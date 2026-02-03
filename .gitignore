@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+ios/
+android/
+.capacitor/
+.DS_Store
+.claude/
+*.docx
+*.odt
+~$*

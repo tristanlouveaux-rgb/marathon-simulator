@@ -1,0 +1,2907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Training Simulator - Proper Logic</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50">
+
+<div class="container mx-auto px-4 py-8 max-w-7xl">
+    
+    <div class="mb-6">
+        <h1 class="text-3xl font-bold text-gray-900 mb-1">🎮 Training Simulator</h1>
+        <p class="text-sm text-gray-600">Proper VDOT calculation from physiological data</p>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        
+        <!-- LEFT -->
+        <div class="lg:col-span-1 space-y-3">
+            
+            <!-- Setup -->
+            <div class="bg-white rounded-lg shadow p-4">
+                <h2 class="text-lg font-bold mb-2">Setup</h2>
+                
+                <div class="space-y-2 text-xs">
+                    <div>
+                        <label class="font-medium">All-Time PBs</label>
+                        <div class="space-y-1 mt-1">
+                            <div class="flex gap-1 items-center"><span class="w-12">5K:</span>
+                                <input type="number" id="p5m" value="17" class="w-12 px-1 py-0.5 border rounded">
+                                <input type="number" id="p5s" value="39" class="w-12 px-1 py-0.5 border rounded">
+                            </div>
+                            <div class="flex gap-1 items-center"><span class="w-12">10K:</span>
+                                <input type="number" id="p10m" value="39" class="w-12 px-1 py-0.5 border rounded">
+                                <input type="number" id="p10s" value="20" class="w-12 px-1 py-0.5 border rounded">
+                            </div>
+                            <div class="flex gap-1 items-center"><span class="w-12">Half:</span>
+                                <input type="number" id="phh" value="1" class="w-10 px-1 py-0.5 border rounded">
+                                <input type="number" id="phm" value="28" class="w-12 px-1 py-0.5 border rounded">
+                                <input type="number" id="phs" value="40" class="w-12 px-1 py-0.5 border rounded">
+                            </div>
+                            <div class="flex gap-1 items-center"><span class="w-12">Mar:</span>
+                                <input type="number" id="pmh" value="3" class="w-10 px-1 py-0.5 border rounded">
+                                <input type="number" id="pmm" value="12" class="w-12 px-1 py-0.5 border rounded">
+                                <input type="number" id="pms" value="0" class="w-12 px-1 py-0.5 border rounded">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="font-medium">⭐ Recent Best Run</label>
+                        <select id="rt" class="w-full mt-1 px-1 py-0.5 border rounded text-xs">
+                            <option value="">None</option>
+                            <option value="5">5K</option>
+                            <option value="10">10K</option>
+                            <option value="21.1">Half</option>
+                            <option value="42.2">Marathon</option>
+                        </select>
+                        <div id="rtd" class="hidden mt-1">
+                            <div id="rtdShort" class="flex gap-1">
+                                <input type="number" id="rm" placeholder="Min" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                                <input type="number" id="rs" placeholder="Sec" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                            </div>
+                            <div id="rtdLong" class="hidden flex gap-1">
+                                <input type="number" id="rh" placeholder="Hr" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                                <input type="number" id="rm2" placeholder="Min" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                                <input type="number" id="rs2" placeholder="Sec" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                            </div>
+                            <div class="mt-1">
+                                <input type="number" id="rweeks" placeholder="Weeks ago (0-12)" class="w-full px-1 py-0.5 border rounded text-xs">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-orange-50 border border-orange-300 p-2 rounded">
+                        <label class="font-medium">Current Physiological Data</label>
+                        <div class="space-y-1 mt-1">
+                            <div class="flex gap-1 items-center">
+                                <span class="w-16 text-xs">LT pace:</span>
+                                <input type="number" id="ltm" value="4" class="w-12 px-1 py-0.5 border rounded">
+                                <span class="text-xs">:</span>
+                                <input type="number" id="lts" value="17" class="w-12 px-1 py-0.5 border rounded">
+                                <span class="text-xs">/km</span>
+                            </div>
+                            <div class="flex gap-1 items-center">
+                                <span class="w-16 text-xs">VO2max:</span>
+                                <input type="number" id="vo2" value="56" class="w-16 px-1 py-0.5 border rounded">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="font-medium">Plan</label>
+                        <div class="space-y-1 mt-1">
+                            <select id="rd" class="w-full px-1 py-0.5 border rounded text-xs">
+                                <option value="5k">5K</option>
+                                <option value="10k">10K</option>
+                                <option value="half" selected>Half</option>
+                                <option value="marathon">Marathon</option>
+                            </select>
+                            <div class="flex gap-1"><span class="w-16 text-xs">Weeks:</span>
+                                <input type="number" id="tw" value="16" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                            </div>
+                            <div class="flex gap-1"><span class="w-16 text-xs">Runs/wk:</span>
+                                <select id="rw" class="flex-1 px-1 py-0.5 border rounded text-xs">
+                                    <option value="3">3</option>
+                                    <option value="4">4</option>
+                                    <option value="5" selected>5</option>
+                                    <option value="6">6</option>
+                                    <option value="7">7</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <button id="bi" class="w-full mt-3 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded text-sm">
+                    Initialize Plan
+                </button>
+            </div>
+
+            <!-- Profile -->
+            <div id="prof" class="bg-white rounded-lg shadow p-3 hidden">
+                <h3 class="font-bold text-sm mb-1">Profile</h3>
+                <div class="text-xs space-y-0.5">
+                    <div class="flex justify-between"><span>Type:</span><strong id="type">--</strong></div>
+                    <div class="flex justify-between"><span>B:</span><span id="bval">--</span></div>
+                    <div class="flex justify-between"><span>Start VDOT:</span><span id="vval">--</span></div>
+                    <div class="flex justify-between"><span>Expected:</span><span id="expec">--</span></div>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div id="ctrl" class="bg-white rounded-lg shadow p-3 hidden">
+                <h3 class="font-bold text-sm mb-1">Week <span id="wn">1</span> / <span id="twn">16</span></h3>
+                <div class="text-xs text-gray-600 mb-2"><span id="ph">BASE</span></div>
+                
+                <div class="space-y-1.5">
+                    <button id="bn" disabled class="w-full bg-gray-300 text-gray-600 font-bold py-2 rounded text-xs">Complete Week</button>
+                    <button id="br" class="w-full bg-gray-600 hover:bg-gray-700 text-white py-1 rounded text-xs">Reset</button>
+                </div>
+                
+                <div id="st" class="mt-2 p-2 bg-yellow-50 text-xs rounded"></div>
+            </div>
+            
+            <!-- Current Physiology -->
+            <div id="curfit" class="bg-white rounded-lg shadow p-3 border-2 border-orange-200 hidden">
+                <h3 class="font-bold text-sm mb-1 text-orange-600">📊 Current Physiology</h3>
+                <div class="text-xs text-gray-500 mb-2">
+                    Update when you have new test results
+                </div>
+                
+                <div class="space-y-2 text-xs">
+                    <div>
+                        <label class="font-medium">Current LT pace:</label>
+                        <div class="flex gap-1 mt-1">
+                            <input type="number" id="curltm" placeholder="Min" class="w-16 px-1 py-0.5 border rounded">
+                            <span>:</span>
+                            <input type="number" id="curlts" placeholder="Sec" class="w-16 px-1 py-0.5 border rounded">
+                            <span>/km</span>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="font-medium">Current VO2max:</label>
+                        <div class="flex gap-1 mt-1">
+                            <input type="number" id="curvo2" placeholder="VO2" class="flex-1 px-1 py-0.5 border rounded">
+                        </div>
+                    </div>
+                    
+                    <button id="bfit" class="w-full bg-orange-600 hover:bg-orange-700 text-white py-2 rounded text-xs font-bold">
+                        Update Fitness
+                    </button>
+                    
+                    <div id="fitStatus" class="mt-2 text-xs p-2 rounded hidden">
+                        <div class="font-medium mb-1">Status:</div>
+                        <div id="fitStatusText"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT -->
+        <div class="lg:col-span-2 space-y-3">
+            
+            <!-- Stale Data Warning -->
+            <div id="staleWarning" class="bg-yellow-50 border border-yellow-300 rounded-lg p-3 hidden">
+                <div class="flex items-start gap-2">
+                    <span class="text-yellow-600 text-xl">⚠️</span>
+                    <div class="flex-1 text-xs">
+                        <div class="font-bold text-yellow-800 mb-1">Stale Performance Data</div>
+                        <div class="text-yellow-700">Your most recent hard effort is over 6 weeks old. Consider doing a fresh time trial or race effort to improve prediction accuracy.</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Prediction -->
+            <div id="pb" class="bg-white rounded-lg shadow p-3 hidden">
+                <div class="grid grid-cols-3 gap-2 text-center text-xs mb-2">
+                    <div><div class="text-gray-600">Initial</div><div class="text-sm font-bold text-gray-500" id="initial">--</div></div>
+                    <div><div class="text-gray-600">Current</div><div class="text-lg font-bold text-blue-700" id="cv">--</div></div>
+                    <div><div class="text-gray-600">Forecast</div><div class="text-xl font-bold text-green-700" id="fc">--</div></div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 text-center text-xs">
+                    <div><div class="text-gray-600">Progress</div><div class="text-lg font-bold" id="pr">--</div></div>
+                    <div><div class="text-gray-600">Improvement</div><div class="text-lg font-bold" id="impSoFar">--</div></div>
+                </div>
+            </div>
+            
+            <!-- Workouts -->
+            <div id="wo" class="bg-white rounded-lg shadow p-4">
+                <div class="text-center text-gray-400 py-20">
+                    <div class="text-6xl mb-4">🏃</div>
+                    <p>Initialize to begin</p>
+                </div>
+            </div>
+            
+            <!-- Log -->
+            <div id="lb" class="bg-white rounded-lg shadow p-3 hidden">
+                <h3 class="font-bold text-sm mb-2">Training Log</h3>
+                <div id="lg" class="space-y-1 max-h-48 overflow-y-auto text-xs"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('rt').onchange=function(){
+    const val=this.value;
+    document.getElementById('rtd').classList.toggle('hidden',!val);
+    if(val){
+        const isLong=val==='21.1'||val==='42.2';
+        document.getElementById('rtdShort').classList.toggle('hidden',isLong);
+        document.getElementById('rtdLong').classList.toggle('hidden',!isLong);
+    }
+};
+
+const s={w:1,tw:16,v:50,iv:50,rpeAdj:0,rd:'half',rw:5,wkm:50,pbs:{},rec:null,lt:null,vo2:null,
+    initialLT:null,initialVO2:null,  // Initial physiology at Week 0
+    initialBaseline:null,             // Initial race time at Week 0 (FIXED, never changes)
+    currentFitness:null,              // Current fitness NOW (changes with RPE/physiology)
+    forecastTime:null,                // Predicted race time after full training
+    typ:'Balanced',b:1.06,wks:[],pac:{},skip:[],timp:0,expectedFinal:50};
+
+// Cross-training activities (persisted separately)
+let crossActivities=[];
+let currentRenderCycle = 0; // Track render cycles to prevent duplicate application
+
+// TRAINING HORIZON PARAMETERS - Non-linear improvement model
+const TRAINING_HORIZON_PARAMS = {
+  // Maximum improvement ceiling by distance and ability (conservative defaults)
+  max_gain_pct: {
+    '5k':      {beginner: 10.0, novice: 8.0, intermediate: 6.0, advanced: 4.0, elite: 2.5},
+    '10k':     {beginner: 11.0, novice: 9.0, intermediate: 7.0, advanced: 5.0, elite: 3.0},
+    'half':    {beginner: 12.0, novice: 10.0, intermediate: 8.0, advanced: 6.0, elite: 3.5},
+    'marathon':{beginner: 13.0, novice: 11.0, intermediate: 9.0, advanced: 6.5, elite: 4.0}
+  },
+  
+  // Time constant (tau) for adaptation - smaller = faster gains
+  tau_weeks: {
+    '5k':      {beginner: 4.0, novice: 5.0, intermediate: 6.0, advanced: 7.0, elite: 8.0},
+    '10k':     {beginner: 5.0, novice: 6.0, intermediate: 7.0, advanced: 8.0, elite: 9.0},
+    'half':    {beginner: 6.0, novice: 7.0, intermediate: 8.0, advanced: 9.0, elite: 10.0},
+    'marathon':{beginner: 7.0, novice: 8.0, intermediate: 9.0, advanced: 10.0, elite: 11.0}
+  },
+  
+  // Reference sessions/week (center of logistic curve)
+  ref_sessions: {
+    '5k':      {beginner: 3.0, novice: 3.5, intermediate: 4.0, advanced: 5.0, elite: 6.0},
+    '10k':     {beginner: 3.0, novice: 4.0, intermediate: 4.5, advanced: 5.5, elite: 6.5},
+    'half':    {beginner: 3.5, novice: 4.0, intermediate: 5.0, advanced: 6.0, elite: 7.0},
+    'marathon':{beginner: 4.0, novice: 4.5, intermediate: 5.5, advanced: 6.5, elite: 7.5}
+  },
+  
+  // Runner type modifiers - trains weakness principle
+  type_modifier: {
+    '5k':      {Speed: 0.90, Balanced: 1.00, Endurance: 1.15},
+    '10k':     {Speed: 0.95, Balanced: 1.00, Endurance: 1.10},
+    'half':    {Speed: 1.10, Balanced: 1.00, Endurance: 0.95},
+    'marathon':{Speed: 1.15, Balanced: 1.00, Endurance: 0.90}
+  },
+  
+  k_sessions: 1.0,  // Logistic steepness
+  min_sessions: {'5k': 2.0, '10k': 2.5, 'half': 3.0, 'marathon': 3.5},
+  undertrain_penalty_pct: {'5k': 2.0, '10k': 2.5, 'half': 3.0, 'marathon': 4.0},
+  taper_bonus_pct: {'5k': 0.8, '10k': 1.0, 'half': 1.2, 'marathon': 1.5},
+  max_gain_cap_pct: 15.0,
+  max_slowdown_pct: 3.0
+};
+
+// ============================================================================
+// TRAINING HORIZON HELPERS - Non-linear improvement model
+// ============================================================================
+
+// Determine ability band from VDOT
+function getAbilityBand(vdot) {
+  if(vdot >= 60) return 'elite';
+  if(vdot >= 52) return 'advanced';
+  if(vdot >= 45) return 'intermediate';
+  if(vdot >= 38) return 'novice';
+  return 'beginner';
+}
+
+// Determine runner type from fatigue exponent
+function getRunnerType(b) {
+  if(!b || isNaN(b)) return 'Balanced';
+  if(b < 1.06) return 'Speed';
+  if(b > 1.12) return 'Endurance';
+  return 'Balanced';
+}
+
+// Core training horizon calculation - returns VDOT gain from non-linear model
+function applyTrainingHorizonAdjustment(params) {
+  const {
+    baseline_vdot,
+    target_distance,
+    weeks_remaining,
+    sessions_per_week,
+    runner_type,
+    ability_band,
+    taper_weeks
+  } = params;
+  
+  // Safety checks
+  if(weeks_remaining <= 0) {
+    return {vdot_gain: 0, improvement_pct: 0, components: {}};
+  }
+  
+  // Get parameters for this distance/ability
+  const distance_key = target_distance;
+  const max_gain = TRAINING_HORIZON_PARAMS.max_gain_pct[distance_key]?.[ability_band] || 5.0;
+  const tau = TRAINING_HORIZON_PARAMS.tau_weeks[distance_key]?.[ability_band] || 8.0;
+  const ref_sessions = TRAINING_HORIZON_PARAMS.ref_sessions[distance_key]?.[ability_band] || 4.0;
+  const type_mod = TRAINING_HORIZON_PARAMS.type_modifier[distance_key]?.[runner_type] || 1.0;
+  
+  // Effective training weeks (exclude taper from fitness gains)
+  const taper_eff = taper_weeks || 0;
+  const weeks_eff = Math.max(0, weeks_remaining - taper_eff);
+  
+  // Week factor: saturating exponential (1 - e^(-w/tau))
+  // Early weeks: rapid gains; later weeks: diminishing returns
+  const week_factor = weeks_eff > 0 ? (1 - Math.exp(-weeks_eff / tau)) : 0;
+  
+  // Session factor: logistic centered at ref_sessions
+  // Below ref: slower gains; at ref: optimal; above ref: diminishing returns
+  const k = TRAINING_HORIZON_PARAMS.k_sessions;
+  const session_factor = 1 / (1 + Math.exp(-k * (sessions_per_week - ref_sessions)));
+  
+  // Base improvement (product of all factors)
+  let improvement_pct = max_gain * type_mod * week_factor * session_factor;
+  
+  // Undertraining penalty (if sessions too low)
+  const min_sess = TRAINING_HORIZON_PARAMS.min_sessions[distance_key] || 3.0;
+  let undertrain_penalty = 0;
+  if(sessions_per_week < min_sess) {
+    const penalty_pct = TRAINING_HORIZON_PARAMS.undertrain_penalty_pct[distance_key] || 2.5;
+    undertrain_penalty = penalty_pct * (min_sess - sessions_per_week) / min_sess;
+  }
+  
+  // Taper bonus (small freshness gain)
+  const taper_nominal = {'5k': 1, '10k': 2, 'half': 2, 'marathon': 3}[distance_key] || 2;
+  const taper_ratio = taper_eff > 0 ? Math.min(taper_eff / taper_nominal, 1) : 0;
+  const taper_bonus = TRAINING_HORIZON_PARAMS.taper_bonus_pct[distance_key] * taper_ratio;
+  
+  // Final improvement (with bounds)
+  improvement_pct = improvement_pct + taper_bonus - undertrain_penalty;
+  improvement_pct = Math.max(-TRAINING_HORIZON_PARAMS.max_slowdown_pct, 
+                            Math.min(TRAINING_HORIZON_PARAMS.max_gain_cap_pct, improvement_pct));
+  
+  // Convert to VDOT gain
+  const vdot_gain = baseline_vdot * (improvement_pct / 100);
+  
+  return {
+    vdot_gain: vdot_gain,
+    improvement_pct: improvement_pct,
+    components: {
+      week_factor: week_factor,
+      session_factor: session_factor,
+      type_modifier: type_mod,
+      undertrain_penalty: undertrain_penalty,
+      taper_bonus: taper_bonus
+    }
+  };
+}
+
+// Load saved state from localStorage on page load
+function loadState(){
+    try{
+        const saved=localStorage.getItem('marathonSimulatorState');
+        if(saved){
+            const loaded=JSON.parse(saved);
+            
+            // Version check - if data is broken, force reset
+            const isBroken = 
+                (loaded.initialBaseline && loaded.initialBaseline < 300) || // Less than 5 minutes is broken
+                (loaded.currentFitness && loaded.currentFitness < 300) ||
+                (loaded.initialBaseline && loaded.initialBaseline > 30000) || // More than 8+ hours is broken
+                (loaded.forecastTime && loaded.forecastTime < 0); // Negative is broken
+            
+            if(isBroken){
+                console.log('🔴 BROKEN DATA DETECTED - Auto-clearing localStorage');
+                console.log(`  initialBaseline: ${loaded.initialBaseline}`);
+                console.log(`  currentFitness: ${loaded.currentFitness}`);
+                console.log(`  forecastTime: ${loaded.forecastTime}`);
+                localStorage.removeItem('marathonSimulatorState');
+                localStorage.removeItem('marathonSimulatorCross');
+                alert('Detected corrupted data. Please re-initialize your plan.');
+                return;
+            }
+            
+            Object.assign(s,loaded);
+            console.log('✅ Loaded saved state from localStorage');
+            console.log(`  Initial: ${ft(s.initialBaseline)}, Current: ${ft(s.currentFitness)}, Forecast: ${ft(s.forecastTime)}`);
+            
+            // Load cross-training activities
+            const savedCross=localStorage.getItem('marathonSimulatorCross');
+            if(savedCross){
+                crossActivities=JSON.parse(savedCross);
+                console.log(`✅ Loaded ${crossActivities.length} cross-training activities`);
+            }
+            
+            // If we have a valid state, display it
+            if(s.wks&&s.wks.length>0){
+                disp();
+                document.getElementById('ctrl').classList.remove('hidden');
+                document.getElementById('pb').classList.remove('hidden');
+                document.getElementById('lb').classList.remove('hidden');
+                document.getElementById('prof').classList.remove('hidden');
+                document.getElementById('curfit').classList.remove('hidden');
+                document.getElementById('type').textContent=s.typ;
+                document.getElementById('bval').textContent=s.b.toFixed(3);
+                document.getElementById('vval').textContent=s.v.toFixed(1);
+                document.getElementById('expec').textContent=s.expectedFinal.toFixed(1);
+                document.getElementById('twn').textContent=s.tw;
+            }
+        }
+    }catch(e){
+        console.error('❌ Error loading state:',e);
+        // Clear corrupted data
+        localStorage.removeItem('marathonSimulatorState');
+        localStorage.removeItem('marathonSimulatorCross');
+        alert('Error loading saved data. Please re-initialize your plan.');
+    }
+}
+
+// Save state to localStorage
+function saveState(){
+    try{
+        localStorage.setItem('marathonSimulatorState',JSON.stringify(s));
+        localStorage.setItem('marathonSimulatorCross',JSON.stringify(crossActivities));
+    }catch(e){
+        console.error('Error saving state:',e);
+    }
+}
+
+// Load state on page load
+window.addEventListener('DOMContentLoaded',loadState);
+
+const IMP={
+    '5k':{easy:0.4,vo2:0.95,threshold:0.8,intervals:0.95,long:0.5},
+    '10k':{easy:0.5,vo2:0.9,threshold:0.9,intervals:0.9,race_pace:0.85,long:0.7},
+    half:{easy:0.6,vo2:0.7,threshold:0.95,race_pace:0.9,mixed:0.85,long:0.95,progressive:0.9},
+    marathon:{easy:0.8,threshold:0.9,marathon_pace:0.95,mixed:0.9,long:1.0,progressive:0.95}
+};
+
+const TIM={
+    '5k':{easy:5,vo2:20,threshold:15,intervals:20,long:10},
+    '10k':{easy:8,vo2:18,threshold:15,intervals:18,race_pace:15,long:15},
+    half:{easy:10,vo2:15,threshold:25,race_pace:20,mixed:18,long:30,progressive:25},
+    marathon:{easy:15,threshold:30,marathon_pace:35,mixed:25,long:60,progressive:35}
+};
+
+// Calculate dynamic skip penalty based on context
+function calculateSkipPenalty(workoutType, raceDistance, weeksRemaining, totalWeeks, cumulativeSkips){
+    const basePenalty = TIM[raceDistance][workoutType] || 20;
+    
+    // Proximity factor: Skips hurt more as race approaches
+    // Early weeks (12+ weeks out): 0.5x penalty
+    // Mid training (6-12 weeks): 1.0x penalty  
+    // Taper/peak (< 6 weeks): 1.5x penalty
+    const weeksOut = totalWeeks - weeksRemaining;
+    let proximityFactor = 1.0;
+    if(weeksOut >= 10) proximityFactor = 0.5;
+    else if(weeksOut >= 6) proximityFactor = 0.8;
+    else if(weeksOut >= 3) proximityFactor = 1.2;
+    else proximityFactor = 1.5;
+    
+    // Cumulative skip factor: Each additional skip compounds
+    // 1st skip: 1.0x
+    // 2nd skip: 1.3x
+    // 3rd skip: 1.7x
+    // 4+ skips: 2.0x+
+    let skipFactor = 1.0;
+    if(cumulativeSkips >= 4) skipFactor = 2.0 + (cumulativeSkips - 4) * 0.3;
+    else if(cumulativeSkips === 3) skipFactor = 1.7;
+    else if(cumulativeSkips === 2) skipFactor = 1.3;
+    else if(cumulativeSkips === 1) skipFactor = 1.0;
+    
+    const penalty = Math.round(basePenalty * proximityFactor * skipFactor);
+    return penalty;
+}
+
+// Expected weekly improvement by athlete level (per week)
+const EXPECTED_GAINS = {
+    novice: {vo2: 0.0055, lt: 0.007},           // 0.55%/week VO2, 0.7%/week LT
+    intermediate: {vo2: 0.00175, lt: 0.00275},  // 0.175%/week VO2, 0.275%/week LT
+    advanced: {vo2: 0.001, lt: 0.00165},        // 0.1%/week VO2, 0.165%/week LT
+    elite: {vo2: 0.0005, lt: 0.00075}           // 0.05%/week VO2, 0.075%/week LT
+};
+
+// Infer athlete level from 5K time or VDOT
+function inferLevel(vdot) {
+    const k5time = tv(vdot, 5); // 5K time from VDOT
+    if (k5time < 16*60) return 'elite';
+    if (k5time < 18*60) return 'advanced';
+    if (k5time < 21*60) return 'intermediate';
+    return 'novice';
+}
+
+const WO={
+    '5k':{Speed:{vo2:[{n:'800m',d:'8×800 @ 5K, 90s',r:9}],threshold:[{n:'Tempo',d:'20min @ threshold',r:7}]},
+        Balanced:{vo2:[{n:'1K',d:'6×1K @ 5K, 2-3min',r:9}],threshold:[{n:'Tempo',d:'22min @ threshold',r:7}]},
+        Endurance:{vo2:[{n:'1200m',d:'5×1200 @ 5K, 3min',r:9}],threshold:[{n:'Long Tempo',d:'25min @ threshold',r:7}]}},
+    '10k':{Speed:{vo2:[{n:'800m',d:'8×800 @ 5K, 90s',r:9}],threshold:[{n:'Tempo',d:'22min @ tempo',r:7}],
+        race_pace:[{n:'Mile',d:'4×1mi @ 10K, 2min',r:8}]},
+        Balanced:{vo2:[{n:'1K',d:'6×1K @ 5K, 2-3min',r:9}],threshold:[{n:'Tempo',d:'25min @ tempo',r:7}],
+        race_pace:[{n:'Mile',d:'4×1mi @ 10K, 2min',r:8}]},
+        Endurance:{vo2:[{n:'1200m',d:'5×1200 @ 5K, 3min',r:8}],threshold:[{n:'Long Tempo',d:'30min @ tempo',r:7}],
+        race_pace:[{n:'2K',d:'3×2K @ 10K, 3min',r:8}]}},
+    half:{Speed:{vo2:[{n:'1200m',d:'4×1200 @ 5K, 3min',r:9}],threshold:[{n:'Tempo',d:'35min @ threshold',r:7}],
+        race_pace:[{n:'800m@HM',d:'8×800 @ HM, 90s',r:8},{n:'Jack Fultz',d:'20×400 @ HM, 200m',r:8}],
+        progressive:[{n:'Fast Finish',d:'21km: last 5 @ HM',r:7}]},
+    Balanced:{vo2:[{n:'1200m',d:'4×1200 @ 5K, 3min',r:9}],threshold:[{n:'Long Tempo',d:'40min @ threshold',r:7}],
+        race_pace:[{n:'Jack Fultz',d:'20×400 @ HM, 200m',r:8}],mixed:[{n:'Nell Rojas',d:'6.5@MP, 2.5@10K, 3@HM',r:8}],
+        progressive:[{n:'Fast Finish',d:'21km: last 5 @ HM',r:7}]},
+    Endurance:{vo2:[{n:'1K',d:'5×1K @ 5K, 3min',r:8}],threshold:[{n:'Long Tempo',d:'45min @ threshold',r:7}],
+        race_pace:[{n:'Jack Fultz',d:'20×400 @ HM, 200m',r:8}],
+        progressive:[{n:'Fast Finish',d:'23km: last 8 @ HM',r:8}]}},
+    marathon:{Speed:{threshold:[{n:'Tempo Int',d:'3×10min @ threshold, 2min',r:7}],
+        marathon_pace:[{n:'MP',d:'2×10km @ MP, 2min',r:6}],progressive:[{n:'Progressive',d:'26km: last 8 @ MP',r:7}]},
+    Balanced:{threshold:[{n:'Long Tempo',d:'2×12km @ threshold, 3min',r:7}],
+        marathon_pace:[{n:'MP',d:'2×12km @ MP, 2min',r:6}],mixed:[{n:'Nell Rojas',d:'10@MP, 4@10K, 5@HM',r:8}],
+        progressive:[{n:'Progressive',d:'29km: last 10 @ MP',r:7}]},
+    Endurance:{threshold:[{n:'Long Tempo',d:'2×15km @ threshold, 3min',r:7}],
+        marathon_pace:[{n:'Long MP',d:'20km @ MP',r:6}],
+        progressive:[{n:'Race Sim',d:'32km: last 12 @ MP',r:8}]}}
+};
+
+// ============= WORKOUT PACE AND TIME ESTIMATION =============
+
+// Parse workout description to extract distance and pace zones
+function parseWorkoutDescription(desc, paces) {
+    const result = {
+        totalDistance: 0,      // in meters
+        workTime: 0,          // in seconds (work intervals only)
+        totalTime: 0,         // in seconds (including rest)
+        avgPace: null,        // average pace in sec/km
+        paceZone: null,       // primary pace zone
+        format: 'unknown'
+    };
+    
+    // Handle modified workout descriptions (e.g., "4km (was 6km)")
+    // Extract the current distance before " (was"
+    const modifiedMatch = desc.match(/^(\d+\.?\d*)km\s*\(was/i);
+    if (modifiedMatch) {
+        result.totalDistance = parseFloat(modifiedMatch[1]) * 1000;
+        result.format = 'simple';
+        result.avgPace = paces.e;
+        result.paceZone = 'easy';
+        result.workTime = (result.totalDistance / 1000) * paces.e;
+        result.totalTime = result.workTime;
+        return result;
+    }
+    
+    // Format 1: Simple distance (e.g., "8km", "10km")
+    const simpleDistMatch = desc.match(/^(\d+\.?\d*)km$/i);
+    if (simpleDistMatch) {
+        result.totalDistance = parseFloat(simpleDistMatch[1]) * 1000;
+        result.format = 'simple';
+        // For simple distance, use easy pace as default (will be overridden by workout type)
+        result.avgPace = paces.e;
+        result.paceZone = 'easy';
+        result.workTime = (result.totalDistance / 1000) * paces.e;
+        result.totalTime = result.workTime;
+        return result;
+    }
+    
+    // Format 2: Time @ pace (e.g., "20min @ threshold", "45min @ tempo")
+    const timeAtPaceMatch = desc.match(/^(\d+)min\s*@\s*(\w+)/i);
+    if (timeAtPaceMatch) {
+        const minutes = parseInt(timeAtPaceMatch[1]);
+        const zone = timeAtPaceMatch[2].toLowerCase();
+        const pace = getPaceForZone(zone, paces);
+        
+        result.workTime = minutes * 60;
+        result.totalTime = minutes * 60;
+        result.totalDistance = (minutes * 60) / pace * 1000; // pace is sec/km
+        result.avgPace = pace;
+        result.paceZone = zone;
+        result.format = 'time_at_pace';
+        return result;
+    }
+    
+    // Format 3: Intervals with distance (e.g., "8×800 @ 5K, 90s", "4×1mi @ 10K, 2min")
+    // Try with explicit unit first
+    let intervalDistMatch = desc.match(/^(\d+)×(\d+\.?\d*)(m|mi|km|k)\s*@\s*([\w\-]+),?\s*(\d+)-?(\d*)(s|min)?/i);
+    
+    // If no match, try without unit (assume meters for distances like "800")
+    if (!intervalDistMatch) {
+        intervalDistMatch = desc.match(/^(\d+)×(\d+\.?\d*)\s*@\s*([\w\-]+),?\s*(\d+)-?(\d*)(s|min)?/i);
+        if (intervalDistMatch) {
+            // Insert 'm' as unit
+            intervalDistMatch = [
+                intervalDistMatch[0],
+                intervalDistMatch[1],  // reps
+                intervalDistMatch[2],  // distance
+                'm',                   // implied meters
+                intervalDistMatch[3],  // pace zone
+                intervalDistMatch[4],  // rest value (min)
+                intervalDistMatch[5],  // rest value (max) if range
+                intervalDistMatch[6]   // rest unit
+            ];
+        }
+    }
+    
+    if (intervalDistMatch) {
+        const reps = parseInt(intervalDistMatch[1]);
+        const dist = parseFloat(intervalDistMatch[2]);
+        const unit = intervalDistMatch[3].toLowerCase();
+        const zone = intervalDistMatch[4];
+        const restVal = parseInt(intervalDistMatch[5]);
+        const restVal2 = intervalDistMatch[6] ? parseInt(intervalDistMatch[6]) : restVal; // If range, take max
+        const restAvg = (restVal + restVal2) / 2; // Average if range
+        const restUnit = intervalDistMatch[7] || 's';
+        
+        let distPerRep = 0;
+        if (unit === 'm') distPerRep = dist;
+        else if (unit === 'mi') distPerRep = dist * 1609;
+        else if (unit === 'km' || unit === 'k') distPerRep = dist * 1000;
+        
+        const pace = getPaceForZone(zone, paces);
+        const repTime = (distPerRep / 1000) * pace;
+        const restTime = restUnit === 'min' ? restAvg * 60 : restAvg;
+        
+        result.totalDistance = distPerRep * reps;
+        result.workTime = repTime * reps;
+        result.totalTime = (repTime + restTime) * reps - restTime; // Don't count rest after last rep
+        result.avgPace = pace;
+        result.paceZone = zone;
+        result.format = 'intervals_dist';
+        return result;
+    }
+    
+    // Format 4: Intervals with time (e.g., "3×10min @ threshold, 2min")
+    const intervalTimeMatch = desc.match(/^(\d+)×(\d+)min\s*@\s*(\w+),?\s*(\d+)min/i);
+    if (intervalTimeMatch) {
+        const reps = parseInt(intervalTimeMatch[1]);
+        const workMin = parseInt(intervalTimeMatch[2]);
+        const zone = intervalTimeMatch[3];
+        const restMin = parseInt(intervalTimeMatch[4]);
+        
+        const pace = getPaceForZone(zone, paces);
+        const repTime = workMin * 60;
+        const restTime = restMin * 60;
+        const distPerRep = (repTime / pace) * 1000;
+        
+        result.totalDistance = distPerRep * reps;
+        result.workTime = repTime * reps;
+        result.totalTime = (repTime + restTime) * reps - restTime;
+        result.avgPace = pace;
+        result.paceZone = zone;
+        result.format = 'intervals_time';
+        return result;
+    }
+    
+    // Format 5: Progressive/Fast finish (e.g., "21km: last 5 @ HM", "29km: last 10 @ MP")
+    const progressiveMatch = desc.match(/^(\d+\.?\d*)km:?\s*last\s*(\d+\.?\d*)\s*@\s*(\w+)/i);
+    if (progressiveMatch) {
+        const totalDist = parseFloat(progressiveMatch[1]) * 1000;
+        const fastDist = parseFloat(progressiveMatch[2]) * 1000;
+        const zone = progressiveMatch[3];
+        
+        const easyDist = totalDist - fastDist;
+        const fastPace = getPaceForZone(zone, paces);
+        const easyPace = paces.e;
+        
+        const easyTime = (easyDist / 1000) * easyPace;
+        const fastTime = (fastDist / 1000) * fastPace;
+        
+        result.totalDistance = totalDist;
+        result.workTime = easyTime + fastTime;
+        result.totalTime = easyTime + fastTime;
+        result.avgPace = result.totalTime / (totalDist / 1000); // Weighted average
+        result.paceZone = 'progressive';
+        result.format = 'progressive';
+        return result;
+    }
+    
+    // Format 6: Simple distance @ pace (e.g., "20km @ MP")
+    const distAtPaceMatch = desc.match(/^(\d+\.?\d*)km\s*@\s*(\w+)/i);
+    if (distAtPaceMatch) {
+        const dist = parseFloat(distAtPaceMatch[1]) * 1000;
+        const zone = distAtPaceMatch[2];
+        const pace = getPaceForZone(zone, paces);
+        
+        result.totalDistance = dist;
+        result.workTime = (dist / 1000) * pace;
+        result.totalTime = result.workTime;
+        result.avgPace = pace;
+        result.paceZone = zone;
+        result.format = 'dist_at_pace';
+        return result;
+    }
+    
+    // Format 7: Mixed paces (e.g., "10@MP, 4@10K, 5@HM", "6.5@MP, 2.5@10K, 3@HM")
+    const mixedMatch = desc.match(/(\d+\.?\d*)@(\w+)/gi);
+    if (mixedMatch && mixedMatch.length > 1) {
+        let totalDist = 0;
+        let totalTime = 0;
+        
+        for (const segment of mixedMatch) {
+            const parts = segment.match(/(\d+\.?\d*)@(\w+)/i);
+            if (parts) {
+                const dist = parseFloat(parts[1]) * 1000;
+                const zone = parts[2];
+                const pace = getPaceForZone(zone, paces);
+                
+                totalDist += dist;
+                totalTime += (dist / 1000) * pace;
+            }
+        }
+        
+        result.totalDistance = totalDist;
+        result.workTime = totalTime;
+        result.totalTime = totalTime;
+        result.avgPace = totalTime / (totalDist / 1000);
+        result.paceZone = 'mixed';
+        result.format = 'mixed';
+        return result;
+    }
+    
+    // Format 8: Long intervals (e.g., "2×10km @ MP, 2min", "2×15km @ threshold, 3min")
+    const longIntervalMatch = desc.match(/^(\d+)×(\d+\.?\d*)km\s*@\s*(\w+),?\s*(\d+)min/i);
+    if (longIntervalMatch) {
+        const reps = parseInt(longIntervalMatch[1]);
+        const distPerRep = parseFloat(longIntervalMatch[2]) * 1000;
+        const zone = longIntervalMatch[3];
+        const restMin = parseInt(longIntervalMatch[4]);
+        
+        const pace = getPaceForZone(zone, paces);
+        const repTime = (distPerRep / 1000) * pace;
+        const restTime = restMin * 60;
+        
+        result.totalDistance = distPerRep * reps;
+        result.workTime = repTime * reps;
+        result.totalTime = (repTime + restTime) * reps - restTime;
+        result.avgPace = pace;
+        result.paceZone = zone;
+        result.format = 'long_intervals';
+        return result;
+    }
+    
+    // If we can't parse it, return what we have
+    console.warn(`Could not fully parse workout: "${desc}"`);
+    return result;
+}
+
+// Map pace zone abbreviations to pace values
+function getPaceForZone(zone, paces) {
+    const zoneMap = {
+        'easy': paces.e,
+        'e': paces.e,
+        'threshold': paces.t,
+        'tempo': paces.t,
+        't': paces.t,
+        '5k': paces.i,
+        '5K': paces.i,
+        'i': paces.i,
+        'r': paces.r,
+        '10k': paces.m * 0.95, // Slightly faster than marathon
+        '10K': paces.m * 0.95,
+        'hm': paces.m * 1.05,  // Half marathon pace (slightly slower than full)
+        'HM': paces.m * 1.05,
+        'mp': paces.m,
+        'MP': paces.m,
+        'm': paces.m
+    };
+    
+    const normalizedZone = zone.toLowerCase().trim();
+    return zoneMap[normalizedZone] || paces.e; // Default to easy if unknown
+}
+
+// Format pace as min:sec/km
+function formatPace(secPerKm) {
+    if (!secPerKm || isNaN(secPerKm)) return '--';
+    const minutes = Math.floor(secPerKm / 60);
+    const seconds = Math.floor(secPerKm % 60);
+    return `${minutes}:${String(seconds).padStart(2, '0')}/km`;
+}
+
+// Format time as h:mm:ss or mm:ss
+function formatWorkoutTime(seconds) {
+    if (!seconds || isNaN(seconds)) return '--';
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    
+    if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(secs).padStart(2, '0')}`;
+}
+
+// ============= END WORKOUT PACE AND TIME ESTIMATION =============
+
+function cv(m,t){const tm=t/60,v=m/tm,vo2=-4.6+0.182258*v+0.000104*v*v,
+    p=0.8+0.1894393*Math.exp(-0.012778*tm)+0.2989558*Math.exp(-0.1932605*tm);return Math.max(vo2/p,20);}
+function vt(k,vd){let f=k>21.1?.165:k>10?.175:k>5?.19:.2,t=k*1000/(vd*f*50)*60;
+    for(let i=0;i<20;i++){const c=cv(k*1000,t),e=vd-c;if(Math.abs(e)<.1)break;t-=e*30;}return t;}
+function tv(vd,k){return vt(k,vd);}  // Alias: vdot→time (expects km)
+function rd(raceDist){return {'5k':5000,'10k':10000,'half':21097,'marathon':42195}[raceDist];}  // Returns METERS
+function rdKm(raceDist){return {'5k':5,'10k':10,'half':21.1,'marathon':42.2}[raceDist];}  // Returns KM for tv()
+function cb(p){const pt=[];if(p.k5)pt.push([5,p.k5]);if(p.k10)pt.push([10,p.k10]);
+    if(p.h)pt.push([21.1,p.h]);if(p.m)pt.push([42.2,p.m]);if(pt.length<2)return 1.06;
+    const ld=pt.map(x=>Math.log(x[0])),lt=pt.map(x=>Math.log(x[1])),n=pt.length,
+    sd=ld.reduce((a,b)=>a+b),st=lt.reduce((a,b)=>a+b),sdt=ld.reduce((s,d,i)=>s+d*lt[i],0),
+    sd2=ld.reduce((s,d)=>s+d*d,0);return(n*sdt-sd*st)/(n*sd2-sd*sd);}
+function gt(b){return b<=1.045?'endurance':b>1.075?'speed':'balanced';}
+function ft(s){const h=~~(s/3600),m=~~(s%3600/60),sec=~~(s%60);
+    return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
+function fp(s){return`${~~(s/60)}:${String(~~(s%60)).padStart(2,'0')}/km`;}
+function gp(v,l){if(l)return{e:l*1.15,m:l*1.05,t:l,i:l*0.93,r:l*0.88};
+    const t5=vt(5,v),t10=vt(10,v),tm=vt(42.2,v);return{e:t5/5*1.25,m:tm/42.2,t:t10/10,i:t5/5,r:t5/5*0.97};}
+
+// ============= PROPER FORECAST FORMULA (3-PREDICTOR BLEND) =============
+
+// Calculate fatigue exponent from PBs
+function calculateFatigueExponent(pbs){
+    let lnD=[],lnT=[];
+    if(pbs.k5){lnD.push(Math.log(5000));lnT.push(Math.log(pbs.k5));}
+    if(pbs.k10){lnD.push(Math.log(10000));lnT.push(Math.log(pbs.k10));}
+    if(pbs.h){lnD.push(Math.log(21097));lnT.push(Math.log(pbs.h));}
+    if(pbs.m){lnD.push(Math.log(42195));lnT.push(Math.log(pbs.m));}
+    if(lnD.length<2)return 1.06;
+    const meanLnD=lnD.reduce((a,b)=>a+b,0)/lnD.length;
+    const meanLnT=lnT.reduce((a,b)=>a+b,0)/lnT.length;
+    let num=0,den=0;
+    for(let i=0;i<lnD.length;i++){num+=(lnD[i]-meanLnD)*(lnT[i]-meanLnT);den+=Math.pow(lnD[i]-meanLnD,2);}
+    return num/den;
+}
+
+// PB predictor - just uses all-time PBs
+function predictFromPB(targetDist,pbs,b){
+    const avail=[];
+    if(pbs.k5)avail.push({d:5000,t:pbs.k5});
+    if(pbs.k10)avail.push({d:10000,t:pbs.k10});
+    if(pbs.h)avail.push({d:21097,t:pbs.h});
+    if(pbs.m)avail.push({d:42195,t:pbs.m});
+    
+    if(avail.length===0)return null;
+    
+    // Find closest distance
+    avail.sort((a,c)=>Math.abs(a.d-targetDist)-Math.abs(c.d-targetDist));
+    const anchor=avail[0];
+    
+    return anchor.t*Math.pow(targetDist/anchor.d,b);
+}
+
+// Recent run predictor with recency decay blending
+function predictFromRecent(targetDist,recentRun,pbs,b){
+    if(!recentRun||!recentRun.t||recentRun.t<=0)return null;
+    
+    const recentDist=recentRun.d*1000; // Convert km to meters
+    const weeksAgo=recentRun.weeksAgo||0;
+    
+    // Project recent run to target distance
+    const T_recent=recentRun.t*Math.pow(targetDist/recentDist,b);
+    
+    // Get all-time PB prediction for comparison
+    const T_pb=predictFromPB(targetDist,pbs,b);
+    
+    if(!T_pb){
+        // No PB to blend with, just use recent
+        return T_recent;
+    }
+    
+    // Recency decay: blend recent with PB based on how old it is
+    let alpha;
+    if(weeksAgo<=2)alpha=0.85;      // Very fresh - trust it heavily
+    else if(weeksAgo<=6)alpha=0.70; // Recent - trust it moderately
+    else if(weeksAgo<=12)alpha=0.50;// Getting old - equal weight
+    else alpha=0.20;                 // Stale - trust PB more
+    
+    const T_eff=alpha*T_recent+(1-alpha)*T_pb;
+    console.log(`  🏃 Recent ${recentRun.d}K (${weeksAgo}w ago): ${ft(T_recent)} × ${alpha.toFixed(2)} + PB ${ft(T_pb)} × ${(1-alpha).toFixed(2)} = ${ft(T_eff)}`);
+    
+    return T_eff;
+}
+
+// LT predictor with runner-type multipliers
+function predictFromLT(targetDist,ltPaceSecPerKm,runnerType){
+    if(!ltPaceSecPerKm){
+        return null;
+    }
+    
+    const mult={
+        5000:{speed:0.95,balanced:0.935,endurance:0.92},
+        10000:{speed:1.01,balanced:0.995,endurance:0.98},
+        21097:{speed:1.06,balanced:1.045,endurance:1.03},
+        42195:{speed:1.14,balanced:1.115,endurance:1.09}
+    };
+    
+    // Fix case sensitivity - convert to lowercase
+    const runnerTypeLower = runnerType ? runnerType.toLowerCase() : 'balanced';
+    const m=mult[targetDist]?mult[targetDist][runnerTypeLower]:1.0;
+    
+    return ltPaceSecPerKm*(targetDist/1000)*m;
+}
+
+// VO2/VDOT predictor using Daniels equations
+function predictFromVO2(targetDist,targetVDOT){
+    if(!targetVDOT)return null;
+    const dVO2=v=>-4.60+0.182258*v+0.000104*v*v;
+    const dFrac=t=>0.8+0.1894393*Math.exp(-0.012778*t)+0.2989558*Math.exp(-0.1932605*t);
+    const vdot=ts=>{const tm=ts/60,v=targetDist/tm;return dVO2(v)/dFrac(tm);};
+    let lo=targetDist/500*60,hi=targetDist/50*60;
+    for(let i=0;i<50;i++){const mid=(lo+hi)/2,calc=vdot(mid);if(Math.abs(calc-targetVDOT)<0.01)return mid;calc<targetVDOT?hi=mid:lo=mid;}
+    return (lo+hi)/2;
+}
+
+// Blend predictions with distance-specific weights
+function blendPredictions(targetDist,pbs,ltPace,vo2max,b,runnerType,recentRun){
+    // Base weights: Prioritize CURRENT fitness indicators
+    // If recent run exists, it gets separate weight
+    const hasRecent=recentRun&&recentRun.t>0;
+    
+    let baseWeights;
+    if(hasRecent){
+        // 4 predictors: Recent, PB, LT, VO2
+        baseWeights={
+            5000:{recent:0.30,pb:0.10,lt:0.35,vo2:0.25},
+            10000:{recent:0.30,pb:0.10,lt:0.40,vo2:0.20},
+            21097:{recent:0.30,pb:0.10,lt:0.45,vo2:0.15},
+            42195:{recent:0.25,pb:0.05,lt:0.55,vo2:0.15}
+        };
+    }else{
+        // 3 predictors: PB, LT, VO2
+        baseWeights={
+            5000:{pb:0.20,lt:0.40,vo2:0.40},
+            10000:{pb:0.20,lt:0.45,vo2:0.35},
+            21097:{pb:0.15,lt:0.60,vo2:0.25},
+            42195:{pb:0.10,lt:0.70,vo2:0.20}
+        };
+    }
+    
+    let w=baseWeights[targetDist]||baseWeights[42195];
+    
+    // Apply gradual recency decay based on how old the recent run is
+    if(hasRecent){
+        const weeksAgo = recentRun.weeksAgo || 0;
+        let recencyFactor = 1.0;  // Full weight for very fresh runs
+        
+        if(weeksAgo <= 2) recencyFactor = 1.0;       // 0-2 weeks: full weight
+        else if(weeksAgo <= 4) recencyFactor = 0.85; // 2-4 weeks: 85%
+        else if(weeksAgo <= 6) recencyFactor = 0.65; // 4-6 weeks: 65%
+        else if(weeksAgo <= 8) recencyFactor = 0.40; // 6-8 weeks: 40%
+        else recencyFactor = 0.15;                   // 8+ weeks: 15%
+        
+        if(recencyFactor < 1.0){
+            // Reduce recent weight, redistribute to LT/PB
+            const recentReduction = w.recent * (1 - recencyFactor);
+            console.log(`📅 Recent run ${weeksAgo}w ago - reducing weight by ${((1-recencyFactor)*100).toFixed(0)}%`);
+            w.recent = w.recent * recencyFactor;
+            w.lt = w.lt + recentReduction * 0.7;  // Give most to LT
+            w.pb = w.pb + recentReduction * 0.3;  // Give some to PB
+        }
+    }
+    
+    const tRecent=predictFromRecent(targetDist,recentRun,pbs,b);
+    const tPB=predictFromPB(targetDist,pbs,b);
+    const tLT=predictFromLT(targetDist,ltPace,runnerType);
+    const tVO2=predictFromVO2(targetDist,vo2max);
+    
+    console.log(`🔍 Predictor results: Recent=${tRecent}, PB=${tPB}, LT=${tLT}, VO2=${tVO2}`);
+    
+    let wRecent=tRecent&&hasRecent?w.recent:0;
+    let wPB=tPB?(w.pb||0):0;
+    let wLT=tLT?w.lt:0;
+    let wVO2=tVO2?w.vo2:0;
+    let totW=wRecent+wPB+wLT+wVO2;
+    
+    if(totW===0)return null;
+    
+    let sum=0;
+    if(tRecent&&hasRecent)sum+=wRecent*tRecent;
+    if(tPB)sum+=wPB*tPB;
+    if(tLT)sum+=wLT*tLT;
+    if(tVO2)sum+=wVO2*tVO2;
+    
+    const blend=sum/totW;
+    console.log(`📊 Blend for ${targetDist}m:`);
+    if(tRecent&&hasRecent)console.log(`  Recent: ${ft(tRecent)} (${(wRecent/totW*100).toFixed(0)}%)`);
+    if(tPB)console.log(`  PB: ${ft(tPB)} (${(wPB/totW*100).toFixed(0)}%)`);
+    if(tLT)console.log(`  LT: ${ft(tLT)} (${(wLT/totW*100).toFixed(0)}%)`);
+    if(tVO2)console.log(`  VO2: ${ft(tVO2)} (${(wVO2/totW*100).toFixed(0)}%)`);
+    console.log(`  → ${ft(blend)}`);
+    return blend;
+}
+
+// ============= END FORECAST FORMULA =============
+
+function init(){
+    // Clear old cross-training activities when starting new plan
+    crossActivities = [];
+    
+    const p={};
+    const p5m=+document.getElementById('p5m').value,p5s=+document.getElementById('p5s').value;
+    if(p5m||p5s)p.k5=p5m*60+p5s;
+    const p10m=+document.getElementById('p10m').value,p10s=+document.getElementById('p10s').value;
+    if(p10m||p10s)p.k10=p10m*60+p10s;
+    const phh=+document.getElementById('phh').value,phm=+document.getElementById('phm').value,phs=+document.getElementById('phs').value;
+    if(phh||phm||phs)p.h=phh*3600+phm*60+phs;
+    const pmh=+document.getElementById('pmh').value,pmm=+document.getElementById('pmm').value,pms=+document.getElementById('pms').value;
+    if(pmh||pmm||pms)p.m=pmh*3600+pmm*60+pms;
+    if(!Object.keys(p).length){alert('Enter 1+ PB!');return;}
+    
+    const rv=document.getElementById('rt').value;let rec=null;
+    if(rv){
+        const isLong=rv==='21.1'||rv==='42.2';let rtime=0;
+        if(isLong){
+            const rh=+document.getElementById('rh').value||0,rm2=+document.getElementById('rm2').value||0,rs2=+document.getElementById('rs2').value||0;
+            rtime=rh*3600+rm2*60+rs2;
+        }else{
+            const rm=+document.getElementById('rm').value||0,rs=+document.getElementById('rs').value||0;
+            rtime=rm*60+rs;
+        }
+        if(rtime>0){
+            const weeksAgo=+document.getElementById('rweeks').value||0;
+            rec={d:+rv,t:rtime,weeksAgo:weeksAgo};
+        }
+    }
+    
+    // Get LT and VO2 from inputs
+    const ltm=+document.getElementById('ltm').value||0,lts=+document.getElementById('lts').value||0;
+    const ltTotalSec=(ltm||lts)?ltm*60+lts:null;
+    const ltPaceSecPerKm=ltTotalSec;  // Already in sec/km (e.g., 4:17/km = 257 sec/km)
+    const vo2=+document.getElementById('vo2').value||null;
+    
+    // Calculate fatigue exponent and runner type from PBs
+    const b=calculateFatigueExponent(p);
+    const typ=gt(b);
+    console.log(`Fatigue exponent b=${b.toFixed(3)} → ${typ} runner`);
+    
+    // Get target race distance
+    const targetDist=rd(document.getElementById('rd').value);
+    console.log(`Target distance: ${targetDist}m`);
+    console.log(`Inputs: PBs=${JSON.stringify(p)}, LT pace=${ltPaceSecPerKm}, VO2=${vo2}, Recent=${JSON.stringify(rec)}`);
+    
+    // PROPER 3-PREDICTOR BLEND (with recent run blending)
+    const blendedTime=blendPredictions(targetDist,p,ltPaceSecPerKm,vo2,b,typ,rec);
+    
+    console.log(`Blended time result: ${blendedTime} seconds`);
+    
+    if(!blendedTime||isNaN(blendedTime)||blendedTime<=0){
+        alert('Error calculating race prediction. Check your inputs and try again.');
+        console.error('Invalid blend result:',blendedTime);
+        return;
+    }
+    
+    console.log(`Blended prediction: ${ft(blendedTime)}`);
+    
+    // Convert blended time to VDOT for training pace calculations
+    const curr=cv(targetDist,blendedTime);
+    console.log(`Initial VDOT from blend: ${curr.toFixed(1)}`);
+    
+    const pac=gp(curr,ltTotalSec);
+    
+    s.w=1;s.tw=+document.getElementById('tw').value||16;s.v=curr;s.iv=curr;s.rpeAdj=0;
+    s.rd=document.getElementById('rd').value;s.rw=+document.getElementById('rw').value||5;
+    s.wkm=s.rw<=3?s.rw*10:s.rw===4?40:s.rw===5?50:s.rw===6?60:70;
+    s.pbs=p;s.rec=rec;s.lt=ltTotalSec;s.ltPace=ltPaceSecPerKm;s.vo2=vo2;s.typ=typ;s.b=b;s.pac=pac;s.wks=[];s.skip=[];s.timp=0;
+    
+    // Store initial physiology
+    s.initialLT=ltTotalSec;
+    s.initialVO2=vo2;
+    
+    // Use BLENDED TIME for ALL three values (Initial, Current, Forecast)
+    s.initialBaseline=blendedTime;  // Fixed snapshot at Week 0
+    s.currentFitness=blendedTime;   // Starts same as initial (will update with training)
+    
+    // Calculate forecast: Apply expected VDOT gain to get forecast time
+    const basePerWeek=0.06;
+    const volMult=Math.min(s.wkm/50,1.2);
+    const runsMult=s.rw/5;  // Simple ratio: 3 runs = 0.6x, 5 runs = 1.0x, 7 runs = 1.4x
+    const totalGain=s.tw*basePerWeek*volMult*runsMult;
+    s.expectedFinal=s.v+totalGain;
+    
+    // Forecast uses expected future VDOT
+    const forecastVDOT=s.v+totalGain;
+    const raceDistKm=rdKm(s.rd);
+    s.forecastTime=tv(forecastVDOT,raceDistKm);
+    
+    for(let w=1;w<=s.tw;w++){const pct=w/s.tw;let ph='base';
+        if(pct>=0.85)ph='taper';else if(pct>=0.65)ph='peak';else if(pct>=0.35)ph='build';
+        s.wks.push({w,ph,rated:{},skip:[],cross:[],wkGain:0,workoutMods:[],adjustments:[],unspentLoad:0,extraRunLoad:0});}
+    
+    document.getElementById('ctrl').classList.remove('hidden');
+    document.getElementById('pb').classList.remove('hidden');
+    document.getElementById('lb').classList.remove('hidden');
+    document.getElementById('prof').classList.remove('hidden');
+    document.getElementById('curfit').classList.remove('hidden');
+    document.getElementById('type').textContent=typ.charAt(0).toUpperCase()+typ.slice(1);
+    document.getElementById('bval').textContent=b.toFixed(3);
+    document.getElementById('vval').textContent=curr.toFixed(1);
+    document.getElementById('expec').textContent=s.expectedFinal.toFixed(1);
+    document.getElementById('twn').textContent=s.tw;
+    
+    // Populate current physiology inputs with initial values
+    if(ltTotalSec){
+        document.getElementById('curltm').value=~~(ltTotalSec/60);
+        document.getElementById('curlts').value=ltTotalSec%60;
+    }
+    if(vo2){
+        document.getElementById('curvo2').value=vo2;
+    }
+    
+    log(`Init: ${typ}, Start ${curr.toFixed(1)}, Expected ${s.expectedFinal.toFixed(1)} (+${totalGain.toFixed(2)})`);
+    saveState(); // Save after initialization
+    disp();
+}
+
+// Calculate expected aerobic and anaerobic load for a workout
+function calculateWorkoutLoad(workoutType, duration_desc, intensity_pct) {
+    // Base aerobic and anaerobic contributions by workout type
+    const loadProfiles = {
+        'easy': {aerobic: 0.95, anaerobic: 0.05},
+        'long': {aerobic: 0.90, anaerobic: 0.10},
+        'threshold': {aerobic: 0.70, anaerobic: 0.30},
+        'vo2': {aerobic: 0.50, anaerobic: 0.50},
+        'race_pace': {aerobic: 0.65, anaerobic: 0.35},
+        'marathon_pace': {aerobic: 0.75, anaerobic: 0.25},
+        'intervals': {aerobic: 0.45, anaerobic: 0.55},
+        'hill_repeats': {aerobic: 0.40, anaerobic: 0.60},
+        'mixed': {aerobic: 0.60, anaerobic: 0.40},
+        'progressive': {aerobic: 0.70, anaerobic: 0.30}
+    };
+    
+    const profile = loadProfiles[workoutType] || {aerobic: 0.80, anaerobic: 0.20};
+    
+    // Parse duration from various formats
+    let dur = 0;
+    
+    if (typeof duration_desc === 'number') {
+        dur = duration_desc;
+    } else if (typeof duration_desc === 'string') {
+        // Try to extract km
+        const kmMatch = duration_desc.match(/(\d+)km/);
+        if (kmMatch) {
+            const km = parseInt(kmMatch[1]);
+            // Estimate pace based on workout type
+            let paceMinPerKm = 5.5; // default moderate pace
+            if (workoutType === 'easy') paceMinPerKm = 6.0;
+            else if (workoutType === 'long') paceMinPerKm = 6.2;
+            else if (workoutType === 'threshold') paceMinPerKm = 4.5;
+            else if (workoutType === 'vo2') paceMinPerKm = 4.0;
+            else if (workoutType === 'race_pace') paceMinPerKm = 4.3;
+            else if (workoutType === 'marathon_pace') paceMinPerKm = 4.8;
+            
+            dur = km * paceMinPerKm;
+        } else {
+            // Try to extract minutes (e.g., "3×10min")
+            const minMatch = duration_desc.match(/(\d+)×(\d+)min/);
+            if (minMatch) {
+                const reps = parseInt(minMatch[1]);
+                const repDur = parseInt(minMatch[2]);
+                dur = reps * repDur;
+            } else {
+                // Try simple "45min"
+                const simpleMatch = duration_desc.match(/(\d+)min/);
+                if (simpleMatch) {
+                    dur = parseInt(simpleMatch[1]);
+                } else {
+                    // Default by workout type
+                    if (workoutType === 'long') dur = 120;
+                    else if (workoutType === 'threshold' || workoutType === 'vo2') dur = 45;
+                    else dur = 40;
+                }
+            }
+        }
+    }
+    
+    if (!dur || dur <= 0) dur = 40; // Fallback
+    
+    // Calculate load to match GARMIN scale, not duration×RPE scale
+    // Garmin formula is roughly: base_load × intensity_factor × time_factor
+    // Easy 8km (~48min, HR zone 2): ~60 load
+    // Threshold 10km (~45min, HR zone 4): ~150 load
+    // Long run 20km (~120min, HR zone 2-3): ~250 load
+    
+    const estimatedRPE = (intensity_pct || 50) / 10; // Convert back to 1-10 scale
+    
+    // Garmin-calibrated base rates (load per minute at different intensities)
+    const loadPerMinByIntensity = {
+        1: 0.5,  // Recovery
+        2: 0.8,  // Easy
+        3: 1.2,  // Easy-moderate
+        4: 1.5,  // Moderate
+        5: 2.0,  // Moderate-hard
+        6: 2.5,  // Tempo
+        7: 3.5,  // Threshold
+        8: 4.5,  // VO2
+        9: 5.5,  // Very hard
+        10: 6.0  // Max
+    };
+    
+    const baseRate = loadPerMinByIntensity[Math.round(estimatedRPE)] || 2.0;
+    const totalLoad = dur * baseRate;
+    
+    // Split into aerobic/anaerobic based on workout type
+    const aerobicLoad = totalLoad * profile.aerobic;
+    const anaerobicLoad = totalLoad * profile.anaerobic;
+    
+    return {
+        aerobic: Math.round(aerobicLoad),
+        anaerobic: Math.round(anaerobicLoad),
+        total: Math.round(aerobicLoad + anaerobicLoad * 1.15)
+    };
+}
+
+function disp(){
+    console.log('disp() called, s.w=', s.w, 's.wks.length=', s.wks.length);
+    
+    if(!s.wks || s.wks.length === 0){
+        console.error('ERROR: s.wks is empty or undefined!');
+        alert('Error: Training plan not initialized properly. Please try again.');
+        return;
+    }
+    
+    const wk=s.wks[s.w-1];
+    
+    if(!wk){
+        console.error('ERROR: Could not find week', s.w, 'in weeks array');
+        alert('Error: Week data missing. Please re-initialize.');
+        return;
+    }
+    
+    console.log('Week data found:', wk);
+    
+    // THREE VALUES:
+    // 1. Initial Baseline (FIXED - from blend at initialization)
+    const initialBaseline = s.initialBaseline;
+    
+    // 2. Current Fitness - Track changes from initial
+    let wg=0;
+    for(let i=0;i<s.w-1;i++){
+        wg+=s.wks[i].wkGain;
+    }
+    const currentVDOT = s.v + wg + s.rpeAdj;
+    
+    // Get race distance in km for VDOT conversions
+    const raceDistKm=rdKm(s.rd);
+    
+    // At week 1 with no training, current = initial
+    // As training progresses, track VDOT changes
+    let currentFitness;
+    if(s.w===1 && wg===0 && s.rpeAdj===0){
+        // Week 1, no training yet - use initial baseline
+        currentFitness = s.initialBaseline;
+    }else{
+        // Training has occurred - use VDOT conversion to track progress
+        currentFitness=tv(currentVDOT,raceDistKm);
+    }
+    s.currentFitness = currentFitness;
+    
+    // 3. Forecast (current VDOT + remaining training improvement)
+    const wr=s.tw-s.w+1;
+    
+    // OLD LINEAR MODEL (for comparison)
+    const bpw=0.06;
+    const vm=Math.min(s.wkm/50,1.2);
+    const rm=s.rw/5;
+    const oldLinearGain=wr*bpw*vm*rm;
+    
+    // NEW NON-LINEAR MODEL
+    // IMPORTANT: Use currentVDOT for ability band so it updates as fitness improves
+    const ability_band = getAbilityBand(currentVDOT);
+    const initial_band = getAbilityBand(s.v);
+    const runner_type = getRunnerType(s.b);
+    
+    // Track ability band progression
+    if(ability_band !== initial_band && s.w > 1) {
+      console.log(`\n🎓 ABILITY PROGRESSION: ${initial_band} → ${ability_band} (VDOT ${s.v.toFixed(1)} → ${currentVDOT.toFixed(1)})`);
+      console.log(`  Parameters now use "${ability_band}" thresholds`);
+    }
+    
+    const horizon_result = applyTrainingHorizonAdjustment({
+      baseline_vdot: currentVDOT,
+      target_distance: s.rd,
+      weeks_remaining: wr,
+      sessions_per_week: s.rw,
+      runner_type: runner_type,
+      ability_band: ability_band,
+      taper_weeks: Math.max(1, Math.ceil(wr * 0.15))  // ~15% taper
+    });
+    
+    const remainingVDOTgain = horizon_result.vdot_gain;
+    
+    // ADAPTATION RATE TRACKING
+    // After 4 weeks, check if athlete is responding faster/slower than expected
+    if(s.w >= 4) {
+      const weeks_elapsed = s.w - 1;
+      const total_gain = currentVDOT - s.v;
+      const avg_weekly_gain = total_gain / weeks_elapsed;
+      const expected_weekly_gain = 0.06 * s.rw; // Baseline expectation
+      const adaptation_ratio = avg_weekly_gain / expected_weekly_gain;
+      
+      // Store for potential UI display
+      s.adaptationRatio = adaptation_ratio;
+      
+      // Log warnings/celebrations at key checkpoints
+      if((s.w === 4 || s.w === 8) && currentRenderCycle % 10 === 0) {
+        console.log(`\n📈 ADAPTATION RATE CHECK (Week ${s.w}):`);
+        console.log(`  Total VDOT gain: +${total_gain.toFixed(2)} over ${weeks_elapsed} weeks`);
+        console.log(`  Average: ${avg_weekly_gain.toFixed(3)}/week (expected: ${expected_weekly_gain.toFixed(3)}/week)`);
+        console.log(`  Adaptation ratio: ${(adaptation_ratio * 100).toFixed(0)}%`);
+        
+        if(adaptation_ratio > 1.3) {
+          console.log(`  🎉 EXCELLENT response! Training stimulus is very effective.`);
+          console.log(`  💡 Consider: Slightly increase training load if feeling good`);
+        } else if(adaptation_ratio > 1.1) {
+          console.log(`  ✅ GOOD response. Training is working well.`);
+        } else if(adaptation_ratio > 0.8) {
+          console.log(`  ✅ NORMAL response. On track for expected improvements.`);
+        } else if(adaptation_ratio > 0.5) {
+          console.log(`  ⚠️ SLOW response. Consider: more recovery, nutrition check, stress management`);
+        } else {
+          console.log(`  🔴 MINIMAL response. May need: recovery week, training plan adjustment, or medical check`);
+        }
+      }
+    }
+    
+    // Log comparison (only on page load or major changes)
+    if(s.w === 1 || s.w === s.tw || currentRenderCycle % 10 === 0) {
+      console.log(`\n📊 FORECAST COMPARISON (Week ${s.w}/${s.tw}):`);
+      console.log(`  Ability: ${ability_band}, Type: ${runner_type}`);
+      console.log(`  Weeks remaining: ${wr}, Sessions/week: ${s.rw}`);
+      console.log(`  OLD Linear:     +${oldLinearGain.toFixed(2)} VDOT (${(oldLinearGain/currentVDOT*100).toFixed(1)}%)`);
+      console.log(`  NEW Non-linear: +${remainingVDOTgain.toFixed(2)} VDOT (${horizon_result.improvement_pct.toFixed(1)}%)`);
+      console.log(`  Components: week=${horizon_result.components.week_factor.toFixed(2)}, session=${horizon_result.components.session_factor.toFixed(2)}, type=${horizon_result.components.type_modifier.toFixed(2)}`);
+    }
+    
+    const forecastVDOT = currentVDOT + remainingVDOTgain;
+    
+    // Convert forecast VDOT to race time (expects KM!)
+    let forecast=tv(forecastVDOT,raceDistKm);
+    
+    // Add skip penalties to forecast
+    if(s.timp>0) forecast+=s.timp;
+    
+    // Guardrail: Forecast should not be slower than Current (unless heavy skip penalties)
+    // Allow forecast to be slightly slower if skips are significant
+    const maxSlowdown = s.timp * 0.5; // Can be slower by up to half the skip penalty
+    if(forecast > currentFitness + maxSlowdown) {
+        forecast = currentFitness + maxSlowdown;
+    }
+    
+    // Display all three
+    document.getElementById('initial').textContent = ft(initialBaseline);
+    document.getElementById('cv').textContent = ft(currentFitness);
+    document.getElementById('fc').textContent = ft(forecast);
+    document.getElementById('pr').textContent = `${s.w}/${s.tw}`;
+    
+    // Calculate improvement so far (Initial → Current)
+    const improvementSoFar = ((initialBaseline - currentFitness) / initialBaseline) * 100;
+    document.getElementById('impSoFar').textContent = `${improvementSoFar >= 0 ? '+' : ''}${improvementSoFar.toFixed(1)}%`;
+    
+    document.getElementById('wn').textContent=s.w;
+    document.getElementById('ph').textContent=wk.ph.toUpperCase();
+    
+    // Show warning if recent run is > 6 weeks old (or missing)
+    const staleWarning = document.getElementById('staleWarning');
+    if(s.rec && s.rec.t > 0){
+        const weeksAgo = s.rec.weeksAgo || 0;
+        if(weeksAgo > 6){
+            staleWarning.classList.remove('hidden');
+        }else{
+            staleWarning.classList.add('hidden');
+        }
+    }else{
+        // No recent run at all - show warning
+        staleWarning.classList.remove('hidden');
+    }
+    
+    // Build workouts
+    const typCapitalized = s.typ.charAt(0).toUpperCase() + s.typ.slice(1);
+    let wos=[],lib=WO[s.rd][typCapitalized];
+    
+    if(s.rw>=4){
+        const ld={'5k':12,'10k':16,'half':20,'marathon':26}[s.rd],adj=wk.ph==='taper'?0.7:wk.ph==='peak'?1.1:1;
+        wos.push({t:'long',n:'Long Run',d:`${Math.round(ld*adj)}km`,rpe:wk.ph==='taper'?3:5});
+    }
+    
+    const sl=s.rw-wos.length;let nk=Math.min(2,sl-1);
+    if(wk.ph==='base'){
+        if(lib.threshold&&nk>0){wos.push({...lib.threshold[0],t:'threshold'});nk--;}
+        if(lib.vo2&&nk>0){wos.push({...lib.vo2[0],t:'vo2'});nk--;}
+    }else if(wk.ph==='build'){
+        if(lib.race_pace&&nk>0){wos.push({...lib.race_pace[0],t:'race_pace'});nk--;}
+        if(lib.threshold&&nk>0){wos.push({...lib.threshold[0],t:'threshold'});nk--;}
+    }else if(wk.ph==='peak'){
+        if(lib.race_pace){wos.push({...(lib.race_pace.length>1?lib.race_pace[1]:lib.race_pace[0]),t:'race_pace'});nk--;}
+        if(nk>0&&(lib.mixed||lib.progressive)){wos.push({...(lib.mixed||lib.progressive)[0],t:lib.mixed?'mixed':'progressive'});nk--;}
+    }else{
+        if(lib.race_pace&&nk>0){wos.push({...lib.race_pace[0],t:'race_pace'});nk--;}
+    }
+    
+    const ne=s.rw-wos.length;
+    for(let i=0;i<ne;i++)wos.push({t:'easy',n:`Easy ${i+1}`,d:`${6+i*2}km`,rpe:3});
+    
+    // Add skipped workouts from previous week BEFORE day assignment
+    const ps=s.w>1?s.wks[s.w-2].skip:[];
+    for(const skipped of ps){
+        wos.push({
+            ...skipped.workout,
+            skipped: true,
+            skipCount: skipped.skipCount || 1,
+            originalName: skipped.n,
+            // Preserve original day if it had one, otherwise will be assigned
+            dayOfWeek: skipped.workout.dayOfWeek,
+            dayName: skipped.workout.dayName
+        });
+    }
+    
+    // Calculate and add aerobic/anaerobic loads to each workout for cross-training matching
+    for(let w of wos){
+        const loads=calculateWorkoutLoad(w.t,w.d,(w.rpe||w.r||5)*10);
+        w.aerobic=loads.aerobic;
+        w.anaerobic=loads.anaerobic;
+    }
+    
+    // Apply stored workout modifications from previous cross-training activities
+    // This ensures modifications persist across disp() calls
+    if(wk.workoutMods && wk.workoutMods.length > 0){
+        console.log(`📋 Applying ${wk.workoutMods.length} stored modifications from previous activities`);
+        for(const mod of wk.workoutMods){
+            const workout = wos.find(w => w.n === mod.name);
+            if(workout){
+                console.log(`  Restoring ${mod.name}: ${mod.status}, ${workout.d} → ${mod.newDistance}`);
+                workout.status = mod.status;
+                workout.modReason = mod.modReason;
+                workout.confidence = mod.confidence;
+                
+                // Apply distance change if workout was modified
+                if(mod.status === 'reduced' || mod.status === 'replaced'){
+                    workout.originalDistance = mod.originalDistance || workout.d;
+                    workout.d = mod.newDistance;
+                    // Recalculate loads with new distance
+                    const newLoads = calculateWorkoutLoad(workout.t, workout.d, (workout.rpe||workout.r||5)*10);
+                    workout.aerobic = newLoads.aerobic;
+                    workout.anaerobic = newLoads.anaerobic;
+                }
+            }
+        }
+    }
+    
+    // PHASE 1: Assign days of week to workouts
+    wos=assignDefaultDays(wos);
+    
+    // Apply manual moves if any
+    if(wk.workoutMoves){
+        for(const workoutName in wk.workoutMoves){
+            const newDay=wk.workoutMoves[workoutName];
+            const workout=wos.find(w=>w.n===workoutName);
+            if(workout){
+                workout.dayOfWeek=newDay;
+                workout.dayName=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][newDay];
+            }
+        }
+    }
+    
+    // Apply cross-training modifications to workouts
+    // TEMPORAL LOGIC: If current week is complete (all rated), apply to NEXT week
+    const totalWorkouts=wos.length;
+    const completedWorkouts=Object.keys(wk.rated).length;
+    const weekComplete=completedWorkouts>=totalWorkouts;
+    
+    let targetWeek=s.w;
+    if(weekComplete&&s.w<s.tw){
+        // Current week is done, apply modifications to NEXT week
+        targetWeek=s.w+1;
+    }
+    
+    const targetActivities=crossActivities.filter(a=>a.week===targetWeek && !a.applied && a.renderCycle !== currentRenderCycle);
+    if(targetActivities.length>0){
+        console.log(`Applying ${targetActivities.length} NEW activities to week ${targetWeek}:`,targetActivities.map(a=>({
+            id: a.date?.getTime(),
+            sport: a.sport,
+            dur: a.duration_min,
+            applied: a.applied,
+            renderCycle: a.renderCycle
+        })));
+        console.log('Workouts before modification:',wos.map(w=>({n:w.n,d:w.d,a:w.aerobic,an:w.anaerobic})));
+        wos=applyCrossTrainingToWorkouts(wk,wos,targetActivities);
+        console.log('Workouts after modification:',wos.map(w=>({n:w.n,d:w.d,status:w.status,reason:w.modReason})));
+        
+        // Store modifications in week data so they persist across disp() calls
+        // Only store workouts that were actually modified
+        wk.workoutMods = wos
+            .filter(w => w.status && (w.status === 'reduced' || w.status === 'replaced'))
+            .map(w => ({
+                name: w.n,
+                status: w.status,
+                modReason: w.modReason,
+                confidence: w.confidence,
+                originalDistance: w.originalDistance,
+                newDistance: w.d
+            }));
+        console.log(`💾 Stored ${wk.workoutMods.length} workout modifications`);
+        
+        // Mark activities as applied AND tag with render cycle
+        // EXCEPT activities that were reassigned to next week
+        targetActivities.forEach(a => {
+            if(!a.appliedToNextWeek){
+                a.applied = true;
+                a.renderCycle = currentRenderCycle;
+            }
+        });
+        saveState();  // Save the applied flag
+    }
+    
+    // Increment render cycle for next call
+    currentRenderCycle++;
+    
+    let h=`<h3 class="font-bold mb-3 text-sm">Week ${s.w} Workouts (${wos.length})</h3>`;
+    
+    // PACE PROGRESSION TRACKING
+    // Store Week 1 paces as baseline, show progression in later weeks
+    if(s.w === 1 && !s.week1EasyPace) {
+      // Find first easy run to use as benchmark
+      const easyRun = wos.find(w => w.t === 'easy');
+      if(easyRun && s.pac && s.pac.ea) {
+        s.week1EasyPace = s.pac.ea; // Store baseline easy pace
+      }
+    }
+    
+    // Show pace progression after Week 4
+    if(s.w >= 4 && s.week1EasyPace && s.pac && s.pac.ea) {
+      const week1Pace = s.week1EasyPace;
+      const currentPace = s.pac.ea;
+      const improvement_sec = week1Pace - currentPace;
+      
+      if(improvement_sec > 2) { // Improved by >2 seconds/km
+        h+=`<div class="bg-green-100 border border-green-300 p-2 rounded mb-2 text-xs">`;
+        h+=`🚀 <strong>Pace Progression:</strong> Easy pace improved from ${ft(week1Pace*1000)} to ${ft(currentPace*1000)} per km `;
+        h+=`(${improvement_sec.toFixed(0)}s/km faster)`;
+        h+=`</div>`;
+      } else if(improvement_sec < -2) { // Regressed
+        h+=`<div class="bg-yellow-100 border border-yellow-300 p-2 rounded mb-2 text-xs">`;
+        h+=`⚠️ <strong>Pace Regression:</strong> Easy pace slower than Week 1. Consider recovery or reduced intensity.`;
+        h+=`</div>`;
+      }
+    }
+    
+    // Check for consecutive hard day warnings
+    const warnings=checkConsecutiveHardDays(wos);
+    if(warnings.length>0){
+        h+=`<div class="bg-red-100 border-2 border-red-400 p-2 rounded mb-3">`;
+        h+=`<div class="text-xs font-bold text-red-900 mb-1">⚠️ Training Plan Warnings:</div>`;
+        for(const warn of warnings){
+            const color=warn.level==='critical'?'text-red-700':'text-yellow-700';
+            h+=`<div class="text-xs ${color} py-0.5">• ${warn.message}</div>`;
+        }
+        h+=`</div>`;
+    }
+    
+    // Show if modifications will apply to next week
+    if(weekComplete&&targetActivities.length>0){
+        h+=`<div class="bg-blue-100 border border-blue-300 p-2 rounded mb-2 text-xs">`;
+        h+=`ℹ️ This week complete. Cross-training will modify <strong>next week's</strong> workouts.`;
+        h+=`</div>`;
+    }
+    
+    // Show cross-training fitness bonus if any
+    if(wk.crossTrainingBonus && wk.crossTrainingBonus > 0.01){
+        const extraRun = wk.extraRunLoad || 0;
+        const cross = wk.unspentLoad || 0;
+        h+=`<div class="bg-green-100 border border-green-300 p-2 rounded mb-2 text-xs">`;
+        h+=`✨ <strong>Fitness Bonus:</strong> +${wk.crossTrainingBonus.toFixed(2)} VDOT from unscheduled activities<br>`;
+        if(extraRun > 0) h+=`<span class="text-green-700">🏃 Extra runs: ${extraRun.toFixed(0)} load</span>`;
+        if(extraRun > 0 && cross > 0) h+=` | `;
+        if(cross > 0) h+=`<span class="text-green-700">⚽ Cross-training: ${cross.toFixed(0)} load</span>`;
+        h+=`</div>`;
+    }
+    
+    // Show cross-training adjustments if any
+    if(wk.adjustments && wk.adjustments.length > 0){
+        h+=`<div class="bg-purple-100 border-2 border-purple-400 p-2 rounded mb-3">`;
+        h+=`<div class="text-xs font-bold text-purple-900 mb-1">⚠️ Cross-Training Adjustments:</div>`;
+        for(const adj of wk.adjustments){
+            const color = adj.vdotChange > 0 ? 'text-green-700' : adj.vdotChange < 0 ? 'text-red-700' : 'text-gray-700';
+            h+=`<div class="text-xs ${color} py-0.5">`;
+            h+=`<strong>${adj.sport}</strong> (Load: ${adj.load.toFixed(0)}) → ${adj.impact}`;
+            h+=`</div>`;
+        }
+        h+=`</div>`;
+    }
+    
+    h+=`<div class="mb-3"><button onclick="addX()" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded text-sm font-bold">+ Cross-Training</button></div>`;
+    
+    if(wk.cross.length>0){h+=`<div class="bg-purple-50 p-2 rounded mb-2 text-xs"><strong>Cross:</strong>`;
+        for(const c of wk.cross)h+=`<div>${c.s}: ${c.d}min, Load=${c.l.toFixed(1)}</div>`;h+=`</div>`;}
+    
+    // PHASE 2: Calendar View (Compact Overview)
+    h+=`<details class="mb-4" open><summary class="cursor-pointer text-sm font-medium text-gray-700 hover:text-gray-900 mb-2">📅 Weekly Calendar View</summary>`;
+    h+=`<div class="grid grid-cols-7 gap-1">`;
+    
+    const dayNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+    
+    // Headers
+    for(const day of dayNames){
+        h+=`<div class="text-xs font-bold text-center py-1 bg-gray-100 rounded">${day}</div>`;
+    }
+    
+    // Workout cells
+    for(let dayIdx=0;dayIdx<7;dayIdx++){
+        const dayWorkouts=wos.filter(w=>w.dayOfWeek===dayIdx);
+        const hasHard=dayWorkouts.some(w=>isHardWorkout(w.t));
+        const borderColor=hasHard?'border-red-300':'border-gray-200';
+        
+        h+=`<div class="border ${borderColor} rounded p-1 min-h-[120px] bg-white" ondrop="drop(event,${dayIdx})" ondragover="allowDrop(event)">`;
+        
+        if(dayWorkouts.length===0){
+            h+=`<div class="text-xs text-gray-400 text-center py-4">Drop here or Rest</div>`;
+        }else{
+            for(const w of dayWorkouts){
+                const rtd=wk.rated[w.n];
+                const isModified=w.status&&(w.status==='replaced'||w.status==='reduced');
+                const isReplaced=w.status==='replaced';
+                const isSkipped=w.skipped===true;
+                
+                // Compact workout card for calendar
+                let cardBg='bg-gray-50';
+                if(rtd||isReplaced)cardBg='bg-green-50';
+                else if(isModified)cardBg='bg-blue-50';
+                else if(isSkipped)cardBg='bg-orange-50';
+                
+                h+=`<div class="${cardBg} border border-gray-300 rounded p-1 mb-1 text-xs cursor-move" draggable="true" ondragstart="dragStart(event,'${w.n.replace(/'/g,"\\'")}')" ondragend="dragEnd(event)">`;
+                h+=`<div class="font-semibold">📌 ${w.n}${rtd?'✓':''}</div>`;
+                h+=`<div class="text-xs text-gray-600">${w.d}</div>`;
+                
+                // Add quick pace/time info
+                const quickInfo = parseWorkoutDescription(w.d, s.pac);
+                if (quickInfo.avgPace) {
+                    h+=`<div class="text-xs text-blue-600">${formatPace(quickInfo.avgPace)}</div>`;
+                }
+                if (quickInfo.totalTime > 0) {
+                    h+=`<div class="text-xs text-purple-600">${formatWorkoutTime(quickInfo.totalTime)}</div>`;
+                }
+                
+                h+=`<div class="text-xs text-blue-600">RPE ${w.rpe||w.r}</div>`;
+                
+                // Modification indicator
+                if(isModified){
+                    const icon=isReplaced?'✅':'📉';
+                    h+=`<div class="text-xs ${isReplaced?'text-green-600':'text-blue-600'} mt-1">${icon}</div>`;
+                }
+                
+                // Move workout dropdown
+                h+=`<select onchange="moveWorkout('${w.n.replace(/'/g,"\\'")}',parseInt(this.value));this.value=-1" class="w-full mt-1 text-xs border rounded px-1 py-0.5">`;
+                h+=`<option value="-1">Move to...</option>`;
+                for(let d=0;d<7;d++){
+                    if(d!==w.dayOfWeek){
+                        h+=`<option value="${d}">${dayNames[d]}</option>`;
+                    }
+                }
+                h+=`</select>`;
+                
+                h+=`</div>`;
+            }
+        }
+        
+        h+=`</div>`;
+    }
+    
+    h+=`</div></div></details>`; // Close calendar view
+    
+    // Detailed Workout View (ALWAYS VISIBLE - PRIMARY INTERFACE)
+    h+=`<h4 class="font-semibold text-sm mb-2 mt-4">Workouts</h4>`;
+    h+=`<div class="space-y-2">`;
+    for(const w of wos){
+        const rtd=wk.rated[w.n],imp=IMP[s.rd][w.t]||0.5;
+        const loads=calculateWorkoutLoad(w.t,w.d,(w.rpe||w.r)*10);
+        
+        // Check if workout was modified by cross-training
+        const isModified=w.status&&(w.status==='replaced'||w.status==='reduced');
+        const isReplaced=w.status==='replaced';
+        
+        // Skipped workout banner
+        const isSkipped = w.skipped === true;
+        
+        // Calculate dynamic penalty for this workout if skipped again
+        let totalSkips = 0;
+        for(let i = 0; i < s.w; i++){
+            if(s.wks[i].rated){
+                totalSkips += Object.values(s.wks[i].rated).filter(v => v === 'skip').length;
+            }
+        }
+        const weeksRemaining = s.tw - s.w + 1;
+        const skipPenalty = isSkipped ? calculateSkipPenalty(w.t, s.rd, weeksRemaining, s.tw, totalSkips) : (TIM[s.rd][w.t] || 20);
+        
+        const skipBannerColor = w.skipCount === 1 ? 'bg-yellow-100 border-yellow-400 text-yellow-900' : 'bg-red-100 border-red-400 text-red-900';
+        
+        // Different border colors for different statuses
+        let borderClass='border-gray-200';
+        // If rated (including auto-completed from replacement), show as done
+        if(rtd||isReplaced)borderClass='border-green-500 bg-green-50';
+        else if(isModified)borderClass='border-blue-500 bg-blue-50';
+        else if(isSkipped)borderClass='border-orange-500 bg-orange-50';
+        
+        h+=`<div class="border-2 ${borderClass} p-2 rounded">`;
+        
+        // Show modification banner if workout was modified by cross-training
+        if(isModified&&w.modReason){
+            const modColor=isReplaced?'bg-green-100 border-green-400 text-green-900':'bg-blue-100 border-blue-400 text-blue-900';
+            const confidenceBadge=w.confidence==='high'?'🟢':w.confidence==='medium'?'🟡':'🔴';
+            const confidenceText=w.confidence==='high'?'High confidence (Garmin data)':w.confidence==='medium'?'Medium confidence (RPE-only)':'Low confidence (RPE-only estimate)';
+            h+=`<div class="mb-2 p-1.5 ${modColor} border rounded text-xs">`;
+            h+=`<div class="font-bold">${isReplaced?'✅ COMPLETED':'📉 REDUCED'}: ${w.modReason}</div>`;
+            if(w.confidence){
+                h+=`<div class="text-xs mt-1 opacity-75">${confidenceBadge} ${confidenceText}</div>`;
+            }
+            h+=`</div>`;
+        }
+        
+        // Show skip banner if this is a skipped workout
+        if(isSkipped){
+            h+=`<div class="mb-2 p-1.5 ${skipBannerColor} border rounded text-xs font-bold">`;
+            if(w.skipCount === 1){
+                h+=`⚠️ SKIPPED WORKOUT - Complete now (no penalty yet)`;
+            }else{
+                h+=`🔴 FINAL CHANCE - Skip again = +${skipPenalty}s penalty!`;
+            }
+            h+=`</div>`;
+        }
+        
+        h+=`<div class="flex justify-between mb-1 text-xs">`;
+        h+=`<div><strong>${w.n}</strong> ${rtd?'<span class="bg-green-500 text-white px-1 py-0.5 rounded ml-1">✓'+rtd+'</span>':''}`;
+        if(isReplaced&&!rtd){
+            // Show auto-completed badge for replaced workouts
+            const autoRPE=wk.rated[w.n]||w.rpe||w.r||5;
+            h+=`<span class="bg-green-500 text-white px-1 py-0.5 rounded ml-1">✓${autoRPE} auto</span>`;
+        }
+        h+=` <span class="text-gray-600">(${(imp*100).toFixed(0)}%)</span></div>`;
+        h+=`<span class="bg-blue-500 text-white px-1 py-0.5 rounded">RPE ${w.rpe||w.r}</span></div>`;
+        h+=`<div class="text-xs text-gray-700 mb-1">${w.d}</div>`;
+        h+=`<div class="text-xs mb-1 text-gray-600">Load: <span class="text-red-600">A${loads.aerobic}</span> / <span class="text-orange-600">An${loads.anaerobic}</span> (${loads.total})</div>`;
+        
+        // Add pace and time estimation (skip for replaced workouts)
+        const workoutInfo = (w.status === 'replaced') ? {totalDistance: 0, totalTime: 0} : parseWorkoutDescription(w.d, s.pac);
+        if (workoutInfo.avgPace || workoutInfo.totalTime > 0) {
+            h+=`<div class="text-xs mb-1 text-blue-700 bg-blue-50 p-1 rounded">`;
+            if (workoutInfo.avgPace) {
+                h+=`<span class="font-medium">Pace:</span> ${formatPace(workoutInfo.avgPace)}`;
+            }
+            if (workoutInfo.totalTime > 0) {
+                if (workoutInfo.avgPace) h+=` | `;
+                h+=`<span class="font-medium">Est. Time:</span> ${formatWorkoutTime(workoutInfo.totalTime)}`;
+            }
+            if (workoutInfo.totalDistance > 0) {
+                h+=` | <span class="font-medium">${(workoutInfo.totalDistance/1000).toFixed(1)}km</span>`;
+            }
+            h+=`</div>`;
+        }
+        
+        // Don't show rating buttons for replaced workouts (they're auto-completed)
+        if(!isReplaced){
+            h+=`<div class="text-xs mb-1">${rtd?'Re-rate:':'Rate:'}</div><div class="grid grid-cols-10 gap-0.5">`;
+            for(let r=1;r<=10;r++)h+=`<button onclick="rate('${w.n.replace(/'/g,"\\'")}',${r},${w.rpe||w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border rounded hover:bg-blue-100">${r}</button>`;
+            h+=`</div>`;
+        }else{
+            const sportName=w.modReason.match(/by (\w+)/)?.[1]||'cross-training';
+            h+=`<div class="text-xs text-green-600 font-medium">✅ Auto-completed via ${sportName} - No manual rating needed</div>`;
+        }
+        
+        h+=`<button onclick="skip('${w.n.replace(/'/g,"\\'")}','${w.t}',${isSkipped},${w.skipCount||0},'${w.d.replace(/'/g,"\\'")}',${w.rpe||w.r},${w.dayOfWeek},'${w.dayName||''}')" class="w-full mt-1 text-xs ${isSkipped?'bg-red-200 hover:bg-red-300':isReplaced?'bg-gray-300 cursor-not-allowed':'bg-yellow-100'} py-0.5 rounded" ${isReplaced?'disabled':''}>${isSkipped?`Skip Again (+${skipPenalty}s)`:isReplaced?'✓ Completed':'Skip'}</button>`;
+        h+=`</div>`;}
+    h+=`</div>`; // Close workout list
+    
+    h+=`<div class="mt-3 grid grid-cols-2 gap-1 text-xs">`;
+    h+=`<div class="bg-gray-50 p-1.5 rounded">Easy: <strong>${fp(s.pac.e)}</strong></div>`;
+    h+=`<div class="bg-gray-50 p-1.5 rounded">Threshold: <strong>${fp(s.pac.t)}</strong></div>`;
+    h+=`<div class="bg-gray-50 p-1.5 rounded">Interval: <strong>${fp(s.pac.i)}</strong></div>`;
+    h+=`<div class="bg-gray-50 p-1.5 rounded">Marathon: <strong>${fp(s.pac.m)}</strong></div></div>`;
+    
+    // Cross-Training Section
+    h+=`<div class="mt-3 p-3 bg-purple-50 rounded border border-purple-200">`;
+    h+=`<div class="font-bold text-sm mb-2 text-purple-900">⚽ Cross-Training & Extra Activities</div>`;
+    h+=`<div class="grid grid-cols-3 gap-1 mb-2">`;
+    h+=`<select id="crossSport" class="text-xs border rounded px-1 py-1">`;
+    h+=`<option value="">Select sport...</option>`;
+    h+=`<option value="soccer">⚽ Soccer/Football</option>`;
+    h+=`<option value="rugby">🏉 Rugby</option>`;
+    h+=`<option value="basketball">🏀 Basketball</option>`;
+    h+=`<option value="tennis">🎾 Tennis</option>`;
+    h+=`<option value="swimming">🏊 Swimming</option>`;
+    h+=`<option value="cycling">🚴 Cycling</option>`;
+    h+=`<option value="strength">💪 Strength/Gym</option>`;
+    h+=`<option value="extra_run">🏃 Extra Run</option>`;
+    h+=`</select>`;
+    h+=`<input type="number" id="crossDur" placeholder="Duration (min)" class="text-xs border rounded px-1 py-1" min="1" max="600">`;
+    h+=`<input type="number" id="crossRPE" placeholder="RPE (1-10)" class="text-xs border rounded px-1 py-1" min="1" max="10">`;
+    h+=`</div>`;
+    h+=`<div class="grid grid-cols-2 gap-1 mb-2">`;
+    h+=`<input type="number" id="crossAerobic" placeholder="Aerobic Load (optional)" class="text-xs border rounded px-1 py-1" min="0" step="1">`;
+    h+=`<input type="number" id="crossAnaerobic" placeholder="Anaerobic Load (optional)" class="text-xs border rounded px-1 py-1" min="0" step="1">`;
+    h+=`</div>`;
+    h+=`<div class="text-xs text-gray-600 mb-2">💡 <strong>Garmin loads:</strong> Use "Training Load" numbers (e.g., Aerobic: 180, Anaerobic: 46), NOT Training Effect scores (4.6/2.4). Find in activity details → Training Load section.</div>`;
+    h+=`<button onclick="logActivity()" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-1.5 rounded text-xs font-bold">Add Activity</button>`;
+    h+=`</div>`;
+    
+    // Activity log
+    h+=`<div id="activityLog" class="mt-2 text-xs bg-gray-50 p-2 rounded max-h-32 overflow-y-auto hidden">`;
+    h+=`<div class="font-medium mb-1">Activity Log:</div>`;
+    h+=`<div id="activityLogEntries"></div></div>`;
+    
+    document.getElementById('wo').innerHTML=h;
+    
+    const tot=wos.length,don=Object.keys(wk.rated).length;
+    document.getElementById('bn').disabled=don<tot;
+    document.getElementById('bn').className=don>=tot?'w-full bg-green-600 hover:bg-green-700 text-white font-bold py-2 rounded text-xs':'w-full bg-gray-300 text-gray-600 font-bold py-2 rounded text-xs';
+    document.getElementById('st').innerHTML=don>=tot?`✅ ${don}/${tot}`:`⚠️ ${don}/${tot}`;
+}
+
+function rate(n,r,exp,typ,isSkipped){
+    const wk=s.wks[s.w-1];
+    
+    // If this was a skipped workout that's now being completed, remove from previous week's skip list
+    if(isSkipped){
+        const pw=s.wks[s.w-2];
+        if(pw){
+            pw.skip=pw.skip.filter(x=>x.n!==n);
+            log(`✅ ${n} completed (was skipped from previous week)`);
+        }
+    }
+    
+    const oldRPE=wk.ratedChanges&&wk.ratedChanges[n];
+    if(oldRPE!==undefined)s.rpeAdj-=oldRPE;
+    
+    wk.rated[n]=r;
+    const dif=r-exp;let ch=0;
+    if(dif<=-3)ch=0.15;else if(dif<=-2)ch=0.08;
+    else if(dif>=3)ch=-0.15;else if(dif>=2)ch=-0.08;
+    const imp=IMP[s.rd][typ]||0.5,wch=ch*imp;
+    
+    if(!wk.ratedChanges)wk.ratedChanges={};
+    wk.ratedChanges[n]=wch;
+    s.rpeAdj+=wch;
+    
+    log(Math.abs(dif)<=1?`✓ ${n} RPE${r}`:`${ch>0?'💪':'⚠️'} ${n}: ${wch>=0?'+':''}${wch.toFixed(2)}`);
+    
+    let wg=0;for(let i=0;i<s.w-1;i++)wg+=s.wks[i].wkGain;
+    s.pac=gp(s.v+wg+s.rpeAdj,s.lt);
+    saveState(); // Save after rating
+    disp();
+}
+
+function skip(n,typ,isAlreadySkipped,currentSkipCount,desc,rpe,dayOfWeek,dayName){
+    const wk=s.wks[s.w-1];
+    
+    if(isAlreadySkipped){
+        // This is the 2nd skip - apply penalty and DON'T carry forward
+        // Count total skips so far for penalty calculation
+        let totalSkips = 0;
+        for(let i = 0; i < s.w; i++){
+            if(s.wks[i].rated){
+                totalSkips += Object.values(s.wks[i].rated).filter(v => v === 'skip').length;
+            }
+        }
+        
+        const weeksRemaining = s.tw - s.w + 1;
+        const penalty = calculateSkipPenalty(typ, s.rd, weeksRemaining, s.tw, totalSkips);
+        s.timp += penalty;
+        
+        // Remove from previous week's skip list (workout is gone)
+        const pw=s.wks[s.w-2];
+        if(pw){
+            pw.skip=pw.skip.filter(x=>x.n!==n);
+        }
+        
+        wk.rated[n]='skip';
+        log(`❌ ${n} skipped AGAIN: +${penalty}s penalty (${totalSkips} total skips, ${weeksRemaining}w remaining)`);
+    }else{
+        // First skip - no penalty, move to next week
+        if(wk.rated[n]){delete wk.rated[n];}
+        wk.rated[n]='skip';
+        
+        // Store full workout details for next week INCLUDING day assignment
+        wk.skip.push({
+            n: n,
+            t: typ,
+            workout: {
+                n: n,
+                t: typ,
+                d: desc || '',
+                rpe: rpe || 5,
+                r: rpe || 5,
+                dayOfWeek: dayOfWeek!==undefined?dayOfWeek:undefined,
+                dayName: dayName || undefined
+            },
+            skipCount: 1
+        });
+        
+        log(`⏭️ ${n} skipped (moved to ${dayName||'next week'}, no penalty)`);
+    }
+    
+    saveState(); // Save after skip
+    disp();
+}
+
+function makeup(n){
+    const pw=s.wks[s.w-2],sk=pw.skip.find(x=>x.n===n);
+    if(!sk)return;
+    pw.skip=pw.skip.filter(x=>x.n!==n);
+    s.timp-=sk.i;
+    log(`✅ ${n}: -${sk.i}s`);
+    disp();
+}
+
+function addX(){
+    if(!s.wks.length){alert('Init first!');return;}
+    const sp=['Cycling','Swimming','Football','Rowing','Elliptical'];
+    const choice=prompt(`Sport:\n${sp.map((x,i)=>`${i+1}. ${x}`).join('\n')}\n\nNumber (1-5):`);
+    if(!choice)return;
+    const si=parseInt(choice)-1;
+    if(si<0||si>=5){alert('Invalid');return;}
+    const sn=sp[si].toLowerCase();
+    
+    const dur=prompt(`Minutes?`,'60');
+    if(!dur)return;
+    const dn=parseInt(dur);
+    if(isNaN(dn)||dn<=0){alert('Invalid');return;}
+    
+    const ae=prompt(`Aerobic (0-5)?`,'3.5');
+    if(!ae)return;
+    const aen=parseFloat(ae);
+    if(isNaN(aen)){alert('Invalid');return;}
+    
+    const an=prompt(`Anaerobic (0-5)?`,'1.0');
+    if(!an)return;
+    const ann=parseFloat(an);
+    if(isNaN(ann)){alert('Invalid');return;}
+    
+    const spec={cycling:0.7,swimming:0.6,football:0.75,rowing:0.65,elliptical:0.8}[sn]||0.5;
+    const st=(aen*0.7+ann*0.3),load=st*spec*(dn/60),ben=load*0.06;
+    s.wks[s.w-1].cross.push({s:sn,d:dn,ae:aen,an:ann,l:load});
+    s.rpeAdj+=ben;
+    log(`🚴 ${sn} ${dn}min: +${ben.toFixed(2)}`);
+    disp();
+}
+
+function updFit(){
+    if(!s.wks.length){alert('Initialize plan first!');return;}
+    
+    const curLTm=+document.getElementById('curltm').value||0;
+    const curLTs=+document.getElementById('curlts').value||0;
+    const curVO2=+document.getElementById('curvo2').value||0;
+    
+    if(!curLTm && !curLTs && !curVO2){
+        alert('Enter at least one current physiology value (LT or VO2)');
+        return;
+    }
+    
+    const newLT = (curLTm||curLTs) ? curLTm*60+curLTs : null;
+    const newVO2val = curVO2 || null;
+    
+    // Calculate expected improvements based on weeks elapsed
+    const level = inferLevel(s.v);
+    const weeksElapsed = s.w - 1;
+    
+    const expectedVO2Gain = EXPECTED_GAINS[level].vo2 * weeksElapsed;
+    const expectedLTGain = EXPECTED_GAINS[level].lt * weeksElapsed;
+    
+    // Calculate observed improvements from INITIAL to CURRENT
+    let observedVO2Gain = 0;
+    let observedLTGain = 0;
+    
+    if(newVO2val && s.initialVO2) {
+        const rawGain = (newVO2val - s.initialVO2) / s.initialVO2;
+        // Garmin conservatism: only use 50% of observed gain
+        observedVO2Gain = rawGain * 0.5;
+    }
+    
+    if(newLT && s.initialLT) {
+        // LT improvement = LOWER sec/km (faster)
+        observedLTGain = (s.initialLT - newLT) / s.initialLT;
+    }
+    
+    // Calculate excess (outperformance)
+    const excessVO2 = observedVO2Gain - expectedVO2Gain;
+    const excessLT = observedLTGain - expectedLTGain;
+    const excessBiomarker = Math.max(excessVO2, excessLT);
+    
+    // Observed gain from RPE (already captured)
+    const observedRPEGain = Math.abs(s.rpeAdj) * 0.01;
+    
+    // Noise buffer
+    const noiseBuffer = 0.003; // 0.3%
+    
+    // Extra gain to apply (only if outperforming)
+    const extraGain = Math.max(0, excessBiomarker - observedRPEGain - noiseBuffer);
+    
+    log(`📊 Fitness Update [${level}, Week ${s.w}]:`);
+    if(newLT) log(`  Initial LT: ${fp(s.initialLT)} → Current: ${fp(newLT)}`);
+    if(newVO2val) log(`  Initial VO2: ${s.initialVO2} → Current: ${newVO2val}`);
+    log(`  Expected gains: VO2 +${(expectedVO2Gain*100).toFixed(2)}%, LT +${(expectedLTGain*100).toFixed(2)}%`);
+    log(`  Observed gains: VO2 +${(observedVO2Gain*100).toFixed(2)}%, LT +${(observedLTGain*100).toFixed(2)}%`);
+    log(`  RPE already captured: +${(observedRPEGain*100).toFixed(2)}%`);
+    log(`  Excess: +${(excessBiomarker*100).toFixed(2)}%`);
+    log(`  Extra to apply: +${(extraGain*100).toFixed(2)}%`);
+    
+    const statusBox = document.getElementById('fitStatus');
+    const statusText = document.getElementById('fitStatusText');
+    
+    if(extraGain > 0.0001) {
+        // OUTPERFORMING - update current fitness
+        log(`  🎯 OUTPERFORMING expectations!`);
+        
+        // Show visual indicator
+        statusBox.classList.remove('hidden', 'bg-gray-50', 'bg-red-50', 'border-red-300');
+        statusBox.classList.add('bg-green-50', 'border', 'border-green-300');
+        statusText.innerHTML = `🎯 <strong>Outperforming!</strong><br>Your improvements exceed expectations.<br>Paces updated.`;
+        
+        // Update stored values
+        if(newLT) s.lt = newLT;
+        if(newVO2val) s.vo2 = newVO2val;
+        
+        // Recalculate current fitness with new physiology
+        let newVDOT = s.v;
+        if(newLT) {
+            newVDOT = cv(10000, newLT*10);
+        } else if(newVO2val) {
+            newVDOT = newVO2val * 0.90;
+        }
+        
+        // Update current fitness
+        const oldCurrent = s.currentFitness;
+        s.currentFitness = tv(newVDOT, rdKm(s.rd));
+        
+        log(`  ✅ Current Fitness: ${ft(oldCurrent)} → ${ft(s.currentFitness)}`);
+        log(`  ✅ Paces updated!`);
+        
+        // Update paces
+        s.pac = gp(newVDOT, newLT);
+        
+    } else if(excessBiomarker < -0.01) {
+        // UNDERPERFORMING - fitness getting worse
+        log(`  ⚠️ UNDERPERFORMING: Fitness declining or not improving as expected`);
+        
+        // Show warning indicator
+        statusBox.classList.remove('hidden', 'bg-gray-50', 'bg-green-50', 'border-green-300');
+        statusBox.classList.add('bg-red-50', 'border', 'border-red-300');
+        statusText.innerHTML = `⚠️ <strong>Underperforming</strong><br>Fitness below expected trajectory.<br>Consider rest or reducing volume.`;
+        
+        // Still update to reflect reality
+        if(newLT) s.lt = newLT;
+        if(newVO2val) s.vo2 = newVO2val;
+        
+        let newVDOT = s.v;
+        if(newLT) {
+            newVDOT = cv(10000, newLT*10);
+        } else if(newVO2val) {
+            newVDOT = newVO2val * 0.90;
+        }
+        
+        const oldCurrent = s.currentFitness;
+        s.currentFitness = tv(newVDOT, rdKm(s.rd));
+        
+        log(`  ⚠️ Current Fitness: ${ft(oldCurrent)} → ${ft(s.currentFitness)}`);
+        log(`  💡 Recommendation: Add recovery week or reduce training load`);
+        
+        s.pac = gp(newVDOT, newLT);
+        
+    } else {
+        // ON TRACK - no changes needed
+        log(`  ℹ️ Improving as expected (within normal range)`);
+        log(`  No changes to fitness or paces - you're on track!`);
+        
+        // Show visual indicator
+        statusBox.classList.remove('hidden', 'bg-green-50', 'border-green-300', 'bg-red-50', 'border-red-300');
+        statusBox.classList.add('bg-gray-50');
+        statusText.innerHTML = `✓ <strong>On Track</strong><br>Improving as expected.<br>No pace changes needed.`;
+        
+        // Show expected values
+        const expectedLT = s.initialLT ? s.initialLT * (1 - expectedLTGain) : null;
+        const expectedVO2 = s.initialVO2 ? s.initialVO2 * (1 + expectedVO2Gain) : null;
+        
+        if(expectedLT && newLT) {
+            const diff = newLT - expectedLT;
+            log(`  Expected LT: ${fp(expectedLT)}, Actual: ${fp(newLT)} (${diff >= 0 ? '+' : ''}${diff.toFixed(1)}s/km)`);
+        }
+        if(expectedVO2 && newVO2val) {
+            const diff = newVO2val - expectedVO2;
+            log(`  Expected VO2: ${expectedVO2.toFixed(1)}, Actual: ${newVO2val} (${diff >= 0 ? '+' : ''}${diff.toFixed(1)})`);
+        }
+    }
+    
+    disp();
+}
+
+function next(){
+    const wk=s.wks[s.w-1];
+    wk.wkGain=0.06;
+    log(`✅ Week ${s.w}: +0.06`);
+    s.w++;
+    if(s.w>s.tw){complete();return;}
+    saveState(); // Save after week advance
+    disp();
+}
+
+function complete(){
+    let wg=0;for(let i=0;i<s.tw;i++)wg+=s.wks[i].wkGain;
+    const fv=s.v+wg+s.rpeAdj,dk={'5k':5,'10k':10,'half':21.1,'marathon':42.2}[s.rd];
+    let fin=vt(dk,fv);if(s.timp>0)fin+=s.timp;
+    let h=`<div class="text-center py-10"><div class="text-6xl mb-4">🎉</div><h2 class="text-2xl font-bold mb-4">Complete!</h2>`;
+    h+=`<div class="bg-green-600 text-white p-6 rounded-lg inline-block mb-4"><div class="text-xs mb-2">Final</div>`;
+    h+=`<div class="text-4xl font-bold">${ft(fin)}</div></div>`;
+    h+=`<div class="grid grid-cols-3 gap-3 max-w-md mx-auto text-sm">`;
+    h+=`<div class="bg-blue-50 p-3 rounded"><div class="text-xs">Start</div><div class="text-xl font-bold">${s.v.toFixed(1)}</div></div>`;
+    h+=`<div class="bg-green-50 p-3 rounded"><div class="text-xs">Final</div><div class="text-xl font-bold">${fv.toFixed(1)}</div></div>`;
+    h+=`<div class="bg-orange-50 p-3 rounded"><div class="text-xs">Expected</div><div class="text-xl font-bold">${s.expectedFinal.toFixed(1)}</div></div></div></div>`;
+    document.getElementById('wo').innerHTML=h;
+}
+
+function log(m){const e=document.createElement('div');e.className='p-1.5 bg-gray-50 rounded border-l-2 border-blue-500 text-xs';
+    e.innerHTML=`<span class="text-gray-500">W${s.w}</span> ${m}`;
+    document.getElementById('lg').insertBefore(e,document.getElementById('lg').firstChild);}
+
+function reset(){
+    if(confirm('Reset and clear all data? This cannot be undone!')){
+        localStorage.removeItem('marathonSimulatorState');
+        localStorage.removeItem('marathonSimulatorCross');
+        location.reload();
+    }
+}
+
+// ============= DAYS OF WEEK ASSIGNMENT =============
+
+function assignDefaultDays(workouts){
+    // Smart day assignment strategy:
+    // Long Run → Sunday (6)
+    // First Quality (Threshold/VO2) → Tuesday (1)
+    // Second Quality (Race Pace/Tempo) → Thursday (3)
+    // Easy runs → Fill Mon(0), Wed(2), Fri(4), Sat(5)
+    
+    const dayNames=['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    
+    // Identify workout types
+    const long=workouts.find(w=>w.t==='long');
+    const quality=workouts.filter(w=>['threshold','vo2','race_pace','marathon_pace','intervals','mixed','progressive'].includes(w.t));
+    const easy=workouts.filter(w=>w.t==='easy'||(!['long','threshold','vo2','race_pace','marathon_pace','intervals','mixed','progressive'].includes(w.t)));
+    
+    // Assign long run to Sunday
+    if(long){
+        long.dayOfWeek=6;
+        long.dayName='Sunday';
+    }
+    
+    // Assign quality workouts to Tue/Thu
+    const qualityDays=[1,3]; // Tuesday, Thursday
+    quality.forEach((w,i)=>{
+        if(i<qualityDays.length){
+            w.dayOfWeek=qualityDays[i];
+            w.dayName=dayNames[qualityDays[i]];
+        }else{
+            // Extra quality sessions go to Saturday
+            w.dayOfWeek=5;
+            w.dayName='Saturday';
+        }
+    });
+    
+    // Assign easy runs to remaining days (Mon, Wed, Fri, Sat)
+    const easyDays=[0,2,4,5]; // Mon, Wed, Fri, Sat
+    let easyDayIndex=0;
+    
+    easy.forEach(w=>{
+        // Skip days already taken by quality workouts
+        while(easyDayIndex<easyDays.length){
+            const day=easyDays[easyDayIndex];
+            const dayTaken=quality.some(q=>q.dayOfWeek===day);
+            if(!dayTaken){
+                w.dayOfWeek=day;
+                w.dayName=dayNames[day];
+                easyDayIndex++;
+                break;
+            }
+            easyDayIndex++;
+        }
+        // If we run out of days, stack on Saturday
+        if(!w.dayOfWeek&&w.dayOfWeek!==0){
+            w.dayOfWeek=5;
+            w.dayName='Saturday';
+        }
+    });
+    
+    // Ensure all workouts have a day assigned
+    workouts.forEach(w=>{
+        if(!w.dayOfWeek&&w.dayOfWeek!==0){
+            w.dayOfWeek=0;
+            w.dayName='Monday';
+        }
+    });
+    
+    return workouts;
+}
+
+function isHardWorkout(workoutType){
+    return ['threshold','vo2','race_pace','marathon_pace','intervals','long','mixed','progressive'].includes(workoutType);
+}
+
+function checkConsecutiveHardDays(workouts){
+    const warnings=[];
+    
+    // Group workouts by day
+    const byDay={};
+    workouts.forEach(w=>{
+        if(!byDay[w.dayOfWeek])byDay[w.dayOfWeek]=[];
+        byDay[w.dayOfWeek].push(w);
+    });
+    
+    // Check each day
+    for(let day=0;day<=6;day++){
+        const today=byDay[day]||[];
+        const tomorrow=byDay[(day+1)%7]||[];
+        
+        const hardToday=today.some(w=>isHardWorkout(w.t));
+        const hardTomorrow=tomorrow.some(w=>isHardWorkout(w.t));
+        
+        if(hardToday&&hardTomorrow){
+            const todayNames=today.filter(w=>isHardWorkout(w.t)).map(w=>w.n).join(', ');
+            const tomorrowNames=tomorrow.filter(w=>isHardWorkout(w.t)).map(w=>w.n).join(', ');
+            warnings.push({
+                level:'critical',
+                message:`Hard workouts on consecutive days: ${todayNames} (${today[0].dayName}) → ${tomorrowNames} (${tomorrow[0].dayName})`
+            });
+        }
+        
+        // Check for multiple hard workouts same day
+        const hardCount=today.filter(w=>isHardWorkout(w.t)).length;
+        if(hardCount>1){
+            const names=today.filter(w=>isHardWorkout(w.t)).map(w=>w.n).join(', ');
+            warnings.push({
+                level:'critical',
+                message:`Multiple hard workouts on ${today[0].dayName}: ${names}`
+            });
+        }
+    }
+    
+    return warnings;
+}
+
+function moveWorkout(workoutName,newDay){
+    // Find workout in current week and update its day
+    const wk=s.wks[s.w-1];
+    if(!wk)return;
+    
+    // We need to store moves and re-render
+    // For now, just refresh with the move applied
+    // This will be handled by re-assigning days in disp()
+    // Store the move preference
+    if(!wk.workoutMoves)wk.workoutMoves={};
+    wk.workoutMoves[workoutName]=newDay;
+    
+    log(`📅 Moved ${workoutName} to ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][newDay]}`);
+    disp();
+}
+
+// Drag and drop support
+let draggedWorkout=null;
+
+function dragStart(event,workoutName){
+    draggedWorkout=workoutName;
+    event.dataTransfer.effectAllowed='move';
+    event.dataTransfer.setData('text/html',workoutName);
+    event.target.style.opacity='0.5';
+}
+
+function dragEnd(event){
+    event.target.style.opacity='';
+}
+
+function allowDrop(event){
+    event.preventDefault();
+    event.dataTransfer.dropEffect='move';
+    return false;
+}
+
+function drop(event,targetDay){
+    event.preventDefault();
+    if(draggedWorkout){
+        moveWorkout(draggedWorkout,targetDay);
+        draggedWorkout=null;
+    }
+    return false;
+}
+
+// ============= CROSS-TRAINING INTEGRATION (PROPER SPEC IMPLEMENTATION) =============
+
+const SPORTS_DB={
+    soccer:{mult:1.35, noReplace:['long'], runSpec:0.40},
+    rugby:{mult:1.50, noReplace:['long'], runSpec:0.35},
+    basketball:{mult:1.25, noReplace:['long'], runSpec:0.45},
+    tennis:{mult:1.20, noReplace:[], runSpec:0.50},
+    swimming:{mult:0.65, noReplace:[], runSpec:0.20},
+    cycling:{mult:0.75, noReplace:[], runSpec:0.55},
+    strength:{mult:1.10, noReplace:[], runSpec:0.30},
+    extra_run:{mult:1.00, noReplace:[], runSpec:1.00}
+};
+
+const SPORT_ALIASES={
+    'football':'soccer',
+    'touch_rugby':'rugby','rugby_union':'rugby','rugby_league':'rugby',
+    'padel':'tennis','pickleball':'tennis','weights':'strength',
+    'gym':'strength','lifting':'strength'
+};
+
+const RPE_MULT={9:1.20,8:1.12,7:1.06,6:1.00,5:0.95,4:0.95,3:0.95,2:0.95,1:0.95};
+const ANAEROBIC_WEIGHT=1.15;
+const RPE_WEIGHT=0.06;
+const DEFAULT_RPE=5;
+
+function normalizeSport(name){
+    const clean=name.toLowerCase().trim().replace(/ /g,'_');
+    return SPORT_ALIASES[clean]||clean;
+}
+
+function getRPEMult(rpe){
+    for(const threshold of [9,8,7,6,5,4,3,2,1]){
+        if(rpe>=threshold)return RPE_MULT[threshold];
+    }
+    return 1.0;
+}
+
+function rpeFactor(rpe){
+    const r=rpe||DEFAULT_RPE;
+    return 1.0+(r-DEFAULT_RPE)*RPE_WEIGHT;
+}
+
+function weightedLoad(aerobic,anaerobic){
+    return aerobic+ANAEROBIC_WEIGHT*anaerobic;
+}
+
+function intensityProfile(aerobic,anaerobic){
+    const total=aerobic+anaerobic;
+    const ratio=total<=0?0:anaerobic/total;
+    const weighted=weightedLoad(aerobic,anaerobic);
+    return {total,anaerobicRatio:ratio,weighted};
+}
+
+function isHardDay(aerobic,anaerobic){
+    const profile=intensityProfile(aerobic,anaerobic);
+    return profile.anaerobicRatio>=0.22||profile.weighted>=40;
+}
+
+function vibeSimilarity(a1,an1,a2,an2){
+    const p1=intensityProfile(a1,an1);
+    const p2=intensityProfile(a2,an2);
+    const ratioScore=1.0-Math.abs(p1.anaerobicRatio-p2.anaerobicRatio);
+    const loadScore=1.0/(1.0+Math.abs(p1.weighted-p2.weighted)/30.0);
+    return 0.6*ratioScore+0.4*loadScore;
+}
+
+function canTouchWorkout(sportKey,workoutType){
+    const sp=SPORTS_DB[sportKey];
+    if(!sp)return true;
+    const wt=workoutType.toLowerCase();
+    return !sp.noReplace.some(nr=>nr.toLowerCase()===wt);
+}
+
+function getWeeklyLoad(week){
+    return crossActivities
+        .filter(a=>a.week===week)
+        .reduce((sum,a)=>{
+            const sportData=SPORTS_DB[normalizeSport(a.sport)]||{mult:1.0};
+            let load=a.aerobic_load+(a.anaerobic_load||0)*ANAEROBIC_WEIGHT;
+            load*=sportData.mult;
+            load*=getRPEMult(a.rpe);
+            return sum+load;
+        },0);
+}
+
+// Apply cross-training modifications to this week's workouts
+function applyCrossTrainingToWorkouts(wk, workouts, activities){
+    if(!activities||activities.length===0)return workouts;
+    
+    // Clone workouts to avoid mutation
+    const modifiedWorkouts=workouts.map(w=>({...w}));
+    
+    // Process each activity
+    for(const act of activities){
+        const sport=normalizeSport(act.sport);
+        const sp=SPORTS_DB[sport];
+        if(!sp)continue;
+        
+        // Check if we have Garmin data
+        const hasGarminData=act.fromGarmin===true;
+        
+        // Calculate effective activity load
+        const recMult=sp.mult||1.0;
+        const runSpec=sp.runSpec||0.6;
+        const rpeF=rpeFactor(act.rpe);
+        
+        let aEff=act.aerobic_load*rpeF*recMult;
+        let anEff=act.anaerobic_load*rpeF*recMult;
+        
+        // Apply running specificity (maps [0..1] to [0.6..1.0])
+        const specMult=0.6+0.4*runSpec;
+        aEff*=specMult;
+        anEff*=specMult;
+        
+        // Apply saturation curve to prevent huge sessions from scaling linearly
+        // First 60-90min counts a lot, hours 2-4 add fatigue but don't "buy" infinite replacements
+        const rawLoad=weightedLoad(aEff,anEff);
+        const tau=800; // Saturation constant - tune based on testing
+        const maxCredit=1500;
+        const saturatedLoad=maxCredit*(1-Math.exp(-rawLoad/tau));
+        
+        let remainingLoad=saturatedLoad;
+        console.log(`Activity ${sport}: Raw=${rawLoad.toFixed(0)}, Saturated=${saturatedLoad.toFixed(0)}, Garmin=${hasGarminData}`);
+        
+        // HARD CAPS: One activity can replace max 1 run + trigger 1 additional adjustment
+        // EXCEPT for extra_run which gets unlimited modifications (it's actual running!)
+        let replacementsAllowed = (sport === 'extra_run') ? 999 : 1;
+        let adjustmentsAllowed = (sport === 'extra_run') ? 999 : 1;
+        let replacementsDone=0;
+        let adjustmentsDone=0;
+        
+        if(sport === 'extra_run'){
+            console.log(`  🏃 Extra run: unlimited workout modifications allowed`);
+            
+            // DIRECT MATCH: For extra_run, first try to find exact RPE + duration match
+            // This handles cases like "40min RPE 3 extra run" replacing "40min Easy RPE 3"
+            const activityDuration = act.duration_min;
+            const activityRPE = act.rpe;
+            
+            for(let i=0; i<modifiedWorkouts.length; i++){
+                const w = modifiedWorkouts[i];
+                if(w.status && w.status !== 'planned') continue; // Skip already modified
+                
+                // CRITICAL: Never modify completed workouts!
+                if(wk.rated && wk.rated[w.n]) {
+                    console.log(`  ⏭️ Skipping ${w.n} - already completed`);
+                    continue;
+                }
+                
+                if(w.t !== 'easy' && w.t !== 'long') continue; // Only match easy/long runs
+                
+                // Extract workout duration from description (e.g., "6km" or "8km")
+                const distMatch = w.d.match(/^(\d+)km$/);
+                if(!distMatch) continue;
+                
+                const workoutDistKm = parseFloat(distMatch[1]);
+                const workoutRPE = w.rpe || w.r || 3;
+                
+                // Estimate workout duration at easy pace (~5:00/km for RPE 3)
+                const estimatedMinutes = workoutDistKm * 5; // 5 min/km for easy running
+                
+                // Check if duration matches within 20% AND RPE matches exactly
+                const durationRatio = activityDuration / estimatedMinutes;
+                const rpeMatches = Math.abs(activityRPE - workoutRPE) <= 1;
+                
+                if(durationRatio >= 0.8 && durationRatio <= 1.2 && rpeMatches){
+                    console.log(`  🎯 DIRECT MATCH: ${activityDuration}min RPE${activityRPE} → ${w.n} (${workoutDistKm}km, ~${estimatedMinutes}min, RPE${workoutRPE})`);
+                    
+                    // Complete replacement
+                    w.status = 'replaced';
+                    w.modReason = `Replaced by extra_run (${activityDuration}min @ RPE${activityRPE})`;
+                    w.confidence = hasGarminData ? 'high' : 'medium';
+                    w.originalDistance = w.d;
+                    w.d = '0km (replaced)';
+                    
+                    // Auto-complete the workout
+                    wk.rated[w.n] = workoutRPE;
+                    w.autoCompleted = true;
+                    w.completedBySport = sport;
+                    
+                    replacementsDone++;
+                    remainingLoad = 0; // Consumed all load with direct match
+                    
+                    console.log(`  ✅ Complete replacement via direct match - no load remaining`);
+                    break; // Found direct match, stop looking
+                }
+            }
+        }
+        
+        // If no Garmin data, be more conservative
+        if(!hasGarminData){
+            console.log(`  ⚠️ No Garmin data - conservative mode`);
+            // Can still replace 1 easy run or reduce 1 quality if next day
+            // But can't replace quality without certainty
+        }
+        
+        // Keep applying to workouts until caps reached
+        let iterations=0;
+        const maxIterations=3; // Reduced from 5
+        
+        // Lower threshold for extra_run (recovery runs are valuable!)
+        const loadThreshold = (sport === 'extra_run') ? 10 : 20;
+        
+        while(remainingLoad>loadThreshold&&iterations<maxIterations){
+            iterations++;
+            
+            // Check if we've hit caps
+            if(replacementsDone>=replacementsAllowed&&adjustmentsDone>=adjustmentsAllowed){
+                console.log(`  Hit caps: ${replacementsDone} replacements, ${adjustmentsDone} adjustments`);
+                break;
+            }
+            
+            // Find best workout to match with remaining load
+            let bestIdx=-1;
+            let bestScore=-1;
+            
+            for(let i=0;i<modifiedWorkouts.length;i++){
+                const w=modifiedWorkouts[i];
+                if(w.status&&w.status!=='planned')continue; // Skip already modified
+                
+                // CRITICAL: Never modify completed workouts!
+                if(wk.rated && wk.rated[w.n]) continue;
+                
+                const wt=w.t.toLowerCase();
+                
+                // Check if sport can touch this workout type
+                if(!canTouchWorkout(sport,wt)){
+                    if(wt!=='long')continue; // Long can be reduced even if can't replace
+                }
+                
+                // WITHOUT GARMIN DATA: Be conservative about quality replacements
+                if(!hasGarminData&&(wt==='threshold'||wt==='vo2'||wt==='race_pace')){
+                    // Can only reduce quality, not replace (unless we've hit replace cap anyway)
+                    if(replacementsDone>=replacementsAllowed){
+                        continue; // Skip - already used replacement on easy run
+                    }
+                }
+                
+                // Calculate similarity with REMAINING load
+                const sim=vibeSimilarity(aEff,anEff,w.aerobic||0,w.anaerobic||0);
+                let score=sim;
+                
+                // Make long run less attractive
+                if(wt==='long')score-=0.20;
+                
+                // Prefer easy runs for replacement when no Garmin data
+                if(!hasGarminData&&wt==='easy')score+=0.15;
+                
+                if(score>bestScore){
+                    bestScore=score;
+                    bestIdx=i;
+                }
+            }
+            
+            if(bestIdx===-1){
+                console.log(`  No more workouts to modify in current week, ${remainingLoad.toFixed(0)} load unused`);
+                
+                // Try applying to NEXT week if available
+                if(s.w < s.tw && remainingLoad > loadThreshold){
+                    console.log(`  🔄 Looking ahead to Week ${s.w + 1} for ${sport}...`);
+                    
+                    // Store this activity for next week instead
+                    act.week = s.w + 1;
+                    act.appliedToNextWeek = true;
+                    console.log(`  ✅ Activity reassigned to Week ${s.w + 1}`);
+                    
+                    // Mark remaining load as "carried forward" instead of overflow
+                    remainingLoad = 0; // Consumed by reassignment
+                }
+                
+                break; // No more workouts available in current week
+            }
+            
+            const w=modifiedWorkouts[bestIdx];
+            const wt=w.t.toLowerCase();
+            const wLoad=weightedLoad(w.aerobic||0,w.anaerobic||0);
+            
+            if(wLoad<=0){
+                w.status='skipped';
+                break;
+            }
+            
+            const ratio=remainingLoad/wLoad;
+            console.log(`  Iteration ${iterations}: Matching to ${w.n}, ratio=${ratio.toFixed(2)}`);
+            
+            // Apply modifications based on workout type and caps
+            let loadConsumed=0;
+            let wasReplaced=false;
+            let wasAdjusted=false;
+            
+            if(wt==='easy'){
+                // Easy runs can be replaced if we have cap left
+                if(ratio>=0.9&&replacementsDone<replacementsAllowed){
+                    w.status='replaced';
+                    w.originalDistance=w.d;
+                    w.d='0km (replaced)';
+                    w.modReason=`Replaced by ${sport}${!hasGarminData?' (RPE-only)':''}`;
+                    w.confidence=hasGarminData?'high':'medium';
+                    loadConsumed=wLoad;
+                    wasReplaced=true;
+                    replacementsDone++;
+                }else if(ratio>=0.3&&adjustmentsDone<adjustmentsAllowed){
+                    const reducePct=Math.min(ratio*0.5,0.5); // Capped at 50% reduction
+                    w.status='reduced';
+                    w.originalDistance=w.d;
+                    const kmMatch=w.d.match(/(\d+)km/);
+                    if(kmMatch){
+                        const origKm=parseInt(kmMatch[1]);
+                        const newKm=Math.round(origKm*(1-reducePct));
+                        w.d=`${newKm}km (was ${origKm}km)`;
+                    }
+                    w.modReason=`Reduced ${(reducePct*100).toFixed(0)}% due to ${sport}${!hasGarminData?' (RPE-only)':''}`;
+                    w.confidence=hasGarminData?'high':'medium';
+                    loadConsumed=wLoad*reducePct;
+                    wasAdjusted=true;
+                    adjustmentsDone++;
+                }
+            }
+            else if(wt==='threshold'||wt==='vo2'||wt==='race_pace'){
+                // Quality runs: With Garmin data can replace if hard + high ratio
+                // Without Garmin: Only reduce, never replace
+                if(hasGarminData&&ratio>=0.85&&isHardDay(aEff,anEff)&&replacementsDone<replacementsAllowed){
+                    w.status='replaced';
+                    w.originalDistance=w.d;
+                    w.d='4km shakeout + 4 strides';
+                    w.modReason=`Quality replaced by ${sport} (confirmed hard day)`;
+                    w.confidence='high';
+                    loadConsumed=wLoad;
+                    wasReplaced=true;
+                    replacementsDone++;
+                }else if(ratio>=0.3&&adjustmentsDone<adjustmentsAllowed){
+                    const reducePct=Math.min(ratio*0.4,0.40); // More conservative than easy
+                    w.status='reduced';
+                    w.originalDistance=w.d;
+                    w.modReason=`Quality reduced ${(reducePct*100).toFixed(0)}% due to ${sport}${!hasGarminData?' (fatigue, RPE-only)':''}`;
+                    w.confidence=hasGarminData?'high':'low';
+                    loadConsumed=wLoad*reducePct;
+                    wasAdjusted=true;
+                    adjustmentsDone++;
+                }
+            }
+            else if(wt==='long'){
+                // Long runs never replaced, only reduced
+                if(ratio>=0.15&&adjustmentsDone<adjustmentsAllowed){
+                    const reducePct=Math.min(ratio*0.20,0.30); // More conservative cap
+                    w.status='reduced';
+                    w.originalDistance=w.d;
+                    const kmMatch=w.d.match(/(\d+)km/);
+                    if(kmMatch){
+                        const origKm=parseInt(kmMatch[1]);
+                        const newKm=Math.round(origKm*(1-reducePct));
+                        w.d=`${newKm}km (was ${origKm}km)`;
+                    }
+                    w.modReason=`Long run shortened ${(reducePct*100).toFixed(0)}% due to ${sport}. KEEP EASY!`;
+                    w.confidence=hasGarminData?'medium':'low';
+                    loadConsumed=wLoad*reducePct;
+                    wasAdjusted=true;
+                    adjustmentsDone++;
+                }
+            }
+            else{
+                // Other workout types
+                if(ratio>=0.9&&replacementsDone<replacementsAllowed){
+                    w.status='replaced';
+                    w.originalDistance=w.d;
+                    w.d='0km (replaced)';
+                    w.modReason=`Replaced by ${sport}`;
+                    w.confidence=hasGarminData?'high':'medium';
+                    loadConsumed=wLoad;
+                    wasReplaced=true;
+                    replacementsDone++;
+                }else if(ratio>=0.3&&adjustmentsDone<adjustmentsAllowed){
+                    const reducePct=Math.min(ratio*0.4,0.4);
+                    w.status='reduced';
+                    w.originalDistance=w.d;
+                    w.modReason=`Reduced ${(reducePct*100).toFixed(0)}% due to ${sport}`;
+                    w.confidence=hasGarminData?'high':'medium';
+                    loadConsumed=wLoad*reducePct;
+                    wasAdjusted=true;
+                    adjustmentsDone++;
+                }
+            }
+            
+            // If workout was replaced, auto-complete it at expected RPE
+            if(wasReplaced){
+                const expectedRPE=w.rpe||w.r||5;
+                wk.rated[w.n]=expectedRPE;
+                w.autoCompleted=true;
+                w.completedBySport=sport;
+                console.log(`  ✅ Replaced ${w.n} at RPE ${expectedRPE}`);
+            }else if(wasAdjusted){
+                console.log(`  📉 Adjusted ${w.n}`);
+            }
+            
+            remainingLoad-=loadConsumed;
+            console.log(`  Consumed ${loadConsumed.toFixed(0)} load, ${remainingLoad.toFixed(0)} remaining`);
+            
+            if(loadConsumed<=0)break; // No progress, stop
+        }
+        
+        if(remainingLoad>50){
+            console.log(`ℹ️ Remaining load (${remainingLoad.toFixed(0)}) applied as weekly volume credit`);
+            
+            // Accumulate unspent load for weekly VDOT bonus calculation
+            // Extra runs get full credit, other sports get reduced credit based on runSpec
+            if(sport === 'extra_run'){
+                wk.extraRunLoad = (wk.extraRunLoad || 0) + remainingLoad;
+                console.log(`  🏃 Extra run credit: ${remainingLoad.toFixed(0)} load accumulated`);
+            } else {
+                const sportData = SPORTS_DB[sport] || {runSpec: 0.5};
+                const creditedLoad = remainingLoad * sportData.runSpec;
+                wk.unspentLoad = (wk.unspentLoad || 0) + creditedLoad;
+                console.log(`  ⚽ Cross-training credit: ${creditedLoad.toFixed(0)} load accumulated (${(sportData.runSpec*100).toFixed(0)}% of ${remainingLoad.toFixed(0)})`);
+            }
+        }
+    }
+    
+    // Calculate VDOT bonus from accumulated overflow loads
+    // This happens AFTER all activities are processed for the week
+    const extraRunLoad = wk.extraRunLoad || 0;
+    const crossLoad = wk.unspentLoad || 0;
+    
+    if(extraRunLoad > 50 || crossLoad > 50){
+        // Extra runs: 0.1 VDOT per 100 load (strong boost - it's actual running!)
+        // Cross-training: 0.03 VDOT per 100 load (moderate boost - general fitness)
+        const extraRunBonus = (extraRunLoad / 100) * 0.10;
+        const crossBonus = (crossLoad / 100) * 0.03;
+        const totalBonus = extraRunBonus + crossBonus;
+        
+        if(totalBonus > 0.01){
+            wk.crossVDOTBonus = totalBonus;
+            wk.wkGain = (wk.wkGain || 0) + totalBonus;
+            
+            console.log(`\n📊 Cross-Training VDOT Bonus for Week ${wk.w}:`);
+            if(extraRunLoad > 50){
+                console.log(`  🏃 Extra runs: ${extraRunLoad.toFixed(0)} load → +${extraRunBonus.toFixed(2)} VDOT`);
+            }
+            if(crossLoad > 50){
+                console.log(`  ⚽ Cross-training: ${crossLoad.toFixed(0)} load → +${crossBonus.toFixed(2)} VDOT`);
+            }
+            console.log(`  💪 Total bonus: +${totalBonus.toFixed(2)} VDOT added to week gain`);
+        }
+    }
+    
+    return modifiedWorkouts;
+}
+
+function logActivity(){
+    if(!s.wks||!s.wks.length){
+        alert('Initialize plan first!');
+        return;
+    }
+    
+    if(s.w>s.tw){
+        alert('Training plan completed!');
+        return;
+    }
+    
+    const sportSelect=document.getElementById('crossSport');
+    const durInput=document.getElementById('crossDur');
+    const rpeInput=document.getElementById('crossRPE');
+    const aerobicInput=document.getElementById('crossAerobic');
+    const anaerobicInput=document.getElementById('crossAnaerobic');
+    
+    if(!sportSelect||!durInput||!rpeInput){
+        alert('Error: Form not found.');
+        return;
+    }
+    
+    let sport=sportSelect.value;
+    let dur=+durInput.value;
+    let rpe=+rpeInput.value;
+    let aerobic=aerobicInput?+aerobicInput.value:null;
+    let anaerobic=anaerobicInput?+anaerobicInput.value:null;
+    
+    if(!sport||sport===''){
+        alert('Please select a sport/activity!');
+        return;
+    }
+    
+    if(isNaN(dur)||dur<=0){
+        alert('Please enter duration!');
+        return;
+    }
+    dur=Math.min(dur,600);
+    
+    if(isNaN(rpe)||rpe<1||rpe>10){
+        alert('Please enter RPE 1-10!');
+        return;
+    }
+    
+    sport=normalizeSport(sport);
+    
+    // Use Garmin loads if provided, otherwise estimate in GARMIN scale
+    let aerobic_load, anaerobic_load;
+    if(aerobic&&aerobic>0){
+        // Direct Garmin data - use as-is
+        aerobic_load=aerobic;
+        anaerobic_load=anaerobic||0;
+    }else{
+        // Estimate in Garmin scale using calibrated rates
+        // Garmin rates: Easy=0.8-1.2/min, Moderate=2.0-2.5/min, Hard=3.5-5.5/min
+        const loadRates={1:0.5,2:0.8,3:1.2,4:1.5,5:2.0,6:2.5,7:3.5,8:4.5,9:5.5,10:6.0};
+        const baseRate=loadRates[rpe]||2.0;
+        aerobic_load=dur*baseRate*0.85; // 85% aerobic
+        anaerobic_load=rpe>7?dur*baseRate*0.15:dur*baseRate*0.05; // 15% or 5% anaerobic
+    }
+    
+    // Determine which week this activity should be assigned to
+    // If current week is complete (all workouts rated), assign to next week
+    const currentWeek = s.wks[s.w - 1];
+    const totalWorkouts = s.rw || 3;
+    const completedWorkouts = currentWeek ? Object.keys(currentWeek.rated).length : 0;
+    const weekComplete = completedWorkouts >= totalWorkouts;
+    
+    // Assign to next week if current week is complete
+    const activityWeek = (weekComplete && s.w < s.tw) ? s.w + 1 : s.w;
+    
+    if(weekComplete && activityWeek > s.w){
+        console.log(`⏭️ Week ${s.w} is complete (${completedWorkouts}/${totalWorkouts} rated), assigning to Week ${activityWeek}`);
+    }
+    
+    const activity={
+        id: Date.now() + Math.random(), // Unique ID for tracking
+        date:new Date(),
+        week:activityWeek,
+        sport:sport,
+        duration_min:dur,
+        rpe:rpe,
+        aerobic_load:aerobic_load,
+        anaerobic_load:anaerobic_load,
+        dayOfWeek:new Date().getDay(),
+        aerobic:aerobic_load,
+        anaerobic:anaerobic_load,
+        fromGarmin:!!(aerobic&&aerobic>0),
+        applied:false,  // Initialize as not applied
+        renderCycle:-1  // Will be set when applied
+    };
+    
+    console.log(`📝 Created activity ID ${activity.id}: ${sport} ${dur}min RPE${rpe} for Week ${activityWeek}`);
+    crossActivities.push(activity);
+    
+    const sportData=SPORTS_DB[sport]||{mult:1.0};
+    let load=aerobic_load+anaerobic_load*ANAEROBIC_WEIGHT;
+    load*=sportData.mult;
+    load*=getRPEMult(rpe);
+    
+    const weeklyLoad=getWeeklyLoad(s.w);
+    
+    const loadSource=activity.fromGarmin?'Garmin':'estimated';
+    log(`⚽ ${sport}: ${dur}min, RPE${rpe}, Load: ${load.toFixed(0)} (${loadSource})`);
+    log(`  Aerobic: ${aerobic_load.toFixed(0)}, Anaerobic: ${anaerobic_load.toFixed(0)}`);
+    log(`  Weekly total: ${weeklyLoad.toFixed(0)}`);
+    log(`  💡 Workouts will be automatically adjusted based on load matching`);
+    
+    // Keep old VDOT adjustment as backup (for safety)
+    const wk=s.wks[s.w-1];
+    if(!wk.adjustments)wk.adjustments=[];
+    
+    // Store for banner display
+    wk.adjustments.push({
+        sport:sport,
+        load:load,
+        impact:'Applied to best-matched workout',
+        vdotChange:0
+    });
+    
+    // Update display
+    const logContainer=document.getElementById('activityLogEntries');
+    if(logContainer){
+        const logEntry=document.createElement('div');
+        logEntry.className='text-xs py-1 border-b border-gray-200';
+        logEntry.innerHTML=`<strong>W${s.w}:</strong> ${sport} (${dur}min, RPE${rpe})<br>
+            <span class="text-gray-600">A:${aerobic_load.toFixed(0)} An:${anaerobic_load.toFixed(0)} ${activity.fromGarmin?'📱':''} | Weekly: ${weeklyLoad.toFixed(0)}</span><br>
+            <span class="text-purple-600">Check workouts for modifications</span>`;
+        
+        logContainer.insertBefore(logEntry,logContainer.firstChild);
+        document.getElementById('activityLog').classList.remove('hidden');
+    }
+    
+    // Clear form
+    sportSelect.value='';
+    durInput.value='';
+    rpeInput.value='';
+    if(aerobicInput)aerobicInput.value='';
+    if(anaerobicInput)anaerobicInput.value='';
+    
+    saveState(); // Save after logging activity
+    
+    // Refresh display to show workout modifications
+    disp();
+}
+
+document.getElementById('bi').onclick=init;
+document.getElementById('bn').onclick=next;
+document.getElementById('bfit').onclick=updFit;
+document.getElementById('br').onclick=reset;
+</script>
+</body>
+</html>

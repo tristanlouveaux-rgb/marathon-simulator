@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Mosaic - Intelligent Training</title>
+    <link rel="stylesheet" href="/src/styles.css">
+    <style>
+        /* Custom animations */
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-slow {
+            animation: spin-slow 3s linear infinite;
+        }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-200">
+
+<!-- App Root - Wizard or Main View rendered here -->
+<div id="app-root"></div>
+
+<!-- Admin Panel (rendered conditionally) -->
+<div id="admin-panel"></div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
