@@ -40,20 +40,36 @@ export function showSuggestionModal(
       let actionColor = '';
       let detail = '';
 
+      // Round km values to 1 decimal place for clean display
+      const origKm = Math.round(adj.originalDistanceKm * 10) / 10;
+      const newKm = Math.round(adj.newDistanceKm * 10) / 10;
+
       if (adj.action === 'replace') {
-        actionLabel = 'Skip';
-        actionColor = 'text-red-400';
-        detail = adj.newDistanceKm > 0
-          ? `Replace with ${adj.newDistanceKm}km shakeout`
-          : 'Covered by cross-training';
+        if (newKm > 0) {
+          // Shakeout conversion - user still does a run
+          actionLabel = 'Convert';
+          actionColor = 'text-sky-400';
+          detail = `${adj.originalType} → ${newKm}km easy shakeout`;
+        } else {
+          // Fully covered - no run needed
+          actionLabel = 'Cover';
+          actionColor = 'text-cyan-400';
+          detail = 'Load covered by cross-training';
+        }
       } else if (adj.action === 'downgrade') {
         actionLabel = 'Downgrade';
         actionColor = 'text-amber-400';
-        detail = `Keep ${adj.originalDistanceKm}km but at easy effort`;
+        // Handle 0km case: show "Keep workout at easy effort" instead of "Keep 0km..."
+        detail = origKm > 0
+          ? `Keep ${origKm}km but at easy effort`
+          : 'Keep workout at easy effort';
       } else {
         actionLabel = 'Reduce';
         actionColor = 'text-amber-400';
-        detail = `${adj.originalDistanceKm}km → ${adj.newDistanceKm}km`;
+        // Handle 0km case for reduce as well
+        detail = origKm > 0
+          ? `${origKm}km → ${newKm}km`
+          : `Reduce intensity`;
       }
 
       return `
@@ -186,6 +202,15 @@ export function showSuggestionModal(
   // Event handlers
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) close(null, []);
+  });
+
+  // CRITICAL: Prevent clicks on <details>/<summary> from bubbling to parent button.
+  // Without this, clicking "View changes" would trigger the parent button's click handler.
+  // See: docs/bugs/boxing-replacement-bug.md
+  overlay.querySelectorAll('details').forEach(details => {
+    details.addEventListener('click', (e) => {
+      e.stopPropagation();
+    });
   });
 
   overlay.querySelector('#choice-replace')?.addEventListener('click', () => {

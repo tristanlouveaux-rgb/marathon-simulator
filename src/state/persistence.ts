@@ -1,10 +1,79 @@
-import type { SimulatorState, CrossActivity } from '@/types';
+import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
+import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION } from '@/types/state';
 import { setState, setCrossActivities, getState, getCrossActivities } from './store';
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
 
 const STATE_KEY = 'marathonSimulatorState';
 const CROSS_KEY = 'marathonSimulatorCross';
+
+/**
+ * Swap Speed↔Endurance for runner type migration.
+ * Balanced stays unchanged.
+ */
+function swapRunnerTypeLabel(type: RunnerType | null | undefined): RunnerType | null {
+  if (type === 'Speed') return 'Endurance';
+  if (type === 'Endurance') return 'Speed';
+  if (type === 'Balanced') return 'Balanced';
+  return null;
+}
+
+/**
+ * Migrate state from older schema versions to current.
+ *
+ * Version 2: Runner type semantics fix (Speed↔Endurance swap)
+ * - Before: b < 1.06 → "Speed", b > 1.12 → "Endurance" (INVERTED)
+ * - After: b < 1.06 → "Endurance", b > 1.12 → "Speed" (CORRECT)
+ *
+ * Persisted runner types need to be swapped to preserve user intent.
+ */
+function migrateState(loaded: SimulatorState): SimulatorState {
+  const currentVersion = loaded.schemaVersion || 1;
+
+  if (currentVersion >= STATE_SCHEMA_VERSION) {
+    return loaded; // Already up to date
+  }
+
+  console.log(`Migrating state from version ${currentVersion} to ${STATE_SCHEMA_VERSION}`);
+
+  // Migration to version 2: Fix runner type semantics inversion
+  if (currentVersion < RUNNER_TYPE_SEMANTICS_FIX_VERSION) {
+    console.log('Applying runner type semantics migration (Speed↔Endurance swap)');
+
+    // Swap the main runner type
+    if (loaded.typ === 'Speed' || loaded.typ === 'Endurance') {
+      const oldType = loaded.typ;
+      loaded.typ = swapRunnerTypeLabel(loaded.typ) as RunnerType;
+      console.log(`  typ: ${oldType} → ${loaded.typ}`);
+    }
+
+    // Swap calculatedRunnerType if present
+    if (loaded.calculatedRunnerType) {
+      const oldCalc = loaded.calculatedRunnerType;
+      loaded.calculatedRunnerType = swapRunnerTypeLabel(loaded.calculatedRunnerType) as RunnerType;
+      console.log(`  calculatedRunnerType: ${oldCalc} → ${loaded.calculatedRunnerType}`);
+    }
+
+    // Migrate onboarding state if present
+    if (loaded.onboarding) {
+      if (loaded.onboarding.confirmedRunnerType) {
+        const oldConfirmed = loaded.onboarding.confirmedRunnerType;
+        loaded.onboarding.confirmedRunnerType = swapRunnerTypeLabel(loaded.onboarding.confirmedRunnerType);
+        console.log(`  onboarding.confirmedRunnerType: ${oldConfirmed} → ${loaded.onboarding.confirmedRunnerType}`);
+      }
+      if (loaded.onboarding.calculatedRunnerType) {
+        const oldOnboardCalc = loaded.onboarding.calculatedRunnerType;
+        loaded.onboarding.calculatedRunnerType = swapRunnerTypeLabel(loaded.onboarding.calculatedRunnerType);
+        console.log(`  onboarding.calculatedRunnerType: ${oldOnboardCalc} → ${loaded.onboarding.calculatedRunnerType}`);
+      }
+    }
+  }
+
+  // Update schema version
+  loaded.schemaVersion = STATE_SCHEMA_VERSION;
+
+  return loaded;
+}
 
 /**
  * Validate state data for corruption
@@ -52,7 +121,16 @@ export function loadState(): boolean {
       return false;
     }
 
-    setState(loaded);
+    // Apply migrations if needed
+    const migrated = migrateState(loaded);
+
+    // Save migrated state back to localStorage if version changed
+    if (migrated.schemaVersion !== loaded.schemaVersion) {
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+      console.log('Saved migrated state to localStorage');
+    }
+
+    setState(migrated);
     console.log('Loaded saved state from localStorage');
     console.log(`  Initial: ${ft(loaded.initialBaseline || 0)}, Current: ${ft(loaded.currentFitness || 0)}, Forecast: ${ft(loaded.forecastTime || 0)}`);
 

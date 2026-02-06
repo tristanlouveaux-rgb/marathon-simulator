@@ -3,3 +3,4 @@ export * from './training-params';
 export * from './workouts';
 export * from './sports';
 export * from './injury-protocols';
+export * from './physiology';

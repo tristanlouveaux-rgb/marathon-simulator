@@ -137,3 +137,26 @@ Tools for development and testing:
 -   Cloud sync/backup.
 -   Community challenges and leaderboards.
 -   Integration with 3rd party platforms (Strava, Garmin).
+
+## Adaptive Plan Philosophy (Natural Language Summary)
+
+We’re building an adaptive running plan that stays realistic when a runner logs other sports.
+
+To do that, we need to predict how a runner’s underlying physiology should improve over a training block — mainly:
+*   **VO2max** (max aerobic capacity)
+*   **Lactate Threshold pace** (how fast they can run before lactate accumulates too quickly)
+
+Different runners improve at different rates:
+*   **Beginners / returners** often improve faster early.
+*   **Advanced / elite** runners improve slowly and non-linearly.
+
+So we forecast an expected improvement curve for VO2 and LT based on:
+*   their current level (VDOT band),
+*   their background (returning/hybrid/etc),
+*   and how much training they’re doing.
+
+When new values arrive from a watch/test, we compare actual vs expected:
+*   If they’re **improving faster** than expected → we congratulate them and optionally tighten training paces slightly.
+*   If **slower** than expected → we keep paces the same or slightly easier and may suggest adjusting training stress.
+
+This lets the app be adaptive without “making stuff up” or double counting improvements.

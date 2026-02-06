@@ -105,6 +105,18 @@ export function predictFromRecent(
 
 /**
  * LT predictor with runner-type multipliers
+ *
+ * Multipliers convert LT pace (threshold/~60min effort) to predicted race pace.
+ * Lower multiplier = faster predicted time.
+ *
+ * Semantics:
+ * - Speed (high b, better at short): lower 5K mult (0.95), higher marathon mult (1.14)
+ * - Endurance (low b, better at long): higher 5K mult (0.92), lower marathon mult (1.09)
+ *
+ * This produces correct predictions:
+ * - Speed types are faster at 5K, slower at marathon
+ * - Endurance types are slower at 5K, faster at marathon
+ *
  * @param targetDist - Target distance in meters
  * @param ltPaceSecPerKm - LT pace in seconds per km
  * @param runnerType - Runner type string
@@ -117,10 +129,15 @@ export function predictFromLT(
 ): number | null {
   if (!ltPaceSecPerKm) return null;
 
+  // Multipliers tuned for correct semantics:
+  // - Speed (high-b, better at short): lower mult at 5K (0.92), higher mult at marathon (1.14)
+  // - Endurance (low-b, better at long): higher mult at 5K (0.95), lower mult at marathon (1.09)
+  // This creates the crossover effect where speed types are faster at short distances
+  // and endurance types are faster at long distances.
   const mult: Record<number, Record<string, number>> = {
-    5000: { speed: 0.95, balanced: 0.935, endurance: 0.92 },
-    10000: { speed: 1.01, balanced: 0.995, endurance: 0.98 },
-    21097: { speed: 1.06, balanced: 1.045, endurance: 1.03 },
+    5000: { speed: 0.92, balanced: 0.935, endurance: 0.95 },
+    10000: { speed: 0.98, balanced: 0.995, endurance: 1.01 },
+    21097: { speed: 1.03, balanced: 1.045, endurance: 1.06 },
     42195: { speed: 1.14, balanced: 1.115, endurance: 1.09 }
   };
 

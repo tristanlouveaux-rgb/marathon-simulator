@@ -41,13 +41,24 @@ export function cb(p: PBs): number {
 
 /**
  * Get runner type from fatigue exponent
+ *
+ * SEMANTIC DEFINITION (universal across product):
+ * - Speed = better at SHORT distances = MORE fade over distance = HIGH b (> 1.12)
+ * - Endurance = better at LONG distances = LESS fade over distance = LOW b (< 1.06)
+ * - Balanced = in-between
+ *
+ * The fatigue exponent b comes from Riegel's model: T(d) = T_anchor * (d/d_anchor)^b
+ * Higher b means time increases MORE as distance increases (more "fade").
+ *
  * @param b - Fatigue exponent
  * @returns Runner type string
  */
 export function getRunnerType(b: number): RunnerType {
   if (!b || isNaN(b)) return 'Balanced';
-  if (b < 1.06) return 'Speed';
-  if (b > 1.12) return 'Endurance';
+  // Low b = less fade = better at long distances = Endurance
+  if (b < 1.06) return 'Endurance';
+  // High b = more fade = better at short distances = Speed
+  if (b > 1.12) return 'Speed';
   return 'Balanced';
 }
 

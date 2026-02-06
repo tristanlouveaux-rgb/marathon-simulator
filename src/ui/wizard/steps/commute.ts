@@ -112,6 +112,7 @@ export function renderCommute(container: HTMLElement, state: OnboardingState): v
 }
 
 function wireEventHandlers(state: OnboardingState, config: CommuteConfig): void {
+  // Yes - show config first, user confirms with Continue
   document.getElementById('commute-yes')?.addEventListener('click', () => {
     updateOnboarding({
       runsToWork: true,
@@ -125,9 +126,10 @@ function wireEventHandlers(state: OnboardingState, config: CommuteConfig): void 
     rerender(state);
   });
 
+  // No - auto-advance immediately (no config needed)
   document.getElementById('commute-no')?.addEventListener('click', () => {
     updateOnboarding({ runsToWork: false, commuteConfig: null });
-    rerender(state);
+    nextStep();
   });
 
   // Config fields

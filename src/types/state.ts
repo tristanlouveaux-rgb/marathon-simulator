@@ -38,6 +38,7 @@ export interface WorkoutDefinition {
 
 /** Workout with additional metadata */
 export interface Workout extends WorkoutDefinition {
+  id?: string;                  // Stable unique ID (e.g., "W1-easy-0")
   t: string;                    // Workout type
   rpe?: number;                 // Expected RPE (alternative to r)
   dayOfWeek?: number;           // Day of week (0=Mon, 6=Sun)
@@ -73,11 +74,14 @@ export interface SkippedWorkout {
 /** Workout modification record (for persistence) */
 export interface WorkoutMod {
   name: string;
+  dayOfWeek?: number;  // Added for unique identification when names collide
   status: string;
   modReason: string;
   confidence?: string;
   originalDistance?: string;
   newDistance: string;
+  newType?: string;    // New workout type if downgraded (e.g., 'easy')
+  newRpe?: number;     // New RPE to match downgraded type
 }
 
 /** Simple cross-training record (old format) */
@@ -110,8 +114,17 @@ export interface Week {
   adhocWorkouts?: Workout[];                    // Ad-hoc workouts (e.g. "Just Run")
 }
 
+/** State schema version for migrations */
+export const STATE_SCHEMA_VERSION = 2;
+
+/** Version where runner type semantics were fixed (Speed↔Endurance swap) */
+export const RUNNER_TYPE_SEMANTICS_FIX_VERSION = 2;
+
 /** Main simulator state */
 export interface SimulatorState {
+  // Schema version (for migrations)
+  schemaVersion?: number;
+
   // Week tracking
   w: number;              // Current week
   tw: number;             // Total weeks
@@ -147,8 +160,9 @@ export interface SimulatorState {
   forecastTime: number | null;      // Forecast race time after training
 
   // Runner profile
-  typ: RunnerType;        // Runner type
-  b: number;              // Fatigue exponent
+  typ: RunnerType;                      // Effective runner type (used by engine)
+  calculatedRunnerType?: RunnerType;    // Runner type calculated from PBs
+  b: number;                            // Fatigue exponent
 
   // Training data
   wks: Week[];            // All weeks
@@ -159,6 +173,19 @@ export interface SimulatorState {
   // Tracking
   adaptationRatio?: number;    // How athlete responds vs expected
   week1EasyPace?: number;      // Week 1 easy pace for tracking
+
+  // Physiology tracking state
+  physiologyTracking?: {
+    measurements: Array<{
+      week: number;
+      ltPaceSecKm: number | null;
+      vo2max: number | null;
+      source: 'watch' | 'manual' | 'test';
+      timestamp?: string;
+    }>;
+    lastAssessmentStatus?: 'excellent' | 'good' | 'onTrack' | 'slow' | 'concerning' | 'needsData';
+    lastAssessmentMessage?: string;
+  };
 
   // Commute configuration
   commuteConfig?: CommuteConfig;

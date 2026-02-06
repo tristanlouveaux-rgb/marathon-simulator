@@ -1,9 +1,10 @@
 import type { OnboardingState } from '@/types/onboarding';
 import type { RunnerType } from '@/types/training';
+import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import {
-  cv, rd, rdKm, calculateFatigueExponent, gt,
+  cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
@@ -13,6 +14,33 @@ export interface CalculationResult {
   success: boolean;
   error?: string;
   runnerType?: RunnerType;
+  calculatedRunnerType?: RunnerType;
+}
+
+/**
+ * Compute effective runner type from physics (PBs → b → calculated) and user override.
+ *
+ * RULES:
+ * - Always compute b from PBs (physics, never fake)
+ * - Always compute calculatedRunnerType from b
+ * - If confirmedRunnerType exists, use it as effectiveRunnerType (style override)
+ * - Otherwise, use calculatedRunnerType
+ *
+ * @param b - Fatigue exponent from PBs
+ * @param confirmedRunnerType - User's confirmed/overridden runner type (or null)
+ * @returns { calculatedRunnerType, effectiveRunnerType }
+ */
+export function computeEffectiveRunnerType(
+  b: number,
+  confirmedRunnerType: RunnerType | null | undefined
+): { calculatedRunnerType: RunnerType; effectiveRunnerType: RunnerType } {
+  // Calculate from physics
+  const calculatedRunnerType = getRunnerType(b);
+
+  // Use confirmed override if present, otherwise use calculated
+  const effectiveRunnerType = confirmedRunnerType ?? calculatedRunnerType;
+
+  return { calculatedRunnerType, effectiveRunnerType };
 }
 
 /**
@@ -29,10 +57,17 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       return { success: false, error: 'No personal bests provided' };
     }
 
-    // Calculate fatigue exponent and runner type
+    // Calculate fatigue exponent (physics - always from PBs)
     const b = calculateFatigueExponent(pbs);
-    const typ = gt(b);
-    const runnerType = (typ.charAt(0).toUpperCase() + typ.slice(1)) as RunnerType;
+
+    // Compute effective runner type (respects user override if present)
+    const { calculatedRunnerType, effectiveRunnerType } = computeEffectiveRunnerType(
+      b,
+      state.confirmedRunnerType
+    );
+
+    // For blendPredictions, we use the effective type (user preference or calculated)
+    const runnerType = effectiveRunnerType;
 
     // Get target race distance
     const targetDistStr = state.raceDistance || 'half';
@@ -46,7 +81,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const vo2max = state.vo2max || null;
 
     // Calculate blended prediction with all available data
-    const blendedTime = blendPredictions(targetDistMeters, pbs, ltPace, vo2max, b, typ, rec);
+    // Note: blendPredictions uses runnerType.toLowerCase() internally
+    const blendedTime = blendPredictions(
+      targetDistMeters, pbs, ltPace, vo2max, b,
+      runnerType.toLowerCase(), rec
+    );
 
     if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
       return { success: false, error: 'Could not calculate race prediction' };
@@ -86,8 +125,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.lt = ltPace;
     s.ltPace = ltPace;
     s.vo2 = vo2max;
-    s.typ = runnerType;
+    s.typ = effectiveRunnerType;           // Effective type used by engine
+    s.calculatedRunnerType = calculatedRunnerType; // Physics-derived type
     s.b = b;
+    s.schemaVersion = STATE_SCHEMA_VERSION;
     s.pac = pac;
     s.wks = initializeWeeks(s.tw);
     s.skip = [];
@@ -136,7 +177,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     saveState();
 
-    return { success: true, runnerType };
+    return { success: true, runnerType: effectiveRunnerType, calculatedRunnerType };
   } catch (error) {
     console.error('Initialization error:', error);
     return { success: false, error: 'An unexpected error occurred' };

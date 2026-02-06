@@ -6,7 +6,8 @@ import {
 } from '@/state';
 import {
   cv, rd, rdKm, tv, calculateFatigueExponent, gt, getRunnerType,
-  gp, blendPredictions, getExpectedPhysiology
+  gp, blendPredictions, getExpectedPhysiology,
+  initializePhysiologyTracking, recordMeasurement, assessAdaptation
 } from '@/calculations';
 import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
@@ -227,8 +228,10 @@ export function init(): void {
 
 /**
  * Rate a workout
+ * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
+ * @param name - Display name for logging
  */
-export function rate(name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean): void {
+export function rate(workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean): void {
   const s = getMutableState();
   if (s.w < 1 || s.w > s.wks.length) return;
   const wk = s.wks[s.w - 1];
@@ -237,16 +240,16 @@ export function rate(name: string, rpe: number, expected: number, workoutType: s
   if (isSkipped && s.w > 1) {
     const pw = s.wks[s.w - 2];
     if (pw) {
-      pw.skip = pw.skip.filter(x => x.n !== name);
+      pw.skip = pw.skip.filter(x => x.workout.id !== workoutId);
       log(`${name} completed (was skipped from previous week)`);
     }
   }
 
   // Remove old adjustment if re-rating
-  const oldRPE = wk.ratedChanges?.[name];
+  const oldRPE = wk.ratedChanges?.[workoutId];
   if (oldRPE !== undefined) s.rpeAdj -= oldRPE;
 
-  wk.rated[name] = rpe;
+  wk.rated[workoutId] = rpe;
   const dif = rpe - expected;
   let ch = 0;
   if (dif <= -3) ch = 0.15;
@@ -258,7 +261,7 @@ export function rate(name: string, rpe: number, expected: number, workoutType: s
   const wch = ch * imp;
 
   if (!wk.ratedChanges) wk.ratedChanges = {};
-  wk.ratedChanges[name] = wch;
+  wk.ratedChanges[workoutId] = wch;
   s.rpeAdj += wch;
 
   log(Math.abs(dif) <= 1 ? `${name} RPE${rpe}` : `${ch > 0 ? 'Strong' : 'Hard'} ${name}: ${wch >= 0 ? '+' : ''}${wch.toFixed(2)}`);
@@ -287,8 +290,11 @@ export function rate(name: string, rpe: number, expected: number, workoutType: s
 
 /**
  * Skip a workout
+ * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
+ * @param name - Display name for logging
  */
 export function skip(
+  workoutId: string,
   name: string,
   workoutType: string,
   isAlreadySkipped: boolean,
@@ -304,16 +310,16 @@ export function skip(
   // Warn before skipping a long run
   if (workoutType === 'long' && !isAlreadySkipped) {
     showLongRunSkipWarning().then(proceed => {
-      if (proceed) skipInner(name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+      if (proceed) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
     });
     return;
   }
 
-  skipInner(name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+  skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
 }
 
 function skipInner(
-  name: string, workoutType: string, isAlreadySkipped: boolean,
+  workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean,
   currentSkipCount: number, desc: string, rpe: number,
   dayOfWeek: number, dayName: string
 ): void {
@@ -337,20 +343,21 @@ function skipInner(
     // Remove from previous week's skip list
     if (s.w > 1) {
       const pw = s.wks[s.w - 2];
-      if (pw) pw.skip = pw.skip.filter(x => x.n !== name);
+      if (pw) pw.skip = pw.skip.filter(x => x.workout.id !== workoutId);
     }
 
-    wk.rated[name] = 'skip';
+    wk.rated[workoutId] = 'skip';
     log(`${name} skipped AGAIN: +${penalty}s penalty`);
   } else {
     // First skip - move to next week
-    if (wk.rated[name]) delete wk.rated[name];
-    wk.rated[name] = 'skip';
+    if (wk.rated[workoutId]) delete wk.rated[workoutId];
+    wk.rated[workoutId] = 'skip';
 
     wk.skip.push({
       n: name,
       t: workoutType,
       workout: {
+        id: workoutId,
         n: name,
         t: workoutType,
         d: desc || '',
@@ -605,7 +612,8 @@ export function editSettings(): void {
 
 /**
  * Update fitness from physiology inputs
- * Compares against predicted trajectory — only adjusts prediction if deviating
+ * Uses physiology-tracker module for comparing expected vs observed values
+ * and computing adaptation ratio.
  */
 export function updateFitness(): void {
   const s = getMutableState();
@@ -626,62 +634,69 @@ export function updateFitness(): void {
   const newLT = (curLTm || curLTs) ? curLTm * 60 + curLTs : null;
   const newVO2val = curVO2 || null;
 
-  // Get expected trajectory values
-  const expected = getExpectedPhysiology(s.initialLT, s.initialVO2, s.w, s.v);
+  // Initialize physiology tracking state if needed
+  let trackingState = s.physiologyTracking
+    ? {
+        initialLT: s.initialLT,
+        initialVO2: s.initialVO2,
+        baselineVdot: s.v,
+        measurements: s.physiologyTracking.measurements || [],
+        currentAdaptationRatio: s.adaptationRatio || 1.0,
+        lastAssessment: null,
+      }
+    : initializePhysiologyTracking(s.initialLT, s.initialVO2, s.v);
 
+  // Record new measurement
+  const measurement = {
+    week: s.w,
+    ltPaceSecKm: newLT,
+    vo2max: newVO2val,
+    source: 'manual' as const,
+    timestamp: new Date().toISOString(),
+  };
+
+  trackingState = recordMeasurement(trackingState, measurement);
+
+  // Get assessment
+  const assessment = assessAdaptation(trackingState, s.w);
+
+  // Update state with new values
+  if (newLT) s.lt = newLT;
+  if (newVO2val) s.vo2 = newVO2val;
+  s.adaptationRatio = trackingState.currentAdaptationRatio;
+
+  // Store tracking state
+  s.physiologyTracking = {
+    measurements: trackingState.measurements,
+    lastAssessmentStatus: assessment.status,
+    lastAssessmentMessage: assessment.message,
+  };
+
+  // Build status messages for display
   const statusMessages: string[] = [];
-  let hasDeviation = false;
 
-  // Compare LT against predicted
-  if (newLT && expected.expectedLT) {
-    const ltDiff = newLT - expected.expectedLT; // negative = faster than expected
-    const ltPctDiff = (ltDiff / expected.expectedLT) * 100;
-
-    if (Math.abs(ltPctDiff) > 1.0) {
-      hasDeviation = true;
-      if (ltDiff < 0) {
-        statusMessages.push(`LT: Improving ${Math.abs(ltPctDiff).toFixed(1)}% faster than predicted`);
+  // Add deviation info if available
+  if (assessment.hasSufficientData) {
+    if (assessment.ltAdaptationRatio !== null) {
+      const ltPct = (assessment.ltAdaptationRatio - 1) * 100;
+      if (Math.abs(ltPct) > 1.5) {
+        statusMessages.push(`LT: ${ltPct > 0 ? '+' : ''}${ltPct.toFixed(1)}% vs expected`);
       } else {
-        statusMessages.push(`LT: Improving ${ltPctDiff.toFixed(1)}% slower than predicted`);
+        statusMessages.push('LT: On track');
       }
-    } else {
-      statusMessages.push('LT: On track with predicted trajectory');
     }
-    s.lt = newLT;
-  } else if (newLT) {
-    s.lt = newLT;
-    statusMessages.push('LT updated (no baseline for comparison)');
-  }
-
-  // Compare VO2 against predicted
-  if (newVO2val && expected.expectedVO2) {
-    const vo2Diff = newVO2val - expected.expectedVO2; // positive = better than expected
-    const vo2PctDiff = (vo2Diff / expected.expectedVO2) * 100;
-
-    if (Math.abs(vo2PctDiff) > 1.5) {
-      hasDeviation = true;
-      if (vo2Diff > 0) {
-        statusMessages.push(`VO2: Improving ${vo2PctDiff.toFixed(1)}% faster than predicted`);
+    if (assessment.vo2AdaptationRatio !== null) {
+      const vo2Pct = (assessment.vo2AdaptationRatio - 1) * 100;
+      if (Math.abs(vo2Pct) > 1.5) {
+        statusMessages.push(`VO2: ${vo2Pct > 0 ? '+' : ''}${vo2Pct.toFixed(1)}% vs expected`);
       } else {
-        statusMessages.push(`VO2: Improving ${Math.abs(vo2PctDiff).toFixed(1)}% slower than predicted`);
+        statusMessages.push('VO2: On track');
       }
-    } else {
-      statusMessages.push('VO2: On track with predicted trajectory');
     }
-    s.vo2 = newVO2val;
-  } else if (newVO2val) {
-    s.vo2 = newVO2val;
-    statusMessages.push('VO2 updated (no baseline for comparison)');
-  }
-
-  // Adjust adaptation ratio if deviating from predicted trajectory
-  if (hasDeviation && newLT && s.initialLT && expected.expectedLT) {
-    const actualLTImprovement = s.initialLT - newLT;
-    const expectedLTImprovement = s.initialLT - expected.expectedLT;
-    if (expectedLTImprovement > 0) {
-      s.adaptationRatio = actualLTImprovement / expectedLTImprovement;
-      statusMessages.push(`Adaptation ratio: ${s.adaptationRatio.toFixed(2)}x`);
-    }
+    statusMessages.push(`Adaptation: ${s.adaptationRatio.toFixed(2)}x`);
+    statusMessages.push(assessment.message);
+  } else {
+    statusMessages.push(assessment.message);
   }
 
   // Update paces with new physiology
@@ -689,12 +704,20 @@ export function updateFitness(): void {
   for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
   s.pac = gp(s.v + wg + s.rpeAdj, newLT);
 
-  // Display status
+  // Display status with color based on assessment status
   const statusEl = document.getElementById('fitStatus');
   const statusTextEl = document.getElementById('fitStatusText');
   if (statusEl && statusTextEl) {
     statusEl.classList.remove('hidden');
-    const bgColor = hasDeviation ? 'bg-amber-950/30 border border-amber-800 text-amber-300' : 'bg-emerald-950/30 border border-emerald-800 text-emerald-300';
+    const colorMap: Record<string, string> = {
+      excellent: 'bg-emerald-950/30 border border-emerald-800 text-emerald-300',
+      good: 'bg-emerald-950/30 border border-emerald-800 text-emerald-300',
+      onTrack: 'bg-sky-950/30 border border-sky-800 text-sky-300',
+      slow: 'bg-amber-950/30 border border-amber-800 text-amber-300',
+      concerning: 'bg-red-950/30 border border-red-800 text-red-300',
+      needsData: 'bg-gray-800/30 border border-gray-700 text-gray-400',
+    };
+    const bgColor = colorMap[assessment.status] || colorMap.onTrack;
     statusEl.className = `mt-2 text-xs p-2 rounded ${bgColor}`;
     statusTextEl.innerHTML = statusMessages.join('<br>');
   }
@@ -789,8 +812,8 @@ export function logActivity(): void {
     s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v
   );
 
-  // Convert to PlannedRun format for suggester
-  const plannedRuns = workoutsToPlannedRuns(workouts);
+  // Convert to PlannedRun format for suggester (pass paces for robust distance parsing)
+  const plannedRuns = workoutsToPlannedRuns(workouts, s.pac);
 
   // Build suggestion popup
   const popup = buildCrossTrainingPopup(
@@ -819,7 +842,8 @@ export function logActivity(): void {
 
   if (hasAdjustments) {
     showSuggestionModal(popup, normalizeSport(sport), (decision) => {
-      // Add activity to state
+      // Add activity to state and mark as applied (prevents re-processing)
+      activity.applied = true;
       addCrossActivity(activity);
 
       // Apply adjustments based on user choice
@@ -831,34 +855,39 @@ export function logActivity(): void {
         if (!wk.workoutMods) wk.workoutMods = [];
 
         for (const adj of decision.adjustments) {
-          const modified = modifiedWorkouts.find(w => w.n === adj.workoutId);
+          // Match by both name and dayOfWeek for unique identification
+          const modified = modifiedWorkouts.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
           if (!modified) continue;
 
           wk.workoutMods.push({
             name: modified.n,
+            dayOfWeek: modified.dayOfWeek,  // Store for unique matching in renderer
             status: modified.status || 'reduced',
             modReason: modified.modReason || '',
             confidence: modified.confidence,
             originalDistance: modified.originalDistance,
             newDistance: modified.d,
+            newType: modified.t,  // Store downgraded type (e.g., 'easy')
+            newRpe: modified.rpe || modified.r,  // Store matching RPE
           });
 
-          // If replaced, mark as rated
-          if (adj.action === 'replace') {
-            wk.rated[modified.n] = modified.rpe || modified.r || 5;
-          }
+          // NOTE: Do NOT mark replaced workouts in wk.rated.
+          // wk.rated is for USER-completed workouts only.
+          // The workout's status='replaced' is tracked via workoutMods.
         }
 
         log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${decision.choice}d plan)`);
       } else {
-        log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)}`);
+        // User chose "keep" - activity is logged but no plan changes applied
+        log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (kept plan)`);
       }
 
       saveState();
       render();
     });
   } else {
-    // No suggestions needed, just add activity
+    // No suggestions needed, just add activity (mark as applied)
+    activity.applied = true;
     addCrossActivity(activity);
     log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)}`);
     saveState();
@@ -941,8 +970,8 @@ export function justRun(): void {
 // Make functions globally available for onclick handlers
 declare global {
   interface Window {
-    rate: typeof rate;
-    skip: typeof skip;
+    rate: (workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean) => void;
+    skip: (workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean, currentSkipCount: number, desc: string, rpe: number, dayOfWeek: number, dayName: string) => void;
     moveWorkout: typeof moveWorkout;
     logActivity: typeof logActivity;
     dragStart: typeof dragStart;

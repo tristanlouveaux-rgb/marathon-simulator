@@ -1480,58 +1480,12 @@ function disp(){
         }
     }
     
-    // Apply cross-training modifications to workouts
-    // TEMPORAL LOGIC: If current week is complete (all rated), apply to NEXT week
-    const totalWorkouts=wos.length;
-    const completedWorkouts=Object.keys(wk.rated).length;
-    const weekComplete=completedWorkouts>=totalWorkouts;
-    
-    let targetWeek=s.w;
-    if(weekComplete&&s.w<s.tw){
-        // Current week is done, apply modifications to NEXT week
-        targetWeek=s.w+1;
-    }
-    
-    const targetActivities=crossActivities.filter(a=>a.week===targetWeek && !a.applied && a.renderCycle !== currentRenderCycle);
-    if(targetActivities.length>0){
-        console.log(`Applying ${targetActivities.length} NEW activities to week ${targetWeek}:`,targetActivities.map(a=>({
-            id: a.date?.getTime(),
-            sport: a.sport,
-            dur: a.duration_min,
-            applied: a.applied,
-            renderCycle: a.renderCycle
-        })));
-        console.log('Workouts before modification:',wos.map(w=>({n:w.n,d:w.d,a:w.aerobic,an:w.anaerobic})));
-        wos=applyCrossTrainingToWorkouts(wk,wos,targetActivities);
-        console.log('Workouts after modification:',wos.map(w=>({n:w.n,d:w.d,status:w.status,reason:w.modReason})));
-        
-        // Store modifications in week data so they persist across disp() calls
-        // Only store workouts that were actually modified
-        wk.workoutMods = wos
-            .filter(w => w.status && (w.status === 'reduced' || w.status === 'replaced'))
-            .map(w => ({
-                name: w.n,
-                status: w.status,
-                modReason: w.modReason,
-                confidence: w.confidence,
-                originalDistance: w.originalDistance,
-                newDistance: w.d
-            }));
-        console.log(`💾 Stored ${wk.workoutMods.length} workout modifications`);
-        
-        // Mark activities as applied AND tag with render cycle
-        // EXCEPT activities that were reassigned to next week
-        targetActivities.forEach(a => {
-            if(!a.appliedToNextWeek){
-                a.applied = true;
-                a.renderCycle = currentRenderCycle;
-            }
-        });
-        saveState();  // Save the applied flag
-    }
-    
-    // Increment render cycle for next call
-    currentRenderCycle++;
+    // NOTE: Cross-training modifications are NO LONGER auto-applied during render.
+    // Plan changes must only happen via explicit user confirmation in the suggestion modal.
+    // The logActivity() function handles showing the modal and applying changes.
+    //
+    // This prevents the bug where logging an activity would silently mutate the plan
+    // without user consent. See: docs/bugs/boxing-replacement-bug.md
     
     let h=`<h3 class="font-bold mb-3 text-sm">Week ${s.w} Workouts (${wos.length})</h3>`;
     
@@ -2840,8 +2794,11 @@ function logActivity(){
         aerobic:aerobic_load,
         anaerobic:anaerobic_load,
         fromGarmin:!!(aerobic&&aerobic>0),
-        applied:false,  // Initialize as not applied
-        renderCycle:-1  // Will be set when applied
+        // Mark as applied immediately to prevent auto-mutation of plan.
+        // Plan changes must only happen via explicit user confirmation.
+        // See: docs/bugs/boxing-replacement-bug.md
+        applied:true,
+        renderCycle:-1
     };
     
     console.log(`📝 Created activity ID ${activity.id}: ${sport} ${dur}min RPE${rpe} for Week ${activityWeek}`);
@@ -2858,7 +2815,6 @@ function logActivity(){
     log(`⚽ ${sport}: ${dur}min, RPE${rpe}, Load: ${load.toFixed(0)} (${loadSource})`);
     log(`  Aerobic: ${aerobic_load.toFixed(0)}, Anaerobic: ${anaerobic_load.toFixed(0)}`);
     log(`  Weekly total: ${weeklyLoad.toFixed(0)}`);
-    log(`  💡 Workouts will be automatically adjusted based on load matching`);
     
     // Keep old VDOT adjustment as backup (for safety)
     const wk=s.wks[s.w-1];
@@ -2879,7 +2835,7 @@ function logActivity(){
         logEntry.className='text-xs py-1 border-b border-gray-200';
         logEntry.innerHTML=`<strong>W${s.w}:</strong> ${sport} (${dur}min, RPE${rpe})<br>
             <span class="text-gray-600">A:${aerobic_load.toFixed(0)} An:${anaerobic_load.toFixed(0)} ${activity.fromGarmin?'📱':''} | Weekly: ${weeklyLoad.toFixed(0)}</span><br>
-            <span class="text-purple-600">Check workouts for modifications</span>`;
+            <span class="text-emerald-600">Activity logged</span>`;
         
         logContainer.insertBefore(logEntry,logContainer.firstChild);
         document.getElementById('activityLog').classList.remove('hidden');

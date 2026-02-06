@@ -109,15 +109,35 @@ export function renderWelcome(container: HTMLElement): void {
     </div>
   `;
 
-  // Wire up event handler
+  // Wire up event handler - name is required
   const ctaButton = document.getElementById('welcome-cta');
-  if (ctaButton) {
+  const nameInput = document.getElementById('welcome-name') as HTMLInputElement;
+
+  if (ctaButton && nameInput) {
     ctaButton.addEventListener('click', () => {
-      const nameInput = document.getElementById('welcome-name') as HTMLInputElement;
-      if (nameInput?.value.trim()) {
-        updateOnboarding({ name: nameInput.value.trim() });
+      const name = nameInput.value.trim();
+      if (!name) {
+        // Show validation error
+        nameInput.classList.add('border-red-500');
+        nameInput.placeholder = 'Please enter your name';
+        nameInput.focus();
+        return;
       }
+      updateOnboarding({ name });
       nextStep();
+    });
+
+    // Clear error state on input
+    nameInput.addEventListener('input', () => {
+      nameInput.classList.remove('border-red-500');
+      nameInput.placeholder = 'Your first name';
+    });
+
+    // Allow Enter key to submit
+    nameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        ctaButton.click();
+      }
     });
   }
 

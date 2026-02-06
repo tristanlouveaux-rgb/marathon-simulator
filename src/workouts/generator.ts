@@ -203,10 +203,19 @@ export function generateWeekWorkouts(
   let scheduledWorkouts = assignDefaultDays(workouts);
 
   // Apply injury adaptations if injury is active
-
   if (injuryState && injuryState.active) {
     scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState);
+  }
 
+  // Generate stable IDs for each workout (W{week}-{type}-{index})
+  // Use weekIndex if available, otherwise default to 1
+  const wk = weekIndex ?? 1;
+  const typeCount: Record<string, number> = {};
+  for (const w of scheduledWorkouts) {
+    const typeKey = w.t || 'unknown';
+    const idx = typeCount[typeKey] || 0;
+    typeCount[typeKey] = idx + 1;
+    w.id = `W${wk}-${typeKey}-${idx}`;
   }
 
   return scheduledWorkouts;

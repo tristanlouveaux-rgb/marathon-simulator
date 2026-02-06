@@ -1,4 +1,5 @@
 import { getState, getMutableState } from '@/state/store';
+import type { SimulatorState } from '@/types';
 import { saveState } from '@/state/persistence';
 import { render, attachTrackRunHandlers } from './renderer';
 import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance } from './events';
@@ -8,6 +9,22 @@ import { ft } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { applyPhaseRegression, recordMorningPain } from '@/injury/engine';
 import { initializeSimulator } from '@/state/initialization';
+
+/**
+ * Check if the training plan has started (any workout has been completed/rated)
+ */
+function hasPlanStarted(s: SimulatorState): boolean {
+  if (!s.wks) return false;
+  for (const wk of s.wks) {
+    if (wk.rated && Object.keys(wk.rated).length > 0) {
+      // Check if at least one workout is completed (not just 'skip')
+      for (const val of Object.values(wk.rated)) {
+        if (val !== 'skip') return true;
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Render the main workout view after onboarding is complete
@@ -161,10 +178,16 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               <div class="space-y-2 text-xs">
                 <div class="flex justify-between items-center">
                   <span class="text-gray-400">Runner Type</span>
-                  <button id="btn-change-runner-type" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-950/50 border border-emerald-800/50 rounded-full text-emerald-400 hover:bg-emerald-900/50 hover:text-emerald-300 transition-colors cursor-pointer">
-                    <span>${s.typ}</span>
-                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                  </button>
+                  ${hasPlanStarted(s)
+                    ? `<span class="flex items-center gap-1 px-2 py-0.5 bg-gray-800 border border-gray-700 rounded-full text-gray-400">
+                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
+                        <span>${s.typ}</span>
+                      </span>`
+                    : `<button id="btn-change-runner-type" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-950/50 border border-emerald-800/50 rounded-full text-emerald-400 hover:bg-emerald-900/50 hover:text-emerald-300 transition-colors cursor-pointer">
+                        <span>${s.typ}</span>
+                        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                      </button>`
+                  }
                 </div>
                 <div>
                   <div class="flex justify-between items-center">

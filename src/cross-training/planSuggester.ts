@@ -16,7 +16,7 @@
  * - Prefer downgrade/reduce before replace.
  */
 
-import type { Workout, RaceDistance, RunnerType, WorkoutType } from '@/types';
+import type { Workout, RaceDistance, RunnerType, WorkoutType, Paces } from '@/types';
 import type {
   ActivityInput,
   UniversalLoadResult,
@@ -28,7 +28,7 @@ import type {
   ChoiceOutcome,
 } from './universal-load-types';
 import { computeUniversalLoad, isExtremeSession } from './universalLoad';
-import { calculateWorkoutLoad } from '@/workouts';
+import { calculateWorkoutLoad, parseWorkoutDescription } from '@/workouts';
 import {
   ANAEROBIC_WEIGHT,
   REPLACE_THRESHOLD,
@@ -98,10 +98,35 @@ function downgradeType(wt: string): WorkoutType {
   return (downgrades[wt] || wt) as WorkoutType;
 }
 
-/** Parse km distance from workout description */
-function parseDistanceKm(desc: string): number {
-  const match = desc.match(/(\d+\.?\d*)km/);
-  return match ? parseFloat(match[1]) : 0;
+/** Default paces for distance estimation when paces not available */
+const DEFAULT_PACES: Paces = { e: 360, t: 300, i: 270, m: 315, r: 255 };
+
+/**
+ * Parse km distance from workout description using the canonical parser.
+ * Falls back to simple regex if parser returns 0.
+ * Always returns distance rounded to 1 decimal place.
+ */
+function parseDistanceKm(desc: string, paces?: Paces, aerobicLoad?: number): number {
+  const effectivePaces = paces || DEFAULT_PACES;
+
+  // Use canonical parser for robust handling of intervals and time-based workouts
+  const parsed = parseWorkoutDescription(desc, effectivePaces);
+  let km = parsed.totalDistance / 1000; // Convert meters to km
+
+  // Fallback: simple regex for backward compatibility
+  if (km <= 0) {
+    const match = desc.match(/(\d+\.?\d*)km/);
+    km = match ? parseFloat(match[1]) : 0;
+  }
+
+  // If still 0 and we have aerobic load, estimate distance
+  // Rough estimate: 1km easy ≈ 35 aerobic load
+  if (km <= 0 && aerobicLoad && aerobicLoad > 0) {
+    km = aerobicLoad / 35;
+  }
+
+  // Round to 1 decimal place
+  return Math.round(km * 10) / 10;
 }
 
 // ---------------------------------------------------------------------------
@@ -128,7 +153,7 @@ function vibeSimilarity(
 // Convert Workouts to PlannedRuns
 // ---------------------------------------------------------------------------
 
-export function workoutsToPlannedRuns(workouts: Workout[]): PlannedRun[] {
+export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): PlannedRun[] {
   return workouts
     .filter(
       (w) =>
@@ -141,7 +166,7 @@ export function workoutsToPlannedRuns(workouts: Workout[]): PlannedRun[] {
       workoutId: w.n,
       dayIndex: w.dayOfWeek ?? idx,
       workoutType: w.t as WorkoutType,
-      plannedDistanceKm: parseDistanceKm(w.d),
+      plannedDistanceKm: parseDistanceKm(w.d, paces, w.aerobic),
       plannedAerobic: w.aerobic || 0,
       plannedAnaerobic: w.anaerobic || 0,
       status: (w.status || 'planned') as PlannedRun['status'],

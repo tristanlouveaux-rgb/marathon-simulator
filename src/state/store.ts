@@ -1,7 +1,9 @@
 import type { SimulatorState, CrossActivity } from '@/types';
+import { STATE_SCHEMA_VERSION } from '@/types/state';
 
 /** Default initial state */
 const defaultState: SimulatorState = {
+  schemaVersion: STATE_SCHEMA_VERSION,
   w: 1,
   tw: 16,
   v: 50,
@@ -21,6 +23,7 @@ const defaultState: SimulatorState = {
   currentFitness: null,
   forecastTime: null,
   typ: 'Balanced',
+  calculatedRunnerType: 'Balanced',
   b: 1.06,
   wks: [],
   pac: { e: 360, t: 300, i: 270, m: 310, r: 260 },

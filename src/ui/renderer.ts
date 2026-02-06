@@ -1,7 +1,6 @@
 import type { Workout, Week } from '@/types';
 import {
-  getState, getMutableState,
-  getCrossActivities, incrementRenderCycle, getRenderCycle
+  getState, getMutableState
 } from '@/state';
 import {
   rdKm, tv, getRunnerType,
@@ -12,9 +11,9 @@ import {
   generateWeekWorkouts, parseWorkoutDescription,
   calculateWorkoutLoad, checkConsecutiveHardDays, assignDefaultDays
 } from '@/workouts';
-import { applyCrossTrainingToWorkouts } from '@/cross-training';
+// applyCrossTrainingToWorkouts is intentionally NOT used here.
+// Plan modifications must only happen via explicit user confirmation in events.ts.
 import { ft, fp, formatPace, formatWorkoutTime, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
-import { saveState } from '@/state';
 import { SPORTS_DB, SPORT_LABELS } from '@/constants';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
@@ -176,7 +175,8 @@ export function render(): void {
   // Apply stored modifications
   if (wk.workoutMods && wk.workoutMods.length > 0) {
     for (const mod of wk.workoutMods) {
-      const workout = wos.find(w => w.n === mod.name);
+      // Match by both name and dayOfWeek for unique identification (handles duplicate names like "Easy Run")
+      const workout = wos.find(w => w.n === mod.name && (mod.dayOfWeek == null || w.dayOfWeek === mod.dayOfWeek));
       if (workout) {
         workout.status = mod.status as any;
         workout.modReason = mod.modReason;
@@ -184,6 +184,12 @@ export function render(): void {
         if (mod.status === 'reduced' || mod.status === 'replaced') {
           workout.originalDistance = mod.originalDistance;
           workout.d = mod.newDistance;
+          // Apply new type and RPE if provided (for downgrades)
+          if (mod.newType) workout.t = mod.newType;
+          if (mod.newRpe != null) {
+            workout.rpe = mod.newRpe;
+            workout.r = mod.newRpe;
+          }
           const newLoads = calculateWorkoutLoad(workout.t, workout.d, (workout.rpe || workout.r || 5) * 10);
           workout.aerobic = newLoads.aerobic;
           workout.anaerobic = newLoads.anaerobic;
@@ -209,52 +215,12 @@ export function render(): void {
     }
   }
 
-  // Apply cross-training modifications
-  const totalWorkouts = wos.length;
-  const completedWorkouts = Object.keys(wk.rated).length;
-  const weekComplete = completedWorkouts >= totalWorkouts;
-
-  let targetWeek = s.w;
-  if (weekComplete && s.w < s.tw) {
-    targetWeek = s.w + 1;
-  }
-
-  const currentRenderCycle = getRenderCycle();
-  const crossActivities = getCrossActivities();
-  const targetActivities = crossActivities.filter(
-    a => a.week === targetWeek && !a.applied && a.renderCycle !== currentRenderCycle
-  );
-
-  // Get previous week activities for 2-week aggregation
-  const previousWeekActivities = crossActivities.filter(
-    a => a.week === targetWeek - 1
-  );
-
-  if (targetActivities.length > 0) {
-    wos = applyCrossTrainingToWorkouts(wk, wos, targetActivities, previousWeekActivities);
-
-    // Store modifications
-    wk.workoutMods = wos
-      .filter(w => w.status && (w.status === 'reduced' || w.status === 'replaced'))
-      .map(w => ({
-        name: w.n,
-        status: w.status!,
-        modReason: w.modReason || '',
-        confidence: w.confidence,
-        originalDistance: w.originalDistance,
-        newDistance: w.d
-      }));
-
-    targetActivities.forEach(a => {
-      if (!a.appliedToNextWeek) {
-        a.applied = true;
-        a.renderCycle = currentRenderCycle;
-      }
-    });
-    saveState();
-  }
-
-  incrementRenderCycle();
+  // NOTE: Cross-training modifications are NO LONGER auto-applied during render.
+  // Plan changes must only happen via explicit user confirmation in the suggestion modal.
+  // The logActivity() function in events.ts handles showing the modal and applying changes.
+  //
+  // This prevents the bug where logging an activity would silently mutate the plan
+  // without user consent.
 
   // Build HTML
   let h = `<h3 class="font-bold mb-3 text-sm text-white">Week ${s.w} Workouts (${wos.length})</h3>`;
@@ -411,7 +377,7 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
       h += `<div class="text-xs text-gray-600 text-center py-4">Rest</div>`;
     } else {
       for (const w of dayWorkouts) {
-        const rtd = wk.rated[w.n];
+        const rtd = w.id ? wk.rated[w.id] : wk.rated[w.n];
         const isModified = w.status && (w.status === 'replaced' || w.status === 'reduced');
         const isReplaced = w.status === 'replaced';
         const isSkipped = w.skipped === true;
@@ -419,12 +385,20 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
         const wColors = getWorkoutColors(w.t);
         let cardBg = wColors.bg;
         let cardBorder = wColors.border;
-        if (rtd || isReplaced) { cardBg = 'bg-emerald-950/50'; cardBorder = 'border-emerald-700'; }
-        else if (isModified) { cardBg = 'bg-gray-700'; cardBorder = 'border-gray-600'; }
+        // User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped = amber
+        if (rtd) { cardBg = 'bg-emerald-950/50'; cardBorder = 'border-emerald-700'; }
+        else if (isReplaced) { cardBg = 'bg-cyan-950/50'; cardBorder = 'border-cyan-700'; }
+        else if (isModified) { cardBg = 'bg-sky-950/50'; cardBorder = 'border-sky-700'; }
         else if (isSkipped) { cardBg = 'bg-amber-950/30'; cardBorder = 'border-amber-700'; }
 
+        // Status label for calendar card
+        let statusLabel = '';
+        if (rtd) statusLabel = ' Done';
+        else if (isReplaced) statusLabel = ' Covered';
+        else if (isModified) statusLabel = ' Modified';
+
         h += `<div class="${cardBg} border ${cardBorder} rounded p-1 mb-1 text-xs cursor-move text-gray-300" draggable="true" ondragstart="window.dragStart(event,'${w.n.replace(/'/g, "\\'")}')">`;
-        h += `<div class="font-semibold text-gray-200">${w.n}${rtd ? ' Done' : ''}</div>`;
+        h += `<div class="font-semibold text-gray-200">${w.n}${statusLabel}</div>`;
         h += `<div class="text-xs text-gray-400">${injectPaces(w.d, paces)}</div>`;
         h += `<div class="text-xs ${wColors.accent}">RPE ${w.rpe || w.r}</div>`;
         h += `</div>`;
@@ -444,7 +418,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
   let h = `<h4 class="font-semibold text-sm mb-2 mt-4 text-white">Workouts</h4><div class="space-y-2">`;
 
   for (const w of wos) {
-    const rtd = wk.rated[w.n];
+    const rtd = w.id ? wk.rated[w.id] : wk.rated[w.n];
     const impByType = IMP[rd as keyof typeof IMP] || {};
     const imp = (impByType as Record<string, number>)[w.t] || 0.5;
     const loads = calculateWorkoutLoad(w.t, w.d, (w.rpe || w.r || 5) * 10);
@@ -453,19 +427,25 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     const isReplaced = w.status === 'replaced';
     const isSkipped = w.skipped === true;
 
-    // Detail cards use neutral colors (calendar stays colorful)
+    // Detail cards: User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped = amber
     let borderClass = 'border-gray-700 bg-gray-800';
-    if (rtd || isReplaced) borderClass = 'border-emerald-700 bg-emerald-950/30';
-    else if (isModified) borderClass = 'border-gray-600 bg-gray-800';
+    if (rtd) borderClass = 'border-emerald-700 bg-emerald-950/30';
+    else if (isReplaced) borderClass = 'border-cyan-700 bg-cyan-950/30';
+    else if (isModified) borderClass = 'border-sky-700 bg-sky-950/30';
     else if (isSkipped) borderClass = 'border-amber-700 bg-amber-950/20';
 
     h += `<div class="border-2 ${borderClass} p-2 rounded">`;
 
     // Modification banner
     if (isModified && w.modReason) {
-      const modColor = isReplaced ? 'bg-emerald-950/30 border-emerald-800 text-emerald-300' : 'bg-gray-700 border-gray-600 text-gray-300';
+      const modColor = isReplaced ? 'bg-cyan-950/30 border-cyan-800 text-cyan-300' : 'bg-sky-950/30 border-sky-800 text-sky-300';
+      const modLabel = isReplaced ? 'LOAD COVERED' : 'LOAD DOWNGRADE';
       h += `<div class="mb-2 p-1.5 ${modColor} border rounded text-xs">`;
-      h += `<div class="font-bold">${isReplaced ? 'COMPLETED' : 'REDUCED'}: ${w.modReason}</div>`;
+      h += `<div class="font-bold">${modLabel}</div>`;
+      h += `<div class="text-gray-400 mt-0.5">${w.modReason}</div>`;
+      if (w.originalDistance && !isReplaced) {
+        h += `<div class="text-gray-500 mt-0.5">Original: ${w.originalDistance}</div>`;
+      }
       h += `</div>`;
     }
 
@@ -511,9 +491,10 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     // Rating buttons
     if (!isReplaced) {
+      const wId = w.id || w.n;
       h += `<div class="text-xs mb-1 text-gray-400">${rtd ? 'Re-rate RPE:' : 'RPE rating:'}</div><div class="grid grid-cols-10 gap-0.5">`;
       for (let r = 1; r <= 10; r++) {
-        h += `<button onclick="window.rate('${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
+        h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
       }
       h += `</div>`;
     }
@@ -536,7 +517,8 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     }
 
     // Skip button
-    h += `<button onclick="window.skip('${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs ${isSkipped ? 'bg-red-900/50 hover:bg-red-800/50 text-red-300' : isReplaced ? 'bg-gray-700 cursor-not-allowed text-gray-500' : 'bg-gray-700 hover:bg-gray-600 text-gray-400'} py-0.5 rounded" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Completed' : 'Skip'}</button>`;
+    const skipId = w.id || w.n;
+    h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs ${isSkipped ? 'bg-red-900/50 hover:bg-red-800/50 text-red-300' : isReplaced ? 'bg-cyan-900/50 cursor-not-allowed text-cyan-400' : 'bg-gray-700 hover:bg-gray-600 text-gray-400'} py-0.5 rounded" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
 
     h += `</div>`;
   }
@@ -645,7 +627,7 @@ export function setupSyncListener(): void {
     );
 
     // Filter out already-rated workouts
-    const unrated = wos.filter(w => !wk.rated[w.n]);
+    const unrated = wos.filter(w => !(w.id ? wk.rated[w.id] : wk.rated[w.n]));
     const match = findMatchingWorkout(activity, unrated);
     if (!match) return;
 
@@ -670,9 +652,39 @@ export function setupSyncListener(): void {
 /**
  * Inject actual pace values into workout description tokens.
  * Replaces "@ MP", "@ threshold", "@ 5K", etc. with the user's calculated pace.
+ * Also expands progressive/fast-finish formats to show easy pace for the first portion.
  */
 function injectPaces(description: string, paces: any): string {
   if (!paces) return description;
+
+  // First, handle progressive/fast-finish format: "Xkm: last Y @ pace"
+  // Convert to "Xkm: first Z @ easy (pace) + last Y @ pace (pace)"
+  const progressiveMatch = description.match(/^(\d+\.?\d*)km:\s*last\s+(\d+\.?\d*)\s*@\s*(.+)$/i);
+  if (progressiveMatch && paces.e) {
+    const totalKm = parseFloat(progressiveMatch[1]);
+    const fastKm = parseFloat(progressiveMatch[2]);
+    const fastPaceToken = progressiveMatch[3].trim();
+    const easyKm = totalKm - fastKm;
+
+    if (easyKm > 0) {
+      // Resolve the fast pace token
+      let fastPace = '';
+      const tokenLower = fastPaceToken.toLowerCase();
+      if (tokenLower === 'mp' && paces.m) fastPace = formatPace(paces.m);
+      else if ((tokenLower === 'threshold' || tokenLower === 'tempo') && paces.t) fastPace = formatPace(paces.t);
+      else if (tokenLower === '5k' && paces.i) fastPace = formatPace(paces.i);
+      else if (tokenLower === '10k' && paces.t) fastPace = formatPace(paces.t);
+      else if (tokenLower === 'hm' && paces.m && paces.t) fastPace = formatPace((paces.m + paces.t) / 2);
+      else if (tokenLower === 'vo2' && paces.i) fastPace = formatPace(paces.i);
+
+      const easyPace = formatPace(paces.e);
+      const fastLabel = fastPace ? `@ ${fastPace}` : `@ ${fastPaceToken}`;
+
+      return `${totalKm}km: ${easyKm} @ easy (${easyPace}) + ${fastKm} ${fastLabel}`;
+    }
+  }
+
+  // Standard token replacement for other formats
   return description
     .replace(/@ ?MP/g, paces.m ? `@ ${formatPace(paces.m)}` : '@ Marathon Pace')
     .replace(/@ ?threshold/gi, paces.t ? `@ ${formatPace(paces.t)}` : '@ threshold')

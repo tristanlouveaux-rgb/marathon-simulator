@@ -65,14 +65,6 @@ function renderRaceList(races: Marathon[], state: OnboardingState): string {
     <div class="flex-1 overflow-y-auto space-y-3 max-h-[400px] pr-2 scrollbar-thin">
       ${raceItems}
     </div>
-
-    ${state.selectedRace ? `
-      <button id="confirm-race"
-        class="mt-6 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-               text-white font-medium rounded-xl transition-all">
-        Continue with ${state.selectedRace.name}
-      </button>
-    ` : ''}
   `;
 }
 
@@ -135,20 +127,12 @@ function renderCustomDateInput(state: OnboardingState): string {
           ${weeksText}
         </div>
       ` : ''}
-
-      ${state.customRaceDate ? `
-        <button id="confirm-custom"
-          class="mt-4 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
-          Continue
-        </button>
-      ` : ''}
     </div>
   `;
 }
 
 function wireEventHandlers(races: Marathon[], state: OnboardingState): void {
-  // Race card selection
+  // Race card selection - auto-advance on selection
   document.querySelectorAll('.race-card').forEach(card => {
     card.addEventListener('click', () => {
       const raceId = card.getAttribute('data-race-id');
@@ -159,14 +143,10 @@ function wireEventHandlers(races: Marathon[], state: OnboardingState): void {
           planDurationWeeks: race.weeksUntil || 16,
           customRaceDate: null,
         });
-        rerender(state);
+        // Auto-advance immediately after selection
+        nextStep();
       }
     });
-  });
-
-  // Confirm race selection
-  document.getElementById('confirm-race')?.addEventListener('click', () => {
-    nextStep();
   });
 
   // Custom race toggle
@@ -186,7 +166,7 @@ function wireEventHandlers(races: Marathon[], state: OnboardingState): void {
     rerender(state);
   });
 
-  // Custom date input
+  // Custom date input - auto-advance on valid date
   const dateInput = document.getElementById('custom-date-input') as HTMLInputElement;
   if (dateInput) {
     dateInput.addEventListener('change', () => {
@@ -198,15 +178,11 @@ function wireEventHandlers(races: Marathon[], state: OnboardingState): void {
           planDurationWeeks: weeks,
           selectedRace: null,
         });
-        rerender(state);
+        // Auto-advance immediately after valid date
+        nextStep();
       }
     });
   }
-
-  // Confirm custom date
-  document.getElementById('confirm-custom')?.addEventListener('click', () => {
-    nextStep();
-  });
 }
 
 function rerender(state: OnboardingState): void {

@@ -244,6 +244,12 @@ function findDirectMatch(
 /**
  * Find the best workout to match with remaining load
  */
+/** Workout types that are valid replacement targets (running workouts only) */
+const RUNNING_WORKOUT_TYPES = new Set([
+  'easy', 'long', 'threshold', 'vo2', 'race_pace', 'marathon_pace',
+  'intervals', 'hill_repeats', 'mixed', 'progressive', 'tempo'
+]);
+
 function findBestWorkoutMatch(
   workouts: Workout[],
   wk: Week,
@@ -263,12 +269,16 @@ function findBestWorkoutMatch(
 
     const wt = w.t.toLowerCase();
 
+    // CRITICAL: Only target running workouts for replacement.
+    // Never replace cycling, cross-training, strength, rest, or other non-running activities.
+    if (!RUNNING_WORKOUT_TYPES.has(wt)) {
+      continue;
+    }
+
     // Long runs must NEVER be fully replaced — only reduced (adjust-only)
     if (wt === 'long' && !skipReplacements) {
       continue;
     }
-
-
 
     // Skip workouts that this sport cannot modify
     if (!canTouchWorkout(sport, wt)) {

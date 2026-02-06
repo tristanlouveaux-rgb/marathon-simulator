@@ -22,8 +22,12 @@ export function renderRunnerType(container: HTMLElement, state: OnboardingState)
         <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
           Your Runner Profile
         </h2>
-        <p class="text-gray-400 text-center mb-8">
-          Based on your personal bests, we've analyzed your running characteristics
+        <p class="text-gray-400 text-center mb-4">
+          Based on your personal bests, we've analyzed how your pace changes across distances
+        </p>
+        <p class="text-xs text-gray-500 text-center mb-8">
+          This profile determines your training emphasis — confirming it helps us optimize your plan.
+          If the calculated type doesn't match how you feel as a runner, you can override it.
         </p>
 
         <!-- Runner Type Display -->

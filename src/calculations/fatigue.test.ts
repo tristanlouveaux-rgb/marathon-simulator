@@ -26,8 +26,9 @@ describe('Fatigue Calculations', () => {
       expect(b).toBeLessThan(1.2);
     });
 
-    it('should detect speed runners (lower b)', () => {
-      // Speed runner: faster at short vs long (lower fatigue scaling)
+    it('should detect speed runners (higher b = more fade at longer distances)', () => {
+      // Speed runner: 5K time is relatively faster than 10K would predict
+      // 18:00 5K → 42:00 10K = high ratio = high b = Speed type
       const pbs: PBs = { k5: 1080, k10: 2520 }; // 18:00 5K, 42:00 10K
       const b = calculateFatigueExponent(pbs);
 
@@ -36,8 +37,9 @@ describe('Fatigue Calculations', () => {
       expect(b).toBeLessThan(1.5);
     });
 
-    it('should detect endurance runners (higher b)', () => {
-      // Endurance runner: scales better to longer distances
+    it('should detect endurance runners (lower b = less fade at longer distances)', () => {
+      // Endurance runner: 10K time is relatively faster than 5K would predict
+      // 20:00 5K → 40:00 10K = almost exactly double = low b = Endurance type
       const pbs: PBs = { k5: 1200, k10: 2400 }; // 20:00 5K, 40:00 10K
       const b = calculateFatigueExponent(pbs);
 
@@ -79,20 +81,38 @@ describe('Fatigue Calculations', () => {
   });
 
   describe('getRunnerType', () => {
-    it('should classify Speed runner (b < 1.06)', () => {
-      expect(getRunnerType(1.04)).toBe('Speed');
-      expect(getRunnerType(1.05)).toBe('Speed');
+    /**
+     * Runner Type Semantics (Corrected):
+     *
+     * The fatigue exponent 'b' comes from Riegel's power law: T(d) = T_anchor * (d/d_anchor)^b
+     *
+     * HIGH b (> 1.12) = MORE fade at longer distances = relatively WORSE at long distances
+     *                 = relatively BETTER at short distances = "Speed" type
+     *
+     * LOW b (< 1.06)  = LESS fade at longer distances = relatively BETTER at long distances
+     *                 = relatively WORSE at short distances = "Endurance" type
+     *
+     * This matches real-world intuition:
+     * - Usain Bolt (speed) would have high b - his 100m is elite but marathon would fade badly
+     * - Kipchoge (endurance) has low b - his marathon pace is incredible relative to shorter races
+     */
+
+    it('should classify Endurance runner (low b < 1.06 = less fade = better at long)', () => {
+      expect(getRunnerType(1.03)).toBe('Endurance');
+      expect(getRunnerType(1.04)).toBe('Endurance');
+      expect(getRunnerType(1.05)).toBe('Endurance');
     });
 
-    it('should classify Balanced runner (1.06 <= b <= 1.12)', () => {
+    it('should classify Balanced runner (mid b = 1.06-1.12)', () => {
       expect(getRunnerType(1.06)).toBe('Balanced');
       expect(getRunnerType(1.09)).toBe('Balanced');
       expect(getRunnerType(1.12)).toBe('Balanced');
     });
 
-    it('should classify Endurance runner (b > 1.12)', () => {
-      expect(getRunnerType(1.13)).toBe('Endurance');
-      expect(getRunnerType(1.20)).toBe('Endurance');
+    it('should classify Speed runner (high b > 1.12 = more fade = better at short)', () => {
+      expect(getRunnerType(1.13)).toBe('Speed');
+      expect(getRunnerType(1.15)).toBe('Speed');
+      expect(getRunnerType(1.20)).toBe('Speed');
     });
 
     it('should handle invalid input', () => {
@@ -100,21 +120,37 @@ describe('Fatigue Calculations', () => {
       // 0 is falsy, so returns 'Balanced' due to guard clause
       expect(getRunnerType(0)).toBe('Balanced');
     });
+
+    // Semantic correctness documentation tests
+    it('SEMANTIC: high b (1.15) means Speed type', () => {
+      // High b = more performance drop at long distances = Speed specialist
+      expect(getRunnerType(1.15)).toBe('Speed');
+    });
+
+    it('SEMANTIC: low b (1.03) means Endurance type', () => {
+      // Low b = less performance drop at long distances = Endurance specialist
+      expect(getRunnerType(1.03)).toBe('Endurance');
+    });
+
+    it('SEMANTIC: mid b (1.09) means Balanced type', () => {
+      // Mid b = average fade = Balanced
+      expect(getRunnerType(1.09)).toBe('Balanced');
+    });
   });
 
   describe('gt (legacy runner type)', () => {
     // gt now delegates to getRunnerType with same thresholds, returns lowercase
 
-    it('should classify with same thresholds as getRunnerType', () => {
-      expect(gt(1.04)).toBe('speed');      // < 1.06
-      expect(gt(1.06)).toBe('balanced');   // >= 1.06 and <= 1.12
-      expect(gt(1.13)).toBe('endurance');  // > 1.12
+    it('should classify with same thresholds as getRunnerType (corrected semantics)', () => {
+      expect(gt(1.04)).toBe('endurance');  // < 1.06 = low b = less fade = endurance
+      expect(gt(1.06)).toBe('balanced');   // >= 1.06 and <= 1.12 = balanced
+      expect(gt(1.13)).toBe('speed');      // > 1.12 = high b = more fade = speed
     });
 
     it('should return lowercase strings', () => {
-      expect(gt(1.04)).toBe('speed');
+      expect(gt(1.04)).toBe('endurance');
       expect(gt(1.06)).toBe('balanced');
-      expect(gt(1.13)).toBe('endurance');
+      expect(gt(1.13)).toBe('speed');
     });
   });
 
