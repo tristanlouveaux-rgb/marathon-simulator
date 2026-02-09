@@ -23,7 +23,16 @@ export type SportKey =
   | 'stair_climbing'
   | 'jump_rope'
   | 'walking'
-  | 'padel';
+  | 'padel'
+  | 'generic_sport'
+  | 'hybrid_test_sport';
+
+/** Extended model for future decoupled fitness/fatigue mechanics (not yet used in scoring) */
+export interface ExtendedModel {
+  aerobicTransfer: number;    // Aerobic fitness adaptation transfer (0-1)
+  anaerobicTransfer: number;  // Anaerobic fitness adaptation transfer (0-1)
+  impactLoading: number;      // Musculoskeletal impact stress factor (0-2)
+}
 
 /** Sport database entry */
 export interface SportConfig {
@@ -31,6 +40,7 @@ export interface SportConfig {
   noReplace: string[];     // Workout types this sport can't replace
   runSpec: number;         // Running specificity (0-1)
   recoveryMult?: number;   // Recovery cost multiplier (>=1 for team sports, <1 for low impact)
+  extendedModel?: ExtendedModel;  // Future: decoupled fitness/fatigue model (read but not scored)
 }
 
 /** Cross-training activity */

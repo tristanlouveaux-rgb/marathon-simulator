@@ -225,7 +225,7 @@ export function computeGoalFactor(
 // ---------------------------------------------------------------------------
 
 /** Average load per km for easy running (for equivalence messaging) */
-export const EASY_LOAD_PER_KM = 35;
+export const EASY_LOAD_PER_KM = 12;
 
 /** Maximum equivalent km shown in UI (cap for sanity) */
 export const MAX_EQUIVALENT_EASY_KM = 25;

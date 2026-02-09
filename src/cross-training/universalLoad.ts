@@ -71,6 +71,7 @@ function getSportConfig(sportKey: SportKey | string) {
       runSpec: config.runSpec,
       recoveryMult: config.recoveryMult ?? 1.0,
       noReplace: config.noReplace,
+      extendedModel: config.extendedModel,
     };
   }
   // Unknown sport: use conservative defaults
@@ -79,6 +80,7 @@ function getSportConfig(sportKey: SportKey | string) {
     runSpec: 0.35,
     recoveryMult: 1.0,
     noReplace: [] as string[],
+    extendedModel: undefined,
   };
 }
 
@@ -293,6 +295,19 @@ export function computeUniversalLoad(
 
   // Apply saturation curve (prevents massive sessions from linearly deleting the week)
   const runReplacementCredit = saturateCredit(rrcRaw);
+
+  // ---------------------------------------------------------------------------
+  // Extended model (future: decoupled fitness/fatigue scoring)
+  // ---------------------------------------------------------------------------
+  // When extendedModel is present, read its fields for downstream consumers.
+  // Legacy FCL/RRC formulas remain the sole scoring path for now.
+  if (config.extendedModel) {
+    const { aerobicTransfer, anaerobicTransfer, impactLoading } = config.extendedModel;
+    // TODO: wire into decoupled scoring when ready
+    void aerobicTransfer;
+    void anaerobicTransfer;
+    void impactLoading;
+  }
 
   // ---------------------------------------------------------------------------
   // Equivalence for UI messaging

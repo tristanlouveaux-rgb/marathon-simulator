@@ -42,6 +42,11 @@ export function renderGoals(container: HTMLElement, state: OnboardingState): voi
           <!-- Distance Selection (shown after choosing event or general) -->
           ${state.trainingForEvent !== null ? renderDistanceSelection(state) : ''}
 
+          <!-- Week selector for 5k/10k races -->
+          ${state.trainingForEvent && (state.raceDistance === '5k' || state.raceDistance === '10k')
+            ? renderWeekSelector(state)
+            : ''}
+
           <!-- Event Selection (inline, for half/marathon) -->
           ${state.trainingForEvent && (state.raceDistance === 'half' || state.raceDistance === 'marathon')
             ? renderInlineEventSelection(state)
@@ -111,6 +116,31 @@ function renderDistanceSelection(state: OnboardingState): string {
   `;
 }
 
+function renderWeekSelector(state: OnboardingState): string {
+  const weeks = state.planDurationWeeks || (state.raceDistance === '5k' ? 8 : 10);
+  const min = 4;
+  const max = 52;
+  return `
+    <div>
+      <label class="block text-sm text-gray-400 mb-3">Plan duration</label>
+      <div class="flex items-center gap-3">
+        <button id="weeks-minus"
+          class="w-10 h-10 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-lg font-medium
+                 ${weeks <= min ? 'opacity-30 cursor-not-allowed' : ''}"
+          ${weeks <= min ? 'disabled' : ''}>−</button>
+        <div class="flex-1 text-center">
+          <span class="text-2xl font-light text-white">${weeks}</span>
+          <span class="text-sm text-gray-400 ml-1">weeks</span>
+        </div>
+        <button id="weeks-plus"
+          class="w-10 h-10 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-lg font-medium
+                 ${weeks >= max ? 'opacity-30 cursor-not-allowed' : ''}"
+          ${weeks >= max ? 'disabled' : ''}>+</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderFocusSelection(state: OnboardingState): string {
   const options: { id: string; label: string; desc: string; dist: RaceDistance; weeks: number }[] = [
     { id: 'speed', label: 'Speed', desc: 'Build raw speed', dist: '5k', weeks: 8 },
@@ -172,7 +202,7 @@ function renderInlineEventSelection(state: OnboardingState): string {
             <input type="date" id="custom-date-input" value="${state.customRaceDate || ''}"
               class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
                      text-white text-sm focus:border-emerald-500 focus:outline-none">
-            ${state.customRaceDate ? `<p class="text-xs text-emerald-400 mt-1">${calculateWeeksUntil(state.customRaceDate)} weeks of training</p>` : ''}
+            ${state.customRaceDate ? `<p id="custom-date-weeks-display" class="text-xs text-emerald-400 mt-1">${calculateWeeksUntil(state.customRaceDate)} weeks of training</p>` : ''}
           </div>
         ` : ''}
       </div>
@@ -228,6 +258,28 @@ function wireEventHandlers(state: OnboardingState): void {
     });
   });
 
+  // Week stepper for 5k/10k
+  document.getElementById('weeks-minus')?.addEventListener('click', () => {
+    import('../controller').then(({ getOnboardingState }) => {
+      const current = getOnboardingState() || state;
+      const weeks = (current.planDurationWeeks || 8) - 1;
+      if (weeks >= 4) {
+        updateOnboarding({ planDurationWeeks: weeks });
+        rerender(state);
+      }
+    });
+  });
+  document.getElementById('weeks-plus')?.addEventListener('click', () => {
+    import('../controller').then(({ getOnboardingState }) => {
+      const current = getOnboardingState() || state;
+      const weeks = (current.planDurationWeeks || 8) + 1;
+      if (weeks <= 52) {
+        updateOnboarding({ planDurationWeeks: weeks });
+        rerender(state);
+      }
+    });
+  });
+
   // Custom date toggle
   document.getElementById('toggle-custom-date')?.addEventListener('click', () => {
     if (state.customRaceDate !== null) {
@@ -238,36 +290,59 @@ function wireEventHandlers(state: OnboardingState): void {
     rerender(state);
   });
 
-  // Custom date input
+  // Custom date input — no validation here, just update state and display
   const dateInput = document.getElementById('custom-date-input') as HTMLInputElement;
   if (dateInput) {
-    // Set min date to 4 weeks from now
-    const minDate = new Date();
-    minDate.setDate(minDate.getDate() + 28);
-    dateInput.min = minDate.toISOString().split('T')[0];
+    // Also set max date to 1 year from now
+    const maxDate = new Date();
+    maxDate.setFullYear(maxDate.getFullYear() + 1);
+    dateInput.max = maxDate.toISOString().split('T')[0];
 
     dateInput.addEventListener('change', () => {
       if (dateInput.value) {
         const weeks = calculateWeeksUntil(dateInput.value);
-        if (weeks < 4) {
-          dateInput.setCustomValidity('Race must be at least 4 weeks away');
-          dateInput.reportValidity();
-          return;
-        }
-        dateInput.setCustomValidity('');
         updateOnboarding({ customRaceDate: dateInput.value, planDurationWeeks: weeks, selectedRace: null });
-        rerender(state);
+        // Update weeks display directly (no rerender) to keep input focus
+        const weeksEl = document.getElementById('custom-date-weeks-display');
+        if (weeksEl) {
+          weeksEl.textContent = `${weeks} weeks of training`;
+        } else {
+          // First time entering a date — need rerender to create the display element
+          rerender(state);
+        }
       }
     });
   }
 
-  // Continue
+  // Continue — validate custom date here instead of on input
   document.getElementById('continue-goals')?.addEventListener('click', () => {
-    if (canContinue(state)) nextStep();
+    import('../controller').then(({ getOnboardingState }) => {
+      const current = getOnboardingState() || state;
+      if (current.customRaceDate) {
+        const weeks = calculateWeeksUntil(current.customRaceDate);
+        if (weeks < 4) {
+          const input = document.getElementById('custom-date-input') as HTMLInputElement;
+          if (input) {
+            input.setCustomValidity('Race must be at least 4 weeks away');
+            input.reportValidity();
+          }
+          return;
+        }
+        if (weeks > 52) {
+          const input = document.getElementById('custom-date-input') as HTMLInputElement;
+          if (input) {
+            input.setCustomValidity('Race must be within 1 year');
+            input.reportValidity();
+          }
+          return;
+        }
+      }
+      if (canContinue(current)) nextStep();
+    });
   });
 }
 
-function rerender(state: OnboardingState): void {
+function rerender(_state: OnboardingState): void {
   import('../controller').then(({ getOnboardingState }) => {
     const currentState = getOnboardingState();
     if (currentState) {

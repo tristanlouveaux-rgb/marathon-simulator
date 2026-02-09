@@ -86,14 +86,14 @@ function isLongRunType(wt: string): boolean {
 /** Downgrade a workout type to an easier version */
 function downgradeType(wt: string): WorkoutType {
   const downgrades: Record<string, WorkoutType> = {
-    vo2: 'easy',
-    intervals: 'easy',
-    hill_repeats: 'easy',
-    threshold: 'easy',
-    race_pace: 'easy',
+    vo2: 'threshold',
+    intervals: 'threshold',
+    hill_repeats: 'threshold',
+    threshold: 'marathon_pace',
+    race_pace: 'marathon_pace',
     marathon_pace: 'easy',
-    mixed: 'easy',
-    progressive: 'easy',
+    mixed: 'marathon_pace',
+    progressive: 'marathon_pace',
   };
   return (downgrades[wt] || wt) as WorkoutType;
 }
@@ -355,10 +355,16 @@ function buildConservativeEdits(
     // For light severity, only one downgrade for quality sessions
     if (severity === 'light' && edits.length >= 1) break;
 
-    // Quality workouts: downgrade to easy
+    // Quality workouts: downgrade one step (vo2→threshold→marathon_pace→easy)
     if (run.isQuality) {
       const newType = downgradeType(run.workoutType);
-      const loadReduction = runLoad * 0.4; // ~40% load reduction from downgrade
+
+      // Calculate precise load reduction (load is truly load-based)
+      // New RPE based on downgraded type
+      const newRpe = newType === 'easy' ? 4 : newType === 'marathon_pace' ? 6 : 7;
+      const newLoads = calculateWorkoutLoad(newType, `${run.plannedDistanceKm}km`, newRpe * 10);
+      const newWeightedLoad = weightedLoad(newLoads.aerobic, newLoads.anaerobic);
+      const loadReduction = Math.max(0, runLoad - newWeightedLoad);
 
       edits.push({
         workoutId: run.workoutId,
@@ -369,7 +375,7 @@ function buildConservativeEdits(
         newType,
         newDistanceKm: run.plannedDistanceKm,
         loadReduction,
-        rationale: `Downgrade ${run.workoutType} to easy effort to manage fatigue.`,
+        rationale: `Downgrade ${run.workoutType} to ${newType} to manage fatigue.`,
       });
 
       remainingFatigue -= loadReduction;
@@ -511,7 +517,12 @@ function buildRecommendedEdits(
       } else {
         // Downgrade instead
         const newType = downgradeType(run.workoutType);
-        const loadReduction = runLoad * 0.4;
+
+        // Calculate precise load reduction
+        const newRpe = newType === 'easy' ? 4 : newType === 'marathon_pace' ? 6 : 7;
+        const newLoads = calculateWorkoutLoad(newType, `${run.plannedDistanceKm}km`, newRpe * 10);
+        const newWeightedLoad = weightedLoad(newLoads.aerobic, newLoads.anaerobic);
+        const loadReduction = Math.max(0, runLoad - newWeightedLoad);
 
         edits.push({
           workoutId: run.workoutId,
@@ -774,7 +785,7 @@ export function applyPlanEdits(
       workout.d =
         edit.newDistanceKm > 0
           ? `${edit.newDistanceKm}km`
-          : '0km (replaced)';
+          : 'Activity Replaced';
       workout.modReason = `Replaced by ${sportName}`;
       workout.confidence = 'high';
       workout.t = edit.newType;
@@ -783,7 +794,10 @@ export function applyPlanEdits(
     } else if (edit.action === 'downgrade') {
       workout.status = 'reduced';
       workout.originalDistance = workout.d;
-      workout.modReason = `Downgraded to easy due to ${sportName}`;
+      const paceLabel = edit.newType === 'marathon_pace' ? 'marathon pace'
+                      : edit.newType === 'threshold' ? 'threshold'
+                      : 'easy';
+      workout.modReason = `Downgraded to ${paceLabel} due to ${sportName}`;
       workout.confidence = 'medium';
       workout.t = edit.newType;
     } else if (edit.action === 'reduce') {

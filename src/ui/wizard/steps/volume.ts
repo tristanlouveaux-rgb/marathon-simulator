@@ -30,8 +30,8 @@ export function renderVolume(container: HTMLElement, state: OnboardingState): vo
                 <button data-runs="${n}"
                   class="runs-btn py-3 rounded-lg font-medium transition-all
                          ${state.runsPerWeek === n
-                           ? 'bg-emerald-600 text-white'
-                           : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
+      ? 'bg-emerald-600 text-white'
+      : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
                   ${n}
                 </button>
               `).join('')}
@@ -49,8 +49,8 @@ export function renderVolume(container: HTMLElement, state: OnboardingState): vo
                 <button data-sports="${n}"
                   class="sports-btn py-3 rounded-lg font-medium transition-all
                          ${state.sportsPerWeek === n
-                           ? 'bg-emerald-600 text-white'
-                           : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
+          ? 'bg-emerald-600 text-white'
+          : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
                   ${n}
                 </button>
               `).join('')}
@@ -83,11 +83,12 @@ function renderInlineActivities(state: OnboardingState): string {
         Don't worry about getting this perfect — your watch sync and manual logs will capture everything automatically.
       </p>
 
-      <p class="text-xs text-gray-500 mb-2">Select intensity based on how well this activity translates to running fitness.</p>
+      <p class="text-xs text-gray-400 mb-2">If you don't play a specific sport regularly but know you'll be active, just choose "Generic Sport" and we'll fit it into the plan.</p>
       <div class="grid grid-cols-4 gap-2 mb-3">
         <select id="act-sport" class="col-span-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
           <option value="" disabled selected>Select sport...</option>
-          ${SPORT_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('')}
+          <option value="Generic Sport">Generic Sport</option>
+          ${SPORT_OPTIONS.filter(s => s !== 'Generic Sport' && s !== 'Hybrid Test Sport').map(s => `<option value="${s}">${s}</option>`).join('')}
         </select>
         <input type="number" id="act-dur" placeholder="Min" min="10" max="300"
           class="text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
@@ -105,15 +106,13 @@ function renderInlineActivities(state: OnboardingState): string {
             <div class="flex items-center gap-3">
               <span class="text-sm text-white font-medium">${a.sport}</span>
               <span class="text-xs text-gray-400">${a.durationMin}min ${a.frequency}x/wk</span>
-              <span class="text-xs px-1.5 py-0.5 rounded ${
-                a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
-                a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
-                'bg-emerald-900/50 text-emerald-300'
-              }">${
-                a.intensity === 'hard' ? 'High Transfer' :
-                a.intensity === 'moderate' ? 'Moderate Transfer' :
-                'Low Transfer'
-              }</span>
+              <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
+      a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
+        'bg-emerald-900/50 text-emerald-300'
+    }">${a.intensity === 'hard' ? 'High Transfer' :
+      a.intensity === 'moderate' ? 'Moderate Transfer' :
+        'Low Transfer'
+    }</span>
             </div>
             <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs">Remove</button>
           </div>
@@ -121,7 +120,6 @@ function renderInlineActivities(state: OnboardingState): string {
       </div>
 
       ${state.recurringActivities.length === 0 ? `<p class="text-xs text-gray-500 mt-2">No activities added yet.</p>` : ''}
-      <p class="text-xs text-gray-600 mt-3">Don't know exact volume? Safe to underestimate — we'll sync actuals from your device.</p>
     </div>
   `;
 }

@@ -59,10 +59,12 @@ export function showSuggestionModal(
       } else if (adj.action === 'downgrade') {
         actionLabel = 'Downgrade';
         actionColor = 'text-amber-400';
-        // Handle 0km case: show "Keep workout at easy effort" instead of "Keep 0km..."
+        const paceLabel = adj.newType === 'marathon_pace' ? 'marathon pace'
+                        : adj.newType === 'threshold' ? 'threshold pace'
+                        : 'easy effort';
         detail = origKm > 0
-          ? `Keep ${origKm}km but at easy effort`
-          : 'Keep workout at easy effort';
+          ? `Keep ${origKm}km but at ${paceLabel}`
+          : `Keep workout at ${paceLabel}`;
       } else {
         actionLabel = 'Reduce';
         actionColor = 'text-amber-400';
@@ -117,11 +119,11 @@ export function showSuggestionModal(
           </div>
         </div>
 
-        <!-- Equivalence badge -->
+        <!-- Load badge -->
         <div class="mt-4 flex items-center gap-2 flex-wrap">
           <span class="inline-flex items-center px-3 py-1.5 rounded-full ${colors.bg} ${colors.border} border">
             <span class="${colors.text} font-medium text-sm">
-              ${popup.durationMin} min ${popup.sportName} ≈ ${popup.equivalentEasyKm}km easy run
+              ${popup.durationMin} min ${popup.sportName} — ${popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate'} training load
             </span>
           </span>
           ${popup.warnings.length > 0 ? `

@@ -1,4 +1,4 @@
-import type { RaceDistance, SimulatorState, Week, Workout } from '@/types';
+import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } from '@/types';
 import {
   getState, getMutableState, updateState,
   getCrossActivities, addCrossActivity,
@@ -12,7 +12,7 @@ import {
 import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
-import { generateWeekWorkouts } from '@/workouts';
+import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
@@ -82,6 +82,25 @@ export function init(): void {
 
   if (!Object.keys(p).length) {
     alert('Enter 1+ PB!');
+    return;
+  }
+
+  // Validate PBs (prevent seconds-as-minutes entry)
+  // World Records: 5k ~12:35, 10k ~26:11, HM ~57:30, M ~2:00:35
+  if (p.k5 && p.k5 < 750) { // < 12:30
+    alert('5k PB is too fast (World Record is ~12:35). Did you enter seconds instead of minutes?');
+    return;
+  }
+  if (p.k10 && p.k10 < 1560) { // < 26:00
+    alert('10k PB is too fast (World Record is ~26:11). Did you enter seconds instead of minutes?');
+    return;
+  }
+  if (p.h && p.h < 3480) { // < 58:00
+    alert('Half Marathon PB is too fast (World Record is ~57:31). Did you enter seconds instead of minutes?');
+    return;
+  }
+  if (p.m && p.m < 7200) { // < 2:00:00
+    alert('Marathon PB is too fast (World Record is ~2:00:35). Did you enter seconds instead of minutes?');
     return;
   }
 
@@ -436,8 +455,35 @@ export async function next(): Promise<void> {
   s.w++;
 
   if (s.w > s.tw) {
-    complete();
-    return;
+    // Continuous mode: append a new 4-week block instead of completing
+    if (s.continuousMode) {
+      const BLOCK_SIZE = 4;
+      s.blockNumber = (s.blockNumber || 1) + 1;
+
+      // Append 4 weeks: Base → Build → Intensify → Deload (evidence-backed mesocycle)
+      // Map to existing phase types:
+      // base = Base week, build = Build week, peak = Intensify week, taper = Deload week
+      const blockPhases: Array<import('@/types').TrainingPhase> = ['base', 'build', 'peak', 'taper'];
+      for (let i = 0; i < BLOCK_SIZE; i++) {
+        s.wks.push({
+          w: s.tw + i + 1,
+          ph: blockPhases[i],
+          rated: {},
+          skip: [],
+          cross: [],
+          wkGain: 0,
+          workoutMods: [],
+          adjustments: [],
+          unspentLoad: 0,
+          extraRunLoad: 0,
+        });
+      }
+      s.tw += BLOCK_SIZE;
+      log(`Block ${s.blockNumber} started (Weeks ${s.tw - BLOCK_SIZE + 1}–${s.tw})`);
+    } else {
+      complete();
+      return;
+    }
   }
 
   saveState();
@@ -558,6 +604,53 @@ function showCompletionModal(incompleteCount: number): Promise<boolean> {
 }
 
 /**
+ * Show a choice modal when a logged sport has a planned slot but duration
+ * is outside 40% range and a generic slot is also available.
+ */
+function showSlotChoiceModal(
+  slotName: string,
+  plannedDur: number,
+  loggedDur: number,
+  sportName: string
+): Promise<'sport' | 'generic'> {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+    overlay.innerHTML = `
+      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
+        <h3 class="text-white font-semibold text-lg mb-2">Match Activity</h3>
+        <p class="text-gray-400 text-sm mb-5">
+          You logged <span class="text-white font-medium">${loggedDur}min ${sportName}</span>
+          but your planned ${slotName} is <span class="text-white font-medium">${plannedDur}min</span>.
+          Which slot should this fill?
+        </p>
+        <div class="flex flex-col gap-2">
+          <button id="btn-match-sport" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm">
+            Replace planned ${slotName}
+          </button>
+          <button id="btn-match-generic" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+            Fill a Generic Sport slot instead
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#btn-match-sport')?.addEventListener('click', () => {
+      overlay.remove();
+      resolve('sport');
+    });
+    overlay.querySelector('#btn-match-generic')?.addEventListener('click', () => {
+      overlay.remove();
+      resolve('generic');
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { overlay.remove(); resolve('sport'); }
+    });
+  });
+}
+
+/**
  * Show a styled warning modal before skipping a long run.
  */
 function showLongRunSkipWarning(): Promise<boolean> {
@@ -637,13 +730,13 @@ export function updateFitness(): void {
   // Initialize physiology tracking state if needed
   let trackingState = s.physiologyTracking
     ? {
-        initialLT: s.initialLT,
-        initialVO2: s.initialVO2,
-        baselineVdot: s.v,
-        measurements: s.physiologyTracking.measurements || [],
-        currentAdaptationRatio: s.adaptationRatio || 1.0,
-        lastAssessment: null,
-      }
+      initialLT: s.initialLT,
+      initialVO2: s.initialVO2,
+      baselineVdot: s.v,
+      measurements: s.physiologyTracking.measurements || [],
+      currentAdaptationRatio: s.adaptationRatio || 1.0,
+      lastAssessment: null,
+    }
     : initializePhysiologyTracking(s.initialLT, s.initialVO2, s.v);
 
   // Record new measurement
@@ -812,6 +905,226 @@ export function logActivity(): void {
     s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v
   );
 
+  // -----------------------------------------------------------------------
+  // Cross-training slot matching: pair logged sport with planned slots
+  // Priority: 1) matching sport slot, 2) generic sport slot, 3) run suggestions
+  // -----------------------------------------------------------------------
+  const sportNorm = normalizeSport(sport);
+
+  // Find unfilled planned slots that match this sport (e.g., logged Cycling → planned "Cycling")
+  const matchingSlots = workouts.filter(w =>
+    w.t === 'cross' &&
+    !w.n.startsWith('Generic Sport') &&
+    normalizeSport(w.n.replace(/ \d+$/, '')) === sportNorm &&
+    !wk.rated[w.n] &&
+    !wk.workoutMods?.some(m => m.name === w.n)
+  );
+
+  // Find unfilled generic sport slots
+  const genericSlots = workouts.filter(w =>
+    w.t === 'cross' &&
+    w.n.startsWith('Generic Sport') &&
+    !wk.rated[w.n] &&
+    !wk.workoutMods?.some(m => m.name === w.n)
+  );
+
+  // Helper: fill a cross-training slot (records the mod but does NOT return early)
+  // Returns the planned duration of the filled slot (0 if unparseable).
+  const fillSlot = (slot: typeof workouts[0], reason: string): number => {
+    if (!wk.workoutMods) wk.workoutMods = [];
+    wk.workoutMods.push({
+      name: slot.n,
+      dayOfWeek: slot.dayOfWeek,
+      status: 'replaced',
+      modReason: reason,
+      confidence: 'high',
+      originalDistance: slot.d,
+      newDistance: `${dur}min ${sportNorm}`,
+      newType: 'cross',
+      newRpe: rpe,
+    });
+    wk.rated[slot.n] = rpe;
+
+    // Parse planned duration from slot description (e.g., "45min swimming")
+    const durMatch = slot.d.match(/(\d+)min/);
+    return durMatch ? parseInt(durMatch[1]) : 0;
+  };
+
+  // Helper: after filling a slot, handle excess duration or finalise
+  const handleSlotFillResult = (plannedDur: number, reason: string) => {
+    const excessMin = plannedDur > 0 ? dur - plannedDur : 0;
+
+    // If excess is small (≤10min or ≤20% over), just log and finish
+    if (excessMin <= 10 || (plannedDur > 0 && excessMin / plannedDur <= 0.2)) {
+      activity.applied = true;
+      addCrossActivity(activity);
+      sportSelect.value = '';
+      durInput.value = '';
+      rpeInput.value = '';
+      if (aerobicInput) aerobicInput.value = '';
+      if (anaerobicInput) anaerobicInput.value = '';
+      const wLoad = getWeeklyLoad(getCrossActivities(), s.w);
+      log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${wLoad.toFixed(0)} (${reason})`);
+      saveState();
+      render();
+      return;
+    }
+
+    // Significant excess: create a remainder activity and run it through the suggester
+    // so the extra load can reduce/replace runs appropriately
+    const excessActivity = createActivity(
+      sport, excessMin, rpe,
+      aerobic > 0 ? aerobic * (excessMin / dur) : undefined,
+      anaerobic > 0 ? anaerobic * (excessMin / dur) : undefined,
+      activityWeek
+    );
+
+    // Mark the slot fill in workouts so suggester sees true state
+    const slotW = workouts.find(w => w.t === 'cross' && wk.workoutMods?.some(
+      m => m.name === w.n && m.dayOfWeek === w.dayOfWeek
+    ));
+    if (slotW) {
+      slotW.status = 'replaced';
+      slotW.d = 'Activity Replaced';
+    }
+
+    // Re-apply existing modifications so suggester knows true state
+    if (wk.workoutMods && wk.workoutMods.length > 0) {
+      for (const mod of wk.workoutMods) {
+        const w = workouts.find(w => w.n === mod.name && w.dayOfWeek === mod.dayOfWeek);
+        if (w) {
+          w.status = mod.status as any;
+          w.d = mod.newDistance;
+          w.t = mod.newType;
+          w.modReason = mod.modReason || '';
+          w.confidence = mod.confidence as any;
+          const rpeVal = (mod.newRpe || 5) * 10;
+          const loads = calculateWorkoutLoad(w.t, w.d, rpeVal);
+          w.aerobic = loads.aerobic;
+          w.anaerobic = loads.anaerobic;
+        }
+      }
+    }
+
+    const plannedRuns = workoutsToPlannedRuns(workouts, s.pac);
+    const popup = buildCrossTrainingPopup(
+      {
+        raceGoal: s.rd,
+        plannedRunsPerWeek: s.rw,
+        injuryMode: !!(s as any).injuryState?.active,
+      },
+      plannedRuns,
+      excessActivity,
+      undefined
+    );
+
+    // Override summary to explain this is excess load from an over-duration session
+    popup.summary = `Your additional ${excessMin} mins ${sportNorm.replace(/_/g, ' ')} has further impact on your training load. ${popup.summary}`;
+
+    sportSelect.value = '';
+    durInput.value = '';
+    rpeInput.value = '';
+    if (aerobicInput) aerobicInput.value = '';
+    if (anaerobicInput) anaerobicInput.value = '';
+
+    const weeklyLoad = getWeeklyLoad(getCrossActivities(), s.w);
+    const hasAdjustments = popup.reduceOutcome.adjustments.length > 0 ||
+      popup.replaceOutcome.adjustments.length > 0;
+
+    // Always record the full activity (not the excess) in the activity log
+    activity.applied = true;
+    addCrossActivity(activity);
+
+    if (hasAdjustments) {
+      showSuggestionModal(popup, sportNorm, (decision) => {
+        if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
+          const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, sportNorm);
+          if (!wk.workoutMods) wk.workoutMods = [];
+          for (const adj of decision.adjustments) {
+            const modified = modifiedWorkouts.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
+            if (!modified) continue;
+            wk.workoutMods.push({
+              name: modified.n,
+              dayOfWeek: modified.dayOfWeek,
+              status: modified.status || 'reduced',
+              modReason: modified.modReason || '',
+              confidence: modified.confidence,
+              originalDistance: modified.originalDistance,
+              newDistance: modified.d,
+              newType: modified.t,
+              newRpe: modified.rpe || modified.r,
+            });
+          }
+          log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${reason} + ${decision.choice}d plan for ${excessMin}min excess)`);
+        } else {
+          log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${reason} + kept plan for excess)`);
+        }
+        saveState();
+        render();
+      });
+    } else {
+      log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${reason}, ${excessMin}min excess — no run adjustments needed)`);
+      saveState();
+      render();
+    }
+  };
+
+  if (matchingSlots.length > 0) {
+    const slot = matchingSlots[0];
+    // Parse planned duration from description (e.g., "60min cycling")
+    const slotDurMatch = slot.d.match(/^(\d+)min/);
+    const plannedDur = slotDurMatch ? parseInt(slotDurMatch[1]) : 0;
+    const withinRange = plannedDur > 0 && Math.abs(dur - plannedDur) / plannedDur <= 0.4;
+
+    if (withinRange || genericSlots.length === 0) {
+      // Duration close enough (or no generic fallback) → auto-pair
+      const filledDur = fillSlot(slot, `matched planned ${slot.n}`);
+      handleSlotFillResult(filledDur, `matched planned ${slot.n}`);
+      return;
+    }
+
+    // Duration mismatch + generic slots available → let user choose
+    showSlotChoiceModal(slot.n, plannedDur, dur, sportNorm).then(choice => {
+      if (choice === 'sport') {
+        const filledDur = fillSlot(slot, `matched planned ${slot.n}`);
+        handleSlotFillResult(filledDur, `matched planned ${slot.n}`);
+      } else {
+        const filledDur = fillSlot(genericSlots[0], `filled Generic Sport slot`);
+        handleSlotFillResult(filledDur, `filled Generic Sport slot`);
+      }
+    });
+    return;
+  }
+
+  if (genericSlots.length > 0 && sport !== 'generic_sport') {
+    const filledDur = fillSlot(genericSlots[0], `filled Generic Sport slot`);
+    handleSlotFillResult(filledDur, `filled Generic Sport slot`);
+    return;
+  }
+
+  // NEW: Re-apply existing modifications so suggester knows true state (prevents double-spending runs)
+  if (wk.workoutMods && wk.workoutMods.length > 0) {
+    for (const mod of wk.workoutMods) {
+      const w = workouts.find(w => w.n === mod.name && w.dayOfWeek === mod.dayOfWeek);
+      if (w) {
+        w.status = mod.status as any;
+        w.d = mod.newDistance;
+        w.t = mod.newType;
+        w.modReason = mod.modReason || '';
+        w.confidence = mod.confidence as any;
+        // If replaced, marking as autoCompleted prevents it from showing as "Missed"
+        // but status='replaced' is enough for suggester to ignore it.
+
+        // Recalculate load for the modified workout
+        // (Replaced runs with "0km" will get 0 load, preventing them from being targeted again)
+        const rpe = (mod.newRpe || 5) * 10;
+        const loads = calculateWorkoutLoad(w.t, w.d, rpe);
+        w.aerobic = loads.aerobic;
+        w.anaerobic = loads.anaerobic;
+      }
+    }
+  }
+
   // Convert to PlannedRun format for suggester (pass paces for robust distance parsing)
   const plannedRuns = workoutsToPlannedRuns(workouts, s.pac);
 
@@ -838,7 +1151,7 @@ export function logActivity(): void {
 
   // Show modal if there are suggestions, otherwise just log and continue
   const hasAdjustments = popup.reduceOutcome.adjustments.length > 0 ||
-                         popup.replaceOutcome.adjustments.length > 0;
+    popup.replaceOutcome.adjustments.length > 0;
 
   if (hasAdjustments) {
     showSuggestionModal(popup, normalizeSport(sport), (decision) => {
@@ -980,6 +1293,9 @@ declare global {
     drop: typeof drop;
     justRun: typeof justRun;
     toggleJustRunPanel: typeof toggleJustRunPanel;
+    recordBenchmark: typeof recordBenchmark;
+    skipBenchmark: typeof skipBenchmark;
+    applyRecoveryAdjustment: typeof applyRecoveryAdjustment;
   }
 }
 
@@ -1009,6 +1325,292 @@ export function updateExerciseBreakdown(): void {
 }
 
 
+/**
+ * Check if the given week is a benchmark week (every 4th week within continuous mode).
+ */
+export function isBenchmarkWeek(weekNumber: number, continuousMode: boolean): boolean {
+  return continuousMode && weekNumber > 0 && weekNumber % 4 === 0;
+}
+
+/**
+ * Find a Garmin/Strava running activity for the given week from cross activities.
+ * Returns the first matching activity or null.
+ */
+export function findGarminRunForWeek(week: number): import('@/types/activities').CrossActivity | null {
+  const activities = getCrossActivities();
+  return activities.find(a =>
+    a.week === week &&
+    a.fromGarmin === true &&
+    (a.sport === 'extra_run' || a.sport === 'running' || a.sport === 'run')
+  ) || null;
+}
+
+/** All benchmark options with descriptions */
+const BENCHMARK_OPTIONS: Record<import('@/types/state').BenchmarkType, { label: string; description: string }> = {
+  easy_checkin: {
+    label: 'Easy Check-in',
+    description: 'A steady 30-min run. We\'ll track if your pace improves at the same effort — low stress.',
+  },
+  threshold_check: {
+    label: 'Threshold Check',
+    description: '20 minutes "comfortably hard". Great fitness signal without an all-out race.',
+  },
+  speed_check: {
+    label: 'Speed Check',
+    description: 'Short and sharp — 12-minute test. Run as far as you can; we\'ll estimate VO2.',
+  },
+  race_simulation: {
+    label: 'Race Simulation',
+    description: 'A 5k time trial. Highest accuracy, highest fatigue — only if you\'re fresh and keen.',
+  },
+};
+
+/**
+ * Get all benchmark options for the user, with a smart default marked as recommended.
+ * Selection logic: focus × experienceLevel from the GPT design doc.
+ */
+export function getBenchmarkOptions(
+  focus: string | null | undefined,
+  experienceLevel: string | undefined,
+): import('@/types/state').BenchmarkOption[] {
+  const exp = experienceLevel || 'intermediate';
+  const isBeginner = ['total_beginner', 'beginner', 'novice'].includes(exp);
+  const isAdvanced = ['advanced', 'competitive'].includes(exp);
+
+  // Determine the recommended default
+  let recommended: import('@/types/state').BenchmarkType;
+  if (isBeginner) {
+    recommended = 'easy_checkin';
+  } else if (isAdvanced) {
+    recommended = focus === 'speed' ? 'speed_check' : 'threshold_check';
+  } else {
+    // intermediate / returning / hybrid
+    recommended = focus === 'speed' ? 'speed_check' : 'threshold_check';
+  }
+
+  // Build options list — recommended first, race_simulation only for intermediate+
+  const types: import('@/types/state').BenchmarkType[] = ['easy_checkin', 'threshold_check', 'speed_check'];
+  if (!isBeginner) types.push('race_simulation');
+
+  // Sort: recommended first
+  types.sort((a, b) => (a === recommended ? -1 : b === recommended ? 1 : 0));
+
+  return types.map(type => ({
+    type,
+    label: BENCHMARK_OPTIONS[type].label,
+    description: BENCHMARK_OPTIONS[type].description,
+    recommended: type === recommended,
+  }));
+}
+
+/**
+ * Convenience: get just the smart default benchmark for the user.
+ */
+export function getBenchmarkDefault(
+  focus: string | null | undefined,
+  experienceLevel: string | undefined,
+): import('@/types/state').BenchmarkOption {
+  return getBenchmarkOptions(focus, experienceLevel)[0];
+}
+
+/**
+ * Record a benchmark result (from Garmin auto-detect or manual entry).
+ * Triggers existing updateFitness flow via physiology tracker.
+ *
+ * Scoring by type:
+ *   easy_checkin     → track pace trend (LT proxy if pace provided)
+ *   threshold_check  → LT pace update (avgPaceSecKm ≈ threshold)
+ *   speed_check      → VO2max estimate from Cooper formula
+ *   race_simulation  → full VDOT recalculation from distance + time
+ */
+export function recordBenchmark(
+  type: import('@/types/state').BenchmarkType,
+  source: 'garmin' | 'manual',
+  distanceKm?: number,
+  durationSec?: number,
+  avgPaceSecKm?: number,
+): void {
+  const s = getMutableState();
+  if (!s.continuousMode) return;
+
+  if (!s.benchmarkResults) s.benchmarkResults = [];
+  s.benchmarkResults.push({
+    week: s.w,
+    blockNumber: s.blockNumber || 1,
+    focus: s.onboarding?.trainingFocus || 'both',
+    type,
+    distanceKm,
+    durationSec,
+    avgPaceSecKm,
+    source,
+    timestamp: new Date().toISOString(),
+  });
+
+  // --- Derive physiology signals from the benchmark type ---
+  let estimatedVO2: number | null = null;
+  let estimatedLT: number | null = null;
+
+  if (type === 'speed_check' && distanceKm) {
+    // Cooper 12-min test: VO2max ≈ (distance_m - 504.9) / 44.73
+    estimatedVO2 = Math.round(((distanceKm * 1000) - 504.9) / 44.73 * 10) / 10;
+  } else if (type === 'threshold_check' && avgPaceSecKm) {
+    // 20-min comfortably hard ≈ threshold pace
+    estimatedLT = avgPaceSecKm;
+  } else if (type === 'easy_checkin' && avgPaceSecKm) {
+    // Easy check-in: lighter signal — still record as LT proxy (weaker confidence)
+    estimatedLT = avgPaceSecKm;
+  } else if (type === 'race_simulation' && distanceKm && durationSec) {
+    // Full TT: compute VDOT directly from time + distance
+    estimatedVO2 = Math.round(cv(distanceKm, durationSec) * 10) / 10;
+  }
+
+  // Record as physiology measurement if we have data
+  if (estimatedVO2 || estimatedLT) {
+    if (!s.physiologyTracking) {
+      s.physiologyTracking = {
+        measurements: initializePhysiologyTracking(s.initialLT, s.initialVO2, s.v).measurements,
+      };
+    }
+
+    const measurement = {
+      week: s.w,
+      ltPaceSecKm: estimatedLT,
+      vo2max: estimatedVO2,
+      source: 'test' as const,
+      timestamp: new Date().toISOString(),
+    };
+
+    const trackingState = {
+      initialLT: s.initialLT,
+      initialVO2: s.initialVO2,
+      baselineVdot: s.v,
+      measurements: s.physiologyTracking.measurements || [],
+      currentAdaptationRatio: s.adaptationRatio || 1.0,
+      lastAssessment: null,
+    };
+    const updated = recordMeasurement(trackingState, measurement);
+    s.physiologyTracking.measurements = updated.measurements;
+    s.adaptationRatio = updated.currentAdaptationRatio;
+  }
+
+  const typeLabel = BENCHMARK_OPTIONS[type]?.label || type;
+  log(`Benchmark recorded: ${typeLabel} (${source})${estimatedVO2 ? ` VO2≈${estimatedVO2}` : ''}${estimatedLT ? ` LT≈${Math.floor(estimatedLT / 60)}:${String(Math.round(estimatedLT % 60)).padStart(2, '0')}/km` : ''}`);
+  saveState();
+  render();
+}
+
+/**
+ * Skip a benchmark check-in. No penalty — plan continues normally.
+ */
+export function skipBenchmark(): void {
+  const s = getMutableState();
+  if (!s.continuousMode) return;
+
+  if (!s.benchmarkResults) s.benchmarkResults = [];
+  const defaultBm = getBenchmarkDefault(s.onboarding?.trainingFocus, s.onboarding?.experienceLevel);
+  s.benchmarkResults.push({
+    week: s.w,
+    blockNumber: s.blockNumber || 1,
+    focus: s.onboarding?.trainingFocus || 'both',
+    type: defaultBm.type,
+    source: 'skipped',
+    timestamp: new Date().toISOString(),
+  });
+
+  log('Benchmark skipped — no penalty');
+  saveState();
+  render();
+}
+
+/**
+ * Apply a recovery-based adjustment to today's workout.
+ * Reuses the cross-training adjustment path (workoutMods).
+ *
+ * @param type - 'downgrade' (keep distance, lower to easy) or 'reduce' (cut distance by 20%)
+ * @param dayOfWeek - Our day index (0=Mon, 6=Sun)
+ */
+export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce', dayOfWeek: number): void {
+  const s = getMutableState();
+  const wk = s.wks[s.w - 1];
+  if (!wk) return;
+
+  // Generate this week's workouts
+  const workouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v
+  );
+
+  // Re-apply existing workoutMods so we don't double-modify
+  if (wk.workoutMods && wk.workoutMods.length > 0) {
+    for (const mod of wk.workoutMods) {
+      const w = workouts.find(wo => wo.n === mod.name && wo.dayOfWeek === mod.dayOfWeek);
+      if (w) {
+        w.status = mod.status as any;
+        w.d = mod.newDistance;
+        if (mod.newType) w.t = mod.newType;
+        w.modReason = mod.modReason || '';
+        w.confidence = mod.confidence as any;
+      }
+    }
+  }
+
+  // Find today's run workout (exclude cross/strength/rest/replaced)
+  const todayRun = workouts.find(w =>
+    w.dayOfWeek === dayOfWeek &&
+    w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
+    w.status !== 'replaced'
+  );
+
+  if (!todayRun) {
+    log('Recovery: No run workout found for today');
+    s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
+    saveState();
+    render();
+    return;
+  }
+
+  // Parse current distance
+  const kmMatch = todayRun.d.match(/(\d+\.?\d*)km/);
+  const currentKm = kmMatch ? parseFloat(kmMatch[1]) : 0;
+
+  if (!wk.workoutMods) wk.workoutMods = [];
+
+  if (type === 'downgrade') {
+    wk.workoutMods.push({
+      name: todayRun.n,
+      dayOfWeek: todayRun.dayOfWeek,
+      status: 'reduced',
+      modReason: 'Recovery: downgraded to easy',
+      confidence: 'high',
+      originalDistance: todayRun.d,
+      newDistance: currentKm > 0 ? `${currentKm}km @ easy` : `${todayRun.d} @ easy effort`,
+      newType: 'easy',
+      newRpe: 4,
+    });
+    log(`Recovery: ${todayRun.n} downgraded to easy`);
+  } else {
+    // Reduce by 20%, min 3km
+    const newKm = Math.max(3, Math.round(currentKm * 0.8 * 10) / 10);
+    wk.workoutMods.push({
+      name: todayRun.n,
+      dayOfWeek: todayRun.dayOfWeek,
+      status: 'reduced',
+      modReason: 'Recovery: distance reduced',
+      confidence: 'high',
+      originalDistance: todayRun.d,
+      newDistance: `${newKm}km (was ${currentKm}km)`,
+      newType: todayRun.t,
+      newRpe: todayRun.rpe || todayRun.r,
+    });
+    log(`Recovery: ${todayRun.n} reduced to ${newKm}km`);
+  }
+
+  s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
+  saveState();
+  render();
+}
+
+window.applyRecoveryAdjustment = applyRecoveryAdjustment;
 window.justRun = justRun;
 window.toggleJustRunPanel = toggleJustRunPanel;
 window.rate = rate;
@@ -1019,3 +1621,5 @@ window.dragStart = dragStart;
 window.dragEnd = dragEnd;
 window.allowDrop = allowDrop;
 window.drop = drop;
+window.recordBenchmark = recordBenchmark;
+window.skipBenchmark = skipBenchmark;

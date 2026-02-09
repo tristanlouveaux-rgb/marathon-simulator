@@ -3,7 +3,7 @@ import {
   getState, getMutableState
 } from '@/state';
 import {
-  rdKm, tv, getRunnerType,
+  rdKm, tv, gp, getRunnerType,
   calculateLiveForecast
 } from '@/calculations';
 import { IMP } from '@/constants';
@@ -85,27 +85,33 @@ export function render(): void {
   }
   if (!(s as any)._viewOnly) s.currentFitness = currentFitness;
 
-  // Forecast using centralized training horizon model
-  const wr = s.tw - realW + 1;
-  const { forecastTime: rawForecast } = calculateLiveForecast({
-    currentVdot: currentVDOT,
-    targetDistance: s.rd,
-    weeksRemaining: wr,
-    sessionsPerWeek: (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0),
-    runnerType: getRunnerType(s.b),
-    experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-    weeklyVolumeKm: s.wkm,
-    hmPbSeconds: s.pbs?.h || undefined,
-    ltPaceSecPerKm: s.lt || undefined,
-    adaptationRatio: s.adaptationRatio,
-  });
-  let forecast = rawForecast;
-  if (s.timp > 0) forecast += s.timp;
+  // Forecast: at week 1 with no training, use stored forecast so dashboard
+  // matches the assessment page exactly. Once training starts, recalculate live.
+  let forecast: number;
+  if (realW === 1 && wg === 0 && s.rpeAdj === 0 && s.forecastTime) {
+    forecast = s.forecastTime;
+  } else {
+    const wr = s.tw - realW + 1;
+    const { forecastTime: rawForecast } = calculateLiveForecast({
+      currentVdot: currentVDOT,
+      targetDistance: s.rd,
+      weeksRemaining: wr,
+      sessionsPerWeek: (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0),
+      runnerType: getRunnerType(s.b),
+      experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+      weeklyVolumeKm: s.wkm,
+      hmPbSeconds: s.pbs?.h || undefined,
+      ltPaceSecPerKm: s.lt || undefined,
+      adaptationRatio: s.adaptationRatio,
+    });
+    forecast = rawForecast;
+    if (s.timp > 0) forecast += s.timp;
 
-  // Guardrail
-  const maxSlowdown = s.timp * 0.5;
-  if (forecast > currentFitness + maxSlowdown) {
-    forecast = currentFitness + maxSlowdown;
+    // Guardrail
+    const maxSlowdown = s.timp * 0.5;
+    if (forecast > currentFitness + maxSlowdown) {
+      forecast = currentFitness + maxSlowdown;
+    }
   }
 
   // If user accepted a milestone challenge, lock forecast to that target
@@ -166,10 +172,10 @@ export function render(): void {
     (s.maxHR || s.restingHR || s.onboarding?.age)
       ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
       : undefined,
-    s.pac?.e,  // Pass runner's actual easy pace for accurate load calculations
+    gp(currentVDOT, s.lt).e, // Pass runner's adjusted easy pace for this specific week
     s.w,   // weekIndex for plan engine
     s.tw,  // totalWeeks for plan engine
-    s.v    // vdot for plan engine
+    currentVDOT // vdot for plan engine (includes RPE and training gains)
   );
 
   // Apply stored modifications
@@ -212,6 +218,20 @@ export function render(): void {
         workout.dayOfWeek = newDay;
         workout.dayName = DAY_NAMES[newDay];
       }
+    }
+  }
+
+  // Deduplicate workout names for unique completion tracking
+  const nameCounts: Record<string, number> = {};
+  for (const w of wos) {
+    nameCounts[w.n] = (nameCounts[w.n] || 0) + 1;
+  }
+  const nameIdx: Record<string, number> = {};
+  for (const w of wos) {
+    if (nameCounts[w.n] > 1) {
+      nameIdx[w.n] = (nameIdx[w.n] || 0) + 1;
+      if (!w.id) w.id = `${w.n} ${nameIdx[w.n]}`;
+      w.n = `${w.n} ${nameIdx[w.n]}`;
     }
   }
 
@@ -540,7 +560,9 @@ function renderCrossTrainingForm(): string {
   h += `<div class="grid grid-cols-3 gap-1 mb-2">`;
   h += `<select id="crossSport" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200">`;
   h += `<option value="">Select sport...</option>`;
+  h += `<option value="generic_sport">Generic Sport</option>`;
   for (const key of Object.keys(SPORTS_DB)) {
+    if (key === 'generic_sport' || key === 'hybrid_test_sport') continue;
     h += `<option value="${key}">${SPORT_LABELS[key as keyof typeof SPORT_LABELS] || key}</option>`;
   }
   h += `</select>`;
@@ -638,7 +660,7 @@ export function setupSyncListener(): void {
       if (decision === 'match') {
         // Auto-rate with RPE 5 (moderate)
         if (window.rate) {
-          window.rate(matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false);
+          window.rate(matchedWorkout.id || matchedWorkout.n, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false);
         }
       } else if (decision === 'keep-both') {
         // Log as separate cross-training — dispatch back as unmatched

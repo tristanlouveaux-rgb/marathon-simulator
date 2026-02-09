@@ -7,7 +7,35 @@ import type {
   TrainingPhase
 } from './training';
 import type { CrossTrainingAdjustment, LoadBudget } from './activities';
-import type { OnboardingState, Marathon, RecurringActivity } from './onboarding';
+import type { OnboardingState, Marathon, RecurringActivity, TrainingFocus } from './onboarding';
+
+/** Benchmark check-in types (4-tier system) */
+export type BenchmarkType =
+  | 'easy_checkin'       // 30 min easy–steady, track pace at same effort
+  | 'threshold_check'    // 20 min "comfortably hard" — proxy for LT
+  | 'speed_check'        // 12-min Cooper test or 3km TT — VO2/speed signal
+  | 'race_simulation';   // 5k/10k TT (advanced only, opt-in)
+
+/** Benchmark result from an optional check-in */
+export interface BenchmarkResult {
+  week: number;
+  blockNumber: number;
+  focus: TrainingFocus;
+  type: BenchmarkType;
+  distanceKm?: number;       // Distance covered (for cooper/TT)
+  durationSec?: number;      // Duration of the effort
+  avgPaceSecKm?: number;     // Average pace
+  source: 'garmin' | 'manual' | 'skipped';
+  timestamp: string;
+}
+
+/** A benchmark option presented to the user */
+export interface BenchmarkOption {
+  type: BenchmarkType;
+  label: string;
+  description: string;
+  recommended?: boolean;      // Smart default for this user
+}
 
 /** Commute run configuration */
 export interface CommuteConfig {
@@ -211,6 +239,18 @@ export interface SimulatorState {
   rehabWeeksDone?: number;        // Weeks completed during injury (plan pointer frozen)
   lastMorningPainDate?: string;   // ISO date string of last morning pain check
   injuryState?: import('./injury').InjuryState; // Active injury state
+
+  // Continuous (non-event) training
+  continuousMode?: boolean;       // True for non-event users — plan loops instead of completing
+  blockNumber?: number;           // Current 4-week block number (1-based)
+  benchmarkResults?: BenchmarkResult[]; // History of optional benchmark check-ins
+
+  // Long race plan structure (>16 weeks)
+  racePhaseStart?: number;        // 1-indexed week where race-specific training begins (last 16 weeks)
+
+  // Recovery tracking
+  recoveryHistory?: import('../recovery/engine').RecoveryEntry[];
+  lastRecoveryPromptDate?: string;   // ISO date — one-prompt-per-day guard
 }
 
 /** Workout parsing result */

@@ -37,8 +37,8 @@ export function renderBackground(container: HTMLElement, state: OnboardingState)
               <button id="commute-yes"
                 class="w-full p-3 rounded-xl border-2 text-left transition-all
                        ${state.runsToWork === true
-                         ? 'border-emerald-500 bg-emerald-950/30'
-                         : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
+      ? 'border-emerald-500 bg-emerald-950/30'
+      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-medium ${state.runsToWork === true ? 'text-emerald-400' : 'text-white'}">Yes</span>
                   ${state.runsToWork === true ? '<svg class="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}
@@ -47,8 +47,8 @@ export function renderBackground(container: HTMLElement, state: OnboardingState)
               <button id="commute-no"
                 class="w-full p-3 rounded-xl border-2 text-left transition-all
                        ${state.runsToWork === false
-                         ? 'border-emerald-500 bg-emerald-950/30'
-                         : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
+      ? 'border-emerald-500 bg-emerald-950/30'
+      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
                 <div class="flex items-center justify-between">
                   <span class="text-sm font-medium ${state.runsToWork === false ? 'text-emerald-400' : 'text-white'}">No</span>
                   ${state.runsToWork === false ? '<svg class="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}
@@ -129,8 +129,8 @@ function renderExperienceOptions(current: string): string {
     <button data-exp="${o.key}"
       class="exp-btn w-full p-3 rounded-xl border-2 text-left transition-all
              ${current === o.key
-               ? 'border-emerald-500 bg-emerald-950/30'
-               : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
+      ? 'border-emerald-500 bg-emerald-950/30'
+      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
       <div class="flex items-center justify-between">
         <div>
           <span class="text-sm font-medium ${current === o.key ? 'text-emerald-400' : 'text-white'}">${o.title}</span>

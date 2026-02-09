@@ -81,6 +81,104 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
   // Forecast-only: no upgrade available (safety capped or max volume)
   const showForecastOnly = !showUpgrade;
 
+  const isNonEvent = state.trainingForEvent === false;
+  const focusLabel = state.trainingFocus === 'speed' ? 'Speed' : state.trainingFocus === 'endurance' ? 'Endurance' : 'Balanced';
+
+  // Non-event users get a different page entirely
+  if (isNonEvent) {
+    container.innerHTML = `
+      <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+        ${renderProgressIndicator(7, 7)}
+
+        <div class="max-w-xl w-full">
+          <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+            Your Training Plan
+          </h2>
+          <p class="text-gray-400 text-center mb-8">
+            Continuous training with periodic check-ins to track your progress.
+          </p>
+
+          <div class="space-y-6">
+
+            <!-- Training Structure -->
+            <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <div class="space-y-4">
+                <div class="flex items-center gap-3 p-4 rounded-lg bg-emerald-950/30 border border-emerald-800/50">
+                  <div class="w-10 h-10 bg-emerald-900/50 rounded-full flex items-center justify-center flex-shrink-0">
+                    <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                  </div>
+                  <div>
+                    <div class="text-sm font-medium text-emerald-300">Continuous ${focusLabel} Training</div>
+                    <div class="text-xs text-gray-400">4-week repeating blocks — 3 weeks training + 1 week recovery with optional check-in</div>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-2 gap-3 text-center">
+                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <div class="text-xs text-gray-500 mb-1">Runs / Week</div>
+                    <div class="text-lg font-medium text-white">${state.runsPerWeek}</div>
+                  </div>
+                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
+                    <div class="text-xs text-gray-500 mb-1">Starting VDOT</div>
+                    <div class="text-lg font-medium text-white">${baselineVdot.toFixed(1)}</div>
+                  </div>
+                </div>
+
+                <p class="text-xs text-gray-500 leading-relaxed">
+                  Your plan has no fixed end date. Every 4 weeks you'll get an optional fitness check-in.
+                  Paces and workouts adjust automatically as you progress. Skip check-ins anytime — no penalty.
+                </p>
+              </div>
+
+              <button id="btn-select-current"
+                class="w-full mt-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all">
+                Start Training
+              </button>
+            </div>
+
+            <!-- Runner Profile -->
+            <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+              <h3 class="text-lg font-medium text-white mb-1">Runner Profile</h3>
+              <p class="text-sm text-gray-400 mb-4">
+                Based on your PBs, we assessed you as <span id="type-heading" class="text-white font-medium">${assessedType}</span>.
+              </p>
+              <div class="grid grid-cols-3 gap-2 mb-4" id="runner-type-toggle">
+                ${(['Speed', 'Balanced', 'Endurance'] as const).map(t => `
+                  <button data-type="${t}"
+                    class="type-btn py-2.5 rounded-lg border text-sm text-center transition-all
+                      ${t === runnerType
+                        ? 'border-emerald-600 bg-emerald-600/20 text-emerald-400 font-medium'
+                        : 'border-gray-700 text-gray-400 hover:bg-gray-800'}">
+                    ${t}
+                  </button>
+                `).join('')}
+              </div>
+
+              <div id="type-description" class="bg-gray-800/50 rounded-lg p-4">
+                <p class="text-sm text-gray-400 leading-relaxed">
+                  ${TYPE_DESCRIPTIONS[runnerType] || TYPE_DESCRIPTIONS.Balanced}
+                </p>
+              </div>
+
+              <p class="text-sm text-gray-400 mt-4 leading-relaxed">
+                Your runner profile does not impact your fitness tracking. It determines the types of workouts in your plan.
+              </p>
+            </div>
+
+          </div>
+
+        </div>
+        ${renderBackButton(true)}
+      </div>
+    `;
+
+    wireHandlers(state, runnerType, upgrade, showUpgrade);
+    return;
+  }
+
+  // ---- Race/event users: original layout unchanged ----
   container.innerHTML = `
     <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
       ${renderProgressIndicator(7, 7)}
@@ -114,6 +212,10 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
                 ${TYPE_DESCRIPTIONS[runnerType] || TYPE_DESCRIPTIONS.Balanced}
               </p>
             </div>
+
+            <p class="text-sm text-gray-400 mt-4 leading-relaxed">
+              Your runner profile does not impact your predicted time. It determines the types of workouts in your plan.
+            </p>
           </div>
 
           <!-- SECTION 2: PLAN SELECTION -->
@@ -320,12 +422,15 @@ function buildVolumeOptions(
     });
   }
 
-  // Find milestone using the best (fastest) forecast time across all options
-  const bestTime = Math.min(...options.map(o => o.forecastTime));
-  const target = findReachableTarget(bestTime, raceDistance);
+  // Find milestone that the options straddle (current misses, upgrade hits)
+  const currentTime = options[0].forecastTime;
+  const bestTime = options.length > 1
+    ? Math.min(...options.slice(1).map(o => o.forecastTime))
+    : currentTime;
+  const target = findStraddledMilestone(currentTime, bestTime, raceDistance);
   const targetTime = target?.time ?? Infinity;
 
-  // Now mark which options actually hit the target
+  // Mark which options hit the straddled target
   for (const opt of options) {
     opt.hitsTarget = opt.forecastTime <= targetTime;
   }
@@ -334,25 +439,23 @@ function buildVolumeOptions(
 }
 
 /**
- * Find the nearest milestone that the best forecast option can actually hit.
- * Uses time-based comparison instead of VDOT gaps to avoid misleading nudges.
- *
- * @param bestForecastTime - the fastest forecast time across all plan options
- * @param raceDistance - target race distance
- * @returns milestone if bestForecastTime beats it, null otherwise
+ * Find a milestone that the current and best forecasts straddle.
+ * Returns a target only when currentTime is above the threshold
+ * but bestTime is at or below it — i.e., upgrading would cross the milestone.
+ * If both plans beat (or both miss) every milestone, returns null.
  */
-function findReachableTarget(
-  bestForecastTime: number,
+function findStraddledMilestone(
+  currentTime: number,
+  bestTime: number,
   raceDistance: RaceDistance,
 ): { time: number; label: string } | null {
   const thresholds = MILESTONE_THRESHOLDS[raceDistance];
   const labels = MILESTONE_LABELS[raceDistance];
   if (!thresholds) return null;
 
-  // Find the fastest milestone the best plan option actually beats
-  // Iterate fastest → slowest, return the first one the forecast clears
-  for (let i = thresholds.length - 1; i >= 0; i--) {
-    if (bestForecastTime <= thresholds[i]) {
+  // Find a milestone where current misses but best hits
+  for (let i = 0; i < thresholds.length; i++) {
+    if (currentTime > thresholds[i] && bestTime <= thresholds[i]) {
       return { time: thresholds[i], label: labels[i] };
     }
   }

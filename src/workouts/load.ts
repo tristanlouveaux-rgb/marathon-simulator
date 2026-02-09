@@ -16,6 +16,11 @@ export function calculateWorkoutLoad(
 ): WorkoutLoad {
   const profile = LOAD_PROFILES[workoutType] || { aerobic: 0.80, anaerobic: 0.20 };
 
+  // Handle replaced/skipped workouts explicitly
+  if (typeof durationDesc === 'string' && durationDesc.toLowerCase().includes('replaced')) {
+    return { aerobic: 0, anaerobic: 0, total: 0 };
+  }
+
   // Derive pace estimates from the runner's actual easy pace (if available)
   const baseMinPerKm = easyPaceSecPerKm ? easyPaceSecPerKm / 60 : 5.5;
 

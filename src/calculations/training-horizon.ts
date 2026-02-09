@@ -137,8 +137,11 @@ function applyGuardrails(
   const hmPb = params.hm_pb_seconds || Infinity;
   const projVdot = baseline_vdot + baseline_vdot * (improvement_pct / 100);
 
-  // Helper: cap projected VDOT just below a barrier ceiling
+  // Helper: cap projected VDOT just below a barrier ceiling.
+  // Skip the cap if the runner's baseline is already within 2 VDOT of the
+  // ceiling — they've already demonstrated fitness at that level.
   const capAt = (ceiling: number): number => {
+    if (baseline_vdot >= ceiling - 2) return improvement_pct;
     if (projVdot <= ceiling) return improvement_pct;
     const maxGain = ceiling - baseline_vdot;
     const maxPct = (maxGain / baseline_vdot) * 100;

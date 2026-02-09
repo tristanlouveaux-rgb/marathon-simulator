@@ -72,8 +72,8 @@ function renderRunsSelector(currentValue: number): string {
           <button data-runs="${n}"
             class="runs-btn py-3 rounded-lg font-medium transition-all
                    ${currentValue === n
-                     ? 'bg-emerald-600 text-white'
-                     : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
+      ? 'bg-emerald-600 text-white'
+      : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
             ${n}
           </button>
         `).join('')}
@@ -97,14 +97,19 @@ function renderSportsSelector(currentValue: number): string {
           <button data-sports="${n}"
             class="sports-btn py-3 rounded-lg font-medium transition-all
                    ${currentValue === n
-                     ? 'bg-emerald-600 text-white'
-                     : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
+      ? 'bg-emerald-600 text-white'
+      : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
             ${n}
           </button>
         `).join('')}
       </div>
       <p class="text-xs text-gray-500 mt-2">
         Include football, cycling, swimming, gym, etc.
+      </p>
+      <p class="text-xs text-gray-400 mt-2">
+        If you don't play a certain sport regularly but know you'll play different sports
+        a number of times a week, just choose "Generic Sport" when logging and we'll fit
+        it into the plan.
       </p>
     </div>
   `;
@@ -130,8 +135,8 @@ function renderExperienceSelector(current: string): string {
           <button data-exp="${o.key}"
             class="exp-btn w-full p-3 rounded-xl border-2 text-left transition-all
                    ${current === o.key
-                     ? 'border-emerald-500 bg-emerald-950/30'
-                     : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
+      ? 'border-emerald-500 bg-emerald-950/30'
+      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
             <div class="flex items-center justify-between">
               <div>
                 <span class="text-sm font-medium ${current === o.key ? 'text-emerald-400' : 'text-white'}">${o.title}</span>

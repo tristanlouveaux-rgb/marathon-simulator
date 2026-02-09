@@ -131,6 +131,53 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.schemaVersion = STATE_SCHEMA_VERSION;
     s.pac = pac;
     s.wks = initializeWeeks(s.tw);
+    // Continuous mode: override phases to repeating 4-week blocks
+    // Base → Build → Intensify → Deload (evidence-backed mesocycle)
+    if (state.trainingForEvent === false) {
+      // Map to existing phase types:
+      // base = Base week (aerobic foundation)
+      // build = Build week (progressive load)
+      // peak = Intensify week (peak load/quality)
+      // taper = Deload week (recovery + optional test)
+      const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
+      for (let i = 0; i < s.wks.length; i++) {
+        s.wks[i].ph = blockPhases[i % 4];
+      }
+    }
+
+    // Long race plans (>16 weeks): block cycling for early weeks,
+    // then standard 16-week race-specific phasing for the final stretch
+    const RACE_PREP_WEEKS = 16;
+    if (state.trainingForEvent !== false && s.tw > RACE_PREP_WEEKS) {
+      const racePhaseStart = s.tw - RACE_PREP_WEEKS; // 0-indexed boundary
+      s.racePhaseStart = racePhaseStart + 1; // 1-indexed for UI
+
+      // Pre-race weeks: repeating 4-week block cycling
+      const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
+      for (let i = 0; i < racePhaseStart; i++) {
+        s.wks[i].ph = blockPhases[i % 4];
+      }
+
+      // Race-specific weeks: standard 16-week phasing
+      // (same algorithm as initializeWeeks but scoped to 16 weeks)
+      const taperWeeks = Math.max(1, Math.ceil(RACE_PREP_WEEKS * 0.12)); // ~2 weeks
+      const taperStart = RACE_PREP_WEEKS - taperWeeks + 1;
+      const pre = taperStart - 1;
+      const baseWeeks = Math.max(1, Math.round(pre * 0.45));
+      const buildWeeks = Math.max(1, Math.round(pre * 0.40));
+      const baseEnd = baseWeeks;
+      const buildEnd = baseWeeks + buildWeeks;
+
+      for (let w = 1; w <= RACE_PREP_WEEKS; w++) {
+        let ph: 'base' | 'build' | 'peak' | 'taper' = 'base';
+        if (w >= taperStart) ph = 'taper';
+        else if (w > buildEnd) ph = 'peak';
+        else if (w > baseEnd) ph = 'build';
+        s.wks[racePhaseStart + w - 1].ph = ph;
+      }
+    } else if (state.trainingForEvent !== false) {
+      s.racePhaseStart = undefined; // ≤16 weeks: no block cycling phase
+    }
     s.skip = [];
     s.timp = 0;
 
@@ -174,6 +221,15 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     // Store onboarding reference
     s.onboarding = state;
+
+    // Continuous mode for non-event users (trainingForEvent is the authoritative flag)
+    if (state.trainingForEvent === false) {
+      s.continuousMode = true;
+      s.blockNumber = 1;
+      s.benchmarkResults = [];
+    } else {
+      s.continuousMode = false;
+    }
 
     saveState();
 

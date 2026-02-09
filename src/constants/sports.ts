@@ -26,6 +26,18 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   jump_rope: { mult: 1.10, noReplace: [], runSpec: 0.50, recoveryMult: 1.05 },
   walking: { mult: 0.35, noReplace: [], runSpec: 0.30, recoveryMult: 0.80 },
   padel: { mult: 1.15, noReplace: [], runSpec: 0.45, recoveryMult: 1.05 },
+  generic_sport: { mult: 0.90, noReplace: [], runSpec: 0.40, recoveryMult: 1.00 },
+  hybrid_test_sport: {
+    mult: 1.0,
+    noReplace: [],
+    runSpec: 0.5,
+    recoveryMult: 1.0,
+    extendedModel: {
+      aerobicTransfer: 0.8,
+      anaerobicTransfer: 0.2,
+      impactLoading: 0.5,
+    },
+  },
 };
 
 /** Human-readable display names for sport keys */
@@ -54,6 +66,8 @@ export const SPORT_LABELS: Record<SportKey, string> = {
   jump_rope: 'Jump Rope',
   walking: 'Walking',
   padel: 'Padel',
+  generic_sport: 'Generic Sport',
+  hybrid_test_sport: 'Hybrid Test Sport',
 };
 
 /** Sport name aliases — maps common variants to canonical SportKey */

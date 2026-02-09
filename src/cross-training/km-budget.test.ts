@@ -1,15 +1,16 @@
 /**
  * km-budget.test.ts
  * =================
- * Regression test for: Cross-training equivalent km double-counting bug
+ * Regression test for: Cross-training load budget double-counting bug
  *
- * BUG: Replace outcome was spending more km than equivalentEasyKm allowed.
- * Example: 60min skiing => equivalentEasyKm ≈ 2.7km, but Replace outcome both:
+ * BUG: Replace outcome was spending more load than runReplacementCredit allowed.
+ * Example: 60min skiing => RRC ≈ 105 load, but Replace outcome both:
  *   - Skipped an Easy Run ("covered") AND
  *   - Reduced Long Run by ~2.4km
- * This exceeded the 2.7km total budget.
+ * This exceeded the total load budget.
  *
- * FIX: buildReplaceAdjustments now enforces km-based budgeting.
+ * FIX: buildReplaceAdjustments and buildReduceAdjustments now enforce
+ * load-based budgeting: total loadReduction across adjustments ≤ runReplacementCredit.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -18,22 +19,13 @@ import { buildCrossTrainingPopup, workoutsToPlannedRuns } from './suggester';
 import type { Workout } from '@/types';
 
 /**
- * Calculate total km impact from adjustments
- * - replace: originalDistanceKm - newDistanceKm (full skip = originalDistanceKm)
- * - reduce: originalDistanceKm - newDistanceKm
- * - downgrade: 0 (no km change, just intensity)
+ * Calculate total load reduction from adjustments.
+ * Load-based budgeting means total load consumed ≤ runReplacementCredit.
  */
-function totalKmImpact(adjustments: Array<{
-  action: string;
-  originalDistanceKm: number;
-  newDistanceKm: number;
+function totalLoadReduction(adjustments: Array<{
+  loadReduction: number;
 }>): number {
-  return adjustments.reduce((sum, adj) => {
-    if (adj.action === 'downgrade') {
-      return sum; // Downgrade doesn't reduce km
-    }
-    return sum + (adj.originalDistanceKm - adj.newDistanceKm);
-  }, 0);
+  return adjustments.reduce((sum, adj) => sum + adj.loadReduction, 0);
 }
 
 // Test workouts with typical weekly plan
@@ -47,8 +39,8 @@ function createTypicalWeek(): Workout[] {
   ];
 }
 
-describe('Km Budget Enforcement', () => {
-  it('replaceOutcome total km impact must not exceed equivalentEasyKm + 0.1', () => {
+describe('Load Budget Enforcement', () => {
+  it('replaceOutcome total load reduction must not exceed runReplacementCredit', () => {
     // Test with various activities of different intensities
     const testCases = [
       { sport: 'skiing', duration: 60, rpe: 5 },
@@ -70,26 +62,26 @@ describe('Km Budget Enforcement', () => {
         activity
       );
 
-      const kmImpact = totalKmImpact(popup.replaceOutcome.adjustments);
-      const budget = popup.equivalentEasyKm;
+      const loadUsed = totalLoadReduction(popup.replaceOutcome.adjustments);
+      const budget = popup.runReplacementCredit;
 
-      // Core assertion: total km impact must not exceed budget (with tiny tolerance)
-      expect(kmImpact).toBeLessThanOrEqual(budget + 0.1);
+      // Core assertion: total load consumed must not exceed RRC budget (with tiny tolerance)
+      expect(loadUsed).toBeLessThanOrEqual(budget + 1.0);
 
       // Log for debugging
       console.log(
         `${sport} ${duration}min RPE${rpe}: ` +
-        `budget=${budget.toFixed(1)}km, impact=${kmImpact.toFixed(1)}km, ` +
+        `budget=${budget.toFixed(1)} load, used=${loadUsed.toFixed(1)} load, ` +
         `adjustments=${popup.replaceOutcome.adjustments.length}`
       );
     }
   });
 
-  it('should skip easy run only if budget covers full distance', () => {
+  it('should skip easy run only if budget covers full run load', () => {
     const workouts = createTypicalWeek();
     const plannedRuns = workoutsToPlannedRuns(workouts);
 
-    // Create low-intensity activity with small equivalence (~2-3km)
+    // Create low-intensity activity with small equivalence
     const activity = createActivity('yoga', 60, 3, undefined, undefined, 1);
 
     const popup = buildCrossTrainingPopup(
@@ -102,9 +94,9 @@ describe('Km Budget Enforcement', () => {
     const replaceActions = popup.replaceOutcome.adjustments.filter(a => a.action === 'replace');
 
     for (const adj of replaceActions) {
-      // If it's a full skip (newDistanceKm = 0), the budget must have covered it
+      // If it's a full skip (newDistanceKm = 0), the load must have been within budget
       if (adj.newDistanceKm === 0) {
-        expect(adj.originalDistanceKm).toBeLessThanOrEqual(popup.equivalentEasyKm + 0.1);
+        expect(adj.loadReduction).toBeLessThanOrEqual(popup.runReplacementCredit + 1.0);
       }
     }
   });
@@ -116,7 +108,7 @@ describe('Km Budget Enforcement', () => {
     ];
     const plannedRuns = workoutsToPlannedRuns(workouts);
 
-    // Create activity with ~4km equivalence (not enough to skip 8km run)
+    // Create activity with moderate load (not enough to fully replace 8km run)
     const activity = createActivity('swimming', 60, 5, undefined, undefined, 1);
 
     const popup = buildCrossTrainingPopup(
@@ -125,20 +117,21 @@ describe('Km Budget Enforcement', () => {
       activity
     );
 
-    // Should reduce rather than try to skip
-    const kmImpact = totalKmImpact(popup.replaceOutcome.adjustments);
-    expect(kmImpact).toBeLessThanOrEqual(popup.equivalentEasyKm + 0.1);
+    // Total load reduction should not exceed load budget
+    const loadUsed = totalLoadReduction(popup.replaceOutcome.adjustments);
+    expect(loadUsed).toBeLessThanOrEqual(popup.runReplacementCredit + 1.0);
   });
 
   /**
-   * REGRESSION TEST: reduceOutcome km budget consistency
+   * REGRESSION TEST: reduceOutcome load budget consistency
    *
-   * BUG: reduceOutcome used load-based budgeting but display showed km-based equivalence.
-   * Example: "120min hiking ≈ 1.7km easy" but reductions totaled 5.1km (3km + 2.1km).
+   * BUG: reduceOutcome previously had inconsistent budgeting — display showed km
+   * equivalence but reductions exceeded it.
    *
-   * FIX: buildReduceAdjustments now uses km-based budgeting like buildReplaceAdjustments.
+   * FIX: Both buildReduceAdjustments and buildReplaceAdjustments now use load-based
+   * budgeting: total loadReduction ≤ runReplacementCredit.
    */
-  it('reduceOutcome total km impact must not exceed equivalentEasyKm + 0.1', () => {
+  it('reduceOutcome total load reduction must not exceed runReplacementCredit', () => {
     const testCases = [
       { sport: 'hiking', duration: 120, rpe: 3 },
       { sport: 'yoga', duration: 60, rpe: 2 },
@@ -157,22 +150,22 @@ describe('Km Budget Enforcement', () => {
         activity
       );
 
-      const kmImpact = totalKmImpact(popup.reduceOutcome.adjustments);
-      const budget = popup.equivalentEasyKm;
+      const loadUsed = totalLoadReduction(popup.reduceOutcome.adjustments);
+      const budget = popup.runReplacementCredit;
 
-      // Core assertion: total km impact must not exceed budget (with tiny tolerance)
-      expect(kmImpact).toBeLessThanOrEqual(budget + 0.1);
+      // Core assertion: total load consumed must not exceed RRC budget
+      expect(loadUsed).toBeLessThanOrEqual(budget + 1.0);
 
       // Log for debugging
       console.log(
         `REDUCE ${sport} ${duration}min RPE${rpe}: ` +
-        `budget=${budget.toFixed(1)}km, impact=${kmImpact.toFixed(1)}km, ` +
+        `budget=${budget.toFixed(1)} load, used=${loadUsed.toFixed(1)} load, ` +
         `adjustments=${popup.reduceOutcome.adjustments.length}`
       );
     }
   });
 
-  it('downgrade should not consume km budget', () => {
+  it('downgrade should preserve distance and consume load budget correctly', () => {
     const workouts: Workout[] = [
       { n: 'Threshold Tempo', t: 'threshold', d: '10km', dayOfWeek: 1, aerobic: 120, anaerobic: 40, rpe: 7, r: 7 },
       { n: 'Long Run', t: 'long', d: '18km', dayOfWeek: 6, aerobic: 160, anaerobic: 16, rpe: 5, r: 5 },
@@ -188,14 +181,14 @@ describe('Km Budget Enforcement', () => {
       activity
     );
 
-    // Downgrade adjustments should have originalDistanceKm === newDistanceKm
+    // Downgrade adjustments should keep same distance (only intensity changes)
     const downgrades = popup.replaceOutcome.adjustments.filter(a => a.action === 'downgrade');
     for (const adj of downgrades) {
       expect(adj.originalDistanceKm).toBe(adj.newDistanceKm);
     }
 
-    // Total km impact should only come from non-downgrade adjustments
-    const kmImpact = totalKmImpact(popup.replaceOutcome.adjustments);
-    expect(kmImpact).toBeLessThanOrEqual(popup.equivalentEasyKm + 0.1);
+    // Total load reduction should not exceed RRC budget
+    const loadUsed = totalLoadReduction(popup.replaceOutcome.adjustments);
+    expect(loadUsed).toBeLessThanOrEqual(popup.runReplacementCredit + 1.0);
   });
 });

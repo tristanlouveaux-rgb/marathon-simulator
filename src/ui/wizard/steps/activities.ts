@@ -99,15 +99,13 @@ function renderActivityList(activities: RecurringActivity[]): string {
         <span class="text-sm text-white font-medium">${a.sport}</span>
         <span class="text-xs text-gray-400">${a.durationMin}min</span>
         <span class="text-xs text-gray-400">${a.frequency}x/wk</span>
-        <span class="text-xs px-1.5 py-0.5 rounded ${
-          a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
-          a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
-          'bg-emerald-900/50 text-emerald-300'
-        }" title="How much this sport benefits running fitness">${
-          a.intensity === 'hard' ? 'High Transfer' :
-          a.intensity === 'moderate' ? 'Moderate Transfer' :
-          'Low Transfer'
-        }</span>
+        <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
+      a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
+        'bg-emerald-900/50 text-emerald-300'
+    }" title="How much this sport benefits running fitness">${a.intensity === 'hard' ? 'High Transfer' :
+      a.intensity === 'moderate' ? 'Moderate Transfer' :
+        'Low Transfer'
+    }</span>
       </div>
       <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs transition-colors">Remove</button>
     </div>

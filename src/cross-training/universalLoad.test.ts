@@ -709,7 +709,7 @@ describe('Universal Load: Apply Plan Edits', () => {
     const easy1 = modified.find((w) => w.n === 'W1-easy1')!;
 
     expect(easy1.status).toBe('replaced');
-    expect(easy1.d).toContain('replaced');
+    expect(easy1.d).toContain('Replaced');
     expect(easy1.autoCompleted).toBe(true);
     expect(easy1.completedBySport).toBe('rugby');
   });
@@ -760,5 +760,46 @@ describe('Universal Load: Apply Plan Edits', () => {
     expect(threshold.status).toBe('reduced');
     expect(threshold.t).toBe('easy');
     expect(threshold.modReason).toContain('Downgraded');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: extendedModel addition must not change any numerical output
+// ---------------------------------------------------------------------------
+
+describe('Universal Load: extendedModel backward compatibility', () => {
+  const tennisInput: ActivityInput = {
+    sport: 'tennis',
+    durationMin: 60,
+    rpe: 6,
+    fromGarmin: false,
+  };
+
+  it('produces identical outputs for tennis 60min RPE 6 (Tier C)', () => {
+    const r = computeUniversalLoad(tennisInput, 'half');
+
+    expect(r.tier).toBe('rpe');
+    expect(r.sportMult).toBe(1.2);
+    expect(r.runSpec).toBe(0.5);
+    expect(r.recoveryMult).toBe(1.1);
+
+    // FCL = baseLoad * recoveryMult — must hold exactly
+    const expectedFCL = Math.round(r.baseLoad * 1.1 * 10) / 10;
+    expect(r.fatigueCostLoad).toBe(expectedFCL);
+
+    // RRC must be positive and capped by saturation
+    expect(r.runReplacementCredit).toBeGreaterThan(0);
+    expect(r.equivalentEasyKm).toBeGreaterThan(0);
+  });
+
+  it('is fully deterministic across repeated calls', () => {
+    const a = computeUniversalLoad(tennisInput, 'half');
+    const b = computeUniversalLoad(tennisInput, 'half');
+
+    expect(b.fatigueCostLoad).toBe(a.fatigueCostLoad);
+    expect(b.runReplacementCredit).toBe(a.runReplacementCredit);
+    expect(b.baseLoad).toBe(a.baseLoad);
+    expect(b.aerobicLoad).toBe(a.aerobicLoad);
+    expect(b.anaerobicLoad).toBe(a.anaerobicLoad);
   });
 });

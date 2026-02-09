@@ -129,7 +129,7 @@ function renderFocusCard(id: string, label: string, desc: string, planType: stri
 function wireEventHandlers(state: OnboardingState): void {
   // Initial question handlers
   document.getElementById('train-yes')?.addEventListener('click', () => {
-    updateOnboarding({ trainingForEvent: true });
+    updateOnboarding({ trainingForEvent: true, continuousMode: false });
     rerender(state);
   });
 
@@ -175,6 +175,7 @@ function wireEventHandlers(state: OnboardingState): void {
         trainingFocus: focus as 'speed' | 'endurance' | 'both',
         raceDistance: distance,
         planDurationWeeks: weeks,
+        continuousMode: true,
       });
       nextStep();
     });

@@ -2,13 +2,15 @@ import { getState, getMutableState } from '@/state/store';
 import type { SimulatorState } from '@/types';
 import { saveState } from '@/state/persistence';
 import { render, attachTrackRunHandlers } from './renderer';
-import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance } from './events';
+import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance, isBenchmarkWeek, findGarminRunForWeek, getBenchmarkOptions, getBenchmarkDefault, recordBenchmark, skipBenchmark } from './events';
 import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
 import { ft } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { applyPhaseRegression, recordMorningPain } from '@/injury/engine';
 import { initializeSimulator } from '@/state/initialization';
+import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
+import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 
 /**
  * Check if the training plan has started (any workout has been completed/rated)
@@ -35,7 +37,7 @@ export function renderMainView(): void {
 
   const s = getState();
   const isAdmin = s.isAdmin || false;
-  const maxViewableWeek = isAdmin ? s.tw : Math.min(3, s.tw); // 21 days = ~3 weeks for trial
+  const maxViewableWeek = s.tw; // Unlimited access (trial cap removed)
 
   container.innerHTML = getMainViewHTML(s, maxViewableWeek);
 
@@ -57,11 +59,103 @@ export function renderMainView(): void {
   setOnWeekAdvance(() => renderMainView());
 }
 
+/**
+ * Calculate which 4-week block the current week belongs to (1-indexed)
+ */
+function getBlockNumber(currentWeek: number): number {
+  return Math.floor((currentWeek - 1) / 4) + 1;
+}
+
+/**
+ * Calculate which week within the current 4-week block (1-4)
+ */
+function getBlockWeek(currentWeek: number): number {
+  return ((currentWeek - 1) % 4) + 1;
+}
+
+/**
+ * Check if the current week is in the block cycling (pre-race) phase of a long plan
+ */
+function isInBlockCyclingPhase(s: any, weekOverride?: number): boolean {
+  const week = weekOverride ?? s.w;
+  return !s.continuousMode && s.racePhaseStart && week < s.racePhaseStart;
+}
+
+/**
+ * Get the race-prep week number (1-indexed within the 16-week race block)
+ */
+function getRacePrepWeek(s: any, weekOverride?: number): number {
+  const week = weekOverride ?? s.w;
+  return week - (s.racePhaseStart - 1);
+}
+
+/**
+ * Get the total race prep weeks (always 16 for long plans)
+ */
+function getRacePrepTotal(s: any): number {
+  return s.tw - (s.racePhaseStart - 1);
+}
+
+/**
+ * Header subtitle text (below plan name)
+ */
+function getHeaderSubtitle(s: any, blockNum: number): string {
+  if (s.continuousMode) {
+    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, true)}`;
+  }
+  if (isInBlockCyclingPhase(s)) {
+    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, true)} (Race prep starts week ${s.racePhaseStart})`;
+  }
+  if (s.racePhaseStart) {
+    const rpWeek = getRacePrepWeek(s);
+    const rpTotal = getRacePrepTotal(s);
+    return `Race Prep — Week ${rpWeek} of ${rpTotal} — ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)}`;
+  }
+  return `Week ${s.w} of ${s.tw} — ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)}`;
+}
+
+/**
+ * Week navigator card title
+ */
+function getWeekNavigatorLabel(s: any, blockNum: number): string {
+  if (s.continuousMode) {
+    return `Week ${s.w} · Block ${blockNum}`;
+  }
+  if (isInBlockCyclingPhase(s)) {
+    return `Week ${s.w} · Block ${blockNum}`;
+  }
+  if (s.racePhaseStart) {
+    const rpWeek = getRacePrepWeek(s);
+    const rpTotal = getRacePrepTotal(s);
+    return `Race Prep ${rpWeek} of ${rpTotal}`;
+  }
+  return `Week ${s.w} of ${s.tw}`;
+}
+
+/**
+ * Week counter label inside the prediction/phase panel
+ */
+function getWeekCounterLabel(s: any): string {
+  if (isInBlockCyclingPhase(s)) {
+    const blockNum = getBlockNumber(s.w);
+    const blockWeek = getBlockWeek(s.w);
+    return `Block ${blockNum} · Week ${blockWeek} of 4`;
+  }
+  if (s.racePhaseStart) {
+    const rpWeek = getRacePrepWeek(s);
+    const rpTotal = getRacePrepTotal(s);
+    return `Race Prep · Week ${rpWeek} of ${rpTotal}`;
+  }
+  return `Week ${s.w} of ${s.tw}`;
+}
+
 function getMainViewHTML(s: any, maxViewableWeek: number): string {
   const injured = isInjuryActive();
   const headerBg = injured ? 'bg-amber-950 border-b border-amber-800' : 'bg-gray-900 border-b border-gray-800';
   const titleColor = injured ? 'text-amber-300' : 'text-white';
   const subtitleColor = injured ? 'text-amber-400/70' : 'text-gray-500';
+  const blockNum = getBlockNumber(s.w);
+
 
   return `
     <div class="min-h-screen bg-gray-950">
@@ -71,7 +165,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
           <div class="flex items-center justify-between">
             <div>
               <h1 class="text-xl font-semibold ${titleColor}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name + "'s" : 'Your'} Adaptive Plan`}</h1>
-              <p class="text-xs ${subtitleColor}">${injured ? 'Recovery Plan Active' : `Week ${s.w} of ${s.tw} - ${getPhaseLabel(s.wks?.[s.w - 1]?.ph)}`}</p>
+              <p class="text-xs ${subtitleColor}">${injured ? 'Recovery Plan Active' : getHeaderSubtitle(s, blockNum)}</p>
             </div>
             <div class="flex items-center gap-3">
               ${renderStravaButton(s.stravaConnected)}
@@ -115,8 +209,14 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
         <!-- Injury Alert Banner -->
         ${renderInjuryBanner()}
 
+        <!-- Recovery Pill -->
+        ${renderRecoveryPill(s)}
+
         <!-- Morning Pain Check (shown when injured, once per day) -->
         ${renderMorningPainCheck(s)}
+
+        <!-- Benchmark Check-in (shown on benchmark weeks for continuous mode) -->
+        ${renderBenchmarkPanel(s)}
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
@@ -126,7 +226,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
             <!-- Week Navigator -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
               <div class="flex items-center justify-between mb-3">
-                <h3 class="text-sm font-medium text-white">Week ${s.w} of ${s.tw}</h3>
+                <h3 class="text-sm font-medium text-white">${getWeekNavigatorLabel(s, blockNum)}</h3>
                 <div class="flex gap-2">
                   <button id="week-prev" class="p-2 bg-gray-800 hover:bg-gray-700 rounded transition-colors ${s.w <= 1 ? 'opacity-50 cursor-not-allowed' : ''}">
                     <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -178,16 +278,10 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               <div class="space-y-2 text-xs">
                 <div class="flex justify-between items-center">
                   <span class="text-gray-400">Runner Type</span>
-                  ${hasPlanStarted(s)
-                    ? `<span class="flex items-center gap-1 px-2 py-0.5 bg-gray-800 border border-gray-700 rounded-full text-gray-400">
-                        <svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd"/></svg>
-                        <span>${s.typ}</span>
-                      </span>`
-                    : `<button id="btn-change-runner-type" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-950/50 border border-emerald-800/50 rounded-full text-emerald-400 hover:bg-emerald-900/50 hover:text-emerald-300 transition-colors cursor-pointer">
+                  <button id="btn-change-runner-type" class="flex items-center gap-1 px-2 py-0.5 bg-emerald-950/50 border border-emerald-800/50 rounded-full text-emerald-400 hover:bg-emerald-900/50 hover:text-emerald-300 transition-colors cursor-pointer">
                         <span>${s.typ}</span>
                         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                      </button>`
-                  }
+                      </button>
                 </div>
                 <div>
                   <div class="flex justify-between items-center">
@@ -198,12 +292,26 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                     ${s.onboarding?.trainingForEvent === false ? 'VDOT is a running fitness metric estimated from your running performance. It represents your aerobic capacity and is used to calculate training paces and performance forecasts. Higher = fitter.' : 'VDOT is a running fitness metric estimated from your race times. It represents your aerobic capacity and is used to calculate training paces and race predictions. Higher = fitter.'}
                   </div>
                 </div>
+                ${s.continuousMode ? `
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Focus</span>
+                  <span class="text-emerald-400">${s.onboarding?.trainingFocus === 'speed' ? 'Speed' : s.onboarding?.trainingFocus === 'endurance' ? 'Endurance' : 'Balanced'}</span>
+                </div>
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Block</span>
+                  <span class="text-white">${blockNum}</span>
+                </div>
+                ` : `
                 <div class="flex justify-between">
                   <span class="text-gray-400">Expected Final</span>
                   <span class="text-emerald-400">${s.expectedFinal?.toFixed(1) || '-'}</span>
                 </div>
+                `}
               </div>
             </div>
+
+            <!-- Recovery Log (last 7 days) -->
+            ${renderRecoveryLog(s)}
 
             <!-- Load Tracker Tab - Bar Chart (smartwatch only) -->
             ${s.onboarding?.hasSmartwatch ? `
@@ -265,16 +373,25 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               </div>
             </div>
 
-            <!-- Prediction Box -->
-            <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
-              <h3 class="font-medium text-sm mb-3 text-white">${s.onboarding?.trainingForEvent === false ? 'Performance Forecast' : 'Race Prediction'}</h3>
+            <!-- Prediction / Progress Box -->
+            ${s.continuousMode ? renderContinuousProgressPanel(s) : `
+            <div class="bg-gray-900 rounded-lg border border-gray-800 p-5">
+              <!-- Phase Display (Big & Bold) -->
+              <div class="mb-5 pb-5 border-b border-gray-800">
+                <div class="text-xs text-gray-500 uppercase tracking-widest mb-1 font-semibold">Current Phase</div>
+                <div id="phase-label" class="text-4xl font-bold text-white tracking-tight">${getPhaseLabel(s.wks?.[s.w - 1]?.ph, isInBlockCyclingPhase(s))}</div>
+                <p id="week-counter" class="text-sm text-emerald-400 mt-1 font-medium">${getWeekCounterLabel(s)}</p>
+              </div>
+
+              <!-- Predictions -->
+              <h3 class="font-medium text-sm mb-4 text-gray-400">Race Prediction</h3>
               <div id="pred" class="grid grid-cols-3 gap-4 text-center">
                 <div>
                   <div class="text-xs text-gray-500 mb-1">Initial</div>
                   <div class="text-lg font-medium text-gray-500" id="initial">${ft(s.initialBaseline || 0)}</div>
                 </div>
                 <div>
-                  <div class="text-xs text-gray-500 mb-1 cursor-help" title="${s.onboarding?.trainingForEvent === false ? 'Your predicted time if you time-trialed today (based on current fatigue).' : 'Your predicted time if you raced tomorrow (based on current fatigue).'}">Current</div>
+                  <div class="text-xs text-gray-500 mb-1 cursor-help" title="Your predicted time if you raced tomorrow (based on current fatigue).">Current</div>
                   <div class="text-xl font-bold text-white" id="cv">${ft(s.currentFitness || 0)}</div>
                 </div>
                 <div>
@@ -283,6 +400,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                 </div>
               </div>
             </div>
+            `}
 
             <!-- Workouts -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
@@ -324,13 +442,627 @@ function renderStravaButton(connected: boolean): string {
   `;
 }
 
-function getPhaseLabel(phase: string | undefined): string {
-  switch (phase) {
-    case 'base': return 'Base Phase';
-    case 'build': return 'Build Phase';
-    case 'peak': return 'Peak Phase';
-    case 'taper': return 'Taper Phase';
-    default: return 'Training';
+/**
+ * Render the progress panel for non-event (continuous mode) users.
+ * Shows VDOT progress, current easy pace, and block progress bar instead of race times.
+ */
+function renderContinuousProgressPanel(s: any): string {
+  // Calculate current VDOT from accumulated gains
+  let wg = 0;
+  for (let i = 0; i < Math.min(s.w - 1, s.wks?.length || 0); i++) wg += (s.wks[i]?.wkGain || 0);
+  const currentVdot = (s.v || 0) + wg + (s.rpeAdj || 0);
+  const vdotChange = currentVdot - (s.iv || s.v || 0);
+
+  // Easy pace from current paces
+  const easyPace = s.pac?.e;
+  const easyPaceStr = easyPace
+    ? `${Math.floor(easyPace / 60)}:${String(Math.round(easyPace % 60)).padStart(2, '0')}/km`
+    : '—';
+
+  // Block progress: which week within the current 4-week block
+  const blockWeek = getBlockWeek(s.w);
+  const blockNum = getBlockNumber(s.w);
+
+  const blockPhaseLabels = ['Base', 'Build', 'Intensify', 'Deload'];
+  const blockPhaseLbl = blockPhaseLabels[blockWeek - 1] || 'Base';
+
+  // Count completed benchmarks
+  const benchmarkCount = s.benchmarkResults?.filter((b: any) => b.source !== 'skipped').length || 0;
+
+  // Get the actual phase from the week data
+  const currentPhase = s.wks?.[s.w - 1]?.ph;
+
+  return `
+    <div class="bg-gray-900 rounded-lg border border-gray-800 p-5">
+      <!-- Phase Display (Big & Bold) -->
+      <div class="mb-5 pb-5 border-b border-gray-800">
+        <div class="text-xs text-gray-500 uppercase tracking-widest mb-1 font-semibold">Current Phase</div>
+        <div id="phase-label" class="text-4xl font-bold text-white tracking-tight">${getPhaseLabel(currentPhase, true)}</div>
+        <p id="week-counter" class="text-sm text-emerald-400 mt-1 font-medium">Block ${blockNum} · Week ${blockWeek} of 4</p>
+      </div>
+
+      <h3 class="font-medium text-sm mb-3 text-white">Fitness Progress</h3>
+
+      <!-- VDOT + Easy Pace -->
+      <div id="pred" class="grid grid-cols-2 gap-4 text-center mb-4">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">Current VDOT</div>
+          <div class="text-2xl font-bold text-white">${currentVdot.toFixed(1)}</div>
+          <div class="text-xs ${vdotChange >= 0 ? 'text-emerald-400' : 'text-red-400'} mt-0.5">
+            ${vdotChange >= 0 ? '+' : ''}${vdotChange.toFixed(2)} from start
+          </div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">Easy Pace</div>
+          <div class="text-2xl font-bold text-emerald-400">${easyPaceStr}</div>
+          <div class="text-xs text-gray-500 mt-0.5">${benchmarkCount > 0 ? `${benchmarkCount} check-in${benchmarkCount > 1 ? 's' : ''} logged` : 'No check-ins yet'}</div>
+        </div>
+      </div>
+
+      <!-- Block Progress Bar -->
+      <div class="bg-gray-800 rounded-lg p-3">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs text-gray-400">Block ${blockNum} · Week ${blockWeek} of 4</span>
+          <span class="text-xs font-medium ${blockWeek === 4 ? 'text-blue-400' : blockWeek === 3 ? 'text-orange-400' : 'text-emerald-400'}">${blockPhaseLbl}</span>
+        </div>
+        <div class="flex gap-1">
+          ${[1, 2, 3, 4].map(i => `
+            <div class="flex-1 h-2 rounded-full ${i < blockWeek ? 'bg-emerald-500' :
+      i === blockWeek ? (i === 4 ? 'bg-blue-500' : i === 3 ? 'bg-orange-500' : 'bg-emerald-500') :
+        'bg-gray-700'
+    }"></div>
+          `).join('')}
+        </div>
+        ${blockWeek === 4 ? '<p class="text-xs text-blue-400/80 mt-2">Deload week — lighter training + optional check-in</p>' : blockWeek === 3 ? '<p class="text-xs text-orange-400/80 mt-2">Intensify week — peak training load</p>' : ''}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render the optional benchmark check-in panel (shown on benchmark weeks for continuous mode users).
+ * Uses the 4-tier benchmark system with smart defaults based on focus × experienceLevel.
+ */
+function renderBenchmarkPanel(s: any): string {
+  if (!s.continuousMode) return '';
+  if (!isBenchmarkWeek(s.w, true)) return '';
+
+  // Check if benchmark already recorded/skipped for this week
+  const existing = s.benchmarkResults?.find((b: any) => b.week === s.w);
+  if (existing) {
+    if (existing.source === 'skipped') {
+      return `
+        <div class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 mb-4">
+          <div class="flex items-center gap-2">
+            <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
+            </svg>
+            <p class="text-sm text-gray-400">Check-in skipped this block — no worries, keep training!</p>
+          </div>
+        </div>
+      `;
+    }
+    // Show recorded result
+    const resultDetails = formatBenchmarkResult(existing);
+    return `
+      <div class="bg-emerald-950/30 border border-emerald-800 rounded-lg p-4 mb-4">
+        <div class="flex items-center gap-2 mb-1">
+          <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+          </svg>
+          <span class="text-sm font-medium text-emerald-300">Check-in Recorded</span>
+          ${existing.source === 'garmin' ? '<span class="text-xs bg-orange-950/50 text-orange-300 px-2 py-0.5 rounded-full border border-orange-800/30">From watch</span>' : ''}
+        </div>
+        <p class="text-xs text-gray-400">${resultDetails}</p>
+      </div>
+    `;
+  }
+
+  const options = getBenchmarkOptions(s.onboarding?.trainingFocus, s.onboarding?.experienceLevel);
+  const garminRun = findGarminRunForWeek(s.w);
+
+  return `
+    <div class="bg-blue-950/30 border border-blue-800 rounded-lg p-4 mb-4">
+      <div class="flex items-start gap-3">
+        <div class="flex-shrink-0 w-10 h-10 bg-blue-900/50 rounded-full flex items-center justify-center">
+          <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+          </svg>
+        </div>
+        <div class="flex-1">
+          <h3 class="text-sm font-semibold text-blue-300 mb-1">Optional Check-in</h3>
+          <p class="text-xs text-blue-400/80 mb-3">See how your fitness is tracking. Totally optional — skip anytime.</p>
+
+          ${garminRun ? `
+            <div class="bg-orange-950/30 border border-orange-800/30 rounded-lg p-3 mb-3">
+              <div class="flex items-center gap-2 mb-1">
+                <svg class="w-4 h-4 text-orange-400" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/>
+                </svg>
+                <span class="text-xs font-medium text-orange-300">Run detected from watch</span>
+              </div>
+              <p class="text-xs text-gray-400">${garminRun.duration_min}min run · RPE ${garminRun.rpe}</p>
+              <button id="btn-benchmark-auto" class="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded-lg transition-colors">
+                Use This Run as Check-in
+              </button>
+            </div>
+          ` : ''}
+
+          <!-- Benchmark options (smart default first) -->
+          <div class="space-y-2 mb-3">
+            ${options.map((opt, idx) => `
+              <button class="btn-benchmark-option w-full text-left p-3 rounded-lg border transition-colors ${opt.recommended
+      ? 'bg-blue-950/50 border-blue-700 hover:border-blue-500'
+      : 'bg-gray-800/50 border-gray-700 hover:border-gray-500'
+    }" data-bm-type="${opt.type}">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-medium ${opt.recommended ? 'text-blue-300' : 'text-gray-300'}">${opt.label}</span>
+                  ${opt.recommended ? '<span class="text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded-full">Recommended</span>' : ''}
+                </div>
+                <p class="text-xs text-gray-500 mt-0.5">${opt.description}</p>
+              </button>
+            `).join('')}
+          </div>
+
+          <button id="btn-benchmark-skip" class="w-full py-2 bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs font-medium rounded-lg transition-colors">
+            Skip this check-in
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/** Format a benchmark result for display */
+function formatBenchmarkResult(result: any): string {
+  switch (result.type) {
+    case 'easy_checkin':
+      return result.avgPaceSecKm
+        ? `Easy check-in · ${Math.floor(result.avgPaceSecKm / 60)}:${String(Math.round(result.avgPaceSecKm % 60)).padStart(2, '0')}/km avg`
+        : `Easy check-in · ${result.durationSec ? Math.round(result.durationSec / 60) + 'min' : 'logged'}`;
+    case 'threshold_check':
+      return result.avgPaceSecKm
+        ? `Threshold check · ${Math.floor(result.avgPaceSecKm / 60)}:${String(Math.round(result.avgPaceSecKm % 60)).padStart(2, '0')}/km`
+        : 'Threshold check · logged';
+    case 'speed_check':
+      return result.distanceKm
+        ? `Speed check · ${result.distanceKm.toFixed(2)} km in 12 min`
+        : 'Speed check · logged';
+    case 'race_simulation':
+      return result.distanceKm && result.durationSec
+        ? `Race sim · ${result.distanceKm}km in ${Math.floor(result.durationSec / 60)}:${String(Math.round(result.durationSec % 60)).padStart(2, '0')}`
+        : 'Race simulation · logged';
+    default:
+      return 'Check-in recorded';
+  }
+}
+
+/**
+ * Show manual benchmark entry modal for a specific benchmark type.
+ */
+function showBenchmarkEntryModal(bmType: string): void {
+  const type = bmType as import('@/types/state').BenchmarkType;
+
+  // Build the right input fields based on benchmark type
+  let fieldsHTML = '';
+  let title = '';
+  let desc = '';
+
+  switch (type) {
+    case 'easy_checkin':
+      title = 'Easy Check-in';
+      desc = 'Log a 30-min steady run. Enter your average pace.';
+      fieldsHTML = renderPaceInput();
+      break;
+    case 'threshold_check':
+      title = 'Threshold Check';
+      desc = 'Log your 20-min "comfortably hard" effort. Enter your average pace.';
+      fieldsHTML = renderPaceInput();
+      break;
+    case 'speed_check':
+      title = 'Speed Check (12-min test)';
+      desc = 'How far did you run in 12 minutes?';
+      fieldsHTML = `
+        <label class="block text-xs text-gray-400 mb-1">Distance covered (km)</label>
+        <input type="number" id="bm-distance" step="0.01" min="0.5" max="6"
+          class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm mb-4"
+          placeholder="e.g. 2.80">
+      `;
+      break;
+    case 'race_simulation':
+      title = 'Race Simulation';
+      desc = 'Log your time trial result.';
+      fieldsHTML = `
+        <label class="block text-xs text-gray-400 mb-1">Distance (km)</label>
+        <input type="number" id="bm-distance" step="0.1" min="1" max="42.2"
+          class="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm mb-3"
+          placeholder="e.g. 5">
+        <label class="block text-xs text-gray-400 mb-1">Time</label>
+        <div class="flex gap-2 mb-4">
+          <input type="number" id="bm-time-min" min="5" max="300"
+            class="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
+            placeholder="min">
+          <span class="text-gray-500 self-center">:</span>
+          <input type="number" id="bm-time-sec" min="0" max="59"
+            class="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
+            placeholder="sec">
+        </div>
+      `;
+      break;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+  overlay.innerHTML = `
+    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
+      <h3 class="text-white font-semibold text-lg mb-2">${title}</h3>
+      <p class="text-gray-400 text-sm mb-4">${desc}</p>
+      ${fieldsHTML}
+      <div class="flex flex-col gap-2">
+        <button id="btn-bm-submit" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm">
+          Save
+        </button>
+        <button id="btn-bm-cancel" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+          Cancel
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelector('#btn-bm-submit')?.addEventListener('click', () => {
+    switch (type) {
+      case 'easy_checkin':
+      case 'threshold_check': {
+        const m = +(document.getElementById('bm-pace-min') as HTMLInputElement)?.value || 0;
+        const sec = +(document.getElementById('bm-pace-sec') as HTMLInputElement)?.value || 0;
+        const paceSec = m * 60 + sec;
+        if (paceSec < 120 || paceSec > 720) { alert('Enter a valid pace (min:sec per km)'); return; }
+        overlay.remove();
+        const dur = type === 'easy_checkin' ? 1800 : 1200; // 30 min / 20 min
+        recordBenchmark(type, 'manual', undefined, dur, paceSec);
+        break;
+      }
+      case 'speed_check': {
+        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        if (!dist || dist < 0.5) { alert('Enter a distance (km)'); return; }
+        overlay.remove();
+        recordBenchmark('speed_check', 'manual', dist, 720); // 12 min
+        break;
+      }
+      case 'race_simulation': {
+        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        const m = +(document.getElementById('bm-time-min') as HTMLInputElement)?.value || 0;
+        const sec = +(document.getElementById('bm-time-sec') as HTMLInputElement)?.value || 0;
+        const totalSec = m * 60 + sec;
+        if (!dist || dist < 1) { alert('Enter a distance'); return; }
+        if (totalSec < 300) { alert('Enter a valid time'); return; }
+        overlay.remove();
+        const avgPace = totalSec / dist;
+        recordBenchmark('race_simulation', 'manual', dist, totalSec, avgPace);
+        break;
+      }
+    }
+  });
+
+  overlay.querySelector('#btn-bm-cancel')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+/** Reusable pace input HTML */
+function renderPaceInput(): string {
+  return `
+    <label class="block text-xs text-gray-400 mb-1">Average pace (min:sec per km)</label>
+    <div class="flex gap-2 mb-4">
+      <input type="number" id="bm-pace-min" min="2" max="12"
+        class="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
+        placeholder="min">
+      <span class="text-gray-500 self-center">:</span>
+      <input type="number" id="bm-pace-sec" min="0" max="59"
+        class="flex-1 bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 text-sm"
+        placeholder="sec">
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------------
+// Recovery UI
+// ---------------------------------------------------------------------------
+
+function renderRecoveryPill(s: any): string {
+  const today = new Date().toISOString().split('T')[0];
+  const history: RecoveryEntry[] = s.recoveryHistory || [];
+  const todayEntry = history.find((e: RecoveryEntry) => e.date === today) || null;
+  const alreadyPrompted = s.lastRecoveryPromptDate === today;
+
+  const { level, shouldPrompt } = computeRecoveryStatus(todayEntry, history);
+
+  if (!todayEntry) {
+    // No data — prompt to log
+    return `
+      <button id="btn-recovery-log" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium bg-gray-800 border border-gray-700 text-gray-400 hover:bg-gray-700 hover:text-gray-300 transition-colors">
+        <span class="w-2 h-2 rounded-full bg-gray-500"></span>
+        Recovery: Log today
+      </button>
+    `;
+  }
+
+  if (level === 'green') {
+    return `
+      <div class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium bg-emerald-950/30 border border-emerald-800/50 text-emerald-400">
+        <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+        Recovery: Good
+      </div>
+    `;
+  }
+
+  if (shouldPrompt && !alreadyPrompted) {
+    const colorMap: Record<RecoveryLevel, string> = {
+      green: '',
+      yellow: 'bg-amber-950/30 border-amber-800/50 text-amber-400',
+      orange: 'bg-orange-950/30 border-orange-800/50 text-orange-400',
+      red: 'bg-red-950/30 border-red-800/50 text-red-400',
+    };
+    const dotColor: Record<RecoveryLevel, string> = {
+      green: '',
+      yellow: 'bg-amber-500',
+      orange: 'bg-orange-500',
+      red: 'bg-red-500',
+    };
+    return `
+      <button id="btn-recovery-adjust" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium ${colorMap[level]} hover:brightness-110 transition-colors">
+        <span class="w-2 h-2 rounded-full ${dotColor[level]}"></span>
+        Recovery: Low — Tap to adjust
+      </button>
+    `;
+  }
+
+  // Already prompted today — small status dot only
+  const dotColor: Record<RecoveryLevel, string> = {
+    green: 'bg-emerald-500',
+    yellow: 'bg-amber-500',
+    orange: 'bg-orange-500',
+    red: 'bg-red-500',
+  };
+  return `
+    <div class="inline-flex items-center gap-2 px-3 py-1.5 mb-4 rounded-full text-xs text-gray-500">
+      <span class="w-2 h-2 rounded-full ${dotColor[level]}"></span>
+      Recovery logged
+    </div>
+  `;
+}
+
+function renderRecoveryLog(s: any): string {
+  const history: RecoveryEntry[] = s.recoveryHistory || [];
+  const last7 = history.slice(-7);
+
+  const dotColor = (score: number): string => {
+    if (score >= 70) return 'bg-emerald-500';
+    if (score >= 50) return 'bg-amber-500';
+    if (score >= 30) return 'bg-orange-500';
+    return 'bg-red-500';
+  };
+
+  return `
+    <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-medium text-sm text-white">Recovery</h3>
+        <button id="btn-recovery-log-panel" class="text-xs text-emerald-400 hover:text-emerald-300 transition-colors">Log Today</button>
+      </div>
+      <div class="flex gap-1.5 items-center">
+        ${last7.length === 0
+          ? '<span class="text-xs text-gray-500">No recovery data yet</span>'
+          : last7.map((e: RecoveryEntry) => `
+            <div class="flex flex-col items-center gap-1" title="${e.date}: Sleep ${e.sleepScore}/100">
+              <span class="w-3 h-3 rounded-full ${dotColor(e.sleepScore)}"></span>
+              <span class="text-[10px] text-gray-600">${e.date.slice(5)}</span>
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+  `;
+}
+
+function showRecoveryInputModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+  overlay.innerHTML = `
+    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
+      <h3 class="text-white font-semibold text-lg mb-1">How did you sleep?</h3>
+      <p class="text-gray-400 text-sm mb-5">Quick check-in to optimize today's training.</p>
+      <div class="flex flex-col gap-2">
+        <button class="recovery-quality-btn w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm" data-quality="great">
+          Great — Slept well
+        </button>
+        <button class="recovery-quality-btn w-full py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg transition-colors text-sm" data-quality="good">
+          Good — Normal night
+        </button>
+        <button class="recovery-quality-btn w-full py-2.5 bg-amber-700 hover:bg-amber-600 text-white font-medium rounded-lg transition-colors text-sm" data-quality="poor">
+          Poor — Restless/short
+        </button>
+        <button class="recovery-quality-btn w-full py-2.5 bg-red-700 hover:bg-red-600 text-white font-medium rounded-lg transition-colors text-sm" data-quality="terrible">
+          Terrible — Barely slept
+        </button>
+        <button id="btn-recovery-skip" class="w-full py-2 text-gray-500 hover:text-gray-400 text-xs transition-colors mt-1">
+          Skip
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  overlay.querySelectorAll('.recovery-quality-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const quality = (btn as HTMLElement).dataset.quality as 'great' | 'good' | 'poor' | 'terrible';
+      overlay.remove();
+      handleRecoveryInput(quality);
+    });
+  });
+
+  overlay.querySelector('#btn-recovery-skip')?.addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+function handleRecoveryInput(quality: 'great' | 'good' | 'poor' | 'terrible'): void {
+  const s = getMutableState();
+  const today = new Date().toISOString().split('T')[0];
+  const score = sleepQualityToScore(quality);
+
+  const entry: RecoveryEntry = { date: today, sleepScore: score, source: 'manual' };
+
+  if (!s.recoveryHistory) s.recoveryHistory = [];
+
+  // Replace if already logged today, else push
+  const idx = s.recoveryHistory.findIndex((e: RecoveryEntry) => e.date === today);
+  if (idx >= 0) {
+    s.recoveryHistory[idx] = entry;
+  } else {
+    s.recoveryHistory.push(entry);
+  }
+
+  // Keep last 7 days
+  if (s.recoveryHistory.length > 7) {
+    s.recoveryHistory = s.recoveryHistory.slice(-7);
+  }
+
+  saveState();
+
+  // If score < 70 → open adjustment modal
+  if (score < 70) {
+    showRecoveryAdjustModal(entry);
+  } else {
+    render();
+    renderMainView();
+  }
+}
+
+function showRecoveryAdjustModal(entry: RecoveryEntry): void {
+  const s = getState();
+  const history: RecoveryEntry[] = s.recoveryHistory || [];
+  const { level, reasons } = computeRecoveryStatus(entry, history);
+
+  // Get today's workouts to show what will be affected
+  const { generateWeekWorkouts } = require('@/workouts') as typeof import('@/workouts');
+  const wk = s.wks[s.w - 1];
+  if (!wk) return;
+
+  const workouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v
+  );
+
+  // Find today's run workout (JS day → our day)
+  const jsDay = new Date().getDay();
+  const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+  const todayWorkout = workouts.find((w: any) =>
+    w.dayOfWeek === ourDay && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest'
+  );
+
+  const todayLabel = todayWorkout ? todayWorkout.n : 'No run planned today';
+
+  const levelLabel: Record<RecoveryLevel, string> = {
+    green: 'Good',
+    yellow: 'Low',
+    orange: 'Low',
+    red: 'Very Low',
+  };
+
+  const levelColor: Record<RecoveryLevel, string> = {
+    green: 'text-emerald-400',
+    yellow: 'text-amber-400',
+    orange: 'text-orange-400',
+    red: 'text-red-400',
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+  overlay.innerHTML = `
+    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="text-sm font-semibold ${levelColor[level]}">Recovery: ${levelLabel[level]}</span>
+      </div>
+      <ul class="text-xs text-gray-400 mb-4 space-y-1">
+        ${reasons.map(r => `<li>&#8226; ${r}</li>`).join('')}
+      </ul>
+      <p class="text-sm text-gray-300 mb-4">Today: <span class="text-white font-medium">${todayLabel}</span></p>
+
+      ${todayWorkout ? `
+        <div class="flex flex-col gap-2">
+          <button id="btn-recovery-downgrade" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm text-left px-4">
+            <div class="flex items-center justify-between">
+              <span>Downgrade to Easy</span>
+              ${level === 'red' || level === 'orange' ? '<span class="text-xs bg-emerald-800 px-2 py-0.5 rounded-full">Recommended</span>' : ''}
+            </div>
+            <p class="text-xs text-emerald-200/70 mt-0.5">Keep distance, lower intensity</p>
+          </button>
+          <button id="btn-recovery-reduce" class="w-full py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg transition-colors text-sm text-left px-4">
+            <span>Reduce Distance</span>
+            <p class="text-xs text-gray-400 mt-0.5">Cut by 20%, keep workout type</p>
+          </button>
+          <button id="btn-recovery-ignore" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-400 font-medium rounded-lg transition-colors text-sm">
+            Keep plan unchanged
+          </button>
+        </div>
+      ` : `
+        <p class="text-xs text-gray-500 mb-3">No run workout scheduled today — no adjustments needed.</p>
+        <button id="btn-recovery-dismiss" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+          Dismiss
+        </button>
+      `}
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  if (todayWorkout) {
+    overlay.querySelector('#btn-recovery-downgrade')?.addEventListener('click', () => {
+      overlay.remove();
+      window.applyRecoveryAdjustment('downgrade', ourDay);
+    });
+    overlay.querySelector('#btn-recovery-reduce')?.addEventListener('click', () => {
+      overlay.remove();
+      window.applyRecoveryAdjustment('reduce', ourDay);
+    });
+    overlay.querySelector('#btn-recovery-ignore')?.addEventListener('click', () => {
+      overlay.remove();
+      markRecoveryPrompted();
+    });
+  } else {
+    overlay.querySelector('#btn-recovery-dismiss')?.addEventListener('click', () => {
+      overlay.remove();
+      markRecoveryPrompted();
+    });
+  }
+
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+}
+
+function markRecoveryPrompted(): void {
+  const s = getMutableState();
+  s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
+  saveState();
+  renderMainView();
+}
+
+function getPhaseLabel(phase: string | undefined, isContinuousMode: boolean = false): string {
+  if (isContinuousMode) {
+    // Continuous mode: Base → Build → Intensify → Deload
+    switch (phase) {
+      case 'base': return 'Base';
+      case 'build': return 'Build';
+      case 'peak': return 'Intensify';
+      case 'taper': return 'Deload';
+      default: return 'Training';
+    }
+  } else {
+    // Race mode: Base → Build → Peak → Taper
+    switch (phase) {
+      case 'base': return 'Base';
+      case 'build': return 'Build';
+      case 'peak': return 'Peak';
+      case 'taper': return 'Taper';
+      default: return 'Training';
+    }
   }
 }
 
@@ -417,7 +1149,7 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
 /**
  * Show runner type selection modal
  */
-function showRunnerTypeModal(currentType: string): void {
+function showRunnerTypeModal(currentType: string, planStarted: boolean = false): void {
   const types = ['Speed', 'Balanced', 'Endurance'];
   const descriptions: Record<string, string> = {
     'Speed': 'Strong at shorter, faster efforts. Training emphasises building aerobic endurance and long-run durability.',
@@ -432,6 +1164,9 @@ function showRunnerTypeModal(currentType: string): void {
     <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-5">
       <h3 class="text-white font-semibold text-lg mb-1">Change Runner Type</h3>
       <p class="text-xs text-gray-400 mb-4">This will recalculate your entire training plan.</p>
+      ${planStarted ? `<div class="p-3 mb-4 bg-amber-950/30 border border-amber-800/50 rounded-lg text-xs text-amber-300 leading-relaxed">
+        Changing your runner type will reset your current plan. Your training data will be preserved but your plan will be rebuilt from scratch.
+      </div>` : ''}
       <div class="space-y-2">
         ${types.map(t => `
           <button class="runner-type-option w-full text-left p-3 rounded-lg border transition-colors ${t === currentType ? 'bg-emerald-950/50 border-emerald-700 text-emerald-300' : 'bg-gray-800 border-gray-700 text-gray-300 hover:border-gray-500'}" data-type="${t}">
@@ -463,7 +1198,14 @@ function showRunnerTypeModal(currentType: string): void {
         return;
       }
       overlay.remove();
-      applyRunnerTypeChange(newType);
+      showStyledConfirm(
+        'Are you sure?',
+        'This will rebuild your entire plan from scratch and you will lose all completed runs.',
+        'Yes, rebuild my plan',
+        'Cancel'
+      ).then(proceed => {
+        if (proceed) applyRunnerTypeChange(newType);
+      });
     });
   });
 }
@@ -475,22 +1217,38 @@ function applyRunnerTypeChange(newType: string): void {
   const s = getMutableState();
   if (!s.onboarding) return;
 
+  // Show rebuilding visual
+  const overlay = document.createElement('div');
+  overlay.id = 'rebuilding-overlay';
+  overlay.className = 'fixed inset-0 bg-gray-950/95 flex items-center justify-center z-50';
+  overlay.innerHTML = `
+    <div class="text-center">
+      <div class="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+      <h3 class="text-white font-semibold text-lg mb-1">Rebuilding Plan</h3>
+      <p class="text-gray-400 text-sm">Recalculating your workouts...</p>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
   s.onboarding.confirmedRunnerType = newType as any;
   s.onboarding.calculatedRunnerType = newType as any;
   saveState();
 
-  const result = initializeSimulator(s.onboarding);
-  if (result.success) {
-    window.location.reload();
-  } else {
-    showAdaptToast('Failed to recalculate: ' + (result.error || 'Unknown error'), false);
-  }
+  setTimeout(() => {
+    const result = initializeSimulator(s.onboarding!);
+    if (result.success) {
+      window.location.reload();
+    } else {
+      overlay.remove();
+      showAdaptToast('Failed to recalculate: ' + (result.error || 'Unknown error'), false);
+    }
+  }, 1200);
 }
 
 function wireEventHandlers(): void {
   const s = getState();
   const isAdmin = s.isAdmin || false;
-  const maxViewableWeek = isAdmin ? s.tw : Math.min(3, s.tw);
+  const maxViewableWeek = s.tw; // Unlimited access (trial cap removed)
 
   // Complete week button
   document.getElementById('btn-complete-week')?.addEventListener('click', next);
@@ -511,7 +1269,18 @@ function wireEventHandlers(): void {
     const wnEl = document.getElementById('wn');
     if (wnEl) wnEl.textContent = String(viewWeek);
     const headerWeek = document.querySelector('h3.text-sm.font-medium.text-white');
-    if (headerWeek) headerWeek.textContent = `Week ${viewWeek} of ${s.tw}`;
+    const viewBlockNum = Math.floor((viewWeek - 1) / 4) + 1;
+    // Create a temporary state-like object for label helpers
+    const viewState = { ...s, w: viewWeek };
+    if (headerWeek) headerWeek.textContent = getWeekNavigatorLabel(viewState, viewBlockNum);
+    // Update phase label and week counter for viewed week
+    const viewWk = s.wks?.[viewWeek - 1];
+    const phaseLabel = document.getElementById('phase-label');
+    if (phaseLabel && viewWk) phaseLabel.textContent = getPhaseLabel(viewWk.ph, s.continuousMode || isInBlockCyclingPhase(viewState));
+    const weekCounter = document.getElementById('week-counter');
+    if (weekCounter) {
+      weekCounter.textContent = getWeekCounterLabel(viewState);
+    }
     // Update mutable state temporarily for render
     const ms = getMutableState();
     const savedW = ms.w;
@@ -571,13 +1340,36 @@ function wireEventHandlers(): void {
   });
 
   // Runner Type change button
+  const planStarted = hasPlanStarted(s);
   document.getElementById('btn-change-runner-type')?.addEventListener('click', () => {
-    showRunnerTypeModal(s.typ || 'Hybrid');
+    showRunnerTypeModal(s.typ || 'Hybrid', planStarted);
   });
 
   // Edit profile button (also opens runner type modal)
   document.getElementById('btn-edit-profile')?.addEventListener('click', () => {
-    showRunnerTypeModal(s.typ || 'Hybrid');
+    showRunnerTypeModal(s.typ || 'Hybrid', planStarted);
+  });
+
+  // Benchmark buttons (continuous mode)
+  document.getElementById('btn-benchmark-auto')?.addEventListener('click', () => {
+    const garminRun = findGarminRunForWeek(s.w);
+    if (garminRun) {
+      // Auto-pull: use the smart default type and record from Garmin data
+      const defaultBm = getBenchmarkDefault(s.onboarding?.trainingFocus, s.onboarding?.experienceLevel);
+      recordBenchmark(defaultBm.type, 'garmin', undefined, garminRun.duration_min * 60);
+    }
+  });
+
+  // Benchmark option buttons (the 4-tier menu)
+  document.querySelectorAll('.btn-benchmark-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const bmType = (btn as HTMLElement).dataset.bmType;
+      if (bmType) showBenchmarkEntryModal(bmType);
+    });
+  });
+
+  document.getElementById('btn-benchmark-skip')?.addEventListener('click', () => {
+    skipBenchmark();
   });
 
   // Morning Pain Check buttons
@@ -591,6 +1383,20 @@ function wireEventHandlers(): void {
 
   document.getElementById('btn-morning-pain-better')?.addEventListener('click', () => {
     handleMorningPainResponse('better');
+  });
+
+  // Recovery buttons
+  document.getElementById('btn-recovery-log')?.addEventListener('click', () => {
+    showRecoveryInputModal();
+  });
+  document.getElementById('btn-recovery-log-panel')?.addEventListener('click', () => {
+    showRecoveryInputModal();
+  });
+  document.getElementById('btn-recovery-adjust')?.addEventListener('click', () => {
+    const today = new Date().toISOString().split('T')[0];
+    const history: RecoveryEntry[] = s.recoveryHistory || [];
+    const todayEntry = history.find((e: RecoveryEntry) => e.date === today);
+    if (todayEntry) showRecoveryAdjustModal(todayEntry);
   });
 }
 

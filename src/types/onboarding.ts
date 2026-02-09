@@ -131,6 +131,9 @@ export interface OnboardingState {
   // Step 9: Milestone Targeting
   targetMilestone: MilestoneTarget | null;
   acceptedMilestoneChallenge: boolean;
+
+  // Continuous training (non-event)
+  continuousMode?: boolean;       // True when user is not training for a specific event
 }
 
 /** Default onboarding state */

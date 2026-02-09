@@ -69,6 +69,27 @@ function migrateState(loaded: SimulatorState): SimulatorState {
     }
   }
 
+  // Migration: Fix continuous mode phases (Base → Build → Intensify → Deload)
+  // Old pattern was: build, build, build, base (incorrect)
+  // New pattern is: base, build, peak, taper (mapped to Base, Build, Intensify, Deload)
+  if (loaded.continuousMode && loaded.wks && loaded.wks.length > 0) {
+    console.log('Migrating continuous mode phases to Base → Build → Intensify → Deload pattern');
+    const correctPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
+    let changedCount = 0;
+
+    for (let i = 0; i < loaded.wks.length; i++) {
+      const correctPhase = correctPhases[i % 4];
+      if (loaded.wks[i].ph !== correctPhase) {
+        loaded.wks[i].ph = correctPhase;
+        changedCount++;
+      }
+    }
+
+    if (changedCount > 0) {
+      console.log(`  Fixed ${changedCount} week phases`);
+    }
+  }
+
   // Update schema version
   loaded.schemaVersion = STATE_SCHEMA_VERSION;
 
