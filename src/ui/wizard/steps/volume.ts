@@ -82,7 +82,9 @@ function renderInlineActivities(state: OnboardingState): string {
       <p class="text-xs text-gray-400 mb-3">
         Don't worry about getting this perfect — your watch sync and manual logs will capture everything automatically.
       </p>
-
+      <p class="text-xs text-gray-400 mb-3">
+        Each sport is tagged by <span class="text-gray-300 font-medium">running benefit</span> — how much it improves your running fitness. High benefit sports like football build aerobic fitness that carries over directly.
+      </p>
       <p class="text-xs text-gray-400 mb-2">If you don't play a specific sport regularly but know you'll be active, just choose "Generic Sport" and we'll fit it into the plan.</p>
       <div class="grid grid-cols-4 gap-2 mb-3">
         <select id="act-sport" class="col-span-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
@@ -109,9 +111,9 @@ function renderInlineActivities(state: OnboardingState): string {
               <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
       a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
         'bg-emerald-900/50 text-emerald-300'
-    }">${a.intensity === 'hard' ? 'High Transfer' :
-      a.intensity === 'moderate' ? 'Moderate Transfer' :
-        'Low Transfer'
+    }">${a.intensity === 'hard' ? 'High running benefit' :
+      a.intensity === 'moderate' ? 'Some running benefit' :
+        'Low running benefit'
     }</span>
             </div>
             <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs">Remove</button>

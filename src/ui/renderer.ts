@@ -319,9 +319,10 @@ export function render(): void {
 
   // Separate Quick Run from planned workouts so it renders in the Just Run banner
   const quickRun = wos.filter(w => w.n === 'Quick Run');
-  const plannedWos = wos.filter(w => w.n !== 'Quick Run');
+  const plannedWos = wos.filter(w => w.n !== 'Quick Run')
+    .sort((a, b) => (a.dayOfWeek ?? 99) - (b.dayOfWeek ?? 99));
 
-  // Detailed workout list (without Quick Run)
+  // Detailed workout list (without Quick Run, sorted Mon→Sun)
   h += renderWorkoutList(plannedWos, wk, s.rd, s.pac, s.tw, s.w);
 
   // Paces
@@ -479,8 +480,9 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     // Header
     const isQuickRun = w.n === 'Quick Run';
+    const dayLabel = w.dayOfWeek != null ? DAY_NAMES_SHORT[w.dayOfWeek] : '';
     h += `<div class="flex justify-between mb-1 text-xs">`;
-    h += `<div><strong>${w.n}</strong>`;
+    h += `<div>${dayLabel ? `<span class="text-gray-500 mr-1.5">${dayLabel}</span>` : ''}<strong>${w.n}</strong>`;
     if (w.commute) h += ` <span class="bg-gray-700 text-gray-400 px-1 py-0.5 rounded ml-1 text-xs">Commute</span>`;
     if (rtd && rtd !== 'skip') h += ` <span class="bg-emerald-600 text-white px-1 py-0.5 rounded ml-1">Done ${rtd}</span>`;
 
@@ -495,8 +497,9 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     // Pace info
     const workoutInfo = isReplaced ? { totalDistance: 0, totalTime: 0, avgPace: null } : parseWorkoutDescription(w.d, paces);
     if (workoutInfo.avgPace || workoutInfo.totalTime > 0) {
+      const paceLabel = w.t === 'easy' ? 'No faster than' : 'Pace';
       h += `<div class="text-xs mb-1 text-sky-300 bg-gray-700/50 p-1 rounded">`;
-      if (workoutInfo.avgPace) h += `Pace: ${formatPace(workoutInfo.avgPace)}`;
+      if (workoutInfo.avgPace) h += `${paceLabel}: ${formatPace(workoutInfo.avgPace)}`;
       if (workoutInfo.totalTime > 0) h += ` | Est: ${formatWorkoutTime(workoutInfo.totalTime)}`;
       h += `</div>`;
     }

@@ -41,9 +41,9 @@ export function renderActivities(container: HTMLElement, state: OnboardingState)
               Don't worry about getting this perfect — your watch sync and manual logs will capture everything automatically. This just helps us build a smarter starting plan.
             </p>
             <p class="text-xs text-gray-500">
-              <span class="text-gray-400 font-medium">Transfer</span> = how much a sport benefits your running.
-              High transfer (e.g. cycling, rowing) has strong aerobic crossover.
-              Low transfer (e.g. swimming, yoga) still aids recovery but less running-specific.
+              <span class="text-gray-400 font-medium">Running benefit</span> = how much a sport improves your running fitness.
+              High benefit (e.g. cycling, rowing) builds aerobic fitness that carries over to running.
+              Low benefit (e.g. swimming, yoga) aids recovery but is less running-specific.
             </p>
           </div>
 
@@ -102,9 +102,9 @@ function renderActivityList(activities: RecurringActivity[]): string {
         <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
       a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
         'bg-emerald-900/50 text-emerald-300'
-    }" title="How much this sport benefits running fitness">${a.intensity === 'hard' ? 'High Transfer' :
-      a.intensity === 'moderate' ? 'Moderate Transfer' :
-        'Low Transfer'
+    }" title="How much this sport benefits running fitness">${a.intensity === 'hard' ? 'High running benefit' :
+      a.intensity === 'moderate' ? 'Some running benefit' :
+        'Low running benefit'
     }</span>
       </div>
       <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs transition-colors">Remove</button>

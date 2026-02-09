@@ -1295,7 +1295,7 @@ declare global {
     toggleJustRunPanel: typeof toggleJustRunPanel;
     recordBenchmark: typeof recordBenchmark;
     skipBenchmark: typeof skipBenchmark;
-    applyRecoveryAdjustment: typeof applyRecoveryAdjustment;
+    applyRecoveryAdjustment: (type: 'downgrade' | 'reduce' | 'easyflag', dayOfWeek: number, workoutName?: string) => void;
   }
 }
 
@@ -1526,10 +1526,11 @@ export function skipBenchmark(): void {
  * Apply a recovery-based adjustment to today's workout.
  * Reuses the cross-training adjustment path (workoutMods).
  *
- * @param type - 'downgrade' (keep distance, lower to easy) or 'reduce' (cut distance by 20%)
+ * @param type - 'downgrade' | 'reduce' | 'easyflag'
  * @param dayOfWeek - Our day index (0=Mon, 6=Sun)
+ * @param workoutName - Optional workout name for reliable matching
  */
-export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce', dayOfWeek: number): void {
+export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag', dayOfWeek: number, workoutName?: string): void {
   const s = getMutableState();
   const wk = s.wks[s.w - 1];
   if (!wk) return;
@@ -1554,12 +1555,19 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce', dayOfWeek:
     }
   }
 
-  // Find today's run workout (exclude cross/strength/rest/replaced)
-  const todayRun = workouts.find(w =>
-    w.dayOfWeek === dayOfWeek &&
+  // Find target run workout — match by name first, then by dayOfWeek, then first available
+  const runWorkouts = workouts.filter(w =>
     w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
     w.status !== 'replaced'
   );
+
+  let todayRun = workoutName
+    ? runWorkouts.find(w => w.n === workoutName)
+    : runWorkouts.find(w => w.dayOfWeek === dayOfWeek);
+
+  if (!todayRun && runWorkouts.length > 0) {
+    todayRun = runWorkouts[0];
+  }
 
   if (!todayRun) {
     log('Recovery: No run workout found for today');
@@ -1588,6 +1596,20 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce', dayOfWeek:
       newRpe: 4,
     });
     log(`Recovery: ${todayRun.n} downgraded to easy`);
+  } else if (type === 'easyflag') {
+    // Already an easy/long run — just flag to ignore pace targets
+    wk.workoutMods.push({
+      name: todayRun.n,
+      dayOfWeek: todayRun.dayOfWeek,
+      status: 'reduced',
+      modReason: 'Recovery: run by feel (ignore pace targets)',
+      confidence: 'high',
+      originalDistance: todayRun.d,
+      newDistance: todayRun.d,
+      newType: todayRun.t,
+      newRpe: Math.max(2, (todayRun.rpe || todayRun.r || 5) - 2),
+    });
+    log(`Recovery: ${todayRun.n} — run by feel, no pace pressure`);
   } else {
     // Reduce by 20%, min 3km
     const newKm = Math.max(3, Math.round(currentKm * 0.8 * 10) / 10);

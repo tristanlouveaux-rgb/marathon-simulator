@@ -179,7 +179,13 @@ function distMeters(dist: string): number {
  * Check if runner should be recommended a volume upgrade.
  * Returns a promise that resolves after the user dismisses the modal (or immediately if no recommendation).
  */
-function checkVolumeRecommendation(state: OnboardingState): Promise<void> {
+function checkVolumeRecommendation(_state: OnboardingState): Promise<void> {
+  // Milestone nudging is handled on the assessment page via plan comparison cards.
+  // No popup needed here — the user sees both plans with times and can choose.
+  return Promise.resolve();
+
+  /* eslint-disable no-unreachable */
+  const state = _state;
   if (!state.trainingForEvent || !state.raceDistance) return Promise.resolve();
   if (state.runsPerWeek >= 4) return Promise.resolve();
 

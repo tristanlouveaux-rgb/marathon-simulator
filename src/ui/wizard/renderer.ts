@@ -39,13 +39,8 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
   // Clear existing content
   container.innerHTML = '';
 
-  // Add persistent top banner (except on welcome and main-view)
-  if (step !== 'welcome' && step !== 'main-view') {
-    const banner = document.createElement('div');
-    banner.className = 'fixed top-0 left-0 right-0 z-50 bg-gray-900/90 backdrop-blur border-b border-gray-800 px-4 py-2 text-center';
-    banner.innerHTML = `<p class="text-xs text-gray-400">Building your perfect plan... <span class="text-gray-500">Takes ~2 mins</span></p>`;
-    container.appendChild(banner);
-  }
+  // Render step, then inject persistent banner after (since steps overwrite innerHTML)
+  const shouldShowBanner = step !== 'welcome' && step !== 'main-view' && step !== 'initializing';
 
   switch (step) {
     // --- New consolidated steps ---
@@ -124,6 +119,17 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
 
     default:
       console.error(`Unknown step: ${step}`);
+  }
+
+  // Inject banner after step renders (steps overwrite innerHTML)
+  const existing = document.getElementById('onboarding-banner');
+  if (existing) existing.remove();
+  if (shouldShowBanner) {
+    const banner = document.createElement('div');
+    banner.id = 'onboarding-banner';
+    banner.className = 'fixed top-0 left-0 right-0 z-50 bg-emerald-950/90 backdrop-blur border-b border-emerald-800/50 px-4 py-3 text-center';
+    banner.innerHTML = `<p class="text-sm text-emerald-300">This takes a little longer than most running apps — we're building a <span class="font-semibold text-emerald-200">holistic picture of you</span> as a runner.</p>`;
+    document.body.appendChild(banner);
   }
 }
 

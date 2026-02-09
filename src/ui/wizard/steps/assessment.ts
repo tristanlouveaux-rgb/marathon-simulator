@@ -225,12 +225,6 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
               Forecasts are adaptive and will evolve based on your actual training execution.
             </p>
 
-            ${target && showUpgrade && upgrade && upgrade.hitsTarget && !current.hitsTarget ? `
-              <div class="p-3 mb-4 bg-emerald-950/30 border border-emerald-800/50 rounded-lg text-xs text-emerald-300 leading-relaxed">
-                You're close to a <span class="text-white font-medium">${target.label}</span> finish. Adding ${upgrade.runs - state.runsPerWeek} more run${upgrade.runs - state.runsPerWeek > 1 ? 's' : ''} per week could get you there.
-              </div>
-            ` : ''}
-
             ${showForecastOnly ? `
               <!-- Scenario C: Forecast Only -->
               <div class="p-4 rounded-lg bg-gray-800/50 border border-gray-700">
@@ -261,12 +255,14 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
               </button>
             ` : `
               <div class="space-y-3">
+                <!-- Only show "Hits Target" when the plans straddle a milestone -->
+                <!-- (i.e. one hits it and the other doesn't — otherwise it's noise) -->
                 <!-- Card A: Current Plan (clickable) -->
-                <button id="btn-select-current" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${current.hitsTarget ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
+                <button id="btn-select-current" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${current.hitsTarget && !(upgrade?.hitsTarget) ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
                   <div>
                     <div class="text-sm text-gray-300 font-medium flex items-center gap-2">
                       Current Plan
-                      ${current.hitsTarget ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
+                      ${current.hitsTarget && !(upgrade?.hitsTarget) ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
                     </div>
                     <div class="text-xs text-gray-500 mt-0.5">${state.runsPerWeek} runs / week</div>
                   </div>
@@ -278,11 +274,11 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
 
                 ${showUpgrade && upgrade ? `
                   <!-- Card B: Harder Plan (clickable) -->
-                  <button id="btn-select-harder" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${upgrade.hitsTarget ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
+                  <button id="btn-select-harder" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${upgrade.hitsTarget && !current.hitsTarget ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
                     <div>
                       <div class="text-sm text-gray-300 font-medium flex items-center gap-2">
                         Harder Plan
-                        ${upgrade.hitsTarget ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
+                        ${upgrade.hitsTarget && !current.hitsTarget ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
                       </div>
                       <div class="text-xs text-gray-500 mt-0.5">${upgrade.runs} runs / week</div>
                     </div>

@@ -11,6 +11,7 @@ import { applyPhaseRegression, recordMorningPain } from '@/injury/engine';
 import { initializeSimulator } from '@/state/initialization';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
+import { generateWeekWorkouts } from '@/workouts';
 
 /**
  * Check if the training plan has started (any workout has been completed/rated)
@@ -164,7 +165,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
         <div class="max-w-7xl mx-auto px-4 py-4">
           <div class="flex items-center justify-between">
             <div>
-              <h1 class="text-xl font-semibold ${titleColor}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name + "'s" : 'Your'} Adaptive Plan`}</h1>
+              <h1 class="text-xl font-semibold ${titleColor}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name + "'s" : 'Your'} ${getPlanName(s)}`}</h1>
               <p class="text-xs ${subtitleColor}">${injured ? 'Recovery Plan Active' : getHeaderSubtitle(s, blockNum)}</p>
             </div>
             <div class="flex items-center gap-3">
@@ -391,8 +392,9 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                   <div class="text-lg font-medium text-gray-500" id="initial">${ft(s.initialBaseline || 0)}</div>
                 </div>
                 <div>
-                  <div class="text-xs text-gray-500 mb-1 cursor-help" title="Your predicted time if you raced tomorrow (based on current fatigue).">Current</div>
+                  <div class="text-xs text-gray-500 mb-1 cursor-help" onclick="this.nextElementSibling?.nextElementSibling?.classList.toggle('hidden')" title="Click for details">Current</div>
                   <div class="text-xl font-bold text-white" id="cv">${ft(s.currentFitness || 0)}</div>
+                  <div class="hidden text-xs text-gray-400 mt-1 bg-gray-800 rounded px-2 py-1">Our prediction if you were to run today</div>
                 </div>
                 <div>
                   <div class="text-xs text-gray-500 mb-1">Forecast</div>
@@ -943,7 +945,6 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   const { level, reasons } = computeRecoveryStatus(entry, history);
 
   // Get today's workouts to show what will be affected
-  const { generateWeekWorkouts } = require('@/workouts') as typeof import('@/workouts');
   const wk = s.wks[s.w - 1];
   if (!wk) return;
 
@@ -952,12 +953,35 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v
   );
 
-  // Find today's run workout (JS day → our day)
+  // Re-apply existing workoutMods so we see the true state
+  if (wk.workoutMods && wk.workoutMods.length > 0) {
+    for (const mod of wk.workoutMods) {
+      const w = workouts.find(wo => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+      if (w) {
+        w.status = mod.status as any;
+        w.d = mod.newDistance;
+        if (mod.newType) w.t = mod.newType;
+      }
+    }
+  }
+
+  // Find today's run workout (JS day → our day: 0=Mon, 6=Sun)
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
-  const todayWorkout = workouts.find((w: any) =>
-    w.dayOfWeek === ourDay && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest'
+
+  // Filter to run workouts not already replaced
+  const runWorkouts = workouts.filter((w: any) =>
+    w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
+    w.status !== 'replaced'
   );
+
+  // Try matching by dayOfWeek first, then fall back to first available run
+  let todayWorkout = runWorkouts.find((w: any) => w.dayOfWeek === ourDay);
+  if (!todayWorkout && runWorkouts.length > 0) {
+    // No exact day match — offer the first unrated run workout
+    const unrated = runWorkouts.filter((w: any) => !wk.rated[w.id || w.n]);
+    todayWorkout = unrated[0] || runWorkouts[0];
+  }
 
   const todayLabel = todayWorkout ? todayWorkout.n : 'No run planned today';
 
@@ -989,17 +1013,31 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
 
       ${todayWorkout ? `
         <div class="flex flex-col gap-2">
-          <button id="btn-recovery-downgrade" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm text-left px-4">
-            <div class="flex items-center justify-between">
-              <span>Downgrade to Easy</span>
-              ${level === 'red' || level === 'orange' ? '<span class="text-xs bg-emerald-800 px-2 py-0.5 rounded-full">Recommended</span>' : ''}
-            </div>
-            <p class="text-xs text-emerald-200/70 mt-0.5">Keep distance, lower intensity</p>
-          </button>
-          <button id="btn-recovery-reduce" class="w-full py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg transition-colors text-sm text-left px-4">
-            <span>Reduce Distance</span>
-            <p class="text-xs text-gray-400 mt-0.5">Cut by 20%, keep workout type</p>
-          </button>
+          ${todayWorkout.t === 'easy' || todayWorkout.t === 'long' ? `
+            <button id="btn-recovery-easy-flag" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm text-left px-4">
+              <div class="flex items-center justify-between">
+                <span>Run by feel</span>
+                ${level === 'red' || level === 'orange' ? '<span class="text-xs bg-emerald-800 px-2 py-0.5 rounded-full">Recommended</span>' : ''}
+              </div>
+              <p class="text-xs text-emerald-200/70 mt-0.5">Ignore pace targets, just get the run in</p>
+            </button>
+            <button id="btn-recovery-reduce" class="w-full py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg transition-colors text-sm text-left px-4">
+              <span>Reduce Distance</span>
+              <p class="text-xs text-gray-400 mt-0.5">Cut by 20%, keep it short</p>
+            </button>
+          ` : `
+            <button id="btn-recovery-downgrade" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm text-left px-4">
+              <div class="flex items-center justify-between">
+                <span>Downgrade to Easy</span>
+                ${level === 'red' || level === 'orange' ? '<span class="text-xs bg-emerald-800 px-2 py-0.5 rounded-full">Recommended</span>' : ''}
+              </div>
+              <p class="text-xs text-emerald-200/70 mt-0.5">Keep distance, lower intensity</p>
+            </button>
+            <button id="btn-recovery-reduce" class="w-full py-2.5 bg-gray-700 hover:bg-gray-600 text-gray-200 font-medium rounded-lg transition-colors text-sm text-left px-4">
+              <span>Reduce Distance</span>
+              <p class="text-xs text-gray-400 mt-0.5">Cut by 20%, keep workout type</p>
+            </button>
+          `}
           <button id="btn-recovery-ignore" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-400 font-medium rounded-lg transition-colors text-sm">
             Keep plan unchanged
           </button>
@@ -1015,13 +1053,19 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   document.body.appendChild(overlay);
 
   if (todayWorkout) {
+    const workoutDay = todayWorkout.dayOfWeek ?? ourDay;
+    const workoutName = todayWorkout.n;
     overlay.querySelector('#btn-recovery-downgrade')?.addEventListener('click', () => {
       overlay.remove();
-      window.applyRecoveryAdjustment('downgrade', ourDay);
+      window.applyRecoveryAdjustment('downgrade', workoutDay, workoutName);
+    });
+    overlay.querySelector('#btn-recovery-easy-flag')?.addEventListener('click', () => {
+      overlay.remove();
+      window.applyRecoveryAdjustment('easyflag', workoutDay, workoutName);
     });
     overlay.querySelector('#btn-recovery-reduce')?.addEventListener('click', () => {
       overlay.remove();
-      window.applyRecoveryAdjustment('reduce', ourDay);
+      window.applyRecoveryAdjustment('reduce', workoutDay, workoutName);
     });
     overlay.querySelector('#btn-recovery-ignore')?.addEventListener('click', () => {
       overlay.remove();
@@ -1042,6 +1086,17 @@ function markRecoveryPrompted(): void {
   s.lastRecoveryPromptDate = new Date().toISOString().split('T')[0];
   saveState();
   renderMainView();
+}
+
+function getPlanName(s: any): string {
+  if (s.continuousMode) return 'Fitness Plan';
+  const labels: Record<string, string> = {
+    '5k': '5K Plan',
+    '10k': '10K Plan',
+    half: 'Half Marathon Plan',
+    marathon: 'Marathon Plan',
+  };
+  return labels[s.rd] || 'Training Plan';
 }
 
 function getPhaseLabel(phase: string | undefined, isContinuousMode: boolean = false): string {
