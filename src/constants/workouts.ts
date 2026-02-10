@@ -114,5 +114,6 @@ export const LOAD_PROFILES: Record<string, { aerobic: number; anaerobic: number 
   'intervals': { aerobic: 0.45, anaerobic: 0.55 },
   'hill_repeats': { aerobic: 0.40, anaerobic: 0.60 },
   'mixed': { aerobic: 0.60, anaerobic: 0.40 },
-  'progressive': { aerobic: 0.70, anaerobic: 0.30 }
+  'progressive': { aerobic: 0.70, anaerobic: 0.30 },
+  'gym': { aerobic: 0.20, anaerobic: 0.80 }
 };

@@ -7,7 +7,7 @@ import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
 import { ft } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
-import { recordMorningPain } from '@/injury/engine';
+import { recordMorningPain, getReturnToRunLevelLabel } from '@/injury/engine';
 import type { MorningPainResponse } from '@/types/injury';
 import { initializeSimulator } from '@/state/initialization';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
@@ -98,6 +98,70 @@ function getRacePrepTotal(s: any): number {
   return s.tw - (s.racePhaseStart - 1);
 }
 
+/** Parse distance in km from a workout description string */
+function parseDistanceKm(d: string): number {
+  if (!d) return 0;
+  if (/^\d+min\s/i.test(d) && !d.includes('km')) return 0;
+  const simple = d.match(/^(\d+(?:\.\d+)?)\s*km/i);
+  if (simple) return parseFloat(simple[1]);
+  const intKm = d.match(/(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*km/i);
+  if (intKm) return parseInt(intKm[1]) * parseFloat(intKm[2]);
+  const intM = d.match(/(\d+)\s*x\s*(\d+)\s*m\b/i);
+  if (intM) return parseInt(intM[1]) * parseInt(intM[2]) / 1000;
+  return 0;
+}
+
+/** Compute total running km from completed workouts across all weeks */
+function computeTotalKm(s: any): number {
+  try {
+    return _computeTotalKm(s);
+  } catch {
+    return 0;
+  }
+}
+
+function _computeTotalKm(s: any): number {
+  let total = 0;
+  if (!s.wks) return 0;
+
+  for (let i = 0; i < s.wks.length; i++) {
+    const wk = s.wks[i];
+    if (!wk.rated || Object.keys(wk.rated).length === 0) continue;
+
+    const workouts = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+      null, s.recurringActivities,
+      s.onboarding?.experienceLevel, undefined, s.pac?.e,
+      i + 1, s.tw, s.v, s.gs
+    );
+
+    if (wk.workoutMods) {
+      for (const mod of wk.workoutMods) {
+        const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+        if (w) w.d = mod.newDistance;
+      }
+    }
+
+    for (const w of workouts) {
+      if (w.t === 'cross' || w.t === 'strength' || w.t === 'rest' || w.t === 'gym') continue;
+      const rated = wk.rated[w.id || ''] ?? wk.rated[w.n];
+      if (rated !== undefined && rated !== 'skip') {
+        total += parseDistanceKm(w.d);
+      }
+    }
+
+    if (wk.adhocWorkouts) {
+      for (const w of wk.adhocWorkouts) {
+        if (w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym') {
+          total += parseDistanceKm(w.d);
+        }
+      }
+    }
+  }
+
+  return Math.round(total);
+}
+
 /**
  * Header subtitle text (below plan name)
  */
@@ -106,7 +170,7 @@ function getHeaderSubtitle(s: any, blockNum: number): string {
     return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, true)}`;
   }
   if (isInBlockCyclingPhase(s)) {
-    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, true)} (Race prep starts week ${s.racePhaseStart})`;
+    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)} (Race prep starts week ${s.racePhaseStart})`;
   }
   if (s.racePhaseStart) {
     const rpWeek = getRacePrepWeek(s);
@@ -157,6 +221,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
   const titleColor = injured ? 'text-amber-300' : 'text-white';
   const subtitleColor = injured ? 'text-amber-400/70' : 'text-gray-500';
   const blockNum = getBlockNumber(s.w);
+  const totalKm = computeTotalKm(s);
 
 
   return `
@@ -299,6 +364,12 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                     ${s.onboarding?.trainingForEvent === false ? 'VDOT is a running fitness metric estimated from your running performance. It represents your aerobic capacity and is used to calculate training paces and performance forecasts. Higher = fitter.' : 'VDOT is a running fitness metric estimated from your race times. It represents your aerobic capacity and is used to calculate training paces and race predictions. Higher = fitter.'}
                   </div>
                 </div>
+                ${totalKm > 0 ? `
+                <div class="flex justify-between">
+                  <span class="text-gray-400">Total Distance</span>
+                  <span class="text-white">${totalKm} km</span>
+                </div>
+                ` : ''}
                 ${s.continuousMode ? `
                 <div class="flex justify-between">
                   <span class="text-gray-400">Focus</span>
@@ -381,12 +452,12 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
             </div>
 
             <!-- Prediction / Progress Box -->
-            ${s.continuousMode ? renderContinuousProgressPanel(s) : `
+            ${s.continuousMode ? renderContinuousProgressPanel(s) : (injured ? renderRecoveryProgressPanel(s) : `
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-5">
               <!-- Phase Display (Big & Bold) -->
               <div class="mb-5 pb-5 border-b border-gray-800">
                 <div class="text-xs text-gray-500 uppercase tracking-widest mb-1 font-semibold">Current Phase</div>
-                <div id="phase-label" class="text-4xl font-bold text-white tracking-tight">${getPhaseLabel(s.wks?.[s.w - 1]?.ph, isInBlockCyclingPhase(s))}</div>
+                <div id="phase-label" class="text-4xl font-bold text-white tracking-tight">${getPhaseLabel(s.wks?.[s.w - 1]?.ph, s.continuousMode)}</div>
                 <p id="week-counter" class="text-sm text-emerald-400 mt-1 font-medium">${getWeekCounterLabel(s)}</p>
               </div>
 
@@ -408,7 +479,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                 </div>
               </div>
             </div>
-            `}
+            `)}
 
             <!-- Workouts -->
             <div class="bg-gray-900 rounded-lg border border-gray-800 p-4">
@@ -447,6 +518,65 @@ function renderStravaButton(connected: boolean): string {
       </svg>
       Connect Strava
     </button>
+  `;
+}
+
+/**
+ * Render recovery progress panel (replaces prediction panel when injured).
+ * Shows phase, return-to-run level, and weeks in recovery — no forecast numbers.
+ */
+function renderRecoveryProgressPanel(s: any): string {
+  const injuryState = getInjuryStateForDisplay();
+  const phase = injuryState.injuryPhase;
+  const rehabWeeks = s.rehabWeeksDone || 0;
+
+  const phaseLabels: Record<string, { label: string; color: string }> = {
+    acute: { label: 'Acute (Rest)', color: 'text-red-400' },
+    rehab: { label: 'Rehabilitation', color: 'text-amber-400' },
+    test_capacity: { label: 'Capacity Testing', color: 'text-purple-400' },
+    return_to_run: { label: 'Return to Run', color: 'text-blue-400' },
+    graduated_return: { label: 'Graduated Return', color: 'text-cyan-400' },
+    resolved: { label: 'Resolved', color: 'text-emerald-400' },
+  };
+  const phaseInfo = phaseLabels[phase] || { label: 'Recovery', color: 'text-gray-400' };
+
+  const levelInfo = phase === 'return_to_run'
+    ? `<div class="text-sm text-gray-400 mt-2">${getReturnToRunLevelLabel(injuryState.returnToRunLevel || 1)}</div>`
+    : phase === 'graduated_return'
+      ? `<div class="text-sm text-gray-400 mt-2">Week ${2 - (injuryState.graduatedReturnWeeksLeft || 0) + 1} of 2</div>`
+      : '';
+
+  const painDisplay = injuryState.currentPain === 0
+    ? '<span class="text-emerald-400 font-bold">0</span>'
+    : `<span class="${injuryState.currentPain <= 2 ? 'text-amber-400' : 'text-red-400'} font-bold">${injuryState.currentPain}</span>`;
+
+  return `
+    <div class="bg-gray-900 rounded-lg border border-gray-800 p-5">
+      <div class="mb-5 pb-5 border-b border-gray-800">
+        <div class="text-xs text-gray-500 uppercase tracking-widest mb-1 font-semibold">Recovery Phase</div>
+        <div class="text-4xl font-bold ${phaseInfo.color} tracking-tight">${phaseInfo.label}</div>
+        ${levelInfo}
+      </div>
+
+      <div class="grid grid-cols-3 gap-4 text-center">
+        <div>
+          <div class="text-xs text-gray-500 mb-1">Pain</div>
+          <div class="text-xl font-bold">${painDisplay}<span class="text-gray-500 text-sm">/10</span></div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">Weeks in Recovery</div>
+          <div class="text-xl font-bold text-white">${rehabWeeks}</div>
+        </div>
+        <div>
+          <div class="text-xs text-gray-500 mb-1">Can Run</div>
+          <div class="text-xl font-bold ${injuryState.canRun === 'yes' ? 'text-emerald-400' : injuryState.canRun === 'limited' ? 'text-amber-400' : 'text-red-400'}">${injuryState.canRun === 'yes' ? 'Yes' : injuryState.canRun === 'limited' ? 'Limited' : 'No'}</div>
+        </div>
+      </div>
+
+      <div class="mt-4 pt-4 border-t border-gray-800">
+        <p class="text-xs text-gray-500 text-center">Race predictions are paused during recovery. They'll return when you're back to full training.</p>
+      </div>
+    </div>
   `;
 }
 
@@ -983,7 +1113,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
 
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs
   );
 
   // Re-apply existing workoutMods so we see the true state
@@ -1410,7 +1540,7 @@ function wireEventHandlers(): void {
     if (headerWeek) headerWeek.textContent = getWeekNavigatorLabel(viewState, viewBlockNum);
     const viewWk = s.wks?.[viewWeek - 1];
     const phaseLabel = document.getElementById('phase-label');
-    if (phaseLabel && viewWk) phaseLabel.textContent = getPhaseLabel(viewWk.ph, s.continuousMode || isInBlockCyclingPhase(viewState));
+    if (phaseLabel && viewWk) phaseLabel.textContent = getPhaseLabel(viewWk.ph, s.continuousMode);
     const weekCounter = document.getElementById('week-counter');
     if (weekCounter) {
       weekCounter.textContent = getWeekCounterLabel(viewState);

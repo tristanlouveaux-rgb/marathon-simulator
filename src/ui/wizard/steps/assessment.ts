@@ -2,7 +2,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { MILESTONE_THRESHOLDS, MILESTONE_LABELS } from '@/types/onboarding';
 import type { RunnerType, RaceDistance } from '@/types/training';
 import {
-  cv, rd, rdKm, tv, calculateFatigueExponent, gt,
+  cv, rd, rdKm, tv, calculateFatigueExponent,
   blendPredictions
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
@@ -19,18 +19,9 @@ interface VolumeOption {
   hitsTarget: boolean;
 }
 
-const TYPE_DESCRIPTIONS: Record<string, string> = {
-  Speed:
-    'Speed runners typically have faster 5K times relative to their marathon. Training emphasises building aerobic endurance and long-run durability.',
-  Endurance:
-    'Endurance runners typically maintain pace better over long distances. Training emphasises speed development and neuromuscular work.',
-  Balanced:
-    'Balanced runners show even performance across distances. Training blends speed and endurance work in roughly equal measure.',
-};
-
 /**
- * Render the Assessment step (post-init, pre-dashboard).
- * Shows runner type confirmation and volume gap analysis.
+ * Render the Assessment step (post-runner-type, pre-dashboard).
+ * Shows plan selection and volume gap analysis.
  */
 export function renderAssessment(container: HTMLElement, state: OnboardingState): void {
   const pbs = state.pbs;
@@ -39,11 +30,9 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
     return;
   }
 
-  // Compute runner type
+  // Use confirmed runner type from the runner-type step, or fall back to calculated/default
   const b = calculateFatigueExponent(pbs);
-  const typ = gt(b);
-  const assessedType = (typ.charAt(0).toUpperCase() + typ.slice(1)) as RunnerType;
-  const runnerType = (state.confirmedRunnerType || assessedType) as RunnerType;
+  const runnerType = (state.confirmedRunnerType || state.calculatedRunnerType || 'Balanced') as RunnerType;
 
   // Compute baseline VDOT
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
@@ -51,7 +40,7 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
   const blendedTime = blendPredictions(
     targetDistMeters, pbs,
     state.ltPace || null, state.vo2max || null,
-    b, typ, state.recentRace
+    b, runnerType, state.recentRace
   );
 
   if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
@@ -88,7 +77,7 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
   if (isNonEvent) {
     container.innerHTML = `
       <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
-        ${renderProgressIndicator(7, 7)}
+        ${renderProgressIndicator(8, 8)}
 
         <div class="max-w-xl w-full">
           <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
@@ -138,35 +127,6 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
               </button>
             </div>
 
-            <!-- Runner Profile -->
-            <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-              <h3 class="text-lg font-medium text-white mb-1">Runner Profile</h3>
-              <p class="text-sm text-gray-400 mb-4">
-                Based on your PBs, we assessed you as <span id="type-heading" class="text-white font-medium">${assessedType}</span>.
-              </p>
-              <div class="grid grid-cols-3 gap-2 mb-4" id="runner-type-toggle">
-                ${(['Speed', 'Balanced', 'Endurance'] as const).map(t => `
-                  <button data-type="${t}"
-                    class="type-btn py-2.5 rounded-lg border text-sm text-center transition-all
-                      ${t === runnerType
-                        ? 'border-emerald-600 bg-emerald-600/20 text-emerald-400 font-medium'
-                        : 'border-gray-700 text-gray-400 hover:bg-gray-800'}">
-                    ${t}
-                  </button>
-                `).join('')}
-              </div>
-
-              <div id="type-description" class="bg-gray-800/50 rounded-lg p-4">
-                <p class="text-sm text-gray-400 leading-relaxed">
-                  ${TYPE_DESCRIPTIONS[runnerType] || TYPE_DESCRIPTIONS.Balanced}
-                </p>
-              </div>
-
-              <p class="text-sm text-gray-400 mt-4 leading-relaxed">
-                Your runner profile does not impact your fitness tracking. It determines the types of workouts in your plan.
-              </p>
-            </div>
-
           </div>
 
         </div>
@@ -178,47 +138,22 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
     return;
   }
 
-  // ---- Race/event users: original layout unchanged ----
+  // ---- Race/event users: plan selection ----
   container.innerHTML = `
     <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
-      ${renderProgressIndicator(7, 7)}
+      ${renderProgressIndicator(8, 8)}
 
       <div class="max-w-xl w-full">
         <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
-          Runner Profile Assessment
+          Choose Your Plan
         </h2>
         <p class="text-gray-400 text-center mb-8">
-          Based on your PBs, we assessed you as <span id="type-heading" class="text-white font-medium">${assessedType}</span>.
+          Your predicted race time based on your profile and training volume.
         </p>
 
         <div class="space-y-6">
 
-          <!-- SECTION 1: RUNNER PROFILE -->
-          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-            <div class="grid grid-cols-3 gap-2 mb-4" id="runner-type-toggle">
-              ${(['Speed', 'Balanced', 'Endurance'] as const).map(t => `
-                <button data-type="${t}"
-                  class="type-btn py-2.5 rounded-lg border text-sm text-center transition-all
-                    ${t === runnerType
-                      ? 'border-emerald-600 bg-emerald-600/20 text-emerald-400 font-medium'
-                      : 'border-gray-700 text-gray-400 hover:bg-gray-800'}">
-                  ${t}
-                </button>
-              `).join('')}
-            </div>
-
-            <div id="type-description" class="bg-gray-800/50 rounded-lg p-4">
-              <p class="text-sm text-gray-400 leading-relaxed">
-                ${TYPE_DESCRIPTIONS[runnerType] || TYPE_DESCRIPTIONS.Balanced}
-              </p>
-            </div>
-
-            <p class="text-sm text-gray-400 mt-4 leading-relaxed">
-              Your runner profile does not impact your predicted time. It determines the types of workouts in your plan.
-            </p>
-          </div>
-
-          <!-- SECTION 2: PLAN SELECTION -->
+          <!-- PLAN SELECTION -->
           <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
             <h3 class="text-lg font-medium text-white mb-1">Plan Outcome</h3>
             <p class="text-xs text-gray-500 mb-5">
@@ -320,27 +255,6 @@ function wireHandlers(
   upgrade: VolumeOption | null,
   showUpgrade: boolean
 ): void {
-  // Runner type toggle buttons
-  document.querySelectorAll('.type-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const selected = (btn as HTMLElement).dataset.type as RunnerType;
-
-      // Update button visuals
-      document.querySelectorAll('.type-btn').forEach(b => {
-        b.classList.remove('border-emerald-600', 'bg-emerald-600/20', 'text-emerald-400', 'font-medium');
-        b.classList.add('border-gray-700', 'text-gray-400');
-      });
-      btn.classList.remove('border-gray-700', 'text-gray-400');
-      btn.classList.add('border-emerald-600', 'bg-emerald-600/20', 'text-emerald-400', 'font-medium');
-
-      // Update description box
-      const descEl = document.querySelector('#type-description p');
-      if (descEl) descEl.textContent = TYPE_DESCRIPTIONS[selected] || TYPE_DESCRIPTIONS.Balanced;
-
-      updateOnboarding({ confirmedRunnerType: selected });
-    });
-  });
-
   // Select Current Plan / Continue
   document.getElementById('btn-select-current')?.addEventListener('click', () => {
     nextStep();

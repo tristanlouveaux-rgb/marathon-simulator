@@ -171,6 +171,7 @@ export interface SimulatorState {
   rd: RaceDistance;       // Race distance
   epw: number;            // Exercises per week (total including cross-training)
   rw: number;             // Runs per week (derived: min(epw, 7))
+  gs?: number;            // Gym sessions per week (0-3)
   wkm: number;            // Weekly km
 
   // Personal records

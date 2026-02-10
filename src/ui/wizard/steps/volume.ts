@@ -39,6 +39,26 @@ export function renderVolume(container: HTMLElement, state: OnboardingState): vo
             <p class="text-xs text-gray-500 mt-2">${getRunsRec(state.runsPerWeek)}</p>
           </div>
 
+          <!-- Gym sessions -->
+          <div>
+            <label class="block text-sm text-gray-400 mb-3">
+              Gym sessions per week <span class="text-gray-600">(optional)</span>
+            </label>
+            <div class="grid grid-cols-4 gap-2">
+              ${[0, 1, 2, 3].map(n => `
+                <button data-gym="${n}"
+                  class="gym-btn py-3 rounded-lg font-medium transition-all
+                         ${state.gymSessionsPerWeek === n
+          ? 'bg-emerald-600 text-white'
+          : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
+                  ${n}
+                </button>
+              `).join('')}
+            </div>
+            <p class="text-xs text-gray-500 mt-2">${getGymRec(state.gymSessionsPerWeek)}</p>
+            ${state.gymSessionsPerWeek > 0 ? '<p class="text-xs text-gray-600 mt-1">Running-focused strength &amp; plyometrics. Already have a gym routine? That\'s great — just make sure to include these key exercises.</p>' : ''}
+          </div>
+
           <!-- Other sports -->
           <div>
             <label class="block text-sm text-gray-400 mb-3">
@@ -143,12 +163,28 @@ function getRunsRec(runs: number): string {
   return 'Advanced training volume';
 }
 
+function getGymRec(gym: number): string {
+  if (gym === 0) return 'No gym — that\'s fine, running is king';
+  if (gym === 1) return 'Good maintenance dose for any runner';
+  if (gym === 2) return 'Recommended for most training plans';
+  return 'Optimal for base phase; auto-reduces in taper';
+}
+
 function wireEventHandlers(state: OnboardingState): void {
   // Runs
   document.querySelectorAll('.runs-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const runs = parseInt(btn.getAttribute('data-runs') || '4');
       updateOnboarding({ runsPerWeek: runs });
+      rerender(state);
+    });
+  });
+
+  // Gym sessions
+  document.querySelectorAll('.gym-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const gym = parseInt(btn.getAttribute('data-gym') || '0');
+      updateOnboarding({ gymSessionsPerWeek: gym });
       rerender(state);
     });
   });

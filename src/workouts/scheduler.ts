@@ -9,6 +9,9 @@ const HARD_WORKOUT_TYPES = [
   'intervals', 'long', 'mixed', 'progressive'
 ];
 
+/** Non-run activity types that should be scheduled after runs */
+const CROSS_TYPES = ['cross', 'strength', 'rest', 'test_run', 'gym'];
+
 /**
  * Check if a workout is considered hard
  * @param workoutType - Type of workout
@@ -19,29 +22,43 @@ export function isHardWorkout(workoutType: string): boolean {
 }
 
 /**
- * Assign default days to workouts using smart scheduling
- * Long Run → Sunday (6)
- * First Quality (Threshold/VO2) → Tuesday (1)
- * Second Quality (Race Pace/Tempo) → Thursday (3)
- * Easy runs → Fill Mon(0), Wed(2), Fri(4), Sat(5)
+ * Assign default days to workouts using smart scheduling.
+ *
+ * Priority order:
+ *   1. Hard workouts (long + quality) get dedicated days
+ *   2. Commute runs fill free weekdays
+ *   3. Easy runs fill remaining free days
+ *   4. Cross-training goes on whatever is left
+ *
+ * When total workouts <= 7 a deconfliction pass ensures
+ * no day has more than one workout.
  *
  * @param workouts - Array of workouts to schedule
  * @returns Workouts with dayOfWeek assigned
  */
 export function assignDefaultDays(workouts: Workout[]): Workout[] {
-  // Identify workout types
+  // ---- Categorise workouts ----
   const long = workouts.find(w => w.t === 'long');
   const quality = workouts.filter(w =>
     ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive'].includes(w.t)
   );
   const commute = workouts.filter(w => w.commute === true);
+  const crossTraining = workouts.filter(w => CROSS_TYPES.includes(w.t) && !w.commute);
   const easy = workouts.filter(w =>
     !w.commute &&
+    !CROSS_TYPES.includes(w.t) &&
     (w.t === 'easy' ||
     !['long', 'threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive'].includes(w.t))
   );
 
-  // Count total hard sessions (quality + long)
+  // Clear pre-assigned days on cross-training (generator may pre-set these,
+  // but we want to place them after runs to avoid conflicts)
+  for (const w of crossTraining) {
+    w.dayOfWeek = undefined;
+    w.dayName = undefined;
+  }
+
+  // ---- 1. Assign hard workouts ----
   const totalHard = quality.length + (long ? 1 : 0);
 
   if (totalHard >= 4) {
@@ -87,21 +104,20 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
     });
   }
 
-  // Build set of days already taken by hard workouts
+  // ---- 2. Assign commute runs to free weekdays ----
   const hardDaySet = new Set<number>();
   workouts.forEach(w => {
     if (w.dayOfWeek !== undefined) hardDaySet.add(w.dayOfWeek);
   });
 
-  // Assign commute runs to weekdays not taken by hard workouts
   const commuteDayOptions = [0, 1, 2, 3, 4].filter(d => !hardDaySet.has(d));
   let commuteIdx = 0;
   commute.forEach(w => {
     if (commuteIdx < commuteDayOptions.length) {
       w.dayOfWeek = commuteDayOptions[commuteIdx];
       w.dayName = DAY_NAMES[commuteDayOptions[commuteIdx]];
-    } else {
-      // Stack on first available weekday
+    } else if (commuteDayOptions.length > 0) {
+      // Stack on first available weekday (only when all weekdays taken)
       const day = commuteDayOptions[commuteIdx % commuteDayOptions.length];
       w.dayOfWeek = day;
       w.dayName = DAY_NAMES[day];
@@ -109,26 +125,19 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
     commuteIdx++;
   });
 
-  // Rebuild taken days including commute
-  const allTakenDays = new Set<number>();
+  // ---- 3. Assign easy runs to remaining free days ----
+  const runDays = new Set<number>();
   workouts.forEach(w => {
-    if (w.dayOfWeek !== undefined) allTakenDays.add(w.dayOfWeek);
+    if (w.dayOfWeek !== undefined) runDays.add(w.dayOfWeek);
   });
 
-  // Find free days for easy runs — prefer spacing them apart
-  const totalWorkouts = workouts.length;
-  const freeDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !allTakenDays.has(d));
-
-  // If >7 workouts, no free days available — easy runs share days with cross-training/commute
-  // Prefer days that only have cross-training (not hard workouts)
-  const crossDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !hardDaySet.has(d) && allTakenDays.has(d));
-  const easySlots = freeDays.length > 0 ? freeDays : crossDays;
+  const freeDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !runDays.has(d));
 
   let easySlotIdx = 0;
   easy.forEach(w => {
-    if (easySlotIdx < easySlots.length) {
-      w.dayOfWeek = easySlots[easySlotIdx];
-      w.dayName = DAY_NAMES[easySlots[easySlotIdx]];
+    if (easySlotIdx < freeDays.length) {
+      w.dayOfWeek = freeDays[easySlotIdx];
+      w.dayName = DAY_NAMES[freeDays[easySlotIdx]];
       easySlotIdx++;
     } else if (freeDays.length > 0) {
       // Cycle through free days if more easy runs than free slots
@@ -136,21 +145,52 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
       w.dayOfWeek = day;
       w.dayName = DAY_NAMES[day];
       easySlotIdx++;
-    } else if (crossDays.length > 0) {
-      // Stack on cross-training days
-      const day = crossDays[easySlotIdx % crossDays.length];
-      w.dayOfWeek = day;
-      w.dayName = DAY_NAMES[day];
-      easySlotIdx++;
     } else {
-      // Last resort: find the least busy day
+      // No free days: find least busy non-hard day
       const dayCounts: Record<number, number> = {};
       workouts.forEach(wk => { if (wk.dayOfWeek !== undefined) dayCounts[wk.dayOfWeek] = (dayCounts[wk.dayOfWeek] || 0) + 1; });
-      const leastBusy = [0, 1, 2, 3, 4, 5, 6].sort((a, b) => (dayCounts[a] || 0) - (dayCounts[b] || 0))[0];
+      const nonHard = [0, 1, 2, 3, 4, 5, 6].filter(d => !hardDaySet.has(d));
+      const candidates = nonHard.length > 0 ? nonHard : [0, 1, 2, 3, 4, 5, 6];
+      const leastBusy = [...candidates].sort((a, b) => (dayCounts[a] || 0) - (dayCounts[b] || 0))[0];
       w.dayOfWeek = leastBusy;
       w.dayName = DAY_NAMES[leastBusy];
     }
   });
+
+  // ---- 4. Assign cross-training to remaining free days ----
+  const allDaysAfterRuns = new Set<number>();
+  workouts.forEach(w => {
+    if (w.dayOfWeek !== undefined) allDaysAfterRuns.add(w.dayOfWeek);
+  });
+  const crossFreeDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !allDaysAfterRuns.has(d));
+  // Prefer non-hard days for cross-training
+  const nonHardFree = crossFreeDays.filter(d => !hardDaySet.has(d));
+  const crossSlots = nonHardFree.length > 0
+    ? [...nonHardFree, ...crossFreeDays.filter(d => hardDaySet.has(d))]
+    : crossFreeDays;
+
+  let crossIdx = 0;
+  crossTraining.forEach(w => {
+    if (crossIdx < crossSlots.length) {
+      w.dayOfWeek = crossSlots[crossIdx];
+      w.dayName = DAY_NAMES[crossSlots[crossIdx]];
+    } else {
+      // More cross-training than free days: stack on least busy non-hard day
+      const dayCounts: Record<number, number> = {};
+      workouts.forEach(wk => { if (wk.dayOfWeek !== undefined) dayCounts[wk.dayOfWeek] = (dayCounts[wk.dayOfWeek] || 0) + 1; });
+      const nonHard = [0, 1, 2, 3, 4, 5, 6].filter(d => !hardDaySet.has(d));
+      const candidates = nonHard.length > 0 ? nonHard : [0, 1, 2, 3, 4, 5, 6];
+      const leastBusy = [...candidates].sort((a, b) => (dayCounts[a] || 0) - (dayCounts[b] || 0))[0];
+      w.dayOfWeek = leastBusy;
+      w.dayName = DAY_NAMES[leastBusy];
+    }
+    crossIdx++;
+  });
+
+  // ---- 5. Deconfliction: if <= 7 workouts, no day should have more than 1 ----
+  if (workouts.length <= 7) {
+    spreadToAvoidStacking(workouts);
+  }
 
   // Ensure all workouts have a day assigned
   workouts.forEach(w => {
@@ -161,6 +201,53 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
   });
 
   return workouts;
+}
+
+/**
+ * When <= 7 workouts, move stacked workouts to free days.
+ * Moves the most movable workout (cross > easy > commute > hard).
+ */
+function spreadToAvoidStacking(workouts: Workout[]): void {
+  for (let iter = 0; iter < workouts.length; iter++) {
+    // Group by day
+    const byDay = new Map<number, Workout[]>();
+    for (const w of workouts) {
+      if (w.dayOfWeek === undefined) continue;
+      if (!byDay.has(w.dayOfWeek)) byDay.set(w.dayOfWeek, []);
+      byDay.get(w.dayOfWeek)!.push(w);
+    }
+
+    // Find free days
+    const usedDays = new Set(byDay.keys());
+    const free = [0, 1, 2, 3, 4, 5, 6].filter(d => !usedDays.has(d));
+    if (free.length === 0) break;
+
+    // Find a stacked day and move the most movable workout
+    let moved = false;
+    for (const [, dayWorkouts] of byDay) {
+      if (dayWorkouts.length <= 1) continue;
+
+      // Pick the most movable workout (highest priority number)
+      const sorted = [...dayWorkouts].sort((a, b) => movePriority(b) - movePriority(a));
+      const toMove = sorted[0];
+
+      toMove.dayOfWeek = free[0];
+      toMove.dayName = DAY_NAMES[free[0]];
+      moved = true;
+      break; // Recompute after each move
+    }
+
+    if (!moved) break;
+  }
+}
+
+/** Higher number = more willing to move */
+function movePriority(w: Workout): number {
+  if (CROSS_TYPES.includes(w.t) && w.t !== 'gym') return 4;
+  if (w.t === 'gym') return 3.5;  // Gym stays put more than cross, less than easy
+  if (w.t === 'easy') return 3;
+  if (w.commute) return 2;
+  return 1; // hard workouts stay put
 }
 
 /**

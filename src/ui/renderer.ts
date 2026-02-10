@@ -175,7 +175,8 @@ export function render(): void {
     gp(currentVDOT, s.lt).e, // Pass runner's adjusted easy pace for this specific week
     s.w,   // weekIndex for plan engine
     s.tw,  // totalWeeks for plan engine
-    currentVDOT // vdot for plan engine (includes RPE and training gains)
+    currentVDOT, // vdot for plan engine (includes RPE and training gains)
+    s.gs   // gym sessions per week
   );
 
   // 1. Deduplicate workout names for unique completion tracking
@@ -387,8 +388,10 @@ export function render(): void {
   refreshRecordings();
 
   // Update complete week button
+  // Only count ratings that match current workout IDs (ignore stale keys from pre-injury workouts)
   const tot = wos.length;
-  const don = Object.keys(wk.rated).length;
+  const currentWorkoutIds = new Set(wos.map(w => w.id || w.n));
+  const don = Object.keys(wk.rated).filter(k => currentWorkoutIds.has(k)).length;
   const bnEl = document.getElementById('bn') as HTMLButtonElement;
   if (bnEl) {
     bnEl.disabled = don < tot;
@@ -711,7 +714,7 @@ export function setupSyncListener(): void {
     // Generate current workouts to match against
     const wos = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-      undefined, undefined, undefined, s.w, s.tw, s.v
+      undefined, undefined, undefined, s.w, s.tw, s.v, s.gs
     );
 
     // Filter out already-rated workouts

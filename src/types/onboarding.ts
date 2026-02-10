@@ -106,6 +106,7 @@ export interface OnboardingState {
 
   // Step 5: Training Frequency
   runsPerWeek: number;
+  gymSessionsPerWeek: number;  // 0-3 running-focused gym sessions
   sportsPerWeek: number;  // Legacy — derived from recurringActivities
   experienceLevel: RunnerExperience;
 
@@ -150,6 +151,7 @@ export const defaultOnboardingState: OnboardingState = {
   runsToWork: null,
   commuteConfig: null,
   runsPerWeek: 4,
+  gymSessionsPerWeek: 0,
   sportsPerWeek: 0,
   experienceLevel: 'intermediate',
   activeLifestyle: false,

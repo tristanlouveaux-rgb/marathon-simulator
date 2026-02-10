@@ -456,7 +456,7 @@ export function requiresTestRun(state: InjuryState): boolean {
 // ============================================================================
 
 /** Phase order for progression and regression */
-const PHASE_ORDER: InjuryPhase[] = ['acute', 'rehab', 'test_capacity', 'return_to_run', 'resolved'];
+const PHASE_ORDER: InjuryPhase[] = ['acute', 'rehab', 'test_capacity', 'return_to_run', 'graduated_return', 'resolved'];
 
 /** Minimum hours in acute phase */
 const ACUTE_PHASE_MIN_HOURS = 72;
@@ -642,7 +642,26 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
       break;
 
     case 'rehab':
-      // Can progress if pain consistently ≤2 for 3+ days
+      // Fast-track: very low pain + can run → skip test_capacity, go straight to return_to_run
+      if (state.currentPain <= 1 && state.canRun === 'yes') {
+        newState.injuryPhase = 'return_to_run';
+        newState.returnToRunLevel = 1;
+        const transition: PhaseTransition = {
+          fromPhase: 'rehab',
+          toPhase: 'return_to_run',
+          date: new Date().toISOString(),
+          reason: 'Very low pain (≤1) and able to run — fast-tracked to return-to-run',
+          wasRegression: false,
+        };
+        newState.phaseTransitions = [...newState.phaseTransitions, transition];
+        console.log('INJURY PHASE FAST-TRACK: rehab -> return_to_run (pain ≤1, can run)');
+        return newState;
+      }
+      // Moderate fast-track: pain ≤2 + can run → progress to test_capacity immediately
+      if (state.currentPain <= 2 && state.canRun === 'yes') {
+        return applyPhaseProgression(newState, 'Low pain and able to run — progressing to capacity testing');
+      }
+      // Default: consistent low pain for 3+ days
       if (state.currentPain <= 2 && state.history.length >= 3) {
         const last3Days = state.history.slice(-3);
         const allLowPain = last3Days.every(h => h.pain <= 2);
@@ -653,6 +672,11 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
       break;
 
     case 'test_capacity':
+      // Fast-track: can run pain-free → auto-pass capacity tests
+      if (state.canRun === 'yes' && state.currentPain <= 1) {
+        newState.capacityTestsPassed = [...REQUIRED_CAPACITY_TESTS];
+        return applyPhaseProgression(newState, 'Can run pain-free — capacity tests auto-passed');
+      }
       if (hasPassedRequiredCapacityTests(state)) {
         return applyPhaseProgression(newState, 'All required capacity tests passed');
       }
@@ -663,6 +687,17 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
       // No automatic time-based progression — weekly gate controls advancement
       if ((state.returnToRunLevel || 1) > 8) {
         return applyPhaseProgression(newState, 'Completed return-to-run protocol (Level 8)');
+      }
+      break;
+
+    case 'graduated_return':
+      // Auto-resolve after 2 clean weeks (graduatedReturnWeeksLeft managed by check-in)
+      if ((state.graduatedReturnWeeksLeft || 0) <= 0) {
+        return applyPhaseProgression(newState, 'Completed graduated return — 2 clean weeks');
+      }
+      // Regress if pain spikes
+      if (state.currentPain >= 4) {
+        return applyPhaseRegression(newState, 'Pain spike during graduated return');
       }
       break;
 
@@ -698,12 +733,23 @@ export function generateAcutePhaseWorkouts(): Workout[] {
 /**
  * Generate workouts for rehab phase (cross-train + rehab strength)
  */
-export function generateRehabPhaseWorkouts(): Workout[] {
+export function generateRehabPhaseWorkouts(injuryState?: InjuryState): Workout[] {
+  // Use preferred cross-training if set and allowed
+  let crossLabel = 'pool, cycling';
+  if (injuryState?.preferredCrossTraining) {
+    const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
+    const allowedSet = new Set(protocol.allowedActivities);
+    if (allowedSet.has(injuryState.preferredCrossTraining as any)) {
+      crossLabel = injuryState.preferredCrossTraining.charAt(0).toUpperCase() +
+        injuryState.preferredCrossTraining.slice(1).replace(/_/g, ' ');
+    }
+  }
+
   return [
     {
       t: 'cross',
-      n: 'Rehab Cross-Training',
-      d: '20-30 min low-impact (pool, cycling)',
+      n: `Rehab Cross-Training: ${crossLabel}`,
+      d: `20-30 min low-impact (${crossLabel})`,
       r: 3,
       rpe: 3,
       status: 'planned',
@@ -834,8 +880,8 @@ export function evaluateReturnToRunGate(state: InjuryState): GateDecision {
   }
 
   // PROGRESS: pain <= 2, no worse mornings, no spike, not worsening
-  // But severity scaling applies:
-  if (severity === 'severe' && (state.holdCount || 0) < 1) {
+  // But severity scaling applies (only hold for severe when pain > 0):
+  if (severity === 'severe' && currentPain > 0 && (state.holdCount || 0) < 1) {
     return {
       decision: 'hold',
       reason: 'Severe injury requires two consecutive good weeks before advancing',
@@ -843,17 +889,26 @@ export function evaluateReturnToRunGate(state: InjuryState): GateDecision {
     };
   }
 
-  // Calculate new level based on severity
+  // Calculate new level based on pain and severity
   let advance = 1;
-  if (severity === 'niggle') advance = 2; // Skip a level
+  if (currentPain === 0) {
+    advance = 2; // Always skip a level with zero pain
+  } else if (severity === 'niggle') {
+    advance = 2;
+  } else if (severity === 'moderate' && currentPain <= 1) {
+    advance = 2;
+  }
 
   const newLevel = Math.min(currentLevel + advance, 9); // 9 = past level 8 → resolved
 
+  const reasons: string[] = [];
+  if (currentPain === 0) reasons.push('Zero pain — accelerated progression');
+  else if (advance === 2) reasons.push('Low severity/pain — skipping ahead');
+  else reasons.push('Pain low, recovery on track');
+
   return {
     decision: 'progress',
-    reason: severity === 'niggle'
-      ? 'Low severity — skipping ahead'
-      : 'Pain low, recovery on track',
+    reason: reasons[0],
     newLevel,
   };
 }
@@ -923,7 +978,7 @@ export function generateReturnToRunWorkouts(level: number = 1, injuryState?: Inj
       modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
     });
   } else if (clampedLevel >= 6) {
-    // Levels 6-7: continuous runs
+    // Levels 6-7: 2 continuous run sessions per week
     workouts.push({
       t: 'return_run',
       n: 'Return-to-Run Intervals',
@@ -933,8 +988,17 @@ export function generateReturnToRunWorkouts(level: number = 1, injuryState?: Inj
       status: 'planned',
       modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
     });
+    workouts.push({
+      t: 'return_run',
+      n: 'Return-to-Run Intervals 2',
+      d: `${proto.sets}x ${proto.run}min continuous run`,
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
   } else {
-    // Levels 1-5: walk/run intervals
+    // Levels 1-5: 2 walk/run interval sessions per week
     workouts.push({
       t: 'return_run',
       n: 'Return-to-Run Intervals',
@@ -944,13 +1008,28 @@ export function generateReturnToRunWorkouts(level: number = 1, injuryState?: Inj
       status: 'planned',
       modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
     });
+    workouts.push({
+      t: 'return_run',
+      n: 'Return-to-Run Intervals 2',
+      d: `${proto.sets}x (${proto.walk}min walk / ${proto.run}min run)`,
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
   }
 
-  // Add cross-training workouts using injury-specific priority activities
+  // Add cross-training workouts using preferred activity or injury-specific priorities
   if (injuryState) {
     const priorities = getPriorityActivities(injuryState.type);
-    const activityName = priorities.length > 0
-      ? priorities[0].charAt(0).toUpperCase() + priorities[0].slice(1).replace(/_/g, ' ')
+    const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
+    const allowedSet = new Set(protocol.allowedActivities);
+    // Use preferred cross-training if set and allowed for this injury type
+    const preferredActivity = injuryState.preferredCrossTraining && allowedSet.has(injuryState.preferredCrossTraining as any)
+      ? injuryState.preferredCrossTraining
+      : (priorities.length > 0 ? priorities[0] : null);
+    const activityName = preferredActivity
+      ? preferredActivity.charAt(0).toUpperCase() + preferredActivity.slice(1).replace(/_/g, ' ')
       : 'Low-impact activity';
     const crossSessions = clampedLevel <= 4 ? 2 : 1;
     const crossDuration = clampedLevel <= 4 ? 30 : 25;
@@ -1097,6 +1176,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
     rehab: 'phase_1',
     test_capacity: 'test_phase',
     return_to_run: 'phase_2',
+    graduated_return: 'phase_2',
     resolved: 'full_training',
   };
   const synced: InjuryState = {
@@ -1115,7 +1195,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
 
     case 'rehab':
       // Phase 2: Cross-training + rehab strength
-      return generateRehabPhaseWorkouts();
+      return generateRehabPhaseWorkouts(evaluatedState);
 
     case 'test_capacity':
       // Phase 3: Capacity test sessions
@@ -1124,6 +1204,31 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
     case 'return_to_run':
       // Phase 4: Response-gated walk/run intervals using level system
       return generateReturnToRunWorkouts(evaluatedState.returnToRunLevel || 1, evaluatedState);
+
+    case 'graduated_return':
+      // Phase 5: Normal workouts but hard sessions are downgraded
+      return workouts.map(workout => {
+        // Easy runs pass through unchanged
+        if (workout.t === 'easy' || workout.t === 'recovery') return workout;
+        // Hard sessions: cap RPE, reduce distance 20%, mark as reduced
+        const isHard = ['vo2', 'intervals', 'threshold', 'race_pace', 'hill_repeats', 'tempo', 'long'].includes(workout.t);
+        if (isHard) {
+          const adapted = { ...workout };
+          adapted.rpe = Math.min(workout.rpe || 5, 4);
+          adapted.r = Math.min(workout.r || 5, 4);
+          adapted.status = 'reduced';
+          adapted.modReason = 'Graduated return — reduced intensity';
+          if (workout.d) {
+            const dist = parseInt(workout.d);
+            if (!isNaN(dist)) {
+              adapted.d = `${Math.round(dist * 0.8)}km`;
+              adapted.originalDistance = workout.d;
+            }
+          }
+          return adapted;
+        }
+        return workout;
+      });
 
     case 'resolved':
       // Fully recovered - use normal workouts but check for high pain

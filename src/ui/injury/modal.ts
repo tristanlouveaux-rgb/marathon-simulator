@@ -21,7 +21,7 @@ const LOCATION_LABELS: Record<InjuryLocation, string> = {
   other: 'Other',
 };
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
-import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity } from '@/injury/engine';
+import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity, evaluatePhaseTransition } from '@/injury/engine';
 import { getState, getMutableState } from '@/state/store';
 import { render } from '@/ui/renderer';
 import { saveState } from '@/state';
@@ -77,8 +77,21 @@ export function closeInjuryModal(): void {
 /**
  * Generate modal HTML
  */
+/** Cross-training activity display labels */
+const CROSS_TRAINING_LABELS: Record<string, string> = {
+  swimming: 'Swimming',
+  cycling: 'Cycling',
+  elliptical: 'Elliptical',
+  rowing: 'Rowing',
+  yoga: 'Yoga',
+};
+
 function getModalHTML(injuryState: InjuryState): string {
   const injuryTypes = Object.keys(INJURY_PROTOCOLS) as InjuryType[];
+  // Get allowed activities for current injury type, filtered to main cross-training options
+  const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
+  const crossTrainingOptions = (protocol.allowedActivities || [])
+    .filter((a: string) => a in CROSS_TRAINING_LABELS);
 
   return `
     <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
@@ -150,6 +163,20 @@ function getModalHTML(injuryState: InjuryState): string {
               <span class="text-sm text-gray-300">No</span>
             </label>
           </div>
+        </div>
+
+        <!-- 3.6. Preferred Cross-Training -->
+        <div>
+          <label class="block text-sm font-medium text-gray-300 mb-1">Preferred rehab exercise</label>
+          <select id="injury-cross-training" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+            <option value="" ${!injuryState.preferredCrossTraining ? 'selected' : ''}>Auto (protocol default)</option>
+            ${crossTrainingOptions.map((a: string) => `
+              <option value="${a}" ${injuryState.preferredCrossTraining === a ? 'selected' : ''}>
+                ${CROSS_TRAINING_LABELS[a] || a}
+              </option>
+            `).join('')}
+          </select>
+          <p class="text-xs text-gray-500 mt-1">Choose your preferred activity for rehab days.</p>
         </div>
 
         <!-- 4. Side/Detail (optional) -->
@@ -282,7 +309,7 @@ function wireModalHandlers(): void {
  * Handle saving injury data
  * AUTO-ACTIVATES injury and forces page reload for clean state
  */
-function handleSaveInjury(): void {
+async function handleSaveInjury(): Promise<void> {
   const typeSelect = document.getElementById('injury-type') as HTMLSelectElement;
   const painSlider = document.getElementById('injury-pain') as HTMLInputElement;
   const locationSelect = document.getElementById('injury-location') as HTMLSelectElement;
@@ -301,9 +328,12 @@ function handleSaveInjury(): void {
   const physioNotes = physioNotesTextarea?.value || '';
   const canRunEl = document.querySelector('input[name="can-run"]:checked') as HTMLInputElement;
   const canRun = (canRunEl?.value || 'no') as 'yes' | 'limited' | 'no';
+  const crossTrainingSelect = document.getElementById('injury-cross-training') as HTMLSelectElement;
+  const preferredCrossTraining = crossTrainingSelect?.value || null;
 
   // Get current state and update
   let injuryState = getInjuryState();
+  const wasAlreadyActive = injuryState.active;
 
   // Determine initial phase based on pain level
   let initialPhase = injuryState.injuryPhase;
@@ -326,6 +356,7 @@ function handleSaveInjury(): void {
     locationDetail,
     physioNotes,
     canRun,
+    preferredCrossTraining: preferredCrossTraining || null,
     startDate: injuryState.startDate || new Date().toISOString(),
     injuryPhase: initialPhase,
     acutePhaseStartDate: initialPhase === 'acute' ? new Date().toISOString() : injuryState.acutePhaseStartDate,
@@ -334,16 +365,32 @@ function handleSaveInjury(): void {
   // Record pain level (adds to history)
   injuryState = recordPainLevel(injuryState, painLevel);
 
+  // Evaluate phase transitions immediately so progression happens when criteria are met
+  injuryState = evaluatePhaseTransition(injuryState);
+
   // Pain resolved handling removed here as it's now handled by the explicit "Resolve" button
 
   const s = getMutableState();
+
+  // Mark check-in done for this week — but only if injury was already active
+  // (initial report is not a check-in; the first check-in happens at week end)
+  if (wasAlreadyActive && s.w >= 1 && s.w <= s.wks.length) {
+    s.wks[s.w - 1].injuryCheckedIn = true;
+  }
 
   // Save to state
   setInjuryState(injuryState);
   saveState();
 
-  // Force full page reload to ensure clean state rebuild
-  window.location.reload();
+  if (wasAlreadyActive) {
+    // Weekly check-in: close modal and call next() to advance the week
+    closeInjuryModal();
+    const { next } = await import('@/ui/events');
+    next();
+  } else {
+    // Initial injury report: full reload for clean state rebuild
+    window.location.reload();
+  }
 }
 
 /**
@@ -387,6 +434,7 @@ const PHASE_LABELS: Record<string, { label: string; color: string }> = {
   rehab: { label: 'Rehabilitation', color: 'text-amber-400' },
   test_capacity: { label: 'Capacity Testing', color: 'text-purple-400' },
   return_to_run: { label: 'Return to Run', color: 'text-blue-400' },
+  graduated_return: { label: 'Graduated Return', color: 'text-cyan-400' },
   resolved: { label: 'Resolved', color: 'text-emerald-400' },
 };
 
@@ -569,7 +617,7 @@ export function openReturnToRunGateModal(): void {
 
   document.getElementById('gate-cancel')?.addEventListener('click', closeInjuryModal);
 
-  document.getElementById('gate-confirm')?.addEventListener('click', () => {
+  document.getElementById('gate-confirm')?.addEventListener('click', async () => {
     const painVal = parseInt((document.getElementById('gate-pain-slider') as HTMLInputElement)?.value || '2');
 
     let state = getInjuryState();
@@ -577,6 +625,11 @@ export function openReturnToRunGateModal(): void {
     state = recordPainLevel(state, painVal);
     // Update severity classification
     state = { ...state, severityClass: classifySeverity(state) };
+    // Track consecutive zero-pain weeks
+    state = {
+      ...state,
+      zeroPainWeeks: painVal === 0 ? (state.zeroPainWeeks || 0) + 1 : 0,
+    };
     // Evaluate gate
     const decision = evaluateReturnToRunGate(state);
     // Apply gate decision
@@ -590,7 +643,38 @@ export function openReturnToRunGateModal(): void {
 
     setInjuryState(state);
     saveState();
-    window.location.reload();
+
+    // After 2+ consecutive zero-pain weeks, offer early exit with graduated return option
+    if (state.zeroPainWeeks >= 2 && state.injuryPhase === 'return_to_run') {
+      closeInjuryModal();
+      const choice = await showThreeOptionChoice(
+        'Ready to return?',
+        "You've had zero pain for 2 weeks. How would you like to proceed?",
+        [
+          { id: 'full', label: 'Yes, full return', description: 'Back to your normal training plan immediately' },
+          { id: 'graduated', label: 'Yes, ease me back in', description: '2 weeks of reduced hard sessions with weekly check-ins' },
+          { id: 'stay', label: 'Not yet', description: 'Continue recovery protocol' },
+        ]
+      );
+      if (choice === 'full') {
+        markAsRecovered();
+        return;
+      }
+      if (choice === 'graduated') {
+        state.injuryPhase = 'graduated_return';
+        state.graduatedReturnWeeksLeft = 2;
+        setInjuryState(state);
+        saveState();
+        const { next } = await import('@/ui/events');
+        next();
+        return;
+      }
+    }
+
+    // Close modal and call next() to advance the week immediately
+    closeInjuryModal();
+    const { next } = await import('@/ui/events');
+    next();
   });
 }
 
@@ -613,5 +697,209 @@ function showInjuryConfirm(title: string, message: string, confirmLabel: string,
     overlay.querySelector('#btn-injury-yes')?.addEventListener('click', () => { overlay.remove(); resolve(true); });
     overlay.querySelector('#btn-injury-no')?.addEventListener('click', () => { overlay.remove(); resolve(false); });
     overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); resolve(false); } });
+  });
+}
+
+/** Three-option choice modal for graduated return decisions. */
+function showThreeOptionChoice(
+  title: string,
+  message: string,
+  options: { id: string; label: string; description: string }[]
+): Promise<string> {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4';
+    const buttonsHtml = options.map((opt, i) => {
+      const style = i === 0
+        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+        : i === 1
+          ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-300';
+      return `
+        <button data-choice="${opt.id}" class="w-full py-2.5 ${style} font-medium rounded-lg transition-colors text-sm">
+          ${opt.label}
+          <span class="block text-xs opacity-75 font-normal mt-0.5">${opt.description}</span>
+        </button>
+      `;
+    }).join('');
+    overlay.innerHTML = `
+      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
+        <h3 class="text-white font-semibold text-lg mb-2">${title}</h3>
+        <p class="text-gray-400 text-sm mb-5">${message}</p>
+        <div class="flex flex-col gap-2">${buttonsHtml}</div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    for (const opt of options) {
+      overlay.querySelector(`[data-choice="${opt.id}"]`)?.addEventListener('click', () => {
+        overlay.remove();
+        resolve(opt.id);
+      });
+    }
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { overlay.remove(); resolve(options[options.length - 1].id); }
+    });
+  });
+}
+
+/**
+ * Open the graduated return weekly check-in modal.
+ * Shows weeks remaining, pain slider, and handles progression/hold/regression.
+ */
+export function openGraduatedReturnCheckIn(): void {
+  closeInjuryModal();
+
+  const injuryState = getInjuryState();
+  const weeksLeft = injuryState.graduatedReturnWeeksLeft || 2;
+  const weekNumber = 2 - weeksLeft + 1; // 1 or 2
+
+  const modal = document.createElement('div');
+  modal.id = MODAL_ID;
+  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+  modal.innerHTML = `
+    <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-white">Graduated Return Check-In</h2>
+        <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Week indicator -->
+      <div class="bg-cyan-950/50 border border-cyan-800 rounded-lg p-3 mb-4">
+        <div class="text-xs text-cyan-400 font-medium mb-1">Graduated Return</div>
+        <div class="text-sm text-white font-semibold">Week ${weekNumber} of 2</div>
+        <p class="text-xs text-gray-400 mt-1">Hard sessions are reduced. Easy runs are normal.</p>
+      </div>
+
+      <!-- Pain Slider -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          How was your pain this week?
+          <span id="grad-pain-value" class="text-emerald-400 font-bold">${injuryState.currentPain || 0}</span>/10
+        </label>
+        <input
+          type="range"
+          id="grad-pain-slider"
+          min="0"
+          max="10"
+          value="${injuryState.currentPain || 0}"
+          class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+        />
+        <div class="flex justify-between text-xs text-gray-500 mt-1">
+          <span>No pain</span>
+          <span>Severe</span>
+        </div>
+      </div>
+
+      <!-- Decision preview -->
+      <div id="grad-decision-preview" class="rounded-lg p-3 mb-4 border"></div>
+
+      <!-- Buttons -->
+      <div class="flex gap-3">
+        <button id="grad-cancel" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button id="grad-confirm" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Confirm & Advance Week
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Preview logic
+  const updatePreview = () => {
+    const painVal = parseInt((document.getElementById('grad-pain-slider') as HTMLInputElement)?.value || '0');
+    const previewEl = document.getElementById('grad-decision-preview');
+    if (!previewEl) return;
+
+    if (painVal <= 1) {
+      const remaining = weeksLeft - 1;
+      if (remaining <= 0) {
+        previewEl.className = 'rounded-lg p-3 mb-4 border bg-emerald-950/50 border-emerald-700';
+        previewEl.innerHTML = `
+          <div class="text-sm font-semibold text-emerald-300 mb-1">Fully Resolved!</div>
+          <div class="text-xs text-gray-400">2 clean weeks complete — returning to normal training</div>
+        `;
+      } else {
+        previewEl.className = 'rounded-lg p-3 mb-4 border bg-emerald-950/50 border-emerald-700';
+        previewEl.innerHTML = `
+          <div class="text-sm font-semibold text-emerald-300 mb-1">Progressing</div>
+          <div class="text-xs text-gray-400">${remaining} week${remaining > 1 ? 's' : ''} remaining in graduated return</div>
+        `;
+      }
+    } else if (painVal <= 3) {
+      previewEl.className = 'rounded-lg p-3 mb-4 border bg-amber-950/50 border-amber-700';
+      previewEl.innerHTML = `
+        <div class="text-sm font-semibold text-amber-300 mb-1">Holding</div>
+        <div class="text-xs text-gray-400">Pain ${painVal}/10 — staying at current level, week does not count</div>
+      `;
+    } else {
+      previewEl.className = 'rounded-lg p-3 mb-4 border bg-red-950/50 border-red-700';
+      previewEl.innerHTML = `
+        <div class="text-sm font-semibold text-red-300 mb-1">Stepping Back</div>
+        <div class="text-xs text-gray-400">Pain ${painVal}/10 — returning to return-to-run protocol</div>
+      `;
+    }
+  };
+
+  updatePreview();
+
+  // Wire handlers
+  document.getElementById('injury-modal-close')?.addEventListener('click', closeInjuryModal);
+  document.getElementById(MODAL_ID)?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeInjuryModal();
+  });
+
+  const painSlider = document.getElementById('grad-pain-slider') as HTMLInputElement;
+  const painValueEl = document.getElementById('grad-pain-value');
+  if (painSlider && painValueEl) {
+    painSlider.addEventListener('input', () => {
+      painValueEl.textContent = painSlider.value;
+      updatePreview();
+    });
+  }
+
+  document.getElementById('grad-cancel')?.addEventListener('click', closeInjuryModal);
+
+  document.getElementById('grad-confirm')?.addEventListener('click', async () => {
+    const painVal = parseInt((document.getElementById('grad-pain-slider') as HTMLInputElement)?.value || '0');
+
+    let state = getInjuryState();
+    state = recordPainLevel(state, painVal);
+
+    if (painVal >= 4) {
+      // Regress to return_to_run
+      state = { ...state, injuryPhase: 'return_to_run' as const, graduatedReturnWeeksLeft: 2 };
+      showInjuryToast('Pain spike — returning to return-to-run protocol', 'amber');
+    } else if (painVal >= 2) {
+      // Hold — don't decrement weeks
+      showInjuryToast('Holding at current level — week does not count', 'amber');
+    } else {
+      // Pain <= 1: decrement weeks
+      state.graduatedReturnWeeksLeft = Math.max(0, (state.graduatedReturnWeeksLeft || 2) - 1);
+      if (state.graduatedReturnWeeksLeft <= 0) {
+        // Auto-resolve
+        state = applyPhaseProgression(state, 'Completed graduated return — 2 clean weeks');
+        showInjuryToast('Graduated return complete — back to full training!', 'emerald');
+      }
+    }
+
+    // Mark check-in complete
+    const s = getMutableState();
+    if (s.w >= 1 && s.w <= s.wks.length) {
+      s.wks[s.w - 1].injuryCheckedIn = true;
+    }
+
+    setInjuryState(state);
+    saveState();
+
+    closeInjuryModal();
+    const { next } = await import('@/ui/events');
+    next();
   });
 }

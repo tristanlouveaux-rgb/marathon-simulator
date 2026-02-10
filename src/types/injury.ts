@@ -55,6 +55,7 @@ export type InjuryPhase =
   | 'rehab'           // Phase 2: Cross-training + rehab strength only
   | 'test_capacity'   // Phase 3: Must pass capacity tests to progress
   | 'return_to_run'   // Phase 4: Walk/run intervals, graded exposure
+  | 'graduated_return' // Phase 5: Normal workouts with reduced hard sessions, 2-week check-in
   | 'resolved';       // Fully recovered, normal training
 
 /** Capacity test types for test_capacity phase */
@@ -151,6 +152,15 @@ export interface InjuryState {
   severityClass: SeverityClass;              // Derived from peak pain
   morningPainResponses: MorningPainResponse[]; // This week's morning data
   holdCount: number;                         // Consecutive holds at current level, default 0
+
+  // Cross-training preference
+  preferredCrossTraining: string | null;     // User's chosen activity, default null
+
+  // Zero-pain tracking for early exit prompt
+  zeroPainWeeks: number;                     // Consecutive weeks with pain 0, default 0
+
+  // Graduated return phase tracking
+  graduatedReturnWeeksLeft: number;          // Weeks remaining in graduated return (default 2)
 }
 
 /** Test run (diagnostic run) workout definition */
@@ -252,5 +262,14 @@ export function createDefaultInjuryState(): InjuryState {
     severityClass: 'moderate',
     morningPainResponses: [],
     holdCount: 0,
+
+    // Cross-training preference
+    preferredCrossTraining: null,
+
+    // Zero-pain tracking
+    zeroPainWeeks: 0,
+
+    // Graduated return
+    graduatedReturnWeeksLeft: 2,
   };
 }

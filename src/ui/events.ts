@@ -534,7 +534,7 @@ export async function next(): Promise<void> {
     const weekWorkouts = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
       injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-      undefined, undefined, s.w, s.tw, undefined
+      undefined, undefined, s.w, s.tw, undefined, s.gs
     );
     // Find unrated run workouts (exclude cross-training, strength, rest)
     const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test'];
@@ -550,7 +550,7 @@ export async function next(): Promise<void> {
       const nextWeekWorkouts = generateWeekWorkouts(
         nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
         injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-        undefined, undefined, s.w + 1, s.tw, undefined
+        undefined, undefined, s.w + 1, s.tw, undefined, s.gs
       );
       nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
     }
@@ -602,6 +602,9 @@ export async function next(): Promise<void> {
       if (injuryState.injuryPhase === 'return_to_run') {
         const { openReturnToRunGateModal } = await import('./injury/modal');
         openReturnToRunGateModal();
+      } else if (injuryState.injuryPhase === 'graduated_return') {
+        const { openGraduatedReturnCheckIn } = await import('./injury/modal');
+        openGraduatedReturnCheckIn();
       } else {
         const { openInjuryModal } = await import('./injury/modal');
         openInjuryModal();
@@ -609,7 +612,17 @@ export async function next(): Promise<void> {
       return;
     }
     s.rehabWeeksDone = (s.rehabWeeksDone || 0) + 1;
-    wk.wkGain = 0; // No training gain during injury
+    // Detraining: fitness decays during injury, but rehab activities offset some loss
+    const baseDetraining = -0.15; // ~0.3% VDOT loss per week (conservative)
+    const phaseOffset: Record<string, number> = {
+      acute: 0,                  // No activity → full detraining
+      rehab: 0.05,               // Cross-training offsets ~1/3
+      test_capacity: 0.05,       // Similar to rehab
+      return_to_run: 0.10,       // Some running → offsets ~2/3
+      graduated_return: 0.12,    // Near-normal training → minimal loss
+    };
+    const offset = phaseOffset[injuryState.injuryPhase] || 0;
+    wk.wkGain = baseDetraining + offset;
     wk.injuryState = { ...injuryState };
 
     log(`Rehab Week ${s.rehabWeeksDone} completed. Plan advancing from Week ${s.w}`);
@@ -624,8 +637,11 @@ export async function next(): Promise<void> {
   const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip').length;
   const expectedCount = s.rw || 3;
   const adherence = expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1;
-  wk.wkGain = isInjured ? 0 : Math.max(0, perWeekGain * adherence);
-  log(`Week ${s.w}: +${wk.wkGain.toFixed(3)} VDOT (${isInjured ? 'Injured' : Math.round(adherence * 100) + '% adherence'})`);
+  if (!isInjured) {
+    wk.wkGain = Math.max(0, perWeekGain * adherence);
+  }
+  // When injured, wk.wkGain was already set to the phase-aware detraining value above
+  log(`Week ${s.w}: ${wk.wkGain >= 0 ? '+' : ''}${wk.wkGain.toFixed(3)} VDOT (${isInjured ? 'Injured — detraining' : Math.round(adherence * 100) + '% adherence'})`);
   s.w++;
 
   if (s.w > s.tw) {
@@ -1091,7 +1107,7 @@ export function logActivity(): void {
   const wk = s.wks[activityWeek - 1];
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v, s.gs
   );
 
   // -----------------------------------------------------------------------
@@ -1740,7 +1756,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   // Generate this week's workouts
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs
   );
 
   // Re-apply existing workoutMods so we don't double-modify

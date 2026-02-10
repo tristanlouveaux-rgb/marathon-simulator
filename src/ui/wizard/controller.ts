@@ -13,6 +13,7 @@ const STEP_ORDER: OnboardingStep[] = [
   'performance',
   'fitness',
   'initializing',
+  'runner-type',
   'assessment',
   'main-view',
 ];
@@ -113,8 +114,8 @@ export function previousStep(): void {
 
   let prevIdx = currentIdx - 1;
 
-  // Skip 'assessment' and 'initializing' when going back
-  while (prevIdx > 0 && (STEP_ORDER[prevIdx] === 'initializing' || STEP_ORDER[prevIdx] === 'assessment')) {
+  // Skip 'initializing' when going back (it's an auto-advance animation)
+  while (prevIdx > 0 && STEP_ORDER[prevIdx] === 'initializing') {
     prevIdx--;
   }
 

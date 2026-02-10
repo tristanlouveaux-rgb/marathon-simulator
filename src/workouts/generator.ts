@@ -9,6 +9,7 @@ import { generateOrderedRunSlots, type SlotType } from './rules_engine';
 import { planWeekSessions } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
+import { generateGymWorkouts } from './gym';
 
 /**
  * Generate workouts for a week based on phase and runner profile
@@ -35,7 +36,8 @@ export function generateWeekWorkouts(
   easyPaceSecPerKm?: number,
   weekIndex?: number,
   totalWeeks?: number,
-  vdot?: number
+  vdot?: number,
+  gymSessionsPerWeek?: number
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here.
@@ -150,6 +152,15 @@ export function generateWeekWorkouts(
         commute: true,
       });
     }
+  }
+
+  // Add gym sessions if configured
+  if (gymSessionsPerWeek && gymSessionsPerWeek > 0) {
+    const gymWorkouts = generateGymWorkouts(
+      phase, gymSessionsPerWeek, fitnessLevel || 'intermediate',
+      weekIndex, totalWeeks, vdot, injuryState
+    );
+    workouts.push(...gymWorkouts);
   }
 
   // Add recurring cross-training activities

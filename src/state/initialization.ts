@@ -119,6 +119,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.rd = targetDistStr;
     s.epw = Math.round(effectiveSessions);
     s.rw = runsPerWeek;
+    s.gs = state.gymSessionsPerWeek || 0;
     s.wkm = runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70;
     s.pbs = pbs;
     s.rec = rec;

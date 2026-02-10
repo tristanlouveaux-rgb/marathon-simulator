@@ -17,7 +17,7 @@ export type { CalculationResult } from '@/state/initialization';
 export function renderInitializing(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
     <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
-      ${renderProgressIndicator(7, 7)}
+      ${renderProgressIndicator(7, 8)}
 
       <div class="max-w-lg w-full text-center">
         <div id="init-animation" class="mb-8">
