@@ -11,6 +11,23 @@ export interface PainHistoryEntry {
   pain: number;       // Pain level 0-10
 }
 
+/** Morning pain response for weekly gate evaluation */
+export interface MorningPainResponse {
+  date: string;
+  response: 'worse' | 'same' | 'better';
+  painLevel: number;
+}
+
+/** Severity classification for return-to-run gating */
+export type SeverityClass = 'niggle' | 'moderate' | 'severe';
+
+/** Gate decision from weekly return-to-run evaluation */
+export interface GateDecision {
+  decision: 'progress' | 'hold' | 'regress';
+  reason: string;
+  newLevel: number;
+}
+
 /** Injury type identifiers */
 export type InjuryType =
   | 'achilles'
@@ -127,6 +144,13 @@ export interface InjuryState {
   phaseTransitions: PhaseTransition[];       // History of phase changes
   lastActivityDate: string | null;           // Last workout/activity date
   morningPainYesterday: number | null;       // Pain level yesterday morning (for latency check)
+  canRun: 'yes' | 'limited' | 'no';         // Self-reported running ability
+
+  // Response-gated return-to-run fields
+  returnToRunLevel: number;                  // Current protocol level (1-8), default 1
+  severityClass: SeverityClass;              // Derived from peak pain
+  morningPainResponses: MorningPainResponse[]; // This week's morning data
+  holdCount: number;                         // Consecutive holds at current level, default 0
 }
 
 /** Test run (diagnostic run) workout definition */
@@ -221,5 +245,12 @@ export function createDefaultInjuryState(): InjuryState {
     phaseTransitions: [],
     lastActivityDate: null,
     morningPainYesterday: null,
+    canRun: 'no',
+
+    // Response-gated return-to-run defaults
+    returnToRunLevel: 1,
+    severityClass: 'moderate',
+    morningPainResponses: [],
+    holdCount: 0,
   };
 }

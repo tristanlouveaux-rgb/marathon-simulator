@@ -82,13 +82,14 @@ export interface Workout extends WorkoutDefinition {
   originalDistance?: string;    // Original distance before modification
   autoCompleted?: boolean;      // Auto-completed by cross-training
   completedBySport?: string;    // Sport that completed this workout
-  commute?: boolean;             // This is a commute run
   hrTarget?: {                   // Heart rate target (conditional — only if HR data available)
     zone: string;
     min: number;
     max: number;
     label: string;
   };
+  commute?: boolean;             // This is a commute run
+  testType?: string; // For physio capacity tests
 }
 
 /** Skipped workout record */
@@ -140,6 +141,8 @@ export interface Week {
   crossTrainingSummary?: CrossTrainingSummary; // Detailed cross-training summary
   injuryState?: import('./injury').InjuryState; // Injury state for this week
   adhocWorkouts?: Workout[];                    // Ad-hoc workouts (e.g. "Just Run")
+  injuryCheckedIn?: boolean;                    // Whether injury was updated this week
+  passedCapacityTests?: string[];               // Capacity tests passed this week
 }
 
 /** State schema version for migrations */
@@ -161,6 +164,7 @@ export interface SimulatorState {
   v: number;              // Starting VDOT
   iv: number;             // Initial VDOT (same as v)
   rpeAdj: number;         // RPE adjustment to VDOT
+  physioAdj?: number;     // VDOT adjustment from manual physiology gains
   expectedFinal: number;  // Expected final VDOT
 
   // Plan configuration

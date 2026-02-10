@@ -22,6 +22,9 @@ import type {
   CapacityTestType,
   CapacityTestResult,
   PhaseTransition,
+  SeverityClass,
+  GateDecision,
+  MorningPainResponse,
 } from '@/types/injury';
 import type { Workout } from '@/types';
 import {
@@ -537,6 +540,7 @@ export function applyPhaseProgression(state: InjuryState, reason: string): Injur
   return {
     ...state,
     injuryPhase: nextPhase,
+    active: nextPhase !== 'resolved', // Deactivate if fully resolved
     phaseTransitions: [...state.phaseTransitions, transition],
     // Clear acute phase start when leaving acute
     acutePhaseStartDate: nextPhase !== 'acute' ? null : state.acutePhaseStartDate,
@@ -655,15 +659,10 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
       break;
 
     case 'return_to_run':
-      // Can resolve if completed 2+ weeks of return protocol with no setbacks
-      if (state.currentPain <= 1 && !state.painLatency) {
-        const twoWeeksAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000);
-        const recentTransitions = state.phaseTransitions.filter(
-          t => new Date(t.date) > twoWeeksAgo && t.wasRegression
-        );
-        if (recentTransitions.length === 0) {
-          return applyPhaseProgression(newState, '2+ weeks in return phase with no regressions');
-        }
+      // Response-gated: only resolve when returnToRunLevel > 8 (set by gate function)
+      // No automatic time-based progression — weekly gate controls advancement
+      if ((state.returnToRunLevel || 1) > 8) {
+        return applyPhaseProgression(newState, 'Completed return-to-run protocol (Level 8)');
       }
       break;
 
@@ -713,7 +712,7 @@ export function generateRehabPhaseWorkouts(): Workout[] {
     {
       t: 'strength',
       n: 'Rehab Strength Session',
-      d: 'Physio-prescribed exercises',
+      d: 'Targeted strength exercises (physio-prescribed if available)',
       r: 2,
       rpe: 2,
       status: 'planned',
@@ -730,52 +729,246 @@ export function generateCapacityTestSession(state: InjuryState): Workout[] {
     test => !state.capacityTestsPassed.includes(test)
   );
 
-  if (remainingTests.length === 0) {
-    return []; // All tests passed
-  }
-
-  const testDescriptions: Record<CapacityTestType, string> = {
-    single_leg_hop: '10x single leg hops on affected side, pain-free',
-    pain_free_walk: '30 minutes continuous walking, pain-free',
-    isometric_hold: '30-second isometric contraction, pain-free',
-    stair_test: '2 flights up/down stairs, pain-free',
-    squat_test: '10x bodyweight squats, pain-free',
+  const testNames: Record<CapacityTestType, string> = {
+    single_leg_hop: 'Single Leg Hop Test',
+    pain_free_walk: '30-Minute Walk Test',
+    isometric_hold: 'Isometric Hold Test',
+    stair_test: 'Stair Test',
+    squat_test: 'Squat Test',
   };
 
-  return [{
+  const testDescriptions: Record<CapacityTestType, string> = {
+    single_leg_hop: '10x single leg hops on affected side (pain-free)',
+    pain_free_walk: '30 minutes continuous walking (pain-free)',
+    isometric_hold: '30-second isometric contraction (pain-free)',
+    stair_test: '2 flights up/down stairs (pain-free)',
+    squat_test: '10x bodyweight squats (pain-free)',
+  };
+
+  return remainingTests.map(testType => ({
     t: 'capacity_test',
-    n: 'Capacity Test Session',
-    d: remainingTests.map(t => testDescriptions[t]).join(' | '),
+    n: testNames[testType],
+    d: testDescriptions[testType],
     r: 3,
     rpe: 3,
     status: 'planned',
-    modReason: `Test capacity phase - ${remainingTests.length} test(s) remaining`,
-  }];
+    testType,
+    modReason: 'Physio-grade capacity test',
+  }));
 }
 
 /**
- * Generate return-to-run workouts (walk/run intervals)
+ * 8-level return-to-run protocol definitions
  */
-export function generateReturnToRunWorkouts(weekInPhase: number = 1): Workout[] {
-  // Progressive walk/run protocol
-  const protocols = [
-    { walk: 4, run: 1, sets: 5 },  // Week 1: 4min walk / 1min run x5
-    { walk: 3, run: 2, sets: 5 },  // Week 2: 3min walk / 2min run x5
-    { walk: 2, run: 3, sets: 5 },  // Week 3: 2min walk / 3min run x5
-    { walk: 1, run: 4, sets: 5 },  // Week 4: 1min walk / 4min run x5
-  ];
+const RETURN_TO_RUN_LEVELS = [
+  { level: 1, walk: 4, run: 1, sets: 5, label: 'Walk-dominant' },
+  { level: 2, walk: 3, run: 2, sets: 5, label: 'Increasing run' },
+  { level: 3, walk: 2, run: 3, sets: 5, label: 'Run-dominant' },
+  { level: 4, walk: 1, run: 4, sets: 5, label: 'Minimal walks' },
+  { level: 5, walk: 1, run: 5, sets: 4, label: 'Extended runs' },
+  { level: 6, walk: 0, run: 10, sets: 2, label: 'Continuous short' },
+  { level: 7, walk: 0, run: 15, sets: 2, label: 'Moderate continuous' },
+  { level: 8, walk: 0, run: 0, sets: 0, label: 'Bridge to full training' }, // Easy runs
+];
 
-  const protocol = protocols[Math.min(weekInPhase - 1, protocols.length - 1)];
+/**
+ * Get the display label for a return-to-run level
+ */
+export function getReturnToRunLevelLabel(level: number): string {
+  const proto = RETURN_TO_RUN_LEVELS[Math.min(level - 1, RETURN_TO_RUN_LEVELS.length - 1)];
+  return `Level ${level} of 8 — ${proto.label}`;
+}
 
-  return [{
-    t: 'return_run',
-    n: 'Return-to-Run Intervals',
-    d: `${protocol.sets}x (${protocol.walk}min walk / ${protocol.run}min run)`,
-    r: 4,
-    rpe: 4,
-    status: 'planned',
-    modReason: `Return phase week ${weekInPhase} - graded exposure`,
-  }];
+/**
+ * Classify injury severity from peak pain history
+ */
+export function classifySeverity(state: InjuryState): SeverityClass {
+  const peakPain = state.history.length > 0
+    ? Math.max(...state.history.map(h => h.pain))
+    : state.currentPain;
+
+  if (peakPain <= 3) return 'niggle';
+  if (peakPain <= 5) return 'moderate';
+  return 'severe';
+}
+
+/**
+ * Evaluate the weekly return-to-run gate decision.
+ * Uses trend analysis, morning pain responses, current pain, and pain latency.
+ */
+export function evaluateReturnToRunGate(state: InjuryState): GateDecision {
+  const trend = analyzeTrend(state);
+  const currentPain = state.currentPain;
+  const mornings = state.morningPainResponses || [];
+  const hasWorseMorning = mornings.some(m => m.response === 'worse');
+  const isSpike = trend.trend === 'acute_spike';
+  const isWorsening = trend.trend === 'worsening';
+  const severity = classifySeverity(state);
+  const currentLevel = state.returnToRunLevel || 1;
+
+  // REGRESS: pain >= 5 OR acute spike
+  if (currentPain >= 5 || isSpike) {
+    const newLevel = Math.max(1, currentLevel - 1);
+    return {
+      decision: 'regress',
+      reason: isSpike
+        ? 'Acute pain spike detected — stepping back for safety'
+        : `Pain level ${currentPain}/10 is too high to continue at this level`,
+      newLevel,
+    };
+  }
+
+  // HOLD: pain 3-4, OR worse morning, OR pain latency, OR worsening trend
+  if (currentPain >= 3 || hasWorseMorning || state.painLatency || isWorsening) {
+    const reasons: string[] = [];
+    if (currentPain >= 3) reasons.push(`pain ${currentPain}/10`);
+    if (hasWorseMorning) reasons.push('worse morning pain this week');
+    if (state.painLatency) reasons.push('pain latency detected');
+    if (isWorsening) reasons.push('worsening trend');
+
+    return {
+      decision: 'hold',
+      reason: reasons.join(', '),
+      newLevel: currentLevel,
+    };
+  }
+
+  // PROGRESS: pain <= 2, no worse mornings, no spike, not worsening
+  // But severity scaling applies:
+  if (severity === 'severe' && (state.holdCount || 0) < 1) {
+    return {
+      decision: 'hold',
+      reason: 'Severe injury requires two consecutive good weeks before advancing',
+      newLevel: currentLevel,
+    };
+  }
+
+  // Calculate new level based on severity
+  let advance = 1;
+  if (severity === 'niggle') advance = 2; // Skip a level
+
+  const newLevel = Math.min(currentLevel + advance, 9); // 9 = past level 8 → resolved
+
+  return {
+    decision: 'progress',
+    reason: severity === 'niggle'
+      ? 'Low severity — skipping ahead'
+      : 'Pain low, recovery on track',
+    newLevel,
+  };
+}
+
+/**
+ * Apply a gate decision to the injury state.
+ * Updates level, holdCount, clears morning pain responses.
+ * If level > 8: triggers phase progression to resolved.
+ * If regress at level 1: triggers phase regression to test_capacity.
+ */
+export function applyGateDecision(state: InjuryState, decision: GateDecision): InjuryState {
+  let newState: InjuryState = {
+    ...state,
+    morningPainResponses: [], // Clear for next week
+    severityClass: classifySeverity(state),
+  };
+
+  if (decision.decision === 'progress') {
+    newState.holdCount = 0;
+    if (decision.newLevel > 8) {
+      // Graduated! Move to resolved
+      return applyPhaseProgression(newState, 'Completed return-to-run protocol (Level 8)');
+    }
+    newState.returnToRunLevel = decision.newLevel;
+  } else if (decision.decision === 'hold') {
+    newState.holdCount = (newState.holdCount || 0) + 1;
+    newState.returnToRunLevel = decision.newLevel;
+  } else {
+    // Regress
+    newState.holdCount = 0;
+    if (decision.newLevel < 1) {
+      // Regress back to test_capacity
+      return applyPhaseRegression(newState, 'Regressed from return-to-run level 1');
+    }
+    newState.returnToRunLevel = decision.newLevel;
+  }
+
+  return newState;
+}
+
+/**
+ * Generate return-to-run workouts (walk/run intervals + cross-training)
+ */
+export function generateReturnToRunWorkouts(level: number = 1, injuryState?: InjuryState): Workout[] {
+  const clampedLevel = Math.max(1, Math.min(level, 8));
+  const proto = RETURN_TO_RUN_LEVELS[clampedLevel - 1];
+  const workouts: Workout[] = [];
+
+  if (clampedLevel === 8) {
+    // Bridge to full training: 2 easy runs ~3-4km
+    workouts.push({
+      t: 'return_run',
+      n: 'Easy Run (Return)',
+      d: '3km easy pace',
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
+    workouts.push({
+      t: 'return_run',
+      n: 'Easy Run 2 (Return)',
+      d: '4km easy pace',
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
+  } else if (clampedLevel >= 6) {
+    // Levels 6-7: continuous runs
+    workouts.push({
+      t: 'return_run',
+      n: 'Return-to-Run Intervals',
+      d: `${proto.sets}x ${proto.run}min continuous run`,
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
+  } else {
+    // Levels 1-5: walk/run intervals
+    workouts.push({
+      t: 'return_run',
+      n: 'Return-to-Run Intervals',
+      d: `${proto.sets}x (${proto.walk}min walk / ${proto.run}min run)`,
+      r: 4,
+      rpe: 4,
+      status: 'planned',
+      modReason: `Return Level ${clampedLevel}/8 — ${proto.label}`,
+    });
+  }
+
+  // Add cross-training workouts using injury-specific priority activities
+  if (injuryState) {
+    const priorities = getPriorityActivities(injuryState.type);
+    const activityName = priorities.length > 0
+      ? priorities[0].charAt(0).toUpperCase() + priorities[0].slice(1).replace(/_/g, ' ')
+      : 'Low-impact activity';
+    const crossSessions = clampedLevel <= 4 ? 2 : 1;
+    const crossDuration = clampedLevel <= 4 ? 30 : 25;
+
+    for (let i = 0; i < crossSessions; i++) {
+      workouts.push({
+        t: 'cross',
+        n: `Cross-Train: ${activityName}${crossSessions > 1 ? ` ${i + 1}` : ''}`,
+        d: `${crossDuration}min ${activityName.toLowerCase()}`,
+        r: 3,
+        rpe: 3,
+        status: 'planned',
+        modReason: `Return Level ${clampedLevel}/8 — injury-specific cross-training`,
+      });
+    }
+  }
+
+  return workouts;
 }
 
 // ============================================================================
@@ -929,15 +1122,8 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
       return generateCapacityTestSession(evaluatedState);
 
     case 'return_to_run':
-      // Phase 4: Walk/run intervals
-      // Calculate weeks in this phase
-      const returnPhaseStart = evaluatedState.phaseTransitions.find(
-        t => t.toPhase === 'return_to_run' && !t.wasRegression
-      );
-      const weeksInPhase = returnPhaseStart
-        ? Math.ceil((Date.now() - new Date(returnPhaseStart.date).getTime()) / (7 * 24 * 60 * 60 * 1000)) + 1
-        : 1;
-      return generateReturnToRunWorkouts(weeksInPhase);
+      // Phase 4: Response-gated walk/run intervals using level system
+      return generateReturnToRunWorkouts(evaluatedState.returnToRunLevel || 1, evaluatedState);
 
     case 'resolved':
       // Fully recovered - use normal workouts but check for high pain

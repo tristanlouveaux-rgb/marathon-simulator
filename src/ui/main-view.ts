@@ -7,7 +7,8 @@ import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
 import { ft } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
-import { applyPhaseRegression, recordMorningPain } from '@/injury/engine';
+import { recordMorningPain } from '@/injury/engine';
+import type { MorningPainResponse } from '@/types/injury';
 import { initializeSimulator } from '@/state/initialization';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
@@ -216,6 +217,9 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
         <!-- Morning Pain Check (shown when injured, once per day) -->
         ${renderMorningPainCheck(s)}
 
+        <!-- Medical Disclaimer (shown during return_to_run phase) -->
+        ${renderMedicalDisclaimer(s)}
+
         <!-- Benchmark Check-in (shown on benchmark weeks for continuous mode) -->
         ${renderBenchmarkPanel(s)}
 
@@ -245,6 +249,8 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               <!-- Week slider -->
               <input type="range" id="week-slider" min="1" max="${maxViewableWeek}" value="${s.w}"
                      class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500">
+
+              <div id="view-week-indicator" class="hidden mt-2 p-2 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-center"></div>
 
               ${!s.isAdmin && maxViewableWeek < s.tw ? `
                 <div class="mt-3 p-2 bg-amber-950/30 border border-amber-800/50 rounded text-xs text-amber-300">
@@ -452,14 +458,21 @@ function renderContinuousProgressPanel(s: any): string {
   // Calculate current VDOT from accumulated gains
   let wg = 0;
   for (let i = 0; i < Math.min(s.w - 1, s.wks?.length || 0); i++) wg += (s.wks[i]?.wkGain || 0);
-  const currentVdot = (s.v || 0) + wg + (s.rpeAdj || 0);
+  const currentVdot = (s.v || 0) + wg + (s.rpeAdj || 0) + (s.physioAdj || 0);
   const vdotChange = currentVdot - (s.iv || s.v || 0);
+  const vdotPct = (s.iv || s.v) ? (vdotChange / (s.iv || s.v)) * 100 : 0;
 
-  // Easy pace from current paces
-  const easyPace = s.pac?.e;
-  const easyPaceStr = easyPace
-    ? `${Math.floor(easyPace / 60)}:${String(Math.round(easyPace % 60)).padStart(2, '0')}/km`
+  // LT and VO2 stats
+  const ltCurrent = s.lt || s.ltPace;
+  const ltInitial = s.initialLT;
+  const ltPct = (ltCurrent && ltInitial) ? ((ltInitial - ltCurrent) / ltInitial) * 100 : 0;
+  const ltPaceStr = ltCurrent
+    ? `${Math.floor(ltCurrent / 60)}:${String(Math.round(ltCurrent % 60)).padStart(2, '0')}/km`
     : '—';
+
+  const vo2Current = s.vo2;
+  const vo2Initial = s.initialVO2;
+  const vo2Pct = (vo2Current && vo2Initial) ? ((vo2Current - vo2Initial) / vo2Initial) * 100 : 0;
 
   // Block progress: which week within the current 4-week block
   const blockWeek = getBlockWeek(s.w);
@@ -483,21 +496,41 @@ function renderContinuousProgressPanel(s: any): string {
         <p id="week-counter" class="text-sm text-emerald-400 mt-1 font-medium">Block ${blockNum} · Week ${blockWeek} of 4</p>
       </div>
 
-      <h3 class="font-medium text-sm mb-3 text-white">Fitness Progress</h3>
+      <h3 class="font-medium text-sm mb-4 text-white">Fitness Progress</h3>
 
-      <!-- VDOT + Easy Pace -->
-      <div id="pred" class="grid grid-cols-2 gap-4 text-center mb-4">
-        <div>
-          <div class="text-xs text-gray-500 mb-1">Current VDOT</div>
-          <div class="text-2xl font-bold text-white">${currentVdot.toFixed(1)}</div>
-          <div class="text-xs ${vdotChange >= 0 ? 'text-emerald-400' : 'text-red-400'} mt-0.5">
-            ${vdotChange >= 0 ? '+' : ''}${vdotChange.toFixed(2)} from start
-          </div>
+      <!-- Fitness Metrics Grid -->
+      <div id="pred" class="grid grid-cols-3 gap-2 mb-6">
+        <!-- VDOT -->
+        <div class="bg-gray-800/40 rounded-lg p-3 border border-gray-800">
+          <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">VDOT</div>
+          <div class="text-xl font-bold text-white">${currentVdot.toFixed(1)}</div>
+          ${vdotPct !== 0 ? `
+            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium ${vdotPct > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+              ${vdotPct > 0 ? '↑' : '↓'} ${Math.abs(vdotPct).toFixed(1)}%
+            </div>
+          ` : '<div class="h-4"></div>'}
         </div>
-        <div>
-          <div class="text-xs text-gray-500 mb-1">Easy Pace</div>
-          <div class="text-2xl font-bold text-emerald-400">${easyPaceStr}</div>
-          <div class="text-xs text-gray-500 mt-0.5">${benchmarkCount > 0 ? `${benchmarkCount} check-in${benchmarkCount > 1 ? 's' : ''} logged` : 'No check-ins yet'}</div>
+
+        <!-- LT Threshold -->
+        <div class="bg-gray-800/40 rounded-lg p-3 border border-gray-800">
+          <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">LT Pace</div>
+          <div class="text-xl font-bold text-emerald-400">${ltPaceStr}</div>
+          ${ltPct !== 0 ? `
+            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium ${ltPct > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+              ${ltPct > 0 ? '↑' : '↓'} ${Math.abs(ltPct).toFixed(1)}%
+            </div>
+          ` : '<div class="h-4"></div>'}
+        </div>
+
+        <!-- VO2max -->
+        <div class="bg-gray-800/40 rounded-lg p-3 border border-gray-800">
+          <div class="text-[10px] text-gray-500 uppercase tracking-wider mb-1">VO2max</div>
+          <div class="text-xl font-bold text-blue-400">${vo2Current?.toFixed(1) || '—'}</div>
+          ${vo2Pct !== 0 ? `
+            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium ${vo2Pct > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'}">
+              ${vo2Pct > 0 ? '↑' : '↓'} ${Math.abs(vo2Pct).toFixed(1)}%
+            </div>
+          ` : '<div class="h-4"></div>'}
         </div>
       </div>
 
@@ -853,14 +886,14 @@ function renderRecoveryLog(s: any): string {
       </div>
       <div class="flex gap-1.5 items-center">
         ${last7.length === 0
-          ? '<span class="text-xs text-gray-500">No recovery data yet</span>'
-          : last7.map((e: RecoveryEntry) => `
+      ? '<span class="text-xs text-gray-500">No recovery data yet</span>'
+      : last7.map((e: RecoveryEntry) => `
             <div class="flex flex-col items-center gap-1" title="${e.date}: Sleep ${e.sleepScore}/100">
               <span class="w-3 h-3 rounded-full ${dotColor(e.sleepScore)}"></span>
               <span class="text-[10px] text-gray-600">${e.date.slice(5)}</span>
             </div>
           `).join('')
-        }
+    }
       </div>
     </div>
   `;
@@ -1168,7 +1201,30 @@ function renderMorningPainCheck(s: any): string {
 }
 
 /**
- * Handle morning pain check response
+ * Render medical disclaimer banner during return_to_run phase
+ */
+function renderMedicalDisclaimer(s: any): string {
+  const injuryState = (s as any).injuryState;
+  if (!injuryState?.active || injuryState.injuryPhase !== 'return_to_run') return '';
+
+  return `
+    <div class="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3 mb-4">
+      <div class="flex items-start gap-2">
+        <svg class="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <p class="text-xs text-amber-300 leading-relaxed">
+          This plan is not medical advice. If pain persists or worsens, consult a sports medicine specialist or physiotherapist. Never push through sharp or worsening pain.
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Handle morning pain check response.
+ * Records to morningPainResponses[] for weekly gate evaluation.
+ * No immediate phase regression — data feeds into weekly check-in.
  */
 function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void {
   const s = getMutableState();
@@ -1180,25 +1236,50 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
   const today = new Date().toISOString().split('T')[0];
   s.lastMorningPainDate = today;
 
-  if (response === 'worse') {
-    // Pain is worse - trigger regression
-    const updatedState = applyPhaseRegression(injuryState, 'Morning pain check: pain worse than yesterday');
-    (s as any).injuryState = updatedState;
-    showAdaptToast('Pain increased — recovery plan adjusted to a previous phase.');
-  } else if (response === 'same') {
-    // Pain same - maintenance
+  // Record morning pain response for weekly gate
+  const morningEntry: MorningPainResponse = {
+    date: today,
+    response,
+    painLevel: injuryState.currentPain || 0,
+  };
+  if (!injuryState.morningPainResponses) injuryState.morningPainResponses = [];
+  injuryState.morningPainResponses.push(morningEntry);
+
+  // Adjust pain level (keep existing logic for same/better)
+  if (response === 'same') {
     const updatedState = recordMorningPain(injuryState, injuryState.currentPain);
     (s as any).injuryState = updatedState;
-  } else {
-    // Pain better - log and encourage
+  } else if (response === 'better') {
     const improvedPain = Math.max(0, (injuryState.currentPain || 1) - 1);
     const updatedState = recordMorningPain(injuryState, improvedPain);
     (s as any).injuryState = updatedState;
-    showAdaptToast('Good recovery! Keep it up.');
+  } else {
+    // Worse — record pain but no immediate regression
+    const worsePain = Math.min(10, (injuryState.currentPain || 1) + 1);
+    const updatedState = recordMorningPain(injuryState, worsePain);
+    (s as any).injuryState = updatedState;
   }
 
   saveState();
-  // showAdaptToast handles the reload after a short delay
+
+  // Show inline feedback instead of reloading
+  const feedbackMessages = {
+    worse: 'Logged — pain worse. This will factor into your weekly check-in.',
+    same: 'Logged — pain unchanged. Noted for your weekly review.',
+    better: 'Logged — pain improving! This will be reflected in your weekly check-in.',
+  };
+
+  const container = document.getElementById('morning-pain-check');
+  if (container) {
+    const color = response === 'worse' ? 'text-red-300 bg-red-950/50 border-red-800'
+      : response === 'better' ? 'text-emerald-300 bg-emerald-950/50 border-emerald-800'
+      : 'text-blue-300 bg-blue-950/50 border-blue-800';
+    container.innerHTML = `
+      <div class="${color} border rounded-lg p-4 mb-4">
+        <p class="text-sm font-medium">${feedbackMessages[response]}</p>
+      </div>
+    `;
+  }
 }
 
 /**
@@ -1325,10 +1406,8 @@ function wireEventHandlers(): void {
     if (wnEl) wnEl.textContent = String(viewWeek);
     const headerWeek = document.querySelector('h3.text-sm.font-medium.text-white');
     const viewBlockNum = Math.floor((viewWeek - 1) / 4) + 1;
-    // Create a temporary state-like object for label helpers
     const viewState = { ...s, w: viewWeek };
     if (headerWeek) headerWeek.textContent = getWeekNavigatorLabel(viewState, viewBlockNum);
-    // Update phase label and week counter for viewed week
     const viewWk = s.wks?.[viewWeek - 1];
     const phaseLabel = document.getElementById('phase-label');
     if (phaseLabel && viewWk) phaseLabel.textContent = getPhaseLabel(viewWk.ph, s.continuousMode || isInBlockCyclingPhase(viewState));
@@ -1336,11 +1415,39 @@ function wireEventHandlers(): void {
     if (weekCounter) {
       weekCounter.textContent = getWeekCounterLabel(viewState);
     }
+
+    const isViewing = viewWeek !== s.w;
+
+    // Show/hide viewing indicator
+    const viewIndicator = document.getElementById('view-week-indicator');
+    if (viewIndicator) {
+      if (isViewing) {
+        viewIndicator.innerHTML = `<span class="text-amber-400">Viewing Week ${viewWeek}</span> · <span class="text-gray-400">You are on Week ${s.w}</span>`;
+        viewIndicator.classList.remove('hidden');
+      } else {
+        viewIndicator.classList.add('hidden');
+      }
+    }
+
+    // Disable Complete Week button when viewing non-current week
+    const completeBtn = document.getElementById('btn-complete-week') as HTMLButtonElement;
+    if (completeBtn) {
+      if (isViewing) {
+        completeBtn.disabled = true;
+        completeBtn.className = 'w-full bg-gray-700 text-gray-500 font-medium py-2 rounded text-sm cursor-not-allowed';
+        completeBtn.textContent = 'Viewing — Return to current week';
+      } else {
+        completeBtn.disabled = false;
+        completeBtn.className = 'w-full bg-emerald-600 hover:bg-emerald-700 text-white font-medium py-2 rounded text-sm transition-colors';
+        completeBtn.textContent = 'Complete Week';
+      }
+    }
+
     // Update mutable state temporarily for render
     const ms = getMutableState();
     const savedW = ms.w;
     ms.w = viewWeek;
-    (ms as any)._viewOnly = viewWeek !== savedW;
+    (ms as any)._viewOnly = isViewing;
     (ms as any)._realW = savedW;
     render();
     ms.w = savedW;

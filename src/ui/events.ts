@@ -7,6 +7,7 @@ import {
 import {
   cv, rd, rdKm, tv, calculateFatigueExponent, gt, getRunnerType,
   gp, blendPredictions, getExpectedPhysiology,
+  calculateZones, getWorkoutHRTarget, calculateIntensityScore, calculateEfficiencyShift,
   initializePhysiologyTracking, recordMeasurement, assessAdaptation
 } from '@/calculations';
 import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
@@ -17,6 +18,7 @@ import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
+import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 
 
 // Drag and drop state
@@ -206,6 +208,10 @@ export function init(): void {
     sessionsPerWeek: s.epw,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+    weeklyVolumeKm: s.wkm,
+    hmPbSeconds: s.pbs?.h || undefined,
+    ltPaceSecPerKm: s.lt || undefined,
+    adaptationRatio: s.adaptationRatio,
   });
   s.expectedFinal = forecastVdot;
   s.forecastTime = forecastTime;
@@ -250,7 +256,18 @@ export function init(): void {
  * @param workoutId - Stable workout ID (e.g., "W1-easy-0")
  * @param name - Display name for logging
  */
-export function rate(workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean): void {
+/**
+ * Rate a workout with combined RPE and optional HR data
+ */
+export function rate(
+  workoutId: string,
+  name: string,
+  rpe: number,
+  expected: number,
+  workoutType: string,
+  isSkipped: boolean,
+  avgHR?: number
+): void {
   const s = getMutableState();
   if (s.w < 1 || s.w > s.wks.length) return;
   const wk = s.wks[s.w - 1];
@@ -269,21 +286,66 @@ export function rate(workoutId: string, name: string, rpe: number, expected: num
   if (oldRPE !== undefined) s.rpeAdj -= oldRPE;
 
   wk.rated[workoutId] = rpe;
-  const dif = rpe - expected;
-  let ch = 0;
-  if (dif <= -3) ch = 0.15;
-  else if (dif <= -2) ch = 0.08;
-  else if (dif >= 3) ch = -0.15;
-  else if (dif >= 2) ch = -0.08;
+  const rpeDif = rpe - expected;
 
-  const imp = IMP[s.rd]?.[workoutType as keyof typeof IMP[typeof s.rd]] || 0.5;
+  // Joint RPE + HR logic
+  let efficiencyShift = 0;
+  if (avgHR && avgHR > 0) {
+    const zones = calculateZones({
+      lthr: s.lt || undefined,
+      maxHR: s.onboarding?.maxHR || undefined,
+      restingHR: s.onboarding?.restingHR || undefined,
+      age: s.onboarding?.age || undefined
+    });
+    const target = getWorkoutHRTarget(workoutType, zones);
+    if (target) {
+      const intensity = calculateIntensityScore(avgHR, target);
+      efficiencyShift = calculateEfficiencyShift(rpe, expected, intensity, workoutType);
+    }
+  }
+
+  let ch = 0;
+  // RPE bands — no dead zone, every difference produces signal
+  if (rpeDif <= -3) ch = 0.15;
+  else if (rpeDif <= -2) ch = 0.08;
+  else if (rpeDif === -1) ch = 0.03;
+  else if (rpeDif === 0) ch = 0;
+  else if (rpeDif === 1) ch = -0.03;
+  else if (rpeDif >= 3) ch = -0.15;
+  else if (rpeDif >= 2) ch = -0.08;
+
+  // Apply efficiency shift from HR
+  if (efficiencyShift !== 0) {
+    if (ch === 0) {
+      // HR-only signal when RPE matched expected — small standalone contribution
+      ch = efficiencyShift * 0.05;
+    } else {
+      // HR modulates the existing RPE signal
+      ch = ch * (1 + efficiencyShift);
+    }
+  }
+
+  const injuryActive = (s as any).injuryState?.active;
+  const imp = (injuryActive || workoutType === 'return_run') ? 0 : (IMP[s.rd]?.[workoutType as keyof typeof IMP[typeof s.rd]] || 0);
   const wch = ch * imp;
 
-  if (!wk.ratedChanges) wk.ratedChanges = {};
-  wk.ratedChanges[workoutId] = wch;
-  s.rpeAdj += wch;
+  // Weekly guardrail: cap total RPE adjustment per week at ±0.3 VDOT
+  const MAX_WEEKLY_RPE_ADJ = 0.3;
+  const weekRpeTotal = Object.values(wk.ratedChanges || {}).reduce((sum: number, v: any) => sum + (v || 0), 0) + wch;
+  const clampedWch = weekRpeTotal > MAX_WEEKLY_RPE_ADJ
+    ? wch - (weekRpeTotal - MAX_WEEKLY_RPE_ADJ)
+    : weekRpeTotal < -MAX_WEEKLY_RPE_ADJ
+      ? wch - (weekRpeTotal + MAX_WEEKLY_RPE_ADJ)
+      : wch;
 
-  log(Math.abs(dif) <= 1 ? `${name} RPE${rpe}` : `${ch > 0 ? 'Strong' : 'Hard'} ${name}: ${wch >= 0 ? '+' : ''}${wch.toFixed(2)}`);
+  if (!wk.ratedChanges) wk.ratedChanges = {};
+  wk.ratedChanges[workoutId] = clampedWch;
+  s.rpeAdj += clampedWch;
+
+  const hrMsg = avgHR ? ` (HR ${avgHR} bpm)` : '';
+  log(Math.abs(rpeDif) <= 1 && efficiencyShift === 0
+    ? `${name} RPE${rpe}${hrMsg}`
+    : `${ch > 0 ? 'Strong' : 'Hard'} ${name}${hrMsg}: ${clampedWch >= 0 ? '+' : ''}${clampedWch.toFixed(2)}`);
 
   // Update paces and predictions
   let wg = 0;
@@ -305,6 +367,50 @@ export function rate(workoutId: string, name: string, rpe: number, expected: num
 
   saveState();
   render();
+}
+
+/**
+ * Handle capacity test result directly from workout list
+ */
+function handleCapacityTestResult(testType: any, passed: boolean): void {
+  const s = getMutableState();
+  let injuryState = (s as any).injuryState;
+  if (!injuryState) return;
+
+  // Record the test (painDuring=0 and painAfter=0 for pass, or 5/5 for fail)
+  const painLevel = passed ? 0 : 5;
+
+  injuryState = recordCapacityTest(injuryState, testType, painLevel, painLevel, passed ? 'Passed' : 'Failed - had pain');
+
+  // Save passed test to current week so it persists in that week's history
+  if (passed && s.w >= 1 && s.w <= s.wks.length) {
+    const wk = s.wks[s.w - 1];
+    if (!wk.passedCapacityTests) wk.passedCapacityTests = [];
+    if (!wk.passedCapacityTests.includes(testType)) {
+      wk.passedCapacityTests.push(testType);
+    }
+  }
+
+  // Check if all required tests are now passed
+  if (passed && hasPassedRequiredCapacityTests(injuryState)) {
+    injuryState = applyPhaseProgression(injuryState, 'All capacity tests passed');
+    log('All capacity tests passed — transitioning to Return-to-Run.');
+  } else if (passed) {
+    log(`${testType} passed! Complete remaining tests to progress.`);
+  } else {
+    log(`${testType} failed — continue rehab exercises and retry when pain-free.`);
+  }
+
+  (s as any).injuryState = injuryState;
+  saveState();
+  render();
+}
+
+/**
+ * Rate a capacity test workout
+ */
+export function rateCapacityTest(testType: string, passed: boolean): void {
+  handleCapacityTestResult(testType, passed);
 }
 
 /**
@@ -411,34 +517,102 @@ export async function next(): Promise<void> {
   // Use actual run workout count from the current week's generated workouts
   const runWorkoutCount = s.rw || 3;
   // Only count run workouts as required (not cross-training, commute, or strength)
-  if (ratedCount < runWorkoutCount) {
+  const injuryState = (s as any).injuryState;
+  const isInjured = injuryState && injuryState.active;
+
+  if (ratedCount < runWorkoutCount && !isInjured) {
     const incomplete = runWorkoutCount - ratedCount;
     const proceed = await showCompletionModal(incomplete);
     if (!proceed) return;
+
+    // Auto-skip unrated workouts: regenerate workout list to find them
+    const MAX_CARRY_FORWARD = 2;
+    const MAX_HARD_PER_WEEK = 4;
+    const HARD_TYPES = ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'long', 'mixed', 'progressive'];
+
+    const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
+    const weekWorkouts = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
+      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+      undefined, undefined, s.w, s.tw, undefined
+    );
+    // Find unrated run workouts (exclude cross-training, strength, rest)
+    const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test'];
+    const unrated = weekWorkouts.filter(w => {
+      const wId = w.id || w.n;
+      return !wk.rated[wId] && !nonRunTypes.includes(w.t);
+    });
+
+    // Preview next week's hard run count so we don't overload it
+    const nextWk = s.wks[s.w]; // s.w is still current week (0-indexed: s.w = next week)
+    let nextWeekHardCount = 0;
+    if (nextWk) {
+      const nextWeekWorkouts = generateWeekWorkouts(
+        nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
+        injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+        undefined, undefined, s.w + 1, s.tw, undefined
+      );
+      nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
+    }
+
+    // Carry forward up to MAX_CARRY_FORWARD, penalize the rest
+    const toCarry = unrated.slice(0, MAX_CARRY_FORWARD);
+    const toPenalize = unrated.slice(MAX_CARRY_FORWARD);
+
+    let carriedHardCount = 0;
+    for (const w of toCarry) {
+      const wId = w.id || w.n;
+      wk.rated[wId] = 'skip';
+
+      // If carrying this hard workout would exceed the cap, downgrade to easy
+      const isHard = HARD_TYPES.includes(w.t);
+      let carryWorkout = { id: wId, n: w.n, t: w.t, d: w.d || '', rpe: w.rpe || 5, r: w.rpe || 5 };
+
+      if (isHard && (nextWeekHardCount + carriedHardCount) >= MAX_HARD_PER_WEEK) {
+        // Estimate a sensible easy distance from the original workout duration
+        // Hard workouts are roughly 30-50min; convert to ~6-8km easy
+        const kmMatch = (w.d || '').match(/(\d+)\s*km/i);
+        const easyDist = kmMatch ? Math.min(parseInt(kmMatch[1]), 8) : 6;
+        carryWorkout = { id: wId, n: `Easy Run (was ${w.n})`, t: 'easy', d: `${easyDist}km`, rpe: 3, r: 3 };
+        log(`${w.n} downgraded to ${easyDist}km easy run → too many hard sessions next week`);
+      } else {
+        if (isHard) carriedHardCount++;
+        log(`${w.n} auto-skipped → moved to next week`);
+      }
+
+      wk.skip.push({
+        n: carryWorkout.n, t: carryWorkout.t,
+        workout: carryWorkout,
+        skipCount: 1,
+      });
+    }
+
+    for (const w of toPenalize) {
+      const wId = w.id || w.n;
+      wk.rated[wId] = 'skip';
+      const basePenalty = TIM[s.rd]?.[w.t as keyof typeof TIM[typeof s.rd]] || 20;
+      s.timp += basePenalty;
+      log(`${w.n} dropped (too many skips) → +${basePenalty}s penalty`);
+    }
   }
 
-  // Check for active injury - save history but freeze plan pointer
-  const injuryState = (s as any).injuryState;
-  if (injuryState && injuryState.active) {
-    // INJURY PAUSE: Run history saving but do NOT increment s.w
+  // Check for active injury - force check-in before advancing
+  if (isInjured) {
+    if (!wk.injuryCheckedIn) {
+      if (injuryState.injuryPhase === 'return_to_run') {
+        const { openReturnToRunGateModal } = await import('./injury/modal');
+        openReturnToRunGateModal();
+      } else {
+        const { openInjuryModal } = await import('./injury/modal');
+        openInjuryModal();
+      }
+      return;
+    }
     s.rehabWeeksDone = (s.rehabWeeksDone || 0) + 1;
+    wk.wkGain = 0; // No training gain during injury
+    wk.injuryState = { ...injuryState };
 
-    // Save week history (user feels "Week Done")
-    wk.wkGain = 0; // No VDOT gain during injury
-    wk.injuryState = { ...injuryState }; // Snapshot injury state
-    // Reset ratings for the frozen week so next rehab week starts clean
-    wk.rated = {};
-    wk.ratedChanges = {};
-
-    // Freeze: s.w stays the same
-    const frozenWeek = s.w;
-    s.w = frozenWeek; // Explicitly keep week frozen
-
-    log(`Rehab Week ${s.rehabWeeksDone} completed (Plan frozen at Week ${s.w})`);
-
-    saveState();
-    if (onWeekAdvanceCb) onWeekAdvanceCb(); else render();
-    return;
+    log(`Rehab Week ${s.rehabWeeksDone} completed. Plan advancing from Week ${s.w}`);
   }
 
   // Normal progression (no injury)
@@ -450,8 +624,8 @@ export async function next(): Promise<void> {
   const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip').length;
   const expectedCount = s.rw || 3;
   const adherence = expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1;
-  wk.wkGain = Math.max(0, perWeekGain * adherence);
-  log(`Week ${s.w}: +${wk.wkGain.toFixed(3)} VDOT (${Math.round(adherence * 100)}% adherence)`);
+  wk.wkGain = isInjured ? 0 : Math.max(0, perWeekGain * adherence);
+  log(`Week ${s.w}: +${wk.wkGain.toFixed(3)} VDOT (${isInjured ? 'Injured' : Math.round(adherence * 100) + '% adherence'})`);
   s.w++;
 
   if (s.w > s.tw) {
@@ -754,7 +928,10 @@ export function updateFitness(): void {
   const assessment = assessAdaptation(trackingState, s.w);
 
   // Update state with new values
-  if (newLT) s.lt = newLT;
+  if (newLT) {
+    s.lt = newLT;
+    s.ltPace = newLT;
+  }
   if (newVO2val) s.vo2 = newVO2val;
   s.adaptationRatio = trackingState.currentAdaptationRatio;
 
@@ -795,7 +972,19 @@ export function updateFitness(): void {
   // Update paces with new physiology
   let wg = 0;
   for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  s.pac = gp(s.v + wg + s.rpeAdj, newLT);
+
+  // NEW: Calibrate VDOT based on manual physio entry
+  let observedVdot: number | null = null;
+  if (newVO2val) {
+    observedVdot = newVO2val;
+  } else if (newLT) {
+    observedVdot = cv(10000, newLT * 10);
+  }
+  if (observedVdot) {
+    s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+  }
+
+  s.pac = gp(s.v + wg + s.rpeAdj + (s.physioAdj || 0), newLT);
 
   // Display status with color based on assessment status
   const statusEl = document.getElementById('fitStatus');
@@ -995,7 +1184,7 @@ export function logActivity(): void {
         if (w) {
           w.status = mod.status as any;
           w.d = mod.newDistance;
-          w.t = mod.newType;
+          w.t = mod.newType || w.t;
           w.modReason = mod.modReason || '';
           w.confidence = mod.confidence as any;
           const rpeVal = (mod.newRpe || 5) * 10;
@@ -1109,7 +1298,7 @@ export function logActivity(): void {
       if (w) {
         w.status = mod.status as any;
         w.d = mod.newDistance;
-        w.t = mod.newType;
+        w.t = mod.newType || w.t;
         w.modReason = mod.modReason || '';
         w.confidence = mod.confidence as any;
         // If replaced, marking as autoCompleted prevents it from showing as "Missed"
@@ -1283,7 +1472,7 @@ export function justRun(): void {
 // Make functions globally available for onclick handlers
 declare global {
   interface Window {
-    rate: (workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean) => void;
+    rate: (workoutId: string, name: string, rpe: number, expected: number, workoutType: string, isSkipped: boolean, avgHR?: number) => void;
     skip: (workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean, currentSkipCount: number, desc: string, rpe: number, dayOfWeek: number, dayName: string) => void;
     moveWorkout: typeof moveWorkout;
     logActivity: typeof logActivity;
@@ -1491,6 +1680,19 @@ export function recordBenchmark(
     const updated = recordMeasurement(trackingState, measurement);
     s.physiologyTracking.measurements = updated.measurements;
     s.adaptationRatio = updated.currentAdaptationRatio;
+
+    // NEW: Calibrate VDOT from benchmark
+    let observedVdot: number | null = null;
+    if (estimatedVO2) {
+      observedVdot = estimatedVO2;
+    } else if (estimatedLT) {
+      observedVdot = cv(10000, estimatedLT * 10);
+    }
+    if (observedVdot) {
+      let wg = 0;
+      for (let i = 0; i < s.w - 1; i++) wg += (s.wks[i]?.wkGain || 0);
+      s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+    }
   }
 
   const typeLabel = BENCHMARK_OPTIONS[type]?.label || type;
@@ -1645,3 +1847,4 @@ window.allowDrop = allowDrop;
 window.drop = drop;
 window.recordBenchmark = recordBenchmark;
 window.skipBenchmark = skipBenchmark;
+window.rateCapacityTest = rateCapacityTest;

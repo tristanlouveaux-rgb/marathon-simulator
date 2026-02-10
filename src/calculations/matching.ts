@@ -15,6 +15,7 @@ export interface ExternalActivity {
   dayOfWeek: number;       // 0=Mon, 6=Sun
   name?: string;
   avgPaceSecPerKm?: number;
+  avgHR?: number;
 }
 
 /** Result of a successful match */
@@ -71,7 +72,7 @@ export function findMatchingWorkout(
         score += 3;
         reasons.push('same day');
       } else if (Math.abs(w.dayOfWeek - activity.dayOfWeek) === 1 ||
-                 Math.abs(w.dayOfWeek - activity.dayOfWeek) === 6) {
+        Math.abs(w.dayOfWeek - activity.dayOfWeek) === 6) {
         score += 1;
         reasons.push('adjacent day');
       }

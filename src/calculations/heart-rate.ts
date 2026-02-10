@@ -125,9 +125,9 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
       return makeTarget('Z4', zones.z4, 'Threshold');
     case 'vo2':
     case 'intervals':
-      return makeTarget('Z5', zones.z5, 'VO2max');
+      // Session average includes recovery jogs — target Z4 not Z5
+      return makeTarget('Z4', zones.z4, 'VO2max (session avg)');
     case 'race_pace':
-      // Between Z3 and Z4
       return makeTarget('Z3-4', {
         min: zones.z3.min,
         max: zones.z4.max,
@@ -139,10 +139,11 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
         max: zones.z4.max,
       }, 'Mixed');
     case 'hill_repeats':
-      return makeTarget('Z4-5', {
-        min: zones.z4.min,
-        max: zones.z5.max,
-      }, 'Hills');
+      // Short reps with walk-back recovery — session average is lower
+      return makeTarget('Z3-4', {
+        min: zones.z3.min,
+        max: zones.z4.max,
+      }, 'Hills (session avg)');
     default:
       return undefined;
   }
@@ -155,4 +156,63 @@ function makeTarget(zone: string, range: { min: number; max: number }, name: str
     max: range.max,
     label: `${range.min}-${range.max} bpm (${zone})`,
   };
+}
+
+/**
+ * Calculate where an actual HR value lands relative to a target range.
+ * Returns a normalized intensity score (1.0 = middle of target range).
+ */
+export function calculateIntensityScore(actualBpm: number, target: HRTarget): number {
+  if (actualBpm <= 0) return 0;
+  const range = target.max - target.min;
+  if (range <= 0) return 1.0;
+
+  // Normalized score: 0.5 at min, 1.5 at max
+  return ((actualBpm - target.min) / range) + 0.5;
+}
+
+/**
+ * Detect efficiency shift based on the gap between RPE and HR intensity.
+ * Returns a multiplier to adjust the standard RPE-based VDOT change.
+ */
+export function calculateEfficiencyShift(
+  rpe: number,
+  expectedRpe: number,
+  hrIntensity: number,
+  workoutType: string
+): number {
+  const rpeDelta = rpe - expectedRpe;
+  const hrDelta = hrIntensity - 1.0; // gap from target center
+  const isInterval = ['vo2', 'intervals', 'hill_repeats'].includes(workoutType);
+  const HR_THRESHOLD = 0.2; // Symmetric threshold — HR must deviate this much to matter
+
+  // Scale with RPE magnitude: bigger RPE gap = bigger HR influence
+  const rpeMag = Math.min(Math.abs(rpeDelta) / 3, 1.0);
+
+  let shift = 0;
+
+  if (rpeDelta === 0) {
+    // RPE matched expected — HR provides standalone signal
+    if (hrDelta < -HR_THRESHOLD) {
+      shift = 0.15;   // HR below target = fitter than plan assumes
+    } else if (hrDelta > HR_THRESHOLD) {
+      shift = -0.15;  // HR above target = more fatigued than plan assumes
+    }
+  } else if (rpeDelta < 0) {
+    // Felt easier than expected
+    if (hrDelta < -HR_THRESHOLD) {
+      shift = 0.3 * rpeMag;    // Pure efficiency — both signals agree
+    } else if (hrDelta > HR_THRESHOLD) {
+      shift = -0.25 * rpeMag;  // Cardio strain — felt easy but HR was high
+    }
+  } else {
+    // Felt harder than expected
+    if (hrDelta > HR_THRESHOLD) {
+      shift = -0.15 * rpeMag;  // Legitimate struggle — both signals agree
+    } else if (hrDelta < -HR_THRESHOLD && isInterval) {
+      shift = -0.35 * rpeMag;  // Central fatigue — effort high but HR suppressed
+    }
+  }
+
+  return shift;
 }

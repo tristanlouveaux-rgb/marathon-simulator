@@ -49,15 +49,15 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
             <button id="has-watch-yes"
               class="py-3 rounded-xl font-medium transition-all
                      ${state.hasSmartwatch === true
-                       ? 'bg-emerald-600 text-white border-2 border-emerald-400'
-                       : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
+      ? 'bg-emerald-600 text-white border-2 border-emerald-400'
+      : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
               Yes
             </button>
             <button id="has-watch-no"
               class="py-3 rounded-xl font-medium transition-all
                      ${state.hasSmartwatch === false
-                       ? 'bg-emerald-600 text-white border-2 border-emerald-400'
-                       : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
+      ? 'bg-emerald-600 text-white border-2 border-emerald-400'
+      : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
               No
             </button>
           </div>
@@ -221,8 +221,22 @@ function wireEventHandlers(state: OnboardingState): void {
       const vo2 = +(document.getElementById('vo2-input') as HTMLInputElement)?.value || null;
 
       const ltPace = (ltMin > 0 || ltSec > 0) ? ltMin * 60 + ltSec : null;
-      const restingHR = +(document.getElementById('resting-hr') as HTMLInputElement)?.value || null;
-      const maxHR = +(document.getElementById('max-hr') as HTMLInputElement)?.value || null;
+      let restingHR = +(document.getElementById('resting-hr') as HTMLInputElement)?.value || null;
+      let maxHR = +(document.getElementById('max-hr') as HTMLInputElement)?.value || null;
+
+      // Validation and Clamping
+      if (restingHR !== null) {
+        if (restingHR > 120 || restingHR < 30) {
+          alert("Please enter a sensible Resting Heart Rate (30-120 bpm)");
+          return;
+        }
+      }
+      if (maxHR !== null) {
+        if (maxHR > 240 || maxHR < 100) {
+          alert("Please enter a sensible Max Heart Rate (100-240 bpm)");
+          return;
+        }
+      }
 
       updateOnboarding({
         ltPace: ltPace,
@@ -233,5 +247,23 @@ function wireEventHandlers(state: OnboardingState): void {
     }
 
     nextStep();
+  });
+
+  // Clamping on blur for HR
+  ['resting-hr', 'max-hr'].forEach(id => {
+    const input = document.getElementById(id) as HTMLInputElement;
+    if (input) {
+      input.addEventListener('blur', () => {
+        const val = +input.value;
+        if (!val) return;
+        if (id === 'resting-hr') {
+          if (val < 30) input.value = '30';
+          if (val > 120) input.value = '120';
+        } else {
+          if (val < 100) input.value = '100';
+          if (val > 240) input.value = '240';
+        }
+      });
+    }
   });
 }

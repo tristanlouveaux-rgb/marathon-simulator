@@ -21,7 +21,7 @@ const LOCATION_LABELS: Record<InjuryLocation, string> = {
   other: 'Other',
 };
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
-import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests } from '@/injury/engine';
+import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity } from '@/injury/engine';
 import { getState, getMutableState } from '@/state/store';
 import { render } from '@/ui/renderer';
 import { saveState } from '@/state';
@@ -83,7 +83,7 @@ function getModalHTML(injuryState: InjuryState): string {
   return `
     <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-white">Report Injury</h2>
+        <h2 class="text-lg font-semibold text-white">${injuryState.active ? 'Weekly Injury Update' : 'Report Injury'}</h2>
         <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -107,18 +107,18 @@ function getModalHTML(injuryState: InjuryState): string {
         <!-- 2. Pain Level Slider -->
         <div>
           <label class="block text-sm font-medium text-gray-300 mb-1">
-            Pain Level: <span id="pain-value" class="text-emerald-400 font-bold">${injuryState.currentPain}</span>/10
+            Pain Level: <span id="pain-value" class="text-emerald-400 font-bold">${Math.max(1, injuryState.currentPain)}</span>/10
           </label>
           <input
             type="range"
             id="injury-pain"
-            min="0"
+            min="1"
             max="10"
-            value="${injuryState.currentPain}"
+            value="${Math.max(1, injuryState.currentPain)}"
             class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
           />
           <div class="flex justify-between text-xs text-gray-500 mt-1">
-            <span>No pain</span>
+            <span>Mild</span>
             <span>Severe</span>
           </div>
         </div>
@@ -138,15 +138,15 @@ function getModalHTML(injuryState: InjuryState): string {
           <label class="block text-sm font-medium text-gray-300 mb-2">Can you run?</label>
           <div class="flex gap-4">
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-yes" value="yes" class="w-4 h-4 text-emerald-500 bg-gray-800 border-gray-600 focus:ring-emerald-500">
+              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4 text-emerald-500 bg-gray-800 border-gray-600 focus:ring-emerald-500">
               <span class="text-sm text-gray-300">Yes</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-limited" value="limited" class="w-4 h-4 text-amber-500 bg-gray-800 border-gray-600 focus:ring-amber-500">
+              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4 text-amber-500 bg-gray-800 border-gray-600 focus:ring-amber-500">
               <span class="text-sm text-gray-300">Limited / With pain</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-no" value="no" checked class="w-4 h-4 text-red-500 bg-gray-800 border-gray-600 focus:ring-red-500">
+              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4 text-red-500 bg-gray-800 border-gray-600 focus:ring-red-500">
               <span class="text-sm text-gray-300">No</span>
             </label>
           </div>
@@ -192,8 +192,6 @@ function getModalHTML(injuryState: InjuryState): string {
           </div>
         </details>
 
-        ${renderCapacityTestSection(injuryState)}
-
         <!-- Note: No checkbox - injury auto-activates on save -->
         <div class="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3">
           <p class="text-xs text-amber-300">
@@ -206,15 +204,24 @@ function getModalHTML(injuryState: InjuryState): string {
           <button
             type="button"
             id="injury-cancel"
-            class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors"
+            class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors"
           >
             Cancel
           </button>
+          ${injuryState.active ? `
+            <button
+              type="button"
+              id="injury-resolve"
+              class="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-600/50 text-emerald-400 rounded-lg text-sm font-medium transition-colors"
+            >
+              Mark Resolved
+            </button>
+          ` : ''}
           <button
             type="submit"
             class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
           >
-            Save & Activate
+            ${injuryState.active ? 'Update Status' : 'Save & Activate'}
           </button>
         </div>
       </form>
@@ -222,164 +229,7 @@ function getModalHTML(injuryState: InjuryState): string {
   `;
 }
 
-/**
- * Render Capacity Test section (only shown in test_capacity phase)
- */
-function renderCapacityTestSection(injuryState: InjuryState): string {
-  if (injuryState.injuryPhase !== 'test_capacity') {
-    return '';
-  }
-
-  const passedTests = injuryState.capacityTestsPassed || [];
-  const hopTestPassed = passedTests.includes('single_leg_hop');
-  const walkTestPassed = passedTests.includes('pain_free_walk');
-  const allPassed = hopTestPassed && walkTestPassed;
-
-  return `
-    <div class="bg-purple-950/30 border border-purple-800/50 rounded-lg p-4">
-      <h3 class="text-sm font-semibold text-purple-300 mb-3 flex items-center gap-2">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        Capacity Tests - Phase 3
-      </h3>
-      <p class="text-xs text-purple-400/80 mb-3">
-        Complete these tests pain-free to unlock running. Both tests must pass.
-      </p>
-
-      <div class="space-y-2">
-        <!-- Walk Test -->
-        <div class="flex items-center justify-between p-2 bg-gray-800/50 rounded-lg">
-          <div class="flex items-center gap-2">
-            ${walkTestPassed
-              ? '<span class="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>'
-              : '<span class="w-5 h-5 bg-gray-600 rounded-full"></span>'
-            }
-            <span class="text-sm text-gray-300">30-min Walk (Pain-Free)</span>
-          </div>
-          ${!walkTestPassed ? `
-            <button type="button" id="btn-walk-test" class="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded transition-colors">
-              Perform Test
-            </button>
-          ` : '<span class="text-xs text-emerald-400">Passed</span>'}
-        </div>
-
-        <!-- Hop Test -->
-        <div class="flex items-center justify-between p-2 bg-gray-800/50 rounded-lg">
-          <div class="flex items-center gap-2">
-            ${hopTestPassed
-              ? '<span class="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>'
-              : '<span class="w-5 h-5 bg-gray-600 rounded-full"></span>'
-            }
-            <span class="text-sm text-gray-300">Single Leg Hop (10x Pain-Free)</span>
-          </div>
-          ${!hopTestPassed ? `
-            <button type="button" id="btn-hop-test" class="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs font-medium rounded transition-colors">
-              Perform Test
-            </button>
-          ` : '<span class="text-xs text-emerald-400">Passed</span>'}
-        </div>
-      </div>
-
-      ${allPassed ? `
-        <div class="mt-3 p-2 bg-emerald-950/50 border border-emerald-700 rounded-lg">
-          <p class="text-xs text-emerald-300">
-            <strong>All tests passed!</strong> Click "Save & Activate" to progress to Return-to-Run phase.
-          </p>
-        </div>
-      ` : ''}
-    </div>
-  `;
-}
-
-/**
- * Show capacity test dialog (Pass/Fail)
- */
-function showCapacityTestDialog(testType: CapacityTestType): void {
-  const testNames: Record<CapacityTestType, string> = {
-    single_leg_hop: 'Single Leg Hop Test',
-    pain_free_walk: '30-Minute Walk Test',
-    isometric_hold: 'Isometric Hold Test',
-    stair_test: 'Stair Test',
-    squat_test: 'Squat Test',
-  };
-
-  const testInstructions: Record<CapacityTestType, string> = {
-    single_leg_hop: 'Perform 10 single-leg hops on the affected leg. Were all hops pain-free?',
-    pain_free_walk: 'Walk for 30 minutes at a normal pace. Was the walk completely pain-free?',
-    isometric_hold: 'Hold an isometric contraction for 30 seconds. Was it pain-free?',
-    stair_test: 'Walk up and down 2 flights of stairs. Was it pain-free?',
-    squat_test: 'Perform 10 bodyweight squats. Were all squats pain-free?',
-  };
-
-  // Create dialog overlay
-  const dialog = document.createElement('div');
-  dialog.id = 'capacity-test-dialog';
-  dialog.className = 'fixed inset-0 bg-black/80 flex items-center justify-center z-[60]';
-  dialog.innerHTML = `
-    <div class="bg-gray-900 border border-purple-700 rounded-lg p-6 w-full max-w-sm mx-4 shadow-xl">
-      <h3 class="text-lg font-semibold text-purple-300 mb-2">${testNames[testType]}</h3>
-      <p class="text-sm text-gray-400 mb-4">${testInstructions[testType]}</p>
-
-      <div class="flex gap-3">
-        <button id="test-fail" class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm font-medium rounded-lg transition-colors">
-          Had Pain
-        </button>
-        <button id="test-pass" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">
-          Pain-Free!
-        </button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(dialog);
-
-  // Wire up buttons
-  document.getElementById('test-pass')?.addEventListener('click', () => {
-    handleCapacityTestResult(testType, true);
-    dialog.remove();
-  });
-
-  document.getElementById('test-fail')?.addEventListener('click', () => {
-    handleCapacityTestResult(testType, false);
-    dialog.remove();
-  });
-
-  // Click outside to close
-  dialog.addEventListener('click', (e) => {
-    if (e.target === dialog) {
-      dialog.remove();
-    }
-  });
-}
-
-/**
- * Handle capacity test result
- */
-function handleCapacityTestResult(testType: CapacityTestType, passed: boolean): void {
-  let injuryState = getInjuryState();
-
-  // Record the test (painDuring=0 and painAfter=0 for pass, or 5/5 for fail)
-  const painLevel = passed ? 0 : 5;
-  injuryState = recordCapacityTest(injuryState, testType, painLevel, painLevel, passed ? 'Passed' : 'Failed - had pain');
-
-  // Check if all required tests are now passed
-  if (passed && hasPassedRequiredCapacityTests(injuryState)) {
-    injuryState = applyPhaseProgression(injuryState, 'All capacity tests passed');
-    showInjuryToast('All tests passed — transitioning to Return-to-Run.', 'emerald');
-  } else if (passed) {
-    showInjuryToast('Test passed! Complete remaining tests to progress.', 'emerald');
-  } else {
-    showInjuryToast('Test failed — continue rehab exercises and retry when pain-free.', 'amber');
-  }
-
-  setInjuryState(injuryState);
-  saveState();
-
-  // Refresh modal to show updated state
-  closeInjuryModal();
-  openInjuryModal();
-}
+// Obsolete capacity test functions removed.
 
 /**
  * Wire up modal event handlers
@@ -409,19 +259,22 @@ function wireModalHandlers(): void {
     closeInjuryModal();
   });
 
+  // Resolve button
+  document.getElementById('injury-resolve')?.addEventListener('click', () => {
+    showInjuryConfirm(
+      'Resolve Injury?',
+      'This will deactivate injury mode and return you to your normal training plan.',
+      'Yes, I\'m recovered',
+      'Cancel'
+    ).then(resolve => {
+      if (resolve) markAsRecovered();
+    });
+  });
+
   // Form submit
   document.getElementById('injury-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     handleSaveInjury();
-  });
-
-  // Capacity Test buttons
-  document.getElementById('btn-walk-test')?.addEventListener('click', () => {
-    showCapacityTestDialog('pain_free_walk');
-  });
-
-  document.getElementById('btn-hop-test')?.addEventListener('click', () => {
-    showCapacityTestDialog('single_leg_hop');
   });
 }
 
@@ -446,6 +299,8 @@ function handleSaveInjury(): void {
   const location = locationSelect.value as InjuryLocation;
   const locationDetail = locationDetailInput?.value || '';
   const physioNotes = physioNotesTextarea?.value || '';
+  const canRunEl = document.querySelector('input[name="can-run"]:checked') as HTMLInputElement;
+  const canRun = (canRunEl?.value || 'no') as 'yes' | 'limited' | 'no';
 
   // Get current state and update
   let injuryState = getInjuryState();
@@ -453,7 +308,6 @@ function handleSaveInjury(): void {
   // Determine initial phase based on pain level
   let initialPhase = injuryState.injuryPhase;
   if (!injuryState.active || initialPhase === 'resolved') {
-    // New injury - set phase based on pain
     if (painLevel >= 7) {
       initialPhase = 'acute';
     } else if (painLevel >= 4) {
@@ -471,6 +325,7 @@ function handleSaveInjury(): void {
     location,
     locationDetail,
     physioNotes,
+    canRun,
     startDate: injuryState.startDate || new Date().toISOString(),
     injuryPhase: initialPhase,
     acutePhaseStartDate: initialPhase === 'acute' ? new Date().toISOString() : injuryState.acutePhaseStartDate,
@@ -479,27 +334,9 @@ function handleSaveInjury(): void {
   // Record pain level (adds to history)
   injuryState = recordPainLevel(injuryState, painLevel);
 
-  // Zero-pain auto-recovery: offer to switch to return-to-run
-  if (painLevel === 0 && injuryState.injuryPhase !== 'return_to_run' && injuryState.injuryPhase !== 'resolved') {
-    // Save current state first, then ask
-    setInjuryState(injuryState);
-    saveState();
-    showInjuryConfirm(
-      'Pain is 0 — Ready to Run?',
-      'Your pain has resolved. Ready to switch to the Return-to-Run phase?',
-      'Yes, let\'s go!',
-      'Not yet',
-    ).then(proceed => {
-      if (proceed) {
-        let s = getInjuryState();
-        s = applyPhaseProgression(s, 'Auto-detected 0 pain');
-        setInjuryState(s);
-        saveState();
-      }
-      window.location.reload();
-    });
-    return;
-  }
+  // Pain resolved handling removed here as it's now handled by the explicit "Resolve" button
+
+  const s = getMutableState();
 
   // Save to state
   setInjuryState(injuryState);
@@ -596,6 +433,165 @@ function showInjuryToast(message: string, color: 'emerald' | 'amber'): void {
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, 2500);
+}
+
+/**
+ * Open the return-to-run gate modal for weekly check-in.
+ * Shows current level, pain slider, morning pain summary, and gate decision.
+ */
+export function openReturnToRunGateModal(): void {
+  // Remove existing modal if any
+  closeInjuryModal();
+
+  const injuryState = getInjuryState();
+  const currentLevel = injuryState.returnToRunLevel || 1;
+  const levelLabel = getReturnToRunLevelLabel(currentLevel);
+  const mornings = injuryState.morningPainResponses || [];
+  const betterCount = mornings.filter(m => m.response === 'better').length;
+  const sameCount = mornings.filter(m => m.response === 'same').length;
+  const worseCount = mornings.filter(m => m.response === 'worse').length;
+
+  const modal = document.createElement('div');
+  modal.id = MODAL_ID;
+  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+  modal.innerHTML = `
+    <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold text-white">Weekly Check-In</h2>
+        <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Current Level -->
+      <div class="bg-blue-950/50 border border-blue-800 rounded-lg p-3 mb-4">
+        <div class="text-xs text-blue-400 font-medium mb-1">Current Protocol Level</div>
+        <div class="text-sm text-white font-semibold">${levelLabel}</div>
+      </div>
+
+      <!-- Morning Pain Summary -->
+      ${mornings.length > 0 ? `
+        <div class="bg-gray-800 rounded-lg p-3 mb-4">
+          <div class="text-xs text-gray-400 font-medium mb-2">This Week's Morning Pain</div>
+          <div class="flex gap-3 text-xs">
+            <span class="text-emerald-400">${betterCount} better</span>
+            <span class="text-blue-400">${sameCount} same</span>
+            <span class="text-red-400">${worseCount} worse</span>
+          </div>
+        </div>
+      ` : `
+        <div class="bg-gray-800 rounded-lg p-3 mb-4">
+          <div class="text-xs text-gray-500">No morning pain data recorded this week</div>
+        </div>
+      `}
+
+      <!-- Pain Slider -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-300 mb-1">
+          How was your pain during the intervals?
+          <span id="gate-pain-value" class="text-emerald-400 font-bold">${injuryState.currentPain || 2}</span>/10
+        </label>
+        <input
+          type="range"
+          id="gate-pain-slider"
+          min="0"
+          max="10"
+          value="${injuryState.currentPain || 2}"
+          class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+        />
+        <div class="flex justify-between text-xs text-gray-500 mt-1">
+          <span>No pain</span>
+          <span>Severe</span>
+        </div>
+      </div>
+
+      <!-- Gate Decision Preview (updates live) -->
+      <div id="gate-decision-preview" class="rounded-lg p-3 mb-4 border"></div>
+
+      <!-- Buttons -->
+      <div class="flex gap-3">
+        <button id="gate-cancel" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button id="gate-confirm" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Confirm & Advance Week
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+
+  // Helper: compute and render gate decision preview
+  const updatePreview = () => {
+    const painVal = parseInt((document.getElementById('gate-pain-slider') as HTMLInputElement)?.value || '2');
+    // Create a temporary state with the slider pain to preview the decision
+    const tempState: InjuryState = { ...injuryState, currentPain: painVal };
+    const decision = evaluateReturnToRunGate(tempState);
+
+    const previewEl = document.getElementById('gate-decision-preview');
+    if (!previewEl) return;
+
+    const colors = {
+      progress: { bg: 'bg-emerald-950/50', border: 'border-emerald-700', text: 'text-emerald-300', label: 'Progressing' },
+      hold: { bg: 'bg-amber-950/50', border: 'border-amber-700', text: 'text-amber-300', label: 'Holding' },
+      regress: { bg: 'bg-red-950/50', border: 'border-red-700', text: 'text-red-300', label: 'Stepping Back' },
+    };
+    const c = colors[decision.decision];
+    const targetLabel = decision.newLevel > 8 ? 'Resolved!' : `Level ${decision.newLevel}`;
+
+    previewEl.className = `rounded-lg p-3 mb-4 border ${c.bg} ${c.border}`;
+    previewEl.innerHTML = `
+      <div class="text-sm font-semibold ${c.text} mb-1">${c.label} → ${targetLabel}</div>
+      <div class="text-xs text-gray-400">${decision.reason}</div>
+    `;
+  };
+
+  // Initial preview
+  updatePreview();
+
+  // Wire handlers
+  document.getElementById('injury-modal-close')?.addEventListener('click', closeInjuryModal);
+  document.getElementById(MODAL_ID)?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeInjuryModal();
+  });
+
+  const painSlider = document.getElementById('gate-pain-slider') as HTMLInputElement;
+  const painValueEl = document.getElementById('gate-pain-value');
+  if (painSlider && painValueEl) {
+    painSlider.addEventListener('input', () => {
+      painValueEl.textContent = painSlider.value;
+      updatePreview();
+    });
+  }
+
+  document.getElementById('gate-cancel')?.addEventListener('click', closeInjuryModal);
+
+  document.getElementById('gate-confirm')?.addEventListener('click', () => {
+    const painVal = parseInt((document.getElementById('gate-pain-slider') as HTMLInputElement)?.value || '2');
+
+    let state = getInjuryState();
+    // Record the check-in pain
+    state = recordPainLevel(state, painVal);
+    // Update severity classification
+    state = { ...state, severityClass: classifySeverity(state) };
+    // Evaluate gate
+    const decision = evaluateReturnToRunGate(state);
+    // Apply gate decision
+    state = applyGateDecision(state, decision);
+
+    // Mark check-in complete for this week
+    const s = getMutableState();
+    if (s.w >= 1 && s.w <= s.wks.length) {
+      s.wks[s.w - 1].injuryCheckedIn = true;
+    }
+
+    setInjuryState(state);
+    saveState();
+    window.location.reload();
+  });
 }
 
 /** Styled confirm modal for injury decisions. */

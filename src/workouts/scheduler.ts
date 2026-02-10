@@ -41,65 +41,114 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
     !['long', 'threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive'].includes(w.t))
   );
 
-  // Assign long run to Sunday
-  if (long) {
-    long.dayOfWeek = 6;
-    long.dayName = 'Sunday';
+  // Count total hard sessions (quality + long)
+  const totalHard = quality.length + (long ? 1 : 0);
+
+  if (totalHard >= 4) {
+    // 4+ hard sessions: space to Mon/Wed/Fri/Sun to avoid consecutive hard days
+    const hardDays = [0, 2, 4, 6]; // Mon, Wed, Fri, Sun
+    const allHard = [...quality];
+    // Long run gets Sunday (last slot)
+    if (long) {
+      long.dayOfWeek = 6;
+      long.dayName = 'Sunday';
+    }
+    // Assign quality to Mon/Wed/Fri (skip Sunday if long takes it)
+    const qualitySlots = long ? hardDays.filter(d => d !== 6) : hardDays;
+    quality.forEach((w, i) => {
+      if (i < qualitySlots.length) {
+        w.dayOfWeek = qualitySlots[i];
+        w.dayName = DAY_NAMES[qualitySlots[i]];
+      } else {
+        // Overflow: find first free odd day (Tue/Thu/Sat)
+        const overflow = [1, 3, 5].find(d => !allHard.some(h => h.dayOfWeek === d) && !(long && long.dayOfWeek === d));
+        if (overflow !== undefined) {
+          w.dayOfWeek = overflow;
+          w.dayName = DAY_NAMES[overflow];
+        }
+      }
+    });
+  } else {
+    // Standard: Long → Sunday, quality → Tue/Thu
+    if (long) {
+      long.dayOfWeek = 6;
+      long.dayName = 'Sunday';
+    }
+
+    const qualityDays = [1, 3]; // Tuesday, Thursday
+    quality.forEach((w, i) => {
+      if (i < qualityDays.length) {
+        w.dayOfWeek = qualityDays[i];
+        w.dayName = DAY_NAMES[qualityDays[i]];
+      } else {
+        w.dayOfWeek = 5;
+        w.dayName = 'Saturday';
+      }
+    });
   }
 
-  // Default quality days
-  const qualityDays = [1, 3]; // Tuesday, Thursday
-
-  // Assign quality workouts
-  quality.forEach((w, i) => {
-    if (i < qualityDays.length) {
-      w.dayOfWeek = qualityDays[i];
-      w.dayName = DAY_NAMES[qualityDays[i]];
-    } else {
-      // Extra quality sessions go to Saturday
-      w.dayOfWeek = 5;
-      w.dayName = 'Saturday';
-    }
-  });
-
-  // Track which days are taken
-  const takenDays = new Set<number>();
+  // Build set of days already taken by hard workouts
+  const hardDaySet = new Set<number>();
   workouts.forEach(w => {
-    if (w.dayOfWeek !== undefined) takenDays.add(w.dayOfWeek);
+    if (w.dayOfWeek !== undefined) hardDaySet.add(w.dayOfWeek);
   });
 
-  // Assign commute runs to weekdays (Mon-Fri), spread evenly
-  const commuteDayOptions = [0, 1, 2, 3, 4]; // Mon-Fri
+  // Assign commute runs to weekdays not taken by hard workouts
+  const commuteDayOptions = [0, 1, 2, 3, 4].filter(d => !hardDaySet.has(d));
   let commuteIdx = 0;
   commute.forEach(w => {
-    // Find next weekday, cycling through Mon-Fri
-    const day = commuteDayOptions[commuteIdx % commuteDayOptions.length];
-    w.dayOfWeek = day;
-    w.dayName = DAY_NAMES[day];
+    if (commuteIdx < commuteDayOptions.length) {
+      w.dayOfWeek = commuteDayOptions[commuteIdx];
+      w.dayName = DAY_NAMES[commuteDayOptions[commuteIdx]];
+    } else {
+      // Stack on first available weekday
+      const day = commuteDayOptions[commuteIdx % commuteDayOptions.length];
+      w.dayOfWeek = day;
+      w.dayName = DAY_NAMES[day];
+    }
     commuteIdx++;
   });
 
-  // Assign easy runs to remaining days (Mon, Wed, Fri, Sat)
-  const easyDays = [0, 2, 4, 5]; // Mon, Wed, Fri, Sat
-  let easyDayIndex = 0;
+  // Rebuild taken days including commute
+  const allTakenDays = new Set<number>();
+  workouts.forEach(w => {
+    if (w.dayOfWeek !== undefined) allTakenDays.add(w.dayOfWeek);
+  });
 
+  // Find free days for easy runs — prefer spacing them apart
+  const totalWorkouts = workouts.length;
+  const freeDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !allTakenDays.has(d));
+
+  // If >7 workouts, no free days available — easy runs share days with cross-training/commute
+  // Prefer days that only have cross-training (not hard workouts)
+  const crossDays = [0, 1, 2, 3, 4, 5, 6].filter(d => !hardDaySet.has(d) && allTakenDays.has(d));
+  const easySlots = freeDays.length > 0 ? freeDays : crossDays;
+
+  let easySlotIdx = 0;
   easy.forEach(w => {
-    // Skip days already taken by quality workouts
-    while (easyDayIndex < easyDays.length) {
-      const day = easyDays[easyDayIndex];
-      const dayTaken = quality.some(q => q.dayOfWeek === day);
-      if (!dayTaken) {
-        w.dayOfWeek = day;
-        w.dayName = DAY_NAMES[day];
-        easyDayIndex++;
-        break;
-      }
-      easyDayIndex++;
-    }
-    // If we run out of days, stack on Saturday
-    if (w.dayOfWeek === undefined) {
-      w.dayOfWeek = 5;
-      w.dayName = 'Saturday';
+    if (easySlotIdx < easySlots.length) {
+      w.dayOfWeek = easySlots[easySlotIdx];
+      w.dayName = DAY_NAMES[easySlots[easySlotIdx]];
+      easySlotIdx++;
+    } else if (freeDays.length > 0) {
+      // Cycle through free days if more easy runs than free slots
+      const day = freeDays[easySlotIdx % freeDays.length];
+      w.dayOfWeek = day;
+      w.dayName = DAY_NAMES[day];
+      easySlotIdx++;
+    } else if (crossDays.length > 0) {
+      // Stack on cross-training days
+      const day = crossDays[easySlotIdx % crossDays.length];
+      w.dayOfWeek = day;
+      w.dayName = DAY_NAMES[day];
+      easySlotIdx++;
+    } else {
+      // Last resort: find the least busy day
+      const dayCounts: Record<number, number> = {};
+      workouts.forEach(wk => { if (wk.dayOfWeek !== undefined) dayCounts[wk.dayOfWeek] = (dayCounts[wk.dayOfWeek] || 0) + 1; });
+      const leastBusy = [0, 1, 2, 3, 4, 5, 6].sort((a, b) => (dayCounts[a] || 0) - (dayCounts[b] || 0))[0];
+      w.dayOfWeek = leastBusy;
+      w.dayName = DAY_NAMES[leastBusy];
     }
   });
 
@@ -133,7 +182,8 @@ export function checkConsecutiveHardDays(workouts: Workout[]): { level: string; 
   // Check each day
   for (let day = 0; day <= 6; day++) {
     const today = byDay[day] || [];
-    const tomorrow = byDay[(day + 1) % 7] || [];
+    // Don't wrap Sun→Mon — they're 6 days apart within the same week
+    const tomorrow = day < 6 ? (byDay[day + 1] || []) : [];
 
     const hardToday = today.some(w => isHardWorkout(w.t));
     const hardTomorrow = tomorrow.some(w => isHardWorkout(w.t));

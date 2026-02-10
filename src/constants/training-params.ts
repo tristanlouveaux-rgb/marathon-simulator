@@ -47,7 +47,7 @@ export const IMP: WorkoutImportance = {
   '5k': { easy: 0.4, vo2: 0.95, threshold: 0.8, intervals: 0.95, long: 0.5 },
   '10k': { easy: 0.5, vo2: 0.9, threshold: 0.9, intervals: 0.9, race_pace: 0.85, long: 0.7 },
   'half': { easy: 0.6, vo2: 0.7, threshold: 0.95, race_pace: 0.9, mixed: 0.85, long: 0.95, progressive: 0.9 },
-  'marathon': { easy: 0.8, threshold: 0.9, marathon_pace: 0.95, mixed: 0.9, long: 1.0, progressive: 0.95 }
+  'marathon': { easy: 0.8, vo2: 0.7, intervals: 0.7, threshold: 0.9, race_pace: 0.85, marathon_pace: 0.95, mixed: 0.9, long: 1.0, progressive: 0.95 }
 };
 
 /** Time impact penalties (seconds) when skipping workouts */

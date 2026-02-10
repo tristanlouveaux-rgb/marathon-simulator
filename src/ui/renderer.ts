@@ -74,7 +74,7 @@ export function render(): void {
   for (let i = 0; i < realW - 1; i++) {
     wg += s.wks[i].wkGain;
   }
-  const currentVDOT = s.v + wg + s.rpeAdj;
+  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
 
   // Current fitness
   let currentFitness: number;
@@ -178,10 +178,25 @@ export function render(): void {
     currentVDOT // vdot for plan engine (includes RPE and training gains)
   );
 
-  // Apply stored modifications
+  // 1. Deduplicate workout names for unique completion tracking
+  // This must happen BEFORE mods and moves so they can reference "Easy Run 1" etc.
+  const nameCounts: Record<string, number> = {};
+  for (const w of wos) {
+    nameCounts[w.n] = (nameCounts[w.n] || 0) + 1;
+  }
+  const nameIdx: Record<string, number> = {};
+  for (const w of wos) {
+    if (nameCounts[w.n] > 1) {
+      nameIdx[w.n] = (nameIdx[w.n] || 0) + 1;
+      if (!w.id) w.id = `${w.n} ${nameIdx[w.n]}`;
+      w.n = `${w.n} ${nameIdx[w.n]}`;
+    }
+  }
+
+  // 2. Apply stored modifications
   if (wk.workoutMods && wk.workoutMods.length > 0) {
     for (const mod of wk.workoutMods) {
-      // Match by both name and dayOfWeek for unique identification (handles duplicate names like "Easy Run")
+      // Match by both name and dayOfWeek for unique identification
       const workout = wos.find(w => w.n === mod.name && (mod.dayOfWeek == null || w.dayOfWeek === mod.dayOfWeek));
       if (workout) {
         workout.status = mod.status as any;
@@ -190,7 +205,6 @@ export function render(): void {
         if (mod.status === 'reduced' || mod.status === 'replaced') {
           workout.originalDistance = mod.originalDistance;
           workout.d = mod.newDistance;
-          // Apply new type and RPE if provided (for downgrades)
           if (mod.newType) workout.t = mod.newType;
           if (mod.newRpe != null) {
             workout.rpe = mod.newRpe;
@@ -204,12 +218,37 @@ export function render(): void {
     }
   }
 
-  // Append ad-hoc workouts (e.g. "Just Run")
+  // 3. Append ad-hoc workouts
   if (wk.adhocWorkouts) {
     wos = wos.concat(wk.adhocWorkouts);
   }
 
-  // Apply manual moves
+  // 3b. Append passed capacity tests saved on this week (so they persist in history)
+  if (wk.passedCapacityTests && wk.passedCapacityTests.length > 0) {
+    const testNames: Record<string, string> = {
+      single_leg_hop: 'Single Leg Hop Test',
+      pain_free_walk: '30-Minute Walk Test',
+      isometric_hold: 'Isometric Hold Test',
+      stair_test: 'Stair Test',
+      squat_test: 'Squat Test',
+    };
+    for (const testType of wk.passedCapacityTests) {
+      // Only add if not already in the workout list (avoid duplicates during test_capacity phase)
+      if (!wos.some(w => (w as any).testType === testType)) {
+        wos.push({
+          t: 'capacity_test',
+          n: testNames[testType] || testType,
+          d: 'Completed',
+          r: 3,
+          rpe: 3,
+          status: 'passed',
+          testType,
+        } as any);
+      }
+    }
+  }
+
+  // 4. Apply manual moves
   if (wk.workoutMoves) {
     for (const workoutName in wk.workoutMoves) {
       const newDay = wk.workoutMoves[workoutName];
@@ -218,20 +257,6 @@ export function render(): void {
         workout.dayOfWeek = newDay;
         workout.dayName = DAY_NAMES[newDay];
       }
-    }
-  }
-
-  // Deduplicate workout names for unique completion tracking
-  const nameCounts: Record<string, number> = {};
-  for (const w of wos) {
-    nameCounts[w.n] = (nameCounts[w.n] || 0) + 1;
-  }
-  const nameIdx: Record<string, number> = {};
-  for (const w of wos) {
-    if (nameCounts[w.n] > 1) {
-      nameIdx[w.n] = (nameIdx[w.n] || 0) + 1;
-      if (!w.id) w.id = `${w.n} ${nameIdx[w.n]}`;
-      w.n = `${w.n} ${nameIdx[w.n]}`;
     }
   }
 
@@ -323,7 +348,8 @@ export function render(): void {
     .sort((a, b) => (a.dayOfWeek ?? 99) - (b.dayOfWeek ?? 99));
 
   // Detailed workout list (without Quick Run, sorted Mon→Sun)
-  h += renderWorkoutList(plannedWos, wk, s.rd, s.pac, s.tw, s.w);
+  const isViewOnly = !!(s as any)._viewOnly;
+  h += renderWorkoutList(plannedWos, wk, s.rd, s.pac, s.tw, s.w, isViewOnly);
 
   // Paces
   h += `<div class="mt-3 text-xs text-gray-400 mb-1">Your current paces</div>`;
@@ -349,7 +375,7 @@ export function render(): void {
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
           </button>
         </div>
-        ${renderWorkoutList(quickRun, wk, s.rd, s.pac, s.tw, s.w)}</div>`;
+        ${renderWorkoutList(quickRun, wk, s.rd, s.pac, s.tw, s.w, isViewOnly)}</div>`;
       jrSlot.classList.remove('hidden');
     } else {
       jrSlot.innerHTML = '';
@@ -406,10 +432,11 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
         const wColors = getWorkoutColors(w.t);
         let cardBg = wColors.bg;
         let cardBorder = wColors.border;
-        // User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped = amber
+        // User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped easy = green; Skipped hard = amber
         if (rtd) { cardBg = 'bg-emerald-950/50'; cardBorder = 'border-emerald-700'; }
         else if (isReplaced) { cardBg = 'bg-cyan-950/50'; cardBorder = 'border-cyan-700'; }
         else if (isModified) { cardBg = 'bg-sky-950/50'; cardBorder = 'border-sky-700'; }
+        else if (isSkipped && w.t === 'easy') { cardBg = 'bg-emerald-950/30'; cardBorder = 'border-emerald-700'; }
         else if (isSkipped) { cardBg = 'bg-amber-950/30'; cardBorder = 'border-amber-700'; }
 
         // Status label for calendar card
@@ -435,7 +462,7 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
 /**
  * Render detailed workout list
  */
-function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw: number, currentWeek: number): string {
+function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw: number, currentWeek: number, viewOnly: boolean = false): string {
   let h = `<h4 class="font-semibold text-sm mb-2 mt-4 text-white">Workouts</h4><div class="space-y-2">`;
 
   for (const w of wos) {
@@ -448,11 +475,12 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     const isReplaced = w.status === 'replaced';
     const isSkipped = w.skipped === true;
 
-    // Detail cards: User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped = amber
+    // Detail cards: User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped easy = green; Skipped hard = amber
     let borderClass = 'border-gray-700 bg-gray-800';
     if (rtd) borderClass = 'border-emerald-700 bg-emerald-950/30';
     else if (isReplaced) borderClass = 'border-cyan-700 bg-cyan-950/30';
     else if (isModified) borderClass = 'border-sky-700 bg-sky-950/30';
+    else if (isSkipped && w.t === 'easy') borderClass = 'border-emerald-700 bg-emerald-950/20';
     else if (isSkipped) borderClass = 'border-amber-700 bg-amber-950/20';
 
     h += `<div class="border-2 ${borderClass} p-2 rounded">`;
@@ -472,10 +500,17 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     // Skip banner
     if (isSkipped) {
-      const skipColor = (w.skipCount || 0) === 1 ? 'bg-amber-950/30 border-amber-700 text-amber-300' : 'bg-red-950/30 border-red-800 text-red-300';
-      h += `<div class="mb-2 p-1.5 ${skipColor} border rounded text-xs font-bold">`;
-      h += (w.skipCount || 0) === 1 ? 'SKIPPED - Complete now (no penalty)' : 'FINAL CHANCE - Skip again = penalty!';
-      h += `</div>`;
+      if (w.t === 'easy' && w.n?.includes('(was')) {
+        // Downgraded makeup: friendly green banner
+        h += `<div class="mb-2 p-1.5 bg-emerald-950/30 border border-emerald-700 text-emerald-300 rounded text-xs font-bold">`;
+        h += 'MAKEUP — Downgraded to easy to protect recovery';
+        h += `</div>`;
+      } else {
+        const skipColor = (w.skipCount || 0) === 1 ? 'bg-amber-950/30 border-amber-700 text-amber-300' : 'bg-red-950/30 border-red-800 text-red-300';
+        h += `<div class="mb-2 p-1.5 ${skipColor} border rounded text-xs font-bold">`;
+        h += (w.skipCount || 0) === 1 ? 'SKIPPED - Complete now (no penalty)' : 'FINAL CHANCE - Skip again = penalty!';
+        h += `</div>`;
+      }
     }
 
     // Header
@@ -489,6 +524,15 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     h += `</div>`;
     if (!isQuickRun) h += `<span class="bg-gray-600 text-gray-300 px-1 py-0.5 rounded">RPE ${w.rpe || w.r} <button class="text-blue-400 hover:text-blue-300 ml-0.5" onclick="window.Mosaic.showRPEHelp()">(?)</button></span>`;
     h += `</div>`;
+
+    // Return-to-run level indicator
+    if (w.t === 'return_run' && w.modReason) {
+      const levelMatch = w.modReason.match(/Return Level (\d+)\/8/);
+      if (levelMatch) {
+        const lvl = parseInt(levelMatch[1]);
+        h += `<div class="text-xs mb-1 px-2 py-1 rounded bg-sky-950/50 border border-sky-800/50 text-sky-300 inline-block">Level ${lvl}/8</div> `;
+      }
+    }
 
     // Description
     h += `<div class="text-xs text-gray-400 mb-1">${injectPaces(w.d, paces)}</div>`;
@@ -512,36 +556,53 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       h += `</div>`;
     }
 
-    // Rating buttons
-    if (!isReplaced) {
+    // Rating buttons (disabled when viewing non-current week)
+    if (!isReplaced && !viewOnly) {
       const wId = w.id || w.n;
-      h += `<div class="text-xs mb-1 text-gray-400">${rtd ? 'Re-rate RPE:' : 'RPE rating:'}</div><div class="grid grid-cols-10 gap-0.5">`;
-      for (let r = 1; r <= 10; r++) {
-        h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
+      if (w.t === 'capacity_test' && (w as any).testType) {
+        if (w.status === 'passed') {
+          h += `<div class="flex items-center gap-2 py-1.5">`;
+          h += `<span class="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
+          h += `<span class="text-xs font-semibold text-emerald-400">PASSED</span>`;
+          h += `</div>`;
+        } else {
+          h += `<div class="text-xs mb-1 text-purple-400">Physio Test Status:</div>`;
+          h += `<div class="grid grid-cols-2 gap-2">`;
+          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', false)" class="px-2 py-1.5 text-xs border border-red-800 rounded bg-red-950/30 hover:bg-red-900/40 text-red-300">Had Pain</button>`;
+          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', true)" class="px-2 py-1.5 text-xs border border-emerald-800 rounded bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-300 font-bold">Pain-Free!</button>`;
+          h += `</div>`;
+        }
+      } else {
+        h += `<div class="text-xs mb-1 text-gray-400">${rtd ? 'Re-rate RPE:' : 'RPE rating:'}</div><div class="grid grid-cols-10 gap-0.5">`;
+        for (let r = 1; r <= 10; r++) {
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
+        }
+        h += `</div>`;
       }
-      h += `</div>`;
+    } else if (!isReplaced && viewOnly && rtd) {
+      h += `<div class="text-xs text-gray-500">Rated RPE ${rtd}</div>`;
     }
 
-    // Track Run / inline GPS tracking (hide for cross-training/sport workouts)
-    if (!isReplaced && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest') {
+    // Track Run / inline GPS tracking (hide for cross-training/sport workouts, disabled when viewing)
+    if (!isReplaced && !viewOnly && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest') {
       const tracking = isTrackingActive();
       if (tracking && getActiveWorkoutName() === w.n) {
-        // This workout is being tracked — show inline GPS
         const gpsData = getActiveGpsData();
         if (gpsData) {
           h += renderInlineGpsHtml(gpsData);
         }
       } else if (tracking) {
-        // Another workout is being tracked — disable button
         h += `<button class="w-full mt-1 text-xs bg-gray-700 text-gray-500 py-0.5 rounded font-medium cursor-not-allowed" disabled>Tracking in progress...</button>`;
       } else {
         h += `<button class="gps-track-btn w-full mt-1 text-xs bg-green-600 hover:bg-green-700 text-white py-1.5 rounded font-bold" data-name="${escapeAttr(w.n)}" data-desc="${escapeAttr(w.d)}">Start Run</button>`;
       }
     }
 
-    // Skip button
-    const skipId = w.id || w.n;
-    h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs ${isSkipped ? 'bg-red-900/50 hover:bg-red-800/50 text-red-300' : isReplaced ? 'bg-cyan-900/50 cursor-not-allowed text-cyan-400' : 'bg-gray-700 hover:bg-gray-600 text-gray-400'} py-0.5 rounded" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
+    // Skip button (disabled when viewing non-current week)
+    if (!viewOnly) {
+      const skipId = w.id || w.n;
+      h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs ${isSkipped ? 'bg-red-900/50 hover:bg-red-800/50 text-red-300' : isReplaced ? 'bg-cyan-900/50 cursor-not-allowed text-cyan-400' : 'bg-gray-700 hover:bg-gray-600 text-gray-400'} py-0.5 rounded" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
+    }
 
     h += `</div>`;
   }
@@ -620,6 +681,8 @@ function getWorkoutColors(wt: string): { bg: string; border: string; accent: str
     case 'mixed':
     case 'progressive':
       return { bg: 'bg-amber-950/50', border: 'border-amber-700', accent: 'text-amber-400' };
+    case 'return_run':
+      return { bg: 'bg-sky-950/50', border: 'border-sky-700', accent: 'text-sky-400' };
     case 'cross':
     case 'strength':
     case 'rest':
@@ -663,7 +726,7 @@ export function setupSyncListener(): void {
       if (decision === 'match') {
         // Auto-rate with RPE 5 (moderate)
         if (window.rate) {
-          window.rate(matchedWorkout.id || matchedWorkout.n, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false);
+          window.rate(matchedWorkout.id || matchedWorkout.n, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false, activity.avgHR);
         }
       } else if (decision === 'keep-both') {
         // Log as separate cross-training — dispatch back as unmatched
