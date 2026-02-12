@@ -51,15 +51,16 @@ export function showSuggestionModal(
           actionColor = 'text-sky-400';
           detail = `${adj.originalType} → ${newKm}km easy shakeout`;
         } else {
-          // Fully covered - no run needed
-          actionLabel = 'Cover';
-          actionColor = 'text-cyan-400';
-          detail = 'Load covered by cross-training';
+          // Fully replaced - no run needed
+          actionLabel = 'Replace';
+          actionColor = 'text-red-400';
+          detail = 'Replaced by cross-training';
         }
       } else if (adj.action === 'downgrade') {
         actionLabel = 'Downgrade';
         actionColor = 'text-amber-400';
-        const paceLabel = adj.newType === 'marathon_pace' ? 'marathon pace'
+        const paceLabel = (adj.originalType === 'threshold' && adj.newType === 'marathon_pace') ? 'steady pace'
+                        : adj.newType === 'marathon_pace' ? 'marathon pace'
                         : adj.newType === 'threshold' ? 'threshold pace'
                         : 'easy effort';
         detail = origKm > 0
@@ -139,10 +140,10 @@ export function showSuggestionModal(
         ${hasReplacements ? `
         <button id="choice-replace" class="w-full text-left p-4 rounded-xl border-2 border-transparent bg-gray-800 hover:border-red-600 transition-all group">
           <div class="flex items-center justify-between mb-2">
-            <span class="font-bold text-red-400 text-lg">Replace</span>
+            <span class="font-bold text-red-400 text-lg">Replace & Reduce</span>
             <span class="text-xs text-gray-500 group-hover:text-gray-400">Recommended for heavy loads</span>
           </div>
-          <p class="text-gray-300 text-sm mb-3">Apply full adjustment including skipping runs covered by your ${popup.sportName}.</p>
+          <p class="text-gray-300 text-sm mb-3">Replace runs where possible, downgrade the rest. Best for heavy cross-training.</p>
           <details class="text-xs">
             <summary class="text-gray-500 cursor-pointer hover:text-gray-400">View changes (${popup.replaceOutcome.adjustments.length})</summary>
             <div class="mt-2 bg-gray-900/50 rounded-lg p-3">

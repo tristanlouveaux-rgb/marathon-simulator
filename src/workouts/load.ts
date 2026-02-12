@@ -30,32 +30,53 @@ export function calculateWorkoutLoad(
   if (typeof durationDesc === 'number') {
     dur = durationDesc;
   } else if (typeof durationDesc === 'string') {
-    // Try to extract km
-    const kmMatch = durationDesc.match(/(\d+)km/);
-    if (kmMatch) {
-      const km = parseInt(kmMatch[1]);
-      // Estimate pace based on workout type, scaled from runner's easy pace
-      let paceMinPerKm = baseMinPerKm;
-      if (workoutType === 'easy') paceMinPerKm = baseMinPerKm;
-      else if (workoutType === 'long') paceMinPerKm = baseMinPerKm * 1.03;
-      else if (workoutType === 'threshold') paceMinPerKm = baseMinPerKm * 0.82;
-      else if (workoutType === 'vo2') paceMinPerKm = baseMinPerKm * 0.73;
-      else if (workoutType === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
-      else if (workoutType === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
+    // Handle multi-line descriptions with warm up / cool down
+    const lines = durationDesc.split('\n').filter(l => l.trim());
+    let mainDesc = durationDesc;
+    let wucdMin = 0;
+    if (lines.length >= 3 && lines[0].includes('warm up')) {
+      mainDesc = lines[1]; // Main set is the middle line
+      // Add WU/CD time from "Xkm warm up" and "Xkm cool down"
+      const wuMatch = lines[0].match(/^(\d+\.?\d*)km/);
+      const cdMatch = lines[lines.length - 1].match(/^(\d+\.?\d*)km/);
+      const wuKm = wuMatch ? parseFloat(wuMatch[1]) : 0;
+      const cdKm = cdMatch ? parseFloat(cdMatch[1]) : 0;
+      wucdMin = (wuKm + cdKm) * baseMinPerKm; // WU/CD at easy pace
+    }
 
-      dur = km * paceMinPerKm;
-    } else {
-      // Try to extract minutes (e.g., "3×10min")
-      const minMatch = durationDesc.match(/(\d+)×(\d+)min/);
-      if (minMatch) {
-        const reps = parseInt(minMatch[1]);
-        const repDur = parseInt(minMatch[2]);
-        dur = reps * repDur;
+    // Try to extract intervals with time (e.g., "5×3min @ 3:47/km ...")
+    const intervalTimeMatch = mainDesc.match(/(\d+)×(\d+\.?\d*)min/);
+    if (intervalTimeMatch) {
+      const reps = parseInt(intervalTimeMatch[1]);
+      const repDur = parseFloat(intervalTimeMatch[2]);
+      // Also extract recovery if present
+      const recMatch = mainDesc.match(/(\d+\.?\d*)\s*min\s*recovery/);
+      const recMin = recMatch ? parseFloat(recMatch[1]) : 0;
+      dur = reps * repDur + (reps - 1) * recMin + wucdMin;
+    }
+    // Try simple "Xmin @ pace"
+    else if (mainDesc.match(/(\d+)min\s*@/)) {
+      const simpleTimeMatch = mainDesc.match(/(\d+)min/);
+      dur = simpleTimeMatch ? parseInt(simpleTimeMatch[1]) + wucdMin : wucdMin;
+    }
+    // Try to extract km (simple distance workouts)
+    else {
+      const kmMatch = mainDesc.match(/(\d+\.?\d*)km/);
+      if (kmMatch) {
+        const km = parseFloat(kmMatch[1]);
+        let paceMinPerKm = baseMinPerKm;
+        if (workoutType === 'easy') paceMinPerKm = baseMinPerKm;
+        else if (workoutType === 'long') paceMinPerKm = baseMinPerKm * 1.03;
+        else if (workoutType === 'threshold') paceMinPerKm = baseMinPerKm * 0.82;
+        else if (workoutType === 'vo2') paceMinPerKm = baseMinPerKm * 0.73;
+        else if (workoutType === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
+        else if (workoutType === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
+        dur = km * paceMinPerKm + wucdMin;
       } else {
         // Try simple "45min"
-        const simpleMatch = durationDesc.match(/(\d+)min/);
+        const simpleMatch = mainDesc.match(/(\d+)min/);
         if (simpleMatch) {
-          dur = parseInt(simpleMatch[1]);
+          dur = parseInt(simpleMatch[1]) + wucdMin;
         } else {
           // Default by workout type
           if (workoutType === 'long') dur = 120;

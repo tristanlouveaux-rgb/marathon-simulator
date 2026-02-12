@@ -562,79 +562,60 @@ function buildReplaceAdjustments(
                          MAX_ADJUSTMENTS_LIGHT;
 
   const minLoadThreshold = 5;
+  const usedIds = new Set<string>();
 
-  for (const { run, runLoad } of candidates) {
-    if (adjustments.length >= maxAdjustments) break;
-    if (remainingLoad <= minLoadThreshold) break;
-    if (runsLeft <= preserveMin) break;
+  // Interleave: replace 1 → reduce/downgrade → replace 1 → reduce/downgrade...
+  // This naturally scales: small budget = just reduce, medium = replace + reduce, large = replace + reduce + replace
+  const candidateKey = (r: PlannedRun) => `${r.workoutId}:${r.dayIndex}`;
 
-    const canReplace = canReplaceWorkout(sport, run.workoutType, ctx);
-    const runKm = run.plannedDistanceKm;
+  // Sort replaceable candidates by cost (cheapest first — easy runs before quality)
+  const replacePool = candidates
+    .filter(c => canReplaceWorkout(sport, c.run.workoutType, ctx) && c.run.workoutType !== 'long')
+    .sort((a, b) => a.runLoad - b.runLoad);
 
-    // Easy runs: replace if budget covers full load; otherwise reduce
-    if (run.workoutType === 'easy' && canReplace) {
-      if (remainingLoad >= runLoad) {
-        // Full replacement — budget covers entire workout load
-        adjustments.push({
-          workoutId: run.workoutId,
-          dayIndex: run.dayIndex,
-          action: 'replace',
-          originalType: run.workoutType,
-          originalDistanceKm: runKm,
-          newType: 'easy',
-          newDistanceKm: 0,
-          loadReduction: runLoad,
-        });
-        remainingLoad -= runLoad;
-        runsLeft--;
-      } else {
-        // Partial reduction — trim km proportional to remaining load budget
-        const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
-        if (loadPerKm <= 0) continue;
+  let replaceIdx = 0;
 
-        const budgetKm = remainingLoad / loadPerKm;
-        const reduceKm = Math.min(budgetKm, runKm * 0.5); // Cap at 50%
-        const newKm = Math.max(MIN_EASY_KM, Math.round((runKm - reduceKm) * 10) / 10);
-        const actualReductionKm = runKm - newKm;
+  while (adjustments.length < maxAdjustments && remainingLoad > minLoadThreshold) {
+    let madeProgress = false;
 
-        if (actualReductionKm >= 0.5) {
-          const loadReduction = loadPerKm * actualReductionKm;
-          adjustments.push({
-            workoutId: run.workoutId,
-            dayIndex: run.dayIndex,
-            action: 'reduce',
-            originalType: run.workoutType,
-            originalDistanceKm: runKm,
-            newType: 'easy',
-            newDistanceKm: newKm,
-            loadReduction,
-          });
-          remainingLoad -= loadReduction;
-        }
-      }
-      continue;
+    // Try to replace one workout
+    while (replaceIdx < replacePool.length) {
+      const { run, runLoad } = replacePool[replaceIdx];
+      replaceIdx++;
+      if (usedIds.has(candidateKey(run))) continue;
+      if (runsLeft <= preserveMin) break;
+      if (remainingLoad < runLoad) continue;
+      if (adjustments.length >= maxAdjustments) break;
+
+      adjustments.push({
+        workoutId: run.workoutId,
+        dayIndex: run.dayIndex,
+        action: 'replace',
+        originalType: run.workoutType,
+        originalDistanceKm: run.plannedDistanceKm,
+        newType: run.workoutType,
+        newDistanceKm: 0,
+        loadReduction: runLoad,
+      });
+      remainingLoad -= runLoad;
+      runsLeft--;
+      usedIds.add(candidateKey(run));
+      madeProgress = true;
+      break; // One replacement per round, then reduce
     }
 
-    // Quality runs: downgrade or replace based on severity
-    if (isQualityWorkout(run.workoutType)) {
-      if (severity === 'extreme' && canReplace && remainingLoad >= runLoad * 0.8) {
-        // Extreme: replace with short shakeout
-        const shakeoutLoad = computeWorkoutWeightedLoad('easy', MIN_EASY_KM, 4);
-        const loadReduction = Math.max(0, runLoad - shakeoutLoad);
-        adjustments.push({
-          workoutId: run.workoutId,
-          dayIndex: run.dayIndex,
-          action: 'replace',
-          originalType: run.workoutType,
-          originalDistanceKm: runKm,
-          newType: 'easy',
-          newDistanceKm: MIN_EASY_KM,
-          loadReduction,
-        });
-        remainingLoad -= loadReduction;
-        runsLeft--;
-      } else {
-        // Downgrade one step — compute real load delta
+    if (adjustments.length >= maxAdjustments || remainingLoad <= minLoadThreshold) break;
+
+    // Then reduce/downgrade one workout
+    let reducedOne = false;
+    for (const { run, runLoad } of candidates) {
+      if (usedIds.has(candidateKey(run))) continue;
+      if (adjustments.length >= maxAdjustments) break;
+      if (remainingLoad <= minLoadThreshold) break;
+
+      const runKm = run.plannedDistanceKm;
+
+      if (isQualityWorkout(run.workoutType)) {
         const newType = downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
                   : run.workoutType === 'threshold' || run.workoutType === 'race_pace' ? 7
@@ -643,52 +624,67 @@ function buildReplaceAdjustments(
         const originalLoad = computeWorkoutWeightedLoad(run.workoutType, runKm, rpe);
         const downgradedLoad = computeWorkoutWeightedLoad(newType, runKm, downgradedRpe);
         const loadReduction = Math.min(Math.max(0, originalLoad - downgradedLoad), remainingLoad);
-
         if (loadReduction <= minLoadThreshold) continue;
 
         adjustments.push({
-          workoutId: run.workoutId,
-          dayIndex: run.dayIndex,
-          action: 'downgrade',
-          originalType: run.workoutType,
-          originalDistanceKm: runKm,
-          newType,
-          newDistanceKm: runKm,
-          loadReduction,
+          workoutId: run.workoutId, dayIndex: run.dayIndex,
+          action: 'downgrade', originalType: run.workoutType,
+          originalDistanceKm: runKm, newType, newDistanceKm: runKm, loadReduction,
         });
         remainingLoad -= loadReduction;
+        usedIds.add(candidateKey(run));
+        reducedOne = true;
+        madeProgress = true;
+        break;
       }
-      continue;
-    }
 
-    // Long runs: reduce only if heavy/extreme, proportional to budget
-    if (run.workoutType === 'long' && severity !== 'light') {
-      const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
-      if (loadPerKm <= 0) continue;
+      if (run.workoutType === 'easy') {
+        const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
+        if (loadPerKm <= 0) continue;
+        const budgetKm = remainingLoad / loadPerKm;
+        const reduceKm = Math.min(budgetKm, runKm * 0.5);
+        const newKm = Math.max(MIN_EASY_KM, Math.round((runKm - reduceKm) * 10) / 10);
+        const actualReductionKm = runKm - newKm;
+        if (actualReductionKm < 0.5) continue;
 
-      const budgetKm = remainingLoad / loadPerKm;
-      const maxReductionKm = Math.min(budgetKm, runKm * 0.3); // Cap at 30%
-
-      if (maxReductionKm < 1.0) continue;
-
-      const newKm = Math.max(MIN_LONG_KM, Math.round((runKm - maxReductionKm) * 10) / 10);
-      const actualReductionKm = runKm - newKm;
-
-      if (actualReductionKm >= 0.5) {
-        const loadReduction = loadPerKm * actualReductionKm;
         adjustments.push({
-          workoutId: run.workoutId,
-          dayIndex: run.dayIndex,
-          action: 'reduce',
-          originalType: run.workoutType,
-          originalDistanceKm: runKm,
-          newType: 'easy',
-          newDistanceKm: newKm,
-          loadReduction,
+          workoutId: run.workoutId, dayIndex: run.dayIndex,
+          action: 'reduce', originalType: run.workoutType,
+          originalDistanceKm: runKm, newType: 'easy', newDistanceKm: newKm,
+          loadReduction: loadPerKm * actualReductionKm,
         });
-        remainingLoad -= loadReduction;
+        remainingLoad -= loadPerKm * actualReductionKm;
+        usedIds.add(candidateKey(run));
+        reducedOne = true;
+        madeProgress = true;
+        break;
+      }
+
+      if (run.workoutType === 'long' && severity !== 'light') {
+        const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
+        if (loadPerKm <= 0) continue;
+        const budgetKm = remainingLoad / loadPerKm;
+        const maxReductionKm = Math.min(budgetKm, runKm * 0.3);
+        if (maxReductionKm < 1.0) continue;
+        const newKm = Math.max(MIN_LONG_KM, Math.round((runKm - maxReductionKm) * 10) / 10);
+        const actualReductionKm = runKm - newKm;
+        if (actualReductionKm < 0.5) continue;
+
+        adjustments.push({
+          workoutId: run.workoutId, dayIndex: run.dayIndex,
+          action: 'reduce', originalType: run.workoutType,
+          originalDistanceKm: runKm, newType: 'easy', newDistanceKm: newKm,
+          loadReduction: loadPerKm * actualReductionKm,
+        });
+        remainingLoad -= loadPerKm * actualReductionKm;
+        usedIds.add(candidateKey(run));
+        reducedOne = true;
+        madeProgress = true;
+        break;
       }
     }
+
+    if (!madeProgress) break;
   }
 
   return adjustments;
@@ -748,6 +744,23 @@ export function buildCrossTrainingPopup(
   const candidates = buildCandidates(weekRuns, aerobic, anaerobic, activity.dayOfWeek, ctx);
 
   // Build adjustments for each choice (load-based budgeting — total reduction ≤ RRC)
+  // DEBUG: log load currency values
+  console.log('[CrossTraining] === Load Currency Debug ===');
+  console.log(`[CrossTraining] Activity: ${activity.duration_min}min ${sportKey} RPE ${defaultRpe(activity.rpe)}`);
+  console.log(`[CrossTraining] Aerobic: ${aerobic.toFixed(1)}, Anaerobic: ${anaerobic.toFixed(1)}, BaseLoad: ${(aerobic + anaerobic).toFixed(1)}`);
+  console.log(`[CrossTraining] FCL (fatigue): ${recoveryCostLoad.toFixed(1)}, RRC (replacement budget): ${runReplacementCredit.toFixed(1)}`);
+  console.log(`[CrossTraining] Weekly run load: ${weeklyRunLoad.toFixed(1)}, FCL/Weekly: ${(weeklyRunLoad > 0 ? recoveryCostLoad / weeklyRunLoad : 0).toFixed(2)}`);
+  console.log(`[CrossTraining] Severity: ${severity}, Max adjustments: ${severity === 'extreme' ? MAX_ADJUSTMENTS_EXTREME : severity === 'heavy' ? MAX_ADJUSTMENTS_HEAVY : MAX_ADJUSTMENTS_LIGHT}`);
+  console.log(`[CrossTraining] Candidates (sorted by similarity):`);
+  for (const c of candidates) {
+    const storedWL = weightedLoad(c.run.plannedAerobic, c.run.plannedAnaerobic);
+    const recalcRpe = c.run.workoutType === 'vo2' || c.run.workoutType === 'intervals' ? 8
+                    : c.run.workoutType === 'threshold' || c.run.workoutType === 'race_pace' ? 7
+                    : c.run.workoutType === 'easy' ? 3 : 5;
+    const recalcWL = computeWorkoutWeightedLoad(c.run.workoutType, c.run.plannedDistanceKm, recalcRpe);
+    console.log(`  ${c.run.workoutId} (${c.run.workoutType}) ${c.run.plannedDistanceKm}km — stored: A${c.run.plannedAerobic} An${c.run.plannedAnaerobic} wl=${storedWL.toFixed(1)} | recalc wl=${recalcWL.toFixed(1)} | sim=${c.similarity.toFixed(3)}`);
+  }
+
   const reduceAdjustments = buildReduceAdjustments(
     candidates, runReplacementCredit, severity, ctx, preserveMin, plannedCount
   );
@@ -759,13 +772,17 @@ export function buildCrossTrainingPopup(
   // Build outcome descriptions
   const keepDescription = 'Keep your running plan unchanged. Be mindful of accumulated fatigue.';
 
+  // Helper: label for downgrade (threshold→marathon_pace shows "steady")
+  const downgradePaceLabel = (a: Adjustment): string => {
+    if (a.originalType === 'threshold' && a.newType === 'marathon_pace') return 'steady';
+    return a.newType === 'marathon_pace' ? 'marathon pace' : a.newType === 'threshold' ? 'threshold' : 'easy';
+  };
+
   let reduceDescription = 'No adjustments needed.';
   if (reduceAdjustments.length > 0) {
     const parts = reduceAdjustments.map(a => {
       if (a.action === 'downgrade') {
-        const paceLabel = a.newType === 'marathon_pace' ? 'marathon pace'
-                        : a.newType === 'threshold' ? 'threshold' : 'easy';
-        return `${a.workoutId}: run at ${paceLabel} instead`;
+        return `${a.workoutId}: run at ${downgradePaceLabel(a)} instead`;
       }
       return `${a.workoutId}: reduce to ${a.newDistanceKm}km`;
     });
@@ -778,12 +795,10 @@ export function buildCrossTrainingPopup(
       if (a.action === 'replace') {
         return a.newDistanceKm > 0
           ? `${a.workoutId}: replace with ${a.newDistanceKm}km shakeout`
-          : `${a.workoutId}: skip (covered by ${sportDisplayName})`;
+          : `${a.workoutId}: replaced by ${sportDisplayName}`;
       }
       if (a.action === 'downgrade') {
-        const paceLabel = a.newType === 'marathon_pace' ? 'marathon pace'
-                        : a.newType === 'threshold' ? 'threshold' : 'easy';
-        return `${a.workoutId}: run at ${paceLabel} instead`;
+        return `${a.workoutId}: run at ${downgradePaceLabel(a)} instead`;
       }
       return `${a.workoutId}: reduce to ${a.newDistanceKm}km`;
     });
@@ -799,14 +814,13 @@ export function buildCrossTrainingPopup(
   const impactAdjs = reduceAdjustments.length > 0 ? reduceAdjustments : replaceAdjustments;
   const impactParts = impactAdjs.map(a => {
     if (a.action === 'downgrade') {
-      const paceLabel = a.newType === 'marathon_pace' ? 'marathon pace'
-                      : a.newType === 'threshold' ? 'threshold pace' : 'easy pace';
-      return `reduce the pace of your ${a.workoutId} to ${paceLabel}`;
+      const paceLabel = downgradePaceLabel(a);
+      return `reduce the pace of your ${a.workoutId} to ${paceLabel} pace`;
     }
     if (a.action === 'replace') {
       return a.newDistanceKm > 0
         ? `convert your ${a.workoutId} to a ${a.newDistanceKm}km shakeout`
-        : `cover your ${a.workoutId}`;
+        : `replace your ${a.workoutId}`;
     }
     const reductionKm = Math.round((a.originalDistanceKm - a.newDistanceKm) * 10) / 10;
     return `reduce your ${a.workoutId} by ${reductionKm}km`;
@@ -943,9 +957,33 @@ export function workoutsToPlannedRuns(workouts: Workout[], paces?: Paces): Plann
 export function applyAdjustments(
   workouts: Workout[],
   adjustments: Adjustment[],
-  sportName: string
+  sportName: string,
+  paces?: Paces
 ): Workout[] {
   const modified = workouts.map(w => ({ ...w }));
+
+  // Format sec/km to "X:XX"
+  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+
+  // Steady pace: halfway between easy and threshold (used for threshold downgrades)
+  const steadyPaceSec = paces ? Math.round((paces.e + paces.t) / 2) : 0;
+
+  // Get the actual pace string for a downgraded type
+  const paceForType = (wt: WorkoutType, origType?: WorkoutType): string => {
+    if (!paces) return wt === 'marathon_pace' ? 'MP' : wt === 'threshold' ? 'threshold' : 'easy';
+    // Threshold → "steady" (halfway between easy and threshold)
+    if (origType === 'threshold' && wt === 'marathon_pace') return `${fmtPace(steadyPaceSec)}/km`;
+    if (wt === 'marathon_pace') return `${fmtPace(paces.m)}/km`;
+    if (wt === 'threshold') return `${fmtPace(paces.t)}/km`;
+    if (wt === 'easy') return `${fmtPace(paces.e)}/km`;
+    return wt;
+  };
+
+  const paceLabelForType = (wt: WorkoutType, origType?: WorkoutType): string => {
+    // Threshold → "steady" label
+    if (origType === 'threshold' && wt === 'marathon_pace') return 'steady';
+    return wt === 'marathon_pace' ? 'marathon pace' : wt === 'threshold' ? 'threshold' : 'easy';
+  };
 
   for (const adj of adjustments) {
     // Match by both name and dayOfWeek for unique identification
@@ -968,23 +1006,55 @@ export function applyAdjustments(
       } else {
         // Fully covered: no run needed
         workout.status = 'replaced';
-        workout.d = '0km (load covered)';
-        workout.modReason = `Load covered by ${sportName}`;
+        workout.d = '0km (replaced)';
+        workout.modReason = `Replaced by ${sportName}`;
         workout.confidence = 'high';
         workout.t = adj.newType;
       }
     } else if (adj.action === 'downgrade') {
       workout.status = 'reduced';
       workout.originalDistance = workout.d;
-      // Update description to show the downgraded pace (one step easier, not straight to easy)
-      const distKm = Math.round(adj.originalDistanceKm * 10) / 10;
-      const paceLabel = adj.newType === 'marathon_pace' ? 'marathon pace'
-                       : adj.newType === 'threshold' ? 'threshold'
-                       : 'easy';
-      workout.d = distKm > 0 ? `${distKm}km @ ${paceLabel}` : `${workout.d} @ ${paceLabel} effort`;
-      workout.modReason = `Downgraded from ${adj.originalType} to ${paceLabel} due to ${sportName}`;
+      const origDesc = workout.d;
+      const newPace = paceForType(adj.newType, adj.originalType);
+      const label = paceLabelForType(adj.newType, adj.originalType);
+
+      // Progressive/fast-finish (e.g. "13km: last 3 @ MP") → plain easy long run
+      if (/last\s+\d/.test(origDesc)) {
+        const totalMatch = origDesc.match(/^(\d+\.?\d*)km/);
+        const totalKm = totalMatch ? parseFloat(totalMatch[1]) : Math.round(adj.originalDistanceKm);
+        workout.d = `${totalKm}km`;
+        workout.t = 'easy';
+        workout.rpe = 3;
+        workout.r = 3;
+      }
+      // Intervals with time (e.g. "3×8min @ 4:05/km ...") → same structure, new pace
+      else if (/\d+×\d/.test(origDesc)) {
+        // Extract reps, duration, and recovery from original description
+        const intMatch = origDesc.match(/^(\d+)×(\d+\.?\d*)min\s*@\s*[^,\n]+(?:,\s*(.+))?/);
+        if (intMatch) {
+          const reps = intMatch[1];
+          const dur = intMatch[2];
+          const rest = intMatch[3] || '';
+          workout.d = `${reps}×${dur}min @ ${newPace} (${label})${rest ? `, ${rest}` : ''}`;
+        } else {
+          workout.d = `${origDesc.replace(/@\s*[^,(\n]+/, `@ ${newPace} (${label})`)}`;
+        }
+      }
+      // Continuous time-at-pace (e.g. "13min @ threshold") → same time, new pace
+      else if (/^\d+min\s*@/.test(origDesc)) {
+        const timeMatch = origDesc.match(/^(\d+)min/);
+        const mins = timeMatch ? timeMatch[1] : '?';
+        workout.d = `${mins}min @ ${newPace} (${label})`;
+      }
+      // Fallback: simple distance @ new pace
+      else {
+        const distKm = Math.round(adj.originalDistanceKm * 10) / 10;
+        workout.d = distKm > 0 ? `${distKm}km @ ${newPace} (${label})` : `${origDesc} @ ${label} effort`;
+      }
+
+      workout.modReason = `Downgraded from ${adj.originalType} to ${label} due to ${sportName}`;
       workout.confidence = 'medium';
-      workout.t = adj.newType;
+      if (workout.t !== 'easy') workout.t = adj.newType;
     } else if (adj.action === 'reduce') {
       workout.status = 'reduced';
       workout.originalDistance = workout.d;

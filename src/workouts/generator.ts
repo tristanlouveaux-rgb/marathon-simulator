@@ -215,7 +215,7 @@ export function generateWeekWorkouts(
 
   // Apply injury adaptations if injury is active
   if (injuryState && injuryState.active) {
-    scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState);
+    scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState, easyPaceSecPerKm);
   }
 
   // Generate stable IDs for each workout (W{week}-{type}-{index})

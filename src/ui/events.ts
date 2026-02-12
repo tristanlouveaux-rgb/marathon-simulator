@@ -1243,11 +1243,15 @@ export function logActivity(): void {
     if (hasAdjustments) {
       showSuggestionModal(popup, sportNorm, (decision) => {
         if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
-          const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, sportNorm);
+          const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, sportNorm, s.pac);
           if (!wk.workoutMods) wk.workoutMods = [];
           for (const adj of decision.adjustments) {
             const modified = modifiedWorkouts.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
-            if (!modified) continue;
+            if (!modified) {
+              console.warn(`[CrossTraining] APPLY MISS: adj="${adj.workoutId}" day=${adj.dayIndex} action=${adj.action} — no match in workouts:`, workouts.map(w => `${w.n} day=${w.dayOfWeek}`));
+              continue;
+            }
+            console.log(`[CrossTraining] APPLY HIT: ${adj.workoutId} day=${adj.dayIndex} → ${adj.action} (${modified.d})`);
             wk.workoutMods.push({
               name: modified.n,
               dayOfWeek: modified.dayOfWeek,
@@ -1367,7 +1371,7 @@ export function logActivity(): void {
       // Apply adjustments based on user choice
       if (decision && decision.choice !== 'keep' && decision.adjustments.length > 0) {
         // Apply the adjustments to workouts
-        const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, normalizeSport(sport));
+        const modifiedWorkouts = applyAdjustments(workouts, decision.adjustments, normalizeSport(sport), s.pac);
 
         // Store workout modifications in the week
         if (!wk.workoutMods) wk.workoutMods = [];

@@ -8,6 +8,10 @@ import type { AbilityBand } from '@/types';
  *
  * Phase-aware templates with ability scaling, deload handling, and injury adaptation.
  * Gym workouts are additive — they never replace running sessions.
+ *
+ * Description format: exercises separated by \n, one per line.
+ * Each line: "{sets}x{reps} {Exercise} {load} ({feel cue}) ({rest period})"
+ * Last line is a stretch tip (starts with "Stretch").
  */
 export function generateGymWorkouts(
   phase: TrainingPhase,
@@ -30,7 +34,12 @@ export function generateGymWorkouts(
       return [{
         t: 'gym',
         n: 'Return Strength',
-        d: '2×10 Bodyweight Squat, 2×10 Glute Bridge, 2×12 Calf Raises',
+        d: [
+          '2x10 Bodyweight Squat (Slow and controlled — no pain) (60s rest)',
+          '2x10 Glute Bridge (Light activation) (30s rest)',
+          '2x12 Calf Raises (Easy — full range) (30s rest)',
+          'Stretch between sets: focus on injured area',
+        ].join('\n'),
         r: 3,
         rpe: 3,
       }];
@@ -105,23 +114,6 @@ function getPhaseSessionCount(phase: TrainingPhase, maxSessions: number): number
 }
 
 // ---------------------------------------------------------------------------
-// Feel cue per phase — appended to every session description
-// ---------------------------------------------------------------------------
-
-const FEEL_CUE: Record<TrainingPhase, string> = {
-  base: 'Feel: heavy but controlled, 2-3 reps left in the tank',
-  build: 'Feel: explosive and powerful, focus on speed of movement',
-  peak: 'Feel: comfortable, just keeping the movement patterns sharp',
-  taper: 'Feel: light and snappy, waking up the muscles',
-};
-
-const COMPLEMENTARY_NOTE = 'These are running-specific exercises. If you already have a gym routine, just add these key moves to your existing sessions.';
-
-function withCue(d: string, phase: TrainingPhase): string {
-  return `${d}. ${FEEL_CUE[phase]}`;
-}
-
-// ---------------------------------------------------------------------------
 // Full templates (intermediate+, hybrid)
 // ---------------------------------------------------------------------------
 
@@ -129,22 +121,64 @@ function getFullTemplates(phase: TrainingPhase): Workout[] {
   switch (phase) {
     case 'base':
       return [
-        { t: 'gym', n: 'Heavy Lower Body', d: withCue('3×5 Back Squat @80% 1RM (heavy — ~2 reps in reserve), 3×8 Romanian Deadlift @60% 1RM (moderate load), 3×10 Hip Thrust @60% 1RM, 3×45s Front Plank', phase), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Unilateral & Core', d: withCue('3×8 Bulgarian Split Squat each @60% 1RM (challenging but steady), 3×10 Step-Ups @50% 1RM, 3×15 Banded Clamshells, 3×10 Pallof Press', phase), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Posterior Chain', d: withCue('3×5 Deadlift @80% 1RM (heavy — ~2 reps in reserve), 3×10 Single-Leg RDL @40% 1RM (moderate), 4×12 Calf Raises, 3×10 Nordic Curl (assisted)', phase), r: 7, rpe: 7 },
+        { t: 'gym', n: 'Heavy Lower Body', d: [
+          '3x5 Back Squat @80% 1RM (Should feel heavy — 2 reps in reserve) (2-3 min rest)',
+          '3x8 Romanian Deadlift @60% 1RM (Moderate — feel the hamstring stretch) (90s rest)',
+          '3x10 Hip Thrust @60% 1RM (Squeeze glutes at the top for 1s) (60-90s rest)',
+          '3x45s Front Plank (Flat back, brace core) (30-60s rest)',
+          'Stretch between sets: hip flexors, quads, calves',
+        ].join('\n'), r: 7, rpe: 7 },
+        { t: 'gym', n: 'Unilateral & Core', d: [
+          '3x8 each leg Bulgarian Split Squat @60% 1RM (Challenging but steady) (90s rest)',
+          '3x10 each leg Step-Ups @50% 1RM (Drive through the heel) (60-90s rest)',
+          '3x15 Banded Clamshells (Slow and controlled) (30s rest)',
+          '3x10 Pallof Press (Resist rotation, brace core) (30-60s rest)',
+          'Stretch between sets: hip flexors, glutes, ankles',
+        ].join('\n'), r: 7, rpe: 7 },
+        { t: 'gym', n: 'Posterior Chain', d: [
+          '3x5 Deadlift @80% 1RM (Should feel heavy — 2 reps in reserve) (2-3 min rest)',
+          '3x10 each leg Single-Leg RDL @40% 1RM (Balance first, then load) (60-90s rest)',
+          '4x12 Calf Raises (Full range — pause at the top) (30-60s rest)',
+          '3x10 Nordic Curl assisted (Slow eccentric, push back up to reset) (60-90s rest)',
+          'Stretch between sets: hamstrings, calves, hip flexors',
+        ].join('\n'), r: 7, rpe: 7 },
       ];
     case 'build':
       return [
-        { t: 'gym', n: 'Power & Plyometrics', d: withCue('4×3 Jump Squat (explosive, bodyweight or light), 3×5 Front Squat @85% 1RM (heavy — last rep should be tough), 3×5 Single-Leg Bounds each, 3×8 Glute Bridge @60% 1RM', phase), r: 7, rpe: 7 },
-        { t: 'gym', n: 'Explosive Strength', d: withCue('3×5 Trap-Bar Deadlift @85% 1RM (heavy — last rep should be tough), 3×5 Box Jumps, 3×8 Weighted Lunges @50% 1RM (moderate), 2×30s Side Plank each', phase), r: 7, rpe: 7 },
+        { t: 'gym', n: 'Power & Plyometrics', d: [
+          '4x3 Jump Squat bodyweight or light (Explosive — maximum height, land soft) (90s rest)',
+          '3x5 Front Squat @85% 1RM (Heavy — last rep should be tough) (2-3 min rest)',
+          '3x5 each leg Single-Leg Bounds (Powerful push through the ankle) (60-90s rest)',
+          '3x8 Glute Bridge @60% 1RM (Squeeze 2s at top) (60s rest)',
+          'Stretch between sets: hip flexors, quads, ankles',
+        ].join('\n'), r: 7, rpe: 7 },
+        { t: 'gym', n: 'Explosive Strength', d: [
+          '3x5 Trap-Bar Deadlift @85% 1RM (Heavy — last rep should be tough) (2-3 min rest)',
+          '3x5 Box Jumps (Land softly, step down to reset) (60-90s rest)',
+          '3x8 each leg Weighted Lunges @50% 1RM (Controlled descent) (60-90s rest)',
+          '2x30s each side Side Plank (Stack hips, brace hard) (30s rest)',
+          'Stretch between sets: hamstrings, hip flexors, calves',
+        ].join('\n'), r: 7, rpe: 7 },
       ];
     case 'peak':
       return [
-        { t: 'gym', n: 'Maintenance', d: withCue('2×5 Squat @75% 1RM (moderate — should feel easy), 2×5 Deadlift @75% 1RM (moderate — should feel easy), 2×8 Lunges @40% 1RM, 2×15 Calf Raises', phase), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Maintenance', d: [
+          '2x5 Squat @75% 1RM (Should feel comfortable — maintaining patterns) (2 min rest)',
+          '2x5 Deadlift @75% 1RM (Smooth reps — not grinding) (2 min rest)',
+          '2x8 each leg Lunges @40% 1RM (Light and controlled) (60s rest)',
+          '2x15 Calf Raises (Easy — maintain range of motion) (30s rest)',
+          'Stretch between sets: full lower body',
+        ].join('\n'), r: 5, rpe: 5 },
       ];
     case 'taper':
       return [
-        { t: 'gym', n: 'Activation', d: withCue('2×5 Jump Squat (bodyweight), 2×5 Trap-Bar Deadlift @70% 1RM (light — smooth and fast), 2×8 Lunges (bodyweight), Short core circuit', phase), r: 4, rpe: 4 },
+        { t: 'gym', n: 'Activation', d: [
+          '2x5 Jump Squat bodyweight (Light and snappy — wake up the legs) (60s rest)',
+          '2x5 Trap-Bar Deadlift @70% 1RM (Smooth and fast — no grinding) (90s rest)',
+          '2x8 each leg Lunges bodyweight (Just moving well) (30s rest)',
+          'Core circuit: 30s plank + 20s each side plank (No rest between exercises)',
+          'Stretch to finish: 5 min full lower body',
+        ].join('\n'), r: 4, rpe: 4 },
       ];
   }
 }
@@ -157,22 +191,64 @@ function getNoviceTemplates(phase: TrainingPhase): Workout[] {
   switch (phase) {
     case 'base':
       return [
-        { t: 'gym', n: 'Lower Body Foundation', d: withCue('3×8 Goblet Squat @50% 1RM (moderate — focus on depth), 3×10 Romanian Deadlift @40% 1RM (light, feel the hamstrings stretch), 3×10 Hip Thrust @50% 1RM, 3×30s Plank', phase), r: 6, rpe: 6 },
-        { t: 'gym', n: 'Unilateral Strength', d: withCue('3×8 Split Squat each @40% 1RM (steady, balance first), 3×10 Step-Ups @30% 1RM, 3×12 Calf Raises, 3×10 Dead Bug', phase), r: 6, rpe: 6 },
-        { t: 'gym', n: 'Posterior Chain', d: withCue('3×8 Kettlebell Deadlift @50% 1RM (moderate, hinge from hips), 3×10 Single-Leg Glute Bridge, 3×12 Calf Raises, 3×30s Side Plank', phase), r: 6, rpe: 6 },
+        { t: 'gym', n: 'Lower Body Foundation', d: [
+          '3x8 Goblet Squat @50% 1RM (Moderate — focus on depth and control) (90s rest)',
+          '3x10 Romanian Deadlift @40% 1RM (Light — feel the hamstring stretch) (60-90s rest)',
+          '3x10 Hip Thrust @50% 1RM (Squeeze glutes at the top) (60s rest)',
+          '3x30s Plank (Flat back, breathe steadily) (30s rest)',
+          'Stretch between sets: hip flexors, hamstrings, calves',
+        ].join('\n'), r: 6, rpe: 6 },
+        { t: 'gym', n: 'Unilateral Strength', d: [
+          '3x8 each leg Split Squat @40% 1RM (Steady — balance first) (90s rest)',
+          '3x10 each leg Step-Ups @30% 1RM (Drive through the heel) (60s rest)',
+          '3x12 Calf Raises (Full range of motion) (30s rest)',
+          '3x10 Dead Bug (Slow — keep lower back flat) (30s rest)',
+          'Stretch between sets: hip flexors, quads, calves',
+        ].join('\n'), r: 6, rpe: 6 },
+        { t: 'gym', n: 'Posterior Chain', d: [
+          '3x8 Kettlebell Deadlift @50% 1RM (Moderate — hinge from hips) (90s rest)',
+          '3x10 each leg Single-Leg Glute Bridge (Squeeze at the top) (30-60s rest)',
+          '3x12 Calf Raises (Full range of motion) (30s rest)',
+          '3x30s each side Side Plank (Stack hips, breathe steadily) (30s rest)',
+          'Stretch between sets: hamstrings, glutes, calves',
+        ].join('\n'), r: 6, rpe: 6 },
       ];
     case 'build':
       return [
-        { t: 'gym', n: 'Power Intro', d: withCue('3×5 Jump Squat (bodyweight, land softly), 3×8 Goblet Squat @55% 1RM, 3×8 Lunges @40% 1RM, 3×10 Glute Bridge', phase), r: 6, rpe: 6 },
-        { t: 'gym', n: 'Strength & Core', d: withCue('3×8 Deadlift @60% 1RM (moderate — challenging but good form), 3×5 Box Jumps (low), 3×8 Step-Ups @40% 1RM, 2×30s Plank', phase), r: 6, rpe: 6 },
+        { t: 'gym', n: 'Power Intro', d: [
+          '3x5 Jump Squat bodyweight (Land softly — absorb through the knees) (60-90s rest)',
+          '3x8 Goblet Squat @55% 1RM (Moderate — controlled depth) (90s rest)',
+          '3x8 each leg Lunges @40% 1RM (Steady descent) (60s rest)',
+          '3x10 Glute Bridge (Squeeze at the top) (30s rest)',
+          'Stretch between sets: hip flexors, quads, ankles',
+        ].join('\n'), r: 6, rpe: 6 },
+        { t: 'gym', n: 'Strength & Core', d: [
+          '3x8 Deadlift @60% 1RM (Moderate — challenging but good form) (90s rest)',
+          '3x5 Box Jumps low box (Land softly, step down) (60-90s rest)',
+          '3x8 each leg Step-Ups @40% 1RM (Drive through the heel) (60s rest)',
+          '2x30s Plank (Flat back, brace core) (30s rest)',
+          'Stretch between sets: hamstrings, hip flexors, calves',
+        ].join('\n'), r: 6, rpe: 6 },
       ];
     case 'peak':
       return [
-        { t: 'gym', n: 'Maintenance', d: withCue('2×8 Goblet Squat @40% 1RM (light), 2×8 Deadlift @40% 1RM (light — easy reps), 2×10 Lunges, 2×12 Calf Raises', phase), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Maintenance', d: [
+          '2x8 Goblet Squat @40% 1RM (Light — just maintaining the pattern) (60s rest)',
+          '2x8 Deadlift @40% 1RM (Light — easy reps) (60s rest)',
+          '2x10 each leg Lunges bodyweight (Controlled movement) (30s rest)',
+          '2x12 Calf Raises (Easy) (30s rest)',
+          'Stretch between sets: full lower body',
+        ].join('\n'), r: 5, rpe: 5 },
       ];
     case 'taper':
       return [
-        { t: 'gym', n: 'Activation', d: withCue('2×5 Jump Squat (bodyweight), 2×10 Lunges, 2×10 Glute Bridge, Short core circuit', phase), r: 4, rpe: 4 },
+        { t: 'gym', n: 'Activation', d: [
+          '2x5 Jump Squat bodyweight (Light and snappy) (60s rest)',
+          '2x10 each leg Lunges bodyweight (Just moving well) (30s rest)',
+          '2x10 Glute Bridge (Easy activation) (30s rest)',
+          'Core circuit: 30s plank + 20s each side plank (No rest between)',
+          'Stretch to finish: 5 min full lower body',
+        ].join('\n'), r: 4, rpe: 4 },
       ];
   }
 }
@@ -185,22 +261,64 @@ function getBeginnerTemplates(phase: TrainingPhase): Workout[] {
   switch (phase) {
     case 'base':
       return [
-        { t: 'gym', n: 'Bodyweight Foundation', d: withCue('3×10 Bodyweight Squat (slow, full depth), 3×10 Glute Bridge (squeeze at top), 3×10 Reverse Lunge each leg (steady), 3×30s Plank (flat back)', phase), r: 5, rpe: 5 },
-        { t: 'gym', n: 'Core & Balance', d: withCue('3×10 Step-Ups (low box), 3×10 Single-Leg Glute Bridge each, 3×10 Dead Bug (slow), 3×20s Side Plank each', phase), r: 5, rpe: 5 },
-        { t: 'gym', n: 'Movement Patterns', d: withCue('3×10 Wall Sit (30s), 3×10 Calf Raises (bodyweight), 3×10 Bird Dog each side, 3×10 Banded Clamshells', phase), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Bodyweight Foundation', d: [
+          '3x10 Bodyweight Squat (Slow and controlled — full depth) (60s rest)',
+          '3x10 Glute Bridge (Squeeze at the top for 1s) (30-60s rest)',
+          '3x10 each leg Reverse Lunge (Steady — touch knee gently to floor) (60s rest)',
+          '3x30s Plank (Flat back — breathe steadily) (30s rest)',
+          'Stretch between sets: hip flexors, quads, calves',
+        ].join('\n'), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Core & Balance', d: [
+          '3x10 each leg Step-Ups low box (Drive through the heel) (60s rest)',
+          '3x10 each leg Single-Leg Glute Bridge (Squeeze at the top) (30-60s rest)',
+          '3x10 Dead Bug (Slow — keep lower back pressed into floor) (30s rest)',
+          '3x20s each side Side Plank (Hips stacked, breathe steadily) (30s rest)',
+          'Stretch between sets: hip flexors, glutes, ankles',
+        ].join('\n'), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Movement Patterns', d: [
+          '3x30s Wall Sit (Back flat against wall, thighs parallel) (30-60s rest)',
+          '3x10 Calf Raises bodyweight (Full range — pause at the top) (30s rest)',
+          '3x10 each side Bird Dog (Slow — opposite arm and leg) (30s rest)',
+          '3x10 Banded Clamshells (Slow and controlled) (30s rest)',
+          'Stretch between sets: hip flexors, calves, hamstrings',
+        ].join('\n'), r: 5, rpe: 5 },
       ];
     case 'build':
       return [
-        { t: 'gym', n: 'Bodyweight Power', d: withCue('3×5 Squat Jumps (land softly), 3×10 Bodyweight Squat, 3×10 Walking Lunges, 3×10 Glute Bridge', phase), r: 5, rpe: 5 },
-        { t: 'gym', n: 'Bodyweight Strength', d: withCue('3×10 Step-Ups, 3×10 Single-Leg RDL (bodyweight, balance focus), 3×12 Calf Raises, 2×30s Plank', phase), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Bodyweight Power', d: [
+          '3x5 Squat Jumps (Land softly — absorb through knees) (60-90s rest)',
+          '3x10 Bodyweight Squat (Controlled depth) (60s rest)',
+          '3x10 each leg Walking Lunges (Steady pace) (60s rest)',
+          '3x10 Glute Bridge (Squeeze at the top) (30s rest)',
+          'Stretch between sets: hip flexors, quads, calves',
+        ].join('\n'), r: 5, rpe: 5 },
+        { t: 'gym', n: 'Bodyweight Strength', d: [
+          '3x10 each leg Step-Ups (Drive through the heel) (60s rest)',
+          '3x10 each leg Single-Leg RDL bodyweight (Balance focus — hold a wall if needed) (60s rest)',
+          '3x12 Calf Raises (Full range of motion) (30s rest)',
+          '2x30s Plank (Flat back, brace core) (30s rest)',
+          'Stretch between sets: hamstrings, calves, hip flexors',
+        ].join('\n'), r: 5, rpe: 5 },
       ];
     case 'peak':
       return [
-        { t: 'gym', n: 'Maintenance', d: withCue('2×10 Bodyweight Squat, 2×10 Glute Bridge, 2×10 Lunges, 2×12 Calf Raises', phase), r: 4, rpe: 4 },
+        { t: 'gym', n: 'Maintenance', d: [
+          '2x10 Bodyweight Squat (Easy — just maintaining movement) (30-60s rest)',
+          '2x10 Glute Bridge (Light activation) (30s rest)',
+          '2x10 each leg Lunges (Controlled) (30s rest)',
+          '2x12 Calf Raises (Easy) (30s rest)',
+          'Stretch between sets: full lower body',
+        ].join('\n'), r: 4, rpe: 4 },
       ];
     case 'taper':
       return [
-        { t: 'gym', n: 'Activation', d: withCue('2×5 Squat Jumps (bodyweight), 2×10 Lunges, 2×10 Glute Bridge, Short core circuit', phase), r: 3, rpe: 3 },
+        { t: 'gym', n: 'Activation', d: [
+          '2x5 Squat Jumps bodyweight (Light and snappy) (60s rest)',
+          '2x10 each leg Lunges (Just moving well) (30s rest)',
+          '2x10 Glute Bridge (Easy activation) (30s rest)',
+          'Core circuit: 20s plank + 15s each side plank (No rest between)',
+          'Stretch to finish: 5 min full lower body',
+        ].join('\n'), r: 3, rpe: 3 },
       ];
   }
 }

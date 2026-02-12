@@ -8,6 +8,23 @@ import { getPaceForZone } from '@/calculations';
  * @returns Parsed workout information
  */
 export function parseWorkoutDescription(desc: string, paces: Paces): ParsedWorkout {
+  // Handle multi-line descriptions with warm up / cool down
+  const lines = desc.split('\n').filter(l => l.trim());
+  if (lines.length >= 3 && lines[0].includes('warm up')) {
+    // Parse the main set (middle line)
+    const mainResult = parseWorkoutDescription(lines[1], paces);
+    // Add WU/CD time: extract km from "Xkm warm up" and "Xkm cool down"
+    const wuMatch = lines[0].match(/^(\d+\.?\d*)km/);
+    const cdMatch = lines[lines.length - 1].match(/^(\d+\.?\d*)km/);
+    const wuKm = wuMatch ? parseFloat(wuMatch[1]) : 0;
+    const cdKm = cdMatch ? parseFloat(cdMatch[1]) : 0;
+    const easyPace = paces.e || 360;
+    const wucdTime = (wuKm + cdKm) * easyPace;
+    mainResult.totalTime += wucdTime;
+    mainResult.totalDistance += (wuKm + cdKm) * 1000;
+    return mainResult;
+  }
+
   const result: ParsedWorkout = {
     totalDistance: 0,
     workTime: 0,
@@ -127,6 +144,44 @@ export function parseWorkoutDescription(desc: string, paces: Paces): ParsedWorko
     return result;
   }
 
+  // Format 4b: Intervals with explicit pace (e.g., "5×3min @ 3:47/km (~790m), 2 min recovery between sets")
+  const intervalPaceMatch = desc.match(/^(\d+)×(\d+\.?\d*)min\s*@\s*(\d+:\d+)\/km\s*\(~[^)]+\),?\s*(\d+\.?\d*)\s*min\s*recovery/i);
+  if (intervalPaceMatch) {
+    const reps = parseInt(intervalPaceMatch[1]);
+    const workMin = parseFloat(intervalPaceMatch[2]);
+    const paceStr = intervalPaceMatch[3]; // e.g. "3:47"
+    const restMin = parseFloat(intervalPaceMatch[4]);
+    const [pm, ps] = paceStr.split(':').map(Number);
+    const paceSec = pm * 60 + ps; // sec per km
+
+    const repTime = workMin * 60;
+    const restTime = restMin * 60;
+    const distPerRep = (repTime / paceSec) * 1000;
+
+    result.totalDistance = distPerRep * reps;
+    result.workTime = repTime * reps;
+    result.totalTime = (repTime + restTime) * reps - restTime;
+    result.avgPace = paceSec;
+    result.format = 'intervals_time';
+    return result;
+  }
+
+  // Format 4c: Continuous at explicit pace (e.g., "13min @ 4:05/km (~3.2km)")
+  const contPaceMatch = desc.match(/^(\d+)min\s*@\s*(\d+:\d+)\/km/i);
+  if (contPaceMatch) {
+    const minutes = parseInt(contPaceMatch[1]);
+    const paceStr = contPaceMatch[2];
+    const [pm, ps] = paceStr.split(':').map(Number);
+    const paceSec = pm * 60 + ps;
+
+    result.workTime = minutes * 60;
+    result.totalTime = minutes * 60;
+    result.totalDistance = (minutes * 60 / paceSec) * 1000;
+    result.avgPace = paceSec;
+    result.format = 'time_at_pace';
+    return result;
+  }
+
   // Format 5: Progressive/Fast finish (e.g., "21km: last 5 @ HM", "29km: last 10 @ MP")
   const progressiveMatch = desc.match(/^(\d+\.?\d*)km:?\s*last\s*(\d+\.?\d*)\s*@\s*(\w+)/i);
   if (progressiveMatch) {
@@ -211,6 +266,16 @@ export function parseWorkoutDescription(desc: string, paces: Paces): ParsedWorko
     result.avgPace = pace;
     result.paceZone = zone;
     result.format = 'long_intervals';
+    return result;
+  }
+
+  // Format 9: Cross-training duration (e.g., "Swimming 30min", "Cycling 45min")
+  const crossMatch = desc.match(/(\d+)\s*min/i);
+  if (crossMatch) {
+    const minutes = parseInt(crossMatch[1]);
+    result.totalTime = minutes * 60;
+    result.workTime = minutes * 60;
+    result.format = 'cross';
     return result;
   }
 

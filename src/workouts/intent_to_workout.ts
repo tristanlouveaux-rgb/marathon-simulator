@@ -28,6 +28,22 @@ export function intentToWorkout(
 ): Workout {
   const { slot, totalMinutes, workMinutes, reps, repMinutes, recoveryMinutes, variantId } = intent;
 
+  // Derive actual paces from easy pace for readable descriptions
+  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  const vo2PaceSec = easyPaceSecPerKm ? easyPaceSecPerKm * 0.809 : 0;
+  const thresholdPaceSec = easyPaceSecPerKm ? easyPaceSecPerKm / 1.15 : 0;
+  const vo2Pace = easyPaceSecPerKm ? fmtPace(vo2PaceSec) : null;   // ~VO2max/5K pace
+  const thresholdPace = easyPaceSecPerKm ? fmtPace(thresholdPaceSec) : null;  // ~LT pace
+  const mpPace = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm * 0.913) : null;     // ~Marathon pace
+  const hmPace = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm * 0.87) : null;      // ~HM pace
+
+  // Zone labels with actual pace when available
+  const easyLabel = easyPaceSecPerKm ? `${fmtPace(easyPaceSecPerKm)}/km` : 'easy pace';
+  const vo2Label = vo2Pace ? `${vo2Pace}/km` : 'VO2 pace';
+  const thresholdLabel = thresholdPace ? `${thresholdPace}/km` : 'threshold';
+  const mpLabel = mpPace ? `MP (${mpPace}/km)` : 'MP';
+  const hmLabel = hmPace ? `HM pace (${hmPace}/km)` : 'HM pace';
+
   switch (slot) {
     case 'easy': {
       const km = minutesToKm(totalMinutes, easyPaceSecPerKm);
@@ -48,7 +64,7 @@ export function intentToWorkout(
         return {
           t: 'progressive',
           n: 'Long Run (Fast Finish)',
-          d: `${km}km: last ${fastKm} @ MP`,
+          d: `${km}km: last ${fastKm} @ ${mpLabel}`,
           r: 5,
           rpe: 5,
         };
@@ -64,20 +80,23 @@ export function intentToWorkout(
 
     case 'threshold': {
       if (reps && repMinutes && recoveryMinutes) {
-        // intervals_time format: "3×8min @ threshold, 2 minute break"
+        const mainSet = `${reps}×${fmtMin(repMinutes)}min @ ${thresholdLabel} (~${fmtDist(repMinutes, thresholdPaceSec)}), ${fmtMin(recoveryMinutes)} min recovery between sets`;
+        const sessionMin = reps * repMinutes + (reps - 1) * recoveryMinutes;
+        const wucd = wucdKm(sessionMin, easyPaceSecPerKm);
         return {
           t: 'threshold',
           n: nameForSlot(slot, intent),
-          d: `${reps}×${fmtMin(repMinutes)}min @ threshold, ${fmtMin(recoveryMinutes)} minute break`,
+          d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
           r: 7,
           rpe: 7,
         };
       }
-      // continuous: time_at_pace format: "20min @ threshold"
+      const mainSet = `${workMinutes}min @ ${thresholdLabel} (~${fmtDist(workMinutes, thresholdPaceSec)})`;
+      const wucd = wucdKm(workMinutes, easyPaceSecPerKm);
       return {
         t: 'threshold',
         n: nameForSlot(slot, intent),
-        d: `${workMinutes}min @ threshold`,
+        d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
         r: 7,
         rpe: 7,
       };
@@ -85,18 +104,23 @@ export function intentToWorkout(
 
     case 'vo2': {
       if (reps && repMinutes && recoveryMinutes) {
+        const mainSet = `${reps}×${fmtMin(repMinutes)}min @ ${vo2Label} (~${fmtDist(repMinutes, vo2PaceSec)}), ${fmtMin(recoveryMinutes)} min recovery between sets`;
+        const sessionMin = reps * repMinutes + (reps - 1) * recoveryMinutes;
+        const wucd = wucdKm(sessionMin, easyPaceSecPerKm);
         return {
           t: 'vo2',
           n: nameForSlot(slot, intent),
-          d: `${reps}×${fmtMin(repMinutes)}min @ 5K, ${fmtMin(recoveryMinutes)} minute break`,
+          d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
           r: 8,
           rpe: 8,
         };
       }
+      const mainSet = `${workMinutes}min @ ${vo2Label} (~${fmtDist(workMinutes, vo2PaceSec)})`;
+      const wucd = wucdKm(workMinutes, easyPaceSecPerKm);
       return {
         t: 'vo2',
         n: nameForSlot(slot, intent),
-        d: `${workMinutes}min @ 5K`,
+        d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
         r: 8,
         rpe: 8,
       };
@@ -106,7 +130,7 @@ export function intentToWorkout(
       return {
         t: 'marathon_pace',
         n: 'Marathon Pace',
-        d: `${workMinutes}min @ MP`,
+        d: `${workMinutes}min @ ${mpLabel}`,
         r: 6,
         rpe: 6,
       };
@@ -118,7 +142,7 @@ export function intentToWorkout(
       return {
         t: 'progressive',
         n: 'Progressive Run',
-        d: `${km}km: last ${workKm} @ MP`,
+        d: `${km}km: last ${workKm} @ ${mpLabel}`,
         r: 5,
         rpe: 5,
       };
@@ -150,6 +174,23 @@ function minutesToKm(minutes: number, easyPaceSecPerKm?: number): number {
 /** Format minutes — drop decimal if integer */
 function fmtMin(m: number): string {
   return Number.isInteger(m) ? String(m) : m.toFixed(1);
+}
+
+/** Warm-up/cool-down km (each side) to bring session to ≥30 min. Returns 0 if already ≥30. */
+function wucdKm(sessionMinutes: number, easyPaceSecPerKm?: number): number {
+  if (sessionMinutes >= 30 || !easyPaceSecPerKm) return 0;
+  const deficitPerSide = (30 - sessionMinutes) / 2;
+  const kmPerSide = deficitPerSide * 60 / easyPaceSecPerKm;
+  return Math.ceil(kmPerSide);
+}
+
+/** Format distance from minutes at a given pace — e.g. "800m" or "3.2km" */
+function fmtDist(minutes: number, paceSecPerKm: number): string {
+  if (!paceSecPerKm) return '?';
+  const km = minutes * 60 / paceSecPerKm;
+  if (km < 1) return `${Math.round(km * 100) * 10}m`;
+  const rounded = Math.round(km * 10) / 10;
+  return `${rounded}km`;
 }
 
 /** Generate a workout name from slot + variant */

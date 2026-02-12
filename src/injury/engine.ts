@@ -558,7 +558,10 @@ export function canProgressFromAcute(state: InjuryState): boolean {
   const now = new Date();
   const hoursPassed = (now.getTime() - startDate.getTime()) / (1000 * 60 * 60);
 
-  return hoursPassed >= ACUTE_PHASE_MIN_HOURS && state.currentPain <= 3;
+  // Time gate: 72 real hours OR at least 1 weekly check-in (simulated week)
+  const timeGatePassed = hoursPassed >= ACUTE_PHASE_MIN_HOURS || state.history.length >= 2;
+
+  return timeGatePassed && state.currentPain <= 3;
 }
 
 /**
@@ -628,6 +631,30 @@ export function recordMorningPain(state: InjuryState, pain: number): InjuryState
 export function evaluatePhaseTransition(state: InjuryState): InjuryState {
   let newState = { ...state };
 
+  // General pain regression — applies to ALL non-acute phases
+  if (state.injuryPhase !== 'acute') {
+    // Severe pain (≥7): straight back to acute regardless of current phase
+    if (state.currentPain >= 7) {
+      newState.injuryPhase = 'acute';
+      newState.acutePhaseStartDate = new Date().toISOString();
+      newState.capacityTestsPassed = [];
+      const transition: PhaseTransition = {
+        fromPhase: state.injuryPhase,
+        toPhase: 'acute',
+        date: new Date().toISOString(),
+        reason: `Severe pain (${state.currentPain}/10) — returning to acute rest`,
+        wasRegression: true,
+      };
+      newState.phaseTransitions = [...newState.phaseTransitions, transition];
+      console.log(`INJURY REGRESSION: ${state.injuryPhase} -> acute (pain ${state.currentPain}/10)`);
+      return newState;
+    }
+    // Moderate pain (≥4) in advanced phases: regress one phase
+    if (state.currentPain >= 4 && ['test_capacity', 'return_to_run', 'graduated_return'].includes(state.injuryPhase)) {
+      return applyPhaseRegression(newState, `Pain increased to ${state.currentPain}/10`);
+    }
+  }
+
   // Check for regression due to pain latency
   if (state.painLatency && state.injuryPhase !== 'acute') {
     return applyPhaseRegression(newState, 'Pain latency detected (pain worse 24h post-activity)');
@@ -637,7 +664,7 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
   switch (state.injuryPhase) {
     case 'acute':
       if (canProgressFromAcute(state)) {
-        return applyPhaseProgression(newState, '72h rest complete, pain ≤3/10');
+        return applyPhaseProgression(newState, 'Rest complete, pain ≤3/10');
       }
       break;
 
@@ -1169,7 +1196,7 @@ export function applyAdvancedInjuryLogic(
  * @param injuryState - Current injury state
  * @returns Adapted workouts array
  */
-export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryState): Workout[] {
+export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryState, easyPaceSecPerKm?: number): Workout[] {
   // Sync recoveryPhase from injuryPhase to prevent dual-system contradictions
   const PHASE_TO_RECOVERY: Record<InjuryPhase, RecoveryPhase> = {
     acute: 'no_load',
@@ -1205,30 +1232,121 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
       // Phase 4: Response-gated walk/run intervals using level system
       return generateReturnToRunWorkouts(evaluatedState.returnToRunLevel || 1, evaluatedState);
 
-    case 'graduated_return':
-      // Phase 5: Normal workouts but hard sessions are downgraded
+    case 'graduated_return': {
+      // Phase 5: Normal workouts but hard sessions downgraded one level
+      // VO2/threshold/race_pace/intervals/mixed → marathon pace
+      // marathon_pace/progressive → steady pace (halfway between easy & MP)
+      // long → easy + 20% distance reduction
+      const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}/km`;
+      const easyStr = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm) : 'easy pace';
+      const mpSec = easyPaceSecPerKm ? easyPaceSecPerKm * 0.913 : 0;
+      const mpStr = mpSec ? fmtPace(mpSec) : 'marathon pace';
+      const steadySec = easyPaceSecPerKm && mpSec ? (easyPaceSecPerKm + mpSec) / 2 : 0;
+      const steadyStr = steadySec ? fmtPace(steadySec) : 'steady pace';
+
+      const toMarathon = new Set(['vo2', 'intervals', 'threshold', 'race_pace', 'tempo', 'hill_repeats', 'mixed']);
+      const toSteady = new Set(['marathon_pace', 'progressive']);
+
+      // Extract main set from multi-line description (strip WU/CD)
+      const extractLines = (d: string) => {
+        const lines = d.split('\n');
+        if (lines.length >= 3 && lines[0].includes('warm up')) {
+          return { wu: lines[0], main: lines.slice(1, -1).join('\n'), cd: lines[lines.length - 1] };
+        }
+        return { wu: '', main: d, cd: '' };
+      };
+
+      // Strip old pace + distance hints from a main set line
+      // Handles both zone labels (@ VO2 pace (3:47/km)) and bare paces (@ 3:47/km)
+      const stripMainSet = (s: string): { structure: string; recovery: string } => {
+        let clean = s;
+        // Strip zone-labeled paces: @ VO2 pace (3:47/km), @ threshold (4:05/km), @ MP (4:17/km), etc.
+        clean = clean.replace(/@\s*(VO2\s+pace\s*\([^)]*\)|threshold\s*\([^)]*\)|MP\s*\([^)]*\)|HM\s+pace\s*\([^)]*\)|5K\s*(\([^)]*\))?|10K\s*(\([^)]*\))?|tempo|race[^,)]*)/gi, '');
+        // Strip bare paces: @ 3:47/km
+        clean = clean.replace(/@\s*\d+:\d+\/km/g, '');
+        // Strip distance hints: (~260m), (~1.2km)
+        clean = clean.replace(/\s*\(~[^)]+\)/g, '');
+        clean = clean.replace(/\s+/g, ' ').trim();
+        // Split at first comma for recovery portion
+        const commaIdx = clean.indexOf(',');
+        if (commaIdx >= 0) {
+          return { structure: clean.slice(0, commaIdx).trim(), recovery: clean.slice(commaIdx + 1).trim() };
+        }
+        return { structure: clean, recovery: '' };
+      };
+
+      // Distance hint at a given pace, rounded to nearest 10m
+      const distHint = (minutes: number, paceSecKm: number): string => {
+        if (!paceSecKm) return '';
+        const km = minutes * 60 / paceSecKm;
+        if (km < 1) return ` (~${Math.round(km * 100) * 10}m)`;
+        return ` (~${(Math.round(km * 10) / 10)}km)`;
+      };
+
       return workouts.map(workout => {
-        // Easy runs pass through unchanged
         if (workout.t === 'easy' || workout.t === 'recovery') return workout;
-        // Hard sessions: cap RPE, reduce distance 20%, mark as reduced
-        const isHard = ['vo2', 'intervals', 'threshold', 'race_pace', 'hill_repeats', 'tempo', 'long'].includes(workout.t);
-        if (isHard) {
+
+        if (toMarathon.has(workout.t)) {
+          const adapted = { ...workout };
+          adapted.rpe = Math.min(workout.rpe || 5, 5);
+          adapted.r = Math.min(workout.r || 5, 5);
+          adapted.status = 'reduced';
+          adapted.originalDistance = workout.d;
+
+          const { wu, main, cd } = extractLines(workout.d || '');
+          const { structure, recovery } = stripMainSet(main);
+          // Recalculate distance hint at marathon pace
+          const repMatch = structure.match(/(\d+)×(\d+(?:\.\d+)?)\s*min/);
+          const dh = repMatch && mpSec ? distHint(parseFloat(repMatch[2]), mpSec) : '';
+          const newMain = recovery
+            ? `${structure} @ Marathon Pace (${mpStr})${dh}, ${recovery}`
+            : `${structure} @ Marathon Pace (${mpStr})${dh}`;
+          adapted.d = wu ? `${wu}\n${newMain}\n${cd}` : newMain;
+          adapted.modReason = `Graduated return — downgraded to marathon pace`;
+          return adapted;
+        }
+
+        if (workout.t === 'long') {
           const adapted = { ...workout };
           adapted.rpe = Math.min(workout.rpe || 5, 4);
           adapted.r = Math.min(workout.r || 5, 4);
           adapted.status = 'reduced';
-          adapted.modReason = 'Graduated return — reduced intensity';
-          if (workout.d) {
-            const dist = parseInt(workout.d);
-            if (!isNaN(dist)) {
-              adapted.d = `${Math.round(dist * 0.8)}km`;
-              adapted.originalDistance = workout.d;
-            }
+          adapted.originalDistance = workout.d;
+          const dist = parseInt(workout.d);
+          if (!isNaN(dist)) {
+            adapted.d = `${Math.round(dist * 0.8)}km @ steady (${steadyStr})`;
           }
+          adapted.modReason = `Graduated return — distance reduced 20%`;
           return adapted;
         }
+
+        if (toSteady.has(workout.t)) {
+          const adapted = { ...workout };
+          adapted.rpe = Math.min(workout.rpe || 5, 4);
+          adapted.r = Math.min(workout.r || 5, 4);
+          adapted.status = 'reduced';
+          adapted.originalDistance = workout.d;
+          // Convert time-based (e.g. "22min @ MP") to distance at steady pace
+          const timeMatch = (workout.d || '').match(/(\d+)\s*min/);
+          if (timeMatch && steadySec) {
+            const km = Math.round(parseInt(timeMatch[1]) * 60 / steadySec);
+            adapted.d = `${km}km @ steady (${steadyStr})`;
+          } else {
+            const dist = parseInt(workout.d);
+            if (!isNaN(dist)) {
+              adapted.d = `${dist}km @ steady (${steadyStr})`;
+            }
+          }
+          adapted.modReason = `Graduated return — downgraded to steady pace`;
+          // progressive = Long Run (Fast Finish) → just "Steady Run" (no fast finish)
+          // marathon_pace → "Steady Pace" (not "Steady Marathon Pace")
+          adapted.n = workout.t === 'progressive' ? 'Steady Run' : 'Steady Pace';
+          return adapted;
+        }
+
         return workout;
       });
+    }
 
     case 'resolved':
       // Fully recovered - use normal workouts but check for high pain
