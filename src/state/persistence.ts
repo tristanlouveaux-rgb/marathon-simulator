@@ -1,5 +1,6 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
 import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION } from '@/types/state';
+import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities } from './store';
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
@@ -90,6 +91,15 @@ function migrateState(loaded: SimulatorState): SimulatorState {
     }
   }
 
+  // Migration: derive planStartDate for existing users who don't have it yet.
+  // Approximate: today minus (currentWeek - 1) * 7 days.
+  if (!loaded.planStartDate && loaded.w && loaded.w >= 1) {
+    const approx = new Date();
+    approx.setDate(approx.getDate() - (loaded.w - 1) * 7);
+    loaded.planStartDate = approx.toISOString().slice(0, 10);
+    console.log(`  Derived planStartDate: ${loaded.planStartDate} (from week ${loaded.w})`);
+  }
+
   // Update schema version
   loaded.schemaVersion = STATE_SCHEMA_VERSION;
 
@@ -124,6 +134,89 @@ function validateState(loaded: SimulatorState): boolean {
   return true;
 }
 
+/** Return the UTC Monday on or before the given date. */
+function getMondayOf(date: Date): Date {
+  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const dow = d.getUTCDay(); // 0=Sun
+  const toMonday = dow === 0 ? -6 : 1 - dow;
+  d.setUTCDate(d.getUTCDate() + toMonday);
+  return d;
+}
+
+/**
+ * Derive planStartDate from actual Garmin activity timestamps when available,
+ * so the week anchor reflects when the user first recorded activities rather
+ * than an approximation from today's date.
+ *
+ * Strategy:
+ *  1. Find the earliest Garmin timestamp stored in any week (garminPending or adhoc).
+ *  2. planStartDate = Monday of that week − (currentWeek − 1) × 7 days.
+ *  3. Fallback: Monday of the current calendar week − (currentWeek − 1) × 7 days.
+ */
+function derivePlanStartDate(s: SimulatorState): string {
+  let earliestMs: number | null = null;
+
+  for (const wk of s.wks || []) {
+    // garminPending items carry startTime
+    for (const item of (wk as any).garminPending || []) {
+      if (item.startTime) {
+        const t = new Date(item.startTime).getTime();
+        if (!isNaN(t) && (earliestMs === null || t < earliestMs)) earliestMs = t;
+      }
+    }
+    // adhoc workouts created from Garmin carry garminTimestamp
+    for (const wo of (wk as any).adhocWorkouts || []) {
+      if (wo.garminTimestamp) {
+        const t = new Date(wo.garminTimestamp).getTime();
+        if (!isNaN(t) && (earliestMs === null || t < earliestMs)) earliestMs = t;
+      }
+    }
+  }
+
+  const anchor = earliestMs !== null ? new Date(earliestMs) : new Date();
+  const monday = getMondayOf(anchor);
+  // monday is the start of the plan week that contains the earliest activity.
+  // planStartDate = start of week 1 = that monday − (w−1) weeks.
+  monday.setUTCDate(monday.getUTCDate() - (s.w - 1) * 7);
+  return monday.toISOString().slice(0, 10);
+}
+
+/**
+ * Remove all Garmin-sourced data from every week so the next sync can
+ * redistribute activities to the correct weeks via week-aware matching.
+ *
+ * Preserves manually entered RPE ratings (only removes ratings that were
+ * auto-completed via Garmin by cross-referencing wk.garminMatched).
+ */
+function clearGarminData(s: SimulatorState): void {
+  for (const wk of s.wks || []) {
+    const matched = (wk as any).garminMatched as Record<string, string> | undefined;
+
+    // Un-rate workouts that were auto-completed by Garmin
+    if (matched && (wk as any).rated) {
+      for (const workoutId of Object.values(matched)) {
+        if (workoutId && workoutId !== '__pending__') {
+          delete (wk as any).rated[workoutId];
+        }
+      }
+    }
+
+    (wk as any).garminMatched = {};
+    (wk as any).garminActuals = {};
+    (wk as any).garminPending = [];
+    (wk as any).garminReviewChoices = {};
+    (wk as any).unspentLoadItems = [];
+    (wk as any).unspentLoad = 0;
+
+    // Remove adhoc workouts that came from Garmin (id starts with 'garmin-')
+    if ((wk as any).adhocWorkouts) {
+      (wk as any).adhocWorkouts = (wk as any).adhocWorkouts.filter(
+        (w: any) => !w.id?.startsWith('garmin-')
+      );
+    }
+  }
+}
+
 /**
  * Load state from localStorage
  * @returns True if state was loaded successfully
@@ -149,6 +242,66 @@ export function loadState(): boolean {
     if (migrated.schemaVersion !== loaded.schemaVersion) {
       localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
       console.log('Saved migrated state to localStorage');
+    }
+
+    // Always ensure planStartDate is set — independent of schema version,
+    // because it was added after the v2 migration and existing v2 users
+    // would have skipped the derivation via the early-return in migrateState.
+    if (!migrated.planStartDate && migrated.w && migrated.w >= 1) {
+      migrated.planStartDate = derivePlanStartDate(migrated);
+      console.log(`  Derived planStartDate: ${migrated.planStartDate} (from week ${migrated.w})`);
+
+      // Garmin data was matched without planStartDate so week assignment was wrong
+      // (fell back to "last 7 days", dumping everything into the current week).
+      // Clear it all so the next sync redistributes activities to the correct weeks.
+      clearGarminData(migrated);
+      console.log('  Cleared garmin data for week-aware re-sync');
+
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+    }
+
+    // Clean up old-format workout mods created before the modReason prefix fix.
+    // Before the fix, gymOverflow fell into the cross-training reduction path and created
+    // modReasons like "Reduced due to strength" / "Downgraded from X to Y due to strength".
+    // These can't be cleaned up by openActivityReReview (which requires the "Garmin:" prefix).
+    {
+      let cleanedMods = false;
+      for (const wk of migrated.wks || []) {
+        if (wk.workoutMods?.length) {
+          const before = wk.workoutMods.length;
+          wk.workoutMods = wk.workoutMods.filter(m =>
+            !m.modReason?.includes('due to strength') && !m.modReason?.includes('due to gym'),
+          );
+          if (wk.workoutMods.length !== before) {
+            cleanedMods = true;
+            console.log(`  Removed ${before - wk.workoutMods.length} stale "due to strength/gym" workout mods in week ${wk.w}`);
+          }
+        }
+      }
+      if (cleanedMods) localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+    }
+
+    // Carry over unresolved excess load from the previous week into the current week.
+    // This ensures that if the user advanced weeks without resolving excess load,
+    // it still appears on the Training tab (excess load card) for the current week.
+    {
+      const currW = migrated.w;
+      if (currW > 1) {
+        const prevWk = migrated.wks?.[currW - 2];
+        const currWk = migrated.wks?.[currW - 1];
+        if (prevWk?.unspentLoadItems?.length && currWk) {
+          const existingIds = new Set((currWk.unspentLoadItems || []).map(i => i.garminId));
+          const toCarry = prevWk.unspentLoadItems.filter(i => !existingIds.has(i.garminId));
+          if (toCarry.length > 0) {
+            if (!currWk.unspentLoadItems) currWk.unspentLoadItems = [];
+            currWk.unspentLoadItems.push(...toCarry);
+            // Clear carried items from previous week to avoid double-display on back-navigation
+            prevWk.unspentLoadItems = prevWk.unspentLoadItems.filter(i => existingIds.has(i.garminId));
+            localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+            console.log(`  Carried ${toCarry.length} unresolved excess load items from week ${currW - 1} → week ${currW}`);
+          }
+        }
+      }
     }
 
     setState(migrated);
@@ -199,6 +352,46 @@ export function saveState(): void {
  */
 export function clearState(): void {
   localStorage.removeItem(STATE_KEY);
+  localStorage.removeItem(CROSS_KEY);
+  clearAllGpsData();
+}
+
+/**
+ * Soft reset: clear training plan but preserve profile data (name, PBs, fitness, runner type).
+ * After soft reset the wizard restarts at 'goals' (skipping welcome) if name exists.
+ */
+export function softResetState(): void {
+  const current = getState();
+  const ob = current.onboarding;
+
+  // Build fresh onboarding state, preserving profile fields
+  const preserved = {
+    ...defaultOnboardingState,
+    ...(ob ? {
+      name: ob.name,
+      age: ob.age,
+      pbs: ob.pbs,
+      recentRace: ob.recentRace,
+      hasSmartwatch: ob.hasSmartwatch,
+      ltPace: ob.ltPace,
+      vo2max: ob.vo2max,
+      restingHR: ob.restingHR,
+      maxHR: ob.maxHR,
+      confirmedRunnerType: ob.confirmedRunnerType,
+      calculatedRunnerType: ob.calculatedRunnerType,
+      experienceLevel: ob.experienceLevel,
+    } : {}),
+    // Skip welcome if name exists
+    currentStep: ob?.name ? 'goals' as const : 'welcome' as const,
+  };
+
+  // Atomic write: build fresh state with preserved onboarding, write in one go
+  const freshState: Partial<SimulatorState> = {
+    onboarding: preserved,
+    hasCompletedOnboarding: false,
+  };
+
+  localStorage.setItem(STATE_KEY, JSON.stringify(freshState));
   localStorage.removeItem(CROSS_KEY);
   clearAllGpsData();
 }
