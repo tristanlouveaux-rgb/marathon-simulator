@@ -27,7 +27,7 @@ export interface PhysiologyMeasurement {
   week: number;
   ltPaceSecKm: number | null;  // LT pace in seconds per km
   vo2max: number | null;        // VO2max in ml/kg/min
-  source: 'watch' | 'manual' | 'test';  // How the measurement was obtained
+  source: 'watch' | 'manual' | 'test' | 'auto_lt';  // How the measurement was obtained
   timestamp?: string;           // ISO timestamp of measurement
 }
 

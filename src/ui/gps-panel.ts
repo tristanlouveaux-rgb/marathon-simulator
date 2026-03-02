@@ -12,8 +12,8 @@ export function renderInlineGpsHtml(data: GpsLiveData): string {
 
   // Status
   const statusLabel = statusText(data.status, data.accuracy);
-  const statusClass = statusClassName(data.status, data.accuracy);
-  h += `<div id="gps-inline-status" class="${statusClass}">${statusLabel}</div>`;
+  const statusStyle = statusClassName(data.status, data.accuracy);
+  h += `<div id="gps-inline-status" style="${statusStyle}">${statusLabel}</div>`;
 
   // Distance + Time
   h += `<div class="grid grid-cols-2 gap-2 mb-1">`;
@@ -36,9 +36,9 @@ export function renderInlineGpsHtml(data: GpsLiveData): string {
 
   // Controls
   h += `<div class="flex gap-1 mb-1">`;
-  h += `<button id="gps-inline-pause" onclick="window.gpsPause()" class="flex-1 bg-yellow-500 hover:bg-yellow-600 text-white py-1.5 rounded text-xs font-bold${data.status !== 'tracking' ? ' hidden' : ''}">Pause</button>`;
-  h += `<button id="gps-inline-resume" onclick="window.gpsResume()" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-1.5 rounded text-xs font-bold${data.status !== 'paused' ? ' hidden' : ''}">Resume</button>`;
-  h += `<button onclick="window.gpsStop()" class="flex-1 bg-red-600 hover:bg-red-700 text-white py-1.5 rounded text-xs font-bold${data.status !== 'tracking' && data.status !== 'paused' && data.status !== 'acquiring' ? ' hidden' : ''}">Stop</button>`;
+  h += `<button id="gps-inline-pause" onclick="window.gpsPause()" class="flex-1 py-1.5 rounded text-xs font-bold${data.status !== 'tracking' ? ' hidden' : ''}" style="background:#F59E0B;color:white">Pause</button>`;
+  h += `<button id="gps-inline-resume" onclick="window.gpsResume()" class="flex-1 m-btn-primary py-1.5 rounded text-xs font-bold${data.status !== 'paused' ? ' hidden' : ''}">Resume</button>`;
+  h += `<button onclick="window.gpsStop()" class="flex-1 py-1.5 rounded text-xs font-bold${data.status !== 'tracking' && data.status !== 'paused' && data.status !== 'acquiring' ? ' hidden' : ''}" style="background:#EF4444;color:white">Stop</button>`;
   h += `</div>`;
 
   // Splits
@@ -75,7 +75,7 @@ export function updateInlineGps(data: GpsLiveData): void {
   const statusEl = document.getElementById('gps-inline-status');
   if (statusEl) {
     statusEl.textContent = statusText(data.status, data.accuracy);
-    statusEl.className = statusClassName(data.status, data.accuracy);
+    statusEl.style.cssText = statusClassName(data.status, data.accuracy);
   }
 
   // Toggle pause/resume button visibility
@@ -111,30 +111,32 @@ function statusText(status: string, accuracy?: number | null): string {
 }
 
 function statusClassName(status: string, accuracy?: number | null): string {
-  let color = 'text-gray-500';
+  let colorStyle = 'color:var(--c-faint)';
+  let extra = '';
 
   if (status === 'tracking') {
-    color = 'text-green-600 font-bold';
+    colorStyle = 'color:var(--c-ok);font-weight:700';
   } else if (status === 'paused') {
-    color = 'text-yellow-600 font-bold';
+    colorStyle = 'color:var(--c-caution);font-weight:700';
   } else if (status === 'acquiring') {
-    // Color code based on accuracy
+    extra = ' gps-status-pulse';
     if (accuracy !== null && accuracy !== undefined) {
       if (accuracy <= 10) {
-        color = 'text-green-600 animate-pulse'; // Excellent
+        colorStyle = 'color:var(--c-ok)'; // Excellent
       } else if (accuracy <= 30) {
-        color = 'text-yellow-600 animate-pulse'; // Good enough
+        colorStyle = 'color:var(--c-caution)'; // Good enough
       } else if (accuracy <= 50) {
-        color = 'text-orange-500 animate-pulse'; // Poor
+        colorStyle = 'color:#F97316'; // Poor — orange
       } else {
-        color = 'text-red-500 animate-pulse'; // Very poor
+        colorStyle = 'color:var(--c-warn)'; // Very poor
       }
     } else {
-      color = 'text-blue-600 animate-pulse';
+      colorStyle = 'color:var(--c-accent)';
     }
   }
 
-  return `text-xs mb-1 ${color}`;
+  // Return a data-style attribute value to be used as inline style
+  return `font-size:12px;margin-bottom:4px;${colorStyle}`;
 }
 
 function renderSplitsTable(completed: GpsSplit[], current: GpsSplit | null): string {
@@ -150,22 +152,22 @@ function renderSplitsTable(completed: GpsSplit[], current: GpsSplit | null): str
     const paceStr = split.pace < 1800 ? formatPace(split.pace) : '--:--';
     const targetStr = split.targetPace ? formatPace(split.targetPace) : '--';
     const diff = split.targetPace ? split.pace - split.targetPace : 0;
-    const diffColor = diff > 10 ? 'text-red-600' : diff < -10 ? 'text-green-600' : 'text-gray-600';
+    const diffColor = diff > 10 ? 'color:var(--c-warn)' : diff < -10 ? 'color:var(--c-ok)' : 'color:var(--c-muted)';
 
     h += `<tr class="border-b border-gray-100">`;
     h += `<td class="py-0.5">${split.label}</td>`;
     h += `<td class="text-right">${(split.distance / 1000).toFixed(2)}</td>`;
-    h += `<td class="text-right font-mono ${diffColor}">${paceStr}</td>`;
-    h += `<td class="text-right text-gray-500">${targetStr}</td>`;
+    h += `<td class="text-right font-mono" style="${diffColor}">${paceStr}</td>`;
+    h += `<td class="text-right" style="color:var(--c-faint)">${targetStr}</td>`;
     h += `</tr>`;
   }
 
   if (current) {
-    h += `<tr class="bg-yellow-50">`;
+    h += `<tr style="background:rgba(245,158,11,0.06)">`;
     h += `<td class="py-0.5 font-bold">${current.label}</td>`;
     h += `<td class="text-right">${(current.distance / 1000).toFixed(2)}</td>`;
     h += `<td class="text-right font-mono">...</td>`;
-    h += `<td class="text-right text-gray-500">${current.targetPace ? formatPace(current.targetPace) : '--'}</td>`;
+    h += `<td class="text-right" style="color:var(--c-faint)">${current.targetPace ? formatPace(current.targetPace) : '--'}</td>`;
     h += `</tr>`;
   }
 
@@ -200,7 +202,7 @@ export function refreshRecordings(): void {
 
 function renderRecordingsList(recordings: GpsRecording[], week: number): string {
   let h = `<details class="text-xs">`;
-  h += `<summary class="cursor-pointer font-medium text-gray-700 hover:text-gray-900 mb-1">Recorded Runs — Week ${week} (${recordings.length})</summary>`;
+  h += `<summary class="cursor-pointer font-medium mb-1" style="color:var(--c-muted)">Recorded Runs — Week ${week} (${recordings.length})</summary>`;
   h += `<div class="space-y-1">`;
 
   for (const rec of recordings) {
@@ -209,12 +211,12 @@ function renderRecordingsList(recordings: GpsRecording[], week: number): string 
     const paceStr = rec.averagePace > 0 && rec.averagePace < 1800
       ? formatPace(rec.averagePace) : '--:--/km';
 
-    h += `<div class="flex items-center justify-between bg-gray-50 rounded p-1.5 border border-gray-200">`;
+    h += `<div class="flex items-center justify-between rounded p-1.5" style="background:var(--c-bg);border:1px solid var(--c-border)">`;
     h += `<div class="flex-1">`;
-    h += `<div class="font-medium">${escapeHtml(rec.workoutName)}</div>`;
-    h += `<div class="text-gray-500">${date} — ${distKm} km — ${paceStr} — ${formatWorkoutTime(rec.totalElapsed)}</div>`;
+    h += `<div class="font-medium" style="color:var(--c-black)">${escapeHtml(rec.workoutName)}</div>`;
+    h += `<div style="color:var(--c-muted)">${date} — ${distKm} km — ${paceStr} — ${formatWorkoutTime(rec.totalElapsed)}</div>`;
     if (rec.splits.length > 0) {
-      h += `<div class="text-gray-400">${rec.splits.length} split${rec.splits.length !== 1 ? 's' : ''}</div>`;
+      h += `<div style="color:var(--c-faint)">${rec.splits.length} split${rec.splits.length !== 1 ? 's' : ''}</div>`;
     }
     h += `</div>`;
     h += `<button class="gps-delete-rec ml-2 text-red-400 hover:text-red-600 px-1" data-id="${rec.id}" title="Delete">x</button>`;
@@ -242,6 +244,7 @@ export function attachRecordingsHandlers(): void {
     if (!btn) return;
     const id = btn.dataset.id;
     if (id) {
+      if (!confirm('Delete this recording?')) return;
       deleteGpsRecording(id);
       refreshRecordings();
     }

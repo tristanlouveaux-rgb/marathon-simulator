@@ -3,122 +3,81 @@ import { initializeSimulatorFromOnboarding } from './initializing';
 
 /**
  * Render the welcome page (Step 1)
- * Classy, corporate-but-beautiful landing with sporty aesthetic
+ * Clean, premium landing in the new light/beige palette.
  */
 export function renderWelcome(container: HTMLElement): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col">
-      <!-- Hero Section -->
-      <div class="flex-1 relative overflow-hidden">
-        <!-- Gradient Background -->
-        <div class="absolute inset-0 bg-gradient-to-br from-gray-900 via-gray-950 to-emerald-950/20"></div>
+    <div class="flex flex-col" style="min-height:100vh;background:var(--c-bg)">
 
-        <!-- Subtle Geometric Pattern (corporate, not AI-generated looking) -->
-        <div class="absolute inset-0 opacity-[0.03]">
-          <div class="h-full w-full" style="
-            background-image:
-              linear-gradient(30deg, transparent 40%, rgba(255,255,255,0.5) 40%, rgba(255,255,255,0.5) 60%, transparent 60%),
-              linear-gradient(-30deg, transparent 40%, rgba(255,255,255,0.5) 40%, rgba(255,255,255,0.5) 60%, transparent 60%);
-            background-size: 60px 105px;
-          "></div>
+      <!-- Hero -->
+      <div class="flex-1 flex flex-col items-center justify-center px-6 py-16">
+
+        <!-- Brand -->
+        <div class="mb-10" style="text-align:center">
+          <h1 class="font-semibold uppercase" style="font-size:clamp(2rem,8vw,4rem);color:var(--c-black);letter-spacing:0.22em;text-align:center">
+            MOSAIC
+          </h1>
+          <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:10px">
+            <div style="height:1px;width:28px;background:var(--c-black);opacity:0.2"></div>
+            <p style="font-size:10px;font-weight:500;letter-spacing:0.28em;text-transform:uppercase;color:var(--c-faint)">Intelligent Training</p>
+            <div style="height:1px;width:28px;background:var(--c-black);opacity:0.2"></div>
+          </div>
         </div>
 
-        <!-- Accent Line -->
-        <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-emerald-500 to-transparent opacity-50"></div>
+        <!-- Tagline -->
+        <p style="font-size:15px;font-weight:300;text-align:center;max-width:280px;line-height:1.6;color:var(--c-muted);margin-bottom:48px">
+          Your personalized path to peak performance
+        </p>
 
-        <!-- Content -->
-        <div class="relative z-10 flex flex-col items-center justify-center h-full px-6 py-12">
-          <!-- Logo/Brand -->
-          <div class="mb-8 text-center">
-            <h1 class="text-5xl md:text-7xl font-extralight tracking-tight text-white">
-              <span class="font-semibold">MOSAIC</span>
-            </h1>
-            <p class="text-xs md:text-sm text-gray-500 tracking-[0.3em] uppercase mt-3">
-              Intelligent Training
-            </p>
-          </div>
-
-          <!-- Divider -->
-          <div class="w-16 h-px bg-gradient-to-r from-transparent via-gray-600 to-transparent mb-8"></div>
-
-          <!-- Tagline -->
-          <div class="max-w-md text-center mb-12">
-            <p class="text-lg md:text-xl text-gray-300 font-light leading-relaxed">
-              Your personalized path to peak performance
-            </p>
-          </div>
-
-          <!-- Name Input -->
-          <div class="max-w-xs w-full mb-8">
-            <input
-              id="welcome-name"
-              type="text"
-              placeholder="Your first name"
-              class="w-full px-5 py-3 bg-gray-900/80 border border-gray-700 rounded-full
-                     text-white text-center text-lg placeholder-gray-500
-                     focus:border-emerald-500 focus:outline-none transition-colors"
-              maxlength="30"
-            >
-          </div>
-
-          <!-- CTA Button -->
-          <button
-            id="welcome-cta"
-            class="group relative px-10 py-4 bg-emerald-600 hover:bg-emerald-500
-                   text-white font-medium rounded-full transition-all duration-300
-                   shadow-lg shadow-emerald-950/50 hover:shadow-emerald-900/50
-                   hover:scale-105 active:scale-100"
+        <!-- Name input -->
+        <div style="width:100%;max-width:280px;margin-bottom:14px">
+          <input
+            id="welcome-name"
+            type="text"
+            placeholder="Your first name"
+            style="width:100%;padding:14px 20px;text-align:center;font-size:15px;background:var(--c-surface);border:1.5px solid var(--c-border-strong);border-radius:50px;color:var(--c-black);outline:none;box-sizing:border-box"
+            maxlength="30"
           >
-            <span class="relative z-10 text-base tracking-wide">Are you ready?</span>
-          </button>
-
-          <!-- Trust Indicators -->
-          <div class="mt-16 flex flex-wrap justify-center gap-6 md:gap-10 text-xs text-gray-500">
-            <div class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-              </svg>
-              <span>Science-backed</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-              </svg>
-              <span>Adaptive</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <svg class="w-4 h-4 text-emerald-600" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-              </svg>
-              <span>Personal</span>
-            </div>
-          </div>
         </div>
 
-        <!-- Bottom Fade -->
-        <div class="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-gray-950 to-transparent"></div>
+        <!-- CTA — black, no blue -->
+        <button
+          id="welcome-cta"
+          style="width:100%;max-width:280px;padding:14px 20px;font-size:15px;font-weight:500;text-align:center;border-radius:50px;background:var(--c-black);color:#FDFCF7;border:none;cursor:pointer;letter-spacing:0.02em"
+        >
+          Are you ready?
+        </button>
+
+        <!-- Trust indicators — monochrome, no color -->
+        <div style="margin-top:52px;display:flex;flex-wrap:wrap;justify-content:center;gap:20px">
+          ${['Science-backed', 'Adaptive', 'Personal'].map(label => `
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--c-faint)">
+              <span style="width:4px;height:4px;border-radius:50%;background:var(--c-black);opacity:0.35;flex-shrink:0;display:inline-block"></span>
+              ${label}
+            </div>
+          `).join('')}
+        </div>
       </div>
 
       <!-- Footer -->
-      <div class="py-4 text-center flex items-center justify-center gap-4">
-        <p class="text-xs text-gray-600">
-          Powered by VDOT methodology
-        </p>
-        <button id="demo-fill" class="text-xs text-gray-700 hover:text-gray-400 transition-colors" title="Auto-fill test data">⚡</button>
+      <div style="padding:16px;text-align:center;display:flex;align-items:center;justify-content:center;gap:16px">
+        <p style="font-size:11px;color:var(--c-faint)">Powered by VDOT methodology</p>
+        <button id="demo-fill" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer" title="Auto-fill test data">⚡</button>
       </div>
     </div>
   `;
 
-  // Wire up event handler - name is required
   const ctaButton = document.getElementById('welcome-cta');
   const nameInput = document.getElementById('welcome-name') as HTMLInputElement;
+
+  const existingName = getOnboardingState()?.name;
+  if (nameInput && existingName) nameInput.value = existingName;
 
   if (ctaButton && nameInput) {
     ctaButton.addEventListener('click', () => {
       const name = nameInput.value.trim();
       if (!name) {
-        // Show validation error
-        nameInput.classList.add('border-red-500');
+        nameInput.style.borderColor = '#EF4444';
         nameInput.placeholder = 'Please enter your name';
         nameInput.focus();
         return;
@@ -127,21 +86,16 @@ export function renderWelcome(container: HTMLElement): void {
       nextStep();
     });
 
-    // Clear error state on input
     nameInput.addEventListener('input', () => {
-      nameInput.classList.remove('border-red-500');
+      nameInput.style.borderColor = 'var(--c-border-strong)';
       nameInput.placeholder = 'Your first name';
     });
 
-    // Allow Enter key to submit
     nameInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') {
-        ctaButton.click();
-      }
+      if (e.key === 'Enter') ctaButton.click();
     });
   }
 
-  // Demo auto-fill button — sets state AND initializes simulator
   document.getElementById('demo-fill')?.addEventListener('click', () => {
     updateOnboarding({
       name: 'Tristan',
@@ -171,7 +125,6 @@ export function renderWelcome(container: HTMLElement): void {
       vo2max: 53,
     });
 
-    // Initialize simulator state so workouts exist
     const onboardingState = getOnboardingState();
     if (onboardingState) {
       const result = initializeSimulatorFromOnboarding(onboardingState);

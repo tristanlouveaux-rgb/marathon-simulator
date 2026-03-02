@@ -16,46 +16,45 @@ const TYPE_DESCRIPTIONS: Record<RunnerType, string> = {
 
 /**
  * Render the runner type confirmation page.
- * Shows calculated runner type with option to override.
  */
 export function renderRunnerType(container: HTMLElement, state: OnboardingState): void {
   const calculatedType = state.calculatedRunnerType || 'Balanced';
   const activeType = state.confirmedRunnerType || calculatedType;
 
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(7, 8)}
 
-      <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:480px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Your Runner Profile
         </h2>
-        <p class="text-gray-400 text-center mb-10">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           Based on your personal bests, we've assessed your running style.
         </p>
 
-        <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
+        <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:24px">
           <!-- Spectrum -->
           ${renderSpectrum(activeType)}
 
           <!-- Type selector -->
-          <div class="grid grid-cols-3 gap-3 mt-8">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:24px">
             ${renderTypeButton('Speed', activeType)}
             ${renderTypeButton('Balanced', activeType)}
             ${renderTypeButton('Endurance', activeType)}
           </div>
 
           <!-- Description -->
-          <p id="type-description" class="text-sm text-gray-400 leading-relaxed mt-5">
+          <p id="type-description" style="font-size:14px;color:var(--c-muted);line-height:1.6;margin-top:16px">
             ${TYPE_DESCRIPTIONS[activeType]}
           </p>
 
-          <p class="text-xs text-gray-500 mt-4">
+          <p style="font-size:12px;color:var(--c-faint);margin-top:10px">
             This shapes your race prediction and training emphasis. Tap to change if it doesn't feel right.
           </p>
 
           <button id="confirm-type"
-            class="w-full mt-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all">
+            style="margin-top:20px;width:100%;padding:14px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
             Continue
           </button>
         </div>
@@ -75,14 +74,20 @@ function renderSpectrum(activeType: RunnerType): string {
     Endurance: '83.33%',
   };
 
+  const dotColors: Record<RunnerType, string> = {
+    Speed: '#F97316',
+    Balanced: '#22C55E',
+    Endurance: '#3B82F6',
+  };
+
   return `
-    <div class="relative pt-1">
-      <div class="h-2.5 rounded-full bg-gradient-to-r from-orange-500 via-emerald-500 to-blue-500 opacity-80"></div>
-      <div class="absolute top-0 transition-all duration-500"
-           style="left: ${positions[activeType]}; transform: translateX(-50%);">
-        <div class="w-5 h-5 rounded-full bg-white shadow-lg border-2 ${getBorderColor(activeType)}"></div>
+    <div style="position:relative;padding-top:4px">
+      <div style="height:10px;border-radius:5px;background:linear-gradient(to right, #F97316, #22C55E, #3B82F6);opacity:0.7"></div>
+      <div style="position:absolute;top:0;transition:left 0.4s ease;" id="spectrum-dot"
+           style="left:${positions[activeType]}">
+        <div style="position:absolute;left:${positions[activeType]};transform:translateX(-50%);width:20px;height:20px;border-radius:50%;background:white;box-shadow:0 2px 8px rgba(0,0,0,0.2);border:2.5px solid ${dotColors[activeType]}"></div>
       </div>
-      <div class="flex justify-between mt-2.5 text-xs text-gray-500">
+      <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:12px;color:var(--c-faint)">
         <span>Speed</span>
         <span>Balanced</span>
         <span>Endurance</span>
@@ -93,46 +98,20 @@ function renderSpectrum(activeType: RunnerType): string {
 
 function renderTypeButton(type: RunnerType, activeType: RunnerType): string {
   const isActive = type === activeType;
+  const typeColors: Record<RunnerType, string> = { Speed: '#F97316', Balanced: '#22C55E', Endurance: '#3B82F6' };
+
   return `
     <button data-type="${type}"
-      class="type-option py-3 rounded-lg border text-sm font-medium text-center transition-all
-        ${isActive
-          ? `border-${getColorName(type)}-600 bg-${getColorName(type)}-600/20 ${getTypeColor(type)}`
-          : 'border-gray-700 text-gray-400 hover:bg-gray-800'}">
+      style="${isActive
+        ? `background:${typeColors[type]};color:white;border:2px solid ${typeColors[type]}`
+        : 'background:var(--c-bg);color:var(--c-black);border:1.5px solid var(--c-border-strong)'
+      };border-radius:10px;padding:12px 4px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s;width:100%" class="type-option">
       ${type}
     </button>
   `;
 }
 
-function getColorName(type: RunnerType): string {
-  switch (type) {
-    case 'Speed': return 'orange';
-    case 'Balanced': return 'emerald';
-    case 'Endurance': return 'blue';
-    default: return 'gray';
-  }
-}
-
-function getTypeColor(type: RunnerType): string {
-  switch (type) {
-    case 'Speed': return 'text-orange-400';
-    case 'Balanced': return 'text-emerald-400';
-    case 'Endurance': return 'text-blue-400';
-    default: return 'text-white';
-  }
-}
-
-function getBorderColor(type: RunnerType): string {
-  switch (type) {
-    case 'Speed': return 'border-orange-500';
-    case 'Balanced': return 'border-emerald-500';
-    case 'Endurance': return 'border-blue-500';
-    default: return 'border-gray-500';
-  }
-}
-
 function wireEventHandlers(state: OnboardingState, calculatedType: RunnerType): void {
-  // Confirm / Continue
   document.getElementById('confirm-type')?.addEventListener('click', () => {
     const finalType = state.confirmedRunnerType || calculatedType;
     updateState({ typ: finalType });
@@ -140,7 +119,6 @@ function wireEventHandlers(state: OnboardingState, calculatedType: RunnerType): 
     nextStep();
   });
 
-  // Type selection — tap to switch
   document.querySelectorAll('.type-option').forEach(btn => {
     btn.addEventListener('click', () => {
       const type = btn.getAttribute('data-type') as RunnerType;
@@ -157,9 +135,7 @@ function rerender(state: OnboardingState): void {
     const currentState = getOnboardingState();
     if (currentState) {
       const container = document.getElementById('app-root');
-      if (container) {
-        renderRunnerType(container, currentState);
-      }
+      if (container) renderRunnerType(container, currentState);
     }
   });
 }

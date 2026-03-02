@@ -119,6 +119,16 @@ export function sleepQualityToScore(quality: 'great' | 'good' | 'poor' | 'terrib
 }
 
 /**
+ * Convert RMSSD (ms) to categorical HRV status.
+ */
+export function rmssdToHrvStatus(rmssd: number): RecoveryEntry['hrvStatus'] {
+  if (rmssd >= 50) return 'balanced';
+  if (rmssd >= 35) return 'low';
+  if (rmssd >= 20) return 'unbalanced';
+  return 'strained';
+}
+
+/**
  * Stub for future Garmin integration.
  */
 export function createGarminRecoveryEntry(

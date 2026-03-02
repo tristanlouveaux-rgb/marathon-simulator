@@ -26,6 +26,8 @@
     "@capacitor/cli": "^8.0.1",
     "@capacitor/core": "^8.0.1",
     "@capacitor/ios": "^8.0.1",
+    "@capgo/capacitor-health": "^8.2.16",
+    "@supabase/supabase-js": "^2.96.0",
     "@transistorsoft/capacitor-background-geolocation": "^8.0.1"
   }
 }

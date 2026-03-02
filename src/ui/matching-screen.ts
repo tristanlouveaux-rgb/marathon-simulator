@@ -62,9 +62,12 @@ function workoutTypeShort(t: string): string {
 function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   const type = item.appType;
   const wt   = workout.t;
+  // Runs only match run-type slots
   if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals';
+  // Gym/strength can replace gym slots or run slots (a hard session can cover either)
   if (type === 'gym') return wt === 'gym';
-  return wt === 'cross' || wt === 'other';
+  // Cross-training can match any non-rest slot
+  return wt !== 'rest';
 }
 
 function escHtml(s: string): string {
@@ -117,17 +120,6 @@ function renderScreen(
     const assigned = [...state.assignments.entries()].find(([, v]) => v === wid);
     const assignedItem = assigned ? integrateItems.find(i => i.garminId === assigned[0]) : null;
 
-    let assignedBadge = '';
-    if (assignedItem) {
-      const dur = Math.round(assignedItem.durationSec / 60);
-      assignedBadge = `
-        <div class="mt-2">
-          <span class="text-xs bg-emerald-900/50 border border-emerald-700/50 text-emerald-300 rounded px-1.5 py-0.5">
-            ${escHtml(formatActivityType(assignedItem.activityType))} ${dur}min
-          </span>
-        </div>`;
-    }
-
     const selectedItem = state.selectedGarminId
       ? integrateItems.find(i => i.garminId === state.selectedGarminId)
       : null;
@@ -135,31 +127,39 @@ function renderScreen(
     const canSwap      = selectedItem && !!assignedItem && isCompatible(selectedItem, w);
     const cannotAssign = selectedItem && !assignedItem && !isCompatible(selectedItem, w);
 
-    let borderClass = assignedItem ? 'border-emerald-700/60' : 'border-gray-700';
-    if (canAssign || canSwap) borderClass = 'border-blue-500 ring-1 ring-blue-500/50';
-    else if (cannotAssign) borderClass = 'border-gray-700 opacity-40';
+    let border: string;
+    let opacity = '1';
+    if (canAssign || canSwap) border = '2px solid var(--c-accent)';
+    else if (cannotAssign) { border = '1px solid var(--c-border)'; opacity = '0.35'; }
+    else if (assignedItem) border = '1px solid rgba(34,197,94,0.4)';
+    else border = '1px solid var(--c-border)';
 
-    let hint = '';
-    if (canAssign) hint = '<p class="text-blue-400 text-xs mt-1.5">Tap to assign</p>';
-    else if (canSwap) hint = '<p class="text-blue-400 text-xs mt-1.5">Tap to swap</p>';
-    else if (cannotAssign) hint = '<p class="text-gray-500 text-xs mt-1.5">Incompatible</p>';
-    else if (!state.selectedGarminId && assignedItem) hint = '<p class="text-gray-500 text-xs mt-1.5">Tap to return to tray</p>';
+    const assignedBadge = assignedItem ? `
+      <div style="margin-top:6px;display:flex;align-items:center;gap:4px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:4px;padding:4px 7px">
+        <span style="font-size:10px;font-weight:600;color:var(--c-ok)">${escHtml(formatActivityType(assignedItem.activityType))}</span>
+        <span style="font-size:10px;color:var(--c-muted)">${Math.round(assignedItem.durationSec / 60)}min</span>
+      </div>` : '';
 
+    const hint = canAssign ? `<div style="font-size:10px;color:var(--c-accent);margin-top:5px">Tap to assign</div>`
+      : canSwap ? `<div style="font-size:10px;color:var(--c-accent);margin-top:5px">Tap to swap</div>`
+      : (!state.selectedGarminId && assignedItem) ? `<div style="font-size:10px;color:var(--c-faint);margin-top:5px">Tap to unassign</div>`
+      : '';
+
+    const descSnippet = (w.d || '').slice(0, 32);
     return `
-      <div class="slot-card bg-gray-900 border ${borderClass} rounded-lg p-3 shrink-0 w-44 cursor-pointer transition-all"
-           data-workout-id="${escHtml(wid)}">
-        <p class="text-white text-xs font-medium">${escHtml(w.n)}</p>
-        <p class="text-gray-400 text-xs mt-0.5">${dayLabel ? `${dayLabel} · ` : ''}${workoutTypeShort(w.t)}</p>
-        <p class="text-gray-500 text-xs mt-0.5 truncate">${escHtml(w.d.slice(0, 28))}${w.d.length > 28 ? '…' : ''}</p>
+      <div class="slot-card" data-workout-id="${escHtml(wid)}"
+           style="background:var(--c-surface);border:${border};border-radius:var(--r-card);padding:10px 12px;flex-shrink:0;width:160px;cursor:pointer;transition:all 0.15s;opacity:${opacity}">
+        <div style="font-size:12px;font-weight:500;color:var(--c-black);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(w.n)}</div>
+        <div style="font-size:10px;color:var(--c-muted)">${dayLabel ? dayLabel + ' · ' : ''}${workoutTypeShort(w.t)}</div>
+        ${descSnippet ? `<div style="font-size:10px;color:var(--c-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(descSnippet)}${w.d.length > 32 ? '…' : ''}</div>` : ''}
         ${assignedBadge}
         ${hint}
       </div>`;
   }).join('');
 
-  // ── Tray: only unassigned integrate items (log-only hidden entirely) ────────
+  // ── Tray: only unassigned integrate items ────────────────────────────────
   const trayItems = sortedIntegrate.filter(item => {
     const a = state.assignments.get(item.garminId);
-    // Show if unassigned OR currently selected (allow deselect tap)
     return (a === null || a === undefined) || item.garminId === state.selectedGarminId;
   });
 
@@ -170,14 +170,14 @@ function renderScreen(
     const actDateStr = new Date(item.startTime).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
     return `
-      <div class="activity-card bg-gray-900 border ${isSelected ? 'border-blue-500 ring-1 ring-blue-500/50' : 'border-gray-700'} rounded-lg p-3 shrink-0 w-44 cursor-pointer transition-all"
-           data-garmin-id="${escHtml(item.garminId)}">
-        <p class="text-white text-xs font-medium">${activityEmoji(item)} ${escHtml(formatActivityType(item.activityType))}</p>
-        <p class="text-gray-400 text-xs mt-0.5">${actDateStr}</p>
-        <p class="text-gray-400 text-xs mt-0.5">${dist}${dur} min</p>
-        ${isSelected
-          ? '<p class="text-blue-300 text-xs mt-1.5 font-medium">↑ Now tap a slot</p>'
-          : '<p class="text-gray-500 text-xs mt-1.5">Tap to select</p>'}
+      <div class="activity-card" data-garmin-id="${escHtml(item.garminId)}"
+           style="background:var(--c-surface);border:${isSelected ? '2px solid var(--c-accent)' : '1px solid var(--c-border)'};border-radius:var(--r-card);padding:10px 12px;flex-shrink:0;width:160px;cursor:pointer;transition:all 0.15s">
+        <div style="font-size:12px;font-weight:500;color:var(--c-black);margin-bottom:2px">${escHtml(formatActivityType(item.activityType))}</div>
+        <div style="font-size:10px;color:var(--c-muted)">${actDateStr}</div>
+        <div style="font-size:10px;color:var(--c-muted);margin-top:1px">${dist}${dur} min</div>
+        <div style="font-size:10px;margin-top:5px;font-weight:${isSelected ? '600' : '400'};color:${isSelected ? 'var(--c-accent)' : 'var(--c-faint)'}">
+          ${isSelected ? '↑ Now tap a slot' : 'Tap to select'}
+        </div>
       </div>`;
   }).join('');
 
@@ -187,13 +187,11 @@ function renderScreen(
   }).length;
 
   // ── Bucket contents (chips with × to return to tray) ─────────────────────
-  // Reduction bucket: all 'integrate' items, all removable
   const reductionBucketItems = [...state.assignments.entries()]
     .filter(([, v]) => v === 'reduction')
     .map(([gid]) => integrateItems.find(i => i.garminId === gid))
     .filter((i): i is GarminPendingItem => !!i);
 
-  // Logonly bucket: 'integrate' items manually sent (removable) vs original 'log' (not removable)
   const logonlyBucketItems = [...state.assignments.entries()]
     .filter(([, v]) => v === 'logonly')
     .map(([gid]) => {
@@ -203,13 +201,13 @@ function renderScreen(
     })
     .filter((x): x is { item: GarminPendingItem; removable: boolean } => !!x);
 
-  function bucketChips(items: GarminPendingItem[], chipClass: string): string {
+  function bucketChips(items: GarminPendingItem[], color: string, bg: string): string {
     if (items.length === 0) return '';
-    return `<div class="mt-2 flex flex-wrap gap-1.5">
+    return `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">
       ${items.map(item => `
-        <button class="bucket-chip text-xs ${chipClass} rounded-md px-2 py-0.5 flex items-center gap-1"
-                data-garmin-id="${escHtml(item.garminId)}">
-          ${activityEmoji(item)} ${escHtml(formatActivityType(item.activityType))} ×
+        <button class="bucket-chip" data-garmin-id="${escHtml(item.garminId)}"
+                style="font-size:10px;color:${color};background:${bg};border:1px solid ${color}33;border-radius:4px;padding:2px 8px;cursor:pointer">
+          ${escHtml(formatActivityType(item.activityType))} ×
         </button>
       `).join('')}
     </div>`;
@@ -217,115 +215,100 @@ function renderScreen(
 
   function staticChips(items: GarminPendingItem[]): string {
     if (items.length === 0) return '';
-    return `<div class="mt-2 flex flex-wrap gap-1.5">
+    return `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px">
       ${items.map(item => `
-        <span class="text-xs text-gray-500 border border-gray-700 rounded-md px-2 py-0.5">
-          ${activityEmoji(item)} ${escHtml(formatActivityType(item.activityType))}
+        <span style="font-size:10px;color:var(--c-faint);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:4px;padding:2px 8px">
+          ${escHtml(formatActivityType(item.activityType))}
         </span>
       `).join('')}
     </div>`;
   }
 
-  const reductionChipsHtml = bucketChips(
-    reductionBucketItems,
-    'bg-amber-900/40 border border-amber-700/40 text-amber-200',
-  );
-  const logonlyRemovable = logonlyBucketItems.filter(x => x.removable).map(x => x.item);
-  const logonlyFixed     = logonlyBucketItems.filter(x => !x.removable).map(x => x.item);
-  const logonlyChipsHtml = bucketChips(logonlyRemovable, 'bg-gray-700/60 border border-gray-600/60 text-gray-300')
-    + staticChips(logonlyFixed);
+  const reductionChipsHtml = bucketChips(reductionBucketItems, '#d97706', 'rgba(245,158,11,0.08)');
+  const logonlyRemovable   = logonlyBucketItems.filter(x => x.removable).map(x => x.item);
+  const logonlyFixed       = logonlyBucketItems.filter(x => !x.removable).map(x => x.item);
+  const logonlyChipsHtml   = bucketChips(logonlyRemovable, 'var(--c-muted)', 'rgba(0,0,0,0.04)') + staticChips(logonlyFixed);
 
-  // ── Counts ──
-  const hasSelected     = state.selectedGarminId !== null;
-  const reductionCount  = reductionBucketItems.length;
-  const logonlyCount    = logonlyBucketItems.length;
+  const hasSelected    = state.selectedGarminId !== null;
+  const reductionCount = reductionBucketItems.length;
+  const logonlyCount   = logonlyBucketItems.length;
   const unassignedCount = sortedIntegrate.filter(i => {
     const a = state.assignments.get(i.garminId);
     return a === null || a === undefined;
   }).length;
 
-  const reductionBorderClass = hasSelected ? 'border-amber-600/60 ring-1 ring-amber-600/30' : 'border-gray-700';
-  const logonlyBorderClass   = hasSelected ? 'border-gray-600 ring-1 ring-gray-600/30'      : 'border-gray-700';
+  const reductionBorder = hasSelected ? '1px solid rgba(245,158,11,0.5)' : '1px solid var(--c-border)';
+  const logonlyBorder   = hasSelected ? '1px solid rgba(0,0,0,0.2)' : '1px solid var(--c-border)';
 
   // ── Full render ─────────────────────────────────────────────────────────────
   overlay.innerHTML = `
-    <div class="bg-gray-900 border-b border-gray-800">
-      <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
-        <button id="ms-back" class="text-gray-400 text-sm shrink-0">← Back</button>
-        <div class="text-center min-w-0">
-          <p class="text-sm font-semibold text-white">Assign Activities</p>
-          ${weekLabel ? `<p class="text-xs text-gray-400 truncate">${escHtml(weekLabel)}</p>` : ''}
-          <p class="text-xs text-gray-500 mt-0.5">Suggested matches applied — move anything around if needed</p>
-        </div>
-        <button id="ms-confirm"
-                class="text-sm font-medium px-3 py-1 rounded-lg transition-colors shrink-0 bg-emerald-600 text-white">
-          Confirm →
-        </button>
+    <div style="background:var(--c-surface);border-bottom:1px solid var(--c-border);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <button id="ms-back" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0;flex-shrink:0">← Cancel</button>
+      <div style="text-align:center;min-width:0">
+        <div style="font-size:15px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Match Activities</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Auto-matched below — tap to reassign</div>
       </div>
+      <button id="ms-confirm" style="font-size:12px;font-weight:600;padding:7px 16px;background:var(--c-ok);color:white;border:none;border-radius:var(--r-card);cursor:pointer;flex-shrink:0">Save</button>
     </div>
 
-    <div class="flex-1 overflow-y-auto">
+    <div style="flex:1;overflow-y:auto">
 
-      <!-- 1. Week Slots -->
-      <div class="px-4 pt-4 pb-2">
-        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Week Slots</p>
+      <!-- Plan Slots -->
+      <div style="padding:14px 18px 10px">
+        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">
+          Plan Slots
+          ${assignedToSlotCount > 0 ? `<span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--c-ok);margin-left:8px">${assignedToSlotCount} matched ✓</span>` : ''}
+        </div>
         ${sortedWorkouts.length === 0
-          ? '<p class="text-gray-500 text-xs">No unrated planned workouts this week.</p>'
-          : `<div class="flex gap-3 overflow-x-auto pb-2" style="-webkit-overflow-scrolling: touch; scrollbar-width: none;">
-               ${slotCards}
-             </div>`}
+          ? `<p style="font-size:12px;color:var(--c-muted)">No unrated sessions this week.</p>`
+          : `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${slotCards}</div>`}
       </div>
 
-      <!-- 2. Activity Tray (unassigned integrate items only) -->
-      <div class="px-4 pt-2 pb-3 border-t border-gray-800">
-        <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-          Select Activity
-          ${assignedToSlotCount > 0 ? `<span class="text-emerald-400 normal-case font-normal ml-2">${assignedToSlotCount} in slots ✓</span>` : ''}
-          ${hasSelected ? '<span class="text-blue-400 normal-case font-normal ml-2">Now tap a slot ↑</span>' : ''}
-        </p>
+      <!-- Activities (tray) -->
+      <div style="padding:10px 18px 14px;border-top:1px solid var(--c-border)">
+        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">
+          Your Activities
+          ${hasSelected ? `<span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--c-accent);margin-left:8px">Now tap a slot above ↑</span>` : ''}
+        </div>
         ${trayItems.length === 0
-          ? `<p class="text-emerald-400 text-xs py-1">${sortedIntegrate.length > 0 ? 'All activities placed ✓' : 'No activities to assign.'}</p>`
-          : `<div class="flex gap-3 overflow-x-auto pb-2" style="-webkit-overflow-scrolling: touch; scrollbar-width: none;">
-               ${trayCards}
-             </div>`}
+          ? `<p style="font-size:12px;color:var(--c-ok)">${sortedIntegrate.length > 0 ? 'All placed ✓' : 'Nothing to assign.'}</p>`
+          : `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${trayCards}</div>`}
       </div>
 
-      <!-- 3. Excess Load bucket -->
-      <div class="px-4 pt-2 pb-2 border-t border-gray-800">
-        <div id="bucket-reduction"
-             class="bg-amber-950/20 border ${reductionBorderClass} rounded-lg p-3 cursor-pointer transition-all">
-          <div class="flex items-center justify-between">
+      <!-- Excess Load bucket -->
+      <div style="padding:0 18px 10px;border-top:1px solid var(--c-border)">
+        <div id="bucket-reduction" style="margin-top:12px;background:rgba(245,158,11,0.04);border:${reductionBorder};border-radius:var(--r-card);padding:10px 14px;cursor:pointer;transition:border 0.15s">
+          <div style="display:flex;align-items:center;justify-content:space-between">
             <div>
-              <p class="text-amber-300 text-sm font-medium">Excess Load</p>
-              <p class="text-xs text-amber-400/70 mt-0.5">Load held — adjust plan after confirm</p>
+              <div style="font-size:13px;font-weight:500;color:var(--c-caution)">Excess Load</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:1px">Saved for later plan adjustment</div>
             </div>
-            ${reductionCount > 0 ? `<span class="text-xs bg-amber-900/50 border border-amber-700/50 text-amber-300 rounded-full px-2 py-0.5">${reductionCount}</span>` : ''}
+            ${reductionCount > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--c-caution);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:2px 8px">${reductionCount}</span>` : ''}
           </div>
-          ${hasSelected ? '<p class="text-amber-400 text-xs mt-1.5">Tap to send here</p>' : ''}
-          ${reductionChipsHtml ? `<p class="text-amber-500/70 text-xs mt-2 mb-0.5">Tap × to return to tray:</p>${reductionChipsHtml}` : ''}
+          ${hasSelected ? `<div style="font-size:10px;color:var(--c-caution);margin-top:4px">Tap to send here</div>` : ''}
+          ${reductionChipsHtml}
         </div>
       </div>
 
-      <!-- 4. Log Only bucket -->
-      <div class="px-4 pt-0 pb-4">
-        <div id="bucket-logonly"
-             class="bg-gray-800/30 border ${logonlyBorderClass} rounded-lg p-3 cursor-pointer transition-all">
-          <div class="flex items-center justify-between">
+      <!-- Log Only bucket -->
+      <div style="padding:0 18px 20px">
+        <div id="bucket-logonly" style="background:rgba(0,0,0,0.02);border:${logonlyBorder};border-radius:var(--r-card);padding:10px 14px;cursor:pointer;transition:border 0.15s">
+          <div style="display:flex;align-items:center;justify-content:space-between">
             <div>
-              <p class="text-gray-300 text-sm font-medium">Log Only</p>
-              <p class="text-xs text-gray-400 mt-0.5">Recorded, no plan impact</p>
+              <div style="font-size:13px;font-weight:500;color:var(--c-black)">Log Only</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:1px">Recorded, no plan impact</div>
             </div>
-            ${logonlyCount > 0 ? `<span class="text-xs bg-gray-700 text-gray-300 rounded-full px-2 py-0.5">${logonlyCount}</span>` : ''}
+            ${logonlyCount > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--c-muted);background:rgba(0,0,0,0.06);border:1px solid var(--c-border);border-radius:10px;padding:2px 8px">${logonlyCount}</span>` : ''}
           </div>
-          ${hasSelected ? '<p class="text-gray-400 text-xs mt-1.5">Tap to send here</p>' : ''}
-          ${logonlyChipsHtml ? `<p class="text-gray-500 text-xs mt-2 mb-0.5">Tap × to return to tray:</p>${logonlyChipsHtml}` : ''}
+          ${hasSelected ? `<div style="font-size:10px;color:var(--c-muted);margin-top:4px">Tap to send here</div>` : ''}
+          ${logonlyChipsHtml}
         </div>
       </div>
 
       ${unassignedCount > 0 ? `
-      <div class="px-4 pb-4">
-        <div class="bg-blue-950/20 border border-blue-800/50 rounded-lg p-3 text-xs text-blue-300">
-          ${unassignedCount} activit${unassignedCount === 1 ? 'y' : 'ies'} in tray — tap to assign to a slot or Log Only, or confirm to send to Excess Load.
+      <div style="padding:0 18px 16px">
+        <div style="background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.2);border-radius:var(--r-card);padding:8px 12px;font-size:11px;color:var(--c-muted)">
+          ${unassignedCount} activit${unassignedCount === 1 ? 'y' : 'ies'} unassigned — tap to place in a slot, or they go to Excess Load on Save.
         </div>
       </div>` : ''}
 

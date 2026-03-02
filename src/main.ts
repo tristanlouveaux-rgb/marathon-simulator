@@ -7,20 +7,77 @@ import './styles.css';
 import { loadState, getState } from '@/state';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
+import { renderHomeView } from '@/ui/home-view';
+import { detectMissedWeeks, showWelcomeBackModal } from '@/ui/welcome-back';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
+import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio } from '@/data/physiologySync';
+import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
+import { syncStravaActivities, fetchStravaHistory } from '@/data/stravaSync';
+import { supabase, isGarminConnected, isStravaConnected, resetStravaCache } from '@/data/supabaseClient';
+import { renderAuthView } from '@/ui/auth-view';
+import { syncAppleHealth } from '@/data/appleHealthSync';
+import '@/ui/strava-detail';
+
+/** True when running in local simulator mode (no auth required) */
+export function isSimulatorMode(): boolean {
+  return localStorage.getItem('mosaic_simulator_mode') === '1';
+}
 
 /**
  * Initialize application on DOM ready
  */
-function bootstrap(): void {
+async function bootstrap(): Promise<void> {
+  // Simulator mode: skip auth entirely for local dev/testing
+  if (isSimulatorMode()) {
+    launchApp();
+    return;
+  }
+
+  // Check for existing Supabase session
+  const { data: { session } } = await supabase.auth.getSession();
+
+  if (!session) {
+    // No authenticated user — show login page
+    renderAuthView();
+    setupAuthListener();
+    return;
+  }
+
+  // Authenticated — proceed with app
+  launchApp();
+  setupAuthListener();
+}
+
+/**
+ * Listen for auth state changes (login/logout)
+ */
+function setupAuthListener(): void {
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === 'SIGNED_IN') {
+      launchApp();
+    } else if (event === 'SIGNED_OUT') {
+      renderAuthView();
+    }
+  });
+}
+
+/**
+ * Launch the main app (called after authentication is confirmed)
+ */
+function launchApp(): void {
   // Try to load saved state
   const hasState = loadState();
   const state = getState();
 
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
-    // Show main workout view
-    renderMainView();
+    // Check for week gap before showing the main view
+    const missedWeeks = detectMissedWeeks();
+    if (missedWeeks > 0) {
+      showWelcomeBackModal(missedWeeks, renderHomeView);
+    } else {
+      renderHomeView();
+    }
   } else {
     // Show onboarding wizard
     initWizard();
@@ -40,6 +97,78 @@ function bootstrap(): void {
       toggleAdminMode();
     }
   });
+
+  // Handle OAuth redirects
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('garmin') === 'connected') {
+    // Clean up URL
+    window.history.replaceState({}, '', window.location.pathname);
+    showGarminConnectedToast();
+    // Only navigate to account if onboarding is complete — otherwise stay in wizard
+    if (hasState && state.hasCompletedOnboarding) {
+      import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
+    }
+    // If still in wizard, toast shows and wizard continues — user can connect Garmin then finish setup
+  }
+
+  if (params.get('strava') === 'connected') {
+    window.history.replaceState({}, '', window.location.pathname);
+    // Persist stravaConnected flag
+    import('@/state').then(({ updateState, saveState }) => {
+      updateState({ stravaConnected: true });
+      saveState();
+    });
+    resetStravaCache();
+    showStravaConnectedToast();
+    if (hasState && state.hasCompletedOnboarding) {
+      import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
+      // Kick off Strava activity sync after short delay (let account view mount first)
+      setTimeout(() => syncStravaActivities().catch(() => {}), 500);
+    }
+  }
+
+  // Sync wearable data on launch (skip in simulator mode — no auth)
+  if (!isSimulatorMode()) {
+    const wearable = state.wearable;
+
+    if (wearable === 'apple') {
+      // Apple Watch: activities + biometrics via HealthKit (iOS only — no-op on web)
+      syncAppleHealth().catch(() => {});
+    } else if (state.stravaConnected) {
+      // Strava is the activity source for any user who has it connected.
+      // Garmin wearable users also get a biometric sync (VO2max, LT, HRV, sleep).
+      isStravaConnected().then((stravaOk) => {
+        if (!stravaOk) return;
+        syncStravaActivities().catch(() => {});
+        if (wearable === 'garmin') {
+          isGarminConnected().then((garminOk) => {
+            if (garminOk) {
+              syncPhysiologySnapshot(7).then(() => {
+                checkRecoveryAndPrompt(getState()).catch(() => {});
+              }).catch(() => {});
+            }
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    } else {
+      // Garmin-only: activities + biometrics from Garmin webhook
+      isGarminConnected().then((connected) => {
+        if (!connected) return;
+        syncPhysiologySnapshot(7).then(() => {
+          checkRecoveryAndPrompt(getState()).catch(() => {});
+        }).catch(() => {});
+        syncActivities().catch(() => {});
+        processPendingCrossTraining();
+      }).catch(() => {});
+    }
+  }
+
+  // Seed CTL baseline from Strava history if not yet fetched
+  if (!isSimulatorMode() && state.stravaConnected && !state.stravaHistoryFetched) {
+    fetchStravaHistory(8).then(() => {
+      import('./ui/home-view').then(({ renderHomeView }) => renderHomeView());
+    }).catch(() => {});
+  }
 
   console.log('Mosaic Training Simulator initialized');
 }
@@ -68,6 +197,81 @@ function wireAdminHandlers(): void {
       window.location.reload();
     });
   });
+}
+
+/**
+ * After physiology sync, check today's recovery data and prompt if needed.
+ * One prompt per day (guarded by s.lastRecoveryPromptDate).
+ */
+async function checkRecoveryAndPrompt(s: ReturnType<typeof import('@/state').getState>): Promise<void> {
+  const today = new Date().toISOString().split('T')[0];
+
+  // One prompt per day guard
+  if ((s as any).lastRecoveryPromptDate === today) return;
+
+  const physioHistory: Array<{ date: string; sleepScore?: number; hrvRmssd?: number; stressAvg?: number; restingHR?: number; vo2max?: number }> =
+    (s as any).physiologyHistory ?? [];
+
+  const todayPhysio = physioHistory.find(p => p.date === today);
+
+  if (!todayPhysio) {
+    // No Garmin data for today — show manual check-in
+    const { showRecoveryLogModal } = await import('@/ui/plan-view');
+    showRecoveryLogModal();
+    return;
+  }
+
+  const { buildRecoveryEntryFromPhysio: build } = await import('@/data/physiologySync');
+  const { computeRecoveryStatus } = await import('@/recovery/engine');
+
+  const entry = build(todayPhysio as any);
+  const history: typeof entry[] = ((s as any).recoveryHistory ?? []);
+  const status = computeRecoveryStatus(entry, history);
+
+  if (!status.shouldPrompt) return;
+
+  // Set recoveryDebt on current week for ATL inflation
+  const wks: any[] = (s as any).wks ?? [];
+  const currentWeek: number = (s as any).w ?? 1;
+  const wk = wks[currentWeek - 1];
+  if (wk) {
+    wk.recoveryDebt = status.level as 'orange' | 'red';
+  }
+
+  // Persist entry to recoveryHistory (cap at 30)
+  const mutable = (await import('@/state')).getMutableState() as any;
+  if (!mutable.recoveryHistory) mutable.recoveryHistory = [];
+  const idx = mutable.recoveryHistory.findIndex((e: any) => e.date === today);
+  if (idx >= 0) mutable.recoveryHistory[idx] = entry;
+  else mutable.recoveryHistory.push(entry);
+  if (mutable.recoveryHistory.length > 30) mutable.recoveryHistory = mutable.recoveryHistory.slice(-30);
+  mutable.lastRecoveryPromptDate = today;
+  (await import('@/state')).saveState();
+
+  const { showRecoveryAdjustModal } = await import('@/ui/plan-view');
+  showRecoveryAdjustModal(entry);
+}
+
+function showGarminConnectedToast(): void {
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 right-4 z-50 bg-emerald-600 text-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-opacity duration-500';
+  toast.textContent = 'Garmin connected successfully!';
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 500);
+  }, 3000);
+}
+
+function showStravaConnectedToast(): void {
+  const toast = document.createElement('div');
+  toast.className = 'fixed top-4 right-4 z-50 bg-orange-600 text-white px-4 py-3 rounded-lg shadow-lg text-sm font-medium transition-opacity duration-500';
+  toast.textContent = 'Strava connected — syncing activities…';
+  document.body.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    setTimeout(() => toast.remove(), 500);
+  }, 3500);
 }
 
 // Initialize on DOM ready

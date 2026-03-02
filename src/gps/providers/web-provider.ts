@@ -3,10 +3,11 @@ import type { GpsProvider, GpsCallback, GpsErrorCallback } from './types';
 
 /**
  * Browser Geolocation API provider.
- * Foreground only — stops when the tab is backgrounded.
+ * Foreground only — tracking may pause when the tab is backgrounded.
  */
 export class WebGpsProvider implements GpsProvider {
   private watchId: number | null = null;
+  private visibilityHandler: (() => void) | null = null;
 
   readonly supportsBackground = false;
 
@@ -46,16 +47,28 @@ export class WebGpsProvider implements GpsProvider {
       (err) => onError(err),
       {
         enableHighAccuracy: true,
-        maximumAge: 0,
+        maximumAge: 3000,
         timeout: 15000,
       }
     );
+
+    // Warn user when tab goes to background
+    this.visibilityHandler = () => {
+      if (document.hidden && this.watchId !== null) {
+        onError(new Error('Tab backgrounded — GPS tracking may pause. Keep this tab visible for accurate tracking.'));
+      }
+    };
+    document.addEventListener('visibilitychange', this.visibilityHandler);
   }
 
   stopWatching(): void {
     if (this.watchId !== null) {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
+    }
+    if (this.visibilityHandler) {
+      document.removeEventListener('visibilitychange', this.visibilityHandler);
+      this.visibilityHandler = null;
     }
   }
 }

@@ -1,10 +1,14 @@
 import type { OnboardingStep, OnboardingState } from '@/types/onboarding';
+import { getState, getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
 import { renderBackground } from './steps/background';
 import { renderVolume } from './steps/volume';
 import { renderPerformance } from './steps/performance';
 import { renderFitness } from './steps/fitness';
+import { renderStravaHistory } from './steps/strava-history';
+import { renderPhysiology } from './steps/physiology';
 import { renderInitializing } from './steps/initializing';
 import { renderAssessment } from './steps/assessment';
 
@@ -68,6 +72,14 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderFitness(container, state);
       break;
 
+    case 'strava-history':
+      renderStravaHistory(container, state);
+      break;
+
+    case 'physiology':
+      renderPhysiology(container, state);
+      break;
+
     case 'initializing':
       renderInitializing(container, state);
       break;
@@ -127,9 +139,30 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
   if (shouldShowBanner) {
     const banner = document.createElement('div');
     banner.id = 'onboarding-banner';
-    banner.className = 'fixed top-0 left-0 right-0 z-50 bg-emerald-950/90 backdrop-blur border-b border-emerald-800/50 px-4 py-3 text-center';
-    banner.innerHTML = `<p class="text-sm text-emerald-300">This takes a little longer than most running apps — we're building a <span class="font-semibold text-emerald-200">holistic picture of you</span> as a runner.</p>`;
+    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:50;background:var(--c-surface);border-bottom:1px solid var(--c-border);padding:12px 16px;text-align:center;backdrop-filter:blur(4px)';
+    banner.innerHTML = `<p style="font-size:13px;color:var(--c-muted)">This takes a little longer than most running apps — we're building a <span style="font-weight:600;color:var(--c-black)">holistic picture of you</span> as a runner.</p>`;
     document.body.appendChild(banner);
+  }
+
+  // Inject "Return to plan →" button for mid-plan edit sessions
+  const existingReturn = document.getElementById('wizard-return-btn');
+  if (existingReturn) existingReturn.remove();
+  const isMidPlan = getState().wks.length > 0;
+  const showReturn = isMidPlan && step !== 'welcome' && step !== 'main-view' && step !== 'initializing';
+  if (showReturn) {
+    const btn = document.createElement('button');
+    btn.id = 'wizard-return-btn';
+    btn.style.cssText = 'position:fixed;bottom:32px;right:32px;display:flex;align-items:center;gap:6px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50';
+    btn.innerHTML = `Return to plan <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>`;
+    btn.addEventListener('click', () => {
+      const s = getMutableState();
+      s.hasCompletedOnboarding = true;
+      saveState();
+      import('@/ui/main-view').then(({ renderMainView }) => {
+        renderMainView();
+      });
+    });
+    document.body.appendChild(btn);
   }
 }
 
@@ -137,6 +170,11 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
  * Transition to the main workout view
  */
 function transitionToMainView(): void {
+  // Mark onboarding complete so future reloads route directly to renderMainView()
+  // and detectMissedWeeks() works correctly.
+  const s = getMutableState();
+  s.hasCompletedOnboarding = true;
+  saveState();
   import('@/ui/main-view').then(({ renderMainView }) => {
     renderMainView();
   });
@@ -151,20 +189,20 @@ export function renderProgressIndicator(currentStep: number, totalSteps: number)
     const isActive = i === currentStep;
     const isCompleted = i < currentStep;
 
-    let dotClass = 'w-2 h-2 rounded-full transition-all duration-300 ';
+    let dotStyle = 'height:8px;border-radius:4px;transition:all 0.3s;';
     if (isActive) {
-      dotClass += 'w-8 bg-emerald-500';
+      dotStyle += 'width:28px;background:var(--c-black);';
     } else if (isCompleted) {
-      dotClass += 'bg-emerald-600';
+      dotStyle += 'width:8px;background:rgba(0,0,0,0.4);';
     } else {
-      dotClass += 'bg-gray-700';
+      dotStyle += 'width:8px;background:rgba(0,0,0,0.12);';
     }
 
-    dots.push(`<div class="${dotClass}"></div>`);
+    dots.push(`<div style="${dotStyle}"></div>`);
   }
 
   return `
-    <div class="flex items-center justify-center gap-2 mb-8">
+    <div style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:32px">
       ${dots.join('')}
     </div>
   `;
@@ -179,13 +217,12 @@ export function renderBackButton(show: boolean = true): string {
   return `
     <button
       onclick="window.wizardPrev()"
-      class="fixed bottom-8 left-8 flex items-center gap-2 text-gray-400 hover:text-white
-             transition-colors duration-200"
+      style="position:fixed;bottom:32px;left:32px;display:flex;align-items:center;gap:8px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50"
     >
-      <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
       </svg>
-      <span class="text-sm">Back</span>
+      Back
     </button>
   `;
 }

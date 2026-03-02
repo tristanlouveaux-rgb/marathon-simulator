@@ -11,56 +11,57 @@ const SPORT_OPTIONS = Object.values(SPORT_LABELS);
  */
 export function renderActivities(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12" style="background:var(--c-bg)">
       ${renderProgressIndicator(6, 11)}
 
       <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <h2 class="text-2xl md:text-3xl font-light mb-2 text-center" style="color:var(--c-black)">
           Active Lifestyle
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p class="text-center mb-8" style="color:var(--c-faint)">
           Tell us about your other activities so we can optimise your plan.
         </p>
 
         <div class="space-y-6">
           <!-- Active Lifestyle Toggle -->
-          <div class="bg-gray-800 rounded-xl p-4 flex items-center justify-between">
+          <div class="rounded-xl p-4 flex items-center justify-between" style="background:rgba(0,0,0,0.06)">
             <div>
-              <div class="text-sm text-white font-medium">Generally active lifestyle?</div>
-              <div class="text-xs text-gray-400">Walking, stairs, active job, etc.</div>
+              <div class="text-sm font-medium" style="color:var(--c-black)">Generally active lifestyle?</div>
+              <div class="text-xs" style="color:var(--c-faint)">Walking, stairs, active job, etc.</div>
             </div>
             <button id="toggle-active"
-              class="w-12 h-6 rounded-full transition-colors ${state.activeLifestyle ? 'bg-emerald-600' : 'bg-gray-600'} relative">
+              class="w-12 h-6 rounded-full transition-colors relative"
+              style="background:${state.activeLifestyle ? 'var(--c-ok)' : 'rgba(0,0,0,0.18)'}">
               <span class="block w-5 h-5 bg-white rounded-full absolute top-0.5 transition-transform ${state.activeLifestyle ? 'translate-x-6' : 'translate-x-0.5'}"></span>
             </button>
           </div>
 
           <!-- Disclaimer -->
-          <div class="bg-gray-800/50 rounded-xl p-3 space-y-2">
-            <p class="text-xs text-gray-400">
+          <div class="rounded-xl p-3 space-y-2" style="background:rgba(0,0,0,0.04)">
+            <p class="text-xs" style="color:var(--c-faint)">
               Don't worry about getting this perfect — your watch sync and manual logs will capture everything automatically. This just helps us build a smarter starting plan.
             </p>
-            <p class="text-xs text-gray-500">
-              <span class="text-gray-400 font-medium">Running benefit</span> = how much a sport improves your running fitness.
+            <p class="text-xs" style="color:var(--c-faint)">
+              <span class="font-medium" style="color:var(--c-muted)">Running benefit</span> = how much a sport improves your running fitness.
               High benefit (e.g. cycling, rowing) builds aerobic fitness that carries over to running.
               Low benefit (e.g. swimming, yoga) aids recovery but is less running-specific.
             </p>
           </div>
 
           <!-- Add Activity Form -->
-          <div class="bg-gray-800 rounded-xl p-4">
-            <div class="text-sm text-white font-medium mb-3">Recurring Activities</div>
+          <div class="rounded-xl p-4" style="background:rgba(0,0,0,0.06)">
+            <div class="text-sm font-medium mb-3" style="color:var(--c-black)">Recurring Activities</div>
             <div class="grid grid-cols-4 gap-2 mb-3">
-              <select id="act-sport" class="col-span-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+              <select id="act-sport" class="col-span-1 text-xs rounded-lg px-2 py-2" style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
                 <option value="" disabled selected>Select sport...</option>
                 ${SPORT_OPTIONS.map(s => `<option value="${s}">${s}</option>`).join('')}
               </select>
               <input type="number" id="act-dur" placeholder="Min" min="10" max="300"
-                class="text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+                class="text-xs rounded-lg px-2 py-2" style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
               <input type="number" id="act-freq" placeholder="x/wk" min="1" max="7"
-                class="text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+                class="text-xs rounded-lg px-2 py-2" style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
               <button id="btn-add-activity"
-                class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors">
+                class="text-xs rounded-lg font-medium transition-colors" style="background:var(--c-black);color:#FDFCF7;border:none">
                 + Add
               </button>
             </div>
@@ -71,14 +72,14 @@ export function renderActivities(container: HTMLElement, state: OnboardingState)
             </div>
 
             ${state.recurringActivities.length === 0 ? `
-              <p class="text-xs text-gray-500 mt-2">No activities added yet. You can skip this step.</p>
+              <p class="text-xs mt-2" style="color:var(--c-faint)">No activities added yet. You can skip this step.</p>
             ` : ''}
           </div>
         </div>
 
         <button id="continue-activities"
-          class="mt-8 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
+          class="mt-8 w-full py-3 rounded-xl transition-all font-medium"
+          style="background:var(--c-black);color:#FDFCF7;border:none">
           Continue
         </button>
       </div>
@@ -94,20 +95,20 @@ function renderActivityList(activities: RecurringActivity[]): string {
   if (activities.length === 0) return '';
 
   return activities.map((a, i) => `
-    <div class="flex items-center justify-between bg-gray-700/50 rounded-lg px-3 py-2">
+    <div class="flex items-center justify-between rounded-lg px-3 py-2" style="background:rgba(0,0,0,0.06)">
       <div class="flex items-center gap-3">
-        <span class="text-sm text-white font-medium">${a.sport}</span>
-        <span class="text-xs text-gray-400">${a.durationMin}min</span>
-        <span class="text-xs text-gray-400">${a.frequency}x/wk</span>
-        <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
-      a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
-        'bg-emerald-900/50 text-emerald-300'
+        <span class="text-sm font-medium" style="color:var(--c-black)">${a.sport}</span>
+        <span class="text-xs" style="color:var(--c-faint)">${a.durationMin}min</span>
+        <span class="text-xs" style="color:var(--c-faint)">${a.frequency}x/wk</span>
+        <span class="text-xs px-1.5 py-0.5 rounded" style="${a.intensity === 'hard' ? 'background:rgba(239,68,68,0.12);color:var(--c-warn)' :
+      a.intensity === 'moderate' ? 'background:rgba(245,158,11,0.12);color:var(--c-caution)' :
+        'background:rgba(34,197,94,0.12);color:var(--c-ok)'
     }" title="How much this sport benefits running fitness">${a.intensity === 'hard' ? 'High running benefit' :
       a.intensity === 'moderate' ? 'Some running benefit' :
         'Low running benefit'
     }</span>
       </div>
-      <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs transition-colors">Remove</button>
+      <button data-remove="${i}" class="remove-activity text-xs transition-colors" style="color:var(--c-faint)">Remove</button>
     </div>
   `).join('');
 }

@@ -5,85 +5,74 @@ import { SPORT_LABELS } from '@/constants/sports';
 
 const SPORT_OPTIONS = Object.values(SPORT_LABELS);
 
+const SEL_INPUT = 'background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;padding:7px 10px;font-size:12px;box-sizing:border-box;outline:none';
+
+function numBtn(selected: boolean): string {
+  return selected
+    ? 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black);border-radius:8px;padding:10px 4px;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.15s;width:100%'
+    : 'background:var(--c-surface);color:var(--c-black);border:2px solid var(--c-border-strong);border-radius:8px;padding:10px 4px;font-size:14px;cursor:pointer;transition:all 0.15s;width:100%';
+}
+
 /**
  * Consolidated Volume step: Runs/Week + Sports/Week + Inline Activities
  */
 export function renderVolume(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(4, 7)}
 
-      <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:480px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Training Volume
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           How much time can you dedicate?
         </p>
 
-        <div class="space-y-6">
+        <div style="display:flex;flex-direction:column;gap:20px">
           <!-- Runs per week -->
           <div>
-            <label class="block text-sm text-gray-400 mb-3">Runs per week</label>
-            <div class="grid grid-cols-7 gap-2">
+            <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Runs per week</label>
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">
               ${[1, 2, 3, 4, 5, 6, 7].map(n => `
-                <button data-runs="${n}"
-                  class="runs-btn py-3 rounded-lg font-medium transition-all
-                         ${state.runsPerWeek === n
-      ? 'bg-emerald-600 text-white'
-      : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
-                  ${n}
-                </button>
+                <button data-runs="${n}" style="${numBtn(state.runsPerWeek === n)}" class="runs-btn">${n}</button>
               `).join('')}
             </div>
-            <p class="text-xs text-gray-500 mt-2">${getRunsRec(state.runsPerWeek)}</p>
+            <p style="font-size:12px;color:var(--c-faint);margin-top:6px">${getRunsRec(state.runsPerWeek)}</p>
           </div>
 
           <!-- Gym sessions -->
           <div>
-            <label class="block text-sm text-gray-400 mb-3">
-              Gym sessions per week <span class="text-gray-600">(optional)</span>
+            <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">
+              Gym sessions per week <span style="color:var(--c-faint)">(optional)</span>
             </label>
-            <div class="grid grid-cols-4 gap-2">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
               ${[0, 1, 2, 3].map(n => `
-                <button data-gym="${n}"
-                  class="gym-btn py-3 rounded-lg font-medium transition-all
-                         ${state.gymSessionsPerWeek === n
-          ? 'bg-emerald-600 text-white'
-          : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
-                  ${n}
-                </button>
+                <button data-gym="${n}" style="${numBtn(state.gymSessionsPerWeek === n)}" class="gym-btn">${n}</button>
               `).join('')}
             </div>
-            <p class="text-xs text-gray-500 mt-2">${getGymRec(state.gymSessionsPerWeek)}</p>
-            ${state.gymSessionsPerWeek > 0 ? '<p class="text-xs text-gray-600 mt-1">Running-focused strength &amp; plyometrics. Already have a gym routine? That\'s great — just make sure to include these key exercises.</p>' : ''}
+            <p style="font-size:12px;color:var(--c-faint);margin-top:6px">${getGymRec(state.gymSessionsPerWeek)}</p>
+            ${state.gymSessionsPerWeek > 0 ? '<p style="font-size:11px;color:var(--c-faint);margin-top:4px">Running-focused strength &amp; plyometrics.</p>' : ''}
           </div>
 
           <!-- Other sports -->
           <div>
-            <label class="block text-sm text-gray-400 mb-3">
-              Other sports sessions per week <span class="text-gray-600">(optional)</span>
+            <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">
+              Other sports sessions per week <span style="color:var(--c-faint)">(optional)</span>
             </label>
-            <div class="grid grid-cols-6 gap-2">
+            <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">
               ${[0, 1, 2, 3, 4, 5].map(n => `
-                <button data-sports="${n}"
-                  class="sports-btn py-3 rounded-lg font-medium transition-all
-                         ${state.sportsPerWeek === n
-          ? 'bg-emerald-600 text-white'
-          : 'bg-gray-800 text-gray-400 hover:bg-gray-750'}">
-                  ${n}
-                </button>
+                <button data-sports="${n}" style="${numBtn(state.sportsPerWeek === n)}" class="sports-btn">${n}</button>
               `).join('')}
             </div>
           </div>
 
-          <!-- Inline Activities (shown when sports > 0) -->
+          <!-- Inline Activities -->
           ${state.sportsPerWeek > 0 ? renderInlineActivities(state) : ''}
         </div>
 
         <button id="continue-volume"
-          class="mt-8 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
+          style="margin-top:24px;width:100%;padding:14px 20px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
           Continue
         </button>
       </div>
@@ -97,51 +86,45 @@ export function renderVolume(container: HTMLElement, state: OnboardingState): vo
 
 function renderInlineActivities(state: OnboardingState): string {
   return `
-    <div class="bg-gray-800 rounded-xl p-4">
-      <div class="text-sm text-white font-medium mb-3">Recurring Activities</div>
-      <p class="text-xs text-gray-400 mb-3">
-        Don't worry about getting this perfect — your watch sync and manual logs will capture everything automatically.
+    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:16px">
+      <div style="font-size:14px;font-weight:500;color:var(--c-black);margin-bottom:8px">Recurring Activities</div>
+      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px">
+        Don't worry about getting this perfect — your watch sync will capture everything automatically.
       </p>
-      <p class="text-xs text-gray-400 mb-3">
-        Each sport is tagged by <span class="text-gray-300 font-medium">running benefit</span> — how much it improves your running fitness. High benefit sports like football build aerobic fitness that carries over directly.
+      <p style="font-size:12px;color:var(--c-muted);margin-bottom:8px">
+        Each sport is tagged by <span style="color:var(--c-black);font-weight:500">running benefit</span> — how much it improves your running fitness.
       </p>
-      <p class="text-xs text-gray-400 mb-2">If you don't play a specific sport regularly but know you'll be active, just choose "Generic Sport" and we'll fit it into the plan.</p>
-      <div class="grid grid-cols-4 gap-2 mb-3">
-        <select id="act-sport" class="col-span-1 text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+      <p style="font-size:11px;color:var(--c-faint);margin-bottom:10px">If you don't play a specific sport regularly, choose "General Sport".</p>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:6px;margin-bottom:10px">
+        <select id="act-sport" style="${SEL_INPUT}">
           <option value="" disabled selected>Select sport...</option>
-          <option value="Generic Sport">Generic Sport</option>
-          ${SPORT_OPTIONS.filter(s => s !== 'Generic Sport' && s !== 'Hybrid Test Sport').map(s => `<option value="${s}">${s}</option>`).join('')}
+          <option value="General Sport">General Sport</option>
+          ${SPORT_OPTIONS.filter(s => s !== 'General Sport' && s !== 'Hybrid Test Sport').map(s => `<option value="${s}">${s}</option>`).join('')}
         </select>
         <input type="number" id="act-dur" placeholder="Min" min="10" max="300"
-          class="text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+          style="${SEL_INPUT}">
         <input type="number" id="act-freq" placeholder="x/wk" min="1" max="7"
-          class="text-xs bg-gray-700 border border-gray-600 rounded-lg px-2 py-2 text-gray-200">
+          style="${SEL_INPUT}">
         <button id="btn-add-activity"
-          class="text-xs bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium transition-colors">
+          style="background:var(--c-black);color:#FDFCF7;border:none;border-radius:8px;font-size:12px;font-weight:500;cursor:pointer;padding:0 8px">
           + Add
         </button>
       </div>
 
-      <div id="activity-list" class="space-y-2">
+      <div id="activity-list" style="display:flex;flex-direction:column;gap:6px">
         ${state.recurringActivities.map((a, i) => `
-          <div class="flex items-center justify-between bg-gray-700/50 rounded-lg px-3 py-2">
-            <div class="flex items-center gap-3">
-              <span class="text-sm text-white font-medium">${a.sport}</span>
-              <span class="text-xs text-gray-400">${a.durationMin}min ${a.frequency}x/wk</span>
-              <span class="text-xs px-1.5 py-0.5 rounded ${a.intensity === 'hard' ? 'bg-red-900/50 text-red-300' :
-      a.intensity === 'moderate' ? 'bg-amber-900/50 text-amber-300' :
-        'bg-emerald-900/50 text-emerald-300'
-    }">${a.intensity === 'hard' ? 'High running benefit' :
-      a.intensity === 'moderate' ? 'Some running benefit' :
-        'Low running benefit'
-    }</span>
+          <div style="display:flex;align-items:center;justify-content:space-between;background:var(--c-bg);border:1px solid var(--c-border);border-radius:8px;padding:8px 12px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:13px;font-weight:500;color:var(--c-black)">${a.sport}</span>
+              <span style="font-size:11px;color:var(--c-muted)">${a.durationMin}min ${a.frequency}x/wk</span>
+              <span style="font-size:11px;padding:2px 6px;border-radius:4px;${a.intensity === 'hard' ? 'background:rgba(239,68,68,0.08);color:var(--c-warn)' : a.intensity === 'moderate' ? 'background:rgba(245,158,11,0.08);color:var(--c-caution)' : 'background:rgba(34,197,94,0.08);color:var(--c-ok)'}">${a.intensity === 'hard' ? 'High benefit' : a.intensity === 'moderate' ? 'Some benefit' : 'Low benefit'}</span>
             </div>
-            <button data-remove="${i}" class="remove-activity text-gray-500 hover:text-red-400 text-xs">Remove</button>
+            <button data-remove="${i}" class="remove-activity" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer">Remove</button>
           </div>
         `).join('')}
       </div>
 
-      ${state.recurringActivities.length === 0 ? `<p class="text-xs text-gray-500 mt-2">No activities added yet.</p>` : ''}
+      ${state.recurringActivities.length === 0 ? `<p style="font-size:12px;color:var(--c-faint);margin-top:6px">No activities added yet.</p>` : ''}
     </div>
   `;
 }

@@ -12,6 +12,8 @@ const STEP_ORDER: OnboardingStep[] = [
   'volume',
   'performance',
   'fitness',
+  'strava-history',
+  'physiology',
   'initializing',
   'runner-type',
   'assessment',
@@ -28,6 +30,14 @@ export function initWizard(): void {
     updateState({
       onboarding: { ...defaultOnboardingState },
       hasCompletedOnboarding: false,
+    });
+    saveState();
+  }
+
+  // After soft reset: skip welcome if name already exists
+  if (s.onboarding?.name && s.onboarding.currentStep === 'welcome') {
+    updateState({
+      onboarding: { ...s.onboarding, currentStep: 'goals' },
     });
     saveState();
   }
@@ -85,6 +95,13 @@ export function nextStep(): void {
   const currentIdx = STEP_ORDER.indexOf(s.onboarding.currentStep);
   let nextIdx = currentIdx + 1;
 
+  // Skip strava-history for non-Strava users
+  while (nextIdx < STEP_ORDER.length &&
+    STEP_ORDER[nextIdx] === 'strava-history' &&
+    s.onboarding.watchType !== 'strava') {
+    nextIdx++;
+  }
+
   if (nextIdx < STEP_ORDER.length) {
     const completedSteps = s.onboarding.completedSteps.includes(s.onboarding.currentStep)
       ? s.onboarding.completedSteps
@@ -115,7 +132,11 @@ export function previousStep(): void {
   let prevIdx = currentIdx - 1;
 
   // Skip 'initializing' when going back (it's an auto-advance animation)
-  while (prevIdx > 0 && STEP_ORDER[prevIdx] === 'initializing') {
+  // Skip 'strava-history' when going back if user is not a Strava user
+  while (prevIdx > 0 && (
+    STEP_ORDER[prevIdx] === 'initializing' ||
+    (STEP_ORDER[prevIdx] === 'strava-history' && s.onboarding.watchType !== 'strava')
+  )) {
     prevIdx--;
   }
 
@@ -208,6 +229,8 @@ declare global {
   }
 }
 
-window.wizardNext = nextStep;
-window.wizardPrev = previousStep;
-window.wizardGoTo = goToStep;
+if (typeof window !== 'undefined') {
+  window.wizardNext = nextStep;
+  window.wizardPrev = previousStep;
+  window.wizardGoTo = goToStep;
+}

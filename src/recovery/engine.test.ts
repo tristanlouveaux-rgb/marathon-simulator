@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeRecoveryStatus, sleepQualityToScore, createGarminRecoveryEntry } from './engine';
+import { computeRecoveryStatus, sleepQualityToScore, createGarminRecoveryEntry, rmssdToHrvStatus } from './engine';
 import type { RecoveryEntry } from './engine';
 
 describe('computeRecoveryStatus', () => {
@@ -103,5 +103,23 @@ describe('createGarminRecoveryEntry', () => {
     expect(entry.sleepScore).toBe(72);
     expect(entry.readiness).toBe(58);
     expect(entry.hrvStatus).toBe('balanced');
+  });
+});
+
+describe('rmssdToHrvStatus', () => {
+  it('maps RMSSD bands to correct status', () => {
+    expect(rmssdToHrvStatus(60)).toBe('balanced');   // ≥ 50
+    expect(rmssdToHrvStatus(50)).toBe('balanced');   // boundary
+    expect(rmssdToHrvStatus(45)).toBe('low');        // 35–49
+    expect(rmssdToHrvStatus(35)).toBe('low');        // boundary
+    expect(rmssdToHrvStatus(28)).toBe('unbalanced'); // 20–34
+    expect(rmssdToHrvStatus(20)).toBe('unbalanced'); // boundary
+    expect(rmssdToHrvStatus(15)).toBe('strained');   // < 20
+    expect(rmssdToHrvStatus(0)).toBe('strained');
+  });
+
+  it('returns balanced for healthy elite values', () => {
+    expect(rmssdToHrvStatus(95)).toBe('balanced');
+    expect(rmssdToHrvStatus(120)).toBe('balanced');
   });
 });

@@ -34,6 +34,9 @@ export interface ActivityInput {
   durationMin: number;
   rpe?: number;                    // 1-10 scale
 
+  // Tier A+: iTRIMP (Individual TRIMP from HR stream — highest accuracy)
+  iTrimp?: number | null;
+
   // Tier A: Garmin/Firstbeat data
   garminAerobicLoad?: number;
   garminAnaerobicLoad?: number;
@@ -54,7 +57,7 @@ export interface ActivityInput {
 // ---------------------------------------------------------------------------
 
 /** Data tier used for calculation */
-export type DataTier = 'garmin' | 'hr' | 'rpe';
+export type DataTier = 'itrimp' | 'garmin' | 'hr' | 'rpe';
 
 /** Computed universal load from any activity */
 export interface UniversalLoadResult {
@@ -74,6 +77,9 @@ export interface UniversalLoadResult {
   sportMult: number;
   recoveryMult: number;
   runSpec: number;
+
+  // Impact load (musculoskeletal / leg stress)
+  impactLoad: number;           // durationMin × sport.impactPerMin
 
   // Explanation strings for UI
   explanations: string[];
@@ -183,8 +189,16 @@ export function crossActivityToInput(act: CrossActivity): ActivityInput {
     sport: act.sport,
     durationMin: act.duration_min,
     rpe: act.rpe,
+    iTrimp: act.iTrimp,
     garminAerobicLoad: act.fromGarmin ? act.aerobic_load : undefined,
     garminAnaerobicLoad: act.fromGarmin ? act.anaerobic_load : undefined,
+    hrZones: act.hrZones ? {
+      zone1Minutes: act.hrZones.z1 / 60,
+      zone2Minutes: act.hrZones.z2 / 60,
+      zone3Minutes: act.hrZones.z3 / 60,
+      zone4Minutes: act.hrZones.z4 / 60,
+      zone5Minutes: act.hrZones.z5 / 60,
+    } : undefined,
     dayOfWeek: act.dayOfWeek,
     fromGarmin: act.fromGarmin,
     activityId: act.id,

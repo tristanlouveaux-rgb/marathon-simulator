@@ -2,7 +2,7 @@ import type { RaceDistance, SimulatorState, Week, Workout, BenchmarkResult } fro
 import {
   getState, getMutableState, updateState,
   getCrossActivities, addCrossActivity,
-  saveState, clearState
+  saveState, clearState, softResetState,
 } from '@/state';
 import {
   cv, rd, rdKm, tv, calculateFatigueExponent, gt, getRunnerType,
@@ -14,11 +14,21 @@ import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { computeACWR, computeWeekTSS } from '@/calculations/fitness-model';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
+import type { ActivityStream } from '@/calculations/stream-processor';
+import { analyzeStream, computeCardiacEfficiency } from '@/calculations/stream-processor';
+import {
+  estimateFromThresholdRun, estimateFromEfficiencyTrend,
+  shouldAutoApply, initLTEstimationState,
+  type LTEstimate,
+} from '@/calculations/lt-estimator';
+import { openActivityReReview } from '@/ui/activity-review';
+import { loadGpsRecording } from '@/gps/persistence';
 
 
 // Drag and drop state
@@ -30,6 +40,120 @@ let onWeekAdvanceCb: (() => void) | null = null;
 /** Register a callback invoked after the week advances. */
 export function setOnWeekAdvance(cb: () => void): void {
   onWeekAdvanceCb = cb;
+}
+
+// ─── Stream cache (module-level, not persisted — cleared on page load) ───
+const workoutStreamCache = new Map<string, ActivityStream>();
+
+/** Store stream data for a workout (called from sync listener). */
+export function storeWorkoutStream(workoutId: string, stream: ActivityStream): void {
+  workoutStreamCache.set(workoutId, stream);
+}
+
+/** Retrieve cached stream data for a workout. */
+function getWorkoutStream(workoutId: string): ActivityStream | undefined {
+  return workoutStreamCache.get(workoutId);
+}
+
+// ─── LT Auto-Update Helpers ─────────────────────────────────────────────
+
+/**
+ * Apply an auto-estimated LT update through the existing pipeline.
+ * Follows same pattern as updateFitness() and recordBenchmark():
+ *   1. Update s.lt and s.ltPace
+ *   2. Record physiology measurement (updates adaptation ratio)
+ *   3. Calibrate VDOT via physioAdj
+ *   4. Recalculate paces
+ *   5. Update LT estimation tracking state
+ *   6. Record ltAutoUpdate on the week for UI display
+ *   7. Log the change
+ */
+function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
+  const wk = s.wks[s.w - 1];
+  if (!wk) return;
+
+  const previousLT = s.lt;
+  const newLT = estimate.ltPaceSecPerKm;
+
+  // 1. Update LT
+  s.lt = newLT;
+  s.ltPace = newLT;
+
+  // 2. Record physiology measurement
+  if (!s.physiologyTracking) {
+    s.physiologyTracking = {
+      measurements: initializePhysiologyTracking(s.initialLT, s.initialVO2, s.v).measurements,
+    };
+  }
+  const measurement = {
+    week: s.w,
+    ltPaceSecKm: newLT,
+    vo2max: null,
+    source: 'auto_lt' as const,
+    timestamp: new Date().toISOString(),
+  };
+  const trackingState = {
+    initialLT: s.initialLT,
+    initialVO2: s.initialVO2,
+    baselineVdot: s.v,
+    measurements: s.physiologyTracking.measurements || [],
+    currentAdaptationRatio: s.adaptationRatio || 1.0,
+    lastAssessment: null,
+  };
+  const updated = recordMeasurement(trackingState, measurement);
+  s.physiologyTracking.measurements = updated.measurements;
+  s.adaptationRatio = updated.currentAdaptationRatio;
+
+  // 3. Calibrate VDOT
+  let wg = 0;
+  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
+  const observedVdot = cv(10000, newLT * 10);
+  s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+
+  // 4. Recalculate paces
+  const adjustedVdot = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  s.pac = gp(adjustedVdot, s.lt);
+
+  // 5. Update LT estimation tracking state
+  if (!s.ltEstimation) s.ltEstimation = initLTEstimationState();
+  s.ltEstimation.lastAutoUpdateWeek = s.w;
+  s.ltEstimation.latestAutoLT = newLT;
+  s.ltEstimation.estimates.push(estimate);
+  s.ltEstimation.pendingConfirmation = null;
+
+  // 6. Record on week for UI
+  wk.ltAutoUpdate = {
+    week: s.w,
+    newLT,
+    previousLT,
+    source: estimate.source,
+    confidence: estimate.confidence,
+  };
+
+  // 7. Log
+  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+  const prevStr = previousLT ? fmtPace(previousLT) : '—';
+  log(`LT Auto-Updated: ${prevStr} → ${fmtPace(newLT)}/km (${estimate.source}, ${estimate.confidence} confidence)`);
+}
+
+/**
+ * Record an efficiency data point from an easy/long run with HR.
+ */
+function recordEfficiencyPoint(
+  s: SimulatorState,
+  avgHR: number,
+  pace: number,
+  workoutType: string,
+  week: number,
+): void {
+  if (!s.ltEstimation) s.ltEstimation = initLTEstimationState();
+  s.ltEstimation.efficiencyHistory.push({
+    week,
+    avgPaceSecPerKm: pace,
+    avgHeartRateBpm: avgHR,
+    efficiencyIndex: computeCardiacEfficiency(pace, avgHR),
+    workoutType,
+  });
 }
 
 /**
@@ -347,6 +471,58 @@ export function rate(
     ? `${name} RPE${rpe}${hrMsg}`
     : `${ch > 0 ? 'Strong' : 'Hard'} ${name}${hrMsg}: ${clampedWch >= 0 ? '+' : ''}${clampedWch.toFixed(2)}`);
 
+  // ─── LT Auto-Estimation (Method 1: Threshold Direct) ─────────────
+  const injuryActiveForLT = !!(s as any).injuryState?.active;
+  if (workoutType === 'threshold') {
+    const stream = getWorkoutStream(workoutId);
+    if (stream) {
+      const analysis = analyzeStream(stream);
+      const zones = calculateZones({
+        lthr: s.lt || undefined,
+        maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
+        restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
+        age: s.onboarding?.age || undefined,
+      });
+      if (zones) {
+        const ltEst = estimateFromThresholdRun(analysis, zones);
+        if (ltEst) {
+          ltEst.week = s.w;
+          if (!s.ltEstimation) s.ltEstimation = initLTEstimationState();
+          const decision = shouldAutoApply(
+            ltEst, s.lt, s.ltEstimation.lastAutoUpdateWeek, s.w, injuryActiveForLT,
+          );
+          if (decision.apply) {
+            applyAutoLTUpdate(s, ltEst);
+          } else if (decision.needsConfirmation) {
+            s.ltEstimation.pendingConfirmation = {
+              estimate: ltEst,
+              currentLT: s.lt || 0,
+              deviationPct: s.lt ? Math.abs(ltEst.ltPaceSecPerKm - s.lt) / s.lt * 100 : 0,
+            };
+            s.ltEstimation.estimates.push(ltEst);
+            log(`LT estimate: ${decision.reason}`);
+          } else {
+            s.ltEstimation.estimates.push(ltEst);
+          }
+        }
+      }
+    }
+  }
+
+  // ─── LT Efficiency Data Collection (easy/long runs with HR) ──────
+  if ((workoutType === 'easy' || workoutType === 'long') && avgHR && avgHR > 0) {
+    // Use stream work segment pace if available, otherwise estimate from paces
+    const stream = getWorkoutStream(workoutId);
+    let pace = s.pac?.e || 0;
+    if (stream) {
+      const analysis = analyzeStream(stream);
+      pace = analysis.workSegment.avgPaceSecPerKm;
+    }
+    if (pace > 0) {
+      recordEfficiencyPoint(s, avgHR, pace, workoutType, s.w);
+    }
+  }
+
   // Update paces and predictions
   let wg = 0;
   for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
@@ -512,36 +688,32 @@ export async function next(): Promise<void> {
   if (s.w < 1 || s.w > s.wks.length) return;
   const wk = s.wks[s.w - 1];
 
-  // Completion gating: check for unrated run workouts
-  const ratedCount = Object.keys(wk.rated).length;
-  // Use actual run workout count from the current week's generated workouts
-  const runWorkoutCount = s.rw || 3;
-  // Only count run workouts as required (not cross-training, commute, or strength)
   const injuryState = (s as any).injuryState;
   const isInjured = injuryState && injuryState.active;
 
-  if (ratedCount < runWorkoutCount && !isInjured) {
-    const incomplete = runWorkoutCount - ratedCount;
-    const proceed = await showCompletionModal(incomplete);
+  // Generate this week's actual workouts once (shared by gating check and auto-skip)
+  const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
+  const weekWorkouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
+    injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+    undefined, undefined, s.w, s.tw, undefined, s.gs
+  );
+
+  // Completion gating: count only unrated RUN workouts (exclude gym/cross/rest)
+  const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+  const unrated = weekWorkouts.filter(w => {
+    const wId = w.id || w.n;
+    return !wk.rated[wId] && !nonRunTypes.includes(w.t);
+  });
+
+  if (unrated.length > 0 && !isInjured) {
+    const proceed = await showCompletionModal(unrated.length);
     if (!proceed) return;
 
-    // Auto-skip unrated workouts: regenerate workout list to find them
+    // Auto-skip unrated run workouts (already computed above)
     const MAX_CARRY_FORWARD = 2;
     const MAX_HARD_PER_WEEK = 4;
     const HARD_TYPES = ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'long', 'mixed', 'progressive'];
-
-    const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-    const weekWorkouts = generateWeekWorkouts(
-      wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-      undefined, undefined, s.w, s.tw, undefined, s.gs
-    );
-    // Find unrated run workouts (exclude cross-training, strength, rest)
-    const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test'];
-    const unrated = weekWorkouts.filter(w => {
-      const wId = w.id || w.n;
-      return !wk.rated[wId] && !nonRunTypes.includes(w.t);
-    });
 
     // Preview next week's hard run count so we don't overload it
     const nextWk = s.wks[s.w]; // s.w is still current week (0-indexed: s.w = next week)
@@ -642,7 +814,171 @@ export async function next(): Promise<void> {
   }
   // When injured, wk.wkGain was already set to the phase-aware detraining value above
   log(`Week ${s.w}: ${wk.wkGain >= 0 ? '+' : ''}${wk.wkGain.toFixed(3)} VDOT (${isInjured ? 'Injured — detraining' : Math.round(adherence * 100) + '% adherence'})`);
+
+  // Store completed km for this week before advancing
+  {
+    const prevSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
+    const weekWos = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, prevSkips, s.commuteConfig,
+      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+      undefined, undefined, s.w, s.tw, undefined, s.gs
+    );
+    // Apply mods so replaced workouts count as 0km
+    if (wk.workoutMods) {
+      for (const mod of wk.workoutMods) {
+        const wo = weekWos.find(w => w.n === mod.name && (mod.dayOfWeek == null || w.dayOfWeek === mod.dayOfWeek));
+        if (wo) { wo.d = mod.newDistance; wo.status = mod.status as any; }
+      }
+    }
+    const nonRunTs = new Set(['cross', 'strength', 'rest', 'gym']);
+    const resolveKm = (wo: Workout, wId: string): number => {
+      const garmin = wk.garminActuals?.[wId];
+      if (garmin?.distanceKm) return garmin.distanceKm;
+      const gpsRecId = wk.gpsRecordings?.[wId];
+      if (gpsRecId) {
+        const rec = loadGpsRecording(gpsRecId);
+        if (rec?.totalDistance) return rec.totalDistance / 1000;
+      }
+      const m = wo.d.match(/(\d+\.?\d*)km/);
+      return m ? parseFloat(m[1]) : 0;
+    };
+
+    let weekKm = 0;
+    // Scheduled workouts
+    for (const wo of weekWos) {
+      if (nonRunTs.has(wo.t)) continue;
+      const wId = wo.id || wo.n;
+      if (!wk.rated[wId] || wk.rated[wId] === 'skip') continue;
+      if (wo.status === 'replaced') continue;
+      weekKm += resolveKm(wo, wId);
+    }
+    // Adhoc GPS runs (unmatched runs added outside the plan)
+    for (const wo of (wk.adhocWorkouts || [])) {
+      if (nonRunTs.has(wo.t)) continue;
+      if (wo.id?.startsWith('garmin-')) continue; // Garmin adhocs counted separately
+      const wId = wo.id || wo.n;
+      if (!wk.rated[wId] || wk.rated[wId] === 'skip') continue;
+      weekKm += resolveKm(wo, wId);
+    }
+    wk.completedKm = Math.round(weekKm * 10) / 10;
+
+    // Compute effort score from this week's RPE ratings vs expected
+    const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+    let totalDev = 0, ratedCount = 0;
+    for (const wo of weekWos) {
+      if (nonRunTypes.includes(wo.t)) continue;
+      const wId = wo.id || wo.n;
+      const rating = wk.rated[wId];
+      if (typeof rating !== 'number') continue;
+      const expected = wo.rpe || wo.r || 5;
+      totalDev += rating - expected;
+      ratedCount++;
+    }
+    if (ratedCount > 0 && !isInjured) {
+      wk.effortScore = totalDev / ratedCount;
+    }
+  }
+
+  // ─── LT Auto-Estimation (Method 2: Cardiac Efficiency Trend) ─────
+  if (!isInjured && s.ltEstimation?.efficiencyHistory && s.ltEstimation.efficiencyHistory.length >= 3) {
+    const ltEst = estimateFromEfficiencyTrend(s.ltEstimation.efficiencyHistory, s.lt);
+    if (ltEst) {
+      ltEst.week = s.w;
+      const decision = shouldAutoApply(
+        ltEst, s.lt, s.ltEstimation.lastAutoUpdateWeek, s.w, false,
+      );
+      if (decision.apply) {
+        applyAutoLTUpdate(s, ltEst);
+      } else if (decision.needsConfirmation) {
+        if (!s.ltEstimation) s.ltEstimation = initLTEstimationState();
+        s.ltEstimation.pendingConfirmation = {
+          estimate: ltEst,
+          currentLT: s.lt || 0,
+          deviationPct: s.lt ? Math.abs(ltEst.ltPaceSecPerKm - s.lt) / s.lt * 100 : 0,
+        };
+        s.ltEstimation.estimates.push(ltEst);
+        log(`LT estimate: ${decision.reason}`);
+      } else {
+        s.ltEstimation.estimates.push(ltEst);
+      }
+    }
+  }
+
+  // ─── Zone Carry Tracking ─────────────────────────────────────────────
+  // When actual TSS > planned TSS × 1.10, store the excess by zone on this week.
+  // The carry banner in main-view reads this and applies CTL decay per elapsed week.
+  {
+    const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated);
+    const TL_BY_TYPE: Record<string, number> = { easy: 0.92, long: 0.92, marathon_pace: 1.45, threshold: 1.78, vo2: 2.22, intervals: 2.22, hill_repeats: 2.0, progressive: 1.45, mixed: 1.45 };
+    const ZONE_PROFILES: Record<string, { base: number; threshold: number; intensity: number }> = {
+      easy:          { base: 0.95, threshold: 0.04, intensity: 0.01 },
+      long:          { base: 0.90, threshold: 0.09, intensity: 0.01 },
+      marathon_pace: { base: 0.65, threshold: 0.30, intensity: 0.05 },
+      threshold:     { base: 0.25, threshold: 0.60, intensity: 0.15 },
+      vo2:           { base: 0.15, threshold: 0.35, intensity: 0.50 },
+      intervals:     { base: 0.10, threshold: 0.30, intensity: 0.60 },
+      hill_repeats:  { base: 0.15, threshold: 0.30, intensity: 0.55 },
+      progressive:   { base: 0.45, threshold: 0.40, intensity: 0.15 },
+      mixed:         { base: 0.45, threshold: 0.35, intensity: 0.20 },
+    };
+    const nonRunTs = new Set(['rest', 'gym', 'cross', 'cross_training']);
+    let pBase = 0, pThresh = 0, pIntens = 0;
+    for (const wo of weekWorkouts) {
+      if (nonRunTs.has(wo.t)) continue;
+      const durMatch = wo.d?.match(/(\d+\.?\d*)\s*km/);
+      const durMin = durMatch ? parseFloat(durMatch[1]) * 6 : 30;
+      const tss = durMin * (TL_BY_TYPE[wo.t] ?? 1.15);
+      const p = ZONE_PROFILES[wo.t] ?? { base: 0.70, threshold: 0.20, intensity: 0.10 };
+      pBase   += tss * p.base;
+      pThresh += tss * p.threshold;
+      pIntens += tss * p.intensity;
+    }
+    const plannedTSS = pBase + pThresh + pIntens;
+    if (actualTSS > plannedTSS * 1.10 && plannedTSS > 0) {
+      const excess = actualTSS - plannedTSS;
+      let aBase = 0, aThresh = 0, aIntens = 0, zCount = 0;
+      for (const actual of Object.values(wk.garminActuals ?? {})) {
+        if (!actual.hrZones) continue;
+        const tot = actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5;
+        if (tot < 60) continue;
+        aBase   += (actual.hrZones.z1 + actual.hrZones.z2) / tot;
+        aThresh += actual.hrZones.z3 / tot;
+        aIntens += (actual.hrZones.z4 + actual.hrZones.z5) / tot;
+        zCount++;
+      }
+      const bRatio = zCount > 0 ? aBase   / zCount : 0.70;
+      const tRatio = zCount > 0 ? aThresh / zCount : 0.20;
+      const iRatio = zCount > 0 ? aIntens / zCount : 0.10;
+      wk.carriedTSS = {
+        base:      Math.round(excess * bRatio),
+        threshold: Math.round(excess * tRatio),
+        intensity: Math.round(excess * iRatio),
+      };
+    } else {
+      delete wk.carriedTSS;
+    }
+  }
+
+  // ─── ACWR → next week adjustment reason ──────────────────────────────
+  // Compute ACWR now (after this week's load is recorded) and store a lightening
+  // reason on the next week so the banner appears when it's rendered.
+  const tier = s.athleteTierOverride ?? s.athleteTier;
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined);
+
   s.w++;
+
+  if (s.w <= s.tw) {
+    const nextWk = s.wks[s.w - 1];
+    if (nextWk) {
+      if (acwr.status === 'high') {
+        nextWk.weekAdjustmentReason = `Load spike detected (${acwr.ratio.toFixed(2)}× baseline) — intensity reduced for safety`;
+      } else if (acwr.status === 'caution') {
+        nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline) — one quality session replaced`;
+      } else {
+        delete nextWk.weekAdjustmentReason;
+      }
+    }
+  }
 
   if (s.w > s.tw) {
     // Continuous mode: append a new 4-week block instead of completing
@@ -693,13 +1029,13 @@ function complete(): void {
   let fin = tv(fv, dk);
   if (s.timp > 0) fin += s.timp;
 
-  let h = `<div class="text-center py-10"><h2 class="text-2xl font-bold mb-4 text-white">Training Complete</h2>`;
-  h += `<div class="bg-emerald-700 text-white p-6 rounded-lg inline-block mb-4"><div class="text-xs mb-2">Final</div>`;
+  let h = `<div class="text-center py-10"><h2 class="text-2xl font-bold mb-4" style="color:var(--c-black)">Training Complete</h2>`;
+  h += `<div class="p-6 rounded-lg inline-block mb-4" style="background:var(--c-ok);color:#fff"><div class="text-xs mb-2">Final</div>`;
   h += `<div class="text-4xl font-bold">${ft(fin)}</div></div>`;
   h += `<div class="grid grid-cols-3 gap-3 max-w-md mx-auto text-sm">`;
-  h += `<div class="bg-gray-800 p-3 rounded border border-gray-700"><div class="text-xs text-gray-400">Start</div><div class="text-xl font-bold text-white">${s.v.toFixed(1)}</div></div>`;
-  h += `<div class="bg-emerald-950/30 p-3 rounded border border-emerald-800"><div class="text-xs text-gray-400">Final</div><div class="text-xl font-bold text-emerald-400">${fv.toFixed(1)}</div></div>`;
-  h += `<div class="bg-gray-800 p-3 rounded border border-gray-700"><div class="text-xs text-gray-400">Expected</div><div class="text-xl font-bold text-white">${s.expectedFinal.toFixed(1)}</div></div></div></div>`;
+  h += `<div class="p-3 rounded border" style="background:rgba(0,0,0,0.04);border-color:var(--c-border)"><div class="text-xs" style="color:var(--c-muted)">Start</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.v.toFixed(1)}</div></div>`;
+  h += `<div class="p-3 rounded border" style="background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.3)"><div class="text-xs" style="color:var(--c-muted)">Final</div><div class="text-xl font-bold" style="color:var(--c-ok)">${fv.toFixed(1)}</div></div>`;
+  h += `<div class="p-3 rounded border" style="background:rgba(0,0,0,0.04);border-color:var(--c-border)"><div class="text-xs" style="color:var(--c-muted)">Expected</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.expectedFinal.toFixed(1)}</div></div></div></div>`;
 
   const woEl = document.getElementById('wo');
   if (woEl) woEl.innerHTML = h;
@@ -711,7 +1047,7 @@ function complete(): void {
 export function reset(): void {
   showResetModal().then(proceed => {
     if (proceed) {
-      clearState();
+      softResetState();
       location.reload();
     }
   });
@@ -722,16 +1058,16 @@ function showResetModal(): Promise<boolean> {
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">Reset All Data?</h3>
-        <p class="text-gray-400 text-sm mb-5">
-          This will clear your entire training plan, history, and settings. This cannot be undone.
+      <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Reset Training Plan?</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">
+          This will clear your training plan and weekly history. Your name, PBs, and fitness data will be kept.
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-confirm-reset" class="w-full py-2.5 bg-red-600 hover:bg-red-500 text-white font-medium rounded-lg transition-colors text-sm">
-            Reset Everything
+          <button id="btn-confirm-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-warn);color:#fff">
+            Reset Plan
           </button>
-          <button id="btn-cancel-reset" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-cancel-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
             Cancel
           </button>
         </div>
@@ -761,17 +1097,17 @@ function showCompletionModal(incompleteCount: number): Promise<boolean> {
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">Incomplete Workouts</h3>
-        <p class="text-gray-400 text-sm mb-5">
-          You have <span class="text-white font-medium">${incompleteCount}</span> workout${incompleteCount > 1 ? 's' : ''} not yet completed.
+      <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Incomplete Workouts</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">
+          You have <span class="font-medium" style="color:var(--c-black)">${incompleteCount}</span> workout${incompleteCount > 1 ? 's' : ''} not yet completed.
           They'll be marked as skipped and may carry forward to next week.
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-skip-continue" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-skip-continue" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:#fff">
             Skip & Continue
           </button>
-          <button id="btn-go-back" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-go-back" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
             Go Back
           </button>
         </div>
@@ -807,19 +1143,19 @@ function showSlotChoiceModal(
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">Match Activity</h3>
-        <p class="text-gray-400 text-sm mb-5">
-          You logged <span class="text-white font-medium">${loggedDur}min ${sportName}</span>
-          but your planned ${slotName} is <span class="text-white font-medium">${plannedDur}min</span>.
+      <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Match Activity</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">
+          You logged <span class="font-medium" style="color:var(--c-black)">${loggedDur}min ${sportName}</span>
+          but your planned ${slotName} is <span class="font-medium" style="color:var(--c-black)">${plannedDur}min</span>.
           Which slot should this fill?
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-match-sport" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-match-sport" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:#fff">
             Replace planned ${slotName}
           </button>
-          <button id="btn-match-generic" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
-            Fill a Generic Sport slot instead
+          <button id="btn-match-generic" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
+            Fill a General Sport slot instead
           </button>
         </div>
       </div>
@@ -848,17 +1184,17 @@ function showLongRunSkipWarning(): Promise<boolean> {
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">Skip Long Run?</h3>
-        <p class="text-gray-400 text-sm mb-5">
+      <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Skip Long Run?</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">
           Skipping a Long Run creates a "Super Week" next week with high injury risk.
           Consider shortening the run instead.
         </p>
         <div class="flex flex-col gap-2">
-          <button id="btn-skip-longrun" class="w-full py-2.5 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-skip-longrun" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:#fff">
             Skip Anyway
           </button>
-          <button id="btn-keep-longrun" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">
+          <button id="btn-keep-longrun" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
             Keep It
           </button>
         </div>
@@ -883,12 +1219,15 @@ function showLongRunSkipWarning(): Promise<boolean> {
 /**
  * Navigate back to the assessment step to edit settings.
  * Preserves all state — only changes the wizard step pointer.
+ * Sets hasCompletedOnboarding = false so initWizard() routes
+ * to the assessment step (not renderMainView()) on reload.
  */
 export function editSettings(): void {
   const s = getMutableState();
   if (s.onboarding) {
     s.onboarding.currentStep = 'assessment';
   }
+  s.hasCompletedOnboarding = false;
   saveState();
   location.reload();
 }
@@ -1008,15 +1347,16 @@ export function updateFitness(): void {
   if (statusEl && statusTextEl) {
     statusEl.classList.remove('hidden');
     const colorMap: Record<string, string> = {
-      excellent: 'bg-emerald-950/30 border border-emerald-800 text-emerald-300',
-      good: 'bg-emerald-950/30 border border-emerald-800 text-emerald-300',
-      onTrack: 'bg-sky-950/30 border border-sky-800 text-sky-300',
-      slow: 'bg-amber-950/30 border border-amber-800 text-amber-300',
-      concerning: 'bg-red-950/30 border border-red-800 text-red-300',
-      needsData: 'bg-gray-800/30 border border-gray-700 text-gray-400',
+      excellent: 'background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);color:var(--c-ok)',
+      good: 'background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3);color:var(--c-ok)',
+      onTrack: 'background:rgba(78,159,229,0.08);border:1px solid rgba(78,159,229,0.3);color:var(--c-accent)',
+      slow: 'background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);color:var(--c-caution)',
+      concerning: 'background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);color:var(--c-warn)',
+      needsData: 'background:rgba(0,0,0,0.04);border:1px solid var(--c-border);color:var(--c-muted)',
     };
     const bgColor = colorMap[assessment.status] || colorMap.onTrack;
-    statusEl.className = `mt-2 text-xs p-2 rounded ${bgColor}`;
+    statusEl.className = `mt-2 text-xs p-2 rounded`;
+    statusEl.style.cssText = bgColor;
     statusTextEl.innerHTML = statusMessages.join('<br>');
   }
 
@@ -1060,25 +1400,16 @@ export function logActivity(): void {
   const sportSelect = document.getElementById('crossSport') as HTMLSelectElement;
   const durInput = document.getElementById('crossDur') as HTMLInputElement;
   const rpeInput = document.getElementById('crossRPE') as HTMLInputElement;
-  const aerobicInput = document.getElementById('crossAerobic') as HTMLInputElement;
-  const anaerobicInput = document.getElementById('crossAnaerobic') as HTMLInputElement;
 
-  const sport = sportSelect?.value;
+  const sport = sportSelect?.value || 'generic_sport';
   let dur = +durInput?.value;
   let rpe = +rpeInput?.value;
-  const aerobic = aerobicInput ? +aerobicInput.value : 0;
-  const anaerobic = anaerobicInput ? +anaerobicInput.value : 0;
 
-  if (!sport) {
-    alert('Please select a sport/activity!');
-    return;
-  }
   if (isNaN(dur) || dur <= 0) {
     alert('Please enter duration!');
     return;
   }
   dur = Math.min(dur, 600);
-  // Default RPE to 1 for rest/recovery activities
   const restSports = ['rest', 'physio', 'stretch', 'massage'];
   if (restSports.includes(sport.toLowerCase())) {
     rpe = 1;
@@ -1098,8 +1429,8 @@ export function logActivity(): void {
     sport,
     dur,
     rpe,
-    aerobic > 0 ? aerobic : undefined,
-    anaerobic > 0 ? anaerobic : undefined,
+    undefined,
+    undefined,
     activityWeek
   );
 
@@ -1112,23 +1443,23 @@ export function logActivity(): void {
 
   // -----------------------------------------------------------------------
   // Cross-training slot matching: pair logged sport with planned slots
-  // Priority: 1) matching sport slot, 2) generic sport slot, 3) run suggestions
+  // Priority: 1) matching sport slot, 2) general sport slot, 3) run suggestions
   // -----------------------------------------------------------------------
   const sportNorm = normalizeSport(sport);
 
   // Find unfilled planned slots that match this sport (e.g., logged Cycling → planned "Cycling")
   const matchingSlots = workouts.filter(w =>
     w.t === 'cross' &&
-    !w.n.startsWith('Generic Sport') &&
+    !w.n.startsWith('General Sport') &&
     normalizeSport(w.n.replace(/ \d+$/, '')) === sportNorm &&
     !wk.rated[w.n] &&
     !wk.workoutMods?.some(m => m.name === w.n)
   );
 
-  // Find unfilled generic sport slots
+  // Find unfilled general sport slots
   const genericSlots = workouts.filter(w =>
     w.t === 'cross' &&
-    w.n.startsWith('Generic Sport') &&
+    w.n.startsWith('General Sport') &&
     !wk.rated[w.n] &&
     !wk.workoutMods?.some(m => m.name === w.n)
   );
@@ -1163,11 +1494,9 @@ export function logActivity(): void {
     if (excessMin <= 10 || (plannedDur > 0 && excessMin / plannedDur <= 0.2)) {
       activity.applied = true;
       addCrossActivity(activity);
-      sportSelect.value = '';
+      if (sportSelect) sportSelect.value = 'generic_sport';
       durInput.value = '';
       rpeInput.value = '';
-      if (aerobicInput) aerobicInput.value = '';
-      if (anaerobicInput) anaerobicInput.value = '';
       const wLoad = getWeeklyLoad(getCrossActivities(), s.w);
       log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${wLoad.toFixed(0)} (${reason})`);
       saveState();
@@ -1179,8 +1508,8 @@ export function logActivity(): void {
     // so the extra load can reduce/replace runs appropriately
     const excessActivity = createActivity(
       sport, excessMin, rpe,
-      aerobic > 0 ? aerobic * (excessMin / dur) : undefined,
-      anaerobic > 0 ? anaerobic * (excessMin / dur) : undefined,
+      undefined,
+      undefined,
       activityWeek
     );
 
@@ -1217,6 +1546,7 @@ export function logActivity(): void {
         raceGoal: s.rd,
         plannedRunsPerWeek: s.rw,
         injuryMode: !!(s as any).injuryState?.active,
+        runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
       },
       plannedRuns,
       excessActivity,
@@ -1226,11 +1556,8 @@ export function logActivity(): void {
     // Override summary to explain this is excess load from an over-duration session
     popup.summary = `Your additional ${excessMin} mins ${sportNorm.replace(/_/g, ' ')} has further impact on your training load. ${popup.summary}`;
 
-    sportSelect.value = '';
     durInput.value = '';
     rpeInput.value = '';
-    if (aerobicInput) aerobicInput.value = '';
-    if (anaerobicInput) anaerobicInput.value = '';
 
     const weeklyLoad = getWeeklyLoad(getCrossActivities(), s.w);
     const hasAdjustments = popup.reduceOutcome.adjustments.length > 0 ||
@@ -1298,16 +1625,16 @@ export function logActivity(): void {
         const filledDur = fillSlot(slot, `matched planned ${slot.n}`);
         handleSlotFillResult(filledDur, `matched planned ${slot.n}`);
       } else {
-        const filledDur = fillSlot(genericSlots[0], `filled Generic Sport slot`);
-        handleSlotFillResult(filledDur, `filled Generic Sport slot`);
+        const filledDur = fillSlot(genericSlots[0], `filled General Sport slot`);
+        handleSlotFillResult(filledDur, `filled General Sport slot`);
       }
     });
     return;
   }
 
   if (genericSlots.length > 0 && sport !== 'generic_sport') {
-    const filledDur = fillSlot(genericSlots[0], `filled Generic Sport slot`);
-    handleSlotFillResult(filledDur, `filled Generic Sport slot`);
+    const filledDur = fillSlot(genericSlots[0], `filled General Sport slot`);
+    handleSlotFillResult(filledDur, `filled General Sport slot`);
     return;
   }
 
@@ -1343,6 +1670,7 @@ export function logActivity(): void {
       raceGoal: s.rd,
       plannedRunsPerWeek: s.rw,
       injuryMode: !!(s as any).injuryState?.active,
+      runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
     },
     plannedRuns,
     activity,
@@ -1350,11 +1678,8 @@ export function logActivity(): void {
   );
 
   // Clear form immediately
-  sportSelect.value = '';
   durInput.value = '';
   rpeInput.value = '';
-  if (aerobicInput) aerobicInput.value = '';
-  if (anaerobicInput) anaerobicInput.value = '';
 
   const weeklyLoad = getWeeklyLoad(getCrossActivities(), s.w);
 
@@ -1470,9 +1795,9 @@ export function justRun(): void {
 
   const name = 'Quick Run';
 
-  // Don't add a duplicate if one already exists and hasn't been rated
+  // Don't add a duplicate placeholder if one already exists
   if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
-  const existing = wk.adhocWorkouts.find(w => w.n === name && !wk.rated[name]);
+  const existing = wk.adhocWorkouts.find(w => w.n === name && !w.id);
   if (!existing) {
     wk.adhocWorkouts.push({ n: name, d: 'Easy pace', r: 5, t: 'easy' });
     saveState();
@@ -1496,6 +1821,8 @@ declare global {
     skip: (workoutId: string, name: string, workoutType: string, isAlreadySkipped: boolean, currentSkipCount: number, desc: string, rpe: number, dayOfWeek: number, dayName: string) => void;
     moveWorkout: typeof moveWorkout;
     logActivity: typeof logActivity;
+    removeGarminActivity: typeof removeGarminActivity;
+    openActivityReReview: typeof openActivityReReview;
     dragStart: typeof dragStart;
     dragEnd: typeof dragEnd;
     allowDrop: typeof allowDrop;
@@ -1505,6 +1832,8 @@ declare global {
     recordBenchmark: typeof recordBenchmark;
     skipBenchmark: typeof skipBenchmark;
     applyRecoveryAdjustment: (type: 'downgrade' | 'reduce' | 'easyflag', dayOfWeek: number, workoutName?: string) => void;
+    acceptLTUpdate: typeof acceptLTUpdate;
+    dismissLTUpdate: typeof dismissLTUpdate;
   }
 }
 
@@ -1854,17 +2183,97 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   render();
 }
 
-window.applyRecoveryAdjustment = applyRecoveryAdjustment;
-window.justRun = justRun;
-window.toggleJustRunPanel = toggleJustRunPanel;
-window.rate = rate;
-window.skip = skip;
-window.moveWorkout = moveWorkout;
-window.logActivity = logActivity;
-window.dragStart = dragStart;
-window.dragEnd = dragEnd;
-window.allowDrop = allowDrop;
-window.drop = drop;
-window.recordBenchmark = recordBenchmark;
-window.skipBenchmark = skipBenchmark;
-window.rateCapacityTest = rateCapacityTest;
+/**
+ * Accept a pending LT auto-update that requires confirmation (>15% deviation).
+ */
+export function acceptLTUpdate(): void {
+  const s = getMutableState();
+  if (!s.ltEstimation?.pendingConfirmation) return;
+  const estimate = s.ltEstimation.pendingConfirmation.estimate;
+  applyAutoLTUpdate(s, estimate);
+  saveState();
+  render();
+}
+
+/**
+ * Dismiss a pending LT auto-update.
+ */
+export function dismissLTUpdate(): void {
+  const s = getMutableState();
+  if (!s.ltEstimation) return;
+  s.ltEstimation.pendingConfirmation = null;
+  log('LT auto-update dismissed');
+  saveState();
+  render();
+}
+
+/**
+ * Remove a Garmin-synced activity from the current week.
+ * Works for both ad-hoc activities and those that filled a cross-training slot.
+ * @param garminId - The raw Garmin activity ID (key in wk.garminMatched)
+ */
+export function removeGarminActivity(garminId: string): void {
+  if (!confirm('Remove this activity?')) return;
+  const s = getMutableState();
+
+  // Search across ALL weeks — the × button may be on any week's card
+  let found = false;
+  for (const wk of s.wks || []) {
+    if (!wk.garminMatched) continue;
+    const workoutId = wk.garminMatched[garminId];
+    if (!workoutId) continue;
+
+    found = true;
+
+    // Remove from ad-hoc workouts list (garmin adhoc id is "garmin-<garminId>")
+    const adhocId = `garmin-${garminId}`;
+    if (wk.adhocWorkouts) {
+      wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== adhocId && (w.id || w.n) !== workoutId);
+    }
+
+    // Remove from workoutMods (if it filled a cross-training slot or applied adjustments)
+    if (wk.workoutMods) {
+      wk.workoutMods = wk.workoutMods.filter(
+        m => !(m.name === workoutId && m.modReason?.startsWith('Garmin:'))
+      );
+    }
+
+    // Remove from pending queue so the activity can be re-matched on next sync
+    if (wk.garminPending) {
+      wk.garminPending = wk.garminPending.filter(p => p.garminId !== garminId);
+    }
+
+    // Clean up all tracking maps — removing from garminMatched allows re-processing on next sync
+    if (wk.rated) delete wk.rated[workoutId];
+    delete wk.garminMatched[garminId];
+    if (wk.garminActuals) delete wk.garminActuals[workoutId];
+
+    break; // garminId can only exist in one week's garminMatched
+  }
+
+  if (!found) return;
+
+  saveState();
+  render();
+}
+
+if (typeof window !== 'undefined') {
+  window.applyRecoveryAdjustment = applyRecoveryAdjustment;
+  window.justRun = justRun;
+  window.toggleJustRunPanel = toggleJustRunPanel;
+  window.rate = rate;
+  window.skip = skip;
+  window.moveWorkout = moveWorkout;
+  window.logActivity = logActivity;
+  window.dragStart = dragStart;
+  window.dragEnd = dragEnd;
+  window.allowDrop = allowDrop;
+  window.drop = drop;
+  window.recordBenchmark = recordBenchmark;
+  window.skipBenchmark = skipBenchmark;
+  window.rateCapacityTest = rateCapacityTest;
+  window.acceptLTUpdate = acceptLTUpdate;
+  window.dismissLTUpdate = dismissLTUpdate;
+  window.removeGarminActivity = removeGarminActivity;
+  window.openActivityReReview = openActivityReReview;
+}

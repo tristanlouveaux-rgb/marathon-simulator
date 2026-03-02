@@ -90,6 +90,10 @@ export interface Workout extends WorkoutDefinition {
   };
   commute?: boolean;             // This is a commute run
   testType?: string; // For physio capacity tests
+  /** Strava activity ID if this workout was paired via Strava enrich */
+  stravaId?: string | null;
+  /** iTRIMP from Strava HR stream (set on Garmin-sourced adhoc workouts after Strava enrich) */
+  iTrimp?: number | null;
 }
 
 /** Skipped workout record */
@@ -122,6 +126,89 @@ export interface SimpleCross {
   l: number;   // Load
 }
 
+/** Single day of Garmin physiology data */
+export interface PhysiologyDayEntry {
+  date: string;           // YYYY-MM-DD
+  restingHR?: number;
+  hrvRmssd?: number;
+  vo2max?: number;
+  sleepScore?: number;
+  stressAvg?: number;
+}
+
+/**
+ * A Garmin cross-training activity awaiting user reduce/replace/keep decision.
+ * Stored in wk.garminPending so it survives between syncs.
+ * Processed sequentially by processPendingCrossTraining() in activitySync.ts.
+ */
+export interface GarminPendingItem {
+  garminId: string;
+  activityType: string;    // Raw Garmin type e.g. 'WALKING'
+  appType: string;         // Mapped type: 'gym' | 'ride' | 'swim' | 'walk'
+  startTime: string;       // ISO timestamp of when the activity occurred
+  durationSec: number;
+  distanceM: number | null;
+  avgHR: number | null;
+  maxHR: number | null;
+  aerobicEffect: number | null;   // Garmin Training Effect aerobic (0-5)
+  anaerobicEffect: number | null; // Garmin Training Effect anaerobic (0-5)
+  garminRpe: number | null;
+  calories: number | null;
+  iTrimp?: number | null;
+  hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+}
+
+/** Actual data from a matched Garmin activity */
+export interface GarminActual {
+  garminId: string;
+  /** ISO timestamp of when the activity started — used for date display */
+  startTime?: string | null;
+  distanceKm: number;
+  durationSec: number;
+  avgPaceSecKm: number | null;
+  avgHR: number | null;
+  maxHR: number | null;
+  calories: number | null;
+  aerobicEffect?: number | null;
+  anaerobicEffect?: number | null;
+  laps?: GarminLap[];
+  /** Human-readable activity name (e.g. "Tennis", "HIIT") — set for gym/cross slot matches */
+  displayName?: string;
+  /** Human-readable matched slot name (e.g. "Easy Run", "Long Run") — set for run slot matches */
+  workoutName?: string;
+  /** iTRIMP computed from HR stream (null if insufficient HR data) */
+  iTrimp?: number | null;
+  /** Strava activity ID if this was enriched/matched via Strava (numeric as string) */
+  stravaId?: string | null;
+  /** Time (seconds) spent in each HR zone, computed from Strava HR stream */
+  hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+  /** Pace (sec/km) for each completed km — runs only */
+  kmSplits?: number[] | null;
+  /** Encoded polyline from Strava (Google polyline format) for map rendering */
+  polyline?: string | null;
+}
+
+/** Per-lap split from Garmin activity details */
+export interface GarminLap {
+  index: number;
+  distanceM: number;
+  durationSec: number;
+  avgPaceSecKm: number;
+  avgHR?: number;
+}
+
+/** Unspent load item — excess load from overflow/surplus activities */
+export interface UnspentLoadItem {
+  garminId: string;
+  displayName: string;        // e.g. "Tennis", "HIIT", "Run +5.2km surplus"
+  sport: string;              // normalised sport label
+  durationMin: number;
+  aerobic: number;
+  anaerobic: number;
+  date: string;               // ISO date string
+  reason: 'overflow' | 'surplus_run' | 'unmatched';
+}
+
 /** Week data */
 export interface Week {
   w: number;                            // Week number
@@ -135,14 +222,35 @@ export interface Week {
   workoutMoves?: Record<string, number>; // Manual workout day moves
   adjustments: CrossTrainingAdjustment[]; // Cross-training adjustments
   unspentLoad: number;                  // Unspent cross-training load
-  extraRunLoad: number;                 // Extra run load
+  unspentLoadItems?: UnspentLoadItem[]; // Individual items making up unspentLoad
+  extraRunLoad: number;                 // Extra run load (kept for backward compat)
+  actualTSS?: number;                   // Training Stress Score this week (TSS-calibrated, all activities)
+  actualImpactLoad?: number;            // Musculoskeletal leg/impact stress this week
   crossVDOTBonus?: number;              // Bonus from cross-training
   crossTrainingBonus?: number;          // Display bonus
   crossTrainingSummary?: CrossTrainingSummary; // Detailed cross-training summary
   injuryState?: import('./injury').InjuryState; // Injury state for this week
   adhocWorkouts?: Workout[];                    // Ad-hoc workouts (e.g. "Just Run")
+  gpsRecordings?: Record<string, string>;          // workoutId → GpsRecording.id
+  garminMatched?: Record<string, string>;                         // garmin_id → workoutId | '__pending__' (prevents re-matching)
+  garminActuals?: Record<string, GarminActual>;                  // workoutId → actual data from Garmin
+  garminPending?: GarminPendingItem[];                           // All Garmin activities queued for review (kept after processing for re-review)
+  garminReviewChoices?: Record<string, 'integrate' | 'log'>;    // Last user choice per garmin_id (for re-review pre-population)
   injuryCheckedIn?: boolean;                    // Whether injury was updated this week
   passedCapacityTests?: string[];               // Capacity tests passed this week
+  completedKm?: number;                         // Total km completed this week (stored on week advance)
+  effortScore?: number;                          // Average (actual RPE - expected RPE) for rated run workouts
+  weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
+  carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
+  acwrOverridden?: boolean;                     // User dismissed "Reduce this week" — adds synthetic ATL debt
+  recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
+  ltAutoUpdate?: {
+    week: number;
+    newLT: number;
+    previousLT: number | null;
+    source: string;
+    confidence: string;
+  };
 }
 
 /** State schema version for migrations */
@@ -213,7 +321,7 @@ export interface SimulatorState {
       week: number;
       ltPaceSecKm: number | null;
       vo2max: number | null;
-      source: 'watch' | 'manual' | 'test';
+      source: 'watch' | 'manual' | 'test' | 'auto_lt';
       timestamp?: string;
     }>;
     lastAssessmentStatus?: 'excellent' | 'good' | 'onTrack' | 'slow' | 'concerning' | 'needsData';
@@ -236,9 +344,36 @@ export interface SimulatorState {
 
   // Integrations
   stravaConnected?: boolean;
+  wearable?: 'garmin' | 'apple' | 'strava';  // Which wearable the user connected
+
+  // Physiology / accuracy
+  biologicalSex?: 'male' | 'female' | 'prefer_not_to_say';  // Used for iTRIMP β coefficient (unset → male default)
+
+  // Plan start date (ISO YYYY-MM-DD) — anchor for all week date ranges
+  planStartDate?: string;
 
   // Selected event (locked from onboarding)
   selectedMarathon?: Marathon;
+
+  // Athlete tier (for ACWR thresholds and plan ramp rate)
+  athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
+  athleteTierOverride?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
+
+  // iTRIMP intensity thresholds — personalised from Strava labelled runs (Phase C2)
+  // Defaults: easy < 70 TSS/hr, tempo 70–95 TSS/hr, vo2 > 95 TSS/hr
+  intensityThresholds?: {
+    easy: number;              // TSS/hr upper bound for easy zone (default 70)
+    tempo: number;             // TSS/hr upper bound for tempo/threshold (default 95)
+    calibratedFrom?: number;   // Number of labelled sessions used for calibration
+  };
+
+  // Phase C — Strava history (populated by fetchStravaHistory() / history mode edge fn)
+  stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
+  stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
+  historicWeeklyTSS?: number[];             // Running-equiv TSS per week, oldest first (8 weeks)
+  historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
+  ctlBaseline?: number;                     // CTL computed from history — seeds fitness model
+  detectedWeeklyKm?: number;               // Average weekly running km from history (for plan starting volume)
 
   // Injury recovery tracking
   rehabWeeksDone?: number;        // Weeks completed during injury (plan pointer frozen)
@@ -256,6 +391,12 @@ export interface SimulatorState {
   // Recovery tracking
   recoveryHistory?: import('../recovery/engine').RecoveryEntry[];
   lastRecoveryPromptDate?: string;   // ISO date — one-prompt-per-day guard
+
+  // Garmin physiology history (last 7 days from daily_metrics)
+  physiologyHistory?: PhysiologyDayEntry[];
+
+  // LT auto-estimation state
+  ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
 }
 
 /** Workout parsing result */

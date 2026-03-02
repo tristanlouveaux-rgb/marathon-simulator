@@ -97,7 +97,8 @@ export function createActivity(
   rpe: number,
   aerobicLoad?: number,
   anaerobicLoad?: number,
-  week: number = 1
+  week: number = 1,
+  iTrimp?: number | null
 ): CrossActivity {
   const normalizedSport = normalizeSport(sport);
 
@@ -130,7 +131,8 @@ export function createActivity(
     anaerobic: anaerobic_load,
     fromGarmin,
     applied: false,
-    renderCycle: -1
+    renderCycle: -1,
+    ...(iTrimp != null ? { iTrimp } : {}),
   };
 }
 

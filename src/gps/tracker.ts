@@ -5,6 +5,7 @@ import type { GpsProvider } from './providers/types';
 import { haversineDistance, calculatePace, rollingPace, filterJitter } from './geo-math';
 
 export type TrackerUpdateCallback = (data: GpsLiveData) => void;
+export type SplitCompleteCallback = (split: GpsSplit, allDone: boolean) => void;
 
 /**
  * Central GPS tracker: processes GPS points, accumulates distance,
@@ -27,6 +28,7 @@ export class GpsTracker {
   private segmentPauseMs = 0;      // accumulated pause time within segment
   private completedSplits: GpsSplit[] = [];
   private listeners: TrackerUpdateCallback[] = [];
+  private splitListeners: SplitCompleteCallback[] = [];
   private lastAccuracy: number | null = null; // track accuracy during acquisition
 
   constructor(provider: GpsProvider, splitScheme?: SplitScheme) {
@@ -42,6 +44,11 @@ export class GpsTracker {
   /** Remove a listener */
   offUpdate(cb: TrackerUpdateCallback): void {
     this.listeners = this.listeners.filter(l => l !== cb);
+  }
+
+  /** Register a callback for split completions */
+  onSplitComplete(cb: SplitCompleteCallback): void {
+    this.splitListeners.push(cb);
   }
 
   /** Get current live data snapshot */
@@ -79,6 +86,9 @@ export class GpsTracker {
       this.notify();
       return false;
     }
+
+    // Start elapsed timer immediately — don't wait for GPS lock
+    this.startTime = Date.now();
 
     this.provider.startWatching(
       (point) => this.handlePoint(point),
@@ -145,7 +155,6 @@ export class GpsTracker {
       if (point.accuracy > 30) return; // wait for acceptable accuracy
 
       this.status = 'tracking';
-      this.startTime = point.timestamp;
       this.segmentStartMs = point.timestamp;
       this.points.push(point);
       this.notify();
@@ -201,6 +210,12 @@ export class GpsTracker {
       // Reset segment timer for the next segment
       this.segmentStartMs = now;
       this.segmentPauseMs = 0;
+
+      // Notify split listeners
+      const allDone = this.currentSegmentIdx >= segments.length;
+      for (const cb of this.splitListeners) {
+        cb(split, allDone);
+      }
     }
   }
 

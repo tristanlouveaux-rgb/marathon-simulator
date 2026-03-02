@@ -19,6 +19,7 @@ import type {
   UniversalLoadResult,
   DataTier,
   ZonesConfig,
+  HRZoneData,
 } from './universal-load-types';
 import { SPORTS_DB } from '@/constants';
 import { normalizeSport } from './activities';
@@ -72,6 +73,7 @@ function getSportConfig(sportKey: SportKey | string) {
       recoveryMult: config.recoveryMult ?? 1.0,
       noReplace: config.noReplace,
       extendedModel: config.extendedModel,
+      impactPerMin: config.impactPerMin ?? 0,
     };
   }
   // Unknown sport: use conservative defaults
@@ -81,7 +83,39 @@ function getSportConfig(sportKey: SportKey | string) {
     recoveryMult: 1.0,
     noReplace: [] as string[],
     extendedModel: undefined,
+    impactPerMin: 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// TIER A+: iTRIMP (Individual TRIMP from HR stream — highest accuracy)
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert iTRIMP value to aerobic/anaerobic split using sport profile.
+ * iTRIMP is an absolute load in arbitrary units — we normalise via the
+ * sport multiplier and RPE aerobic split to produce FCL-compatible values.
+ */
+function computeTierAPlus(
+  iTrimp: number,
+  sportMult: number,
+  runSpec: number,
+  explanations: string[]
+): { aerobic: number; anaerobic: number; confidence: number } {
+  // iTRIMP → base load via sport multiplier (normalise to FCL currency)
+  const baseLoad = iTrimp * sportMult;
+
+  // Split aerobic/anaerobic: use a fixed 85/15 split as iTRIMP doesn't
+  // distinguish zones — it is purely a cardiovascular load signal.
+  const aerobicFrac = 0.85;
+  const aerobic = baseLoad * aerobicFrac;
+  const anaerobic = baseLoad * (1 - aerobicFrac);
+
+  void runSpec; // Available for future use in RRC override
+
+  explanations.push(`iTRIMP-based load (second-by-second HR stream, highest accuracy). Base load: ${baseLoad.toFixed(1)}.`);
+
+  return { aerobic, anaerobic, confidence: 0.95 };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,8 +270,21 @@ export function computeUniversalLoad(
   let confidence: number;
   let tier: DataTier;
 
+  // TIER A+: iTRIMP available (second-by-second HR stream — highest accuracy)
+  if (input.iTrimp != null && input.iTrimp > 0) {
+    const tierAPlus = computeTierAPlus(
+      input.iTrimp,
+      config.mult,
+      config.runSpec,
+      explanations
+    );
+    aerobicLoad = tierAPlus.aerobic;
+    anaerobicLoad = tierAPlus.anaerobic;
+    confidence = tierAPlus.confidence;
+    tier = 'itrimp';
+  }
   // TIER A: Garmin data available?
-  if (
+  else if (
     input.fromGarmin &&
     input.garminAerobicLoad != null &&
     input.garminAnaerobicLoad != null &&
@@ -297,6 +344,13 @@ export function computeUniversalLoad(
   const runReplacementCredit = saturateCredit(rrcRaw);
 
   // ---------------------------------------------------------------------------
+  // IMPACT LOAD (musculoskeletal / leg stress)
+  // ---------------------------------------------------------------------------
+  // Simple linear model: durationMin × sport's impact-per-minute factor.
+  // Running impact is km-based and handled separately by calculateWorkoutLoad().
+  const impactLoad = input.durationMin * config.impactPerMin;
+
+  // ---------------------------------------------------------------------------
   // Extended model (future: decoupled fitness/fatigue scoring)
   // ---------------------------------------------------------------------------
   // When extendedModel is present, read its fields for downstream consumers.
@@ -333,6 +387,7 @@ export function computeUniversalLoad(
     baseLoad: Math.round(baseLoad * 10) / 10,
     fatigueCostLoad: Math.round(fatigueCostLoad * 10) / 10,
     runReplacementCredit: Math.round(runReplacementCredit * 10) / 10,
+    impactLoad: Math.round(impactLoad * 10) / 10,
     tier,
     confidence: Math.round(confidence * 100) / 100,
     sportKey,
@@ -398,4 +453,138 @@ export function isExtremeSession(
   }
 
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Workout Type Classification (Phase B v3)
+// ---------------------------------------------------------------------------
+
+/** Intensity thresholds for iTRIMP-based classification (can be personalised per athlete) */
+export interface IntensityThresholds {
+  /** TSS/hr upper bound for easy zone (default 70) */
+  easy: number;
+  /** TSS/hr upper bound for tempo/threshold zone (default 95) — above this = vo2/interval */
+  tempo: number;
+  calibratedFrom?: number;
+}
+
+/** Classification result for a cross-training activity */
+export interface WorkoutClassification {
+  /** Intensity profile — maps to planned run types for matching */
+  type: 'easy' | 'threshold' | 'vo2';
+  /** Estimated TSS for this activity */
+  tss: number;
+  /** Running-equivalent TSS (tss × sport.runSpec) — for comparing against planned run load */
+  runningEquivTSS: number;
+  /** Method used — for transparency in UI */
+  method: 'itrimp' | 'zones' | 'profile';
+}
+
+/**
+ * Classify workout intensity using iTRIMP.
+ *
+ * Normalisation: iTRIMP × 100 / 15000 ≈ TSS
+ * (≈55 TSS for easy 60min, ≈85 TSS for tempo 60min, ≈120+ for intervals)
+ * Classifier then uses TSS/hr against thresholds.
+ */
+export function classifyByITrimp(
+  iTrimp: number,
+  durationMin: number,
+  thresholds?: IntensityThresholds
+): { type: 'easy' | 'threshold' | 'vo2'; tss: number; tssPerHour: number } {
+  const tss = (iTrimp * 100) / 15000;
+  const tssPerHour = durationMin > 0 ? tss * (60 / durationMin) : 0;
+  const easyUpper = thresholds?.easy ?? 70;
+  const tempoUpper = thresholds?.tempo ?? 95;
+  const type =
+    tssPerHour < easyUpper ? 'easy' :
+    tssPerHour < tempoUpper ? 'threshold' :
+    'vo2';
+  return { type, tss, tssPerHour };
+}
+
+/**
+ * Classify workout intensity using HR zone distribution.
+ * For steady-state sports (cycling, padel, swimming) where zone data is reliable (≥ 20min total).
+ */
+export function classifyByZones(hrZones: HRZoneData): {
+  type: 'easy' | 'threshold' | 'vo2';
+  baseRatio: number;
+  threshRatio: number;
+  intensityRatio: number;
+} {
+  const total =
+    hrZones.zone1Minutes + hrZones.zone2Minutes + hrZones.zone3Minutes +
+    hrZones.zone4Minutes + hrZones.zone5Minutes;
+  if (total === 0) {
+    return { type: 'easy', baseRatio: 1, threshRatio: 0, intensityRatio: 0 };
+  }
+  const baseRatio = (hrZones.zone1Minutes + hrZones.zone2Minutes) / total;
+  const threshRatio = hrZones.zone3Minutes / total;
+  const intensityRatio = (hrZones.zone4Minutes + hrZones.zone5Minutes) / total;
+  const type =
+    intensityRatio > 0.30 ? 'vo2' :
+    threshRatio > 0.40 ? 'threshold' :
+    'easy';
+  return { type, baseRatio, threshRatio, intensityRatio };
+}
+
+/**
+ * Classify a cross-training activity's workout type using the best available data.
+ *
+ * Decision tree (spec §6.2):
+ * 1. Use iTRIMP when: sport is intermittent, OR high-HR proportion > 15%, OR < 20min zone data
+ * 2. Use zone distribution for steady-state sports with ≥ 20min HR data
+ * 3. Profile fallback — defaults to easy
+ */
+export function classifyWorkoutType(input: {
+  sport: SportKey | string;
+  durationMin: number;
+  iTrimp?: number | null;
+  hrZones?: HRZoneData;
+  thresholds?: IntensityThresholds;
+}): WorkoutClassification {
+  const sportKey = normalizeSport(input.sport) as SportKey;
+  const sportEntry = SPORTS_DB[sportKey as SportKey];
+  const config = getSportConfig(sportKey);
+  const isIntermittent = sportEntry?.intermittent ?? false;
+
+  const totalZoneMin = input.hrZones
+    ? input.hrZones.zone1Minutes + input.hrZones.zone2Minutes + input.hrZones.zone3Minutes +
+      input.hrZones.zone4Minutes + input.hrZones.zone5Minutes
+    : 0;
+  const highHRRatio =
+    totalZoneMin > 0
+      ? (input.hrZones!.zone4Minutes + input.hrZones!.zone5Minutes) / totalZoneMin
+      : 0;
+
+  const hasITrimp = input.iTrimp != null && input.iTrimp > 0;
+  // Use iTRIMP when: sport is intermittent, high-HR spike proportion > 15%, or < 20min zone data
+  const useITrimp = hasITrimp && (isIntermittent || highHRRatio > 0.15 || totalZoneMin < 20);
+  const useZones = !useITrimp && input.hrZones != null && totalZoneMin >= 20;
+
+  let type: 'easy' | 'threshold' | 'vo2';
+  let tss: number;
+  let method: 'itrimp' | 'zones' | 'profile';
+
+  if (useITrimp) {
+    const result = classifyByITrimp(input.iTrimp!, input.durationMin, input.thresholds);
+    type = result.type;
+    tss = result.tss;
+    method = 'itrimp';
+  } else if (useZones) {
+    const result = classifyByZones(input.hrZones!);
+    type = result.type;
+    // Estimate TSS from zone distribution when iTRIMP absent (TSS/min × duration)
+    const intensityFactor = type === 'easy' ? 0.55 : type === 'threshold' ? 0.85 : 1.1;
+    tss = input.durationMin * intensityFactor;
+    method = 'zones';
+  } else {
+    // No HR data — safe default
+    type = 'easy';
+    tss = input.durationMin * 0.55;
+    method = 'profile';
+  }
+
+  return { type, tss, runningEquivTSS: tss * config.runSpec, method };
 }

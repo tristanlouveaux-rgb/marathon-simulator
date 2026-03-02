@@ -38,60 +38,60 @@ export function renderPlanPreview(container: HTMLElement, state: OnboardingState
   const showMilestonePopup = milestone && !state.acceptedMilestoneChallenge && state.targetMilestone === null;
 
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12" style="background:var(--c-bg)">
       ${renderProgressIndicator(10, 10)}
 
       <div class="max-w-lg w-full">
         <!-- Title -->
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <h2 class="text-2xl md:text-3xl font-light mb-2 text-center" style="color:var(--c-black)">
           Your Training Plan
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p class="text-center mb-8" style="color:var(--c-faint)">
           ${totalWeeks} weeks to race day
         </p>
 
         <!-- Target Time Card -->
-        <div class="bg-gradient-to-br from-emerald-900/30 to-gray-800 rounded-xl p-6 mb-6 border border-emerald-800/30">
+        <div class="rounded-xl p-6 mb-6" style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.2)">
           <div class="text-center">
-            <div class="text-sm text-gray-400 mb-2">Predicted Finish Time</div>
-            <div class="text-5xl font-bold text-emerald-400 mb-2">
+            <div class="text-sm mb-2" style="color:var(--c-faint)">Predicted Finish Time</div>
+            <div class="text-5xl font-bold mb-2" style="color:var(--c-ok)">
               ${ft(state.targetMilestone ? state.targetMilestone.time : forecastTime)}
             </div>
-            <div class="text-sm text-gray-500">
+            <div class="text-sm" style="color:var(--c-faint)">
               ${getDistanceLabel(raceDistance)}
             </div>
 
             ${state.targetMilestone ? `
-              <div class="mt-3 inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-950/50 rounded-full border border-emerald-700/50">
-                <svg class="w-4 h-4 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+              <div class="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-full" style="background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3)">
+                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20" style="color:var(--c-ok)">
                   <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
                 </svg>
-                <span class="text-sm text-emerald-300 font-medium">Targeting ${state.targetMilestone.label}</span>
+                <span class="text-sm font-medium" style="color:var(--c-ok)">Targeting ${state.targetMilestone.label}</span>
               </div>
             ` : ''}
           </div>
 
           <!-- Improvement indicator -->
-          <div class="mt-4 pt-4 border-t border-gray-700/50 flex justify-between text-sm">
+          <div class="mt-4 pt-4 flex justify-between text-sm" style="border-top:1px solid var(--c-border)">
             <div>
-              <span class="text-gray-500">Current fitness:</span>
-              <span class="text-gray-300 ml-1">${ft(initialTime)}</span>
+              <span style="color:var(--c-faint)">Current fitness:</span>
+              <span class="ml-1" style="color:var(--c-muted)">${ft(initialTime)}</span>
             </div>
-            <div class="text-emerald-400">
+            <div style="color:var(--c-ok)">
               ${formatImprovement(initialTime, state.targetMilestone ? state.targetMilestone.time : forecastTime)}
             </div>
           </div>
         </div>
 
         <!-- Disclaimer Banner -->
-        <div class="bg-amber-950/20 border border-amber-800/30 rounded-xl p-4 mb-6">
+        <div class="rounded-xl p-4 mb-6" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25)">
           <div class="flex gap-3">
-            <svg class="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" style="color:var(--c-caution)">
               <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
             </svg>
             <div>
-              <p class="text-sm text-amber-300/90 font-medium">Adaptive prediction</p>
-              <p class="text-xs text-gray-400 mt-1">
+              <p class="text-sm font-medium" style="color:var(--c-caution)">Adaptive prediction</p>
+              <p class="text-xs mt-1" style="color:var(--c-muted)">
                 This time will evolve as you train. The algorithm learns from your paces,
                 heart rate data, and workout feedback to update your prediction weekly.
               </p>
@@ -100,26 +100,26 @@ export function renderPlanPreview(container: HTMLElement, state: OnboardingState
         </div>
 
         <!-- Plan Summary -->
-        <div class="bg-gray-800 rounded-xl p-4 mb-6">
-          <h3 class="text-sm font-medium text-white mb-3">Plan Summary</h3>
+        <div class="rounded-xl p-4 mb-6" style="background:rgba(0,0,0,0.06)">
+          <h3 class="text-sm font-medium mb-3" style="color:var(--c-black)">Plan Summary</h3>
           <div class="grid grid-cols-2 gap-3 text-sm">
             <div class="flex justify-between">
-              <span class="text-gray-400">Runs per week</span>
-              <span class="text-white">${s.rw}</span>
+              <span style="color:var(--c-faint)">Runs per week</span>
+              <span style="color:var(--c-black)">${s.rw}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-gray-400">Weekly volume</span>
-              <span class="text-white">~${s.wkm}km</span>
+              <span style="color:var(--c-faint)">Weekly volume</span>
+              <span style="color:var(--c-black)">~${s.wkm}km</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-gray-400">Runner type</span>
-              <span class="text-white">${s.typ}</span>
+              <span style="color:var(--c-faint)">Runner type</span>
+              <span style="color:var(--c-black)">${s.typ}</span>
             </div>
             <div class="flex justify-between">
-              <span class="text-gray-400">Starting VDOT</span>
-              <span class="text-white flex items-center gap-1">
+              <span style="color:var(--c-faint)">Starting VDOT</span>
+              <span class="flex items-center gap-1" style="color:var(--c-black)">
                 ${s.v.toFixed(1)}
-                <button id="vdot-info" class="text-gray-500 hover:text-emerald-400 transition-colors">
+                <button id="vdot-info" class="transition-colors" style="color:var(--c-faint);background:none;border:none">
                   <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
                     <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-3a1 1 0 00-.867.5 1 1 0 11-1.731-1A3 3 0 0113 8a3.001 3.001 0 01-2 2.83V11a1 1 0 11-2 0v-1a1 1 0 011-1 1 1 0 100-2zm0 8a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
                   </svg>
@@ -128,14 +128,14 @@ export function renderPlanPreview(container: HTMLElement, state: OnboardingState
             </div>
             ${s.initialLT ? `
             <div class="flex justify-between">
-              <span class="text-gray-400">LT Threshold</span>
-              <span class="text-white">${formatLTPace(s.initialLT)}/km</span>
+              <span style="color:var(--c-faint)">LT Threshold</span>
+              <span style="color:var(--c-black)">${formatLTPace(s.initialLT)}/km</span>
             </div>
             ` : ''}
             ${s.initialVO2 ? `
             <div class="flex justify-between">
-              <span class="text-gray-400">VO2 Max</span>
-              <span class="text-white">${s.initialVO2.toFixed(1)} ml/kg/min</span>
+              <span style="color:var(--c-faint)">VO2 Max</span>
+              <span style="color:var(--c-black)">${s.initialVO2.toFixed(1)} ml/kg/min</span>
             </div>
             ` : ''}
           </div>
@@ -143,9 +143,8 @@ export function renderPlanPreview(container: HTMLElement, state: OnboardingState
 
         <!-- Start Training Button -->
         <button id="start-training"
-          class="w-full py-4 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium text-lg rounded-xl transition-all
-                 shadow-lg shadow-emerald-900/30">
+          class="w-full py-4 rounded-xl transition-all font-medium text-lg"
+          style="background:var(--c-black);color:#FDFCF7;border:none">
           Start Training
         </button>
       </div>
@@ -165,45 +164,45 @@ function renderMilestonePopup(milestone: MilestoneTarget, currentForecast: numbe
   const percentAway = ((timeDiff / milestone.time) * 100).toFixed(1);
 
   return `
-    <div id="milestone-popup" class="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
-      <div class="bg-gray-900 rounded-2xl p-6 max-w-sm w-full border border-emerald-800/50 shadow-2xl">
+    <div id="milestone-popup" class="fixed inset-0 flex items-center justify-center z-50 p-6" style="background:rgba(0,0,0,0.55)">
+      <div class="rounded-2xl p-6 max-w-sm w-full shadow-2xl" style="background:var(--c-surface);border:1px solid var(--c-border)">
         <div class="text-center mb-6">
-          <div class="w-16 h-16 bg-emerald-950/50 rounded-full flex items-center justify-center mx-auto mb-4">
-            <svg class="w-8 h-8 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+          <div class="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4" style="background:rgba(34,197,94,0.1)">
+            <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 20 20" style="color:var(--c-ok)">
               <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z"/>
             </svg>
           </div>
-          <h3 class="text-xl font-bold text-white mb-2">You're close to a milestone!</h3>
-          <p class="text-gray-400 text-sm">
-            You're only <span class="text-emerald-400 font-medium">${percentAway}%</span> away from
-            <span class="text-white font-medium">${milestone.label}</span>
+          <h3 class="text-xl font-bold mb-2" style="color:var(--c-black)">You're close to a milestone!</h3>
+          <p class="text-sm" style="color:var(--c-muted)">
+            You're only <span class="font-medium" style="color:var(--c-ok)">${percentAway}%</span> away from
+            <span class="font-medium" style="color:var(--c-black)">${milestone.label}</span>
           </p>
         </div>
 
-        <div class="bg-gray-800 rounded-xl p-4 mb-6">
+        <div class="rounded-xl p-4 mb-6" style="background:rgba(0,0,0,0.06)">
           <div class="flex justify-between items-center mb-3">
-            <span class="text-gray-400 text-sm">Current prediction</span>
-            <span class="text-white font-medium">${ft(currentForecast)}</span>
+            <span class="text-sm" style="color:var(--c-faint)">Current prediction</span>
+            <span class="font-medium" style="color:var(--c-black)">${ft(currentForecast)}</span>
           </div>
           <div class="flex justify-between items-center">
-            <span class="text-gray-400 text-sm">Milestone target</span>
-            <span class="text-emerald-400 font-bold">${ft(milestone.time)}</span>
+            <span class="text-sm" style="color:var(--c-faint)">Milestone target</span>
+            <span class="font-bold" style="color:var(--c-ok)">${ft(milestone.time)}</span>
           </div>
         </div>
 
-        <p class="text-xs text-gray-400 mb-6 text-center">
+        <p class="text-xs mb-6 text-center" style="color:var(--c-faint)">
           ${milestone.extraWorkout}
         </p>
 
         <div class="flex gap-3">
           <button id="decline-milestone"
-            class="flex-1 py-3 bg-gray-700 hover:bg-gray-600
-                   text-gray-200 font-medium rounded-xl transition-all">
+            class="flex-1 py-3 rounded-xl transition-all font-medium"
+            style="background:var(--c-bg);color:var(--c-black);border:1.5px solid var(--c-border-strong)">
             No thanks
           </button>
           <button id="accept-milestone"
-            class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500
-                   text-white font-medium rounded-xl transition-all">
+            class="flex-1 py-3 rounded-xl transition-all font-medium"
+            style="background:var(--c-black);color:#FDFCF7;border:none">
             Let's go!
           </button>
         </div>
@@ -244,12 +243,13 @@ function formatLTPace(secPerKm: number): string {
 function showVDOTExplanation(): void {
   const popup = document.createElement('div');
   popup.id = 'vdot-popup';
-  popup.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6';
+  popup.className = 'fixed inset-0 flex items-center justify-center z-50 p-6';
+  popup.style.cssText = 'background:rgba(0,0,0,0.55)';
   popup.innerHTML = `
-    <div class="bg-gray-900 rounded-2xl p-6 max-w-md w-full border border-gray-700 shadow-2xl max-h-[80vh] overflow-y-auto">
+    <div class="rounded-2xl p-6 max-w-md w-full shadow-2xl max-h-[80vh] overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border)">
       <div class="flex justify-between items-start mb-4">
-        <h3 class="text-xl font-semibold text-white">What is VDOT?</h3>
-        <button id="close-vdot" class="text-gray-500 hover:text-white">
+        <h3 class="text-xl font-semibold" style="color:var(--c-black)">What is VDOT?</h3>
+        <button id="close-vdot" style="color:var(--c-faint);background:none;border:none">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -257,48 +257,49 @@ function showVDOTExplanation(): void {
       </div>
 
       <div class="space-y-4 text-sm">
-        <p class="text-gray-300">
+        <p style="color:var(--c-muted)">
           VDOT is a running performance metric developed by legendary coach
-          <strong class="text-white">Jack Daniels</strong>. It represents your
+          <strong style="color:var(--c-black)">Jack Daniels</strong>. It represents your
           current running fitness level as a single number.
         </p>
 
-        <div class="bg-gray-800 rounded-lg p-4">
-          <h4 class="text-emerald-400 font-medium mb-2">How it works</h4>
-          <p class="text-gray-400 text-xs">
+        <div class="rounded-lg p-4" style="background:var(--c-bg)">
+          <h4 class="font-medium mb-2" style="color:var(--c-ok)">How it works</h4>
+          <p class="text-xs" style="color:var(--c-faint)">
             VDOT is calculated from your race times and correlates closely with
             VO2 max, but also accounts for running economy. A higher VDOT means
             better running fitness.
           </p>
         </div>
 
-        <div class="bg-gray-800 rounded-lg p-4">
-          <h4 class="text-emerald-400 font-medium mb-2">Example VDOT values</h4>
-          <ul class="text-xs text-gray-400 space-y-1">
-            <li><span class="text-white">30-35:</span> Beginner runners</li>
-            <li><span class="text-white">40-45:</span> Recreational runners</li>
-            <li><span class="text-white">50-55:</span> Competitive club runners</li>
-            <li><span class="text-white">60-65:</span> Sub-elite / fast amateurs</li>
-            <li><span class="text-white">70+:</span> Elite professionals</li>
+        <div class="rounded-lg p-4" style="background:var(--c-bg)">
+          <h4 class="font-medium mb-2" style="color:var(--c-ok)">Example VDOT values</h4>
+          <ul class="text-xs space-y-1" style="color:var(--c-faint)">
+            <li><span style="color:var(--c-black)">30-35:</span> Beginner runners</li>
+            <li><span style="color:var(--c-black)">40-45:</span> Recreational runners</li>
+            <li><span style="color:var(--c-black)">50-55:</span> Competitive club runners</li>
+            <li><span style="color:var(--c-black)">60-65:</span> Sub-elite / fast amateurs</li>
+            <li><span style="color:var(--c-black)">70+:</span> Elite professionals</li>
           </ul>
         </div>
 
-        <div class="bg-gray-800 rounded-lg p-4">
-          <h4 class="text-emerald-400 font-medium mb-2">Why we use it</h4>
-          <p class="text-gray-400 text-xs">
+        <div class="rounded-lg p-4" style="background:var(--c-bg)">
+          <h4 class="font-medium mb-2" style="color:var(--c-ok)">Why we use it</h4>
+          <p class="text-xs" style="color:var(--c-faint)">
             Your VDOT determines your training paces across all zones (easy, tempo,
             interval, etc.). As your fitness improves and VDOT increases, your
             training paces are automatically adjusted.
           </p>
         </div>
 
-        <p class="text-gray-500 text-xs italic">
+        <p class="text-xs italic" style="color:var(--c-faint)">
           Reference: "Daniels' Running Formula" by Jack Daniels, PhD
         </p>
       </div>
 
       <button id="close-vdot-btn"
-        class="mt-6 w-full py-3 bg-gray-700 hover:bg-gray-600 text-white font-medium rounded-xl transition-all">
+        class="mt-6 w-full py-3 rounded-xl transition-all font-medium"
+        style="background:var(--c-bg);color:var(--c-black);border:1.5px solid var(--c-border-strong)">
         Got it
       </button>
     </div>

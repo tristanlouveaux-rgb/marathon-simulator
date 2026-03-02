@@ -1,18 +1,24 @@
-import type { Paces, GpsRecording, GpsLiveData } from '@/types';
+import type { Paces, GpsRecording, GpsLiveData, SplitScheme } from '@/types';
 import { GpsTracker } from '@/gps/tracker';
 import { buildSplitScheme } from '@/gps/split-scheme';
 import { createGpsProvider } from '@/gps/providers';
 import { saveGpsRecording } from '@/gps/persistence';
+import { handleCompletedRecording } from '@/gps/recording-handler';
+import { splitAlert, workoutCompleteAlert } from '@/gps/haptics';
 import { updateInlineGps } from './gps-panel';
 import { getState } from '@/state';
 
 let activeTracker: GpsTracker | null = null;
 let activeWorkoutName: string | null = null;
+let activeWorkoutDesc: string | null = null;
+let activeScheme: SplitScheme | null = null;
 let timerInterval: ReturnType<typeof setInterval> | null = null;
+let lastSplitCount = 0;
 
 // Lifecycle callbacks (wired from main.ts to avoid circular imports)
 let onTrackingStartCb: (() => void) | null = null;
 let onTrackingStopCb: (() => void) | null = null;
+let onTrackingTickCb: ((data: GpsLiveData) => void) | null = null;
 
 /** Register a callback invoked after tracking starts or state changes (pause/resume). */
 export function setOnTrackingStart(cb: () => void): void {
@@ -22,6 +28,16 @@ export function setOnTrackingStart(cb: () => void): void {
 /** Register a callback invoked after tracking stops. */
 export function setOnTrackingStop(cb: () => void): void {
   onTrackingStopCb = cb;
+}
+
+/** Register a callback invoked every second with live GPS data while tracking. */
+export function setOnTrackingTick(cb: ((data: GpsLiveData) => void) | null): void {
+  onTrackingTickCb = cb;
+}
+
+/** Return the active split scheme (structured workouts), or null for simple runs. */
+export function getActiveSplitScheme(): SplitScheme | null {
+  return activeScheme;
 }
 
 // --- State getters for renderer ---
@@ -59,15 +75,28 @@ export async function startTracking(
   const provider = createGpsProvider();
   const scheme = buildSplitScheme(workoutDesc, paces);
 
-  activeTracker = new GpsTracker(provider, scheme.segments.length > 0 ? scheme : undefined);
+  activeScheme = scheme.segments.length > 0 ? scheme : null;
+  activeTracker = new GpsTracker(provider, activeScheme ?? undefined);
   activeWorkoutName = workoutName;
+  activeWorkoutDesc = workoutDesc;
+  lastSplitCount = 0;
 
   activeTracker.onUpdate(updateInlineGps);
+
+  // Wire split completion alerts
+  activeTracker.onSplitComplete((_split, allDone) => {
+    if (allDone) {
+      workoutCompleteAlert();
+    } else {
+      splitAlert();
+    }
+  });
 
   const started = await activeTracker.start();
   if (!started) {
     activeTracker = null;
     activeWorkoutName = null;
+    activeWorkoutDesc = null;
     alert('GPS permission denied');
     return;
   }
@@ -75,7 +104,9 @@ export async function startTracking(
   // Update elapsed time display every second
   timerInterval = setInterval(() => {
     if (activeTracker) {
-      updateInlineGps(activeTracker.getLiveData());
+      const data = activeTracker.getLiveData();
+      updateInlineGps(data);
+      if (onTrackingTickCb) onTrackingTickCb(data);
     }
   }, 1000);
 }
@@ -107,11 +138,12 @@ export function stopTracking(): void {
   // Save recording
   const data = activeTracker.getLiveData();
   const s = getState();
+  const workoutName = activeWorkoutName || 'Unknown';
 
-  if (data.totalDistance > 10) {
+  if (data.totalDistance > 10 || data.elapsed > 5) {
     const recording: GpsRecording = {
       id: `gps_${Date.now()}`,
-      workoutName: activeWorkoutName || 'Unknown',
+      workoutName,
       week: s.w || 1,
       date: new Date().toISOString(),
       route: activeTracker.getPoints(),
@@ -121,10 +153,27 @@ export function stopTracking(): void {
       averagePace: data.totalDistance > 0 ? (data.elapsed / data.totalDistance) * 1000 : 0,
     };
     saveGpsRecording(recording);
+
+    // Clean up tracker state before showing modal
+    activeTracker = null;
+    activeWorkoutName = null;
+    activeWorkoutDesc = null;
+    activeScheme = null;
+    lastSplitCount = 0;
+
+    // Show completion modal instead of just re-rendering
+    handleCompletedRecording(recording, workoutName);
+
+    if (onTrackingStopCb) onTrackingStopCb();
+    return;
   }
 
+  // Distance too short — discard silently
   activeTracker = null;
   activeWorkoutName = null;
+  activeWorkoutDesc = null;
+  activeScheme = null;
+  lastSplitCount = 0;
 
   if (onTrackingStopCb) onTrackingStopCb();
 }
@@ -151,15 +200,21 @@ declare global {
   }
 }
 
-window.gpsPause = gpsPause;
-window.gpsResume = gpsResume;
-window.gpsStop = gpsStop;
+if (typeof window !== 'undefined') {
+  window.gpsPause = gpsPause;
+  window.gpsResume = gpsResume;
+  window.gpsStop = gpsStop;
+}
 
 /**
  * Called from "Track Run" button on a workout card.
+ * Starts tracking then navigates to the Record tab.
  */
-window.trackWorkout = async (name: string, desc: string) => {
-  const s = getState();
-  await startTracking(name, desc, s.pac || { e: 330, t: 270, i: 240, m: 285, r: 210 });
-  if (onTrackingStartCb) onTrackingStartCb();
-};
+if (typeof window !== 'undefined') {
+  window.trackWorkout = async (name: string, desc: string) => {
+    const s = getState();
+    await startTracking(name, desc, s.pac || { e: 330, t: 270, i: 240, m: 285, r: 210 });
+    const { renderRecordView } = await import('./record-view');
+    renderRecordView();
+  };
+}

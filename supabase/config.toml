@@ -1,0 +1,23 @@
+[functions.garmin-auth-start]
+verify_jwt = false
+
+[functions.garmin-auth-callback]
+verify_jwt = false
+
+[functions.strava-auth-start]
+verify_jwt = false
+
+[functions.strava-auth-callback]
+verify_jwt = false
+
+[functions.sync-physiology-snapshot]
+verify_jwt = false
+
+[functions.sync-activities]
+verify_jwt = false
+
+[functions.sync-activity-details]
+verify_jwt = false
+
+[functions.sync-strava-activities]
+verify_jwt = false

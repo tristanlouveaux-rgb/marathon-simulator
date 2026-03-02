@@ -29,7 +29,7 @@
 |--------|---------|-----------|-------------|
 | `state/` | Central store + persistence + plan initialization | `store.ts`, `initialization.ts`, `persistence.ts` | `getState()`, `getMutableState()`, `updateState()`, `loadState()`, `saveState()`, `initializeSimulator()` |
 | `workouts/` | Plan generation, scheduling, gym workouts | `generator.ts`, `plan_engine.ts`, `scheduler.ts`, `gym.ts`, `load.ts` | `generateWeekWorkouts()`, `planWeekSessions()`, `assignDefaultDays()`, `generateGymWorkouts()`, `calculateWorkoutLoad()` |
-| `calculations/` | VDOT, paces, predictions, fatigue, physiology | `vdot.ts`, `paces.ts`, `predictions.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()` |
+| `calculations/` | VDOT, paces, predictions, fatigue, physiology, TSS/ACWR | `vdot.ts`, `paces.ts`, `predictions.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts`, `fitness-model.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()`, `computeWeekTSS()`, `computeFitnessModel()`, `computeACWR()` |
 | `injury/` | Phase-based injury management + workout adaptation | `engine.ts` | `applyInjuryAdaptations()`, `evaluatePhaseTransition()`, `recordPainLevel()`, `analyzeTrend()` |
 | `cross-training/` | Universal load model, workout matching, suggestions | `universalLoad.ts`, `matcher.ts`, `load-matching.ts`, `suggester.ts` | `computeUniversalLoad()`, `applyCrossTrainingToWorkouts()`, `buildCrossTrainingPopup()`, `applyAdjustments()` |
 | `gps/` | GPS tracking, split detection, recording persistence | `tracker.ts`, `geo-math.ts`, `split-scheme.ts`, `persistence.ts` | `GpsTracker` (class), `haversineDistance()`, `filterJitter()`, `buildSplitScheme()` |
@@ -37,7 +37,7 @@
 | `ui/` | Dashboard, renderer, events, wizard, modals | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `activity-review.ts`, `welcome-back.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()` |
 | `constants/` | Static config, protocols, sport DB, training params | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS` |
 | `types/` | All TypeScript interfaces and type unions | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase` |
-| `data/` | Static data (marathon events list) | `marathons.ts` | Marathon event catalog |
+| `data/` | Static data, Supabase client, wearable sync | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncPhysiologySnapshot()` |
 | `utils/` | Formatting, helpers, platform detection | `format.ts`, `helpers.ts`, `platform.ts` | Time/pace formatting, platform checks |
 | `scripts/` | Offline audit/analysis scripts | `sanity_audit.ts`, `comprehensive_audit.ts` | Not imported at runtime |
 | `testing/` | Synthetic athlete generators, forecast matrix | `synthetic-athlete.ts`, `forecast-matrix.ts` | Test utilities only |
@@ -111,7 +111,9 @@ user clicks "Complete Week"
 | Injury | `injuryState` (InjuryState), `rehabWeeksDone`, `lastMorningPainDate` |
 | Continuous mode | `continuousMode`, `blockNumber`, `benchmarkResults` |
 | Recovery | `recoveryHistory` (RecoveryEntry[]), `lastRecoveryPromptDate` |
+| Integrations | `wearable` (`'garmin' \| 'apple' \| 'strava' \| undefined`) — biometric device; `stravaConnected?: boolean` — when true, Strava is the activity source regardless of wearable; `biologicalSex` (`'male' \| 'female' \| 'prefer_not_to_say'`) — for iTRIMP β |
 | Onboarding | `onboarding` (OnboardingState), `hasCompletedOnboarding` |
+| ACWR / Tier | `athleteTier?` — computed from CTL (5 tiers); `athleteTierOverride?` — manual override takes precedence |
 
 ### Workout (`src/types/state.ts`)
 
@@ -133,7 +135,7 @@ Phase-based recovery: `active`, `injuryPhase`, `currentPain` (0–10), `history`
 
 ### OnboardingState (`src/types/onboarding.ts`)
 
-Wizard data: `name`, `raceDistance`, `trainingForEvent`, `runsPerWeek`, `gymSessionsPerWeek`, `experienceLevel`, `pbs`, `ltPace`, `vo2max`, `continuousMode`, `recurringActivities`.
+Wizard data: `name`, `raceDistance`, `trainingForEvent`, `runsPerWeek`, `gymSessionsPerWeek`, `experienceLevel`, `pbs`, `ltPace`, `vo2max`, `continuousMode`, `recurringActivities`, `hasSmartwatch`, `watchType` (`'garmin' | 'apple' | 'strava'`), `biologicalSex` (`'male' | 'female' | 'prefer_not_to_say'` — for iTRIMP β, collected on physiology step).
 
 ### TrainingPhase
 
@@ -293,9 +295,20 @@ Three ability tiers: beginner (bodyweight), novice (light weights), full (barbel
 
 **Injury handling**: no gym in acute/rehab/test_capacity; light return session in return_to_run (level 5+).
 
-### Garmin Activity Sync (`src/data/activitySync.ts`, `src/calculations/activity-matcher.ts`)
+### Wearable Activity Sync (`src/data/activitySync.ts`, `src/data/stravaSync.ts`, `src/data/appleHealthSync.ts`, `src/calculations/activity-matcher.ts`)
 
-Fire-and-forget on boot: `syncActivities()` calls the `sync-activities` Edge Function (14-day lookback), then `matchAndAutoComplete()` processes results.
+Fire-and-forget on boot. Two separate concerns are handled independently:
+
+**Activity source** (what workouts were done) — `s.stravaConnected` takes priority:
+- **Strava connected** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. IDs namespaced `"strava-{id}"`. This path is used even for Garmin wearable users who have Strava.
+- **Garmin-only** (`!s.stravaConnected`, `s.wearable === 'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook.
+- **Apple Watch** (`s.wearable === 'apple'`): `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` (iOS native only; no-op on web).
+
+**Biometric source** (VO2max, LT, HRV, sleep, resting HR) — always the wearable, independent of Strava:
+- **Garmin wearable**: `syncPhysiologySnapshot(7)` → `sync-physiology-snapshot` Edge Function → merges `daily_metrics`, `sleep_summaries`, `physiology_snapshots` (all written by Garmin webhook).
+- **Apple Watch**: biometrics come from `syncAppleHealth()` directly.
+
+All activity paths produce `GarminActivityRow[]` and feed into `matchAndAutoComplete()` — identical pipeline from that point.
 
 **Matching pipeline**:
 1. Filter activities already in `wk.garminMatched` (idempotent)

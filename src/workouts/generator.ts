@@ -37,7 +37,9 @@ export function generateWeekWorkouts(
   weekIndex?: number,
   totalWeeks?: number,
   vdot?: number,
-  gymSessionsPerWeek?: number
+  gymSessionsPerWeek?: number,
+  effortScore?: number,
+  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here.
@@ -55,6 +57,8 @@ export function generateWeekWorkouts(
       weekIndex,
       totalWeeks,
       vdot: vdot || 45,
+      effortScore,
+      acwrStatus,
     });
     for (const intent of intents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
@@ -216,6 +220,12 @@ export function generateWeekWorkouts(
   // Apply injury adaptations if injury is active
   if (injuryState && injuryState.active) {
     scheduledWorkouts = applyInjuryAdaptations(scheduledWorkouts, injuryState, easyPaceSecPerKm);
+    // Recalculate loads for adapted workouts (descriptions/RPE changed by injury engine)
+    for (const w of scheduledWorkouts) {
+      const loads = calculateWorkoutLoad(w.t, w.d, (w.rpe || w.r || 5) * 10, easyPaceSecPerKm);
+      w.aerobic = loads.aerobic;
+      w.anaerobic = loads.anaerobic;
+    }
   }
 
   // Generate stable IDs for each workout (W{week}-{type}-{index})

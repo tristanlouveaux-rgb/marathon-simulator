@@ -11,6 +11,7 @@ import type { GpsProvider, GpsCallback, GpsErrorCallback } from './types';
 export class NativeGpsProvider implements GpsProvider {
   private bgGeo: any = null;
   private onPointCb: GpsCallback | null = null;
+  private onErrorCb: GpsErrorCallback | null = null;
 
   readonly supportsBackground = true;
 
@@ -21,10 +22,13 @@ export class NativeGpsProvider implements GpsProvider {
 
       const state = await this.bgGeo.ready({
         desiredAccuracy: this.bgGeo.DESIRED_ACCURACY_HIGH,
-        distanceFilter: 5,
+        distanceFilter: 10,
         stopOnTerminate: false,
         startOnBoot: false,
         enableHeadless: false,
+        preventSuspend: true,
+        heartbeatInterval: 60,
+        pausesLocationUpdatesAutomatically: false,
         locationAuthorizationRequest: 'Always',
         backgroundPermissionRationale: {
           title: 'Allow background location access',
@@ -47,23 +51,35 @@ export class NativeGpsProvider implements GpsProvider {
     }
 
     this.onPointCb = onPoint;
+    this.onErrorCb = onError;
 
-    this.bgGeo.onLocation((location: any) => {
-      if (!this.onPointCb) return;
-      const point: GpsPoint = {
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
-        altitude: location.coords.altitude,
-        accuracy: location.coords.accuracy,
-        speed: location.coords.speed,
-        timestamp: new Date(location.timestamp).getTime(),
-      };
-      this.onPointCb(point);
-    });
+    this.bgGeo.onLocation(
+      (location: any) => {
+        if (!this.onPointCb) return;
+        const point: GpsPoint = {
+          lat: location.coords.latitude,
+          lng: location.coords.longitude,
+          altitude: location.coords.altitude,
+          accuracy: location.coords.accuracy,
+          speed: location.coords.speed,
+          timestamp: new Date(location.timestamp).getTime(),
+        };
+        this.onPointCb(point);
+      },
+      (error: any) => {
+        console.warn('GPS location error:', error);
+        if (this.onErrorCb) {
+          this.onErrorCb(new Error(error?.message || 'Location error'));
+        }
+      }
+    );
 
     this.bgGeo.onProviderChange((event: any) => {
       if (!event.enabled) {
-        onError(new Error('Location services disabled'));
+        console.warn('Location services disabled by user');
+        if (this.onErrorCb) {
+          this.onErrorCb(new Error('Location services disabled'));
+        }
       }
     });
 
@@ -76,5 +92,6 @@ export class NativeGpsProvider implements GpsProvider {
       this.bgGeo.removeListeners();
     }
     this.onPointCb = null;
+    this.onErrorCb = null;
   }
 }

@@ -104,16 +104,20 @@ export const LONG_RUN_DISTANCES: Record<RaceDistance, number> = {
 };
 
 /** Load profiles for different workout types */
-export const LOAD_PROFILES: Record<string, { aerobic: number; anaerobic: number }> = {
-  'easy': { aerobic: 0.95, anaerobic: 0.05 },
-  'long': { aerobic: 0.90, anaerobic: 0.10 },
-  'threshold': { aerobic: 0.70, anaerobic: 0.30 },
-  'vo2': { aerobic: 0.50, anaerobic: 0.50 },
-  'race_pace': { aerobic: 0.65, anaerobic: 0.35 },
-  'marathon_pace': { aerobic: 0.75, anaerobic: 0.25 },
-  'intervals': { aerobic: 0.45, anaerobic: 0.55 },
-  'hill_repeats': { aerobic: 0.40, anaerobic: 0.60 },
-  'mixed': { aerobic: 0.60, anaerobic: 0.40 },
-  'progressive': { aerobic: 0.70, anaerobic: 0.30 },
-  'gym': { aerobic: 0.20, anaerobic: 0.80 }
+export const LOAD_PROFILES: Record<string, {
+  aerobic: number; anaerobic: number;
+  // 3-zone breakdown: Base (Z1+Z2) / Threshold (Z3) / High Intensity (Z4+Z5)
+  base?: number; threshold?: number; intensity?: number;
+}> = {
+  'easy':          { aerobic: 0.95, anaerobic: 0.05, base: 0.94, threshold: 0.05, intensity: 0.01 },
+  'long':          { aerobic: 0.90, anaerobic: 0.10, base: 0.88, threshold: 0.10, intensity: 0.02 },
+  'threshold':     { aerobic: 0.70, anaerobic: 0.30, base: 0.15, threshold: 0.65, intensity: 0.20 },
+  'vo2':           { aerobic: 0.50, anaerobic: 0.50, base: 0.10, threshold: 0.35, intensity: 0.55 },
+  'race_pace':     { aerobic: 0.65, anaerobic: 0.35, base: 0.20, threshold: 0.55, intensity: 0.25 },
+  'marathon_pace': { aerobic: 0.75, anaerobic: 0.25, base: 0.40, threshold: 0.45, intensity: 0.15 },
+  'intervals':     { aerobic: 0.45, anaerobic: 0.55, base: 0.05, threshold: 0.30, intensity: 0.65 },
+  'hill_repeats':  { aerobic: 0.40, anaerobic: 0.60, base: 0.10, threshold: 0.30, intensity: 0.60 },
+  'mixed':         { aerobic: 0.60, anaerobic: 0.40, base: 0.30, threshold: 0.40, intensity: 0.30 },
+  'progressive':   { aerobic: 0.70, anaerobic: 0.30, base: 0.35, threshold: 0.45, intensity: 0.20 },
+  'gym':           { aerobic: 0.20, anaerobic: 0.80, base: 0.05, threshold: 0.20, intensity: 0.75 },
 };

@@ -135,7 +135,7 @@ function validateState(loaded: SimulatorState): boolean {
 }
 
 /** Return the UTC Monday on or before the given date. */
-function getMondayOf(date: Date): Date {
+export function getMondayOf(date: Date): Date {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const dow = d.getUTCDay(); // 0=Sun
   const toMonday = dow === 0 ? -6 : 1 - dow;
@@ -244,6 +244,16 @@ export function loadState(): boolean {
       console.log('Saved migrated state to localStorage');
     }
 
+    // Snap planStartDate to Monday if it isn't already (pre-fix users may have a mid-week anchor).
+    if (migrated.planStartDate) {
+      const snapped = getMondayOf(new Date(migrated.planStartDate)).toISOString().slice(0, 10);
+      if (snapped !== migrated.planStartDate) {
+        console.log(`  Snapping planStartDate ${migrated.planStartDate} → ${snapped} (Monday)`);
+        migrated.planStartDate = snapped;
+        localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+      }
+    }
+
     // Always ensure planStartDate is set — independent of schema version,
     // because it was added after the v2 migration and existing v2 users
     // would have skipped the derivation via the early-return in migrateState.
@@ -279,6 +289,32 @@ export function loadState(): boolean {
         }
       }
       if (cleanedMods) localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+    }
+
+    // Retroactively fix completedKm for past weeks using garminActuals (runs only).
+    // Old code stored planned km parsed from workout descriptions; actual Garmin distances
+    // are already persisted in garminActuals and should take precedence.
+    // Only sum run-type slots — exclude cross-training, gym, rest, etc. by key name.
+    {
+      const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk'];
+      const isRunKey = (k: string) => !NON_RUN_KW.some(kw => k.toLowerCase().includes(kw));
+      let fixedKm = false;
+      for (let i = 0; i < (migrated.w || 1) - 1; i++) {
+        const wk = migrated.wks?.[i];
+        if (!wk) continue;
+        const entries = Object.entries((wk as any).garminActuals || {}) as Array<[string, { distanceKm?: number }]>;
+        const runEntries = entries.filter(([k]) => isRunKey(k));
+        if (runEntries.length === 0) continue;
+        const totalFromActuals = runEntries.reduce((sum, [, a]) => sum + (a.distanceKm || 0), 0);
+        if (totalFromActuals > 0 && Math.abs(totalFromActuals - ((wk as any).completedKm || 0)) > 0.5) {
+          (wk as any).completedKm = Math.round(totalFromActuals * 10) / 10;
+          fixedKm = true;
+        }
+      }
+      if (fixedKm) {
+        localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+        console.log('  Retroactively fixed completedKm for past weeks from garminActuals (runs only)');
+      }
     }
 
     // Carry over unresolved excess load from the previous week into the current week.

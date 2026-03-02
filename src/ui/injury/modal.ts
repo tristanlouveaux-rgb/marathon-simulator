@@ -48,19 +48,17 @@ function setInjuryState(injuryState: InjuryState): void {
  * Open the injury report modal
  */
 export function openInjuryModal(): void {
-  // Remove existing modal if any
   closeInjuryModal();
 
   const injuryState = getInjuryState();
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
-  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+  modal.style.background = 'rgba(0,0,0,0.45)';
   modal.innerHTML = getModalHTML(injuryState);
 
   document.body.appendChild(modal);
-
-  // Wire up event handlers
   wireModalHandlers();
 }
 
@@ -68,15 +66,9 @@ export function openInjuryModal(): void {
  * Close the injury modal
  */
 export function closeInjuryModal(): void {
-  const modal = document.getElementById(MODAL_ID);
-  if (modal) {
-    modal.remove();
-  }
+  document.getElementById(MODAL_ID)?.remove();
 }
 
-/**
- * Generate modal HTML
- */
 /** Cross-training activity display labels */
 const CROSS_TRAINING_LABELS: Record<string, string> = {
   swimming: 'Swimming',
@@ -86,18 +78,19 @@ const CROSS_TRAINING_LABELS: Record<string, string> = {
   yoga: 'Yoga',
 };
 
+const INPUT_STYLE = `background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;width:100%;padding:8px 12px;font-size:14px;outline:none`;
+
 function getModalHTML(injuryState: InjuryState): string {
   const injuryTypes = Object.keys(INJURY_PROTOCOLS) as InjuryType[];
-  // Get allowed activities for current injury type, filtered to main cross-training options
   const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
   const crossTrainingOptions = (protocol.allowedActivities || [])
     .filter((a: string) => a in CROSS_TRAINING_LABELS);
 
   return `
-    <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border-strong);max-height:90vh">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-white">${injuryState.active ? 'Weekly Injury Update' : 'Report Injury'}</h2>
-        <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
+        <h2 class="text-lg font-semibold" style="color:var(--c-black)">${injuryState.active ? 'Weekly Injury Update' : 'Report Injury'}</h2>
+        <button id="injury-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -105,10 +98,10 @@ function getModalHTML(injuryState: InjuryState): string {
       </div>
 
       <form id="injury-form" class="space-y-4">
-        <!-- 1. Body Part Location (FIRST - most intuitive) -->
+        <!-- 1. Body Part Location -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">Where does it hurt?</label>
-          <select id="injury-location" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Where does it hurt?</label>
+          <select id="injury-location" style="${INPUT_STYLE}">
             ${(Object.keys(LOCATION_LABELS) as InjuryLocation[]).map(loc => `
               <option value="${loc}" ${injuryState.location === loc ? 'selected' : ''}>
                 ${LOCATION_LABELS[loc]}
@@ -119,8 +112,8 @@ function getModalHTML(injuryState: InjuryState): string {
 
         <!-- 2. Pain Level Slider -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">
-            Pain Level: <span id="pain-value" class="text-emerald-400 font-bold">${Math.max(1, injuryState.currentPain)}</span>/10
+          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">
+            Pain Level: <span id="pain-value" class="font-bold" style="color:var(--c-ok)">${Math.max(1, injuryState.currentPain)}</span>/10
           </label>
           <input
             type="range"
@@ -128,9 +121,10 @@ function getModalHTML(injuryState: InjuryState): string {
             min="1"
             max="10"
             value="${Math.max(1, injuryState.currentPain)}"
-            class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            style="background:rgba(0,0,0,0.08)"
           />
-          <div class="flex justify-between text-xs text-gray-500 mt-1">
+          <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
             <span>Mild</span>
             <span>Severe</span>
           </div>
@@ -138,37 +132,37 @@ function getModalHTML(injuryState: InjuryState): string {
 
         <!-- 3. Mobility Status -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">Can you walk pain-free?</label>
-          <select id="injury-mobility" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Can you walk pain-free?</label>
+          <select id="injury-mobility" style="${INPUT_STYLE}">
             <option value="yes">Yes - walking is fine</option>
             <option value="limited">Limited - some discomfort</option>
             <option value="no">No - walking is painful</option>
           </select>
         </div>
 
-        <!-- 3.5. Can you run? Radio buttons -->
+        <!-- 3.5. Can you run? -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-2">Can you run?</label>
+          <label class="block text-sm font-medium mb-2" style="color:var(--c-muted)">Can you run?</label>
           <div class="flex gap-4">
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4 text-emerald-500 bg-gray-800 border-gray-600 focus:ring-emerald-500">
-              <span class="text-sm text-gray-300">Yes</span>
+              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4 accent-emerald-500">
+              <span class="text-sm" style="color:var(--c-black)">Yes</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4 text-amber-500 bg-gray-800 border-gray-600 focus:ring-amber-500">
-              <span class="text-sm text-gray-300">Limited / With pain</span>
+              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4 accent-amber-500">
+              <span class="text-sm" style="color:var(--c-black)">Limited / With pain</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4 text-red-500 bg-gray-800 border-gray-600 focus:ring-red-500">
-              <span class="text-sm text-gray-300">No</span>
+              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4 accent-red-500">
+              <span class="text-sm" style="color:var(--c-black)">No</span>
             </label>
           </div>
         </div>
 
         <!-- 3.6. Preferred Cross-Training -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">Preferred rehab exercise</label>
-          <select id="injury-cross-training" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Preferred rehab exercise</label>
+          <select id="injury-cross-training" style="${INPUT_STYLE}">
             <option value="" ${!injuryState.preferredCrossTraining ? 'selected' : ''}>Auto (protocol default)</option>
             ${crossTrainingOptions.map((a: string) => `
               <option value="${a}" ${injuryState.preferredCrossTraining === a ? 'selected' : ''}>
@@ -176,77 +170,76 @@ function getModalHTML(injuryState: InjuryState): string {
               </option>
             `).join('')}
           </select>
-          <p class="text-xs text-gray-500 mt-1">Choose your preferred activity for rehab days.</p>
+          <p class="text-xs mt-1" style="color:var(--c-faint)">Choose your preferred activity for rehab days.</p>
         </div>
 
         <!-- 4. Side/Detail (optional) -->
         <div>
-          <label class="block text-sm font-medium text-gray-300 mb-1">Which side? (optional)</label>
+          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Which side? (optional)</label>
           <input
             type="text"
             id="injury-location-detail"
             placeholder="e.g., Left, Right, Both"
             value="${injuryState.locationDetail || ''}"
-            class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+            style="${INPUT_STYLE}"
           />
         </div>
 
-        <!-- 5. Injury Type (Secondary - auto-inferred based on location) -->
-        <details class="bg-gray-800/50 rounded-lg p-3">
-          <summary class="text-sm font-medium text-gray-400 cursor-pointer">Advanced: Specific diagnosis (optional)</summary>
+        <!-- 5. Injury Type (collapsed) -->
+        <details class="rounded-lg p-3" style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border)">
+          <summary class="text-sm font-medium cursor-pointer" style="color:var(--c-muted)">Advanced: Specific diagnosis (optional)</summary>
           <div class="mt-3">
-            <select id="injury-type" class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500">
+            <select id="injury-type" style="${INPUT_STYLE}">
               ${injuryTypes.map(type => `
                 <option value="${type}" ${injuryState.type === type ? 'selected' : ''}>
                   ${INJURY_PROTOCOLS[type].displayName}
                 </option>
               `).join('')}
             </select>
-            <p class="text-xs text-gray-500 mt-1">Leave as "General" if unsure - we'll adapt your plan based on pain level.</p>
+            <p class="text-xs mt-1" style="color:var(--c-faint)">Leave as "General" if unsure — we'll adapt your plan based on pain level.</p>
           </div>
         </details>
 
-        <!-- 6. Physio Notes (optional, collapsed) -->
-        <details class="bg-gray-800/50 rounded-lg p-3">
-          <summary class="text-sm font-medium text-gray-400 cursor-pointer">Physio notes (optional)</summary>
+        <!-- 6. Physio Notes (collapsed) -->
+        <details class="rounded-lg p-3" style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border)">
+          <summary class="text-sm font-medium cursor-pointer" style="color:var(--c-muted)">Physio notes (optional)</summary>
           <div class="mt-3">
             <textarea
               id="injury-physio-notes"
               rows="3"
               placeholder="Enter notes from your physiotherapist..."
-              class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 resize-none"
+              class="resize-none"
+              style="${INPUT_STYLE};height:auto"
             >${injuryState.physioNotes || ''}</textarea>
           </div>
         </details>
 
-        <!-- Note: No checkbox - injury auto-activates on save -->
-        <div class="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3">
-          <p class="text-xs text-amber-300">
+        <!-- Note -->
+        <div class="rounded-lg p-3" style="background:var(--c-caution-bg);border:1px solid rgba(245,158,11,0.3)">
+          <p class="text-xs" style="color:var(--c-caution-text)">
             <strong>Note:</strong> Saving will automatically activate injury mode and adjust your training plan.
           </p>
         </div>
 
         <!-- Buttons -->
         <div class="flex gap-3 pt-2">
-          <button
-            type="button"
-            id="injury-cancel"
-            class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors"
-          >
+          <button type="button" id="injury-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">
             Cancel
           </button>
           ${injuryState.active ? `
             <button
               type="button"
               id="injury-resolve"
-              class="px-4 py-2 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-600/50 text-emerald-400 rounded-lg text-sm font-medium transition-colors"
+              class="px-4 py-2 rounded-lg text-sm font-medium"
+              style="background:var(--c-ok-bg);border:1px solid rgba(34,197,94,0.4);color:var(--c-ok-text)"
             >
               Mark Resolved
             </button>
           ` : ''}
           <button
             type="submit"
-            class="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-medium transition-colors"
+            class="flex-1 px-4 py-2 rounded-lg text-sm font-medium"
+            style="background:#EF4444;color:white"
           >
             ${injuryState.active ? 'Update Status' : 'Save & Activate'}
           </button>
@@ -256,23 +249,16 @@ function getModalHTML(injuryState: InjuryState): string {
   `;
 }
 
-// Obsolete capacity test functions removed.
-
 /**
  * Wire up modal event handlers
  */
 function wireModalHandlers(): void {
-  // Close button
   document.getElementById('injury-modal-close')?.addEventListener('click', closeInjuryModal);
 
-  // Click outside to close
   document.getElementById(MODAL_ID)?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) {
-      closeInjuryModal();
-    }
+    if (e.target === e.currentTarget) closeInjuryModal();
   });
 
-  // Pain slider update
   const painSlider = document.getElementById('injury-pain') as HTMLInputElement;
   const painValue = document.getElementById('pain-value');
   if (painSlider && painValue) {
@@ -281,12 +267,8 @@ function wireModalHandlers(): void {
     });
   }
 
-  // Cancel button - just close modal
-  document.getElementById('injury-cancel')?.addEventListener('click', () => {
-    closeInjuryModal();
-  });
+  document.getElementById('injury-cancel')?.addEventListener('click', () => closeInjuryModal());
 
-  // Resolve button
   document.getElementById('injury-resolve')?.addEventListener('click', () => {
     showInjuryConfirm(
       'Resolve Injury?',
@@ -298,7 +280,6 @@ function wireModalHandlers(): void {
     });
   });
 
-  // Form submit
   document.getElementById('injury-form')?.addEventListener('submit', (e) => {
     e.preventDefault();
     handleSaveInjury();
@@ -307,7 +288,6 @@ function wireModalHandlers(): void {
 
 /**
  * Handle saving injury data
- * AUTO-ACTIVATES injury and forces page reload for clean state
  */
 async function handleSaveInjury(): Promise<void> {
   const typeSelect = document.getElementById('injury-type') as HTMLSelectElement;
@@ -331,13 +311,12 @@ async function handleSaveInjury(): Promise<void> {
   const crossTrainingSelect = document.getElementById('injury-cross-training') as HTMLSelectElement;
   const preferredCrossTraining = crossTrainingSelect?.value || null;
 
-  // Get current state and update
   let injuryState = getInjuryState();
   const wasAlreadyActive = injuryState.active;
 
-  // Determine initial phase based on pain level
+  const isNewInjury = !injuryState.active || injuryState.injuryPhase === 'resolved';
   let initialPhase = injuryState.injuryPhase;
-  if (!injuryState.active || initialPhase === 'resolved') {
+  if (isNewInjury) {
     if (painLevel >= 7) {
       initialPhase = 'acute';
     } else if (painLevel >= 4) {
@@ -347,48 +326,50 @@ async function handleSaveInjury(): Promise<void> {
     }
   }
 
-  // Update injury state - AUTO-ACTIVATE (no checkbox)
   injuryState = {
     ...injuryState,
-    active: true,  // ALWAYS activate on save
+    active: true,
     type: injuryType,
     location,
     locationDetail,
     physioNotes,
     canRun,
     preferredCrossTraining: preferredCrossTraining || null,
-    startDate: injuryState.startDate || new Date().toISOString(),
+    startDate: isNewInjury ? new Date().toISOString() : injuryState.startDate,
     injuryPhase: initialPhase,
     acutePhaseStartDate: initialPhase === 'acute' ? new Date().toISOString() : injuryState.acutePhaseStartDate,
+    ...(isNewInjury ? {
+      capacityTestsPassed: [],
+      capacityTestHistory: [],
+      returnToRunLevel: 1,
+      zeroPainWeeks: 0,
+      graduatedReturnWeeksLeft: 2,
+      holdCount: 0,
+      morningPainResponses: [],
+      history: [],
+      phaseTransitions: [],
+      lastTestRunDate: null,
+      testRunPainResult: null,
+    } : {}),
   };
 
-  // Record pain level (adds to history)
   injuryState = recordPainLevel(injuryState, painLevel);
-
-  // Evaluate phase transitions immediately so progression happens when criteria are met
   injuryState = evaluatePhaseTransition(injuryState);
-
-  // Pain resolved handling removed here as it's now handled by the explicit "Resolve" button
 
   const s = getMutableState();
 
-  // Mark check-in done for this week — but only if injury was already active
-  // (initial report is not a check-in; the first check-in happens at week end)
   if (wasAlreadyActive && s.w >= 1 && s.w <= s.wks.length) {
     s.wks[s.w - 1].injuryCheckedIn = true;
   }
 
-  // Save to state
   setInjuryState(injuryState);
   saveState();
 
   if (wasAlreadyActive) {
-    // Weekly check-in: close modal and call next() to advance the week
     closeInjuryModal();
     const { next } = await import('@/ui/events');
     next();
   } else {
-    // Initial injury report: full reload for clean state rebuild
     window.location.reload();
   }
 }
@@ -397,27 +378,17 @@ async function handleSaveInjury(): Promise<void> {
  * Check if injury is currently active
  */
 export function isInjuryActive(): boolean {
-  const injuryState = getInjuryState();
-  return injuryState.active;
+  return getInjuryState().active;
 }
 
 /**
- * Mark injury as recovered - deactivates injury mode
+ * Mark injury as recovered
  */
 export function markAsRecovered(): void {
   let injuryState = getInjuryState();
-
-  injuryState = {
-    ...injuryState,
-    active: false,
-    currentPain: 0,
-  };
-
+  injuryState = { ...injuryState, active: false, currentPain: 0 };
   setInjuryState(injuryState);
   saveState();
-
-
-  // Force full page reload to rebuild normal training plan
   window.location.reload();
 }
 
@@ -429,13 +400,13 @@ export function getInjuryStateForDisplay(): InjuryState {
 }
 
 /** Phase display labels */
-const PHASE_LABELS: Record<string, { label: string; color: string }> = {
-  acute: { label: 'Acute (Rest)', color: 'text-red-400' },
-  rehab: { label: 'Rehabilitation', color: 'text-amber-400' },
-  test_capacity: { label: 'Capacity Testing', color: 'text-purple-400' },
-  return_to_run: { label: 'Return to Run', color: 'text-blue-400' },
-  graduated_return: { label: 'Graduated Return', color: 'text-cyan-400' },
-  resolved: { label: 'Resolved', color: 'text-emerald-400' },
+const PHASE_LABELS: Record<string, { label: string; style: string }> = {
+  acute:            { label: 'Acute (Rest)',         style: `color:var(--c-warn)` },
+  rehab:            { label: 'Rehabilitation',       style: `color:var(--c-caution)` },
+  test_capacity:    { label: 'Capacity Testing',     style: `color:#A855F7` },
+  return_to_run:    { label: 'Return to Run',        style: `color:var(--c-accent)` },
+  graduated_return: { label: 'Graduated Return',     style: `color:#06B6D4` },
+  resolved:         { label: 'Resolved',             style: `color:var(--c-ok)` },
 };
 
 /**
@@ -443,29 +414,26 @@ const PHASE_LABELS: Record<string, { label: string; color: string }> = {
  */
 export function renderInjuryBanner(): string {
   const injuryState = getInjuryState();
-
-  if (!injuryState.active) {
-    return '';
-  }
+  if (!injuryState.active) return '';
 
   const protocol = INJURY_PROTOCOLS[injuryState.type];
   const displayName = protocol?.displayName || injuryState.type;
-  const phaseInfo = PHASE_LABELS[injuryState.injuryPhase] || { label: 'Unknown', color: 'text-gray-400' };
+  const phaseInfo = PHASE_LABELS[injuryState.injuryPhase] || { label: 'Unknown', style: `color:var(--c-faint)` };
 
   return `
-    <div class="bg-red-950/50 border border-red-800 rounded-lg p-3 mb-4">
+    <div class="rounded-lg p-3 mb-4" style="background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.25)">
       <div class="flex items-center gap-3">
-        <svg class="w-5 h-5 text-red-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-5 h-5 flex-shrink-0" style="color:var(--c-warn)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
         </svg>
         <div class="flex-1">
-          <p class="text-sm font-medium text-red-300">Injury Mode Active</p>
-          <p class="text-xs text-red-400/80">
-            ${displayName} - Pain: ${injuryState.currentPain}/10 -
-            <span class="${phaseInfo.color} font-medium">${phaseInfo.label}</span>
+          <p class="text-sm font-medium" style="color:var(--c-warn)">Injury Mode Active</p>
+          <p class="text-xs" style="color:var(--c-muted)">
+            ${displayName} — Pain: ${injuryState.currentPain}/10 —
+            <span class="font-medium" style="${phaseInfo.style}">${phaseInfo.label}</span>
           </p>
         </div>
-        <button id="btn-injury-details" class="text-xs px-2 py-1 bg-red-900/50 hover:bg-red-800/50 text-red-300 rounded transition-colors">
+        <button id="btn-injury-details" class="text-xs px-2 py-1 rounded" style="background:rgba(239,68,68,0.1);color:var(--c-warn);border:1px solid rgba(239,68,68,0.25)">
           Details
         </button>
       </div>
@@ -473,11 +441,13 @@ export function renderInjuryBanner(): string {
   `;
 }
 
-/** Styled toast for injury feedback (no reload). */
+/** Styled toast for injury feedback */
 function showInjuryToast(message: string, color: 'emerald' | 'amber'): void {
-  const bg = color === 'emerald' ? 'bg-emerald-600' : 'bg-amber-600';
+  const bg = color === 'emerald' ? 'var(--c-ok)' : 'var(--c-caution)';
   const toast = document.createElement('div');
-  toast.className = `fixed bottom-6 left-1/2 -translate-x-1/2 ${bg} text-white px-6 py-3 rounded-xl shadow-lg text-sm font-medium z-[70] transition-opacity`;
+  toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-xl shadow-lg text-sm font-medium z-[70] transition-opacity';
+  toast.style.color = 'white';
+  toast.style.background = bg;
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 400); }, 2500);
@@ -485,10 +455,8 @@ function showInjuryToast(message: string, color: 'emerald' | 'amber'): void {
 
 /**
  * Open the return-to-run gate modal for weekly check-in.
- * Shows current level, pain slider, morning pain summary, and gate decision.
  */
 export function openReturnToRunGateModal(): void {
-  // Remove existing modal if any
   closeInjuryModal();
 
   const injuryState = getInjuryState();
@@ -501,12 +469,13 @@ export function openReturnToRunGateModal(): void {
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
-  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+  modal.style.background = 'rgba(0,0,0,0.45)';
   modal.innerHTML = `
-    <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-white">Weekly Check-In</h2>
-        <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
+        <h2 class="text-lg font-semibold" style="color:var(--c-black)">Weekly Check-In</h2>
+        <button id="injury-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -514,32 +483,32 @@ export function openReturnToRunGateModal(): void {
       </div>
 
       <!-- Current Level -->
-      <div class="bg-blue-950/50 border border-blue-800 rounded-lg p-3 mb-4">
-        <div class="text-xs text-blue-400 font-medium mb-1">Current Protocol Level</div>
-        <div class="text-sm text-white font-semibold">${levelLabel}</div>
+      <div class="rounded-lg p-3 mb-4" style="background:rgba(78,159,229,0.08);border:1px solid rgba(78,159,229,0.3)">
+        <div class="text-xs font-medium mb-1" style="color:var(--c-accent)">Current Protocol Level</div>
+        <div class="text-sm font-semibold" style="color:var(--c-black)">${levelLabel}</div>
       </div>
 
       <!-- Morning Pain Summary -->
       ${mornings.length > 0 ? `
-        <div class="bg-gray-800 rounded-lg p-3 mb-4">
-          <div class="text-xs text-gray-400 font-medium mb-2">This Week's Morning Pain</div>
+        <div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">
+          <div class="text-xs font-medium mb-2" style="color:var(--c-muted)">This Week's Morning Pain</div>
           <div class="flex gap-3 text-xs">
-            <span class="text-emerald-400">${betterCount} better</span>
-            <span class="text-blue-400">${sameCount} same</span>
-            <span class="text-red-400">${worseCount} worse</span>
+            <span style="color:var(--c-ok)">${betterCount} better</span>
+            <span style="color:var(--c-accent)">${sameCount} same</span>
+            <span style="color:var(--c-warn)">${worseCount} worse</span>
           </div>
         </div>
       ` : `
-        <div class="bg-gray-800 rounded-lg p-3 mb-4">
-          <div class="text-xs text-gray-500">No morning pain data recorded this week</div>
+        <div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">
+          <div class="text-xs" style="color:var(--c-faint)">No morning pain data recorded this week</div>
         </div>
       `}
 
       <!-- Pain Slider -->
       <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-300 mb-1">
+        <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">
           How was your pain during the intervals?
-          <span id="gate-pain-value" class="text-emerald-400 font-bold">${injuryState.currentPain || 2}</span>/10
+          <span id="gate-pain-value" class="font-bold" style="color:var(--c-ok)">${injuryState.currentPain || 2}</span>/10
         </label>
         <input
           type="range"
@@ -547,35 +516,30 @@ export function openReturnToRunGateModal(): void {
           min="0"
           max="10"
           value="${injuryState.currentPain || 2}"
-          class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          style="background:rgba(0,0,0,0.08)"
         />
-        <div class="flex justify-between text-xs text-gray-500 mt-1">
+        <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
           <span>No pain</span>
           <span>Severe</span>
         </div>
       </div>
 
-      <!-- Gate Decision Preview (updates live) -->
-      <div id="gate-decision-preview" class="rounded-lg p-3 mb-4 border"></div>
+      <!-- Gate Decision Preview -->
+      <div id="gate-decision-preview" class="rounded-lg p-3 mb-4" style="border:1px solid var(--c-border)"></div>
 
       <!-- Buttons -->
       <div class="flex gap-3">
-        <button id="gate-cancel" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
-          Cancel
-        </button>
-        <button id="gate-confirm" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
-          Confirm & Advance Week
-        </button>
+        <button id="gate-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancel</button>
+        <button id="gate-confirm" class="flex-1 m-btn-primary px-4 py-2 rounded-lg text-sm font-medium">Confirm & Advance Week</button>
       </div>
     </div>
   `;
 
   document.body.appendChild(modal);
 
-  // Helper: compute and render gate decision preview
   const updatePreview = () => {
     const painVal = parseInt((document.getElementById('gate-pain-slider') as HTMLInputElement)?.value || '2');
-    // Create a temporary state with the slider pain to preview the decision
     const tempState: InjuryState = { ...injuryState, currentPain: painVal };
     const decision = evaluateReturnToRunGate(tempState);
 
@@ -583,24 +547,23 @@ export function openReturnToRunGateModal(): void {
     if (!previewEl) return;
 
     const colors = {
-      progress: { bg: 'bg-emerald-950/50', border: 'border-emerald-700', text: 'text-emerald-300', label: 'Progressing' },
-      hold: { bg: 'bg-amber-950/50', border: 'border-amber-700', text: 'text-amber-300', label: 'Holding' },
-      regress: { bg: 'bg-red-950/50', border: 'border-red-700', text: 'text-red-300', label: 'Stepping Back' },
+      progress: { bg: 'rgba(34,197,94,0.08)', border: 'rgba(34,197,94,0.3)', textStyle: `color:var(--c-ok)`, label: 'Progressing' },
+      hold:     { bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.3)', textStyle: `color:var(--c-caution-text)`, label: 'Holding' },
+      regress:  { bg: 'rgba(239,68,68,0.08)',  border: 'rgba(239,68,68,0.3)',  textStyle: `color:var(--c-warn)`, label: 'Stepping Back' },
     };
     const c = colors[decision.decision];
     const targetLabel = decision.newLevel > 8 ? 'Resolved!' : `Level ${decision.newLevel}`;
 
-    previewEl.className = `rounded-lg p-3 mb-4 border ${c.bg} ${c.border}`;
+    previewEl.style.background = c.bg;
+    previewEl.style.borderColor = c.border;
     previewEl.innerHTML = `
-      <div class="text-sm font-semibold ${c.text} mb-1">${c.label} → ${targetLabel}</div>
-      <div class="text-xs text-gray-400">${decision.reason}</div>
+      <div class="text-sm font-semibold mb-1" style="${c.textStyle}">${c.label} → ${targetLabel}</div>
+      <div class="text-xs" style="color:var(--c-muted)">${decision.reason}</div>
     `;
   };
 
-  // Initial preview
   updatePreview();
 
-  // Wire handlers
   document.getElementById('injury-modal-close')?.addEventListener('click', closeInjuryModal);
   document.getElementById(MODAL_ID)?.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeInjuryModal();
@@ -621,21 +584,12 @@ export function openReturnToRunGateModal(): void {
     const painVal = parseInt((document.getElementById('gate-pain-slider') as HTMLInputElement)?.value || '2');
 
     let state = getInjuryState();
-    // Record the check-in pain
     state = recordPainLevel(state, painVal);
-    // Update severity classification
     state = { ...state, severityClass: classifySeverity(state) };
-    // Track consecutive zero-pain weeks
-    state = {
-      ...state,
-      zeroPainWeeks: painVal === 0 ? (state.zeroPainWeeks || 0) + 1 : 0,
-    };
-    // Evaluate gate
+    state = { ...state, zeroPainWeeks: painVal === 0 ? (state.zeroPainWeeks || 0) + 1 : 0 };
     const decision = evaluateReturnToRunGate(state);
-    // Apply gate decision
     state = applyGateDecision(state, decision);
 
-    // Mark check-in complete for this week
     const s = getMutableState();
     if (s.w >= 1 && s.w <= s.wks.length) {
       s.wks[s.w - 1].injuryCheckedIn = true;
@@ -644,22 +598,18 @@ export function openReturnToRunGateModal(): void {
     setInjuryState(state);
     saveState();
 
-    // After 2+ consecutive zero-pain weeks, offer early exit with graduated return option
     if (state.zeroPainWeeks >= 2 && state.injuryPhase === 'return_to_run') {
       closeInjuryModal();
       const choice = await showThreeOptionChoice(
         'Ready to return?',
         "You've had zero pain for 2 weeks. How would you like to proceed?",
         [
-          { id: 'full', label: 'Yes, full return', description: 'Back to your normal training plan immediately' },
+          { id: 'full',      label: 'Yes, full return',    description: 'Back to your normal training plan immediately' },
           { id: 'graduated', label: 'Yes, ease me back in', description: '2 weeks of reduced hard sessions with weekly check-ins' },
-          { id: 'stay', label: 'Not yet', description: 'Continue recovery protocol' },
+          { id: 'stay',      label: 'Not yet',              description: 'Continue recovery protocol' },
         ]
       );
-      if (choice === 'full') {
-        markAsRecovered();
-        return;
-      }
+      if (choice === 'full') { markAsRecovered(); return; }
       if (choice === 'graduated') {
         state.injuryPhase = 'graduated_return';
         state.graduatedReturnWeeksLeft = 2;
@@ -671,7 +621,6 @@ export function openReturnToRunGateModal(): void {
       }
     }
 
-    // Close modal and call next() to advance the week immediately
     closeInjuryModal();
     const { next } = await import('@/ui/events');
     next();
@@ -682,14 +631,15 @@ export function openReturnToRunGateModal(): void {
 function showInjuryConfirm(title: string, message: string, confirmLabel: string, cancelLabel: string): Promise<boolean> {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4';
+    overlay.className = 'fixed inset-0 flex items-center justify-center z-[70] px-4';
+    overlay.style.background = 'rgba(0,0,0,0.45)';
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">${title}</h3>
-        <p class="text-gray-400 text-sm mb-5">${message}</p>
+      <div class="rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">${title}</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">${message}</p>
         <div class="flex flex-col gap-2">
-          <button id="btn-injury-yes" class="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-lg transition-colors text-sm">${confirmLabel}</button>
-          <button id="btn-injury-no" class="w-full py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-lg transition-colors text-sm">${cancelLabel}</button>
+          <button id="btn-injury-yes" class="w-full m-btn-primary py-2.5 font-medium rounded-lg text-sm">${confirmLabel}</button>
+          <button id="btn-injury-no" class="w-full m-btn-secondary py-2.5 font-medium rounded-lg text-sm">${cancelLabel}</button>
         </div>
       </div>
     `;
@@ -708,24 +658,25 @@ function showThreeOptionChoice(
 ): Promise<string> {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
-    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-[70] px-4';
+    overlay.className = 'fixed inset-0 flex items-center justify-center z-[70] px-4';
+    overlay.style.background = 'rgba(0,0,0,0.45)';
     const buttonsHtml = options.map((opt, i) => {
-      const style = i === 0
-        ? 'bg-emerald-600 hover:bg-emerald-500 text-white'
+      const btnStyle = i === 0
+        ? `class="w-full m-btn-primary py-2.5 font-medium rounded-lg text-sm"`
         : i === 1
-          ? 'bg-cyan-600 hover:bg-cyan-500 text-white'
-          : 'bg-gray-800 hover:bg-gray-700 text-gray-300';
+          ? `class="w-full py-2.5 font-medium rounded-lg text-sm" style="background:var(--c-accent);color:white"`
+          : `class="w-full m-btn-secondary py-2.5 font-medium rounded-lg text-sm"`;
       return `
-        <button data-choice="${opt.id}" class="w-full py-2.5 ${style} font-medium rounded-lg transition-colors text-sm">
+        <button data-choice="${opt.id}" ${btnStyle}>
           ${opt.label}
           <span class="block text-xs opacity-75 font-normal mt-0.5">${opt.description}</span>
         </button>
       `;
     }).join('');
     overlay.innerHTML = `
-      <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-6">
-        <h3 class="text-white font-semibold text-lg mb-2">${title}</h3>
-        <p class="text-gray-400 text-sm mb-5">${message}</p>
+      <div class="rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">${title}</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">${message}</p>
         <div class="flex flex-col gap-2">${buttonsHtml}</div>
       </div>
     `;
@@ -744,23 +695,23 @@ function showThreeOptionChoice(
 
 /**
  * Open the graduated return weekly check-in modal.
- * Shows weeks remaining, pain slider, and handles progression/hold/regression.
  */
 export function openGraduatedReturnCheckIn(): void {
   closeInjuryModal();
 
   const injuryState = getInjuryState();
   const weeksLeft = injuryState.graduatedReturnWeeksLeft || 2;
-  const weekNumber = 2 - weeksLeft + 1; // 1 or 2
+  const weekNumber = 2 - weeksLeft + 1;
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
-  modal.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50';
+  modal.className = 'fixed inset-0 flex items-center justify-center z-50';
+  modal.style.background = 'rgba(0,0,0,0.45)';
   modal.innerHTML = `
-    <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md mx-4 shadow-xl">
+    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl" style="background:var(--c-surface);border:1px solid var(--c-border-strong)">
       <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold text-white">Graduated Return Check-In</h2>
-        <button id="injury-modal-close" class="text-gray-400 hover:text-white transition-colors">
+        <h2 class="text-lg font-semibold" style="color:var(--c-black)">Graduated Return Check-In</h2>
+        <button id="injury-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -768,17 +719,17 @@ export function openGraduatedReturnCheckIn(): void {
       </div>
 
       <!-- Week indicator -->
-      <div class="bg-cyan-950/50 border border-cyan-800 rounded-lg p-3 mb-4">
-        <div class="text-xs text-cyan-400 font-medium mb-1">Graduated Return</div>
-        <div class="text-sm text-white font-semibold">Week ${weekNumber} of 2</div>
-        <p class="text-xs text-gray-400 mt-1">Hard sessions are reduced. Easy runs are normal.</p>
+      <div class="rounded-lg p-3 mb-4" style="background:rgba(6,182,212,0.08);border:1px solid rgba(6,182,212,0.3)">
+        <div class="text-xs font-medium mb-1" style="color:#06B6D4">Graduated Return</div>
+        <div class="text-sm font-semibold" style="color:var(--c-black)">Week ${weekNumber} of 2</div>
+        <p class="text-xs mt-1" style="color:var(--c-muted)">Hard sessions are reduced. Easy runs are normal.</p>
       </div>
 
       <!-- Pain Slider -->
       <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-300 mb-1">
+        <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">
           How was your pain this week?
-          <span id="grad-pain-value" class="text-emerald-400 font-bold">${injuryState.currentPain || 0}</span>/10
+          <span id="grad-pain-value" class="font-bold" style="color:var(--c-ok)">${injuryState.currentPain || 0}</span>/10
         </label>
         <input
           type="range"
@@ -786,32 +737,28 @@ export function openGraduatedReturnCheckIn(): void {
           min="0"
           max="10"
           value="${injuryState.currentPain || 0}"
-          class="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+          style="background:rgba(0,0,0,0.08)"
         />
-        <div class="flex justify-between text-xs text-gray-500 mt-1">
+        <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
           <span>No pain</span>
           <span>Severe</span>
         </div>
       </div>
 
       <!-- Decision preview -->
-      <div id="grad-decision-preview" class="rounded-lg p-3 mb-4 border"></div>
+      <div id="grad-decision-preview" class="rounded-lg p-3 mb-4" style="border:1px solid var(--c-border)"></div>
 
       <!-- Buttons -->
       <div class="flex gap-3">
-        <button id="grad-cancel" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
-          Cancel
-        </button>
-        <button id="grad-confirm" class="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors">
-          Confirm & Advance Week
-        </button>
+        <button id="grad-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancel</button>
+        <button id="grad-confirm" class="flex-1 m-btn-primary px-4 py-2 rounded-lg text-sm font-medium">Confirm & Advance Week</button>
       </div>
     </div>
   `;
 
   document.body.appendChild(modal);
 
-  // Preview logic
   const updatePreview = () => {
     const painVal = parseInt((document.getElementById('grad-pain-slider') as HTMLInputElement)?.value || '0');
     const previewEl = document.getElementById('grad-decision-preview');
@@ -819,37 +766,38 @@ export function openGraduatedReturnCheckIn(): void {
 
     if (painVal <= 1) {
       const remaining = weeksLeft - 1;
+      previewEl.style.background = 'rgba(34,197,94,0.08)';
+      previewEl.style.borderColor = 'rgba(34,197,94,0.3)';
       if (remaining <= 0) {
-        previewEl.className = 'rounded-lg p-3 mb-4 border bg-emerald-950/50 border-emerald-700';
         previewEl.innerHTML = `
-          <div class="text-sm font-semibold text-emerald-300 mb-1">Fully Resolved!</div>
-          <div class="text-xs text-gray-400">2 clean weeks complete — returning to normal training</div>
+          <div class="text-sm font-semibold mb-1" style="color:var(--c-ok)">Fully Resolved!</div>
+          <div class="text-xs" style="color:var(--c-muted)">2 clean weeks complete — returning to normal training</div>
         `;
       } else {
-        previewEl.className = 'rounded-lg p-3 mb-4 border bg-emerald-950/50 border-emerald-700';
         previewEl.innerHTML = `
-          <div class="text-sm font-semibold text-emerald-300 mb-1">Progressing</div>
-          <div class="text-xs text-gray-400">${remaining} week${remaining > 1 ? 's' : ''} remaining in graduated return</div>
+          <div class="text-sm font-semibold mb-1" style="color:var(--c-ok)">Progressing</div>
+          <div class="text-xs" style="color:var(--c-muted)">${remaining} week${remaining > 1 ? 's' : ''} remaining in graduated return</div>
         `;
       }
     } else if (painVal <= 3) {
-      previewEl.className = 'rounded-lg p-3 mb-4 border bg-amber-950/50 border-amber-700';
+      previewEl.style.background = 'rgba(245,158,11,0.08)';
+      previewEl.style.borderColor = 'rgba(245,158,11,0.3)';
       previewEl.innerHTML = `
-        <div class="text-sm font-semibold text-amber-300 mb-1">Holding</div>
-        <div class="text-xs text-gray-400">Pain ${painVal}/10 — staying at current level, week does not count</div>
+        <div class="text-sm font-semibold mb-1" style="color:var(--c-caution-text)">Holding</div>
+        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10 — staying at current level, week does not count</div>
       `;
     } else {
-      previewEl.className = 'rounded-lg p-3 mb-4 border bg-red-950/50 border-red-700';
+      previewEl.style.background = 'rgba(239,68,68,0.08)';
+      previewEl.style.borderColor = 'rgba(239,68,68,0.3)';
       previewEl.innerHTML = `
-        <div class="text-sm font-semibold text-red-300 mb-1">Stepping Back</div>
-        <div class="text-xs text-gray-400">Pain ${painVal}/10 — returning to return-to-run protocol</div>
+        <div class="text-sm font-semibold mb-1" style="color:var(--c-warn)">Stepping Back</div>
+        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10 — returning to return-to-run protocol</div>
       `;
     }
   };
 
   updatePreview();
 
-  // Wire handlers
   document.getElementById('injury-modal-close')?.addEventListener('click', closeInjuryModal);
   document.getElementById(MODAL_ID)?.addEventListener('click', (e) => {
     if (e.target === e.currentTarget) closeInjuryModal();
@@ -873,23 +821,18 @@ export function openGraduatedReturnCheckIn(): void {
     state = recordPainLevel(state, painVal);
 
     if (painVal >= 4) {
-      // Regress to return_to_run
       state = { ...state, injuryPhase: 'return_to_run' as const, graduatedReturnWeeksLeft: 2 };
       showInjuryToast('Pain spike — returning to return-to-run protocol', 'amber');
     } else if (painVal >= 2) {
-      // Hold — don't decrement weeks
       showInjuryToast('Holding at current level — week does not count', 'amber');
     } else {
-      // Pain <= 1: decrement weeks
       state.graduatedReturnWeeksLeft = Math.max(0, (state.graduatedReturnWeeksLeft || 2) - 1);
       if (state.graduatedReturnWeeksLeft <= 0) {
-        // Auto-resolve
         state = applyPhaseProgression(state, 'Completed graduated return — 2 clean weeks');
         showInjuryToast('Graduated return complete — back to full training!', 'emerald');
       }
     }
 
-    // Mark check-in complete
     const s = getMutableState();
     if (s.w >= 1 && s.w <= s.wks.length) {
       s.wks[s.w - 1].injuryCheckedIn = true;

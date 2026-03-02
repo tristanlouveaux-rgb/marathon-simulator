@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mosaic — Home Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --c-bg:           #FDFCF7;
+      --c-surface:      #FFFFFF;
+      --c-black:        #1A1A1A;
+      --c-muted:        #888888;
+      --c-faint:        rgba(0,0,0,0.38);
+      --c-accent:       #4E9FE5;
+      --c-border:       rgba(0,0,0,0.09);
+      --c-border-strong:#1A1A1A;
+      --c-ok:           #22C55E;
+      --c-caution:      #F59E0B;
+      --c-warn:         #EF4444;
+
+      --f: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+      --r-card: 6px;
+      --r-pill: 100px;
+    }
+    * { box-sizing: border-box; -webkit-font-smoothing: antialiased; margin: 0; padding: 0; }
+
+    body {
+      background: #E3E1DB;
+      font-family: var(--f);
+      color: var(--c-black);
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      padding: 40px 20px;
+      gap: 40px;
+      flex-wrap: wrap;
+    }
+
+    /* ── Phone shell ─────────────────── */
+    .phone {
+      width: 393px;
+      background: var(--c-bg);
+      border-radius: 48px;
+      overflow: hidden;
+      box-shadow:
+        0 32px 80px rgba(0,0,0,0.16),
+        0 0 0 1px rgba(0,0,0,0.06),
+        inset 0 0 0 1px rgba(255,255,255,0.4);
+      display: flex;
+      flex-direction: column;
+      height: 852px;
+    }
+
+    /* Status bar */
+    .status-bar {
+      padding: 16px 28px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      flex-shrink: 0;
+    }
+
+    .scroll-area {
+      flex: 1;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .scroll-area::-webkit-scrollbar { display: none; }
+
+    /* ── Header ──────────────────────── */
+    .header {
+      padding: 14px 22px 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand {
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      color: var(--c-black);
+    }
+    .account-btn {
+      width: 32px; height: 32px;
+      border-radius: 50%;
+      border: 1px solid var(--c-border-strong);
+      background: transparent;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+      cursor: pointer; color: var(--c-black);
+    }
+
+    /* ── Progress section ────────────── */
+    .section { padding: 0 18px; margin-bottom: 14px; }
+
+    .progress-block {
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-card);
+      padding: 16px 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+      background: var(--c-surface);
+    }
+
+    .prog-row { display: flex; flex-direction: column; gap: 7px; }
+    .prog-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    .prog-name {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--c-faint);
+    }
+    .prog-value {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--c-black);
+      letter-spacing: -0.01em;
+    }
+    /* Bar container — max 88% wide to leave room for +X% label */
+    .prog-bar-wrap {
+      position: relative;
+      height: 5px;
+    }
+    .prog-track {
+      width: 88%;
+      height: 5px;
+      background: rgba(0,0,0,0.07);
+      border-radius: 100px;
+      position: relative;
+      overflow: hidden;
+    }
+    .prog-fill {
+      height: 100%;
+      border-radius: 100px;
+      transition: width 0.5s ease;
+    }
+    .prog-overflow-label {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    /* Status pill */
+    .pill-row { display: flex; align-items: center; gap: 8px; padding-top: 2px; }
+    .pill {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px;
+      border-radius: var(--r-pill);
+      font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+    }
+    .pill-ok      { background: #DCFCE7; color: #15803D; }
+    .pill-caution { background: #FEF3C7; color: #92400E; }
+    .pill-dot { width: 5px; height: 5px; border-radius: 50%; }
+    .pill-ok .pill-dot      { background: var(--c-ok); }
+    .pill-caution .pill-dot { background: var(--c-caution); }
+    .pill-caption { font-size: 12px; color: var(--c-muted); }
+
+    /* ── Injury + Recovery bars ──────── */
+    .signal-block {
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-card);
+      background: var(--c-surface);
+      overflow: hidden;
+    }
+    .signal-row {
+      padding: 12px 16px;
+    }
+    .signal-row + .signal-row {
+      border-top: 1px solid var(--c-border);
+    }
+    .signal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 9px;
+    }
+    .signal-name {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--c-faint);
+    }
+    .signal-status {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .signal-track {
+      height: 6px;
+      background: rgba(0,0,0,0.06);
+      border-radius: 100px;
+      position: relative;
+    }
+    .signal-fill {
+      height: 100%;
+      border-radius: 100px;
+    }
+    .signal-thumb {
+      position: absolute;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: white;
+      border: 1.5px solid var(--c-border-strong);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    }
+    .signal-caption {
+      margin-top: 7px;
+      font-size: 11px;
+      color: var(--c-muted);
+      line-height: 1.4;
+    }
+
+    /* ── Workout hero card ───────────── */
+    .workout-hero {
+      margin: 0 0 14px;
+      background: #F5F0E8;
+      position: relative;
+      overflow: hidden;
+      border-top: 1px solid rgba(0,0,0,0.08);
+      border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+    /* Geometric art — concentric circles */
+    .geo-art {
+      position: absolute;
+      right: -60px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+    }
+    .geo-art circle {
+      fill: none;
+      stroke: rgba(78,159,229,0.18);
+      stroke-width: 1;
+    }
+    .geo-art-lines line {
+      stroke: rgba(78,159,229,0.1);
+      stroke-width: 0.8;
+    }
+    .workout-hero-inner {
+      position: relative;
+      z-index: 2;
+      padding: 20px 22px 18px;
+    }
+    .workout-hero-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+    .workout-day-chip {
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--c-faint);
+    }
+    .btn-start {
+      background: var(--c-accent);
+      color: white;
+      border: none;
+      border-radius: var(--r-pill);
+      padding: 9px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex; align-items: center; gap: 6px;
+      letter-spacing: 0.01em;
+      font-family: var(--f);
+      box-shadow: 0 2px 8px rgba(78,159,229,0.35);
+    }
+    .btn-start-icon {
+      width: 12px; height: 12px;
+      background: white;
+      clip-path: polygon(0 0, 100% 50%, 0 100%);
+    }
+    .workout-name {
+      font-size: 28px;
+      font-weight: 300;
+      letter-spacing: -0.04em;
+      line-height: 1.05;
+      margin-bottom: 5px;
+    }
+    .workout-desc {
+      font-size: 13px;
+      color: var(--c-muted);
+      line-height: 1.4;
+      margin-bottom: 16px;
+    }
+    .workout-meta-row {
+      display: flex;
+      gap: 0;
+      border-top: 1px solid rgba(0,0,0,0.09);
+      padding-top: 14px;
+      align-items: center;
+    }
+    .workout-meta-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .workout-meta-item + .workout-meta-item {
+      border-left: 1px solid rgba(0,0,0,0.09);
+      padding-left: 14px;
+    }
+    .meta-val { font-size: 16px; font-weight: 400; letter-spacing: -0.02em; }
+    .meta-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--c-faint); }
+    .btn-view-link {
+      font-size: 12px; font-weight: 500;
+      color: var(--c-accent);
+      text-decoration: none;
+      display: flex; align-items: center; gap: 3px;
+      white-space: nowrap;
+    }
+    .btn-view-link svg {
+      width: 13px; height: 13px;
+      stroke: var(--c-accent); stroke-width: 2;
+      fill: none; stroke-linecap: round; stroke-linejoin: round;
+    }
+
+    /* ── Race countdown ──────────────── */
+    .countdown-block {
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-card);
+      background: var(--c-surface);
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .countdown-left { display: flex; flex-direction: column; gap: 3px; }
+    .countdown-eyebrow { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.1em; color: var(--c-faint); }
+    .countdown-race { font-size: 15px; font-weight: 400; letter-spacing: -0.02em; }
+    .countdown-right { display: flex; align-items: baseline; gap: 5px; }
+    .countdown-n { font-size: 44px; font-weight: 300; letter-spacing: -0.05em; line-height: 1; }
+    .countdown-unit { font-size: 13px; color: var(--c-muted); }
+
+    /* ── Activity list ───────────────── */
+    .activity-list {
+      border: 1px solid var(--c-border);
+      border-radius: var(--r-card);
+      background: var(--c-surface);
+      overflow: hidden;
+    }
+    .activity-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      gap: 12px;
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+    .activity-item:not(:last-child) { border-bottom: 1px solid var(--c-border); }
+    .activity-item:active { background: rgba(0,0,0,0.025); }
+    .act-icon {
+      width: 34px; height: 34px; border-radius: 50%; flex-shrink: 0;
+      background: rgba(78,159,229,0.08);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .act-icon svg { width: 17px; height: 17px; stroke: var(--c-accent); stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .act-icon.grey { background: rgba(0,0,0,0.05); }
+    .act-icon.grey svg { stroke: var(--c-muted); }
+    .act-body { flex: 1; }
+    .act-name { font-size: 14px; font-weight: 400; margin-bottom: 1px; letter-spacing: -0.01em; }
+    .act-sub { font-size: 11px; color: var(--c-muted); }
+    .act-right { display: flex; align-items: center; gap: 8px; }
+    .act-val { font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+    .arrow-icon { opacity: 0.25; }
+    .arrow-icon svg { width: 15px; height: 15px; stroke: var(--c-black); stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ── Tab bar ─────────────────────── */
+    .tab-bar {
+      border-top: 1px solid var(--c-border-strong);
+      background: var(--c-bg);
+      padding: 10px 0 26px;
+      display: flex;
+      justify-content: space-around;
+      flex-shrink: 0;
+    }
+    .tab-item {
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      cursor: pointer; opacity: 0.28; min-width: 64px;
+    }
+    .tab-item.active { opacity: 1; }
+    .tab-item svg { width: 22px; height: 22px; stroke: var(--c-black); stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .tab-item.active svg { stroke-width: 2; }
+    .tab-lbl { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; }
+
+    /* section label */
+    .sec-label {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.1em; color: var(--c-faint);
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ═══════════════════════════ PHONE 1: ON TRACK ══════════════════════════ -->
+<div class="phone">
+  <div class="status-bar">
+    <span>9:41</span>
+    <span style="display:flex;gap:5px;align-items:center;opacity:0.7">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="#1A1A1A"><rect x="0" y="2.5" width="2.5" height="8.5" rx="0.8"/><rect x="4" y="1.5" width="2.5" height="9.5" rx="0.8"/><rect x="8" y="0" width="2.5" height="11" rx="0.8"/><rect x="12" y="0" width="2.5" height="11" rx="0.8" opacity="0.3"/></svg>
+      <svg width="23" height="12" viewBox="0 0 23 12" fill="none"><rect x="0.5" y="0.5" width="18" height="11" rx="2" stroke="#1A1A1A" stroke-width="1.1"/><rect x="2" y="2" width="13" height="8" rx="1" fill="#1A1A1A"/><path d="M19.5 4v4a2 2 0 000-4z" fill="#1A1A1A"/></svg>
+    </span>
+  </div>
+
+  <div class="scroll-area">
+
+    <!-- Header -->
+    <div class="header">
+      <div class="brand">Mosaic</div>
+      <button class="account-btn">TL</button>
+    </div>
+
+    <!-- Progress bars -->
+    <div class="section">
+      <div class="sec-label">This Week</div>
+      <div class="progress-block">
+
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Sessions</span>
+            <span class="prog-value">4 / 5</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <div class="prog-fill" style="width:80%;background:var(--c-ok)"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Distance</span>
+            <span class="prog-value">42.5 / 50 km</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <div class="prog-fill" style="width:85%;background:var(--c-ok)"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Training Load</span>
+            <span class="prog-value">186 / 219 TSS</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <div class="prog-fill" style="width:85%;background:var(--c-ok)"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pill-row">
+          <span class="pill pill-ok"><span class="pill-dot"></span>On Track!</span>
+          <span class="pill-caption">Great week — one session left.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Injury + Recovery signals -->
+    <div class="section">
+      <div class="signal-block">
+
+        <div class="signal-row">
+          <div class="signal-header">
+            <span class="signal-name">Injury Risk</span>
+            <span class="signal-status" style="color:var(--c-ok)">Low</span>
+          </div>
+          <div class="signal-track">
+            <div class="signal-fill" style="width:28%;background:linear-gradient(to right,#22C55E,#84CC16)"></div>
+            <div class="signal-thumb" style="left:28%"></div>
+          </div>
+          <p class="signal-caption">Load is within a safe range.</p>
+        </div>
+
+        <div class="signal-row">
+          <div class="signal-header">
+            <span class="signal-name">Recovery</span>
+            <span class="signal-status" style="color:var(--c-faint)">—</span>
+          </div>
+          <div class="signal-track" style="background:rgba(0,0,0,0.04)">
+            <div class="signal-fill" style="width:0%"></div>
+          </div>
+          <p class="signal-caption" style="opacity:0.45">Sleep data · connect watch to unlock</p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Today's workout hero -->
+    <div class="workout-hero">
+      <!-- Geometric art -->
+      <svg class="geo-art" width="200" height="200" viewBox="0 0 200 200">
+        <circle cx="100" cy="100" r="30"/>
+        <circle cx="100" cy="100" r="55"/>
+        <circle cx="100" cy="100" r="82"/>
+        <circle cx="100" cy="100" r="112"/>
+        <circle cx="100" cy="100" r="145"/>
+        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
+        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
+        <line x1="0" y1="0" x2="200" y2="200" stroke="rgba(78,159,229,0.06)" stroke-width="0.8"/>
+        <line x1="200" y1="0" x2="0" y2="200" stroke="rgba(78,159,229,0.06)" stroke-width="0.8"/>
+      </svg>
+
+      <div class="workout-hero-inner">
+        <div class="workout-hero-top">
+          <div class="workout-day-chip">Thursday · Today</div>
+          <button class="btn-start">
+            <span class="btn-start-icon"></span>
+            Start
+          </button>
+        </div>
+        <div class="workout-name">Tempo Run</div>
+        <div class="workout-desc">5 × 1 km @ 4:05/km · 90s recovery</div>
+        <div class="workout-meta-row">
+          <div class="workout-meta-item">
+            <span class="meta-val">~45 min</span>
+            <span class="meta-lbl">Duration</span>
+          </div>
+          <div class="workout-meta-item">
+            <span class="meta-val">10.2 km</span>
+            <span class="meta-lbl">Distance</span>
+          </div>
+          <div class="workout-meta-item">
+            <span class="meta-val">RPE 7</span>
+            <span class="meta-lbl">Effort</span>
+          </div>
+          <a class="btn-view-link" href="#" style="margin-left:auto;padding-left:14px;border-left:1px solid rgba(0,0,0,0.09)">
+            View
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Race countdown -->
+    <div class="section">
+      <div class="countdown-block">
+        <div class="countdown-left">
+          <span class="countdown-eyebrow">Race Day</span>
+          <span class="countdown-race">London Marathon</span>
+        </div>
+        <div class="countdown-right">
+          <span class="countdown-n">42</span>
+          <span class="countdown-unit">days</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent -->
+    <div class="section">
+      <div class="sec-label">Recent</div>
+      <div class="activity-list">
+        <div class="activity-item">
+          <div class="act-icon"><svg viewBox="0 0 24 24"><path d="M13 4a1 1 0 100-2 1 1 0 000 2z" fill="#4E9FE5" stroke="none"/><path d="M6.5 20l3-5.5 2.5 2 3.5-7 2.5 4.5"/></svg></div>
+          <div class="act-body"><div class="act-name">Easy Run</div><div class="act-sub">Today · 6:30 AM</div></div>
+          <div class="act-right"><span class="act-val">8.0 km</span><div class="arrow-icon"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        </div>
+        <div class="activity-item">
+          <div class="act-icon"><svg viewBox="0 0 24 24"><path d="M13 4a1 1 0 100-2 1 1 0 000 2z" fill="#4E9FE5" stroke="none"/><path d="M6.5 20l3-5.5 2.5 2 3.5-7 2.5 4.5"/></svg></div>
+          <div class="act-body"><div class="act-name">Long Run</div><div class="act-sub">Sun · 7:15 AM</div></div>
+          <div class="act-right"><span class="act-val">18.5 km</span><div class="arrow-icon"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        </div>
+        <div class="activity-item">
+          <div class="act-icon grey"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div>
+          <div class="act-body"><div class="act-name">Gym — Strength</div><div class="act-sub">Sat · 10:00 AM</div></div>
+          <div class="act-right"><span class="act-val">45 min</span><div class="arrow-icon"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:16px"></div>
+  </div>
+
+  <div class="tab-bar">
+    <div class="tab-item active"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span class="tab-lbl">Home</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h4M8 17h8"/></svg><span class="tab-lbl">Plan</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="#1A1A1A" stroke="none"/></svg><span class="tab-lbl">Record</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg><span class="tab-lbl">Stats</span></div>
+  </div>
+</div>
+
+
+<!-- ═══════════════════════ PHONE 2: TRAINING HARD ═════════════════════════ -->
+<div class="phone">
+  <div class="status-bar">
+    <span>9:41</span>
+    <span style="display:flex;gap:5px;align-items:center;opacity:0.7">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="#1A1A1A"><rect x="0" y="2.5" width="2.5" height="8.5" rx="0.8"/><rect x="4" y="1.5" width="2.5" height="9.5" rx="0.8"/><rect x="8" y="0" width="2.5" height="11" rx="0.8"/><rect x="12" y="0" width="2.5" height="11" rx="0.8" opacity="0.3"/></svg>
+      <svg width="23" height="12" viewBox="0 0 23 12" fill="none"><rect x="0.5" y="0.5" width="18" height="11" rx="2" stroke="#1A1A1A" stroke-width="1.1"/><rect x="2" y="2" width="13" height="8" rx="1" fill="#1A1A1A"/><path d="M19.5 4v4a2 2 0 000-4z" fill="#1A1A1A"/></svg>
+    </span>
+  </div>
+
+  <div class="scroll-area">
+    <div class="header">
+      <div class="brand">Mosaic</div>
+      <button class="account-btn">TL</button>
+    </div>
+
+    <!-- Progress — elevated state -->
+    <div class="section">
+      <div class="sec-label">This Week</div>
+      <div class="progress-block">
+
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Sessions</span>
+            <span class="prog-value">5 / 5</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <div class="prog-fill" style="width:88%;background:var(--c-ok)"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Distance: 62/50 = 124% → capped bar + amber label -->
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Distance</span>
+            <span class="prog-value">62 / 50 km</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <!-- green to 80% of bar (=target), amber from 80%–88% (=cap), clamp -->
+              <div class="prog-fill" style="width:88%;background:linear-gradient(to right, var(--c-ok) 80%, var(--c-caution) 80%)"></div>
+            </div>
+            <span class="prog-overflow-label" style="color:var(--c-caution)">+24%</span>
+          </div>
+        </div>
+
+        <!-- Load: 278/219 = 127% → capped bar + amber label -->
+        <div class="prog-row">
+          <div class="prog-header">
+            <span class="prog-name">Training Load</span>
+            <span class="prog-value">278 / 219 TSS</span>
+          </div>
+          <div class="prog-bar-wrap">
+            <div class="prog-track">
+              <div class="prog-fill" style="width:88%;background:linear-gradient(to right, var(--c-ok) 79%, var(--c-caution) 79%)"></div>
+            </div>
+            <span class="prog-overflow-label" style="color:var(--c-caution)">+27%</span>
+          </div>
+        </div>
+
+        <div class="pill-row">
+          <span class="pill pill-caution"><span class="pill-dot"></span>Training Hard!</span>
+          <span class="pill-caption">Ease into the weekend.</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Injury + Recovery — elevated -->
+    <div class="section">
+      <div class="signal-block">
+
+        <div class="signal-row">
+          <div class="signal-header">
+            <span class="signal-name">Injury Risk</span>
+            <span class="signal-status" style="color:var(--c-caution)">Elevated</span>
+          </div>
+          <div class="signal-track">
+            <div class="signal-fill" style="width:58%;background:linear-gradient(to right,#22C55E 0%,#EAB308 50%,#F59E0B 100%)"></div>
+            <div class="signal-thumb" style="left:58%;border-color:var(--c-caution)"></div>
+          </div>
+          <p class="signal-caption">You've trained hard this week. Prioritise sleep and keep tomorrow easy.</p>
+        </div>
+
+        <div class="signal-row">
+          <div class="signal-header">
+            <span class="signal-name">Recovery</span>
+            <span class="signal-status" style="color:var(--c-faint)">—</span>
+          </div>
+          <div class="signal-track" style="background:rgba(0,0,0,0.04)"></div>
+          <p class="signal-caption" style="opacity:0.45">Sleep data · connect watch to unlock</p>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Rest day workout -->
+    <div class="workout-hero" style="background:#F7F5F0">
+      <svg class="geo-art" width="200" height="200" viewBox="0 0 200 200" style="opacity:0.5">
+        <circle cx="100" cy="100" r="30" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="60" fill="none" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="95" fill="none" stroke="rgba(0,0,0,0.04)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="135" fill="none" stroke="rgba(0,0,0,0.03)" stroke-width="1"/>
+      </svg>
+      <div class="workout-hero-inner">
+        <div class="workout-hero-top">
+          <div class="workout-day-chip">Friday · Tomorrow</div>
+        </div>
+        <div class="workout-name" style="opacity:0.45;font-size:22px">Rest Day</div>
+        <div class="workout-desc" style="margin-bottom:16px">No structured training. Walk, stretch, sleep.</div>
+        <div class="workout-meta-row">
+          <span style="font-size:12px;color:var(--c-muted)">Next run: Saturday — Easy 10 km</span>
+          <a class="btn-view-link" href="#" style="margin-left:auto">
+            View plan
+            <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Race countdown -->
+    <div class="section">
+      <div class="countdown-block">
+        <div class="countdown-left">
+          <span class="countdown-eyebrow">Race Day</span>
+          <span class="countdown-race">London Marathon</span>
+        </div>
+        <div class="countdown-right">
+          <span class="countdown-n">42</span>
+          <span class="countdown-unit">days</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Recent -->
+    <div class="section">
+      <div class="sec-label">Recent</div>
+      <div class="activity-list">
+        <div class="activity-item">
+          <div class="act-icon"><svg viewBox="0 0 24 24"><path d="M13 4a1 1 0 100-2 1 1 0 000 2z" fill="#4E9FE5" stroke="none"/><path d="M6.5 20l3-5.5 2.5 2 3.5-7 2.5 4.5"/></svg></div>
+          <div class="act-body"><div class="act-name">Threshold Intervals</div><div class="act-sub">Today · 6:00 AM</div></div>
+          <div class="act-right"><span class="act-val">12.0 km</span><div class="arrow-icon"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        </div>
+        <div class="activity-item">
+          <div class="act-icon"><svg viewBox="0 0 24 24"><path d="M13 4a1 1 0 100-2 1 1 0 000 2z" fill="#4E9FE5" stroke="none"/><path d="M6.5 20l3-5.5 2.5 2 3.5-7 2.5 4.5"/></svg></div>
+          <div class="act-body"><div class="act-name">Long Run</div><div class="act-sub">Sun · 7:15 AM</div></div>
+          <div class="act-right"><span class="act-val">24 km</span><div class="arrow-icon"><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="height:16px"></div>
+  </div>
+
+  <div class="tab-bar">
+    <div class="tab-item active"><svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg><span class="tab-lbl">Home</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18M8 14h4M8 17h8"/></svg><span class="tab-lbl">Plan</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="#1A1A1A" stroke="none"/></svg><span class="tab-lbl">Record</span></div>
+    <div class="tab-item"><svg viewBox="0 0 24 24"><path d="M18 20V10M12 20V4M6 20v-6"/></svg><span class="tab-lbl">Stats</span></div>
+  </div>
+</div>
+
+</body>
+</html>

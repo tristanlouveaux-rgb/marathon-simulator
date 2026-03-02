@@ -14,7 +14,11 @@ import { describe, it, expect } from 'vitest';
 import {
   computeUniversalLoad,
   isExtremeSession,
+  classifyByITrimp,
+  classifyByZones,
+  classifyWorkoutType,
 } from './universalLoad';
+import type { HRZoneData } from './universal-load-types';
 import {
   suggestAdjustments,
   workoutsToPlannedRuns,
@@ -801,5 +805,173 @@ describe('Universal Load: extendedModel backward compatibility', () => {
     expect(b.baseLoad).toBe(a.baseLoad);
     expect(b.aerobicLoad).toBe(a.aerobicLoad);
     expect(b.anaerobicLoad).toBe(a.anaerobicLoad);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase B v3 — Workout Type Classifier
+// ---------------------------------------------------------------------------
+
+function zones(z1: number, z2: number, z3: number, z4: number, z5: number): HRZoneData {
+  return { zone1Minutes: z1, zone2Minutes: z2, zone3Minutes: z3, zone4Minutes: z4, zone5Minutes: z5 };
+}
+
+// iTRIMP value that produces a given TSS (reverse of the normalisation formula)
+function itrimp(tss: number): number {
+  return (tss * 15000) / 100;
+}
+
+describe('classifyByITrimp', () => {
+  it('easy: 55 TSS in 60min → TSS/hr 55 → easy', () => {
+    const r = classifyByITrimp(itrimp(55), 60);
+    expect(r.type).toBe('easy');
+    expect(r.tss).toBeCloseTo(55, 0);
+    expect(r.tssPerHour).toBeCloseTo(55, 0);
+  });
+
+  it('threshold: 80 TSS/hr → threshold', () => {
+    const r = classifyByITrimp(itrimp(80), 60);
+    expect(r.type).toBe('threshold');
+  });
+
+  it('vo2: 120 TSS/hr → vo2', () => {
+    const r = classifyByITrimp(itrimp(120), 60);
+    expect(r.type).toBe('vo2');
+  });
+
+  it('same iTRIMP but 30min session → double the TSS/hr → upgrades type', () => {
+    // 55 TSS in 30min = 110 TSS/hr → vo2
+    const r = classifyByITrimp(itrimp(55), 30);
+    expect(r.type).toBe('vo2');
+    expect(r.tssPerHour).toBeCloseTo(110, 0);
+  });
+
+  it('boundary: exactly 70 TSS/hr is NOT easy (not < 70)', () => {
+    const r = classifyByITrimp(itrimp(70), 60);
+    expect(r.type).toBe('threshold');
+  });
+
+  it('boundary: exactly 95 TSS/hr is NOT threshold', () => {
+    const r = classifyByITrimp(itrimp(95), 60);
+    expect(r.type).toBe('vo2');
+  });
+
+  it('custom thresholds: easy < 85 → 80 TSS/hr classified as easy', () => {
+    const r = classifyByITrimp(itrimp(80), 60, { easy: 85, tempo: 110 });
+    expect(r.type).toBe('easy');
+  });
+});
+
+describe('classifyByZones', () => {
+  it('base-dominant (83% Z1+Z2) → easy', () => {
+    // 50min Z1+Z2 out of 60min total
+    const r = classifyByZones(zones(30, 20, 5, 3, 2));
+    expect(r.type).toBe('easy');
+    expect(r.baseRatio).toBeCloseTo(50 / 60, 2);
+  });
+
+  it('threshold-dominant (50% Z3) → threshold', () => {
+    const r = classifyByZones(zones(5, 5, 25, 5, 10));
+    expect(r.type).toBe('threshold');
+    expect(r.threshRatio).toBeCloseTo(0.5, 2);
+  });
+
+  it('intensity-dominant (40% Z4+Z5) → vo2', () => {
+    const r = classifyByZones(zones(10, 10, 10, 10, 10));
+    expect(r.type).toBe('vo2');
+    expect(r.intensityRatio).toBeCloseTo(0.4, 2);
+  });
+
+  it('zero zone data → defaults to easy', () => {
+    const r = classifyByZones(zones(0, 0, 0, 0, 0));
+    expect(r.type).toBe('easy');
+    expect(r.baseRatio).toBe(1);
+  });
+
+  it('27% Z4+Z5 does NOT reach vo2 threshold (need > 30%)', () => {
+    // Z4+Z5 = 15/55 ≈ 27%
+    const r = classifyByZones(zones(30, 0, 10, 6, 9));
+    expect(r.intensityRatio).toBeLessThan(0.3);
+    expect(r.type).not.toBe('vo2');
+  });
+});
+
+describe('classifyWorkoutType', () => {
+  it('intermittent sport (soccer) uses iTRIMP even when zone data looks easy', () => {
+    // Zones look easy (83% base) but soccer is intermittent + iTRIMP says threshold
+    const r = classifyWorkoutType({
+      sport: 'soccer',
+      durationMin: 60,
+      iTrimp: itrimp(80), // 80 TSS/hr → threshold
+      hrZones: zones(30, 20, 5, 3, 2),
+    });
+    expect(r.method).toBe('itrimp');
+    expect(r.type).toBe('threshold');
+  });
+
+  it('cycling (non-intermittent) with high Z4+Z5 (20%) uses iTRIMP', () => {
+    const r = classifyWorkoutType({
+      sport: 'cycling',
+      durationMin: 60,
+      iTrimp: itrimp(100),
+      hrZones: zones(15, 15, 18, 8, 4), // Z4+Z5 = 12/60 = 20% > 15%
+    });
+    expect(r.method).toBe('itrimp');
+  });
+
+  it('cycling with < 20min zone data uses iTRIMP', () => {
+    const r = classifyWorkoutType({
+      sport: 'cycling',
+      durationMin: 20,
+      iTrimp: itrimp(55),
+      hrZones: zones(5, 5, 3, 1, 1), // 15min total < 20
+    });
+    expect(r.method).toBe('itrimp');
+  });
+
+  it('steady-state cycling with sufficient zone data and no iTRIMP uses zones', () => {
+    const r = classifyWorkoutType({
+      sport: 'cycling',
+      durationMin: 60,
+      hrZones: zones(30, 20, 8, 1, 1), // Z4+Z5 = 2/60 = 3% — steady-state
+    });
+    expect(r.method).toBe('zones');
+    expect(r.type).toBe('easy');
+  });
+
+  it('no HR data → profile fallback, type = easy', () => {
+    const r = classifyWorkoutType({ sport: 'cycling', durationMin: 45 });
+    expect(r.method).toBe('profile');
+    expect(r.type).toBe('easy');
+  });
+
+  it('runningEquivTSS = tss × sport.runSpec (cycling runSpec=0.55)', () => {
+    const r = classifyWorkoutType({
+      sport: 'cycling',
+      durationMin: 60,
+      iTrimp: itrimp(55),
+    });
+    expect(r.tss).toBeCloseTo(55, 0);
+    expect(r.runningEquivTSS).toBeCloseTo(55 * 0.55, 0);
+  });
+
+  it('personal thresholds: easy < 90 → 80 TSS/hr is easy', () => {
+    const r = classifyWorkoutType({
+      sport: 'soccer',
+      durationMin: 60,
+      iTrimp: itrimp(80),
+      thresholds: { easy: 90, tempo: 120 },
+    });
+    expect(r.type).toBe('easy');
+  });
+
+  it('rugby (intermittent, runSpec=0.35) — runningEquivTSS substantially less than raw tss', () => {
+    const r = classifyWorkoutType({
+      sport: 'rugby',
+      durationMin: 80,
+      iTrimp: itrimp(100),
+    });
+    expect(r.runningEquivTSS).toBeCloseTo(r.tss * 0.35, 0);
+    expect(r.runningEquivTSS).toBeLessThan(r.tss);
   });
 });

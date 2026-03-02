@@ -2,7 +2,24 @@
 
 Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capacitor).
 
-**Read `docs/ARCHITECTURE.md` before making changes** — it has the module map, data flows, key types, and state abbreviation lookup.
+## Key Docs (read before making changes)
+
+| Doc | What it contains |
+|-----|-----------------|
+| `docs/ARCHITECTURE.md` | Module map, data flows, key types, state abbreviations, subsystem notes |
+| `docs/FEATURES.md` | Every feature in plain English — what it does, key file, test status |
+| `docs/CHANGELOG.md` | Session-by-session history of significant changes |
+
+## Doc Maintenance Rules (always follow these)
+
+After **any** code change, update the relevant docs before finishing:
+
+- **Added or changed a feature** → update the feature's section in `docs/FEATURES.md`
+- **Fixed a bug or made a significant change** → add a bullet to the current date section in `docs/CHANGELOG.md` (create the date heading if it doesn't exist)
+- **Changed module structure, data flow, or key types** → update `docs/ARCHITECTURE.md`
+- **Test status changed** (new tests added, tests fixed) → update ✅/⚠️/❌ in `docs/FEATURES.md`
+
+Do **not** wait to be asked. Keeping these docs current is part of every task.
 
 ## Commands
 

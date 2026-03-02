@@ -1,12 +1,12 @@
-import type { Workout, Week } from '@/types';
+import type { Workout, Week, GarminActual } from '@/types';
 import {
-  getState, getMutableState
+  getState, getMutableState, saveState
 } from '@/state';
 import {
   rdKm, tv, gp, getRunnerType,
   calculateLiveForecast
 } from '@/calculations';
-import { IMP } from '@/constants';
+import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
 import {
   generateWeekWorkouts, parseWorkoutDescription,
   calculateWorkoutLoad, checkConsecutiveHardDays, assignDefaultDays
@@ -14,12 +14,16 @@ import {
 // applyCrossTrainingToWorkouts is intentionally NOT used here.
 // Plan modifications must only happen via explicit user confirmation in events.ts.
 import { ft, fp, formatPace, formatWorkoutTime, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
-import { SPORTS_DB, SPORT_LABELS } from '@/constants';
+import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
+import { computeACWR } from '@/calculations/fitness-model';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
+import { loadGpsRecording } from '@/gps/persistence';
+import { openGpsRecordingDetail } from './gps-completion-modal';
 import { findMatchingWorkout, type ExternalActivity } from '@/calculations/matching';
 import { showMatchProposal } from './sync-modal';
 import { showRPEHelp, showMPHelp } from './explanations';
+import { storeWorkoutStream } from './events';
 
 // Expose explanation modals globally for onclick handlers
 declare global {
@@ -27,23 +31,107 @@ declare global {
     Mosaic: {
       showRPEHelp: typeof showRPEHelp;
       showMPHelp: typeof showMPHelp;
+      clearGarmin: () => void;
     };
+    undoWorkoutMod: (workoutName: string, dayOfWeek: number | null) => void;
+    unrateWorkout: (wId: string) => void;
+    deleteGpsRun: (wId: string) => void;
   }
 }
-window.Mosaic = { showRPEHelp, showMPHelp };
+
+/** Returns true if a modReason was created by the cross-training suggestion system */
+function isCrossTrainingMod(modReason: string | undefined): boolean {
+  if (!modReason) return false;
+  return modReason.startsWith('Garmin:')
+    || modReason.startsWith('Downgraded from')
+    || modReason.startsWith('Reduced due to')
+    || modReason.startsWith('Replaced by')
+    || modReason.startsWith('Converted to shakeout')
+    || modReason.includes(' due to ');
+}
+
+function clearGarminAndResync(): void {
+  const s = getMutableState();
+  for (const wk of s.wks || []) {
+    const matched = wk.garminMatched || {};
+    for (const workoutId of Object.values(matched)) {
+      if (workoutId && workoutId !== '__pending__') delete wk.rated[workoutId];
+    }
+    wk.garminMatched = {};
+    wk.garminActuals = {};
+    wk.garminPending = [];
+    wk.garminReviewChoices = {};
+    wk.unspentLoadItems = [];
+    wk.unspentLoad = 0;
+    if (wk.adhocWorkouts) {
+      wk.adhocWorkouts = wk.adhocWorkouts.filter(w => !w.id || !w.id.startsWith('garmin-'));
+    }
+    // Remove all cross-training sourced workout modifications (Garmin and manual)
+    if (wk.workoutMods) {
+      wk.workoutMods = wk.workoutMods.filter(m => !isCrossTrainingMod(m.modReason));
+    }
+  }
+  saveState();
+  alert('Garmin data cleared. Reloading to re-sync...');
+  window.location.reload();
+}
+
+if (typeof window !== 'undefined') {
+  window.Mosaic = { showRPEHelp, showMPHelp, clearGarmin: clearGarminAndResync };
+
+  // Undo a specific workout mod by name + day (for manually-logged cross-training mods)
+  window.undoWorkoutMod = (workoutName: string, dayOfWeek: number | null) => {
+    const s = getMutableState();
+    const wk = s.wks?.[s.w - 1];
+    if (!wk?.workoutMods) return;
+    wk.workoutMods = wk.workoutMods.filter(
+      m => !(m.name === workoutName && (dayOfWeek === null || m.dayOfWeek === dayOfWeek)),
+    );
+    saveState();
+    render();
+  };
+
+  // Remove the done/rated status from a planned workout
+  window.unrateWorkout = (wId: string) => {
+    const s = getMutableState();
+    const wk = s.wks?.[s.w - 1];
+    if (!wk) return;
+    delete wk.rated[wId];
+    // Remove garmin actuals so the slot no longer shows as garmin-matched
+    if (wk.garminActuals?.[wId]) {
+      const garminId = wk.garminActuals[wId].garminId;
+      delete wk.garminActuals[wId];
+      // Reset garmin match to pending so it can be re-reviewed if desired
+      if (garminId && wk.garminMatched?.[garminId]) {
+        wk.garminMatched[garminId] = '__pending__';
+      }
+    }
+    saveState();
+    render();
+  };
+
+  // Delete a GPS-tracked run: removes rating, GPS recording link, and adhoc entry
+  window.deleteGpsRun = (wId: string) => {
+    if (!confirm('Delete this run?')) return;
+    const s = getMutableState();
+    const wk = s.wks?.[s.w - 1];
+    if (!wk) return;
+    delete wk.rated[wId];
+    if (wk.gpsRecordings?.[wId]) delete wk.gpsRecordings[wId];
+    if (wk.adhocWorkouts) {
+      wk.adhocWorkouts = wk.adhocWorkouts.filter(w => (w.id || w.n) !== wId);
+    }
+    saveState();
+    render();
+  };
+}
 
 /**
- * Add log entry to training log
+ * Log a training/sync message to the browser console.
  */
 export function log(message: string): void {
   const s = getState();
-  const lgEl = document.getElementById('lg');
-  if (!lgEl) return;
-
-  const e = document.createElement('div');
-  e.className = 'p-1.5 bg-gray-800 rounded border-l-2 border-gray-600 text-xs text-gray-300';
-  e.innerHTML = `<span class="text-gray-500">W${s.w}</span> ${message}`;
-  lgEl.insertBefore(e, lgEl.firstChild);
+  console.log(`[W${s.w}] ${message}`);
 }
 
 /**
@@ -55,6 +143,24 @@ export function render(): void {
   if (!s.wks || s.wks.length === 0) {
     console.error('ERROR: s.wks is empty or undefined!');
     return;
+  }
+
+  // Cleanup: purge Quick Run placeholders and skip carry-overs from all weeks.
+  // These were created by the justRun() flow before it was fixed. Runs every render
+  // but is a no-op (no save) once state is clean.
+  {
+    let dirty = false;
+    for (const wk of s.wks) {
+      if (wk.adhocWorkouts?.some(a => !a.id && a.n === 'Quick Run')) {
+        wk.adhocWorkouts = wk.adhocWorkouts.filter(a => !(!a.id && a.n === 'Quick Run'));
+        dirty = true;
+      }
+      if (wk.skip?.some(sk => sk.workout?.n === 'Quick Run')) {
+        wk.skip = wk.skip.filter(sk => sk.workout?.n !== 'Quick Run');
+        dirty = true;
+      }
+    }
+    if (dirty) saveState();
   }
 
   const wk = s.wks[s.w - 1];
@@ -128,7 +234,7 @@ export function render(): void {
   if (fcEl) {
     fcEl.textContent = ft(displayForecast);
     if (isTargetLocked) {
-      fcEl.innerHTML = ft(displayForecast) + ' <span class="text-xs text-emerald-300 ml-1">Target</span>';
+      fcEl.innerHTML = ft(displayForecast) + ' <span class="text-xs ml-1" style="color:var(--c-ok)">Target</span>';
     }
   }
   const prEl = document.getElementById('pr');
@@ -158,6 +264,8 @@ export function render(): void {
   // Generate workouts
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
   const injuryState = (s as any).injuryState || null;  // Get injury state for plan adaptation
+  const trailingEffort = getTrailingEffortScore(s.wks, s.w);
+  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined);
   let wos = generateWeekWorkouts(
     wk.ph,
     s.rw,
@@ -176,7 +284,9 @@ export function render(): void {
     s.w,   // weekIndex for plan engine
     s.tw,  // totalWeeks for plan engine
     currentVDOT, // vdot for plan engine (includes RPE and training gains)
-    s.gs   // gym sessions per week
+    s.gs,  // gym sessions per week
+    trailingEffort, // effort score for adaptive scaling
+    acwrForRender.status === 'unknown' ? undefined : acwrForRender.status // acwrStatus — reduces quality sessions when elevated
   );
 
   // 1. Apply stored modifications BEFORE renaming duplicates.
@@ -220,9 +330,25 @@ export function render(): void {
     }
   }
 
-  // 3. Append ad-hoc workouts
+  // 3. Append ad-hoc workouts — exclude Garmin-synced ones (separate section) and GPS
+  //    impromptu runs (they're shown in the GPS recordings panel, not the plan list).
+  //    Two cases to exclude:
+  //    a) GPS-linked entries (id present in gpsRecordings)
+  //    b) No-id placeholders added by justRun() that have a completed GPS sibling
   if (wk.adhocWorkouts) {
-    wos = wos.concat(wk.adhocWorkouts);
+    // Names that already have a GPS-linked entry (GPS run completed)
+    const completedGpsNames = new Set(
+      wk.adhocWorkouts
+        .filter(w => w.id && wk.gpsRecordings?.[w.id])
+        .map(w => w.n),
+    );
+    wos = wos.concat(wk.adhocWorkouts.filter(w => {
+      if (w.id?.startsWith('garmin-')) return false;            // Garmin-synced → own section
+      if (w.id && wk.gpsRecordings?.[w.id]) return false;      // GPS-linked → recordings panel
+      if (!w.id && w.n === 'Quick Run') return false;           // justRun() placeholder
+      if (!w.id && completedGpsNames.has(w.n)) return false;   // Other orphaned placeholders
+      return true;
+    }));
   }
 
   // 3b. Append passed capacity tests saved on this week (so they persist in history)
@@ -269,24 +395,157 @@ export function render(): void {
   // This prevents the bug where logging an activity would silently mutate the plan
   // without user consent.
 
+  // --- Training Stats ---
+  // Km this week: sum completed (rated, non-skip) run workouts using actual Garmin distances
+  let weekKm = 0;
+  for (const wo of wos) {
+    if (wo.t === 'cross' || wo.t === 'strength' || wo.t === 'rest' || wo.t === 'gym') continue;
+    const wId = wo.id || wo.n;
+    if (!wk.rated[wId] || wk.rated[wId] === 'skip') continue;
+    if (wo.status === 'replaced') continue;
+    const actual = wk.garminActuals?.[wId];
+    if (actual?.distanceKm) {
+      weekKm += actual.distanceKm;
+    } else {
+      const kmMatch = wo.d.match(/(\d+\.?\d*)km/);
+      if (kmMatch) weekKm += parseFloat(kmMatch[1]);
+    }
+  }
+  // GPS impromptu runs are excluded from wos but still count toward weekly km
+  for (const wo of (wk.adhocWorkouts || [])) {
+    if (!wo.id || !wk.gpsRecordings?.[wo.id]) continue;
+    if (wo.t === 'cross' || wo.t === 'strength' || wo.t === 'rest' || wo.t === 'gym') continue;
+    const wId = wo.id;
+    if (!wk.rated[wId] || wk.rated[wId] === 'skip') continue;
+    const rec = loadGpsRecording(wk.gpsRecordings[wId]);
+    if (rec?.totalDistance) {
+      weekKm += rec.totalDistance / 1000;
+    } else {
+      const kmMatch = wo.d.match(/(\d+\.?\d*)km/);
+      if (kmMatch) weekKm += parseFloat(kmMatch[1]);
+    }
+  }
+  const kmEl = document.getElementById('stat-km');
+  if (kmEl) kmEl.textContent = weekKm > 0 ? weekKm.toFixed(1) : '0';
+
+  // Planned km for the week (from workout descriptions)
+  let plannedKm = 0;
+  for (const wo of wos) {
+    if (wo.t === 'cross' || wo.t === 'strength' || wo.t === 'rest' || wo.t === 'gym') continue;
+    if (wo.status === 'replaced') continue;
+    const kmMatch = wo.d.match(/(\d+\.?\d*)km/i);
+    if (kmMatch) plannedKm += parseFloat(kmMatch[1]);
+  }
+  const kmPlannedEl = document.getElementById('stat-km-planned');
+  if (kmPlannedEl) kmPlannedEl.textContent = plannedKm > 0 ? plannedKm.toFixed(1) : '—';
+  const kmBarEl = document.getElementById('stat-km-bar');
+  if (kmBarEl && plannedKm > 0) {
+    const pct = Math.min(100, Math.round((weekKm / plannedKm) * 100));
+    kmBarEl.style.width = `${pct}%`;
+    kmBarEl.className = `h-full rounded-full transition-all`;
+    kmBarEl.style.background = 'var(--c-ok)';
+  }
+
+  // VO2 Max display
+  const vo2El = document.getElementById('stat-vo2');
+  const vo2DeltaEl = document.getElementById('stat-vo2-delta');
+  if (vo2El) {
+    if (s.vo2) {
+      vo2El.textContent = `${s.vo2.toFixed(1)}`;
+      const initialVO2 = s.onboarding?.vo2max;
+      if (vo2DeltaEl && initialVO2 && Math.abs(s.vo2 - initialVO2) >= 0.1) {
+        const delta = s.vo2 - initialVO2;
+        vo2DeltaEl.textContent = `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
+        vo2DeltaEl.className = `text-xs`;
+        vo2DeltaEl.style.color = delta >= 0 ? 'var(--c-ok)' : 'var(--c-warn)';
+      }
+    } else {
+      vo2El.textContent = '—';
+    }
+  }
+
+  // LT Pace display
+  const ltEl = document.getElementById('stat-lt');
+  const ltDeltaEl = document.getElementById('stat-lt-delta');
+  if (ltEl) {
+    if (s.lt) {
+      const ltMin = Math.floor(s.lt / 60);
+      const ltSec = Math.floor(s.lt % 60);
+      ltEl.textContent = `${ltMin}:${String(ltSec).padStart(2, '0')}/km`;
+      const initialLT = s.onboarding?.ltPace; // sec/km
+      if (ltDeltaEl && initialLT && Math.abs(s.lt - initialLT) >= 1) {
+        const delta = initialLT - s.lt; // Positive = faster (improvement)
+        const dSec = Math.round(delta);
+        ltDeltaEl.textContent = `${dSec >= 0 ? '-' : '+'}${Math.abs(dSec)}s`;
+        ltDeltaEl.className = `text-xs`;
+        ltDeltaEl.style.color = dSec >= 0 ? 'var(--c-ok)' : 'var(--c-warn)';
+      }
+    } else {
+      ltEl.textContent = '—';
+    }
+  }
+
+  // LT source indicator
+  const ltSourceEl = document.getElementById('stat-lt-source');
+  if (ltSourceEl) {
+    const lastEst = s.ltEstimation?.estimates?.length
+      ? s.ltEstimation.estimates[s.ltEstimation.estimates.length - 1]
+      : null;
+    if (lastEst) {
+      const sourceLabels: Record<string, string> = {
+        threshold_direct: 'Auto (threshold)',
+        cardiac_efficiency: 'Auto (efficiency)',
+        manual: 'Manual',
+        benchmark: 'Benchmark',
+      };
+      ltSourceEl.textContent = sourceLabels[lastEst.source] || lastEst.source;
+      ltSourceEl.className = 'text-xs';
+      ltSourceEl.style.color = 'var(--c-faint)';
+    } else if (s.lt) {
+      ltSourceEl.textContent = 'Manual';
+      ltSourceEl.className = 'text-xs';
+      ltSourceEl.style.color = 'var(--c-faint)';
+    } else {
+      ltSourceEl.textContent = '';
+    }
+  }
+
   // Build HTML
-  let h = `<h3 class="font-bold mb-3 text-sm text-white">Week ${s.w} Workouts (${wos.length})</h3>`;
+  let h = `<h3 class="font-bold mb-3 text-sm" style="color:var(--c-black)">Week ${s.w} Workouts (${wos.length})</h3>`;
+
+  // Adaptive note for future weeks
+  if ((s as any)._viewOnly && s.w > ((s as any)._realW || 0)) {
+    h += `<div class="text-xs italic mb-3" style="color:var(--c-faint)">Workout plans are adaptive and will change based on previous weeks' training.</div>`;
+  }
+
+  // LT pending confirmation banner
+  if (s.ltEstimation?.pendingConfirmation) {
+    const pc = s.ltEstimation.pendingConfirmation;
+    const fmtP = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    h += `<div class="p-3 rounded mb-3 text-xs border" style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35)">`;
+    h += `<div class="font-bold mb-1" style="color:var(--c-caution)">LT Change Detected (${pc.deviationPct.toFixed(1)}%)</div>`;
+    h += `<div class="mb-2" style="color:var(--c-muted)">Estimated LT: ${fmtP(pc.estimate.ltPaceSecPerKm)}/km (current: ${fmtP(pc.currentLT)}/km)</div>`;
+    h += `<div class="flex gap-2">`;
+    h += `<button onclick="window.acceptLTUpdate()" class="px-3 py-1.5 rounded font-medium" style="background:var(--c-ok);color:white">Accept</button>`;
+    h += `<button onclick="window.dismissLTUpdate()" class="px-3 py-1.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Dismiss</button>`;
+    h += `</div></div>`;
+  }
 
   // Warnings
   const warnings = checkConsecutiveHardDays(wos);
   if (warnings.length > 0) {
-    h += `<div class="bg-red-950/50 border border-red-800 p-2 rounded mb-3">`;
-    h += `<div class="text-xs font-bold text-red-400 mb-1">Training Plan Warnings:</div>`;
+    h += `<div class="p-2 rounded mb-3 border" style="background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.3)">`;
+    h += `<div class="text-xs font-bold mb-1" style="color:var(--c-warn)">Training Plan Warnings:</div>`;
     for (const warn of warnings) {
-      const color = warn.level === 'critical' ? 'text-red-400' : 'text-amber-400';
-      h += `<div class="text-xs ${color} py-0.5">${warn.message}</div>`;
+      const color = warn.level === 'critical' ? 'var(--c-warn)' : 'var(--c-caution)';
+      h += `<div class="text-xs py-0.5" style="color:${color}">${warn.message}</div>`;
     }
     h += `</div>`;
   }
 
   // Cross-training bonus
   if (wk.crossTrainingBonus && wk.crossTrainingBonus > 0.01) {
-    h += `<div class="bg-emerald-950/30 border border-emerald-800 p-2 rounded mb-2 text-xs text-emerald-300">`;
+    h += `<div class="p-2 rounded mb-2 text-xs border" style="background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25);color:var(--c-ok)">`;
     h += `<strong>Fitness Bonus:</strong> +${wk.crossTrainingBonus.toFixed(2)} VDOT from unscheduled activities`;
     h += `</div>`;
   }
@@ -297,33 +556,33 @@ export function render(): void {
     const replacementPct = Math.round(summary.budgetUtilization.replacement * 100);
     const adjustmentPct = Math.round(summary.budgetUtilization.adjustment * 100);
 
-    h += `<div class="bg-gray-800 border border-gray-700 p-2 rounded mb-2 text-xs">`;
-    h += `<div class="font-bold text-gray-200 mb-1">Cross-Training Impact</div>`;
+    h += `<div class="p-2 rounded mb-2 text-xs border" style="background:var(--c-surface);border-color:var(--c-border)">`;
+    h += `<div class="font-bold mb-1" style="color:var(--c-black)">Cross-Training Impact</div>`;
     h += `<div class="grid grid-cols-2 gap-2">`;
 
     // Modifications
     h += `<div class="space-y-0.5">`;
     if (summary.workoutsReplaced > 0) {
-      h += `<div class="text-emerald-400">${summary.workoutsReplaced} workout${summary.workoutsReplaced > 1 ? 's' : ''} replaced</div>`;
+      h += `<div style="color:var(--c-ok)">${summary.workoutsReplaced} workout${summary.workoutsReplaced > 1 ? 's' : ''} replaced</div>`;
     }
     if (summary.workoutsReduced > 0) {
-      h += `<div class="text-sky-400">${summary.workoutsReduced} workout${summary.workoutsReduced > 1 ? 's' : ''} reduced</div>`;
+      h += `<div style="color:var(--c-accent)">${summary.workoutsReduced} workout${summary.workoutsReduced > 1 ? 's' : ''} reduced</div>`;
     }
     h += `</div>`;
 
     // Budget utilization
-    h += `<div class="space-y-0.5 text-gray-400">`;
+    h += `<div class="space-y-0.5" style="color:var(--c-muted)">`;
     h += `<div class="flex items-center gap-1">`;
     h += `<span>Replace:</span>`;
-    h += `<div class="flex-1 bg-gray-700 rounded-full h-2">`;
-    h += `<div class="bg-emerald-500 h-2 rounded-full" style="width: ${Math.min(replacementPct, 100)}%"></div>`;
+    h += `<div class="flex-1 rounded-full h-2" style="background:rgba(0,0,0,0.08)">`;
+    h += `<div class="h-2 rounded-full" style="width: ${Math.min(replacementPct, 100)}%;background:var(--c-ok)"></div>`;
     h += `</div>`;
     h += `<span class="w-8 text-right">${replacementPct}%</span>`;
     h += `</div>`;
     h += `<div class="flex items-center gap-1">`;
     h += `<span>Adjust:</span>`;
-    h += `<div class="flex-1 bg-gray-700 rounded-full h-2">`;
-    h += `<div class="bg-sky-500 h-2 rounded-full" style="width: ${Math.min(adjustmentPct, 100)}%"></div>`;
+    h += `<div class="flex-1 rounded-full h-2" style="background:rgba(0,0,0,0.08)">`;
+    h += `<div class="h-2 rounded-full" style="width: ${Math.min(adjustmentPct, 100)}%;background:var(--c-accent)"></div>`;
     h += `</div>`;
     h += `<span class="w-8 text-right">${adjustmentPct}%</span>`;
     h += `</div>`;
@@ -333,7 +592,7 @@ export function render(): void {
 
     // Overflow warning
     if (summary.totalLoadOverflow > 50) {
-      h += `<div class="mt-1 text-amber-400 text-xs">`;
+      h += `<div class="mt-1 text-xs" style="color:var(--c-caution)">`;
       h += `+${Math.round(summary.totalLoadOverflow)} load overflow (contributing to fitness bonus)`;
       h += `</div>`;
     }
@@ -341,25 +600,62 @@ export function render(): void {
     h += `</div>`;
   }
 
+  // LT auto-update banner
+  if (wk.ltAutoUpdate) {
+    const ltu = wk.ltAutoUpdate;
+    const fmtP = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    const bannerStyle = ltu.confidence === 'high'
+      ? 'background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25);color:var(--c-ok)'
+      : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.25);color:var(--c-accent)';
+    const sourceLabel = ltu.source === 'threshold_direct' ? 'threshold run' : 'efficiency trend';
+    h += `<div class="border p-2 rounded mb-2 text-xs" style="${bannerStyle}">`;
+    h += `<strong>LT Auto-Updated:</strong> ${fmtP(ltu.newLT)}/km`;
+    if (ltu.previousLT) h += ` (was ${fmtP(ltu.previousLT)}/km)`;
+    h += ` — via ${sourceLabel}, ${ltu.confidence} confidence`;
+    h += `</div>`;
+  }
+
   // Calendar view
   h += renderCalendar(wos, wk, s.pac);
 
-  // Separate Quick Run from planned workouts so it renders in the Just Run banner
-  const quickRun = wos.filter(w => w.n === 'Quick Run');
-  const plannedWos = wos.filter(w => w.n !== 'Quick Run')
-    .sort((a, b) => (a.dayOfWeek ?? 99) - (b.dayOfWeek ?? 99));
+  const allPlannedWos = wos.slice().sort((a, b) => (a.dayOfWeek ?? 99) - (b.dayOfWeek ?? 99));
 
-  // Detailed workout list (without Quick Run, sorted Mon→Sun)
   const isViewOnly = !!(s as any)._viewOnly;
-  h += renderWorkoutList(plannedWos, wk, s.rd, s.pac, s.tw, s.w, isViewOnly);
+
+  // Split into pending (unrated) and completed (rated) sections
+  const completedWos: Workout[] = [];
+  const pendingWos: Workout[] = [];
+  for (const w of allPlannedWos) {
+    const rtd = w.id ? wk.rated[w.id] : wk.rated[w.n];
+    if (rtd && rtd !== 'skip') completedWos.push(w);
+    else pendingWos.push(w);
+  }
+
+  // Planned section (unrated workouts)
+  if (pendingWos.length > 0) {
+    h += `<h4 class="font-semibold text-sm mb-2 mt-4" style="color:var(--c-black)">This Week's Plan</h4>`;
+    h += renderWorkoutList(pendingWos, wk, s.rd, s.pac, s.tw, s.w, isViewOnly);
+  }
+
+  // Completed section (rated workouts)
+  if (completedWos.length > 0) {
+    h += `<h4 class="font-semibold text-sm mb-2 mt-4" style="color:var(--c-ok)">Completed</h4>`;
+    h += renderWorkoutList(completedWos, wk, s.rd, s.pac, s.tw, s.w, isViewOnly);
+  }
+
+  // GPS recordings section (populated by refreshRecordings() below)
+  h += `<div id="gps-recordings-section" class="mt-3"></div>`;
 
   // Paces
-  h += `<div class="mt-3 text-xs text-gray-400 mb-1">Your current paces</div>`;
+  h += `<div class="mt-3 text-xs mb-1" style="color:var(--c-muted)">Your current paces</div>`;
   h += `<div class="grid grid-cols-2 gap-1 text-xs">`;
-  h += `<div class="bg-gray-800 p-1.5 rounded text-gray-300">Easy (no faster than): <strong class="text-gray-100">${fp(s.pac.e)}</strong></div>`;
-  h += `<div class="bg-gray-800 p-1.5 rounded text-gray-300">Threshold: <strong class="text-gray-100">${fp(s.pac.t)}</strong></div>`;
-  h += `<div class="bg-gray-800 p-1.5 rounded text-gray-300">VO2 Builder: <strong class="text-gray-100">${fp(s.pac.i)}</strong></div>`;
-  h += `<div class="bg-gray-800 p-1.5 rounded text-gray-300">Marathon: <strong class="text-gray-100">${fp(s.pac.m)}</strong></div></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Easy (no faster than): <strong style="color:var(--c-black)">${fp(s.pac.e)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Threshold: <strong style="color:var(--c-black)">${fp(s.pac.t)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">VO2 Builder: <strong style="color:var(--c-black)">${fp(s.pac.i)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Marathon: <strong style="color:var(--c-black)">${fp(s.pac.m)}</strong></div></div>`;
+
+  // Garmin synced activities section (separate from plan, below paces)
+  h += renderGarminSyncedSection(wk);
 
   // Cross-training form
   h += renderCrossTrainingForm();
@@ -367,65 +663,67 @@ export function render(): void {
   const woEl = document.getElementById('wo');
   if (woEl) woEl.innerHTML = h;
 
-  // Render Quick Run card inside the Just Run banner (only when expanded)
-  const jrSlot = document.getElementById('just-run-workout');
-  if (jrSlot) {
-    if (quickRun.length > 0 && (window as any).__justRunExpanded) {
-      jrSlot.innerHTML = `<div class="border-t border-emerald-700/50 px-4 pb-4 pt-3">
-        <div class="flex justify-end mb-1">
-          <button onclick="toggleJustRunPanel()" class="text-gray-500 hover:text-gray-300 transition-colors" title="Minimise">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7"/></svg>
-          </button>
-        </div>
-        ${renderWorkoutList(quickRun, wk, s.rd, s.pac, s.tw, s.w, isViewOnly)}</div>`;
-      jrSlot.classList.remove('hidden');
-    } else {
-      jrSlot.innerHTML = '';
-      jrSlot.classList.add('hidden');
-    }
-  }
 
   // Populate past GPS recordings
   refreshRecordings();
 
   // Update complete week button
-  // Only count ratings that match current workout IDs (ignore stale keys from pre-injury workouts)
+  // Only count ratings that match current workout IDs.
+  // Excludes: stale keys from pre-injury workouts, Garmin ad-hoc entries (id starts with "garmin-").
   const tot = wos.length;
   const currentWorkoutIds = new Set(wos.map(w => w.id || w.n));
-  const don = Object.keys(wk.rated).filter(k => currentWorkoutIds.has(k)).length;
+  const don = Object.keys(wk.rated).filter(k => currentWorkoutIds.has(k) && !k.startsWith('garmin-')).length;
   const bnEl = document.getElementById('bn') as HTMLButtonElement;
   if (bnEl) {
     bnEl.disabled = don < tot;
     bnEl.className = don >= tot
-      ? 'w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2 rounded text-xs'
-      : 'w-full bg-gray-800 text-gray-500 font-bold py-2 rounded text-xs cursor-not-allowed';
+      ? 'w-full font-bold py-2 rounded text-xs'
+      : 'w-full font-bold py-2 rounded text-xs cursor-not-allowed';
+  bnEl.style.background = don >= tot ? 'var(--c-ok)' : 'rgba(0,0,0,0.06)';
+  bnEl.style.color = don >= tot ? 'white' : 'var(--c-faint)';
   }
   const stEl = document.getElementById('st');
   if (stEl) stEl.innerHTML = don >= tot ? `Complete ${don}/${tot}` : `Progress ${don}/${tot}`;
 }
 
 /**
+ * Compute trailing effort score from the last 2 completed weeks with effort data.
+ * Skips injury weeks. Returns 0 when no data available.
+ */
+function getTrailingEffortScore(weeks: Week[], currentWeekIdx: number): number {
+  const completed: number[] = [];
+  for (let i = currentWeekIdx - 2; i >= 0 && completed.length < 2; i--) {
+    const w = weeks[i];
+    if (w.effortScore != null && !w.injuryState?.active) {
+      completed.push(w.effortScore);
+    }
+  }
+  if (completed.length === 0) return 0;
+  return completed.reduce((a, b) => a + b, 0) / completed.length;
+}
+
+/**
  * Render calendar view
  */
 function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
-  let h = `<details class="mb-4" open><summary class="cursor-pointer text-sm font-medium text-gray-400 hover:text-gray-200 mb-2">Weekly Calendar View</summary>`;
+  let h = `<details class="mb-4" open><summary class="cursor-pointer text-sm font-medium mb-2" style="color:var(--c-muted)">Weekly Calendar View</summary>`;
   h += `<div class="grid grid-cols-7 gap-1">`;
 
   // Headers
   for (const day of DAY_NAMES_SHORT) {
-    h += `<div class="text-xs font-bold text-center py-1 bg-gray-800 rounded text-gray-400">${day}</div>`;
+    h += `<div class="text-xs font-bold text-center py-1 rounded" style="background:var(--c-surface);color:var(--c-muted)">${day}</div>`;
   }
 
   // Cells
   for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
     const dayWorkouts = wos.filter(w => w.dayOfWeek === dayIdx);
     const hasHard = dayWorkouts.some(w => isHardWorkoutType(w.t));
-    const borderColor = hasHard ? 'border-red-800' : 'border-gray-700';
+    const cellBorderColor = hasHard ? 'rgba(239,68,68,0.4)' : 'var(--c-border)';
 
-    h += `<div class="border ${borderColor} rounded p-1 min-h-[120px] bg-gray-800/50" ondrop="window.drop(event,${dayIdx})" ondragover="window.allowDrop(event)">`;
+    h += `<div class="border rounded p-1 min-h-[120px]" style="border-color:${cellBorderColor};background:var(--c-bg)" ondrop="window.drop(event,${dayIdx})" ondragover="window.allowDrop(event)">`;
 
     if (dayWorkouts.length === 0) {
-      h += `<div class="text-xs text-gray-600 text-center py-4">Rest</div>`;
+      h += `<div class="text-xs text-center py-4" style="color:var(--c-border)">Rest</div>`;
     } else {
       for (const w of dayWorkouts) {
         const rtd = w.id ? wk.rated[w.id] : wk.rated[w.n];
@@ -434,30 +732,42 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
         const isSkipped = w.skipped === true;
 
         const wColors = getWorkoutColors(w.t);
-        let cardBg = wColors.bg;
-        let cardBorder = wColors.border;
+        let cardBgStyle = wColors.bgStyle;
+        let cardBorderColor = wColors.borderColor;
         // User-completed = green; Replaced = cyan; Modified/shakeout = sky; Skipped easy = green; Skipped hard = amber
-        if (rtd) { cardBg = 'bg-emerald-950/50'; cardBorder = 'border-emerald-700'; }
-        else if (isReplaced) { cardBg = 'bg-cyan-950/50'; cardBorder = 'border-cyan-700'; }
-        else if (isModified) { cardBg = 'bg-sky-950/50'; cardBorder = 'border-sky-700'; }
-        else if (isSkipped && w.t === 'easy') { cardBg = 'bg-emerald-950/30'; cardBorder = 'border-emerald-700'; }
-        else if (isSkipped) { cardBg = 'bg-amber-950/30'; cardBorder = 'border-amber-700'; }
+        if (rtd) { cardBgStyle = 'rgba(34,197,94,0.08)'; cardBorderColor = 'rgba(34,197,94,0.4)'; }
+        else if (isReplaced) { cardBgStyle = 'rgba(6,182,212,0.08)'; cardBorderColor = 'rgba(6,182,212,0.4)'; }
+        else if (isModified) { cardBgStyle = 'rgba(78,159,229,0.08)'; cardBorderColor = 'rgba(78,159,229,0.4)'; }
+        else if (isSkipped && w.t === 'easy') { cardBgStyle = 'rgba(34,197,94,0.05)'; cardBorderColor = 'rgba(34,197,94,0.4)'; }
+        else if (isSkipped) { cardBgStyle = 'rgba(245,158,11,0.05)'; cardBorderColor = 'rgba(245,158,11,0.4)'; }
 
         // Status label for calendar card
+        const calGarmin = wk.garminActuals?.[w.id || w.n];
         let statusLabel = '';
-        if (rtd) statusLabel = ' Done';
-        else if (isReplaced) statusLabel = ' Replaced';
+        if (rtd && calGarmin) {
+          // For gym/cross slots: show the matched activity name instead of the generic Garmin dot
+          if ((w.t === 'gym' || w.t === 'cross') && calGarmin.displayName) {
+            statusLabel = ` → ${calGarmin.displayName}`;
+          } else {
+            statusLabel = ' <span style="color:#F97316">&#9673;</span>';
+          }
+        }
+        else if (rtd) statusLabel = ' Done';
+        else if (isReplaced) {
+          const actName = w.modReason ? w.modReason.replace(/^Garmin:\s*/i, '').trim() : '';
+          statusLabel = actName ? ` → ${actName}` : ' Replaced';
+        }
         else if (isModified) statusLabel = ' Modified';
 
-        h += `<div class="${cardBg} border ${cardBorder} rounded p-1 mb-1 text-xs cursor-move text-gray-300" draggable="true" ondragstart="window.dragStart(event,'${w.n.replace(/'/g, "\\'")}')">`;
-        h += `<div class="font-semibold text-gray-200">${w.n}${statusLabel}</div>`;
+        h += `<div class="border rounded p-1 mb-1 text-xs cursor-move" style="background:${cardBgStyle};border-color:${cardBorderColor};color:var(--c-muted)" draggable="true" ondragstart="window.dragStart(event,'${w.n.replace(/'/g, "\\'")}')">`;
+        h += `<div class="font-semibold" style="color:var(--c-black)">${w.n}${statusLabel}</div>`;
         if (w.t !== 'gym') {
           if (isReplaced) {
             // Replaced: show original description struck through
             const origDesc = w.originalDistance || w.d;
             const origLine = injectPaces(origDesc, paces).split(/\n/)[0];
-            h += `<div class="text-xs text-gray-500 line-through">${origLine}</div>`;
-            h += `<div class="text-xs text-cyan-400">${w.modReason || 'Replaced'}</div>`;
+            h += `<div class="text-xs line-through" style="color:var(--c-faint)">${origLine}</div>`;
+            h += `<div class="text-xs" style="color:var(--c-accent)">${w.modReason ? w.modReason.replace(/^Garmin:\s*/i, '').trim() : 'Replaced'}</div>`;
           } else if (isModified) {
             // Modified (graduated return): short format — just key info
             const descLines = injectPaces(w.d, paces).split(/\n/);
@@ -468,8 +778,8 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
               .replace(/\s*\(~[^)]+\)/g, '')     // strip distance hints
               .replace(/,\s*\d+\s*min\s*recovery.*/gi, '') // strip recovery
               .replace(/\s+/g, ' ').trim();
-            h += `<div class="text-xs text-sky-300">${shortDesc || mainLine.split(',')[0]}</div>`;
-            h += `<div class="text-xs ${wColors.accent}">RPE ${w.rpe || w.r}</div>`;
+            h += `<div class="text-xs" style="color:var(--c-accent)">${shortDesc || mainLine.split(',')[0]}</div>`;
+            h += `<div class="text-xs" style="color:${wColors.accentColor}">RPE ${w.rpe || w.r}</div>`;
           } else {
             let calDesc = '';
             if (w.t === 'cross') {
@@ -482,8 +792,8 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
             } else {
               calDesc = injectPaces(w.d, paces).split(/\n/)[0];
             }
-            h += `<div class="text-xs text-gray-400">${calDesc}</div>`;
-            h += `<div class="text-xs ${wColors.accent}">RPE ${w.rpe || w.r}</div>`;
+            h += `<div class="text-xs" style="color:var(--c-muted)">${calDesc}</div>`;
+            h += `<div class="text-xs" style="color:${wColors.accentColor}">RPE ${w.rpe || w.r}</div>`;
           }
         }
         h += `</div>`;
@@ -500,59 +810,92 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
  * Render detailed workout list
  */
 function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw: number, currentWeek: number, viewOnly: boolean = false): string {
-  let h = `<h4 class="font-semibold text-sm mb-2 mt-4 text-white">Workouts</h4><div class="space-y-2">`;
+  let h = `<div class="space-y-2">`;
 
   for (const w of wos) {
     const rtd = w.id ? wk.rated[w.id] : wk.rated[w.n];
 
+    // Detect Garmin-synced activities that can be removed
+    // Case 1: Ad-hoc activity with id like "garmin-<id>"
+    const isGarminAdhoc = (w.id || '').startsWith('garmin-');
+    const garminAdhocRawId = isGarminAdhoc ? (w.id || '').slice('garmin-'.length) : '';
+    // Case 2: Slot matched to Garmin via garminActuals (gym, cross, or run slot)
+    const garminActualsData = !isGarminAdhoc ? wk.garminActuals?.[w.id || w.n] : undefined;
+    const garminActualsId = garminActualsData?.garminId ?? '';
+    // Case 3: Cross-training slot reduced/replaced by Garmin (legacy workoutMod path)
+    const garminSlotId = !isGarminAdhoc && !garminActualsId && wk.garminMatched
+      ? Object.entries(wk.garminMatched).find(([, wid]) => wid === (w.id || w.n) &&
+          wk.workoutMods?.some(m => m.name === wid && m.modReason?.startsWith('Garmin:'))
+        )?.[0]
+      : undefined;
+    const garminId = garminAdhocRawId || garminActualsId || garminSlotId || '';
+    const isGarminActivity = !viewOnly && !!garminId;
+
     // --- Gym workouts: simplified card with collapsible exercise list ---
     if (w.t === 'gym') {
-      let borderClass = 'border-gray-700 bg-gray-800';
-      if (rtd) borderClass = 'border-emerald-700 bg-emerald-950/30';
+      const gymGarminActual = wk.garminActuals?.[w.id || w.n];
+      const gymDisplayName = gymGarminActual?.displayName;
+      let gymBorderColor = 'var(--c-border)';
+      let gymBgStyle = 'var(--c-surface)';
+      if (rtd) { gymBorderColor = 'rgba(34,197,94,0.4)'; gymBgStyle = 'rgba(34,197,94,0.06)'; }
 
-      h += `<div class="border-2 ${borderClass} p-2 rounded">`;
+      h += `<div class="border-2 p-2 rounded" style="border-color:${gymBorderColor};background:${gymBgStyle}">`;
 
-      // Header
+      // Header — show matched activity name if garmin-matched
       const dayLabel = w.dayOfWeek != null ? DAY_NAMES_SHORT[w.dayOfWeek] : '';
       h += `<div class="flex justify-between mb-1 text-xs">`;
-      h += `<div>${dayLabel ? `<span class="text-gray-500 mr-1.5">${dayLabel}</span>` : ''}<strong>${w.n}</strong>`;
-      if (rtd && rtd !== 'skip') h += ` <span class="bg-emerald-600 text-white px-1 py-0.5 rounded ml-1">Done ${rtd}</span>`;
+      h += `<div>${dayLabel ? `<span class="mr-1.5" style="color:var(--c-faint)">${dayLabel}</span>` : ''}`;
+      h += `<strong>${gymDisplayName || w.n}</strong>`;
+      if (gymDisplayName) h += ` <span class="font-normal" style="color:var(--c-faint)">← ${w.n}</span>`;
+      if (rtd && rtd !== 'skip') h += ` <span class="px-1 py-0.5 rounded ml-1" style="background:var(--c-ok);color:white">Done</span>`;
       h += `</div>`;
-      h += `<span class="bg-gray-600 text-gray-300 px-1 py-0.5 rounded">RPE ${w.rpe || w.r}</span>`;
+      h += `<div class="flex items-center gap-1">`;
+      if (isGarminActivity) h += `<button onclick="window.removeGarminActivity('${garminId}')" class="transition-colors ml-1 text-base leading-none" style="color:var(--c-faint)" title="Remove Garmin activity">&times;</button>`;
       h += `</div>`;
+      h += `</div>`;
+
+      // If garmin-matched, show duration/HR summary before exercise list
+      if (gymGarminActual && gymDisplayName) {
+        const dur = Math.round(gymGarminActual.durationSec / 60);
+        let statLine = `${dur} min`;
+        if (gymGarminActual.avgHR) statLine += ` · Avg HR ${gymGarminActual.avgHR}`;
+        if (gymGarminActual.calories) statLine += ` · ${gymGarminActual.calories} kcal`;
+        h += `<div class="text-xs mb-1" style="color:rgba(249,115,22,0.8)">${statLine}</div>`;
+      }
 
       // Collapsible exercise list
       const lines = w.d.split('\n').filter(l => l.trim());
       const exercises = lines.filter(l => !l.startsWith('Stretch'));
       const stretchTip = lines.find(l => l.startsWith('Stretch'));
 
-      h += `<details class="mb-1"><summary class="text-xs text-gray-400 cursor-pointer hover:text-gray-300">View exercises</summary>`;
-      h += `<ol class="mt-1.5 ml-4 space-y-1.5 text-xs text-gray-300 list-decimal">`;
+      h += `<details class="mb-1"><summary class="text-xs cursor-pointer" style="color:var(--c-muted)">View exercises</summary>`;
+      h += `<ol class="mt-1.5 ml-4 space-y-1.5 text-xs list-decimal" style="color:var(--c-muted)">`;
       for (const ex of exercises) {
         h += `<li>${ex}</li>`;
       }
       h += `</ol>`;
       if (stretchTip) {
-        h += `<div class="mt-1.5 text-xs text-gray-500 italic">${stretchTip}</div>`;
+        h += `<div class="mt-1.5 text-xs italic" style="color:var(--c-faint)">${stretchTip}</div>`;
       }
       h += `</details>`;
 
-      // RPE rating buttons
+      // Gym: simple mark as done (no RPE needed)
       if (!viewOnly) {
         const wId = w.id || w.n;
-        h += `<div class="text-xs mb-1 text-gray-400">${rtd ? 'Re-rate RPE:' : 'RPE rating:'}</div><div class="grid grid-cols-10 gap-0.5">`;
-        for (let r = 1; r <= 10; r++) {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',false)" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
+        if (rtd) {
+          const unrateId = (w.id || w.n).replace(/'/g, "\\'");
+          h += `<button onclick="window.unrateWorkout('${unrateId}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Unmark as done</button>`;
+        } else {
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Mark as done</button>`;
         }
-        h += `</div>`;
       } else if (viewOnly && rtd) {
-        h += `<div class="text-xs text-gray-500">Rated RPE ${rtd}</div>`;
+        h += `<div class="text-xs" style="color:var(--c-ok)">Done</div>`;
       }
 
-      // Skip button
-      if (!viewOnly) {
+      // Skip button — only for unrated (planned) gym sessions
+      if (!viewOnly && !rtd) {
         const skipId = w.id || w.n;
-        h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',false,0,'${w.d.replace(/'/g, "\\'").replace(/\n/g, ' ')}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-400 py-0.5 rounded">Skip</button>`;
+        h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',false,0,'${w.d.replace(/'/g, "\\'").replace(/\n/g, ' ')}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Skip</button>`;
       }
 
       h += `</div>`;
@@ -569,25 +912,48 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     const isSkipped = w.skipped === true;
 
     // Detail cards: User-completed = green; Load covered = cyan; Modified/shakeout = sky; Skipped easy = green; Skipped hard = amber
-    let borderClass = 'border-gray-700 bg-gray-800';
-    if (rtd) borderClass = 'border-emerald-700 bg-emerald-950/30';
-    else if (isReplaced) borderClass = 'border-cyan-700 bg-cyan-950/30';
-    else if (isModified) borderClass = 'border-sky-700 bg-sky-950/30';
-    else if (isSkipped && w.t === 'easy') borderClass = 'border-emerald-700 bg-emerald-950/20';
-    else if (isSkipped) borderClass = 'border-amber-700 bg-amber-950/20';
+    let cardDetailBorderColor = 'var(--c-border)';
+    let cardDetailBgStyle = 'var(--c-surface)';
+    if (rtd) { cardDetailBorderColor = 'rgba(34,197,94,0.4)'; cardDetailBgStyle = 'rgba(34,197,94,0.06)'; }
+    else if (isReplaced) { cardDetailBorderColor = 'rgba(6,182,212,0.4)'; cardDetailBgStyle = 'rgba(6,182,212,0.06)'; }
+    else if (isModified) { cardDetailBorderColor = 'rgba(78,159,229,0.4)'; cardDetailBgStyle = 'rgba(78,159,229,0.06)'; }
+    else if (isSkipped && w.t === 'easy') { cardDetailBorderColor = 'rgba(34,197,94,0.4)'; cardDetailBgStyle = 'rgba(34,197,94,0.04)'; }
+    else if (isSkipped) { cardDetailBorderColor = 'rgba(245,158,11,0.4)'; cardDetailBgStyle = 'rgba(245,158,11,0.04)'; }
 
-    h += `<div class="border-2 ${borderClass} p-2 rounded">`;
+    h += `<div class="border-2 p-2 rounded" style="border-color:${cardDetailBorderColor};background:${cardDetailBgStyle}">`;
+
+    // Garmin-matched slot banner (cross/run slots matched via garminActuals)
+    if (garminActualsData?.displayName && !isModified && (w.t === 'cross' || w.t === 'run' || w.t === 'easy' || w.t === 'long' || w.t === 'threshold' || w.t === 'vo2' || w.t === 'marathon_pace')) {
+      const actName = garminActualsData.displayName;
+      const dur = Math.round(garminActualsData.durationSec / 60);
+      let statLine = `${dur} min`;
+      if (garminActualsData.avgHR) statLine += ` · HR ${garminActualsData.avgHR}`;
+      if (garminActualsData.distanceKm > 0.1) statLine += ` · ${garminActualsData.distanceKm.toFixed(1)} km`;
+      h += `<div class="mb-2 p-1.5 border rounded text-xs" style="background:rgba(249,115,22,0.06);border-color:rgba(249,115,22,0.3);color:#F97316">`;
+      h += `<div class="font-semibold">Matched: ${actName}</div>`;
+      h += `<div class="mt-0.5" style="color:rgba(249,115,22,0.7)">${statLine}</div>`;
+      h += `</div>`;
+    }
 
     // Modification banner
     if (isModified && w.modReason) {
-      const modColor = isReplaced ? 'bg-cyan-950/30 border-cyan-800 text-cyan-300' : 'bg-sky-950/30 border-sky-800 text-sky-300';
-      const modLabel = isReplaced ? 'RUN REPLACED' : 'LOAD DOWNGRADE';
-      h += `<div class="mb-2 p-1.5 ${modColor} border rounded text-xs">`;
-      h += `<div class="font-bold">${modLabel}</div>`;
-      h += `<div class="text-gray-400 mt-0.5">${w.modReason}</div>`;
+      const activityName = w.modReason.replace(/^Garmin:\s*/i, '').trim();
+      const modStyleAttr = isReplaced
+        ? 'background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.3);color:var(--c-accent)'
+        : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.3);color:var(--c-accent)';
+      const modLabel = isReplaced ? `Replaced by ${activityName}` : `Reduced — ${activityName}`;
+      const isGarminMod = w.modReason.startsWith('Garmin:') || !!garminActualsData;
+      const undoOnclick = isGarminMod
+        ? `window.openActivityReReview()`
+        : `window.undoWorkoutMod('${w.n.replace(/'/g, "\\'")}',${w.dayOfWeek ?? null})`;
+      h += `<div class="mb-2 p-1.5 border rounded text-xs flex items-start justify-between gap-2" style="${modStyleAttr}">`;
+      h += `<div>`;
+      h += `<div class="font-semibold">${modLabel}</div>`;
       if (w.originalDistance && !isReplaced) {
-        h += `<div class="text-gray-500 mt-0.5">Original: ${w.originalDistance}</div>`;
+        h += `<div class="mt-0.5" style="color:var(--c-faint)">Was: ${w.originalDistance}</div>`;
       }
+      h += `</div>`;
+      h += `<button onclick="${undoOnclick}" class="text-xs whitespace-nowrap shrink-0 underline" style="color:var(--c-faint)">Undo</button>`;
       h += `</div>`;
     }
 
@@ -595,12 +961,14 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     if (isSkipped) {
       if (w.t === 'easy' && w.n?.includes('(was')) {
         // Downgraded makeup: friendly green banner
-        h += `<div class="mb-2 p-1.5 bg-emerald-950/30 border border-emerald-700 text-emerald-300 rounded text-xs font-bold">`;
+        h += `<div class="mb-2 p-1.5 border rounded text-xs font-bold" style="background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.35);color:var(--c-ok)">`;
         h += 'MAKEUP — Downgraded to easy to protect recovery';
         h += `</div>`;
       } else {
-        const skipColor = (w.skipCount || 0) === 1 ? 'bg-amber-950/30 border-amber-700 text-amber-300' : 'bg-red-950/30 border-red-800 text-red-300';
-        h += `<div class="mb-2 p-1.5 ${skipColor} border rounded text-xs font-bold">`;
+        const skipStyleAttr = (w.skipCount || 0) === 1
+          ? 'background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35);color:var(--c-caution)'
+          : 'background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.3);color:var(--c-warn)';
+        h += `<div class="mb-2 p-1.5 border rounded text-xs font-bold" style="${skipStyleAttr}">`;
         h += (w.skipCount || 0) === 1 ? 'SKIPPED - Complete now (no penalty)' : 'FINAL CHANCE - Skip again = penalty!';
         h += `</div>`;
       }
@@ -609,21 +977,31 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     // Header
     // Only suppress RPE/load for true "no physical activity" rest (acute RICE protocol)
     const isCompleteRest = w.t === 'rest' && (w.d?.includes('RICE') || w.d?.includes('No physical activity') || w.d?.includes('Complete rest'));
-    const isQuickRun = w.n === 'Quick Run';
+    // Running workouts need RPE; non-running (cross, strength, rest) just need "done"
+    const isRunWorkout = w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest';
     const dayLabel = w.dayOfWeek != null ? DAY_NAMES_SHORT[w.dayOfWeek] : '';
     const workoutInfo = isReplaced ? { totalDistance: 0, totalTime: 0, avgPace: null } : parseWorkoutDescription(w.d, paces);
     const timeRange = workoutInfo.totalTime > 0 ? fmtTimeRange(workoutInfo.totalTime, w.t) : '';
     h += `<div class="flex justify-between mb-1 text-xs">`;
-    h += `<div>${dayLabel ? `<span class="text-gray-500 mr-1.5">${dayLabel}</span>` : ''}<strong>${w.n}</strong>`;
-    if (w.commute) h += ` <span class="bg-gray-700 text-gray-400 px-1 py-0.5 rounded ml-1 text-xs">Commute</span>`;
-    if (isCompleteRest && rtd) h += ` <span class="bg-emerald-600 text-white px-1 py-0.5 rounded ml-1">Done</span>`;
-    else if (rtd && rtd !== 'skip') h += ` <span class="bg-emerald-600 text-white px-1 py-0.5 rounded ml-1">Done ${rtd}</span>`;
+    h += `<div>${dayLabel ? `<span class="mr-1.5" style="color:var(--c-faint)">${dayLabel}</span>` : ''}<strong>${w.n}</strong>`;
+    if (w.commute) h += ` <span class="px-1 py-0.5 rounded ml-1 text-xs" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Commute</span>`;
+    const garminActual = wk.garminActuals?.[w.id || w.n];
+    if (garminActual) h += ` <span class="px-1 py-0.5 rounded ml-1 text-xs border" style="background:rgba(249,115,22,0.08);color:#F97316;border-color:rgba(249,115,22,0.25)">Garmin</span>`;
+    const hasStravaPair = garminActual?.stravaId || garminActual?.garminId?.startsWith('strava-');
+    if (hasStravaPair) h += ` <span class="px-1 py-0.5 rounded ml-1 text-xs border" style="background:rgba(168,85,247,0.08);color:#A855F7;border-color:rgba(168,85,247,0.25)">Strava</span>`;
+    if (isCompleteRest && rtd) h += ` <span class="px-1 py-0.5 rounded ml-1" style="background:var(--c-ok);color:white">Done</span>`;
+    else if (rtd && rtd !== 'skip') h += ` <span class="px-1 py-0.5 rounded ml-1" style="background:var(--c-ok);color:white">${isRunWorkout ? `Done ${rtd}` : 'Done'}</span>`;
 
     h += `</div>`;
-    if (!isQuickRun && !isCompleteRest) {
+    if (!isCompleteRest) {
       h += `<div class="flex items-center gap-1.5">`;
-      if (timeRange) h += `<span class="text-gray-400 text-xs">${timeRange}</span>`;
-      h += `<span class="bg-gray-600 text-gray-300 px-1 py-0.5 rounded">RPE ${w.rpe || w.r} <button class="text-blue-400 hover:text-blue-300 ml-0.5" onclick="window.Mosaic.showRPEHelp()">(?)</button></span>`;
+      if (timeRange) h += `<span class="text-xs" style="color:var(--c-muted)">${timeRange}</span>`;
+      if (isRunWorkout) h += `<span class="px-1 py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">RPE ${w.rpe || w.r} <button class="ml-0.5" style="color:var(--c-accent)" onclick="window.Mosaic.showRPEHelp()">(?)</button></span>`;
+      if (isGarminActivity) h += `<button onclick="window.removeGarminActivity('${garminId}')" class="transition-colors text-base leading-none" style="color:var(--c-faint)" title="Remove Garmin activity">&times;</button>`;
+      else if (!viewOnly && wk.gpsRecordings?.[w.id || w.n] && rtd) {
+        const gpsDeleteId = (w.id || w.n).replace(/'/g, "\\'");
+        h += `<button onclick="window.deleteGpsRun('${gpsDeleteId}')" class="transition-colors text-base leading-none" style="color:var(--c-faint)" title="Delete run">&times;</button>`;
+      }
       h += `</div>`;
     }
     h += `</div>`;
@@ -633,32 +1011,174 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       const levelMatch = w.modReason.match(/Return Level (\d+)\/8/);
       if (levelMatch) {
         const lvl = parseInt(levelMatch[1]);
-        h += `<div class="text-xs mb-1 px-2 py-1 rounded bg-sky-950/50 border border-sky-800/50 text-sky-300 inline-block">Level ${lvl}/8</div> `;
+        h += `<div class="text-xs mb-1 px-2 py-1 rounded border inline-block" style="background:rgba(78,159,229,0.08);border-color:rgba(78,159,229,0.35);color:var(--c-accent)">Level ${lvl}/8</div> `;
       }
     }
 
     // Description — for replaced workouts, show original distance instead of "0km (replaced)"
     if (isReplaced && w.originalDistance) {
       const origDesc = injectPaces(w.originalDistance, paces).replace(/\n/g, '<br>');
-      h += `<div class="text-xs text-gray-400 mb-1"><s>${origDesc}</s> <span class="text-cyan-400">(replaced)</span></div>`;
+      h += `<div class="text-xs mb-1" style="color:var(--c-muted)"><s>${origDesc}</s> <span style="color:var(--c-accent)">(replaced)</span></div>`;
     } else {
-      h += `<div class="text-xs text-gray-400 mb-1">${injectPaces(w.d, paces).replace(/\n/g, '<br>')}</div>`;
+      h += `<div class="text-xs mb-1" style="color:var(--c-muted)">${injectPaces(w.d, paces).replace(/\n/g, '<br>')}</div>`;
     }
     if (!isCompleteRest && !isReplaced) {
-      h += `<div class="text-xs mb-1 text-gray-500">Forecast load: <span class="text-red-400">A${loads.aerobic}</span> / <span class="text-amber-400">An${loads.anaerobic}</span></div>`;
+      if (rtd) {
+        const rpeVal = typeof rtd === 'number' ? rtd : (w.rpe || w.r || 5);
+        const hasITrimp = garminActual && garminActual.iTrimp != null && garminActual.iTrimp > 0;
+        const actualTSSVal = hasITrimp
+          ? Math.round((garminActual!.iTrimp! * 100) / 15000)
+          : garminActual && garminActual.durationSec > 0
+            ? Math.round((garminActual.durationSec / 60) * (TL_PER_MIN[Math.round(rpeVal)] ?? 0.92))
+            : null;
+        // Data tier badge
+        const hasGarminTE = garminActual && (garminActual.aerobicEffect != null || garminActual.anaerobicEffect != null);
+        const dataTierLabel = hasITrimp ? '<span style="color:rgba(34,197,94,0.6)">Strava HR</span>'
+          : hasGarminTE ? '<span style="color:rgba(78,159,229,0.6)">Garmin TE</span>'
+          : garminActual ? '<span style="color:var(--c-faint)">RPE est.</span>'
+          : '';
+        if (actualTSSVal != null) {
+          // Zone breakdown — use real hrZones if available, else fall back to workout type profile
+          let zBase = 0, zThreshold = 0, zIntensity = 0;
+          const hz = garminActual?.hrZones;
+          const hzTotal = hz ? (hz.z1 + hz.z2 + hz.z3 + hz.z4 + hz.z5) : 0;
+          if (hz && hzTotal > 0) {
+            zBase      = Math.round(actualTSSVal * (hz.z1 + hz.z2) / hzTotal);
+            zThreshold = Math.round(actualTSSVal * hz.z3 / hzTotal);
+            zIntensity = actualTSSVal - zBase - zThreshold; // avoid rounding gap
+          } else {
+            const prof = LOAD_PROFILES[w.t] ?? { base: 0.80, threshold: 0.15, intensity: 0.05 };
+            zBase      = Math.round(actualTSSVal * (prof.base      ?? 0.80));
+            zThreshold = Math.round(actualTSSVal * (prof.threshold ?? 0.15));
+            zIntensity = actualTSSVal - zBase - zThreshold;
+          }
+          const hasHR = hz && hzTotal > 0;
+          h += `<div class="text-xs mb-0.5" style="color:var(--c-faint)">TSS: <span class="font-medium" style="color:var(--c-ok)">${actualTSSVal}</span>${dataTierLabel ? ` · ${dataTierLabel}` : ''}${!hasHR ? ` · <span style="color:rgba(202,138,4,0.6)">Estimated</span>` : ''}</div>`;
+          const zoneDefs = [
+            { label: 'Base',      val: zBase,      colStyle: 'rgba(59,130,246,0.7)' },
+            { label: 'Threshold', val: zThreshold, colStyle: 'rgba(245,158,11,0.7)' },
+            { label: 'Intensity', val: zIntensity, colStyle: 'rgba(249,115,22,0.7)' },
+          ];
+          // Scale bars relative to the largest zone so the dominant zone always hits 100%
+          const maxZoneVal = Math.max(zBase, zThreshold, zIntensity, 1);
+          h += `<div class="space-y-0.5 mb-1">`;
+          for (const zd of zoneDefs) {
+            if (zd.val <= 0) continue;
+            const pct = Math.round((zd.val / maxZoneVal) * 100);
+            h += `<div class="flex items-center gap-1 text-xs"><span class="w-14 shrink-0" style="color:var(--c-border)">${zd.label}</span><div class="h-1 rounded-full w-16 overflow-hidden" style="background:rgba(0,0,0,0.08)"><div class="h-full rounded-full" style="width:${pct}%;background:${zd.colStyle}"></div></div><span style="color:var(--c-muted)">${zd.val}</span></div>`;
+          }
+          h += `</div>`;
+          if (!hasHR) {
+            h += `<div class="text-[10px] mb-1" style="color:rgba(202,138,4,0.4)">Zone split estimated — HR stream data unavailable.</div>`;
+          }
+        }
+        // Garmin Training Effect aerobic/anaerobic split (0-5 scale, separate from TL)
+        if (hasGarminTE) {
+          const ae = garminActual!.aerobicEffect != null ? garminActual!.aerobicEffect.toFixed(1) : '—';
+          const ane = garminActual!.anaerobicEffect != null ? garminActual!.anaerobicEffect.toFixed(1) : '—';
+          h += `<div class="text-xs mb-1" style="color:var(--c-border)">Training Effect: <span style="color:rgba(239,68,68,0.7)">${ae} aerobic</span> · <span style="color:rgba(245,158,11,0.7)">${ane} anaerobic</span></div>`;
+        }
+      } else {
+        // Show planned TSS (converted from FCL scale) with 3-zone breakdown
+        // Zones are derived first; total is their sum to avoid rounding mismatches
+        const rpeVal = w.rpe || w.r || 5;
+        const scale = (TL_PER_MIN[Math.round(rpeVal)] ?? 1.0) / (LOAD_PER_MIN_BY_INTENSITY[Math.round(rpeVal)] ?? 2.0);
+        const pBase      = loads.base      != null ? Math.round(loads.base      * scale) : null;
+        const pThreshold = loads.threshold != null ? Math.round(loads.threshold * scale) : null;
+        const pIntensity = loads.intensity != null ? Math.round(loads.intensity * scale) : null;
+        // If zone data available, sum zones for total so numbers always add up
+        const plannedTSS = (pBase != null)
+          ? (pBase ?? 0) + (pThreshold ?? 0) + (pIntensity ?? 0)
+          : Math.round(loads.total * scale);
+        const zoneParts: string[] = [];
+        if (pBase      != null && pBase      > 0) zoneParts.push(`<span style="color:rgba(59,130,246,0.8)">${pBase} base</span>`);
+        if (pThreshold != null && pThreshold > 0) zoneParts.push(`<span style="color:rgba(245,158,11,0.8)">${pThreshold} threshold</span>`);
+        if (pIntensity != null && pIntensity > 0) zoneParts.push(`<span style="color:rgba(249,115,22,0.8)">${pIntensity} intensity</span>`);
+        const zoneStr = zoneParts.length ? ` <span style="color:var(--c-border)">·</span> ${zoneParts.join(' <span style="color:var(--c-border)">·</span> ')}` : '';
+        h += `<div class="text-xs mb-1" style="color:var(--c-faint)">Planned TSS: <span class="font-medium" style="color:var(--c-muted)">${plannedTSS}</span>${zoneStr}</div>`;
+      }
     }
 
     // Pace info
     if (workoutInfo.avgPace) {
       const paceLabel = w.t === 'easy' ? 'No faster than' : 'Pace';
-      h += `<div class="text-xs mb-1 text-sky-300 bg-gray-700/50 p-1 rounded">`;
+      h += `<div class="text-xs mb-1 p-1 rounded" style="color:var(--c-accent);background:rgba(78,159,229,0.06)">`;
       h += `${paceLabel}: ${formatPace(workoutInfo.avgPace)}`;
       h += `</div>`;
     }
 
-    // HR target pill (conditional — only rendered if data exists)
-    if (w.hrTarget) {
-      h += `<div class="text-xs mb-1 px-2 py-1 rounded-full inline-flex items-center gap-1 bg-rose-950/40 border border-rose-800/50 text-rose-300">`;
+    // Garmin actual vs planned comparison
+    if (garminActual) {
+      h += renderGarminActuals(garminActual, workoutInfo);
+
+      // Strava detail panel (HR zones, km splits, route map) — shown on expand
+      if (garminActual.hrZones || garminActual.kmSplits?.length || garminActual.polyline) {
+        const detailId = 'gd-' + escapeAttr(w.id || w.n);
+        h += `<button onclick="window.toggleStravaDetail('${detailId}')" class="flex items-center gap-1 text-[11px] mt-1.5 transition-colors" style="color:var(--c-faint)">`;
+        h += `<svg id="${detailId}-chevron" class="w-3 h-3 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>`;
+        h += `Strava details</button>`;
+        h += `<div id="${detailId}" class="hidden mt-1.5 space-y-2.5">`;
+
+        if (garminActual.hrZones) {
+          const z = garminActual.hrZones;
+          const total = z.z1 + z.z2 + z.z3 + z.z4 + z.z5;
+          if (total > 0) {
+            const pct = (v: number) => ((v / total) * 100).toFixed(1);
+            h += `<div>`;
+            h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">HR Zones</div>`;
+            h += `<div class="flex rounded overflow-hidden h-2.5 w-full">`;
+            if (z.z1 > 0) h += `<div style="width:${pct(z.z1)}%;background:#3B82F6" title="Z1 ${fmtZoneTime(z.z1)}"></div>`;
+            if (z.z2 > 0) h += `<div style="width:${pct(z.z2)}%;background:#22C55E" title="Z2 ${fmtZoneTime(z.z2)}"></div>`;
+            if (z.z3 > 0) h += `<div style="width:${pct(z.z3)}%;background:#FACC15" title="Z3 ${fmtZoneTime(z.z3)}"></div>`;
+            if (z.z4 > 0) h += `<div style="width:${pct(z.z4)}%;background:#F97316" title="Z4 ${fmtZoneTime(z.z4)}"></div>`;
+            if (z.z5 > 0) h += `<div style="width:${pct(z.z5)}%;background:#EF4444" title="Z5 ${fmtZoneTime(z.z5)}"></div>`;
+            h += `</div>`;
+            h += `<div class="flex gap-2 mt-1 flex-wrap">`;
+            const zoneDefs = [
+              { k: 'z1' as const, label: 'Z1', dotColor: '#3B82F6' },
+              { k: 'z2' as const, label: 'Z2', dotColor: '#22C55E' },
+              { k: 'z3' as const, label: 'Z3', dotColor: '#FACC15' },
+              { k: 'z4' as const, label: 'Z4', dotColor: '#F97316' },
+              { k: 'z5' as const, label: 'Z5', dotColor: '#EF4444' },
+            ];
+            for (const { k, label, dotColor } of zoneDefs) {
+              const sec = z[k];
+              if (sec > 0) h += `<span class="flex items-center gap-0.5 text-[10px]" style="color:var(--c-muted)"><span class="inline-block w-2 h-2 rounded-sm" style="background:${dotColor}"></span>${label} ${fmtZoneTime(sec)}</span>`;
+            }
+            h += `</div></div>`;
+          }
+        }
+
+        if (garminActual.kmSplits && garminActual.kmSplits.length > 0) {
+          h += `<div>`;
+          h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">Km Splits</div>`;
+          h += `<div class="grid grid-cols-4 gap-x-3 gap-y-0.5">`;
+          for (let i = 0; i < garminActual.kmSplits.length; i++) {
+            h += `<div class="flex justify-between text-[11px]">`;
+            h += `<span style="color:var(--c-faint)">${i + 1}</span>`;
+            h += `<span class="font-mono" style="color:var(--c-black)">${formatPace(garminActual.kmSplits[i])}</span>`;
+            h += `</div>`;
+          }
+          h += `</div></div>`;
+        }
+
+        if (garminActual.polyline) {
+          const splitsAttr = garminActual.kmSplits?.length
+            ? ` data-km-splits="${escapeAttr(JSON.stringify(garminActual.kmSplits))}"`
+            : '';
+          h += `<div>`;
+          h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">Route</div>`;
+          h += `<canvas id="${detailId}-map" class="w-full rounded" height="200" style="background:var(--c-surface)" data-polyline="${escapeAttr(garminActual.polyline)}"${splitsAttr}></canvas>`;
+          h += `</div>`;
+        }
+
+        h += `</div>`; // end detail panel
+      }
+    }
+
+    // HR target pill (conditional — only rendered if data exists and workout not yet done)
+    if (w.hrTarget && !rtd) {
+      h += `<div class="text-xs mb-1 px-2 py-1 rounded-full inline-flex items-center gap-1 border" style="background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.3);color:var(--c-warn)">`;
       h += `<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clip-rule="evenodd"/></svg>`;
       h += `<span>${w.hrTarget.label}</span>`;
       h += `</div>`;
@@ -671,59 +1191,88 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         // Complete rest (RICE / no physical activity): simple complete button, no RPE needed
         if (rtd) {
           h += `<div class="flex items-center gap-2 py-1.5">`;
-          h += `<span class="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
-          h += `<span class="text-xs font-semibold text-emerald-400">Complete</span>`;
+          h += `<span class="w-5 h-5 rounded-full flex items-center justify-center" style="background:var(--c-ok)"><svg class="w-3 h-3" style="color:white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
+          h += `<span class="text-xs font-semibold" style="color:var(--c-ok)">Complete</span>`;
           h += `</div>`;
         } else {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',1,1,'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded font-medium">Complete Rest Day</button>`;
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',1,1,'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Complete Rest Day</button>`;
         }
       } else if (w.t === 'capacity_test' && (w as any).testType) {
         if (w.status === 'passed') {
           h += `<div class="flex items-center gap-2 py-1.5">`;
-          h += `<span class="w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center"><svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
-          h += `<span class="text-xs font-semibold text-emerald-400">PASSED</span>`;
+          h += `<span class="w-5 h-5 rounded-full flex items-center justify-center" style="background:var(--c-ok)"><svg class="w-3 h-3" style="color:white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
+          h += `<span class="text-xs font-semibold" style="color:var(--c-ok)">PASSED</span>`;
           h += `</div>`;
         } else {
-          h += `<div class="text-xs mb-1 text-purple-400">Physio Test Status:</div>`;
+          h += `<div class="text-xs mb-1" style="color:#A855F7">Physio Test Status:</div>`;
           h += `<div class="grid grid-cols-2 gap-2">`;
-          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', false)" class="px-2 py-1.5 text-xs border border-red-800 rounded bg-red-950/30 hover:bg-red-900/40 text-red-300">Had Pain</button>`;
-          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', true)" class="px-2 py-1.5 text-xs border border-emerald-800 rounded bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-300 font-bold">Pain-Free!</button>`;
+          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', false)" class="px-2 py-1.5 text-xs border rounded" style="border-color:rgba(239,68,68,0.4);background:rgba(239,68,68,0.06);color:var(--c-warn)">Had Pain</button>`;
+          h += `<button onclick="window.rateCapacityTest('${(w as any).testType}', true)" class="px-2 py-1.5 text-xs border rounded font-bold" style="border-color:rgba(34,197,94,0.4);background:rgba(34,197,94,0.06);color:var(--c-ok)">Pain-Free!</button>`;
           h += `</div>`;
         }
+      } else if (!isRunWorkout) {
+        // Non-running (cross, strength, rest): simple mark as done, no RPE needed
+        if (rtd) {
+          h += `<button onclick="window.unrateWorkout('${wId.replace(/'/g, "\\'")}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Unmark as done</button>`;
+        } else {
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Mark as done</button>`;
+        }
       } else {
-        h += `<div class="text-xs mb-1 text-gray-400">${rtd ? 'Re-rate RPE:' : 'RPE rating:'}</div><div class="grid grid-cols-10 gap-0.5">`;
+        // Running: ask for RPE (always same label; highlight current selection)
+        const currentRpe = rtd ? parseInt(String(rtd)) : 0;
+        h += `<div class="text-xs mb-1" style="color:var(--c-muted)">RPE:</div><div class="grid grid-cols-10 gap-0.5">`;
         for (let r = 1; r <= 10; r++) {
-          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border border-gray-600 rounded hover:bg-gray-600 text-gray-300 bg-gray-700">${r}</button>`;
+          const sel = r === currentRpe;
+          const btnStyle = sel
+            ? 'border-color:var(--c-ok);background:var(--c-ok);color:white;font-weight:bold'
+            : 'border-color:var(--c-border);background:rgba(0,0,0,0.04);color:var(--c-muted)';
+          h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',${r},${w.rpe || w.r},'${w.t}',${isSkipped})" class="px-0.5 py-0.5 text-xs border rounded" style="${btnStyle}">${r}</button>`;
         }
         h += `</div>`;
+        if (rtd) {
+          h += `<button onclick="window.unrateWorkout('${wId.replace(/'/g, "\\'")}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Unmark as done</button>`;
+        }
       }
     } else if (!isReplaced && viewOnly && rtd) {
       if (isCompleteRest) {
-        h += `<div class="text-xs text-emerald-500">Rested</div>`;
+        h += `<div class="text-xs" style="color:var(--c-ok)">Rested</div>`;
+      } else if (!isRunWorkout) {
+        h += `<div class="text-xs" style="color:var(--c-ok)">Done</div>`;
       } else {
-        h += `<div class="text-xs text-gray-500">Rated RPE ${rtd}</div>`;
+        h += `<div class="text-xs" style="color:var(--c-faint)">Rated RPE ${rtd}</div>`;
       }
     }
 
     // Track Run / inline GPS tracking (hide for cross-training/sport/gym workouts, disabled when viewing)
-    if (!isReplaced && !viewOnly && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym') {
-      const tracking = isTrackingActive();
-      if (tracking && getActiveWorkoutName() === w.n) {
-        const gpsData = getActiveGpsData();
-        if (gpsData) {
-          h += renderInlineGpsHtml(gpsData);
+    if (!isReplaced && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym') {
+      const gpsRecId = wk.gpsRecordings?.[w.id || w.n];
+      if (gpsRecId && rtd) {
+        // Completed with GPS — show "View Run" button
+        h += `<button class="gps-view-btn w-full mt-1 text-xs py-1 rounded font-medium" style="background:var(--c-ok);color:white" data-recid="${escapeAttr(gpsRecId)}">View Run</button>`;
+      } else if (!viewOnly && !rtd) {
+        const tracking = isTrackingActive();
+        if (tracking && getActiveWorkoutName() === w.n) {
+          const gpsData = getActiveGpsData();
+          if (gpsData) {
+            h += renderInlineGpsHtml(gpsData);
+          }
+        } else if (tracking) {
+          h += `<button class="w-full mt-1 text-xs py-0.5 rounded font-medium cursor-not-allowed" style="background:rgba(0,0,0,0.06);color:var(--c-faint)" disabled>Tracking in progress...</button>`;
+        } else {
+          h += `<button class="gps-track-btn w-full mt-1 text-xs py-1.5 rounded font-bold" style="background:var(--c-ok);color:white" data-name="${escapeAttr(w.n)}" data-desc="${escapeAttr(w.d)}">Start Run</button>`;
         }
-      } else if (tracking) {
-        h += `<button class="w-full mt-1 text-xs bg-gray-700 text-gray-500 py-0.5 rounded font-medium cursor-not-allowed" disabled>Tracking in progress...</button>`;
-      } else {
-        h += `<button class="gps-track-btn w-full mt-1 text-xs bg-green-600 hover:bg-green-700 text-white py-1.5 rounded font-bold" data-name="${escapeAttr(w.n)}" data-desc="${escapeAttr(w.d)}">Start Run</button>`;
       }
     }
 
-    // Skip button (disabled when viewing non-current week)
-    if (!viewOnly) {
+    // Skip button — only for unrated (planned) workouts
+    if (!viewOnly && !rtd) {
       const skipId = w.id || w.n;
-      h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs ${isSkipped ? 'bg-red-900/50 hover:bg-red-800/50 text-red-300' : isReplaced ? 'bg-cyan-900/50 cursor-not-allowed text-cyan-400' : 'bg-gray-700 hover:bg-gray-600 text-gray-400'} py-0.5 rounded" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
+      const skipBtnStyle = isSkipped
+        ? 'background:rgba(239,68,68,0.12);color:var(--c-warn)'
+        : isReplaced
+          ? 'background:rgba(6,182,212,0.08);color:var(--c-accent);cursor:not-allowed'
+          : 'background:rgba(0,0,0,0.06);color:var(--c-muted)';
+      h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',${isSkipped},${w.skipCount || 0},'${w.d.replace(/'/g, "\\'")}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs py-0.5 rounded" style="${skipBtnStyle}" ${isReplaced ? 'disabled' : ''}>${isSkipped ? 'Skip Again' : isReplaced ? 'Covered' : 'Skip'}</button>`;
     }
 
     h += `</div>`;
@@ -731,9 +1280,264 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
   h += `</div>`;
 
-  // Past GPS recordings section
-  h += `<div id="gps-recordings-section" class="mt-3"></div>`;
+  return h;
+}
 
+/**
+ * Render a dedicated section for Garmin-synced activities that are NOT planned workouts.
+ * These are ad-hoc entries (id starts with "garmin-") stored in wk.adhocWorkouts.
+ * They appear here rather than in the main workout list so they don't inflate the
+ * completion counter or mislead the user into thinking they have unrated planned workouts.
+ */
+
+/** Convert an internal workout key (e.g. "W1-easy-0") to a human label ("Easy Run"). */
+function cleanGarminKeyName(key: string): string {
+  const TYPE_LABELS: Record<string, string> = {
+    easy: 'Easy Run', long: 'Long Run', threshold: 'Threshold Run',
+    vo2: 'VO2 Run', marathon_pace: 'Marathon Pace Run', intervals: 'Intervals',
+    cross: 'Cross Training', gym: 'Gym', strength: 'Strength Training',
+    rest: 'Rest', recovery: 'Recovery Run', progressive: 'Progressive Run',
+    hill_repeats: 'Hill Repeats', race_pace: 'Race Pace Run', tempo: 'Tempo Run',
+  };
+  const typeKey = key.replace(/^W\d+-/, '').replace(/-\d+$/, '');
+  return TYPE_LABELS[typeKey] || typeKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Format zone time as M:SS */
+function fmtZoneTime(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Derive the activity source label from the garmin_id prefix.
+ * strava-NNN → 'Strava', apple-NNN → 'Apple Watch', numeric/other → 'Garmin'
+ */
+function getActivitySource(garminId?: string | null): 'Strava' | 'Apple Watch' | 'Garmin' {
+  if (!garminId) return 'Garmin';
+  if (garminId.startsWith('strava-')) return 'Strava';
+  if (garminId.startsWith('apple-')) return 'Apple Watch';
+  return 'Garmin';
+}
+
+/** Render a source badge pill */
+function sourceBadge(source: 'Strava' | 'Apple Watch' | 'Garmin'): string {
+  if (source === 'Strava') {
+    return `<span class="px-1 py-0.5 rounded text-[10px] border" style="background:rgba(168,85,247,0.08);color:#A855F7;border-color:rgba(168,85,247,0.25)">Strava</span>`;
+  }
+  if (source === 'Apple Watch') {
+    return `<span class="px-1 py-0.5 rounded text-[10px] border" style="background:rgba(0,0,0,0.05);color:var(--c-muted);border-color:var(--c-border)">Apple Watch</span>`;
+  }
+  return `<span class="px-1 py-0.5 rounded text-[10px] border" style="background:rgba(249,115,22,0.08);color:#F97316;border-color:rgba(249,115,22,0.25)">Garmin</span>`;
+}
+
+/** Format a date string as "24 Feb" */
+function fmtActivityDate(isoString?: string | null): string {
+  if (!isoString) return '';
+  try {
+    const d = new Date(isoString);
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  } catch { return ''; }
+}
+
+function renderGarminSyncedSection(wk: Week): string {
+  // Matched activities: everything in garminActuals
+  const actuals = wk.garminActuals || {};
+  const matchedRows = Object.entries(actuals).map(([workoutId, a]: [string, any]) => {
+    const displayName: string | undefined = a.displayName !== 'General Sport' ? a.displayName : undefined;
+    const name: string = a.workoutName || displayName || cleanGarminKeyName(workoutId);
+    return {
+      name,
+      workoutId,
+      garminId: a.garminId as string | undefined,
+      startTime: a.startTime as string | null | undefined,
+      distanceKm: a.distanceKm as number,
+      avgPaceSecKm: a.avgPaceSecKm as number | null,
+      avgHR: a.avgHR as number | null,
+      durationSec: a.durationSec as number,
+      calories: a.calories as number | null,
+      hrZones: a.hrZones as { z1: number; z2: number; z3: number; z4: number; z5: number } | null | undefined,
+      kmSplits: a.kmSplits as number[] | null | undefined,
+      polyline: a.polyline as string | null | undefined,
+    };
+  });
+
+  // Unmatched adhoc activities: id starts with "garmin-", sorted chronologically
+  const adhocGarmin = (wk.adhocWorkouts || [])
+    .filter(w => w.id?.startsWith('garmin-'))
+    .slice()
+    .sort((a, b) => {
+      const ta = (a as any).garminTimestamp ?? '';
+      const tb = (b as any).garminTimestamp ?? '';
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
+
+  // Pending items: in garminPending but not yet reviewed (garminMatched === '__pending__')
+  const garminMatched = wk.garminMatched || {};
+  const pendingItems = (wk.garminPending || []).filter(p => garminMatched[p.garminId] === '__pending__');
+
+  if (matchedRows.length === 0 && adhocGarmin.length === 0 && pendingItems.length === 0) return '';
+
+  let h = `<div class="mt-3 p-3 rounded border" style="background:var(--c-surface);border-color:rgba(249,115,22,0.25)">`;
+  h += `<div class="font-bold text-sm mb-2 flex items-center justify-between gap-2" style="color:#F97316">`;
+  h += `<div class="flex items-center gap-2">`;
+  h += `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>`;
+  h += `Synced activities`;
+  h += `</div>`;
+  h += `<button onclick="window.openActivityReReview()" class="text-xs transition-colors font-normal" style="color:var(--c-muted)">Review</button>`;
+  h += `</div>`;
+  h += `<div class="space-y-1.5">`;
+
+  // ── Matched plan slot activities ──
+  for (const row of matchedRows) {
+    const source = getActivitySource(row.garminId);
+    const distStr = row.distanceKm > 0 ? `${row.distanceKm.toFixed(1)} km` : '';
+    const paceStr = row.avgPaceSecKm ? formatPace(row.avgPaceSecKm) : '';
+    const hrStr = row.avgHR ? `HR ${row.avgHR}` : '';
+    const durStr = !distStr && row.durationSec > 0 ? `${Math.round(row.durationSec / 60)} min` : '';
+    const calStr = row.calories ? `${row.calories} kcal` : '';
+    const dateStr = fmtActivityDate(row.startTime);
+    const meta = [distStr || durStr, paceStr, hrStr, dateStr, calStr].filter(Boolean).join(' · ');
+
+    const hasDetail = row.hrZones != null || (row.kmSplits?.length ?? 0) > 0 || !!row.polyline;
+    const expandId = `sd-${escapeAttr(row.garminId ?? row.workoutId)}`;
+
+    h += `<div class="border rounded text-xs overflow-hidden" style="background:rgba(0,0,0,0.03);border-color:var(--c-border)">`;
+
+    // Summary row
+    h += `<div class="flex items-center justify-between px-2 py-1.5${hasDetail ? ' cursor-pointer transition-colors' : ''}"`;
+    if (hasDetail) h += ` onclick="window.toggleStravaDetail('${expandId}')"`;
+    h += `>`;
+    h += `<div class="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">`;
+    h += sourceBadge(source);
+    h += `<span class="font-medium" style="color:var(--c-black)">${row.name}</span>`;
+    if (meta) h += `<span style="color:var(--c-muted)">${meta}</span>`;
+    h += `</div>`;
+    if (hasDetail) h += `<svg id="${expandId}-chevron" class="w-3 h-3 transition-transform flex-shrink-0 mr-1" style="color:var(--c-faint)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>`;
+    if (row.garminId) h += `<button onclick="event.stopPropagation();window.removeGarminActivity('${escapeAttr(row.garminId)}')" class="text-xs transition-colors px-1 flex-shrink-0" style="color:var(--c-faint)" title="Remove">&times;</button>`;
+    h += `</div>`;
+
+    // Expanded detail panel (HR zones, km splits, route map)
+    if (hasDetail) {
+      h += `<div id="${expandId}" class="hidden px-2 pb-2 pt-2 space-y-2.5 border-t" style="border-color:var(--c-border)">`;
+
+      if (row.hrZones) {
+        const z = row.hrZones;
+        const total = z.z1 + z.z2 + z.z3 + z.z4 + z.z5;
+        if (total > 0) {
+          const pct = (s: number) => ((s / total) * 100).toFixed(1);
+          h += `<div>`;
+          h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">HR Zones</div>`;
+          h += `<div class="flex rounded overflow-hidden h-2.5 w-full">`;
+          if (z.z1 > 0) h += `<div style="width:${pct(z.z1)}%;background:#3B82F6" title="Z1 ${fmtZoneTime(z.z1)}"></div>`;
+          if (z.z2 > 0) h += `<div style="width:${pct(z.z2)}%;background:#22C55E" title="Z2 ${fmtZoneTime(z.z2)}"></div>`;
+          if (z.z3 > 0) h += `<div style="width:${pct(z.z3)}%;background:#FACC15" title="Z3 ${fmtZoneTime(z.z3)}"></div>`;
+          if (z.z4 > 0) h += `<div style="width:${pct(z.z4)}%;background:#F97316" title="Z4 ${fmtZoneTime(z.z4)}"></div>`;
+          if (z.z5 > 0) h += `<div style="width:${pct(z.z5)}%;background:#EF4444" title="Z5 ${fmtZoneTime(z.z5)}"></div>`;
+          h += `</div>`;
+          h += `<div class="flex gap-2 mt-1 flex-wrap">`;
+          const zoneDefs = [
+            { k: 'z1' as const, label: 'Z1', dotColor: '#3B82F6' },
+            { k: 'z2' as const, label: 'Z2', dotColor: '#22C55E' },
+            { k: 'z3' as const, label: 'Z3', dotColor: '#FACC15' },
+            { k: 'z4' as const, label: 'Z4', dotColor: '#F97316' },
+            { k: 'z5' as const, label: 'Z5', dotColor: '#EF4444' },
+          ];
+          for (const { k, label, dotColor } of zoneDefs) {
+            const sec = z[k];
+            if (sec > 0) h += `<span class="flex items-center gap-0.5 text-[10px]" style="color:var(--c-muted)"><span class="inline-block w-2 h-2 rounded-sm" style="background:${dotColor}"></span>${label} ${fmtZoneTime(sec)}</span>`;
+          }
+          h += `</div></div>`;
+        }
+      }
+
+      if (row.kmSplits && row.kmSplits.length > 0) {
+        h += `<div>`;
+        h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">Km Splits</div>`;
+        h += `<div class="grid grid-cols-4 gap-x-3 gap-y-0.5">`;
+        for (let i = 0; i < row.kmSplits.length; i++) {
+          h += `<div class="flex justify-between text-[11px]">`;
+          h += `<span style="color:var(--c-faint)">${i + 1}</span>`;
+          h += `<span class="font-mono" style="color:var(--c-black)">${formatPace(row.kmSplits[i])}</span>`;
+          h += `</div>`;
+        }
+        h += `</div></div>`;
+      }
+
+      if (row.polyline) {
+        const splitsAttr = row.kmSplits?.length
+          ? ` data-km-splits="${escapeAttr(JSON.stringify(row.kmSplits))}"`
+          : '';
+        h += `<div>`;
+        h += `<div class="text-[10px] mb-1 font-medium uppercase tracking-wide" style="color:var(--c-muted)">Route</div>`;
+        h += `<canvas id="${expandId}-map" class="w-full rounded" height="200" style="background:var(--c-surface)" data-polyline="${escapeAttr(row.polyline)}"${splitsAttr}></canvas>`;
+        h += `</div>`;
+      }
+
+      h += `</div>`; // end detail panel
+    }
+
+    h += `</div>`; // end card
+  }
+
+  // ── Ad-hoc (unmatched) activities ──
+  for (const w of adhocGarmin) {
+    const rawId = w.id!.slice('garmin-'.length);
+    const source = getActivitySource(rawId);
+    const distKm = (w as any).garminDistKm as number | undefined;
+    const avgHR = (w as any).garminAvgHR as number | null | undefined;
+    const calories = (w as any).garminCalories as number | null | undefined;
+    const avgPace = (w as any).garminAvgPace as number | null | undefined;
+    const timestamp = (w as any).garminTimestamp as string | undefined;
+    const durationMin = (w as any).garminDurationMin as number | undefined;
+
+    const distStr = distKm && distKm > 0.1 ? `${distKm.toFixed(1)} km` : '';
+    const durStr = !distStr && durationMin ? `${durationMin} min` : '';
+    const paceStr = avgPace ? formatPace(avgPace) : '';
+    const hrStr = avgHR ? `HR ${avgHR}` : '';
+    const calStr = calories ? `${calories} kcal` : '';
+    const dateStr = fmtActivityDate(timestamp);
+    // Fallback: parse description if structured fields not available (legacy adhocs)
+    const meta = [distStr || durStr, paceStr, hrStr, dateStr, calStr].filter(Boolean).join(' · ')
+      || w.d || '';
+
+    h += `<div class="flex items-center justify-between border rounded px-2 py-1.5 text-xs" style="background:rgba(0,0,0,0.03);border-color:var(--c-border)">`;
+    h += `<div class="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">`;
+    h += sourceBadge(source);
+    h += `<span class="font-medium" style="color:var(--c-black)">${w.n}</span>`;
+    if (meta) h += `<span style="color:var(--c-muted)">${meta}</span>`;
+    h += `</div>`;
+    h += `<button onclick="window.removeGarminActivity('${rawId}')" class="text-xs transition-colors px-1 flex-shrink-0" style="color:var(--c-faint)" title="Remove">&times;</button>`;
+    h += `</div>`;
+  }
+
+  // ── Pending (unreviewed) items ──
+  for (const p of pendingItems) {
+    const source = getActivitySource(p.garminId);
+    const distStr = p.distanceM && p.distanceM > 0 ? `${(p.distanceM / 1000).toFixed(1)} km` : '';
+    const durStr = !distStr && p.durationSec ? `${Math.round(p.durationSec / 60)} min` : '';
+    const hrStr = p.avgHR ? `HR ${p.avgHR}` : '';
+    const calStr = p.calories ? `${p.calories} kcal` : '';
+    const dateStr = fmtActivityDate(p.startTime);
+    const meta = [distStr || durStr, hrStr, dateStr, calStr].filter(Boolean).join(' · ');
+    // Use formatActivityType mapping for the label
+    const label = p.activityType
+      ? (p.activityType.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))
+      : 'Activity';
+
+    h += `<div class="flex items-center justify-between border rounded px-2 py-1.5 text-xs" style="background:rgba(245,158,11,0.05);border-color:rgba(245,158,11,0.3)">`;
+    h += `<div class="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">`;
+    h += sourceBadge(source);
+    h += `<span class="font-medium" style="color:var(--c-caution)">${label}</span>`;
+    h += `<span class="text-[10px]" style="color:rgba(245,158,11,0.7)">pending review</span>`;
+    if (meta) h += `<span style="color:var(--c-muted)">${meta}</span>`;
+    h += `</div>`;
+    h += `</div>`;
+  }
+
+  h += `</div>`;
+  h += `</div>`;
   return h;
 }
 
@@ -741,43 +1545,28 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
  * Render cross-training form
  */
 function renderCrossTrainingForm(): string {
-  let h = `<div id="crossForm" class="mt-3 p-3 bg-gray-800 rounded border border-gray-700">`;
-  h += `<div class="font-bold text-sm mb-2 text-gray-200">Cross-Training & Extra Activities</div>`;
+  const inputStyle = 'background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)';
+  let h = `<div id="crossForm" class="mt-3 p-3 rounded border" style="background:var(--c-surface);border-color:var(--c-border)">`;
+  h += `<div class="font-bold text-sm mb-2" style="color:var(--c-black)">Manual upload</div>`;
   h += `<div class="grid grid-cols-3 gap-1 mb-2">`;
-  h += `<select id="crossSport" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200">`;
-  h += `<option value="">Select sport...</option>`;
-  h += `<option value="generic_sport">Generic Sport</option>`;
-  for (const key of Object.keys(SPORTS_DB)) {
-    if (key === 'generic_sport' || key === 'hybrid_test_sport') continue;
-    h += `<option value="${key}">${SPORT_LABELS[key as keyof typeof SPORT_LABELS] || key}</option>`;
-  }
+  h += `<select id="crossSport" class="text-xs rounded px-1 py-1" style="${inputStyle}">`;
+  h += `<option value="generic_sport">Activity</option>`;
+  h += `<option value="run">Run</option>`;
+  h += `<option value="cycling">Cycling</option>`;
+  h += `<option value="swimming">Swimming</option>`;
+  h += `<option value="elliptical">Elliptical</option>`;
+  h += `<option value="yoga">Yoga</option>`;
+  h += `<option value="gym">Strength</option>`;
+  h += `<option value="hiking">Hiking</option>`;
+  h += `<option value="rowing">Rowing</option>`;
+  h += `<option value="rest">Rest/Recovery</option>`;
   h += `</select>`;
-  h += `<input type="number" id="crossDur" placeholder="Duration (min)" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200" min="1" max="600">`;
-  h += `<div class="relative"><input type="number" id="crossRPE" placeholder="RPE (1-10)" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200 w-full" min="1" max="10">`;
-  h += `<span class="rpe-help absolute right-1 top-1 text-gray-500 hover:text-emerald-400 cursor-help text-xs" title="1-3: Easy conversation\n4-6: Short sentences\n7-8: 1-2 words\n9-10: Gasping/Max">(?)</span></div>`;
+  h += `<input type="number" id="crossDur" placeholder="Duration (min)" class="text-xs rounded px-1 py-1" style="${inputStyle}" min="1" max="600">`;
+  h += `<div class="relative"><input type="number" id="crossRPE" placeholder="RPE (1-10)" class="text-xs rounded px-1 py-1 w-full" style="${inputStyle}" min="1" max="10">`;
+  h += `<span class="rpe-help absolute right-1 top-1 cursor-help text-xs" style="color:var(--c-faint)" title="1-3: Easy conversation\n4-6: Short sentences\n7-8: 1-2 words\n9-10: Gasping/Max">(?)</span></div>`;
   h += `</div>`;
-  h += `<div class="grid grid-cols-2 gap-1 mb-2">`;
-  h += `<input type="number" id="crossAerobic" placeholder="Aerobic Load (optional)" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200" min="0">`;
-  h += `<input type="number" id="crossAnaerobic" placeholder="Anaerobic Load (optional)" class="text-xs bg-gray-700 border border-gray-600 rounded px-1 py-1 text-gray-200" min="0">`;
+  h += `<button onclick="window.logActivity()" class="w-full py-1.5 rounded text-xs font-bold" style="background:var(--c-ok);color:white">Add Activity</button>`;
   h += `</div>`;
-  h += `<button onclick="window.logActivity()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-1.5 rounded text-xs font-bold">Add Activity</button>`;
-  h += `</div>`;
-  // Disable RPE for rest/recovery activities
-  h += `<script>
-    (function() {
-      var sel = document.getElementById('crossSport');
-      var rpe = document.getElementById('crossRPE');
-      if (sel && rpe) {
-        sel.addEventListener('change', function() {
-          var v = sel.value.toLowerCase();
-          var isRest = (v === 'rest' || v === 'physio' || v === 'stretch' || v === 'massage');
-          rpe.disabled = isRest;
-          if (isRest) { rpe.value = '1'; rpe.style.opacity = '0.5'; }
-          else { rpe.style.opacity = '1'; }
-        });
-      }
-    })();
-  </script>`;
   return h;
 }
 
@@ -785,35 +1574,36 @@ function isHardWorkoutType(workoutType: string): boolean {
   return ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'long', 'mixed', 'progressive'].includes(workoutType);
 }
 
-/** Get color classes for a workout type: { bg, border, accent } */
-function getWorkoutColors(wt: string): { bg: string; border: string; accent: string } {
+/** Get color styles for a workout type: { bgStyle, borderColor, accentColor } */
+function getWorkoutColors(wt: string): { bgStyle: string; borderColor: string; accentColor: string; bg: string; border: string; accent: string } {
+  // Legacy class fields kept for any remaining references; primary values are inline style fields
   switch (wt) {
     case 'easy':
-      return { bg: 'bg-emerald-950/50', border: 'border-emerald-700', accent: 'text-emerald-400' };
+      return { bgStyle: 'rgba(34,197,94,0.06)', borderColor: 'rgba(34,197,94,0.35)', accentColor: 'var(--c-ok)', bg: '', border: '', accent: '' };
     case 'long':
-      return { bg: 'bg-blue-950/50', border: 'border-blue-700', accent: 'text-blue-400' };
+      return { bgStyle: 'rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.35)', accentColor: 'var(--c-accent)', bg: '', border: '', accent: '' };
     case 'threshold':
     case 'marathon_pace':
-      return { bg: 'bg-purple-950/50', border: 'border-purple-700', accent: 'text-purple-400' };
+      return { bgStyle: 'rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.35)', accentColor: '#A855F7', bg: '', border: '', accent: '' };
     case 'vo2':
     case 'intervals':
-      return { bg: 'bg-red-950/50', border: 'border-red-700', accent: 'text-red-400' };
+      return { bgStyle: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.35)', accentColor: 'var(--c-warn)', bg: '', border: '', accent: '' };
     case 'race_pace':
-      return { bg: 'bg-orange-950/50', border: 'border-orange-700', accent: 'text-orange-400' };
+      return { bgStyle: 'rgba(249,115,22,0.06)', borderColor: 'rgba(249,115,22,0.35)', accentColor: '#F97316', bg: '', border: '', accent: '' };
     case 'mixed':
     case 'progressive':
-      return { bg: 'bg-amber-950/50', border: 'border-amber-700', accent: 'text-amber-400' };
+      return { bgStyle: 'rgba(245,158,11,0.06)', borderColor: 'rgba(245,158,11,0.35)', accentColor: 'var(--c-caution)', bg: '', border: '', accent: '' };
     case 'return_run':
-      return { bg: 'bg-sky-950/50', border: 'border-sky-700', accent: 'text-sky-400' };
+      return { bgStyle: 'rgba(78,159,229,0.06)', borderColor: 'rgba(78,159,229,0.35)', accentColor: 'var(--c-accent)', bg: '', border: '', accent: '' };
     case 'gym':
-      return { bg: 'bg-violet-950/50', border: 'border-violet-700', accent: 'text-violet-400' };
+      return { bgStyle: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.35)', accentColor: '#8B5CF6', bg: '', border: '', accent: '' };
     case 'cross':
     case 'strength':
     case 'rest':
     case 'test_run':
-      return { bg: 'bg-gray-950', border: 'border-gray-600', accent: 'text-gray-400' };
+      return { bgStyle: 'var(--c-bg)', borderColor: 'var(--c-border)', accentColor: 'var(--c-muted)', bg: '', border: '', accent: '' };
     default:
-      return { bg: 'bg-gray-800', border: 'border-gray-700', accent: 'text-gray-400' };
+      return { bgStyle: 'var(--c-surface)', borderColor: 'var(--c-border)', accentColor: 'var(--c-muted)', bg: '', border: '', accent: '' };
   }
 }
 
@@ -831,6 +1621,11 @@ export function setupSyncListener(): void {
     const s = getState();
     const wk = s.wks?.[s.w - 1];
     if (!wk) return;
+
+    // Cache stream data for LT estimation if present
+    if (activity.stream && activity.name) {
+      storeWorkoutStream(activity.name, activity.stream);
+    }
 
     // Generate current workouts to match against
     const wos = generateWeekWorkouts(
@@ -918,6 +1713,72 @@ function injectPaces(description: string, paces: any): string {
     .replace(/@ ?VO2/gi, paces.i ? `@ ${formatPace(paces.i)}` : '@ VO2');
 }
 
+/** Render Garmin actual vs planned comparison */
+function renderGarminActuals(actual: GarminActual, planned: { totalDistance: number; totalTime: number; avgPace: number | null }): string {
+  let h = `<div class="text-xs mt-1 mb-1 p-2 border rounded" style="background:rgba(249,115,22,0.06);border-color:rgba(249,115,22,0.25)">`;
+  h += `<div class="font-medium mb-1" style="color:#F97316">Actual (Garmin)</div>`;
+  h += `<div class="grid grid-cols-2 gap-x-4 gap-y-0.5">`;
+
+  // Distance: actual vs planned
+  if (actual.distanceKm > 0) {
+    const plannedKm = planned.totalDistance > 0 ? (planned.totalDistance / 1000) : 0;
+    h += `<div style="color:var(--c-muted)">Distance</div>`;
+    h += `<div style="color:var(--c-black)">${actual.distanceKm.toFixed(1)}km`;
+    if (plannedKm > 0) {
+      const diff = actual.distanceKm - plannedKm;
+      const diffColor = Math.abs(diff) < 0.5 ? 'var(--c-faint)' : diff > 0 ? 'var(--c-ok)' : 'var(--c-caution)';
+      h += ` <span style="color:${diffColor}">(${diff >= 0 ? '+' : ''}${diff.toFixed(1)})</span>`;
+    }
+    h += `</div>`;
+  }
+
+  // Pace: actual vs planned
+  if (actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0) {
+    h += `<div style="color:var(--c-muted)">Avg Pace</div>`;
+    h += `<div style="color:var(--c-black)">${formatPace(actual.avgPaceSecKm)}`;
+    if (planned.avgPace != null && planned.avgPace > 0) {
+      const diff = actual.avgPaceSecKm - planned.avgPace;
+      // For pace, faster (negative diff) is good
+      const diffColor = Math.abs(diff) < 5 ? 'var(--c-faint)' : diff < 0 ? 'var(--c-ok)' : 'var(--c-caution)';
+      const diffSec = Math.round(Math.abs(diff));
+      h += ` <span style="color:${diffColor}">(${diff < 0 ? '-' : '+'}${diffSec}s)</span>`;
+    }
+    h += `</div>`;
+  }
+
+  // Duration
+  if (actual.durationSec > 0) {
+    const durMin = Math.round(actual.durationSec / 60);
+    h += `<div style="color:var(--c-muted)">Duration</div>`;
+    h += `<div style="color:var(--c-black)">${durMin} min</div>`;
+  }
+
+  // Avg HR
+  if (actual.avgHR != null) {
+    h += `<div style="color:var(--c-muted)">Avg HR</div>`;
+    h += `<div style="color:var(--c-black)">${actual.avgHR} bpm</div>`;
+  }
+
+  h += `</div>`;
+
+  // Lap splits (if available)
+  if (actual.laps && actual.laps.length > 1) {
+    h += `<details class="mt-1.5"><summary class="cursor-pointer" style="color:var(--c-muted)">Lap splits (${actual.laps.length})</summary>`;
+    h += `<div class="mt-1 space-y-0.5">`;
+    for (const lap of actual.laps) {
+      const lapDistKm = (lap.distanceM / 1000).toFixed(2);
+      h += `<div class="flex justify-between" style="color:var(--c-muted)">`;
+      h += `<span>Lap ${lap.index}</span>`;
+      h += `<span>${formatPace(lap.avgPaceSecKm)} · ${lapDistKm}km${lap.avgHR ? ` · ${lap.avgHR}bpm` : ''}</span>`;
+      h += `</div>`;
+    }
+    h += `</div></details>`;
+  }
+
+  h += `</div>`;
+  return h;
+}
+
 /** Escape a string for use in an HTML attribute value */
 function escapeAttr(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -929,18 +1790,27 @@ function escapeAttr(s: string): string {
  */
 export function attachTrackRunHandlers(): void {
   const handler = (e: Event) => {
-    const btn = (e.target as HTMLElement).closest('.gps-track-btn') as HTMLElement | null;
-    if (!btn) return;
-    const name = btn.dataset.name || '';
-    const desc = btn.dataset.desc || '';
-    if (window.trackWorkout) {
-      window.trackWorkout(name, desc);
+    const trackBtn = (e.target as HTMLElement).closest('.gps-track-btn') as HTMLElement | null;
+    if (trackBtn) {
+      const name = trackBtn.dataset.name || '';
+      const desc = trackBtn.dataset.desc || '';
+      if (window.trackWorkout) {
+        window.trackWorkout(name, desc);
+      }
+      return;
+    }
+
+    const viewBtn = (e.target as HTMLElement).closest('.gps-view-btn') as HTMLElement | null;
+    if (viewBtn) {
+      const recId = viewBtn.dataset.recid || '';
+      if (recId) {
+        const rec = loadGpsRecording(recId);
+        if (rec) openGpsRecordingDetail(rec);
+      }
     }
   };
 
   const woEl = document.getElementById('wo');
   if (woEl) woEl.addEventListener('click', handler);
 
-  const jrEl = document.getElementById('just-run-container');
-  if (jrEl) jrEl.addEventListener('click', handler);
 }

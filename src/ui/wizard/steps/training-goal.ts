@@ -13,12 +13,12 @@ export function renderTrainingGoal(container: HTMLElement, state: OnboardingStat
   const showInitialQuestion = state.trainingForEvent === null;
 
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12" style="background:var(--c-bg)">
       ${renderProgressIndicator(2, 10)}
 
       <div class="max-w-lg w-full">
         <!-- Title -->
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <h2 class="text-2xl md:text-3xl font-light mb-2 text-center" style="color:var(--c-black)">
           ${showInitialQuestion ? 'Training Goal' :
             showDistanceOptions ? 'Select Your Distance' :
             'What are you focusing on?'}
@@ -38,19 +38,17 @@ export function renderTrainingGoal(container: HTMLElement, state: OnboardingStat
 
 function renderInitialQuestion(): string {
   return `
-    <p class="text-gray-400 text-center mb-8">Are you training for a specific event?</p>
+    <p class="text-center mb-8" style="color:var(--c-faint)">Are you training for a specific event?</p>
 
     <div class="flex gap-4 justify-center">
       <button id="train-yes"
-        class="flex-1 max-w-[180px] py-6 bg-gray-800 hover:bg-gray-750
-               border-2 border-transparent hover:border-emerald-500/50 rounded-xl transition-all
-               text-white font-medium text-lg">
+        class="flex-1 max-w-[180px] py-6 rounded-xl transition-all font-medium text-lg"
+        style="background:rgba(0,0,0,0.06);color:var(--c-black);border:2px solid transparent">
         Yes
       </button>
       <button id="train-no"
-        class="flex-1 max-w-[180px] py-6 bg-gray-800 hover:bg-gray-750
-               border-2 border-transparent hover:border-emerald-500/50 rounded-xl transition-all
-               text-white font-medium text-lg">
+        class="flex-1 max-w-[180px] py-6 rounded-xl transition-all font-medium text-lg"
+        style="background:rgba(0,0,0,0.06);color:var(--c-black);border:2px solid transparent">
         No
       </button>
     </div>
@@ -59,7 +57,7 @@ function renderInitialQuestion(): string {
 
 function renderDistanceOptions(): string {
   return `
-    <p class="text-gray-400 text-center mb-8">Choose your target race distance</p>
+    <p class="text-center mb-8" style="color:var(--c-faint)">Choose your target race distance</p>
 
     <div class="grid grid-cols-2 gap-4">
       ${renderDistanceCard('5k', '5K', 'Speed focused', '3.1 miles')}
@@ -69,7 +67,7 @@ function renderDistanceOptions(): string {
     </div>
 
     <button id="change-goal"
-      class="mt-6 w-full text-center text-sm text-gray-500 hover:text-gray-300 transition-colors">
+      class="mt-6 w-full text-center text-sm transition-colors" style="color:var(--c-faint);background:none;border:none">
       Change my goal
     </button>
   `;
@@ -78,21 +76,20 @@ function renderDistanceOptions(): string {
 function renderDistanceCard(id: string, label: string, desc: string, miles: string): string {
   return `
     <button id="dist-${id}"
-      class="p-5 bg-gray-800 hover:bg-gray-750
-             border-2 border-transparent hover:border-emerald-500/50 rounded-xl transition-all
-             text-left group">
-      <div class="text-xl font-semibold text-white mb-1 group-hover:text-emerald-400 transition-colors">
+      class="p-5 rounded-xl transition-all text-left group"
+      style="background:rgba(0,0,0,0.06);border:2px solid transparent">
+      <div class="text-xl font-semibold mb-1" style="color:var(--c-black)">
         ${label}
       </div>
-      <div class="text-sm text-gray-400 mb-2">${desc}</div>
-      <div class="text-xs text-gray-600">${miles}</div>
+      <div class="text-sm mb-2" style="color:var(--c-muted)">${desc}</div>
+      <div class="text-xs" style="color:var(--c-faint)">${miles}</div>
     </button>
   `;
 }
 
 function renderFocusOptions(): string {
   return `
-    <p class="text-gray-400 text-center mb-8">Let us build the perfect plan for you</p>
+    <p class="text-center mb-8" style="color:var(--c-faint)">Let us build the perfect plan for you</p>
 
     <div class="space-y-3">
       ${renderFocusCard('speed', 'Speed', 'Build raw speed and leg turnover', '5K training focus')}
@@ -101,7 +98,7 @@ function renderFocusOptions(): string {
     </div>
 
     <button id="change-goal"
-      class="mt-6 w-full text-center text-sm text-gray-500 hover:text-gray-300 transition-colors">
+      class="mt-6 w-full text-center text-sm transition-colors" style="color:var(--c-faint);background:none;border:none">
       Change my goal
     </button>
   `;
@@ -110,16 +107,15 @@ function renderFocusOptions(): string {
 function renderFocusCard(id: string, label: string, desc: string, planType: string): string {
   return `
     <button id="focus-${id}"
-      class="w-full p-4 bg-gray-800 hover:bg-gray-750
-             border-2 border-transparent hover:border-emerald-500/50 rounded-xl transition-all
-             flex justify-between items-center group">
+      class="w-full p-4 rounded-xl transition-all flex justify-between items-center group"
+      style="background:rgba(0,0,0,0.06);border:2px solid transparent">
       <div class="text-left">
-        <div class="text-lg font-medium text-white group-hover:text-emerald-400 transition-colors">
+        <div class="text-lg font-medium" style="color:var(--c-black)">
           ${label}
         </div>
-        <div class="text-sm text-gray-400">${desc}</div>
+        <div class="text-sm" style="color:var(--c-muted)">${desc}</div>
       </div>
-      <div class="text-xs text-emerald-500/80 bg-emerald-950/50 px-3 py-1.5 rounded-full border border-emerald-800/30">
+      <div class="text-xs px-3 py-1.5 rounded-full" style="color:var(--c-ok);background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25)">
         ${planType}
       </div>
     </button>

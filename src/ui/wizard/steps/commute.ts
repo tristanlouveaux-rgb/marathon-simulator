@@ -16,70 +16,69 @@ export function renderCommute(container: HTMLElement, state: OnboardingState): v
   };
 
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12" style="background:var(--c-bg)">
       ${renderProgressIndicator(4, 10)}
 
       <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <h2 class="text-2xl md:text-3xl font-light mb-2 text-center" style="color:var(--c-black)">
           Run Commute
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p class="text-center mb-8" style="color:var(--c-faint)">
           Do you run more than 5km to work?
         </p>
 
         <!-- Yes / No Toggle -->
         <div class="flex gap-3 justify-center mb-6">
           <button id="commute-yes"
-            class="flex-1 max-w-[160px] py-4 rounded-xl font-medium transition-all border-2
-                   ${state.runsToWork === true
-                     ? 'bg-emerald-600 text-white border-emerald-500'
-                     : 'bg-gray-800 text-gray-400 border-transparent hover:border-gray-600'}">
+            class="flex-1 max-w-[160px] py-4 rounded-xl font-medium transition-all"
+            style="${state.runsToWork === true
+              ? 'background:var(--c-ok);color:#FDFCF7;border:2px solid var(--c-ok)'
+              : 'background:rgba(0,0,0,0.06);color:var(--c-muted);border:2px solid transparent'}">
             Yes
           </button>
           <button id="commute-no"
-            class="flex-1 max-w-[160px] py-4 rounded-xl font-medium transition-all border-2
-                   ${state.runsToWork === false
-                     ? 'bg-gray-700 text-white border-gray-500'
-                     : 'bg-gray-800 text-gray-400 border-transparent hover:border-gray-600'}">
+            class="flex-1 max-w-[160px] py-4 rounded-xl font-medium transition-all"
+            style="${state.runsToWork === false
+              ? 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black)'
+              : 'background:rgba(0,0,0,0.06);color:var(--c-muted);border:2px solid transparent'}">
             No
           </button>
         </div>
 
         <!-- Expandable Config (shown when Yes) -->
-        <div id="commute-config" class="${state.runsToWork === true ? '' : 'hidden'}">
-          <div class="bg-gray-800 rounded-xl p-6 space-y-5 mb-4">
+        <div id="commute-config" style="display:${state.runsToWork === true ? '' : 'none'}">
+          <div class="rounded-xl p-6 space-y-5 mb-4" style="background:rgba(0,0,0,0.06)">
             <!-- Distance -->
             <div>
-              <label class="block text-sm text-gray-400 mb-2">One-way distance (km)</label>
+              <label class="block text-sm mb-2" style="color:var(--c-faint)">One-way distance (km)</label>
               <input type="number" id="commute-distance"
                 min="1" max="25" step="0.5"
                 value="${config.distanceKm}"
-                class="w-full px-4 py-3 bg-gray-900 border border-gray-700 rounded-lg
-                       text-white text-lg focus:border-emerald-500 focus:outline-none">
+                class="w-full px-4 py-3 rounded-lg text-lg focus:outline-none"
+                style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
             </div>
 
             <!-- Bidirectional -->
             <label class="flex items-center gap-3 cursor-pointer">
               <input type="checkbox" id="commute-bidirectional"
                 ${config.isBidirectional ? 'checked' : ''}
-                class="w-5 h-5 rounded bg-gray-900 border-gray-700 text-emerald-500
-                       focus:ring-emerald-500 focus:ring-offset-gray-800">
+                class="w-5 h-5 rounded">
               <div>
-                <span class="text-white text-sm">Run both ways</span>
-                <p class="text-xs text-gray-500">Count morning and evening as separate runs</p>
+                <span class="text-sm" style="color:var(--c-black)">Run both ways</span>
+                <p class="text-xs" style="color:var(--c-faint)">Count morning and evening as separate runs</p>
               </div>
             </label>
 
             <!-- Days per week -->
             <div>
-              <label class="block text-sm text-gray-400 mb-2">Days per week</label>
+              <label class="block text-sm mb-2" style="color:var(--c-faint)">Days per week</label>
               <div class="flex gap-2">
                 ${[1, 2, 3, 4, 5].map(n => `
                   <button data-days="${n}"
-                    class="commute-day flex-1 py-3 rounded-lg font-medium transition-all
-                           ${config.commuteDaysPerWeek === n
-                             ? 'bg-emerald-600 text-white'
-                             : 'bg-gray-900 text-gray-400 hover:bg-gray-750'}">
+                    class="commute-day flex-1 py-3 rounded-lg font-medium transition-all"
+                    style="${config.commuteDaysPerWeek === n
+                      ? 'background:var(--c-black);color:#FDFCF7;border:none'
+                      : 'background:var(--c-bg);color:var(--c-muted);border:1px solid var(--c-border)'}">
                     ${n}
                   </button>
                 `).join('')}
@@ -89,16 +88,15 @@ export function renderCommute(container: HTMLElement, state: OnboardingState): v
         </div>
 
         <!-- No-commute note -->
-        <div id="no-commute-note" class="${state.runsToWork === false ? '' : 'hidden'}">
-          <p class="text-sm text-gray-500 text-center mb-4">
+        <div id="no-commute-note" style="display:${state.runsToWork === false ? '' : 'none'}">
+          <p class="text-sm text-center mb-4" style="color:var(--c-faint)">
             No problem — you can always add commute runs later in settings.
           </p>
         </div>
 
         <button id="continue-commute"
-          class="w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all
-                 ${state.runsToWork === null ? 'opacity-50 cursor-not-allowed' : ''}"
+          class="w-full py-3 rounded-xl transition-all font-medium"
+          style="background:var(--c-black);color:#FDFCF7;border:none;${state.runsToWork === null ? 'opacity:0.5;cursor:not-allowed' : ''}"
           ${state.runsToWork === null ? 'disabled' : ''}>
           Continue
         </button>

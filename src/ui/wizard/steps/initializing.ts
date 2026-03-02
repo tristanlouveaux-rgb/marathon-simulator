@@ -4,6 +4,7 @@ import { initializeSimulator } from '@/state/initialization';
 import { cv } from '@/calculations/vdot';
 import type { PBs } from '@/types/training';
 import { nextStep, updateOnboarding } from '../controller';
+import { getState } from '@/state/store';
 import { renderProgressIndicator } from '../renderer';
 
 // Re-export for backwards compatibility
@@ -16,52 +17,52 @@ export type { CalculationResult } from '@/state/initialization';
  */
 export function renderInitializing(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
       ${renderProgressIndicator(7, 8)}
 
-      <div class="max-w-lg w-full text-center">
-        <div id="init-animation" class="mb-8">
-          <div class="relative w-24 h-24 mx-auto">
-            <svg class="w-full h-full animate-spin-slow" viewBox="0 0 100 100">
-              <path fill="currentColor" class="text-emerald-600" d="M50 15a35 35 0 0 1 35 35 35 35 0 0 1-35 35 35 35 0 0 1-35-35 35 35 0 0 1 35-35m0-5a40 40 0 0 0-40 40 40 40 0 0 0 40 40 40 40 0 0 0 40-40 40 40 0 0 0-40-40z"/>
-              <circle cx="50" cy="50" r="25" fill="none" stroke="currentColor" class="text-emerald-500" stroke-width="4" stroke-dasharray="20 10"/>
+      <div style="max-width:480px;width:100%;text-align:center">
+        <div id="init-animation" style="margin-bottom:32px">
+          <div style="position:relative;width:80px;height:80px;margin:0 auto">
+            <svg class="animate-spin-slow" style="width:100%;height:100%" viewBox="0 0 100 100">
+              <path fill="currentColor" style="color:var(--c-black);opacity:0.15" d="M50 15a35 35 0 0 1 35 35 35 35 0 0 1-35 35 35 35 0 0 1-35-35 35 35 0 0 1 35-35m0-5a40 40 0 0 0-40 40 40 40 0 0 0 40 40 40 40 0 0 0 40-40 40 40 0 0 0-40-40z"/>
+              <circle cx="50" cy="50" r="25" fill="none" style="color:var(--c-black);opacity:0.25" stroke="currentColor" stroke-width="4" stroke-dasharray="20 10"/>
             </svg>
-            <div class="absolute inset-0 flex items-center justify-center">
-              <svg class="w-10 h-10 text-emerald-400" fill="currentColor" viewBox="0 0 20 20">
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+              <svg style="width:32px;height:32px;color:var(--c-black)" fill="currentColor" viewBox="0 0 20 20">
                 <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
               </svg>
             </div>
           </div>
         </div>
 
-        <h2 id="init-title" class="text-2xl font-light text-white mb-3">
+        <h2 id="init-title" style="font-size:1.5rem;font-weight:300;color:var(--c-black);margin-bottom:12px">
           Analyzing your physiology...
         </h2>
 
-        <p id="init-status" class="text-gray-400 text-sm">
+        <p id="init-status" style="font-size:14px;color:var(--c-muted)">
           Building a custom plan tailored to you
         </p>
 
-        <div id="init-steps" class="mt-8 space-y-3 text-left max-w-xs mx-auto">
-          <div id="step-pbs" class="flex items-center gap-3 text-sm">
-            <div class="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center">
-              <svg class="w-3 h-3 text-white animate-pulse" fill="currentColor" viewBox="0 0 20 20">
+        <div id="init-steps" style="margin-top:32px;display:flex;flex-direction:column;gap:12px;text-align:left;max-width:240px;margin-left:auto;margin-right:auto">
+          <div id="step-pbs" style="display:flex;align-items:center;gap:12px;font-size:14px">
+            <div id="step-pbs-icon" style="width:20px;height:20px;border-radius:50%;background:var(--c-black);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg style="width:10px;height:10px;color:#FDFCF7" fill="currentColor" viewBox="0 0 20 20">
                 <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16z" clip-rule="evenodd"/>
               </svg>
             </div>
-            <span class="text-gray-400">Analyzing personal bests</span>
+            <span id="step-pbs-text" style="color:var(--c-black)">Analyzing personal bests</span>
           </div>
-          <div id="step-profile" class="flex items-center gap-3 text-sm opacity-50">
-            <div class="w-5 h-5 rounded-full bg-gray-700 flex items-center justify-center">
-              <div class="w-2 h-2 rounded-full bg-gray-500"></div>
+          <div id="step-profile" style="display:flex;align-items:center;gap:12px;font-size:14px;opacity:0.4">
+            <div id="step-profile-icon" style="width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <div style="width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,0.4)"></div>
             </div>
-            <span class="text-gray-500">Calculating runner profile</span>
+            <span id="step-profile-text" style="color:var(--c-faint)">Calculating runner profile</span>
           </div>
-          <div id="step-plan" class="flex items-center gap-3 text-sm opacity-50">
-            <div class="w-5 h-5 rounded-full bg-gray-700 flex items-center justify-center">
-              <div class="w-2 h-2 rounded-full bg-gray-500"></div>
+          <div id="step-plan" style="display:flex;align-items:center;gap:12px;font-size:14px;opacity:0.4">
+            <div id="step-plan-icon" style="width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <div style="width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,0.4)"></div>
             </div>
-            <span class="text-gray-500">Generating training plan</span>
+            <span id="step-plan-text" style="color:var(--c-faint)">Generating training plan</span>
           </div>
         </div>
       </div>
@@ -84,6 +85,12 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
 }
 
 async function runInitialization(state: OnboardingState): Promise<void> {
+  // Mid-plan: user arrived via "Edit Settings". Keep existing plan — just advance.
+  if (getState().wks.length > 0) {
+    nextStep();
+    return;
+  }
+
   await delay(600);
 
   updateStep('step-pbs', true);
@@ -113,7 +120,7 @@ async function runInitialization(state: OnboardingState): Promise<void> {
   const titleEl = document.getElementById('init-title');
   if (titleEl) {
     titleEl.textContent = 'Your plan is ready!';
-    titleEl.classList.add('text-emerald-400');
+    titleEl.style.color = 'var(--c-black)';
   }
 
   updateOnboarding({ calculatedRunnerType: result.runnerType });
@@ -125,19 +132,17 @@ async function runInitialization(state: OnboardingState): Promise<void> {
 function updateStep(stepId: string, complete: boolean): void {
   const stepEl = document.getElementById(stepId);
   if (!stepEl) return;
-  stepEl.classList.remove('opacity-50');
-  const iconContainer = stepEl.querySelector('div');
-  const textEl = stepEl.querySelector('span');
-  if (complete && iconContainer) {
-    iconContainer.innerHTML = `<svg class="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>`;
-    iconContainer.classList.remove('bg-gray-700');
-    iconContainer.classList.add('bg-emerald-600');
-    if (textEl) { textEl.classList.remove('text-gray-500'); textEl.classList.add('text-emerald-400'); }
-  } else if (iconContainer) {
-    iconContainer.innerHTML = `<svg class="w-3 h-3 text-white animate-pulse" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16z" clip-rule="evenodd"/></svg>`;
-    iconContainer.classList.remove('bg-gray-700');
-    iconContainer.classList.add('bg-emerald-600');
-    if (textEl) { textEl.classList.remove('text-gray-500'); textEl.classList.add('text-gray-400'); }
+  stepEl.style.opacity = '1';
+  const iconEl = document.getElementById(`${stepId}-icon`);
+  const textEl = document.getElementById(`${stepId}-text`);
+  if (complete && iconEl) {
+    iconEl.style.background = 'var(--c-black)';
+    iconEl.innerHTML = `<svg style="width:10px;height:10px;color:#FDFCF7" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>`;
+    if (textEl) textEl.style.color = 'var(--c-black)';
+  } else if (iconEl) {
+    iconEl.style.background = 'var(--c-black)';
+    iconEl.innerHTML = `<svg style="width:10px;height:10px;color:#FDFCF7" class="animate-pulse" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16z" clip-rule="evenodd"/></svg>`;
+    if (textEl) textEl.style.color = 'var(--c-muted)';
   }
 }
 
@@ -149,8 +154,8 @@ function updateStatus(text: string): void {
 function showError(message: string): void {
   const t = document.getElementById('init-title');
   const s = document.getElementById('init-status');
-  if (t) { t.textContent = 'Initialization failed'; t.classList.add('text-red-400'); }
-  if (s) { s.textContent = message; s.classList.add('text-red-400'); }
+  if (t) { t.textContent = 'Initialization failed'; t.style.color = 'var(--c-warn)'; }
+  if (s) { s.textContent = message; s.style.color = 'var(--c-warn)'; }
 }
 
 function delay(ms: number): Promise<void> {
@@ -214,22 +219,22 @@ function checkVolumeRecommendation(_state: OnboardingState): Promise<void> {
   return new Promise<void>(resolve => {
     const overlay = document.createElement('div');
     overlay.id = 'volume-rec-overlay';
-    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px';
     overlay.innerHTML = `
-      <div class="bg-gray-900 rounded-2xl max-w-md w-full p-6 space-y-5">
-        <h3 class="text-lg font-medium text-emerald-400 text-center">Analysis Complete</h3>
-        <p class="text-gray-300 text-sm text-center leading-relaxed">
-          You are close to your <span class="text-white font-medium">${goalLabel}</span> goal.
-          We recommend adding <span class="text-white font-medium">1 run/week</span> to bridge the endurance gap.
+      <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:400px;width:100%;padding:24px">
+        <h3 style="font-size:16px;font-weight:500;color:var(--c-black);text-align:center;margin-bottom:12px">Analysis Complete</h3>
+        <p style="font-size:14px;color:var(--c-muted);text-align:center;line-height:1.6;margin-bottom:20px">
+          You are close to your <strong style="color:var(--c-black)">${goalLabel}</strong> goal.
+          We recommend adding <strong style="color:var(--c-black)">1 run/week</strong> to bridge the endurance gap.
         </p>
-        <div class="flex flex-col gap-3">
+        <div style="display:flex;flex-direction:column;gap:10px">
           <button id="btn-optimize-plan"
-            class="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all">
+            style="width:100%;padding:13px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer">
             Optimize Plan (Recommended)
           </button>
           <button id="btn-keep-volume"
-            class="w-full py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 font-medium rounded-xl transition-all">
-            No, keep current volume
+            style="width:100%;padding:13px;background:var(--c-surface);color:var(--c-black);border:1.5px solid var(--c-border-strong);border-radius:10px;font-size:14px;cursor:pointer">
+            Keep current volume
           </button>
         </div>
       </div>

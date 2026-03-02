@@ -14,7 +14,7 @@ export function calculateWorkoutLoad(
   intensityPct: number,
   easyPaceSecPerKm?: number
 ): WorkoutLoad {
-  const profile = LOAD_PROFILES[workoutType] || { aerobic: 0.80, anaerobic: 0.20 };
+  const profile = LOAD_PROFILES[workoutType] || { aerobic: 0.80, anaerobic: 0.20, base: 0.70, threshold: 0.20, intensity: 0.10 };
 
   // Handle replaced/skipped workouts explicitly
   if (typeof durationDesc === 'string' && durationDesc.toLowerCase().includes('replaced')) {
@@ -101,6 +101,9 @@ export function calculateWorkoutLoad(
   return {
     aerobic: Math.round(aerobicLoad),
     anaerobic: Math.round(anaerobicLoad),
-    total: Math.round(aerobicLoad + anaerobicLoad * 1.15)
+    total: Math.round(aerobicLoad + anaerobicLoad * 1.15),
+    base:      profile.base      != null ? Math.round(totalLoad * profile.base)      : undefined,
+    threshold: profile.threshold != null ? Math.round(totalLoad * profile.threshold) : undefined,
+    intensity: profile.intensity != null ? Math.round(totalLoad * profile.intensity) : undefined,
   };
 }

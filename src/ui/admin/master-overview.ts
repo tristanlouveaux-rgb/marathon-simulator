@@ -40,7 +40,7 @@ export function renderAdminPanel(): string {
           Unlock All Weeks
         </button>
         <button id="admin-clear-state"
-          class="w-full py-2 px-3 bg-red-900 hover:bg-red-800 rounded text-red-200 text-xs font-medium transition-colors">
+          class="w-full py-2 px-3 rounded text-xs font-medium transition-colors" style="background:rgba(239,68,68,0.12);color:var(--c-warn);border:1px solid rgba(239,68,68,0.3)">
           Clear All Data
         </button>
       </div>

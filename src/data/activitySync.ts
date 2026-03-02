@@ -31,7 +31,17 @@ export async function syncActivities(): Promise<void> {
     );
 
     const rows = Array.isArray(data) ? data : [];
-    if (rows.length === 0) return;
+
+    // Always check for stuck __pending__ items, even when no new rows arrive.
+    // Without this, items queued in a previous sync never surface if the DB is empty.
+    if (rows.length === 0) {
+      if (!document.getElementById('activity-review-overlay') &&
+          !document.getElementById('suggestion-modal')) {
+        _pendingModalActive = false;
+      }
+      processPendingCrossTraining();
+      return;
+    }
 
     const result = matchAndAutoComplete(rows);
 

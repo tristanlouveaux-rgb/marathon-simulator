@@ -41,6 +41,9 @@ export interface SportConfig {
   runSpec: number;         // Running specificity (0-1)
   recoveryMult?: number;   // Recovery cost multiplier (>=1 for team sports, <1 for low impact)
   extendedModel?: ExtendedModel;  // Future: decoupled fitness/fatigue model (read but not scored)
+  impactPerMin?: number;   // Musculoskeletal impact load per minute (0 for cycling/swimming)
+  volumeTransfer?: number; // GPS km credit toward running volume bar (0–1). Only GPS sports with real distance.
+  intermittent?: boolean;  // True for sports with high-HR bursts + rest (football, rugby, basketball)
 }
 
 /** Cross-training activity */
@@ -60,6 +63,8 @@ export interface CrossActivity {
   applied: boolean;
   renderCycle: number;
   appliedToNextWeek?: boolean;
+  iTrimp?: number | null;
+  hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
 }
 
 /** Intensity profile for load matching */
@@ -79,9 +84,15 @@ export interface CrossTrainingAdjustment {
 
 /** Workout load calculation result */
 export interface WorkoutLoad {
-  aerobic: number;
-  anaerobic: number;
+  aerobic: number;       // base + threshold (backward compat for cross-training matcher)
+  anaerobic: number;     // intensity (backward compat for cross-training matcher)
   total: number;
+  tl?: number;           // TSS-calibrated load for this workout
+  impactLoad?: number;   // Musculoskeletal impact load
+  // 3-zone breakdown (Z1+Z2 / Z3 / Z4+Z5) — used for display only
+  base?: number;
+  threshold?: number;
+  intensity?: number;
 }
 
 /** Load budget for cross-training modifications */

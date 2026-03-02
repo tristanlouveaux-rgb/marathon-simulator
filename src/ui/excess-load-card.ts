@@ -7,6 +7,8 @@
  */
 
 import type { Week, UnspentLoadItem } from '@/types/state';
+import type { SportKey } from '@/types';
+import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import { getMutableState, saveState } from '@/state';
 import { render } from '@/ui/renderer';
 import {
@@ -53,11 +55,18 @@ function getWeekWorkoutsForExcess() {
   );
 }
 
-function miniBar(value: number, max: number, colorClass: string): string {
+function miniBar(value: number, max: number, color: string): string {
   const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return `<div class="flex-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
-    <div class="${colorClass} h-full rounded-full" style="width: ${pct}%"></div>
+  return `<div style="flex:1;background:rgba(0,0,0,0.08);border-radius:4px;height:4px;overflow:hidden">
+    <div style="background:${color};height:100%;border-radius:4px;width:${pct}%"></div>
   </div>`;
+}
+
+/** Compute TSS-equivalent for an unspent item (same formula as computeWeekTSS fallback) */
+function itemTL(item: UnspentLoadItem): number {
+  const cfg = (SPORTS_DB as any)[item.sport];
+  const runSpec: number = cfg?.runSpec ?? 0.35;
+  return Math.round(item.durationMin * (TL_PER_MIN[5] ?? 1.15) * runSpec);
 }
 
 // ---------------------------------------------------------------------------
@@ -73,53 +82,86 @@ export function renderExcessLoadCard(wk: Week | undefined): string {
 
   if (!items?.length) {
     return `
-      <div class="bg-gray-900/40 border border-gray-800 rounded-lg px-3 py-2.5 flex items-center justify-between">
+      <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between">
         <div>
-          <p class="text-gray-500 text-xs font-medium">Excess Load</p>
-          <p class="text-gray-600 text-xs mt-0.5">No overflow — all activities matched to plan slots</p>
+          <p style="color:var(--c-muted);font-size:12px;font-weight:500">Excess Load</p>
+          <p style="color:var(--c-faint);font-size:12px;margin-top:2px">No overflow — all activities matched to plan slots</p>
         </div>
       </div>`;
   }
 
-  const totalAerobic   = items.reduce((sum, i) => sum + i.aerobic, 0);
-  const totalAnaerobic = items.reduce((sum, i) => sum + i.anaerobic, 0);
-  const maxVal = Math.max(totalAerobic, totalAnaerobic, 1);
+  const totalTL     = items.reduce((sum, i) => sum + itemTL(i), 0);
+  const totalImpact = items.reduce((sum, i) => sum + i.durationMin * (SPORTS_DB[i.sport as SportKey]?.impactPerMin ?? 0), 0);
+  const impactColor = totalImpact <= 0 ? '#16a34a'
+    : totalImpact < 4   ? '#16a34a'
+    : totalImpact < 10  ? 'var(--c-caution)'
+    :                     'var(--c-warn)';
+  const impactText = totalImpact <= 0 ? 'No leg impact'
+    : totalImpact < 4   ? 'Low leg impact'
+    : totalImpact < 10  ? 'Moderate leg impact'
+    :                     'High leg impact';
 
   return `
-    <div id="excess-load-card" class="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3 cursor-pointer">
-      <div class="flex items-start justify-between gap-2 mb-2">
+    <div id="excess-load-card" style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:12px;cursor:pointer">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px">
         <div>
-          <p class="text-amber-300 text-sm font-medium">Excess Activity Load</p>
-          <p class="text-xs text-amber-400/70 mt-0.5">${items.length} activit${items.length === 1 ? 'y' : 'ies'} not yet applied to plan</p>
+          <p style="color:var(--c-caution);font-size:13px;font-weight:500">Excess Activity Load</p>
+          <p style="font-size:12px;color:rgba(245,158,11,0.7);margin-top:2px">${items.length} activit${items.length === 1 ? 'y' : 'ies'} not yet applied to plan</p>
         </div>
-        <span class="text-xs text-amber-500 mt-0.5">Tap for details</span>
+        <span style="font-size:12px;color:var(--c-caution);margin-top:2px">Tap for details</span>
       </div>
-      <div class="space-y-1.5 mb-3">
-        <div class="flex items-center gap-2 text-xs">
-          <span class="text-gray-400 w-16 shrink-0">Aerobic</span>
-          ${miniBar(totalAerobic, maxVal, 'bg-red-400')}
-          <span class="text-gray-400 w-8 text-right">${totalAerobic.toFixed(1)}</span>
+      <div style="margin-bottom:10px">
+        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px">
+          <span style="font-size:18px;font-weight:700;color:var(--c-black)">${totalTL}</span>
+          <span style="font-size:12px;color:var(--c-faint)">TSS unspent</span>
         </div>
-        <div class="flex items-center gap-2 text-xs">
-          <span class="text-gray-400 w-16 shrink-0">Anaerobic</span>
-          ${miniBar(totalAnaerobic, maxVal, 'bg-amber-400')}
-          <span class="text-gray-400 w-8 text-right">${totalAnaerobic.toFixed(1)}</span>
+        <p style="font-size:10px;color:var(--c-faint)">Training stress not yet applied to plan</p>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:6px">
+          <span style="color:${impactColor}">${impactText}</span>
+          <button id="excess-impact-info" style="font-size:9px;color:var(--c-faint);border:1px solid var(--c-border);border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:none;cursor:pointer;padding:0">?</button>
         </div>
       </div>
-      <div class="flex gap-2">
+      <div style="display:flex;gap:8px">
         <button id="excess-adjust-btn"
-                class="flex-1 py-1.5 bg-amber-700/60 hover:bg-amber-700 text-amber-100 text-xs font-medium rounded-lg transition-colors">
+                style="flex:1;padding:8px;background:rgba(245,158,11,0.15);color:var(--c-caution);font-size:12px;font-weight:500;border:none;border-radius:8px;cursor:pointer">
           Adjust Plan
         </button>
         <button id="excess-dismiss-btn"
-                class="px-3 py-1.5 bg-gray-700/60 hover:bg-gray-700 text-gray-300 text-xs font-medium rounded-lg transition-colors">
+                style="padding:8px 14px;background:var(--c-bg);color:var(--c-muted);font-size:12px;font-weight:500;border:1px solid var(--c-border);border-radius:8px;cursor:pointer">
           Dismiss
         </button>
       </div>
-      <p id="excess-dismiss-warning" class="hidden text-xs text-red-400 mt-2">
+      <p id="excess-dismiss-warning" style="display:none;font-size:12px;color:var(--c-warn);margin-top:8px">
         Dismissing will remove this load without adjusting your plan. Tap Dismiss again to confirm.
       </p>
     </div>`;
+}
+
+function showImpactInfoSheet(): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.5);display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:var(--c-surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding-bottom:env(safe-area-inset-bottom,0px)">
+      <div style="padding:16px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
+        <h2 style="color:var(--c-black);font-weight:600;font-size:16px">Leg Impact</h2>
+        <button id="impact-sheet-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0">✕</button>
+      </div>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:14px;font-size:14px">
+        <p style="color:var(--c-muted);line-height:1.6">Leg impact tracks musculoskeletal stress from activities that load your joints and tendons — separate from cardiovascular fitness stress (TSS).</p>
+        <p style="color:var(--c-faint);line-height:1.6">Running creates high impact per minute. Court sports like tennis and padel create moderate impact. Cycling and swimming create almost none.</p>
+        <div style="background:var(--c-bg);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px">
+          <p style="color:var(--c-faint);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em">Impact levels</p>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0"></div><span style="color:#16a34a">None / Low</span><span style="color:var(--c-faint);margin-left:4px">— cycling, swimming, yoga, rowing</span></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--c-caution);flex-shrink:0"></div><span style="color:var(--c-caution)">Moderate</span><span style="color:var(--c-faint);margin-left:4px">— tennis, padel, hiking, basketball</span></div>
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--c-warn);flex-shrink:0"></div><span style="color:var(--c-warn)">High</span><span style="color:var(--c-faint);margin-left:4px">— running, jump rope, stair climbing</span></div>
+        </div>
+        <p style="color:var(--c-faint);font-size:12px">High leg impact from unplanned activities may increase injury risk even if your TSS looks manageable. Consider reducing your next run if leg impact is high.</p>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#impact-sheet-close')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
 
 /**
@@ -137,8 +179,14 @@ export function wireExcessLoadCard(): void {
   // Tap card body → popup (not on buttons)
   card.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
-    if (target.closest('#excess-adjust-btn') || target.closest('#excess-dismiss-btn')) return;
+    if (target.closest('#excess-adjust-btn') || target.closest('#excess-dismiss-btn') || target.closest('#excess-impact-info')) return;
     showExcessLoadPopup(wk.unspentLoadItems!);
+  });
+
+  // Leg impact info button
+  document.getElementById('excess-impact-info')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showImpactInfoSheet();
   });
 
   // Adjust Plan
@@ -154,7 +202,7 @@ export function wireExcessLoadCard(): void {
     const warning = document.getElementById('excess-dismiss-warning');
     if (!dismissWarningShown) {
       dismissWarningShown = true;
-      warning?.classList.remove('hidden');
+      if (warning) warning.style.display = '';
       return;
     }
     // Second tap — confirm clear
@@ -173,68 +221,52 @@ export function wireExcessLoadCard(): void {
 
 function showExcessLoadPopup(items: UnspentLoadItem[]): void {
   const overlay = document.createElement('div');
-  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-end justify-center';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.5);display:flex;align-items:flex-end;justify-content:center';
 
-  const totalAerobic   = items.reduce((sum, i) => sum + i.aerobic, 0);
-  const totalAnaerobic = items.reduce((sum, i) => sum + i.anaerobic, 0);
-  const maxVal = Math.max(totalAerobic, totalAnaerobic, 1);
+  const totalTL = items.reduce((sum, i) => sum + itemTL(i), 0);
 
   const itemRows = items.map(item => {
-    const iMax = Math.max(item.aerobic, item.anaerobic, 1);
+    const tl = itemTL(item);
     return `
-      <div class="border-t border-gray-800 pt-3">
-        <div class="flex justify-between items-center mb-1">
-          <p class="text-white text-sm font-medium">${escHtml(item.displayName)}</p>
-          <span class="text-xs text-gray-500">${Math.round(item.durationMin)} min</span>
+      <div style="border-top:1px solid var(--c-border);padding-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+          <p style="color:var(--c-black);font-size:14px;font-weight:500">${escHtml(item.displayName)}</p>
+          <span style="color:var(--c-ok);font-weight:500;font-size:14px">${tl} TSS</span>
         </div>
-        <p class="text-xs text-gray-400 mb-2">${escHtml(item.sport)} · ${new Date(item.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</p>
-        <div class="space-y-1">
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-gray-400 w-16 shrink-0">Aerobic</span>
-            ${miniBar(item.aerobic, iMax, 'bg-red-400')}
-            <span class="text-gray-400 w-8 text-right">${item.aerobic.toFixed(1)}</span>
-          </div>
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-gray-400 w-16 shrink-0">Anaerobic</span>
-            ${miniBar(item.anaerobic, iMax, 'bg-amber-400')}
-            <span class="text-gray-400 w-8 text-right">${item.anaerobic.toFixed(1)}</span>
-          </div>
+        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-muted)">
+          <span>${Math.round(item.durationMin)} min</span>
+          <span>·</span>
+          <span>${escHtml(item.sport)}</span>
+          <span>·</span>
+          <span>${new Date(item.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+          <span style="color:var(--c-faint);margin-left:4px">aerobic</span>
         </div>
       </div>`;
   }).join('');
 
   overlay.innerHTML = `
-    <div class="bg-gray-900 rounded-t-2xl w-full max-w-lg max-h-[80vh] flex flex-col"
-         style="padding-bottom: env(safe-area-inset-bottom, 0px)">
-      <div class="px-4 pt-4 pb-3 border-b border-gray-800">
-        <div class="flex items-center justify-between">
-          <h2 class="text-white font-semibold">Excess Activity Load</h2>
-          <button id="elp-close" class="text-gray-400 text-xl leading-none">✕</button>
+    <div style="background:var(--c-surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px)">
+      <div style="padding:16px;border-bottom:1px solid var(--c-border)">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <h2 style="color:var(--c-black);font-weight:600;font-size:16px">Excess Activity Load</h2>
+          <button id="elp-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0">✕</button>
         </div>
-        <p class="text-xs text-gray-400 mt-1">${items.length} activit${items.length === 1 ? 'y' : 'ies'} with unspent load</p>
-        <div class="space-y-1.5 mt-3">
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-gray-400 w-16 shrink-0">Total Aero</span>
-            ${miniBar(totalAerobic, maxVal, 'bg-red-400')}
-            <span class="text-gray-400 w-8 text-right">${totalAerobic.toFixed(1)}</span>
-          </div>
-          <div class="flex items-center gap-2 text-xs">
-            <span class="text-gray-400 w-16 shrink-0">Total An.</span>
-            ${miniBar(totalAnaerobic, maxVal, 'bg-amber-400')}
-            <span class="text-gray-400 w-8 text-right">${totalAnaerobic.toFixed(1)}</span>
-          </div>
+        <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px">
+          <span style="font-size:20px;font-weight:700;color:var(--c-black)">${totalTL}</span>
+          <span style="font-size:13px;color:var(--c-muted)">TSS unspent</span>
         </div>
+        <p style="font-size:10px;color:var(--c-faint);margin-top:2px">Training stress not yet applied to plan</p>
       </div>
-      <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+      <div style="flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px">
         ${itemRows}
       </div>
-      <div class="px-4 py-3 border-t border-gray-800 flex gap-2">
+      <div style="padding:12px 16px;border-top:1px solid var(--c-border);display:flex;gap:8px">
         <button id="elp-adjust"
-                class="flex-1 py-2.5 bg-amber-700/60 hover:bg-amber-700 text-amber-100 text-sm font-medium rounded-xl transition-colors">
+                style="flex:1;padding:12px;background:rgba(245,158,11,0.15);color:var(--c-caution);font-size:14px;font-weight:500;border:none;border-radius:10px;cursor:pointer">
           Adjust Plan
         </button>
         <button id="elp-close2"
-                class="px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm font-medium rounded-xl transition-colors">
+                style="padding:12px 18px;background:var(--c-bg);color:var(--c-muted);font-size:14px;font-weight:500;border:1px solid var(--c-border);border-radius:10px;cursor:pointer">
           Close
         </button>
       </div>

@@ -10,6 +10,8 @@ export interface PlanContext {
   weekIndex: number;   // 1-based
   totalWeeks: number;
   vdot: number;
+  effortScore?: number;  // Trailing effort score from recent weeks (used for adaptive scaling)
+  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR injury risk — reduces quality sessions when elevated
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,14 @@ export function deloadMultiplier(ability: AbilityBand): number {
     case 'advanced': return 0.87;
     case 'elite': return 0.90;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Effort multiplier (within-band adaptive scaling)
+// ---------------------------------------------------------------------------
+
+export function effortMultiplier(score: number): number {
+  return Math.max(0.85, Math.min(1.15, 1 - score * 0.05));
 }
 
 // ---------------------------------------------------------------------------
@@ -254,15 +264,26 @@ function applyRunnerTypeBias(priority: SlotType[], runnerType: RunnerType): Slot
 export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   const {
     runsPerWeek, raceDistance, runnerType, phase, fitnessLevel,
-    weekIndex, totalWeeks, vdot,
+    weekIndex, totalWeeks, vdot, acwrStatus,
   } = ctx;
 
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
   const deload = isDeloadWeek(weekIndex, ability);
-  const dMult = deload ? deloadMultiplier(ability) : 1.0;
+  const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
+  const dMult = (deload ? deloadMultiplier(ability) : 1.0) * eMult;
 
   const intents: SessionIntent[] = [];
-  const maxQuality = qualityCap(ability, fitnessLevel, runsPerWeek);
+  let maxQuality = qualityCap(ability, fitnessLevel, runsPerWeek);
+
+  // ACWR-driven quality session reduction
+  // caution: drop one quality session; high: drop two and cap long run
+  const acwrNote = acwrStatus === 'high'
+    ? 'ACWR elevated — intensity reduced (high risk)'
+    : acwrStatus === 'caution'
+    ? 'ACWR caution — one quality session replaced with easy'
+    : '';
+  if (acwrStatus === 'caution') maxQuality = Math.max(0, maxQuality - 1);
+  if (acwrStatus === 'high')    maxQuality = Math.max(0, maxQuality - 2);
 
   // For 1 run/week: single combined session
   if (runsPerWeek <= 1) {
@@ -283,15 +304,21 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   let slotsRemaining = runsPerWeek;
 
   if (needsLong) {
-    const longMins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
+    let longMins = Math.round(longRunMinutes(weekIndex, totalWeeks, ability, raceDistance, phase) * dMult);
+    // ACWR high: cap long run at previous week's equivalent (≈ no progression this week)
+    if (acwrStatus === 'high' && weekIndex > 1) {
+      const prevLongMins = Math.round(longRunMinutes(weekIndex - 1, totalWeeks, ability, raceDistance, phase) * dMult);
+      longMins = Math.min(longMins, prevLongMins);
+    }
     const longVar = LONG_VARIANTS[Math.max(0, (weekIndex - 1)) % LONG_VARIANTS.length];
+    const longNote = acwrNote || (deload ? 'Deload week' : '');
     intents.push({
       dayIndex: runsPerWeek - 1, // last day
       slot: 'long',
       totalMinutes: longMins,
       workMinutes: longMins,
       variantId: longVar.id,
-      notes: deload ? 'Deload week' : '',
+      notes: longNote,
     });
     slotsRemaining--;
   }
@@ -305,6 +332,8 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     if (qualityFilled >= maxQuality || slotsRemaining <= 0) break;
     // Reserve at least 1 slot for easy (unless we're the last slot)
     if (slotsRemaining <= 1 && qualityFilled > 0) break;
+
+    const qualityNote = acwrNote || (deload ? 'Deload week' : '');
 
     if (slot === 'threshold') {
       const workMins = Math.round(thresholdWorkMinutes(ability, phase, weekIndex, totalWeeks) * dMult);
@@ -321,7 +350,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
         repMinutes: variant.repMin,
         recoveryMinutes: variant.recMin,
         variantId: variant.id,
-        notes: deload ? 'Deload week' : '',
+        notes: qualityNote,
       });
     } else if (slot === 'vo2') {
       const workMins = Math.round(vo2WorkMinutes(ability, phase) * dMult);
@@ -336,7 +365,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
         repMinutes: variant.repMin,
         recoveryMinutes: variant.recMin,
         variantId: variant.id,
-        notes: deload ? 'Deload week' : '',
+        notes: qualityNote,
       });
     } else if (slot === 'marathon_pace') {
       const workMins = Math.round(mpWorkMinutes(raceDistance, ability, phase) * dMult);
@@ -347,7 +376,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
         totalMinutes: workMins + 20,
         workMinutes: workMins,
         variantId: 'mp_continuous',
-        notes: deload ? 'Deload week' : '',
+        notes: qualityNote,
       });
     }
 

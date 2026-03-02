@@ -6,9 +6,32 @@ import { getPaceForZone } from '@/calculations';
  * Build a SplitScheme from a workout description and current paces.
  * Parses the workout description (same formats as parser.ts) and creates
  * distance-based segments the tracker will watch for.
+ *
+ * Multi-line descriptions (with warm up / cool down lines) are handled by
+ * extracting WU/CD as single segments and parsing the main set from the
+ * middle line(s).
  */
 export function buildSplitScheme(workoutDesc: string, paces: Paces): SplitScheme {
-  // Try interval format: "8×400 @ 5K, 90s" or "4×1km @ threshold, 2min"
+  // Multi-line: extract WU / main set / CD separately
+  if (workoutDesc.includes('\n')) {
+    return buildMultiLineScheme(workoutDesc, paces);
+  }
+  return buildSingleLineScheme(workoutDesc, paces);
+}
+
+/**
+ * Resolve a pace zone name OR a literal "m:ss/km" pace string to sec/km.
+ * e.g. "4:49/km" → 289, "vo2" → paces.v, "threshold" → paces.t
+ */
+function resolvePace(zone: string, paces: Paces): number {
+  const literal = zone.match(/^(\d+):(\d{2})(?:\/km)?$/);
+  if (literal) return parseInt(literal[1]) * 60 + parseInt(literal[2]);
+  return getPaceForZone(zone, paces);
+}
+
+/** Parse a single-line workout description into a SplitScheme. */
+function buildSingleLineScheme(workoutDesc: string, paces: Paces): SplitScheme {
+  // Try interval format: "8×400m @ 5K, 90s" or "4×1km @ threshold, 2min"
   const intervalDistMatch = workoutDesc.match(
     /^(\d+)×(\d+\.?\d*)(m|mi|km|k)\s*@\s*([\w\-]+),?\s*(\d+)-?(\d*)(s|min)?/i
   );
@@ -28,12 +51,31 @@ export function buildSplitScheme(workoutDesc: string, paces: Paces): SplitScheme
     return buildIntervalScheme(adapted, paces);
   }
 
-  // Try time intervals: "3×10min @ threshold, 2min"
+  // Try time intervals: "6×2min @ 4:49/km (~790m), 2 min recovery between sets"
+  // or "3×10min @ threshold, 2min"
+  // Optional (~dist) parenthetical between zone and rest time.
   const timeIntervalMatch = workoutDesc.match(
-    /^(\d+)×(\d+)min\s*@\s*(\w+),?\s*(\d+)min/i
+    /^(\d+)×(\d+(?:\.\d+)?)min\s*@\s*([\w\-:./]+)\s*(?:\([^)]*\))?,?\s*(\d+(?:\.\d+)?)\s*min/i
   );
   if (timeIntervalMatch) {
     return buildTimeIntervalScheme(timeIntervalMatch, paces);
+  }
+
+  // Try continuous time at pace: "20min @ threshold (~3.2km)" or "20min @ 4:49/km"
+  // Produced by intentToWorkout for threshold/vo2 without reps, and marathon_pace.
+  const contTimeMatch = workoutDesc.match(
+    /^(\d+(?:\.\d+)?)min\s*@\s*([\w\-:./]+(?:\s*\([^)]*\))?)/i
+  );
+  if (contTimeMatch) {
+    const minutes = parseFloat(contTimeMatch[1]);
+    // Strip parenthetical from zone before resolving
+    const zone = contTimeMatch[2].replace(/\s*\([^)]*\)/, '').trim();
+    const pace = resolvePace(zone, paces);
+    if (pace > 0) {
+      const dist = (minutes * 60 / pace) * 1000;
+      const label = `${contTimeMatch[1]}min @ ${zone}`;
+      return { segments: [{ label, distance: dist, targetPace: pace }], totalDistance: dist, description: label };
+    }
   }
 
   // Try progressive: "21km: last 5 @ HM"
@@ -44,30 +86,86 @@ export function buildSplitScheme(workoutDesc: string, paces: Paces): SplitScheme
     return buildProgressiveScheme(progressiveMatch, paces);
   }
 
-  // Try distance @ pace: "20km @ MP"
-  const distAtPaceMatch = workoutDesc.match(/^(\d+\.?\d*)km\s*@\s*(\w+)/i);
+  // Try distance @ pace: "20km @ MP" — single segment so phased bar stays clean
+  const distAtPaceMatch = workoutDesc.match(/^(\d+\.?\d*)km\s*@\s*([\w\-:./]+)/i);
   if (distAtPaceMatch) {
     const dist = parseFloat(distAtPaceMatch[1]) * 1000;
-    const pace = getPaceForZone(distAtPaceMatch[2], paces);
-    return buildKmSplits(dist, pace, `${distAtPaceMatch[1]}km @ ${distAtPaceMatch[2]}`);
+    const pace = resolvePace(distAtPaceMatch[2], paces);
+    const label = `${distAtPaceMatch[1]}km @ ${distAtPaceMatch[2]}`;
+    return { segments: [{ label, distance: dist, targetPace: pace }], totalDistance: dist, description: label };
   }
 
-  // Try simple distance: "8km"
+  // Try simple distance: "8km" — single segment
   const simpleDistMatch = workoutDesc.match(/^(\d+\.?\d*)km$/i);
   if (simpleDistMatch) {
     const dist = parseFloat(simpleDistMatch[1]) * 1000;
-    return buildKmSplits(dist, paces.e, `${simpleDistMatch[1]}km easy`);
-  }
-
-  // Fallback: km splits for whatever distance we can extract
-  const anyDistMatch = workoutDesc.match(/(\d+\.?\d*)\s*km/i);
-  if (anyDistMatch) {
-    const dist = parseFloat(anyDistMatch[1]) * 1000;
-    return buildKmSplits(dist, null, workoutDesc);
+    const label = `${simpleDistMatch[1]}km Easy`;
+    return { segments: [{ label, distance: dist, targetPace: paces.e }], totalDistance: dist, description: `${simpleDistMatch[1]}km easy` };
   }
 
   // Can't parse — return empty scheme
   return { segments: [], totalDistance: 0, description: workoutDesc };
+}
+
+/**
+ * Parse a multi-line description.
+ * Lines are categorised as:
+ *   - Warm-up:   "Xkm warm up ..."  → single WU segment at easy pace
+ *   - Cool-down: "Xkm cool down ..." → single CD segment at easy pace
+ *   - Main set:  everything else — first parseable line wins
+ */
+function buildMultiLineScheme(workoutDesc: string, paces: Paces): SplitScheme {
+  const lines = workoutDesc.split('\n').map(l => l.trim()).filter(Boolean);
+
+  let wuDist = 0;
+  let cdDist = 0;
+  let mainScheme: SplitScheme | null = null;
+
+  for (const line of lines) {
+    const wuMatch = line.match(/^(\d+\.?\d*)km\s+warm\s+up/i);
+    if (wuMatch) {
+      wuDist = parseFloat(wuMatch[1]) * 1000;
+      continue;
+    }
+    const cdMatch = line.match(/^(\d+\.?\d*)km\s+cool\s+down/i);
+    if (cdMatch) {
+      cdDist = parseFloat(cdMatch[1]) * 1000;
+      continue;
+    }
+    if (!mainScheme) {
+      const candidate = buildSingleLineScheme(line, paces);
+      if (candidate.segments.length > 0) mainScheme = candidate;
+    }
+  }
+
+  const segments: SplitSegment[] = [];
+
+  if (wuDist > 0) {
+    const km = wuDist / 1000;
+    segments.push({
+      label: `${km % 1 === 0 ? km.toFixed(0) : km}km Warm Up`,
+      distance: wuDist,
+      targetPace: paces.e,
+    });
+  }
+
+  if (mainScheme) {
+    segments.push(...mainScheme.segments);
+  }
+
+  if (cdDist > 0) {
+    const km = cdDist / 1000;
+    segments.push({
+      label: `${km % 1 === 0 ? km.toFixed(0) : km}km Cool Down`,
+      distance: cdDist,
+      targetPace: paces.e,
+    });
+  }
+
+  const totalDistance = segments.reduce((s, seg) => s + seg.distance, 0);
+  const description = mainScheme?.description ?? workoutDesc.split('\n')[0];
+
+  return { segments, totalDistance, description };
 }
 
 function buildIntervalScheme(match: RegExpMatchArray, paces: Paces): SplitScheme {
@@ -115,11 +213,11 @@ function buildIntervalScheme(match: RegExpMatchArray, paces: Paces): SplitScheme
 
 function buildTimeIntervalScheme(match: RegExpMatchArray, paces: Paces): SplitScheme {
   const reps = parseInt(match[1]);
-  const workMin = parseInt(match[2]);
+  const workMin = parseFloat(match[2]);
   const zone = match[3];
-  const restMin = parseInt(match[4]);
+  const restMin = parseFloat(match[4]);
 
-  const workPace = getPaceForZone(zone, paces);
+  const workPace = resolvePace(zone, paces);
   const workDist = (workMin * 60) / workPace * 1000;
   const recoveryDist = (restMin * 60) / paces.e * 1000;
 
@@ -157,24 +255,16 @@ function buildProgressiveScheme(match: RegExpMatchArray, paces: Paces): SplitSch
 
   const segments: SplitSegment[] = [];
 
-  // Easy portion as km splits
-  for (let i = 0; i < Math.floor(easyKm); i++) {
+  // Easy portion as a single block
+  if (easyKm > 0) {
     segments.push({
-      label: `km ${i + 1}`,
-      distance: 1000,
-      targetPace: paces.e,
-    });
-  }
-  const easyRemainder = (easyKm - Math.floor(easyKm)) * 1000;
-  if (easyRemainder > 0) {
-    segments.push({
-      label: `km ${Math.floor(easyKm) + 1} (partial)`,
-      distance: easyRemainder,
+      label: `${easyKm % 1 === 0 ? easyKm.toFixed(0) : easyKm}km Easy`,
+      distance: easyKm * 1000,
       targetPace: paces.e,
     });
   }
 
-  // Fast portion as km splits
+  // Fast portion as km splits so the runner can track each km
   for (let i = 0; i < Math.floor(fastKm); i++) {
     segments.push({
       label: `Fast km ${i + 1} of ${Math.floor(fastKm)}`,
@@ -183,7 +273,7 @@ function buildProgressiveScheme(match: RegExpMatchArray, paces: Paces): SplitSch
     });
   }
   const fastRemainder = (fastKm - Math.floor(fastKm)) * 1000;
-  if (fastRemainder > 0) {
+  if (fastRemainder > 50) {
     segments.push({
       label: `Fast km ${Math.floor(fastKm) + 1} (partial)`,
       distance: fastRemainder,

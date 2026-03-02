@@ -19,6 +19,8 @@ export type OnboardingStep =
   | 'volume'
   | 'performance'
   | 'fitness'
+  | 'strava-history'
+  | 'physiology'
   | 'initializing'
   | 'assessment'
   | 'main-view'
@@ -120,6 +122,8 @@ export interface OnboardingState {
 
   // Step 7: Fitness Data (smartwatch)
   hasSmartwatch: boolean | null;
+  watchType?: 'garmin' | 'apple' | 'strava';  // Which device the user selected
+  biologicalSex?: 'male' | 'female' | 'prefer_not_to_say';  // For iTRIMP β coefficient
   ltPace: number | null;      // LT pace in seconds per km
   vo2max: number | null;      // VO2 max in ml/kg/min
   restingHR: number | null;   // Resting heart rate in bpm

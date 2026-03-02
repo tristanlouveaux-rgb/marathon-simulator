@@ -2,7 +2,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import type { RunnerType } from '@/types/training';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
-import { saveState } from '@/state/persistence';
+import { saveState, getMondayOf } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
   gp, blendPredictions
@@ -198,6 +198,14 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.commuteConfig = undefined;
     }
 
+    // Phase C3: if user accepted Strava history and we have a detected weekly km,
+    // use it as the plan starting volume (overrides the runs-per-week lookup above).
+    // Commute km has already been added — we override the base but keep commute on top.
+    if (s.stravaHistoryAccepted && s.detectedWeeklyKm != null) {
+      const commuteExtra = s.wkm - (runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70);
+      s.wkm = Math.round(s.detectedWeeklyKm) + Math.max(0, commuteExtra);
+    }
+
     // Store initial physiology
     s.initialLT = ltPace;
     s.initialVO2 = vo2max;
@@ -207,6 +215,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // Store heart rate data for HR zone calculations
     if (state.restingHR) s.restingHR = state.restingHR;
     if (state.maxHR) s.maxHR = state.maxHR;
+
+    // Store biological sex for iTRIMP β coefficient
+    if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
 
     // Calculate expected final via shared forecast function
     const forecast = calculateForecast(
@@ -219,6 +230,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     if (state.selectedRace) {
       s.selectedMarathon = state.selectedRace;
     }
+
+    // Anchor all week date ranges to the Monday of the week the plan was created
+    s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
 
     // Store onboarding reference
     s.onboarding = state;

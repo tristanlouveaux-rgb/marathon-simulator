@@ -29,17 +29,18 @@ import {
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { generateWeekWorkouts } from '@/workouts';
-import { gp } from '@/calculations/paces';
 import {
   findMatchingWorkout,
   type ExternalActivity,
   type MatchResult,
 } from '@/calculations/matching';
 import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } from '@/types';
+import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
+import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 
-const INTRO_SEEN_KEY = 'mosaic_activity_review_intro_seen';
+// Intro screen removed — flow goes directly to matching screen
 
 // ---------------------------------------------------------------------------
 // Week workouts helper
@@ -48,30 +49,12 @@ function getWeekWorkoutsForReview() {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
-
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
-  const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-
-  let trailingEffort = 0;
-  const lookback = Math.min(3, s.w - 1);
-  if (lookback > 0) {
-    let total = 0; let count = 0;
-    for (let i = s.w - 2; i >= s.w - 1 - lookback && i >= 0; i--) {
-      if (s.wks[i].effortScore != null) { total += s.wks[i].effortScore!; count++; }
-    }
-    if (count > 0) trailingEffort = total / count;
-  }
-
+  // CRITICAL: must use IDENTICAL parameters to getPlanHTML's generateWeekWorkouts call
+  // so that workout IDs (w.id || w.n) match exactly — matching breaks if they differ.
   return generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-    (s as any).injuryState || null, s.recurringActivities,
-    s.onboarding?.experienceLevel,
-    (s.maxHR || s.restingHR || s.onboarding?.age)
-      ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
-      : undefined,
-    gp(currentVDOT, s.lt).e, s.w, s.tw, currentVDOT, s.gs, trailingEffort,
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+    null, s.recurringActivities,
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
   );
 }
 
@@ -133,24 +116,20 @@ function defaultsToIntegrate(item: GarminPendingItem, match: MatchResult | null)
 export function showActivityReview(
   pending: GarminPendingItem[],
   onComplete: () => void,
-  skipIntro = false,
+  _skipIntro = false, // kept for call-site compatibility
   savedChoices?: Record<string, 'integrate' | 'log'>,
+  onCancel?: () => void,
 ): void {
   const overlay = document.createElement('div');
   overlay.id = 'activity-review-overlay';
-  overlay.className = 'fixed inset-0 z-50 bg-gray-950 flex flex-col';
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:var(--c-bg);display:flex;flex-direction:column';
   document.body.appendChild(overlay);
 
-  // Use persisted choices as fallback when not explicitly provided (e.g. refresh without applying)
+  // All activities default to 'integrate'; matching screen's Log Only bucket handles exceptions
+  // Use persisted choices as fallback (re-review preserves previous assignments)
   const sAr = getMutableState();
   const effectiveSavedChoices = savedChoices ?? sAr.wks?.[sAr.w - 1]?.garminReviewChoices;
-
-  const hasSeenIntro = localStorage.getItem(INTRO_SEEN_KEY) === '1';
-  if (skipIntro || hasSeenIntro) {
-    showReviewScreen(overlay, pending, onComplete, effectiveSavedChoices);
-  } else {
-    showIntroScreen(overlay, pending, onComplete);
-  }
+  showMatchingEntryScreen(overlay, pending, onComplete, effectiveSavedChoices, onCancel);
 }
 
 /**
@@ -158,13 +137,22 @@ export function showActivityReview(
  * Undoes previous processing, pre-populates with saved choices, shows review.
  * Called from the "Review Garmin activities" button in the Garmin section.
  */
-export function openActivityReReview(): void {
+export function openActivityReReview(onDone?: () => void): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk?.garminPending?.length) return;
 
   // Capture previous choices before undoing
   const savedChoices = { ...(wk.garminReviewChoices || {}) };
+
+  // Snapshot state so Cancel can restore it exactly
+  const snapshot = {
+    rated: { ...wk.rated },
+    garminActuals: JSON.parse(JSON.stringify(wk.garminActuals || {})),
+    garminMatched: { ...(wk.garminMatched || {}) },
+    adhocWorkouts: JSON.parse(JSON.stringify(wk.adhocWorkouts || [])),
+    workoutMods: JSON.parse(JSON.stringify(wk.workoutMods || [])),
+  };
 
   // Undo all previous Garmin processing for every pending item
   for (const item of wk.garminPending) {
@@ -196,16 +184,117 @@ export function openActivityReReview(): void {
 
   saveState();
 
+  const done = () => { if (onDone) onDone(); else render(); };
   showActivityReview(
     wk.garminPending,
-    () => { render(); },
+    done,
     /* skipIntro */ true,
     savedChoices,
+    /* onCancel */ () => {
+      // Restore state to exactly what it was before the user opened the review
+      const s2 = getMutableState();
+      const wk2 = s2.wks?.[s2.w - 1];
+      if (wk2) {
+        wk2.rated = snapshot.rated;
+        wk2.garminActuals = snapshot.garminActuals;
+        wk2.garminMatched = snapshot.garminMatched;
+        wk2.adhocWorkouts = snapshot.adhocWorkouts;
+        wk2.workoutMods = snapshot.workoutMods;
+        saveState();
+      }
+      done();
+    },
   );
 }
 
 // ---------------------------------------------------------------------------
-// Step 1: Intro (shown once, then skipped via localStorage)
+// Direct entry: skip integrate/log toggle page, go straight to matching screen
+
+function showMatchingEntryScreen(
+  overlay: HTMLElement,
+  pending: GarminPendingItem[],
+  onComplete: () => void,
+  savedChoices?: Record<string, 'integrate' | 'log'>,
+  onCancel?: () => void,
+): void {
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  const allWorkouts = getWeekWorkoutsForReview();
+
+  // Default all to 'integrate'; Log Only bucket on the matching screen handles exceptions
+  const choices: Record<string, 'integrate' | 'log'> = {};
+  for (const item of pending) {
+    choices[item.garminId] = savedChoices?.[item.garminId] === 'log' ? 'log' : 'integrate';
+  }
+
+  const pairings = proposeMatchings(pending, choices, buildMatchCache(pending, allWorkouts, wk), allWorkouts);
+  const unrated = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
+
+  let weekStartDate: Date | undefined;
+  let weekLabel: string | undefined;
+  if (s.planStartDate) {
+    weekStartDate = new Date(s.planStartDate);
+    weekStartDate.setDate(weekStartDate.getDate() + (s.w - 1) * 7);
+    const weekEndDate = new Date(weekStartDate);
+    weekEndDate.setDate(weekEndDate.getDate() + 6);
+    const fmtD = (d: Date) => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+    weekLabel = `Week ${s.w}${s.tw ? ` of ${s.tw}` : ''} · ${fmtD(weekStartDate)} – ${fmtD(weekEndDate)}`;
+  }
+
+  showMatchingScreen(
+    overlay,
+    pending,
+    choices,
+    pairings,
+    unrated,
+    (confirmedMatchings, reductionItems, logonlyItems) => {
+      const sOrig = getMutableState();
+      const wkOrig = sOrig.wks?.[sOrig.w - 1];
+      if (wkOrig) {
+        if (!wkOrig.garminReviewChoices) wkOrig.garminReviewChoices = {};
+        for (const [id, choice] of Object.entries(choices)) {
+          wkOrig.garminReviewChoices[id] = choice;
+        }
+      }
+
+      const updatedChoices = { ...choices };
+      for (const item of reductionItems) updatedChoices[item.garminId] = 'log';
+      for (const item of logonlyItems)   updatedChoices[item.garminId] = 'log';
+
+      populateUnspentLoadItems(reductionItems);
+
+      const toastLines = buildAssignmentLines(pending, choices, updatedChoices, confirmedMatchings, allWorkouts);
+      overlay.remove();
+      saveState();
+      showAssignmentToast(toastLines);
+      applyReview(pending, updatedChoices, buildMatchCache(pending, allWorkouts, wk), onComplete, confirmedMatchings);
+    },
+    () => {
+      overlay.remove();
+      if (onCancel) onCancel();
+      else onComplete();
+    },
+    weekStartDate,
+    weekLabel,
+  );
+}
+
+/** Build matchCache from pending items against unrated workouts */
+function buildMatchCache(
+  pending: GarminPendingItem[],
+  allWorkouts: ReturnType<typeof getWeekWorkoutsForReview>,
+  wk: ReturnType<typeof getMutableState>['wks'][0] | undefined,
+): Map<string, import('@/calculations/matching').MatchResult | null> {
+  const unratedWorkouts = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
+  const matchCache = new Map<string, import('@/calculations/matching').MatchResult | null>();
+  for (const item of pending) {
+    matchCache.set(item.garminId, findMatchingWorkout(buildExternalActivity(item), unratedWorkouts));
+  }
+  return matchCache;
+}
+
+// ---------------------------------------------------------------------------
+// Step 1: Intro (kept for reference but no longer called)
 
 function showIntroScreen(
   overlay: HTMLElement,
@@ -213,44 +302,43 @@ function showIntroScreen(
   onComplete: () => void,
 ): void {
   overlay.innerHTML = `
-    <div class="bg-gray-900 border-b border-gray-800">
+    <div class="border-b" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="max-w-7xl mx-auto px-4 py-4">
-        <h1 class="text-xl font-semibold text-white">Activity Review</h1>
-        <p class="text-sm text-gray-400 mt-0.5">${pending.length} activit${pending.length === 1 ? 'y' : 'ies'} from Garmin</p>
+        <h1 class="text-xl font-semibold" style="color:var(--c-black)">Activity Review</h1>
+        <p class="text-sm mt-0.5" style="color:var(--c-muted)">${pending.length} activit${pending.length === 1 ? 'y' : 'ies'} from Garmin</p>
       </div>
     </div>
 
     <div class="flex-1 overflow-y-auto px-4 py-6">
-      <p class="text-gray-200 text-base mb-5">
+      <p class="text-base mb-5" style="color:var(--c-black)">
         Choose how each Garmin activity should be handled before your plan is updated.
       </p>
 
       <div class="mb-6">
-        <p class="text-white font-semibold mb-3">Integrate</p>
-        <ul class="space-y-2 text-sm text-gray-300">
-          <li class="flex gap-2"><span class="text-gray-500 shrink-0">—</span>Runs are matched to the closest planned session and marked complete at your recorded effort.</li>
-          <li class="flex gap-2"><span class="text-gray-500 shrink-0">—</span>Strength and HIIT sessions slot against planned gym work.</li>
-          <li class="flex gap-2"><span class="text-gray-500 shrink-0">—</span>Any remaining cross-training load is assessed and we may suggest reducing or replacing an upcoming run. You approve the change before it's applied.</li>
+        <p class="font-semibold mb-3" style="color:var(--c-black)">Integrate</p>
+        <ul class="space-y-2 text-sm" style="color:var(--c-muted)">
+          <li class="flex gap-2"><span class="shrink-0" style="color:var(--c-faint)">—</span>Runs are matched to the closest planned session and marked complete at your recorded effort.</li>
+          <li class="flex gap-2"><span class="shrink-0" style="color:var(--c-faint)">—</span>Strength and HIIT sessions slot against planned gym work.</li>
+          <li class="flex gap-2"><span class="shrink-0" style="color:var(--c-faint)">—</span>Any remaining cross-training load is assessed and we may suggest reducing or replacing an upcoming run. You approve the change before it's applied.</li>
         </ul>
       </div>
 
-      <div class="border-t border-gray-800 pt-5">
-        <p class="text-white font-semibold mb-3">Log Only</p>
-        <ul class="space-y-2 text-sm text-gray-300">
-          <li class="flex gap-2"><span class="text-gray-500 shrink-0">—</span>Recorded in your weekly summary for reference.</li>
-          <li class="flex gap-2"><span class="text-gray-500 shrink-0">—</span>Does not affect your plan, load calculations, or scheduled runs.</li>
+      <div class="border-t pt-5" style="border-color:var(--c-border)">
+        <p class="font-semibold mb-3" style="color:var(--c-black)">Log Only</p>
+        <ul class="space-y-2 text-sm" style="color:var(--c-muted)">
+          <li class="flex gap-2"><span class="shrink-0" style="color:var(--c-faint)">—</span>Recorded in your weekly summary for reference.</li>
+          <li class="flex gap-2"><span class="shrink-0" style="color:var(--c-faint)">—</span>Does not affect your plan, load calculations, or scheduled runs.</li>
         </ul>
       </div>
     </div>
 
-    <div class="bg-gray-900 border-t border-gray-800 px-4 py-4 flex gap-3"
-         style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
+    <div class="border-t px-4 py-4 flex gap-3" style="background:var(--c-surface);border-color:var(--c-border);padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
       <button id="ar-cancel-intro"
-              class="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
         Cancel
       </button>
       <button id="ar-continue"
-              class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:var(--c-ok);color:#fff">
         Review activities
       </button>
     </div>
@@ -262,7 +350,6 @@ function showIntroScreen(
   });
 
   overlay.querySelector('#ar-continue')?.addEventListener('click', () => {
-    localStorage.setItem(INTRO_SEEN_KEY, '1');
     showReviewScreen(overlay, pending, onComplete);
   });
 }
@@ -275,6 +362,7 @@ function showReviewScreen(
   pending: GarminPendingItem[],
   onComplete: () => void,
   savedChoices?: Record<string, 'integrate' | 'log'>,
+  onCancel?: () => void,
 ): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
@@ -306,11 +394,11 @@ function showReviewScreen(
   }
 
   overlay.innerHTML = `
-    <div class="bg-gray-900 border-b border-gray-800">
+    <div class="border-b" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="max-w-7xl mx-auto px-4 py-4">
-        <h1 class="text-xl font-semibold text-white">Activity Review</h1>
-        <p class="text-sm text-gray-300 mt-0.5">${weekHeaderStr}</p>
-        <p class="text-xs text-gray-500 mt-0.5">${pending.length} activit${pending.length === 1 ? 'y' : 'ies'} to review</p>
+        <h1 class="text-xl font-semibold" style="color:var(--c-black)">Activity Review</h1>
+        <p class="text-sm mt-0.5" style="color:var(--c-muted)">${weekHeaderStr}</p>
+        <p class="text-xs mt-0.5" style="color:var(--c-faint)">${pending.length} activit${pending.length === 1 ? 'y' : 'ies'} to review</p>
       </div>
     </div>
 
@@ -318,14 +406,13 @@ function showReviewScreen(
       ${renderByDay(pending, choices, matchCache)}
     </div>
 
-    <div class="bg-gray-900 border-t border-gray-800 px-4 py-4 flex gap-3"
-         style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
+    <div class="border-t px-4 py-4 flex gap-3" style="background:var(--c-surface);border-color:var(--c-border);padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
       <button id="ar-cancel"
-              class="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
         Cancel
       </button>
       <button id="ar-apply"
-              class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:var(--c-ok);color:#fff">
         Apply
       </button>
     </div>
@@ -352,7 +439,8 @@ function showReviewScreen(
 
   overlay.querySelector('#ar-cancel')?.addEventListener('click', () => {
     overlay.remove();
-    onComplete();
+    if (onCancel) onCancel();
+    else onComplete();
   });
 
   overlay.querySelector('#ar-apply')?.addEventListener('click', () => {
@@ -444,7 +532,7 @@ function renderByDay(
 
   return buckets.map(bucket => `
     <div>
-      <p class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">${bucket.label}</p>
+      <p class="text-xs font-semibold uppercase tracking-wide mb-2" style="color:var(--c-faint)">${bucket.label}</p>
       <div class="space-y-2">
         ${bucket.items.map(item => renderCard(item, choices, matchCache)).join('')}
       </div>
@@ -467,29 +555,29 @@ function renderCard(
   let matchHint = '';
   if (item.appType === 'run' || item.appType === 'gym' || item.appType === 'other') {
     if (match) {
-      const color  = match.confidence === 'high' ? 'text-emerald-400' : 'text-amber-400';
+      const color  = match.confidence === 'high' ? 'color:var(--c-ok)' : 'color:var(--c-caution)';
       const prefix = match.confidence === 'high' ? 'Matches' : 'Possible match';
-      matchHint = `<p class="text-xs ${color} mt-1">${prefix}: ${match.workoutName}</p>`;
+      matchHint = `<p class="text-xs mt-1" style="${color}">${prefix}: ${match.workoutName}</p>`;
     } else if (item.appType !== 'other') {
-      matchHint = `<p class="text-xs text-gray-500 mt-1">No planned session — will log as extra activity</p>`;
+      matchHint = `<p class="text-xs mt-1" style="color:var(--c-faint)">No planned session — will log as extra activity</p>`;
     }
   }
 
   return `
-    <div class="bg-gray-900 rounded-lg border border-gray-800 p-3">
+    <div class="rounded-lg border p-3" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="mb-2.5">
-        <p class="text-white font-medium text-sm">${label}</p>
-        <p class="text-xs text-gray-400 mt-0.5">${distKm ? `${distKm} km &middot; ` : ''}${durationMin} min &middot; ${timeStr}</p>
+        <p class="font-medium text-sm" style="color:var(--c-black)">${label}</p>
+        <p class="text-xs mt-0.5" style="color:var(--c-muted)">${distKm ? `${distKm} km &middot; ` : ''}${durationMin} min &middot; ${timeStr}</p>
         ${matchHint}
       </div>
       <div class="flex gap-2">
         <button data-garmin-id="${item.garminId}" data-choice="integrate"
-                class="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  choice === 'integrate' ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-400'
+                class="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors" style="${
+                  choice === 'integrate' ? 'background:var(--c-ok);color:#fff' : 'background:rgba(0,0,0,0.06);color:var(--c-muted)'
                 }">${choice === 'integrate' ? '● Integrate' : 'Integrate'}</button>
         <button data-garmin-id="${item.garminId}" data-choice="log"
-                class="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  choice === 'log' ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-400'
+                class="flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors" style="${
+                  choice === 'log' ? 'background:rgba(0,0,0,0.18);color:var(--c-black)' : 'background:rgba(0,0,0,0.06);color:var(--c-muted)'
                 }">${choice === 'log' ? '● Log Only' : 'Log Only'}</button>
       </div>
     </div>
@@ -502,12 +590,14 @@ function patchCardButtons(overlay: HTMLElement, garminId: string, choice: 'integ
 
   if (integBtn) {
     const on = choice === 'integrate';
-    integBtn.className = `flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${on ? 'bg-emerald-600 text-white' : 'bg-gray-800 text-gray-400'}`;
+    integBtn.className = `flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors`;
+    integBtn.style.cssText = on ? 'background:var(--c-ok);color:#fff' : 'background:rgba(0,0,0,0.06);color:var(--c-muted)';
     integBtn.textContent = on ? '● Integrate' : 'Integrate';
   }
   if (logBtn) {
     const on = choice === 'log';
-    logBtn.className = `flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${on ? 'bg-gray-600 text-white' : 'bg-gray-800 text-gray-400'}`;
+    logBtn.className = `flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors`;
+    logBtn.style.cssText = on ? 'background:rgba(0,0,0,0.18);color:var(--c-black)' : 'background:rgba(0,0,0,0.06);color:var(--c-muted)';
     logBtn.textContent = on ? '● Log Only' : 'Log Only';
   }
 }
@@ -526,6 +616,8 @@ function populateUnspentLoadItems(items: GarminPendingItem[]): void {
   if (!wk.unspentLoadItems) wk.unspentLoadItems = [];
 
   for (const item of items) {
+    // Dedup: skip if this garminId is already in the excess load list
+    if (wk.unspentLoadItems.some(u => u.garminId === item.garminId)) continue;
     const aerobic   = item.aerobicEffect   ?? 1.5;
     const anaerobic = item.anaerobicEffect ?? 0.5;
     const sport     = mapAppTypeToSport(item.appType);
@@ -625,6 +717,16 @@ function applyReview(
 
   // ── 2. Runs → match planned runs ──────────────────────────────────────────
   for (const item of integrateRuns) {
+    // Guard: if this run is already definitively matched (not __pending__), don't re-process.
+    // This prevents double-processing when applyReview is called for activities that were
+    // auto-matched by matchAndAutoComplete (and openActivityReReview didn't un-rate them).
+    const existingMatch = wk.garminMatched[item.garminId];
+    if (existingMatch && existingMatch !== '__pending__' && !existingMatch.startsWith('garmin-')) {
+      // Already matched to a plan slot — mark it as used and skip
+      usedWorkoutIds.add(existingMatch);
+      continue;
+    }
+
     const rpe = deriveItemRPE(item, s);
     // Confirmed matchings from the UI screen override the auto-match
     const confirmedId = confirmedMatchings?.get(item.garminId);
@@ -647,6 +749,7 @@ function applyReview(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[match.workoutId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0
@@ -657,6 +760,8 @@ function applyReview(
         calories: item.calories,
         aerobicEffect: item.aerobicEffect,
         anaerobicEffect: item.anaerobicEffect,
+        workoutName: match.workoutName,
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
 
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
@@ -695,12 +800,14 @@ function applyReview(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[matchId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
 
       const idx = planCandidates.findIndex(w => (w.id || w.n) === matchId);
@@ -790,12 +897,14 @@ function applyReview(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[slotId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
 
       const idx = genericCrossSlots.findIndex(w => (w.id || w.n) === slotId);
@@ -912,6 +1021,19 @@ function applyReview(
       }
       if (!wk3.garminMatched) wk3.garminMatched = {};
       wk3.garminMatched[item.garminId] = adhocId;
+    }
+
+    // Store cross-training TL and impact load
+    {
+      const sport = normalizeSport(combinedActivity.sport) as SportKey;
+      const cfg = SPORTS_DB[sport];
+      const runSpec = cfg?.runSpec ?? 0.35;
+      const impactPerMin = cfg?.impactPerMin ?? 0.04;
+      const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
+        ? (combinedActivity.iTrimp * 100) / 15000
+        : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
+      wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
+      wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
     }
 
     const affectedStr = affectedNames.length > 0 ? ` — adjusted: ${affectedNames.join(', ')}` : '';
@@ -1074,7 +1196,7 @@ function showMatchingConfirmation(
     const overflowSel = !p.proposedWorkoutId ? 'selected' : '';
     return `
       <select data-garmin-id="${p.item.garminId}"
-              class="w-full bg-gray-800 border border-gray-700 text-gray-200 text-xs rounded-lg px-2 py-1.5 mt-1.5">
+              class="w-full border text-xs rounded-lg px-2 py-1.5 mt-1.5" style="background:var(--c-bg);border-color:var(--c-border);color:var(--c-black)">
         <option value="" ${overflowSel}>⚠ No slot — load adjustment modal</option>
         ${options}
       </select>`;
@@ -1088,17 +1210,17 @@ function showMatchingConfirmation(
     const emoji   = activityEmoji(p.item);
     const badge   = p.proposedWorkoutId
       ? (p.confidence === 'high'
-          ? '<span class="text-xs text-emerald-400 ml-1.5">✓ High match</span>'
-          : '<span class="text-xs text-amber-400 ml-1.5">~ Possible</span>')
-      : '<span class="text-xs text-gray-500 ml-1.5">No slot found</span>';
+          ? '<span class="text-xs ml-1.5" style="color:var(--c-ok)">✓ High match</span>'
+          : '<span class="text-xs ml-1.5" style="color:var(--c-caution)">~ Possible</span>')
+      : '<span class="text-xs ml-1.5" style="color:var(--c-faint)">No slot found</span>';
 
     return `
-      <div class="bg-gray-900 rounded-lg border border-gray-800 p-3">
+      <div class="rounded-lg border p-3" style="background:var(--c-surface);border-color:var(--c-border)">
         <div class="flex items-center justify-between gap-2 mb-0.5">
-          <p class="text-white text-sm font-medium">${emoji} ${label}</p>
+          <p class="text-sm font-medium" style="color:var(--c-black)">${emoji} ${label}</p>
           <span>${badge}</span>
         </div>
-        <p class="text-xs text-gray-400">${distKm}${dur} min · ${timeStr}</p>
+        <p class="text-xs" style="color:var(--c-muted)">${distKm}${dur} min · ${timeStr}</p>
         ${buildSelect(p)}
       </div>`;
   });
@@ -1106,32 +1228,31 @@ function showMatchingConfirmation(
   const overflowCount = pairings.filter(p => !p.proposedWorkoutId).length;
 
   overlay.innerHTML = `
-    <div class="bg-gray-900 border-b border-gray-800">
+    <div class="border-b" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="max-w-7xl mx-auto px-4 py-4">
-        <h1 class="text-xl font-semibold text-white">Confirm Matching</h1>
-        <p class="text-sm text-gray-400 mt-0.5">Review how each activity maps to your plan — adjust if needed.</p>
+        <h1 class="text-xl font-semibold" style="color:var(--c-black)">Confirm Matching</h1>
+        <p class="text-sm mt-0.5" style="color:var(--c-muted)">Review how each activity maps to your plan — adjust if needed.</p>
       </div>
     </div>
 
     <div class="flex-1 overflow-y-auto px-4 py-4 space-y-2">
       ${rows.join('')}
-      <div class="p-3 ${overflowCount > 0
-        ? 'bg-amber-950/30 border-amber-800/50 text-amber-300'
-        : 'bg-emerald-950/30 border-emerald-800/50 text-emerald-300'} border rounded-lg text-xs">
+      <div class="p-3 border rounded-lg text-xs" style="${overflowCount > 0
+        ? 'background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.3);color:var(--c-caution)'
+        : 'background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.3);color:var(--c-ok)'}">
         ${overflowCount > 0
           ? `${overflowCount} activit${overflowCount === 1 ? 'y has' : 'ies have'} no slot — a load adjustment modal will follow.`
           : 'All activities matched — no load adjustment needed.'}
       </div>
     </div>
 
-    <div class="bg-gray-900 border-t border-gray-800 px-4 py-4 flex gap-3"
-         style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
+    <div class="border-t px-4 py-4 flex gap-3" style="background:var(--c-surface);border-color:var(--c-border);padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem)">
       <button id="mc-back"
-              class="flex-1 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
         ← Back
       </button>
       <button id="mc-confirm"
-              class="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-medium transition-colors">
+              class="flex-1 py-3 rounded-xl font-medium transition-colors" style="background:var(--c-ok);color:#fff">
         Confirm →
       </button>
     </div>
@@ -1201,12 +1322,15 @@ export function autoProcessActivities(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[match.workoutId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0
           ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR, maxHR: item.maxHR, calories: item.calories,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
+        workoutName: match.workoutName,
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
       const idx = planCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
@@ -1233,12 +1357,14 @@ export function autoProcessActivities(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[match.workoutId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
       const idx = planCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
@@ -1278,12 +1404,14 @@ export function autoProcessActivities(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[namedMatch.workoutId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
       const idx = planCandidates.findIndex(w => (w.id || w.n) === namedMatch.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
@@ -1315,12 +1443,14 @@ export function autoProcessActivities(
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[slotId] = {
         garminId: item.garminId,
+        startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
         avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
+        hrZones: item.hrZones ?? null,
       } as GarminActual;
       const idx = genericCrossSlots.findIndex(w => (w.id || w.n) === slotId);
       if (idx >= 0) genericCrossSlots.splice(idx, 1);
@@ -1402,6 +1532,19 @@ export function autoProcessActivities(
       wk3.unspentLoadItems = wk3.unspentLoadItems.filter(u => !overflowIds.has(u.garminId));
     }
 
+    // Store cross-training TL and impact load
+    {
+      const sport = normalizeSport(combinedActivity.sport) as SportKey;
+      const cfg = SPORTS_DB[sport];
+      const runSpec = cfg?.runSpec ?? 0.35;
+      const impactPerMin = cfg?.impactPerMin ?? 0.04;
+      const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
+        ? (combinedActivity.iTrimp * 100) / 15000
+        : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
+      wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
+      wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
+    }
+
     showAssignmentToast(autoAssignLines);
     saveState();
     render();
@@ -1431,9 +1574,22 @@ function buildCombinedActivity(
   }
   const avgRPE = Math.round(weightedRpe / totalDurationMin);
 
-  const combined = createActivity(sport, Math.round(totalDurationMin), avgRPE, undefined, undefined, s.w);
+  const totalITrimp = items.reduce((sum, i) => sum + (i.iTrimp ?? 0), 0);
+  const combinedITrimp = totalITrimp > 0 ? totalITrimp : undefined;
+  const combined = createActivity(sport, Math.round(totalDurationMin), avgRPE, undefined, undefined, s.w, combinedITrimp);
   const mostRecent = items.reduce((a, b) => (a.startTime > b.startTime ? a : b));
   const jsDay = new Date(mostRecent.startTime).getDay();
   combined.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+  // Aggregate HR zone times (seconds) from all items that have zone data
+  const zoneItems = items.filter(i => i.hrZones != null);
+  if (zoneItems.length > 0) {
+    combined.hrZones = {
+      z1: zoneItems.reduce((sum, i) => sum + (i.hrZones?.z1 ?? 0), 0),
+      z2: zoneItems.reduce((sum, i) => sum + (i.hrZones?.z2 ?? 0), 0),
+      z3: zoneItems.reduce((sum, i) => sum + (i.hrZones?.z3 ?? 0), 0),
+      z4: zoneItems.reduce((sum, i) => sum + (i.hrZones?.z4 ?? 0), 0),
+      z5: zoneItems.reduce((sum, i) => sum + (i.hrZones?.z5 ?? 0), 0),
+    };
+  }
   return combined;
 }

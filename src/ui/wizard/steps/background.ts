@@ -3,6 +3,14 @@ import type { CommuteConfig } from '@/types/state';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 
+const INPUT = 'background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;padding:7px 10px;font-size:13px;width:100%;box-sizing:border-box;outline:none';
+
+function selRow(selected: boolean): string {
+  return selected
+    ? 'background:rgba(0,0,0,0.04);border:2px solid var(--c-black)'
+    : 'background:var(--c-surface);border:2px solid var(--c-border-strong)';
+}
+
 /**
  * Consolidated Background step: Experience Level + Commute + Active Lifestyle
  */
@@ -10,76 +18,70 @@ export function renderBackground(container: HTMLElement, state: OnboardingState)
   const config = state.commuteConfig || { enabled: true, distanceKm: 5, isBidirectional: false, commuteDaysPerWeek: 2 };
 
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(3, 7)}
 
-      <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:480px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Your Background
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           Help us understand your fitness profile
         </p>
 
-        <div class="space-y-6">
+        <div style="display:flex;flex-direction:column;gap:20px">
           <!-- Experience Level -->
           <div>
-            <label class="block text-sm text-gray-400 mb-3">Running Background</label>
-            <div class="space-y-2">
+            <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Running Background</label>
+            <div style="display:flex;flex-direction:column;gap:6px">
               ${renderExperienceOptions(state.experienceLevel)}
             </div>
           </div>
 
-          <!-- Commute Toggle + Inline Config -->
+          <!-- Commute Toggle -->
           <div>
-            <label class="block text-sm text-gray-400 mb-3">Do you run to work? (5km+)</label>
-            <div class="space-y-2">
+            <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Do you run to work? (5km+)</label>
+            <div style="display:flex;flex-direction:column;gap:6px">
               <button id="commute-yes"
-                class="w-full p-3 rounded-xl border-2 text-left transition-all
-                       ${state.runsToWork === true
-      ? 'border-emerald-500 bg-emerald-950/30'
-      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-medium ${state.runsToWork === true ? 'text-emerald-400' : 'text-white'}">Yes</span>
-                  ${state.runsToWork === true ? '<svg class="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}
+                style="${selRow(state.runsToWork === true)};border-radius:10px;padding:12px 16px;cursor:pointer;transition:all 0.15s;text-align:left;width:100%">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="font-size:14px;font-weight:500;color:var(--c-black)">Yes</span>
+                  ${state.runsToWork === true ? '<svg style="width:16px;height:16px;color:var(--c-black)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}
                 </div>
               </button>
               <button id="commute-no"
-                class="w-full p-3 rounded-xl border-2 text-left transition-all
-                       ${state.runsToWork === false
-      ? 'border-emerald-500 bg-emerald-950/30'
-      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
-                <div class="flex items-center justify-between">
-                  <span class="text-sm font-medium ${state.runsToWork === false ? 'text-emerald-400' : 'text-white'}">No</span>
-                  ${state.runsToWork === false ? '<svg class="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}
+                style="${selRow(state.runsToWork === false)};border-radius:10px;padding:12px 16px;cursor:pointer;transition:all 0.15s;text-align:left;width:100%">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="font-size:14px;font-weight:500;color:var(--c-black)">No</span>
+                  ${state.runsToWork === false ? '<svg style="width:16px;height:16px;color:var(--c-black)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}
                 </div>
               </button>
             </div>
 
             <!-- Inline commute config -->
-            <div id="commute-config" class="${state.runsToWork === true ? '' : 'hidden'} mt-3 bg-gray-800 rounded-xl p-4 space-y-3">
-              <div class="grid grid-cols-3 gap-2">
+            <div id="commute-config" style="${state.runsToWork === true ? '' : 'display:none;'}margin-top:12px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:16px">
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
                 <div>
-                  <label class="block text-xs text-gray-400 mb-1">Distance (km)</label>
+                  <label style="display:block;font-size:11px;color:var(--c-muted);margin-bottom:4px">Distance (km)</label>
                   <input type="number" id="commute-distance" min="1" max="25" step="0.5" value="${config.distanceKm}"
-                    class="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none">
+                    style="${INPUT}">
                 </div>
                 <div>
-                  <label class="block text-xs text-gray-400 mb-1">Days/week</label>
-                  <div class="flex gap-1">
+                  <label style="display:block;font-size:11px;color:var(--c-muted);margin-bottom:4px">Days/week</label>
+                  <div style="display:flex;gap:3px">
                     ${[1, 2, 3, 4, 5].map(n => `
-                      <button data-days="${n}" class="commute-day flex-1 py-1.5 text-xs rounded font-medium transition-all
-                        ${config.commuteDaysPerWeek === n ? 'bg-emerald-600 text-white' : 'bg-gray-900 text-gray-400'}">
+                      <button data-days="${n}" class="commute-day" style="flex:1;padding:6px 2px;font-size:11px;border-radius:6px;cursor:pointer;font-weight:500;transition:all 0.15s;border:none;
+                        ${config.commuteDaysPerWeek === n ? 'background:var(--c-black);color:#FDFCF7' : 'background:var(--c-bg);color:var(--c-black)'}">
                         ${n}
                       </button>
                     `).join('')}
                   </div>
                 </div>
-                <div class="flex items-end">
-                  <label class="flex items-center gap-2 cursor-pointer pb-1.5">
+                <div style="display:flex;align-items:flex-end">
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;padding-bottom:2px">
                     <input type="checkbox" id="commute-bidir" ${config.isBidirectional ? 'checked' : ''}
-                      class="w-4 h-4 rounded bg-gray-900 border-gray-700 text-emerald-500">
-                    <span class="text-xs text-gray-300">Both ways</span>
+                      style="width:16px;height:16px;accent-color:var(--c-black)">
+                    <span style="font-size:12px;color:var(--c-black)">Both ways</span>
                   </label>
                 </div>
               </div>
@@ -87,21 +89,20 @@ export function renderBackground(container: HTMLElement, state: OnboardingState)
           </div>
 
           <!-- Active Lifestyle Toggle -->
-          <div class="bg-gray-800 rounded-xl p-4 flex items-center justify-between">
-            <div>
-              <div class="text-sm text-white font-medium">Active Job / Lifestyle</div>
-              <div class="text-xs text-gray-400">Do you spend most of the day on your feet? (e.g. Waiter, Nurse, Manual Labor)</div>
+          <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:16px;display:flex;align-items:center;justify-content:space-between">
+            <div style="flex:1;margin-right:16px">
+              <div style="font-size:14px;font-weight:500;color:var(--c-black)">Active Job / Lifestyle</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Do you spend most of the day on your feet? (e.g. Waiter, Nurse, Manual Labor)</div>
             </div>
             <button id="toggle-active"
-              class="w-12 h-6 rounded-full transition-colors ${state.activeLifestyle ? 'bg-emerald-600' : 'bg-gray-600'} relative">
-              <span class="block w-5 h-5 bg-white rounded-full absolute top-0.5 transition-transform ${state.activeLifestyle ? 'translate-x-6' : 'translate-x-0.5'}"></span>
+              style="width:48px;height:26px;border-radius:13px;border:none;cursor:pointer;transition:background 0.2s;position:relative;flex-shrink:0;background:${state.activeLifestyle ? 'var(--c-black)' : 'rgba(0,0,0,0.15)'}">
+              <span style="display:block;width:20px;height:20px;background:white;border-radius:50%;position:absolute;top:3px;transition:transform 0.2s;transform:${state.activeLifestyle ? 'translateX(25px)' : 'translateX(3px)'}"></span>
             </button>
           </div>
         </div>
 
         <button id="continue-background"
-          class="mt-8 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
+          style="margin-top:24px;width:100%;padding:14px 20px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
           Continue
         </button>
       </div>
@@ -127,16 +128,17 @@ function renderExperienceOptions(current: string): string {
 
   return options.map(o => `
     <button data-exp="${o.key}"
-      class="exp-btn w-full p-3 rounded-xl border-2 text-left transition-all
-             ${current === o.key
-      ? 'border-emerald-500 bg-emerald-950/30'
-      : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
-      <div class="flex items-center justify-between">
+      style="${
+        current === o.key
+          ? 'background:rgba(0,0,0,0.04);border:2px solid var(--c-black)'
+          : 'background:var(--c-surface);border:2px solid var(--c-border-strong)'
+      };border-radius:10px;padding:12px 16px;cursor:pointer;transition:all 0.15s;text-align:left;width:100%" class="exp-btn">
+      <div style="display:flex;align-items:center;justify-content:space-between">
         <div>
-          <span class="text-sm font-medium ${current === o.key ? 'text-emerald-400' : 'text-white'}">${o.title}</span>
-          <span class="text-xs text-gray-400 ml-2">${o.desc}</span>
+          <span style="font-size:14px;font-weight:500;color:var(--c-black)">${o.title}</span>
+          <span style="font-size:12px;color:var(--c-muted);margin-left:8px">${o.desc}</span>
         </div>
-        ${current === o.key ? '<svg class="w-4 h-4 text-emerald-400 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>' : ''}
+        ${current === o.key ? '<svg style="width:16px;height:16px;flex-shrink:0;color:var(--c-black)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>' : ''}
       </div>
     </button>
   `).join('');

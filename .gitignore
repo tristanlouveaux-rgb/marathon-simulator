@@ -1,11 +1,15 @@
 node_modules/
 dist/
 coverage/
+.env.local
 ios/
 android/
 .capacitor/
 .DS_Store
 .claude/
+.cursor/
+.playwright-mcp/
+mcp.json
 *.docx
 *.odt
 ~$*

@@ -8,42 +8,42 @@
 export function showRPEHelp(): void {
   const overlay = document.createElement('div');
   overlay.id = 'rpe-help-modal';
-  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px';
   overlay.innerHTML = `
-    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-5">
-      <h3 class="text-white font-semibold text-lg mb-1">RPE Scale</h3>
-      <p class="text-xs text-gray-400 mb-4">Rate of Perceived Exertion — how hard did it feel?</p>
-      <div class="space-y-1 text-xs">
-        <div class="flex items-center gap-2 p-1.5 rounded bg-emerald-950/30">
-          <span class="font-bold text-emerald-400 w-6 text-right">1-2</span>
-          <span class="text-gray-300">Very easy — could chat freely</span>
+    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:384px;width:100%;padding:20px">
+      <h3 style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">RPE Scale</h3>
+      <p style="font-size:12px;color:var(--c-faint);margin-bottom:16px">Rate of Perceived Exertion — how hard did it feel?</p>
+      <div style="display:flex;flex-direction:column;gap:4px;font-size:12px">
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(22,163,74,0.06)">
+          <span style="font-weight:700;color:var(--c-ok);width:24px;text-align:right">1-2</span>
+          <span style="color:var(--c-muted)">Very easy — could chat freely</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-emerald-950/20">
-          <span class="font-bold text-emerald-400 w-6 text-right">3</span>
-          <span class="text-gray-300">Easy — comfortable conversation</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(22,163,74,0.04)">
+          <span style="font-weight:700;color:var(--c-ok);width:24px;text-align:right">3</span>
+          <span style="color:var(--c-muted)">Easy — comfortable conversation</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-amber-950/20">
-          <span class="font-bold text-amber-400 w-6 text-right">4-5</span>
-          <span class="text-gray-300">Moderate — short sentences only</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(245,158,11,0.06)">
+          <span style="font-weight:700;color:var(--c-caution);width:24px;text-align:right">4-5</span>
+          <span style="color:var(--c-muted)">Moderate — short sentences only</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-amber-950/30">
-          <span class="font-bold text-amber-400 w-6 text-right">6</span>
-          <span class="text-gray-300">Hard — a few words at a time</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(245,158,11,0.08)">
+          <span style="font-weight:700;color:var(--c-caution);width:24px;text-align:right">6</span>
+          <span style="color:var(--c-muted)">Hard — a few words at a time</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-red-950/20">
-          <span class="font-bold text-red-400 w-6 text-right">7-8</span>
-          <span class="text-gray-300">Very hard — 1-2 words max</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(239,68,68,0.05)">
+          <span style="font-weight:700;color:var(--c-warn);width:24px;text-align:right">7-8</span>
+          <span style="color:var(--c-muted)">Very hard — 1-2 words max</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-red-950/30">
-          <span class="font-bold text-red-400 w-6 text-right">9</span>
-          <span class="text-gray-300">Near max — gasping</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(239,68,68,0.08)">
+          <span style="font-weight:700;color:var(--c-warn);width:24px;text-align:right">9</span>
+          <span style="color:var(--c-muted)">Near max — gasping</span>
         </div>
-        <div class="flex items-center gap-2 p-1.5 rounded bg-red-950/40">
-          <span class="font-bold text-red-400 w-6 text-right">10</span>
-          <span class="text-gray-300">Maximum — cannot sustain</span>
+        <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;background:rgba(239,68,68,0.12)">
+          <span style="font-weight:700;color:var(--c-warn);width:24px;text-align:right">10</span>
+          <span style="color:var(--c-muted)">Maximum — cannot sustain</span>
         </div>
       </div>
-      <button id="btn-close-rpe-help" class="w-full mt-4 py-2 text-gray-400 hover:text-gray-300 text-xs transition-colors">Close</button>
+      <button id="btn-close-rpe-help" style="width:100%;margin-top:16px;padding:8px;background:none;border:none;font-size:12px;color:var(--c-faint);cursor:pointer">Close</button>
     </div>
   `;
 
@@ -61,17 +61,17 @@ export function showRPEHelp(): void {
 export function showMPHelp(): void {
   const overlay = document.createElement('div');
   overlay.id = 'mp-help-modal';
-  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px';
   overlay.innerHTML = `
-    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-sm w-full p-5">
-      <h3 class="text-white font-semibold text-lg mb-1">Marathon Pace (MP)</h3>
-      <p class="text-xs text-gray-400 mb-3">The pace you'd sustain for a full marathon on race day.</p>
-      <div class="space-y-2 text-xs text-gray-300">
-        <p>Marathon pace work teaches your body to burn fat efficiently at race speed. It should feel <strong class="text-white">comfortably hard</strong> — you can say a few words but not hold a conversation.</p>
-        <p>Typical RPE: <strong class="text-amber-400">5-6</strong> out of 10.</p>
-        <p class="text-gray-500">If you can't maintain the pace for the full session, it's too fast. Slow down 5-10 sec/km.</p>
+    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:384px;width:100%;padding:20px">
+      <h3 style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">Marathon Pace (MP)</h3>
+      <p style="font-size:12px;color:var(--c-faint);margin-bottom:12px">The pace you'd sustain for a full marathon on race day.</p>
+      <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--c-muted)">
+        <p>Marathon pace work teaches your body to burn fat efficiently at race speed. It should feel <strong style="color:var(--c-black)">comfortably hard</strong> — you can say a few words but not hold a conversation.</p>
+        <p>Typical RPE: <strong style="color:var(--c-caution)">5-6</strong> out of 10.</p>
+        <p style="color:var(--c-faint)">If you can't maintain the pace for the full session, it's too fast. Slow down 5-10 sec/km.</p>
       </div>
-      <button id="btn-close-mp-help" class="w-full mt-4 py-2 text-gray-400 hover:text-gray-300 text-xs transition-colors">Close</button>
+      <button id="btn-close-mp-help" style="width:100%;margin-top:16px;padding:8px;background:none;border:none;font-size:12px;color:var(--c-faint);cursor:pointer">Close</button>
     </div>
   `;
 

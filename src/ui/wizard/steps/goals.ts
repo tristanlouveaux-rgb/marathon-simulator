@@ -4,42 +4,44 @@ import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil } from '@/d
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 
+// Inline style constants
+const CARD = 'background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:20px;margin-bottom:16px';
+const INPUT = 'background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;padding:8px 12px;font-size:14px;width:100%;box-sizing:border-box;outline:none';
+
+function selBtn(selected: boolean): string {
+  return selected
+    ? 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black);border-radius:10px;padding:12px;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.15s;width:100%'
+    : 'background:var(--c-surface);color:var(--c-black);border:2px solid var(--c-border-strong);border-radius:10px;padding:12px;font-size:14px;cursor:pointer;transition:all 0.15s;width:100%';
+}
+
 /**
  * Consolidated Goals step: Training for Event? -> Distance -> Event Selection (inline)
  */
 export function renderGoals(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(2, 7)}
 
-      <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:480px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Training Goal
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           What are you training for?
         </p>
 
-        <div class="space-y-6">
+        <div style="display:flex;flex-direction:column;gap:16px">
           <!-- Event Toggle -->
-          <div class="flex gap-3 justify-center">
-            <button id="goal-event"
-              class="flex-1 max-w-[180px] py-4 rounded-xl font-medium transition-all border-2
-                     ${state.trainingForEvent === true
-                       ? 'bg-emerald-600 text-white border-emerald-500'
-                       : 'bg-gray-800 text-gray-400 border-transparent hover:border-gray-600'}">
+          <div style="display:flex;gap:12px;justify-content:center">
+            <button id="goal-event" style="flex:1;max-width:180px;${selBtn(state.trainingForEvent === true)}">
               Race
             </button>
-            <button id="goal-general"
-              class="flex-1 max-w-[180px] py-4 rounded-xl font-medium transition-all border-2
-                     ${state.trainingForEvent === false
-                       ? 'bg-gray-700 text-white border-gray-500'
-                       : 'bg-gray-800 text-gray-400 border-transparent hover:border-gray-600'}">
+            <button id="goal-general" style="flex:1;max-width:180px;${selBtn(state.trainingForEvent === false)}">
               General Fitness
             </button>
           </div>
 
-          <!-- Distance Selection (shown after choosing event or general) -->
+          <!-- Distance Selection -->
           ${state.trainingForEvent !== null ? renderDistanceSelection(state) : ''}
 
           <!-- Week selector for 5k/10k races -->
@@ -55,18 +57,16 @@ export function renderGoals(container: HTMLElement, state: OnboardingState): voi
           <!-- Focus Selection (for general fitness) -->
           ${state.trainingForEvent === false ? renderFocusSelection(state) : ''}
 
-          <!-- Speed focus warning -->
+          <!-- Speed focus note -->
           ${state.trainingFocus === 'speed' ? `
-            <div class="bg-amber-950/30 border border-amber-800/50 rounded-lg p-3 text-xs text-amber-300">
-              <strong>Note:</strong> Speed-focused training is more intense. Expect higher RPE sessions and ensure adequate recovery between workouts.
+            <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:12px">
+              <p style="font-size:12px;color:var(--c-caution-text)"><strong>Note:</strong> Speed-focused training is more intense. Expect higher RPE sessions and ensure adequate recovery.</p>
             </div>
           ` : ''}
         </div>
 
         <button id="continue-goals"
-          class="mt-8 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all
-                 ${canContinue(state) ? '' : 'opacity-50 cursor-not-allowed'}"
+          style="margin-top:24px;width:100%;padding:14px 20px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer;opacity:${canContinue(state) ? '1' : '0.4'}"
           ${canContinue(state) ? '' : 'disabled'}>
           Continue
         </button>
@@ -89,7 +89,7 @@ function canContinue(state: OnboardingState): boolean {
 }
 
 function renderDistanceSelection(state: OnboardingState): string {
-  if (state.trainingForEvent === false) return ''; // Focus selection handles this
+  if (state.trainingForEvent === false) return '';
   const distances: { id: RaceDistance; label: string; sub: string }[] = [
     { id: '5k', label: '5K', sub: '3.1 miles' },
     { id: '10k', label: '10K', sub: '6.2 miles' },
@@ -99,16 +99,16 @@ function renderDistanceSelection(state: OnboardingState): string {
 
   return `
     <div>
-      <label class="block text-sm text-gray-400 mb-3">Distance</label>
-      <div class="grid grid-cols-4 gap-2">
+      <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Distance</label>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
         ${distances.map(d => `
-          <button data-dist="${d.id}"
-            class="dist-btn py-3 rounded-xl text-center transition-all border-2
-                   ${state.raceDistance === d.id
-                     ? 'bg-emerald-600 text-white border-emerald-500'
-                     : 'bg-gray-800 text-gray-400 border-transparent hover:border-gray-600'}">
-            <div class="font-medium text-sm">${d.label}</div>
-            <div class="text-xs opacity-60">${d.sub}</div>
+          <button data-dist="${d.id}" style="${
+            state.raceDistance === d.id
+              ? 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black)'
+              : 'background:var(--c-surface);color:var(--c-black);border:2px solid var(--c-border-strong)'
+          };border-radius:10px;padding:10px 4px;cursor:pointer;transition:all 0.15s;text-align:center" class="dist-btn">
+            <div style="font-size:14px;font-weight:500">${d.label}</div>
+            <div style="font-size:11px;opacity:0.6;margin-top:2px">${d.sub}</div>
           </button>
         `).join('')}
       </div>
@@ -122,19 +122,17 @@ function renderWeekSelector(state: OnboardingState): string {
   const max = 52;
   return `
     <div>
-      <label class="block text-sm text-gray-400 mb-3">Plan duration</label>
-      <div class="flex items-center gap-3">
+      <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Plan duration</label>
+      <div style="display:flex;align-items:center;gap:12px">
         <button id="weeks-minus"
-          class="w-10 h-10 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-lg font-medium
-                 ${weeks <= min ? 'opacity-30 cursor-not-allowed' : ''}"
+          style="width:40px;height:40px;border-radius:8px;background:var(--c-surface);border:1.5px solid var(--c-border-strong);color:var(--c-black);font-size:18px;cursor:pointer;opacity:${weeks <= min ? '0.3' : '1'}"
           ${weeks <= min ? 'disabled' : ''}>−</button>
-        <div class="flex-1 text-center">
-          <span class="text-2xl font-light text-white">${weeks}</span>
-          <span class="text-sm text-gray-400 ml-1">weeks</span>
+        <div style="flex:1;text-align:center">
+          <span style="font-size:24px;font-weight:300;color:var(--c-black)">${weeks}</span>
+          <span style="font-size:14px;color:var(--c-muted);margin-left:4px">weeks</span>
         </div>
         <button id="weeks-plus"
-          class="w-10 h-10 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 transition-colors text-lg font-medium
-                 ${weeks >= max ? 'opacity-30 cursor-not-allowed' : ''}"
+          style="width:40px;height:40px;border-radius:8px;background:var(--c-surface);border:1.5px solid var(--c-border-strong);color:var(--c-black);font-size:18px;cursor:pointer;opacity:${weeks >= max ? '0.3' : '1'}"
           ${weeks >= max ? 'disabled' : ''}>+</button>
       </div>
     </div>
@@ -150,16 +148,17 @@ function renderFocusSelection(state: OnboardingState): string {
 
   return `
     <div>
-      <label class="block text-sm text-gray-400 mb-3">Focus</label>
-      <div class="space-y-2">
+      <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Focus</label>
+      <div style="display:flex;flex-direction:column;gap:8px">
         ${options.map(o => `
           <button data-focus="${o.id}" data-focus-dist="${o.dist}" data-focus-weeks="${o.weeks}"
-            class="focus-btn w-full p-3 rounded-xl border-2 text-left transition-all
-                   ${state.trainingFocus === o.id
-                     ? 'border-emerald-500 bg-emerald-950/30'
-                     : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
-            <span class="text-sm font-medium ${state.trainingFocus === o.id ? 'text-emerald-400' : 'text-white'}">${o.label}</span>
-            <span class="text-xs text-gray-400 ml-2">${o.desc}</span>
+            style="${
+              state.trainingFocus === o.id
+                ? 'background:rgba(0,0,0,0.04);border:2px solid var(--c-black);color:var(--c-black)'
+                : 'background:var(--c-surface);border:2px solid var(--c-border-strong);color:var(--c-black)'
+            };border-radius:10px;padding:12px 16px;cursor:pointer;transition:all 0.15s;text-align:left;width:100%" class="focus-btn">
+            <span style="font-size:14px;font-weight:500">${o.label}</span>
+            <span style="font-size:12px;color:var(--c-muted);margin-left:8px">${o.desc}</span>
           </button>
         `).join('')}
       </div>
@@ -173,36 +172,36 @@ function renderInlineEventSelection(state: OnboardingState): string {
 
   return `
     <div>
-      <label class="block text-sm text-gray-400 mb-3">Select your event</label>
-      <div class="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+      <label style="display:block;font-size:13px;color:var(--c-muted);margin-bottom:10px">Select your event</label>
+      <div style="display:flex;flex-direction:column;gap:8px;max-height:220px;overflow-y:auto;padding-right:4px">
         ${races.slice(0, 8).map(race => `
           <button data-race-id="${race.id}"
-            class="race-card w-full p-3 rounded-xl border-2 text-left transition-all
-                   ${state.selectedRace?.id === race.id
-                     ? 'border-emerald-500 bg-emerald-950/30'
-                     : 'border-gray-700 bg-gray-800 hover:border-gray-600'}">
-            <div class="flex justify-between items-center">
+            style="${
+              state.selectedRace?.id === race.id
+                ? 'background:rgba(0,0,0,0.04);border:2px solid var(--c-black)'
+                : 'background:var(--c-surface);border:2px solid var(--c-border-strong)'
+            };border-radius:10px;padding:12px 16px;cursor:pointer;transition:all 0.15s;text-align:left;width:100%" class="race-card">
+            <div style="display:flex;justify-content:space-between;align-items:center">
               <div>
-                <span class="text-sm font-medium ${state.selectedRace?.id === race.id ? 'text-emerald-400' : 'text-white'}">${race.name}</span>
-                <span class="text-xs text-gray-400 ml-2">${formatRaceDate(race.date)}</span>
+                <span style="font-size:14px;font-weight:500;color:var(--c-black)">${race.name}</span>
+                <span style="font-size:12px;color:var(--c-muted);margin-left:8px">${formatRaceDate(race.date)}</span>
               </div>
-              <span class="text-xs font-bold ${race.weeksUntil && race.weeksUntil < 12 ? 'text-amber-400' : 'text-emerald-400'}">${race.weeksUntil}wk</span>
+              <span style="font-size:12px;font-weight:600;color:${race.weeksUntil && race.weeksUntil < 12 ? 'var(--c-caution)' : 'var(--c-ok)'}">${race.weeksUntil}wk</span>
             </div>
           </button>
         `).join('')}
       </div>
 
       <!-- Custom date toggle -->
-      <div class="mt-3">
-        <button id="toggle-custom-date" class="text-xs text-gray-500 hover:text-gray-300 transition-colors">
+      <div style="margin-top:12px">
+        <button id="toggle-custom-date" style="font-size:12px;color:var(--c-faint);background:none;border:none;cursor:pointer">
           ${state.customRaceDate !== null ? 'Browse races' : 'Enter custom date'}
         </button>
         ${state.customRaceDate !== null ? `
-          <div class="mt-2">
+          <div style="margin-top:8px">
             <input type="date" id="custom-date-input" value="${state.customRaceDate || ''}"
-              class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                     text-white text-sm focus:border-emerald-500 focus:outline-none">
-            ${state.customRaceDate ? `<p id="custom-date-weeks-display" class="text-xs text-emerald-400 mt-1">${calculateWeeksUntil(state.customRaceDate)} weeks of training</p>` : ''}
+              style="${INPUT}">
+            ${state.customRaceDate ? `<p id="custom-date-weeks-display" style="font-size:12px;color:var(--c-ok);margin-top:4px">${calculateWeeksUntil(state.customRaceDate)} weeks of training</p>` : ''}
           </div>
         ` : ''}
       </div>
@@ -290,10 +289,9 @@ function wireEventHandlers(state: OnboardingState): void {
     rerender(state);
   });
 
-  // Custom date input — no validation here, just update state and display
+  // Custom date input
   const dateInput = document.getElementById('custom-date-input') as HTMLInputElement;
   if (dateInput) {
-    // Also set max date to 1 year from now
     const maxDate = new Date();
     maxDate.setFullYear(maxDate.getFullYear() + 1);
     dateInput.max = maxDate.toISOString().split('T')[0];
@@ -302,19 +300,17 @@ function wireEventHandlers(state: OnboardingState): void {
       if (dateInput.value) {
         const weeks = calculateWeeksUntil(dateInput.value);
         updateOnboarding({ customRaceDate: dateInput.value, planDurationWeeks: weeks, selectedRace: null });
-        // Update weeks display directly (no rerender) to keep input focus
         const weeksEl = document.getElementById('custom-date-weeks-display');
         if (weeksEl) {
           weeksEl.textContent = `${weeks} weeks of training`;
         } else {
-          // First time entering a date — need rerender to create the display element
           rerender(state);
         }
       }
     });
   }
 
-  // Continue — validate custom date here instead of on input
+  // Continue
   document.getElementById('continue-goals')?.addEventListener('click', () => {
     import('../controller').then(({ getOnboardingState }) => {
       const current = getOnboardingState() || state;
@@ -322,18 +318,12 @@ function wireEventHandlers(state: OnboardingState): void {
         const weeks = calculateWeeksUntil(current.customRaceDate);
         if (weeks < 4) {
           const input = document.getElementById('custom-date-input') as HTMLInputElement;
-          if (input) {
-            input.setCustomValidity('Race must be at least 4 weeks away');
-            input.reportValidity();
-          }
+          if (input) { input.setCustomValidity('Race must be at least 4 weeks away'); input.reportValidity(); }
           return;
         }
         if (weeks > 52) {
           const input = document.getElementById('custom-date-input') as HTMLInputElement;
-          if (input) {
-            input.setCustomValidity('Race must be within 1 year');
-            input.reportValidity();
-          }
+          if (input) { input.setCustomValidity('Race must be within 1 year'); input.reportValidity(); }
           return;
         }
       }

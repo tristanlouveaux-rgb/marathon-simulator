@@ -3,60 +3,60 @@ import type { PBs } from '@/types/training';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 
+const INPUT = 'background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;padding:8px 12px;font-size:14px;outline:none;box-sizing:border-box';
+
 /**
  * Consolidated Performance step: PBs + Prominent Recent Hard Run
  */
 export function renderPerformance(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(5, 7)}
 
-      <div class="max-w-lg w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:480px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Your Performance
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           Enter at least one PB to calibrate your plan
         </p>
 
-        <div class="space-y-6">
+        <div style="display:flex;flex-direction:column;gap:16px">
           <!-- PBs -->
-          <div class="bg-gray-800 rounded-xl p-5 space-y-4">
-            <h3 class="text-sm font-medium text-white mb-3">All-time PBs</h3>
+          <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:20px">
+            <h3 style="font-size:14px;font-weight:500;color:var(--c-black);margin-bottom:16px">All-time PBs</h3>
             ${renderPBInput('5K', 'pb-5k', state.pbs.k5, 'mm:ss', '17:30', false)}
             ${renderPBInput('10K', 'pb-10k', state.pbs.k10, 'mm:ss', '36:00', false)}
             ${renderPBInput('Half Marathon', 'pb-half', state.pbs.h, 'h:mm or h:mm:ss', '1:20', true)}
             ${renderPBInput('Marathon', 'pb-marathon', state.pbs.m, 'h:mm or h:mm:ss', '3:12', true)}
-            <p class="text-xs text-gray-500">Leave blank if you haven't raced this distance</p>
+            <p style="font-size:12px;color:var(--c-faint);margin-top:12px">Leave blank if you haven't raced this distance</p>
           </div>
 
-          <!-- Recent Hard Run — PROMINENT -->
-          <div class="bg-gradient-to-br from-blue-950/40 to-gray-800 rounded-xl p-5 border border-blue-800/40">
-            <div class="flex items-center gap-3 mb-4">
-              <div class="w-8 h-8 bg-blue-900/50 rounded-full flex items-center justify-center flex-shrink-0">
-                <svg class="w-4 h-4 text-blue-400" fill="currentColor" viewBox="0 0 20 20">
+          <!-- Recent Hard Run -->
+          <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:20px">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+              <div style="width:32px;height:32px;background:var(--c-bg);border:1px solid var(--c-border);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                <svg style="width:16px;height:16px;color:var(--c-black)" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/>
                 </svg>
               </div>
               <div>
-                <h3 class="text-sm font-medium text-blue-300">Recent Hard Run</h3>
-                <p class="text-xs text-blue-400/70">This helps gauge your <em>current</em> fitness vs. your all-time PBs</p>
+                <h3 style="font-size:14px;font-weight:500;color:var(--c-black)">Recent Hard Run</h3>
+                <p style="font-size:12px;color:var(--c-muted);margin-top:1px">Helps gauge your <em>current</em> fitness vs. your all-time PBs</p>
               </div>
             </div>
 
-            <label class="flex items-center gap-3 cursor-pointer mb-4">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;margin-bottom:12px">
               <input type="checkbox" id="has-recent" ${state.recentRace ? 'checked' : ''}
-                class="w-5 h-5 rounded bg-gray-900 border-gray-700 text-emerald-500
-                       focus:ring-emerald-500 focus:ring-offset-gray-800">
-              <span class="text-sm text-gray-300">I've done a hard run recently</span>
+                style="width:18px;height:18px;accent-color:var(--c-black)">
+              <span style="font-size:14px;color:var(--c-black)">I've done a hard run recently</span>
             </label>
 
-            <div id="recent-race-form" class="${state.recentRace ? '' : 'hidden'} space-y-3 pt-3 border-t border-blue-800/30">
-              <div class="grid grid-cols-2 gap-3">
+            <div id="recent-race-form" style="${state.recentRace ? '' : 'display:none;'}padding-top:12px;border-top:1px solid var(--c-border)">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
                 <div>
-                  <label class="block text-xs text-gray-400 mb-1">Distance</label>
-                  <select id="recent-distance"
-                    class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none">
+                  <label style="display:block;font-size:12px;color:var(--c-muted);margin-bottom:4px">Distance</label>
+                  <select id="recent-distance" style="${INPUT};width:100%">
                     <option value="5" ${state.recentRace?.d === 5 ? 'selected' : ''}>5K</option>
                     <option value="10" ${state.recentRace?.d === 10 ? 'selected' : ''}>10K</option>
                     <option value="21.1" ${state.recentRace?.d === 21.1 ? 'selected' : ''}>Half Marathon</option>
@@ -64,28 +64,27 @@ export function renderPerformance(container: HTMLElement, state: OnboardingState
                   </select>
                 </div>
                 <div>
-                  <label class="block text-xs text-gray-400 mb-1">Weeks ago</label>
+                  <label style="display:block;font-size:12px;color:var(--c-muted);margin-bottom:4px">Weeks ago</label>
                   <input type="number" id="recent-weeks" min="0" max="52" value="${state.recentRace?.weeksAgo || 2}"
-                    class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none">
+                    style="${INPUT};width:100%">
                 </div>
               </div>
               <div>
-                <label class="block text-xs text-gray-400 mb-1">Time</label>
+                <label style="display:block;font-size:12px;color:var(--c-muted);margin-bottom:4px">Time</label>
                 <input type="text" id="recent-time" placeholder="mm:ss or h:mm:ss"
                   value="${state.recentRace ? formatTime(state.recentRace.t) : ''}"
-                  class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none">
+                  style="${INPUT};width:100%">
               </div>
             </div>
           </div>
 
-          <div id="pb-error" class="hidden text-center text-red-400 text-sm">
+          <div id="pb-error" style="display:none;text-align:center;color:var(--c-warn);font-size:14px">
             Please enter at least one personal best
           </div>
         </div>
 
         <button id="continue-perf"
-          class="mt-8 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
+          style="margin-top:24px;width:100%;padding:14px 20px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
           Continue
         </button>
       </div>
@@ -99,11 +98,11 @@ export function renderPerformance(container: HTMLElement, state: OnboardingState
 
 function renderPBInput(label: string, id: string, value: number | undefined, placeholder: string, example: string, isLong: boolean): string {
   return `
-    <div class="flex items-center gap-3">
-      <label class="w-28 text-sm text-gray-400">${label}</label>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+      <label style="width:110px;font-size:13px;color:var(--c-muted);flex-shrink:0">${label}</label>
       <input type="text" id="${id}" placeholder="${placeholder}" value="${value ? formatTime(value, isLong) : ''}"
-        class="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-emerald-500 focus:outline-none placeholder:text-gray-600">
-      <span class="text-xs text-gray-600 w-16">e.g. ${example}</span>
+        style="${INPUT};flex:1">
+      <span style="font-size:11px;color:var(--c-faint);width:60px;flex-shrink:0">e.g. ${example}</span>
     </div>
   `;
 }
@@ -146,7 +145,6 @@ function wireEventHandlers(state: OnboardingState): void {
     { id: 'pb-marathon', key: 'm' },
   ];
 
-  // PB blur handlers
   pbInputs.forEach(({ id, key }) => {
     const input = document.getElementById(id) as HTMLInputElement;
     if (input) {
@@ -160,17 +158,15 @@ function wireEventHandlers(state: OnboardingState): void {
     }
   });
 
-  // Recent race toggle
   const hasRecentCheckbox = document.getElementById('has-recent') as HTMLInputElement;
   const recentForm = document.getElementById('recent-race-form');
   if (hasRecentCheckbox && recentForm) {
     hasRecentCheckbox.addEventListener('change', () => {
-      recentForm.classList.toggle('hidden', !hasRecentCheckbox.checked);
+      recentForm.style.display = hasRecentCheckbox.checked ? '' : 'none';
       if (!hasRecentCheckbox.checked) updateOnboarding({ recentRace: null });
     });
   }
 
-  // Recent race fields
   const recentDist = document.getElementById('recent-distance') as HTMLSelectElement;
   const recentWeeks = document.getElementById('recent-weeks') as HTMLInputElement;
   const recentTime = document.getElementById('recent-time') as HTMLInputElement;
@@ -187,7 +183,6 @@ function wireEventHandlers(state: OnboardingState): void {
   recentWeeks?.addEventListener('blur', updateRecent);
   recentTime?.addEventListener('blur', updateRecent);
 
-  // Continue
   document.getElementById('continue-perf')?.addEventListener('click', () => {
     const pbs: PBs = {};
     pbInputs.forEach(({ id, key }) => {
@@ -199,25 +194,22 @@ function wireEventHandlers(state: OnboardingState): void {
     });
 
     if (Object.keys(pbs).length === 0) {
-      document.getElementById('pb-error')?.classList.remove('hidden');
+      const errorEl = document.getElementById('pb-error');
+      if (errorEl) errorEl.style.display = '';
       return;
     }
 
-    // Sanity check PB values
     const PB_RANGES: Record<string, [number, number]> = {
-      k5: [12 * 60, 45 * 60],        // 12:00 - 45:00
-      k10: [25 * 60, 90 * 60],       // 25:00 - 1:30:00
-      h: [60 * 60, 4 * 3600],        // 1:00:00 - 4:00:00
-      m: [2 * 3600, 7 * 3600],       // 2:00:00 - 7:00:00
+      k5: [12 * 60, 45 * 60],
+      k10: [25 * 60, 90 * 60],
+      h: [60 * 60, 4 * 3600],
+      m: [2 * 3600, 7 * 3600],
     };
     for (const [key, time] of Object.entries(pbs)) {
       const range = PB_RANGES[key];
       if (range && (time < range[0] || time > range[1])) {
         const errorEl = document.getElementById('pb-error');
-        if (errorEl) {
-          errorEl.textContent = `That time looks unusual. Please double-check your entries.`;
-          errorEl.classList.remove('hidden');
-        }
+        if (errorEl) { errorEl.textContent = 'That time looks unusual. Please double-check your entries.'; errorEl.style.display = ''; }
         return;
       }
     }

@@ -1,0 +1,604 @@
+⏺ Assumptions (proceeding without clarifying questions)    
+
+  1. Primary surface is mobile (iOS/Capacitor), laptop secondary — all layouts mobile-first                            
+  2. "Current week" = the week containing today, even if incomplete
+  3. Baseline = CTL (42-day exponentially-weighted TSS average), already in fitness-model.ts                           
+  4. Injury risk = output from injury/engine.ts — already has a risk level                                           
+  5. Race Readiness not surfaced as a default metric — too abstract, unreliable early in training
+  6. Plan target TSS exists per-week from plan_engine.ts
+  7. No empty-state shaming — beginner weeks with 0–60 TSS get neutral, encouraging copy
+
+  ---
+  B) The ONE Sentence Narrative
+
+  The Stats page communicates exactly one sentence. Everything else is evidence for that sentence.
+
+  "Your load is [building / holding steady / easing off] — [you're building well / ease into next week / protect
+  recovery before next week]."
+
+  This is a 3 × 3 matrix (direction × ACWR status = 9 specific sentences). It is not a static tagline — it updates on
+  tab focus. It sits in 16px medium weight, muted text, directly below the page heading. It IS the page. The chart is
+  proof. The cards are the number.
+
+  ---
+  C) Information Hierarchy
+
+  Layer 1 — Simple (Default, always visible)
+
+  Above fold:
+  1. Narrative sentence
+  2. 8-week TSS bar chart (bars + CTL line + current week highlight — nothing else)
+  3. Two metric cards: Training Intensity + Weekly Km
+
+  Below fold (collapsed by default):
+  - "How it's calculated" section: chart view switcher, 3-bullet explainer, 8-week summary row
+
+  Layer 2 — Advanced (opt-in, persistent accordion)
+
+  - Three training bars (Km vs plan / TSS vs plan / Zone split vs plan)
+  - PMC metrics (CTL / ATL / TSB / ACWR)
+
+  ---
+  D) Toggle vs Progressive Disclosure — Decision
+
+  Option 1: Simple / Advanced Toggle
+
+  Pros: Clean mental model, easy to A/B test, avoids scroll depth anxiety
+  Cons: Requires toggle placement (awkward on mobile headers), two layout trees to maintain, beginners may never find
+  it, users forget which mode they're in
+
+  Option 2: One Page with Progressive Disclosure Sections
+
+  Pros: Natural on mobile (scroll = explore), no mode state, users discover advanced content organically, single layout
+   tree, pattern familiar from Apple Health and Strava
+  Cons: Advanced users can't jump directly to PMC, no "I want everything" affordance
+
+  Decision: Option 2 — Progressive Disclosure.
+
+  Rationale: Mosaic's modal user is a beginner-intermediate runner who will never tap an "Advanced" toggle. A binary
+  toggle creates a cognitive question ("which mode am I supposed to use?") that gets in the way of trust. Scroll is
+  free. Power users find the accordion through curiosity; beginners never feel excluded from a "Simple" box. Persistent
+   accordion state (localStorage) means power users don't re-expand every session.
+
+  ---
+  E1) DEFAULT (Simple) — Above the Fold
+
+  Page Header
+
+  Heading (20px medium):  "Your last 8 weeks"
+  Narrative (14px, muted): "Load is building steadily — keep the consistency."
+
+  ---
+  Primary Chart: 8-Week Weekly Training Load (TSS)
+
+  Chart type: Vertical bar chart (not line chart)
+
+  Justification: Each week is a discrete unit. Bars communicate "this week's total." Lines imply continuity. The CTL
+  baseline IS a line — that distinction matters visually.
+
+  Baseline: Rolling CTL line (not shaded band)
+
+  Justification: CTL has a precise formula we already compute. A shaded band requires defining two bounds — that's a
+  spec decision with no obvious right answer, and it crowds a 375px screen. A single line reads as "your normal" with
+  zero explanation. Users learn "am I above or below the line" in one session.
+
+  ---
+  Chart Specification
+
+  Dimensions:
+    Height: 180px mobile / 220px laptop
+    Width: 100% container
+    Padding: 16px H, 8px top, 28px bottom (x-axis labels)
+
+  X-axis:
+    8 labels: date-based preferred ("Jan 6", "Jan 13"...)
+    Current week: bold weight, "This week" label OR "Feb 26 ★"
+    Font: 11px muted grey
+
+  Y-axis:
+    Implicit only — no visible axis line or labels
+    Max: max(TSS across 8 weeks) × 1.15, floor at 100
+    2–3 subtle dotted horizontal gridlines at round numbers
+    Values shown only on tap/hover — not as persistent labels
+
+  Bars:
+    Default (past weeks): #D1D5DB (grey)
+    Within optimal range (actual ≈ plan ±10%): #22C55E (green)
+    Past week 1.10–1.30× CTL: green body + orange cap segment
+    Past week > 1.30× CTL: green body + red cap segment
+    Current week: #3B82F6 (blue), always differentiated
+    Incomplete current week: blue with subtle diagonal hatch
+
+    Width: 70% of slot, 2px rounded corners
+    Gap: 30% of slot
+
+  Baseline CTL line:
+    Color: #6B7280
+    Style: solid, 1.5px stroke
+    Label: small "CTL" pill badge at right end, 10px grey text
+    No dots — clean continuous line
+
+  Plan target: NOT shown on this chart (moved to Advanced)
+    Reason: reduces visual layers from 4 to 2
+
+  Clamping:
+    If bar would exceed chart height: clamp at top, show "+35%" badge above bar
+
+  Tap / hover interaction:
+    Mobile: tap bar → bottom sheet slides up (dismiss on tap outside)
+    Laptop: hover → inline tooltip
+    Content: Week, TSS actual, Plan target, CTL, % vs CTL
+
+  Mobile vs Laptop:
+  - Mobile: 44px minimum touch targets per bar slot, tooltip is bottom sheet
+  - Laptop: hover tooltip, no bottom sheet
+
+  ---
+  Two Metric Cards
+
+  Chosen: Training Intensity + Weekly Km
+
+  Why Training Intensity (not Load Ratio): The ratio is the right data but "Load Ratio: 1.12×" is jargon. Renaming to
+  "Training Intensity" and expressing value as "+12% vs baseline" is immediately interpretable by any runner.
+
+  Why Weekly Km: Every runner already tracks this. It anchors the abstract TSS to something concrete. No explanation
+  required for what it measures.
+
+  Why not Injury Risk as a card: Too alarming as a top-level default. Belongs below fold, shown only when risk is
+  elevated. Not showing it when risk is low wastes the slot; showing it always normalises alarm.
+
+  Why not Race Readiness: Unreliable before an 8-week baseline; misleading for beginners.
+
+  ---
+  Card Layout
+  Two cards, side-by-side, equal width
+  Background: white / surface
+  Border: 1px solid #E5E7EB
+  Border-radius: 12px
+  Padding: 16px
+  Shadow: 0 1px 3px rgba(0,0,0,0.08)
+
+  ---
+  Card 1: Training Intensity
+
+  ┌────────────────┬────────────────┬──────────────────────────────────────┬───────────────────────────────────────┐
+  │     State      │ Value display  │             Status pill              │              What to do               │
+  ├────────────────┼────────────────┼──────────────────────────────────────┼───────────────────────────────────────┤
+  │ No baseline    │ —              │ "Building" (grey)                    │ Keep training — Mosaic is learning    │
+  │ yet            │                │                                      │ your load.                            │
+  ├────────────────┼────────────────┼──────────────────────────────────────┼───────────────────────────────────────┤
+  │ > 20% below    │ −20% vs        │ "Low load" (grey)                    │ Good time to add a quality session.   │
+  │ CTL            │ baseline       │                                      │                                       │
+  ├────────────────┼────────────────┼──────────────────────────────────────┼───────────────────────────────────────┤
+  │ Within ±10%    │ +4% vs         │ "On track" (green)                   │ Keep this week's plan as-is.          │
+  │ CTL            │ baseline       │                                      │                                       │
+  ├────────────────┼────────────────┼──────────────────────────────────────┼───────────────────────────────────────┤
+  │ 10–30% above   │ +18% vs        │ "Elevated" (orange)                  │ Prioritise sleep and easy days.       │
+  │ CTL            │ baseline       │                                      │                                       │
+  ├────────────────┼────────────────┼──────────────────────────────────────┼───────────────────────────────────────┤
+  │ > 30% above    │ +35% vs        │ "High load" (red pill — pill only,   │ Reduce one session before next week.  │
+  │ CTL            │ baseline       │ not card)                            │                                       │
+  └────────────────┴────────────────┴──────────────────────────────────────┴───────────────────────────────────────┘
+
+  Label: "Training Intensity" (12px medium, muted)
+  Value: "+12% vs baseline" (28px bold, black)
+  Status pill: [above table]
+  What it means (12px muted): "How hard this week is vs. your recent normal."
+  What to do (12px muted): [dynamic, above table]
+
+  ---
+  Card 2: Weekly Km
+
+  ┌──────────────────┬────────────────────────────────────┬─────────────────────────────────────────────────┐
+  │      State       │            Status pill             │                   What to do                    │
+  ├──────────────────┼────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ < 50% of plan    │ "Light week" (grey)                │ Consistency matters more than volume right now. │
+  ├──────────────────┼────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ 50–90% of plan   │ "On track" (green)                 │ Volume is where it should be.                   │
+  ├──────────────────┼────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ 90–110% of plan  │ "On target" (green)                │ Right where you need to be.                     │
+  ├──────────────────┼────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ 110–130% of plan │ "Above plan" (orange)              │ Check if the extra km is intentional.           │
+  ├──────────────────┼────────────────────────────────────┼─────────────────────────────────────────────────┤
+  │ > 130% of plan   │ "Over plan" (red pill — pill only) │ Back off — let the load settle.                 │
+  └──────────────────┴────────────────────────────────────┴─────────────────────────────────────────────────┘
+
+  Label: "Weekly Km" (12px medium, muted)
+  Value: "52 km" (28px bold, black)
+  If cross-training: "+ ~8 km cross-training" (11px muted, below value)
+  Status pill: [above table]
+  What it means (12px muted): "Total running distance logged this week."
+  What to do (12px muted): [dynamic, above table]
+
+  ---
+  E2) BELOW FOLD — Collapsed (default)
+
+  Trigger: "How it's calculated  ↓" — 14px slate, full-width tap target, positioned immediately below the two cards.
+  Label chosen deliberately to differentiate from the Advanced accordion below it.
+
+  ---
+  Section 2a: Chart View Switcher
+  Segmented control, 3 options:
+    [Training Load] [Km] [Zone Breakdown]
+
+  Training Load: same chart as above fold (default)
+
+  Km: same 8-bar chart
+    Running km: #3B82F6 blue
+    Cross-training km (volumeTransfer applied): #A855F7 purple, stacked on top of blue
+    CTL line replaced by: plan target line (dashed, grey)
+
+  Zone Breakdown: stacked bar chart
+    Stack bottom→top: Base (green) / Threshold (amber) / Intensity (red)
+    Same x-axis, y-axis = TSS
+    Legend: inline color swatches + labels below chart
+    If no zone data available: option disabled, greyed out
+      Label: "Zone data unavailable — connect a heart rate monitor"
+
+  Section 2b: How Mosaic Calculates This
+  Heading: "How this works" (14px medium)
+
+  • Training Load (TSS) measures how hard each week was, combining duration and intensity.
+  • The line on the chart is your CTL — a rolling average that represents your current fitness level.
+  • Training Intensity = this week's TSS ÷ CTL. Values above 1.30 increase injury risk.
+
+  Section 2c: 8-Week Summary Row
+  Three inline stats, no color coding — pure information:
+    Avg TSS/week: 74
+    Training days: 5.2 / wk avg
+    Consistency: 87%
+
+  Consistency formula: weeks where actual TSS ≥ 70% planned TSS ÷ 8 × 100
+  Caption: "Over your last 8 weeks" (11px muted, below row)
+  No judgment on this row. Numbers only.
+
+  ---
+  E3) ADVANCED — Opt-In Accordion
+
+  Entry: "⚙  Advanced stats  ↓" — full-width tap target, border-top separator to visually distinguish from E2.
+
+  State: localStorage key: mosaic_stats_advanced_open — defaults closed. Once opened, persists across sessions.
+
+  ---
+  Bar 1: Weekly Km vs Plan Target
+
+  Type: Horizontal progress bar
+  Height: 32px, full width
+  Label left: "Km this week" (12px)
+  Value right: "52 km" (12px bold)
+
+  Color fill (left to right):
+    Green: actual km up to plan target
+    Orange segment: km above plan target (if > 110%)
+    Red segment: km above 130% of plan
+
+  Target marker:
+    Vertical tick at plan target position
+    Tap/hover reveals: "Target: 48 km"
+
+  Clamping: if actual > 150% of plan, cap bar visually, show "+52%" badge at right edge
+  Optimal band: ± 5% of target shown as subtle tick range (not a full band — too heavy)
+
+  What it means (12px muted): "Running volume drives your aerobic base and race fitness."
+  What to do (12px muted): [dynamic]
+
+  ---
+  Bar 2: Weekly TSS vs Plan Target
+
+  Type: Segmented horizontal bar (3 colour zones)
+  Height: 32px, full width
+  Label left: "Training Load" (12px)
+  Value right: "91 TSS" (12px bold)
+
+  Color semantics (left to right):
+    Grey: 0 to CTL — "your fitness baseline"
+    Green: CTL to plan target — "the intended progression"
+    Orange: plan target to plan target × 1.10 — "managed overshoot"
+    Red: above plan target × 1.10 — "overreach"
+
+    Note: if plan target < CTL (recovery week), the entire green zone collapses to a tick mark
+    at CTL, and bar is grey to the right of that tick — this is correct and expected
+
+  Target marker:
+    Vertical tick at plan TSS position
+    Second tick at CTL position (labelled "CTL" in 9px)
+    Tap/hover on plan tick: "Plan: 85 TSS"
+
+  Clamping: cap at plan × 1.35, show "+X%" at right edge
+
+  What it means (12px muted): "TSS combines duration and intensity into one number."
+  What to do (12px muted): [dynamic based on segment user is in]
+
+  ---
+  Bar 3: Zone / Intensity Distribution vs Plan
+
+  Important revision from first-pass (self-critique fix #4): No ghost bar. Ghost bars require training to read. Replace
+   with a divergence text line.
+
+  Type: Proportional split bar (shows proportion, not absolute)
+  Height: 28px, full width
+
+  Segments (left to right, by % of actual TSS):
+    Base Z1+Z2: green
+    Threshold Z3: amber
+    Intensity Z4+Z5: red
+
+  Above bar: "72% Base · 18% Threshold · 10% Intensity" (12px, actual proportions)
+  Below bar: "Plan: 75% · 15% · 10%" (11px muted, plan proportions)
+
+  Divergence indicator:
+    For each zone deviating > 10% from plan:
+      Inline ⚠ next to that zone's label in the "above" line
+      Tap/hover on ⚠: "5% above target. High-intensity work compounds quickly."
+
+  Legend (below divergence): ● Base (aerobic) · ● Threshold (race-pace) · ● Intensity (hard)
+
+  What it means (12px muted): "Zone balance shows if you're training smart, not just hard."
+  What to do (12px muted): [dynamic — e.g., "More easy running would reinforce your long run."]
+
+  If no zone data (no HR source):
+    Grey bar with: "Connect a heart rate source for zone breakdown"
+    No ⚠, no divergence text, no What to do
+
+  ---
+  PMC Section (Advanced)
+
+  Four inline metrics:
+    CTL: 72   ATL: 81   TSB: −9   ACWR: 1.12×
+
+  ACWR bar:
+    Gradient left→right: green (0.8) → green (1.10) → orange (1.30) → red (1.50+)
+    Thumb marker at current ratio
+    Status text below: "Manageable load" / "Caution — monitor this week" / "High — reduce load"
+
+  CTL/ATL/TSB: three-metric row, no color, pure numbers
+
+  ---
+  F) Edge States
+
+  F1: First 4 Weeks (Baseline-Building)
+
+  Chart: bars shown, CTL line ABSENT (not enough data)
+  Banner ABOVE chart (neutral grey, not alarming):
+    "Building your baseline — CTL trend appears after week 4."
+
+  Training Intensity card:
+    Value: "—"
+    Status: "Building" (grey)
+    What it means: "Not enough training history to calculate a reliable baseline."
+    What to do: "Keep training consistently — Mosaic is learning your load."
+
+  Advanced accordion: hidden entirely with note below "How it's calculated":
+    "Advanced metrics become available after 4 weeks of training."
+
+  F2: Missing Weeks / Travel
+
+  Missing week bars: empty slot with "—" x-axis label (NOT "Missed")
+  No shaming. No red.
+  Tooltip on empty slot: "No training logged this week."
+
+  CTL line: continues naturally (CTL decays — the line drops honestly)
+
+  Narrative adjustment:
+    If last 2+ weeks empty: "You're getting back into rhythm — ease in this week."
+
+  F3: Beginner Low Volume (< 40 avg TSS/week)
+
+  Chart y-axis: scales to actual data — never a fixed 200 TSS max making bars look tiny
+
+  Language guardrails:
+    NEVER "Low load" in red or orange — it's grey "Building" or green "On track"
+    Status map: < 70% plan → "Building" (grey), not "Light week"
+
+  Narrative: "Every session builds your base — you're making progress."
+
+  Advanced accordion: collapsed with note:
+    "Advanced stats become more meaningful as your training volume builds."
+
+  Do NOT show: ACWR warnings at beginner volumes (meaningless at 20 TSS/week)
+
+  F4: Advanced High Volume (> 150 TSS/week)
+
+  Chart y-axis: scales to data. Never a fixed max that clips bars.
+  Clamping: only if bar exceeds container height.
+
+  Critical: color semantics are RATIO-BASED, not absolute.
+    130 TSS = green if CTL is 120. Do not flag high absolute TSS as dangerous.
+
+  Narrative: "You're training at high volume — recovery is your performance lever."
+
+  Training Intensity card: Load Ratio is the most important signal for this user.
+    1.05× → "On track" (green) even if absolute TSS seems large.
+
+  F5: High Cross-Training Week, Low Running
+
+  Weekly Km card:
+    Value: "28 km running"
+    Sub-value: "+ ~12 km cross-training" (volumeTransfer applied, 11px muted)
+    Status: "Cross-training week" (grey pill)
+    What it means: "Km is lower, but cross-training keeps your aerobic load on track."
+    What to do: "Your Training Intensity tells a fuller picture."
+
+  TSS bars:
+    Blue = running TSS
+    Purple = cross-training TSS, stacked on top
+    Combined height shows full training week — bar does not look empty
+
+  Narrative: "Load is steady — cross-training is filling the gap."
+
+  F6: Injury Flagged / Return-to-Run
+
+  Banner (amber, NOT dismissible, above chart):
+    "Return-to-run mode active. Volume is intentionally reduced."
+
+  Training Intensity card:
+    Status: "Return protocol" (amber pill, custom — not green/red)
+    What it means: "Load is deliberately light while you recover."
+    What to do: "Follow the plan. Don't add sessions — let Mosaic manage the ramp."
+
+  Advanced section:
+    Zone bar: hidden (no intensity data during return protocol)
+    Km bar: target tick is amber instead of grey, label "Return protocol target: X km"
+
+  Do NOT show: injury risk percentage during return-to-run. It is punitive and not actionable.
+
+  ---
+  G) Engineering Handoff
+
+  Raw Fields Required
+
+  // Per Week (last 8 weeks)
+  week.tss            // number | null — actual TSS (null if week not started)
+  week.plannedTSS     // number — plan target TSS
+  week.actualKm       // number — running km logged
+  week.plannedKm      // number — plan target km
+  week.crossTSS       // number — cross-training TSS contribution
+  week.crossKm        // number — cross-training km equivalent (volumeTransfer applied)
+  week.zoneSplit      // { base: number, threshold: number, intensity: number } | null
+  week.iTrimp         // number | null — for zone classification fallback
+  week.startDate      // ISO string — for x-axis labels
+  week.isComplete     // boolean
+
+  // Global state
+  s.biologicalSex     // for iTRIMP sex-correction factor
+  s.athleteTier       // 'beginner' | 'intermediate' | 'advanced' | 'high_volume'
+  injuryEngine.returnToRun  // boolean
+  injuryEngine.currentRisk  // InjuryRisk — used for F6 banner trigger only
+
+  Computed Fields
+
+  // CTL at end of each week (already in fitness-model.ts)
+  CTL_n = CTL_{n-1} × (1 − 1/42) + TSS_n × (1/42)
+  // Seed: 0, or onboarding estimate if available
+
+  // ATL per week
+  ATL_n = ATL_{n-1} × (1 − 1/7) + TSS_n × (1/7)
+
+  // Training Intensity (card value)
+  trainingIntensity = currentWeek.tss / CTL_current
+  displayValue = ${Math.round((trainingIntensity - 1) * 100)}% vs baseline
+  // Special: if CTL < 20 → null → show "—", status "Building"
+
+  // Narrative direction
+  recent3Avg = avg(weeks[-3..-1].tss)
+  historic5Avg = avg(weeks[-8..-4].tss)
+  direction = recent3Avg > historic5Avg × 1.05 ? 'building'
+            : recent3Avg < historic5Avg × 0.95 ? 'easing'
+            : 'steady'
+
+  // Narrative action — from ACWR status (already computed)
+  // 3 × 3 matrix → 9 specific sentence endings
+
+  // Consistency score
+  consistency = (weeks where actualTSS >= plannedTSS × 0.70).length / totalWeeks × 100
+
+  // Zone proportions (for Advanced bar)
+  zonePct = {
+    base: week.zoneSplit.base / week.tss,
+    threshold: week.zoneSplit.threshold / week.tss,
+    intensity: week.zoneSplit.intensity / week.tss
+  }
+
+  // Plan zone proportions
+  // Stored per week from plan_engine — if not available, use sport × intensity defaults
+  // from LOAD_PROFILES in workouts/load.ts
+
+  Acceptance Criteria (PM/Designer sign-off)
+
+  1. 5-second scan: Cover the bottom half of the screen with your thumb — the card labels and the top of the chart
+  communicate a clear status without scrolling.
+  2. No full-red screen: In no scenario does the entire chart, card background, or page header turn red. Red appears
+  only as a bar cap segment.
+  3. Narrative updates on tab focus: Not only on app open — the narrative sentence recomputes when the user navigates
+  to Stats.
+  4. Cross-training week not empty: A week with 0 running km but 60 cross-training TSS shows a full-height blue+purple
+  bar.
+  5. Beginner never sees "High load": An 8-week dataset with max 45 TSS/week, following plan, never produces an orange
+  or red status pill.
+  6. Tooltips in bounds: Tapping any bar on a 375px screen shows a tooltip that does not overflow either edge.
+  7. Zone disabled state: When week.zoneSplit is null for all 8 weeks, the Zone Breakdown option in the switcher is
+  visually disabled with explanatory copy — not a crash or empty bar.
+  8. Return-to-run banner: When injuryEngine.returnToRun === true, the amber banner appears before the chart and the
+  Training Intensity card shows "Return protocol" pill.
+
+  ---
+  H) Self-Critique + Revision
+
+  5 Ways This Could Still Confuse Users or Look Busy
+
+  1. "Training Intensity" sounds like effort-per-workout, not week-vs-baseline. A runner might read "+12% vs baseline"
+  and think it means they ran harder than usual today, not that their weekly load is elevated.
+  2. Two collapsed sections ("How it's calculated" and "⚙ Advanced stats") are visually similar on first scroll. A user
+   who taps the first one and gets explainer bullets may think they've found everything and never discover the training
+   bars.
+  3. The CTL line disappears before week 4 (F1 edge state) but nothing explains this to users who open the Stats tab on
+   day 1. They just see floating bars with no reference — which looks like a broken chart.
+  4. The zone proportional bar (Advanced) with divergence text works only if users know what "plan zone targets" means.
+   A user who doesn't know their plan specifies 75% base work will not understand why a ⚠ is appearing at 70% base.
+  5. The narrative sentence matrix (3 × 3 = 9 variants) is invisible to engineers without a table. Without explicit
+  copy for all 9 cells, this will be implemented as 2–3 generic strings, defeating the purpose.
+
+  ---
+  Revisions
+
+  Fix 1: Rename card again — "Week vs Baseline"
+
+  - Label: "Week vs Baseline"
+  - Value: "+12%" (large) + "above your normal" (12px muted, below value, same line as What it means)
+  - This makes the comparison explicit in the label itself. No training knowledge required.
+
+  Fix 2: Visual separator between the two collapsed sections
+
+  - "How it's calculated" section: no icon, blue underline on the label
+  - "Advanced stats" section: ⚙ icon + full horizontal rule above it + "For coaches and data-driven athletes"
+  descriptor in 11px muted
+  - These are now distinguishable at a glance — label, icon, visual separator, and descriptor all differ
+
+  Fix 3: Day-1 empty state for chart
+
+  - When < 4 weeks of data AND no CTL: replace the CTL line slot with an inline annotation directly on the chart (not a
+   banner)
+  - Small grey pill floating at right: "Baseline available after week 4"
+  - No separate banner component — one fewer element, less noise
+
+  Fix 4: Zone bar — show plan targets as text above bar, not as a percentage
+
+  - Replace "Plan: 75% · 15% · 10%" (abstract) with: "Your plan targets mostly easy running this week"
+  - For the ⚠, tooltip changes to: "Mosaic planned 10% intensity for this week — you've done 15%. That's fine once, but
+   compounds over time."
+  - This grounds the divergence in plain English, not a comparison the user has to compute in their head
+
+  Fix 5: Publish the full narrative sentence matrix
+
+  All 9 sentences, production-ready copy:
+
+  ┌───────────┬──────────────────────────────┬────────────────────────────────┬───────────────────────────────────┐
+  │ Direction │           ACWR: OK           │         ACWR: Caution          │            ACWR: High             │
+  ├───────────┼──────────────────────────────┼────────────────────────────────┼───────────────────────────────────┤
+  │ Building  │ "Load is building well —     │ "Load is rising fast — today's │ "Load is spiking — protect        │
+  │           │ stay consistent."            │  easy run matters."            │ recovery before next week."       │
+  ├───────────┼──────────────────────────────┼────────────────────────────────┼───────────────────────────────────┤
+  │ Steady    │ "Load is holding steady —    │ "Load is elevated — keep this  │ "Load is high — reduce one        │
+  │           │ you're on track."            │ week easy."                    │ session this week."               │
+  ├───────────┼──────────────────────────────┼────────────────────────────────┼───────────────────────────────────┤
+  │ Easing    │ "You're in a recovery week — │ "Load is dropping but still    │ "This week is still heavy — don't │
+  │           │  trust the dip."             │ elevated — stay easy."         │  add sessions."                   │
+  └───────────┴──────────────────────────────┴────────────────────────────────┴───────────────────────────────────┘
+
+  ---
+  Final What Changed from First Pass
+
+  ┌─────────────────────────────────────────────┬────────────────────────────────────────────────────┐
+  │                 First pass                  │                      Revised                       │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ "Training Intensity" card label             │ → "Week vs Baseline"                               │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Two collapsed sections look similar         │ → Visual separator + descriptor text on Advanced   │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Day-1 chart missing CTL with no explanation │ → Inline pill annotation on chart, no extra banner │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Zone bar ghost + text divergence            │ → Text divergence only, with plain-English tooltip │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Narrative: vague 2-variable system          │ → Published 9-cell copy matrix above               │
+  ├─────────────────────────────────────────────┼────────────────────────────────────────────────────┤
+  │ Plan target ticks on primary chart          │ → Removed (moved to Advanced only)                 │

@@ -4,6 +4,643 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-01 — Recovery Check-In Feature
+
+- `recovery/engine.ts`: Added `rmssdToHrvStatus(rmssd)` — maps RMSSD (ms) to `'balanced'|'low'|'unbalanced'|'strained'`; exported
+- `data/physiologySync.ts`: Added `buildRecoveryEntryFromPhysio(physio)` — converts `PhysiologyDayEntry` to `RecoveryEntry`; Garmin stress inverted to readiness
+- `main.ts`: Added `checkRecoveryAndPrompt(s)` — called after `syncPhysiologySnapshot(7)` resolves; finds today's physio entry, builds entry + computes status; shows manual check-in if no Garmin data; shows `showRecoveryAdjustModal` if orange/red; respects `lastRecoveryPromptDate` one-per-day guard
+- `ui/plan-view.ts`: Replaced 4-option sleep quality modal with 1–10 colour-graded numeric tap UI; `handleRecoveryScoreInput` maps score×10 to sleepScore; history capped at 30; sets `lastRecoveryPromptDate`; `showRecoveryAdjustModal` now exported
+- `types/state.ts`: Added `recoveryDebt?: 'orange' | 'red'` to `Week`
+- `calculations/fitness-model.ts`: ATL multiplier now stacks `acwrOverridden` (1.15×), orange debt (1.10×), red debt (1.20×) — takes the max
+- `ui/home-view.ts`: Recovery row shows HRV status dot (colour from RMSSD), resting HR sub-caption with ↑/↓ vs 7-day avg, "Self-reported" caption when manual entry was made today
+- `recovery/engine.test.ts`: Added 2 new `rmssdToHrvStatus` tests (all 17 engine tests passing)
+
+## 2026-03-01 — Home screen: tappable signal bars + injury indicator
+
+**Feature parity audit — changes made:**
+- `home-view.ts` `buildSignalBars`: Injury Risk and Recovery rows now have `cursor:pointer` and IDs (`home-injury-risk-row`, `home-recovery-row`)
+- When `isInjuryActive()`: Injury Risk row replaced with amber "In Recovery" pill + caption; tap opens `openInjuryModal()`
+- When not injured: Injury Risk row (ACWR bar) tap opens `triggerACWRReduction()` (plan softening modal)
+- Recovery row tap opens `showRecoveryLogModal()` (sleep quality bottom sheet)
+- `triggerACWRReduction` exported from `main-view.ts`; `showRecoveryLogModal` exported from `plan-view.ts`
+- `isInjuryActive` imported into `home-view.ts` for injury state check
+
+**Still in Plan tab only (not yet on Home):**
+- Morning pain check-in (worse/same/better) — shown when injured
+- Capacity test UI (Had Pain / Pain-Free) — on injury test workout cards
+- Recovery 7-day dot log panel
+- Excess Load card / ACWR zone carry banner
+
+---
+
+## 2026-03-01 — Light/Beige palette conversion: main-view.ts
+
+- Converted all Tailwind dark-palette color classes (`bg-gray-*`, `text-white`, `text-gray-*`, `bg-emerald-*`, `text-emerald-*`, `bg-amber-*`, `bg-red-*`, `bg-blue-*`, etc.) to CSS variable inline styles using the design system (`var(--c-bg)`, `var(--c-surface)`, `var(--c-black)`, `var(--c-muted)`, `var(--c-faint)`, `var(--c-border)`, `var(--c-ok)`, `var(--c-caution)`, `var(--c-warn)`, `var(--c-accent)`)
+- Updated: header, week navigator, week progress bars, zone bands, ACWR bar, carry banner, lightened week banner, benchmark panel, recovery pill, recovery log, physiology card, all modals (benchmark entry, recovery input, recovery adjust, runner type, styled confirm, ACWR info sheet, TSS info sheet), spinner overlay, toast
+- Dynamic color expressions (injured header, phase labels, pain/canRun indicators) converted from Tailwind class interpolations to inline style interpolations
+- `setZoneProgress()` updated to set `style.background` instead of className
+- `dots()` helper updated to embed color as inline style; call sites pass CSS color values instead of Tailwind class names
+- DOM querySelector fixed: `h3.text-sm.font-medium.text-white` → `h3.text-sm.font-medium` (text-white class removed)
+- Zero new TypeScript errors introduced
+
+## 2026-03-01 — Phase C2 + C3: History-informed onboarding & adaptive plan rebuild
+
+**ctlBaseline wiring fix (5 callsites):**
+- `renderer.ts`, `events.ts`, `main-view.ts` (3×): pass `s.ctlBaseline ?? undefined` as 4th arg to `computeACWR()` — previously these paths started CTL from 0 even when Strava history was available
+
+**Phase C2 — History-informed onboarding:**
+- `stravaSync.ts fetchStravaHistory()`: after computing `ctlBaseline`, derives and sets `s.athleteTier` from CTL ranges (beginner <30 / recreational 30–60 / trained 60–90 / performance 90–120 / high_volume 120+)
+- `fitness.ts`: 3rd device option "Strava" added (grid-cols-3); Strava connect card with OAuth button; pre-saves `currentStep: 'strava-history'` before redirect so wizard resumes correctly
+- New `src/ui/wizard/steps/strava-history.ts`: wizard step shown after Strava OAuth — loading spinner → history summary (avg TSS/km, detected tier, tier description, plan start km, "Use this" / "Enter manually"); inline tier picker via "Change" link
+- `OnboardingStep` type: `'strava-history'` added
+- `controller.ts`: `strava-history` added to STEP_ORDER after `fitness`; `nextStep()` and `previousStep()` skip it for non-Strava users
+- `wizard/renderer.ts`: `renderStravaHistory` case added
+- `state.ts`: `stravaHistoryAccepted?: boolean` added to `SimulatorState`
+
+**Phase C3 — Adaptive plan rebuild:**
+- `initialization.ts`: if `s.stravaHistoryAccepted && s.detectedWeeklyKm`, override `s.wkm` (weekly km target) with the detected value at plan init time — plan starts at the athlete's actual training volume instead of a runs/week lookup
+- `account-view.ts`: "Training History" card shown when Strava connected; displays avg TSS/week, avg km/week, detected tier; "Rebuild Plan with Strava Data" button runs full re-init, preserves existing garminActuals/ratings, then navigates home; "Refresh History" and "Load History" buttons
+
+## 2026-02-28 — Feature parity: Porting missing features to new tab UX
+
+Restored all interactive features that were orphaned when `renderMainView()` became a one-liner delegate to `renderPlanView()`.
+
+**plan-view.ts:**
+- Injury banner + Report/Recover buttons: `buildInjuryBanner()`, `buildInjuryHeaderBtn()` — full-width card with gradient accent, pain level, phase, can-run badge, medical disclaimer for return phases; circular icon in header when healthy
+- Morning pain check-in: `buildMorningPainCheck()` — once-per-day card with Worse/Same/Better grid; animated in-place feedback on selection
+- Capacity test buttons: "Had Pain" / "Pain-Free!" grid on injury capacity test workout cards
+- Recovery status pill: `buildRecoveryPill()` — 4 states (no data, green, low+CTA, already prompted)
+- Recovery adjust modal: `showRecoveryAdjustModal()` — bottom-sheet with adjustments (run by feel / downgrade / reduce) for poor sleep; `markRecoveryPrompted()` suppresses re-prompt
+- Recovery log panel: `buildRecoveryLogPanel()` — 7-day dot history card (green/amber/orange/red by score); "Log today"/"Update ✓" button
+- Benchmark check-in panel: `buildBenchmarkPanel()` — optional fitness check-in on benchmark weeks; Garmin auto-detect; `showBenchmarkEntryModal()` bottom-sheet for manual entry (pace/distance/time)
+
+**account-view.ts:**
+- Change Runner Type: "Change" link next to runner type label → `showRunnerTypeModal()` (bottom-sheet picker with 3 types); confirmation dialog when plan already started; `applyRunnerTypeChange()` rebuilds plan via `initializeSimulator()`
+
+**stats-view.ts:**
+- VDOT &amp; Paces section: enhanced `buildFoldedPaces()` → "VDOT &amp; Paces" — hero VDOT tile with % change badge + "Started at X" sub-label, inline explainer of what VDOT means, paces grid below
+
+## 2026-02-27 — UX Redesign + Load System UI convergence
+
+**Phase 1 — CTL seeding fix**:
+- `computeACWR` + `computeFitnessModel` gain optional `ctlSeed?` param — seeds CTL/ATL from Strava history instead of starting from 0
+- All `computeACWR` calls in `home-view.ts` and `stats-view.ts` now pass `s.ctlBaseline`
+- `main.ts`: calls `fetchStravaHistory(8)` on startup when Strava connected + history not yet fetched, re-renders home on complete
+
+**Phase 2 — Stats Tab full redesign**:
+- Complete rewrite of `stats-view.ts` — light theme CSS vars throughout (no dark Tailwind)
+- Above fold: "Your last 8 weeks" heading + narrative sentence (3×3 matrix: direction × ACWR status)
+- 8-week Training Load SVG bar chart with zone bands (Optimal green shading, "Ease back" threshold line, dashed "Your usual" baseline)
+- Two summary cards: "This Week" (±% vs usual + plain-English copy) + "Distance" (km vs plan)
+- "Dig deeper" accordion: chart view switcher (Training Load / Distance / Zones), 3 explainer bullets, 8-week summary row
+- "Advanced" accordion (persisted open state): distance + load vs plan bars, CTL/ATL/TSB/ACWR metrics grid, ⓘ tap-to-expand inline explanations, ACWR gradient bar with tier label
+- Folded sub-sections (light theme): Race Prediction, Current Paces, Recovery & Physiology, Phase Timeline
+
+**Phase 3 — Home sparkline**:
+- `buildSparkline(s)` added to `home-view.ts` — 36px mini 8-bar chart below injury risk bar
+- Same zone colouring as Stats chart; baseline dashed line; tap → navigates to Stats tab
+- Placeholder "Baseline builds in week 4" when no history
+
+**Phase 4 — Suggestion modal Phase B v3 header**:
+- `CrossTrainingModalContext` interface + optional 5th param on `showSuggestionModal`
+- When provided: renders sport emoji + name + duration, HR-based load + effort type (Easy/Tempo/Interval from `classifyWorkoutType`), matched run name/km, cardio covered % + running km gap with inline tap-to-expand explanations
+
+## 2026-02-27 — Plan tab overhaul: matching flow, visual hierarchy, card detail
+
+**Matching flow fix (critical)**:
+- `isDone` now includes `!!garminAct` — workouts paired via activity review now show as "Logged" (green) instead of "Missed"
+- `garminAct` lookup moved before `isDone` calculation throughout `buildWorkoutCards`
+
+**Visual hierarchy**:
+- Colour-coded left border stripe: green = Logged/Done, blue = Today, amber = Missed, none = Upcoming
+- "Missed" label now amber (`var(--c-caution)`) not grey faint — clearly distinguishable from "Upcoming"
+- Status shows "Logged" when matched via Garmin/Strava, "Done" when manually rated
+- Name no longer fades on completion (only fades on Skip/Replace)
+- Garmin banner in expanded detail uses green background (success) not blue
+
+**Expanded card detail enriched**:
+- Route map canvas rendered inline when garminActual has polyline — lazy-loaded on expand
+- HR zone bars + legend shown when hrZones available (actual data, not estimate)
+- Planned load profile (3 bars: Base/Threshold/Intensity) shown for every workout type
+- "Move to day" buttons at bottom — 7 day buttons; active day highlighted blue; fixes Sat/Sun drag issue
+
+**Activity Log**:
+- Header now shows "X matched" count and "+Y excess TSS" in amber when unspentLoad > 0
+
+## 2026-02-27 — Activity detail + drag-and-drop restore
+
+- **New `src/ui/activity-detail.ts`**: Full-page activity detail view with stats grid (distance/time/pace/HR/maxHR/calories), HR zone bars + legend, km splits with pace-coloured bars, OSM route map canvas (via `drawPolylineOnCanvas`). Back button returns to plan or home.
+- **`strava-detail.ts`**: Exported `drawPolylineOnCanvas` (previously unexported) for use in activity-detail.
+- **Plan tab — activity click-through**: Activity Log rows (plan-matched garminActuals) and adhoc garmin rows are now tappable with chevron arrow; the inline actMatchRow sub-row on workout cards is also tappable. All navigate to activity-detail. "View full activity →" link added inside expanded card garmin banner.
+- **Plan tab — drag-and-drop**: Workout cards now have `draggable="true"` and `data-day-of-week`. HTML5 DnD handlers wire dragstart/dragover/drop — dropping card A onto card B swaps their days via `wk.workoutMoves`. Day moves applied in `getPlanHTML` before rendering.
+- **Home tab — activity click-through**: Recent activity rows backed by garminActuals get `home-act-row` class with `data-workout-key`/`data-week-num`; click navigates to activity-detail. Rows without detail (adhoc) show no chevron and no click.
+- **Zero new TS errors** in modified files.
+
+## 2026-02-26 — Plan tab: route back to main-view (restore full functionality)
+
+- **Architecture correction**: Plan tab routes back to `renderMainView()` in all views (home, stats, record, account). `plan-view.ts` is parked — it was a partial reimplementation that lost drag-drop, historic week editing, RPE modals, workout names, strava-detail expansion, skip/makeup logic, ACWR bars, GPS recordings, benchmark UI, and more.
+- All 'plan' tab navigations restored to full functionality via main-view
+- `plan-view.ts` kept as a future starting point for a proper redesign with complete feature parity
+
+## 2026-02-26 — Plan tab: expandable cards, activity log, font fix
+
+- **Inter font loaded** via Google Fonts preconnect in index.html; removed dark Tailwind override on body tag
+- **Workout cards expandable**: tap any row to expand inline detail — shows description, Garmin/Strava sync banner with stats, Mark Done / Skip / Unmark buttons. Chevron rotates on expand.
+- **Mark Done / Skip / Unrate** wired directly to `rate()`, `skip()`, `getMutableState()` from events.ts — re-renders plan-view after action (no navigation away)
+- **Activity Log section** below workout cards: matched activities (garminActuals), adhoc Garmin activities, pending items banner with count; Review button calls `openActivityReReview()` directly
+- **Remove garmin (×)** on both the expanded card banner and activity log rows — calls `removeGarminActivity()`
+- **All nav routes to 'plan' tab** updated: home-view, stats-view, record-view, account-view all point to `renderPlanView()`
+
+## 2026-02-26 — Phase 1 & 2 UX Redesign (Home tab + Plan tab)
+
+- **New design system** (`styles.css`): Full CSS custom-property system — cream bg (`#FDFCF7`), Inter font, powder-blue accent (`#4E9FE5`), card/pill radii, progress bars, pills, signal bars, type scale
+- **New tab structure** (`tab-bar.ts`): 4 tabs — Home | Plan | Record | Stats; Account moved to header avatar
+- **Home tab** (`home-view.ts` NEW): Week progress bars, ACWR injury risk bar, today's workout hero card, race countdown, recent activity, sync actions; geometric SVG art behind workout hero
+- **Plan tab** (`plan-view.ts` NEW): Week calendar strip, Vergia-style workout card list, week navigation (< > buttons, keyboard arrows, touch swipe); delegates complex operations (rate/advance) to main-view.ts
+- **Wired all views** to route 'plan' tab to `renderPlanView()` instead of `renderMainView()` (`home-view.ts`, `stats-view.ts`, `record-view.ts`, `account-view.ts`)
+- **Font/contrast fix**: `--c-muted` `#888` → `#555`, `--c-faint` `0.38` → `0.52` for legibility on web
+
+## 2026-02-26 — Strava HR zone caching (fix rate-limit zone loss)
+
+- **Root cause**: Edge function fetched Strava HR streams for ALL 50 activities on EVERY sync, burning the 100 req/15 min rate limit. Activities later in the batch got `hrZones: null`, which persisted in `garminActuals` and triggered "Zone split estimated — HR stream data unavailable" even though the activity came from Strava.
+- **Fix — DB caching**: New `hr_zones jsonb` + `km_splits integer[]` columns in `garmin_activities` (migration `20260226_garmin_activities_zones.sql`). Edge function now does a single bulk `SELECT` of existing rows before the loop; activities that already have `hr_zones` in DB skip the stream fetch entirely and return cached data. Stream is only fetched the **first time** an activity is seen.
+- **DB writes optimised**: Upsert only fires when fresh stream data was fetched (`needsUpsert` flag), reducing write amplification on every sync.
+- **`stravaSync.ts` patch loop**: Comment clarified — the `!actual.hrZones` guard is intentional and correct; the second sync now returns real zones from DB so the patch fires and fills in activities that missed zones on first sync.
+
+## 2026-02-26 — Synced activities display fixes (round 2)
+
+- **`formatActivityType` missing entries**: Added `WORKOUT: 'Workout'`, `CARDIO: 'Cardio'`, `KICKBOXING`, `ELLIPTICAL`, `STAIRSTEPPER`. Fixes "workout" (lowercase via fallback) showing for Strava activities that were stored with `activity_type = "WORKOUT"`.
+- **hrZones + startTime on all GarminActual creation sites**: All 6 sites in `activity-review.ts` (manual review assignments, auto-process for runs/gym/cross) now copy `item.hrZones` and `item.startTime` into `GarminActual`. Fixes "Zone split estimated" showing for cross-training and manually-reviewed activities.
+- **`stravaSync.ts` patch loop extended**: Now loops over ALL weeks (not just current week) and also patches `startTime` and `displayName` — so activity labels like "HIIT" update correctly on next sync after edge function redeployment, without requiring the user to delete and re-add.
+- **`removeGarminActivity` cross-week search**: Now searches ALL weeks' `garminMatched` to find the activity (not just current week). Fixes cases where a past-week activity's × button silently did nothing. Also correctly filters `adhocWorkouts` by both the adhoc id (`garmin-{id}`) AND the workoutId, so matched plan-slot runs are properly cleaned up.
+
+## 2026-02-26 — Synced activities display fixes
+
+- **Edge function `sport_type`**: `sync-strava-activities` now uses Strava's `sport_type` field first (more specific, e.g. "HIIT") before falling back to `type` ("Workout"). Added mappings for `workout` → `CARDIO`, `pilates`, `boxing`, `elliptical`, `stairstepper`. Fixes HIIT activities showing as "Workout".
+- **`hrZones` on `GarminActual`**: `activity-matcher.ts` now copies `row.hrZones` directly into the `GarminActual` when auto-completing a run. Previously hrZones were only patched on a subsequent `stravaSync.ts` resync, causing the "Zone split estimated" message to show even for Strava-connected users after first sync.
+- **`startTime` on `GarminActual`**: Added `startTime?: string` to `GarminActual` type (`state.ts`); `activity-matcher.ts` now stores `row.start_time` in matched run actuals for date display.
+- **Source badge**: `renderGarminSyncedSection` now derives the activity source from the `garminId` prefix (`strava-` → Strava badge, `apple-` → Apple Watch badge, numeric → Garmin badge) instead of checking `stravaId`. All three activity types (matched, adhoc, pending) now show a source badge.
+- **Unified format**: All synced activities (matched plan slots, ad-hoc, pending review) now show: Source badge · Name · Distance · Pace · HR · Date · Calories. Helpers `getActivitySource()`, `sourceBadge()`, `fmtActivityDate()` added in renderer.
+- **Adhoc structured data**: `addAdhocWorkout()` and `addAdhocWorkoutFromPending()` now store `garminDistKm`, `garminDurationMin`, `garminAvgHR`, `garminCalories`, `garminAvgPace` as extended properties on the workout object. Name no longer includes "(Garmin)" suffix (replaced by source badge).
+- **Zone split message**: Changed "Zone split estimated — connect Strava for HR-accurate data" to "Zone split estimated — HR stream data unavailable" (neutral, accurate for all data sources).
+
+## 2026-02-26 — Strava-first activity sync architecture
+
+- **New data source strategy**: Strava is now always the activity source when connected (regardless of wearable). Garmin/Apple Watch continues as the biometric source (VO2max, LT, HRV, sleep, resting HR). For users without Strava, Garmin webhook remains the activity source.
+- **`supabase/functions/sync-strava-activities/index.ts`**: Removed enrich mode entirely. Single standalone path — fetches activity list + HR streams, computes iTRIMP + HR zones + km splits, upserts into `garmin_activities` with `source='strava'`. Fixed `garmin_daily_metrics` → `daily_metrics` table name for physiology lookup (was using wrong table, causing fallback to 55/190 defaults for all iTRIMP calculations).
+- **`src/data/stravaSync.ts`**: Removed all enrich mode code. `syncStravaActivities()` now always runs standalone and returns `{ processed: number }`. Patches `hrZones`, `kmSplits`, `polyline` onto `garminActuals` after matching.
+- **`src/main.ts`**: Boot sync routing updated — if `s.stravaConnected`, calls Strava for activities + Garmin physio for Garmin wearable users. Garmin-only branch no longer calls Strava enrichment. Strava connected toast updated to "syncing activities".
+- **`src/ui/main-view.ts`**: Sync button now shows for all users (not hidden for `wearable === 'strava'`). Label updated: "Sync Strava" / "Sync Garmin" / "Sync Apple Watch" based on `s.stravaConnected` then `s.wearable`. Handler routes to Strava when connected.
+- **`src/ui/account-view.ts`**: Sync Now button uses same routing. "Pair Strava HR" section renamed to "Re-sync activities" with orange styling matching Strava brand. Handler uses `{ processed }` return type.
+- **`supabase/migrations/20260226_garmin_activities_source.sql`**: Adds nullable `source` text column to `garmin_activities` (needed for Strava standalone upsert).
+- **`supabase/migrations/20260226_sleep_and_activity_details.sql`**: Creates `sleep_summaries` and `activity_details` tables (were missing from DB schema, causing 400 errors on physiology sync and lap detail sync).
+- **`src/data/activitySync.ts`**: Fixed early return bug — `processPendingCrossTraining()` is now called even when the DB returns 0 rows, so stuck `__pending__` items surface on sync.
+
+## 2026-02-26 — Stats page plain-English rewrite (Volume & Load section)
+
+- **`src/ui/stats-view.ts` `buildLoadVolumeHTML`**: Complete rewrite of the Volume & Load section:
+  - Removed confusing week-on-week TL delta badge (`-418`) — replaced with plain-English context ("28% less than last week")
+  - "Leg Stress" card now only appears when `impactLoad > 0` — no more "None / Musculoskeletal impact (0 units)"
+  - History bar charts: hidden until 4+ completed weeks; labels upgraded from `text-[8px]` to `text-[10px]`; bar values sit above bars not below; note explains what the chart shows
+  - PMC redesign ("Training Balance" heading): CTL → "Fitness / 42-day base", ATL → "Fatigue / 7-day load", TSB → "Form / Fresh|Neutral|Fatigued". Plain-English explanation of what each means
+  - ACWR section in PMC: taller bar (h-2), "this week vs your baseline" label, "Rest / ▲ safe limit / Overload" axis labels
+  - Athlete tier: "Safe load increase: up to X% above your baseline" instead of raw ACWR number
+- **`src/ui/main-view.ts`**: Training tab TSS split bar now uses 8-week rolling max as scale anchor — stops the ◆ baseline marker jumping when one outlier week sets a huge scale. Added `computeWeekTSS` import.
+
+## 2026-02-26 — Stats + Training tab UX polish
+
+- **`src/ui/stats-view.ts`**: Reordered stats page — Fitness (PMC) and Load/Volume now appear second/third, before Race Prediction. Previously required scrolling past paces/insights to reach training metrics.
+- **`src/ui/stats-view.ts`**: PMC "Building baseline" state when < 4 weeks data — suppresses misleading "Fatigued · TSB -99" label (ATL is naturally high early in training); TSB grid cell shows "—" with a plain-English explanation instead.
+- **`src/ui/main-view.ts`**: ◆ Baseline label added to legend row on Training tab TSS split bar — was an unlabelled grey diamond.
+
+## 2026-02-26 — Bug fix: Load chart now updates when navigating weeks
+
+- **`src/ui/main-view.ts`**: `updateViewWeek()` now calls `updateLoadChart({ ...s, w: viewWeek })` after every week change. Previously the TSS split bar, Running Volume bar, zone bars, and load numbers stayed frozen on the week you were on when the page loaded.
+
+## 2026-02-26 — Phase B v2: Override Debt, Volume Bars, Carry Tracking, acwrStatus Wiring
+
+- **`src/types/activities.ts`**: Added `volumeTransfer?: number` and `intermittent?: boolean` to `SportConfig` interface.
+- **`src/types/state.ts`**: Added `carriedTSS?` and `acwrOverridden?` to `Week`.
+- **`src/constants/sports.ts`**: Added `volumeTransfer` (GPS km credit toward running volume bar) and `intermittent` flag to all `SPORTS_DB` entries. Soccer/rugby: 0.7, extra_run: 1.0, hiking: 0.4, cycling/swimming/padel/tennis: 0.
+- **`src/calculations/fitness-model.ts`**: Synthetic ATL debt — when `wk.acwrOverridden` is true, ATL computation uses 1.15× the actual TSS, making ACWR appear elevated even after load returns to normal. CTL stays accurate.
+- **`src/ui/events.ts`**: Imported `computeACWR`/`computeWeekTSS` from fitness-model. In `next()`: (1) computes zone carry tracking (stores `wk.carriedTSS` when actual TSS > planned × 1.10, with HR zone breakdown); (2) computes ACWR and sets `weekAdjustmentReason` on the incoming week when elevated.
+- **`src/ui/renderer.ts`**: `generateWeekWorkouts()` main render call now receives `acwrStatus` from `computeACWR` — plan engine reduces quality sessions when ACWR is elevated.
+- **`src/ui/main-view.ts`** (Volume bars): "This Week" TSS bar now splits running (blue) + cross-training (purple) with a CTL baseline marker (◆). New Running Volume row shows running km (blue) + GPS cross-training km (grey-blue, weighted by `volumeTransfer`), with planned km and baseline marker. "Your cross-training is covering fitness load" nudge when run km is zero but cross-training load is healthy.
+- **`src/ui/main-view.ts`** (override debt): "Dismiss" button added next to "Reduce this week" — sets `wk.acwrOverridden = true`. Selecting "Keep" in the reduction modal also sets this flag.
+- **`src/ui/main-view.ts`** (over-plan % trigger, §5.2): "Reduce this week" button now appears when actual TSS > ~planned × 1.20 even when ACWR is safe/unknown. Button text changes to describe the over-plan %.
+- **`src/ui/main-view.ts`** (injury risk label, §5.3): Escalating label below ACWR bar: Safe=hidden, Caution=Moderate amber, High=High red, 1 override=High + override note, 2+ overrides=Very High/Extreme.
+- **`src/ui/main-view.ts`** (carry banner, §5.4): Amber collapsible banner above workouts when prior weeks' `carriedTSS` sums (with CTL decay × 0.85/week) to ≥ 8 TSS. Tap-to-expand shows per-week breakdown with decay factor.
+
+## 2026-02-26 — Phase B: ACWR Injury Risk System
+
+- **`src/calculations/fitness-model.ts`**: Added `computeACWR()`, `AthleteACWR` interface, `AthleteACWRStatus` type, and `TIER_ACWR_CONFIG` table (5 athlete tiers with safe-upper ACWR thresholds and labels).
+- **`src/types/state.ts`**: Added `athleteTier?` and `athleteTierOverride?` to `SimulatorState`; `weekAdjustmentReason?` to `Week` (surfaced as a banner when the plan engine lightens a week due to ACWR).
+- **`src/workouts/plan_engine.ts`**: Added `acwrStatus?` to `PlanContext`. When `caution`: reduces `maxQuality` by 1 (replaces one hard session with easy). When `high`: reduces by 2 and caps long run at previous week's distance. ACWR note propagated to session `notes` field.
+- **`src/workouts/generator.ts`**: Added `acwrStatus?` param (passed through to `planWeekSessions`).
+- **`src/ui/suggestion-modal.ts`**: Added `ACWRModalContext` interface and optional 4th param to `showSuggestionModal()`. Renders a collapsible context header at the top of the modal explaining the load spike when ACWR is caution/high.
+- **`src/ui/main-view.ts`**: Retired `excess-load-card` (removed import, render call, and `wireExcessLoadCard()`). Added ACWR bar in "This Week" panel (below zone bars) — shows ratio, colour-coded gradient bar with safe-threshold marker, status text. Added "Reduce this week" button (caution/high only) → opens suggestion modal with ACWR context. Added `updateACWRBar()`, `updateLightenedWeekBanner()`, `triggerACWRReduction()`, `showACWRInfoSheet()` functions. Lightened-week banner above workouts when `weekAdjustmentReason` is set.
+- **`src/ui/stats-view.ts`**: Expanded PMC section — now shows ACWR ratio (prominent number), colour-coded status, bar with safe-threshold marker, 3-metric grid (CTL/ATL/TSB), athlete tier badge with override indicator.
+
+## 2026-02-26 — Zone Mini-Bars on Cards + Cross-Training Planned Load Fix
+
+- **`src/ui/renderer.ts`** (activity cards): Completed activity cards now show zone mini-bars (Base / Threshold / Intensity) with a number alongside, replacing the single-line `38b · 18t · 4i` shorthand. When no HR zone data (no Strava sync), shows "Estimated" badge inline and a footnote explaining to connect Strava for accurate data.
+- **`src/ui/main-view.ts`** (planned load): Cross-training planned workouts (`w.t === 'cross'`) now have `SPORTS_DB[sport].runSpec` applied when computing planned weekly TSS, preventing sports like swimming (runSpec 0.20) or tennis (0.50) from inflating the planned target the same as an equivalent running session. Default runSpec 0.40 used for unknown sports.
+
+## 2026-02-25 — Phase A Fixes: Zone Bars + Card Zones
+
+- **`src/ui/main-view.ts`** (zone bars): Zone bars now show each zone as a % of total actual TSS, not relative to each other. Base bar = 179/369 = 49% wide, etc. Subtitle changed to "Zone distribution of actual TSS". Bars thickened to h-1.5.
+- **`src/ui/renderer.ts`** (activity cards): Completed activity cards now show zone breakdown inline with TSS: `TSS: 115 · 80b · 25t · 10i · Strava HR`. Uses real hrZones data when available; falls back to workout type profile. Imported `LOAD_PROFILES` for fallback. Zone labels use shorthand (b/t/i) to fit inline.
+- **`src/ui/main-view.ts`** (TSS info sheet): Added explanation that planned TSS for cross-training may exceed actual because the plan doesn't apply a running-specificity discount, whereas Strava HR data does.
+
+## 2026-02-25 — Phase A Fixes: Zone Sum + Over-Plan Display
+
+- **`src/ui/renderer.ts`** (Planned TSS): Fixed zone values not summing to the total — now derives `plannedTSS` as sum of zone parts (base+threshold+intensity) rather than from `loads.total` which had an extra 1.15× anaerobic multiplier applied.
+- **`src/ui/main-view.ts`** (TSS bar): Bar still caps at 100% width visually, but now shows a `+X% over plan` label (orange) when actual exceeds plan, and `X% of plan` (grey) when below 80%. Added `stat-load-pct` element to HTML template.
+
+## 2026-02-25 — TSS UX Polish
+
+- **`src/ui/main-view.ts`**: Added `?` button next to "TSS" label → opens bottom sheet explaining TSS, reference points (~55 easy 60min, ~80 threshold, ~100 race), and 3 zones (base/threshold/intensity). Replaced text-only zone labels with visual mini-bars (blue/amber/orange) with numbers on the right — bars scale relative to the largest zone.
+- **`src/ui/renderer.ts`**: Replaced "Planned load: X aerobic · Y anaerobic" on unrated workout cards with "Planned TSS: X · base / threshold / intensity" breakdown in TSS-scale values. Imports `LOAD_PER_MIN_BY_INTENSITY` for FCL→TSS conversion.
+- **`src/ui/excess-load-card.ts`**: Added `?` button next to leg impact label → opens bottom sheet explaining what leg impact means, which sports cause which level, and what to do about high impact.
+
+## 2026-02-25 — Phase A: TSS Rename + 3-Zone Display
+
+- **`src/types/activities.ts`** (`WorkoutLoad`): Added `base?`, `threshold?`, `intensity?` fields (Z1+Z2 / Z3 / Z4+Z5 split) alongside existing `aerobic`/`anaerobic` (kept for cross-training matcher backward compat).
+- **`src/constants/workouts.ts`** (`LOAD_PROFILES`): Added 3-zone fields to every workout type profile (e.g. easy = `{base:0.94, threshold:0.05, intensity:0.01}`).
+- **`src/workouts/load.ts`** (`calculateWorkoutLoad`): Now populates `base`, `threshold`, `intensity` fields in returned `WorkoutLoad`.
+- **`src/types/state.ts`**: Renamed `actualTL` → `actualTSS` on `Week` interface.
+- **`src/calculations/fitness-model.ts`**: Renamed `computeWeekTL` → `computeWeekTSS`; `FitnessMetrics.actualTL` → `actualTSS`; added `computeWeekTL` backward-compat alias; `computeWeekTSS` reads `wk.actualTSS` first, falls back to `wk.actualTL` for migration.
+- **`src/calculations/activity-matcher.ts`**: `wk.actualTL` → `wk.actualTSS`.
+- **`src/data/stravaSync.ts`**: All `wk.actualTL` → `wk.actualTSS`.
+- **`src/ui/activity-review.ts`**: Both `wk3.actualTL` → `wk3.actualTSS`.
+- **`src/ui/main-view.ts`**: "Training Load" label → "TSS"; `hw.actualTL` → `hw.actualTSS`; `updateLoadChart()` now computes 3-zone breakdown (actualBase/actualThreshold/actualIntensity) using hrZones data when available, otherwise workout-type profile; replaced aerobic/anaerobic sublabels with "X base · Y threshold · Z intensity" labels; load numbers now use `Math.round()` not `.toFixed(1)`.
+- **`src/ui/renderer.ts`**: "Training load: X TL" → "TSS: X" on activity cards.
+- **`src/ui/stats-view.ts`**: `computeWeekTL` → `computeWeekTSS` import + call sites.
+- **`src/ui/excess-load-card.ts`**: "TL" → "TSS" throughout.
+
+## 2026-02-25 — Unified Load Display (TL everywhere)
+
+- **`src/ui/main-view.ts`**: "Activity Load" renamed "Training Load". `updateLoadChart()` now computes planned/actual in TL units (same scale as individual activity cards). Planned uses `TL_PER_MIN / LOAD_PER_MIN_BY_INTENSITY` scale factor applied to `calculateWorkoutLoad()` output. Actual matched runs use iTRIMP normalisation or `durationSec × TL_PER_MIN[rpe]`, split by workout type via `LOAD_PROFILES`. Unspent cross-training items use `durationMin × TL_PER_MIN[5] × 0.35`. Sublabels show "X aerobic · Y anaerobic" in TL units with explanatory subtitle.
+- **`src/ui/excess-load-card.ts`**: Added `itemTL()` helper computing TL as `durationMin × TL_PER_MIN[5] × runSpec`. Card body now shows total TL with explanatory text instead of aerobic/anaerobic bars. Popup shows TL per item instead of per-item bars.
+
+## 2026-02-25 — Load System Audit: hrZones Pipeline + impactLoad + UI Tier Badge
+
+- **`src/types/state.ts`** (`GarminPendingItem`): Added `hrZones?` field so HR zone data can flow from the Garmin edge function through the activity review pipeline.
+- **`src/types/activities.ts`** (`CrossActivity`): Added `hrZones?` field so zone data is available when building the suggestion popup.
+- **`src/calculations/activity-matcher.ts`** (`GarminActivityRow`): Added optional `hrZones?` field; all 3 `GarminPendingItem` builders now copy `row.hrZones ?? null`.
+- **`src/ui/activity-review.ts`** (`buildCombinedActivity`): Aggregates HR zone times (in seconds) across all pending items that have zone data, sets `combined.hrZones`.
+- **`src/cross-training/universal-load-types.ts`**: Added `impactLoad: number` to `UniversalLoadResult`; updated `crossActivityToInput()` to convert `hrZones` from `{z1..z5}` (seconds) to `HRZoneData` (minutes).
+- **`src/cross-training/universalLoad.ts`**: `getSportConfig()` now returns `impactPerMin`; `computeUniversalLoad()` computes `impactLoad = durationMin × impactPerMin` and includes it in the result.
+- **`src/cross-training/suggester.ts`**: `buildCrossTrainingPopup()` now passes `hrZones` (converted) to `computeUniversalLoad()` so Tier B (HR Zones) is reached when zone data is available. `SuggestionPayload` gained `tier`, `aerobicLoad`, `anaerobicLoad`, `impactLoad` fields; `buildCrossTrainingPopup()` returns them.
+- **`src/ui/suggestion-modal.ts`**: Shows a data tier badge ("HR Stream" / "Garmin" / "HR Zones" / "Estimated"), aerobic/anaerobic percentage split, and leg impact label (No / Low / Moderate / High) below the main load badge.
+- **`src/ui/excess-load-card.ts`**: Added leg impact label computed from `SPORTS_DB[sport].impactPerMin × durationMin` for each unspent item.
+
+## 2026-02-25 — Strava Activity Detail: HR Zones, Km Splits, Route Map
+
+- **`supabase/functions/sync-strava-activities/index.ts`**: Enrich mode now computes and returns HR zones (time in Z1–Z5 using Karvonen/HRR thresholds), km splits for runs (from Strava distance+time stream via linear interpolation), and route polyline (`map.summary_polyline`). Match tolerance widened from ±5 min to ±10 min to catch HIIT and gym sessions. Activity type (`activity_type`) now included in `garmin_activities` query so distance stream is fetched only for runs. Deployed.
+- **`src/types/state.ts`** (`GarminActual`): Added `hrZones?`, `kmSplits?`, `polyline?` optional fields.
+- **`src/data/stravaSync.ts`**: Enrich client patches `hrZones`, `kmSplits`, `polyline` onto `garminActuals` alongside existing `iTrimp`/`stravaId`. `StravaEnrichResult` interface extended to match new response shape. `strava_id` fallback to `'strava-{garminId}'` ensures badge always shows even with older deployments.
+- **`src/ui/renderer.ts`** (`renderGarminSyncedSection`): Each matched activity row is now tap-to-expand. Expanded panel shows: stacked HR zone bar (Z1 blue → Z5 red) with per-zone time legend, km split grid (pace per km in M:SS), and canvas route map. Added `fmtZoneTime()` helper.
+- **`src/ui/strava-detail.ts`** *(new)*: `toggleStravaDetail()` expand/collapse handler registered on `window`. Includes Google encoded polyline decoder (no external deps) and canvas renderer that draws the route in purple with green/red start/end dots.
+- **`src/main.ts`**: Imports `strava-detail.ts` to register `window.toggleStravaDetail` at app startup.
+
+## 2026-02-25 — Activity Review Loop Fixes (Round 2)
+
+- **`src/ui/activity-review.ts`** (`openActivityReReview`): Snapshots `rated`, `garminActuals`, `garminMatched`, `adhocWorkouts`, and `workoutMods` before undoing pairings. Passes an `onCancel` callback to `showActivityReview` → `showReviewScreen` → Cancel button. Pressing Cancel now restores state exactly as it was before the modal opened — no pairings lost.
+- **`src/ui/activity-review.ts`** (`showActivityReview`, `showReviewScreen`): Added optional `onCancel?: () => void` parameter. Cancel button calls `onCancel` if provided, otherwise falls back to `onComplete` (first-time flow unchanged).
+- **`src/ui/events.ts`** (`next()`): Fixed "1 workout to do" false positive on complete week. Old logic compared `Object.keys(wk.rated).length` (all rated items including gym/sports) against `s.rw` (configured run days) — incompatible units. New logic generates the actual week workouts upfront, filters to run-type workouts only, and counts those without a `wk.rated` entry. Auto-skip code reuses the same `weekWorkouts`/`unrated` computation.
+- **`src/ui/renderer.ts`** (`renderGarminSyncedSection`): Section now stays visible when activities are in `garminPending` with `__pending__` status (user cancelled the review before applying). Pending items render with a yellow/amber "pending review" badge so the Review button in the header remains accessible.
+
+## 2026-02-25 — Activity Review Loop Fixes (Round 1)
+
+- **Root cause found**: `__editThisWeek` (the "Edit this week" amber button on past-week views) was wiping all Garmin state (`garminMatched`, `garminActuals`, `garminPending`). After the reload, `syncActivities()` treated all activities as new, re-queued them as `__pending__`, and immediately fired the activity review — even though everything was already paired.
+- **`src/ui/main-view.ts`** (`__editThisWeek`): Simplified to only set `ms.w = viewWeek` and reload. No state is cleared. Existing pairings, ratings, and plan state are fully preserved. The activity review will only fire if there are genuinely unprocessed (`__pending__`) items — not for already-paired activities.
+- **`src/calculations/activity-matcher.ts`**: Auto-matched runs are now also pushed to `wk.garminPending` so `openActivityReReview()` can find and un-rate them during a manual re-review.
+- **`src/ui/activity-review.ts`**: `populateUnspentLoadItems()` deduplicates by `garminId` — prevents excess load from growing on repeated re-reviews.
+- **`src/ui/activity-review.ts`**: `applyReview()` guards against overwriting an already-confirmed match in the run loop — prevents the "workout shows done but not linked to Garmin data" symptom.
+
+## 2026-02-24 (Round 21 — Load System Overhaul: TL, Impact Load, CTL/ATL/TSB)
+
+- **`src/types/state.ts`**: Added `actualTL?: number` and `actualImpactLoad?: number` to `Week` interface (TSS-calibrated training load and musculoskeletal impact stress per week)
+- **`src/types/activities.ts`**: Added `tl?: number` and `impactLoad?: number` to `WorkoutLoad`; added `impactPerMin?: number` to `SportConfig`
+- **`src/constants/sports.ts`**: Added `TL_PER_MIN` table (RPE 1–10 → TSS-calibrated TL per minute); added `IMPACT_PER_KM` table (run intensity → impact per km); added `impactPerMin` to every `SPORTS_DB` entry; both tables exported
+- **`src/calculations/fitness-model.ts`** *(new)*: `computeWeekTL()` — computes weekly TL from `actualTL` (fast path), iTRIMP, or RPE fallback; `computeFitnessModel()` — CTL/ATL/TSB using 42-day/7-day EMA
+- **`src/calculations/activity-matcher.ts`**: Fixed `extraRunLoad` bug (raw Garmin TE 0–5 replaced by TSS-calibrated TL accumulation on `wk.actualTL`); removed meaningless `aerobic`/`anaerobic` Garmin TE fields from `addAdhocWorkout`; added `wk.actualImpactLoad` accumulation for matched runs
+- **`src/ui/activity-review.ts`**: Added cross-training TL and impact load storage (`wk.actualTL`, `wk.actualImpactLoad`) at both `applyAdjustments` call sites (regular cross-training + overflow handlers)
+- **`src/ui/stats-view.ts`**: Replaced `computeWeekLoad` (Garmin TE) with `computeWeekTL`; replaced "Aerobic/Anaerobic TE / 5 max" display with Actual TL / Planned TL / Impact Load; added `buildPMCHTML()` — PMC chart with CTL/ATL/TSB bars; called from `getStatsHTML`
+- **`src/ui/main-view.ts`**: Fixed load history chart to use `hw.actualTL ?? hw.extraRunLoad ?? 0` (correct scale for new data, graceful fallback for historical weeks)
+
+## 2026-02-24 (Round 20 — Strava OAuth integration end-to-end)
+
+- **`supabase/config.toml`**: Added `verify_jwt = false` for `strava-auth-start`, `strava-auth-callback`, `sync-physiology-snapshot`, `sync-activities`, `sync-activity-details`, `sync-strava-activities` — required because Supabase project uses ES256 JWT signing which the edge function gateway cannot verify with HS256; functions do their own auth via `auth.getUser()`
+- **`supabase/functions/strava-auth-start/index.ts`**: Strip trailing slash from `SUPABASE_URL`; use `STRAVA_CALLBACK_URL` env var for redirect_uri with fallback
+- **`supabase/functions/strava-auth-callback/index.ts`**: Same redirect_uri fix for token exchange
+- **`src/data/supabaseClient.ts`**: Fixed `getValidSession()` to check `expires_at` before returning cached session — previously returned expired tokens without refreshing
+- **`supabase/migrations/20260224_strava_oauth.sql`**: Ran via SQL Editor — created `strava_auth_requests`, `strava_tokens` tables and added `itrimp` column to `garmin_activities`
+- **Deployed**: `strava-auth-start`, `strava-auth-callback`, `sync-strava-activities`, `sync-activity-details`, `sync-physiology-snapshot`, `sync-activities` all deployed to production
+
+## 2026-02-24 (Round 19 — Fix week navigation resetting to current week)
+
+- **`src/ui/main-view.ts`**: Added module-level `_persistedViewWeek` so the viewed week survives `renderMainView()` re-renders; `wireEventHandlers` now initialises `viewWeek` from the persisted value and saves it on every navigation; `updateViewWeek(viewWeek)` at end of `wireEventHandlers` replaces the separate `render()` call in `renderMainView`; `setOnWeekAdvance` clears `_persistedViewWeek` so a real week advance returns to the new current week
+
+## 2026-02-24 (Round 18 — RPE only for runs)
+
+- **`src/ui/renderer.ts`**: Non-running workouts (cross, strength, rest, gym) now show a simple "Mark as done" / "Unmark as done" button instead of an RPE 1-10 grid; RPE badge removed from their card headers; "Done" badge shows no RPE number; running workouts unchanged; `isRunWorkout` flag added alongside `isCompleteRest`
+
+## 2026-02-24 (Round 17 — Planned/Completed workout split + GPS load fix)
+
+- **`src/gps/recording-handler.ts`**: Fixed `createActivity('run', ...)` → `createActivity('extra_run', ...)` so impromptu GPS runs correctly route through SPORTS_DB load pipeline
+- **`src/ui/renderer.ts`**: Split workout list into "This Week's Plan" (unrated) and "Completed" (rated) sections; completed Quick Runs move from Just Run banner into Completed section; `renderWorkoutList` no longer injects its own `<h4>` header; GPS recordings div moved to call site to avoid duplication
+
+## 2026-02-24 (Round 16 — Strava onboarding + iTRIMP plumbing)
+
+- **`src/types/onboarding.ts`**: Extended `watchType` union to include `'strava'`; added `biologicalSex?: 'male' | 'female' | 'prefer_not_to_say'`
+- **`src/types/state.ts`**: `GarminPendingItem` — added `iTrimp?: number | null`; `SimulatorState.biologicalSex` union extended to include `'prefer_not_to_say'`
+- **`src/types/activities.ts`**: `CrossActivity` — added `iTrimp?: number | null`
+- **`src/cross-training/activities.ts`**: `createActivity()` — added optional `iTrimp` parameter; spreads onto returned object
+- **`src/ui/wizard/steps/fitness.ts`**: Added Strava as a third device picker option (3-col grid); wires `watch-strava` click handler; checks `isStravaConnected()` for connection badge; `btn-wizard-strava` triggers `strava-auth-start` OAuth flow
+- **`src/ui/wizard/steps/physiology.ts`**: Added biological sex selector (Male / Female / Prefer not to say) at top; Strava users see connection status + connect button; Garmin users see a "Connect Strava for better load data" nudge banner
+- **`src/state/initialization.ts`**: Maps `onboarding.biologicalSex` → `s.biologicalSex`
+- **`src/calculations/activity-matcher.ts`**: `GarminActivityRow` — added `iTrimp?`; both pending item builders copy `row.iTrimp`
+- **`src/cross-training/universal-load-types.ts`**: `crossActivityToInput()` — maps `act.iTrimp` → `ActivityInput.iTrimp`
+- **`src/cross-training/suggester.ts`**: `buildCrossTrainingPopup()` — passes `iTrimp: activity.iTrimp` to `computeUniversalLoad()`
+- **`src/ui/activity-review.ts`**: `buildCombinedActivity()` — sums iTRIMP across pending items; passes to `createActivity()`
+- **`src/data/stravaSync.ts`**: Passes `biological_sex: s.biologicalSex` in both standalone and enrich mode calls
+
+---
+
+## 2026-02-24 — Impromptu GPS run: match + load pipeline
+
+- **`src/gps/recording-handler.ts`**: Impromptu runs (no name match) now go through a two-stage flow instead of just saving an adhoc entry.
+  1. **Smarter match**: `findMatchingWorkout()` is called with the run's actual distance + day-of-week against unrated, non-replaced planned runs. If a match is found, a confirmation dialog ("Assign to [Workout Name]?") lets the user assign it — calling `rate()` on that planned workout.
+  2. **Load logic fallback**: If no match or the user declines, the run is saved as an adhoc entry and `createActivity('run', ...)` is run through `buildCrossTrainingPopup` + `showSuggestionModal` so the extra load can adjust the week's plan (reduce/replace/keep).
+  - `modReason` for GPS-sourced mods uses `GPS: ${workoutName}` prefix.
+
+---
+
+## 2026-02-24 — Physiology wizard step split
+
+### Refactor: Split fitness step into Garmin connect + physiology data pages
+- `src/types/onboarding.ts`: added `'physiology'` to `OnboardingStep`
+- `src/ui/wizard/controller.ts`: inserted `'physiology'` between `fitness` and `initializing` in `STEP_ORDER`
+- `src/ui/wizard/steps/fitness.ts`: stripped LT/VO2/HR fields; "No watch" now calls `goToStep('initializing')` to skip physiology; "Continue" just persists wearable and advances
+- `src/ui/wizard/steps/physiology.ts` (new): LT pace, VO2 max, Resting HR, Max HR fields; "Sync from Garmin" button calls `isGarminConnected()` + `syncPhysiologySnapshot(1)` and populates fields with result count feedback; "Skip for now" advances without saving; "Continue" validates and saves
+- `src/ui/wizard/renderer.ts`: registered `renderPhysiology` for the new step
+
+---
+
+## 2026-02-24 (Bug fix — Edit Settings return button)
+
+- **`src/ui/wizard/steps/assessment.ts`**: Added "← Return to my plan" button on the assessment step when accessed mid-plan via "Edit Settings". Detects `isMidPlan` via `getState().wks.length > 0`. Button restores `hasCompletedOnboarding = true` and navigates directly to `renderMainView()` without touching the plan. Back button hidden in mid-plan mode (irrelevant to navigate further back into the wizard). Button appears in all three assessment layouts: non-event, forecast-only, and plan-selection.
+
+---
+
+## 2026-02-24 (Round 15 — Strava + iTRIMP)
+
+### Feature: Strava Integration + iTRIMP Training Load
+
+- **`src/calculations/trimp.ts`** (new): Pure iTRIMP math module — three tiers: `calculateITrimp` (1-second HR stream), `calculateITrimpFromLaps` (per-lap avgHR), `calculateITrimpFromSummary` (single avgHR). β = 1.92 (male/unknown) | 1.67 (female). 20 unit tests all passing.
+- **`supabase/migrations/20260224_strava_oauth.sql`** (new): `strava_auth_requests`, `strava_tokens` tables with RLS. `ALTER TABLE garmin_activities ADD COLUMN IF NOT EXISTS itrimp float`.
+- **`supabase/functions/strava-auth-start/`** (new): Mirrors `garmin-auth-start`. Initiates Strava OAuth2 PKCE flow; stores ephemeral state in `strava_auth_requests`.
+- **`supabase/functions/strava-auth-callback/`** (new): Exchanges code for Strava tokens, stores in `strava_tokens`, redirects to app with `?strava=connected`.
+- **`supabase/functions/sync-strava-activities/`** (new): Handles `standalone` (fetches activities + HR streams → `garmin_activities` upsert) and `enrich` (matches existing activities by start_time ±5 min → updates `itrimp` column). Includes inline token refresh.
+- **`src/data/stravaSync.ts`** (new): Client-side orchestration. Standalone mode feeds into `matchAndAutoComplete()` pipeline. Enrich mode patches `wk.garminActuals[].iTrimp`.
+- **`src/data/supabaseClient.ts`**: Added `isStravaConnected()` and `resetStravaCache()` following the Garmin pattern.
+- **`src/types/state.ts`**: `wearable` now includes `'strava'`. Added `biologicalSex?: 'male' | 'female'`. Added `GarminActual.iTrimp?: number | null`.
+- **`src/cross-training/universal-load-types.ts`**: Added `iTrimp` field to `ActivityInput`. Extended `DataTier` with `'itrimp'`.
+- **`src/cross-training/universalLoad.ts`**: Added **Tier A+** — iTRIMP fires before Garmin Training Effect when `input.iTrimp > 0`. Confidence: 0.95.
+- **`src/main.ts`**: Added `wearable === 'strava'` sync branch; Garmin+Strava enrich branch (fire-and-forget); `?strava=connected` redirect handler with toast + account nav.
+- **`src/ui/account-view.ts`**: Strava standalone card, Strava HR enrichment card (connect/disconnect/sync), biological sex selector.
+
+---
+
+## 2026-02-24 (Round 14d)
+
+### Fix: GPS runs now enter the plan + completedKm uses actual distances (`src/gps/recording-handler.ts`, `src/ui/events.ts`)
+
+- **Unmatched GPS runs** (e.g. "Just Run", or any run whose name doesn't match a scheduled workout): now added to `wk.adhocWorkouts` on save, linked via `wk.gpsRecordings`, and `rate()` is called (expected RPE 5, type easy). The run is visible on the training week card with a "View Run" button and counts toward adherence and VDOT feedback.
+- **completedKm now uses GPS actual distance**: the week-advance loop checks `wk.gpsRecordings[workoutId]` → `loadGpsRecording()` → `recording.totalDistance` before falling back to the planned description distance. Garmin actuals still take priority.
+- **Adhoc workouts counted in completedKm**: the week-advance loop now also iterates `wk.adhocWorkouts` (excluding Garmin-sourced entries), so GPS-only runs contribute to the week's km total.
+
+---
+
+## 2026-02-24 (Round 14c)
+
+### Fix: GPS completion modal always shows + discard confirmation (`src/gps/tracker.ts`, `src/ui/gps-events.ts`, `src/gps/recording-handler.ts`, `src/ui/gps-completion-modal.ts`)
+
+- **Timer fix**: `startTime` is now set in `GpsTracker.start()` immediately after GPS permission is granted, not when the first accurate GPS point arrives. Previously the timer showed 00:00 indefinitely on desktop/web (where location accuracy is typically >30m, failing the threshold), and on slow GPS lock. Now the elapsed counter ticks from the moment the user presses Run.
+- **Save modal fix**: `stopTracking()` now shows the completion modal/save option when `elapsed > 5s`, even if `totalDistance = 0` (GPS never locked). Previously any run with <10m of tracked distance was silently discarded with no feedback.
+- **recording-handler.ts**: No longer bails silently when no matching scheduled workout is found. Now passes `workout: null` to the modal — which shows "Save Run" instead of "Complete Workout" and skips the planned-vs-actual section. Run is still saved to GPS recordings.
+- **gps-completion-modal.ts**: `CompletionData.workout` is now nullable. Button row is rendered dynamically via `showMainButtons()` with a shared `currentSaveBtn` reference so RPE selection correctly enables the save button even after returning from discard confirmation.
+- **Discard confirmation**: Clicking "Discard" now shows an inline "This run won't be saved. Are you sure?" prompt with "Keep" / "Yes, Discard" — no accidental data loss.
+
+---
+
+## 2026-02-24 (Round 14b)
+
+### Fix + UX: Interval live UI — parsing + phase visibility (`src/gps/split-scheme.ts`, `src/ui/record-view.ts`)
+
+**split-scheme.ts:**
+- `resolvePace(zone, paces)`: resolves literal `m:ss/km` pace strings (e.g. `4:49/km`) as well as zone names; used throughout scheme builders.
+- `timeIntervalMatch` regex now tolerates optional `(~dist)` parenthetical between zone and rest: correctly parses `"6×2min @ 4:49/km (~790m), 2 min recovery between sets"` → 6 Rep + 5 Recovery segments.
+- New `contTimeMatch` handler for `"Nmin @ pace/zone (~dist)"` (continuous threshold/VO2/MP blocks without reps) → single segment.
+- `buildTimeIntervalScheme` uses `resolvePace` instead of `getPaceForZone` → handles literal paces from `intentToWorkout`.
+- `distAtPaceMatch` updated to `[\w\-:./]+` zone group (tolerates literal paces).
+
+**record-view.ts — Interval UI redesign:**
+- **Phase badge** (`rec-phase-badge`) top-right of header: WARM UP (amber) / INTERVAL (blue) / RECOVERY (gray) / COOL DOWN (emerald) / TEMPO (orange); updates on every segment change.
+- **Current segment block** moved ABOVE the segment list: label + remaining distance (large) + target pace / "jog / recover".
+- **Segment list** now fills remaining flex space (`flex-1 min-h-0`) so it's always fully visible — no fixed max-height.
+
+---
+
+## 2026-02-24 (Round 14)
+
+### Feature: "Edit this week" plan mode in Training tab (`src/ui/main-view.ts`)
+- When viewing a past week via the week slider/arrows, the viewing indicator now shows an **"Edit this week"** button
+- Clicking it permanently sets `s.w` to the viewed week, clears that week's `garminMatched`/`garminActuals`/`garminPending` and garmin-sourced `adhocWorkouts`, then reloads
+- On reload, Garmin sync treats that week as current → activities queue in `garminPending` → review modal fires as normal
+- Button wired via `window.__editThisWeek` closure, updated each time `updateViewWeek()` runs
+
+---
+
+## 2026-02-24 (Round 13)
+
+### Fix: Supabase data pipeline — VO2max, LT, max HR not flowing through
+- **`garmin_tokens` migration** (`20260219_garmin_oauth2.sql`): added `garmin_user_id text UNIQUE` column + index — without it, `resolveUserId()` in the webhook returns null for every user and nothing gets stored
+- **New migration** `20260224_physiology_and_maxhr.sql`: creates `physiology_snapshots` table (LT + VO2max running), adds `max_hr int` column to `daily_metrics`, backfills `garmin_user_id` for existing installs
+- **garmin-webhook**: added `handleUserMetrics()` — handles Garmin `userMetrics` push which carries `lactateThresholdSpeed` (m/s → converted to sec/km) and `vo2MaxRunning`; also added `max_hr` to `handleDailies` upsert
+- **sync-physiology-snapshot edge function**: now selects and returns `max_hr` from `daily_metrics` so `physiologySync.ts` can update `s.maxHR`
+
+---
+
+## 2026-02-24 (Round 12)
+
+### Feature: Re-review previous week button in Account → Recover Plan (`src/ui/account-view.ts`)
+- New "Re-review Week N-1 Activities" button appears inside the Recover Plan card when `s.w > 1`
+- Clears the previous week's `garminMatched`, `garminActuals`, `garminPending`, and Garmin-sourced `adhocWorkouts` + run ratings
+- Steps `s.w` back by 1 so the re-sync treats that week as current — activities queue into `garminPending` for the normal review modal instead of being silently auto-processed
+- After reviewing, user taps "Complete Week" to advance back to the current week
+
+---
+
+## 2026-02-24 (Round 11)
+
+### Fix: Garmin wizard — connected state + auto-populate (`src/ui/wizard/steps/fitness.ts`, `src/data/physiologySync.ts`)
+- "Connect Garmin" button now checks `isGarminConnected()` on mount; shows "✓ Garmin Connected" green badge once connected (no more loop)
+- After connection detected, calls `syncPhysiologySnapshot(1)` and copies VO2, resting HR, max HR, LT pace into wizard form fields automatically
+- `physiologySync.ts`: LT pace (`lt_pace_sec_km`) from Garmin now wired to `s.lt` (was fetched but silently dropped)
+
+---
+
+## 2026-02-24 (Round 10b)
+
+### Feature: Record tab — phased bar UI for tempo/progressive runs (`src/ui/record-view.ts`, `src/gps/split-scheme.ts`)
+- **Three distinct live UIs** now based on workout structure:
+  - **Simple** — single-pace run (easy, long, freerun): unchanged
+  - **Phased** — multiple named phases, no recovery gaps (WU + tempo + CD, progressive): segmented horizontal bar showing all phases proportionally; current phase fills as you run; colour: emerald (done) / blue (current) / gray (upcoming); labels below bar. Current phase block + 4-stat row below.
+  - **Interval** — has null-pace recovery segments: full scrollable segment list (unchanged)
+- `isPhasedWorkout(scheme)` helper: true when scheme has multiple distinct non-null paces and no null-pace segments.
+- `distAtPaceMatch` and `simpleDistMatch` in `buildSingleLineScheme` now produce a **single segment** (not km-by-km) so the tempo middle block appears as one bar, not 13 tiny slices.
+- `patchPhasedStats`: updates elapsed/dist/pace/avg + inner phase fill width every tick; triggers full `renderRecordView()` re-render on phase completion (rare, cheap).
+- Phase bar short labels: "Warm Up" → "WU", "Cool Down" → "CD", "Easy" stripped for compactness.
+
+---
+
+## 2026-02-24 (Round 10)
+
+### Feature: Pending Activities card + Review Now button (`src/ui/account-view.ts`)
+- New blue card in Account tab appears when `wk.garminPending` has unprocessed items (hidden otherwise)
+- Lists up to 5 pending activities (type, duration, distance, date) with "+N more" overflow
+- "Review Now" button: navigates to Training tab then calls `processPendingCrossTraining()` with 150ms delay, re-opening the full activity review modal
+- Fixes "accidentally dismissed review modal" — no need for a full re-sync
+
+---
+
+## 2026-02-24 (Round 9)
+
+### Fix: Plan weeks always start on Monday
+- `src/state/initialization.ts`: `planStartDate` now set to `getMondayOf(today)` instead of today's raw date
+- `src/state/persistence.ts`: `getMondayOf` exported; `loadState` snaps any existing non-Monday `planStartDate` to Monday on load (one-time migration for existing users)
+
+---
+
+## 2026-02-24 (Round 8)
+
+### Rename: "Generic Sport" → "General Sport"
+- Updated display label in `src/constants/sports.ts` (`generic_sport` key)
+- Updated all UI references: renderer.ts dropdown, events.ts slot-matching logic and log messages, wizard steps (frequency.ts, volume.ts)
+- Internal key `generic_sport` unchanged
+
+---
+
+## 2026-02-24 (Round 7)
+
+### Feature: Plan Recovery card in Account tab (`src/ui/account-view.ts`)
+- New amber "Recover Plan" card always visible in the Account tab
+- Date picker for original plan start date (pre-filled with a sensible guess based on current week)
+- Week number input (pre-filled with current `s.w`)
+- On "Restore & Re-sync": sets `planStartDate`, `s.w`, `hasCompletedOnboarding = true`; clears `garminMatched`/`garminActuals`/`garminPending` across all weeks so the next Garmin sync re-processes all activities from the last 28 days
+- Page reloads automatically after 800ms; sync fires on boot as normal
+
+### Bug fix: Edit Settings resets plan (`src/ui/events.ts`, `src/ui/wizard/steps/assessment.ts`, `src/ui/wizard/renderer.ts`)
+- **Root cause**: `hasCompletedOnboarding` was never set to `true` in the current wizard flow (assessment → main-view path never calls `completeOnboarding()`). So the `isMidPlan` guard in assessment.ts evaluated as `false` even for mid-plan users, allowing `initializeSimulator()` to fire on "Harder Plan" click.
+- **`editSettings()` fix**: now also sets `hasCompletedOnboarding = false` so that on reload, `initWizard()` correctly routes to the assessment step (instead of `renderMainView()` bypassing the wizard).
+- **`isMidPlan` guard fix** (`assessment.ts`): changed from `currentState.hasCompletedOnboarding && currentState.w > 1` to just `currentState.w > 1` — the week counter is the reliable mid-plan indicator.
+- **Mid-plan "Harder Plan" path**: when `isMidPlan`, only updates `s.rw` in-place (no `initializeSimulator` call), preserving all progress.
+- **`transitionToMainView()` fix** (`wizard/renderer.ts`): now sets `hasCompletedOnboarding = true` before rendering main view, so future reloads correctly bypass the wizard and `detectMissedWeeks()` works.
+
+---
+
+## 2026-02-24 (Round 6b)
+
+### Bug fix: Split scheme multi-line / WU+CD / progressive segment grouping (`src/gps/split-scheme.ts`)
+- **Root cause**: Multi-line workout descriptions (WU + main set + CD) fell through all regexes to `anyDistMatch`, grabbed the first `Xkm` (WU distance), called `buildKmSplits` with `null` pace → two 1km segments with null targetPace → wrongly shown as Structured UI with "km 1 (recovery), km 2 (recovery)".
+- **Fix**: `buildSplitScheme` detects `\n` and delegates to `buildMultiLineScheme`: extracts WU (`Xkm warm up …`) and CD (`Xkm cool down …`) as single labeled segments at easy pace; finds the main set line and parses it with `buildSingleLineScheme`; assembles `[WU] + [mainSet] + [CD]`.
+- **Progressive fix**: easy portion is now one `"Xkm Easy"` segment instead of km-by-km splits. Fast portion still km-by-km.
+- `buildSingleLineScheme` extracted as a named helper for reuse by `buildMultiLineScheme`.
+- `timeIntervalMatch` regex zone group broadened to `[\w\-:./]+` to tolerate literal pace strings like `3:47/km`.
+
+---
+
+## 2026-02-24 (Round 6)
+
+### Redesign: Record tab live run UI v2 (`src/ui/record-view.ts`)
+- Added `isStructuredWorkout(scheme)` helper: returns true if any segment has `targetPace === null` (recovery) or segments have more than one distinct target pace; easy/long runs with uniform km splits now correctly use Simple UI.
+- **Simple UI**: REC dot + workout name, target pace context line, large elapsed time, progress bar with "X.XX / Y.YY km" label (when total distance known), current/avg pace row, Pause + Stop.
+- **Structured UI**: header with workout name + "Seg N/T" counter; full scrollable segment list (`rec-segment-list`, `overflow-y-auto max-h-52`); density adapts (≤6 segments → spacious two-line rows, >6 → compact single-line rows); icons ✓ emerald / ● blue / · gray; current row highlighted with blue bg. Current segment block shows remaining distance (large) + target pace. 4-column stats row (elapsed | km total | pace | avg). Pause + Stop.
+- `lastCompletedIdx` module var resets to -1 on each `renderRecordView()`; `patchStructuredStats` auto-scrolls current row into view when a split completes.
+- `patchSimpleStats` now also updates `rec-progress` bar width on each tick.
+- Removed old 4-segment sliding-window strip (`renderSegmentStrip` / `patchStructuredStats` windowed re-render).
+
+---
+
+## 2026-02-24 (Round 5)
+
+### Feature: Record tab live run UI + universal Track Run navigation (`src/ui/record-view.ts`, `src/ui/gps-events.ts`)
+- Every "Track Run" button (plan workout cards, Just Run, Record tab Start Run) now navigates to the Record tab instead of staying on the Plan tab with inline GPS.
+- `window.trackWorkout` dynamically imports and calls `renderRecordView()` after `startTracking()` completes.
+- Added `activeScheme` module var in `gps-events.ts` to store the built split scheme; exported via `getActiveSplitScheme()`.
+- Added `setOnTrackingTick()` / `onTrackingTickCb` — called every second by the timer interval so the Record tab can patch its own DOM without full re-renders.
+- Record tab renders two distinct live layouts: **Simple** (large time + 4-stat grid) for unstructured runs, **Structured** (segment flow strip + elapsed/distance/pace) for interval/threshold/progressive workouts.
+- Segment flow strip shows a sliding window of 4 segments: ✓ done, ● current with km-remaining and target pace, · upcoming.
+- Tick handler is deregistered (`setOnTrackingTick(null)`) when the user navigates away from the Record tab, preventing stale DOM writes.
+
+---
+
+## 2026-02-24 (Round 4)
+
+### Removed Training Log UI panel (`src/ui/main-view.ts`, `src/ui/renderer.ts`)
+- The "Training Log" card was an in-memory debug console (cleared on every reload) showing internal Garmin sync messages. All useful information is now visible in the "Synced from Garmin" section and plan workout cards. `log()` now writes to `console.log` for dev tools debugging.
+
+### Bug fix: "Synced from Garmin" section shows clean run names, hides ugly IDs and non-run activities (`src/ui/renderer.ts`, `src/ui/activity-review.ts`, `src/types/state.ts`)
+- Added `workoutName` field to `GarminActual` and populated it at run match write sites with the human-readable slot name (e.g. "Easy Run", "Long Run").
+- Section now shows matched runs using `workoutName` (e.g. "Easy Run · 7.3 km · 5:12/km · HR 142") instead of the internal ID ("W1-easy-0").
+- Cross-training and gym matched activities are filtered out of the section — they are already visible as modified plan slots above. Only run-type matched and adhoc entries appear.
+- "Synced from Garmin" section now shows for any week with matched or unmatched Garmin runs.
+
+### Bug fix: "Synced from Garmin" section now shows matched plan activities too (`src/ui/renderer.ts`)
+- Previously the section only showed adhoc (unmatched) activities with `garmin-` id prefix. Activities matched to plan slots went into `garminActuals` and were invisible in the log. Now both matched (showing workout name, distance, pace, HR, "matched" badge) and unmatched (with RPE + remove button) appear. The section shows for any week that has either.
+
+### Bug fix: Km stats now show run-only distances and correct weekly scope (`src/state/persistence.ts`, `src/ui/renderer.ts`, `src/ui/stats-view.ts`, `src/ui/main-view.ts`)
+- All garminActuals km calculations now filter to run-type slots only (exclude cross/gym/strength/rest/tennis/swim/bike/etc. by workout ID keyword). Previously all activity distances were summed regardless of type.
+- Retroactive `completedKm` correction in `loadState` uses the same run-only filter.
+- Home dashboard stat renamed "Total Km Run" → "Km This Week" and now shows only the current week's run km (live), not a cumulative total. 11km for a week where 11km of running was logged.
+
+### Bug fix: Past week completedKm retroactively corrected from garminActuals on load (`src/state/persistence.ts`)
+- `completedKm` was stored using planned km from workout descriptions. On every `loadState`, past weeks that have `garminActuals` entries now have their `completedKm` recomputed from actual Garmin distances, so all stats (total km, bar chart, etc.) reflect what was actually run.
+- "Runs rated" renamed to "Runs completed" in stats tab volume card.
+
+### Bug fix: Stats tab volume card now shows true total km and includes current week (`src/ui/stats-view.ts`)
+- "Block total" renamed to "Total km" and now includes the current week's km (past `completedKm` + current `garminActuals` sum).
+- Bar chart extended to include the current week as a brighter bar.
+
+### Bug fix: Total km stat now uses actual Garmin distance instead of planned (`src/ui/events.ts`, `src/ui/renderer.ts`, `src/ui/main-view.ts`)
+- All three km-summing code paths were parsing planned distance from `wo.d` (e.g. "10km"). Now each checks `wk.garminActuals[wId].distanceKm` first and only falls back to the description if no Garmin actual exists.
+- `events.ts`: `wk.completedKm` stored on week advance now uses actual distance — this fixes stats-view and all past-week totals.
+- `renderer.ts`: current-week live `stat-km` element also uses actuals.
+- `main-view.ts`: `_computeTotalKm` (VDOT panel "Total Distance") now uses stored `wk.completedKm` for past weeks (avoiding redundant regeneration) and checks garminActuals for the current week.
+
+### Bug fix: HR target pill hidden for completed runs (`src/ui/renderer.ts`)
+- The target HR zone pill was shown even after a run was rated/completed. Added `&& !rtd` so it only appears on planned (not-yet-done) workouts.
+
+### Bug fix: "Start Run" button hidden for Garmin-logged runs (`src/ui/renderer.ts`)
+- Garmin-completed runs had `rtd` set but no `gpsRecId`, so the GPS block showed "Start Run" instead of nothing. Fixed by adding `&& !rtd` to the `else if (!viewOnly)` guard — the button is now only shown for workouts that haven't been rated/completed yet.
+
+---
+
+## 2026-02-24 (Round 3)
+
+### Apple Watch / HealthKit sync implemented (`src/data/appleHealthSync.ts`, `src/ui/wizard/steps/fitness.ts`, `src/ui/account-view.ts`, `src/main.ts`)
+- Replaced the dead `capacitor-health-kit` package stub with a full implementation using `@capgo/capacitor-health` (`Health.requestAuthorization` + `Health.queryWorkouts`).
+- Apple Watch workouts are converted to the same `GarminActivityRow` shape and fed into `matchAndAutoComplete()` — identical pipeline to Garmin.
+- Users choose their wearable (Garmin or Apple Watch) during onboarding (fitness wizard step) and in the Account view. The choice is mutually exclusive and stored as `s.wearable: 'garmin' | 'apple'`.
+- `src/main.ts` launch sync branches on `s.wearable`: Apple Watch → `syncAppleHealth()`, Garmin → existing `isGarminConnected()` path.
+- Account view is now device-aware: shows an Apple Watch card (Sync Now + Switch Device) when `s.wearable === 'apple'`, otherwise the existing Garmin card.
+- New state fields: `SimulatorState.wearable?: 'garmin' | 'apple'` and `OnboardingState.watchType?: 'garmin' | 'apple'`.
+
+---
+
 ## 2026-02-24 (Round 2)
 
 ### "Reduced due to strength" modReason still appearing from excess load card path (`src/ui/excess-load-card.ts`)

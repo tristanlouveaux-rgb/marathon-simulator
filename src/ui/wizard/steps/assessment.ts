@@ -7,7 +7,8 @@ import {
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
 import { initializeSimulator } from '@/state/initialization';
-import { getState } from '@/state/store';
+import { getState, getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 
@@ -18,6 +19,8 @@ interface VolumeOption {
   forecastTime: number;
   hitsTarget: boolean;
 }
+
+const CARD = 'background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:24px;margin-bottom:16px';
 
 /**
  * Render the Assessment step (post-runner-type, pre-dashboard).
@@ -30,11 +33,9 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
     return;
   }
 
-  // Use confirmed runner type from the runner-type step, or fall back to calculated/default
   const b = calculateFatigueExponent(pbs);
   const runnerType = (state.confirmedRunnerType || state.calculatedRunnerType || 'Balanced') as RunnerType;
 
-  // Compute baseline VDOT
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
   const targetDistMeters = rd(targetDistStr);
   const blendedTime = blendPredictions(
@@ -49,13 +50,10 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
   }
 
   const baselineVdot = cv(targetDistMeters, blendedTime);
-
-  // Effective cross-training sessions
   const crossSessions = calcCrossSessions(state);
   const totalSessions = state.runsPerWeek + crossSessions;
   const isSafetyCapped = totalSessions >= 8;
 
-  // Build volume options and find reachable milestone
   const { options, target } = buildVolumeOptions(
     state.runsPerWeek, crossSessions, baselineVdot,
     state.planDurationWeeks, targetDistStr, runnerType, state
@@ -63,70 +61,60 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
 
   const current = options[0];
   const upgrade = options[1] || null;
-
-  // Show upgrade whenever an option exists and not safety capped
   const showUpgrade = !isSafetyCapped && upgrade !== null;
-
-  // Forecast-only: no upgrade available (safety capped or max volume)
   const showForecastOnly = !showUpgrade;
-
   const isNonEvent = state.trainingForEvent === false;
   const focusLabel = state.trainingFocus === 'speed' ? 'Speed' : state.trainingFocus === 'endurance' ? 'Endurance' : 'Balanced';
 
-  // Non-event users get a different page entirely
+  // Non-event users
   if (isNonEvent) {
     container.innerHTML = `
-      <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+      <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
         ${renderProgressIndicator(8, 8)}
 
-        <div class="max-w-xl w-full">
-          <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <div style="width:100%;max-width:520px">
+          <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
             Your Training Plan
           </h2>
-          <p class="text-gray-400 text-center mb-8">
+          <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
             Continuous training with periodic check-ins to track your progress.
           </p>
 
-          <div class="space-y-6">
-
-            <!-- Training Structure -->
-            <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-              <div class="space-y-4">
-                <div class="flex items-center gap-3 p-4 rounded-lg bg-emerald-950/30 border border-emerald-800/50">
-                  <div class="w-10 h-10 bg-emerald-900/50 rounded-full flex items-center justify-center flex-shrink-0">
-                    <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                    </svg>
-                  </div>
-                  <div>
-                    <div class="text-sm font-medium text-emerald-300">Continuous ${focusLabel} Training</div>
-                    <div class="text-xs text-gray-400">4-week repeating blocks — 3 weeks training + 1 week recovery with optional check-in</div>
-                  </div>
+          <div style="${CARD}">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;align-items:center;gap:12px;padding:14px;border-radius:10px;background:rgba(0,0,0,0.04);border:1px solid var(--c-border)">
+                <div style="width:40px;height:40px;background:var(--c-bg);border:1px solid var(--c-border);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                  <svg style="width:20px;height:20px;color:var(--c-muted)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                  </svg>
                 </div>
-
-                <div class="grid grid-cols-2 gap-3 text-center">
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <div class="text-xs text-gray-500 mb-1">Runs / Week</div>
-                    <div class="text-lg font-medium text-white">${state.runsPerWeek}</div>
-                  </div>
-                  <div class="p-3 rounded-lg bg-gray-800/50 border border-gray-700">
-                    <div class="text-xs text-gray-500 mb-1">Starting VDOT</div>
-                    <div class="text-lg font-medium text-white">${baselineVdot.toFixed(1)}</div>
-                  </div>
+                <div>
+                  <div style="font-size:14px;font-weight:500;color:var(--c-black)">Continuous ${focusLabel} Training</div>
+                  <div style="font-size:12px;color:var(--c-muted);margin-top:2px">4-week repeating blocks — 3 weeks training + 1 week recovery with optional check-in</div>
                 </div>
-
-                <p class="text-xs text-gray-500 leading-relaxed">
-                  Your plan has no fixed end date. Every 4 weeks you'll get an optional fitness check-in.
-                  Paces and workouts adjust automatically as you progress. Skip check-ins anytime — no penalty.
-                </p>
               </div>
 
-              <button id="btn-select-current"
-                class="w-full mt-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all">
-                Start Training
-              </button>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:center">
+                <div style="padding:14px;border-radius:10px;background:var(--c-bg);border:1px solid var(--c-border)">
+                  <div style="font-size:11px;color:var(--c-faint);margin-bottom:4px">Runs / Week</div>
+                  <div style="font-size:20px;font-weight:500;color:var(--c-black)">${state.runsPerWeek}</div>
+                </div>
+                <div style="padding:14px;border-radius:10px;background:var(--c-bg);border:1px solid var(--c-border)">
+                  <div style="font-size:11px;color:var(--c-faint);margin-bottom:4px">Starting VDOT</div>
+                  <div style="font-size:20px;font-weight:500;color:var(--c-black)">${baselineVdot.toFixed(1)}</div>
+                </div>
+              </div>
+
+              <p style="font-size:12px;color:var(--c-faint);line-height:1.5">
+                Your plan has no fixed end date. Every 4 weeks you'll get an optional fitness check-in.
+                Paces and workouts adjust automatically as you progress.
+              </p>
             </div>
 
+            <button id="btn-select-current"
+              style="margin-top:20px;width:100%;padding:14px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
+              Start Training
+            </button>
           </div>
 
         </div>
@@ -138,107 +126,95 @@ export function renderAssessment(container: HTMLElement, state: OnboardingState)
     return;
   }
 
-  // ---- Race/event users: plan selection ----
+  // Race/event users: plan selection
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
       ${renderProgressIndicator(8, 8)}
 
-      <div class="max-w-xl w-full">
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+      <div style="width:100%;max-width:520px">
+        <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Choose Your Plan
         </h2>
-        <p class="text-gray-400 text-center mb-8">
+        <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
           Your predicted race time based on your profile and training volume.
         </p>
 
-        <div class="space-y-6">
+        <div style="${CARD}">
+          <h3 style="font-size:16px;font-weight:500;color:var(--c-black);margin-bottom:4px">Plan Outcome</h3>
+          <p style="font-size:12px;color:var(--c-faint);margin-bottom:20px">
+            Forecasts are adaptive and will evolve based on your actual training execution.
+          </p>
 
-          <!-- PLAN SELECTION -->
-          <div class="bg-gray-900 rounded-xl p-6 border border-gray-800">
-            <h3 class="text-lg font-medium text-white mb-1">Plan Outcome</h3>
-            <p class="text-xs text-gray-500 mb-5">
-              Forecasts are adaptive and will evolve based on your actual training execution.
-            </p>
+          ${showForecastOnly ? `
+            <!-- Scenario C: Forecast Only -->
+            <div style="padding:16px;border-radius:10px;background:var(--c-bg);border:1px solid var(--c-border);margin-bottom:12px">
+              <div style="font-size:14px;color:var(--c-black);font-weight:500;margin-bottom:6px">Current Forecast: ${formatTime(current.forecastTime)}</div>
+              <p style="font-size:12px;color:var(--c-faint);line-height:1.5">
+                This forecast is adaptive and will update as you train. Consistency is key.
+              </p>
+            </div>
 
-            ${showForecastOnly ? `
-              <!-- Scenario C: Forecast Only -->
-              <div class="p-4 rounded-lg bg-gray-800/50 border border-gray-700">
-                <div class="flex items-center justify-between mb-3">
-                  <div class="text-sm text-gray-300 font-medium">Current Forecast Time: ${formatTime(current.forecastTime)}</div>
+            ${isSafetyCapped ? `
+              <div style="padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
+                <svg style="width:18px;height:18px;color:var(--c-caution);flex-shrink:0;margin-top:1px" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                </svg>
+                <div style="font-size:12px;color:var(--c-caution-text)">
+                  Volume capped at 8 sessions/week to reduce injury risk.
                 </div>
-                <p class="text-xs text-gray-500 leading-relaxed">
-                  This forecast is adaptive and will update as you train. Consistency is key.
-                </p>
               </div>
+            ` : ''}
 
-              ${isSafetyCapped ? `
-                <div class="mt-3 p-3 bg-amber-950/30 border border-amber-900/50 rounded-lg flex gap-3">
-                  <svg class="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                  </svg>
-                  <div class="text-xs text-amber-200">
-                    Volume capped at 8 sessions/week to reduce injury risk.
+            <button id="btn-select-current"
+              style="width:100%;padding:14px;background:var(--c-black);color:#FDFCF7;border:none;border-radius:12px;font-size:15px;font-weight:500;cursor:pointer">
+              Continue to Dashboard
+            </button>
+          ` : `
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <!-- Card A: Current Plan -->
+              <button id="btn-select-current" style="width:100%;text-align:left;display:flex;align-items:center;justify-content:space-between;padding:16px;border-radius:10px;background:var(--c-bg);border:${current.hitsTarget && !(upgrade?.hitsTarget) ? '2px solid var(--c-black)' : '1.5px solid var(--c-border-strong)'};cursor:pointer;transition:all 0.15s">
+                <div>
+                  <div style="font-size:14px;font-weight:500;color:var(--c-black);display:flex;align-items:center;gap:8px">
+                    Current Plan
+                    ${current.hitsTarget && !(upgrade?.hitsTarget) ? `<span style="font-size:11px;color:var(--c-ok);font-weight:500">Hits Target</span>` : ''}
                   </div>
+                  <div style="font-size:12px;color:var(--c-faint);margin-top:2px">${state.runsPerWeek} runs / week</div>
                 </div>
-              ` : ''}
-
-              <!-- Continue button (forecast only) -->
-              <button id="btn-select-current"
-                class="w-full mt-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded-xl transition-all">
-                Continue to Dashboard
+                <div style="text-align:right">
+                  <div style="font-size:20px;font-family:monospace;color:var(--c-black)">${formatTime(current.forecastTime)}</div>
+                  <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">Predicted</div>
+                </div>
               </button>
-            ` : `
-              <div class="space-y-3">
-                <!-- Only show "Hits Target" when the plans straddle a milestone -->
-                <!-- (i.e. one hits it and the other doesn't — otherwise it's noise) -->
-                <!-- Card A: Current Plan (clickable) -->
-                <button id="btn-select-current" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${current.hitsTarget && !(upgrade?.hitsTarget) ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
+
+              ${showUpgrade && upgrade ? `
+                <!-- Card B: Harder Plan -->
+                <button id="btn-select-harder" style="width:100%;text-align:left;display:flex;align-items:center;justify-content:space-between;padding:16px;border-radius:10px;background:var(--c-bg);border:${upgrade.hitsTarget && !current.hitsTarget ? '2px solid var(--c-black)' : '1.5px solid var(--c-border-strong)'};cursor:pointer;transition:all 0.15s">
                   <div>
-                    <div class="text-sm text-gray-300 font-medium flex items-center gap-2">
-                      Current Plan
-                      ${current.hitsTarget && !(upgrade?.hitsTarget) ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
+                    <div style="font-size:14px;font-weight:500;color:var(--c-black);display:flex;align-items:center;gap:8px">
+                      Harder Plan
+                      ${upgrade.hitsTarget && !current.hitsTarget ? `<span style="font-size:11px;color:var(--c-ok);font-weight:500">Hits Target</span>` : ''}
                     </div>
-                    <div class="text-xs text-gray-500 mt-0.5">${state.runsPerWeek} runs / week</div>
+                    <div style="font-size:12px;color:var(--c-faint);margin-top:2px">${upgrade.runs} runs / week</div>
                   </div>
-                  <div class="text-right">
-                    <div class="text-lg font-mono text-white">${formatTime(current.forecastTime)}</div>
-                    <div class="text-[10px] text-gray-500 uppercase tracking-wider">Predicted</div>
+                  <div style="text-align:right">
+                    <div style="font-size:20px;font-family:monospace;color:var(--c-black)">${formatTime(upgrade.forecastTime)}</div>
+                    <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.05em;margin-top:2px">Predicted</div>
                   </div>
                 </button>
 
-                ${showUpgrade && upgrade ? `
-                  <!-- Card B: Harder Plan (clickable) -->
-                  <button id="btn-select-harder" class="w-full text-left flex items-center justify-between p-4 rounded-lg bg-gray-800/50 border ${upgrade.hitsTarget && !current.hitsTarget ? 'border-emerald-700' : 'border-gray-700'} hover:bg-gray-700/50 transition-colors cursor-pointer">
-                    <div>
-                      <div class="text-sm text-gray-300 font-medium flex items-center gap-2">
-                        Harder Plan
-                        ${upgrade.hitsTarget && !current.hitsTarget ? '<span class="text-xs text-emerald-400">Hits Target</span>' : ''}
-                      </div>
-                      <div class="text-xs text-gray-500 mt-0.5">${upgrade.runs} runs / week</div>
+                ${upgrade.totalSessions > 7 ? `
+                  <div style="padding:12px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:10px;display:flex;align-items:flex-start;gap:10px">
+                    <svg style="width:18px;height:18px;color:var(--c-caution);flex-shrink:0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                    </svg>
+                    <div style="font-size:12px;color:var(--c-caution-text)">
+                      ${upgrade.totalSessions} total sessions/wk including cross-training. Monitor recovery closely.
                     </div>
-                    <div class="text-right">
-                      <div class="text-lg font-mono text-white">${formatTime(upgrade.forecastTime)}</div>
-                      <div class="text-[10px] text-gray-500 uppercase tracking-wider">Predicted</div>
-                    </div>
-                  </button>
-
-                  ${upgrade.totalSessions > 7 ? `
-                    <div class="p-3 bg-amber-950/30 border border-amber-900/50 rounded-lg flex gap-3">
-                      <svg class="w-5 h-5 text-amber-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-                      </svg>
-                      <div class="text-xs text-amber-200">
-                        ${upgrade.totalSessions} total sessions/wk including cross-training. Monitor recovery closely.
-                      </div>
-                    </div>
-                  ` : ''}
+                  </div>
                 ` : ''}
-              </div>
-            `}
-          </div>
-
+              ` : ''}
+            </div>
+          `}
         </div>
 
       </div>
@@ -255,19 +231,20 @@ function wireHandlers(
   upgrade: VolumeOption | null,
   showUpgrade: boolean
 ): void {
-  // Select Current Plan / Continue
   document.getElementById('btn-select-current')?.addEventListener('click', () => {
     nextStep();
   });
 
-  // Select Harder Plan
   if (showUpgrade && upgrade) {
     document.getElementById('btn-select-harder')?.addEventListener('click', () => {
       updateOnboarding({ runsPerWeek: upgrade.runs });
-      // Only re-initialize if not mid-plan (avoid destroying progress)
       const currentState = getState();
-      const isMidPlan = currentState.hasCompletedOnboarding && currentState.w > 1;
-      if (!isMidPlan) {
+      const isMidPlan = currentState.w > 1;
+      if (isMidPlan) {
+        const s = getMutableState();
+        s.rw = upgrade.runs;
+        saveState();
+      } else {
         initializeSimulator({
           ...state,
           runsPerWeek: upgrade.runs,
@@ -279,7 +256,6 @@ function wireHandlers(
   }
 }
 
-/** Calculate effective cross-training sessions from state */
 function calcCrossSessions(state: OnboardingState): number {
   const INTENSITY_FACTOR: Record<string, number> = { easy: 0.5, moderate: 0.7, hard: 0.9 };
   let cross = 0;
@@ -295,10 +271,6 @@ function calcCrossSessions(state: OnboardingState): number {
   return cross;
 }
 
-/**
- * Build forecast options for current, +1, and +2 runs/week.
- * Uses applyTrainingHorizonAdjustment for forecast modelling.
- */
 function buildVolumeOptions(
   runsPerWeek: number,
   crossSessions: number,
@@ -317,30 +289,22 @@ function buildVolumeOptions(
     if (extra > 0 && total > maxTotal) break;
 
     const effectiveSessions = runs + crossSessions;
-
-    // Use shared forecast with a temporary state override for runs
     const stateOverride = { ...state, runsPerWeek: runs };
-    const forecast = calculateForecast(
-      baselineVdot, effectiveSessions, stateOverride, runnerType
-    );
+    const forecast = calculateForecast(baselineVdot, effectiveSessions, stateOverride, runnerType);
 
     options.push({
       runs,
       totalSessions: Math.round(total),
       forecastTime: forecast.forecastTime,
-      hitsTarget: false, // set below once we know the target
+      hitsTarget: false,
     });
   }
 
-  // Find milestone that the options straddle (current misses, upgrade hits)
   const currentTime = options[0].forecastTime;
-  const bestTime = options.length > 1
-    ? Math.min(...options.slice(1).map(o => o.forecastTime))
-    : currentTime;
+  const bestTime = options.length > 1 ? Math.min(...options.slice(1).map(o => o.forecastTime)) : currentTime;
   const target = findStraddledMilestone(currentTime, bestTime, raceDistance);
   const targetTime = target?.time ?? Infinity;
 
-  // Mark which options hit the straddled target
   for (const opt of options) {
     opt.hitsTarget = opt.forecastTime <= targetTime;
   }
@@ -348,12 +312,6 @@ function buildVolumeOptions(
   return { options, target };
 }
 
-/**
- * Find a milestone that the current and best forecasts straddle.
- * Returns a target only when currentTime is above the threshold
- * but bestTime is at or below it — i.e., upgrading would cross the milestone.
- * If both plans beat (or both miss) every milestone, returns null.
- */
 function findStraddledMilestone(
   currentTime: number,
   bestTime: number,
@@ -363,17 +321,14 @@ function findStraddledMilestone(
   const labels = MILESTONE_LABELS[raceDistance];
   if (!thresholds) return null;
 
-  // Find a milestone where current misses but best hits
   for (let i = 0; i < thresholds.length; i++) {
     if (currentTime > thresholds[i] && bestTime <= thresholds[i]) {
       return { time: thresholds[i], label: labels[i] };
     }
   }
-
   return null;
 }
 
-/** Format seconds to h:mm:ss or mm:ss */
 function formatTime(seconds: number): string {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);

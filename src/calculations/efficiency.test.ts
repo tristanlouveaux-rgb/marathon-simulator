@@ -27,34 +27,40 @@ describe('RPE + HR Fusion Logic', () => {
     });
 
     describe('calculateEfficiencyShift', () => {
-        it('should return 0.5 (Pure Efficiency) for Low RPE + Low HR', () => {
-            // Steady state easy run
-            // Expected RPE 3, actual 2 (rpeDelta = -1)
-            // HR intensity 0.8 (below center)
-            const shift = calculateEfficiencyShift(2, 3, 0.8, 'easy');
-            expect(shift).toBe(0.5);
+        it('should return positive shift (Pure Efficiency) for Low RPE + Low HR', () => {
+            // Expected RPE 3, actual 2 (rpeDelta = -1, felt easier)
+            // HR intensity 0.75 (clearly below center — hrDelta = -0.25)
+            // Branch: rpeDelta < 0 and hrDelta < -0.2 → shift = 0.3 * rpeMag
+            // rpeMag = min(1/3, 1) ≈ 0.333 → shift ≈ 0.1
+            const shift = calculateEfficiencyShift(2, 3, 0.75, 'easy');
+            expect(shift).toBeCloseTo(0.1, 5);
         });
 
-        it('should return -0.4 (Cardiovascular Strain) for Low RPE + High HR', () => {
-            // Expected RPE 3, actual 2 (rpeDelta = -1)
-            // HR intensity 1.4 (high)
+        it('should return negative shift (Cardiovascular Strain) for Low RPE + High HR', () => {
+            // Expected RPE 3, actual 2 (rpeDelta = -1, felt easier)
+            // HR intensity 1.4 (high — hrDelta = +0.4)
+            // Branch: rpeDelta < 0 and hrDelta > 0.2 → shift = -0.25 * rpeMag
+            // rpeMag ≈ 0.333 → shift ≈ -0.0833
             const shift = calculateEfficiencyShift(2, 3, 1.4, 'easy');
-            expect(shift).toBe(-0.4);
+            expect(shift).toBeCloseTo(-0.0833, 3);
         });
 
-        it('should return -0.2 (Struggle) for High RPE + High HR', () => {
-            // Expected RPE 3, actual 5 (rpeDelta = 2)
-            // HR intensity 1.2 (above center)
-            const shift = calculateEfficiencyShift(5, 3, 1.2, 'easy');
-            expect(shift).toBe(-0.2);
+        it('should return negative shift (Struggle) for High RPE + High HR', () => {
+            // Expected RPE 3, actual 5 (rpeDelta = +2, felt harder)
+            // HR intensity 1.25 (clearly above center — hrDelta = +0.25)
+            // Branch: rpeDelta > 0 and hrDelta > 0.2 → shift = -0.15 * rpeMag
+            // rpeMag = min(2/3, 1) ≈ 0.667 → shift ≈ -0.1
+            const shift = calculateEfficiencyShift(5, 3, 1.25, 'easy');
+            expect(shift).toBeCloseTo(-0.1, 5);
         });
 
-        it('should return -0.6 (Suppression) for High RPE + Low Peak HR (Intervals)', () => {
-            // Interval session
-            // Expected RPE 8, actual 9 (rpeDelta = 1)
-            // HR intensity 0.6 (very low for target)
+        it('should return negative shift (Suppression) for High RPE + Low Peak HR (Intervals)', () => {
+            // Interval session. Expected RPE 8, actual 9 (rpeDelta = +1)
+            // HR intensity 0.6 (very low for target — hrDelta = -0.4)
+            // Branch: rpeDelta > 0 and hrDelta < -0.2 and isInterval → shift = -0.35 * rpeMag
+            // rpeMag ≈ 0.333 → shift ≈ -0.1167
             const shift = calculateEfficiencyShift(9, 8, 0.6, 'intervals');
-            expect(shift).toBe(-0.6);
+            expect(shift).toBeCloseTo(-0.1167, 3);
         });
 
         it('should return 0 for neutral results', () => {

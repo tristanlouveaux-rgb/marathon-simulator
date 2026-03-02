@@ -514,10 +514,19 @@ export function applyPhaseRegression(state: InjuryState, reason: string): Injury
     injuryPhase: previousPhase,
     painLatency: false, // Reset after handling
     phaseTransitions: [...state.phaseTransitions, transition],
-    // Reset capacity tests if regressing to before test_capacity
+    // Reset progression state when regressing past the relevant phase
     capacityTestsPassed: previousPhase === 'acute' || previousPhase === 'rehab'
       ? []
       : state.capacityTestsPassed,
+    returnToRunLevel: previousPhase === 'acute' || previousPhase === 'rehab' || previousPhase === 'test_capacity'
+      ? 1
+      : state.returnToRunLevel,
+    zeroPainWeeks: previousPhase === 'acute' || previousPhase === 'rehab'
+      ? 0
+      : state.zeroPainWeeks,
+    graduatedReturnWeeksLeft: previousPhase !== 'graduated_return'
+      ? 2
+      : state.graduatedReturnWeeksLeft,
   };
 }
 
@@ -637,7 +646,11 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
     if (state.currentPain >= 7) {
       newState.injuryPhase = 'acute';
       newState.acutePhaseStartDate = new Date().toISOString();
+      // Full reset — must go through all gates again
       newState.capacityTestsPassed = [];
+      newState.returnToRunLevel = 1;
+      newState.zeroPainWeeks = 0;
+      newState.graduatedReturnWeeksLeft = 2;
       const transition: PhaseTransition = {
         fromPhase: state.injuryPhase,
         toPhase: 'acute',

@@ -10,28 +10,31 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
   const hasLT = state.ltPace !== null && state.ltPace !== undefined;
   const hasVO2 = state.vo2max !== null && state.vo2max !== undefined;
 
+  const selectedStyle = 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black)';
+  const unselectedStyle = 'background:rgba(0,0,0,0.06);color:var(--c-muted);border:2px solid transparent';
+
   container.innerHTML = `
-    <div class="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+    <div class="min-h-screen flex flex-col items-center justify-center px-6 py-12" style="background:var(--c-bg)">
       ${renderProgressIndicator(7, 10)}
 
       <div class="max-w-lg w-full">
         <!-- Title -->
-        <h2 class="text-2xl md:text-3xl font-light text-white mb-2 text-center">
+        <h2 class="text-2xl md:text-3xl font-light mb-2 text-center" style="color:var(--c-black)">
           Fitness Data
         </h2>
-        <p class="text-gray-400 text-center mb-6">
+        <p class="text-center mb-6" style="color:var(--c-faint)">
           Do you have data from a smartwatch or fitness tracker?
         </p>
 
         <!-- Why we want this data -->
-        <div class="bg-blue-900/30 border border-blue-700/50 rounded-xl p-4 mb-6">
+        <div class="rounded-xl p-4 mb-6" style="background:rgba(78,159,229,0.08);border:1px solid rgba(78,159,229,0.25)">
           <div class="flex gap-3">
-            <svg class="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <svg class="w-5 h-5 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" style="color:var(--c-accent)">
               <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
             </svg>
             <div class="text-sm">
-              <p class="text-blue-300 font-medium mb-1">Why we ask for this data</p>
-              <p class="text-blue-200/70 text-xs leading-relaxed">
+              <p class="font-medium mb-1" style="color:var(--c-accent)">Why we ask for this data</p>
+              <p class="text-xs leading-relaxed" style="color:var(--c-muted)">
                 Your Lactate Threshold (LT) pace and VO2 max are powerful predictors of race performance.
                 Combined with your PBs, they allow us to create more accurate pace zones and better
                 forecasts. If your fitness improves faster than expected, we'll automatically
@@ -42,118 +45,114 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
         </div>
 
         <!-- Smartwatch question -->
-        <div class="bg-gray-800 rounded-xl p-5 mb-4">
-          <h3 class="text-sm font-medium text-white mb-4">Do you have a compatible smartwatch?</h3>
+        <div class="rounded-xl p-5 mb-4" style="background:rgba(0,0,0,0.06)">
+          <h3 class="text-sm font-medium mb-4" style="color:var(--c-black)">Do you have a compatible smartwatch?</h3>
 
           <div class="grid grid-cols-2 gap-3 mb-4">
             <button id="has-watch-yes"
-              class="py-3 rounded-xl font-medium transition-all
-                     ${state.hasSmartwatch === true
-      ? 'bg-emerald-600 text-white border-2 border-emerald-400'
-      : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
+              class="py-3 rounded-xl font-medium transition-all"
+              style="${state.hasSmartwatch === true ? selectedStyle : unselectedStyle}">
               Yes
             </button>
             <button id="has-watch-no"
-              class="py-3 rounded-xl font-medium transition-all
-                     ${state.hasSmartwatch === false
-      ? 'bg-emerald-600 text-white border-2 border-emerald-400'
-      : 'bg-gray-700 text-gray-300 border-2 border-transparent hover:border-gray-600'}">
+              class="py-3 rounded-xl font-medium transition-all"
+              style="${state.hasSmartwatch === false ? selectedStyle : unselectedStyle}">
               No
             </button>
           </div>
 
-          <p class="text-xs text-gray-500">
+          <p class="text-xs" style="color:var(--c-faint)">
             Garmin, Apple Watch, Polar, COROS, and similar devices can provide this data.
             We're working on direct sync - for now, please enter values manually.
           </p>
         </div>
 
         <!-- Fitness data inputs (shown when has watch) -->
-        <div id="fitness-inputs" class="${state.hasSmartwatch ? '' : 'hidden'} space-y-4">
+        <div id="fitness-inputs" style="display:${state.hasSmartwatch ? '' : 'none'}" class="space-y-4">
           <!-- LT Threshold -->
-          <div class="bg-gray-800 rounded-xl p-5">
+          <div class="rounded-xl p-5" style="background:rgba(0,0,0,0.06)">
             <div class="flex items-center justify-between mb-3">
-              <h3 class="text-sm font-medium text-white">Lactate Threshold Pace</h3>
-              <span class="text-xs text-gray-500">Optional</span>
+              <h3 class="text-sm font-medium" style="color:var(--c-black)">Lactate Threshold Pace</h3>
+              <span class="text-xs" style="color:var(--c-faint)">Optional</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">
+            <p class="text-xs mb-3" style="color:var(--c-faint)">
               Your LT pace is the fastest pace you can sustain for about an hour.
               Find this in your watch's training status or physiology metrics.
             </p>
             <div class="flex gap-2 items-center">
               <input type="number" id="lt-min" min="2" max="10" placeholder="min"
                 value="${hasLT ? Math.floor((state.ltPace || 0) / 60) : ''}"
-                class="w-20 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                       text-white text-sm focus:border-emerald-500 focus:outline-none text-center">
-              <span class="text-gray-500">:</span>
+                class="w-20 px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
+                style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
+              <span style="color:var(--c-faint)">:</span>
               <input type="number" id="lt-sec" min="0" max="59" placeholder="sec"
                 value="${hasLT ? Math.floor((state.ltPace || 0) % 60) : ''}"
-                class="w-20 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                       text-white text-sm focus:border-emerald-500 focus:outline-none text-center">
-              <span class="text-gray-400 text-sm">/km</span>
+                class="w-20 px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
+                style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
+              <span class="text-sm" style="color:var(--c-faint)">/km</span>
             </div>
           </div>
 
           <!-- VO2 Max -->
-          <div class="bg-gray-800 rounded-xl p-5">
+          <div class="rounded-xl p-5" style="background:rgba(0,0,0,0.06)">
             <div class="flex items-center justify-between mb-3">
-              <h3 class="text-sm font-medium text-white">VO2 Max</h3>
-              <span class="text-xs text-gray-500">Optional</span>
+              <h3 class="text-sm font-medium" style="color:var(--c-black)">VO2 Max</h3>
+              <span class="text-xs" style="color:var(--c-faint)">Optional</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">
+            <p class="text-xs mb-3" style="color:var(--c-faint)">
               Your VO2 max measures aerobic capacity. Most smartwatches estimate this
               from your heart rate and pace data.
             </p>
             <div class="flex gap-2 items-center">
               <input type="number" id="vo2-input" min="20" max="90" step="0.1" placeholder="e.g. 52"
                 value="${hasVO2 ? state.vo2max : ''}"
-                class="w-28 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                       text-white text-sm focus:border-emerald-500 focus:outline-none text-center">
-              <span class="text-gray-400 text-sm">ml/kg/min</span>
+                class="w-28 px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
+                style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
+              <span class="text-sm" style="color:var(--c-faint)">ml/kg/min</span>
             </div>
           </div>
 
           <!-- Heart Rate -->
-          <div class="bg-gray-800 rounded-xl p-5">
+          <div class="rounded-xl p-5" style="background:rgba(0,0,0,0.06)">
             <div class="flex items-center justify-between mb-3">
-              <h3 class="text-sm font-medium text-white">Heart Rate Data</h3>
-              <span class="text-xs text-gray-500">Optional</span>
+              <h3 class="text-sm font-medium" style="color:var(--c-black)">Heart Rate Data</h3>
+              <span class="text-xs" style="color:var(--c-faint)">Optional</span>
             </div>
-            <p class="text-xs text-gray-400 mb-3">
+            <p class="text-xs mb-3" style="color:var(--c-faint)">
               If your watch reports resting and/or max heart rate, we'll calculate personalised HR zones for each workout.
             </p>
             <div class="grid grid-cols-2 gap-3">
               <div>
-                <label class="block text-xs text-gray-400 mb-1">Resting HR</label>
+                <label class="block text-xs mb-1" style="color:var(--c-faint)">Resting HR</label>
                 <div class="flex gap-2 items-center">
                   <input type="number" id="resting-hr" min="30" max="100" placeholder="e.g. 52"
                     value="${state.restingHR || ''}"
-                    class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                           text-white text-sm focus:border-emerald-500 focus:outline-none text-center">
-                  <span class="text-gray-400 text-xs">bpm</span>
+                    class="w-full px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
+                    style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
+                  <span class="text-xs" style="color:var(--c-faint)">bpm</span>
                 </div>
               </div>
               <div>
-                <label class="block text-xs text-gray-400 mb-1">Max HR</label>
+                <label class="block text-xs mb-1" style="color:var(--c-faint)">Max HR</label>
                 <div class="flex gap-2 items-center">
                   <input type="number" id="max-hr" min="120" max="220" placeholder="e.g. 190"
                     value="${state.maxHR || ''}"
-                    class="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg
-                           text-white text-sm focus:border-emerald-500 focus:outline-none text-center">
-                  <span class="text-gray-400 text-xs">bpm</span>
+                    class="w-full px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
+                    style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
+                  <span class="text-xs" style="color:var(--c-faint)">bpm</span>
                 </div>
               </div>
             </div>
           </div>
 
           <!-- Sync buttons (future) -->
-          <div class="bg-gray-800/50 rounded-xl p-4">
-            <p class="text-xs text-gray-500 mb-3">Coming soon: automatic sync</p>
+          <div class="rounded-xl p-4" style="background:rgba(0,0,0,0.04)">
+            <p class="text-xs mb-3" style="color:var(--c-faint)">Coming soon: automatic sync</p>
             <div class="flex gap-2">
-              <button disabled class="flex-1 py-2 bg-gray-700/50 text-gray-500 rounded-lg text-xs font-medium cursor-not-allowed">
+              <button disabled class="flex-1 py-2 rounded-lg text-xs font-medium cursor-not-allowed" style="background:rgba(0,0,0,0.06);color:var(--c-faint);border:none">
                 Connect Garmin
               </button>
-              <button disabled class="flex-1 py-2 bg-gray-700/50 text-gray-500 rounded-lg text-xs font-medium cursor-not-allowed">
+              <button disabled class="flex-1 py-2 rounded-lg text-xs font-medium cursor-not-allowed" style="background:rgba(0,0,0,0.06);color:var(--c-faint);border:none">
                 Connect Apple Health
               </button>
             </div>
@@ -161,9 +160,9 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
         </div>
 
         <!-- No watch message -->
-        <div id="no-watch-message" class="${state.hasSmartwatch === false ? '' : 'hidden'}">
-          <div class="bg-gray-800/50 rounded-xl p-4 text-center">
-            <p class="text-sm text-gray-400">
+        <div id="no-watch-message" style="display:${state.hasSmartwatch === false ? '' : 'none'}">
+          <div class="rounded-xl p-4 text-center" style="background:rgba(0,0,0,0.04)">
+            <p class="text-sm" style="color:var(--c-muted)">
               No problem! We'll use your PBs to estimate your fitness level.
               You can always add this data later if you get a smartwatch.
             </p>
@@ -171,8 +170,8 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
         </div>
 
         <button id="continue-fitness"
-          class="mt-6 w-full py-3 bg-emerald-600 hover:bg-emerald-500
-                 text-white font-medium rounded-xl transition-all">
+          class="mt-6 w-full py-3 rounded-xl transition-all font-medium"
+          style="background:var(--c-black);color:#FDFCF7;border:none">
           Continue
         </button>
       </div>
@@ -187,29 +186,28 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
 function wireEventHandlers(state: OnboardingState): void {
   const fitnessInputs = document.getElementById('fitness-inputs');
   const noWatchMessage = document.getElementById('no-watch-message');
-  const yesBtn = document.getElementById('has-watch-yes');
-  const noBtn = document.getElementById('has-watch-no');
+  const yesBtn = document.getElementById('has-watch-yes') as HTMLButtonElement | null;
+  const noBtn = document.getElementById('has-watch-no') as HTMLButtonElement | null;
+
+  const selectedStyle = 'background:var(--c-black);color:#FDFCF7;border:2px solid var(--c-black)';
+  const unselectedStyle = 'background:rgba(0,0,0,0.06);color:var(--c-muted);border:2px solid transparent';
 
   // Yes button
   yesBtn?.addEventListener('click', () => {
     updateOnboarding({ hasSmartwatch: true });
-    yesBtn.classList.add('bg-emerald-600', 'text-white', 'border-emerald-400');
-    yesBtn.classList.remove('bg-gray-700', 'text-gray-300', 'border-transparent');
-    noBtn?.classList.remove('bg-emerald-600', 'text-white', 'border-emerald-400');
-    noBtn?.classList.add('bg-gray-700', 'text-gray-300', 'border-transparent');
-    fitnessInputs?.classList.remove('hidden');
-    noWatchMessage?.classList.add('hidden');
+    if (yesBtn) yesBtn.style.cssText = selectedStyle;
+    if (noBtn) noBtn.style.cssText = unselectedStyle;
+    if (fitnessInputs) fitnessInputs.style.display = '';
+    if (noWatchMessage) noWatchMessage.style.display = 'none';
   });
 
   // No button
   noBtn?.addEventListener('click', () => {
     updateOnboarding({ hasSmartwatch: false, ltPace: null, vo2max: null, restingHR: null, maxHR: null });
-    noBtn.classList.add('bg-emerald-600', 'text-white', 'border-emerald-400');
-    noBtn.classList.remove('bg-gray-700', 'text-gray-300', 'border-transparent');
-    yesBtn?.classList.remove('bg-emerald-600', 'text-white', 'border-emerald-400');
-    yesBtn?.classList.add('bg-gray-700', 'text-gray-300', 'border-transparent');
-    fitnessInputs?.classList.add('hidden');
-    noWatchMessage?.classList.remove('hidden');
+    if (noBtn) noBtn.style.cssText = selectedStyle;
+    if (yesBtn) yesBtn.style.cssText = unselectedStyle;
+    if (fitnessInputs) fitnessInputs.style.display = 'none';
+    if (noWatchMessage) noWatchMessage.style.display = '';
   });
 
   // Continue button

@@ -2,14 +2,238 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Mosaic Design System ───────────────────────────────────────────────── */
+
+:root {
+  --c-bg:           #FDFCF7;
+  --c-surface:      #FFFFFF;
+  --c-black:        #1A1A1A;
+  --c-muted:        #555555;
+  --c-faint:        rgba(0,0,0,0.52);
+  --c-accent:       #4E9FE5;
+  --c-accent-dark:  #2E7EC4;
+  --c-border:       rgba(0,0,0,0.09);
+  --c-border-strong:#1A1A1A;
+
+  /* Status — ratio-based, never applied to full backgrounds */
+  --c-ok:           #22C55E;
+  --c-caution:      #F59E0B;
+  --c-warn:         #EF4444;
+  --c-ok-bg:        #DCFCE7;
+  --c-ok-text:      #15803D;
+  --c-caution-bg:   #FEF3C7;
+  --c-caution-text: #92400E;
+
+  /* Radii */
+  --r-card:  6px;
+  --r-pill:  100px;
+
+  /* Font */
+  --f: 'Inter', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* ─── Base ───────────────────────────────────────────────────────────────── */
+
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-family: var(--f);
 }
 
 body {
+  background-color: var(--c-bg);
+  color: var(--c-black);
   padding-top: env(safe-area-inset-top);
   padding-right: env(safe-area-inset-right);
   padding-bottom: env(safe-area-inset-bottom);
   padding-left: env(safe-area-inset-left);
 }
+
+/* ─── Tab bar ────────────────────────────────────────────────────────────── */
+
+.mosaic-tab-bar {
+  background: var(--c-bg);
+  border-top: 1px solid var(--c-border-strong);
+}
+
+.tab-active   { color: var(--c-black); opacity: 1; }
+.tab-inactive { color: var(--c-black); opacity: 0.28; }
+
+/* ─── Page scaffold ──────────────────────────────────────────────────────── */
+
+/* All main pages should use this wrapper to sit above the fixed tab bar */
+.mosaic-page {
+  min-height: 100dvh;
+  background: var(--c-bg);
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+}
+
+/* ─── Cards ──────────────────────────────────────────────────────────────── */
+
+.m-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-card);
+}
+
+.m-card-strong {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-card);
+}
+
+/* ─── Progress bars ──────────────────────────────────────────────────────── */
+
+.m-prog-track {
+  height: 5px;
+  background: rgba(0,0,0,0.07);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+
+.m-prog-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  transition: width 0.5s ease;
+}
+
+/* ─── Pills ──────────────────────────────────────────────────────────────── */
+
+.m-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--r-pill);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.m-pill-ok      { background: var(--c-ok-bg);      color: var(--c-ok-text); }
+.m-pill-caution { background: var(--c-caution-bg);  color: var(--c-caution-text); }
+.m-pill-neutral { background: rgba(0,0,0,0.06);     color: var(--c-muted); }
+
+.m-pill-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+}
+.m-pill-ok      .m-pill-dot { background: var(--c-ok); }
+.m-pill-caution .m-pill-dot { background: var(--c-caution); }
+.m-pill-neutral .m-pill-dot { background: var(--c-muted); }
+
+/* ─── Buttons ────────────────────────────────────────────────────────────── */
+
+.m-btn-primary {
+  background: var(--c-accent);
+  color: white;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 9px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: var(--f);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 2px 8px rgba(78,159,229,0.32);
+  letter-spacing: 0.01em;
+  transition: background 0.15s;
+}
+.m-btn-primary:active { background: var(--c-accent-dark); }
+
+.m-btn-secondary {
+  background: transparent;
+  color: var(--c-black);
+  border: 1px solid var(--c-border-strong);
+  border-radius: var(--r-pill);
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--f);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+
+.m-btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-accent);
+  cursor: pointer;
+  font-family: var(--f);
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ─── Section label ──────────────────────────────────────────────────────── */
+
+.m-sec-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--c-faint);
+  margin-bottom: 8px;
+}
+
+/* ─── Signal bar (injury risk / recovery) ────────────────────────────────── */
+
+.m-signal-track {
+  height: 6px;
+  background: rgba(0,0,0,0.06);
+  border-radius: var(--r-pill);
+  position: relative;
+}
+
+.m-signal-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+}
+
+.m-signal-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: white;
+  border: 1.5px solid var(--c-border-strong);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+}
+
+/* ─── Workout hero section ───────────────────────────────────────────────── */
+
+.workout-hero-bg {
+  background: #F5F0E8;
+  border-top: 1px solid rgba(0,0,0,0.08);
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ─── List items ─────────────────────────────────────────────────────────── */
+
+.m-list-item {
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  gap: 12px;
+  cursor: pointer;
+  transition: background 0.12s;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-list-item:active { background: rgba(0,0,0,0.025); }
+.m-list-item + .m-list-item { border-top: 1px solid var(--c-border); }
+
+/* ─── Type scale ─────────────────────────────────────────────────────────── */
+
+.m-text-hero    { font-size: 36px; font-weight: 300; letter-spacing: -0.04em; line-height: 1; }
+.m-text-title   { font-size: 24px; font-weight: 600; letter-spacing: -0.03em; }
+.m-text-section { font-size: 22px; font-weight: 300; letter-spacing: -0.03em; line-height: 1.1; }
+.m-text-body    { font-size: 14px; font-weight: 400; line-height: 1.4; }
+.m-text-caption { font-size: 11px; color: var(--c-muted); line-height: 1.4; }
