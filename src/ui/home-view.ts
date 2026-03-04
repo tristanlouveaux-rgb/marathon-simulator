@@ -7,7 +7,7 @@ import { getState } from '@/state';
 import type { SimulatorState } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
-import { computeWeekTSS, computeACWR } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, getWeeklyExcess } from '@/calculations/fitness-model';
 import { generateWeekWorkouts } from '@/workouts';
 import { isInjuryActive } from './injury/modal';
 
@@ -64,11 +64,29 @@ const isRunKey = (k: string) => !NON_RUN_KW.some(kw => k.toLowerCase().includes(
 function buildProgressBars(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
 
-  // Sessions done this week
-  const sessionsDone = wk
+  // Sessions done this week — prefer synced activity count (Strava or Garmin) over rated count
+  const syncedSessions = wk
+    ? Object.keys(wk.garminActuals || {}).length
+      + (wk.adhocWorkouts || []).filter((w: any) =>
+          w.id?.startsWith('garmin-') || w.id?.startsWith('strava-')
+        ).length
+    : 0;
+  const ratedSessions = wk
     ? Object.values(wk.rated || {}).filter(v => typeof v === 'number' && v > 0).length
     : 0;
-  const sessionsPlan = s.rw || 5;
+  const sessionsDone = Math.max(syncedSessions, ratedSessions);
+  // Count all planned non-rest sessions (runs + gym + cross-training + adhoc)
+  const plannedWorkouts = wk
+    ? generateWeekWorkouts(
+        wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+        null, s.recurringActivities,
+        s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
+      )
+    : [];
+  const adhocExtra = wk
+    ? (wk.adhocWorkouts || []).filter((w: any) => !(w.id || '').startsWith('garmin-') && !(w.id || '').startsWith('strava-')).length
+    : 0;
+  const sessionsPlan = plannedWorkouts.filter((w: any) => w.t !== 'rest').length + adhocExtra || s.rw || 5;
 
   // Distance this week (running only from garmin, or completedKm)
   const kmDone = wk
@@ -78,8 +96,8 @@ function buildProgressBars(s: SimulatorState): string {
     : 0;
   const kmPlan = (s.rw || 5) * ((s.wks?.[s.w - 1] as any)?.targetKmPerRun || 10);
 
-  // TSS this week vs plan
-  const tssActual = wk ? computeWeekTSS(wk, wk.rated ?? {}) : 0;
+  // TSS this week vs plan — Signal B (raw physiological): honest total load, gym + cross-training at full weight
+  const tssActual = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
   const tssPlan = (wk as any)?.plannedTSS || (kmPlan * 4.5); // ~4.5 TSS/km fallback
 
   function bar(actual: number, plan: number, fmt: (v: number) => string, planFmt: (v: number) => string): string {
@@ -144,7 +162,7 @@ function buildProgressBars(s: SimulatorState): string {
 
   // Status pill
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
   let pillHtml: string;
   let pillCaption: string;
   if (acwr.ratio <= 0 || (s.w < 3)) {
@@ -170,7 +188,7 @@ function buildProgressBars(s: SimulatorState): string {
 
         <div class="flex flex-col gap-[7px]">
           <div class="flex justify-between items-baseline">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">Sessions</span>
+            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Sessions</span>
             <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${sessionsDone} / ${sessionsPlan}</span>
           </div>
           <div class="relative" style="height:5px">
@@ -181,7 +199,7 @@ function buildProgressBars(s: SimulatorState): string {
 
         <div class="flex flex-col gap-[7px]">
           <div class="flex justify-between items-baseline">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">Distance</span>
+            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Distance</span>
             <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${kmDone.toFixed(1)} / ${kmPlan.toFixed(0)} km</span>
           </div>
           <div class="relative" style="height:5px">
@@ -190,10 +208,13 @@ function buildProgressBars(s: SimulatorState): string {
           </div>
         </div>
 
-        <div class="flex flex-col gap-[7px]">
+        <div id="home-tss-row" class="flex flex-col gap-[7px]" style="cursor:pointer">
           <div class="flex justify-between items-baseline">
-            <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">Training Load</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${tssActual} / ${Math.round(tssPlan)} TSS</span>
+            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Training Load (TSS)</span>
+            <div class="flex items-center gap-[6px]">
+              <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${tssActual} / ${Math.round(tssPlan)} TSS</span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </div>
           </div>
           <div class="relative" style="height:5px">
             <div class="m-prog-track w-[88%]">${fillBar(tssActual, tssPlan)}</div>
@@ -212,7 +233,11 @@ function buildProgressBars(s: SimulatorState): string {
 
 function buildSignalBars(s: SimulatorState): string {
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined);
+  // ATL seed: inflate baseline for gym-heavy athletes — same formula as buildAdvancedSection in stats-view so
+  // Home and Stats always compute ACWR identically (fixes ISSUE-55)
+  const atlSeedMultiplier = 1 + Math.min(0.1 * (s.gs ?? 0), 0.3);
+  const atlSeed = (s.ctlBaseline ?? 0) * atlSeedMultiplier;
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
 
   // Injury risk: map ACWR ratio to 0–100% position on gradient bar
   let riskPct = 0;
@@ -281,6 +306,20 @@ function buildSignalBars(s: SimulatorState): string {
 
   const injured = isInjuryActive();
 
+  // Show "Adjust week" button when there is unresolved excess load but ACWR is not elevated.
+  // Tier 1 (Auto: mod) silently absorbed the excess — button hides until user undoes.
+  // Tier 2 range: excess 15–40 TSS above baseline. Falls back to showing for any items if no baseline.
+  const wkForExcess = s.wks?.[s.w - 1];
+  const _hasAutoMod = (wkForExcess?.workoutMods ?? []).some(m => m.modReason?.startsWith('Auto:'));
+  const _baseline = s.signalBBaseline ?? 0;
+  const _excess = wkForExcess ? getWeeklyExcess(wkForExcess, _baseline, s.planStartDate) : 0;
+  const _inTier2Range = _baseline > 0 ? (_excess >= 15 && _excess <= 40) : true;
+  const hasPendingExcess = !injured &&
+    acwr.status !== 'caution' && acwr.status !== 'high' &&
+    (wkForExcess?.unspentLoadItems?.length ?? 0) > 0 &&
+    !_hasAutoMod &&
+    _inTier2Range;
+
   // Injury risk row: show recovery pill when injured, ACWR bar otherwise
   const injuryRowContent = injured
     ? `
@@ -295,10 +334,10 @@ function buildSignalBars(s: SimulatorState): string {
         <span class="text-[12px] font-semibold" style="color:${riskLabelColor}">${riskLabel}</span>
       </div>
       <div class="m-signal-track">
-        <div class="m-signal-fill" style="width:${riskPct}%;background:linear-gradient(to right,#22C55E 0%,#EAB308 50%,#EF4444 100%)"></div>
+        <div class="m-signal-fill" style="width:${riskPct}%;background:${riskLabelColor}"></div>
         ${acwr.ratio > 0 ? `<div class="m-signal-thumb" style="left:${riskPct}%;border-color:${thumbBorder}"></div>` : ''}
       </div>
-      <p class="m-text-caption mt-[7px]">${riskCaption}</p>`;
+      <p class="m-text-caption mt-[7px]">${hasPendingExcess ? 'You have unresolved cross-training load this week.' : riskCaption}</p>`;
 
   return `
     <div class="section px-[18px] mb-[14px]">
@@ -330,7 +369,7 @@ function buildSparkline(s: SimulatorState): string {
   const ctl = s.ctlBaseline ?? null;
 
   const wk = s.wks?.[s.w - 1];
-  const currentTSS = wk ? computeWeekTSS(wk, wk.rated ?? {}) : 0;
+  const currentTSS = wk ? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
 
   if (histTSS.length === 0 && currentTSS === 0) {
     return `
@@ -407,6 +446,14 @@ function buildTodayWorkout(s: SimulatorState): string {
     for (const mod of wk.workoutMods) {
       const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
       if (w) { (w as any).d = mod.newDistance; (w as any).status = mod.status; }
+    }
+  }
+
+  // Apply day moves (drag-and-drop reorder from plan tab)
+  if ((wk as any).workoutMoves) {
+    for (const [workoutId, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
+      const w = workouts.find((wo: any) => (wo.id || wo.n) === workoutId);
+      if (w) (w as any).dayOfWeek = newDay;
     }
   }
 
@@ -499,6 +546,13 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
     const wk = s.wks?.[s.w - 1];
     if (wk) {
       const workouts = generateWeekWorkouts(wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined, null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs);
+      // Apply day moves so "Next workout" reflects any plan-tab reorders
+      if ((wk as any).workoutMoves) {
+        for (const [workoutId, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
+          const wo = workouts.find((w: any) => (w.id || w.n) === workoutId);
+          if (wo) (wo as any).dayOfWeek = newDay;
+        }
+      }
       const upcoming = workouts.filter((w: any) => w.dayOfWeek > ourDay && w.t !== 'rest');
       if (upcoming.length > 0) {
         const next = upcoming[0] as any;
@@ -668,7 +722,10 @@ function getHomeHTML(s: SimulatorState): string {
           <div style="font-size:24px;font-weight:600;letter-spacing:-0.03em;color:var(--c-black);line-height:1.1">Mosaic</div>
           ${s.w && s.tw ? `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-top:2px">Week ${s.w} of ${s.tw}${s.wks?.[s.w-1]?.ph ? ` · ${s.wks[s.w-1].ph.charAt(0).toUpperCase() + s.wks[s.w-1].ph.slice(1)}` : ''}</div>` : ''}
         </div>
-        <button id="home-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button id="home-injured-btn" style="height:32px;padding:0 10px;border-radius:16px;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;cursor:pointer;color:var(--c-black);font-family:var(--f)">🩹 Report Injury</button>
+          <button id="home-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
+        </div>
       </div>
 
       ${buildProgressBars(s)}
@@ -693,6 +750,11 @@ function wireHomeHandlers(): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
+  // Injured button
+  document.getElementById('home-injured-btn')?.addEventListener('click', () => {
+    import('./injury/modal').then(({ openInjuryModal }) => openInjuryModal());
+  });
+
   // Start workout button
   document.getElementById('home-start-btn')?.addEventListener('click', (e) => {
     const workoutId = (e.currentTarget as HTMLElement).getAttribute('data-workout-id');
@@ -714,12 +776,22 @@ function wireHomeHandlers(): void {
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
 
-  // Injury risk row → injury modal (if injured) or ACWR reduction (if load spike)
+  // Injury risk row → injury modal (if injured), reduce/replace modal (if ACWR elevated),
+  // or Stats page (if load is safe — excess-load-card in plan view handles pending adjustments).
   document.getElementById('home-injury-risk-row')?.addEventListener('click', () => {
     if (isInjuryActive()) {
       import('./injury/modal').then(({ openInjuryModal }) => openInjuryModal());
     } else {
-      import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
+      const s = getState();
+      const tier = s.athleteTierOverride ?? s.athleteTier;
+      const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
+      if (acwr.status === 'caution' || acwr.status === 'high') {
+        import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
+      } else {
+        // ACWR is safe — navigate to Stats so user can see their load in context.
+        // Any pending plan adjustments are shown in the Plan tab via excess-load-card.
+        import('./stats-view').then(({ renderStatsView }) => renderStatsView());
+      }
     }
   });
 
@@ -730,6 +802,11 @@ function wireHomeHandlers(): void {
 
   // Sparkline → Stats tab
   document.getElementById('home-sparkline')?.addEventListener('click', () => {
+    import('./stats-view').then(({ renderStatsView }) => renderStatsView());
+  });
+
+  // TSS row → Stats tab (see activity breakdown)
+  document.getElementById('home-tss-row')?.addEventListener('click', () => {
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   });
 

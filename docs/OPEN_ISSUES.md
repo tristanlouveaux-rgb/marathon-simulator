@@ -81,10 +81,9 @@ general sport placeholders and adhoc additions. Fixed in `home-view.ts`.
 
 ## P1 — Bugs (broken or actively misleading)
 
-### ISSUE-53: Moving a workout on the Plan tab does not update the Home view
-**Symptom**: Drag-and-drop reordering on the Plan tab updates `wk.workoutMoves` and re-renders the plan, but the Home tab still shows the workout at its original scheduled day. Today's session card and the day timeline on Home are not recalculated on re-render after a move.
-**Root cause**: Home view reads the default generated workouts without applying `wk.workoutMoves`. The plan view applies moves during `getPlanHTML` but Home view (`buildTodayCard` / equivalent) does not.
-**Priority**: P1 — confusing when user reschedules today's session and home still shows the old one.
+### ✅ ISSUE-53: Moving a workout on the Plan tab does not update the Home view *(fixed 2026-03-05)*
+**Root cause**: `buildTodayWorkout` and `buildNoWorkoutHero` in `home-view.ts` applied `workoutMods` but not `workoutMoves`. Today's session was found by `dayOfWeek` before moves were applied.
+**Fix**: Added `workoutMoves` loop (identical to plan-view.ts) in both `buildTodayWorkout` and the "next workout" finder in `buildNoWorkoutHero`.
 
 ---
 
