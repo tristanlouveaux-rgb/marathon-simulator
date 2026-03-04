@@ -4,6 +4,312 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-05 — Issue batch 1: deload week check-in guard + doc fixes
+
+- **ISSUE-54** (already resolved): Confirmed duplicate "Running Fitness" sections in suggestion modal were removed in 2026-03-04 jargon cleanup. No code change needed.
+- **ISSUE-17**: `main-view.ts` + `plan-view.ts` — benchmark panel now returns `''` on deload weeks. Added `isDeloadWeek` + `abilityBandFromVdot` checks to `renderBenchmarkPanel` / `buildBenchmarkPanel`. Hard efforts (threshold, speed, race sim) never presented on recovery/deload weeks.
+
+## 2026-03-04 — Stats chart fixes: single area, range slicing, Monday anchoring, near-zero fallback, Signal A running chart
+
+- **Fix 1** `buildLoadHistoryChart`: removed fake aerobic/intensity split (was hardcoded 88%/12% when zone data absent). Replaced with a single clean blue area (`rgba(99,149,255)`). Legend simplified to "Total load (all sports)" + ref line entries only.
+- **Fix 2** `getChartData`: range slicing now applied before appending current week — `8w` slices to last 8, `16w` to last 16, `all` unsliced. `histWeekCount` reflects the sliced length.
+- **Fix 3** `buildLoadHistoryChart`: week labels now anchored to Monday of the current ISO week. Rightmost label still shows today's date.
+- **Fix 4** `getChartData`: for any of the last 4 hist entries where TSS < 5 (Strava edge fn gap), falls back to live `computeWeekRawTSS` from plan data. Fixes near-zero display for Feb 25 week.
+- **Fix 5** `buildRunningFitnessChart`: replaced flat CTL-only sparkline with weekly Signal A area chart (green). CTL now a dashed reference line overlay. Caption updated. x-axis uses same Monday-anchor.
+
+## 2026-03-04 — Phase 10: Adjust Week button + carry-over card in plan-view
+
+- `plan-view.ts`: Added `buildAdjustWeekRow()` — context-sensitive button ("Adjust week / Review session changes / Resolve X TSS extra load") shown when `hasPendingExcess || hasUnacceptedTimingMods`. Wired to `triggerExcessLoadAdjustment()`.
+- `plan-view.ts`: Added `buildCarryOverCard()` — orange card at top of plan list when `wk.hasCarriedLoad && !wk.carryOverCardDismissed`. Tap → `triggerExcessLoadAdjustment()`; dismiss × → sets `wk.carryOverCardDismissed = true`.
+- `persistence.ts`: Sets `currWk.hasCarriedLoad = true` when unresolved load items are carried from previous week.
+- `excess-load-card.ts`: Exported `triggerExcessLoadAdjustment` so plan-view can import it directly.
+- `home-view.ts`: Removed "Adjust week →" button and its event handler — button now lives exclusively in plan-view. Caption ("You have unresolved cross-training load this week.") retained.
+- `types/state.ts`: Added `hasCarriedLoad?: boolean` and `carryOverCardDismissed?: boolean` to `Week` interface (done in previous session).
+
+## 2026-03-04 — Fix: TSS signal consistency (B1/B2/B3/B5/B6)
+
+- **B1** `home-view.ts` `buildProgressBars`: switched `tssActual` from `computeWeekTSS` (Signal A) to `computeWeekRawTSS` (Signal B) — home load bar now shows honest total physiological load per PRINCIPLES.md
+- **B2** `stats-view.ts` `getChartData`: 8-week Training Load chart now uses Signal B throughout. Uses `historicWeeklyRawTSS` when available, falls back to `historicWeeklyTSS × 1.4` proxy (PRINCIPLES.md sanctioned). Eliminates false spike caused by stitching Signal A history with Signal B current week.
+- **B3** `home-view.ts` `buildSignalBars`: added same `atlSeed` inflator as `buildAdvancedSection` in `stats-view.ts`. Home and Stats now compute ACWR identically — closes ISSUE-55.
+- **B5** `plan-view.ts`: switched `_actualTSS` (plan load line) from Signal B to Signal A — both sides of "X planned · Y so far" are now run-equivalent, apples-to-apples.
+- **B6** `stats-view.ts`: renamed "Zones" tab to "Running Zones" — makes clear this chart shows run-derived data only (stays Signal A per design).
+
+## 2026-03-04 — Fix: TSS double-count in computeWeekRawTSS (ISSUE-42)
+
+- **Bug fix** `fitness-model.ts` `computeWeekRawTSS()`: added `seenGarminIds` Set to deduplicate
+  across all three sources (`garminActuals`, `adhocWorkouts`, `unspentLoadItems`). Previously,
+  after a cross-training session was approved via the suggestion modal it landed in `adhocWorkouts`
+  AND contributed to `wk.actualTSS`; `computeWeekRawTSS` (called by Stats page and ACWR) would
+  then recount it from `adhocWorkouts`, inflating the displayed TSS by ~28–40 TSS for a typical
+  tennis/HIIT session. The dedup check strips the `garmin-` prefix from adhoc workout IDs to
+  match the raw garminId stored in `garminActuals` and `unspentLoadItems`.
+
+## 2026-03-04 — Phase 8 + 9: Tier 1 auto-reduce + Tier 2 card reframe
+
+- **New** `getWeeklyExcess(wk, baseline, planStartDate)` exported from `fitness-model.ts`:
+  Signal B total for the week minus `signalBBaseline`. Returns 0 if no baseline set.
+- **Tier 1 auto-reduce** (`activity-review.ts` `autoProcessActivities`): when excess ≤ 15 TSS
+  above baseline, the nearest unrated easy run is silently reduced (distance via ~5.5 TSS/km at
+  RPE4). Stores `WorkoutMod` with `modReason: "Auto: …"` and `autoReduceNote`. `unspentLoadItems`
+  remain in state so undo works.
+- **Plan card** (`plan-view.ts`): auto-reduced easy runs show a note row below the card header
+  with the reduction summary and an **Undo** button. Undo removes all `Auto:` mods; excess card
+  reappears automatically.
+- **Tier 2 card** (`excess-load-card.ts`): hidden when Tier 1 `Auto:` mod exists; hidden when
+  excess is <15 TSS or >40 TSS (baseline known); label reframed to `"X TSS above your usual
+  weekly load"` instead of `"X TSS unspent"`.
+- **`WorkoutMod`** interface: added optional `autoReduceNote?: string`.
+
+## 2026-03-04 — Phase 7: Timing check — day-proximity quality session downgrade
+
+- **New** `src/cross-training/timing-check.ts`: `applyTimingDowngradesFromWorkouts()` scans
+  each unrated quality session (threshold/vo2/long) and checks if a Signal B ≥ 30 TSS activity
+  was completed the day before (dayOfWeek - 1 mod 7). If so, generates a WorkoutMod:
+  threshold → marathon pace, vo2 → threshold, long → −15% km (if Signal B ≥ 50 TSS).
+  `mergeTimingMods()` integrates with state — generates workouts via `generateWeekWorkouts`,
+  replaces old Timing: mods in `wk.workoutMods`, returns true if anything changed.
+- **Wired** into `activitySync.ts` and `stravaSync.ts`: `mergeTimingMods()` called after each
+  sync, saves state only when mods changed.
+- **Plan card** (`plan-view.ts`): amber badge "Adjusted — hard session yesterday" shown on
+  affected unrated quality sessions. Expanded detail panel shows explanation + adjusted pace
+  label + "Move this session to a different day for full intensity." note.
+- Mods are computed fresh every sync — automatically clear when activity or session is rescheduled.
+- modReason in `wk.workoutMods` now also patched onto workout object during `getPlanHTML()`.
+
+## 2026-03-04 — Signal B baseline: edge function + state fields
+
+- **Edge function** (`sync-strava-activities`): `history` mode now returns `rawTSS` (Signal B)
+  alongside existing `totalTSS` (Signal A). New `getRawFallbackTSS()` computes raw physiological
+  load without runSpec discount for no-HR activities. Sport breakdown now includes `rawTSS` and
+  `sessionCount` per sport per week. Deployed to `elnuiudfndsvtbfisaje`.
+- **State** (`src/types/state.ts`): Added `historicWeeklyRawTSS`, `signalBBaseline`,
+  `sportBaselineByType` fields.
+- **Client** (`src/data/stravaSync.ts`): `fetchStravaHistory()` now populates all three new
+  state fields. `signalBBaseline` = simple 8-week average of raw weekly TSS. `sportBaselineByType`
+  = per-sport avg session rawTSS + sessions/week (Phase 2 calibration data, not yet consumed).
+  Backward-compatible: `rawTSS ?? totalTSS` fallback if old edge fn cached response used.
+- **Closes ISSUE-52** (Signal B edge function gap). ISSUE-51 (v2 rebuild) next.
+
+## 2026-03-04 — Cross-training load management v2 design
+
+- **Design session**: Diagnosed and documented the reduce/replace logic gaps (ISSUE-51, ISSUE-52).
+- **PRINCIPLES.md**: Added "Cross-Training Load Management — Excess & Reduction Logic" section
+  with three-tier response model, Signal B baseline definition, timing sensitivity rules,
+  high-intensity sport handling, quality session independence, and "Adjust Week" UX moment.
+- **FEATURES.md**: Added §18b spec for full v2 rebuild — not yet built.
+- **OPEN_ISSUES.md**: Added ISSUE-51 (v2 rebuild), ISSUE-52 (Signal B edge function gap).
+
+## 2026-03-04 — VDOT bug fix + history display
+
+- **physioAdj clamp** (`events.ts`): All code paths that set `s.physioAdj` now clamp the value to `Math.max(-5.0, rawAdj)`. A physioAdj below -5.0 is implausible and was causing VDOT to drop 2.5 pts when stale LT data triggered `applyAutoLTUpdate`.
+- **`applyAutoLTUpdate` warning log**: Added `console.warn` when the clamp fires so debugging is easier in future.
+- **`syncPhysiologySnapshot` LT sanity check** (`physiologySync.ts`): If the Garmin-supplied `lt_pace_sec_km` would imply a VDOT more than 8 pts from `s.v`, it is silently skipped and logged. Prevents stale Garmin LT measurements from corrupting `s.lt`.
+- **VDOT history** (`state.ts`, `events.ts`): Added `vdotHistory?: Array<{week, vdot, date}>` to `AppState`. `recordVdotHistory()` helper appended after every VDOT-changing event: `rate()` (when RPE changes VDOT), `applyAutoLTUpdate()`, `updateFitness()`, `recordBenchmark()`, and `next()` (week advance). Capped at last 20 entries.
+- **VDOT sparkline + change note** (`stats-view.ts`): `buildFoldedPaces` now shows a SVG sparkline of `vdotHistory` below the VDOT number. Shows colour-coded change note: "↓ X pts since [date]" or "↑ X pts" or "Steady". Helpers: `buildVdotSparkline()`, `buildVdotChangeNote()`.
+- **VDOT info button** (`stats-view.ts`): Added `buildInfoIcon('vdot')` next to "Current VDOT" label. Tapping reveals an inline explanation. Added `'vdot'` entry to `INFO_TEXTS`.
+
+---
+
+## 2026-03-03 — Signal A/B round 2: narrative/bar fixes, ATL seed, dual badge
+
+- **Narrative sentence** switched to Signal B (`computeWeekRawTSS`) — drives "should I rest?" decisions, must use raw fatigue not running-equiv
+- **"Total Load vs Plan" bar** in Advanced: switched to Signal B, renamed, added "Includes runs, gym & cross-training at full physiological weight" note
+- **Load chart current week**: Signal B; historical bars remain Signal A (edge fn deferred); legend footnote explains the mix
+- **ATL seed split**: `computeFitnessModel` + `computeACWR` now take optional `atlSeed` param. Callers pass `ctlBaseline × (1 + 0.1 × gymSessions)` capped at 1.3×. Cross-training-heavy athletes start with elevated ACWR from day 1
+- **"This Week" card**: sub-label → "vs your running base"; no-baseline label → "total load (runs + gym + sport)"
+- **Plan-view badge**: shows `X run · Y total` when Signal B > Signal A × 1.15; `title` tooltip explains both numbers
+
+---
+
+## 2026-03-03 (continued) — Garmin physiology pipeline fixes + all-time Max HR
+
+- **`sync-physiology-snapshot` response shape changed** — now returns `{ days, maxHR }` envelope; `maxHR` is the all-time peak across all `garmin_activities` (Garmin + Strava), not today's daily value.
+- **`physiologySync.ts` updated** — `callEdgeFunction` typed as `PhysiologyResponse`; `data.maxHR` applied to `s.maxHR` (replaces per-day `latest.max_hr`); `rows` extracted from `data.days`.
+- **Physiology charts: min 3 data points** — `miniChart()` in both `main-view.ts` and `stats-view.ts` now shows "Building history…" until 3+ valid values exist (was 2).
+
+---
+
+## 2026-03-03 — Signal A/B load model split + stats two-chart redesign
+
+- **`computeWeekRawTSS()` added** (`fitness-model.ts`) — Signal B function: same as `computeWeekTSS` but removes `runSpec` discount from adhoc cross-training and unspent load items. Skips `actualTSS` fast-path (stored value is Signal A). Raw iTRIMP for garminActuals unchanged.
+- **`computeFitnessModel()` ATL split** — CTL now uses Signal A (run-equivalent, `computeWeekTSS`); ATL now uses Signal B (total physiological, `computeWeekRawTSS`). ACWR ratio = Signal B fatigue / Signal A fitness. Cross-training weeks now correctly raise ACWR.
+- **`FitnessMetrics` extended** — added `rawTSS: number` field (Signal B for each week).
+- **`strength` runSpec 0.30 → 0.35** (`sports.ts`) — compound leg work has partial but real transfer to running; Signal B (ATL) is unaffected by runSpec.
+- **Stats: Running Fitness chart** (`stats-view.ts`) — new `buildRunningFitnessChart()` renders a green CTL sparkline below the summary cards. Shows current CTL value + trend arrow.
+- **Stats: This Week card** — switched `currentTSS` to `computeWeekRawTSS` (Signal B — honest total week fatigue).
+- **Stats: Advanced labels** — "Fitness (CTL)" → "Running Fitness (CTL)" + sub-label "run-equivalent · 42-day avg"; ATL sub-label "total load · 7-day avg"; updated ⓘ tooltips explaining Signal A/B split.
+- **Stats: CTL range card** — new gradient bar (0–120 scale) in Advanced section showing Beginner/Recreational/Trained/Performance/Elite bands with verbal explanation.
+- **Stats: Legend rename** — "Aerobic TSS" → "Aerobic (all sports)"; "Anaerobic TSS" → "High intensity".
+- **Plan view: week TSS badge** — completed week headers now show a muted `XX TSS` chip (Signal A, run-equivalent). Future weeks show nothing.
+- **`docs/PRINCIPLES.md`** — added Initialization Principle section (aerobic base gap, Signal B history gap TODO, conversion framing).
+- **`docs/LOAD_MODEL_PLAN.md`** — created tracking document with per-phase status, testing instructions, and deferred items.
+
+---
+
+## 2026-03-03 — Garmin physiology card: all 6 metrics, trend arrows, tap-to-expand graph
+
+- **Physiology card rewritten** (`renderPhysiologyCard` in `main-view.ts`) — now shows all 6 Garmin metrics: Resting HR, Max HR, HRV (RMSSD), VO2max, LT Pace, LT Heart Rate. Each metric conditionally renders only when data is present.
+- **Trend arrows** — each metric compares latest value against the 7-day rolling average and shows a coloured ↑/↓ arrow (green = improving, red = declining; direction aware of whether higher is better per metric).
+- **Dot sparkline** — existing 7-dot history row kept; dot size encodes relative position in range.
+- **Tap-to-expand SVG chart** — each metric row is a `<details>/<summary>` element. Tapping opens an inline SVG polyline chart of the 7-day history with date labels.
+- **`PhysiologyDayEntry` extended** (`state.ts`) — added `maxHR`, `ltPace`, `ltHR` fields.
+- **History mapping updated** (`physiologySync.ts`) — maps `max_hr`, `lt_pace_sec_km`, `lt_heart_rate` from edge fn response into history entries.
+- **`buildFoldedRecovery` updated** (`stats-view.ts`) — adds Max HR, LT Pace, LT HR to the 2-column metrics grid in the stats Recovery & Physiology fold.
+
+---
+
+## 2026-03-03 — Garmin pipeline: critical 401 fix, resolveUserId fallback, LT heart rate wired through
+
+- **Root cause: garmin-webhook returning 401 on every Garmin push** — Supabase edge functions require a JWT by default. Garmin Health API is an external server with no Supabase JWT, so every webhook POST was rejected with 401 before reaching any code. All Garmin data (dailies, sleeps, userMetrics) has been silently dropped. Redeployed `garmin-webhook --no-verify-jwt` to allow unauthenticated POSTs from Garmin's servers.
+- **`resolveUserId` fallback** — added `access_token` secondary lookup in case `garmin_user_id` was never stored by auth callback (silent try/catch failure). Now tries stable Garmin user ID first, then OAuth token.
+- **LT heart rate wired through** — `physiology_snapshots.lt_heart_rate` was stored by webhook but never queried. Added to `sync-physiology-snapshot` select, `PhysiologyRow` interface, `PhysiologySnapshot` return type, state assignment (`s.ltHR`), and `SimulatorState.ltHR`.
+
+---
+
+## 2026-03-03 — TSS: fix carry-over unspentLoadItems inflating current week load
+
+- **`unspentLoadItems` date attribution fixed** — items carried over from previous weeks (via `loadState` carry-over logic) were being counted in the current week's `computeWeekTSS`, inflating TSS (e.g. 170 shown vs ~30 actual). Added `planStartDate?` param to `computeWeekTSS`, `computeFitnessModel`, and `computeACWR`. When provided, `unspentLoadItems` are filtered to only those whose `date` falls within the week's 7-day window (`planStartDate + (w-1)*7` to `+7`). Carry-over items retain their original dates so they correctly contribute to the week they occurred in. All callers updated to pass `s.planStartDate`.
+- **ACWR now correctly elevated by historic overflow** — week 2's overflow load (Tennis, Bouldering, Run) now counts in week 2's TSS → ATL is appropriately elevated going into week 3 → ACWR suggests reducing if needed.
+
+---
+
+## 2026-03-03 — Home view: fix session count, make TSS row tappable
+
+- **Session count bug fixed** — "Sessions" in the "This Week" card was always 0 when activities were synced from Strava/Garmin, because it only counted `wk.rated` entries (RPE ratings). Strava/Garmin sync writes to `wk.garminActuals` and sets `wk.actualTSS` without touching `wk.rated`, causing TSS to be e.g. 131 while sessions showed 0. Fixed: `sessionsDone` now takes the max of synced sessions (`wk.garminActuals` keys + garmin-/strava-prefixed adhocWorkouts) and rated sessions, so whichever source has data wins.
+- **TSS row tappable** — "Training Load (TSS)" row in the "This Week" card now navigates to the Stats tab on tap, so users can see the activity breakdown that makes up that number. Added a subtle → arrow indicator.
+
+---
+
+## 2026-03-03 — History mode dedup: fix Garmin+Strava double-counting
+
+- **Double-counted activities fixed** — `history` mode in `sync-strava-activities` was summing both the Garmin webhook row (`garmin_id = "12345"`, no iTRIMP) and the Strava backfill row (`garmin_id = "strava-12345"`, with iTRIMP) for the same physical workout. Added a deduplication pass over the sorted rows: activities with start times within 2 minutes are collapsed into one, keeping the row with iTRIMP (Strava-processed) over the duration-fallback Garmin row. Logs `[History] Deduped N duplicate rows` when overlap is detected. This was inflating the peak week TSS (712 shown vs ~465 expected).
+
+---
+
+## 2026-03-03 — Garmin pipeline fixes: resolveUserId fallback, LT heart rate wired through
+
+- **`resolveUserId` silent-drop bug fixed** — webhook `resolveUserId` only looked up by `garmin_user_id`. If the auth callback's `/user/id` fetch failed (swallowed by try/catch), `garmin_user_id` was never stored → every incoming webhook payload resolved to `null` → all Garmin data silently dropped (webhook still returns 200 to avoid Garmin retries). Added `access_token` fallback: if `garmin_user_id` lookup misses, tries `.eq("access_token", identifier)` so data is matched even without the stable Garmin user ID.
+- **LT heart rate wired through** — `physiology_snapshots.lt_heart_rate` (stored by webhook's `handleUserMetrics`) was never queried. Fixed `sync-physiology-snapshot` edge function to select and return it. Added `lt_heart_rate` to `PhysiologyRow` in `physiologySync.ts` and apply to `s.ltHR`. Added `ltHR?: number` to `SimulatorState`.
+- **`PhysiologySnapshot` return type updated** — `ltHR: number | null` added alongside existing `vo2`, `restingHR`, `maxHR`, `ltPace`.
+
+---
+
+## 2026-03-03 — Stats chart: Y-axis scale, peak annotation, distance chart range fix; backfill HR rounding fix
+
+- **Y-axis TSS scale** — load history chart now shows TSS value labels (e.g. 100, 200, 300…) as absolute-positioned HTML overlays on the chart. Labels use rounded tick steps based on the max value so they're always legible.
+- **Peak week annotation** — the highest-TSS week in the chart now shows its TSS value in orange above the peak (e.g. "465 TSS"). Makes it easy to verify spikes visually.
+- **Distance chart respects range** — `buildDistanceAreaChart` now accepts `range` param; when 16w/All is selected in the main range toggle, the distance chart in "Dig deeper" uses `extendedHistoryKm` instead of the 8-week `historicWeeklyKm`. Switching the range also refreshes the distance chart.
+- **Backfill HR float bug fixed** — Strava returns `average_heartrate` and `max_heartrate` as floats (e.g. `120.1`) but `garmin_activities.avg_hr/max_hr` are `smallint`. Every backfill upsert for 74 activities was failing with "invalid input syntax for type smallint". Now rounds to `Math.round()` in all three upsert paths (step 6 full-stream, step 7 avg-HR batch, standalone). Edge function deployed.
+
+## 2026-03-03 — Strava history: actual HR zone data for chart accuracy (round 4)
+
+- **History mode uses real HR zone data** — the history mode query now fetches `hr_zones` and uses the actual per-second zone distribution (z1-z5) when available, instead of always estimating from TSS/hr intensity. For activities processed with full Strava HR streams (most runs), the chart now accurately shows exactly how much time was spent in each zone. Falls back to `estimateZoneProfile` for activities that only have avg_heartrate.
+- **Debug log enhanced** — zone classification source now shown in `[History:row]` logs as `(hr)` for actual zones or `(est)` for estimated.
+- **MOUNTAIN_BIKING type fixes** — `getRunSpec` now correctly returns 0.55 (was falling through to 0.40 generic since "MOUNTAIN_BIKING" doesn't contain "CYCLING" or "RIDE"). `getSportLabel` now returns "cycling" instead of "other". `getDurationFallbackTSS` now 0.40 TSS/min explicitly (same as road cycling).
+- **Edge function deployed** (`sync-strava-activities`).
+
+---
+
+## 2026-03-03 — Strava history: diagnostics, zone classification fix, and backfill improvements (round 3)
+
+- **`rawTSS` bug fixed** — history mode crashed with `ReferenceError: rawTSS is not defined` on line 434 due to variable rename during Load System refactor. Every history fetch since that commit was silently failing → chart was stuck on old cached state.
+- **All-zero hr_zones no longer blocks re-processing** — activities stored without HR data get `{z1:0,…z5:0}` in DB which is truthy, so they were stuck in `cachedWithZones` forever. Backfill now checks if zone values sum > 0; all-zero → `cachedBasic` so next backfill re-attempts avg_heartrate iTRIMP.
+- **Standalone + backfill upserts store `hr_zones: null`** instead of all-zero object when no HR stream is available — prevents future stuck activities.
+- **Zone classification uses raw (pre-rs-discount) iTRIMP intensity** — previously, HIIT/Hyrox/climbing showed as aerobic because their rs-discounted equivTSS/hr was < 70. Now `estimateZoneProfile` uses raw iTRIMP TSS/hr so high-intensity cross-training correctly shows orange (anaerobic) bars.
+- **`cachedBasic` skip fix** — activities in DB without iTRIMP were permanently skipped on re-backfill; now only skip if `cachedBasic` AND has iTRIMP.
+- **`activity_name` saved** — added to standalone and both backfill upserts so iTRIMP calibration can work.
+- **Activity type re-upsert in backfill** — new step 8 force-updates `activity_type` + `activity_name` for ALL Strava activities, fixing stale types stored by old edge fn versions (e.g. `CARDIO` → `BACKCOUNTRY_SKIING`).
+- **Per-week Strava log** — backfill now logs `[Backfill:strava] Week YYYY-MM-DD: N activities` for every week Strava API returns, enabling direct comparison with DB history to find gaps.
+- **Per-activity history log** — history mode logs every activity with type, duration, iTRIMP, equivTSS, zone classification.
+- **`backfillStravaHistory` populates extended history** — after a 16-week backfill, `extendedHistoryTSS/Km/Zones` are also populated so the stats "16w" button works immediately without a second round-trip.
+- **`historicWeeklyTSS` trimmed to last 8 weeks** after backfill (extended history holds the full 16w).
+- **Startup threshold raised** — auto-backfill triggers when `historicWeeklyTSS.length < 8` (was < 3).
+
+---
+
+## 2026-03-03 — Fix silent upsert failures blocking backfill from storing activities
+
+- **Root cause identified** — `activity_name` column included in all `garmin_activities` upserts (standalone + backfill modes) but the DB migration had not been applied to production. Supabase returns an error from upsert but without error checking the code silently incremented the counter and continued, so every backfill "processed" 79 activities without storing any.
+- **Fix** — removed `activity_name` from all upserts in both standalone and backfill modes. Added explicit error checking (`const { error } = await supabase.upsert(...)`) with `console.error` so future failures are visible in edge function logs.
+- **Calibrate mode guarded** — if the `activity_name` column is missing, calibrate returns `[]` instead of a 500 error.
+- **Standalone mode fixed** — also removed `activity_name` from SELECT cache query and single-column backfill update; upsert errors now logged.
+- **Edge function deployed** — `sync-strava-activities` redeployed. On next backfill run, activities will actually persist to DB and history will expand beyond 2 weeks.
+- **Migration note** — `20260302_activity_name.sql` still needs to be applied via the Supabase Dashboard SQL editor to re-enable calibrate mode. One-liner: `ALTER TABLE garmin_activities ADD COLUMN IF NOT EXISTS activity_name text;`
+
+---
+
+## 2026-03-03 — Strava history backfill: fetch 16 weeks of real HR-based load
+
+- **New edge function `backfill` mode** — fetches all Strava activities for the last 16 weeks (paginated), detects HR monitor usage, fetches full HR streams for most-recent ≤99 uncached activities (staying within Strava's 100 req/15 min limit), uses `avg_heartrate → calculateITrimpFromSummary` for the rest. All results upserted to `garmin_activities`.
+- **`backfillStravaHistory(weeks)`** in `stravaSync.ts` — client wrapper that calls `backfill` mode then re-runs `fetchStravaHistory` to refresh state. Idempotent (already-cached activities skipped).
+- **Auto-trigger on startup** — `main.ts` now calls `backfillStravaHistory(16)` instead of `fetchStravaHistory(8)` when Strava connected + history not yet fetched.
+- **Account view buttons** — "Load History" and "Refresh History" buttons both now call `backfillStravaHistory(16)`. Refresh no longer needs to reset `stravaHistoryFetched` flag.
+
+---
+
+## 2026-03-03 — Load history chart now shows full training timeline (pre-plan history + plan weeks)
+
+- **Full timeline in load chart** — `getChartData` in `stats-view.ts` now includes ALL completed plan weeks (real `garminActuals` data) between the pre-plan Strava history and the current week. Previously the chart skipped plan weeks 1..s.w-2, showing only Strava history + current week.
+- **Strava overlap trimmed** — Strava history weeks that fall inside the plan period are stripped (the plan week actuals are more accurate); only genuinely pre-plan Strava weeks are prepended.
+- **Distance chart aligned** — `buildDistanceAreaChart` applies the same logic so the distance view also reflects completed plan km.
+- **`NON_RUN_KW_CHART` extracted** — moved to module-level constant and shared by `getChartData` / `buildDistanceAreaChart` via a `runKmFromWeek()` helper.
+
+---
+
+## 2026-03-03 — Chart polish: labels, baseline reliability, 16w "no history" state
+
+- **Home page bar labels readable** — "Sessions / Distance / Training Load (TSS)" labels changed from `text-[10px] color:faint` (invisible on mobile) to `text-[11px] color:muted`
+- **CTL reference lines hidden until 4+ weeks** — "Your usual" and "Ease back" lines now only show when `histWeekCount >= 4`; below that a note explains "Baseline builds from week 4 — reference lines will appear then". Prevents misleading tiny-CTL reference lines from a 2-week history.
+- **"Your usual" legend shows week count** — label now reads "Your usual (8wk avg)" so users understand what it's based on
+- **16w/All shows "no more history" message** — when extended fetch returns same or fewer weeks as the 8w default, chart stays as-is and an inline note shows "X weeks synced so far — more history will appear as you keep training"
+- **Zone alignment bug fixed** — `historicWeeklyZones` could be undefined from old state, causing zones array misalignment with TSS array (wrong bar getting coloured). `getChartData` now pads zones to exactly match TSS length with `null` entries; chart uses 88% aerobic fallback for null entries
+- **Minimum intensity floor** — aerobic TSS is capped at 88% of total to ensure the orange (anaerobic) layer is always visually detectable, even for easy-only training weeks where zone estimation gives 99% aerobic
+
+---
+
+## 2026-03-03 — Load history chart fixes + distance area chart
+
+- **Chart labels fixed** — all charts (load history, distance, zone) now show real calendar dates computed backwards from today, not plan week offsets. Historic Strava data shows correct calendar weeks.
+- **TSS units labelled** — load chart legend now says "Aerobic TSS" / "Anaerobic TSS"
+- **Reference lines labelled clearly** — legend now has two separate entries with matching dashed-line icons: "Your usual" (dark dashed) and "Ease back" (amber dashed), replacing the confusing combined label
+- **Distance chart → smooth area** — Dig Deeper distance tab converted from bar chart to smooth stacked area chart (same style as load history); shows running km vs plan target reference line; calendar dates on x-axis
+- **Zone bar initial state fixed** — Training tab TSS + Volume bars no longer show as solid red blocks on first render; parent background now provides the danger-zone colour and the `flex-1` fill div is removed
+
+---
+
+## 2026-03-02 — Spec gaps addressed + Load History Chart
+
+- **Load History Chart (§12.9)** — stacked area SVG chart on Stats page replacing bar chart; aerobic (base+threshold, blue) / anaerobic (intensity, orange) areas; smooth bezier curves; time range selector (8w / 16w / All) fetches extended history on demand; CTL baseline + ease-back reference lines; dig-deeper accordion now shows distance/zones only
+- **`historicWeeklyZones` stored** — `fetchStravaHistory()` now persists zone breakdown (base/threshold/intensity) per week; `fetchExtendedHistory()` added for 16w/52w on-demand fetches
+- **Minimum running km floors (§5.6)** — goal-time-scaled weekly floor (sub-3:30 → 35km peak, 3:30–4:30 → 25km, 4:30+ → 18km); linear ramp early→peak; nudge shown in volume bar after 2 consecutive weeks below floor
+- **5-rule plain language reduction logic (§8)** — ACWR modal header now picks specific copy based on: consecutive intensity weeks (Rule 4), cross-training cause (Rule 3), km spike (Rule 2), intensity-heavy week (Rule 1), or general load buildup (Rule 5); `ACWRModalContext` extended with `kmSpiked`, `crossTrainingCause`, `consecutiveIntensityWeeks`
+- **"Already completed" + "no matching run" modal flows (§6.5)** — `SuggestionPayload` gains `alreadyCompletedMatch` and `noMatchingRun` fields; `buildCrossTrainingPopup` detects these edge cases; modal renders contextual panel with [Apply to next week] / [Log load only] buttons
+- **Supabase deployment** — `supabase/migrations/20260302_activity_name.sql` applied; edge function redeployed with `history` / `calibrate` / `standalone` modes all live
+
+---
+
+## 2026-03-02 — Workout card data restoration (post-UX overhaul)
+
+The new plan-view/activity-detail UI dropped several data fields that existed in the old renderer. Restored:
+
+- [x] **TSS badge in Garmin/Strava match banner** — `TSS: XX` shown next to distance/pace/HR; computed from `iTrimp` (HR-based) or falls back to `duration × TL_PER_MIN[rpe]`
+- [x] **Planned vs actual load comparison** — two-row bar in expanded card (planned grey bar vs actual green/amber/red bar); replaces the zone-profile bars when actual data exists; planned zone profile shown as fallback
+- [x] **km splits sparkline inline** — compact vertical-bar chart in the expanded card below HR zones; bars colour-coded green→amber→red by relative pace, inverted so faster = taller
+- [x] **Training effect badges** — aerobic/anaerobic effect (Garmin 1–5 scale) shown as labelled chips ("Maintaining", "Improving", etc.) in both the inline banner and the full-page detail
+- [x] **Training Load section on full-page `activity-detail.ts`** — large TSS figure with HR-based/estimated label, planned vs actual bars + diff % when `plannedTSS` is passed from the call site; training effect chips below
+
+---
+
+## 2026-03-02 — ACWR-aware week generation + iTRIMP calibration
+
+- `types/state.ts`: Added `Week.scheduledAcwrStatus?` — stores ACWR status at week-advance time so the generator can be seeded without recomputing
+- `ui/events.ts`: `next()` now sets `nextWk.scheduledAcwrStatus` ('high'/'caution') alongside `weekAdjustmentReason`; clears it when ACWR is safe
+- `ui/main-view.ts`: All three `generateWeekWorkouts()` calls for the current week now pass `wk.scheduledAcwrStatus` — workouts are actually reduced (not just the banner) when ACWR is elevated
+- `supabase/migrations/20260302_activity_name.sql`: Added `activity_name` column to `garmin_activities`
+- `supabase/functions/sync-strava-activities/index.ts`: Saves `act.name` (Strava workout title) on upsert; new `calibrate` mode returns individually-labelled running activities for iTRIMP threshold calibration
+- `data/stravaSync.ts`: Added `calibrateIntensityThresholds(weeks)` — fetches labelled runs, classifies by name keywords, computes personal easy/tempo TSS/hr thresholds, stores on `s.intensityThresholds`; automatically called (non-blocking) at end of `fetchStravaHistory()`
+- `ui/stats-view.ts`: Added `buildCalibrationStatus()` — shows calibration count in Advanced section ("Calibrating…" / "Calibrated from N sessions")
+
 ## 2026-03-01 — Recovery Check-In Feature
 
 - `recovery/engine.ts`: Added `rmssdToHrvStatus(rmssd)` — maps RMSSD (ms) to `'balanced'|'low'|'unbalanced'|'strained'`; exported
