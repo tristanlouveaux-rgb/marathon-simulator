@@ -203,6 +203,10 @@ export function showSuggestionModal(
       // Rule 5 — trailing zone mix / general
       zoneAdvice = `Your load has built quickly. The safest cut is your longest run — it carries the most volume. Keep quality sessions if your intensity ratio is within range.`;
     }
+    // Human-consequence headline: what does pctAbove actually mean for the athlete?
+    const humanConsequence = status === 'high'
+      ? `You've been training ${pctAbove}% harder than usual this week. Your body needs extra recovery before your next hard effort.`
+      : `This week is running ${pctAbove}% above your normal load. Recovery between sessions matters more than usual.`;
     return `
       <div style="padding:16px 20px 0">
         <div style="${statusBg};border-radius:10px;padding:14px 16px;margin-bottom:4px">
@@ -210,11 +214,9 @@ export function showSuggestionModal(
             <svg style="width:14px;height:14px;${statusTextColor};flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
             </svg>
-            <span style="font-weight:600;${statusTextColor};font-size:14px">${status === 'high' ? 'Load spike detected' : 'Load increasing quickly'}</span>
+            <span style="font-weight:600;${statusTextColor};font-size:14px">${status === 'high' ? 'Heavy training week' : 'Load building up'}</span>
           </div>
-          <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin-bottom:8px">
-            Your ACWR is <span style="font-weight:700;color:var(--c-black)">${ratio.toFixed(2)}×</span> — ${pctAbove}% above your 6-week baseline.
-          </p>
+          <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin-bottom:8px">${humanConsequence}</p>
           <p style="font-size:12px;color:var(--c-faint)">${zoneAdvice}</p>
           <button id="acwr-details-toggle" style="margin-top:10px;font-size:11px;color:var(--c-faint);display:flex;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
             <span id="acwr-details-caret">▸</span> See details

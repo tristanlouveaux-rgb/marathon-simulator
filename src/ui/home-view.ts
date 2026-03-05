@@ -247,15 +247,37 @@ function buildSignalBars(s: SimulatorState): string {
   let riskCaption = 'Keep training consistently to build your baseline.';
   let thumbBorder = 'var(--c-border-strong)';
 
+  // Find top Signal-B contributor this week for risk attribution
+  let topContributorText = '';
+  const wkNow = s.wks?.[s.w - 1];
+  if (wkNow) {
+    // Gather all Signal B contributions: garminActuals + adhocWorkouts
+    const contributions: { name: string; rawTSS: number }[] = [];
+    for (const actual of Object.values(wkNow.garminActuals ?? {})) {
+      const act = actual as any;
+      const tss = act.iTrimp ? Math.round((act.iTrimp * 100) / 15000) : Math.round((act.durationSec ?? 0) / 60 * 0.7);
+      if (tss > 5) contributions.push({ name: act.displayName || 'Run', rawTSS: tss });
+    }
+    for (const w of wkNow.adhocWorkouts ?? []) {
+      const tss = (w as any).iTrimp ? Math.round(((w as any).iTrimp * 100) / 15000)
+        : Math.round((parseInt(((w as any).d ?? '').match(/(\d+)min/)?.[1] ?? '0') || 30) * 0.7);
+      if (tss > 5) contributions.push({ name: w.n || 'Activity', rawTSS: tss });
+    }
+    contributions.sort((a, b) => b.rawTSS - a.rawTSS);
+    if (contributions.length > 0) {
+      topContributorText = ` ${contributions[0].name} (${contributions[0].rawTSS} load) is the biggest driver.`;
+    }
+  }
+
   if (acwr.ratio > 0) {
     // Map 0.6→0% to 1.8→100%
     riskPct = Math.min(100, Math.max(0, Math.round(((acwr.ratio - 0.6) / 1.2) * 100)));
     if (acwr.status === 'high') {
       riskLabel = 'High'; riskLabelColor = 'var(--c-warn)'; thumbBorder = 'var(--c-warn)';
-      riskCaption = 'Your load this week is significantly above your baseline. Shorten or ease remaining sessions.';
+      riskCaption = `Load spike this week.${topContributorText} Tap to adjust your training plan.`;
     } else if (acwr.status === 'caution') {
       riskLabel = 'Elevated'; riskLabelColor = 'var(--c-caution)'; thumbBorder = 'var(--c-caution)';
-      riskCaption = 'You\'ve trained hard this week. Prioritise sleep and keep tomorrow easy.';
+      riskCaption = `You've trained hard this week.${topContributorText} Tap to review your remaining sessions.`;
     } else {
       riskLabel = 'Low'; riskLabelColor = 'var(--c-ok)';
       riskCaption = 'Load is within a safe range. Keep this week\'s plan as-is.';

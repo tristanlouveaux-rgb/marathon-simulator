@@ -124,21 +124,15 @@ add a plain-language sentence.
 
 ---
 
-### ISSUE-09: Injury risk and Reduce/Replace modal are disconnected
-**Symptom**: User sees "Injury Risk: Low" in one place but a scary reduce/replace modal elsewhere.
-No connection between the two.
-
-**Fix**: Injury risk card should summarise what drove the risk this week (per-session contribution)
-and link directly to the reduce/replace action when ACWR is elevated.
+### ✅ ISSUE-09: Injury risk and Reduce/Replace modal are disconnected *(fixed 2026-03-05)*
+**Root cause**: ACWR risk caption in `home-view.ts` gave no context about what drove the spike; no top-contributor attribution.
+**Fix**: `buildSignalBars()` now identifies the top-contributing activity (highest Signal B TSS) from `garminActuals` + `adhocWorkouts`. ACWR caution/high captions include the top contributor name and a "Tap to adjust your training plan" CTA that routes to the suggestion modal.
 
 ---
 
-### ISSUE-10: Reduce/Replace modal copy is too technical
-**Symptom**: "70% aero / 30% anaero", "Balanced runner · Balanced volume/intensity reduction" —
-jargon without context.
-
-**Fix**: Lead with the human consequence. "This session is as taxing as a 25km run.
-Your body needs recovery before your next hard effort." Save the numbers for secondary detail.
+### ✅ ISSUE-10: Reduce/Replace modal copy is too technical *(fixed 2026-03-05)*
+**Root cause**: `acwrHeader` in `suggestion-modal.ts` led with "Your ACWR is 1.45× — 21% above your 6-week baseline" — technical ratio with no human meaning.
+**Fix**: Rewrote to lead with human consequence: "You've been training X% harder than usual this week. Your body needs extra recovery before your next hard effort." ACWR ratio preserved in the expandable "See details" panel. Titles changed to "Heavy training week" / "Load building up".
 
 ---
 
