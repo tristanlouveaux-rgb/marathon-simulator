@@ -2144,8 +2144,8 @@ function updateACWRBar(s: SimulatorState): void {
 
   if (acwr.status === 'unknown' && acwr.ratio === 0) {
     const histLen = (s.historicWeeklyTSS ?? []).length;
-    const baselineMsg = histLen < 3
-      ? 'Building baseline — check back after 3 weeks'
+    const baselineMsg = histLen < 4
+      ? 'Building baseline — check back after a few more weeks'
       : 'Not enough recent data to compute load ratio';
     container.innerHTML = `<p class="text-[10px]" style="color:var(--c-faint)">${baselineMsg}</p>`;
     if (reduceBtn) reduceBtn.classList.add('hidden');

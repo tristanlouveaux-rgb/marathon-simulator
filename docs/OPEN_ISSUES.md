@@ -193,18 +193,13 @@ on error. Does not auto-navigate. Fixed in `plan-view.ts`.
 
 ---
 
-### ISSUE-23: "17w average" hardcoded label bug *(decision resolved 2026-03-04)*
-**Decision**: 8W / 16W / Full tabs stay as-is. "Full" is correct — history will grow beyond 16W as the user keeps using the app. "Full" rename stands.
-**Remaining fix**: Stats bars show "your usual 17w average" — hardcoded week count is wrong. Should say "your running base" or derive dynamically from actual history length.
-**File**: `stats-view.ts`
+### ✅ ISSUE-23: "17w average" hardcoded label bug *(fixed 2026-03-05)*
+Legend label already reads "Your running base" (stats-view.ts line 242). No hardcoded week count visible in current code.
 
 ---
 
-### ISSUE-24: "Building baseline" / "Calibrating intensity zones" shown when data exists
-**Symptom**: App shows baseline/calibration messages even when weeks of Strava data is available.
-
-**Fix**: Gate these messages on actual data absence. If `historicWeeklyTSS.length >= 4`
-and `intensityThresholds` are set, never show these placeholder messages.
+### ✅ ISSUE-24: "Building baseline" / "Calibrating intensity zones" shown when data exists *(fixed 2026-03-05)*
+**Fix**: All "Building baseline" gates raised from `< 3` to `< 4` weeks in `stats-view.ts` and `main-view.ts`. "Calibrating intensity zones" already gated on `thresh.calibratedFrom > 0` (only shows during active partial calibration).
 
 ---
 
