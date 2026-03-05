@@ -499,10 +499,8 @@ User wants a visual bar identical to the home page load bar.
 
 ---
 
-### ISSUE-59: Maintenance gym session on Home — not expandable, poorly labeled *(logged 2026-03-04)*
-**Symptom**: A session labeled "Maintenance" appears on the Home page with no expandable detail and no clear indication it's a gym session.
-**Fix**: Label should read "Maintenance Gym Session". Tapping it should expand to show what the session involves (exercises, load, duration estimate). Consistent with other session cards.
-**Priority**: P2 — unhelpful label, no detail on tap.
+### ✅ ISSUE-59: Maintenance gym session on Home — not expandable, poorly labeled *(fixed 2026-03-05)*
+Gym workout names now get "Gym Session" appended if not already present. Exercises (from `d` field, newline-separated) render as a `<details>` expandable list in the Home card.
 
 ---
 

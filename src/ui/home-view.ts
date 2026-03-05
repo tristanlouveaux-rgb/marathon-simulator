@@ -481,13 +481,20 @@ function buildTodayWorkout(s: SimulatorState): string {
     return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
   }
 
-  const name = (todayW as any).n || 'Workout';
-  const desc = (todayW as any).d || '';
+  const isGym = (todayW as any).t === 'gym';
+  const rawName = (todayW as any).n || 'Workout';
+  // For gym sessions, append "Gym Session" if not already in the name
+  const name = isGym && !rawName.toLowerCase().includes('gym') ? `${rawName} Gym Session` : rawName;
+  const rawDesc = (todayW as any).d || '';
   const distKm = (todayW as any).km || (todayW as any).distanceKm || null;
   const durationMin = (todayW as any).dur || null;
   const rpe = (todayW as any).rpe || null;
   const workoutId = (todayW as any).id || (todayW as any).n;
   const alreadyRated = wk.rated[workoutId] && wk.rated[workoutId] !== 'skip';
+
+  // For gym sessions: render exercises as an expandable list
+  const exercises = isGym && rawDesc ? rawDesc.split('\n').filter(Boolean) : [];
+  const desc = isGym ? '' : rawDesc; // don't show raw desc inline for gym sessions
 
   const metaItems = [
     durationMin ? { val: `~${Math.round(durationMin)} min`, lbl: 'Duration' } : null,
@@ -526,7 +533,17 @@ function buildTodayWorkout(s: SimulatorState): string {
           ${startBtn}
         </div>
         <div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1.05;margin-bottom:5px">${name}</div>
-        <div class="m-text-caption mb-[16px]">${desc}</div>
+        ${desc ? `<div class="m-text-caption mb-[16px]">${desc}</div>` : ''}
+        ${exercises.length > 0 ? `
+        <details class="mb-[16px]" style="cursor:pointer">
+          <summary style="list-style:none;font-size:12px;font-weight:600;letter-spacing:0.04em;color:var(--c-faint);text-transform:uppercase;display:flex;align-items:center;gap:6px">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="transition:transform 0.15s;flex-shrink:0"><path d="M2 3l3 4 3-4"/></svg>
+            Exercises (${exercises.length})
+          </summary>
+          <div style="margin-top:10px;display:flex;flex-direction:column;gap:5px">
+            ${exercises.map((ex: string) => `<div style="font-size:13px;color:var(--c-muted);line-height:1.4;padding-left:4px">• ${ex}</div>`).join('')}
+          </div>
+        </details>` : ''}
         <div class="flex gap-0 items-center pt-[14px]" style="border-top:1px solid rgba(0,0,0,0.09)">
           ${metaHtml}
           <button id="home-view-plan-btn" class="m-btn-link ml-auto pl-[14px]" style="border-left:1px solid rgba(0,0,0,0.09);white-space:nowrap">
