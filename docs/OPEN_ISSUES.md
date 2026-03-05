@@ -98,12 +98,8 @@ general sport placeholders and adhoc additions. Fixed in `home-view.ts`.
 
 ---
 
-### ISSUE-57: Week of 25 Feb still shows near-zero load *(logged 2026-03-04)*
-**Symptom**: After fixes to ISSUE-01 and ISSUE-42, the week of 25 Feb still shows almost no load in the chart. Activities from that week appear to not be contributing to the TSS total.
-**Root cause**: May be the same root cause as ISSUE-42 (historic load bleeding in wrong direction, or activities not being matched to the correct week). Or the week predates the `historicWeeklyTSS` calculation window. Needs investigation.
-**Related**: ISSUE-42 (TSS 97/90 confusion). Both suggest load calculation has systematic errors for certain weeks.
-**Fix**: Add diagnostic logging to `computeWeekRawTSS` to trace which activities are included per week. Verify week boundary calculation.
-**Priority**: P1 — misleading chart, makes recent history look inactive.
+### ✅ ISSUE-57: Week of 25 Feb still shows near-zero load *(fixed 2026-03-05)*
+**Root cause**: The edge function history mode always includes the current in-progress week as the last row. `fetchStravaHistory` was storing all rows (including the partial current week) into `historicWeeklyTSS`. This caused an off-by-one shift: the previous completed week appeared at the wrong position in the chart, and Fix 4's `planWeekIdx` lookup in `getChartData` missed it. **Fix**: Both `fetchStravaHistory` and `backfillStravaHistory` now filter with `r.weekStart < thisMondayISO` before storing to all historicWeekly* arrays and extendedHistory* arrays.
 
 ---
 
@@ -448,12 +444,8 @@ Defer until RPE capture (ISSUE-34) is implemented first.
 
 ---
 
-### ISSUE-42: TSS showing 97/90 after one tennis session (tennis = 69 load)
-**Symptom (2026-03-04)**: After one tennis session, the stats/plan bar showed 97/90 TSS.
-Tennis added 69 load. Where does 97 come from? Either historic load is bleeding into this week,
-the bar is counting something extra, or the calculation is wrong.
-**Additional symptom**: Week of 25 Feb shows near-zero load despite activity data existing (see ISSUE-57 — same root cause suspected).
-**Investigate**: Is `computeWeekRawTSS` double-counting? Is historic Strava load being included?
+### ✅ ISSUE-42: TSS showing 97/90 after one tennis session *(fixed 2026-03-05)*
+**Root cause**: Off-by-one in historicWeeklyTSS (current partial week included, shifting all entries). Combined with ISSUE-68 dedup fix. Both resolved by ISSUE-57 fix.
 
 ---
 

@@ -4,6 +4,10 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-05 — Batch 2: load calc, skip logic, cardiac efficiency, injury link, modal copy, km/mi, phases, plan bar, sync button
+
+- **ISSUE-57/42**: `stravaSync.ts` — `fetchStravaHistory` and `backfillStravaHistory` now filter out the current in-progress week before storing to `historicWeeklyTSS` / `historicWeeklyRawTSS` / `historicWeeklyKm` / `historicWeeklyZones`. The edge function always returns the current partial week; storing it caused an off-by-one shift that made Fix 4 in `getChartData` backfill the wrong plan week. Near-zero load for the most recent completed week is now correctly shown.
+
 ## 2026-03-05 — Bug batch 2: build unblocked, GPS splits, ACWR consistency, recovery bar, TSS dedup
 
 - **ISSUE-64**: Unblocked production build — 42 TS errors → 0. `tsconfig.json` now excludes `src/scripts/` + `src/testing/`. Created `src/vite-env.d.ts` for `import.meta.env` types. Fixed `InjuryType` (`'overuse'` → `'general'`) and `CapacityTestType` (`'walk_10min'` → `'pain_free_walk'`) in test fixtures. Cast renderer's `(w as any).status === 'passed'` to preserve capacity test badge. Added `rateCapacityTest` to `Window` interface. Deleted 60-line unreachable block in `initializing.ts`.
