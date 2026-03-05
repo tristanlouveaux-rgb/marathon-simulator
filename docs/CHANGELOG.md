@@ -12,6 +12,7 @@ Session-by-session record of significant changes. Most recent first.
 - **ISSUE-09**: `home-view.ts` — ACWR risk caption now identifies and names the top-contributing activity (highest Signal B TSS) from `garminActuals` + `adhocWorkouts`. High/caution captions include top contributor and "Tap to adjust your training plan" CTA.
 - **ISSUE-10**: `suggestion-modal.ts` — `acwrHeader` rewrites lead sentence from ACWR ratio to human consequence ("You've been training X% harder than usual"). Titles changed to "Heavy training week" / "Load building up". ACWR ratio preserved in the "See details" panel.
 - **ISSUE-31**: `state.ts` + `format.ts` + `account-view.ts` + `home-view.ts` + `stats-view.ts` + `activity-detail.ts` — KM/Mile toggle. Added `unitPref: 'km' | 'mi'` to state, `formatKm()` utility, Preferences card with segmented control in Account. Distance displays updated across all key views.
+- **ISSUE-32**: `plan-view.ts` — Phase now shows as a colour-coded badge (Base=blue, Build=orange, Peak=red, Taper=green) in the plan week header next to the date. Added `phaseBadge()` + `PHASE_COLORS` helpers.
 
 ## 2026-03-05 — Bug batch 2: build unblocked, GPS splits, ACWR consistency, recovery bar, TSS dedup
 

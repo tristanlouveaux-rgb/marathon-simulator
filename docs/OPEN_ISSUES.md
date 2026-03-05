@@ -351,12 +351,9 @@ or a tier label. Numbers alone are meaningless.
 
 ---
 
-### ISSUE-32: Phases have taken a back seat — not visible in plan
-**Symptom**: Training phases (base, build, peak, taper) used to be more prominent but are
-now hard to find or not clearly shown.
-
-**Fix**: Restore phase label visibility in plan week headers. User should always know which
-phase they're in and why their sessions look the way they do.
+### ✅ ISSUE-32: Phases have taken a back seat — not visible in plan *(fixed 2026-03-05)*
+**Root cause**: Phase label was rendered as faint uppercase text alongside the date range — same styling, easy to miss.
+**Fix**: Phase now renders as a colour-coded badge (blue=Base, orange=Build, red=Peak, green=Taper) in the plan week header, next to the date range. `phaseBadge()` helper added to `plan-view.ts`.
 
 ---
 

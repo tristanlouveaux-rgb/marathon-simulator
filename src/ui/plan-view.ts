@@ -72,6 +72,20 @@ function phaseLabel(ph: string): string {
   return map[ph] || ph;
 }
 
+const PHASE_COLORS: Record<string, { bg: string; text: string }> = {
+  base:  { bg: 'rgba(59,130,246,0.1)',  text: '#2563EB' },
+  build: { bg: 'rgba(249,115,22,0.1)',  text: '#EA580C' },
+  peak:  { bg: 'rgba(239,68,68,0.1)',   text: '#DC2626' },
+  taper: { bg: 'rgba(34,197,94,0.1)',   text: '#16A34A' },
+};
+
+function phaseBadge(ph: string): string {
+  if (!ph) return '';
+  const label = phaseLabel(ph);
+  const c = PHASE_COLORS[ph] ?? { bg: 'rgba(0,0,0,0.06)', text: 'var(--c-muted)' };
+  return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${c.bg};color:${c.text};letter-spacing:0.02em;text-transform:none">${label}</span>`;
+}
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -1876,8 +1890,9 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
               Week ${viewWeek} of ${s.tw}
               ${!isCurrentWeek ? `<span style="font-size:12px;font-weight:500;color:var(--c-accent);margin-left:6px">← viewing</span>` : ''}
             </div>
-            <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-top:2px;display:flex;align-items:center;gap:8px">
-              <span>${[phase, dateRange].filter(Boolean).join(' · ')}</span>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
+              ${wk?.ph ? phaseBadge(wk.ph) : ''}
+              ${dateRange ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${dateRange}</span>` : ''}
               ${weekTSSBadge ? `<span title="${_weekTotalTSS > _weekRunTSS * 1.15 ? `Running-equivalent: ${_weekRunTSS} · Total body load: ${_weekTotalTSS} (includes gym &amp; cross-training at full weight)` : `Run-equivalent training stress`}" style="font-size:10px;font-weight:500;color:var(--c-muted);background:rgba(0,0,0,0.05);padding:1px 7px;border-radius:10px;letter-spacing:0.04em;cursor:help">${weekTSSBadge}</span>` : ''}
             </div>
             ${weekLoadLine ? `<div style="margin-top:3px;font-size:11px;color:var(--c-faint);font-weight:400;text-transform:none;letter-spacing:0">${weekLoadLine}</div>` : ''}
