@@ -425,7 +425,8 @@ function buildNarrativeSentence(s: SimulatorState): string {
   else direction = 'steady';
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined);
+  const acwrAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed);
   const status = acwr.status;
 
   const matrix: Record<string, Record<string, string>> = {
@@ -438,7 +439,7 @@ function buildNarrativeSentence(s: SimulatorState): string {
     steady: {
       safe:    'Consistent week. Your fitness base is solidifying.',
       caution: 'Holding a hard week. Prioritise sleep and easy efforts.',
-      high:    'High load this week. Consider swapping one session for rest.',
+      high:    'High load this week. Shorten or ease your remaining sessions.',
       unknown: 'Steady week — keep the habit going.',
     },
     easing: {

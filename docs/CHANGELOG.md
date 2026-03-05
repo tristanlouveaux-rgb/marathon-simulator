@@ -4,12 +4,23 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-05 — Bug batch 2: build unblocked, GPS splits, ACWR consistency, recovery bar, TSS dedup
+
+- **ISSUE-64**: Unblocked production build — 42 TS errors → 0. `tsconfig.json` now excludes `src/scripts/` + `src/testing/`. Created `src/vite-env.d.ts` for `import.meta.env` types. Fixed `InjuryType` (`'overuse'` → `'general'`) and `CapacityTestType` (`'walk_10min'` → `'pain_free_walk'`) in test fixtures. Cast renderer's `(w as any).status === 'passed'` to preserve capacity test badge. Added `rateCapacityTest` to `Window` interface. Deleted 60-line unreachable block in `initializing.ts`.
+- **ISSUE-65**: GPS per-km splits now work — wired `buildKmSplits()` into simple distance, dist@pace, progressive easy portion, and added `Xkm [description]` catch-all. 5 failing GPS tests → all 714 passing.
+- **ISSUE-66**: ACWR `atlSeed` now consistent across all 12 call sites — applied gym-inflation formula to 9 missing sites in `home-view.ts`, `main-view.ts`, `stats-view.ts`, `renderer.ts`, `events.ts`, `activity-review.ts`. Added missing `planStartDate` to `stats-view.ts:428`.
+- **ISSUE-67**: Recovery bar direction fixed — was `100 - recoveryPct` (wide = bad), now `recoveryPct` (wide = good).
+- **ISSUE-68**: `computeWeekTSS` (Signal A) now deduplicates by `garminId` — prevents double-counting activities in both `garminActuals` and `adhocWorkouts`. Likely root cause of ISSUE-42/57.
+- **ISSUE-69**: Suggestion modal ACWR details panel — removed duplicate `display:none` that immediately overrode `display:flex`. Toggle now works correctly.
+
 ## 2026-03-05 — Issue batch 1: deload week check-in guard + doc fixes
 
 - **ISSUE-54** (already resolved): Confirmed duplicate "Running Fitness" sections in suggestion modal were removed in 2026-03-04 jargon cleanup. No code change needed.
 - **ISSUE-17**: `main-view.ts` + `plan-view.ts` — benchmark panel now returns `''` on deload weeks. Added `isDeloadWeek` + `abilityBandFromVdot` checks to `renderBenchmarkPanel` / `buildBenchmarkPanel`. Hard efforts (threshold, speed, race sim) never presented on recovery/deload weeks.
 - **ISSUE-53**: `home-view.ts` — `buildTodayWorkout` and "next workout" finder now apply `wk.workoutMoves` before searching by day. Moving a workout on Plan tab now correctly reflects in Home view today card and upcoming label.
 - **ISSUE-23**: Confirmed already fixed — stats chart legend reads "Your running base" (no hardcoded week count).
+- **ISSUE-39**: `welcome-back.ts` — `WELCOME_BACK_MIN_HOURS` raised from 20 → 24. Welcome back modal now suppressed if app was opened within the last 24 hours.
+- **ISSUE-56**: `stats-view.ts`, `suggestion-modal.ts`, `home-view.ts` — replaced all "reduce one session" copy with load-based language ("shorten or ease remaining sessions", "reducing intensity or duration").
 - **ISSUE-24**: `stats-view.ts` + `main-view.ts` — "Building baseline" gate raised from `< 3` to `< 4` weeks. "Calibrating intensity zones" already properly gated.
 - **ISSUE-39**: `welcome-back.ts` — `WELCOME_BACK_MIN_HOURS` raised from 20 → 24. Welcome back modal now suppressed if app was opened within the last 24 hours.
 

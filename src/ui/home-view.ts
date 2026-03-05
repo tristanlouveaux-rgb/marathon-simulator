@@ -162,7 +162,8 @@ function buildProgressBars(s: SimulatorState): string {
 
   // Status pill
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
+  const atlSeedProgress = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeedProgress);
   let pillHtml: string;
   let pillCaption: string;
   if (acwr.ratio <= 0 || (s.w < 3)) {
@@ -251,7 +252,7 @@ function buildSignalBars(s: SimulatorState): string {
     riskPct = Math.min(100, Math.max(0, Math.round(((acwr.ratio - 0.6) / 1.2) * 100)));
     if (acwr.status === 'high') {
       riskLabel = 'High'; riskLabelColor = 'var(--c-warn)'; thumbBorder = 'var(--c-warn)';
-      riskCaption = 'Load is significantly above your baseline. Reduce one session this week.';
+      riskCaption = 'Your load this week is significantly above your baseline. Shorten or ease remaining sessions.';
     } else if (acwr.status === 'caution') {
       riskLabel = 'Elevated'; riskLabelColor = 'var(--c-caution)'; thumbBorder = 'var(--c-caution)';
       riskCaption = 'You\'ve trained hard this week. Prioritise sleep and keep tomorrow easy.';
@@ -301,7 +302,7 @@ function buildSignalBars(s: SimulatorState): string {
         : `Sleep score ${Math.round(sleepScore)}/100${rhrCaption} — ${sleepScore >= 75 ? 'you\'re well rested.' : sleepScore >= 55 ? 'reasonable recovery.' : 'prioritise sleep tonight.'}`)
     : 'Sleep data · connect watch to unlock';
   const recoveryFill = sleepScore
-    ? `background:linear-gradient(to right,var(--c-ok) 0%,var(--c-caution) 60%,var(--c-warn) 100%);width:${100 - recoveryPct}%`
+    ? `background:linear-gradient(to right,var(--c-ok) 0%,var(--c-caution) 60%,var(--c-warn) 100%);width:${recoveryPct}%`
     : 'width:0%';
 
   const injured = isInjuryActive();
@@ -784,7 +785,8 @@ function wireHomeHandlers(): void {
     } else {
       const s = getState();
       const tier = s.athleteTierOverride ?? s.athleteTier;
-      const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
+      const atlSeedHandler = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+      const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeedHandler);
       if (acwr.status === 'caution' || acwr.status === 'high') {
         import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
       } else {

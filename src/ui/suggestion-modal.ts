@@ -9,7 +9,8 @@
 
 import type { SuggestionPopup, GlobalChoice, Adjustment } from '@/cross-training/suggester';
 import { classifyWorkoutType } from '@/cross-training/universalLoad';
-import { getState } from '@/state';
+import { getState } from '@/state'; // used for intensityThresholds in cross-training header
+import { SPORT_LABELS } from '@/constants/sports';
 
 export interface SuggestionDecision {
   choice: GlobalChoice;
@@ -32,7 +33,10 @@ export interface ACWRModalContext {
   ratio: number;
   status: 'caution' | 'high';
   safeUpper: number;
-  intensityPct?: number; // % of week's planned load that is threshold+intensity
+  intensityPct?: number;           // % of week's planned load that is threshold+intensity
+  kmSpiked?: boolean;              // actual running km > planned km × 1.3 (mechanical risk)
+  crossTrainingCause?: string;     // sport name if cross-training drove the spike (Rule 3)
+  consecutiveIntensityWeeks?: number; // # consecutive past weeks >40% intensity (Rule 4)
 }
 
 /**
@@ -133,18 +137,6 @@ export function showSuggestionModal(
   const hasReplacements = popup.replaceOutcome.adjustments.some(a => a.action === 'replace');
   const hasReductions = popup.reduceOutcome.adjustments.length > 0;
 
-  // Runner type context
-  const state = getState();
-  const runnerType = state.typ || 'Balanced';
-  const runnerTypeLabel = runnerType === 'Speed' ? 'Speed runner'
-                        : runnerType === 'Endurance' ? 'Endurance runner'
-                        : 'Balanced runner';
-  const runnerTypeFocus = runnerType === 'Speed'
-    ? 'Volume cuts prioritised — quality sessions protected'
-    : runnerType === 'Endurance'
-    ? 'Intensity cuts prioritised — easy mileage protected'
-    : 'Balanced volume/intensity reduction';
-
   // Equivalent easy km display
   const equivKm = popup.equivalentEasyKm > 0
     ? `≈ ${popup.equivalentEasyKm.toFixed(1)} km easy running equivalent`
@@ -161,22 +153,21 @@ export function showSuggestionModal(
   const tierStyle = tierStyles[popup.tier] ?? tierStyles.rpe;
   const tierLabel = tierLabelMap[popup.tier] ?? 'Estimated';
 
-  // Aerobic / anaerobic split
-  const totalLoad = popup.aerobicLoad + popup.anaerobicLoad;
-  const aeroPct = totalLoad > 0 ? Math.round((popup.aerobicLoad / totalLoad) * 100) : 85;
-  const anaPct = 100 - aeroPct;
-
   // Impact load label
   const impactStyle = popup.impactLoad <= 0 ? { text: 'No leg impact', color: '#16a34a' }
     : popup.impactLoad < 4   ? { text: 'Low leg impact',      color: '#16a34a' }
     : popup.impactLoad < 10  ? { text: 'Moderate leg impact', color: 'var(--c-caution)' }
     :                          { text: 'High leg impact',      color: 'var(--c-warn)' };
 
-  // Warning text based on severity
-  const keepWarning = popup.severity === 'extreme'
-    ? 'Warning: Very high fatigue risk. Consider at least reducing.'
-    : popup.severity === 'heavy'
-    ? 'Note: Elevated fatigue risk this week.'
+  // Warning text based on severity — only shown when ACWR is actually elevated.
+  // A heavy session alone doesn't mean fatigue risk is high (e.g. high-volume athlete with
+  // high CTL baseline can absorb a big session without ACWR spiking).
+  const keepWarning = acwrContext
+    ? (popup.severity === 'extreme'
+        ? 'Warning: Your load this week is above your usual base. Consider reducing intensity or duration of remaining sessions.'
+        : popup.severity === 'heavy'
+        ? 'Note: Fatigue has built this week. Monitor how you feel.'
+        : '')
     : '';
 
   // Build optional ACWR context header
@@ -188,9 +179,30 @@ export function showSuggestionModal(
       ? 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25)'
       : 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25)';
     const statusTextColor = status === 'high' ? 'color:var(--c-warn)' : 'color:var(--c-caution)';
-    const zoneAdvice = (intensityPct ?? 0) > 50
-      ? 'Your week is intensity-heavy. To reduce fastest, cut intervals first, then threshold.'
-      : 'Your load has increased quickly. Consider reducing your longest or hardest session.';
+    // §8 — 5-rule plain language reduction advice
+    const { kmSpiked, crossTrainingCause, consecutiveIntensityWeeks } = acwrContext;
+    const iHeavy = (intensityPct ?? 0) > 50;
+    let zoneAdvice: string;
+    if (consecutiveIntensityWeeks != null && consecutiveIntensityWeeks >= 3) {
+      // Rule 4 — consecutive intensity-heavy weeks
+      zoneAdvice = `Your last ${consecutiveIntensityWeeks} weeks have been intensity-heavy. Replacing one interval session with an easy run will protect your aerobic base.`;
+    } else if (crossTrainingCause) {
+      // Rule 3 — cross-training drove the spike
+      const sportLabel = crossTrainingCause === 'generic_sport'
+        ? 'cross-training'
+        : (SPORT_LABELS[crossTrainingCause as keyof typeof SPORT_LABELS]
+            ?? crossTrainingCause.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())).toLowerCase();
+      zoneAdvice = `A heavy ${sportLabel} session pushed your total load above baseline. Your running plan can stay mostly intact — reduce by replacing one easy run with a rest day or lighter session.`;
+    } else if (kmSpiked) {
+      // Rule 2 — running km spiked (mechanical risk)
+      zoneAdvice = 'Your running km spiked this week. Heart rate load is fine — this is a mechanical risk (tendons, bones). Shorten the long run and one easy run rather than cutting intensity.';
+    } else if (iHeavy) {
+      // Rule 1 — ACWR elevated + intensity-heavy
+      zoneAdvice = `Your load jumped ${pctAbove}% above baseline and most of it was high-intensity work. Cut intervals first — they're the biggest fatigue driver. Threshold sessions next.`;
+    } else {
+      // Rule 5 — trailing zone mix / general
+      zoneAdvice = `Your load has built quickly. The safest cut is your longest run — it carries the most volume. Keep quality sessions if your intensity ratio is within range.`;
+    }
     return `
       <div style="padding:16px 20px 0">
         <div style="${statusBg};border-radius:10px;padding:14px 16px;margin-bottom:4px">
@@ -207,7 +219,7 @@ export function showSuggestionModal(
           <button id="acwr-details-toggle" style="margin-top:10px;font-size:11px;color:var(--c-faint);display:flex;align-items:center;gap:4px;background:none;border:none;cursor:pointer;padding:0">
             <span id="acwr-details-caret">▸</span> See details
           </button>
-          <div id="acwr-details-body" style="display:none;margin-top:10px;display:flex;flex-direction:column;gap:4px">
+          <div id="acwr-details-body" style="display:none;margin-top:10px;flex-direction:column;gap:4px">
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint)"><span>ATL (acute fatigue)</span><span style="color:var(--c-black)">${Math.round(acwrContext.ratio * (safeUpper * 50))}</span></div>
             <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-faint)"><span>Safe upper (your tier)</span><span style="color:var(--c-black)">${safeUpper.toFixed(1)}×</span></div>
             <div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--c-faint)">Current ratio</span><span style="${statusTextColor};font-weight:500">${ratio.toFixed(2)}×</span></div>
@@ -291,16 +303,14 @@ export function showSuggestionModal(
       </div>`;
   })();
 
-  const overlay = document.createElement('div');
-  overlay.id = 'suggestion-modal';
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;overflow-y:auto';
-
-  overlay.innerHTML = `
-    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto">
-      ${acwrHeader}
-      ${ctxHeader}
-      <!-- Header -->
-      <div style="padding:20px;border-bottom:1px solid var(--c-border)">
+  // When ACWR context is present, the amber box above already explains what happened.
+  // Show a compact strip (just data provenance + impact) rather than duplicating the session details.
+  const mainHeader = acwrContext
+    ? `<div style="padding:8px 20px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:11px;color:${impactStyle.color}">${impactStyle.text}</span>
+        ${equivKm ? `<span style="font-size:11px;color:var(--c-faint)">${equivKm}</span>` : ''}
+      </div>`
+    : `<div style="padding:20px;border-bottom:1px solid var(--c-border)">
         <div style="display:flex;align-items:flex-start;gap:16px">
           <div style="width:44px;height:44px;border-radius:50%;${sv.bg};${sv.border};display:flex;align-items:center;justify-content:center;flex-shrink:0">
             <svg style="width:20px;height:20px;${sv.iconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -312,33 +322,58 @@ export function showSuggestionModal(
             <p style="color:var(--c-muted);font-size:13px;line-height:1.6">${popup.summary}</p>
           </div>
         </div>
-
-        <!-- Load badge + equiv km -->
         <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:20px;${sv.badgeStyle};font-size:13px;font-weight:500">
             ${popup.durationMin} min ${popup.sportName} — ${popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate'} load
           </span>
           ${equivKm ? `<span style="font-size:12px;color:var(--c-faint)">${equivKm}</span>` : ''}
-          ${popup.warnings.length > 0 ? `
-            <span style="font-size:12px;color:var(--c-caution)">${popup.warnings[0]}</span>
-          ` : ''}
+          ${popup.warnings.length > 0 ? `<span style="font-size:12px;color:var(--c-caution)">${popup.warnings[0]}</span>` : ''}
         </div>
-
-        <!-- Data quality + aerobic/anaerobic breakdown + impact -->
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:11px">
           <span style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:4px;font-weight:500;${tierStyle}">${tierLabel}</span>
-          <span style="color:var(--c-faint)">${aeroPct}% aero / ${anaPct}% anaero</span>
           <span style="color:${impactStyle.color}">${impactStyle.text}</span>
         </div>
+      </div>`;
 
-        <!-- Runner type context -->
-        <div style="margin-top:10px;display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-faint)">
-          <svg style="width:12px;height:12px;flex-shrink:0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-          </svg>
-          <span>${runnerTypeLabel} · ${runnerTypeFocus}</span>
+  const overlay = document.createElement('div');
+  overlay.id = 'suggestion-modal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;overflow-y:auto';
+
+  overlay.innerHTML = `
+    <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:16px;max-width:440px;width:100%;max-height:90vh;overflow-y:auto">
+      ${acwrHeader}
+      ${ctxHeader}
+      ${mainHeader}
+
+      <!-- §6.5 edge case: already completed run or no matching run -->
+      ${popup.alreadyCompletedMatch ? `
+      <div style="padding:16px 20px 0">
+        <div style="background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.2);border-radius:10px;padding:14px 16px">
+          <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:6px">
+            Matched to: ${popup.alreadyCompletedMatch.runName} — but you already completed it
+          </div>
+          <p style="font-size:12px;color:var(--c-muted);line-height:1.6;margin-bottom:10px">
+            Your session contributes to your weekly load (ACWR updated). Apply the load credit to next week's ${popup.alreadyCompletedMatch.runType.replace(/_/g,' ')} run instead?
+          </p>
+          <div style="display:flex;gap:8px">
+            <button id="choice-apply-next-week" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid rgba(37,99,235,0.4);background:rgba(37,99,235,0.06);cursor:pointer;font-size:12px;font-weight:500;color:var(--c-accent);font-family:var(--f)">Apply to next week</button>
+            <button id="choice-log-load-only" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid var(--c-border);background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--c-muted);font-family:var(--f)">Log load only</button>
+          </div>
         </div>
-      </div>
+      </div>` : ''}
+      ${popup.noMatchingRun ? `
+      <div style="padding:16px 20px 0">
+        <div style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border);border-radius:10px;padding:14px 16px">
+          <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:6px">No matching planned run this week</div>
+          <p style="font-size:12px;color:var(--c-muted);line-height:1.6;margin-bottom:10px">
+            Your session's load is counted in your weekly TSS. Apply the credit toward next week's plan?
+          </p>
+          <div style="display:flex;gap:8px">
+            <button id="choice-apply-next-week" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid rgba(37,99,235,0.4);background:rgba(37,99,235,0.06);cursor:pointer;font-size:12px;font-weight:500;color:var(--c-accent);font-family:var(--f)">Match to next week</button>
+            <button id="choice-log-load-only" style="flex:1;padding:10px 12px;border-radius:8px;border:1.5px solid var(--c-border);background:transparent;cursor:pointer;font-size:12px;font-weight:500;color:var(--c-muted);font-family:var(--f)">Log as load only</button>
+          </div>
+        </div>
+      </div>` : ''}
 
       <!-- 3 Global Choices -->
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
@@ -441,6 +476,14 @@ export function showSuggestionModal(
     details.addEventListener('click', (e) => {
       e.stopPropagation();
     });
+  });
+
+  // §6.5 edge case buttons — fire 'keep' with empty adjustments (load already counted in ACWR)
+  overlay.querySelector('#choice-apply-next-week')?.addEventListener('click', () => {
+    close('keep', []);
+  });
+  overlay.querySelector('#choice-log-load-only')?.addEventListener('click', () => {
+    close('keep', []);
   });
 
   overlay.querySelector('#choice-replace')?.addEventListener('click', () => {
