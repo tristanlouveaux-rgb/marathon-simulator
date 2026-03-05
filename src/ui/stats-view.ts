@@ -10,7 +10,7 @@ import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
-import { fp, ft } from '@/utils/format';
+import { fp, ft, formatKm } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG } from '@/calculations/fitness-model';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 
@@ -326,7 +326,7 @@ function buildDistanceAreaChart(s: SimulatorState, range: ChartRange = '8w'): st
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap">
       <div style="display:flex;align-items:center;gap:4px">
         <div style="width:10px;height:10px;border-radius:2px;background:rgba(37,99,235,0.5)"></div>
-        <span style="font-size:11px;color:var(--c-muted)">Running km</span>
+        <span style="font-size:11px;color:var(--c-muted)">Running ${s.unitPref === 'mi' ? 'mi' : 'km'}</span>
       </div>
       ${planKm > 0 ? `
       <div style="display:flex;align-items:center;gap:4px">
@@ -522,7 +522,8 @@ function buildAboveFold(s: SimulatorState): string {
     : kmPct >= 20 ? 'm-pill-caution'
     : kmPct >= -10 ? 'm-pill-ok'
     : 'm-pill-neutral';
-  const kmPillText = kmPct === null ? 'No data' : `${kmDone.toFixed(1)} / ${kmPlan.toFixed(0)} km`;
+  const unitPref = s.unitPref ?? 'km';
+  const kmPillText = kmPct === null ? 'No data' : `${formatKm(kmDone, unitPref)} / ${formatKm(kmPlan, unitPref, 0)}`;
 
   return `
     <!-- Heading -->
@@ -572,8 +573,8 @@ function buildAboveFold(s: SimulatorState): string {
       <!-- Distance card -->
       <div class="m-card" style="flex:1;padding:14px">
         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">Distance</div>
-        <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${kmDone > 0 ? kmDone.toFixed(1) : '—'}</div>
-        <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">km this week</div>
+        <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${kmDone > 0 ? (unitPref === 'mi' ? (kmDone * 0.621371).toFixed(1) : kmDone.toFixed(1)) : '—'}</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">${unitPref === 'mi' ? 'mi this week' : 'km this week'}</div>
         <span class="m-pill ${kmPillClass}" style="font-size:10px"><span class="m-pill-dot"></span>${kmPillText}</span>
       </div>
 
@@ -831,6 +832,7 @@ function buildAdvancedSection(s: SimulatorState): string {
   const kmGreenPct = Math.min(kmPct, 100);
   const kmAmberPct = Math.max(0, Math.min(kmPct - 100, 30));
 
+  const advUnitPref = s.unitPref ?? 'km';
   const advancedOpen = typeof localStorage !== 'undefined' && localStorage.getItem('mosaic_stats_advanced_open') === '1';
 
   return `
@@ -852,7 +854,7 @@ function buildAdvancedSection(s: SimulatorState): string {
           <div style="margin-bottom:12px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
               <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Distance vs Plan</span>
-              <span style="font-size:12px;font-weight:500">${kmDone.toFixed(1)} / ${kmPlan.toFixed(0)} km</span>
+              <span style="font-size:12px;font-weight:500">${formatKm(kmDone, advUnitPref)} / ${formatKm(kmPlan, advUnitPref, 0)}</span>
             </div>
             <div style="height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden">
               <div style="height:100%;border-radius:4px;background:linear-gradient(to right,var(--c-ok) ${kmGreenPct}%,var(--c-caution) ${kmGreenPct}%);width:${kmGreenPct + kmAmberPct}%"></div>

@@ -6,6 +6,8 @@
 
 import type { GarminActual } from '@/types';
 import { drawPolylineOnCanvas } from './strava-detail';
+import { getState } from '@/state';
+import { formatKm } from '@/utils/format';
 
 export type ActivityDetailSource = 'plan' | 'home';
 
@@ -40,7 +42,7 @@ function fmtZoneTime(sec: number): string {
   return `${m}m ${s}s`;
 }
 
-function buildDetailHTML(actual: GarminActual, planWorkoutName: string): string {
+function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedTSS?: number, unitPref: 'km' | 'mi' = 'km'): string {
   const source = actual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
   const actName = actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
   const dateStr = actual.startTime
@@ -51,7 +53,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string): string 
 
   // ─── Stats grid ─────────────────────────────────────────────────────────────
   const stats = [
-    actual.distanceKm > 0.1 ? { val: `${actual.distanceKm.toFixed(2)} km`, lbl: 'Distance' } : null,
+    actual.distanceKm > 0.1 ? { val: formatKm(actual.distanceKm, unitPref, 2), lbl: 'Distance' } : null,
     actual.durationSec > 0 ? { val: fmtDuration(actual.durationSec), lbl: 'Time' } : null,
     actual.avgPaceSecKm ? { val: fmtPace(actual.avgPaceSecKm), lbl: 'Avg Pace' } : null,
     actual.avgHR ? { val: `${actual.avgHR} bpm`, lbl: 'Avg HR' } : null,
@@ -69,6 +71,75 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string): string 
       `).join('')}
     </div>
   `;
+
+  // ─── Training Load ───────────────────────────────────────────────────────────
+  const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
+  const actualTSS = actual.iTrimp != null && actual.iTrimp > 0
+    ? Math.round((actual.iTrimp * 100) / 15000)
+    : durMin > 0 ? Math.round(durMin * 0.92) : null;
+
+  let loadHtml = '';
+  if (actualTSS != null) {
+    // Training effect chips
+    const teLabel = (v: number) => v < 1.0 ? 'No effect' : v < 2.0 ? 'Minor' : v < 3.0 ? 'Maintaining' : v < 4.0 ? 'Improving' : v < 5.0 ? 'Highly improving' : 'Overreaching';
+    const teColor = (v: number) => v < 2.0 ? 'var(--c-faint)' : v < 3.5 ? '#22C55E' : v < 4.5 ? '#F97316' : '#EF4444';
+    const teChips = [
+      actual.aerobicEffect != null ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:rgba(0,0,0,0.04);border:1px solid var(--c-border);color:${teColor(actual.aerobicEffect)}">Aerobic ${actual.aerobicEffect.toFixed(1)} · ${teLabel(actual.aerobicEffect)}</span>` : '',
+      actual.anaerobicEffect != null ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:5px;background:rgba(0,0,0,0.04);border:1px solid var(--c-border);color:${teColor(actual.anaerobicEffect)}">Anaerobic ${actual.anaerobicEffect.toFixed(1)} · ${teLabel(actual.anaerobicEffect)}</span>` : '',
+    ].filter(Boolean).join('');
+
+    if (plannedTSS && plannedTSS > 0) {
+      // Planned vs actual comparison
+      const maxTSS = Math.max(plannedTSS, actualTSS, 1);
+      const ratio = actualTSS / plannedTSS;
+      const actualColor = ratio > 1.15 ? '#EF4444' : ratio < 0.80 ? '#EAB308' : '#22C55E';
+      const diffPct = Math.round((ratio - 1) * 100);
+      const diffStr = diffPct === 0 ? 'on target' : diffPct > 0 ? `+${diffPct}% vs planned` : `${diffPct}% vs planned`;
+      loadHtml = `
+        <div style="margin-bottom:20px">
+          <div class="m-sec-label">Training Load</div>
+          <div class="m-card" style="padding:14px 16px">
+            <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:12px">
+              <span style="font-size:28px;font-weight:300;letter-spacing:-0.03em;color:${actualColor}">${actualTSS}</span>
+              <span style="font-size:11px;color:var(--c-muted)">TSS · ${actual.iTrimp != null ? 'HR-based' : 'estimated'}</span>
+              <span style="font-size:11px;font-weight:500;color:${actualColor};margin-left:auto">${diffStr}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:10px;color:var(--c-muted);width:50px;flex-shrink:0">Planned</span>
+                <div style="flex:1;height:5px;background:rgba(0,0,0,0.05);border-radius:3px;overflow:hidden">
+                  <div style="width:${Math.round((plannedTSS / maxTSS) * 100)}%;height:100%;background:var(--c-border);border-radius:3px"></div>
+                </div>
+                <span style="font-size:10px;color:var(--c-faint);width:44px;text-align:right;flex-shrink:0">${plannedTSS} TSS</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span style="font-size:10px;color:var(--c-muted);width:50px;flex-shrink:0">Actual</span>
+                <div style="flex:1;height:5px;background:rgba(0,0,0,0.05);border-radius:3px;overflow:hidden">
+                  <div style="width:${Math.round((actualTSS / maxTSS) * 100)}%;height:100%;background:${actualColor};border-radius:3px"></div>
+                </div>
+                <span style="font-size:10px;font-weight:600;color:${actualColor};width:44px;text-align:right;flex-shrink:0">${actualTSS} TSS</span>
+              </div>
+            </div>
+            ${teChips ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">${teChips}</div>` : ''}
+          </div>
+        </div>
+      `;
+    } else {
+      // No planned TSS — just show actual
+      loadHtml = `
+        <div style="margin-bottom:20px">
+          <div class="m-sec-label">Training Load</div>
+          <div class="m-card" style="padding:14px 16px">
+            <div style="display:flex;align-items:baseline;gap:8px${teChips ? ';margin-bottom:12px' : ''}">
+              <span style="font-size:28px;font-weight:300;letter-spacing:-0.03em">${actualTSS}</span>
+              <span style="font-size:11px;color:var(--c-muted)">TSS · ${actual.iTrimp != null ? 'HR-based' : 'estimated'}</span>
+            </div>
+            ${teChips ? `<div style="display:flex;gap:6px;flex-wrap:wrap">${teChips}</div>` : ''}
+          </div>
+        </div>
+      `;
+    }
+  }
 
   // ─── Route map ───────────────────────────────────────────────────────────────
   let mapHtml = '';
@@ -173,6 +244,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string): string 
 
       <!-- Scrollable content -->
       <div style="padding:16px 18px 40px">
+        ${loadHtml}
         ${statsHtml}
         ${mapHtml}
         ${hrHtml}
@@ -187,10 +259,12 @@ export function renderActivityDetail(
   actual: GarminActual,
   planWorkoutName: string,
   returnView: ActivityDetailSource,
+  plannedTSS?: number,
 ): void {
   const container = document.getElementById('app-root');
   if (!container) return;
-  container.innerHTML = buildDetailHTML(actual, planWorkoutName);
+  const unitPref = getState().unitPref ?? 'km';
+  container.innerHTML = buildDetailHTML(actual, planWorkoutName, plannedTSS, unitPref);
 
   // Draw route map canvas after layout
   const canvas = document.getElementById('act-detail-map') as HTMLCanvasElement | null;

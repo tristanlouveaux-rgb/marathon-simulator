@@ -115,6 +115,7 @@ export interface WorkoutMod {
   newDistance: string;
   newType?: string;    // New workout type if downgraded (e.g., 'easy')
   newRpe?: number;     // New RPE to match downgraded type
+  autoReduceNote?: string; // Set when mod was silently applied by Tier 1 auto-reduce
 }
 
 /** Simple cross-training record (old format) */
@@ -130,10 +131,13 @@ export interface SimpleCross {
 export interface PhysiologyDayEntry {
   date: string;           // YYYY-MM-DD
   restingHR?: number;
+  maxHR?: number;
   hrvRmssd?: number;
   vo2max?: number;
   sleepScore?: number;
   stressAvg?: number;
+  ltPace?: number;        // sec/km — from physiology_snapshots
+  ltHR?: number;          // bpm at lactate threshold — from physiology_snapshots
 }
 
 /**
@@ -241,9 +245,12 @@ export interface Week {
   completedKm?: number;                         // Total km completed this week (stored on week advance)
   effortScore?: number;                          // Average (actual RPE - expected RPE) for rated run workouts
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
+  scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time — passed to generator
   carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
   acwrOverridden?: boolean;                     // User dismissed "Reduce this week" — adds synthetic ATL debt
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
+  hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
+  carryOverCardDismissed?: boolean;             // User dismissed the carry-over card for this week
   ltAutoUpdate?: {
     week: number;
     newLT: number;
@@ -289,6 +296,7 @@ export interface SimulatorState {
   // Physiology
   lt: number | null;      // Current LT pace (sec/km)
   ltPace?: number | null; // LT pace alias
+  ltHR?: number;          // LT heart rate (bpm) — from Garmin userMetrics
   vo2: number | null;     // Current VO2max
   initialLT: number | null;   // Initial LT at week 0
   initialVO2: number | null;  // Initial VO2 at week 0
@@ -370,10 +378,21 @@ export interface SimulatorState {
   // Phase C — Strava history (populated by fetchStravaHistory() / history mode edge fn)
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
   stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
-  historicWeeklyTSS?: number[];             // Running-equiv TSS per week, oldest first (8 weeks)
+  historicWeeklyTSS?: number[];             // Signal A: running-equiv TSS per week, oldest first (8 weeks)
+  historicWeeklyRawTSS?: number[];          // Signal B: raw physiological TSS per week, oldest first (no runSpec discount)
   historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
-  ctlBaseline?: number;                     // CTL computed from history — seeds fitness model
+  historicWeeklyZones?: { base: number; threshold: number; intensity: number }[];  // Zone breakdown per week
+  ctlBaseline?: number;                     // Signal A CTL — 42-day EMA of run-equiv load; seeds fitness model
+  signalBBaseline?: number;                 // Signal B baseline — 8-week EMA of raw physiological TSS; used for excess load thresholds
+  sportBaselineByType?: Record<string, {    // Per-sport session averages from history (Phase 2 calibration)
+    avgSessionRawTSS: number;               //   avg raw TSS per session
+    sessionsPerWeek: number;                //   avg sessions per week in the history window
+  }>;
   detectedWeeklyKm?: number;               // Average weekly running km from history (for plan starting volume)
+  extendedHistoryWeeks?: number;            // How many weeks are loaded in extended view (16 or 52)
+  extendedHistoryTSS?: number[];
+  extendedHistoryKm?: number[];
+  extendedHistoryZones?: { base: number; threshold: number; intensity: number }[];
 
   // Injury recovery tracking
   rehabWeeksDone?: number;        // Weeks completed during injury (plan pointer frozen)
@@ -397,6 +416,12 @@ export interface SimulatorState {
 
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
+
+  // VDOT history — appended whenever VDOT changes, capped at last 20 entries
+  vdotHistory?: Array<{ week: number; vdot: number; date?: string }>;
+
+  // Display preferences
+  unitPref?: 'km' | 'mi';   // Distance unit preference (default 'km')
 }
 
 /** Workout parsing result */

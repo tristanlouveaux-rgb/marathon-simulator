@@ -10,6 +10,7 @@ import { isSimulatorMode } from '@/main';
 import { computeWeekTSS, computeWeekRawTSS, computeACWR, getWeeklyExcess } from '@/calculations/fitness-model';
 import { generateWeekWorkouts } from '@/workouts';
 import { isInjuryActive } from './injury/modal';
+import { formatKm } from '@/utils/format';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -201,7 +202,7 @@ function buildProgressBars(s: SimulatorState): string {
         <div class="flex flex-col gap-[7px]">
           <div class="flex justify-between items-baseline">
             <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Distance</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${kmDone.toFixed(1)} / ${kmPlan.toFixed(0)} km</span>
+            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${formatKm(kmDone, s.unitPref ?? 'km')} / ${formatKm(kmPlan, s.unitPref ?? 'km', 0)}</span>
           </div>
           <div class="relative" style="height:5px">
             <div class="m-prog-track w-[88%]">${fillBar(kmDone, kmPlan)}</div>

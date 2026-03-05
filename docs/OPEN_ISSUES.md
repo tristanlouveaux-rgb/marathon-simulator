@@ -346,13 +346,8 @@ or a tier label. Numbers alone are meaningless.
 
 ---
 
-### ISSUE-31: No KM/Mile toggle
-**Scoping confirmed**: Toggle lives in (1) onboarding/setup and (2) Settings/Account page.
-Should apply globally to all distance displays across the app.
-**Symptom**: All distances shown in km. No way to switch to miles.
-
-**Fix**: Add a unit preference in setup and settings. Store in state. Apply across all distance
-display points.
+### ✅ ISSUE-31: No KM/Mile toggle *(fixed 2026-03-05)*
+**Fix**: Added `unitPref: 'km' | 'mi'` to `SimulatorState`. Added `formatKm(km, pref, decimals)` utility to `src/utils/format.ts`. Added "Preferences" card in `account-view.ts` with km/mi segmented control. Updated distance displays in `home-view.ts` (weekly distance bar), `stats-view.ts` (distance card, Distance vs Plan bar, Running km label), and `activity-detail.ts` (Distance stat). Toggle persists in state, re-renders on change.
 
 ---
 

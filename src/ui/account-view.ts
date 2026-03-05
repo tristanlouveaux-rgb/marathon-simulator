@@ -4,7 +4,7 @@
 
 import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache } from '@/data/supabaseClient';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
-import { syncStravaActivities, fetchStravaHistory } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
@@ -22,6 +22,7 @@ let syncing = false;
 let checkingGarmin = true;
 let syncResultMsg = '';
 let syncResultOk = true;
+let _renderGen = 0; // guard against stale re-renders after navigation
 
 /**
  * Render the account page into #app-root
@@ -29,6 +30,8 @@ let syncResultOk = true;
 export async function renderAccountView(): Promise<void> {
   const container = document.getElementById('app-root');
   if (!container) return;
+
+  const myGen = ++_renderGen;
 
   checkingGarmin = true;
   syncResultMsg = '';
@@ -46,6 +49,7 @@ export async function renderAccountView(): Promise<void> {
   // Check Strava status for enrichment (Garmin users) or standalone
   if (!isSimulatorMode()) {
     checkingStrava = true;
+    if (_renderGen !== myGen) return; // user navigated away
     container.innerHTML = getAccountHTML();
     wireAccountHandlers();
     try {
@@ -57,6 +61,7 @@ export async function renderAccountView(): Promise<void> {
     checkingStrava = false;
   }
 
+  if (_renderGen !== myGen) return; // user navigated away
   container.innerHTML = getAccountHTML();
   wireAccountHandlers();
 }
@@ -134,6 +139,20 @@ function getAccountHTML(): string {
 
         ${renderStravaHistoryCard()}
 
+        <!-- Preferences -->
+        <div class="m-card" style="padding:16px">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Preferences</div>
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="font-size:14px;color:var(--c-black)">Distance units</div>
+            <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden">
+              <button id="btn-unit-km"
+                style="padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;border:none;${(s.unitPref ?? 'km') === 'km' ? 'background:var(--c-black);color:#fff' : 'background:var(--c-surface);color:var(--c-muted)'}">km</button>
+              <button id="btn-unit-mi"
+                style="padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.unitPref === 'mi' ? 'background:var(--c-black);color:#fff' : 'background:var(--c-surface);color:var(--c-muted)'}">mi</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Plan Settings -->
         <div class="m-card" style="padding:16px">
           <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Plan Settings</div>
@@ -146,6 +165,20 @@ function getAccountHTML(): string {
               style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.04);font-size:14px;color:#dc2626;text-align:left;cursor:pointer;box-sizing:border-box">
               Reset Plan
             </button>
+          </div>
+        </div>
+
+        <!-- Advanced / VDOT -->
+        <div class="m-card" style="padding:16px">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Advanced</div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <button id="btn-reset-vdot"
+              style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--c-border-strong);background:var(--c-surface);font-size:14px;color:var(--c-muted);text-align:left;cursor:pointer;box-sizing:border-box">
+              Reset VDOT calibration
+            </button>
+            <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding:0 2px">
+              Clears automatic fitness adjustments. Use if your VDOT looks wrong. It will recalibrate from your next training data.
+            </div>
           </div>
         </div>
 
@@ -559,7 +592,9 @@ function renderStravaHistoryCard(): string {
       </div>
 
       <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-        ${weeksFound > 0 ? `<div style="font-size:12px;color:var(--c-muted)">${weeksFound} weeks of Strava data loaded</div>` : ''}
+        ${weeksFound > 0
+          ? `<div style="font-size:12px;color:var(--c-muted)">${weeksFound} week${weeksFound !== 1 ? 's' : ''} of training history loaded${weeksFound < 4 ? ' — tap Sync History to pull more' : ''}</div>`
+          : '<div style="font-size:12px;color:var(--c-caution)">No history data — tap Sync History below</div>'}
         ${avgTSS !== null ? `
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:13px;color:var(--c-muted)">Avg weekly load</span>
@@ -584,10 +619,10 @@ function renderStravaHistoryCard(): string {
         </button>
         <button id="btn-refresh-history"
           style="width:100%;padding:9px;border-radius:10px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:13px;color:var(--c-muted);cursor:pointer;box-sizing:border-box">
-          Refresh History
+          Sync History (last 16 weeks)
         </button>
       </div>
-      <div style="font-size:11px;color:var(--c-faint);margin-top:10px">Your logged activities and ratings are preserved when rebuilding.</div>
+      <div style="font-size:11px;color:var(--c-faint);margin-top:10px">Syncs HR-based load from Strava. Your logged activities and ratings are preserved when rebuilding.</div>
     </div>
   `;
 }
@@ -664,7 +699,9 @@ function renderPlanRecoveryCard(): string {
 function wireAccountHandlers(): void {
   // Tab bar navigation
   wireTabBarHandlers((tab: TabId) => {
-    if (tab === 'plan') {
+    if (tab === 'home') {
+      import('./home-view').then(({ renderHomeView }) => renderHomeView());
+    } else if (tab === 'plan') {
       import('./plan-view').then(({ renderPlanView }) => renderPlanView());
     } else if (tab === 'record') {
       import('./record-view').then(({ renderRecordView }) => renderRecordView());
@@ -678,6 +715,22 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
+  document.getElementById('btn-unit-km')?.addEventListener('click', () => {
+    const s = getMutableState();
+    s.unitPref = 'km';
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+  });
+
+  document.getElementById('btn-unit-mi')?.addEventListener('click', () => {
+    const s = getMutableState();
+    s.unitPref = 'mi';
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+  });
+
   document.getElementById('btn-edit-plan')?.addEventListener('click', () => {
     import('./events').then(({ editSettings }) => editSettings());
   });
@@ -686,20 +739,39 @@ function wireAccountHandlers(): void {
     import('./events').then(({ reset }) => reset());
   });
 
+  document.getElementById('btn-reset-vdot')?.addEventListener('click', () => {
+    const btn = document.getElementById('btn-reset-vdot') as HTMLButtonElement | null;
+    const s = getMutableState();
+    s.physioAdj = 0;
+    saveState();
+    if (btn) {
+      const original = btn.textContent ?? 'Reset VDOT calibration';
+      btn.textContent = 'VDOT calibration reset. Your score will update with your next training data.';
+      btn.disabled = true;
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.disabled = false;
+      }, 3000);
+    }
+  });
+
   // Strava history: Fetch or refresh
   document.getElementById('btn-fetch-history')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-fetch-history') as HTMLButtonElement | null;
     if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
-    await fetchStravaHistory(8).catch(() => {});
+    await backfillStravaHistory(16).catch(() => {});
     renderAccountView();
   });
 
   document.getElementById('btn-refresh-history')?.addEventListener('click', async () => {
     const btn = document.getElementById('btn-refresh-history') as HTMLButtonElement | null;
-    if (btn) { btn.disabled = true; btn.textContent = 'Refreshing…'; }
-    const ms = getMutableState();
-    ms.stravaHistoryFetched = false; // force re-fetch
-    await fetchStravaHistory(8).catch(() => {});
+    if (btn) { btn.disabled = true; btn.textContent = 'Syncing from Strava…'; }
+    const result = await backfillStravaHistory(16).catch(() => null);
+    if (btn && result) {
+      btn.textContent = result.processed > 0
+        ? `Synced ${result.processed} activities ✓`
+        : 'Up to date ✓';
+    }
     renderAccountView();
   });
 

@@ -64,6 +64,23 @@ export function formatDistance(meters: number): string {
   return `${meters}m`;
 }
 
+const KM_TO_MI = 0.621371;
+
+export type UnitPref = 'km' | 'mi';
+
+/**
+ * Format a distance given in kilometres using the user's unit preference.
+ * @param km - Distance in kilometres
+ * @param pref - Unit preference ('km' or 'mi', default 'km')
+ * @param decimals - Decimal places (default 1)
+ */
+export function formatKm(km: number, pref: UnitPref = 'km', decimals = 1): string {
+  if (pref === 'mi') {
+    return `${(km * KM_TO_MI).toFixed(decimals)} mi`;
+  }
+  return `${km.toFixed(decimals)} km`;
+}
+
 /**
  * Format percentage
  * @param value - Decimal value (e.g., 0.15 for 15%)
