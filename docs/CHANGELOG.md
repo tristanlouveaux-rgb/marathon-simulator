@@ -14,6 +14,7 @@ Session-by-session record of significant changes. Most recent first.
 - **ISSUE-31**: `state.ts` + `format.ts` + `account-view.ts` + `home-view.ts` + `stats-view.ts` + `activity-detail.ts` — KM/Mile toggle. Added `unitPref: 'km' | 'mi'` to state, `formatKm()` utility, Preferences card with segmented control in Account. Distance displays updated across all key views.
 - **ISSUE-32**: `plan-view.ts` — Phase now shows as a colour-coded badge (Base=blue, Build=orange, Peak=red, Taper=green) in the plan week header next to the date. Added `phaseBadge()` + `PHASE_COLORS` helpers.
 - **ISSUE-26/45**: `plan-view.ts` — Replaced "Week load: X TSS planned · Y so far" text with a visual progress bar (accent bar, planned vs actual TSS). Shown for current and future weeks; past weeks retain the TSS badge.
+- **ISSUE-27**: Confirmed already resolved — Sync Strava was never in plan-view; it lives correctly in account-view.ts. Marked as done in OPEN_ISSUES.md.
 
 ## 2026-03-05 — Bug batch 2: build unblocked, GPS splits, ACWR consistency, recovery bar, TSS dedup
 

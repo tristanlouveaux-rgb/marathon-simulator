@@ -199,11 +199,8 @@ Legend label already reads "Your running base" (stats-view.ts line 242). No hard
 
 ---
 
-### ISSUE-27: Sync Strava button on Plan page — wrong location
-**Symptom**: Sync Strava appears in plan mode. Doesn't belong there — it's a data action,
-not a planning action.
-
-**Fix**: Move to Account/Profile tab or a persistent settings area. Remove from plan page.
+### ✅ ISSUE-27: Sync Strava button on Plan page — wrong location *(confirmed resolved)*
+**Status**: Already resolved. Sync Strava lives in `account-view.ts` (rendered via `renderStravaEnrichCard` and `renderStravaStandaloneCard`). It does not appear in `plan-view.ts` or `buildPlanActionStrip`. No code change needed.
 
 ---
 
