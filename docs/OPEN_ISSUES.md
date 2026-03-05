@@ -193,11 +193,9 @@ Legend label already reads "Your running base" (stats-view.ts line 242). No hard
 
 ---
 
-### ISSUE-26: Total load for the week not visible on Plan page
-**Symptom**: Plan page doesn't show the week's total TSS or load anywhere prominent.
-
-**Fix**: Add a week-level load summary — either in the header or as a card above sessions.
-Should show planned TSS, actual TSS to date, and % complete.
+### ✅ ISSUE-26 + ISSUE-45: Week load visual bar on Plan page *(fixed 2026-03-05)*
+**Root cause**: Load was shown as a text line ("Week load: 47 TSS planned · 31 so far") — hard to read at a glance.
+**Fix**: Replaced text line with a visual progress bar (same style as home page) showing planned TSS vs actual TSS. Shown for current and future weeks; past weeks already show the TSS badge. Bar turns accent-coloured as the week progresses.
 
 ---
 
@@ -437,10 +435,7 @@ where they can explore race scenarios, see projected outcomes, try different tra
 
 ---
 
-### ISSUE-45: Week load on plan page should be a bar, not a text line
-**Symptom**: Agent added "Week load: 47 TSS planned · 31 so far" as a text line.
-User wants a visual bar identical to the home page load bar.
-**Fix**: Replace text line with same bar component used on home page.
+### ✅ ISSUE-45: Week load on plan page should be a bar, not a text line *(fixed 2026-03-05, combined with ISSUE-26)*
 
 ---
 

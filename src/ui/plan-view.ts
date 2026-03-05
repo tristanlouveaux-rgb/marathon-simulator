@@ -1859,11 +1859,20 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   // Total physiological load is visible elsewhere (Home excess-load card, Stats above-fold).
   const _plannedTSS = wk ? Math.round(computeWeekTSS(wk, {}, s.planStartDate)) : 0;
   const _actualTSS = wk ? Math.round(computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
-  const weekLoadLine = (isCurrentWeek || viewWeek > s.w) && _plannedTSS > 0
-    ? (_actualTSS > 0
-      ? `Week load: ${_plannedTSS} TSS planned · ${_actualTSS} so far`
-      : `Week load: ${_plannedTSS} TSS planned`)
-    : '';
+  // Visual load bar — shown for current + future weeks (past weeks show weekTSSBadge instead)
+  const showLoadBar = _plannedTSS > 0 && viewWeek >= s.w;
+  const _loadBarPct = showLoadBar && _actualTSS > 0 ? Math.min(100, Math.round((_actualTSS / _plannedTSS) * 100)) : 0;
+  const _loadBarColor = _loadBarPct >= 100 ? 'var(--c-ok)' : _loadBarPct >= 70 ? 'var(--c-ok)' : 'var(--c-accent)';
+  const weekLoadBar = showLoadBar ? `
+    <div style="margin-top:8px;padding-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+        <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Week Load (TSS)</span>
+        <span style="font-size:11px;font-weight:500;color:var(--c-muted)">${_actualTSS > 0 ? `${_actualTSS} / ${_plannedTSS}` : `${_plannedTSS} planned`}</span>
+      </div>
+      <div style="height:5px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden">
+        <div style="height:100%;border-radius:3px;background:${_loadBarColor};width:${_loadBarPct}%;transition:width 0.3s"></div>
+      </div>
+    </div>` : '';
   const canGoBack = viewWeek > 1;
   const canGoForward = viewWeek < s.tw;
   const injured = isInjuryActive();
@@ -1895,7 +1904,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
               ${dateRange ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${dateRange}</span>` : ''}
               ${weekTSSBadge ? `<span title="${_weekTotalTSS > _weekRunTSS * 1.15 ? `Running-equivalent: ${_weekRunTSS} · Total body load: ${_weekTotalTSS} (includes gym &amp; cross-training at full weight)` : `Run-equivalent training stress`}" style="font-size:10px;font-weight:500;color:var(--c-muted);background:rgba(0,0,0,0.05);padding:1px 7px;border-radius:10px;letter-spacing:0.04em;cursor:help">${weekTSSBadge}</span>` : ''}
             </div>
-            ${weekLoadLine ? `<div style="margin-top:3px;font-size:11px;color:var(--c-faint);font-weight:400;text-transform:none;letter-spacing:0">${weekLoadLine}</div>` : ''}
+            ${weekLoadBar}
             ${viewWeek < s.w ? `<button id="plan-jump-current" style="margin-top:4px;background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--c-accent);cursor:pointer;letter-spacing:0.01em;display:flex;align-items:center;gap:3px">&#8594; This week</button>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center">
