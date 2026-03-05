@@ -23,6 +23,7 @@ Session-by-session record of significant changes. Most recent first.
 - **ISSUE-56**: `stats-view.ts`, `suggestion-modal.ts`, `home-view.ts` — replaced all "reduce one session" copy with load-based language ("shorten or ease remaining sessions", "reducing intensity or duration").
 - **ISSUE-24**: `stats-view.ts` + `main-view.ts` — "Building baseline" gate raised from `< 3` to `< 4` weeks. "Calibrating intensity zones" already properly gated.
 - **ISSUE-59**: `home-view.ts` — gym session Home card now appends "Gym Session" to name if missing. Exercises (newline-separated in workout `d` field) render as a `<details>` expandable list below the workout title.
+- **ISSUE-50** (already present): Load chart footnote confirmed at `stats-view.ts:265`. No code change.
 
 ## 2026-03-04 — Stats chart fixes: single area, range slicing, Monday anchoring, near-zero fallback, Signal A running chart
 

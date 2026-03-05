@@ -282,10 +282,8 @@ Includes "why does X look wrong?" quick-reference table.
 
 ---
 
-### ISSUE-50: Load chart footnote missing
-**From original test plan (Test 4)**: Main 8-week chart needs a faint footnote:
-"History from Strava · current week includes all training at full physiological weight"
-Never implemented. Add to chart footer area in `stats-view.ts`.
+### ✅ ISSUE-50: Load chart footnote missing *(already present)*
+Footnote `"History from Strava · current week includes all training at full physiological weight"` is already rendered at line 265 of `stats-view.ts:buildLoadHistoryChart`. No code change needed.
 
 ---
 
