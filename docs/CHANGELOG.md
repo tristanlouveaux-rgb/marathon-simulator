@@ -11,6 +11,7 @@ Session-by-session record of significant changes. Most recent first.
 - **ISSUE-53**: `home-view.ts` — `buildTodayWorkout` and "next workout" finder now apply `wk.workoutMoves` before searching by day. Moving a workout on Plan tab now correctly reflects in Home view today card and upcoming label.
 - **ISSUE-23**: Confirmed already fixed — stats chart legend reads "Your running base" (no hardcoded week count).
 - **ISSUE-24**: `stats-view.ts` + `main-view.ts` — "Building baseline" gate raised from `< 3` to `< 4` weeks. "Calibrating intensity zones" already properly gated.
+- **ISSUE-39**: `welcome-back.ts` — `WELCOME_BACK_MIN_HOURS` raised from 20 → 24. Welcome back modal now suppressed if app was opened within the last 24 hours.
 
 ## 2026-03-04 — Stats chart fixes: single area, range slicing, Monday anchoring, near-zero fallback, Signal A running chart
 

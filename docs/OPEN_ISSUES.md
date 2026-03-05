@@ -506,11 +506,9 @@ User wants a visual bar identical to the home page load bar.
 
 ---
 
-### ISSUE-39: Welcome back message shows incorrectly
-**Symptom**: "Welcome back" greeting appears even when the user hasn't been away.
-
-**Fix**: Gate on time-since-last-open (e.g. > 24 hours). If no recent Strava activities,
-consider a "No recent training logged — did you train offline?" prompt instead.
+### ✅ ISSUE-39: Welcome back message shows incorrectly *(fixed 2026-03-05)*
+**Root cause**: `WELCOME_BACK_MIN_HOURS` was 20, allowing the modal to fire if the user opened the app less than 24h before the week rolled over.
+**Fix**: Raised `WELCOME_BACK_MIN_HOURS` from 20 → 24 in `welcome-back.ts`. Modal also gated on daily calendar key and actual missed-week detection (returns 0 if still in current week).
 
 ---
 

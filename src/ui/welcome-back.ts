@@ -16,6 +16,8 @@
 import { getMutableState, saveState } from '@/state';
 
 const GAP_SEEN_KEY = 'mosaic_gap_seen';
+const LAST_OPENED_KEY = 'mosaic_last_opened_at';
+const WELCOME_BACK_MIN_HOURS = 24;
 
 // ---------------------------------------------------------------------------
 // Detection
@@ -85,12 +87,35 @@ function computeCurrentCalendarWeek(s: ReturnType<typeof getMutableState>): numb
  * Show the welcome-back modal for a user returning after a missed-week gap.
  * Calls `onComplete` when the user confirms (state already updated by then).
  */
+/**
+ * Record the current timestamp as the last time the app was opened.
+ * Call this on every app launch after state is loaded.
+ */
+export function recordAppOpen(): void {
+  localStorage.setItem(LAST_OPENED_KEY, new Date().toISOString());
+}
+
 export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): void {
-  // Guard: only show once per calendar day
-  const today = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10);
+
+  // Guard: only show once per calendar day (existing guard)
   if (localStorage.getItem(GAP_SEEN_KEY) === today) {
+    recordAppOpen();
     onComplete();
     return;
+  }
+
+  // Guard: only show if the app was last opened more than 20 hours ago
+  const lastOpenedStr = localStorage.getItem(LAST_OPENED_KEY);
+  if (lastOpenedStr) {
+    const lastOpened = new Date(lastOpenedStr);
+    const hoursSinceLast = (now.getTime() - lastOpened.getTime()) / (1000 * 60 * 60);
+    if (hoursSinceLast < WELCOME_BACK_MIN_HOURS) {
+      recordAppOpen();
+      onComplete();
+      return;
+    }
   }
 
   const s = getMutableState();
@@ -203,6 +228,7 @@ export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): 
     }
 
     localStorage.setItem(GAP_SEEN_KEY, today);
+    recordAppOpen();
     saveState();
     overlay.remove();
     onComplete();
