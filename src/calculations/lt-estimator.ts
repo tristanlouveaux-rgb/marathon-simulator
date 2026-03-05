@@ -164,7 +164,11 @@ export function estimateFromEfficiencyTrend(
   const span = Math.max(...weeks) - Math.min(...weeks);
   const totalImprovementPct = weeklyImprovementPct * span;
 
-  // Only produce estimate if implied change > 1 sec/km
+  // Require >10% improvement for statistical significance — avoids firing on
+  // normal week-to-week CEI variation from terrain, temperature, or hydration.
+  if (totalImprovementPct < 0.10) return null;
+
+  // Also require implied change > 1 sec/km (absolute floor)
   const impliedChange = currentLT * totalImprovementPct;
   if (impliedChange < 1) return null;
 

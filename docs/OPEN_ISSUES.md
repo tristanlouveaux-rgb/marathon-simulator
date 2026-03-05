@@ -62,14 +62,8 @@ general sport placeholders and adhoc additions. Fixed in `home-view.ts`.
 
 ---
 
-### ISSUE-16: Skipped workouts — general fitness mode not pushing to next week
-**Confirmed design**:
-- Race/marathon mode: skip → pushed to next week → skip again → drops + impacts predicted time. ✅ Already built.
-- General fitness mode: MUST match — skip → pushed to next week → skip again → user manually drops.
-- Currently general fitness may not do this, which is likely causing VDOT to decline (skipped sessions counted as 0-load completions).
-
-**Fix**: Audit general fitness skip logic and align with race mode behaviour.
-**Suspected VDOT link**: If skipped sessions feed into VDOT as bad runs, this would explain the ~5% decline.
+### ✅ ISSUE-16: Skipped workouts — general fitness mode not pushing to next week *(fixed 2026-03-05)*
+**Root cause**: In `continuousMode` (general fitness), second skip auto-dropped with a race-time penalty (`s.timp`) that has no meaning outside a race plan. First skip correctly pushes to next week in both modes. **Fix**: Second skip in `continuousMode` now shows a "Drop It / Keep It" confirmation dialog instead of auto-dropping. Race-time penalty only applied in race mode (`!s.continuousMode`). VDOT decline link: primarily caused by ISSUE-48 (efficiency trend), not skip logic.
 
 ---
 
@@ -258,17 +252,8 @@ Sets `physioAdj = 0`, saves state, shows 3s confirmation. Real fix is ISSUE-48.
 
 ---
 
-### ISSUE-48: Cardiac Efficiency Trend algorithm fires incorrectly on easy runs
-**Root cause**: Algorithm reads "slower pace on easy run" as "declining fitness" without normalising for HR.
-Easy runs SHOULD be slower. Must compare pace:HR ratio, not pace alone.
-6:00/km at 125bpm = better efficiency than 5:30/km at 140bpm — current code may get this backwards.
-**Current damage**: A recovery week with chill easy runs can tank VDOT 2+ points.
-**Fix needed**: Rewrite `estimateFromEfficiencyTrend()` to:
-1. Only use Z2 HR data points
-2. Trend pace:HR ratio, not pace alone
-3. Require >10% ratio change for statistical significance before firing
-4. Use detailed HR stream data when available (connects to ISSUE-41)
-The −5.0 clamp (ISSUE-14) limits damage but doesn't fix the algorithm.
+### ✅ ISSUE-48: Cardiac Efficiency Trend fires incorrectly on easy runs *(fixed 2026-03-05)*
+**Root cause**: Efficiency data collection in `events.ts` did not check HR zone — recovery runs (<Z2) and aerobic-threshold runs (>Z2) polluted the trend. **Fix (1)**: Added Z2 gate in `recordEfficiencyPoint` call — only records when `avgHR` is within `effZones.z2.min..z2.max × 1.05`. **Fix (2)**: Added `totalImprovementPct < 0.10` guard in `estimateFromEfficiencyTrend()` — ignores week-to-week variance of <10%. CEI = pace/HR was already correct (lower = more efficient). physioAdj clamp (-5.0) remains as safety net.
 
 ---
 

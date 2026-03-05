@@ -7,6 +7,8 @@ Session-by-session record of significant changes. Most recent first.
 ## 2026-03-05 — Batch 2: load calc, skip logic, cardiac efficiency, injury link, modal copy, km/mi, phases, plan bar, sync button
 
 - **ISSUE-57/42**: `stravaSync.ts` — `fetchStravaHistory` and `backfillStravaHistory` now filter out the current in-progress week before storing to `historicWeeklyTSS` / `historicWeeklyRawTSS` / `historicWeeklyKm` / `historicWeeklyZones`. The edge function always returns the current partial week; storing it caused an off-by-one shift that made Fix 4 in `getChartData` backfill the wrong plan week. Near-zero load for the most recent completed week is now correctly shown.
+- **ISSUE-16**: `events.ts` — General fitness / continuous mode second skip now shows "Drop It / Keep It" confirmation dialog instead of silently auto-dropping. Race-time penalty (`s.timp`) only applied in race mode. First skip (push to next week) was already correct in both modes.
+- **ISSUE-48**: `events.ts` + `lt-estimator.ts` — Cardiac Efficiency Trend now only records Z2 HR data points (gate added before `recordEfficiencyPoint`). Added >10% improvement significance threshold in `estimateFromEfficiencyTrend()`. This prevents recovery-pace easy runs and aerobic-threshold runs from polluting the trend and causing spurious VDOT decline.
 
 ## 2026-03-05 — Bug batch 2: build unblocked, GPS splits, ACWR consistency, recovery bar, TSS dedup
 

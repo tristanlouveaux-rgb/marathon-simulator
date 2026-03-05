@@ -42,6 +42,21 @@ export function setOnWeekAdvance(cb: () => void): void {
   onWeekAdvanceCb = cb;
 }
 
+// ─── VDOT History Helper ─────────────────────────────────────────────────
+
+/**
+ * Record the current computed VDOT in s.vdotHistory.
+ * Called after any event that changes VDOT (rate, applyAutoLTUpdate, next, recordBenchmark).
+ * Capped at the last 20 entries.
+ */
+function recordVdotHistory(s: SimulatorState): void {
+  let wg = 0;
+  for (let i = 0; i < s.w - 1; i++) wg += (s.wks[i]?.wkGain || 0);
+  const computedVdot = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  const entry = { week: s.w, vdot: Math.round(computedVdot * 10) / 10, date: new Date().toISOString().slice(0, 10) };
+  s.vdotHistory = [...(s.vdotHistory ?? []), entry].slice(-20);
+}
+
 // ─── Stream cache (module-level, not persisted — cleared on page load) ───
 const workoutStreamCache = new Map<string, ActivityStream>();
 
@@ -108,11 +123,23 @@ function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
   let wg = 0;
   for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
   const observedVdot = cv(10000, newLT * 10);
-  s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+  const rawPhysioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+  // Safety clamp: physioAdj must not drag total VDOT below (s.v - 5.0).
+  // A drop of >5 points from the starting VDOT is implausible and indicates stale/wrong data.
+  const minPhysioAdj = -5.0;
+  if (rawPhysioAdj < minPhysioAdj) {
+    console.warn(`[applyAutoLTUpdate] physioAdj clamped: raw=${rawPhysioAdj.toFixed(2)}, clamped to ${minPhysioAdj} (observedVdot=${observedVdot.toFixed(1)}, newLT=${newLT}s/km)`);
+    s.physioAdj = minPhysioAdj;
+  } else {
+    s.physioAdj = rawPhysioAdj;
+  }
 
   // 4. Recalculate paces
   const adjustedVdot = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
   s.pac = gp(adjustedVdot, s.lt);
+
+  // 4b. Record VDOT history entry
+  recordVdotHistory(s);
 
   // 5. Update LT estimation tracking state
   if (!s.ltEstimation) s.ltEstimation = initLTEstimationState();
@@ -509,17 +536,29 @@ export function rate(
     }
   }
 
-  // ─── LT Efficiency Data Collection (easy/long runs with HR) ──────
+  // ─── LT Efficiency Data Collection (easy/long runs with Z2 HR) ──────
+  // Only record data points where HR is in Z2 (aerobic zone).
+  // Easy runs at recovery pace (<Z2) or aerobic-threshold pace (>Z2) would
+  // produce outlier CEI values and pollute the trend. We require known HR zones
+  // to validate the data point — without them CEI comparisons are meaningless.
   if ((workoutType === 'easy' || workoutType === 'long') && avgHR && avgHR > 0) {
-    // Use stream work segment pace if available, otherwise estimate from paces
-    const stream = getWorkoutStream(workoutId);
-    let pace = s.pac?.e || 0;
-    if (stream) {
-      const analysis = analyzeStream(stream);
-      pace = analysis.workSegment.avgPaceSecPerKm;
-    }
-    if (pace > 0) {
-      recordEfficiencyPoint(s, avgHR, pace, workoutType, s.w);
+    const effZones = calculateZones({
+      lthr: s.lt || undefined,
+      maxHR: s.maxHR || s.onboarding?.maxHR || undefined,
+      restingHR: s.restingHR || s.onboarding?.restingHR || undefined,
+      age: s.onboarding?.age || undefined,
+    });
+    const inZ2 = effZones && avgHR >= effZones.z2.min && avgHR <= effZones.z2.max * 1.05;
+    if (inZ2) {
+      const stream = getWorkoutStream(workoutId);
+      let pace = s.pac?.e || 0;
+      if (stream) {
+        const analysis = analyzeStream(stream);
+        pace = analysis.workSegment.avgPaceSecPerKm;
+      }
+      if (pace > 0) {
+        recordEfficiencyPoint(s, avgHR, pace, workoutType, s.w);
+      }
     }
   }
 
@@ -540,6 +579,9 @@ export function rate(
     ? totalExpectedGain * ((s.tw - weeksCompleted) / s.tw)
     : 0;
   s.forecastTime = tv(currentVDOT + remainingGain, raceDistKm);
+
+  // Record VDOT snapshot whenever RPE changes VDOT
+  if (clampedWch !== 0) recordVdotHistory(s);
 
   saveState();
   render();
@@ -606,12 +648,20 @@ export function skip(
   dayName: string
 ): void {
   const s = getMutableState();
-  const wk = s.wks[s.w - 1];
 
   // Warn before skipping a long run
   if (workoutType === 'long' && !isAlreadySkipped) {
     showLongRunSkipWarning().then(proceed => {
       if (proceed) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
+    });
+    return;
+  }
+
+  // General fitness / continuous mode: second skip requires user confirmation to drop.
+  // There is no race penalty here — the user explicitly chooses to remove the session.
+  if (isAlreadySkipped && s.continuousMode) {
+    showDropWorkoutConfirmation(name).then(drop => {
+      if (drop) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
     });
     return;
   }
@@ -628,18 +678,15 @@ function skipInner(
   const wk = s.wks[s.w - 1];
 
   if (isAlreadySkipped) {
-    // Second skip - apply penalty
-    let totalSkips = 0;
-    for (let i = 0; i < s.w; i++) {
-      if (s.wks[i].rated) {
-        totalSkips += Object.values(s.wks[i].rated).filter(v => v === 'skip').length;
-      }
+    // Second skip - apply race-time penalty only in race mode (not continuous/general fitness)
+    if (!s.continuousMode) {
+      const basePenalty = TIM[s.rd]?.[workoutType as keyof typeof TIM[typeof s.rd]] || 20;
+      const penalty = Math.round(basePenalty * 1.5);
+      s.timp += penalty;
+      log(`${name} skipped AGAIN: +${penalty}s penalty`);
+    } else {
+      log(`${name} dropped from plan`);
     }
-
-    const weeksRemaining = s.tw - s.w + 1;
-    const basePenalty = TIM[s.rd]?.[workoutType as keyof typeof TIM[typeof s.rd]] || 20;
-    const penalty = Math.round(basePenalty * 1.5);
-    s.timp += penalty;
 
     // Remove from previous week's skip list
     if (s.w > 1) {
@@ -648,7 +695,6 @@ function skipInner(
     }
 
     wk.rated[workoutId] = 'skip';
-    log(`${name} skipped AGAIN: +${penalty}s penalty`);
   } else {
     // First skip - move to next week
     if (wk.rated[workoutId]) delete wk.rated[workoutId];
@@ -908,7 +954,7 @@ export async function next(): Promise<void> {
   // When actual TSS > planned TSS × 1.10, store the excess by zone on this week.
   // The carry banner in main-view reads this and applies CTL decay per elapsed week.
   {
-    const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated);
+    const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated, s.planStartDate);
     const TL_BY_TYPE: Record<string, number> = { easy: 0.92, long: 0.92, marathon_pace: 1.45, threshold: 1.78, vo2: 2.22, intervals: 2.22, hill_repeats: 2.0, progressive: 1.45, mixed: 1.45 };
     const ZONE_PROFILES: Record<string, { base: number; threshold: number; intensity: number }> = {
       easy:          { base: 0.95, threshold: 0.04, intensity: 0.01 },
@@ -963,7 +1009,8 @@ export async function next(): Promise<void> {
   // Compute ACWR now (after this week's load is recorded) and store a lightening
   // reason on the next week so the banner appears when it's rendered.
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined);
+  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
 
   s.w++;
 
@@ -972,10 +1019,13 @@ export async function next(): Promise<void> {
     if (nextWk) {
       if (acwr.status === 'high') {
         nextWk.weekAdjustmentReason = `Load spike detected (${acwr.ratio.toFixed(2)}× baseline) — intensity reduced for safety`;
+        nextWk.scheduledAcwrStatus = 'high';
       } else if (acwr.status === 'caution') {
         nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline) — one quality session replaced`;
+        nextWk.scheduledAcwrStatus = 'caution';
       } else {
         delete nextWk.weekAdjustmentReason;
+        delete nextWk.scheduledAcwrStatus;
       }
     }
   }
@@ -1011,6 +1061,9 @@ export async function next(): Promise<void> {
       return;
     }
   }
+
+  // Record VDOT snapshot on every week advance
+  recordVdotHistory(s);
 
   saveState();
   if (onWeekAdvanceCb) onWeekAdvanceCb(); else render();
@@ -1217,6 +1270,46 @@ function showLongRunSkipWarning(): Promise<boolean> {
 }
 
 /**
+ * Ask user to confirm dropping a twice-skipped workout in general fitness mode.
+ * Returns true if they confirm drop, false to keep it in the carry list.
+ */
+function showDropWorkoutConfirmation(name: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
+    overlay.innerHTML = `
+      <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Drop ${name}?</h3>
+        <p class="text-sm mb-5" style="color:var(--c-muted)">
+          You've skipped this session twice. Drop it from your plan or carry it forward one more week?
+        </p>
+        <div class="flex flex-col gap-2">
+          <button id="btn-drop-workout" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:#fff">
+            Drop It
+          </button>
+          <button id="btn-keep-workout" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
+            Keep It
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#btn-drop-workout')?.addEventListener('click', () => {
+      overlay.remove();
+      resolve(true);
+    });
+    overlay.querySelector('#btn-keep-workout')?.addEventListener('click', () => {
+      overlay.remove();
+      resolve(false);
+    });
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) { overlay.remove(); resolve(false); }
+    });
+  });
+}
+
+
+/**
  * Navigate back to the assessment step to edit settings.
  * Preserves all state — only changes the wizard step pointer.
  * Sets hasCompletedOnboarding = false so initWizard() routes
@@ -1336,8 +1429,10 @@ export function updateFitness(): void {
     observedVdot = cv(10000, newLT * 10);
   }
   if (observedVdot) {
-    s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+    const rawAdj = observedVdot - (s.v + wg + s.rpeAdj);
+    s.physioAdj = Math.max(-5.0, rawAdj);
   }
+  recordVdotHistory(s);
 
   s.pac = gp(s.v + wg + s.rpeAdj + (s.physioAdj || 0), newLT);
 
@@ -1834,6 +1929,7 @@ declare global {
     applyRecoveryAdjustment: (type: 'downgrade' | 'reduce' | 'easyflag', dayOfWeek: number, workoutName?: string) => void;
     acceptLTUpdate: typeof acceptLTUpdate;
     dismissLTUpdate: typeof dismissLTUpdate;
+    rateCapacityTest: typeof rateCapacityTest;
   }
 }
 
@@ -2040,7 +2136,8 @@ export function recordBenchmark(
     if (observedVdot) {
       let wg = 0;
       for (let i = 0; i < s.w - 1; i++) wg += (s.wks[i]?.wkGain || 0);
-      s.physioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+      s.physioAdj = Math.max(-5.0, observedVdot - (s.v + wg + s.rpeAdj));
+      recordVdotHistory(s);
     }
   }
 
