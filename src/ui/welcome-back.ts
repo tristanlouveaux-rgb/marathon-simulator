@@ -59,10 +59,37 @@ export function advanceWeekToToday(): void {
 
   const s = getMutableState();
 
-  // Advance week pointer
+  // Advance week pointer — never exceed wks array length
   const targetWeek = computeCurrentCalendarWeek(s);
-  const maxWeek = s.tw || targetWeek;
-  s.w = Math.min(targetWeek, maxWeek);
+  const maxWeek = (s.tw && s.tw > 0) ? s.tw : (s.wks?.length ?? s.w);
+
+  // In continuous mode, extend wks array if calendar is ahead of planned weeks
+  if (s.continuousMode && targetWeek > maxWeek && s.wks) {
+    const BLOCK_SIZE = 4;
+    const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
+    while ((s.tw ?? s.wks.length) < targetWeek) {
+      s.blockNumber = (s.blockNumber || 1) + 1;
+      for (let i = 0; i < BLOCK_SIZE; i++) {
+        s.wks.push({
+          w: (s.tw ?? s.wks.length) + i + 1,
+          ph: blockPhases[i],
+          rated: {},
+          skip: [],
+          cross: [],
+          wkGain: 0,
+          workoutMods: [],
+          adjustments: [],
+          unspentLoad: 0,
+          extraRunLoad: 0,
+        });
+      }
+      s.tw = (s.tw ?? 0) + BLOCK_SIZE;
+    }
+  }
+
+  // Clamp to the smaller of target and available weeks
+  const effectiveMax = Math.min(s.tw ?? s.wks?.length ?? s.w, s.wks?.length ?? s.w);
+  s.w = Math.min(targetWeek, effectiveMax);
 
   // Apply VDOT detraining silently
   if (s.v && gap > 0) {
