@@ -11,8 +11,10 @@ import type { SimulatorState, PhysiologyDayEntry } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { fp, ft, formatKm } from '@/utils/format';
-import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS } from '@/calculations/fitness-model';
 import { fetchExtendedHistory } from '@/data/stravaSync';
+import { vt } from '@/calculations/vdot';
+import { computeRecoveryScore } from '@/calculations/readiness';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -120,9 +122,10 @@ function getChartData(s: SimulatorState, range: ChartRange): {
   const paddedHistZones: ({ base: number; threshold: number; intensity: number } | null)[] =
     histTSS.map((_, i) => histZonesRaw[i] ?? null);
 
-  // Current week zone split — use stored zone fields when available, else proportion-based fallback.
-  const currentZone = wk
-    ? { base: (wk as any).zoneBase ?? currentTSS * 0.6, threshold: (wk as any).zoneThreshold ?? currentTSS * 0.28, intensity: (wk as any).zoneIntensity ?? currentTSS * 0.12 }
+  // Current week zone split — use stored zone fields when available, else null (no hardcoded splits).
+  const hasCurrentZones = wk && ((wk as any).zoneBase > 0 || (wk as any).zoneThreshold > 0 || (wk as any).zoneIntensity > 0);
+  const currentZone = hasCurrentZones
+    ? { base: (wk as any).zoneBase ?? 0, threshold: (wk as any).zoneThreshold ?? 0, intensity: (wk as any).zoneIntensity ?? 0 }
     : { base: 0, threshold: 0, intensity: 0 };
 
   return {
@@ -350,51 +353,96 @@ function buildDistanceAreaChart(s: SimulatorState, range: ChartRange = '8w'): st
     </div>`;
 }
 
-// ---------------------------------------------------------------------------
-// Dig Deeper chart dispatcher
-
-function build8WeekChart(s: SimulatorState, mode: 'distance' | 'zones', range: ChartRange = '8w'): string {
-  if (mode === 'zones') return buildZoneStackChart(s);
-  return buildDistanceAreaChart(s, range);
-}
-
 
 function buildZoneStackChart(s: SimulatorState): string {
-  // Collect zone split data from last 8 completed weeks + current
-  const completedWeeks = (s.wks ?? []).slice(0, s.w - 1).slice(-7);
+  // Collect zone split data from historicWeeklyZones (real HR data from Strava/Garmin).
+  // NEVER use hardcoded splits — see PRINCIPLES.md "No Hardcoded Splits".
+  const histZones = s.historicWeeklyZones ?? [];
+  const histTSS = s.historicWeeklyTSS ?? [];
   const wk = s.wks?.[s.w - 1];
 
-  const hasZones = completedWeeks.some(w => w.actualTSS != null);
-  if (!hasZones) {
-    return `<div style="height:130px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--c-muted)">Zone breakdown requires HR data — connect your watch</div>`;
+  // Check if we have ANY real zone data (at least one week with non-zero base/threshold/intensity)
+  const hasRealZones = histZones.some(z => z && (z.base > 0 || z.threshold > 0 || z.intensity > 0));
+  if (!hasRealZones) {
+    return `<div style="height:130px;display:flex;align-items:center;justify-content:center;text-align:center;padding:0 16px">
+      <div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:4px">Zone data needs HR from your watch</div>
+        <div style="font-size:11px;color:var(--c-faint)">Connect Garmin or Strava with heart rate to see your training zones</div>
+      </div>
+    </div>`;
   }
 
-  const allWeeks = [...completedWeeks, ...(wk ? [wk] : [])];
-  const maxVal = Math.max(...allWeeks.map(w => computeWeekTSS(w, w.rated ?? {}, s.planStartDate)), 1);
-  const chartH = 130;
+  // Build per-week zone data: use real zones, show grey for weeks without HR data
+  const recentZones = histZones.slice(-7);
+  const recentTSS = histTSS.slice(-7);
 
+  // Current week zone data
+  const currentZone = wk
+    ? { base: (wk as any).zoneBase ?? 0, threshold: (wk as any).zoneThreshold ?? 0, intensity: (wk as any).zoneIntensity ?? 0 }
+    : null;
+  const currentTSS = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
+
+  type ZoneWeek = { base: number; threshold: number; intensity: number; tss: number; hasZones: boolean };
+  const allWeeks: ZoneWeek[] = [];
+  for (let i = 0; i < recentZones.length; i++) {
+    const z = recentZones[i];
+    const total = (z?.base ?? 0) + (z?.threshold ?? 0) + (z?.intensity ?? 0);
+    allWeeks.push({
+      base: z?.base ?? 0,
+      threshold: z?.threshold ?? 0,
+      intensity: z?.intensity ?? 0,
+      tss: recentTSS[i] ?? 0,
+      hasZones: total > 0,
+    });
+  }
+  if (currentZone) {
+    const total = currentZone.base + currentZone.threshold + currentZone.intensity;
+    allWeeks.push({ ...currentZone, tss: currentTSS, hasZones: total > 0 });
+  }
+
+  if (allWeeks.length === 0) return '';
+
+  const maxVal = Math.max(...allWeeks.map(w => w.hasZones ? (w.base + w.threshold + w.intensity) : w.tss), 1);
+  const chartH = 130;
   const BAR_W = 100 / (allWeeks.length * 1.4 + 0.4);
-  const GAP   = (100 - BAR_W * allWeeks.length) / (allWeeks.length + 1);
+  const GAP = (100 - BAR_W * allWeeks.length) / (allWeeks.length + 1);
 
   const zoneToday = new Date();
   const barsHTML = allWeeks.map((w, i) => {
-    const tss = computeWeekTSS(w, w.rated ?? {}, s.planStartDate);
-    const barH = Math.max(2, Math.round((tss / maxVal) * chartH));
     const x = GAP + i * (BAR_W + GAP);
-    // Rough zone split: 60% base / 25% threshold / 15% intensity
-    const baseH = Math.round(barH * 0.6);
-    const threshH = Math.round(barH * 0.25);
-    const intH = barH - baseH - threshH;
     const weeksAgo = allWeeks.length - 1 - i;
     const d = new Date(zoneToday);
     d.setDate(d.getDate() - weeksAgo * 7);
     const lbl = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+
+    if (!w.hasZones) {
+      // No HR zone data for this week — show grey bar with total TSS height
+      const barH = Math.max(2, Math.round((w.tss / maxVal) * chartH));
+      return `
+        <rect x="${x.toFixed(1)}%" y="${chartH - barH}" width="${BAR_W.toFixed(1)}%" height="${barH}" fill="var(--c-border)" rx="2" opacity="0.5"/>
+        <text x="${(x + BAR_W / 2).toFixed(1)}%" y="${chartH + 16}" text-anchor="middle" font-size="9" fill="var(--c-faint)">${lbl}</text>`;
+    }
+
+    const total = w.base + w.threshold + w.intensity;
+    const barH = Math.max(2, Math.round((total / maxVal) * chartH));
+    const baseFrac = total > 0 ? w.base / total : 1;
+    const threshFrac = total > 0 ? w.threshold / total : 0;
+    const baseH = Math.round(barH * baseFrac);
+    const threshH = Math.round(barH * threshFrac);
+    const intH = barH - baseH - threshH;
+
     return `
       <rect x="${x.toFixed(1)}%" y="${chartH - baseH}" width="${BAR_W.toFixed(1)}%" height="${baseH}" fill="var(--c-ok)" rx="2" opacity="0.85"/>
       <rect x="${x.toFixed(1)}%" y="${chartH - baseH - threshH}" width="${BAR_W.toFixed(1)}%" height="${threshH}" fill="var(--c-caution)" rx="0"/>
       <rect x="${x.toFixed(1)}%" y="${chartH - barH}" width="${BAR_W.toFixed(1)}%" height="${intH}" fill="var(--c-warn)" rx="2 2 0 0"/>
       <text x="${(x + BAR_W / 2).toFixed(1)}%" y="${chartH + 16}" text-anchor="middle" font-size="9" fill="var(--c-faint)">${lbl}</text>`;
   }).join('');
+
+  // Count weeks with missing zone data
+  const greyCount = allWeeks.filter(w => !w.hasZones).length;
+  const greyNote = greyCount > 0
+    ? `<div style="font-size:10px;color:var(--c-faint);margin-top:4px">Grey bars = no HR data for that week</div>`
+    : '';
 
   return `
     <svg width="100%" height="${chartH + 22}" style="overflow:visible;display:block">
@@ -404,7 +452,8 @@ function buildZoneStackChart(s: SimulatorState): string {
       <span style="font-size:10px;color:var(--c-faint)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c-ok);margin-right:3px;vertical-align:middle"></span>Base</span>
       <span style="font-size:10px;color:var(--c-faint)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c-caution);margin-right:3px;vertical-align:middle"></span>Threshold</span>
       <span style="font-size:10px;color:var(--c-faint)"><span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:var(--c-warn);margin-right:3px;vertical-align:middle"></span>Intensity</span>
-    </div>`;
+    </div>
+    ${greyNote}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -473,37 +522,37 @@ function buildAboveFold(s: SimulatorState): string {
   const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
   const currentTSS = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
 
+  // This Week card — Signal B (total load) vs Signal B baseline (weekly average).
+  // Shows progress toward weekly target: "X / Y TSS · Z% complete".
+  // Resets each Monday — always current week actual vs full weekly baseline.
+  const signalBBase = s.signalBBaseline ?? 0;
   let thisWeekPct: number | null = null;
   let thisWeekLabel = '';
   let thisWeekCopy = '';
   let thisWeekPillClass = 'm-pill-neutral';
-  let dirWord = '';
+  let thisWeekSub = '';
 
-  if (ctl && ctl > 0 && currentTSS > 0) {
-    // Prorate the baseline by day of week so a Tuesday partial week isn't -74%.
-    // Mon=1 … Sun=7. On Sat/Sun (dow≥6) the week is nearly complete — compare normally.
-    const dow = (new Date().getDay() + 6) % 7 + 1; // 1=Mon … 7=Sun
-    const proratedBaseline = dow >= 6 ? ctl : ctl * (dow / 7);
-    const dayName = new Date().toLocaleDateString('en-GB', { weekday: 'long' });
-    thisWeekPct = Math.round(((currentTSS - proratedBaseline) / proratedBaseline) * 100);
-    thisWeekLabel = `${thisWeekPct >= 0 ? '+' : '-'}${Math.abs(thisWeekPct)}%`;
-    // "vs your running base" — Signal B fatigue compared against Signal A CTL
-    dirWord = dow >= 6 ? 'vs your running base' : `${dayName} · week in progress`;
+  if (signalBBase > 0 && currentTSS > 0) {
+    thisWeekPct = Math.round((currentTSS / signalBBase) * 100);
+    thisWeekLabel = `${thisWeekPct}%`;
+    thisWeekSub = `${currentTSS} / ${signalBBase} TSS`;
 
-    if (thisWeekPct >= 30) {
-      thisWeekCopy = 'Your total load this week is above your usual base. Consider a lighter day.';
+    if (thisWeekPct >= 120) {
+      thisWeekCopy = 'Well above your weekly average. Consider a lighter day.';
       thisWeekPillClass = 'm-pill-caution';
-    } else if (thisWeekPct >= 10) {
-      thisWeekCopy = 'High load. Watch how you feel tomorrow.';
-      thisWeekPillClass = 'm-pill-caution';
-    } else if (thisWeekPct >= -10) {
-      thisWeekCopy = 'Keep this week\'s plan as-is.';
+    } else if (thisWeekPct >= 90) {
+      thisWeekCopy = 'On track for your weekly average.';
+      thisWeekPillClass = 'm-pill-ok';
+    } else if (thisWeekPct >= 50) {
+      thisWeekCopy = 'Building steadily — keep going.';
       thisWeekPillClass = 'm-pill-ok';
     } else {
-      thisWeekCopy = 'Good time to add a quality session.';
+      thisWeekCopy = 'Early in the week — plenty of time.';
       thisWeekPillClass = 'm-pill-neutral';
     }
   } else if (currentTSS > 0) {
+    thisWeekLabel = String(currentTSS);
+    thisWeekSub = 'total load this week';
     thisWeekPillClass = 'm-pill-neutral';
     thisWeekCopy = 'Keep logging sessions to build your baseline.';
   }
@@ -535,11 +584,20 @@ function buildAboveFold(s: SimulatorState): string {
       <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
     </div>
 
-    <!-- Load history chart -->
+    <!-- Main chart card with Load/Distance/Zones tabs + time range -->
     <div id="stats-chart-wrap" style="padding:0 18px 12px">
       <div class="m-card" style="padding:14px 14px 10px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <div style="font-size:12px;font-weight:600;color:var(--c-black)">Training Load</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+          <!-- Chart type tabs -->
+          <div style="display:flex;background:rgba(0,0,0,0.05);border-radius:6px;padding:2px;gap:1px">
+            <button class="stats-main-chart-tab stats-main-chart-tab-active" data-chart="load"
+              style="padding:4px 10px;font-size:11px;font-weight:500;border:none;cursor:pointer;border-radius:4px;font-family:var(--f);background:var(--c-surface);color:var(--c-black);box-shadow:0 1px 2px rgba(0,0,0,0.08)">Load</button>
+            <button class="stats-main-chart-tab" data-chart="distance"
+              style="padding:4px 10px;font-size:11px;font-weight:500;border:none;cursor:pointer;border-radius:4px;font-family:var(--f);background:transparent;color:var(--c-muted)">Distance</button>
+            <button class="stats-main-chart-tab" data-chart="zones"
+              style="padding:4px 10px;font-size:11px;font-weight:500;border:none;cursor:pointer;border-radius:4px;font-family:var(--f);background:transparent;color:var(--c-muted)">Zones</button>
+          </div>
+          <!-- Time range tabs -->
           <div style="display:flex;background:rgba(0,0,0,0.05);border-radius:6px;padding:2px;gap:1px">
             <button class="history-range-btn history-range-active" data-range="8w"
               style="padding:3px 9px;font-size:11px;font-weight:500;border:none;cursor:pointer;border-radius:4px;font-family:var(--f);background:var(--c-surface);color:var(--c-black);box-shadow:0 1px 2px rgba(0,0,0,0.08)">8w</button>
@@ -556,16 +614,11 @@ function buildAboveFold(s: SimulatorState): string {
     <!-- Two summary cards -->
     <div style="padding:0 18px 14px;display:flex;gap:10px">
 
-      <!-- This Week card -->
+      <!-- This Week card — Signal B actual vs Signal B baseline -->
       <div class="m-card" style="flex:1;padding:14px">
         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">This Week</div>
-        ${ctl && ctl > 0 && currentTSS > 0 && thisWeekPct !== null ? `
-          <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${thisWeekLabel}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">${dirWord}</div>
-        ` : `
-          <div style="font-size:24px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${currentTSS > 0 ? currentTSS : '—'}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">total load (runs + gym + sport)</div>
-        `}
+        <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${thisWeekLabel || '—'}</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">${thisWeekSub || 'total load'}</div>
         <span class="m-pill ${thisWeekPillClass}" style="font-size:10px"><span class="m-pill-dot"></span>${acwr.status === 'high' ? 'High load' : acwr.status === 'caution' ? 'Elevated' : 'On track'}</span>
         <div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">${thisWeekCopy || ((s.historicWeeklyTSS ?? []).length < 4 ? 'Building baseline — keep logging sessions.' : 'Steady training this week.')}</div>
       </div>
@@ -675,75 +728,7 @@ function buildRunningFitnessChart(s: SimulatorState): string {
   `;
 }
 
-// ---------------------------------------------------------------------------
-// "Dig deeper" accordion
 
-function buildDigDeeper(s: SimulatorState): string {
-  const hist = s.historicWeeklyTSS ?? [];
-  const avgLoad = hist.length > 0 ? Math.round(avg(hist)) : null;
-  const avgSessions = s.rw ?? null;
-  // Consistency: weeks in plan with at least 1 rated session
-  const planWeekCount = Math.max(1, s.w - 1);
-  const activeWeeks = (s.wks ?? []).slice(0, s.w - 1).filter(w => Object.values(w.rated ?? {}).some(v => typeof v === 'number' && v > 0)).length;
-  const consistencyPct = planWeekCount > 0 ? Math.round((activeWeeks / planWeekCount) * 100) : null;
-
-  return `
-    <div id="dig-deeper-section" style="padding:0 18px 14px">
-      <button id="dig-deeper-btn" style="width:100%;background:none;border:none;cursor:pointer;text-align:left;padding:12px 0;display:flex;align-items:center;justify-content:space-between;font-family:var(--f)">
-        <span style="font-size:14px;color:var(--c-accent);font-weight:500">Dig deeper</span>
-        <span id="dig-deeper-chevron" style="font-size:14px;color:var(--c-accent);transform:rotate(0deg);transition:transform 0.2s">↓</span>
-      </button>
-      <div id="dig-deeper-body" style="display:none">
-
-        <!-- Chart switcher -->
-        <div style="display:flex;background:rgba(0,0,0,0.04);border-radius:8px;padding:2px;margin-bottom:12px">
-          <button class="stats-chart-tab stats-chart-tab-active" data-mode="distance"
-            style="flex:1;padding:6px 0;font-size:12px;font-weight:500;border:none;cursor:pointer;border-radius:6px;font-family:var(--f);background:var(--c-surface);color:var(--c-black);box-shadow:0 1px 2px rgba(0,0,0,0.08)">
-            Distance
-          </button>
-          <button class="stats-chart-tab" data-mode="zones"
-            style="flex:1;padding:6px 0;font-size:12px;font-weight:500;border:none;cursor:pointer;border-radius:6px;font-family:var(--f);background:transparent;color:var(--c-muted)">
-            Running Zones
-          </button>
-        </div>
-
-        <div id="dig-deeper-chart" style="margin-bottom:12px">${build8WeekChart(s, 'distance')}</div>
-
-        <!-- Explainer bullets -->
-        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-          ${['Training load combines how long and how hard each session was.',
-             'The dashed line is your typical weekly load — a rolling 42-day average.',
-             'Bars above the line are harder weeks; significantly above = higher injury risk.',
-            ].map(t => `
-            <div style="display:flex;gap:8px;align-items:flex-start">
-              <span style="color:var(--c-accent);font-size:12px;flex-shrink:0;margin-top:1px">•</span>
-              <span style="font-size:12px;color:var(--c-muted);line-height:1.45">${t}</span>
-            </div>`).join('')}
-        </div>
-
-        <!-- 8-week summary row -->
-        ${avgLoad !== null ? `
-        <div class="m-card" style="padding:12px 14px;display:flex;justify-content:space-between">
-          <div style="text-align:center">
-            <div style="font-size:16px;font-weight:500;letter-spacing:-0.02em">${avgLoad}</div>
-            <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-top:1px">Avg load/wk</div>
-          </div>
-          <div style="width:1px;background:var(--c-border)"></div>
-          <div style="text-align:center">
-            <div style="font-size:16px;font-weight:500;letter-spacing:-0.02em">${avgSessions ?? '—'}</div>
-            <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-top:1px">Avg sessions/wk</div>
-          </div>
-          <div style="width:1px;background:var(--c-border)"></div>
-          <div style="text-align:center">
-            <div style="font-size:16px;font-weight:500;letter-spacing:-0.02em">${consistencyPct !== null ? consistencyPct + '%' : '—'}</div>
-            <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-top:1px">Consistency</div>
-          </div>
-        </div>` : ''}
-
-      </div>
-    </div>
-  `;
-}
 
 // ---------------------------------------------------------------------------
 // Advanced accordion — CTL/ATL/TSB + ACWR
@@ -782,7 +767,300 @@ function buildCalibrationStatus(s: SimulatorState): string {
   `;
 }
 
-function buildAdvancedSection(s: SimulatorState): string {
+// ---------------------------------------------------------------------------
+// Horizontal position bars — "Your Numbers" (Garmin endurance score style)
+
+interface PositionZone {
+  label: string;
+  /** Fraction of bar width this zone occupies (all zones must sum to 1). */
+  fraction: number;
+  color: string;
+}
+
+function buildOnePositionBar(opts: {
+  title: string;
+  infoId?: string;
+  value: number | null;
+  valueLabel: string;
+  zoneName: string;
+  zones: PositionZone[];
+  /** Min and max of the full scale, for marker positioning. */
+  scaleMin: number;
+  scaleMax: number;
+}): string {
+  const { title, infoId, value, valueLabel, zoneName, zones, scaleMin, scaleMax } = opts;
+  const markerPct = value != null
+    ? Math.min(98, Math.max(2, ((value - scaleMin) / (scaleMax - scaleMin)) * 100))
+    : null;
+
+  const zoneSegments = zones.map(z =>
+    `<div style="flex:${z.fraction};height:100%;background:${z.color};min-width:0"></div>`
+  ).join('');
+
+  const zoneLabels = zones.map(z =>
+    `<span style="flex:${z.fraction};font-size:8px;color:var(--c-faint);text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${z.label}</span>`
+  ).join('');
+
+  const infoBox = infoId && INFO_TEXTS[infoId]
+    ? `<div id="stats-info-${infoId}" style="display:none;margin-top:6px;font-size:11px;color:var(--c-muted);line-height:1.5;background:rgba(0,0,0,0.04);border-radius:8px;padding:10px 12px">${INFO_TEXTS[infoId]}</div>`
+    : '';
+
+  return `
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+        <span style="font-size:11px;font-weight:600;color:var(--c-black)">${title}${infoId ? buildInfoIcon(infoId) : ''}</span>
+        <span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">${value != null ? `<strong>${valueLabel}</strong> · ${zoneName}` : '—'}</span>
+      </div>
+      <div style="position:relative;height:10px;border-radius:5px;overflow:hidden;display:flex;gap:1px;background:var(--c-border)">
+        ${zoneSegments}
+        ${markerPct != null ? `
+        <div style="position:absolute;top:-3px;left:${markerPct}%;transform:translateX(-50%);width:4px;height:16px;background:var(--c-black);border-radius:2px;border:1.5px solid white;z-index:2"></div>
+        ` : ''}
+      </div>
+      <div style="display:flex;gap:1px;margin-top:3px">
+        ${zoneLabels}
+      </div>
+      ${infoBox}
+    </div>
+  `;
+}
+
+function buildProgressCard(args: { ctl: number; s: SimulatorState }): string {
+  const { ctl, s } = args;
+
+  const ctlZone = ctl < 30 ? 'Beginner' : ctl < 55 ? 'Recreational' : ctl < 80 ? 'Trained' : ctl < 110 ? 'Competitive' : 'Elite';
+  const ctlBar = buildOnePositionBar({
+    title: 'Running Fitness',
+    infoId: 'ctl',
+    value: ctl > 0 ? ctl : null,
+    valueLabel: ctl.toFixed(0),
+    zoneName: ctlZone,
+    scaleMin: 0,
+    scaleMax: 140,
+    zones: [
+      { label: 'Beginner',     fraction: 30/140, color: 'rgba(78,159,229,0.25)' },
+      { label: 'Recreational', fraction: 25/140, color: 'rgba(78,159,229,0.40)' },
+      { label: 'Trained',      fraction: 25/140, color: 'rgba(52,199,89,0.45)'  },
+      { label: 'Competitive',  fraction: 30/140, color: 'rgba(52,199,89,0.65)'  },
+      { label: 'Elite',        fraction: 30/140, color: 'rgba(52,199,89,0.85)'  },
+    ],
+  });
+
+  const vdot = s.v ?? 0;
+  const vdotZone = vdot < 35 ? 'Beginner' : vdot < 45 ? 'Recreational' : vdot < 55 ? 'Trained' : vdot < 65 ? 'Competitive' : 'Elite';
+  const vdotBar = buildOnePositionBar({
+    title: 'VDOT',
+    infoId: 'vdot',
+    value: vdot > 0 ? vdot : null,
+    valueLabel: vdot.toFixed(1),
+    zoneName: vdotZone,
+    scaleMin: 20,
+    scaleMax: 80,
+    zones: [
+      { label: 'Beginner',     fraction: 15/60, color: 'rgba(78,159,229,0.25)' },
+      { label: 'Recreational', fraction: 10/60, color: 'rgba(78,159,229,0.40)' },
+      { label: 'Trained',      fraction: 10/60, color: 'rgba(52,199,89,0.45)'  },
+      { label: 'Competitive',  fraction: 10/60, color: 'rgba(52,199,89,0.65)'  },
+      { label: 'Elite',        fraction: 15/60, color: 'rgba(52,199,89,0.85)'  },
+    ],
+  });
+
+  return `
+    <div class="m-card" style="padding:14px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Progress</div>
+      ${ctlBar}
+      ${vdotBar}
+    </div>
+  `;
+}
+
+/** Reusable mini sparkline for a physiology metric field over recent history. */
+function buildPhysioMiniChart(
+  history: import('@/types').PhysiologyDayEntry[],
+  field: keyof import('@/types').PhysiologyDayEntry,
+  color: string,
+): string {
+  const vals = history.map(d => d[field] as number | undefined);
+  const nums = vals.filter((v): v is number => v !== undefined);
+  if (nums.length < 3) return `<span style="font-size:11px;color:var(--c-faint)">Building history…</span>`;
+  const W = 200, H = 32;
+  const lo = Math.min(...nums), hi = Math.max(...nums), range = hi - lo || 1;
+  const step = W / Math.max(vals.length - 1, 1);
+  const pts = vals.map((v, i) => v !== undefined
+    ? `${(i * step).toFixed(1)},${(H - ((v - lo) / range) * H).toFixed(1)}` : null)
+    .filter(Boolean).join(' ');
+  const circles = vals.map((v, i) => v !== undefined
+    ? `<circle cx="${(i * step).toFixed(1)}" cy="${(H - ((v - lo) / range) * H).toFixed(1)}" r="2.5" fill="${color}"/>` : '').join('');
+  const d0 = history[0]?.date?.slice(5) ?? '';
+  const d1 = history[history.length - 1]?.date?.slice(5) ?? '';
+  return `<svg width="${W}" height="${H + 14}" viewBox="0 0 ${W} ${H + 14}" style="display:block;max-width:100%;overflow:visible">
+    <polyline points="${pts}" stroke="${color}" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    ${circles}
+    <text x="0" y="${H + 12}" font-size="9" fill="var(--c-faint)">${d0}</text>
+    <text x="${W}" y="${H + 12}" font-size="9" fill="var(--c-faint)" text-anchor="end">${d1}</text>
+  </svg>`;
+}
+
+function buildRecoveryCard(args: { ctl: number; atl: number; tsb: number; ratio: number; s: SimulatorState }): string {
+  const { ctl, atl, tsb, ratio, s } = args;
+
+  // ── Watch-based recovery score (gated on real physiology data) ────────────
+  const physioHistory = s.physiologyHistory ?? [];
+  const recovery = computeRecoveryScore(physioHistory);
+
+  const recoveryScoreBar = recovery.hasData
+    ? buildOnePositionBar({
+        title: 'Recovery Score',
+        value: recovery.score,
+        valueLabel: String(recovery.score),
+        zoneName: recovery.zone,
+        scaleMin: 0,
+        scaleMax: 100,
+        zones: [
+          { label: 'Poor',      fraction: 35/100, color: 'rgba(255,69,58,0.55)'  },
+          { label: 'Fair',      fraction: 20/100, color: 'rgba(255,159,10,0.45)' },
+          { label: 'Good',      fraction: 20/100, color: 'rgba(52,199,89,0.45)'  },
+          { label: 'Excellent', fraction: 25/100, color: 'rgba(52,199,89,0.75)'  },
+        ],
+      })
+    : `<div style="margin-bottom:14px;padding:10px 0">
+        <div style="font-size:11px;font-weight:600;color:var(--c-black);margin-bottom:6px">Recovery Score</div>
+        <div style="font-size:11px;color:var(--c-faint)">Connect a watch to see your recovery score — needs sleep and HRV data.</div>
+      </div>`;
+
+  // ── Sub-metric bars (watch data, clickable to expand sparkline) ───────────
+  const watchBars = recovery.hasData ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:10px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch metrics</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${recovery.sleepScore != null ? `
+          <details style="border-radius:6px;overflow:hidden">
+            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
+              <span style="font-size:11px;color:var(--c-muted)">Sleep</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:13px;font-weight:500;color:${recovery.sleepScore >= 75 ? 'var(--c-ok)' : recovery.sleepScore >= 50 ? 'var(--c-caution)' : 'var(--c-warn)'}">${recovery.sleepScore}/100</span>
+                <span style="font-size:10px;color:var(--c-faint)">▾</span>
+              </div>
+            </summary>
+            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
+              ${buildPhysioMiniChart(physioHistory, 'sleepScore', 'var(--c-accent)')}
+            </div>
+          </details>` : ''}
+        ${recovery.hrvScore != null ? `
+          <details style="border-radius:6px;overflow:hidden">
+            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
+              <span style="font-size:11px;color:var(--c-muted)">HRV</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:13px;font-weight:500;color:${recovery.hrvScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">${recovery.hrvScore}/100</span>
+                <span style="font-size:10px;color:var(--c-faint)">▾</span>
+              </div>
+            </summary>
+            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
+              ${buildPhysioMiniChart(physioHistory, 'hrvRmssd', '#A855F7')}
+            </div>
+          </details>` : ''}
+        ${recovery.rhrScore != null ? `
+          <details style="border-radius:6px;overflow:hidden">
+            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
+              <span style="font-size:11px;color:var(--c-muted)">Resting HR</span>
+              <div style="display:flex;align-items:center;gap:6px">
+                <span style="font-size:13px;font-weight:500;color:${recovery.rhrScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">${recovery.rhrScore}/100</span>
+                <span style="font-size:10px;color:var(--c-faint)">▾</span>
+              </div>
+            </summary>
+            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
+              ${buildPhysioMiniChart(physioHistory, 'restingHR', '#EF4444')}
+            </div>
+          </details>` : ''}
+      </div>
+    </div>` : '';
+
+  // ── Load-based bars (always shown) ────────────────────────────────────────
+  const tsbZone2 = tsb < -25 ? 'Overtrained' : tsb < -10 ? 'Fatigued' : tsb < 0 ? 'Recovering' : tsb < 10 ? 'Fresh' : 'Peaked';
+  const tsbBar = buildOnePositionBar({
+    title: 'Freshness',
+    infoId: 'tsb',
+    value: ctl > 0 ? tsb : null,
+    valueLabel: (tsb > 0 ? '+' : '') + tsb.toFixed(0),
+    zoneName: tsbZone2,
+    scaleMin: -40,
+    scaleMax: 20,
+    zones: [
+      { label: 'Overtrained', fraction: 15/60, color: 'rgba(255,69,58,0.60)'  },
+      { label: 'Fatigued',    fraction: 15/60, color: 'rgba(255,159,10,0.55)' },
+      { label: 'Recovering',  fraction: 10/60, color: 'rgba(78,159,229,0.40)' },
+      { label: 'Fresh',       fraction: 10/60, color: 'rgba(52,199,89,0.55)'  },
+      { label: 'Peaked',      fraction: 10/60, color: 'rgba(52,199,89,0.80)'  },
+    ],
+  });
+
+  const atlZone = atl < 60 ? 'Low' : atl < 100 ? 'Moderate' : atl < 150 ? 'High' : 'Very High';
+  const atlBar = buildOnePositionBar({
+    title: 'Short-Term Load',
+    infoId: 'atl',
+    value: atl > 0 ? atl : null,
+    valueLabel: atl.toFixed(0),
+    zoneName: atlZone,
+    scaleMin: 0,
+    scaleMax: 200,
+    zones: [
+      { label: 'Low',       fraction: 60/200,  color: 'rgba(52,199,89,0.40)'  },
+      { label: 'Moderate',  fraction: 40/200,  color: 'rgba(52,199,89,0.65)'  },
+      { label: 'High',      fraction: 50/200,  color: 'rgba(255,159,10,0.55)' },
+      { label: 'Very High', fraction: 50/200,  color: 'rgba(255,69,58,0.55)'  },
+    ],
+  });
+
+  const acwrZoneLabel = ratio <= 0 ? '—' : ratio <= 1.3 ? 'Safe' : ratio <= 1.5 ? 'Moderate Risk' : 'High Risk';
+  const acwrBar = buildOnePositionBar({
+    title: 'Load Safety',
+    infoId: 'acwr',
+    value: ratio > 0 ? ratio : null,
+    valueLabel: ratio.toFixed(2) + '×',
+    zoneName: acwrZoneLabel,
+    scaleMin: 0.5,
+    scaleMax: 2.0,
+    zones: [
+      { label: 'Safe',          fraction: 0.8/1.5, color: 'rgba(52,199,89,0.55)'  },
+      { label: 'Moderate Risk', fraction: 0.2/1.5, color: 'rgba(255,159,10,0.55)' },
+      { label: 'High Risk',     fraction: 0.5/1.5, color: 'rgba(255,69,58,0.55)'  },
+    ],
+  });
+
+  return `
+    <div class="m-card" style="padding:14px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Recovery</div>
+      ${recoveryScoreBar}
+      ${watchBars}
+      ${tsbBar}
+      ${atlBar}
+      ${acwrBar}
+    </div>
+  `;
+}
+
+function buildNumbersSection(s: SimulatorState): string {
+  const tier = s.athleteTierOverride ?? s.athleteTier;
+  const atlSeedMultiplier = 1 + Math.min(0.1 * (s.gs ?? 0), 0.3);
+  const atlSeed = (s.ctlBaseline ?? 0) * atlSeedMultiplier;
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const latest = metrics[metrics.length - 1];
+
+  const ctl   = latest?.ctl  ?? 0;
+  const atl   = latest?.atl  ?? 0;
+  const tsb   = latest?.tsb  ?? 0;
+  const ratio = acwr.ratio;
+
+  return `
+    <div style="padding:0 18px 14px">
+      ${buildProgressCard({ ctl, s })}
+      ${buildRecoveryCard({ ctl, atl, tsb, ratio, s })}
+    </div>
+  `;
+}
+
+function buildMoreDetailSection(s: SimulatorState): string {
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const tierKey = tier ?? 'recreational';
   const tierCfg = TIER_ACWR_CONFIG[tierKey] ?? TIER_ACWR_CONFIG.recreational;
@@ -792,7 +1070,6 @@ function buildAdvancedSection(s: SimulatorState): string {
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
   const latest = metrics[metrics.length - 1];
 
-  const ctl   = latest?.ctl  ?? 0;
   const atl   = latest?.atl  ?? 0;
   const tsb   = latest?.tsb  ?? 0;
   const ratio = acwr.ratio;
@@ -812,10 +1089,16 @@ function buildAdvancedSection(s: SimulatorState): string {
   const tsbColor = tsb > 5 ? 'var(--c-ok)' : tsb < -15 ? 'var(--c-warn)' : 'var(--c-caution)';
   const tsbLabel = tsb > 5 ? 'Fresh' : tsb > -15 ? 'Neutral' : 'Fatigued';
 
-  // This week vs plan bars — Signal B (total load) for honest training volume tracking
+  // This week vs plan bars
   const wk = s.wks?.[s.w - 1];
   const currentTSS = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const plannedTSS = (wk as any)?.plannedTSS ?? (s.rw ?? 5) * 50;
+  const plannedTSS = computePlannedWeekTSS(
+    s.historicWeeklyTSS,
+    s.ctlBaseline,
+    wk?.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier,
+    s.rw,
+  );
   const tssPct = plannedTSS > 0 ? Math.min(150, Math.round((currentTSS / plannedTSS) * 100)) : 0;
   const tssGreenPct = Math.min(tssPct, 100);
   const tssAmberPct = Math.max(0, Math.min(tssPct - 100, 30));
@@ -833,19 +1116,16 @@ function buildAdvancedSection(s: SimulatorState): string {
   const kmAmberPct = Math.max(0, Math.min(kmPct - 100, 30));
 
   const advUnitPref = s.unitPref ?? 'km';
-  const advancedOpen = typeof localStorage !== 'undefined' && localStorage.getItem('mosaic_stats_advanced_open') === '1';
+  const moreDetailOpen = typeof localStorage !== 'undefined' && localStorage.getItem('mosaic_stats_advanced_open') === '1';
 
   return `
     <div id="advanced-section" style="padding:0 18px 14px">
-      <div style="height:1px;background:var(--c-border);margin-bottom:14px"></div>
-      <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:10px">For coaches &amp; data-driven athletes</div>
-
       <button id="advanced-btn" style="width:100%;background:none;border:none;cursor:pointer;text-align:left;padding:0 0 12px;display:flex;align-items:center;justify-content:space-between;font-family:var(--f)">
-        <span style="font-size:14px;color:var(--c-black);font-weight:500">Advanced</span>
-        <span id="advanced-chevron" style="font-size:14px;color:var(--c-muted);transition:transform 0.2s;transform:rotate(${advancedOpen ? '180' : '0'}deg)">↓</span>
+        <span style="font-size:14px;color:var(--c-accent);font-weight:500">More detail</span>
+        <span id="advanced-chevron" style="font-size:14px;color:var(--c-accent);transition:transform 0.2s;transform:rotate(${moreDetailOpen ? '180' : '0'}deg)">↓</span>
       </button>
 
-      <div id="advanced-body" style="display:${advancedOpen ? 'block' : 'none'}">
+      <div id="advanced-body" style="display:${moreDetailOpen ? 'block' : 'none'}">
 
         <!-- Training Bars -->
         <div class="m-card" style="padding:14px;margin-bottom:10px">
@@ -861,7 +1141,7 @@ function buildAdvancedSection(s: SimulatorState): string {
             </div>
           </div>
 
-          <!-- Bar 2: Total Load vs Plan (Signal B — includes gym, cross-training, runs) -->
+          <!-- Bar 2: Total Load vs Plan -->
           <div style="margin-bottom:4px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
               <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Total Load vs Plan</span>
@@ -880,23 +1160,20 @@ function buildAdvancedSection(s: SimulatorState): string {
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
 
             <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:1px">Fatigue (ATL)${buildInfoIcon('atl')}</div>
-              <div style="font-size:9px;color:var(--c-faint);margin-bottom:4px;letter-spacing:0.04em">total load · 7-day avg</div>
+              <div style="font-size:11px;color:var(--c-faint);margin-bottom:1px">Short-Term Load</div>
+              <div style="font-size:9px;color:var(--c-faint);margin-bottom:4px;letter-spacing:0.04em">ATL · 7-day avg</div>
               <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em">${atl > 0 ? atl.toFixed(0) : '—'}</div>
-              <div id="stats-info-atl" style="display:none;font-size:11px;color:var(--c-muted);line-height:1.4;margin-top:5px">${INFO_TEXTS.atl}</div>
             </div>
 
             <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Form (TSB)${buildInfoIcon('tsb')}</div>
+              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Freshness</div>
               <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em" style="color:${tsbColor}">${latest ? (tsb > 0 ? '+' : '') + tsb.toFixed(0) : '—'}</div>
               <div style="font-size:10px;color:${tsbColor}">${latest ? tsbLabel : ''}</div>
-              <div id="stats-info-tsb" style="display:none;font-size:11px;color:var(--c-muted);line-height:1.4;margin-top:5px">${INFO_TEXTS.tsb}</div>
             </div>
 
             <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Load ratio${buildInfoIcon('acwr')}</div>
+              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Load Safety</div>
               <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em">${ratio > 0 ? ratio.toFixed(2) + '×' : '—'}</div>
-              <div id="stats-info-acwr" style="display:none;font-size:11px;color:var(--c-muted);line-height:1.4;margin-top:5px">${INFO_TEXTS.acwr}</div>
             </div>
 
           </div>
@@ -905,7 +1182,7 @@ function buildAdvancedSection(s: SimulatorState): string {
         <!-- ACWR gradient bar -->
         <div class="m-card" style="padding:14px;margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Injury Risk</span>
+            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Load Safety</span>
             <span style="font-size:12px;font-weight:500;color:${acwr.status === 'high' ? 'var(--c-warn)' : acwr.status === 'caution' ? 'var(--c-caution)' : 'var(--c-ok)'}">${riskLabel}</span>
           </div>
           <div class="m-signal-track" style="margin-bottom:8px">
@@ -920,6 +1197,7 @@ function buildAdvancedSection(s: SimulatorState): string {
         ${buildCalibrationStatus(s)}
 
         <!-- Folded existing sections -->
+        ${buildForecastTimes(s)}
         ${buildFoldedRacePrediction(s)}
         ${buildFoldedPaces(s)}
         ${buildFoldedRecovery(s)}
@@ -932,6 +1210,45 @@ function buildAdvancedSection(s: SimulatorState): string {
 
 // ---------------------------------------------------------------------------
 // Folded sub-sections (light theme versions of old dark sections)
+
+function buildForecastTimes(s: SimulatorState): string {
+  // Gate: only show after ≥4 weeks of Strava data
+  const histLen = (s.historicWeeklyTSS ?? []).length;
+  if (histLen < 4 && !s.stravaHistoryFetched) return '';
+
+  const vdot = computeCurrentVDOT(s);
+  if (!vdot || vdot < 20) return '';
+
+  const distances = [
+    { label: '5K', km: 5 },
+    { label: '10K', km: 10 },
+    { label: 'Half', km: 21.0975 },
+    { label: 'Marathon', km: 42.195 },
+  ];
+
+  const fmtTime = (secs: number): string => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const sc = Math.round(secs % 60);
+    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sc).padStart(2, '0')}`;
+    return `${m}:${String(sc).padStart(2, '0')}`;
+  };
+
+  const rows = distances.map(d => {
+    const timeSec = vt(d.km, vdot);
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${d.label !== 'Marathon' ? 'border-bottom:1px solid var(--c-border)' : ''}">
+        <span style="font-size:14px;color:var(--c-muted)">${d.label}</span>
+        <span style="font-size:16px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span>
+      </div>
+    `;
+  }).join('');
+
+  return foldedSection('Forecast times', `
+    <p style="font-size:12px;color:var(--c-faint);margin-bottom:12px">Based on your current fitness</p>
+    ${rows}
+  `);
+}
 
 function buildFoldedRacePrediction(s: SimulatorState): string {
   if (s.continuousMode || (!s.initialBaseline && !s.currentFitness)) return '';
@@ -1055,13 +1372,6 @@ function buildFoldedPaces(s: SimulatorState): string {
           ${changeNote}
         </div>
       ` : changeNote}
-      <div id="stats-info-vdot" style="display:none;margin-top:8px;font-size:11px;color:var(--c-muted);line-height:1.5;background:rgba(0,0,0,0.04);border-radius:8px;padding:10px 12px">
-        Your VDOT score reflects your current running fitness. It adjusts automatically based on:<br>
-        &bull; How your recent runs felt vs. what was planned (RPE feedback)<br>
-        &bull; Analysis of your training data over time<br>
-        &bull; Updates to your threshold pace from GPS workouts<br><br>
-        A drop usually means recent sessions have been harder than expected, or your threshold data was recalibrated. A rise means your fitness is building on schedule.
-      </div>
     </div>
 
     ${paces.length > 0 ? `
@@ -1245,37 +1555,13 @@ function foldedSection(title: string, body: string): string {
 // ---------------------------------------------------------------------------
 // Main render
 
-function buildRaceSimulatorEntry(s: SimulatorState): string {
-  // Only show if we have enough fitness data to make a race prediction meaningful
-  const hasFitness = !!(s.currentFitness || s.initialBaseline || s.forecastTime);
-  if (!hasFitness) return '';
-  return `
-    <div style="padding:0 18px 14px">
-      <button id="stats-race-sim-btn"
-        style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:13px 16px;
-               background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;
-               cursor:pointer;font-family:var(--f);text-align:left">
-        <div>
-          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:2px">Simulate race day</div>
-          <div style="font-size:12px;color:var(--c-muted)">See your predicted finish time</div>
-        </div>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)"
-             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M5 12h14M13 6l6 6-6 6"/>
-        </svg>
-      </button>
-    </div>
-  `;
-}
-
 function getStatsHTML(s: SimulatorState): string {
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
 
       ${buildAboveFold(s)}
-      ${buildRaceSimulatorEntry(s)}
-      ${buildDigDeeper(s)}
-      ${buildAdvancedSection(s)}
+      ${buildNumbersSection(s)}
+      ${buildMoreDetailSection(s)}
 
     </div>
     ${renderTabBar('stats', isSimulatorMode())}
@@ -1288,46 +1574,7 @@ function wireStatsEventHandlers(s: SimulatorState): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
-  // Race simulator entry point — opens the Race Prediction section in Advanced
-  document.getElementById('stats-race-sim-btn')?.addEventListener('click', () => {
-    // Expand the Advanced section and scroll to the Race Prediction folded card
-    const advBody = document.getElementById('advanced-body');
-    const advChevron = document.getElementById('advanced-chevron');
-    if (advBody && advBody.style.display === 'none') {
-      advBody.style.display = 'block';
-      if (advChevron) advChevron.style.transform = 'rotate(180deg)';
-      localStorage.setItem('mosaic_stats_advanced_open', '1');
-    }
-    // Scroll to the Race Prediction folded card (first .stats-fold-btn)
-    setTimeout(() => {
-      const foldBtns = document.querySelectorAll<HTMLButtonElement>('.stats-fold-btn');
-      const racePredBtn = Array.from(foldBtns).find(b => b.textContent?.includes('Race Prediction'));
-      if (racePredBtn) {
-        // Expand it if not already open
-        const body = racePredBtn.nextElementSibling as HTMLElement;
-        const chevron = racePredBtn.querySelector('.stats-fold-chevron') as HTMLElement;
-        if (body && body.style.display === 'none') {
-          body.style.display = 'block';
-          if (chevron) chevron.style.transform = 'rotate(180deg)';
-        }
-        racePredBtn.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    }, 80);
-  });
-
-  // Dig deeper accordion
-  const digBtn = document.getElementById('dig-deeper-btn');
-  const digBody = document.getElementById('dig-deeper-body');
-  const digChevron = document.getElementById('dig-deeper-chevron');
-  if (digBtn && digBody && digChevron) {
-    digBtn.addEventListener('click', () => {
-      const open = digBody.style.display !== 'none';
-      digBody.style.display = open ? 'none' : 'block';
-      digChevron.style.transform = open ? 'rotate(0deg)' : 'rotate(180deg)';
-    });
-  }
-
-  // Advanced accordion
+  // More detail accordion
   const advBtn = document.getElementById('advanced-btn');
   const advBody = document.getElementById('advanced-body');
   const advChevron = document.getElementById('advanced-chevron');
@@ -1340,9 +1587,33 @@ function wireStatsEventHandlers(s: SimulatorState): void {
     });
   }
 
-  // Time range selector (main chart)
+  // Main chart: type tabs (Load/Distance/Zones) + time range tabs
   const chartInner = document.getElementById('stats-chart-inner');
   let currentRange: ChartRange = '8w';
+  let currentChart: 'load' | 'distance' | 'zones' = 'load';
+
+  const renderMainChart = () => {
+    if (!chartInner) return;
+    if (currentChart === 'load') chartInner.innerHTML = buildLoadHistoryChart(s, currentRange);
+    else if (currentChart === 'distance') chartInner.innerHTML = buildDistanceAreaChart(s, currentRange);
+    else chartInner.innerHTML = buildZoneStackChart(s);
+  };
+
+  // Chart type tabs
+  document.querySelectorAll<HTMLButtonElement>('.stats-main-chart-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentChart = (btn.dataset.chart ?? 'load') as 'load' | 'distance' | 'zones';
+      document.querySelectorAll<HTMLElement>('.stats-main-chart-tab').forEach(b => {
+        const active = b === btn;
+        b.style.background = active ? 'var(--c-surface)' : 'transparent';
+        b.style.color = active ? 'var(--c-black)' : 'var(--c-muted)';
+        b.style.boxShadow = active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none';
+      });
+      renderMainChart();
+    });
+  });
+
+  // Time range tabs
   document.querySelectorAll<HTMLButtonElement>('.history-range-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const range = btn.dataset.range as ChartRange;
@@ -1357,41 +1628,18 @@ function wireStatsEventHandlers(s: SimulatorState): void {
         if (chartInner) chartInner.innerHTML = `<div style="height:155px;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--c-muted)">Loading…</div>`;
         await fetchExtendedHistory(range === '16w' ? 16 : 52);
       }
-      // Check if extended history added any new weeks beyond the default 8w
       const defaultWeeks = s.historicWeeklyTSS?.length ?? 0;
       const extendedWeeks = s.extendedHistoryTSS?.length ?? 0;
       const hasMoreHistory = (range === '16w' || range === 'all') && extendedWeeks > defaultWeeks;
       if ((range === '16w' || range === 'all') && !hasMoreHistory && defaultWeeks > 0) {
-        // No additional history available — show info then render with available data
         if (chartInner) chartInner.innerHTML =
           buildLoadHistoryChart(s, '8w') +
           `<div style="margin-top:6px;font-size:10px;color:var(--c-faint);text-align:center">
             ${defaultWeeks} week${defaultWeeks !== 1 ? 's' : ''} synced so far — more history will appear as you keep training
           </div>`;
       } else {
-        if (chartInner) chartInner.innerHTML = buildLoadHistoryChart(s, currentRange);
+        renderMainChart();
       }
-      // Also refresh the dig deeper distance chart so it shows the same time range
-      const activeTab = document.querySelector<HTMLElement>('.stats-chart-tab-active');
-      const activeMode = (activeTab?.dataset.mode ?? 'distance') as 'distance' | 'zones';
-      const digChartEl2 = document.getElementById('dig-deeper-chart');
-      if (digChartEl2) digChartEl2.innerHTML = build8WeekChart(s, activeMode, currentRange);
-    });
-  });
-
-  // Dig deeper chart switcher tabs (distance / zones only)
-  document.querySelectorAll<HTMLButtonElement>('.stats-chart-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.dataset.mode as 'distance' | 'zones';
-      document.querySelectorAll('.stats-chart-tab').forEach(b => {
-        const el = b as HTMLElement;
-        const active = b === btn;
-        el.style.background = active ? 'var(--c-surface)' : 'transparent';
-        el.style.color = active ? 'var(--c-black)' : 'var(--c-muted)';
-        el.style.boxShadow = active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none';
-      });
-      const digChartEl = document.getElementById('dig-deeper-chart');
-      if (digChartEl) digChartEl.innerHTML = build8WeekChart(s, mode, currentRange);
     });
   });
 
