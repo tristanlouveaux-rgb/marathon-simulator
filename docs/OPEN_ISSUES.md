@@ -143,8 +143,8 @@ Home page load bars already have: label ("Training Load (TSS)"), actual/planned 
 
 ---
 
-### ✅ ISSUE-20: Activity card UX *(fixed 2026-03-09)*
-Stats grid now shows fixed 5-cell 3-column grid (Distance, Time, Avg Pace, Avg HR, Max HR) with `—` for missing fields instead of silently omitting them. HR zones already rendered as horizontal stacked bar with time labels (only when real data exists). km splits already rendered as horizontal pace bars. Map only shown when polyline exists.
+### ⚠️ ISSUE-20: Activity card UX *(partially fixed — km splits on historic runs NOT working)*
+Stats grid fix (5-cell grid with `—`) and HR zones bar confirmed working. **km splits on historic completed runs are not rendering** — marked fixed incorrectly. Needs investigation into why `buildKmSplits()` isn't producing output for past activities in the activity review card.
 
 ---
 
@@ -186,7 +186,7 @@ Legend label already reads "Your running base" (stats-view.ts line 242). No hard
 
 ---
 
-### ✅ ISSUE-28: Cannot edit historic weeks *(fixed 2026-03-08)*
+### ⚠️ ISSUE-28: Cannot edit historic weeks *(marked fixed incorrectly — still broken on device)*
 **Symptom**: Past weeks are read-only. User can't correct a missed session or adjust load retroactively.
 
 **Confirmed scope (2026-03-08)**:
@@ -543,6 +543,71 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
+### ✅ ISSUE-82: "How are you feeling?" check-in is mandatory, should be optional *(fixed 2026-03-09)*
+**Fix**: Removed auto-triggered `showRecoveryLogModal()` from startup. The `checkRecoveryAndPrompt` function no longer shows a manual check-in when no Garmin data exists — it silently returns. Both startup `checkRecoveryAndPrompt()` calls removed from `main.ts`.
+
+---
+
+### ✅ ISSUE-83: TSS value looks wrong — shows 107% / 245/330 *(resolved 2026-03-09, shared root cause with ISSUE-85)*
+**Root cause**: The inflated numbers shared a root cause with ISSUE-85 — cross-training iTRIMP was accumulated into `wk.actualTSS` without runSpec discount, and `computeWeekTSS` returned the cached (corrupted) value. The ISSUE-85 fix (always recompute from raw data, apply runSpec) resolves this. Signal B computation path (used by home "This Week" card) was audited and found correct: dedup in place, same signal both sides (D4), `signalBBaseline` from proper edge fn average.
+
+---
+
+### ISSUE-84: HR zones chart is visually ugly *(P2)* `[ui-ux-pro-max]`
+**Symptom**: HR zone bars (stacked horizontal) look rough — likely font size, spacing, colour contrast, or proportions are off. User finds them unpleasant to read.
+**Design**: Cleaner zone bar: consistent height, readable zone labels (Z1–Z5), time per zone, muted base colours with accent highlight for the dominant zone. Review against activity card and Stats chart styling for consistency.
+**Files**: `src/ui/stats-view.ts` (zone chart), `src/ui/activity-review.ts` (per-activity zones).
+
+---
+
+### ✅ ISSUE-85: Running Fitness (CTL) shows 222 — inflated, not calibrated to real athlete level *(fixed 2026-03-09)*
+**Symptom**: User has a 3:12 marathon (solidly recreational/trained), but CTL reads 222 which the tier system labels as "Elite" (200+). This is wrong and erodes trust in the whole fitness model.
+**Root cause (hypotheses)**:
+1. CTL computed from raw iTRIMP without proper normalisation — 1 hour of backcountry skiing or Hyrox inflates it disproportionately relative to running
+2. `CTL_DECAY` constant may be too slow, causing CTL to accumulate without decay
+3. `historicWeeklyTSS` baseline fed into CTL includes Signal A values (runSpec-discounted) in some paths and raw Signal B in others — inconsistency inflates the number
+4. VDOT-to-CTL expected range: a 3:12 marathoner (~VDOT 48–52) would have CTL ~60–90 in a trained training block, not 222
+**Action**: Audit the CTL EMA computation in `fitness-model.ts`, verify `CTL_DECAY` (`e^(-7/42)`), check which signal feeds `ctlBaseline`, and review tier thresholds — they may need recalibration against real runner populations.
+**Impact**: High — CTL feeds athlete tier, ACWR baseline, plannedTSS, and cross-training tier thresholds. A 222 CTL corrupts all downstream calculations.
+
+---
+
+### ISSUE-86: Reduce/Replace recommendation is wildly disproportionate to stated load *(P1)*
+**Symptom**: Modal headline says "2% above your normal load" — a trivial overshoot. But the recommendation is to cut an 8km Easy Run to 5.4km, a **32% reduction**. The severity of the action bears no relation to the severity of the problem described.
+
+**Two separate sub-bugs**:
+1. **Misleading headline vs actual signal**: "2% above normal load" likely refers to `(ACWR − safeUpper) / safeUpper` — i.e. 2% above the 1.6× safety ceiling, not 2% above baseline. These are very different things. The headline should read something like "Load ratio is just above the safe ceiling (1.63 vs 1.60)" — not frame it as a minor volume excess.
+2. **Cut size not proportional to excess**: At 1.63× ACWR (3% over the 1.6× ceiling), the appropriate cut is small — maybe 10–15% off the longest run. The 5.4km recommendation implies the cut algorithm targets a fixed TSS reduction regardless of how far over the threshold the user actually is. The reduction should scale with the degree of overshoot: tiny overshoot → gentle nudge, large overshoot → significant cut.
+
+**Expected behaviour**: At 1.63× the headline should say something like "Just over the safe load ceiling — a small adjustment is enough." The recommended distance cut should reflect the TSS delta needed to bring ACWR back to 1.6×, not a hard-coded fraction of the session.
+
+**Files**: `src/ui/suggestion-modal.ts` (headline copy + reduction calc), `src/calculations/fitness-model.ts` or wherever reduction distance is computed.
+
+---
+
+### ISSUE-87: Two "Load Safety" bars on Stats — kill the second one *(P2)*
+**Symptom**: There are two Load Safety entries visible. The first (with the contextual explanation style — "Your level: High-volume athlete · Safe ceiling: up to 60% above your usual / Fatigue includes all training (runs + gym + cross-training). Your Running Fitness is the running-specific baseline. A heavy load sports or heavy gym week correctly raises this even if you barely ran.") is good and should stay. The second duplicate should be removed.
+**Fix**: Remove the redundant second Load Safety entry. Keep the first.
+**Files**: `src/ui/stats-view.ts` — wherever the Recovery card or Load Safety bar is rendered twice.
+
+---
+
+### ISSUE-88: km/mile unit tag not working *(P1)*
+**Symptom**: The km/mile toggle (added in ISSUE-31) is not applying correctly — distances still show in the wrong unit, or the tag label itself is broken.
+**Files**: `src/ui/account-view.ts` (toggle), `src/utils/format.ts` (`formatKm`), plus all call sites in `home-view.ts`, `stats-view.ts`, `activity-detail.ts`.
+
+---
+
+### ISSUE-89: Activity load card shows "93 TSS estimated" — why estimated? *(P2)*
+**Symptom**: For activities like Tennis, the load card says "93 TSS estimated". The word "estimated" is unexplained and makes users distrust the number.
+**Context**: TSS is estimated when there's no HR stream — the app falls back to a duration-based calculation using `getDurationFallbackTSS()`. This is technically correct behaviour, but the label is confusing without explanation.
+**Two options** (need decision):
+1. **Remove "estimated" label entirely** — the number is the best available figure; labelling it estimated adds noise without helping the user act on it.
+2. **Keep label but add explanation** — e.g. "93 TSS (no HR data — based on duration)" so it's clear why and what would make it more accurate (i.e. wearing a HR monitor).
+**Files**: `src/ui/activity-review.ts` or `src/ui/excess-load-card.ts` — wherever TSS is rendered with the "estimated" tag.
+
+---
+
 ## Priority Order
 
 | Priority | Issue | Group | Effort | Impact |
@@ -562,6 +627,13 @@ suggest adding a session. Non-blocking nudge card.
 | ✅ | ISSUE-20: Activity card UX | Cards | Medium | High |
 | ✅ | ISSUE-19: Home load bars | Home | — | High |
 | ✅ | ISSUE-08: Training Load bar unlabelled | Stats | — | High |
+| P1 | ISSUE-88: km/mile tag not working | Format | Small | High |
+| P2 | ISSUE-87: Two Load Safety bars — kill second one | Stats | Small | Medium |
+| P1 | ISSUE-86: Reduce recommendation 32% cut for 2% overshoot — disproportionate | Modal | Small | High |
+| P1 | ISSUE-85: CTL 222 — inflated, corrupts all downstream calcs | Calc | Medium | Critical |
+| P1 | ISSUE-83: TSS 245/330 — looks wrong, needs audit | Calc | Small | High |
+| P2 | ISSUE-82: "How are you feeling?" check-in should be optional | Home | Small | Medium |
+| P2 | ISSUE-84: HR zones chart visually ugly | Stats/Cards | Small | Medium |
 | P2 | ISSUE-29: VDOT history | Stats | Medium | High |
 | P3 | ISSUE-35: HR vs expected | Feature | Large | High |
 | P3 | ISSUE-33: 2 workouts/day | Feature | Medium | Low |
