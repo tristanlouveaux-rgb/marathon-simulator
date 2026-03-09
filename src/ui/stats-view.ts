@@ -828,7 +828,7 @@ function buildOnePositionBar(opts: {
 function buildProgressCard(args: { ctl: number; s: SimulatorState }): string {
   const { ctl, s } = args;
 
-  const ctlZone = ctl < 30 ? 'Beginner' : ctl < 55 ? 'Recreational' : ctl < 80 ? 'Trained' : ctl < 110 ? 'Competitive' : 'Elite';
+  const ctlZone = ctl < 30 ? 'Building' : ctl < 60 ? 'Foundation' : ctl < 90 ? 'Trained' : ctl < 120 ? 'Performance' : 'Elite';
   const ctlBar = buildOnePositionBar({
     title: 'Running Fitness',
     infoId: 'ctl',
@@ -836,13 +836,13 @@ function buildProgressCard(args: { ctl: number; s: SimulatorState }): string {
     valueLabel: ctl.toFixed(0),
     zoneName: ctlZone,
     scaleMin: 0,
-    scaleMax: 140,
+    scaleMax: 150,
     zones: [
-      { label: 'Beginner',     fraction: 30/140, color: 'rgba(78,159,229,0.25)' },
-      { label: 'Recreational', fraction: 25/140, color: 'rgba(78,159,229,0.40)' },
-      { label: 'Trained',      fraction: 25/140, color: 'rgba(52,199,89,0.45)'  },
-      { label: 'Competitive',  fraction: 30/140, color: 'rgba(52,199,89,0.65)'  },
-      { label: 'Elite',        fraction: 30/140, color: 'rgba(52,199,89,0.85)'  },
+      { label: 'Building',     fraction: 30/150, color: 'rgba(78,159,229,0.25)' },
+      { label: 'Foundation',   fraction: 30/150, color: 'rgba(78,159,229,0.40)' },
+      { label: 'Trained',      fraction: 30/150, color: 'rgba(52,199,89,0.45)'  },
+      { label: 'Performance',  fraction: 30/150, color: 'rgba(52,199,89,0.65)'  },
+      { label: 'Elite',        fraction: 30/150, color: 'rgba(52,199,89,0.85)'  },
     ],
   });
 

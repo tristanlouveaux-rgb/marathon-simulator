@@ -39,6 +39,7 @@ import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
+import { computeACWR, getWeeklyExcess } from '@/calculations/fitness-model';
 
 // Intro screen removed — flow goes directly to matching screen
 
@@ -1030,7 +1031,7 @@ function applyReview(
       const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
       const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? (combinedActivity.iTrimp * 100) / 15000
+        ? (combinedActivity.iTrimp * 100) / 15000 * runSpec
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
@@ -1288,6 +1289,7 @@ function showMatchingConfirmation(
 export function autoProcessActivities(
   items: GarminPendingItem[],
   onComplete: () => void,
+  forceModal = false,
 ): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
@@ -1471,9 +1473,70 @@ export function autoProcessActivities(
     return;
   }
 
-  // Overflow → populate unspentLoadItems, then show suggestion modal
+  // Overflow → populate unspentLoadItems
   populateUnspentLoadItems(overflow);
   saveState();
+
+  // Tier 1: silently reduce nearest easy run when excess is small (≤ 15 TSS above baseline).
+  // The unspentLoadItems remain in state so the undo can restore them.
+  const _signalBBaseline = s.signalBBaseline ?? 0;
+  if (!forceModal && _signalBBaseline > 0 && overflow.length > 0) {
+    const _excess = getWeeklyExcess(wk, _signalBBaseline, s.planStartDate);
+    if (_excess > 0 && _excess <= 15) {
+      const easyRun = allWorkouts.find(
+        w => (w.t === 'easy' || w.t === 'e') && wk.rated[w.id || w.n] === undefined,
+      );
+      if (easyRun) {
+        const origKm: number = parseFloat(easyRun.d) || 0;
+        if (origKm >= 2) {
+          // ~5.5 TSS per easy km (RPE4 × 6 min/km: TL_PER_MIN[4] × 6 = 0.92 × 6)
+          const EASY_TSS_PER_KM = (TL_PER_MIN[4] ?? 0.92) * 6;
+          const reductionKm = Math.min(
+            origKm - 1, // always keep at least 1 km
+            Math.round((_excess / EASY_TSS_PER_KM) * 10) / 10,
+          );
+          if (reductionKm >= 0.5) {
+            const newKm = Math.round((origKm - reductionKm) * 10) / 10;
+            const sportLabel = overflow.length === 1
+              ? formatActivityType(overflow[0].activityType)
+              : 'heavy load activities';
+            if (!wk.workoutMods) wk.workoutMods = [];
+            wk.workoutMods.push({
+              name: easyRun.n,
+              dayOfWeek: easyRun.dayOfWeek,
+              status: 'reduced',
+              modReason: `Auto: ${sportLabel}`,
+              originalDistance: `${origKm}km`,
+              newDistance: `${newKm}km (was ${origKm}km)`,
+              autoReduceNote: `Easy run reduced by ${reductionKm.toFixed(1)} km · ${Math.round(_excess)} TSS absorbed`,
+            } as WorkoutMod);
+            saveState();
+            showAssignmentToast(autoAssignLines);
+            render();
+            onComplete();
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  // Only show the blocking modal when ACWR is elevated (caution/high) or forceModal is set.
+  // For mild excess, unspentLoadItems remain on state and the "Adjust week" button
+  // on the home view surfaces them on-demand without interrupting the user.
+  if (!forceModal) {
+    const _s = getMutableState();
+    const _tier = _s.athleteTierOverride ?? _s.athleteTier;
+    const _atlSeed = (_s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (_s.gs ?? 0), 0.3));
+    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed);
+    if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
+      showAssignmentToast(autoAssignLines);
+      render();
+      onComplete();
+      return;
+    }
+  }
+
   const s2  = getMutableState();
   const wk2 = s2.wks?.[s2.w - 1];
   if (!wk2) { onComplete(); return; }
@@ -1539,7 +1602,7 @@ export function autoProcessActivities(
       const runSpec = cfg?.runSpec ?? 0.35;
       const impactPerMin = cfg?.impactPerMin ?? 0.04;
       const crossTL = (combinedActivity.iTrimp != null && combinedActivity.iTrimp > 0)
-        ? (combinedActivity.iTrimp * 100) / 15000
+        ? (combinedActivity.iTrimp * 100) / 15000 * runSpec
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
