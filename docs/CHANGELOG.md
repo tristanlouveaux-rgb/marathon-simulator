@@ -4,6 +4,77 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-09 — Batch 6: Recovery Pipeline + Week Debrief + Activity Card
+
+- **Garmin backfill edge function** (`supabase/functions/garmin-backfill/index.ts`): Pulls N weeks of historic dailies (resting HR, max HR, HRV, stress, VO2max) + sleep from Garmin Health API. Upserts into `daily_metrics` + `sleep_summaries`. Idempotent. Called on startup in both Garmin-only and Strava+Garmin paths (ISSUE-76).
+- **`triggerGarminBackfill()`** (`supabaseClient.ts`): Fire-and-forget wrapper for the backfill edge function (ISSUE-76).
+- **Recovery Score** (`readiness.ts`): `computeRecoveryScore()` — composite 0–100 from HRV 45% / Sleep 35% / RHR 20%, all relative to user's 28-day personal baseline. Requires ≥3 days data (ISSUE-80).
+- **Recovery card with watch data** (`stats-view.ts`): `buildRecoveryCard()` shows Recovery Score position bar + clickable sub-bars (Sleep, HRV, Resting HR with 14-day sparklines). "Connect a watch" placeholder when no data (ISSUE-80).
+- **Welcome-back modal killed** (`main.ts`): `showWelcomeBackModal` trigger removed. `detectMissedWeeks()` + `recordAppOpen()` still run for state advancement (ISSUE-81).
+- **Week-end debrief** (`src/ui/week-debrief.ts`): New modal sheet — phase badge, load % vs planned, distance, CTL delta, effort pacing adjustment (reads `wk.effortScore`, applies `rpeAdj` cap ±0.5). "Finish week" button added to plan page current week header. Auto-triggers on app open (guarded by `lastDebriefWeek`) (ISSUE-60, ISSUE-34 merged).
+- **Activity card stats grid** (`activity-detail.ts`): Fixed 5-cell 3-column grid (Distance, Time, Avg Pace, Avg HR, Max HR) with `—` for missing fields instead of silently omitting them (ISSUE-20).
+- **ISSUE-08, ISSUE-19, ISSUE-30 verified resolved**: Stats training bars and home load bars already had labels + values + colour coding. Position bars already have zone labels. No code changes needed.
+
+---
+
+## 2026-03-09 — Stats Page Restructure (ISSUE-72 + ISSUE-73)
+
+- **Chart tabs** (`stats-view.ts`): Main chart card now has Load/Distance/Zones tabs at the top, replacing the hidden "Dig Deeper" accordion. All three charts are first-class, accessible with one tap.
+- **Progress card** (`stats-view.ts`): New card with Running Fitness (CTL) and VDOT position bars — the "how am I improving?" section.
+- **Recovery card** (`stats-view.ts`): New card with Freshness (TSB), Short-Term Load (ATL), and Load Safety (ACWR) position bars — the "am I recovering?" section.
+- **Killed "Dig Deeper"** (`stats-view.ts`): Removed the old accordion and its chart switcher. Distance and Zones charts promoted to main chart card tabs.
+- **Killed "Your Numbers" monolith** (`stats-view.ts`): The single 5-bar card split into focused Progress and Recovery cards.
+- **"More detail" toggle** (`stats-view.ts`): Replaces "Your Numbers" accordion. Contains training bars, metrics row, ACWR gradient bar, and all folded sections.
+- **No hardcoded zone splits** (`stats-view.ts`): Current week zone data returns zeros when no real HR data exists (previously fell back to 60/28/12 hardcoded split).
+
+## 2026-03-08 — Historic Week Editing
+
+- **Edit button on past weeks** (`plan-view.ts`): The ✎ button now appears on past week headers (`viewWeek < s.w`) instead of only the current week. Sheet message updated to explain past-week editing.
+- **Past-week RPE / skip buttons** (`plan-view.ts`): `buildWorkoutExpandedDetail` now accepts `currentWeek` param. For past weeks, Mark Done and Skip buttons are enabled — same as current week — unless the workout has a `garminActual` match.
+- **Synced-from-watch guard** (`plan-view.ts`): Workouts matched to a Garmin/Strava activity show a "Synced from watch/Strava" read-only label instead of action buttons when viewing a past week.
+- **Activity day placement** (`plan-view.ts`): `buildWorkoutCards` now pre-computes effective day-of-week from `garminActual.startTime` for each workout. Cards appear in the day column when the activity was actually performed, not the originally planned day.
+
+## 2026-03-08 — Garmin Token Refresh System
+
+- **New edge function** (`supabase/functions/garmin-refresh-token/index.ts`): Accepts user JWT, looks up `refresh_token` from `garmin_tokens`, calls Garmin OAuth2 token endpoint with `grant_type=refresh_token`, updates DB with new tokens + `expires_at`.
+- **Auto-refresh on connect check** (`src/data/supabaseClient.ts`): `isGarminConnected()` now queries `expires_at` — if expired, calls `refreshGarminToken()` before returning. New exported `refreshGarminToken()` function.
+- **Account page health info** (`src/ui/account-view.ts`): Garmin card shows "Connected · Last sync: [date]" (from latest `daily_metrics.day_date`) when healthy, or "Token expired" (amber dot) when refresh fails.
+- **Webhook logging** (`supabase/functions/garmin-webhook/index.ts`): `handleDailies()` and `handleSleeps()` now log successful upserts with user ID and date.
+
+## 2026-03-08 — Copy Audit (ISSUE-21)
+
+- **Recovery labels** (`main-view.ts`): "Recovery: Log today" → "How are you feeling?", "Recovery: Good" → "Feeling good", "Recovery: Low — Tap to adjust" → "Feeling rough — tap to adjust".
+- **Plan today card** (`plan-view.ts`): Removed 🏃 emoji, "Today's planned run" → "Today".
+- **Welcome-back modal** (`welcome-back.ts`): Bullet-point copy → plain sentences without `•` prefix.
+- **Wizard runner-type** (`runner-type.ts`): "Based on your personal bests, we've assessed your running style." → "Here's your running style, based on your race times."
+
+## 2026-03-08 — Forecast Times Section
+
+- **Forecast times** (`stats-view.ts`): New collapsible section in Stats Advanced area showing predicted 5K, 10K, Half Marathon, and Marathon times based on current VDOT. Uses `vt()` from `vdot.ts`. Gated on ≥4 weeks of historic TSS data or `stravaHistoryFetched`. Appears before Race Prediction fold.
+
+## 2026-03-05 — Training Readiness TSB Signal Fix (Batch 3.2)
+
+- **Root cause fixed** (`fitness-model.ts`): Cross-trainers were getting permanently negative TSB because the mixed-signal model uses Signal A (runSpec-discounted) for CTL but Signal B (full physiological) for ATL — creating a structural gap that shows as chronic fatigue even at steady state. This is correct for load management but wrong for readiness.
+- **`computeSameSignalTSB()`** (`fitness-model.ts`): New exported function. Uses Signal B for both CTL and ATL with the same seed, so steady-state TSB converges near 0. ATL inflation from `acwrOverridden`/`recoveryDebt` still applied. `CTL_DECAY` and `ATL_DECAY` constants exported.
+- **Wired in readiness ring** (`home-view.ts`): `buildReadinessRing` and the pill info sheet handler both now compute `tsb` and `ctlNow` from `computeSameSignalTSB` instead of the mixed-signal model. Original metrics still used for `ctlFourWeeksAgo` (momentum signal).
+- **Tests** (`fitness-model.test.ts` new, `readiness.test.ts`): 6 new `computeSameSignalTSB` unit tests (null, steady-state, spike, light week, seed, decay constants) + 2 readiness integration tests for cross-trainer scenario. **748 total tests passing**.
+
+## 2026-03-05 — Training Readiness UX Polish (Batch 3.1)
+
+- **ISSUE 1** (`home-view.ts`): Driving signal pill now has coloured left border (`border-left: 3px solid var(--c-warn)`) and "⬇ Main factor" label — user immediately sees which sub-metric is pulling the score down.
+- **ISSUE 2** (`home-view.ts`): Each pill (`data-pill="fitness|safety|momentum|recovery"`) is individually tappable. Tap opens a bottom-sheet info sheet with: current value, zone label, plain-English explanation, scale bar with position marker, and "What to do" advice. Event propagation stopped so pill tap doesn't also toggle the card.
+- **ISSUE 3** (`home-view.ts`): Removed flawed "second tap = action" behaviour. Ring card now just toggles pills open/closed. When readiness ≤ 59 an "Adjust today's session" button appears inside the pills panel — text varies by driving signal (Swap to easy run / Reduce session load / Take it lighter today / Keep consistency). Button routes to `triggerACWRReduction()`.
+- **ISSUE 4** (`home-view.ts`): Momentum pill sub-caption changed from "CTL 195" → "Fitness 195" — no jargon.
+- **ISSUE 5** (`home-view.ts`): Deleted `buildSignalBars()` and `buildSparkline()` dead code (~220 lines).
+- **ISSUE 6** (`home-view.ts`): Recovery pill value colour now reflects actual score (amber < 65, red < 40) instead of always green.
+
+## 2026-03-05 — Training Readiness Ring + No Jargon cleanup
+
+- **Training Readiness Ring** (`src/calculations/readiness.ts`, `src/ui/home-view.ts`): New composite 0–100 score on the Home page. Four sub-signals: Freshness (TSB), Load Safety (ACWR), Momentum (CTL trend), Recovery (sleep/HRV when available). Safety floor: ACWR > 1.5 caps score ≤ 39, ACWR 1.3–1.5 caps ≤ 59. Labels: Ready to Push / On Track / Manage Load / Ease Back. Ring tap expands sub-metric pills; second tap triggers reduction or Stats. Replaced `buildSignalBars()` + `buildSparkline()`. **26 tests** all passing.
+- **Bug fix** (`readiness.ts`): `clamp()` argument order was wrong (`clamp(0, 100, expr)` → always returned 100). Fixed to `clamp(expr, 0, 100)` — sub-scores now computed correctly.
+- **No Jargon** (`src/ui/main-view.ts`, `src/ui/stats-view.ts`): Renamed all user-facing jargon per spec. "Injury Risk" → "Load Safety" (plan tab bar + info sheet). "Fitness (CTL)" → "Running Fitness (CTL)". "Fatigue (ATL)" → "Short-Term Load (ATL)". "Form (TSB)" → "Freshness (TSB)". "Fitness, Fatigue & Form" → "Running Fitness, Load & Freshness". "High risk" → "High Risk" (capitalised, injury language removed).
+- **Stats page "Your Numbers"** (`src/ui/stats-view.ts`): 5 Garmin-style horizontal position bars added to the "Advanced" section (renamed "Your Numbers"): Running Fitness, Short-Term Load, Freshness, VDOT, Load Safety — each with zone segments and a marker pin.
+
 ## 2026-03-05 — Batch 2: load calc, skip logic, cardiac efficiency, injury link, modal copy, km/mi, phases, plan bar, sync button
 
 - **ISSUE-57/42**: `stravaSync.ts` — `fetchStravaHistory` and `backfillStravaHistory` now filter out the current in-progress week before storing to `historicWeeklyTSS` / `historicWeeklyRawTSS` / `historicWeeklyKm` / `historicWeeklyZones`. The edge function always returns the current partial week; storing it caused an off-by-one shift that made Fix 4 in `getChartData` backfill the wrong plan week. Near-zero load for the most recent completed week is now correctly shown.

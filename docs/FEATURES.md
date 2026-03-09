@@ -12,7 +12,11 @@ Update the status column after running `npx vitest run`.
 ### 1. VDOT Engine
 **What it does**: Converts a race time (e.g. 5K in 22:00) into a single fitness number called VDOT. All training paces are derived from this number. Higher VDOT = fitter runner.
 
-**Key file**: `src/calculations/vdot.ts`
+`currentVDOT = s.v + sum(wk.wkGain) + s.rpeAdj + (s.physioAdj || 0)`
+
+`physioAdj` is clamped to `Math.max(-5.0, rawAdj)` at all write sites to prevent stale LT data from making VDOT implausibly low. A `vdotHistory` array (last 20 entries, `{week, vdot, date}`) is appended on every VDOT-changing event (RPE rating, LT auto-update, week advance, manual fitness update, benchmark).
+
+**Key files**: `src/calculations/vdot.ts`, `src/ui/events.ts` (physioAdj + vdotHistory), `src/data/physiologySync.ts` (LT sanity check)
 **Tests**: `src/calculations/vdot.test.ts` — ✅ Passing
 
 ---
@@ -160,10 +164,8 @@ Update the status column after running `npx vitest run`.
 - Recovery log modal: 1–10 colour-graded tap buttons (red→green); maps score×10 to sleepScore
 - Recovery adjust modal: bottom-sheet offering "Run by feel", "Downgrade to Easy", or "Reduce Distance" with recommended option highlighted
 
-**Home tab UI** (`buildSignalBars` in `home-view.ts`):
-- HRV status dot (green/amber/red) next to recovery label (from RMSSD)
-- "Self-reported" caption when manual entry was made today
-- Resting HR sub-caption with ↑/↓ vs 7-day average
+**Home tab UI** (`buildReadinessRing` in `home-view.ts`):
+- Training Readiness ring (see §29) replaced `buildSignalBars` — HRV, sleep, and RHR data surface inside the Recovery pill there
 
 **ATL inflation** (`fitness-model.ts`): `recoveryDebt='orange'` → 1.10× ATL; `recoveryDebt='red'` → 1.20× ATL (stacks with `acwrOverridden` 1.15×, takes max)
 
@@ -186,7 +188,7 @@ Update the status column after running `npx vitest run`.
 - `classifyByITrimp(iTrimp, durationMin, thresholds?)` — normalises iTRIMP → TSS/hr and classifies as easy / threshold / vo2 using configurable thresholds (default: easy < 70, threshold 70–95, vo2 > 95 TSS/hr)
 - `classifyByZones(hrZones)` — uses HR zone ratios for steady-state sports (base > 80% → easy; Z3 > 40% → threshold; Z4+Z5 > 30% → vo2)
 - `classifyWorkoutType({ sport, durationMin, iTrimp?, hrZones?, thresholds? })` — decision tree: uses iTRIMP for intermittent sports (football, rugby, basketball), high-HR spike activities (>15% Z4+Z5), or short sessions (<20min zone data); uses zone distribution otherwise; falls back to profile. Returns `{ type, tss, runningEquivTSS, method }`.
-- Personal intensity thresholds stored at `SimulatorState.intensityThresholds` — calibrated from Strava labelled runs in Phase C2. Defaults used until then.
+- Personal intensity thresholds stored at `SimulatorState.intensityThresholds` — automatically calibrated from labelled Strava runs via `calibrateIntensityThresholds()` in `data/stravaSync.ts`. Strava workout names classified by keyword (e.g. "Tempo Run" → tempo zone; "Interval" → interval zone). 90th-percentile TSS/hr per zone, clamped to sane bounds. Requires ≥3 labelled sessions per zone to update from defaults (easy≤70, tempo≤95 TSS/hr). Calibration status shown in Stats → Advanced.
 
 **How to test manually**: Trigger any cross-training popup (e.g. log a 60min football session). The console will show `[CrossTraining] Zone classification: threshold (itrimp) — TSS 84.3, runEquiv 37.9` confirming method and type.
 
@@ -208,6 +210,121 @@ Update the status column after running `npx vitest run`.
 
 **Key files**: `src/cross-training/suggester.ts`, `src/ui/suggestion-modal.ts`
 **Tests**: `src/cross-training/suggester.test.ts`, `src/cross-training/universalLoad.test.ts` (classifier tests), `src/cross-training/matcher.test.ts`, `src/cross-training/boxing-bug.test.ts`, `src/cross-training/km-budget.test.ts` — ✅ Passing
+
+---
+
+### 18b. Cross-Training Load Management v2 *(designed 2026-03-04 — not yet built)*
+
+> Replaces the current "overflow → blocking modal" pattern with a tiered,
+> baseline-relative, timing-aware system. See PRINCIPLES.md for the "why."
+
+#### Signal B weekly baseline
+
+- New state field: `historicWeeklyRawTSS` — array of weekly raw iTRIMP totals (no runSpec)
+  from Strava history. Parallel to existing `historicWeeklyTSS` (Signal A).
+- New state field: `signalBBaseline` — 8-week EMA of `historicWeeklyRawTSS`.
+- Requires a new edge function query: `sport-history` mode on `sync-strava-activities`.
+  Groups `garmin_activities` by week, sums iTRIMP per week without runSpec discount.
+- **Fallback until edge function built**: use Signal A weekly total × 1.4 as a proxy
+  (rough conversion — understates baseline, so excess warnings will be slightly over-sensitive).
+- Excess this week = `currentWeekSignalB − signalBBaseline`.
+
+#### Initialisation load graph
+
+On plan start (or first load with Strava history available), the onboarding or welcome screen
+shows an 8-week chart of the athlete's historic Signal B load with:
+- A labelled baseline line ("Your usual weekly load: ~85 TSS")
+- Sport breakdown annotations (hover/tap for per-sport contribution where data allows)
+- Narrative: *"You've been consistently active. Your plan starts here and adds running load
+  gradually on top of what you're already doing."*
+- If `Signal B CTL / Signal A CTL > 1.5`: *"You have aerobic fitness from cross-training.
+  We'll build running specificity carefully to protect your joints."*
+
+**Key file to build**: onboarding or `welcome-back.ts` chart section.
+
+#### Tier 1 — Auto-adjust (≤ 15 TSS excess)
+
+- When a cross-training activity creates ≤ 15 TSS above `signalBBaseline` for the week:
+  - Find the nearest **unrated easy run** in the current week
+  - Reduce its distance proportionally (Signal A translation: excess TSS → easy km equivalent)
+  - Apply as a `workoutMod` silently (no popup)
+  - Show an inline note on the activity card: *"Easy run reduced by 1.2km · 18 TSS accounted for"*
+  - Tap the note to see details or undo (restores original distance, re-queues as Tier 2)
+- If no unrated easy run exists, excess moves to Tier 2 instead.
+
+**Key files to modify**: `src/ui/activity-review.ts` (`autoProcessActivities`),
+`src/data/activitySync.ts`, `src/calculations/fitness-model.ts` (TSS delta).
+
+#### Tier 2 — Nudge card (15–40 TSS excess)
+
+- Amber card at top of Training tab: *"32 TSS of cross-training load waiting · Adjust week"*
+- Does NOT block or interrupt. Dismissable.
+- Tapping opens the existing reduce/replace modal flow (`triggerExcessLoadAdjustment`).
+- Card clears once the user adjusts or explicitly dismisses.
+- Existing `excess-load-card.ts` is the base for this — needs threshold-relative copy
+  and "32 TSS above your baseline" framing instead of raw TSS total.
+
+**Key file**: `src/ui/excess-load-card.ts`.
+
+#### Tier 3 — Blocking modal (ACWR caution/high only)
+
+- Existing behaviour preserved. Fires only when ACWR enters caution or high zone.
+- Not triggered by TSS overage alone.
+- Existing `suggestion-modal.ts` + ACWR context header untouched.
+
+#### Timing sensitivity: day-proximity → quality session downgrade
+
+- After any activity syncs, run a **proximity check**:
+  - For each remaining unrated quality session this week (threshold, VO2, long run):
+    - Is there a completed cross-training or run activity with Signal B ≥ 30 TSS
+      whose `startTime` is within 1 calendar day of this session's planned day?
+    - If yes: apply a `workoutMod` with `status: 'downgraded'`
+      - Threshold → Marathon Pace intensity
+      - VO2/Interval → Threshold pace intensity
+      - Long run → distance reduced by 15% if Signal B ≥ 50 TSS
+    - Show explanation on the plan card: *"You trained hard yesterday — adjusted to
+      marathon pace. Move this session if you want full intensity."*
+  - If the user reschedules the session (moves to a different day): re-run proximity
+    check; clear the downgrade if the new day is safe.
+- Timing check is **independent** of Tier 1/2/3. Can fire inside baseline.
+
+**Key files to build/modify**: `src/calculations/activity-matcher.ts` or new
+`src/cross-training/timing-check.ts`; wired in `activitySync.ts` after match completes.
+
+#### "Adjust Week" card + week-start carry-over
+
+- **During the week**: If unresolved Tier 2 excess or timing downgrades exist, a persistent
+  "Adjust Week" button appears on the Training tab (not a card — a button row beneath the
+  session list). Taps into the existing reduce/replace flow with combined context.
+- **At week start** (week advance): If `prevWk.unspentLoadItems` is non-empty OR
+  excess carried from prev week, show a top-of-Training-tab card:
+  *"Last week had 28 TSS of unresolved training load. Here's how it affects this week."*
+  Card links to Adjust Week flow. Dismissable with one tap.
+
+**Key files**: `src/ui/main-view.ts` (week-start card), `src/state/persistence.ts`
+(carry-over already exists — needs copy update).
+
+#### Quality session independence
+
+- If a quality session was missed this week AND Signal B is not elevated:
+  show a **separate** quiet flag on the plan view: *"Threshold run not yet done this week."*
+- Do NOT credit cross-training surplus toward a missed quality session.
+- Do NOT remove a quality session because of cross-training surplus.
+- These are two independent signals surfaced separately.
+
+#### Strava sport-history edge function (new)
+
+New mode `sport-history` on `sync-strava-activities`:
+- Query `garmin_activities` for all activities since 16w ago
+- For each week: sum raw iTRIMP (no runSpec) → `weeklyRawTSS`
+- Return: `HistoryRawRow[] = { weekStart: string, rawTSS: number, breakdown: Record<sport, rawTSS> }`
+- Client stores `historicWeeklyRawTSS` in state from this response
+- Per-sport breakdown stored in `sportBaselineByType` for Phase 2 per-session calibration
+
+**Tests to write**: timing check unit tests; baseline delta computation; Tier 1 auto-apply
+distance reduction formula.
+
+**Status**: ❌ Not yet built
 
 ---
 
@@ -297,7 +414,9 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **UnspentLoadItem** (`src/types/state.ts`): `garminId`, `displayName`, `sport`, `durationMin`, `aerobic`, `anaerobic`, `date`, `reason`.
 
-**Key files**: `src/data/activitySync.ts`, `src/data/stravaSync.ts`, `src/calculations/activity-matcher.ts`, `src/ui/activity-review.ts`, `src/ui/matching-screen.ts`, `src/ui/excess-load-card.ts`, `src/ui/toast.ts`
+**Garmin token refresh**: `isGarminConnected()` checks `expires_at` from `garmin_tokens`. If expired, calls `refreshGarminToken()` → `garmin-refresh-token` edge function → Garmin OAuth2 refresh_token flow. Account page shows "Connected · Last sync: [date]" when healthy, "Token expired" when refresh fails. Webhook handlers (`handleDailies`, `handleSleeps`) log successful upserts.
+
+**Key files**: `src/data/activitySync.ts`, `src/data/stravaSync.ts`, `src/data/supabaseClient.ts`, `src/calculations/activity-matcher.ts`, `src/ui/activity-review.ts`, `src/ui/matching-screen.ts`, `src/ui/excess-load-card.ts`, `src/ui/toast.ts`, `supabase/functions/garmin-refresh-token/index.ts`
 **Tests**: `src/calculations/activity-matcher.test.ts` — ✅ Passing
 
 ---
@@ -344,41 +463,49 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 ---
 
-### 26. Welcome Back / Missed Week Detection
-**What it does**: When you reopen the app after one or more missed weeks, a modal greets you, applies VDOT detraining to reflect the fitness lost, and advances your plan pointer. Detraining compounds at ~1.2%/week for the first two weeks, then ~0.8%/week thereafter. Gaps of 3+ weeks reset the training phase to base. The modal only fires once per calendar day so it doesn't repeat on the same device session.
+### 26. Missed Week Detection + Week-End Debrief
+**What it does**: On app open after a missed week, `detectMissedWeeks()` silently applies VDOT detraining and advances the plan pointer (no modal). At week end, a focused debrief sheet fires (once per week, guarded by `lastDebriefWeek`):
+- Phase badge + "Week N complete"
+- Training load % vs planned, distance km, Running Fitness delta (CTL ↑/→/↓)
+- If effort score significantly high/low: offers one pacing adjustment toggle (applies ±rpeAdj, capped at ±0.5 VDOT)
+- Next week preview (phase + planned TSS)
 
-**Experience-level messaging**: Competitive, elite, hybrid, and returning-runner profiles see messaging focused on wearable data and fitness benchmarks rather than generic guidance.
+Two trigger paths: user taps "Finish week" in the plan page current week header, or auto-trigger on app open after week advance.
 
-**Key files**: `src/ui/welcome-back.ts`, `src/main.ts`
-**Tests**: ⚠️ No automated tests — logic is straightforward date maths + state mutation
+**Key files**: `src/ui/week-debrief.ts`, `src/ui/welcome-back.ts` (state logic only), `src/main.ts`
+**Tests**: ⚠️ No automated tests
 
 ---
 
 ### 27. Training Load (TL) + Performance Management Chart (PMC)
-**What it does**: Computes a TSS-calibrated **Training Load** per week and per activity. Displays CTL/ATL/TSB (fitness/fatigue/form) in the Stats tab Advanced section, with inline explanations and ACWR gradient bar.
+**What it does**: Computes Signal A (run-equivalent) and Signal B (raw physiological) TSS per week. Displays CTL/ATL/TSB (fitness/fatigue/form) in the Stats tab. CTL = Signal A (42-day EMA of run-equiv load); ATL = Signal B (7-day EMA of total load including cross-training at full weight). ACWR = Signal B ATL / Signal A CTL — correctly flags cross-training-heavy weeks.
 
-**Stats Tab (redesigned 2026-02-27)**:
-- Above fold: "Your last 8 weeks" heading + narrative sentence computed from direction × ACWR status matrix
-- 8-week SVG bar chart with zone bands (Optimal green shading, "Ease back" amber threshold, dashed baseline)
-- Two summary cards: "This Week" (±% vs CTL baseline) + "Distance" (km vs plan)
-- "Dig deeper" accordion: chart switcher (Training Load/Distance/Zones), explainer bullets, 8-week summary stats
-- "Advanced" accordion (persisted): Training Load vs Plan bar, CTL/ATL/TSB/ACWR metrics, ⓘ inline explanations, ACWR gradient bar, athlete tier label, folded sub-sections (Race Prediction, **VDOT & Paces**, Recovery, Phase Timeline)
-- **VDOT & Paces section**: Hero VDOT tile with current value, % change badge vs initial, "Started at X" sub-label, inline "What's VDOT?" explainer; paces grid (Easy/Marathon/Threshold/VO2) below
-- Home sparkline: 36px mini chart below injury risk bar; tap navigates to Stats
+**Three-signal model**:
+- **Signal A** (`computeWeekTSS`): run-equivalent TSS with runSpec discount. Used for CTL, replace/reduce decisions, race prediction.
+- **Signal B** (`computeWeekRawTSS`): raw physiological TSS, no runSpec discount. Used for ATL, ACWR injury risk, "This Week" load card.
+- **Signal C** (`wk.actualImpactLoad`): musculoskeletal impact. Computed, not yet surfaced in UI.
+
+**Stats Tab** (restructured 2026-03-09):
+- Above fold: "Your last 8 weeks" heading + narrative sentence; main chart card with **Load/Distance/Zones tabs** + 8w/16w/Full range tabs; "This Week" card (Signal B % of weekly target) + "Distance" card
+- **Running Fitness chart**: green CTL sparkline showing 42-day fitness trend, CTL value + trend arrow (↑/→/↓)
+- **Progress card**: Running Fitness (CTL) + VDOT position bars with ⓘ info buttons
+- **Recovery card**: Recovery Score position bar (from `computeRecoveryScore()`: HRV 45% / Sleep 35% / RHR 20%, gated on ≥3 days physiology data); clickable sub-bars for Sleep, HRV, Resting HR with 14-day sparklines; then Freshness (TSB) + Short-Term Load (ATL) + Load Safety (ACWR) position bars with ⓘ info buttons
+- **"More detail" toggle**: Training bars (Distance vs Plan, Total Load vs Plan), ATL/TSB/ACWR metrics row, ACWR gradient bar, calibration status, plus folded sections: Forecast times, Race Prediction, VDOT & Paces, Recovery & Physiology, Phase Timeline
+- **VDOT sparkline**: shows `s.vdotHistory` trend in VDOT & Paces section. Colour-coded change note. Info button explains all VDOT adjustment sources.
+- Home sparkline: mini chart below injury risk bar; tap navigates to Stats
+
+**Plan view**: Completed week headers show a muted `XX TSS` badge (Signal A).
 
 **TL per session**:
-- Runs matched via Garmin: iTRIMP → TL (normalised to ~55 TL for easy 60min), or RPE × TL_PER_MIN × distKm fallback
-- Cross-training (manual or Garmin): durationMin × TL_PER_MIN[rpe] × sport.runSpec
-- Stored on `wk.actualTL` each time an activity is processed
+- Runs (garminActuals): raw iTRIMP → TL (no runSpec) — same for both signals
+- Cross-training (adhocWorkouts / unspentLoadItems): Signal A applies `runSpec`; Signal B uses full iTRIMP weight
 
-**Impact Load**: km-based for running (multiplied by intensity factor: easy=1.0, threshold=1.3, VO2=1.5); duration-based for cross-training (sport.impactPerMin). Stored on `wk.actualImpactLoad`.
-
-**PMC chart**: CTL = 42-day EMA of weekly TL; ATL = 7-day EMA; TSB = CTL − ATL. Rendered as a column chart in the Stats tab with colour-coded form indicator (Fresh/Neutral/Fatigued).
+**Impact Load**: km-based for running (intensity factor: easy=1.0, threshold=1.3, VO2=1.5); duration × `impactPerMin` for cross-training. Stored on `wk.actualImpactLoad` (not yet surfaced).
 
 **Key files**:
-- `src/calculations/fitness-model.ts` — `computeWeekTSS()` (renamed from `computeWeekTL` in Phase A), `computeFitnessModel()`
-- `src/constants/sports.ts` — `TL_PER_MIN`, `IMPACT_PER_KM`, `SPORTS_DB.impactPerMin`
-- `src/ui/stats-view.ts` — `build8WeekChart()`, `buildAdvancedSection()`, `buildDigDeeper()`
+- `src/calculations/fitness-model.ts` — `computeWeekTSS()` (Signal A), `computeWeekRawTSS()` (Signal B), `computeFitnessModel()`, `FitnessMetrics`
+- `src/constants/sports.ts` — `TL_PER_MIN`, `IMPACT_PER_KM`, `SPORTS_DB` (strength runSpec=0.35)
+- `src/ui/stats-view.ts` — `buildLoadHistoryChart()`, `buildRunningFitnessChart()`, `buildProgressCard()`, `buildRecoveryCard()`, `buildMoreDetailSection()`
 - `src/calculations/activity-matcher.ts` — accumulates `wk.actualTL` and `wk.actualImpactLoad`
 - `src/ui/activity-review.ts` — stores cross-training TL after user approves adjustments
 
@@ -386,8 +513,8 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 ---
 
-### 28. ACWR Injury Risk (Phase B)
-**What it does**: Computes the Acute:Chronic Workload Ratio (ATL ÷ CTL) from weekly TSS history. Shows a colour-coded bar in the Training tab ("Injury Risk" row inside "This Week" panel) and a "Reduce this week" button when risk is elevated. Automatically lightens the next week's plan when ACWR is caution or high.
+### 28. ACWR Load Safety (Phase B)
+**What it does**: Computes the Acute:Chronic Workload Ratio (ATL ÷ CTL) from weekly TSS history. Shows a colour-coded bar in the Training tab ("Load Safety" row inside "This Week" panel) and a "Reduce this week" button when risk is elevated. Automatically lightens the next week's plan when ACWR is caution or high.
 
 **ACWR bar (Training tab)**:
 - Green when ratio ≤ safe upper bound (varies by athlete tier)
@@ -440,12 +567,37 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 **Phase B v3 — HR Zone Matching for Replacement Decisions (backend complete 2026-02-27)**:
 - `classifyWorkoutType()` wired into `buildCrossTrainingPopup()` — every activity is now classified before candidate scoring
 - Zone-profile match now adjusts candidate similarity scores (see Feature #18 above)
-- `AthleteContext.intensityThresholds?` added — will be populated from Strava history in Phase C2
+- `AthleteContext.intensityThresholds?` added — populated from `s.intensityThresholds` (calibrated via `calibrateIntensityThresholds()` in `stravaSync.ts`)
 - UI portion (modal header showing sport info, speed, match quality, km impact) is pending the UX redesign agent — see `docs/specs/LOAD_SYSTEM_SPEC.md §6.5` for the spec and `§12.7` for wiring instructions
 
 **How to test Phase B v3**: Run `npx vitest run src/cross-training/universalLoad.test.ts` — 15 classifier tests at the bottom of the file cover all three classifier functions and the decision tree. For the end-to-end matching, trigger a cross-training popup and read the `[CrossTraining]` console lines.
 
 **Tests**: ⚠️ Phase B/B v2 UI — no automated tests. Phase B v3 classifier — ✅ 15 tests passing (`src/cross-training/universalLoad.test.ts`)
+
+---
+
+### 29. Training Readiness Ring
+**What it does**: Composite 0–100 score on the Home page answering "Should I do today's planned workout as-is?" One ring gauge, one label, one sentence. Replaces the old `buildSignalBars()` + `buildSparkline()` on the Home tab.
+
+**Four sub-signals**:
+- **Freshness** (35% / 40% without recovery) — TSB. Ranges from Overtrained → Peaked.
+- **Load Safety** (30% / 35%) — ACWR. Safe / Moderate Risk / High Risk.
+- **Momentum** (15% / 25%) — CTL now vs 4 weeks ago. Rising / Stable / Dropping.
+- **Recovery** (20%, greyed out if no watch) — sleep score + HRV RMSSD delta vs personal avg. "Connect watch to unlock."
+
+**Safety floor**: ACWR > 1.5 → score ≤ 39 (Ease Back); ACWR 1.3–1.5 → score ≤ 59 (Manage Load). A good sleep can't override a load spike.
+
+**Score → label**: 80–100 Ready to Push (green) · 60–79 On Track (blue) · 40–59 Manage Load (amber) · 0–39 Ease Back (red)
+
+**Tap behaviour**: First tap expands sub-metric pills. Second tap triggers action — injury modal if injured, ACWR reduction if elevated, or Stats tab if all clear.
+
+**No Jargon Policy**: ATL/CTL/TSB/ACWR never shown in user-facing copy. Info sheets use both: "Running Fitness (CTL)", "Freshness (TSB)", etc.
+
+**Key files**:
+- `src/calculations/readiness.ts` — `computeReadiness()`, `readinessColor()`, `drivingSignalLabel()`
+- `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handler
+
+**Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios.
 
 ---
 
@@ -470,6 +622,15 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 **What it does**: Workout cards in the Plan tab are draggable. Drag card A onto card B to swap their assigned days for the current week. Day overrides are stored in `wk.workoutMoves` (already typed as `Record<string, number>` on `Week`) and applied when generating the week's workout list. Persists across re-renders; cleared when advancing to a new week.
 
 **Key file**: `src/ui/plan-view.ts` — `wirePlanHandlers` drag-and-drop section; `getPlanHTML` workoutMoves application
+**Tests**: ⚠️ No automated tests
+
+---
+
+## Historic Week Editing
+
+**What it does**: Past weeks (before current week) now show an edit button in the header. Tapping a past-week workout card shows Mark Done / Skip buttons so you can retroactively log RPE or mark skips. Watch-synced sessions (Garmin/Strava matched via `garminActuals`) are read-only and display a "Synced from watch/Strava" label instead of action buttons. Activities with a `startTime` are placed in the day column matching when they were actually performed, not the originally planned day.
+
+**Key file**: `src/ui/plan-view.ts` — `buildWorkoutExpandedDetail` (synced guard + past-week actions), `buildWorkoutCards` (effective day placement), `getPlanHTML` (edit button condition)
 **Tests**: ⚠️ No automated tests
 
 ---
