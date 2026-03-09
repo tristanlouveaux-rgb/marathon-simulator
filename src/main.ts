@@ -8,7 +8,7 @@ import { loadState, getState } from '@/state';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
-import { detectMissedWeeks, recordAppOpen } from '@/ui/welcome-back';
+import { advanceWeekToToday, recordAppOpen } from '@/ui/welcome-back';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio } from '@/data/physiologySync';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
@@ -72,7 +72,7 @@ function launchApp(): void {
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
-    detectMissedWeeks(); // still advances week if needed
+    advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
     recordAppOpen();
     renderHomeView();
     // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
@@ -144,11 +144,12 @@ function launchApp(): void {
         if (wearable === 'garmin') {
           isGarminConnected().then((garminOk) => {
             if (garminOk) {
-              syncPhysiologySnapshot(7).then(() => {
-                checkRecoveryAndPrompt(getState()).catch(() => {});
-              }).catch(() => {});
-              // Backfill historic recovery data (idempotent — safe to call every launch)
-              triggerGarminBackfill(8).catch(() => {});
+              // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
+              triggerGarminBackfill(8).catch(() => {}).finally(() => {
+                syncPhysiologySnapshot(7).then(() => {
+                  checkRecoveryAndPrompt(getState()).catch(() => {});
+                }).catch(() => {});
+              });
             }
           }).catch(() => {});
         }
@@ -157,13 +158,14 @@ function launchApp(): void {
       // Garmin-only: activities + biometrics from Garmin webhook
       isGarminConnected().then((connected) => {
         if (!connected) return;
-        syncPhysiologySnapshot(7).then(() => {
-          checkRecoveryAndPrompt(getState()).catch(() => {});
-        }).catch(() => {});
         syncActivities().catch(() => {});
         processPendingCrossTraining();
-        // Backfill historic recovery data (idempotent — safe to call every launch)
-        triggerGarminBackfill(8).catch(() => {});
+        // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
+        triggerGarminBackfill(8).catch(() => {}).finally(() => {
+          syncPhysiologySnapshot(7).then(() => {
+            checkRecoveryAndPrompt(getState()).catch(() => {});
+          }).catch(() => {});
+        });
       }).catch(() => {});
     }
   }

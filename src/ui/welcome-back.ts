@@ -20,7 +20,7 @@ const LAST_OPENED_KEY = 'mosaic_last_opened_at';
 const WELCOME_BACK_MIN_HOURS = 24;
 
 // ---------------------------------------------------------------------------
-// Detection
+// Detection + silent advancement
 // ---------------------------------------------------------------------------
 
 /**
@@ -44,6 +44,38 @@ export function detectMissedWeeks(): number {
 
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   return Math.floor((today.getTime() - weekEnd.getTime()) / msPerWeek) + 1;
+}
+
+/**
+ * Silently advance s.w to the correct calendar week and apply proportional
+ * VDOT detraining. Called on every launch — replaces the modal trigger now
+ * that the welcome-back modal is removed (ISSUE-81).
+ *
+ * Safe to call when gap = 0 (no-op) or repeatedly (idempotent within a day).
+ */
+export function advanceWeekToToday(): void {
+  const gap = detectMissedWeeks();
+  if (gap <= 0) return;
+
+  const s = getMutableState();
+
+  // Advance week pointer
+  const targetWeek = computeCurrentCalendarWeek(s);
+  const maxWeek = s.tw || targetWeek;
+  s.w = Math.min(targetWeek, maxWeek);
+
+  // Apply VDOT detraining silently
+  if (s.v && gap > 0) {
+    const loss = computeVdotLoss(s.v, gap);
+    if (loss > 0) s.v = Math.max(Math.round((s.v - loss) * 10) / 10, 20);
+  }
+
+  // 3+ week gap: mark landing week as base (reduced volume)
+  if (gap >= 3 && s.wks?.[s.w - 1]) {
+    s.wks[s.w - 1].ph = 'base';
+  }
+
+  saveState();
 }
 
 // ---------------------------------------------------------------------------
@@ -138,16 +170,16 @@ export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): 
     bodyText = isDataFirst
       ? 'One week off means minimal detraining — aerobic base is intact.'
       : "You've missed one week. Your aerobic base is still solid — let's pick right back up.";
-    bullets.push('• Light detraining effect — your fitness is largely preserved');
-    bullets.push('• Plan continues from today\'s week, no structural changes');
+    bullets.push('Light detraining — your fitness is largely preserved.');
+    bullets.push('Your plan continues from today, no changes needed.');
   } else if (weeksGap === 2) {
     titleText = isDataFirst ? `Back after ${weeksLabel}` : `Welcome back — ${weeksLabel} away`;
     bodyText = isDataFirst
       ? 'Two weeks off: moderate detraining, aerobic base is reducing.'
       : "You've been away for 2 weeks — aerobic base is starting to reduce but is still strong.";
-    bullets.push('• Moderate detraining detected');
-    bullets.push('• Keep early sessions comfortable to ease back in');
-    bullets.push('• Plan jumps to today\'s week');
+    bullets.push('Moderate detraining detected.');
+    bullets.push('Keep early sessions comfortable to ease back in.');
+    bullets.push('Your plan jumps to today\'s week.');
   } else {
     titleText = isDataFirst
       ? `Return after ${weeksLabel} — ease-in week active`
@@ -155,15 +187,15 @@ export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): 
     bodyText = isDataFirst
       ? `Significant detraining over ${weeksLabel}. This week is set to Base phase (reduced volume) to minimise injury risk.`
       : `You\'ve been away for ${weeksLabel}. We\'ll ease you back in with a lighter week — prioritise consistency over pace.`;
-    bullets.push('• Aerobic base has reduced — intensity targets are for reference only');
-    bullets.push('• This week is treated as a return / base week (reduced volume)');
-    bullets.push('• Run by feel; don\'t chase pace targets');
+    bullets.push('Your aerobic base has reduced — intensity targets are just guides.');
+    bullets.push('This week is a return week with reduced volume.');
+    bullets.push('Run by feel, don\'t chase pace targets.');
   }
 
   if (vdotLoss > 0) {
     bullets.push(isDataFirst
-      ? `• VDOT adjusted down by ~${vdotLoss.toFixed(1)} points`
-      : `• Fitness adjusted to reflect time away`);
+      ? `Fitness adjusted down by ~${vdotLoss.toFixed(1)} points.`
+      : `Fitness adjusted to reflect time away.`);
   }
 
   // ── Modal HTML ─────────────────────────────────────────────────────────────
