@@ -146,9 +146,7 @@ function launchApp(): void {
             if (garminOk) {
               // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
               triggerGarminBackfill(8).catch(() => {}).finally(() => {
-                syncPhysiologySnapshot(7).then(() => {
-                  checkRecoveryAndPrompt(getState()).catch(() => {});
-                }).catch(() => {});
+                syncPhysiologySnapshot(7).catch(() => {});
               });
             }
           }).catch(() => {});
@@ -162,9 +160,7 @@ function launchApp(): void {
         processPendingCrossTraining();
         // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
         triggerGarminBackfill(8).catch(() => {}).finally(() => {
-          syncPhysiologySnapshot(7).then(() => {
-            checkRecoveryAndPrompt(getState()).catch(() => {});
-          }).catch(() => {});
+          syncPhysiologySnapshot(7).catch(() => {});
         });
       }).catch(() => {});
     }
@@ -225,9 +221,7 @@ async function checkRecoveryAndPrompt(s: ReturnType<typeof import('@/state').get
   const todayPhysio = physioHistory.find(p => p.date === today);
 
   if (!todayPhysio) {
-    // No Garmin data for today — show manual check-in
-    const { showRecoveryLogModal } = await import('@/ui/plan-view');
-    showRecoveryLogModal();
+    // No Garmin data for today — silently skip (ISSUE-82: don't auto-prompt)
     return;
   }
 
