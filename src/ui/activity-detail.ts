@@ -51,21 +51,20 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
       })
     : '';
 
-  // ─── Stats grid ─────────────────────────────────────────────────────────────
-  const stats = [
-    actual.distanceKm > 0.1 ? { val: formatKm(actual.distanceKm, unitPref, 2), lbl: 'Distance' } : null,
-    actual.durationSec > 0 ? { val: fmtDuration(actual.durationSec), lbl: 'Time' } : null,
-    actual.avgPaceSecKm ? { val: fmtPace(actual.avgPaceSecKm), lbl: 'Avg Pace' } : null,
-    actual.avgHR ? { val: `${actual.avgHR} bpm`, lbl: 'Avg HR' } : null,
-    actual.maxHR ? { val: `${actual.maxHR} bpm`, lbl: 'Max HR' } : null,
-    actual.calories ? { val: `${actual.calories} kcal`, lbl: 'Calories' } : null,
-  ].filter(Boolean) as { val: string; lbl: string }[];
+  // ─── Stats grid — always 5 cells, — for missing fields ──────────────────────
+  const stats: { val: string; lbl: string }[] = [
+    { val: actual.distanceKm > 0.1 ? formatKm(actual.distanceKm, unitPref, 2) : '—', lbl: 'Distance' },
+    { val: actual.durationSec > 0 ? fmtDuration(actual.durationSec) : '—', lbl: 'Time' },
+    { val: actual.avgPaceSecKm ? fmtPace(actual.avgPaceSecKm) : '—', lbl: 'Avg Pace' },
+    { val: actual.avgHR ? `${actual.avgHR} bpm` : '—', lbl: 'Avg HR' },
+    { val: actual.maxHR ? `${actual.maxHR} bpm` : '—', lbl: 'Max HR' },
+  ];
 
   const statsHtml = `
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px">
       ${stats.map(item => `
-        <div style="flex:1;min-width:calc(50% - 4px);padding:12px 14px;background:var(--c-surface);border-radius:var(--r-card);border:1px solid var(--c-border)">
-          <div style="font-size:20px;font-weight:300;letter-spacing:-0.03em;line-height:1.1">${esc(item.val)}</div>
+        <div style="padding:12px 14px;background:var(--c-surface);border-radius:var(--r-card);border:1px solid var(--c-border)">
+          <div style="font-size:20px;font-weight:300;letter-spacing:-0.03em;line-height:1.1;color:${item.val === '—' ? 'var(--c-faint)' : 'inherit'}">${esc(item.val)}</div>
           <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-top:4px">${item.lbl}</div>
         </div>
       `).join('')}
