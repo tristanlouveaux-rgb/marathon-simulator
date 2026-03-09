@@ -20,34 +20,62 @@ Deno.serve(async (req) => {
         const { days } = await req.json()
         const limit = days || 1
 
+        // Resolve authenticated user for explicit user_id filtering
+        const { data: { user }, error: authErr } = await supabaseClient.auth.getUser()
+        if (authErr || !user) {
+            return new Response(JSON.stringify({ error: 'unauthorized' }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: 401,
+            })
+        }
+        const userId = user.id
+
         // Calculate start date
         const startDate = new Date()
         startDate.setDate(startDate.getDate() - (limit + 1))
         const startDateStr = startDate.toISOString().split('T')[0]
 
+        console.log(`[sync-physiology-snapshot] ${limit}d from ${startDateStr} for user ${userId.slice(0,8)}`)
+
         // Query daily_metrics with correct column names matching webhook schema
         // Webhook writes: garmin_user_id, day_date, resting_hr, hrv_rmssd, stress_avg, vo2max
-        const [metricsRes, sleepRes, physioRes] = await Promise.all([
+        // Explicit user_id filter (defense in depth alongside RLS)
+        const [metricsRes, sleepRes, physioRes, maxHRRes] = await Promise.all([
             supabaseClient
                 .from('daily_metrics')
                 .select('day_date, resting_hr, max_hr, hrv_rmssd, stress_avg, vo2max')
+                .eq('user_id', userId)
                 .gte('day_date', startDateStr)
                 .order('day_date', { ascending: true }),
 
             supabaseClient
                 .from('sleep_summaries')
                 .select('calendar_date, overall_sleep_score')
+                .eq('user_id', userId)
                 .gte('calendar_date', startDateStr),
 
             supabaseClient
                 .from('physiology_snapshots')
-                .select('calendar_date, vo2_max_running, lactate_threshold_pace')
-                .gte('calendar_date', startDateStr)
+                .select('calendar_date, vo2_max_running, lactate_threshold_pace, lt_heart_rate')
+                .eq('user_id', userId)
+                .gte('calendar_date', startDateStr),
+
+            // All-time peak max HR across every stored activity (Garmin + Strava)
+            supabaseClient
+                .from('garmin_activities')
+                .select('max_hr')
+                .eq('user_id', userId)
+                .not('max_hr', 'is', null)
+                .order('max_hr', { ascending: false })
+                .limit(1)
         ])
 
         if (metricsRes.error) throw metricsRes.error
         if (sleepRes.error) throw sleepRes.error
         if (physioRes.error) throw physioRes.error
+        // maxHRRes failure is non-fatal — just skip
+
+        console.log(`[sync-physiology-snapshot] Results: metrics=${metricsRes.data?.length ?? 0}, sleep=${sleepRes.data?.length ?? 0}, physio=${physioRes.data?.length ?? 0}`)
 
         // Merge by date — map DB column names to client-expected names
         const mergedData = new Map<string, any>()
@@ -78,13 +106,16 @@ Deno.serve(async (req) => {
                 existing.vo2max = p.vo2_max_running
             }
             existing.lt_pace_sec_km = p.lactate_threshold_pace
+            existing.lt_heart_rate = p.lt_heart_rate ?? null
             mergedData.set(p.calendar_date, existing)
         }
 
-        const result = Array.from(mergedData.values())
+        const mergedDays = Array.from(mergedData.values())
             .sort((a, b) => a.calendar_date.localeCompare(b.calendar_date))
 
-        return new Response(JSON.stringify(result), {
+        const allTimeMaxHR: number | null = maxHRRes.data?.[0]?.max_hr ?? null
+
+        return new Response(JSON.stringify({ days: mergedDays, maxHR: allTimeMaxHR }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 200,
         })
