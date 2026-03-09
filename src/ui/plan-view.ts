@@ -16,7 +16,7 @@ import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisp
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS } from '@/calculations/fitness-model';
 import { triggerExcessLoadAdjustment } from './excess-load-card';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
 import type { MorningPainResponse } from '@/types/injury';
@@ -125,7 +125,7 @@ function fmtZoneSec(sec: number): string {
 
 // ─── Workout expanded detail ──────────────────────────────────────────────────
 
-function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: number): string {
+function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: number, currentWeek?: number): string {
   const id = w.id || w.n;
   const rated = wk?.rated ?? {};
   const ratingVal = rated[id];
@@ -330,6 +330,17 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   }
 
   // ── Action buttons ────────────────────────────────────────────────────────
+  const _isPastWeek = currentWeek != null && viewWeek < currentWeek;
+  const _isSynced = !!garminActual;
+
+  // Synced-from-watch guard: past weeks with garmin/strava match are read-only
+  if (_isPastWeek && _isSynced) {
+    const syncSource = garminActual!.garminId?.startsWith('strava-') ? 'Strava' : 'watch';
+    html += `<div style="display:flex;align-items:center;gap:6px;padding:8px 12px;background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.15);border-radius:var(--r-card);margin-bottom:8px">`;
+    html += `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-ok)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>`;
+    html += `<span style="font-size:12px;font-weight:500;color:var(--c-ok)">Synced from ${syncSource}</span>`;
+    html += `</div>`;
+  } else {
   const testType = (w as any).testType as string | undefined;
   if (!isDone && !isSkipped && testType) {
     // Capacity test workout — different button set
@@ -380,6 +391,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   } else if (isDone) {
     html += `<button class="plan-action-unrate m-btn-secondary" data-workout-id="${escapeHtml(id)}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.7">Unmark as Done</button>`;
   }
+  } // end synced guard
 
   // ── Move to day ───────────────────────────────────────────────────────────
   const currentDay = w.dayOfWeek ?? 0;
@@ -597,12 +609,37 @@ function buildWorkoutCards(
   const jsDay = new Date().getDay();
   const actualToday = jsDay === 0 ? 6 : jsDay - 1;
 
+  // Pre-compute effective dayOfWeek for each workout based on garminActual startTime
+  const effectiveDay = new Map<string, number>();
+  if (s.planStartDate && wk?.garminActuals) {
+    const weekMonday = weekStartDate(s.planStartDate, viewWeek);
+    for (const w of workouts) {
+      const wId = w.id || w.n;
+      const ga = (wk.garminActuals as any)?.[wId];
+      if (ga?.startTime) {
+        const actDate = new Date(ga.startTime);
+        const jsDay = actDate.getDay();
+        const monDay = jsDay === 0 ? 6 : jsDay - 1; // convert JS Sunday=0 to Mon=0..Sun=6
+        // Only override if the activity falls within this week (within 7 days of weekMonday)
+        const diffMs = actDate.getTime() - weekMonday.getTime();
+        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+        if (diffDays >= 0 && diffDays < 7) {
+          effectiveDay.set(wId, monDay);
+        }
+      }
+    }
+  }
+
   // Build one card per day (Mon–Sun), grouping workouts by dayOfWeek
   const cards: string[] = [];
   const dayFirstCardEmitted = new Set<number>(); // track which days have had their first card anchor
 
   for (let dayIdx = 0; dayIdx < 7; dayIdx++) {
-    const dayWorkouts = workouts.filter((w: any) => w.dayOfWeek === dayIdx);
+    const dayWorkouts = workouts.filter((w: any) => {
+      const wId = w.id || w.n;
+      const eff = effectiveDay.get(wId);
+      return (eff != null ? eff : w.dayOfWeek) === dayIdx;
+    });
 
     if (dayWorkouts.length === 0) {
       // Rest day row — also a drop target
@@ -615,6 +652,18 @@ function buildWorkoutCards(
       `);
       continue;
     }
+
+    // Sort workouts within each day: most recent activity first (by garminActual startTime)
+    dayWorkouts.sort((a: any, b: any) => {
+      const aId = a.id || a.n;
+      const bId = b.id || b.n;
+      const aTime = (wk?.garminActuals as any)?.[aId]?.startTime || (wk?.garminActuals as any)?.[aId]?.date || '';
+      const bTime = (wk?.garminActuals as any)?.[bId]?.startTime || (wk?.garminActuals as any)?.[bId]?.date || '';
+      if (bTime && aTime) return bTime > aTime ? 1 : bTime < aTime ? -1 : 0;
+      if (bTime) return 1;
+      if (aTime) return -1;
+      return 0;
+    });
 
     // Render each workout for this day
     for (const w of dayWorkouts) {
@@ -773,7 +822,7 @@ function buildWorkoutCards(
           </div>`
         : '';
 
-      const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek);
+      const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
       cards.push(`
         <div ${dayAnchorId}class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="border-top:1px solid var(--c-border);background:var(--c-surface);${borderLeft}">
           <div class="plan-card-header" style="display:flex;align-items:center;padding:${headerPad};gap:12px;cursor:pointer">
@@ -1674,9 +1723,8 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
 
         ${todayWorkout ? `
           <div style="background:var(--c-faint);border-radius:10px;padding:10px 12px;margin-bottom:16px;display:flex;align-items:center;gap:8px">
-            <span style="font-size:16px">🏃</span>
             <div>
-              <div style="font-size:12px;color:var(--c-muted);font-weight:500">Today's planned run</div>
+              <div style="font-size:12px;color:var(--c-muted);font-weight:500">Today</div>
               <div style="font-size:14px;font-weight:600;color:var(--c-black)">${todayWorkout.n}</div>
             </div>
           </div>
@@ -1855,9 +1903,15 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       : `${_weekRunTSS} TSS`)
     : '';
   // Week load summary — planned vs actual for current/future weeks.
-  // Both use Signal A (run-equivalent) so the comparison is apples-to-apples: running plan vs running done.
-  // Total physiological load is visible elsewhere (Home excess-load card, Stats above-fold).
-  const _plannedTSS = wk ? Math.round(computeWeekTSS(wk, {}, s.planStartDate)) : 0;
+  // Plan page uses Signal A (run-equivalent) — running plan vs running done.
+  // Planned load derived from historic median × phase multiplier (ISSUE-79).
+  const _plannedTSS = computePlannedWeekTSS(
+    s.historicWeeklyTSS,
+    s.ctlBaseline,
+    wk?.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier,
+    s.rw,
+  );
   const _actualTSS = wk ? Math.round(computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   // Visual load bar — shown for current + future weeks (past weeks show weekTSSBadge instead)
   const showLoadBar = _plannedTSS > 0 && viewWeek >= s.w;
@@ -1909,7 +1963,8 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           </div>
           <div style="display:flex;gap:8px;align-items:center">
             ${buildInjuryHeaderBtn(injured)}
-            ${isCurrentWeek ? `<button id="plan-edit-week-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer" title="Edit week">&#9998;</button>` : ''}
+            ${viewWeek < s.w ? `<button id="plan-edit-week-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer" title="Edit week">&#9998;</button>` : ''}
+            ${isCurrentWeek && s.w > 1 ? `<button id="plan-finish-week-btn" style="height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--c-border);background:transparent;font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;letter-spacing:0.02em">Finish week</button>` : ''}
             ${navBtn('prev', canGoBack)}
             ${navBtn('next', canGoForward)}
             <button id="plan-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
@@ -1974,8 +2029,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     sheet.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:var(--c-surface);border-radius:16px 16px 0 0;padding:24px 20px 40px;box-shadow:0 -4px 24px rgba(0,0,0,0.12)';
     sheet.innerHTML = `
       <div style="width:36px;height:4px;background:var(--c-border);border-radius:2px;margin:0 auto 20px"></div>
-      <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;margin-bottom:10px">Edit week</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.5">Week editing coming soon — for now, use the session cards to mark sessions complete or skip them.</div>
+      <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;margin-bottom:10px">Edit past week</div>
+      <div style="font-size:14px;color:var(--c-muted);line-height:1.5">Tap a session card to mark it as done or skipped. Watch-synced sessions are locked.</div>
       <button id="plan-edit-week-close" style="margin-top:24px;width:100%;padding:13px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;cursor:pointer;color:var(--c-black);font-family:var(--f)">Close</button>
     `;
     const overlay = document.createElement('div');
@@ -1985,6 +2040,16 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     sheet.querySelector('#plan-edit-week-close')?.addEventListener('click', close);
     document.body.appendChild(overlay);
     document.body.appendChild(sheet);
+  });
+
+  // Finish week button — fires week-end debrief for the PREVIOUS week
+  document.getElementById('plan-finish-week-btn')?.addEventListener('click', () => {
+    const curWeek = (getState() as any).w ?? 1;
+    if (curWeek > 1) {
+      import('@/ui/week-debrief').then(({ showWeekDebrief }) => {
+        showWeekDebrief(curWeek - 1);
+      });
+    }
   });
 
   // Injury buttons

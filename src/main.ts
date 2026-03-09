@@ -8,12 +8,12 @@ import { loadState, getState } from '@/state';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
-import { detectMissedWeeks, showWelcomeBackModal } from '@/ui/welcome-back';
+import { detectMissedWeeks, recordAppOpen } from '@/ui/welcome-back';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio } from '@/data/physiologySync';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
-import { syncStravaActivities, fetchStravaHistory } from '@/data/stravaSync';
-import { supabase, isGarminConnected, isStravaConnected, resetStravaCache } from '@/data/supabaseClient';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
+import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth } from '@/data/appleHealthSync';
 import '@/ui/strava-detail';
@@ -71,13 +71,14 @@ function launchApp(): void {
 
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
-    // Check for week gap before showing the main view
-    const missedWeeks = detectMissedWeeks();
-    if (missedWeeks > 0) {
-      showWelcomeBackModal(missedWeeks, renderHomeView);
-    } else {
-      renderHomeView();
-    }
+    // Record app open (used for debrief timing), then go straight to home
+    detectMissedWeeks(); // still advances week if needed
+    recordAppOpen();
+    renderHomeView();
+    // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
+    import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
+      if (shouldAutoDebrief()) showWeekDebrief();
+    });
   } else {
     // Show onboarding wizard
     initWizard();
@@ -146,6 +147,8 @@ function launchApp(): void {
               syncPhysiologySnapshot(7).then(() => {
                 checkRecoveryAndPrompt(getState()).catch(() => {});
               }).catch(() => {});
+              // Backfill historic recovery data (idempotent — safe to call every launch)
+              triggerGarminBackfill(8).catch(() => {});
             }
           }).catch(() => {});
         }
@@ -159,13 +162,18 @@ function launchApp(): void {
         }).catch(() => {});
         syncActivities().catch(() => {});
         processPendingCrossTraining();
+        // Backfill historic recovery data (idempotent — safe to call every launch)
+        triggerGarminBackfill(8).catch(() => {});
       }).catch(() => {});
     }
   }
 
-  // Seed CTL baseline from Strava history if not yet fetched
-  if (!isSimulatorMode() && state.stravaConnected && !state.stravaHistoryFetched) {
-    fetchStravaHistory(8).then(() => {
+  // Backfill Strava history: run if never fetched OR if we have fewer than 8 weeks cached.
+  // Extended history (16w) is populated by backfillStravaHistory so the stats "16w" tab works.
+  const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
+  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory)) {
+    console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0})`);
+    backfillStravaHistory(16).then(() => {
       import('./ui/home-view').then(({ renderHomeView }) => renderHomeView());
     }).catch(() => {});
   }
