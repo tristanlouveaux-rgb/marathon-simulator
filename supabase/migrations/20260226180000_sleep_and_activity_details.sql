@@ -22,6 +22,8 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies WHERE tablename = 'sleep_summaries' AND policyname = 'sleep_summaries_user_select'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name = 'sleep_summaries' AND column_name = 'user_id'
   ) THEN
     CREATE POLICY "sleep_summaries_user_select"
       ON sleep_summaries FOR SELECT
@@ -51,6 +53,8 @@ DO $$
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies WHERE tablename = 'activity_details' AND policyname = 'activity_details_user_select'
+  ) AND EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name = 'activity_details' AND column_name = 'user_id'
   ) THEN
     CREATE POLICY "activity_details_user_select"
       ON activity_details FOR SELECT

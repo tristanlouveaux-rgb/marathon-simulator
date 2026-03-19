@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
             supabaseClient
                 .from('sleep_summaries')
-                .select('calendar_date, overall_sleep_score')
+                .select('calendar_date, overall_sleep_score, duration_sec, deep_sec, rem_sec, awake_sec')
                 .eq('user_id', userId)
                 .gte('calendar_date', startDateStr),
 
@@ -95,6 +95,10 @@ Deno.serve(async (req) => {
         for (const s of sleepRes.data || []) {
             const existing = mergedData.get(s.calendar_date) || { calendar_date: s.calendar_date }
             existing.sleep_score = s.overall_sleep_score
+            existing.sleep_duration_sec = s.duration_sec ?? null
+            existing.sleep_deep_sec = s.deep_sec ?? null
+            existing.sleep_rem_sec = s.rem_sec ?? null
+            existing.sleep_awake_sec = s.awake_sec ?? null
             mergedData.set(s.calendar_date, existing)
         }
 

@@ -17,9 +17,11 @@ CREATE TABLE IF NOT EXISTS physiology_snapshots (
 
 ALTER TABLE physiology_snapshots ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "physiology_snapshots_user_select"
-  ON physiology_snapshots FOR SELECT
-  USING (user_id = auth.uid());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'physiology_snapshots' AND policyname = 'physiology_snapshots_user_select') THEN
+    CREATE POLICY "physiology_snapshots_user_select" ON physiology_snapshots FOR SELECT USING (user_id = auth.uid());
+  END IF;
+END $$;
 
 -- ── daily_metrics: add max_hr ─────────────────────────────────
 -- Garmin dailies push includes maxHeartRateInBeatsPerMinute.

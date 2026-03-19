@@ -32,14 +32,18 @@ CREATE TABLE IF NOT EXISTS strava_tokens (
 ALTER TABLE strava_tokens ENABLE ROW LEVEL SECURITY;
 
 -- Users can read their own row (needed for isStravaConnected client check)
-CREATE POLICY "strava_tokens_user_select"
-  ON strava_tokens FOR SELECT
-  USING (user_id = auth.uid());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'strava_tokens' AND policyname = 'strava_tokens_user_select') THEN
+    CREATE POLICY "strava_tokens_user_select" ON strava_tokens FOR SELECT USING (user_id = auth.uid());
+  END IF;
+END $$;
 
 -- Users can update their own row
-CREATE POLICY "strava_tokens_user_update"
-  ON strava_tokens FOR UPDATE
-  USING (user_id = auth.uid());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'strava_tokens' AND policyname = 'strava_tokens_user_update') THEN
+    CREATE POLICY "strava_tokens_user_update" ON strava_tokens FOR UPDATE USING (user_id = auth.uid());
+  END IF;
+END $$;
 
 -- Service role (used by edge functions) bypasses RLS automatically.
 

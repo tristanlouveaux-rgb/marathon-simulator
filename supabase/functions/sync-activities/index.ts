@@ -23,13 +23,20 @@ Deno.serve(async (req) => {
         // Query garmin_activities with correct column names matching webhook schema
         const { data, error } = await supabaseClient
             .from('garmin_activities')
-            .select('garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, aerobic_effect, anaerobic_effect, garmin_rpe')
+            .select('garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, aerobic_effect, anaerobic_effect, garmin_rpe, itrimp, hr_zones')
             .gte('start_time', startDate.toISOString())
             .order('start_time', { ascending: false })
 
         if (error) throw error
 
-        return new Response(JSON.stringify(data ?? []), {
+        // Map DB snake_case columns to the camelCase fields expected by GarminActivityRow
+        const rows = (data ?? []).map((r: any) => ({
+            ...r,
+            iTrimp: r.itrimp ?? null,
+            hrZones: r.hr_zones ?? null,
+        }))
+
+        return new Response(JSON.stringify(rows), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 200,
         })

@@ -126,31 +126,38 @@ Deno.serve(async (req) => {
     // --- 4. Clean up the pending auth request ---
     await supabase.from("garmin_auth_requests").delete().eq("state", state);
 
-    // --- 5. Register user with Garmin + fetch Garmin user ID ---
+    // --- 5. Fetch Garmin user ID + check permissions ---
+    // OAuth2 PKCE: user registration for push is automatic after consent.
+    // The only registration endpoint is DELETE (for disconnecting).
+    // We just need to fetch the user ID and verify permissions.
     try {
-      const regRes = await fetch("https://apis.garmin.com/wellness-api/rest/user/registration", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${accessToken}` },
-      });
-      if (!regRes.ok) {
-        console.error("[garmin-auth-callback] User registration failed:", regRes.status, await regRes.text());
-      } else {
-        console.log("[garmin-auth-callback] User registered for Garmin push notifications");
-      }
-
       // Fetch and store the stable Garmin user ID
       const idRes = await fetch("https://apis.garmin.com/wellness-api/rest/user/id", {
         headers: { "Authorization": `Bearer ${accessToken}` },
       });
       if (idRes.ok) {
-        const { userId: garminUserId } = await idRes.json();
+        const idJson = await idRes.json();
+        const garminUserId = idJson.userId;
         if (garminUserId) {
           await supabase.from("garmin_tokens").update({ garmin_user_id: garminUserId }).eq("user_id", userId);
           console.log("[garmin-auth-callback] Garmin user ID stored:", garminUserId);
         }
+      } else {
+        console.error("[garmin-auth-callback] Failed to fetch user ID:", idRes.status, await idRes.text());
+      }
+
+      // Check what permissions Garmin granted — logs whether HEALTH_EXPORT is present
+      const permRes = await fetch("https://apis.garmin.com/wellness-api/rest/user/permissions", {
+        headers: { "Authorization": `Bearer ${accessToken}` },
+      });
+      if (permRes.ok) {
+        const perms = await permRes.json();
+        console.log("[garmin-auth-callback] User permissions:", JSON.stringify(perms));
+      } else {
+        console.error("[garmin-auth-callback] Permissions check failed:", permRes.status, await permRes.text());
       }
     } catch (regErr) {
-      console.error("[garmin-auth-callback] Registration error:", regErr);
+      console.error("[garmin-auth-callback] Post-auth error:", regErr);
     }
 
     // --- 6. Redirect back to the app ---

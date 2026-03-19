@@ -40,6 +40,9 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json();
 
+    // Log ALL top-level keys so we can see exactly what Garmin pushes
+    console.log(`[garmin-webhook] Received keys: ${Object.keys(body).join(', ')}`);
+
     // Garmin sends data as arrays under typed keys
     if (body.activities) {
       await handleActivities(supabase, body.activities);
@@ -56,6 +59,12 @@ Deno.serve(async (req) => {
     if (body.userMetrics) {
       await handleUserMetrics(supabase, body.userMetrics);
     }
+    if (body.hrv) {
+      await handleHrv(supabase, body.hrv);
+    }
+    if (body.hrvSummaries) {
+      await handleHrv(supabase, body.hrvSummaries);
+    }
 
     return new Response("ok", { status: 200 });
   } catch (e) {
@@ -66,22 +75,45 @@ Deno.serve(async (req) => {
 });
 
 /**
- * Resolve a Garmin userAccessToken to our Supabase user_id.
- * Returns null if the token is unknown.
+ * Resolve a Garmin identifier to our Supabase user_id.
+ *
+ * Garmin webhook payloads include both:
+ *   - userId        → stable Garmin user ID (stored in garmin_tokens.garmin_user_id by auth callback)
+ *   - userAccessToken → OAuth access token (stored in garmin_tokens.access_token)
+ *
+ * We try garmin_user_id first (preferred — stable). If that fails (e.g. auth
+ * callback's /user/id fetch silently errored and never stored it), we fall back
+ * to matching by access_token so data is never silently dropped.
  */
 async function resolveUserId(
   supabase: ReturnType<typeof createClient>,
-  userAccessToken: string,
+  identifier: string,
 ): Promise<string | null> {
+  console.log("[garmin-webhook] resolveUserId lookup:", identifier);
+
+  // Primary: stable Garmin user ID
   const { data, error } = await supabase
     .from("garmin_tokens")
     .select("user_id")
-    .eq("garmin_user_id", userAccessToken)
+    .eq("garmin_user_id", identifier)
     .limit(1);
 
-  console.log("[garmin-webhook] resolveUserId lookup value:", userAccessToken);
-  if (error || !data?.[0]) return null;
-  return data[0].user_id;
+  if (!error && data?.[0]) return data[0].user_id;
+
+  // Fallback: OAuth access token (covers case where garmin_user_id was never stored)
+  const { data: data2, error: err2 } = await supabase
+    .from("garmin_tokens")
+    .select("user_id")
+    .eq("access_token", identifier)
+    .limit(1);
+
+  if (!err2 && data2?.[0]) {
+    console.log("[garmin-webhook] resolveUserId matched via access_token fallback");
+    return data2[0].user_id;
+  }
+
+  console.warn("[garmin-webhook] resolveUserId: no match for identifier");
+  return null;
 }
 
 /**
@@ -157,21 +189,30 @@ async function handleDailies(
 
     if (!dayDate) continue;
 
+    // Only include hrv_rmssd if the dailies payload actually has HRV data.
+    // Otherwise we'd overwrite a value previously stored by handleHrv().
+    const hrvFromDaily = d.hrvSummary?.lastNight ?? d.hrvSummary?.lastNightAvg ?? undefined;
+    const row: Record<string, unknown> = {
+      user_id: userId,
+      day_date: dayDate,
+      resting_hr: d.restingHeartRateInBeatsPerMinute ?? null,
+      max_hr: d.maxHeartRateInBeatsPerMinute ?? null,
+      stress_avg: d.averageStressLevel ?? null,
+      vo2max: d.vo2Max ?? null,
+    };
+    if (hrvFromDaily != null) {
+      row.hrv_rmssd = hrvFromDaily;
+    }
+
     const { error } = await supabase.from("daily_metrics").upsert(
-      {
-        user_id: userId,
-        day_date: dayDate,
-        resting_hr: d.restingHeartRateInBeatsPerMinute ?? null,
-        max_hr: d.maxHeartRateInBeatsPerMinute ?? null,
-        hrv_rmssd: d.hrvSummary?.lastNightAvg ?? null,
-        stress_avg: d.averageStressLevel ?? null,
-        vo2max: d.vo2Max ?? null,
-      },
+      row,
       { onConflict: "user_id,day_date" },
     );
 
     if (error) {
       console.error("[garmin-webhook] Failed to upsert daily metric:", error);
+    } else {
+      console.log(`[garmin-webhook] Daily metric stored for user ${userId} on ${dayDate}`);
     }
   }
 }
@@ -191,17 +232,43 @@ async function handleSleeps(
     const calendarDate = s.calendarDate ?? null;
     if (!calendarDate) continue;
 
+    // Garmin may send the score in different formats depending on firmware.
+    // qualifierKey is a string (e.g. "EXCELLENT"), not a number — skip it.
+    const sleepScore: number | null =
+      s.sleepScores?.overall?.value
+      ?? s.overallSleepScore?.value
+      ?? null;
+
+    // Store stage durations (seconds). These arrive in the webhook payload
+    // regardless of whether the score is available yet.
+    const durationSec: number | null = s.durationInSeconds ?? null;
+    const deepSec: number | null = s.deepSleepDurationInSeconds ?? null;
+    const remSec: number | null = s.remSleepDurationInSeconds ?? null;
+    const awakeSec: number | null = s.awakeDurationInSeconds ?? null;
+
+    if (sleepScore != null) {
+      console.log(`[garmin-webhook] Sleep score received: ${sleepScore} (${calendarDate})`);
+    } else if (durationSec != null) {
+      console.log(`[garmin-webhook] Sleep stages only (score pending): ${(durationSec/3600).toFixed(1)}h, deep=${deepSec}s, rem=${remSec}s, awake=${awakeSec}s`);
+    }
+
     const { error } = await supabase.from("sleep_summaries").upsert(
       {
         user_id: userId,
         calendar_date: calendarDate,
-        overall_sleep_score: s.overallSleepScore?.value ?? s.sleepScores?.overall?.value ?? null,
+        overall_sleep_score: sleepScore,
+        duration_sec: durationSec,
+        deep_sec: deepSec,
+        rem_sec: remSec,
+        awake_sec: awakeSec,
       },
       { onConflict: "user_id,calendar_date" },
     );
 
     if (error) {
       console.error("[garmin-webhook] Failed to upsert sleep summary:", error);
+    } else {
+      console.log(`[garmin-webhook] Sleep summary stored for user ${userId} on ${calendarDate}`);
     }
   }
 }
@@ -247,6 +314,45 @@ async function handleUserMetrics(
       console.error("[garmin-webhook] Failed to upsert physiology snapshot:", error);
     } else {
       console.log(`[garmin-webhook] Physiology snapshot saved for ${calendarDate}: VO2max=${m.vo2MaxRunning}, LT=${ltPaceSecKm}s/km`);
+    }
+  }
+}
+
+/**
+ * Handle HRV summary pushes (overnight HRV monitoring).
+ * Garmin sends HRV as a separate body.hrv key, distinct from body.dailies.
+ * FR965 and other HRV-capable devices push this after each nightly sync.
+ * Garmin schema: https://developer.garmin.com/gc-developer-program/hrv-api/
+ */
+async function handleHrv(
+  supabase: ReturnType<typeof createClient>,
+  hrvSummaries: any[],
+) {
+  for (const h of hrvSummaries) {
+    const userId = await resolveUserId(supabase, h.userId ?? h.userAccessToken);
+    if (!userId) continue;
+
+    const calendarDate = h.calendarDate ?? null;
+    if (!calendarDate) continue;
+
+    // lastNight = overall nightly HRV RMSSD (ms). lastNightAvg is the 5-min average.
+    const hrv = h.lastNight ?? h.lastNightAvg ?? null;
+    if (hrv == null) continue;
+
+    // Upsert into daily_metrics — merge with existing row for the same day
+    const { error } = await supabase.from("daily_metrics").upsert(
+      {
+        user_id: userId,
+        day_date: calendarDate,
+        hrv_rmssd: hrv,
+      },
+      { onConflict: "user_id,day_date", ignoreDuplicates: false },
+    );
+
+    if (error) {
+      console.error("[garmin-webhook] Failed to upsert HRV:", error);
+    } else {
+      console.log(`[garmin-webhook] HRV stored for user ${userId} on ${calendarDate}: ${hrv}ms`);
     }
   }
 }

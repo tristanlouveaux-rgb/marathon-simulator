@@ -47,12 +47,13 @@ let _garminConnected: boolean | null = null;
 /**
  * Check whether the current user has a Garmin connection (row in garmin_tokens).
  * Result is cached after first successful check.
+ * If the token is expired, attempts an automatic refresh before returning.
  */
 export async function isGarminConnected(): Promise<boolean> {
   if (_garminConnected !== null) return _garminConnected;
   try {
     const token = await getAccessToken();
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/garmin_tokens?select=user_id&limit=1`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/garmin_tokens?select=user_id,expires_at&limit=1`, {
       headers: {
         'Authorization': `Bearer ${token}`,
         'apikey': SUPABASE_ANON_KEY,
@@ -60,7 +61,25 @@ export async function isGarminConnected(): Promise<boolean> {
     });
     if (res.ok) {
       const rows = await res.json();
-      _garminConnected = Array.isArray(rows) && rows.length > 0;
+      if (Array.isArray(rows) && rows.length > 0) {
+        const expiresAt = rows[0].expires_at;
+        const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : 0;
+        const isExpired = expiresAtMs < Date.now();
+        // Refresh if: already expired, expiring within 24h, or expires_at was never stored (null → 0)
+        const shouldRefresh = !expiresAt || expiresAtMs < Date.now() + 24 * 60 * 60 * 1000;
+        if (shouldRefresh) {
+          const refreshed = await refreshGarminToken();
+          if (!refreshed && isExpired) {
+            // Only fail hard if token is already expired AND refresh didn't work
+            _garminConnected = false;
+            return false;
+          }
+          // If refresh failed but token hasn't expired yet, stay connected and retry next launch
+        }
+        _garminConnected = true;
+      } else {
+        _garminConnected = false;
+      }
     } else {
       _garminConnected = false;
     }
@@ -70,9 +89,86 @@ export async function isGarminConnected(): Promise<boolean> {
   return _garminConnected;
 }
 
+/**
+ * Call the garmin-refresh-token edge function to refresh expired Garmin OAuth tokens.
+ * Resets the Garmin cache on success so subsequent checks re-query.
+ */
+export async function refreshGarminToken(): Promise<boolean> {
+  try {
+    const result = await callEdgeFunction<{ ok: boolean }>('garmin-refresh-token', {});
+    if (result.ok) {
+      resetGarminCache();
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /** Reset the cached Garmin connection flag (e.g. after connecting) */
 export function resetGarminCache(): void {
   _garminConnected = null;
+}
+
+/**
+ * Trigger the garmin-backfill edge function to pull historic dailies + sleep.
+ * Fire-and-forget — logs success/failure but does not throw.
+ * @param weeks Number of weeks to backfill (default 8)
+ */
+/**
+ * Trigger the garmin-backfill edge function to pull historic dailies + sleep.
+ * Garmin Health API is push-only — the pull API returns 0 rows.
+ * We guard with a localStorage flag so we only attempt once per device.
+ * Call resetGarminBackfillGuard() to force a retry (e.g. after re-auth).
+ */
+export async function triggerGarminBackfill(weeks = 8): Promise<void> {
+  const GUARD_KEY = 'mosaic_garmin_backfill_empty';
+  if (localStorage.getItem(GUARD_KEY) === '1') {
+    console.log('[garmin-backfill] Skipped — previous run returned 0 rows (push-only API)');
+    return;
+  }
+  try {
+    const result = await callEdgeFunction<{ ok: boolean; days: number; sleepDays: number }>(
+      'garmin-backfill',
+      { weeks },
+    );
+    if (result.ok) {
+      console.log(`[garmin-backfill] Done — ${result.days} daily rows, ${result.sleepDays} sleep rows`);
+      if (result.days === 0 && result.sleepDays === 0) {
+        localStorage.setItem(GUARD_KEY, '1');
+        console.log('[garmin-backfill] API returned 0 rows — guarding future runs');
+      }
+    } else {
+      console.warn('[garmin-backfill] Returned ok:false');
+    }
+  } catch (e) {
+    console.warn('[garmin-backfill] Failed (non-fatal):', e);
+  }
+}
+
+/** Reset the backfill guard so it runs again on next launch */
+export function resetGarminBackfillGuard(): void {
+  localStorage.removeItem('mosaic_garmin_backfill_empty');
+}
+
+/**
+ * Re-fetch the last 2 days of Garmin sleep/biometric data.
+ * Bypasses the backfill guard — safe to call daily to pick up today's sleep
+ * score after Garmin's server-side processing completes (usually 1–4h post-wake).
+ */
+export async function refreshRecentSleepScores(): Promise<void> {
+  try {
+    const result = await callEdgeFunction<{ ok: boolean; days: number; sleepDays: number }>(
+      'garmin-backfill',
+      { weeks: 1 },
+    );
+    if (result.ok) {
+      console.log(`[garmin-sleep-refresh] Done — ${result.sleepDays} sleep rows`);
+    }
+  } catch (e) {
+    console.warn('[garmin-sleep-refresh] Failed (non-fatal):', e);
+  }
 }
 
 /** Cached Strava connection status — null means not yet checked */
