@@ -9,7 +9,9 @@ import { saveState } from '@/state';
 import { rate } from '@/ui/events';
 import { render } from '@/ui/renderer';
 import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion-modal';
+import { deleteGpsRecording } from '@/gps/persistence';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
+import { getTrailingEffortScore } from '@/calculations/fitness-model';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
@@ -40,7 +42,8 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
     weekWorkouts = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
       injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-      undefined, undefined, s.w, s.tw, s.v, s.gs
+      undefined, undefined, s.w, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
     );
     const matched = weekWorkouts.find(w => w.n === workoutName);
     if (matched) {
@@ -79,6 +82,7 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
     },
     // onDiscard
     () => {
+      deleteGpsRecording(recording.id);
       render();
     },
   );

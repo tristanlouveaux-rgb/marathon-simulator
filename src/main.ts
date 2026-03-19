@@ -5,6 +5,7 @@
 
 import './styles.css';
 import { loadState, getState } from '@/state';
+import { restorePlanFromSupabase } from '@/data/planSettingsSync';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
@@ -13,7 +14,7 @@ import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio } from '@/data/physiologySync';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
-import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill } from '@/data/supabaseClient';
+import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth } from '@/data/appleHealthSync';
 import '@/ui/strava-detail';
@@ -29,7 +30,7 @@ export function isSimulatorMode(): boolean {
 async function bootstrap(): Promise<void> {
   // Simulator mode: skip auth entirely for local dev/testing
   if (isSimulatorMode()) {
-    launchApp();
+    await launchApp();
     return;
   }
 
@@ -44,7 +45,7 @@ async function bootstrap(): Promise<void> {
   }
 
   // Authenticated — proceed with app
-  launchApp();
+  await launchApp();
   setupAuthListener();
 }
 
@@ -54,7 +55,7 @@ async function bootstrap(): Promise<void> {
 function setupAuthListener(): void {
   supabase.auth.onAuthStateChange((event) => {
     if (event === 'SIGNED_IN') {
-      launchApp();
+      void launchApp();
     } else if (event === 'SIGNED_OUT') {
       renderAuthView();
     }
@@ -64,9 +65,17 @@ function setupAuthListener(): void {
 /**
  * Launch the main app (called after authentication is confirmed)
  */
-function launchApp(): void {
+async function launchApp(): Promise<void> {
   // Try to load saved state
-  const hasState = loadState();
+  let hasState = loadState();
+
+  // If localStorage is empty and user is authenticated, silently restore from Supabase backup
+  if (!hasState && !isSimulatorMode()) {
+    const restored = await restorePlanFromSupabase();
+    if (restored) {
+      hasState = loadState();
+    }
+  }
   const state = getState();
 
   // Check if onboarding is complete
@@ -140,13 +149,25 @@ function launchApp(): void {
       // Garmin wearable users also get a biometric sync (VO2max, LT, HRV, sleep).
       isStravaConnected().then((stravaOk) => {
         if (!stravaOk) return;
-        syncStravaActivities().catch(() => {});
+        syncStravaActivities().then(() => {
+          // Re-render home view if it's still active so TSS reflects post-sync state
+          if (document.getElementById('home-tss-row')) renderHomeView();
+        }).catch(() => {});
         if (wearable === 'garmin') {
           isGarminConnected().then((garminOk) => {
             if (garminOk) {
               // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-              triggerGarminBackfill(8).catch(() => {}).finally(() => {
-                syncPhysiologySnapshot(7).catch(() => {});
+              triggerGarminBackfill(4).catch(() => {}).finally(() => {
+                syncPhysiologySnapshot(28).then(() => {
+                  // If today's sleep score is missing, re-fetch recent data — Garmin
+                  // computes sleep scores 1–4h after waking, so the webhook may have
+                  // fired before the score was ready.
+                  const todayStr = new Date().toISOString().split('T')[0];
+                  const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
+                  if (!todaySleep?.sleepScore) {
+                    refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).catch(() => {});
+                  }
+                }).catch(() => {});
               });
             }
           }).catch(() => {});
@@ -156,11 +177,19 @@ function launchApp(): void {
       // Garmin-only: activities + biometrics from Garmin webhook
       isGarminConnected().then((connected) => {
         if (!connected) return;
-        syncActivities().catch(() => {});
+        syncActivities().then(() => {
+          if (document.getElementById('home-tss-row')) renderHomeView();
+        }).catch(() => {});
         processPendingCrossTraining();
         // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-        triggerGarminBackfill(8).catch(() => {}).finally(() => {
-          syncPhysiologySnapshot(7).catch(() => {});
+        triggerGarminBackfill(4).catch(() => {}).finally(() => {
+          syncPhysiologySnapshot(28).then(() => {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
+            if (!todaySleep?.sleepScore) {
+              refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).catch(() => {});
+            }
+          }).catch(() => {});
         });
       }).catch(() => {});
     }
@@ -171,9 +200,7 @@ function launchApp(): void {
   const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
   if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory)) {
     console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0})`);
-    backfillStravaHistory(16).then(() => {
-      import('./ui/home-view').then(({ renderHomeView }) => renderHomeView());
-    }).catch(() => {});
+    backfillStravaHistory(16).catch(() => {});
   }
 
   console.log('Mosaic Training Simulator initialized');

@@ -135,6 +135,10 @@ export interface PhysiologyDayEntry {
   hrvRmssd?: number;
   vo2max?: number;
   sleepScore?: number;
+  sleepDurationSec?: number;  // total sleep in seconds (from Garmin)
+  sleepDeepSec?: number;      // deep sleep in seconds
+  sleepRemSec?: number;       // REM sleep in seconds
+  sleepAwakeSec?: number;     // awake time in seconds
   stressAvg?: number;
   ltPace?: number;        // sec/km — from physiology_snapshots
   ltHR?: number;          // bpm at lactate threshold — from physiology_snapshots
@@ -190,6 +194,22 @@ export interface GarminActual {
   kmSplits?: number[] | null;
   /** Encoded polyline from Strava (Google polyline format) for map rendering */
   polyline?: string | null;
+  /** Raw activity type from Garmin/Strava (e.g. 'RUNNING', 'CYCLING', 'WALKING').
+   *  Used to distinguish runs from cross-training when plannedType is null. */
+  activityType?: string | null;
+  /** Plan workout type at the time of matching (e.g. 'easy', 'long', 'threshold', 'vo2').
+   *  Used by iTRIMP intensity calibration. Null for non-run matches or pre-migration actuals. */
+  plannedType?: string | null;
+  /** HR effort score: how hard this was relative to target zone.
+   *  0.8 = undercooked, 1.0 = nailed it, 1.2 = overcooked. Null if no HR data or no target zone. */
+  hrEffortScore?: number | null;
+  /** HR drift %: (avgHR_2nd_half - avgHR_1st_half) / avgHR_1st_half × 100.
+   *  Only computed for steady-state runs > 20 min. Null otherwise. */
+  hrDrift?: number | null;
+  /** Pace adherence: actual pace vs target pace ratio.
+   *  1.0 = nailed it, <1.0 = ran faster than target, >1.0 = ran slower.
+   *  Only computed for runs with both actual pace and a target pace from the plan. */
+  paceAdherence?: number | null;
 }
 
 /** Per-lap split from Garmin activity details */

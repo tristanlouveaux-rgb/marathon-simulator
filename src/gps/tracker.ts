@@ -100,7 +100,7 @@ export class GpsTracker {
 
   /** Pause tracking (keeps GPS watching but stops accumulating) */
   pause(): void {
-    if (this.status !== 'tracking') return;
+    if (this.status !== 'tracking' && this.status !== 'acquiring') return;
     this.status = 'paused';
     this.pauseStart = Date.now();
     this.notify();
@@ -183,6 +183,16 @@ export class GpsTracker {
     this.notify();
   }
 
+  /**
+   * Called every second by the external timer so time-based recovery segments
+   * auto-advance even without incoming GPS points.
+   */
+  public tick(): void {
+    if (this.status !== 'tracking') return;
+    this.checkSplitBoundary();
+    this.notify();
+  }
+
   /** Check if we've crossed a segment boundary */
   private checkSplitBoundary(): void {
     if (!this.splitScheme) return;
@@ -190,10 +200,14 @@ export class GpsTracker {
     if (this.currentSegmentIdx >= segments.length) return;
 
     const segment = segments[this.currentSegmentIdx];
-    if (this.segmentDistance >= segment.distance) {
-      // Actual elapsed time for this segment (excluding pauses)
-      const now = this.points[this.points.length - 1]?.timestamp ?? Date.now();
-      const segmentElapsed = Math.max(0, (now - this.segmentStartMs - this.segmentPauseMs) / 1000);
+    const now = Date.now();
+    const segmentElapsed = Math.max(0, (now - this.segmentStartMs - this.segmentPauseMs) / 1000);
+
+    const isDone = segment.durationSeconds != null
+      ? segmentElapsed >= segment.durationSeconds
+      : this.segmentDistance >= segment.distance;
+
+    if (isDone) {
 
       const split: GpsSplit = {
         index: this.completedSplits.length,
@@ -204,7 +218,9 @@ export class GpsTracker {
         targetPace: segment.targetPace,
       };
       this.completedSplits.push(split);
-      this.segmentDistance -= segment.distance; // carry over excess
+      // Time-based segments: reset segment distance (recovery distance should not bleed into the next rep).
+      // Distance-based segments: carry over excess so sub-second boundary crossings are accurate.
+      this.segmentDistance = segment.durationSeconds != null ? 0 : this.segmentDistance - segment.distance;
       this.currentSegmentIdx++;
 
       // Reset segment timer for the next segment
@@ -238,11 +254,14 @@ export class GpsTracker {
 
     if (this.currentSegmentIdx >= this.splitScheme.segments.length) return null;
     const segment = this.splitScheme.segments[this.currentSegmentIdx];
+    const segmentElapsed = this.segmentStartMs > 0
+      ? Math.max(0, (Date.now() - this.segmentStartMs - this.segmentPauseMs) / 1000)
+      : 0;
     return {
       index: this.currentSegmentIdx,
       label: segment.label,
       distance: this.segmentDistance,
-      elapsed: 0,
+      elapsed: segmentElapsed,
       pace: rollingPace(this.points) ?? 0,
       targetPace: segment.targetPace,
     };

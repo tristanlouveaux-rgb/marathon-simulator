@@ -21,8 +21,9 @@ export interface GpsSplit {
 /** A segment in a split scheme (what the tracker watches for) */
 export interface SplitSegment {
   label: string;
-  distance: number;        // meters for this segment
+  distance: number;        // meters for this segment (0 for time-based segments)
   targetPace: number | null; // sec/km target, null for untimed
+  durationSeconds?: number; // if set, segment advances by time rather than distance
 }
 
 /** A full split scheme describing the structure of a workout */

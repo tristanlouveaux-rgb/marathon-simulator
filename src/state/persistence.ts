@@ -1,4 +1,5 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
+import { savePlanSettings } from '@/data/planSettingsSync';
 import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities } from './store';
@@ -331,6 +332,7 @@ export function loadState(): boolean {
           if (toCarry.length > 0) {
             if (!currWk.unspentLoadItems) currWk.unspentLoadItems = [];
             currWk.unspentLoadItems.push(...toCarry);
+            currWk.hasCarriedLoad = true;
             // Clear carried items from previous week to avoid double-display on back-navigation
             prevWk.unspentLoadItems = prevWk.unspentLoadItems.filter(i => existingIds.has(i.garminId));
             localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
@@ -378,6 +380,9 @@ export function saveState(): void {
 
     localStorage.setItem(STATE_KEY, JSON.stringify(state));
     localStorage.setItem(CROSS_KEY, JSON.stringify(crossActivities));
+
+    // Fire-and-forget Supabase backup — only runs if user is authenticated
+    savePlanSettings();
   } catch (e) {
     console.error('Error saving state:', e);
   }
