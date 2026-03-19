@@ -108,6 +108,12 @@ export interface SuggestionPayload {
   replaceOutcome: ChoiceOutcome;
 
   warnings: string[];
+
+  // §6.5 edge cases
+  /** Best candidate run was already completed earlier this week */
+  alreadyCompletedMatch?: { runName: string; runType: string };
+  /** No viable planned runs exist to match this activity */
+  noMatchingRun?: boolean;
 }
 
 // For backwards compatibility with existing code
@@ -780,7 +786,13 @@ export function buildCrossTrainingPopup(
   ctx: AthleteContext,
   weekRuns: PlannedRun[],
   activity: CrossActivity,
-  prevWeekRunLoad?: number
+  prevWeekRunLoad?: number,
+  /**
+   * Recovery trend multiplier from computeRecoveryTrend() (1.0–1.50).
+   * Inflates runReplacementCredit so poor recovery → larger reduction budget.
+   * Capped at +20 TSS equivalent to prevent catastrophic over-reduction.
+   */
+  recoveryMultiplier = 1.0,
 ): SuggestionPopup {
   const warnings: string[] = [];
 
@@ -865,12 +877,40 @@ export function buildCrossTrainingPopup(
     console.log(`  ${c.run.workoutId} (${c.run.workoutType}) ${c.run.plannedDistanceKm}km — stored: A${c.run.plannedAerobic} An${c.run.plannedAnaerobic} wl=${storedWL.toFixed(1)} | recalc wl=${recalcWL.toFixed(1)} | sim=${c.similarity.toFixed(3)}`);
   }
 
+  // §6.5 — detect edge cases before building adjustments
+  // "Already completed": candidates empty but there ARE rated runs that would have matched
+  const NON_RUN_TYPES = new Set(['gym', 'cross', 'strength', 'rest', 'swim', 'bike'] as const);
+  const allRuns = weekRuns.filter(r => !NON_RUN_TYPES.has(r.workoutType as any));
+  const completedRuns = allRuns.filter(r => r.status !== 'planned' && r.status !== 'reduced');
+  const noViablePlanned = candidates.length === 0;
+  let alreadyCompletedMatch: { runName: string; runType: string } | undefined;
+  let noMatchingRun: boolean | undefined;
+  if (noViablePlanned) {
+    if (completedRuns.length > 0) {
+      // Find the completed run most similar to this activity (by zone profile)
+      const best = [...completedRuns].sort((a, b) => {
+        const simA = vibeSimilarity(aerobic, anaerobic, a.plannedAerobic, a.plannedAnaerobic);
+        const simB = vibeSimilarity(aerobic, anaerobic, b.plannedAerobic, b.plannedAnaerobic);
+        return simB - simA;
+      })[0];
+      alreadyCompletedMatch = { runName: best.workoutId, runType: best.workoutType };
+    } else {
+      noMatchingRun = true;
+    }
+  }
+
+  // Apply recovery multiplier to the reduction budget.
+  // Cap the additional recovery contribution at 20 TSS equivalent (spec §6 guardrail).
+  // Recovery modulates reduction aggressiveness — doesn't dominate it.
+  const recoveryExtra = runReplacementCredit * (recoveryMultiplier - 1.0);
+  const effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
+
   const reduceAdjustments = buildReduceAdjustments(
-    candidates, runReplacementCredit, severity, ctx, preserveMin, plannedCount
+    candidates, effectiveRRC, severity, ctx, preserveMin, plannedCount
   );
 
   const replaceAdjustments = buildReplaceAdjustments(
-    candidates, runReplacementCredit, severity, ctx, sport, preserveMin, plannedCount
+    candidates, effectiveRRC, severity, ctx, sport, preserveMin, plannedCount
   );
 
   // Build outcome descriptions
@@ -1009,6 +1049,8 @@ export function buildCrossTrainingPopup(
     reduceOutcome: { adjustments: reduceAdjustments, description: reduceDescription },
     replaceOutcome: { adjustments: replaceAdjustments, description: replaceDescription },
     warnings,
+    alreadyCompletedMatch,
+    noMatchingRun,
     // Legacy compatibility
     globalSuggestion,
     runSuggestions,

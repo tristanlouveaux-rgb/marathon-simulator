@@ -16,7 +16,7 @@ import type { InjuryState } from '@/types/injury';
 function makeState(overrides: Partial<InjuryState> = {}): InjuryState {
   return {
     active: true,
-    type: 'overuse',
+    type: 'general',
     location: 'knee',
     locationDetail: 'left',
     currentPain: 3,
@@ -238,7 +238,7 @@ describe('evaluatePhaseTransition — pain regression', () => {
       injuryPhase: 'return_to_run',
       currentPain: 9,
       returnToRunLevel: 5,
-      capacityTestsPassed: ['walk_10min'],
+      capacityTestsPassed: ['pain_free_walk'],
       phaseTransitions: [],
     });
     const next = evaluatePhaseTransition(state);

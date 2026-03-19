@@ -17,6 +17,22 @@ import type { Week } from '@/types';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 
+/**
+ * Compute trailing effort score from the last 2 completed weeks with effort data.
+ * Skips injury weeks. Returns 0 when no data available.
+ */
+export function getTrailingEffortScore(weeks: Week[], currentWeekIdx: number): number {
+  const completed: number[] = [];
+  for (let i = currentWeekIdx - 2; i >= 0 && completed.length < 2; i--) {
+    const w = weeks[i];
+    if (w.effortScore != null && !w.injuryState?.active) {
+      completed.push(w.effortScore);
+    }
+  }
+  if (completed.length === 0) return 0;
+  return completed.reduce((a, b) => a + b, 0) / completed.length;
+}
+
 export interface FitnessMetrics {
   week: number;
   ctl: number;      // Chronic Training Load (42-day EMA) — Signal A (run-equivalent)
@@ -220,6 +236,50 @@ export function getWeeklyExcess(
 }
 
 // ---------------------------------------------------------------------------
+// Cross-training TSS calibration
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute median TSS-per-minute for a sport from the user's actual history.
+ * Uses iTrimp-based TSS (same scale as actual TSS display) so planned estimates
+ * stay consistent with actuals. Returns null when < 2 samples exist.
+ *
+ * Special case: `generic_sport` is a catch-all plan slot that can match any
+ * cross-training activity. For it we scan ALL non-running actuals rather than
+ * trying to match a specific sport name (Strava labels will vary).
+ */
+export function computeCrossTrainTSSPerMin(wks: Week[] | undefined | null, sportKey: string): number | null {
+  if (!wks?.length) return null;
+  const isGeneric = sportKey === 'generic_sport';
+  const seen = new Set<string>();
+  const samples: number[] = [];
+  for (const wk of wks) {
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      if (!actual.iTrimp || actual.iTrimp <= 0) continue;
+      if (!actual.durationSec || actual.durationSec < 600) continue; // skip < 10 min
+      if (actual.garminId && seen.has(actual.garminId)) continue;
+      if (actual.garminId) seen.add(actual.garminId);
+      if (isGeneric) {
+        // Exclude running activities — use activityType if present, otherwise
+        // treat sessions with avgPaceSecKm as running proxies.
+        const aType = (actual.activityType || '').toUpperCase();
+        const isRun = aType === 'RUNNING' || aType.includes('RUN') || (!aType && actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0);
+        if (isRun) continue;
+      } else {
+        const sport = normalizeSport(actual.displayName || actual.workoutName || '');
+        if (sport !== sportKey) continue;
+      }
+      const durMin = actual.durationSec / 60;
+      const tss = (actual.iTrimp * 100) / 15000;
+      samples.push(tss / durMin);
+    }
+  }
+  if (samples.length < 2) return null;
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)];
+}
+
+// ---------------------------------------------------------------------------
 // Planned Load Model (ISSUE-79)
 // ---------------------------------------------------------------------------
 
@@ -301,6 +361,60 @@ export function computePlannedWeekTSS(
   return Math.round(baseline * multiplier);
 }
 
+/**
+ * Compute the composite planned Signal B target for the week.
+ *
+ * plannedSignalB = runningPlanTSS + crossTrainingBudget
+ *
+ * Running plan TSS: same as computePlannedWeekTSS (phase-adjusted Signal A baseline).
+ * Cross-training budget: Σ(avgSessionRawTSS × sessionsPerWeek) across all sports
+ *   in sportBaselineByType. Falls back to zero when no history exists.
+ *
+ * Use this wherever Signal B actual is compared to a target (plan bar, excess detection).
+ * Never compare Signal B actual to computePlannedWeekTSS — that's a cross-signal mismatch.
+ */
+export function computePlannedSignalB(
+  historicWeeklyTSS: number[] | undefined,
+  ctlBaseline: number | undefined,
+  phase: string,
+  athleteTier?: string,
+  runsPerWeek?: number,
+  weekInPhase?: number,
+  totalPhaseWeeks?: number,
+  sportBaselineByType?: Record<string, { avgSessionRawTSS: number; sessionsPerWeek: number }>,
+): number {
+  // historicWeeklyTSS is Signal A — it includes cross-training at runSpec-discounted weight.
+  // We need the running-only baseline so we can add the full Signal B cross-training budget
+  // without double-counting the discounted portion.
+  //
+  // Correction: subtract the average discounted cross-training from each historical week
+  // to isolate running-only TSS before computing the planned running target.
+  let discountedCrossTraining = 0;
+  let crossTrainingBudget = 0;
+  if (sportBaselineByType) {
+    for (const [sportKey, sport] of Object.entries(sportBaselineByType)) {
+      const cfg = (SPORTS_DB as any)[sportKey];
+      const runSpec: number = cfg?.runSpec ?? 0.35;
+      const weeklyRaw = sport.avgSessionRawTSS * sport.sessionsPerWeek;
+      crossTrainingBudget += weeklyRaw;
+      discountedCrossTraining += weeklyRaw * runSpec;
+    }
+  }
+
+  // Shift historical TSS to running-only values (clamp to 0 to avoid negatives
+  // in weeks where cross-training was below the average).
+  const runningOnlyTSS = historicWeeklyTSS?.map(v => Math.max(0, v - discountedCrossTraining));
+  const runningOnlyCTL = ctlBaseline != null
+    ? Math.max(0, ctlBaseline - discountedCrossTraining)
+    : undefined;
+
+  const runningTSS = computePlannedWeekTSS(
+    runningOnlyTSS, runningOnlyCTL, phase, athleteTier, runsPerWeek, weekInPhase, totalPhaseWeeks,
+  );
+
+  return Math.round(runningTSS + crossTrainingBudget);
+}
+
 // ---------------------------------------------------------------------------
 // ACWR — Acute:Chronic Workload Ratio
 // ---------------------------------------------------------------------------
@@ -317,11 +431,11 @@ export interface AthleteACWR {
 
 /** Per-tier ACWR thresholds and display labels (from spec §2) */
 export const TIER_ACWR_CONFIG: Record<string, { safeUpper: number; label: string }> = {
-  beginner:     { safeUpper: 1.2, label: 'New to structured training' },
-  recreational: { safeUpper: 1.3, label: 'Recreational runner' },
-  trained:      { safeUpper: 1.4, label: 'Trained runner' },
-  performance:  { safeUpper: 1.5, label: 'Performance athlete' },
-  high_volume:  { safeUpper: 1.6, label: 'High-volume athlete' },
+  beginner:     { safeUpper: 1.2, label: 'Building' },
+  recreational: { safeUpper: 1.3, label: 'Foundation' },
+  trained:      { safeUpper: 1.4, label: 'Trained / Well-Trained' },
+  performance:  { safeUpper: 1.5, label: 'Performance' },
+  high_volume:  { safeUpper: 1.6, label: 'Elite' },
 };
 
 /**

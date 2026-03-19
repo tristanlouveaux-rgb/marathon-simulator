@@ -156,3 +156,50 @@ export function analyzeStream(stream: ActivityStream): StreamAnalysis {
     overallAvgPace,
   };
 }
+
+/**
+ * Compute HR drift from raw HR + time arrays (same format as Strava streams).
+ *
+ * HR drift = (avgHR_2nd_half - avgHR_1st_half) / avgHR_1st_half × 100
+ *
+ * Rules:
+ * - Only meaningful for steady-state efforts (easy, long, marathon pace)
+ * - Requires ≥ 20 minutes of data with HR > 0
+ * - Strips first 10% of data points (warmup) before splitting
+ * - Returns null if insufficient data
+ *
+ * Positive drift = HR rising at same pace (fatigue/dehydration/heat)
+ * Negative drift = HR dropping at same pace (rare — cooldown effect or data noise)
+ */
+export function computeHRDrift(
+  hrData: number[],
+  timeData: number[],
+): number | null {
+  if (!hrData || !timeData || hrData.length < 120 || hrData.length !== timeData.length) return null;
+
+  // Duration check: need ≥ 20 minutes
+  const totalSec = timeData[timeData.length - 1] - timeData[0];
+  if (totalSec < 1200) return null;
+
+  // Strip first 10% (warmup) and filter to points with HR > 0
+  const startIdx = Math.floor(hrData.length * 0.10);
+  const validPoints: number[] = [];
+  for (let i = startIdx; i < hrData.length; i++) {
+    if (hrData[i] > 0) validPoints.push(hrData[i]);
+  }
+
+  if (validPoints.length < 60) return null; // need ≥ 60 valid points
+
+  // Split in half
+  const mid = Math.floor(validPoints.length / 2);
+  const firstHalf = validPoints.slice(0, mid);
+  const secondHalf = validPoints.slice(mid);
+
+  const avgFirst = firstHalf.reduce((a, b) => a + b, 0) / firstHalf.length;
+  const avgSecond = secondHalf.reduce((a, b) => a + b, 0) / secondHalf.length;
+
+  if (avgFirst <= 0) return null;
+
+  const drift = ((avgSecond - avgFirst) / avgFirst) * 100;
+  return Math.round(drift * 10) / 10; // one decimal place
+}

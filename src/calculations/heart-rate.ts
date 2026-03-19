@@ -172,6 +172,41 @@ export function calculateIntensityScore(actualBpm: number, target: HRTarget): nu
 }
 
 /**
+ * Compute HR effort score: how hard a workout was relative to its target HR zone.
+ *
+ * Returns a score where:
+ *   < 0.9  = undercooked (HR well below target — session was too easy)
+ *   0.9–1.1 = on target
+ *   > 1.1  = overcooked (HR above target — session was harder than planned)
+ *
+ * Returns null if no HR data or no applicable target zone.
+ */
+export function computeHREffortScore(
+  avgHR: number | null | undefined,
+  workoutType: string | null | undefined,
+  zones: HRZones | undefined,
+): number | null {
+  if (!avgHR || avgHR <= 0 || !workoutType || !zones) return null;
+
+  const target = getWorkoutHRTarget(workoutType, zones);
+  if (!target) return null;
+
+  const midpoint = (target.min + target.max) / 2;
+  const halfRange = (target.max - target.min) / 2;
+  if (halfRange <= 0 || midpoint <= 0) return null;
+
+  // 1.0 at midpoint; scales linearly away from it.
+  // e.g. avgHR at target.max → 1.0 + halfRange/halfRange*0.5 = 1.5? No — we want gentler.
+  // Score = 1.0 + (avgHR - midpoint) / halfRange * 0.5
+  // So at target.max: 1.5, at target.min: 0.5? Too aggressive.
+  // Better: normalise so target.min → 0.8, target.max → 1.2, midpoint → 1.0
+  const score = 1.0 + (avgHR - midpoint) / halfRange * 0.2;
+
+  // Clamp to reasonable range (0.5–1.5)
+  return Math.max(0.5, Math.min(1.5, Math.round(score * 100) / 100));
+}
+
+/**
  * Detect efficiency shift based on the gap between RPE and HR intensity.
  * Returns a multiplier to adjust the standard RPE-based VDOT change.
  */

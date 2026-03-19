@@ -9,7 +9,7 @@ import type { InjuryState } from '@/types/injury';
 function makeInjuryState(overrides: Partial<InjuryState> = {}): InjuryState {
   return {
     active: true,
-    type: 'overuse',
+    type: 'general',
     location: 'knee',
     locationDetail: 'left',
     currentPain: 3,

@@ -215,6 +215,35 @@ export function drivingSignalLabel(signal: DrivingSignal): string {
   return 'Poor recovery';
 }
 
+// ─── Recovery Trend Multiplier ───────────────────────────────────────────────
+
+/**
+ * Compute a recovery trend multiplier for excess-load reduction sizing.
+ *
+ * Uses computeRecoveryScore over the last `days` days. Poor recovery = larger
+ * reduction recommended. Returns 1.0 when no data is available (graceful degradation).
+ *
+ * Multiplier table (from LOAD_BUDGET_SPEC §6):
+ *   ≥ 70 → 1.00  (normal)
+ *   50–69 → 1.15  (mildly suppressed)
+ *   30–49 → 1.30  (poor recovery)
+ *   < 30  → 1.50  (serious deficit)
+ */
+export function computeRecoveryTrend(
+  history: Array<{ sleepScore?: number | null; hrvRmssd?: number | null; restingHR?: number | null; date?: string }>,
+): number {
+  // Pass the full history so computeRecoveryScore has its 28-day baseline window.
+  // Slicing to 5 days first breaks HRV and RHR scores — both baseline and recent
+  // would be the same 5 entries, producing a delta of ~0 and always scoring ~65.
+  const result = computeRecoveryScore(history);
+  if (!result.hasData || result.score == null) return 1.0;
+  const s = result.score;
+  if (s >= 70) return 1.00;
+  if (s >= 50) return 1.15;
+  if (s >= 30) return 1.30;
+  return 1.50;
+}
+
 // ─── Recovery Score (Stats Recovery card) ────────────────────────────────────
 
 export interface RecoveryScoreResult {
@@ -291,7 +320,7 @@ export function computeRecoveryScore(
   const hasHrv   = hrvScore != null;
   const hasSleep = sleepScore != null;
   const hasRhr   = rhrScore != null;
-  if (!hasHrv && !hasSleep) return noData;
+  if (!hasHrv && !hasSleep && !hasRhr) return noData;
 
   // Apply weights only to available signals, renormalised
   let totalWeight = 0;

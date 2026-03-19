@@ -43,7 +43,7 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   tennis:        { mult: 1.20, noReplace: [], runSpec: 0.50, recoveryMult: 1.10, impactPerMin: 0.05, volumeTransfer: 0 },
   swimming:      { mult: 0.65, noReplace: [], runSpec: 0.20, recoveryMult: 0.90, impactPerMin: 0.00, volumeTransfer: 0 },
   cycling:       { mult: 0.75, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.00, volumeTransfer: 0 },
-  strength:      { mult: 1.10, noReplace: [], runSpec: 0.30, recoveryMult: 1.00, impactPerMin: 0.08, volumeTransfer: 0 },
+  strength:      { mult: 1.10, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.08, volumeTransfer: 0 },
   extra_run:     { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 }, // km-based for runs
   hiking:        { mult: 0.80, noReplace: [], runSpec: 0.45, recoveryMult: 0.95, impactPerMin: 0.06, volumeTransfer: 0.4 },
   rowing:        { mult: 0.85, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.00, volumeTransfer: 0 },
@@ -132,6 +132,7 @@ export const SPORT_ALIASES: Record<string, SportKey> = {
   'skipping': 'jump_rope',
   'cross_country_skiing': 'skiing',
   'stairmaster': 'stair_climbing',
+  'general_sport': 'generic_sport',
 };
 
 /** RPE multipliers for load calculation (1–10 scale) */

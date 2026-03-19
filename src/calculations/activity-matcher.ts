@@ -8,6 +8,7 @@ import { gp } from '@/calculations/paces';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { findMatchingWorkout, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary } from './trimp';
+import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem } from '@/types';
 import { log } from '@/ui/renderer';
 import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
@@ -29,6 +30,7 @@ export interface GarminActivityRow {
   garmin_feeling?: string | null;
   iTrimp?: number | null;
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+  hrDrift?: number | null;
 }
 
 /** Map Garmin activity type to app activity type */
@@ -113,6 +115,85 @@ function mapGarminType(garminType: string): ExternalActivity['type'] {
 function dayOfWeekFromDate(date: Date): number {
   const jsDay = date.getDay(); // 0=Sun, 6=Sat
   return jsDay === 0 ? 6 : jsDay - 1; // Convert to 0=Mon, 6=Sun
+}
+
+/**
+ * Get the expected target pace (sec/km) for a workout type given the user's paces.
+ * Easy runs use easy pace, threshold uses threshold, etc.
+ * Returns null for types without a clear pace target (gym, cross, rest).
+ */
+function getTargetPace(
+  workoutType: string | null | undefined,
+  s: { v?: number; lt?: number | null },
+): number | null {
+  if (!workoutType || !s.v) return null;
+  const paces = gp(s.v, s.lt);
+  switch (workoutType) {
+    case 'easy': case 'long': return paces.e;
+    case 'threshold': case 'tempo': return paces.t;
+    case 'marathon_pace': return paces.m;
+    case 'vo2': case 'intervals': return paces.i;
+    case 'race_pace': return paces.t; // close approximation
+    case 'progressive': return (paces.e + paces.t) / 2; // midpoint
+    default: return null;
+  }
+}
+
+/**
+ * Compute pace adherence for a run: actual pace / target pace.
+ * 1.0 = nailed the target, <1.0 = faster, >1.0 = slower.
+ * Returns null if no actual pace or no target pace available.
+ *
+ * Quality sessions (threshold, VO2, marathon pace) weight this more heavily
+ * than easy runs, since missing pace on a quality session is a stronger
+ * signal that the runner is struggling.
+ */
+export function computePaceAdherence(
+  actualPaceSecKm: number | null | undefined,
+  targetPaceSecKm: number | null | undefined,
+): number | null {
+  if (!actualPaceSecKm || actualPaceSecKm <= 0) return null;
+  if (!targetPaceSecKm || targetPaceSecKm <= 0) return null;
+  // Ratio: actual / target. 1.0 = on pace, 1.1 = 10% slower, 0.9 = 10% faster
+  return Math.round((actualPaceSecKm / targetPaceSecKm) * 100) / 100;
+}
+
+/** Is this a quality workout type where pace matters significantly? */
+export function isQualityType(workoutType: string | null | undefined): boolean {
+  if (!workoutType) return false;
+  return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive'].includes(workoutType);
+}
+
+/**
+ * Compute pace adherence and return it for storage on GarminActual.
+ * Combines getTargetPace + computePaceAdherence.
+ */
+export function getPaceAdherence(
+  actualPaceSecKm: number | null | undefined,
+  workoutType: string | null | undefined,
+  s: { v?: number; lt?: number | null },
+): number | null {
+  const target = getTargetPace(workoutType, s);
+  return computePaceAdherence(actualPaceSecKm, target);
+}
+
+/**
+ * Compute HR effort score for an activity using user's HR profile from state.
+ * NOTE: "Garmin" naming is historical — avgHR comes from Strava HR streams
+ * (or Garmin where connected). All activity sources flow through this path.
+ */
+export function getHREffort(
+  avgHR: number | null | undefined,
+  plannedType: string | null | undefined,
+  s: { maxHR?: number | null; restingHR?: number | null; onboarding?: { age?: number } },
+): number | null {
+  const profile: HRProfile = {
+    maxHR: s.maxHR ?? undefined,
+    restingHR: s.restingHR ?? undefined,
+    age: s.onboarding?.age,
+  };
+  const zones = calculateZones(profile);
+  return computeHREffortScore(avgHR, plannedType, zones);
 }
 
 /**
@@ -342,9 +423,62 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
   }
 
+  // Re-enrich already-matched runs when DB now has hrZones / iTrimp that state is missing.
+  // This self-heals actuals that were matched before sync-activities returned these fields.
+  let enrichChanged = false;
+  for (const row of rows) {
+    if (!globalProcessed.has(row.garmin_id)) continue;
+    // Prefer the DB / stream-computed iTrimp (most accurate).
+    // But if the stored value is physically impossible (> 3 TSS/min implies
+    // HR fraction exceeded 1 due to wrong maxHR), recompute from avg_hr.
+    const storedForCheck = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex);
+    const durationMin = row.duration_sec / 60;
+    const storedTSS = storedForCheck != null ? (storedForCheck * 100) / 15000 : 0;
+    const freshITrimp = (storedForCheck != null && durationMin > 0 && storedTSS > durationMin * 3
+      && row.avg_hr != null && s.restingHR != null && s.maxHR != null)
+      ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, s.restingHR, s.maxHR, s.biologicalSex as 'male' | 'female' | undefined)
+      : storedForCheck;
+    const freshZones = row.hrZones ?? null;
+    if (freshITrimp == null && freshZones == null) continue;
+    for (const week of s.wks) {
+      const workoutId = week.garminMatched?.[row.garmin_id];
+      if (!workoutId || workoutId === '__pending__') continue;
+      const actual = week.garminActuals?.[workoutId];
+      console.log(`[Enrich] ${row.garmin_id} → workoutId=${workoutId} actual=${actual ? 'found' : 'missing'} freshITrimp=${freshITrimp?.toFixed(0)} storedITrimp=${actual?.iTrimp?.toFixed(0)}`);
+      if (!actual) break;
+      if (freshITrimp != null && actual.iTrimp !== freshITrimp) {
+        actual.iTrimp = freshITrimp;
+        enrichChanged = true;
+      }
+      if (actual.hrZones == null && freshZones != null) {
+        actual.hrZones = freshZones;
+        enrichChanged = true;
+      }
+      // Backfill hrEffortScore for actuals that predate this feature
+      if (actual.hrEffortScore == null && actual.avgHR && actual.plannedType) {
+        actual.hrEffortScore = getHREffort(actual.avgHR, actual.plannedType, s);
+        if (actual.hrEffortScore != null) enrichChanged = true;
+      }
+      // Backfill paceAdherence for actuals that predate this feature
+      if (actual.paceAdherence == null && actual.avgPaceSecKm && actual.plannedType) {
+        actual.paceAdherence = getPaceAdherence(actual.avgPaceSecKm, actual.plannedType, s);
+        if (actual.paceAdherence != null) enrichChanged = true;
+      }
+      // Backfill hrDrift from DB row
+      if (actual.hrDrift == null && row.hrDrift != null) {
+        actual.hrDrift = row.hrDrift;
+        enrichChanged = true;
+      }
+      break;
+    }
+  }
+
   // Filter out already-processed activities (across all weeks)
   const newRows = rows.filter(r => !globalProcessed.has(r.garmin_id));
-  if (newRows.length === 0) return { changed: false, pending: [] };
+  if (newRows.length === 0) {
+    if (enrichChanged) saveState();
+    return { changed: enrichChanged, pending: [] };
+  }
 
   // Group unprocessed activities by their correct plan week.
   // Activities outside the plan date range are skipped.
@@ -484,6 +618,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           workoutName: match.workoutName || match.matchedWorkout?.n || undefined,
           iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
           hrZones: row.hrZones ?? null,
+          activityType: row.activity_type ?? null,
+          plannedType: match.matchedWorkout?.t ?? null,
+          hrEffortScore: getHREffort(row.avg_hr, match.matchedWorkout?.t, s),
+          paceAdherence: getPaceAdherence(row.avg_pace_sec_km, match.matchedWorkout?.t, s),
+          hrDrift: row.hrDrift ?? null,
         };
         wk.garminActuals[match.workoutId] = actual;
 
@@ -619,6 +758,32 @@ export function formatActivityType(garminType: string): string {
     STRENGTH_TRAINING: 'Strength',
     INDOOR_CARDIO: 'Indoor Cardio',
     HIIT: 'HIIT',
+    HIGHINTENSITYINTERVALTRAINING: 'HIIT',
+    MOUNTAINBIKERIDE: 'Mountain Bike',
+    EMOUNTAINBIKERIDE: 'E-MTB',
+    GRAVELRIDE: 'Gravel Ride',
+    VELOMOBILE: 'Cycling',
+    HANDCYCLE: 'Cycling',
+    ROLLERSKI: 'Roller Ski',
+    VIRTUALROW: 'Virtual Row',
+    CANOEING: 'Canoeing',
+    STANDUPPADDLING: 'Paddleboard',
+    ROCKCLIMBING: 'Climbing',
+    TABLETENNIS: 'Table Tennis',
+    RACQUETBALL: 'Racquetball',
+    ICESKATE: 'Ice Skating',
+    INLINESKATE: 'Inline Skating',
+    SNOWSHOE: 'Snowshoe',
+    SNOWBOARD: 'Snowboard',
+    ALPINESKI: 'Skiing',
+    BACKCOUNTRYSKI: 'Backcountry Ski',
+    NORDICSKI: 'Nordic Ski',
+    SAIL: 'Sailing',
+    SURFING: 'Surfing',
+    WINDSURF: 'Windsurfing',
+    KITESURF: 'Kitesurfing',
+    SKATEBOARD: 'Skateboarding',
+    WHEELCHAIR: 'Wheelchair',
     FITNESS_EQUIPMENT: 'Fitness',
     CARDIO: 'Cardio',
     CROSS_TRAINING: 'Cross Training',
@@ -709,6 +874,13 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
   (workout as any).garminAvgPace = row.avg_pace_sec_km ?? null;
 
   wk.adhocWorkouts.push(workout);
+
+  // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)
+  const rawITrimp = row.iTrimp ?? null;
+  const rawTSS = (rawITrimp != null && rawITrimp > 0)
+    ? (rawITrimp * 100) / 15000
+    : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+  wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 }
 
 /**
@@ -747,5 +919,12 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   (workout as any).garminCalories = item.calories ?? null;
   (workout as any).garminAvgPace = null; // pending items don't have avg pace
   wk.adhocWorkouts.push(workout);
+
+  // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)
+  const rawITrimp = item.iTrimp ?? null;
+  const rawTSS = (rawITrimp != null && rawITrimp > 0)
+    ? (rawITrimp * 100) / 15000
+    : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+  wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
 }
 
