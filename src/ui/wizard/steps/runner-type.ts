@@ -30,7 +30,7 @@ export function renderRunnerType(container: HTMLElement, state: OnboardingState)
           Your Runner Profile
         </h2>
         <p style="font-size:15px;color:var(--c-muted);text-align:center;margin-bottom:32px">
-          Based on your personal bests, we've assessed your running style.
+          Here's your running style, based on your race times.
         </p>
 
         <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:24px">

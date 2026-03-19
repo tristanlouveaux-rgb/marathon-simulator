@@ -1,6 +1,7 @@
 import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
+import { getState } from '@/state/store';
 
 /**
  * Render the fitness data collection page (Step 6.5 - between PBs and Initializing)
@@ -81,15 +82,15 @@ export function renderFitnessData(container: HTMLElement, state: OnboardingState
             </p>
             <div class="flex gap-2 items-center">
               <input type="number" id="lt-min" min="2" max="10" placeholder="min"
-                value="${hasLT ? Math.floor((state.ltPace || 0) / 60) : ''}"
+                value="${hasLT ? Math.floor(((getState().unitPref ?? 'km') === 'mi' ? (state.ltPace || 0) * 1.60934 : (state.ltPace || 0)) / 60) : ''}"
                 class="w-20 px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
                 style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
               <span style="color:var(--c-faint)">:</span>
               <input type="number" id="lt-sec" min="0" max="59" placeholder="sec"
-                value="${hasLT ? Math.floor((state.ltPace || 0) % 60) : ''}"
+                value="${hasLT ? Math.floor(((getState().unitPref ?? 'km') === 'mi' ? (state.ltPace || 0) * 1.60934 : (state.ltPace || 0)) % 60) : ''}"
                 class="w-20 px-3 py-2 rounded-lg text-sm text-center focus:outline-none"
                 style="background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)">
-              <span class="text-sm" style="color:var(--c-faint)">/km</span>
+              <span class="text-sm" style="color:var(--c-faint)">${(getState().unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span>
             </div>
           </div>
 
@@ -218,7 +219,9 @@ function wireEventHandlers(state: OnboardingState): void {
       const ltSec = +(document.getElementById('lt-sec') as HTMLInputElement)?.value || 0;
       const vo2 = +(document.getElementById('vo2-input') as HTMLInputElement)?.value || null;
 
-      const ltPace = (ltMin > 0 || ltSec > 0) ? ltMin * 60 + ltSec : null;
+      const ltPaceRaw = (ltMin > 0 || ltSec > 0) ? ltMin * 60 + ltSec : null;
+      // Convert sec/mi → sec/km if user entered in miles
+      const ltPace = ltPaceRaw != null && (getState().unitPref ?? 'km') === 'mi' ? ltPaceRaw / 1.60934 : ltPaceRaw;
       let restingHR = +(document.getElementById('resting-hr') as HTMLInputElement)?.value || null;
       let maxHR = +(document.getElementById('max-hr') as HTMLInputElement)?.value || null;
 

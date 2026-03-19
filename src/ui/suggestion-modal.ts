@@ -11,6 +11,7 @@ import type { SuggestionPopup, GlobalChoice, Adjustment } from '@/cross-training
 import { classifyWorkoutType } from '@/cross-training/universalLoad';
 import { getState } from '@/state'; // used for intensityThresholds in cross-training header
 import { SPORT_LABELS } from '@/constants/sports';
+import { formatKm } from '@/utils/format';
 
 export interface SuggestionDecision {
   choice: GlobalChoice;
@@ -51,6 +52,7 @@ export function showSuggestionModal(
   acwrContext?: ACWRModalContext,
   crossTrainingCtx?: CrossTrainingModalContext
 ): void {
+  const unitPref = getState().unitPref ?? 'km';
   const severityStyles = {
     light: {
       bg: 'background:rgba(37,99,235,0.06)',
@@ -94,7 +96,7 @@ export function showSuggestionModal(
         if (newKm > 0) {
           actionLabel = 'Convert';
           actionStyle = 'color:#2563EB';
-          detail = `${adj.originalType} → ${newKm}km easy shakeout`;
+          detail = `${adj.originalType} → ${formatKm(newKm, unitPref)} easy shakeout`;
         } else {
           actionLabel = 'Replace';
           actionStyle = 'color:var(--c-warn)';
@@ -109,13 +111,13 @@ export function showSuggestionModal(
                         : adj.newType === 'threshold' ? 'threshold pace'
                         : 'lower intensity';
         detail = origKm > 0
-          ? `Keep ${origKm}km — drop to ${paceLabel}`
+          ? `Keep ${formatKm(origKm, unitPref)} — drop to ${paceLabel}`
           : `Drop to ${paceLabel}`;
       } else {
         actionLabel = 'Reduce';
         actionStyle = 'color:var(--c-caution)';
         detail = origKm > 0
-          ? `${origKm}km → ${newKm}km`
+          ? `${formatKm(origKm, unitPref)} → ${formatKm(newKm, unitPref)}`
           : `Reduce intensity`;
       }
 
@@ -139,7 +141,7 @@ export function showSuggestionModal(
 
   // Equivalent easy km display
   const equivKm = popup.equivalentEasyKm > 0
-    ? `≈ ${popup.equivalentEasyKm.toFixed(1)} km easy running equivalent`
+    ? `≈ ${formatKm(popup.equivalentEasyKm, unitPref)} easy running equivalent`
     : '';
 
   // Data tier badge
@@ -174,7 +176,8 @@ export function showSuggestionModal(
   const acwrHeader = (() => {
     if (!acwrContext) return '';
     const { ratio, status, safeUpper, intensityPct } = acwrContext;
-    const pctAbove = Math.round((ratio / safeUpper - 1) * 100);
+    const pctAboveCeiling = Math.round((ratio / safeUpper - 1) * 100);
+    const pctAboveBaseline = Math.round((ratio - 1) * 100);
     const statusBg = status === 'high'
       ? 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25)'
       : 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25)';
@@ -198,15 +201,17 @@ export function showSuggestionModal(
       zoneAdvice = 'Your running km spiked this week. Heart rate load is fine — this is a mechanical risk (tendons, bones). Shorten the long run and one easy run rather than cutting intensity.';
     } else if (iHeavy) {
       // Rule 1 — ACWR elevated + intensity-heavy
-      zoneAdvice = `Your load jumped ${pctAbove}% above baseline and most of it was high-intensity work. Cut intervals first — they're the biggest fatigue driver. Threshold sessions next.`;
+      zoneAdvice = `Your load is ${pctAboveBaseline}% above your usual weekly volume and most of it was high-intensity work. Cut intervals first — they're the biggest fatigue driver. Threshold sessions next.`;
     } else {
       // Rule 5 — trailing zone mix / general
       zoneAdvice = `Your load has built quickly. The safest cut is your longest run — it carries the most volume. Keep quality sessions if your intensity ratio is within range.`;
     }
-    // Human-consequence headline: what does pctAbove actually mean for the athlete?
+    // Human-consequence headline: reference actual load vs baseline (not vs safety ceiling)
     const humanConsequence = status === 'high'
-      ? `You've been training ${pctAbove}% harder than usual this week. Your body needs extra recovery before your next hard effort.`
-      : `This week is running ${pctAbove}% above your normal load. Recovery between sessions matters more than usual.`;
+      ? `You've been training ${pctAboveBaseline}% above your usual weekly load. Your body needs extra recovery before your next hard effort.`
+      : pctAboveCeiling <= 5
+      ? `Your load is just above the safe ceiling (${ratio.toFixed(2)}× vs ${safeUpper.toFixed(1)}×). A small adjustment is enough.`
+      : `This week is running ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`;
     return `
       <div style="padding:16px 20px 0">
         <div style="${statusBg};border-radius:10px;padding:14px 16px;margin-bottom:4px">
@@ -286,7 +291,7 @@ export function showSuggestionModal(
           </div>
           ${matchedRunName || matchedRunKm ? `
           <div style="border-top:1px solid var(--c-border);margin-top:10px;padding-top:10px">
-            ${matchedRunName ? `<div style="color:var(--c-muted);font-size:12px;margin-bottom:4px">Matched to: <span style="color:var(--c-black)">${matchedRunName}${matchedRunKm ? ` (${matchedRunKm} km)` : ''}</span></div>` : ''}
+            ${matchedRunName ? `<div style="color:var(--c-muted);font-size:12px;margin-bottom:4px">Matched to: <span style="color:var(--c-black)">${matchedRunName}${matchedRunKm ? ` (${formatKm(matchedRunKm, unitPref)})` : ''}</span></div>` : ''}
             <div style="display:flex;gap:12px;font-size:12px">
               ${cardioCoveredPct !== null ? `
                 <button class="ctx-info-btn" data-ctx-info="cardio" style="background:none;border:none;cursor:pointer;color:var(--c-muted);padding:0">
@@ -294,7 +299,7 @@ export function showSuggestionModal(
                 </button>` : ''}
               ${kmGap !== null ? `
                 <button class="ctx-info-btn" data-ctx-info="km" style="background:none;border:none;cursor:pointer;color:var(--c-muted);padding:0">
-                  Running km gap: <span style="color:var(--c-black);font-weight:500">${kmGap} km</span>
+                  Running km gap: <span style="color:var(--c-black);font-weight:500">${formatKm(kmGap as number, unitPref)}</span>
                 </button>` : ''}
             </div>
             <div id="ctx-info-cardio" style="display:none;margin-top:8px;font-size:12px;color:var(--c-faint);line-height:1.6">Cardio covered compares the aerobic load of this activity to your planned run. Above 80% means your heart and lungs get a similar stimulus without the running stress.</div>

@@ -12,13 +12,15 @@
  *   Modal dismiss → re-opens review with still-pending items (no intro repeat).
  */
 
-import { getMutableState, saveState } from '@/state';
+import { getMutableState, getState, saveState } from '@/state';
 import { render, log } from '@/ui/renderer';
 import {
   addAdhocWorkoutFromPending,
   formatActivityType,
   mapAppTypeToSport,
   deriveRPE,
+  getHREffort,
+  getPaceAdherence,
 } from '@/calculations/activity-matcher';
 import {
   normalizeSport,
@@ -34,12 +36,14 @@ import {
   type ExternalActivity,
   type MatchResult,
 } from '@/calculations/matching';
+import { classifyByName } from '@/data/stravaSync';
 import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } from '@/types';
 import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeACWR, getWeeklyExcess } from '@/calculations/fitness-model';
+import { computeACWR, getWeeklyExcess, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { formatKm } from '@/utils/format';
 
 // Intro screen removed — flow goes directly to matching screen
 
@@ -56,6 +60,7 @@ function getWeekWorkoutsForReview() {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
 }
 
@@ -546,10 +551,11 @@ function renderCard(
   choices: Record<string, 'integrate' | 'log'>,
   matchCache: Map<string, MatchResult | null>,
 ): string {
+  const unitPref    = getState().unitPref ?? 'km';
   const label       = formatActivityType(item.activityType);
   const timeStr     = new Date(item.startTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   const durationMin = Math.round(item.durationSec / 60);
-  const distKm      = item.distanceM ? (item.distanceM / 1000).toFixed(1) : null;
+  const distKm      = item.distanceM ? item.distanceM / 1000 : null;
   const choice      = choices[item.garminId];
   const match       = matchCache.get(item.garminId) ?? null;
 
@@ -568,7 +574,7 @@ function renderCard(
     <div class="rounded-lg border p-3" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="mb-2.5">
         <p class="font-medium text-sm" style="color:var(--c-black)">${label}</p>
-        <p class="text-xs mt-0.5" style="color:var(--c-muted)">${distKm ? `${distKm} km &middot; ` : ''}${durationMin} min &middot; ${timeStr}</p>
+        <p class="text-xs mt-0.5" style="color:var(--c-muted)">${distKm ? `${formatKm(distKm, unitPref)} &middot; ` : ''}${durationMin} min &middot; ${timeStr}</p>
         ${matchHint}
       </div>
       <div class="flex gap-2">
@@ -763,6 +769,11 @@ function applyReview(
         anaerobicEffect: item.anaerobicEffect,
         workoutName: match.workoutName,
         hrZones: item.hrZones ?? null,
+        plannedType: classifyByName(match.workoutId) ?? undefined,
+        hrEffortScore: getHREffort(item.avgHR, classifyByName(match.workoutId), s),
+        paceAdherence: getPaceAdherence(
+          item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+          classifyByName(match.workoutId), s),
       } as GarminActual;
 
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
@@ -1206,7 +1217,7 @@ function showMatchingConfirmation(
   const rows = pairings.map(p => {
     const label   = formatActivityType(p.item.activityType);
     const dur     = Math.round(p.item.durationSec / 60);
-    const distKm  = p.item.distanceM ? `${(p.item.distanceM / 1000).toFixed(1)} km · ` : '';
+    const distKm  = p.item.distanceM ? `${formatKm(p.item.distanceM / 1000, s.unitPref ?? 'km')} · ` : '';
     const timeStr = new Date(p.item.startTime).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     const emoji   = activityEmoji(p.item);
     const badge   = p.proposedWorkoutId
@@ -1333,6 +1344,11 @@ export function autoProcessActivities(
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         workoutName: match.workoutName,
         hrZones: item.hrZones ?? null,
+        plannedType: classifyByName(match.workoutId) ?? undefined,
+        hrEffortScore: getHREffort(item.avgHR, classifyByName(match.workoutId), s),
+        paceAdherence: getPaceAdherence(
+          item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+          classifyByName(match.workoutId), s),
       } as GarminActual;
       const idx = planCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
@@ -1508,7 +1524,7 @@ export function autoProcessActivities(
               modReason: `Auto: ${sportLabel}`,
               originalDistance: `${origKm}km`,
               newDistance: `${newKm}km (was ${origKm}km)`,
-              autoReduceNote: `Easy run reduced by ${reductionKm.toFixed(1)} km · ${Math.round(_excess)} TSS absorbed`,
+              autoReduceNote: `Easy run reduced by ${formatKm(reductionKm, s.unitPref ?? 'km')} · ${Math.round(_excess)} TSS absorbed`,
             } as WorkoutMod);
             saveState();
             showAssignmentToast(autoAssignLines);

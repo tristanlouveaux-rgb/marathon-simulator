@@ -13,9 +13,9 @@ import {
 } from '@/workouts';
 // applyCrossTrainingToWorkouts is intentionally NOT used here.
 // Plan modifications must only happen via explicit user confirmation in events.ts.
-import { ft, fp, formatPace, formatWorkoutTime, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
+import { ft, fp, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
-import { computeACWR } from '@/calculations/fitness-model';
+import { computeACWR, getTrailingEffortScore } from '@/calculations/fitness-model';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
 import { loadGpsRecording } from '@/gps/persistence';
@@ -265,7 +265,8 @@ export function render(): void {
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
   const injuryState = (s as any).injuryState || null;  // Get injury state for plan adaptation
   const trailingEffort = getTrailingEffortScore(s.wks, s.w);
-  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined);
+  const acwrAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed);
   let wos = generateWeekWorkouts(
     wk.ph,
     s.rw,
@@ -469,9 +470,7 @@ export function render(): void {
   const ltDeltaEl = document.getElementById('stat-lt-delta');
   if (ltEl) {
     if (s.lt) {
-      const ltMin = Math.floor(s.lt / 60);
-      const ltSec = Math.floor(s.lt % 60);
-      ltEl.textContent = `${ltMin}:${String(ltSec).padStart(2, '0')}/km`;
+      ltEl.textContent = fp(s.lt, (s as any).unitPref ?? 'km');
       const initialLT = s.onboarding?.ltPace; // sec/km
       if (ltDeltaEl && initialLT && Math.abs(s.lt - initialLT) >= 1) {
         const delta = initialLT - s.lt; // Positive = faster (improvement)
@@ -521,10 +520,10 @@ export function render(): void {
   // LT pending confirmation banner
   if (s.ltEstimation?.pendingConfirmation) {
     const pc = s.ltEstimation.pendingConfirmation;
-    const fmtP = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    const fmtP = (sec: number) => fp(sec, (s as any).unitPref ?? 'km');
     h += `<div class="p-3 rounded mb-3 text-xs border" style="background:rgba(245,158,11,0.06);border-color:rgba(245,158,11,0.35)">`;
     h += `<div class="font-bold mb-1" style="color:var(--c-caution)">LT Change Detected (${pc.deviationPct.toFixed(1)}%)</div>`;
-    h += `<div class="mb-2" style="color:var(--c-muted)">Estimated LT: ${fmtP(pc.estimate.ltPaceSecPerKm)}/km (current: ${fmtP(pc.currentLT)}/km)</div>`;
+    h += `<div class="mb-2" style="color:var(--c-muted)">Estimated LT: ${fmtP(pc.estimate.ltPaceSecPerKm)} (current: ${fmtP(pc.currentLT)})</div>`;
     h += `<div class="flex gap-2">`;
     h += `<button onclick="window.acceptLTUpdate()" class="px-3 py-1.5 rounded font-medium" style="background:var(--c-ok);color:white">Accept</button>`;
     h += `<button onclick="window.dismissLTUpdate()" class="px-3 py-1.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Dismiss</button>`;
@@ -603,14 +602,15 @@ export function render(): void {
   // LT auto-update banner
   if (wk.ltAutoUpdate) {
     const ltu = wk.ltAutoUpdate;
-    const fmtP = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}`;
+    const ltBannerUnitPref = (s as any).unitPref ?? 'km';
+    const fmtP = (sec: number) => fp(sec, ltBannerUnitPref);
     const bannerStyle = ltu.confidence === 'high'
       ? 'background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.25);color:var(--c-ok)'
       : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.25);color:var(--c-accent)';
     const sourceLabel = ltu.source === 'threshold_direct' ? 'threshold run' : 'efficiency trend';
     h += `<div class="border p-2 rounded mb-2 text-xs" style="${bannerStyle}">`;
-    h += `<strong>LT Auto-Updated:</strong> ${fmtP(ltu.newLT)}/km`;
-    if (ltu.previousLT) h += ` (was ${fmtP(ltu.previousLT)}/km)`;
+    h += `<strong>LT Auto-Updated:</strong> ${fmtP(ltu.newLT)}`;
+    if (ltu.previousLT) h += ` (was ${fmtP(ltu.previousLT)})`;
     h += ` — via ${sourceLabel}, ${ltu.confidence} confidence`;
     h += `</div>`;
   }
@@ -686,26 +686,13 @@ export function render(): void {
   if (stEl) stEl.innerHTML = don >= tot ? `Complete ${don}/${tot}` : `Progress ${don}/${tot}`;
 }
 
-/**
- * Compute trailing effort score from the last 2 completed weeks with effort data.
- * Skips injury weeks. Returns 0 when no data available.
- */
-function getTrailingEffortScore(weeks: Week[], currentWeekIdx: number): number {
-  const completed: number[] = [];
-  for (let i = currentWeekIdx - 2; i >= 0 && completed.length < 2; i--) {
-    const w = weeks[i];
-    if (w.effortScore != null && !w.injuryState?.active) {
-      completed.push(w.effortScore);
-    }
-  }
-  if (completed.length === 0) return 0;
-  return completed.reduce((a, b) => a + b, 0) / completed.length;
-}
+// getTrailingEffortScore moved to @/calculations/fitness-model
 
 /**
  * Render calendar view
  */
 function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
+  const unitPref = getState().unitPref ?? 'km';
   let h = `<details class="mb-4" open><summary class="cursor-pointer text-sm font-medium mb-2" style="color:var(--c-muted)">Weekly Calendar View</summary>`;
   h += `<div class="grid grid-cols-7 gap-1">`;
 
@@ -764,13 +751,12 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
         if (w.t !== 'gym') {
           if (isReplaced) {
             // Replaced: show original description struck through
-            const origDesc = w.originalDistance || w.d;
-            const origLine = injectPaces(origDesc, paces).split(/\n/)[0];
+            const origLine = fmtDesc(injectPaces(w.originalDistance || w.d, paces), unitPref).split(/\n/)[0];
             h += `<div class="text-xs line-through" style="color:var(--c-faint)">${origLine}</div>`;
             h += `<div class="text-xs" style="color:var(--c-accent)">${w.modReason ? w.modReason.replace(/^Garmin:\s*/i, '').trim() : 'Replaced'}</div>`;
           } else if (isModified) {
             // Modified (graduated return): short format — just key info
-            const descLines = injectPaces(w.d, paces).split(/\n/);
+            const descLines = fmtDesc(injectPaces(w.d, paces), unitPref).split(/\n/);
             const mainLine = descLines.length >= 3 ? descLines[1] : descLines[0];
             // Strip paces, distance hints, recovery — just show structure
             const shortDesc = mainLine
@@ -784,13 +770,13 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
             let calDesc = '';
             if (w.t === 'cross') {
               // Strip sport name from description to avoid duplication with w.n
-              calDesc = w.d.replace(new RegExp('^' + w.n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'i'), '');
+              calDesc = fmtDesc(w.d, unitPref).replace(new RegExp('^' + w.n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*', 'i'), '');
             } else if (w.t === 'vo2' || w.t === 'threshold') {
-              const descLines = injectPaces(w.d, paces).split(/\n/);
+              const descLines = fmtDesc(injectPaces(w.d, paces), unitPref).split(/\n/);
               const mainLine = descLines.length >= 3 ? descLines[1] : descLines[0];
-              calDesc = mainLine.replace(/\s*\(~[^)]+\)/g, '').replace(/\/km/g, '');
+              calDesc = mainLine.replace(/\s*\(~[^)]+\)/g, '');
             } else {
-              calDesc = injectPaces(w.d, paces).split(/\n/)[0];
+              calDesc = fmtDesc(injectPaces(w.d, paces), unitPref).split(/\n/)[0];
             }
             h += `<div class="text-xs" style="color:var(--c-muted)">${calDesc}</div>`;
             h += `<div class="text-xs" style="color:${wColors.accentColor}">RPE ${w.rpe || w.r}</div>`;
@@ -810,6 +796,7 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
  * Render detailed workout list
  */
 function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw: number, currentWeek: number, viewOnly: boolean = false): string {
+  const unitPref = getState().unitPref ?? 'km';
   let h = `<div class="space-y-2">`;
 
   for (const w of wos) {
@@ -928,7 +915,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       const dur = Math.round(garminActualsData.durationSec / 60);
       let statLine = `${dur} min`;
       if (garminActualsData.avgHR) statLine += ` · HR ${garminActualsData.avgHR}`;
-      if (garminActualsData.distanceKm > 0.1) statLine += ` · ${garminActualsData.distanceKm.toFixed(1)} km`;
+      if (garminActualsData.distanceKm > 0.1) statLine += ` · ${formatKm(garminActualsData.distanceKm, unitPref)}`;
       h += `<div class="mb-2 p-1.5 border rounded text-xs" style="background:rgba(249,115,22,0.06);border-color:rgba(249,115,22,0.3);color:#F97316">`;
       h += `<div class="font-semibold">Matched: ${actName}</div>`;
       h += `<div class="mt-0.5" style="color:rgba(249,115,22,0.7)">${statLine}</div>`;
@@ -950,7 +937,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       h += `<div>`;
       h += `<div class="font-semibold">${modLabel}</div>`;
       if (w.originalDistance && !isReplaced) {
-        h += `<div class="mt-0.5" style="color:var(--c-faint)">Was: ${w.originalDistance}</div>`;
+        h += `<div class="mt-0.5" style="color:var(--c-faint)">Was: ${fmtDesc(w.originalDistance, unitPref)}</div>`;
       }
       h += `</div>`;
       h += `<button onclick="${undoOnclick}" class="text-xs whitespace-nowrap shrink-0 underline" style="color:var(--c-faint)">Undo</button>`;
@@ -1017,10 +1004,10 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
     // Description — for replaced workouts, show original distance instead of "0km (replaced)"
     if (isReplaced && w.originalDistance) {
-      const origDesc = injectPaces(w.originalDistance, paces).replace(/\n/g, '<br>');
+      const origDesc = fmtDesc(injectPaces(w.originalDistance, paces), unitPref).replace(/\n/g, '<br>');
       h += `<div class="text-xs mb-1" style="color:var(--c-muted)"><s>${origDesc}</s> <span style="color:var(--c-accent)">(replaced)</span></div>`;
     } else {
-      h += `<div class="text-xs mb-1" style="color:var(--c-muted)">${injectPaces(w.d, paces).replace(/\n/g, '<br>')}</div>`;
+      h += `<div class="text-xs mb-1" style="color:var(--c-muted)">${fmtDesc(injectPaces(w.d, paces), unitPref).replace(/\n/g, '<br>')}</div>`;
     }
     if (!isCompleteRest && !isReplaced) {
       if (rtd) {
@@ -1198,7 +1185,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           h += `<button onclick="window.rate('${wId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}',1,1,'${w.t}',false)" class="w-full mt-1 py-1.5 text-xs rounded font-medium" style="background:var(--c-ok);color:white">Complete Rest Day</button>`;
         }
       } else if (w.t === 'capacity_test' && (w as any).testType) {
-        if (w.status === 'passed') {
+        if ((w as any).status === 'passed') {
           h += `<div class="flex items-center gap-2 py-1.5">`;
           h += `<span class="w-5 h-5 rounded-full flex items-center justify-center" style="background:var(--c-ok)"><svg class="w-3 h-3" style="color:white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg></span>`;
           h += `<span class="text-xs font-semibold" style="color:var(--c-ok)">PASSED</span>`;
@@ -1342,6 +1329,7 @@ function fmtActivityDate(isoString?: string | null): string {
 }
 
 function renderGarminSyncedSection(wk: Week): string {
+  const unitPref = getState().unitPref ?? 'km';
   // Matched activities: everything in garminActuals
   const actuals = wk.garminActuals || {};
   const matchedRows = Object.entries(actuals).map(([workoutId, a]: [string, any]) => {
@@ -1392,7 +1380,7 @@ function renderGarminSyncedSection(wk: Week): string {
   // ── Matched plan slot activities ──
   for (const row of matchedRows) {
     const source = getActivitySource(row.garminId);
-    const distStr = row.distanceKm > 0 ? `${row.distanceKm.toFixed(1)} km` : '';
+    const distStr = row.distanceKm > 0 ? formatKm(row.distanceKm, unitPref) : '';
     const paceStr = row.avgPaceSecKm ? formatPace(row.avgPaceSecKm) : '';
     const hrStr = row.avgHR ? `HR ${row.avgHR}` : '';
     const durStr = !distStr && row.durationSec > 0 ? `${Math.round(row.durationSec / 60)} min` : '';
@@ -1492,7 +1480,7 @@ function renderGarminSyncedSection(wk: Week): string {
     const timestamp = (w as any).garminTimestamp as string | undefined;
     const durationMin = (w as any).garminDurationMin as number | undefined;
 
-    const distStr = distKm && distKm > 0.1 ? `${distKm.toFixed(1)} km` : '';
+    const distStr = distKm && distKm > 0.1 ? formatKm(distKm, unitPref) : '';
     const durStr = !distStr && durationMin ? `${durationMin} min` : '';
     const paceStr = avgPace ? formatPace(avgPace) : '';
     const hrStr = avgHR ? `HR ${avgHR}` : '';
@@ -1515,7 +1503,7 @@ function renderGarminSyncedSection(wk: Week): string {
   // ── Pending (unreviewed) items ──
   for (const p of pendingItems) {
     const source = getActivitySource(p.garminId);
-    const distStr = p.distanceM && p.distanceM > 0 ? `${(p.distanceM / 1000).toFixed(1)} km` : '';
+    const distStr = p.distanceM && p.distanceM > 0 ? formatKm(p.distanceM / 1000, unitPref) : '';
     const durStr = !distStr && p.durationSec ? `${Math.round(p.durationSec / 60)} min` : '';
     const hrStr = p.avgHR ? `HR ${p.avgHR}` : '';
     const calStr = p.calories ? `${p.calories} kcal` : '';
@@ -1630,7 +1618,8 @@ export function setupSyncListener(): void {
     // Generate current workouts to match against
     const wos = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-      undefined, undefined, undefined, s.w, s.tw, s.v, s.gs
+      undefined, undefined, undefined, s.w, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus
     );
 
     // Filter out already-rated workouts
@@ -1715,6 +1704,7 @@ function injectPaces(description: string, paces: any): string {
 
 /** Render Garmin actual vs planned comparison */
 function renderGarminActuals(actual: GarminActual, planned: { totalDistance: number; totalTime: number; avgPace: number | null }): string {
+  const unitPref = getState().unitPref ?? 'km';
   let h = `<div class="text-xs mt-1 mb-1 p-2 border rounded" style="background:rgba(249,115,22,0.06);border-color:rgba(249,115,22,0.25)">`;
   h += `<div class="font-medium mb-1" style="color:#F97316">Actual (Garmin)</div>`;
   h += `<div class="grid grid-cols-2 gap-x-4 gap-y-0.5">`;
@@ -1723,11 +1713,12 @@ function renderGarminActuals(actual: GarminActual, planned: { totalDistance: num
   if (actual.distanceKm > 0) {
     const plannedKm = planned.totalDistance > 0 ? (planned.totalDistance / 1000) : 0;
     h += `<div style="color:var(--c-muted)">Distance</div>`;
-    h += `<div style="color:var(--c-black)">${actual.distanceKm.toFixed(1)}km`;
+    h += `<div style="color:var(--c-black)">${formatKm(actual.distanceKm, unitPref)}`;
     if (plannedKm > 0) {
       const diff = actual.distanceKm - plannedKm;
+      const diffVal = unitPref === 'mi' ? diff * 0.621371 : diff;
       const diffColor = Math.abs(diff) < 0.5 ? 'var(--c-faint)' : diff > 0 ? 'var(--c-ok)' : 'var(--c-caution)';
-      h += ` <span style="color:${diffColor}">(${diff >= 0 ? '+' : ''}${diff.toFixed(1)})</span>`;
+      h += ` <span style="color:${diffColor}">(${diff >= 0 ? '+' : ''}${diffVal.toFixed(1)} ${unitPref})</span>`;
     }
     h += `</div>`;
   }
@@ -1766,10 +1757,10 @@ function renderGarminActuals(actual: GarminActual, planned: { totalDistance: num
     h += `<details class="mt-1.5"><summary class="cursor-pointer" style="color:var(--c-muted)">Lap splits (${actual.laps.length})</summary>`;
     h += `<div class="mt-1 space-y-0.5">`;
     for (const lap of actual.laps) {
-      const lapDistKm = (lap.distanceM / 1000).toFixed(2);
+      const lapDistKm = lap.distanceM / 1000;
       h += `<div class="flex justify-between" style="color:var(--c-muted)">`;
       h += `<span>Lap ${lap.index}</span>`;
-      h += `<span>${formatPace(lap.avgPaceSecKm)} · ${lapDistKm}km${lap.avgHR ? ` · ${lap.avgHR}bpm` : ''}</span>`;
+      h += `<span>${formatPace(lap.avgPaceSecKm)} · ${formatKm(lapDistKm, unitPref, 2)}${lap.avgHR ? ` · ${lap.avgHR}bpm` : ''}</span>`;
       h += `</div>`;
     }
     h += `</div></details>`;

@@ -5,8 +5,9 @@
  */
 
 import type { GpsRecording, GpsSplit, Workout } from '@/types';
-import { formatPace, formatWorkoutTime } from '@/utils';
+import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
 import { parseDistanceKm } from '@/calculations/matching';
+import { getState } from '@/state';
 
 const MODAL_ID = 'gps-completion-modal';
 
@@ -36,6 +37,7 @@ export function openGpsCompletionModal(
   const actualDistKm = recording.totalDistance / 1000;
   const plannedDistKm = workout ? parseDistanceKm(workout.d) : 0;
   const avgPace = recording.averagePace;
+  const unitPref = getState().unitPref ?? 'km';
   const workoutLabel = workout ? workout.n : recording.workoutName;
   const saveLabel = workout ? 'Complete Workout' : 'Save Run';
 
@@ -52,8 +54,7 @@ export function openGpsCompletionModal(
       <div class="grid grid-cols-3 gap-2 mb-4">
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Distance</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${actualDistKm.toFixed(2)}</div>
-          <div class="text-xs" style="color:var(--c-faint)">km</div>
+          <div class="text-lg font-bold" style="color:var(--c-black)">${formatKm(actualDistKm, unitPref, 2)}</div>
         </div>
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Time</div>
@@ -61,7 +62,7 @@ export function openGpsCompletionModal(
         </div>
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Avg Pace</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace) : '--'}</div>
+          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref) : '--'}</div>
         </div>
       </div>
 
@@ -72,7 +73,7 @@ export function openGpsCompletionModal(
           <div class="flex justify-between text-sm">
             <span style="color:var(--c-muted)">Distance</span>
             <span style="color:var(--c-black)">
-              ${actualDistKm.toFixed(1)} / ${plannedDistKm.toFixed(1)} km
+              ${formatKm(actualDistKm, unitPref)} / ${formatKm(plannedDistKm, unitPref)}
               <span style="${distanceStyle(actualDistKm, plannedDistKm)}" class="ml-1">
                 (${distancePercent(actualDistKm, plannedDistKm)})
               </span>
@@ -82,7 +83,7 @@ export function openGpsCompletionModal(
       ` : ''}
 
       <!-- Splits table -->
-      ${recording.splits.length > 0 ? renderSplitsSection(recording.splits) : ''}
+      ${recording.splits.length > 0 ? renderSplitsSection(recording.splits, unitPref) : ''}
 
       <!-- RPE selector -->
       <div class="mb-5">
@@ -194,7 +195,7 @@ export function closeGpsCompletionModal(): void {
   document.getElementById(MODAL_ID)?.remove();
 }
 
-function renderSplitsSection(splits: GpsSplit[]): string {
+function renderSplitsSection(splits: GpsSplit[], unitPref: 'km' | 'mi' = 'km'): string {
   let h = `<div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">`;
   h += `<div class="text-xs font-semibold mb-2" style="color:var(--c-faint)">Splits</div>`;
   h += `<table class="w-full text-xs">`;
@@ -206,14 +207,14 @@ function renderSplitsSection(splits: GpsSplit[]): string {
   h += `</tr></thead><tbody>`;
 
   for (const split of splits) {
-    const paceStr = split.pace > 0 && split.pace < 1800 ? formatPace(split.pace) : '--';
-    const targetStr = split.targetPace ? formatPace(split.targetPace) : '--';
+    const paceStr = split.pace > 0 && split.pace < 1800 ? formatPace(split.pace, unitPref) : '--';
+    const targetStr = split.targetPace ? formatPace(split.targetPace, unitPref) : '--';
     const diff = split.targetPace ? split.pace - split.targetPace : 0;
     const paceStyle = diff > 10 ? `color:var(--c-warn)` : diff < -10 ? `color:var(--c-ok)` : `color:var(--c-black)`;
 
     h += `<tr style="border-bottom:1px solid var(--c-border)">`;
     h += `<td class="py-1" style="color:var(--c-black)">${escapeHtml(split.label)}</td>`;
-    h += `<td class="text-right" style="color:var(--c-muted)">${(split.distance / 1000).toFixed(2)}</td>`;
+    h += `<td class="text-right" style="color:var(--c-muted)">${formatKm(split.distance / 1000, unitPref, 2)}</td>`;
     h += `<td class="text-right font-mono" style="${paceStyle}">${paceStr}</td>`;
     h += `<td class="text-right" style="color:var(--c-faint)">${targetStr}</td>`;
     h += `</tr>`;
@@ -244,6 +245,7 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
 
   const actualDistKm = recording.totalDistance / 1000;
   const avgPace = recording.averagePace;
+  const unitPref2 = getState().unitPref ?? 'km';
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
@@ -266,8 +268,7 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
       <div class="grid grid-cols-3 gap-2 mb-4">
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Distance</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${actualDistKm.toFixed(2)}</div>
-          <div class="text-xs" style="color:var(--c-faint)">km</div>
+          <div class="text-lg font-bold" style="color:var(--c-black)">${formatKm(actualDistKm, unitPref2, 2)}</div>
         </div>
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Time</div>
@@ -275,11 +276,11 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
         </div>
         <div class="rounded-lg p-3 text-center" style="background:var(--c-bg);border:1px solid var(--c-border)">
           <div class="text-xs" style="color:var(--c-faint)">Avg Pace</div>
-          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace) : '--'}</div>
+          <div class="text-lg font-bold" style="color:var(--c-black)">${avgPace > 0 && avgPace < 1800 ? formatPace(avgPace, unitPref2) : '--'}</div>
         </div>
       </div>
 
-      ${recording.splits.length > 0 ? renderSplitsSection(recording.splits) : ''}
+      ${recording.splits.length > 0 ? renderSplitsSection(recording.splits, unitPref2) : ''}
 
       <button id="gps-detail-close" class="w-full m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">
         Close

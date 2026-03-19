@@ -2,7 +2,7 @@
  * Account page — user email, wearable connection status, sync controls, sign out.
  */
 
-import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache } from '@/data/supabaseClient';
+import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken } from '@/data/supabaseClient';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
@@ -18,6 +18,9 @@ let garminConnected = false;
 let stravaConnectedStatus = false;
 let checkingStrava = false;
 let lastSyncTime: string | null = null;
+let garminExpiresAt: string | null = null;
+let garminTokenExpired = false;
+let lastGarminSyncDate: string | null = null;
 let syncing = false;
 let checkingGarmin = true;
 let syncResultMsg = '';
@@ -49,7 +52,7 @@ export async function renderAccountView(): Promise<void> {
   // Check Strava status for enrichment (Garmin users) or standalone
   if (!isSimulatorMode()) {
     checkingStrava = true;
-    if (_renderGen !== myGen) return; // user navigated away
+    if (_renderGen !== myGen || !document.getElementById('btn-unit-km')) return;
     container.innerHTML = getAccountHTML();
     wireAccountHandlers();
     try {
@@ -61,7 +64,7 @@ export async function renderAccountView(): Promise<void> {
     checkingStrava = false;
   }
 
-  if (_renderGen !== myGen) return; // user navigated away
+  if (_renderGen !== myGen || !document.getElementById('btn-unit-km')) return;
   container.innerHTML = getAccountHTML();
   wireAccountHandlers();
 }
@@ -72,7 +75,9 @@ async function checkGarminStatus(): Promise<void> {
     garminConnected = await isGarminConnected();
     if (garminConnected) {
       const token = await getAccessToken();
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/garmin_tokens?select=created_at&limit=1`, {
+
+      // Fetch token info (created_at + expires_at)
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/garmin_tokens?select=created_at,expires_at&limit=1`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'apikey': SUPABASE_ANON_KEY,
@@ -81,13 +86,36 @@ async function checkGarminStatus(): Promise<void> {
       if (res.ok) {
         const rows = await res.json();
         lastSyncTime = rows?.[0]?.created_at ?? null;
+        garminExpiresAt = rows?.[0]?.expires_at ?? null;
+        garminTokenExpired = garminExpiresAt ? new Date(garminExpiresAt).getTime() < Date.now() : false;
+      }
+
+      // Fetch latest daily_metrics date as "last sync" indicator
+      const metricsRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/daily_metrics?select=day_date&order=day_date.desc&limit=1`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'apikey': SUPABASE_ANON_KEY,
+          },
+        },
+      );
+      if (metricsRes.ok) {
+        const metricsRows = await metricsRes.json();
+        lastGarminSyncDate = metricsRows?.[0]?.day_date ?? null;
       }
     } else {
       lastSyncTime = null;
+      garminExpiresAt = null;
+      garminTokenExpired = false;
+      lastGarminSyncDate = null;
     }
   } catch {
     garminConnected = false;
     lastSyncTime = null;
+    garminExpiresAt = null;
+    garminTokenExpired = false;
+    lastGarminSyncDate = null;
   }
 }
 
@@ -104,324 +132,230 @@ function getUserEmail(): string {
   return 'Signed in';
 }
 
+// ─── Shared style helpers ─────────────────────────────────────────────────────
+
+function sectionLabel(text: string, mt = 28): string {
+  return `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);padding:0 4px;margin-top:${mt}px;margin-bottom:8px">${text}</div>`;
+}
+
+function groupCard(rows: string): string {
+  return `<div style="border-radius:13px;overflow:hidden;background:var(--c-surface);border:1px solid var(--c-border)">${rows}</div>`;
+}
+
+function rowDivider(ml = 16): string {
+  return `<div style="height:1px;background:var(--c-border);margin-left:${ml}px"></div>`;
+}
+
+function chevron(): string {
+  return `<svg width="14" height="14" fill="none" stroke="var(--c-faint)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" style="flex-shrink:0"><path d="M9 18l6-6-6-6"/></svg>`;
+}
+
+function statusDot(color: string): string {
+  return `<div style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0"></div>`;
+}
+
+function iconBox(svg: string, bg: string): string {
+  return `<div style="width:32px;height:32px;border-radius:9px;background:${bg};display:flex;align-items:center;justify-content:center;flex-shrink:0">${svg}</div>`;
+}
+
+function pillBtn(id: string, label: string, style: string): string {
+  return `<button id="${id}" style="padding:7px 13px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;${style}">${label}</button>`;
+}
+
+// ─── Main HTML ─────────────────────────────────────────────────────────────────
+
 function getAccountHTML(): string {
   const s = getState();
   const email = getUserEmail();
-
-  const modeLabel = isSimulatorMode()
-    ? `<span style="font-size:12px;color:#d97706;font-weight:600">Simulator Mode</span>`
-    : `<span style="font-size:12px;color:var(--c-muted)">${email}</span>`;
-
-  // Determine which primary wearable card to show
+  const sim = isSimulatorMode();
   const useApple = s.wearable === 'apple';
   const useStravaStandalone = s.wearable === 'strava';
   const useGarmin = !useApple && !useStravaStandalone;
 
+  const tier = s.athleteTierOverride ?? s.athleteTier;
+  const tierDisplay = tier ? (TIER_LABELS_ACCOUNT[tier] ?? tier) : null;
+
+  const displayName = sim ? 'Simulator' : email;
+  const initials = sim ? 'SIM'
+    : email.includes('@') ? (email[0] + (email.split('@')[0][1] ?? '')).toUpperCase()
+    : email.slice(0, 2).toUpperCase();
+
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
-      <!-- Header -->
-      <div style="padding:14px 18px 12px;border-bottom:1px solid var(--c-border)">
-        <div style="font-size:20px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">Account</div>
-        <div style="margin-top:2px">${modeLabel}</div>
+
+      <!-- Profile header -->
+      <div style="padding:32px 20px 24px;display:flex;flex-direction:column;align-items:center;gap:6px">
+        <div style="width:72px;height:72px;border-radius:50%;background:var(--c-black);display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;color:#fff;letter-spacing:-0.02em;flex-shrink:0">${initials}</div>
+        <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-top:8px">${displayName}</div>
+        ${tierDisplay ? `<div style="font-size:12px;color:var(--c-muted);padding:3px 0">${tierDisplay}</div>` : ''}
+        ${sim ? `<div style="font-size:12px;color:var(--c-muted);padding:2px 0">Simulator Mode</div>` : ''}
       </div>
 
-      <div style="padding:16px;display:flex;flex-direction:column;gap:12px;padding-bottom:90px">
+      <div style="padding:0 16px 90px">
 
-        ${useApple ? renderAppleWatchCard() : (useStravaStandalone ? renderStravaStandaloneCard() : renderGarminCard())}
+        ${renderPendingAlert()}
 
-        ${useGarmin ? renderStravaEnrichCard() : ''}
+        ${sectionLabel('Connected Apps', 4)}
+        ${groupCard(
+          (useApple ? renderAppleRow() : useStravaStandalone ? renderStravaStandaloneRow() : renderGarminRow()) +
+          (useGarmin ? rowDivider(60) + renderStravaEnrichRow() : '')
+        )}
 
-        ${renderRunnerProfileCard()}
+        ${sectionLabel('Profile')}
+        ${renderProfileGroup()}
 
-        ${renderPendingActivitiesCard()}
+        ${sectionLabel('Preferences')}
+        ${renderPreferencesGroup()}
 
-        ${renderPlanRecoveryCard()}
+        ${(s.stravaConnected || s.stravaHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
 
-        ${renderStravaHistoryCard()}
+        ${sectionLabel('Plan')}
+        ${groupCard(`
+          <button id="btn-edit-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
+            <span style="font-size:15px;color:var(--c-black)">Edit Plan</span>
+            ${chevron()}
+          </button>
+        `)}
 
-        <!-- Preferences -->
-        <div class="m-card" style="padding:16px">
-          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Preferences</div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div style="font-size:14px;color:var(--c-black)">Distance units</div>
-            <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden">
-              <button id="btn-unit-km"
-                style="padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;border:none;${(s.unitPref ?? 'km') === 'km' ? 'background:var(--c-black);color:#fff' : 'background:var(--c-surface);color:var(--c-muted)'}">km</button>
-              <button id="btn-unit-mi"
-                style="padding:6px 14px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.unitPref === 'mi' ? 'background:var(--c-black);color:#fff' : 'background:var(--c-surface);color:var(--c-muted)'}">mi</button>
+        ${sectionLabel('Advanced')}
+        ${groupCard(`
+          <button id="btn-reset-vdot" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+            <div>
+              <div style="font-size:15px;color:var(--c-black);text-align:left">Reset VDOT</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Recalibrates from your next training data</div>
             </div>
-          </div>
-        </div>
+            ${chevron()}
+          </button>
+          ${rowDivider()}
+          ${renderRecoverPlanRow()}
+          ${rowDivider()}
+          <button id="btn-reset-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
+            <span style="font-size:15px;color:#dc2626">Reset Plan</span>
+            ${chevron()}
+          </button>
+        `)}
 
-        <!-- Plan Settings -->
-        <div class="m-card" style="padding:16px">
-          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Plan Settings</div>
-          <div style="display:flex;flex-direction:column;gap:8px">
-            <button id="btn-edit-plan"
-              style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--c-border-strong);background:var(--c-surface);font-size:14px;color:var(--c-black);text-align:left;cursor:pointer;box-sizing:border-box">
-              Edit Plan
-            </button>
-            <button id="btn-reset-plan"
-              style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.04);font-size:14px;color:#dc2626;text-align:left;cursor:pointer;box-sizing:border-box">
-              Reset Plan
-            </button>
-          </div>
-        </div>
+        <div id="garmin-error" style="font-size:12px;color:var(--c-warn);margin-top:8px;display:none;padding:0 4px"></div>
 
-        <!-- Advanced / VDOT -->
-        <div class="m-card" style="padding:16px">
-          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:12px">Advanced</div>
-          <div style="display:flex;flex-direction:column;gap:4px">
-            <button id="btn-reset-vdot"
-              style="width:100%;padding:11px 14px;border-radius:10px;border:1px solid var(--c-border-strong);background:var(--c-surface);font-size:14px;color:var(--c-muted);text-align:left;cursor:pointer;box-sizing:border-box">
-              Reset VDOT calibration
-            </button>
-            <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding:0 2px">
-              Clears automatic fitness adjustments. Use if your VDOT looks wrong. It will recalibrate from your next training data.
-            </div>
-          </div>
-        </div>
-
-        <!-- Sign Out / Exit Simulator -->
-        <div class="m-card" style="padding:14px">
-          ${isSimulatorMode() ? `
-            <button id="btn-exit-simulator"
-              style="width:100%;padding:11px;border-radius:10px;border:none;background:rgba(217,119,6,0.08);font-size:14px;font-weight:600;color:#d97706;cursor:pointer">
+        <!-- Sign Out -->
+        <div style="margin-top:28px">
+          ${sim ? `
+            <button id="btn-exit-simulator" style="width:100%;padding:15px;border-radius:13px;border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;color:var(--c-muted);cursor:pointer">
               Exit Simulator Mode
             </button>
           ` : `
-            <button id="btn-sign-out"
-              style="width:100%;padding:11px;border-radius:10px;border:none;background:rgba(239,68,68,0.06);font-size:14px;font-weight:600;color:#dc2626;cursor:pointer">
+            <button id="btn-sign-out" style="width:100%;padding:15px;border-radius:13px;border:none;background:none;font-size:15px;font-weight:500;color:#dc2626;cursor:pointer">
               Sign Out
             </button>
           `}
         </div>
+
       </div>
-      ${renderTabBar('account', isSimulatorMode())}
+      ${renderTabBar('account', sim)}
     </div>
   `;
 }
 
-function renderGarminCard(): string {
+// ─── Connected App Rows ────────────────────────────────────────────────────────
+
+function renderGarminRow(): string {
   const connected = garminConnected;
-  const statusColor = connected ? 'var(--c-ok)' : 'var(--c-faint)';
-  const statusText = checkingGarmin ? 'Checking…' : (connected ? 'Connected' : 'Not connected');
-  const syncTimeStr = lastSyncTime ? new Date(lastSyncTime).toLocaleDateString() : '—';
+  const expired = garminTokenExpired && !checkingGarmin;
+  const dotColor = expired ? 'var(--c-warn)' : connected ? 'var(--c-ok)' : 'var(--c-faint)';
+  const sub = checkingGarmin ? 'Checking…'
+    : expired ? 'Token expired — reconnect'
+    : connected ? (lastGarminSyncDate ? `Connected · last sync ${lastGarminSyncDate}` : 'Connected')
+    : 'Not connected';
 
   return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${connected ? '12px' : '0'}">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:40px;height:40px;border-radius:10px;background:rgba(59,130,246,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="22" height="22" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-              <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-            </svg>
-          </div>
-          <div>
-            <div style="font-size:15px;font-weight:600;color:var(--c-black)">Garmin Connect</div>
-            <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
-              <div style="width:7px;height:7px;border-radius:50%;background:${statusColor}"></div>
-              <span style="font-size:12px;color:var(--c-muted)">${statusText}</span>
-            </div>
-          </div>
+    <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:500;color:var(--c-black)">Garmin Connect</div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
+          ${statusDot(dotColor)}
+          <span style="font-size:12px;color:var(--c-muted)">${sub}</span>
         </div>
-        ${!connected && !checkingGarmin ? `
-          <button id="btn-connect-garmin"
-            style="padding:8px 14px;border-radius:8px;background:#3b82f6;color:white;border:none;font-size:13px;font-weight:600;cursor:pointer">
-            Connect
-          </button>
-        ` : ''}
       </div>
-
-      ${connected ? `
-        <div style="border-top:1px solid var(--c-border);padding-top:12px;display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Connected since</span>
-            <span style="font-size:13px;color:var(--c-black)">${syncTimeStr}</span>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Manual sync</span>
-            <button id="btn-sync-now"
-              style="padding:6px 12px;border-radius:8px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:12px;font-weight:600;color:var(--c-black);cursor:pointer;opacity:${syncing ? '0.5' : '1'}">
-              ${syncing ? 'Syncing…' : 'Sync Now'}
-            </button>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Remove access</span>
-            <button id="btn-disconnect-garmin"
-              style="padding:6px 12px;border-radius:8px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);font-size:12px;font-weight:600;color:#dc2626;cursor:pointer">
-              Disconnect
-            </button>
-          </div>
-          ${syncResultMsg ? `<div style="font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
-        </div>
-      ` : (checkingGarmin ? '' : `
-        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:10px">
-          Connect your Garmin watch to automatically sync activities, heart rate, HRV, and training load.
-        </div>
-      `)}
-      <div id="garmin-error" style="font-size:12px;color:var(--c-warn);margin-top:8px;display:none"></div>
+      ${!connected && !checkingGarmin
+        ? pillBtn('btn-connect-garmin', 'Connect', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')
+        : connected ? `<div style="display:flex;gap:8px;align-items:center">
+            ${pillBtn('btn-sync-now', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
+            <button id="btn-disconnect-garmin" style="background:none;border:none;font-size:12px;font-weight:500;color:#dc2626;cursor:pointer;padding:4px 2px">Remove</button>
+          </div>` : ''}
     </div>
+    ${syncResultMsg && connected ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
   `;
 }
 
-function renderAppleWatchCard(): string {
+function renderAppleRow(): string {
   return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <div style="width:40px;height:40px;border-radius:10px;background:rgba(0,0,0,0.06);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-          <svg width="22" height="22" fill="none" stroke="var(--c-black)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
-          </svg>
-        </div>
-        <div>
-          <div style="font-size:15px;font-weight:600;color:var(--c-black)">Apple Watch</div>
-          <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
-            <div style="width:7px;height:7px;border-radius:50%;background:var(--c-ok)"></div>
-            <span style="font-size:12px;color:var(--c-muted)">Syncs automatically</span>
-          </div>
+    <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:500;color:var(--c-black)">Apple Watch</div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
+          ${statusDot('var(--c-ok)')}
+          <span style="font-size:12px;color:var(--c-muted)">Syncs automatically</span>
         </div>
       </div>
-
-      <div style="border-top:1px solid var(--c-border);padding-top:12px;display:flex;flex-direction:column;gap:10px">
-        <div style="font-size:13px;color:var(--c-muted);line-height:1.5">Workouts from Apple Health sync each time you open the app on your iPhone.</div>
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;color:var(--c-muted)">Manual sync</span>
-          <button id="btn-sync-apple"
-            style="padding:6px 12px;border-radius:8px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:12px;font-weight:600;color:var(--c-black);cursor:pointer;opacity:${syncing ? '0.5' : '1'}">
-            ${syncing ? 'Syncing…' : 'Sync Now'}
-          </button>
-        </div>
-        ${syncResultMsg ? `<div style="font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:13px;color:var(--c-muted)">Switch device</span>
-          <button id="btn-switch-device"
-            style="padding:6px 12px;border-radius:8px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:12px;font-weight:600;color:var(--c-muted);cursor:pointer">
-            Change
-          </button>
-        </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        ${pillBtn('btn-sync-apple', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
+        <button id="btn-switch-device" style="background:none;border:none;font-size:12px;font-weight:500;color:var(--c-muted);cursor:pointer;padding:4px 2px">Change</button>
       </div>
     </div>
+    ${syncResultMsg ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
   `;
 }
 
-function renderStravaStandaloneCard(): string {
-  const statusColor = stravaConnectedStatus ? 'var(--c-ok)' : 'var(--c-faint)';
-  const statusText = checkingStrava ? 'Checking…' : (stravaConnectedStatus ? 'Connected' : 'Not connected');
-
+function renderStravaStandaloneRow(): string {
+  const dotColor = stravaConnectedStatus ? 'var(--c-ok)' : 'var(--c-faint)';
+  const sub = checkingStrava ? 'Checking…' : stravaConnectedStatus ? 'Connected · auto-syncs on launch' : 'Not connected';
   return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${stravaConnectedStatus ? '12px' : '0'}">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:40px;height:40px;border-radius:10px;background:rgba(249,115,22,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="20" height="20" fill="#f97316" viewBox="0 0 24 24">
-              <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0 5 13.828h4.172"/>
-            </svg>
-          </div>
-          <div>
-            <div style="font-size:15px;font-weight:600;color:var(--c-black)">Strava</div>
-            <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
-              <div style="width:7px;height:7px;border-radius:50%;background:${statusColor}"></div>
-              <span style="font-size:12px;color:var(--c-muted)">${statusText}</span>
-            </div>
-          </div>
+    <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:500;color:var(--c-black)">Strava</div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
+          ${statusDot(dotColor)}
+          <span style="font-size:12px;color:var(--c-muted)">${sub}</span>
         </div>
-        ${!stravaConnectedStatus && !checkingStrava ? `
-          <button id="btn-connect-strava"
-            style="padding:8px 14px;border-radius:8px;background:#f97316;color:white;border:none;font-size:13px;font-weight:600;cursor:pointer">
-            Connect
-          </button>
-        ` : ''}
       </div>
-
-      ${stravaConnectedStatus ? `
-        <div style="border-top:1px solid var(--c-border);padding-top:12px;display:flex;flex-direction:column;gap:10px">
-          <div style="font-size:12px;color:var(--c-muted)">Activities sync automatically each time you open the app.</div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Manual sync</span>
-            <button id="btn-sync-strava"
-              style="padding:6px 12px;border-radius:8px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:12px;font-weight:600;color:var(--c-black);cursor:pointer;opacity:${syncing ? '0.5' : '1'}">
-              ${syncing ? 'Syncing…' : 'Sync Now'}
-            </button>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Remove access</span>
-            <button id="btn-disconnect-strava"
-              style="padding:6px 12px;border-radius:8px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);font-size:12px;font-weight:600;color:#dc2626;cursor:pointer">
-              Disconnect
-            </button>
-          </div>
-          ${syncResultMsg ? `<div style="font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
-        </div>
-      ` : (checkingStrava ? '' : `
-        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:10px">
-          Connect Strava to sync your activities and heart rate data into your training plan.
-        </div>
-      `)}
+      ${!stravaConnectedStatus && !checkingStrava
+        ? pillBtn('btn-connect-strava', 'Connect', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')
+        : stravaConnectedStatus ? `<div style="display:flex;gap:8px;align-items:center">
+            ${pillBtn('btn-sync-strava', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
+            <button id="btn-disconnect-strava" style="background:none;border:none;font-size:12px;font-weight:500;color:#dc2626;cursor:pointer;padding:4px 2px">Remove</button>
+          </div>` : ''}
     </div>
+    ${syncResultMsg && stravaConnectedStatus ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
   `;
 }
 
-function renderStravaEnrichCard(): string {
-  const statusColor = stravaConnectedStatus ? 'var(--c-ok)' : 'var(--c-faint)';
-  const statusText = checkingStrava ? 'Checking…' : (stravaConnectedStatus ? 'Connected' : 'Not connected');
-
+function renderStravaEnrichRow(): string {
+  const dotColor = stravaConnectedStatus ? 'var(--c-ok)' : 'var(--c-faint)';
+  const sub = checkingStrava ? 'Checking…' : stravaConnectedStatus ? 'Connected · HR enrichment active' : 'Not connected — add for accurate load';
   return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${stravaConnectedStatus ? '12px' : '0'}">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:40px;height:40px;border-radius:10px;background:rgba(249,115,22,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="20" height="20" fill="#f97316" viewBox="0 0 24 24">
-              <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0 5 13.828h4.172"/>
-            </svg>
-          </div>
-          <div>
-            <div style="font-size:15px;font-weight:600;color:var(--c-black)">Strava HR Enrichment</div>
-            <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
-              <div style="width:7px;height:7px;border-radius:50%;background:${statusColor}"></div>
-              <span style="font-size:12px;color:var(--c-muted)">${statusText}</span>
-            </div>
-          </div>
+    <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:500;color:var(--c-black)">Strava</div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:2px">
+          ${statusDot(dotColor)}
+          <span style="font-size:12px;color:var(--c-muted)">${sub}</span>
         </div>
-        ${!stravaConnectedStatus && !checkingStrava ? `
-          <button id="btn-connect-strava"
-            style="padding:8px 14px;border-radius:8px;background:#f97316;color:white;border:none;font-size:13px;font-weight:600;cursor:pointer">
-            Connect
-          </button>
-        ` : ''}
       </div>
-
-      ${stravaConnectedStatus ? `
-        <div style="border-top:1px solid var(--c-border);padding-top:12px;display:flex;flex-direction:column;gap:10px">
-          <div style="font-size:12px;color:var(--c-muted);line-height:1.4">Synced with full heart rate streams for accurate training load calculations.</div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Re-sync activities</span>
-            <button id="btn-sync-strava-hr"
-              style="padding:6px 12px;border-radius:8px;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);font-size:12px;font-weight:600;color:#ea580c;cursor:pointer;opacity:${syncing ? '0.5' : '1'}">
-              ${syncing ? 'Syncing…' : 'Sync Strava'}
-            </button>
-          </div>
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:13px;color:var(--c-muted)">Remove access</span>
-            <button id="btn-disconnect-strava"
-              style="padding:6px 12px;border-radius:8px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.2);font-size:12px;font-weight:600;color:#dc2626;cursor:pointer">
-              Disconnect
-            </button>
-          </div>
-          ${syncResultMsg ? `<div style="font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
-        </div>
-      ` : (checkingStrava ? '' : `
-        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:10px">
-          Connect Strava to add second-by-second heart rate data to your cross-training activities for more accurate load calculations.
-        </div>
-      `)}
+      ${!stravaConnectedStatus && !checkingStrava
+        ? pillBtn('btn-connect-strava', 'Connect', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')
+        : stravaConnectedStatus ? `<div style="display:flex;gap:8px;align-items:center">
+            ${pillBtn('btn-sync-strava-hr', syncing ? 'Syncing…' : 'Sync', `border:1px solid var(--c-border);background:transparent;color:var(--c-muted);opacity:${syncing ? '0.5' : '1'};`)}
+            <button id="btn-disconnect-strava" style="background:none;border:none;font-size:12px;font-weight:500;color:#dc2626;cursor:pointer;padding:4px 2px">Remove</button>
+          </div>` : ''}
     </div>
+    ${syncResultMsg && stravaConnectedStatus ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
   `;
 }
 
-function renderRunnerProfileCard(): string {
+// ─── Profile Group ─────────────────────────────────────────────────────────────
+
+function renderProfileGroup(): string {
   const s = getState();
-  const email = getUserEmail();
   const pbs = s.pbs || {};
 
   const fmtTime = (secs: number | undefined): string => {
@@ -437,108 +371,69 @@ function renderRunnerProfileCard(): string {
     : s.biologicalSex === 'female' ? 'Female'
     : 'Not set';
 
-  const runnerTypeLabel = s.typ || '—';
-
-  const pbGrid = [
+  const pbItems = [
     { label: '5K', val: pbs.k5 },
     { label: '10K', val: pbs.k10 },
-    { label: 'Half', val: pbs.h },
+    { label: 'HM', val: pbs.h },
     { label: 'Marathon', val: pbs.m },
   ].filter(pb => pb.val);
 
-  return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
-        <div style="font-size:14px;font-weight:600;color:var(--c-black)">Runner Profile</div>
-        <button id="btn-edit-profile"
-          style="font-size:12px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">
-          Edit
-        </button>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Email</span>
-          <span style="font-size:13px;color:var(--c-black);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${email}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Gender</span>
-          <span style="font-size:13px;color:var(--c-black)">${genderLabel}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Runner type</span>
-          <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:13px;color:var(--c-black)">${runnerTypeLabel}</span>
-            <button id="btn-change-runner-type"
-              style="font-size:12px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">
-              Change
-            </button>
+  const pbSection = pbItems.length > 0 ? `
+    ${rowDivider()}
+    <div style="padding:14px 16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Personal Bests</div>
+      <div style="display:grid;grid-template-columns:repeat(${Math.min(pbItems.length, 4)},1fr);gap:8px">
+        ${pbItems.map(pb => `
+          <div style="border:1px solid var(--c-border);border-radius:10px;padding:10px 6px;text-align:center">
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:3px">${pb.label}</div>
+            <div style="font-size:15px;font-weight:700;color:var(--c-black)">${fmtTime(pb.val)}</div>
           </div>
-        </div>
+        `).join('')}
       </div>
-      ${pbGrid.length > 0 ? `
-      <div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--c-border)">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">Personal Bests</div>
-        <div style="display:grid;grid-template-columns:repeat(${pbGrid.length},1fr);gap:6px">
-          ${pbGrid.map(pb => `
-            <div style="background:var(--c-faint);border-radius:8px;padding:8px;text-align:center">
-              <div style="font-size:11px;color:var(--c-muted)">${pb.label}</div>
-              <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-top:2px">${fmtTime(pb.val)}</div>
-            </div>
-          `).join('')}
-        </div>
-      </div>` : ''}
+    </div>` : '';
+
+  return groupCard(`
+    <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:15px;color:var(--c-black)">Gender</span>
+      <span style="font-size:15px;color:var(--c-muted)">${genderLabel}</span>
     </div>
-  `;
+    ${rowDivider()}
+    <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:15px;color:var(--c-black)">Runner type</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:15px;color:var(--c-muted)">${s.typ || '—'}</span>
+        <button id="btn-change-runner-type" style="font-size:13px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">Change</button>
+      </div>
+    </div>
+    ${pbSection}
+    ${rowDivider()}
+    <button id="btn-edit-profile" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:none;border:none;cursor:pointer">
+      <span style="font-size:15px;color:var(--c-accent)">Edit Profile</span>
+      ${chevron()}
+    </button>
+  `);
 }
 
-function renderPendingActivitiesCard(): string {
+// ─── Pending Alert ─────────────────────────────────────────────────────────────
+
+function renderPendingAlert(): string {
   const s = getState();
   const wk = s.wks?.[s.w - 1];
   if (!wk?.garminPending?.length) return '';
 
-  // Find items not yet reviewed (garminMatched undefined or '__pending__')
   const unprocessed = wk.garminPending.filter(item => {
     const matched = wk.garminMatched?.[item.garminId];
     return !matched || matched === '__pending__';
   });
-
   if (unprocessed.length === 0) return '';
 
-  const activityLines = unprocessed.slice(0, 5).map(item => {
-    const date = new Date(item.startTime).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-    const dur = item.durationSec ? `${Math.round(item.durationSec / 60)}min` : '';
-    const dist = item.distanceM ? ` · ${(item.distanceM / 1000).toFixed(1)}km` : '';
-    const label = item.activityType.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
-    return `
-      <div style="display:flex;align-items:center;gap:8px;padding:6px 0">
-        <div style="width:7px;height:7px;border-radius:50%;background:var(--c-accent);flex-shrink:0"></div>
-        <span style="font-size:13px;color:var(--c-black);flex:1">${label}${dur ? ' · ' + dur : ''}${dist}</span>
-        <span style="font-size:12px;color:var(--c-muted)">${date}</span>
-      </div>`;
-  }).join('');
-
-  const extra = unprocessed.length > 5 ? `<div style="font-size:12px;color:var(--c-muted);margin-top:4px">+ ${unprocessed.length - 5} more</div>` : '';
-
   return `
-    <div class="m-card" style="padding:16px;border-left:3px solid var(--c-accent)">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-        <div style="width:40px;height:40px;border-radius:10px;background:rgba(59,130,246,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-          <svg width="20" height="20" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-            <path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-          </svg>
-        </div>
-        <div>
-          <div style="font-size:15px;font-weight:600;color:var(--c-black)">${unprocessed.length} activit${unprocessed.length === 1 ? 'y' : 'ies'} pending</div>
-          <div style="font-size:12px;color:var(--c-muted)">Week ${s.w} · waiting to be integrated</div>
-        </div>
+    <div style="margin-bottom:4px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:13px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+      <div>
+        <div style="font-size:14px;font-weight:600;color:var(--c-black)">${unprocessed.length} activit${unprocessed.length === 1 ? 'y' : 'ies'} to review</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Week ${s.w} · not yet matched to your plan</div>
       </div>
-      <div style="border-top:1px solid var(--c-border);padding-top:12px">
-        ${activityLines}
-        ${extra}
-        <button id="btn-review-pending" class="m-btn-primary" style="width:100%;margin-top:12px">
-          Review Now
-        </button>
-      </div>
+      <button id="btn-review-pending" style="padding:9px 16px;border-radius:9px;background:var(--c-black);color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">Review</button>
     </div>
   `;
 }
@@ -551,149 +446,181 @@ const TIER_LABELS_ACCOUNT: Record<string, string> = {
   high_volume:  'High-volume athlete',
 };
 
-function renderStravaHistoryCard(): string {
+// ─── Training History Group ────────────────────────────────────────────────────
+
+function renderTrainingHistoryGroup(): string {
   const s = getState();
-
-  // Only show if Strava is connected or history has been fetched
-  if (!s.stravaConnected && !s.stravaHistoryFetched) return '';
-
   const hasFetched = !!s.stravaHistoryFetched;
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const tierLabel = tier ? (TIER_LABELS_ACCOUNT[tier] ?? tier) : null;
   const avgKm = s.detectedWeeklyKm;
-  const avgTSS = s.historicWeeklyTSS && s.historicWeeklyTSS.length > 0
+  const avgTSS = s.historicWeeklyTSS?.length
     ? Math.round(s.historicWeeklyTSS.reduce((a, b) => a + b, 0) / s.historicWeeklyTSS.length)
     : null;
-  const weeksFound = s.historicWeeklyTSS?.length ?? 0;
   const accepted = !!s.stravaHistoryAccepted;
 
   if (!hasFetched) {
-    return `
-      <div class="m-card" style="padding:14px 16px">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <div>
-            <div style="font-size:14px;font-weight:600;color:var(--c-black)">Training History</div>
-            <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Strava history not yet loaded</div>
-          </div>
-          <button id="btn-fetch-history"
-            style="padding:7px 12px;border-radius:8px;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);font-size:12px;font-weight:600;color:#ea580c;cursor:pointer">
-            Load History
-          </button>
+    return groupCard(`
+      <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+        <div>
+          <div style="font-size:15px;color:var(--c-black)">Strava History</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Not yet loaded</div>
         </div>
+        ${pillBtn('btn-fetch-history', 'Load', 'border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);')}
       </div>
-    `;
+    `);
   }
 
-  return `
-    <div class="m-card" style="padding:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
-        <div style="font-size:14px;font-weight:600;color:var(--c-black)">Training History</div>
-        ${accepted ? `<span style="font-size:12px;font-weight:600;color:var(--c-ok)">✓ Applied</span>` : ''}
-      </div>
+  const rows = [
+    avgTSS !== null ? `
+      <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:15px;color:var(--c-black)">Avg weekly load</span>
+        <span style="font-size:15px;color:var(--c-muted)">${avgTSS} <span style="font-size:12px">TSS/wk</span></span>
+      </div>` : '',
+    avgKm !== null ? `
+      <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:15px;color:var(--c-black)">Running volume</span>
+        <span style="font-size:15px;color:var(--c-muted)">${s.unitPref === 'mi' ? ((avgKm ?? 0) * 0.621371).toFixed(0) : avgKm} <span style="font-size:12px">${s.unitPref === 'mi' ? 'mi' : 'km'}/wk</span></span>
+      </div>` : '',
+    tierLabel ? `
+      <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:15px;color:var(--c-black)">Fitness tier</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${accepted ? `<span style="font-size:11px;font-weight:600;color:var(--c-ok)">✓ Applied</span>` : ''}
+          <span style="font-size:15px;color:var(--c-muted)">${tierLabel}</span>
+        </div>
+      </div>` : '',
+  ].filter(Boolean);
 
-      <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px">
-        ${weeksFound > 0
-          ? `<div style="font-size:12px;color:var(--c-muted)">${weeksFound} week${weeksFound !== 1 ? 's' : ''} of training history loaded${weeksFound < 4 ? ' — tap Sync History to pull more' : ''}</div>`
-          : '<div style="font-size:12px;color:var(--c-caution)">No history data — tap Sync History below</div>'}
-        ${avgTSS !== null ? `
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Avg weekly load</span>
-          <span style="font-size:13px;font-weight:600;color:var(--c-black)">${avgTSS} TSS/week</span>
-        </div>` : ''}
-        ${avgKm !== null ? `
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Avg running volume</span>
-          <span style="font-size:13px;font-weight:600;color:var(--c-black)">${avgKm} km/week</span>
-        </div>` : ''}
-        ${tierLabel ? `
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <span style="font-size:13px;color:var(--c-muted)">Detected tier</span>
-          <span style="font-size:13px;font-weight:600;color:var(--c-black)">${tierLabel}</span>
-        </div>` : ''}
-      </div>
+  const dataRows = rows.join(rowDivider());
 
-      <div style="display:flex;flex-direction:column;gap:8px">
-        <button id="btn-rebuild-plan"
-          style="width:100%;padding:11px;border-radius:10px;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);font-size:14px;font-weight:600;color:#ea580c;cursor:pointer;box-sizing:border-box">
-          Rebuild Plan with Strava Data
-        </button>
-        <button id="btn-refresh-history"
-          style="width:100%;padding:9px;border-radius:10px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:13px;color:var(--c-muted);cursor:pointer;box-sizing:border-box">
-          Sync History (last 16 weeks)
-        </button>
-      </div>
-      <div style="font-size:11px;color:var(--c-faint);margin-top:10px">Syncs HR-based load from Strava. Your logged activities and ratings are preserved when rebuilding.</div>
+  return groupCard(`
+    ${dataRows}
+    ${dataRows ? rowDivider() : ''}
+    <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px">
+      <button id="btn-rebuild-plan" style="width:100%;padding:11px;border-radius:10px;background:transparent;border:1px solid var(--c-border-strong);font-size:14px;font-weight:600;color:var(--c-black);cursor:pointer">
+        Rebuild Plan from Strava Data
+      </button>
+      <button id="btn-refresh-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
+        Sync History (last 16 weeks)
+      </button>
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.5">Your logged activities and ratings are preserved when rebuilding.</div>
     </div>
-  `;
+  `);
 }
 
-function renderPlanRecoveryCard(): string {
+// ─── Preferences Group ─────────────────────────────────────────────────────────
+
+function renderPreferencesGroup(): string {
+  const s = getState();
+  return groupCard(`
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:15px;color:var(--c-black)">Distance</span>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden">
+        <button id="btn-unit-km"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${(s.unitPref ?? 'km') === 'km' ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">km</button>
+        <button id="btn-unit-mi"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.unitPref === 'mi' ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">mi</button>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <label for="input-max-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Max HR</label>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input id="input-max-hr" type="number" min="100" max="240"
+          value="${s.maxHR ?? ''}" placeholder="190"
+          style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+        <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <label for="input-resting-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Resting HR</label>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input id="input-resting-hr" type="number" min="30" max="100"
+          value="${s.restingHR ?? ''}" placeholder="55"
+          style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+        <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:12px 16px;display:flex;justify-content:flex-end">
+      <button id="btn-save-hr" style="padding:8px 18px;border-radius:8px;background:transparent;border:1px solid var(--c-border-strong);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">
+        Save
+      </button>
+    </div>
+  `);
+}
+
+// ─── Recover Plan Row (inside Advanced group) ──────────────────────────────────
+
+function renderRecoverPlanRow(): string {
   const s = getState();
   const currentWeek = s.w || 1;
   const currentStart = s.planStartDate || '';
 
-  // Default date suggestion: work backwards from today using current week
   let suggestedStart = currentStart;
   if (!suggestedStart || suggestedStart === new Date().toISOString().slice(0, 10)) {
-    // Plan was reset today — suggest a start date based on week number
     const d = new Date();
     d.setDate(d.getDate() - (currentWeek - 1) * 7);
     suggestedStart = d.toISOString().slice(0, 10);
   }
 
   return `
-    <details class="m-card" style="padding:0">
-      <summary style="padding:14px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;list-style:none">
-        <div style="width:38px;height:38px;border-radius:10px;background:rgba(217,119,6,0.1);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-          <svg width="18" height="18" fill="none" stroke="#d97706" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24">
-            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-          </svg>
+    <details style="overflow:hidden">
+      <summary style="padding:15px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;list-style:none;cursor:pointer">
+        <div>
+          <div style="font-size:15px;color:var(--c-black);text-align:left">Recover Plan</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Restore progress if plan was reset</div>
         </div>
-        <div style="flex:1">
-          <div style="font-size:14px;font-weight:600;color:var(--c-black)">Recover Plan</div>
-          <div style="font-size:12px;color:var(--c-muted)">Restore progress if the plan was accidentally reset</div>
-        </div>
-        <svg width="16" height="16" fill="none" stroke="var(--c-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" style="flex-shrink:0"><path d="M19 9l-7 7-7-7"/></svg>
+        ${chevron()}
       </summary>
-      <div style="padding:0 16px 16px;border-top:1px solid var(--c-border);padding-top:14px;display:flex;flex-direction:column;gap:10px">
-        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
-          Enter the date your plan originally started and the week you were on. Activities from the last 28 days will re-sync automatically.
+      <div style="padding:0 16px 16px;border-top:1px solid var(--c-border)">
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin:12px 0">
+          Enter the date your plan originally started and the week you were on. Activities from the last 28 days will re-sync.
         </div>
         <div style="display:flex;flex-direction:column;gap:8px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
-            <label style="font-size:13px;color:var(--c-muted);flex-shrink:0">Plan started on</label>
+            <label style="font-size:13px;color:var(--c-muted);flex-shrink:0">Plan started</label>
             <input type="date" id="recovery-start-date"
-              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:6px 10px;border:1px solid var(--c-border-strong);flex-shrink:0"
+              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:7px 10px;border:1px solid var(--c-border-strong)"
               value="${suggestedStart}">
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
             <label style="font-size:13px;color:var(--c-muted);flex-shrink:0">I was on week</label>
             <input type="number" id="recovery-week" min="1" max="52"
-              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:6px 10px;border:1px solid var(--c-border-strong);width:64px;text-align:center;flex-shrink:0"
+              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:7px 10px;border:1px solid var(--c-border-strong);width:64px;text-align:center"
               value="${currentWeek}">
           </div>
         </div>
-        <div id="recovery-result" style="font-size:12px;display:none"></div>
-        <button id="btn-recover-plan"
-          style="width:100%;padding:11px;border-radius:10px;background:rgba(217,119,6,0.1);border:1px solid rgba(217,119,6,0.3);font-size:14px;font-weight:600;color:#d97706;cursor:pointer;box-sizing:border-box">
+        <div id="recovery-result" style="font-size:12px;display:none;margin-top:8px"></div>
+        <button id="btn-recover-plan" style="width:100%;margin-top:10px;padding:11px;border-radius:10px;background:transparent;border:1px solid var(--c-border-strong);font-size:14px;font-weight:600;color:var(--c-black);cursor:pointer">
           Restore &amp; Re-sync
         </button>
-
         ${s.w > 1 ? `
-        <div style="margin-top:4px;padding-top:12px;border-top:1px solid var(--c-border)">
-          <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:10px">
-            Need to re-review Week ${s.w - 1} activities? This rolls back one week and re-syncs so the review screen reappears. Tap <strong>Complete Week</strong> after reviewing to advance back.
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--c-border)">
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:8px">
+              Need to re-review Week ${s.w - 1}? Roll back one week so the review screen reappears.
+            </div>
+            <div id="rewind-result" style="font-size:12px;display:none;margin-bottom:6px"></div>
+            <button id="btn-rewind-week" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;font-weight:500;color:var(--c-black);cursor:pointer">
+              Re-review Week ${s.w - 1}
+            </button>
           </div>
-          <div id="rewind-result" style="font-size:12px;display:none;margin-bottom:6px"></div>
-          <button id="btn-rewind-week"
-            style="width:100%;padding:11px;border-radius:10px;background:var(--c-faint);border:1px solid var(--c-border-strong);font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer;box-sizing:border-box">
-            Re-review Week ${s.w - 1} Activities
-          </button>
-        </div>
         ` : ''}
       </div>
     </details>
   `;
+}
+
+function setUnitButtonActive(pref: 'km' | 'mi'): void {
+  const kmBtn = document.getElementById('btn-unit-km') as HTMLButtonElement | null;
+  const miBtn = document.getElementById('btn-unit-mi') as HTMLButtonElement | null;
+  if (!kmBtn || !miBtn) return;
+  const activeStyle = 'background:var(--c-black);color:#fff';
+  const inactiveStyle = 'background:transparent;color:var(--c-muted)';
+  kmBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${pref === 'km' ? activeStyle : inactiveStyle}`;
+  miBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${pref === 'mi' ? activeStyle : inactiveStyle}`;
 }
 
 function wireAccountHandlers(): void {
@@ -715,20 +642,31 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
-  document.getElementById('btn-unit-km')?.addEventListener('click', () => {
+  document.getElementById('btn-save-hr')?.addEventListener('click', () => {
+    const maxHRInput = (document.getElementById('input-max-hr') as HTMLInputElement)?.value;
+    const restingHRInput = (document.getElementById('input-resting-hr') as HTMLInputElement)?.value;
+    const maxHR = maxHRInput ? +maxHRInput : null;
+    const restingHR = restingHRInput ? +restingHRInput : null;
+    if (maxHR !== null && (maxHR < 100 || maxHR > 240)) { alert('Max HR must be between 100 and 240'); return; }
+    if (restingHR !== null && (restingHR < 30 || restingHR > 100)) { alert('Resting HR must be between 30 and 100'); return; }
     const s = getMutableState();
-    s.unitPref = 'km';
+    if (maxHR !== null) s.maxHR = maxHR;
+    if (restingHR !== null) s.restingHR = restingHR;
     saveState();
-    const container = document.getElementById('app-root');
-    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+    const btn = document.getElementById('btn-save-hr') as HTMLButtonElement;
+    if (btn) { btn.textContent = 'Saved'; btn.disabled = true; setTimeout(() => { btn.textContent = 'Save HR values'; btn.disabled = false; }, 2000); }
+  });
+
+  document.getElementById('btn-unit-km')?.addEventListener('click', () => {
+    getMutableState().unitPref = 'km';
+    saveState();
+    setUnitButtonActive('km');
   });
 
   document.getElementById('btn-unit-mi')?.addEventListener('click', () => {
-    const s = getMutableState();
-    s.unitPref = 'mi';
+    getMutableState().unitPref = 'mi';
     saveState();
-    const container = document.getElementById('app-root');
-    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+    setUnitButtonActive('mi');
   });
 
   document.getElementById('btn-edit-plan')?.addEventListener('click', () => {
@@ -789,7 +727,7 @@ function wireAccountHandlers(): void {
     const msg = `Rebuild your training plan?\n\n` +
       `Your logged activities and ratings will be preserved.\n` +
       `Only the unstarted workout plan will be rebuilt.\n\n` +
-      (avgKm ? `Plan will start at ~${avgKm}km/week (${tierLabel}).\n` : '');
+      (avgKm ? `Plan will start at ~${s.unitPref === 'mi' ? (avgKm * 0.621371).toFixed(0) : avgKm}${s.unitPref === 'mi' ? 'mi' : 'km'}/week (${tierLabel}).\n` : '');
 
     if (!confirm(msg)) return;
 

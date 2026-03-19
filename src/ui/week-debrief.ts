@@ -5,13 +5,17 @@
  * Replaces the welcome-back modal (ISSUE-81).
  *
  * Trigger paths:
- *   1. User taps "Finish week" button in the current week header (plan-view)
+ *   1. User taps "Wrap up week" button in the current week header (plan-view)
+ *      → mode 'complete': CTA calls next() to advance the week
  *   2. Auto: on app open on Monday after week advance (guarded by lastDebriefWeek)
+ *      → mode 'review': CTA just closes and records the debrief
+ *   3. Auto: on plan-view render on Sunday (guarded by lastDebriefShownDate)
+ *      → mode 'complete'
  *
- * Content (one screen):
- *   - Load % vs planned
+ * Content:
  *   - Distance completed
- *   - Running Fitness (CTL) delta
+ *   - Total training load (TSS)
+ *   - Running Fitness (CTL value + delta)
  *   - Effort trend — if effortScore significantly off, offer one pacing adjustment
  *   - Next week preview (phase + planned TSS)
  *
@@ -19,8 +23,10 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { computeFitnessModel, computeWeekTSS, computePlannedWeekTSS } from '@/calculations/fitness-model';
+import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS } from '@/calculations/fitness-model';
+import { formatKm } from '@/utils/format';
 import { renderHomeView } from '@/ui/home-view';
+import { next } from '@/ui/events';
 
 // ─── Phase helpers (local — same mapping as plan-view) ────────────────────────
 
@@ -44,7 +50,7 @@ function phaseBadge(ph: string): string {
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Check if the week-end debrief should fire automatically.
+ * Check if the week-end debrief should fire automatically (missed-week path).
  * Returns true if the completed week has not yet been debriefed.
  */
 export function shouldAutoDebrief(): boolean {
@@ -56,13 +62,39 @@ export function shouldAutoDebrief(): boolean {
 }
 
 /**
- * Show the week-end debrief for the just-completed week.
- * `forWeek` defaults to s.w - 1 (auto) or can be passed explicitly (manual "Finish week" tap).
+ * Check if the Sunday end-of-week debrief should auto-show.
+ * Returns true when:
+ *   - Today is Sunday (ourDay() === 6)
+ *   - The debrief hasn't been auto-shown today yet
  */
-export function showWeekDebrief(forWeek?: number): void {
+export function shouldShowSundayDebrief(): boolean {
+  const s = getState() as any;
+  if (!s.wks || !s.w || !s.hasCompletedOnboarding) return false;
+  const js = new Date().getDay();
+  const isSunday = js === 0; // Sunday in JS land
+  if (!isSunday) return false;
+  const today = new Date().toISOString().split('T')[0];
+  if ((s.lastDebriefShownDate ?? '') === today) return false;
+  return true;
+}
+
+/**
+ * Show the week-end debrief.
+ *
+ * @param forWeek   Week number to summarise. Defaults to s.w - 1 (auto/review path).
+ *                  Pass s.w for the Sunday/complete path.
+ * @param mode      'complete' → CTA calls next() to advance week.
+ *                  'review'  → CTA just closes and records (week already advanced).
+ */
+export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 'review'): void {
   const s = getState() as any;
   const weekNum = forWeek ?? (s.w ?? 1) - 1;
   if (weekNum < 1 || !s.wks?.[weekNum - 1]) return;
+
+  // Mark as shown today (prevents auto re-fire on same day even if cancelled)
+  const ms = getMutableState() as any;
+  ms.lastDebriefShownDate = new Date().toISOString().split('T')[0];
+  saveState();
 
   const wk = s.wks[weekNum - 1];
   const nextWk = s.wks[weekNum] ?? null;
@@ -78,13 +110,22 @@ export function showWeekDebrief(forWeek?: number): void {
   const ctlNow  = metrics[weekNum - 1]?.ctl  ?? null;
   const ctlPrev = metrics[weekNum - 2]?.ctl  ?? null;
   const ctlDelta = ctlNow != null && ctlPrev != null ? Math.round((ctlNow - ctlPrev) * 10) / 10 : null;
+  // Display CTL as daily-equivalent (÷7)
+  const ctlDisplay = ctlNow != null ? Math.round((ctlNow / 7) * 10) / 10 : null;
 
+  // Signal B (raw physiological TSS — all sports, no runSpec discount)
+  const weekRawTSS = Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate));
+  // Signal A (run-equivalent, for % of plan)
   const actualTSS = wk.actualTSS ?? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate);
   const plannedTSS = computePlannedWeekTSS(
     s.historicWeeklyTSS, s.ctlBaseline, wk.ph, tier, s.rw, undefined, undefined,
   );
   const tssPct = plannedTSS > 0 ? Math.round((actualTSS / plannedTSS) * 100) : null;
-  const distanceKm = wk.completedKm ?? null;
+
+  // Distance: use wk.completedKm if set, otherwise sum garminActuals
+  const rawKm = wk.completedKm
+    ?? Object.values(wk.garminActuals ?? {}).reduce((sum: number, a: any) => sum + (a.distanceKm ?? 0), 0);
+  const distanceKm = rawKm > 0 ? Math.round(rawKm * 10) / 10 : null;
 
   const effortScore: number | null = wk.effortScore ?? null;
   const effortHigh  = effortScore != null && effortScore >  1.0;
@@ -104,21 +145,17 @@ export function showWeekDebrief(forWeek?: number): void {
     : tssPct >= 80  ? 'var(--c-ok)'
     : 'var(--c-caution)';
 
-  const tssLabel = tssPct == null ? '—'
-    : tssPct >= 100 ? `${tssPct}% — above plan`
-    : tssPct >= 80  ? `${tssPct}% of planned`
-    : `${tssPct}% of planned`;
-
-  const ROW = 'display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--c-border)';
+  const ROW = 'display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--c-border)';
   const LABEL_STYLE = 'font-size:14px;color:var(--c-muted);font-weight:500';
-  const VALUE_STYLE = 'font-size:14px;font-weight:600;letter-spacing:-0.01em';
+  const VALUE_STYLE = 'font-size:15px;font-weight:700;letter-spacing:-0.02em';
 
-  const ctlLine = ctlDelta == null ? ''
-    : ctlDelta > 0
-      ? `<div style="${ROW}"><span style="${LABEL_STYLE}">Running Fitness</span><span style="${VALUE_STYLE};color:var(--c-ok)">↑ ${ctlDelta} pts</span></div>`
-      : ctlDelta < 0
-        ? `<div style="${ROW}"><span style="${LABEL_STYLE}">Running Fitness</span><span style="${VALUE_STYLE};color:var(--c-warn)">↓ ${Math.abs(ctlDelta)} pts</span></div>`
-        : `<div style="${ROW}"><span style="${LABEL_STYLE}">Running Fitness</span><span style="${VALUE_STYLE};color:var(--c-muted)">Holding steady</span></div>`;
+  // Running Fitness row: show current value and delta
+  const fitnessValue = ctlDisplay != null
+    ? ctlDisplay.toString()
+    : '—';
+  const fitnessDelta = ctlDelta != null && ctlDelta !== 0
+    ? `<span style="font-size:12px;font-weight:500;color:${ctlDelta > 0 ? 'var(--c-ok)' : 'var(--c-warn)'};margin-left:4px">${ctlDelta > 0 ? '↑' : '↓'} ${Math.abs(ctlDelta)}</span>`
+    : '';
 
   const effortBlock = showPacing ? `
     <div style="margin-top:16px;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px">
@@ -142,61 +179,179 @@ export function showWeekDebrief(forWeek?: number): void {
     </div>
   ` : '';
 
-  const html = `
-    <div id="week-debrief-modal" style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.45);display:flex;align-items:flex-end;justify-content:center">
-      <div style="width:100%;max-width:480px;background:var(--c-surface);border-radius:20px 20px 0 0;padding:24px 20px 40px;box-shadow:0 -4px 32px rgba(0,0,0,0.15)">
-        <div style="width:36px;height:4px;background:var(--c-border);border-radius:2px;margin:0 auto 20px"></div>
+  const ctaLabel = mode === 'complete' ? 'Complete week →' : 'Continue →';
 
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:20px">
-          ${wk.ph ? phaseBadge(wk.ph) : ''}
-          <span style="font-size:18px;font-weight:700;letter-spacing:-0.02em">Week ${weekNum} complete</span>
+  const html = `
+    <div id="week-debrief-modal"
+      style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.45);
+             display:flex;align-items:center;justify-content:center;padding:20px">
+      <div style="width:100%;max-width:400px;background:var(--c-surface);
+                  border-radius:20px;padding:24px 20px 20px;
+                  box-shadow:0 8px 40px rgba(0,0,0,0.18);
+                  max-height:85vh;overflow-y:auto">
+
+        <!-- Header -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+          <div style="display:flex;align-items:center;gap:8px">
+            ${wk.ph ? phaseBadge(wk.ph) : ''}
+            <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em">Week ${weekNum}</span>
+          </div>
+          <button id="debrief-cancel"
+            style="width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
+                   background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
+                   display:flex;align-items:center;justify-content:center;flex-shrink:0">✕</button>
         </div>
 
-        <div>
-          <div style="${ROW}">
-            <span style="${LABEL_STYLE}">Training load</span>
-            <span style="${VALUE_STYLE};color:${tssColor}">${tssLabel}</span>
-          </div>
+        <!-- Metrics -->
+        <div style="border-top:1px solid var(--c-border)">
           ${distanceKm != null ? `
           <div style="${ROW}">
             <span style="${LABEL_STYLE}">Distance</span>
-            <span style="${VALUE_STYLE}">${distanceKm} km</span>
+            <span style="${VALUE_STYLE}">${formatKm(distanceKm, s.unitPref ?? 'km')}</span>
           </div>` : ''}
-          ${ctlLine}
+          <div style="${ROW}">
+            <span style="${LABEL_STYLE}">Training load</span>
+            <span style="${VALUE_STYLE};color:${tssColor}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;color:${tssColor};margin-left:4px">(${tssPct}% of plan)</span>` : ''}</span>
+          </div>
+          <div style="${ROW};border-bottom:none">
+            <span style="${LABEL_STYLE}">Running fitness</span>
+            <span style="${VALUE_STYLE}">${fitnessValue}${fitnessDelta}</span>
+          </div>
         </div>
 
         ${effortBlock}
         ${nextWeekBlock}
 
-        <button id="debrief-continue" style="margin-top:24px;width:100%;padding:14px;border-radius:12px;border:none;background:var(--c-accent);color:#fff;font-size:16px;font-weight:600;cursor:pointer;font-family:var(--f);letter-spacing:-0.01em">Continue →</button>
+        <div id="debrief-cta-area" style="margin-top:20px">
+          <button id="debrief-continue"
+            style="width:100%;padding:14px;border-radius:12px;border:none;
+                   background:var(--c-accent);color:#fff;font-size:15px;font-weight:600;
+                   cursor:pointer;font-family:var(--f);letter-spacing:-0.01em">${ctaLabel}</button>
+        </div>
       </div>
     </div>
   `;
 
   document.body.insertAdjacentHTML('beforeend', html);
-  _wireHandlers(weekNum, effortScore, showPacing);
+  _wireHandlers(weekNum, effortScore, showPacing, mode);
 }
 
 // ─── Event wiring ─────────────────────────────────────────────────────────────
 
-function _wireHandlers(weekNum: number, effortScore: number | null, showPacing: boolean): void {
+function _wireHandlers(
+  weekNum: number,
+  effortScore: number | null,
+  showPacing: boolean,
+  mode: 'complete' | 'review',
+): void {
+  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
+    document.getElementById('week-debrief-modal')?.remove();
+    // Do NOT set lastDebriefWeek — cancel means "I'll come back to this"
+  });
+
   document.getElementById('debrief-continue')?.addEventListener('click', () => {
-    // Apply pacing adjustment if user left the toggle checked
     if (showPacing) {
       const toggle = document.getElementById('debrief-pacing-toggle') as HTMLInputElement | null;
       if (toggle?.checked && effortScore != null) {
         _applyPacingAdj(effortScore);
       }
     }
-    _closeAndRecord(weekNum);
+    if (mode === 'complete') {
+      _handleUncompletedSessions(weekNum, mode);
+    } else {
+      _closeAndRecord(weekNum, mode);
+    }
+  });
+}
+
+/**
+ * Check for uncompleted sessions and either show a prompt or proceed directly.
+ */
+function _handleUncompletedSessions(weekNum: number, mode: 'complete' | 'review'): void {
+  const s = getMutableState() as any;
+  const wk = s.wks?.[weekNum - 1];
+  if (!wk) {
+    _closeAndRecord(weekNum, mode);
+    return;
+  }
+
+  const workouts: any[] = wk.workouts ?? [];
+  const rated: Record<string, any> = wk.rated ?? {};
+
+  // Find sessions already pushed from THIS week to next (to avoid double-push)
+  const alreadyPushedIds = new Set<string>(
+    (wk.skip ?? []).map((entry: any) => entry.workout?.id).filter(Boolean)
+  );
+
+  // Uncompleted = not rated AND not already in this week's skip array
+  const uncompleted = workouts.filter((w: any) => {
+    const id = w.id || w.n;
+    return rated[id] === undefined && !alreadyPushedIds.has(id);
+  });
+
+  if (uncompleted.length === 0) {
+    _closeAndRecord(weekNum, mode);
+    return;
+  }
+
+  // Show inline prompt inside the debrief modal
+  const ctaArea = document.getElementById('debrief-cta-area');
+  if (!ctaArea) {
+    _closeAndRecord(weekNum, mode);
+    return;
+  }
+
+  const count = uncompleted.length;
+  const label = count === 1 ? '1 session' : `${count} sessions`;
+  ctaArea.innerHTML = `
+    <p style="font-size:14px;color:var(--c-black);margin:0 0 14px;text-align:center">
+      ${label} weren't completed this week. What would you like to do?
+    </p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button id="debrief-push-sessions" class="m-btn-primary" style="flex:1;font-size:14px;padding:12px 0;text-align:center">Move to next week</button>
+      <button id="debrief-drop-sessions" class="m-btn-secondary" style="flex:1;font-size:14px;padding:12px 0;text-align:center;opacity:0.7">Drop them</button>
+    </div>
+  `;
+
+  document.getElementById('debrief-push-sessions')?.addEventListener('click', () => {
+    const nextWk = s.wks?.[weekNum]; // index weekNum = week weekNum+1
+    if (nextWk) {
+      for (const w of uncompleted) {
+        const id = w.id || w.n;
+        // Mark as skipped in this week
+        if (!wk.rated) wk.rated = {};
+        wk.rated[id] = 'skip';
+        // Push to next week's skip list
+        if (!nextWk.skip) nextWk.skip = [];
+        nextWk.skip.push({
+          n: w.n || '',
+          t: w.t || 'easy',
+          workout: {
+            id,
+            n: w.n || '',
+            t: w.t || 'easy',
+            d: w.d || '',
+            rpe: w.rpe || w.r || 5,
+            r: w.rpe || w.r || 5,
+            dayOfWeek: w.dayOfWeek,
+            dayName: w.dayName || '',
+          },
+          skipCount: 1,
+        });
+      }
+      saveState();
+    }
+    _closeAndRecord(weekNum, mode);
+  });
+
+  document.getElementById('debrief-drop-sessions')?.addEventListener('click', () => {
+    _closeAndRecord(weekNum, mode);
   });
 }
 
 /**
  * Apply a small rpeAdj change proportional to effortScore.
  * Cap at ±0.5 VDOT per adjustment to prevent overcorrection.
- * Positive effortScore = harder than expected → reduce paces (rpeAdj −).
- * Negative effortScore = easier than expected → increase paces (rpeAdj +).
  */
 function _applyPacingAdj(effortScore: number): void {
   const s = getMutableState() as any;
@@ -205,10 +360,14 @@ function _applyPacingAdj(effortScore: number): void {
   saveState();
 }
 
-function _closeAndRecord(weekNum: number): void {
+function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   const s = getMutableState() as any;
   s.lastDebriefWeek = weekNum;
   saveState();
   document.getElementById('week-debrief-modal')?.remove();
-  renderHomeView();
+  if (mode === 'complete') {
+    next(); // triggers setOnWeekAdvance callback → re-renders plan view
+  } else {
+    renderHomeView();
+  }
 }

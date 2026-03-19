@@ -13,6 +13,8 @@
 import type { GarminPendingItem } from '@/types/state';
 import type { Workout } from '@/types/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
+import { getState } from '@/state';
+import { formatKm } from '@/utils/format';
 
 // ─── Day labels ───────────────────────────────────────────────────────────────
 
@@ -66,8 +68,8 @@ function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals';
   // Gym/strength can replace gym slots or run slots (a hard session can cover either)
   if (type === 'gym') return wt === 'gym';
-  // Cross-training can match any non-rest slot
-  return wt !== 'rest';
+  // Cross-training (rides, swims, walks, sports) only match cross slots
+  return wt === 'cross';
 }
 
 function escHtml(s: string): string {
@@ -90,6 +92,7 @@ function renderScreen(
   weekStartDate?: Date,
   weekLabel?: string,
 ): void {
+  const unitPref = getState().unitPref ?? 'km';
   // Items the user chose to integrate from the review screen
   const integrateItems = pending.filter(i => choices[i.garminId] === 'integrate');
 
@@ -166,7 +169,7 @@ function renderScreen(
   const trayCards = trayItems.map(item => {
     const isSelected = state.selectedGarminId === item.garminId;
     const dur        = Math.round(item.durationSec / 60);
-    const dist       = item.distanceM ? `${(item.distanceM / 1000).toFixed(1)} km · ` : '';
+    const dist       = item.distanceM ? `${formatKm(item.distanceM / 1000, unitPref)} · ` : '';
     const actDateStr = new Date(item.startTime).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
     return `

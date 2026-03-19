@@ -57,6 +57,11 @@ export function isTrackingActive(): boolean {
   return status !== 'idle' && status !== 'stopped';
 }
 
+export function isTrackingPaused(): boolean {
+  if (!activeTracker) return false;
+  return activeTracker.getStatus() === 'paused';
+}
+
 /**
  * Start GPS tracking for a workout.
  * @param workoutName - Name of the workout being tracked
@@ -101,9 +106,10 @@ export async function startTracking(
     return;
   }
 
-  // Update elapsed time display every second
+  // Update elapsed time display every second; tick() also fires time-based segment advances
   timerInterval = setInterval(() => {
     if (activeTracker) {
+      activeTracker.tick();
       const data = activeTracker.getLiveData();
       updateInlineGps(data);
       if (onTrackingTickCb) onTrackingTickCb(data);
@@ -115,7 +121,7 @@ export async function startTracking(
 export function togglePause(): void {
   if (!activeTracker) return;
   const status = activeTracker.getStatus();
-  if (status === 'tracking') {
+  if (status === 'tracking' || status === 'acquiring') {
     activeTracker.pause();
   } else if (status === 'paused') {
     activeTracker.resume();

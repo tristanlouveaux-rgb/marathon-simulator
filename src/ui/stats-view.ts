@@ -10,11 +10,13 @@ import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
-import { fp, ft, formatKm } from '@/utils/format';
-import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS } from '@/calculations/fitness-model';
+import { fp, ft, formatKm, fmtDateUK } from '@/utils/format';
+import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB } from '@/calculations/fitness-model';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { computeRecoveryScore } from '@/calculations/readiness';
+import { getSleepInsight, sleepScoreColor, buildBarChart, fmtSleepDuration } from '@/calculations/sleep-insights';
+import { showSleepSheet } from '@/ui/home-view';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -534,8 +536,8 @@ function buildAboveFold(s: SimulatorState): string {
 
   if (signalBBase > 0 && currentTSS > 0) {
     thisWeekPct = Math.round((currentTSS / signalBBase) * 100);
-    thisWeekLabel = `${thisWeekPct}%`;
-    thisWeekSub = `${currentTSS} / ${signalBBase} TSS`;
+    thisWeekLabel = String(currentTSS);
+    thisWeekSub = `of ${signalBBase} TSS avg`;
 
     if (thisWeekPct >= 120) {
       thisWeekCopy = 'Well above your weekly average. Consider a lighter day.';
@@ -615,7 +617,7 @@ function buildAboveFold(s: SimulatorState): string {
     <div style="padding:0 18px 14px;display:flex;gap:10px">
 
       <!-- This Week card — Signal B actual vs Signal B baseline -->
-      <div class="m-card" style="flex:1;padding:14px">
+      <div id="stats-this-week-card" class="m-card" style="flex:1;padding:14px;cursor:pointer">
         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">This Week</div>
         <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black);margin-bottom:3px">${thisWeekLabel || '—'}</div>
         <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">${thisWeekSub || 'total load'}</div>
@@ -658,10 +660,19 @@ function buildRunningFitnessChart(s: SimulatorState): string {
   const delta  = latest && prev ? latest.ctl - prev.ctl : 0;
   const trend  = delta > 0.5 ? '↑' : delta < -0.5 ? '↓' : '→';
   const trendColor = delta > 0.5 ? 'var(--c-ok)' : delta < -0.5 ? 'var(--c-muted)' : 'var(--c-faint)';
-  const ctlDisplay = latest ? latest.ctl : (s.ctlBaseline ?? 0);
+  // ÷7 converts weekly-EMA scale → daily-equivalent (TrainingPeaks-compatible display)
+  const ctlDisplay = Math.round((latest ? latest.ctl : (s.ctlBaseline ?? 0)) / 7);
 
   const ctl = s.ctlBaseline ?? null;
   const maxVal = Math.max(...allSignalA, ctl ? ctl * 1.3 : 0, 1);
+
+  // Momentum annotation: 4-week CTL trend for the arrow badge on the chart
+  const fourBackM = metrics.length >= 5 ? metrics[metrics.length - 5] : null;
+  const ctl4waM = fourBackM?.ctl ?? (latest?.ctl ?? 0);
+  const ctlLatestM = latest?.ctl ?? 0;
+  const momentumDirM = ctlLatestM > ctl4waM ? 'Building' : ctlLatestM > ctl4waM * 0.95 ? 'Stable' : 'Declining';
+  const momentumArrowM = momentumDirM === 'Building' ? '↗' : momentumDirM === 'Stable' ? '→' : '↘';
+  const momentumColM = momentumDirM === 'Building' ? '#34c759' : momentumDirM === 'Stable' ? '#ff9f0a' : '#ff453a';
 
   const W = 320;
   const H = 90;
@@ -676,7 +687,7 @@ function buildRunningFitnessChart(s: SimulatorState): string {
   const topPath  = smoothAreaPath(pts);
   const areaPath = `${topPath} L ${xOf(n-1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
-  // CTL dashed reference line — 42-day fitness base, same style as Training Load chart
+  // CTL dashed reference line — 42-day fitness base
   const ctlLine = ctl
     ? `<line x1="${padL}" y1="${yOf(ctl).toFixed(1)}" x2="${W - padR}" y2="${yOf(ctl).toFixed(1)}" stroke="rgba(34,197,94,0.5)" stroke-width="0.8" stroke-dasharray="4 3"/>`
     : '';
@@ -704,11 +715,14 @@ function buildRunningFitnessChart(s: SimulatorState): string {
   return `
     <div style="padding:0 18px 14px">
       <div class="m-card" style="padding:14px 14px 10px">
-        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
           <div style="font-size:12px;font-weight:600;color:var(--c-black)">Running Fitness</div>
-          <div style="font-size:11px;color:var(--c-muted)">
-            CTL <span style="font-size:16px;font-weight:500;letter-spacing:-0.02em;color:var(--c-black)">${ctlDisplay.toFixed(0)}</span>
-            <span style="color:${trendColor};font-size:12px;margin-left:2px">${trend}</span>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--c-muted)">
+              CTL <span style="font-size:16px;font-weight:500;letter-spacing:-0.02em;color:var(--c-black)">${ctlDisplay.toFixed(0)}</span>
+              <span style="color:${trendColor};font-size:12px;margin-left:2px">${trend}</span>
+            </div>
+            <div style="font-size:10px;color:var(--c-faint);margin-top:1px">4-week trend <span style="color:${momentumColM};font-weight:600">${momentumArrowM} ${momentumDirM}</span></div>
           </div>
         </div>
         <div style="position:relative">
@@ -739,26 +753,39 @@ function buildInfoIcon(id: string): string {
 }
 
 const INFO_TEXTS: Record<string, string> = {
-  ctl: 'Running Fitness (CTL) — a 42-day rolling average of your run-equivalent training load. It only counts running and activities with strong running transfer (e.g. cycling at 55%, gym at 35%). Cross-training boosts fitness but counts less here — because it doesn\'t fully replace running-specific adaptation.',
-  atl: 'Fatigue (ATL) — a 7-day rolling average of your total physiological load: runs, gym, cross-training, everything. Your body doesn\'t care what sport caused the fatigue — hard is hard. When this rises well above your Running Fitness, injury risk increases even if you haven\'t been running much.',
-  tsb: 'Form (TSB = Running Fitness − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +20.',
+  ctl: 'Running Fitness (CTL) — a 42-day rolling average of your run-equivalent training load, shown in daily-equivalent units (TrainingPeaks-compatible). Running counts fully; cross-training at a discount (e.g. cycling 55%, padel 45%, gym 35%) — because it doesn\'t fully replace running-specific adaptation.',
+  atl: 'Fatigue (ATL) — a 7-day rolling average of your total physiological load: runs, gym, cross-training, everything, shown in daily-equivalent units. Your body doesn\'t care what sport caused the fatigue — hard is hard. When this rises well above your Running Fitness, injury risk increases even if you haven\'t been running much.',
+  tsb: 'Form (TSB = Running Fitness − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
   acwr: 'Load Ratio (Fatigue ÷ Running Fitness) — compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
+  momentum: 'Running Fitness Momentum — your 4-week trend in running fitness (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped — try to stay consistent, since skipping sessions compounds quickly. This isn\'t about today\'s recovery — it\'s about whether your body\'s conditioning (tendons, muscles, aerobic system) is ready for the work ahead.',
   vdot: 'Your VDOT score reflects your current running fitness. It adjusts automatically based on: how your recent runs felt vs. what was planned (RPE feedback), analysis of your training data over time, and updates to your threshold pace from GPS workouts. A drop usually means recent sessions have been harder than expected, or your threshold data was recalibrated. A rise means your fitness is building on schedule.',
+  aerobic: 'Aerobic Capacity (VO2max equivalent) — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. Zones are sex-calibrated using ACSM standards. This is your Daniels VDOT score, which closely tracks VO2max. Garmin\'s device estimate is shown as a secondary reference if available.',
+  lt: 'Lactate Threshold (LT) pace — the fastest pace you can sustain without accumulating lactic acid. The most trainable of the three metrics. A higher LT pace (further right on the bar) means you can race faster at aerobic effort. LT heart rate is shown if available from your Garmin device.',
 };
 
 function buildCalibrationStatus(s: SimulatorState): string {
   if (!s.stravaHistoryFetched) return '';
+
+  // Count completed tracked runs (garminActuals with real iTrimp+duration) across all weeks.
+  // Hide the banner entirely until the user has ≥5 — before that it is just confusing.
+  const completedRuns = (s.wks ?? []).reduce((acc, wk) => {
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      if ((actual.iTrimp ?? 0) > 0 && (actual.durationSec ?? 0) > 600) acc++;
+    }
+    return acc;
+  }, 0);
+  if (completedRuns < 5) return '';
+
   const thresh = s.intensityThresholds;
   // Only show calibration status when thresholds exist (calibratedFrom > 0)
   if (!thresh || !thresh.calibratedFrom || thresh.calibratedFrom === 0) return '';
   const n = thresh.calibratedFrom;
   const MIN = 3;
   const calibrated = n >= MIN * 2;
-  const needed = Math.max(0, MIN * 2 - n);
-  const msg = calibrated
-    ? `Intensity zones calibrated from ${n} training sessions`
-    : `Calibrating intensity zones — ${needed} more labelled session${needed !== 1 ? 's' : ''} to personalise`;
-  const color = calibrated ? 'var(--c-ok)' : 'var(--c-caution)';
+  // Only show when calibration is complete — the amber "calibrating" state is confusing
+  if (!calibrated) return '';
+  const msg = `Intensity zones calibrated from ${n} matched sessions`;
+  const color = 'var(--c-ok)';
   return `
     <div class="m-card" style="padding:12px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px">
       <div style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0"></div>
@@ -787,8 +814,10 @@ function buildOnePositionBar(opts: {
   /** Min and max of the full scale, for marker positioning. */
   scaleMin: number;
   scaleMax: number;
+  /** Optional secondary line shown below zone labels (e.g. LT HR). */
+  subtitle?: string;
 }): string {
-  const { title, infoId, value, valueLabel, zoneName, zones, scaleMin, scaleMax } = opts;
+  const { title, infoId, value, valueLabel, zoneName, zones, scaleMin, scaleMax, subtitle } = opts;
   const markerPct = value != null
     ? Math.min(98, Math.max(2, ((value - scaleMin) / (scaleMax - scaleMin)) * 100))
     : null;
@@ -820,6 +849,7 @@ function buildOnePositionBar(opts: {
       <div style="display:flex;gap:1px;margin-top:3px">
         ${zoneLabels}
       </div>
+      ${subtitle ? `<div style="font-size:10px;color:var(--c-faint);margin-top:4px;text-align:right">${subtitle}</div>` : ''}
       ${infoBox}
     </div>
   `;
@@ -827,82 +857,139 @@ function buildOnePositionBar(opts: {
 
 function buildProgressCard(args: { ctl: number; s: SimulatorState }): string {
   const { ctl, s } = args;
+  const isFemale = s.biologicalSex === 'female';
+  const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
 
-  const ctlZone = ctl < 30 ? 'Building' : ctl < 60 ? 'Foundation' : ctl < 90 ? 'Trained' : ctl < 120 ? 'Performance' : 'Elite';
+  // ── Bar 1: Running Fitness (CTL) ───────────────────────────────────────────
+  // Daily-equivalent units (÷7) to match TrainingPeaks CTL scale.
+  // 6-zone Coggan framework: breakpoints at ~40, ~58, ~75, ~95 (physiologically meaningful).
+  const ctlD = Math.round(ctl / 7);
+  const ctlBreaks = [20, 40, 58, 75, 95];
+  const ctlZoneIdx = ctlBreaks.findIndex(b => ctlD < b);
+  const ctlZone = zoneLabels[ctlZoneIdx === -1 ? 5 : ctlZoneIdx];
   const ctlBar = buildOnePositionBar({
     title: 'Running Fitness',
     infoId: 'ctl',
-    value: ctl > 0 ? ctl : null,
-    valueLabel: ctl.toFixed(0),
+    value: ctl > 0 ? ctlD : null,
+    valueLabel: String(ctlD),
     zoneName: ctlZone,
     scaleMin: 0,
     scaleMax: 150,
     zones: [
-      { label: 'Building',     fraction: 30/150, color: 'rgba(78,159,229,0.25)' },
-      { label: 'Foundation',   fraction: 30/150, color: 'rgba(78,159,229,0.40)' },
-      { label: 'Trained',      fraction: 30/150, color: 'rgba(52,199,89,0.45)'  },
-      { label: 'Performance',  fraction: 30/150, color: 'rgba(52,199,89,0.65)'  },
-      { label: 'Elite',        fraction: 30/150, color: 'rgba(52,199,89,0.85)'  },
+      { label: 'Building',     fraction:  20/150, color: 'rgba(78,159,229,0.20)' },
+      { label: 'Foundation',   fraction:  20/150, color: 'rgba(78,159,229,0.38)' },
+      { label: 'Trained',      fraction:  18/150, color: 'rgba(52,199,89,0.40)'  },
+      { label: 'Well-Trained', fraction:  17/150, color: 'rgba(52,199,89,0.58)'  },
+      { label: 'Performance',  fraction:  20/150, color: 'rgba(52,199,89,0.75)'  },
+      { label: 'Elite',        fraction:  55/150, color: 'rgba(52,199,89,0.90)'  },
     ],
   });
 
+  // ── Bar 2: Aerobic Capacity (VDOT / VO2max) ────────────────────────────────
+  // VDOT (Daniels) ≈ VO2max. Sex-calibrated ACSM zones. Scale 20–80.
+  // Male:   Building<35  Foundation 35-42  Trained 42-52  Well-Trained 52-60  Performance 60-70  Elite≥70
+  // Female: Building<28  Foundation 28-35  Trained 35-45  Well-Trained 45-55  Performance 55-65  Elite≥65
   const vdot = s.v ?? 0;
-  const vdotZone = vdot < 35 ? 'Beginner' : vdot < 45 ? 'Recreational' : vdot < 55 ? 'Trained' : vdot < 65 ? 'Competitive' : 'Elite';
-  const vdotBar = buildOnePositionBar({
-    title: 'VDOT',
-    infoId: 'vdot',
+  const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
+  const aerZoneIdx = aerBreaks.findIndex(b => vdot < b);
+  const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
+  const aerZones = isFemale
+    ? [
+        { label: 'Building',     fraction:  8/60, color: 'rgba(78,159,229,0.20)' },
+        { label: 'Foundation',   fraction:  7/60, color: 'rgba(78,159,229,0.38)' },
+        { label: 'Trained',      fraction: 10/60, color: 'rgba(52,199,89,0.40)'  },
+        { label: 'Well-Trained', fraction: 10/60, color: 'rgba(52,199,89,0.58)'  },
+        { label: 'Performance',  fraction: 10/60, color: 'rgba(52,199,89,0.75)'  },
+        { label: 'Elite',        fraction: 15/60, color: 'rgba(52,199,89,0.90)'  },
+      ]
+    : [
+        { label: 'Building',     fraction: 15/60, color: 'rgba(78,159,229,0.20)' },
+        { label: 'Foundation',   fraction:  7/60, color: 'rgba(78,159,229,0.38)' },
+        { label: 'Trained',      fraction: 10/60, color: 'rgba(52,199,89,0.40)'  },
+        { label: 'Well-Trained', fraction:  8/60, color: 'rgba(52,199,89,0.58)'  },
+        { label: 'Performance',  fraction: 10/60, color: 'rgba(52,199,89,0.75)'  },
+        { label: 'Elite',        fraction: 10/60, color: 'rgba(52,199,89,0.90)'  },
+      ];
+  const aerSubtitle = s.vo2 ? `Garmin VO2max: ${Math.round(s.vo2)}` : undefined;
+  const aerBar = buildOnePositionBar({
+    title: 'Aerobic Capacity',
+    infoId: 'aerobic',
     value: vdot > 0 ? vdot : null,
     valueLabel: vdot.toFixed(1),
-    zoneName: vdotZone,
+    zoneName: aerZone,
     scaleMin: 20,
     scaleMax: 80,
+    zones: aerZones,
+    subtitle: aerSubtitle,
+  });
+
+  // ── Bar 3: Lactate Threshold ────────────────────────────────────────────────
+  // s.lt = LT pace in sec/km. Faster (lower) = better → mapped to 0-100 score.
+  // Male: 360 s/km (6:00) → 0,  160 s/km (2:40) → 100
+  // Female: 380 s/km (6:20) → 0, 180 s/km (3:00) → 100
+  const ltPace = s.lt ?? 0;
+  const ltSlower = isFemale ? 380 : 360;
+  const ltFaster = isFemale ? 180 : 160;
+  const ltScore = ltPace > 0
+    ? Math.min(100, Math.max(0, ((ltSlower - ltPace) / (ltSlower - ltFaster)) * 100))
+    : null;
+  const ltBreaks = [20, 40, 55, 70, 85];
+  const ltZoneIdx = ltScore != null ? ltBreaks.findIndex(b => ltScore < b) : -1;
+  const ltZoneName = ltScore != null ? zoneLabels[ltZoneIdx === -1 ? 5 : ltZoneIdx] : '—';
+  const ltUnitPref = s.unitPref ?? 'km';
+  const ltPaceSec = ltUnitPref === 'mi' ? ltPace * 1.60934 : ltPace;
+  const ltPaceUnit = ltUnitPref === 'mi' ? '/mi' : '/km';
+  const ltLabel = ltPace > 0
+    ? `${Math.floor(ltPaceSec / 60)}:${String(Math.round(ltPaceSec % 60)).padStart(2, '0')}${ltPaceUnit}`
+    : '—';
+  let ltSubtitle: string | undefined;
+  if (s.ltHR && s.ltHR > 0) {
+    const pct = s.maxHR ? Math.round((s.ltHR / s.maxHR) * 100) : null;
+    ltSubtitle = pct ? `${s.ltHR} bpm · ${pct}% max HR` : `${s.ltHR} bpm`;
+  }
+  const ltBar = buildOnePositionBar({
+    title: 'Lactate Threshold',
+    infoId: 'lt',
+    value: ltScore,
+    valueLabel: ltLabel,
+    zoneName: ltZoneName,
+    scaleMin: 0,
+    scaleMax: 100,
     zones: [
-      { label: 'Beginner',     fraction: 15/60, color: 'rgba(78,159,229,0.25)' },
-      { label: 'Recreational', fraction: 10/60, color: 'rgba(78,159,229,0.40)' },
-      { label: 'Trained',      fraction: 10/60, color: 'rgba(52,199,89,0.45)'  },
-      { label: 'Competitive',  fraction: 10/60, color: 'rgba(52,199,89,0.65)'  },
-      { label: 'Elite',        fraction: 15/60, color: 'rgba(52,199,89,0.85)'  },
+      { label: 'Building',     fraction: 20/100, color: 'rgba(78,159,229,0.20)' },
+      { label: 'Foundation',   fraction: 20/100, color: 'rgba(78,159,229,0.38)' },
+      { label: 'Trained',      fraction: 15/100, color: 'rgba(52,199,89,0.40)'  },
+      { label: 'Well-Trained', fraction: 15/100, color: 'rgba(52,199,89,0.58)'  },
+      { label: 'Performance',  fraction: 15/100, color: 'rgba(52,199,89,0.75)'  },
+      { label: 'Elite',        fraction: 15/100, color: 'rgba(52,199,89,0.90)'  },
     ],
+    subtitle: ltSubtitle,
   });
 
   return `
     <div class="m-card" style="padding:14px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Progress</div>
       ${ctlBar}
-      ${vdotBar}
+      ${aerBar}
+      ${ltBar}
     </div>
   `;
 }
 
-/** Reusable mini sparkline for a physiology metric field over recent history. */
-function buildPhysioMiniChart(
-  history: import('@/types').PhysiologyDayEntry[],
-  field: keyof import('@/types').PhysiologyDayEntry,
-  color: string,
-): string {
-  const vals = history.map(d => d[field] as number | undefined);
-  const nums = vals.filter((v): v is number => v !== undefined);
-  if (nums.length < 3) return `<span style="font-size:11px;color:var(--c-faint)">Building history…</span>`;
-  const W = 200, H = 32;
-  const lo = Math.min(...nums), hi = Math.max(...nums), range = hi - lo || 1;
-  const step = W / Math.max(vals.length - 1, 1);
-  const pts = vals.map((v, i) => v !== undefined
-    ? `${(i * step).toFixed(1)},${(H - ((v - lo) / range) * H).toFixed(1)}` : null)
-    .filter(Boolean).join(' ');
-  const circles = vals.map((v, i) => v !== undefined
-    ? `<circle cx="${(i * step).toFixed(1)}" cy="${(H - ((v - lo) / range) * H).toFixed(1)}" r="2.5" fill="${color}"/>` : '').join('');
-  const d0 = history[0]?.date?.slice(5) ?? '';
-  const d1 = history[history.length - 1]?.date?.slice(5) ?? '';
-  return `<svg width="${W}" height="${H + 14}" viewBox="0 0 ${W} ${H + 14}" style="display:block;max-width:100%;overflow:visible">
-    <polyline points="${pts}" stroke="${color}" stroke-width="1.5" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
-    ${circles}
-    <text x="0" y="${H + 12}" font-size="9" fill="var(--c-faint)">${d0}</text>
-    <text x="${W}" y="${H + 12}" font-size="9" fill="var(--c-faint)" text-anchor="end">${d1}</text>
-  </svg>`;
+/** Build a day-labelled bar chart entry array from a physiology history field. */
+function physioBarEntries(
+  history: PhysiologyDayEntry[],
+  field: keyof PhysiologyDayEntry,
+): Array<{ value: number | null; day: string }> {
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  return history.map(d => ({
+    value: d[field] != null ? Number(d[field]) : null,
+    day: DAYS[new Date(d.date + 'T12:00:00').getDay()],
+  }));
 }
 
-function buildRecoveryCard(args: { ctl: number; atl: number; tsb: number; ratio: number; s: SimulatorState }): string {
-  const { ctl, atl, tsb, ratio, s } = args;
+function buildRecoveryCard(args: { ctl: number; atl: number; tsb: number; ratio: number; ctlFourWeeksAgo: number; s: SimulatorState }): string {
+  const { ctl, atl, tsb, ratio, ctlFourWeeksAgo, s } = args;
 
   // ── Watch-based recovery score (gated on real physiology data) ────────────
   const physioHistory = s.physiologyHistory ?? [];
@@ -928,92 +1015,101 @@ function buildRecoveryCard(args: { ctl: number; atl: number; tsb: number; ratio:
         <div style="font-size:11px;color:var(--c-faint)">Connect a watch to see your recovery score — needs sleep and HRV data.</div>
       </div>`;
 
-  // ── Sub-metric bars (watch data, clickable to expand sparkline) ───────────
-  const watchBars = recovery.hasData ? `
-    <div style="margin-bottom:14px">
-      <div style="font-size:10px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch metrics</div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        ${recovery.sleepScore != null ? `
-          <details style="border-radius:6px;overflow:hidden">
-            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
-              <span style="font-size:11px;color:var(--c-muted)">Sleep</span>
-              <div style="display:flex;align-items:center;gap:6px">
-                <span style="font-size:13px;font-weight:500;color:${recovery.sleepScore >= 75 ? 'var(--c-ok)' : recovery.sleepScore >= 50 ? 'var(--c-caution)' : 'var(--c-warn)'}">${recovery.sleepScore}/100</span>
-                <span style="font-size:10px;color:var(--c-faint)">▾</span>
-              </div>
-            </summary>
-            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
-              ${buildPhysioMiniChart(physioHistory, 'sleepScore', 'var(--c-accent)')}
-            </div>
-          </details>` : ''}
-        ${recovery.hrvScore != null ? `
-          <details style="border-radius:6px;overflow:hidden">
-            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
-              <span style="font-size:11px;color:var(--c-muted)">HRV</span>
-              <div style="display:flex;align-items:center;gap:6px">
-                <span style="font-size:13px;font-weight:500;color:${recovery.hrvScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">${recovery.hrvScore}/100</span>
-                <span style="font-size:10px;color:var(--c-faint)">▾</span>
-              </div>
-            </summary>
-            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
-              ${buildPhysioMiniChart(physioHistory, 'hrvRmssd', '#A855F7')}
-            </div>
-          </details>` : ''}
-        ${recovery.rhrScore != null ? `
-          <details style="border-radius:6px;overflow:hidden">
-            <summary style="list-style:none;-webkit-appearance:none;display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:rgba(0,0,0,0.03);cursor:pointer">
-              <span style="font-size:11px;color:var(--c-muted)">Resting HR</span>
-              <div style="display:flex;align-items:center;gap:6px">
-                <span style="font-size:13px;font-weight:500;color:${recovery.rhrScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">${recovery.rhrScore}/100</span>
-                <span style="font-size:10px;color:var(--c-faint)">▾</span>
-              </div>
-            </summary>
-            <div style="padding:8px 10px;border-top:1px solid var(--c-border)">
-              ${buildPhysioMiniChart(physioHistory, 'restingHR', '#EF4444')}
-            </div>
-          </details>` : ''}
-      </div>
-    </div>` : '';
+  // ── Sub-metric bar charts (watch data) ───────────────────────────────────
+  const watchBars = recovery.hasData ? (() => {
+    const sleepWith = physioHistory.filter(d => d.sleepScore != null).slice(-7);
+    const avg7 = sleepWith.length > 0
+      ? Math.round(sleepWith.reduce((a, d) => a + (d.sleepScore ?? 0), 0) / sleepWith.length)
+      : null;
+    const sleepInsight = getSleepInsight({ history: physioHistory });
 
-  // ── Load-based bars (always shown) ────────────────────────────────────────
-  const tsbZone2 = tsb < -25 ? 'Overtrained' : tsb < -10 ? 'Fatigued' : tsb < 0 ? 'Recovering' : tsb < 10 ? 'Fresh' : 'Peaked';
+    const sleepChart = recovery.sleepScore != null ? `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:10px;font-weight:600;color:var(--c-black)">Sleep${avg7 != null ? ` · avg ${avg7}` : ''}</span>
+          <span style="font-size:12px;font-weight:500;color:${sleepScoreColor(recovery.sleepScore)}">${recovery.sleepScore}/100</span>
+        </div>
+        ${buildBarChart(physioBarEntries(physioHistory.slice(-7), 'sleepScore'), sleepScoreColor)}
+        ${sleepInsight ? `<p style="font-size:11px;color:var(--c-muted);margin-top:8px;line-height:1.5">${sleepInsight}</p>` : ''}
+        <button id="stats-sleep-detail-btn" style="margin-top:10px;width:100%;padding:7px;border-radius:8px;border:1px solid var(--c-border);cursor:pointer;font-size:12px;font-weight:500;background:rgba(0,0,0,0.03);color:var(--c-black);font-family:var(--f)">
+          Sleep detail &#8594;
+        </button>
+      </div>` : '';
+
+    const hrvWith = physioHistory.filter(d => d.hrvRmssd != null).slice(-7);
+    const hrvLatest = hrvWith[hrvWith.length - 1]?.hrvRmssd;
+    const hrvChart = recovery.hrvScore != null ? `
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:10px;font-weight:600;color:var(--c-black)">HRV (RMSSD)</span>
+          <span style="font-size:12px;font-weight:500;color:${recovery.hrvScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">
+            ${hrvLatest != null ? Math.round(hrvLatest) + ' ms' : recovery.hrvScore + '/100'}
+          </span>
+        </div>
+        ${buildBarChart(physioBarEntries(physioHistory.slice(-7), 'hrvRmssd'), '#A855F7', v => Math.round(v) + 'ms')}
+      </div>` : '';
+
+    const rhrWith = physioHistory.filter(d => d.restingHR != null).slice(-7);
+    const rhrLatest = rhrWith[rhrWith.length - 1]?.restingHR;
+    const rhrChart = recovery.rhrScore != null ? `
+      <div style="margin-bottom:4px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:10px;font-weight:600;color:var(--c-black)">Resting HR</span>
+          <span style="font-size:12px;font-weight:500;color:${recovery.rhrScore >= 65 ? 'var(--c-ok)' : 'var(--c-caution)'}">
+            ${rhrLatest != null ? Math.round(rhrLatest) + ' bpm' : recovery.rhrScore + '/100'}
+          </span>
+        </div>
+        ${buildBarChart(physioBarEntries(physioHistory.slice(-7), 'restingHR'), '#EF4444', v => Math.round(v) + '')}
+      </div>` : '';
+
+    return `
+      <div style="margin-bottom:14px">
+        <div style="font-size:10px;font-weight:600;color:var(--c-black);margin-bottom:10px">Watch metrics</div>
+        ${sleepChart}${hrvChart}${rhrChart}
+      </div>`;
+  })() : '';
+
+  // ── Load-based bars (always shown) — ÷7 for TrainingPeaks-compatible display ──
+  const tsbD = Math.round(tsb / 7);
+  const tsbZone2 = tsbD < -4 ? 'Overtrained' : tsbD < -2 ? 'Fatigued' : tsbD < 0 ? 'Recovering' : tsbD < 2 ? 'Fresh' : 'Peaked';
   const tsbBar = buildOnePositionBar({
     title: 'Freshness',
     infoId: 'tsb',
-    value: ctl > 0 ? tsb : null,
-    valueLabel: (tsb > 0 ? '+' : '') + tsb.toFixed(0),
+    value: ctl > 0 ? tsbD : null,
+    valueLabel: (tsbD > 0 ? '+' : '') + String(tsbD),
     zoneName: tsbZone2,
-    scaleMin: -40,
-    scaleMax: 20,
+    scaleMin: -6,
+    scaleMax: 4,
     zones: [
-      { label: 'Overtrained', fraction: 15/60, color: 'rgba(255,69,58,0.60)'  },
-      { label: 'Fatigued',    fraction: 15/60, color: 'rgba(255,159,10,0.55)' },
-      { label: 'Recovering',  fraction: 10/60, color: 'rgba(78,159,229,0.40)' },
-      { label: 'Fresh',       fraction: 10/60, color: 'rgba(52,199,89,0.55)'  },
-      { label: 'Peaked',      fraction: 10/60, color: 'rgba(52,199,89,0.80)'  },
+      { label: 'Overtrained', fraction: 2/10, color: 'rgba(255,69,58,0.60)'  },
+      { label: 'Fatigued',    fraction: 2/10, color: 'rgba(255,159,10,0.55)' },
+      { label: 'Recovering',  fraction: 2/10, color: 'rgba(78,159,229,0.40)' },
+      { label: 'Fresh',       fraction: 2/10, color: 'rgba(52,199,89,0.55)'  },
+      { label: 'Peaked',      fraction: 2/10, color: 'rgba(52,199,89,0.80)'  },
     ],
   });
 
-  const atlZone = atl < 60 ? 'Low' : atl < 100 ? 'Moderate' : atl < 150 ? 'High' : 'Very High';
+  const atlD = Math.round(atl / 7);
+  const atlZone = atlD < 10 ? 'Low' : atlD < 15 ? 'Moderate' : atlD < 22 ? 'High' : 'Very High';
   const atlBar = buildOnePositionBar({
     title: 'Short-Term Load',
     infoId: 'atl',
-    value: atl > 0 ? atl : null,
-    valueLabel: atl.toFixed(0),
+    value: atl > 0 ? atlD : null,
+    valueLabel: String(atlD),
     zoneName: atlZone,
     scaleMin: 0,
-    scaleMax: 200,
+    scaleMax: 30,
     zones: [
-      { label: 'Low',       fraction: 60/200,  color: 'rgba(52,199,89,0.40)'  },
-      { label: 'Moderate',  fraction: 40/200,  color: 'rgba(52,199,89,0.65)'  },
-      { label: 'High',      fraction: 50/200,  color: 'rgba(255,159,10,0.55)' },
-      { label: 'Very High', fraction: 50/200,  color: 'rgba(255,69,58,0.55)'  },
+      { label: 'Low',       fraction: 10/30, color: 'rgba(52,199,89,0.40)'  },
+      { label: 'Moderate',  fraction:  5/30, color: 'rgba(52,199,89,0.65)'  },
+      { label: 'High',      fraction:  7/30, color: 'rgba(255,159,10,0.55)' },
+      { label: 'Very High', fraction:  8/30, color: 'rgba(255,69,58,0.55)'  },
     ],
   });
 
-  const acwrZoneLabel = ratio <= 0 ? '—' : ratio <= 1.3 ? 'Safe' : ratio <= 1.5 ? 'Moderate Risk' : 'High Risk';
+  const acwrZoneLabel = ratio <= 0 ? '—' : ratio <= 1.3 ? 'Safe' : ratio <= 1.5 ? 'Elevated' : 'High Risk';
   const acwrBar = buildOnePositionBar({
-    title: 'Load Safety',
+    title: 'Load Safety (Injury Risk)',
     infoId: 'acwr',
     value: ratio > 0 ? ratio : null,
     valueLabel: ratio.toFixed(2) + '×',
@@ -1022,17 +1118,46 @@ function buildRecoveryCard(args: { ctl: number; atl: number; tsb: number; ratio:
     scaleMax: 2.0,
     zones: [
       { label: 'Safe',          fraction: 0.8/1.5, color: 'rgba(52,199,89,0.55)'  },
-      { label: 'Moderate Risk', fraction: 0.2/1.5, color: 'rgba(255,159,10,0.55)' },
+      { label: 'Elevated',      fraction: 0.2/1.5, color: 'rgba(255,159,10,0.55)' },
       { label: 'High Risk',     fraction: 0.5/1.5, color: 'rgba(255,69,58,0.55)'  },
     ],
   });
 
+  // ── Momentum bar — 4-week CTL trend, tied to Running Fitness above ──
+  const ctlNow = ctl; // Signal A CTL
+  const ctlDNow = Math.round(ctlNow / 7);
+  const ctlD4wa = Math.round(ctlFourWeeksAgo / 7);
+  const momentumDirection = ctlNow > ctlFourWeeksAgo ? 'Building'
+    : ctlNow > ctlFourWeeksAgo * 0.95 ? 'Stable' : 'Declining';
+  // Scale: ratio of current CTL to 4-week-ago CTL, centred on 1.0
+  const momentumRatio = ctlFourWeeksAgo > 0 ? ctlNow / ctlFourWeeksAgo : 1.0;
+  const momentumSubtitle = ctlFourWeeksAgo > 0
+    ? `Running Fitness: ${ctlD4wa} → ${ctlDNow} over 4 weeks`
+    : undefined;
+  const momentumBar = buildOnePositionBar({
+    title: 'Running Fitness Momentum',
+    infoId: 'momentum',
+    value: ctlFourWeeksAgo > 0 ? momentumRatio : null,
+    valueLabel: momentumDirection,
+    zoneName: momentumDirection,
+    scaleMin: 0.7,
+    scaleMax: 1.3,
+    zones: [
+      { label: 'Declining',  fraction: 1/6, color: 'rgba(255,69,58,0.55)'  },
+      { label: 'Stable',     fraction: 2/6, color: 'rgba(52,199,89,0.55)'  },
+      { label: 'Building',   fraction: 2/6, color: 'rgba(52,199,89,0.75)'  },
+      { label: 'Overreach',  fraction: 1/6, color: 'rgba(255,159,10,0.55)' },
+    ],
+    subtitle: momentumSubtitle,
+  });
+
   return `
     <div class="m-card" style="padding:14px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Recovery</div>
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Training Readiness</div>
       ${recoveryScoreBar}
       ${watchBars}
       ${tsbBar}
+      ${momentumBar}
       ${atlBar}
       ${acwrBar}
     </div>
@@ -1047,15 +1172,23 @@ function buildNumbersSection(s: SimulatorState): string {
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
   const latest = metrics[metrics.length - 1];
 
-  const ctl   = latest?.ctl  ?? 0;
-  const atl   = latest?.atl  ?? 0;
-  const tsb   = latest?.tsb  ?? 0;
+  // Signal A CTL for Running Fitness bar (runSpec-discounted — correct for running fitness)
+  const ctlSignalA = latest?.ctl ?? 0;
+
+  // 4-week-ago CTL for Momentum signal
+  const fourBack = metrics[metrics.length - 5];
+  const ctlFourWeeksAgo = fourBack?.ctl ?? ctlSignalA;
+
+  // Same-signal TSB (Signal B for both CTL and ATL) for Training Readiness card — matches home readiness ring
+  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const atl   = sameSignal?.atl ?? latest?.atl  ?? 0;
+  const tsb   = sameSignal?.tsb ?? latest?.tsb  ?? 0;
   const ratio = acwr.ratio;
 
   return `
     <div style="padding:0 18px 14px">
-      ${buildProgressCard({ ctl, s })}
-      ${buildRecoveryCard({ ctl, atl, tsb, ratio, s })}
+      ${buildProgressCard({ ctl: ctlSignalA, s })}
+      ${buildRecoveryCard({ ctl: ctlSignalA, atl, tsb, ratio, ctlFourWeeksAgo, s })}
     </div>
   `;
 }
@@ -1074,20 +1207,11 @@ function buildMoreDetailSection(s: SimulatorState): string {
   const tsb   = latest?.tsb  ?? 0;
   const ratio = acwr.ratio;
 
-  // Injury risk bar
-  const riskPct = ratio > 0 ? Math.min(100, Math.max(0, Math.round(((ratio - 0.6) / 1.2) * 100))) : 0;
-  const histLen = (s.historicWeeklyTSS ?? []).length;
-  const riskLabel = acwr.status === 'high' ? 'High — reduce load'
-    : acwr.status === 'caution' ? 'Elevated — monitor'
-    : acwr.status === 'safe' ? 'Manageable'
-    : histLen < 4 ? 'Building baseline' : 'Not enough recent data';
-  const thumbBorder = acwr.status === 'high' ? 'var(--c-warn)'
-    : acwr.status === 'caution' ? 'var(--c-caution)'
-    : 'var(--c-border-strong)';
-
-  // TSB colour
-  const tsbColor = tsb > 5 ? 'var(--c-ok)' : tsb < -15 ? 'var(--c-warn)' : 'var(--c-caution)';
-  const tsbLabel = tsb > 5 ? 'Fresh' : tsb > -15 ? 'Neutral' : 'Fatigued';
+  // ÷7 for TrainingPeaks-compatible display
+  const tsbDMore = Math.round(tsb / 7);
+  const atlDMore = Math.round(atl / 7);
+  const tsbColor = tsbDMore > 1 ? 'var(--c-ok)' : tsbDMore < -2 ? 'var(--c-warn)' : 'var(--c-caution)';
+  const tsbLabel = tsbDMore > 1 ? 'Fresh' : tsbDMore > -2 ? 'Neutral' : 'Fatigued';
 
   // This week vs plan bars
   const wk = s.wks?.[s.w - 1];
@@ -1126,72 +1250,6 @@ function buildMoreDetailSection(s: SimulatorState): string {
       </button>
 
       <div id="advanced-body" style="display:${moreDetailOpen ? 'block' : 'none'}">
-
-        <!-- Training Bars -->
-        <div class="m-card" style="padding:14px;margin-bottom:10px">
-
-          <!-- Bar 1: Distance vs Plan -->
-          <div style="margin-bottom:12px">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-              <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Distance vs Plan</span>
-              <span style="font-size:12px;font-weight:500">${formatKm(kmDone, advUnitPref)} / ${formatKm(kmPlan, advUnitPref, 0)}</span>
-            </div>
-            <div style="height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden">
-              <div style="height:100%;border-radius:4px;background:linear-gradient(to right,var(--c-ok) ${kmGreenPct}%,var(--c-caution) ${kmGreenPct}%);width:${kmGreenPct + kmAmberPct}%"></div>
-            </div>
-          </div>
-
-          <!-- Bar 2: Total Load vs Plan -->
-          <div style="margin-bottom:4px">
-            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-              <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Total Load vs Plan</span>
-              <span style="font-size:12px;font-weight:500">${currentTSS} / ${Math.round(plannedTSS)}</span>
-            </div>
-            <div style="height:8px;background:rgba(0,0,0,0.05);border-radius:4px;overflow:hidden">
-              <div style="height:100%;border-radius:4px;background:linear-gradient(to right,var(--c-ok) ${tssGreenPct}%,var(--c-caution) ${tssGreenPct}%);width:${tssGreenPct + tssAmberPct}%"></div>
-            </div>
-            <div style="font-size:10px;color:var(--c-faint);margin-top:4px">Includes runs, gym &amp; cross-training at full physiological weight</div>
-          </div>
-
-        </div>
-
-        <!-- Metrics row: ATL / TSB / ACWR -->
-        <div class="m-card" style="padding:14px;margin-bottom:10px">
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
-
-            <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:1px">Short-Term Load</div>
-              <div style="font-size:9px;color:var(--c-faint);margin-bottom:4px;letter-spacing:0.04em">ATL · 7-day avg</div>
-              <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em">${atl > 0 ? atl.toFixed(0) : '—'}</div>
-            </div>
-
-            <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Freshness</div>
-              <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em" style="color:${tsbColor}">${latest ? (tsb > 0 ? '+' : '') + tsb.toFixed(0) : '—'}</div>
-              <div style="font-size:10px;color:${tsbColor}">${latest ? tsbLabel : ''}</div>
-            </div>
-
-            <div>
-              <div style="font-size:11px;color:var(--c-faint);margin-bottom:2px">Load Safety</div>
-              <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em">${ratio > 0 ? ratio.toFixed(2) + '×' : '—'}</div>
-            </div>
-
-          </div>
-        </div>
-
-        <!-- ACWR gradient bar -->
-        <div class="m-card" style="padding:14px;margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Load Safety</span>
-            <span style="font-size:12px;font-weight:500;color:${acwr.status === 'high' ? 'var(--c-warn)' : acwr.status === 'caution' ? 'var(--c-caution)' : 'var(--c-ok)'}">${riskLabel}</span>
-          </div>
-          <div class="m-signal-track" style="margin-bottom:8px">
-            <div class="m-signal-fill" style="width:${riskPct}%;background:${acwr.status === 'high' ? 'var(--c-warn)' : acwr.status === 'caution' ? 'var(--c-caution)' : 'var(--c-ok)'}"></div>
-            ${ratio > 0 ? `<div class="m-signal-thumb" style="left:${riskPct}%;border-color:${thumbBorder}"></div>` : ''}
-          </div>
-          <div style="font-size:11px;color:var(--c-muted)">Your level: ${tierCfg.label} · Safe ceiling: up to ${((tierCfg.safeUpper - 1) * 100).toFixed(0)}% above your usual</div>
-          <div style="font-size:11px;color:var(--c-faint);margin-top:4px;line-height:1.4">Fatigue includes all training (runs + gym + cross-training). Your Running Fitness is the running-specific baseline. A heavy load sports or heavy gym week correctly raises this even if you barely ran.</div>
-        </div>
 
         <!-- Intensity calibration status -->
         ${buildCalibrationStatus(s)}
@@ -1326,11 +1384,7 @@ function buildVdotChangeNote(history: Array<{ week: number; vdot: number; date?:
 }
 
 function buildFoldedPaces(s: SimulatorState): string {
-  const currentVDOT = computeCurrentVDOT(s);
-  const initialVDOT = s.iv || s.v || 0;
-  const vdotDelta = currentVDOT - initialVDOT;
-  const vdotPct = initialVDOT ? (vdotDelta / initialVDOT) * 100 : 0;
-
+  const unitPref = s.unitPref ?? 'km';
   const paces = s.pac ? [
     { label: 'Easy',      value: s.pac.e, color: 'var(--c-ok)' },
     { label: 'Marathon',  value: s.pac.m, color: 'var(--c-accent)' },
@@ -1338,49 +1392,14 @@ function buildFoldedPaces(s: SimulatorState): string {
     { label: 'VO2',       value: s.pac.i, color: 'var(--c-warn)' },
   ].filter(p => p.value) : [];
 
-  const vdotBadge = vdotPct !== 0 ? `
-    <span style="font-size:11px;font-weight:600;color:${vdotPct > 0 ? 'var(--c-ok)' : 'var(--c-warn)'};background:${vdotPct > 0 ? 'var(--c-ok-bg)' : '#fee2e2'};padding:2px 7px;border-radius:10px">
-      ${vdotPct > 0 ? '↑' : '↓'} ${Math.abs(vdotPct).toFixed(1)}%
-    </span>
-  ` : '';
-
-  const vdotHistory = s.vdotHistory ?? [];
-  const sparkline = buildVdotSparkline(vdotHistory);
-  const changeNote = buildVdotChangeNote(vdotHistory);
-
-  return foldedSection('VDOT &amp; Paces', `
-    <!-- VDOT hero row -->
-    <div style="background:rgba(0,0,0,0.03);border-radius:10px;padding:12px 14px;margin-bottom:10px">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between">
-        <div>
-          <div style="display:flex;align-items:center;gap:4px;margin-bottom:2px">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Current VDOT</div>
-            ${buildInfoIcon('vdot')}
-          </div>
-          <div style="display:flex;align-items:baseline;gap:8px">
-            <span style="font-size:26px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${currentVDOT.toFixed(1)}</span>
-            ${vdotBadge}
-          </div>
-          ${initialVDOT && initialVDOT !== currentVDOT ? `
-            <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Started at ${initialVDOT.toFixed(1)}</div>
-          ` : ''}
-        </div>
-      </div>
-      ${sparkline ? `
-        <div style="margin-top:8px">
-          ${sparkline}
-          ${changeNote}
-        </div>
-      ` : changeNote}
-    </div>
-
+  return foldedSection('Training Paces', `
     ${paces.length > 0 ? `
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Training paces</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
         ${paces.map(p => `
           <div style="background:rgba(0,0,0,0.03);border-radius:8px;padding:9px 11px;display:flex;align-items:center;justify-content:space-between">
             <span style="font-size:11px;color:var(--c-muted)">${p.label}</span>
-            <span style="font-size:14px;font-weight:600;color:${p.color}">${fp(p.value!)}</span>
+            <span style="font-size:14px;font-weight:600;color:${p.color}">${fp(p.value!, unitPref)}</span>
           </div>`).join('')}
       </div>
     ` : ''}
@@ -1402,10 +1421,10 @@ function buildFoldedRecovery(s: SimulatorState): string {
   };
 
   // RHR and HRV as rolling averages — daily values are noisy
-  const restingHR  = rollingAvg(history.map(h => h.restingHR)) ?? (s.restingHR ? Math.round(s.restingHR) : null);
+  const restingHR  = rollingAvg(history.map(h => h.restingHR));
   const hrv        = rollingAvg(history.map(h => h.hrvRmssd));
-  // Max HR: peak across the window — more likely to reflect true physiological max
-  const peakMaxHR  = rollingPeak(history.map(h => h.maxHR)) ?? s.maxHR ?? null;
+  // Max HR: Garmin all-time max HR (from physiology sync) takes priority; fall back to daily peak
+  const peakMaxHR  = s.maxHR ?? rollingPeak(history.map(h => h.maxHR)) ?? null;
   const sleepScore = latest?.sleepScore;
   const garminVO2  = latest?.vo2max ?? s.vo2;
   const ltPace     = latest?.ltPace ?? s.lt;
@@ -1414,10 +1433,8 @@ function buildFoldedRecovery(s: SimulatorState): string {
   const hasPhysio = !!(restingHR || peakMaxHR || hrv !== null || sleepScore !== undefined || garminVO2 || ltPace || ltHR);
   if (!hasPhysio) return '';
 
-  const fmtPace = (sec: number) => {
-    const m = Math.floor(sec / 60), s2 = sec % 60;
-    return `${m}:${String(s2).padStart(2, '0')}/km`;
-  };
+  const advUnitPref = s.unitPref ?? 'km';
+  const fmtPace = (sec: number) => fp(sec, advUnitPref);
 
   // SVG line chart for expanded view
   const miniChart = (vals: (number | undefined)[], color: string): string => {
@@ -1572,6 +1589,16 @@ function wireStatsEventHandlers(s: SimulatorState): void {
   // Account button
   document.getElementById('stats-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
+  });
+
+  // This Week card → load breakdown sheet
+  document.getElementById('stats-this-week-card')?.addEventListener('click', () => {
+    import('./home-view').then(({ showLoadBreakdownSheet }) => showLoadBreakdownSheet(s));
+  });
+
+  // Sleep detail button → sleep sheet
+  document.getElementById('stats-sleep-detail-btn')?.addEventListener('click', () => {
+    showSleepSheet(s.physiologyHistory ?? [], s.wks ?? []);
   });
 
   // More detail accordion

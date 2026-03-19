@@ -129,7 +129,7 @@ export function renderPlanPreview(container: HTMLElement, state: OnboardingState
             ${s.initialLT ? `
             <div class="flex justify-between">
               <span style="color:var(--c-faint)">LT Threshold</span>
-              <span style="color:var(--c-black)">${formatLTPace(s.initialLT)}/km</span>
+              <span style="color:var(--c-black)">${formatLTPace(s.initialLT)}${(s.unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span>
             </div>
             ` : ''}
             ${s.initialVO2 ? `

@@ -5,7 +5,7 @@ import { render, attachTrackRunHandlers } from './renderer';
 import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance, isBenchmarkWeek, findGarminRunForWeek, getBenchmarkOptions, getBenchmarkDefault, recordBenchmark, skipBenchmark } from './events';
 import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
-import { ft } from '@/utils/format';
+import { ft, fp, fmtDateUK, formatKm } from '@/utils/format';
 import { openInjuryModal, renderInjuryBanner, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { recordMorningPain, getReturnToRunLevelLabel } from '@/injury/engine';
 import type { MorningPainResponse } from '@/types/injury';
@@ -18,7 +18,7 @@ import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SP
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
-import { computeACWR, computeWeekTSS } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
@@ -131,7 +131,8 @@ function _computeTotalKm(s: any): number {
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e,
-      i + 1, s.tw, s.v, s.gs
+      i + 1, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, i + 1), wk.scheduledAcwrStatus,
     );
 
     if (wk.workoutMods) {
@@ -461,10 +462,10 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                       <span class="text-[10px]" style="color:var(--c-faint)">Running Volume</span>
                       <div class="flex items-baseline gap-1 text-[10px]">
                         <span class="font-medium" style="color:var(--c-black)" id="stat-vol-run">—</span>
-                        <span style="color:var(--c-faint)">km run</span>
+                        <span id="stat-vol-run-unit" style="color:var(--c-faint)">km run</span>
                         <span class="mx-0.5" style="color:var(--c-faint)">+</span>
                         <span class="font-medium" style="color:var(--c-muted)" id="stat-vol-cross">0</span>
-                        <span style="color:var(--c-faint)">km GPS sports</span>
+                        <span id="stat-vol-cross-unit" style="color:var(--c-faint)">km GPS sports</span>
                       </div>
                     </div>
                     <div class="relative h-3 rounded-full overflow-hidden mb-1" style="background:rgba(239,68,68,0.10)">
@@ -484,7 +485,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                     </div>
                     <div class="flex items-center justify-between">
                       <span id="stat-vol-note" class="text-[10px]" style="color:var(--c-faint)"></span>
-                      <span class="text-[9px]" style="color:var(--c-faint)">/ <span id="stat-vol-planned">—</span> km planned</span>
+                      <span class="text-[9px]" style="color:var(--c-faint)">/ <span id="stat-vol-planned">—</span> <span id="stat-vol-planned-unit">km</span> planned</span>
                     </div>
                     <div id="stat-km-floor-nudge" class="text-[10px] mt-1" style="color:var(--c-caution);display:none"></div>
                   </div>
@@ -516,7 +517,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                   <!-- ACWR Injury Risk bar -->
                   <div class="pt-3 border-t mt-3" style="border-color:var(--c-border)">
                     <div class="flex items-center justify-between mb-2">
-                      <span class="text-xs" style="color:var(--c-faint)">Injury Risk</span>
+                      <span class="text-xs" style="color:var(--c-faint)">Load Safety</span>
                       <button id="acwr-info-btn" class="text-[10px] leading-none rounded-full w-3.5 h-3.5 flex items-center justify-center transition-colors" style="color:var(--c-faint);border:1px solid var(--c-border)">?</button>
                     </div>
                     <div id="acwr-bar-container">
@@ -654,9 +655,7 @@ function renderContinuousProgressPanel(s: any): string {
   const ltCurrent = s.lt || s.ltPace;
   const ltInitial = s.initialLT;
   const ltPct = (ltCurrent && ltInitial) ? ((ltInitial - ltCurrent) / ltInitial) * 100 : 0;
-  const ltPaceStr = ltCurrent
-    ? `${Math.floor(ltCurrent / 60)}:${String(Math.round(ltCurrent % 60)).padStart(2, '0')}/km`
-    : '—';
+  const ltPaceStr = ltCurrent ? fp(ltCurrent, s.unitPref ?? 'km') : '—';
 
   const vo2Current = s.vo2;
   const vo2Initial = s.initialVO2;
@@ -841,22 +840,23 @@ function renderBenchmarkPanel(s: any): string {
 
 /** Format a benchmark result for display */
 function formatBenchmarkResult(result: any): string {
+  const unitPref = getState().unitPref ?? 'km';
   switch (result.type) {
     case 'easy_checkin':
       return result.avgPaceSecKm
-        ? `Easy check-in · ${Math.floor(result.avgPaceSecKm / 60)}:${String(Math.round(result.avgPaceSecKm % 60)).padStart(2, '0')}/km avg`
+        ? `Easy check-in · ${fp(result.avgPaceSecKm, unitPref)} avg`
         : `Easy check-in · ${result.durationSec ? Math.round(result.durationSec / 60) + 'min' : 'logged'}`;
     case 'threshold_check':
       return result.avgPaceSecKm
-        ? `Threshold check · ${Math.floor(result.avgPaceSecKm / 60)}:${String(Math.round(result.avgPaceSecKm % 60)).padStart(2, '0')}/km`
+        ? `Threshold check · ${fp(result.avgPaceSecKm, unitPref)}`
         : 'Threshold check · logged';
     case 'speed_check':
       return result.distanceKm
-        ? `Speed check · ${result.distanceKm.toFixed(2)} km in 12 min`
+        ? `Speed check · ${formatKm(result.distanceKm, unitPref, 2)} in 12 min`
         : 'Speed check · logged';
     case 'race_simulation':
       return result.distanceKm && result.durationSec
-        ? `Race sim · ${result.distanceKm}km in ${Math.floor(result.durationSec / 60)}:${String(Math.round(result.durationSec % 60)).padStart(2, '0')}`
+        ? `Race sim · ${formatKm(result.distanceKm, unitPref)} in ${Math.floor(result.durationSec / 60)}:${String(Math.round(result.durationSec % 60)).padStart(2, '0')}`
         : 'Race simulation · logged';
     default:
       return 'Check-in recorded';
@@ -868,6 +868,9 @@ function formatBenchmarkResult(result: any): string {
  */
 function showBenchmarkEntryModal(bmType: string): void {
   const type = bmType as import('@/types/state').BenchmarkType;
+  const bmUnitPref = getState().unitPref ?? 'km';
+  const bmDistUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
+  const bmPaceUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
 
   // Build the right input fields based on benchmark type
   let fieldsHTML = '';
@@ -889,7 +892,7 @@ function showBenchmarkEntryModal(bmType: string): void {
       title = 'Speed Check (12-min test)';
       desc = 'How far did you run in 12 minutes?';
       fieldsHTML = `
-        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance covered (km)</label>
+        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance covered (${bmDistUnit})</label>
         <input type="number" id="bm-distance" step="0.01" min="0.5" max="6"
           class="w-full rounded-lg px-3 py-2 text-sm mb-4" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
           placeholder="e.g. 2.80">
@@ -899,7 +902,7 @@ function showBenchmarkEntryModal(bmType: string): void {
       title = 'Race Simulation';
       desc = 'Log your time trial result.';
       fieldsHTML = `
-        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance (km)</label>
+        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance (${bmDistUnit})</label>
         <input type="number" id="bm-distance" step="0.1" min="1" max="42.2"
           class="w-full rounded-lg px-3 py-2 text-sm mb-3" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
           placeholder="e.g. 5">
@@ -942,30 +945,36 @@ function showBenchmarkEntryModal(bmType: string): void {
       case 'threshold_check': {
         const m = +(document.getElementById('bm-pace-min') as HTMLInputElement)?.value || 0;
         const sec = +(document.getElementById('bm-pace-sec') as HTMLInputElement)?.value || 0;
-        const paceSec = m * 60 + sec;
-        if (paceSec < 120 || paceSec > 720) { alert('Enter a valid pace (min:sec per km)'); return; }
+        const paceSecRaw = m * 60 + sec;
+        if (paceSecRaw < 120 || paceSecRaw > 900) { alert(`Enter a valid pace (min:sec per ${bmPaceUnit})`); return; }
+        // Convert to sec/km if user entered sec/mi
+        const paceSec = bmUnitPref === 'mi' ? paceSecRaw * 1.60934 : paceSecRaw;
         overlay.remove();
         const dur = type === 'easy_checkin' ? 1800 : 1200; // 30 min / 20 min
         recordBenchmark(type, 'manual', undefined, dur, paceSec);
         break;
       }
       case 'speed_check': {
-        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        if (!dist || dist < 0.5) { alert('Enter a distance (km)'); return; }
+        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        if (!distRaw || distRaw < 0.5) { alert(`Enter a distance (${bmDistUnit})`); return; }
+        // Convert to km if user entered miles
+        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
         overlay.remove();
-        recordBenchmark('speed_check', 'manual', dist, 720); // 12 min
+        recordBenchmark('speed_check', 'manual', distKm, 720); // 12 min
         break;
       }
       case 'race_simulation': {
-        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
         const m = +(document.getElementById('bm-time-min') as HTMLInputElement)?.value || 0;
         const sec = +(document.getElementById('bm-time-sec') as HTMLInputElement)?.value || 0;
         const totalSec = m * 60 + sec;
-        if (!dist || dist < 1) { alert('Enter a distance'); return; }
+        if (!distRaw || distRaw < 1) { alert('Enter a distance'); return; }
         if (totalSec < 300) { alert('Enter a valid time'); return; }
+        // Convert to km if user entered miles
+        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
         overlay.remove();
-        const avgPace = totalSec / dist;
-        recordBenchmark('race_simulation', 'manual', dist, totalSec, avgPace);
+        const avgPace = totalSec / distKm; // sec/km
+        recordBenchmark('race_simulation', 'manual', distKm, totalSec, avgPace);
         break;
       }
     }
@@ -977,8 +986,9 @@ function showBenchmarkEntryModal(bmType: string): void {
 
 /** Reusable pace input HTML */
 function renderPaceInput(): string {
+  const paceUnit = getState().unitPref === 'mi' ? 'mi' : 'km';
   return `
-    <label class="block text-xs mb-1" style="color:var(--c-muted)">Average pace (min:sec per km)</label>
+    <label class="block text-xs mb-1" style="color:var(--c-muted)">Average pace (min:sec per ${paceUnit})</label>
     <div class="flex gap-2 mb-4">
       <input type="number" id="bm-pace-min" min="2" max="12"
         class="flex-1 rounded-lg px-3 py-2 text-sm" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
@@ -1008,7 +1018,7 @@ function renderRecoveryPill(s: any): string {
     return `
       <button id="btn-recovery-log" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium transition-colors" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-muted)">
         <span class="w-2 h-2 rounded-full" style="background:var(--c-faint)"></span>
-        Recovery: Log today
+        How are you feeling?
       </button>
     `;
   }
@@ -1017,7 +1027,7 @@ function renderRecoveryPill(s: any): string {
     return `
       <div class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium" style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.30);color:var(--c-ok)">
         <span class="w-2 h-2 rounded-full" style="background:var(--c-ok)"></span>
-        Recovery: Good
+        Feeling good
       </div>
     `;
   }
@@ -1038,7 +1048,7 @@ function renderRecoveryPill(s: any): string {
     return `
       <button id="btn-recovery-adjust" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium transition-colors" style="${colorStyle[level]}">
         <span class="w-2 h-2 rounded-full" style="${dotStyle[level]}"></span>
-        Recovery: Low — Tap to adjust
+        Feeling rough — tap to adjust
       </button>
     `;
   }
@@ -1067,28 +1077,23 @@ function renderPhysiologyCard(s: any): string {
   const rollAvg = (vals: (number | undefined)[]) => { const n = numVals(vals); return n.length ? n.reduce((a, b) => a + b, 0) / n.length : null; };
   const rollPeak = (vals: (number | undefined)[]) => { const n = numVals(vals); return n.length ? Math.max(...n) : null; };
 
-  const rhr    = rollAvg(history.map(h => h.restingHR)) ?? s.restingHR ?? null;
-  const maxHR  = rollPeak(history.map(h => h.maxHR)) ?? s.maxHR ?? null;
-  const hrv    = rollAvg(history.map(h => h.hrvRmssd));
-  const vo2    = latest?.vo2max ?? s.vo2;
+  const rhr = rollAvg(history.map(h => h.restingHR)) ?? null;
+  const maxHR = rollPeak(history.map(h => h.maxHR)) ?? null;
+  const hrv = rollAvg(history.map(h => h.hrvRmssd));
+  const vo2 = latest?.vo2max ?? s.vo2;
   const ltPace = latest?.ltPace ?? s.lt;
-  const ltHR   = latest?.ltHR ?? s.ltHR;
+  const ltHR = latest?.ltHR ?? s.ltHR;
 
   if (!rhr && !maxHR && hrv == null && !vo2 && !ltPace && !ltHR) return '';
 
-  // sec/km → M:SS/km
-  const fmtPace = (sec: number) => {
-    const m = Math.floor(sec / 60);
-    const s2 = sec % 60;
-    return `${m}:${String(s2).padStart(2, '0')}/km`;
-  };
+  const fmtPace = (sec: number) => fp(sec, s.unitPref ?? 'km');
 
   // Compare latest vs prev-N average; returns coloured arrow or empty string
   const trendArrow = (vals: (number | undefined)[], higherIsBetter: boolean): string => {
     const nums = vals.filter((v): v is number => v !== undefined);
     if (nums.length < 2) return '';
     const last = nums[nums.length - 1];
-    const avg  = nums.slice(0, -1).reduce((a, b) => a + b, 0) / (nums.length - 1);
+    const avg = nums.slice(0, -1).reduce((a, b) => a + b, 0) / (nums.length - 1);
     const diff = last - avg;
     if (Math.abs(diff) < 0.5) return '';
     const good = higherIsBetter ? diff > 0 : diff < 0;
@@ -1224,7 +1229,7 @@ function renderRecoveryLog(s: any): string {
       : last7.map((e: RecoveryEntry) => `
             <div class="flex flex-col items-center gap-1" title="${e.date}: Sleep ${e.sleepScore}/100">
               <span class="w-3 h-3 rounded-full" style="background:${dotColorStyle(e.sleepScore)}"></span>
-              <span class="text-[10px]" style="color:var(--c-faint)">${e.date.slice(5)}</span>
+              <span class="text-[10px]" style="color:var(--c-faint)">${fmtDateUK(e.date)}</span>
             </div>
           `).join('')
     }
@@ -1609,8 +1614,8 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
     const colorStyle = response === 'worse'
       ? 'color:var(--c-warn);background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.30)'
       : response === 'better'
-      ? 'color:var(--c-ok);background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.30)'
-      : 'color:var(--c-accent);background:rgba(78,159,229,0.08);border:1px solid rgba(78,159,229,0.30)';
+        ? 'color:var(--c-ok);background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.30)'
+        : 'color:var(--c-accent);background:rgba(78,159,229,0.08);border:1px solid rgba(78,159,229,0.30)';
     container.innerHTML = `
       <div style="${colorStyle}" class="rounded-lg p-4 mb-4">
         <p class="text-sm font-medium">${feedbackMessages[response]}</p>
@@ -1771,7 +1776,7 @@ function updateLoadChart(s: SimulatorState): void {
     }
     plannedAero += fcl.aerobic * scale * sportRunSpec;
     plannedAnaero += fcl.anaerobic * scale * sportRunSpec;
-    plannedBase      += (fcl.base      ?? 0) * scale * sportRunSpec;
+    plannedBase += (fcl.base ?? 0) * scale * sportRunSpec;
     plannedThreshold += (fcl.threshold ?? 0) * scale * sportRunSpec;
     plannedIntensity += (fcl.intensity ?? 0) * scale * sportRunSpec;
   }
@@ -1796,11 +1801,11 @@ function updateLoadChart(s: SimulatorState): void {
       // If hrZones available, split by actual zone time; otherwise use workout-type profile
       if (actual.hrZones && (actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5) > 0) {
         const totalSec = actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5;
-        actualBase      += tl * (actual.hrZones.z1 + actual.hrZones.z2) / totalSec;
+        actualBase += tl * (actual.hrZones.z1 + actual.hrZones.z2) / totalSec;
         actualThreshold += tl * actual.hrZones.z3 / totalSec;
         actualIntensity += tl * (actual.hrZones.z4 + actual.hrZones.z5) / totalSec;
       } else {
-        actualBase      += tl * (profile.base      ?? profile.aerobic * 0.80);
+        actualBase += tl * (profile.base ?? profile.aerobic * 0.80);
         actualThreshold += tl * (profile.threshold ?? profile.aerobic * 0.20);
         actualIntensity += tl * (profile.intensity ?? profile.anaerobic);
       }
@@ -1819,17 +1824,17 @@ function updateLoadChart(s: SimulatorState): void {
   }
 
   const plannedTotal = plannedAero + plannedAnaero;
-  const actualTotal  = actualAero  + actualAnaero;
+  const actualTotal = actualAero + actualAnaero;
   const max = Math.max(plannedTotal, actualTotal, 1);
 
   const setHeight = (id: string, pct: number) => {
     const el = document.getElementById(id);
     if (el) el.style.height = `${pct}%`;
   };
-  setHeight('bar-plan-aero',    Math.min(100, Math.round((plannedAero   / max) * 100)));
-  setHeight('bar-actual-aero',  Math.min(100, Math.round((actualAero    / max) * 100)));
-  setHeight('bar-plan-anaero',  Math.min(100, Math.round((plannedAnaero / max) * 100)));
-  setHeight('bar-actual-anaero',Math.min(100, Math.round((actualAnaero  / max) * 100)));
+  setHeight('bar-plan-aero', Math.min(100, Math.round((plannedAero / max) * 100)));
+  setHeight('bar-actual-aero', Math.min(100, Math.round((actualAero / max) * 100)));
+  setHeight('bar-plan-anaero', Math.min(100, Math.round((plannedAnaero / max) * 100)));
+  setHeight('bar-actual-anaero', Math.min(100, Math.round((actualAnaero / max) * 100)));
 
   const loadExpected = document.getElementById('load-expected');
   if (loadExpected) loadExpected.textContent = Math.round(plannedTotal).toString();
@@ -1880,12 +1885,12 @@ function updateLoadChart(s: SimulatorState): void {
   }
 
   // ── TSS split bar ─────────────────────────────────────────────────────
-  const tssTotalActual  = actualRunTSS + actualCrossTSS;
+  const tssTotalActual = actualRunTSS + actualCrossTSS;
 
   // Fixed scale: plannedTotal × 1.4. Plan line sits at ~71%; bar clips at 100% when over.
   // Avoids outlier weeks compressing the scale (507 TSS at 146% over plan → clips to 100%).
   const barMax = Math.max(plannedTotal * 1.4, tssTotalActual * 1.1, 1);
-  const runPct   = Math.min(100, Math.round((actualRunTSS   / barMax) * 100));
+  const runPct = Math.min(100, Math.round((actualRunTSS / barMax) * 100));
   const crossPct = Math.min(100, Math.round((actualCrossTSS / barMax) * 100));
 
   const loadActualEl = document.getElementById('stat-load-actual');
@@ -1893,24 +1898,25 @@ function updateLoadChart(s: SimulatorState): void {
   const loadPlannedEl = document.getElementById('stat-load-planned');
   if (loadPlannedEl) loadPlannedEl.textContent = plannedTotal > 0 ? Math.round(plannedTotal).toString() : '—';
 
-  const runBarEl   = document.getElementById('stat-load-bar-run');
+  const runBarEl = document.getElementById('stat-load-bar-run');
   const crossBarEl = document.getElementById('stat-load-bar-cross');
-  if (runBarEl)   runBarEl.style.width   = `${runPct}%`;
+  if (runBarEl) runBarEl.style.width = `${runPct}%`;
   if (crossBarEl) crossBarEl.style.width = `${Math.min(100 - runPct, crossPct)}%`;
 
   // Zone band widths — background behind the actual fill
   // Gray = 0→CTL (your chronic baseline); Green = CTL→plan (the target zone);
   // Amber = plan→plan×1.2 (acceptable overrun); Red = beyond that (fills rest).
-  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate);
+  const acwrAtlSeed1 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1);
   const ctlWeeklyEquiv = acwrData.ctl;
-  const ctlPctOfBar    = barMax > 0 ? Math.min(100, (ctlWeeklyEquiv / barMax) * 100) : 0;
-  const planPctOfBar   = barMax > 0 ? Math.min(100, (plannedTotal    / barMax) * 100) : 71;
-  const cautionWidth   = barMax > 0 ? Math.min(100, (plannedTotal * 0.2 / barMax) * 100) : 0; // 20% overrun band
-  const targetWidth    = Math.max(0, planPctOfBar - ctlPctOfBar);
+  const ctlPctOfBar = barMax > 0 ? Math.min(100, (ctlWeeklyEquiv / barMax) * 100) : 0;
+  const planPctOfBar = barMax > 0 ? Math.min(100, (plannedTotal / barMax) * 100) : 71;
+  const cautionWidth = barMax > 0 ? Math.min(100, (plannedTotal * 0.2 / barMax) * 100) : 0; // 20% overrun band
+  const targetWidth = Math.max(0, planPctOfBar - ctlPctOfBar);
   const setW = (id: string, pct: number) => { const el = document.getElementById(id); if (el) el.style.width = `${Math.max(0, pct).toFixed(1)}%`; };
   setW('zone-load-baseline', ctlPctOfBar);
-  setW('zone-load-target',   targetWidth);
-  setW('zone-load-caution',  cautionWidth);
+  setW('zone-load-target', targetWidth);
+  setW('zone-load-caution', cautionWidth);
 
   // Plan target line (boundary between green and amber)
   const planLineEl = document.getElementById('stat-load-plan-line');
@@ -1989,22 +1995,22 @@ function updateLoadChart(s: SimulatorState): void {
 
   // Fixed scale: plannedRunKm × 1.4 so plan line sits at ~71% of the bar
   const volMax = Math.max(plannedRunKm * 1.4, actualRunKm + actualGpsKm, 1);
-  const volRunPct   = Math.min(100, Math.round((actualRunKm   / volMax) * 100));
-  const volCrossPct = Math.min(100, Math.round((actualGpsKm   / volMax) * 100));
+  const volRunPct = Math.min(100, Math.round((actualRunKm / volMax) * 100));
+  const volCrossPct = Math.min(100, Math.round((actualGpsKm / volMax) * 100));
 
-  const volRunEl   = document.getElementById('stat-vol-bar-run');
+  const volRunEl = document.getElementById('stat-vol-bar-run');
   const volCrossEl = document.getElementById('stat-vol-bar-cross');
-  if (volRunEl)   volRunEl.style.width   = `${volRunPct}%`;
+  if (volRunEl) volRunEl.style.width = `${volRunPct}%`;
   if (volCrossEl) volCrossEl.style.width = `${Math.min(100 - volRunPct, volCrossPct)}%`;
 
   // Volume zone bands
-  const volCtlPct    = (baselineKm42 > 0 && volMax > 0) ? Math.min(100, (baselineKm42 / volMax) * 100) : 0;
-  const volPlanPct   = (plannedRunKm  > 0 && volMax > 0) ? Math.min(100, (plannedRunKm / volMax) * 100) : 71;
-  const volTargetW   = Math.max(0, volPlanPct - volCtlPct);
-  const volCautionW  = plannedRunKm > 0 ? Math.min(100, (plannedRunKm * 0.2 / volMax) * 100) : 0;
+  const volCtlPct = (baselineKm42 > 0 && volMax > 0) ? Math.min(100, (baselineKm42 / volMax) * 100) : 0;
+  const volPlanPct = (plannedRunKm > 0 && volMax > 0) ? Math.min(100, (plannedRunKm / volMax) * 100) : 71;
+  const volTargetW = Math.max(0, volPlanPct - volCtlPct);
+  const volCautionW = plannedRunKm > 0 ? Math.min(100, (plannedRunKm * 0.2 / volMax) * 100) : 0;
   setW('zone-vol-baseline', volCtlPct);
-  setW('zone-vol-target',   volTargetW);
-  setW('zone-vol-caution',  volCautionW);
+  setW('zone-vol-target', volTargetW);
+  setW('zone-vol-caution', volCautionW);
 
   const volPlanLineEl = document.getElementById('stat-vol-plan-line');
   if (volPlanLineEl && plannedRunKm > 0) {
@@ -2017,22 +2023,31 @@ function updateLoadChart(s: SimulatorState): void {
   if (volAxisEl) {
     const labels: string[] = [];
     if (baselineKm42 > 0) {
-      labels.push(`<span class="absolute text-[9px]" style="left:${Math.min(92, volCtlPct).toFixed(1)}%;transform:translateX(-50%);color:var(--c-faint)">◆ ${baselineKm42.toFixed(0)}km</span>`);
+      labels.push(`<span class="absolute text-[9px]" style="left:${Math.min(92, volCtlPct).toFixed(1)}%;transform:translateX(-50%);color:var(--c-faint)">◆ ${formatKm(baselineKm42, s.unitPref ?? 'km', 0)}</span>`);
     }
     if (plannedRunKm > 0) {
       const planLabelLeft = Math.min(96, volPlanPct);
-      labels.push(`<span class="absolute text-[9px]" style="left:${planLabelLeft.toFixed(1)}%;transform:translateX(-50%);color:var(--c-muted)">${Math.round(plannedRunKm)}km</span>`);
+      labels.push(`<span class="absolute text-[9px]" style="left:${planLabelLeft.toFixed(1)}%;transform:translateX(-50%);color:var(--c-muted)">${formatKm(plannedRunKm, s.unitPref ?? 'km', 0)}</span>`);
     }
     volAxisEl.innerHTML = labels.join('');
   }
 
-  const volRunNumEl  = document.getElementById('stat-vol-run');
+  const volRunNumEl = document.getElementById('stat-vol-run');
   const volCrossNumEl = document.getElementById('stat-vol-cross');
   const volPlannedEl = document.getElementById('stat-vol-planned');
-  const volNoteEl    = document.getElementById('stat-vol-note');
-  if (volRunNumEl)  volRunNumEl.textContent  = actualRunKm > 0 ? actualRunKm.toFixed(1) : '—';
-  if (volCrossNumEl) volCrossNumEl.textContent = actualGpsKm > 0 ? actualGpsKm.toFixed(1) : '0';
-  if (volPlannedEl) volPlannedEl.textContent  = plannedRunKm > 0 ? Math.round(plannedRunKm).toString() : '—';
+  const volNoteEl = document.getElementById('stat-vol-note');
+  const volUnitPref = s.unitPref ?? 'km';
+  const volToDisplay = (km: number) => volUnitPref === 'mi' ? km * 0.621371 : km;
+  const volUnit = volUnitPref === 'mi' ? 'mi' : 'km';
+  if (volRunNumEl) volRunNumEl.textContent = actualRunKm > 0 ? volToDisplay(actualRunKm).toFixed(1) : '—';
+  if (volCrossNumEl) volCrossNumEl.textContent = actualGpsKm > 0 ? volToDisplay(actualGpsKm).toFixed(1) : '0';
+  if (volPlannedEl) volPlannedEl.textContent = plannedRunKm > 0 ? Math.round(volToDisplay(plannedRunKm)).toString() : '—';
+  const volRunUnitEl = document.getElementById('stat-vol-run-unit');
+  const volCrossUnitEl = document.getElementById('stat-vol-cross-unit');
+  const volPlannedUnitEl = document.getElementById('stat-vol-planned-unit');
+  if (volRunUnitEl) volRunUnitEl.textContent = `${volUnit} run`;
+  if (volCrossUnitEl) volCrossUnitEl.textContent = `${volUnit} GPS sports`;
+  if (volPlannedUnitEl) volPlannedUnitEl.textContent = volUnit;
   if (volNoteEl && actualCrossTSS > 0 && actualRunKm === 0) {
     volNoteEl.textContent = 'Cross-training covering fitness load — consider a short run for conditioning';
     volNoteEl.className = 'text-[10px]';
@@ -2045,8 +2060,8 @@ function updateLoadChart(s: SimulatorState): void {
   // Derive goal tier from marathon pace (sec/km)
   const marathonTimeSec = (s.pac?.m ?? 360) * 42.195;
   const floorTier = marathonTimeSec < 3.5 * 3600 ? 'fast'        // sub 3:30
-                  : marathonTimeSec < 4.5 * 3600 ? 'mid'         // 3:30–4:30
-                  :                                 'finish';     // 4:30+
+    : marathonTimeSec < 4.5 * 3600 ? 'mid'         // 3:30–4:30
+      : 'finish';     // 4:30+
   const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
   const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
   const totalWeeks = s.tw ?? 16;
@@ -2061,7 +2076,7 @@ function updateLoadChart(s: SimulatorState): void {
   const kmFloorNudgeEl = document.getElementById('stat-km-floor-nudge');
   if (kmFloorNudgeEl) {
     if (consecutiveBelow && actualRunKm < floorKm) {
-      kmFloorNudgeEl.textContent = `Running km has been below ${Math.round(floorKm)}km for 2+ weeks — consider adding a short easy run`;
+      kmFloorNudgeEl.textContent = `Running ${s.unitPref === 'mi' ? 'mileage' : 'km'} has been below ${formatKm(floorKm, s.unitPref ?? 'km', 0)} for 2+ weeks — consider adding a short easy run`;
       kmFloorNudgeEl.style.display = 'block';
     } else {
       kmFloorNudgeEl.style.display = 'none';
@@ -2093,9 +2108,9 @@ function updateLoadChart(s: SimulatorState): void {
       }
     }
   };
-  setZoneProgress('zone-bar-base',      'stat-load-base-label',      actualBase,      plannedBase,      'var(--c-accent)', 'var(--c-warn)');
+  setZoneProgress('zone-bar-base', 'stat-load-base-label', actualBase, plannedBase, 'var(--c-accent)', 'var(--c-warn)');
   setZoneProgress('zone-bar-threshold', 'stat-load-threshold-label', actualThreshold, plannedThreshold, 'var(--c-caution)', 'var(--c-warn)');
-  setZoneProgress('zone-bar-intensity', 'stat-load-intensity-label', actualIntensity, plannedIntensity, '#F97316',         'var(--c-warn)');
+  setZoneProgress('zone-bar-intensity', 'stat-load-intensity-label', actualIntensity, plannedIntensity, '#F97316', 'var(--c-warn)');
 
   // --- Load History chart (last 6 weeks, using extraRunLoad as proxy) ---
   const historyContainer = document.getElementById('load-history-chart');
@@ -2140,7 +2155,8 @@ function updateACWRBar(s: SimulatorState): void {
   if (!container) return;
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
+  const acwrAtlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2);
 
   if (acwr.status === 'unknown' && acwr.ratio === 0) {
     const histLen = (s.historicWeeklyTSS ?? []).length;
@@ -2160,22 +2176,22 @@ function updateACWRBar(s: SimulatorState): void {
 
   // Compute bar fill width: map 0 → safeUpper+0.4 range to 0–100%
   const barRange = safeUpper + 0.4;
-  const fillPct  = Math.min(100, Math.round((ratio / barRange) * 100));
-  const safePct  = Math.round((safeUpper / barRange) * 100);
+  const fillPct = Math.min(100, Math.round((ratio / barRange) * 100));
+  const safePct = Math.round((safeUpper / barRange) * 100);
 
   const statusColor = acwr.status === 'high'
     ? { fillStyle: 'background:var(--c-warn)', textStyle: 'color:var(--c-warn)' }
     : acwr.status === 'caution'
-    ? { fillStyle: 'background:var(--c-caution)', textStyle: 'color:var(--c-caution)' }
-    : { fillStyle: 'background:var(--c-ok)', textStyle: 'color:var(--c-ok)' };
+      ? { fillStyle: 'background:var(--c-caution)', textStyle: 'color:var(--c-caution)' }
+      : { fillStyle: 'background:var(--c-ok)', textStyle: 'color:var(--c-ok)' };
 
   const statusMsg = acwr.status === 'high'
     ? `Load spike detected (${ratio.toFixed(2)}× baseline) — reduce this week`
     : acwr.status === 'caution'
-    ? `Load increasing quickly (${ratio.toFixed(2)}× baseline) — consider easing off`
-    : acwr.status === 'unknown'
-    ? `Deload / low activity (${ratio.toFixed(2)}×)`
-    : `Load well-managed (${ratio.toFixed(2)}× baseline)`;
+      ? `Load increasing quickly (${ratio.toFixed(2)}× baseline) — consider easing off`
+      : acwr.status === 'unknown'
+        ? `Deload / low activity (${ratio.toFixed(2)}×)`
+        : `Load well-managed (${ratio.toFixed(2)}× baseline)`;
 
   container.innerHTML = `
     <div class="relative h-1.5 rounded-full overflow-hidden mb-1" style="background:rgba(0,0,0,0.08)">
@@ -2299,7 +2315,7 @@ function updateCarryBanner(s: SimulatorState): void {
   const dominant = totalIntens >= totalBase && totalIntens >= totalThresh ? 'intensity'
     : totalThresh >= totalBase ? 'threshold' : 'base';
   const domColorStyle = dominant === 'intensity' ? 'color:#F97316' : dominant === 'threshold' ? 'color:var(--c-caution)' : 'color:var(--c-accent)';
-  const domDotStyle   = dominant === 'intensity' ? 'background:#F97316' : dominant === 'threshold' ? 'background:var(--c-caution)' : 'background:var(--c-accent)';
+  const domDotStyle = dominant === 'intensity' ? 'background:#F97316' : dominant === 'threshold' ? 'background:var(--c-caution)' : 'background:var(--c-accent)';
 
   bannerEl.innerHTML = `
     <div class="mb-2">
@@ -2312,11 +2328,11 @@ function updateCarryBanner(s: SimulatorState): void {
       </button>
       <div id="carry-detail" class="hidden px-3 py-2 rounded-b-lg text-[10px] space-y-1 mt-0.5" style="background:rgba(0,0,0,0.03);border:1px solid rgba(245,158,11,0.15);border-top:none">
         ${rows.map(r => {
-          const rowTotal = r.base + r.threshold + r.intensity;
-          const dom = r.intensity >= r.base && r.intensity >= r.threshold ? 'intensity' : r.threshold >= r.base ? 'threshold' : 'base';
-          const dcStyle = dom === 'intensity' ? 'color:#F97316' : dom === 'threshold' ? 'color:var(--c-caution)' : 'color:var(--c-accent)';
-          return `<div class="flex items-center justify-between"><span style="color:var(--c-faint)">Week ${r.week}</span><span style="${dcStyle}">+${rowTotal} TSS (${dom})</span><span style="color:rgba(0,0,0,0.20)">×${r.decay.toFixed(2)} decay</span></div>`;
-        }).join('')}
+    const rowTotal = r.base + r.threshold + r.intensity;
+    const dom = r.intensity >= r.base && r.intensity >= r.threshold ? 'intensity' : r.threshold >= r.base ? 'threshold' : 'base';
+    const dcStyle = dom === 'intensity' ? 'color:#F97316' : dom === 'threshold' ? 'color:var(--c-caution)' : 'color:var(--c-accent)';
+    return `<div class="flex items-center justify-between"><span style="color:var(--c-faint)">Week ${r.week}</span><span style="${dcStyle}">+${rowTotal} TSS (${dom})</span><span style="color:rgba(0,0,0,0.20)">×${r.decay.toFixed(2)} decay</span></div>`;
+  }).join('')}
         <div class="border-t pt-1 flex justify-between" style="border-color:var(--c-border)"><span style="color:var(--c-muted)">Total</span><span style="${domColorStyle}">+${totalCarry} TSS</span></div>
       </div>
     </div>
@@ -2386,7 +2402,8 @@ export function triggerACWRReduction(): void {
   if (!wk) return;
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate);
+  const acwrAtlSeed3 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3);
 
   // Build popup source: use unspent items if present, else synthesise from planned load
   let durationMin: number;
@@ -2397,11 +2414,11 @@ export function triggerACWRReduction(): void {
 
   if (wk.unspentLoadItems?.length) {
     const items = wk.unspentLoadItems;
-    durationMin  = items.reduce((sum, i) => sum + i.durationMin, 0);
-    aerobic      = items.reduce((sum, i) => sum + i.aerobic, 0);
-    anaerobic    = items.reduce((sum, i) => sum + i.anaerobic, 0);
-    sport        = items[0]?.sport ?? 'cross-training';
-    sportLabel   = items.length === 1
+    durationMin = items.reduce((sum, i) => sum + i.durationMin, 0);
+    aerobic = items.reduce((sum, i) => sum + i.aerobic, 0);
+    anaerobic = items.reduce((sum, i) => sum + i.anaerobic, 0);
+    sport = items[0]?.sport ?? 'cross-training';
+    sportLabel = items.length === 1
       ? (items[0].displayName || items[0].sport?.replace(/_/g, ' ') || 'cross-training')
       : 'cross-training load';
   } else {
@@ -2410,26 +2427,26 @@ export function triggerACWRReduction(): void {
     const estimatedWeeklyTSS = Math.max(50, acwr.ctl); // rough weekly TSS proxy
     const excessTSS = excessFraction * estimatedWeeklyTSS;
     // Convert TSS → approximate minutes at easy pace (≈ 55 TSS/60min easy)
-    durationMin = Math.max(20, Math.round((excessTSS / 55) * 60));
-    aerobic     = 3.5;
-    anaerobic   = 0.5;
-    sport       = 'running';
-    sportLabel  = 'Training load';
+    durationMin = Math.max(5, Math.round((excessTSS / 55) * 60));
+    aerobic = 3.5;
+    anaerobic = 0.5;
+    sport = 'running';
+    sportLabel = 'Training load';
   }
 
   const avgRPE = aerobic > 3.5 ? 7 : 5;
   const combinedActivity = createActivity(sport, Math.round(durationMin), avgRPE, undefined, undefined, s.w);
   combinedActivity.dayOfWeek = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
 
-  const freshWorkouts  = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
-  const weekRuns       = workoutsToPlannedRuns(freshWorkouts, s.pac);
-  const ctx            = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined };
-  const popup          = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
+  const freshWorkouts = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
+  const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
+  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined };
+  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
   // Compute intensity % for ACWR context header
   const plannedThreshold = freshWorkouts.filter(w => w.t === 'threshold' || w.t === 'marathon_pace').length;
   const plannedIntensity = freshWorkouts.filter(w => w.t === 'vo2' || w.t === 'intervals').length;
-  const intensityPct     = freshWorkouts.length > 0
+  const intensityPct = freshWorkouts.length > 0
     ? Math.round(((plannedThreshold + plannedIntensity) / freshWorkouts.length) * 100)
     : 0;
 
@@ -2437,12 +2454,12 @@ export function triggerACWRReduction(): void {
   // Rule 2 — km spike
   let actualRunKmForRule = 0;
   const plannedRunKmForRule = (getWeekWorkoutsForACWR(s) as any[])
-    .filter((w: any) => ['easy','long','marathon_pace','threshold','vo2','intervals','progressive','mixed'].includes(w.t))
+    .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed'].includes(w.t))
     .reduce((sum: number, w: any) => { const m = (w.d ?? '').match(/(\d+\.?\d*)\s*km/); return sum + (m ? parseFloat(m[1]) : 0); }, 0);
   if (wk.garminActuals) {
     for (const [wId, act] of Object.entries(wk.garminActuals)) {
       const pw = getWeekWorkoutsForACWR(s).find((w: any) => (w.id || w.n) === wId);
-      if (pw && ['easy','long','marathon_pace','threshold','vo2','intervals','progressive','mixed'].includes((pw as any).t)) {
+      if (pw && ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed'].includes((pw as any).t)) {
         actualRunKmForRule += (act as any).distanceKm ?? 0;
       }
     }
@@ -2462,13 +2479,15 @@ export function triggerACWRReduction(): void {
   }
 
   const acwrCtx: ACWRModalContext | undefined = (acwr.status === 'caution' || acwr.status === 'high')
-    ? { ratio: acwr.ratio, status: acwr.status, safeUpper: acwr.safeUpper, intensityPct,
-        kmSpiked, crossTrainingCause, consecutiveIntensityWeeks: consecutiveIntensityWeeks >= 3 ? consecutiveIntensityWeeks : undefined }
+    ? {
+      ratio: acwr.ratio, status: acwr.status, safeUpper: acwr.safeUpper, intensityPct,
+      kmSpiked, crossTrainingCause, consecutiveIntensityWeeks: consecutiveIntensityWeeks >= 3 ? consecutiveIntensityWeeks : undefined
+    }
     : undefined;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) return;
-    const s3  = getMutableState();
+    const s3 = getMutableState();
     const wk3 = s3.wks?.[s3.w - 1];
     if (!wk3) return;
 
@@ -2476,7 +2495,7 @@ export function triggerACWRReduction(): void {
       // User saw the recommendation but chose to keep full load — record override
       wk3.acwrOverridden = true;
     } else if (decision.adjustments.length > 0) {
-      const freshW   = getWeekWorkoutsForACWR(s3);
+      const freshW = getWeekWorkoutsForACWR(s3);
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
       if (!wk3.workoutMods) wk3.workoutMods = [];
       for (const adj of decision.adjustments) {
@@ -2503,20 +2522,20 @@ export function triggerACWRReduction(): void {
 
 function showACWRInfoSheet(): void {
   const overlay = document.createElement('div');
-  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-end justify-center';
+  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
   overlay.innerHTML = `
-    <div class="rounded-t-2xl w-full max-w-lg" style="background:var(--c-surface);padding-bottom: env(safe-area-inset-bottom, 0px)">
+    <div class="rounded-2xl w-full max-w-lg" style="background:var(--c-surface);max-height:85vh;overflow-y:auto">
       <div class="px-4 pt-4 pb-3 border-b flex items-center justify-between" style="border-color:var(--c-border)">
-        <h2 class="font-semibold" style="color:var(--c-black)">Injury Risk (ACWR)</h2>
+        <h2 class="font-semibold" style="color:var(--c-black)">Load Safety</h2>
         <button id="acwr-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">✕</button>
       </div>
       <div class="px-4 py-4 space-y-4 text-sm">
-        <p style="color:var(--c-muted)"><span style="color:var(--c-black);font-weight:500">ACWR</span> (Acute:Chronic Workload Ratio) compares your recent training load to your long-term baseline. A ratio near 1.0 means your current week matches your 6-week average — safe territory.</p>
+        <p style="color:var(--c-muted)"><span style="color:var(--c-black);font-weight:500">Load Safety</span> measures how fast your training load is ramping. It compares your recent week to your long-term baseline — ACWR (Acute:Chronic Workload Ratio). A ratio near 1.0 means this week matches your 6-week average — safe territory.</p>
         <div class="rounded-lg p-3 space-y-2" style="background:rgba(0,0,0,0.04)">
           <p class="text-xs font-medium uppercase tracking-wide" style="color:var(--c-faint)">Zones</p>
           <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-ok)"></div><span style="color:var(--c-ok)">Safe (0.8–threshold)</span><span style="color:var(--c-muted)" class="ml-1">— load increase is manageable</span></div>
           <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-caution)"></div><span style="color:var(--c-caution)">Caution</span><span style="color:var(--c-muted)" class="ml-1">— consider reducing one hard session</span></div>
-          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div><span style="color:var(--c-warn)">High risk</span><span style="color:var(--c-muted)" class="ml-1">— significantly above baseline, injury risk elevated</span></div>
+          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div><span style="color:var(--c-warn)">High Risk</span><span style="color:var(--c-muted)" class="ml-1">— load spike, ease back or swap for easy session</span></div>
         </div>
         <p class="text-xs" style="color:var(--c-faint)">The safe threshold varies by your training history — experienced athletes tolerate higher ratios. Your threshold adjusts as you build history.</p>
         <p class="text-xs" style="color:var(--c-faint)">The ratio needs at least 3 completed weeks to become meaningful.</p>
@@ -2530,9 +2549,9 @@ function showACWRInfoSheet(): void {
 
 function showTSSInfoSheet(): void {
   const overlay = document.createElement('div');
-  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-end justify-center';
+  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
   overlay.innerHTML = `
-    <div class="rounded-t-2xl w-full max-w-lg overflow-y-auto" style="background:var(--c-surface);max-height:85vh;padding-bottom: env(safe-area-inset-bottom, 0px)">
+    <div class="rounded-2xl w-full max-w-lg overflow-y-auto" style="background:var(--c-surface);max-height:85vh">
       <div class="px-4 pt-4 pb-3 border-b flex items-center justify-between" style="border-color:var(--c-border)">
         <h2 class="font-semibold" style="color:var(--c-black)">Training Load</h2>
         <button id="tss-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">✕</button>
@@ -2550,28 +2569,28 @@ function showTSSInfoSheet(): void {
         </div>
 
         <div>
-          <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Fitness, Fatigue & Form</p>
+          <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Running Fitness, Load & Freshness</p>
           <div class="space-y-3">
             <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
               <div class="flex items-center gap-2 mb-1">
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-ok)"></div>
-                <span class="font-medium text-xs" style="color:var(--c-ok)">Fitness (CTL)</span>
+                <span class="font-medium text-xs" style="color:var(--c-ok)">Running Fitness (CTL)</span>
               </div>
               <p class="text-xs" style="color:var(--c-muted)">Your 6-week rolling average of weekly TSS. This represents how much your body has adapted to training. It rises slowly with consistent work and falls slowly during rest. The ◆ marker on the load bar shows your current fitness baseline.</p>
             </div>
             <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
               <div class="flex items-center gap-2 mb-1">
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div>
-                <span class="font-medium text-xs" style="color:var(--c-warn)">Fatigue (ATL)</span>
+                <span class="font-medium text-xs" style="color:var(--c-warn)">Short-Term Load (ATL)</span>
               </div>
-              <p class="text-xs" style="color:var(--c-muted)">Your 1-week rolling average. Fatigue rises quickly after hard sessions and drops within days of rest. A big gap between Fatigue and Fitness means your body needs recovery time.</p>
+              <p class="text-xs" style="color:var(--c-muted)">Your 1-week rolling average. Short-term load rises quickly after hard sessions and drops within days of rest. A big gap between Short-Term Load and Running Fitness means your body needs recovery time.</p>
             </div>
             <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
               <div class="flex items-center gap-2 mb-1">
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-accent)"></div>
-                <span class="font-medium text-xs" style="color:var(--c-accent)">Form (TSB = Fitness − Fatigue)</span>
+                <span class="font-medium text-xs" style="color:var(--c-accent)">Freshness (TSB)</span>
               </div>
-              <p class="text-xs" style="color:var(--c-muted)">How ready you are to perform. Negative = accumulated fatigue, normal during hard training blocks. Positive = you're fresh. Best race form is TSB around 0 to +10 — fit but rested. During taper, TSB should climb toward this range.</p>
+              <p class="text-xs" style="color:var(--c-muted)">How ready you are to perform. Negative = accumulated fatigue, normal during hard training blocks. Positive = you're fresh. Best race form is TSB around 0 to +10 — fit but rested. During taper, Freshness should climb toward this range.</p>
             </div>
           </div>
         </div>
@@ -2639,6 +2658,12 @@ function wireEventHandlers(): void {
 
   // Complete week button
   document.getElementById('btn-complete-week')?.addEventListener('click', next);
+
+  // When next() completes successfully, reload to show the new week
+  setOnWeekAdvance(() => {
+    _persistedViewWeek = null;
+    window.location.reload();
+  });
 
   // Edit Settings button
   document.getElementById('btn-edit-settings')?.addEventListener('click', editSettings);

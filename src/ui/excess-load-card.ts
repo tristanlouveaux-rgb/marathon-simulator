@@ -1,15 +1,22 @@
 /**
- * Excess Load Card — persistent card on the Training tab showing unspent load
- * from overflow/surplus Garmin activities.
+ * Excess Load Card — amber card on the Training tab when total week Signal B
+ * exceeds the composite planned target (running plan + cross-training budget).
  *
- * Shows aerobic + anaerobic mini-bars, [Adjust Plan] and [Dismiss] buttons.
- * Tapping the card body opens a detail popup listing each UnspentLoadItem.
+ * Excess is detected from the FULL Signal B picture — matched activities that
+ * were harder than expected, extra sessions, heavy cross-training — everything.
+ * Whether activities matched plan slots or not is irrelevant to detection.
+ *
+ * Three-tier response:
+ *   Tier 1 (≤15 TSS excess): silently auto-reduce. No card.
+ *   Tier 2 (15–40 TSS): amber card. Tap to adjust plan.
+ *   Tier 3 (>40 TSS or elevated ACWR): blocking modal fires instead.
  */
 
-import type { Week, UnspentLoadItem } from '@/types/state';
-import type { SportKey } from '@/types';
-import { SPORTS_DB, TL_PER_MIN } from '@/constants';
+import type { Week } from '@/types/state';
+import { SPORTS_DB } from '@/constants';
 import { getMutableState, saveState } from '@/state';
+import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
+import { computeRecoveryTrend } from '@/calculations/readiness';
 import { render } from '@/ui/renderer';
 import {
   normalizeSport,
@@ -21,7 +28,6 @@ import {
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { generateWeekWorkouts } from '@/workouts';
 import { gp } from '@/calculations/paces';
-import { mapAppTypeToSport } from '@/calculations/activity-matcher';
 import type { WorkoutMod } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -55,73 +61,56 @@ function getWeekWorkoutsForExcess() {
   );
 }
 
-function miniBar(value: number, max: number, color: string): string {
-  const pct = max > 0 ? Math.min(100, Math.round((value / max) * 100)) : 0;
-  return `<div style="flex:1;background:rgba(0,0,0,0.08);border-radius:4px;height:4px;overflow:hidden">
-    <div style="background:${color};height:100%;border-radius:4px;width:${pct}%"></div>
-  </div>`;
-}
-
-/** Compute TSS-equivalent for an unspent item (same formula as computeWeekTSS fallback) */
-function itemTL(item: UnspentLoadItem): number {
-  const cfg = (SPORTS_DB as any)[item.sport];
-  const runSpec: number = cfg?.runSpec ?? 0.35;
-  return Math.round(item.durationMin * (TL_PER_MIN[5] ?? 1.15) * runSpec);
-}
 
 // ---------------------------------------------------------------------------
 // Public API
 
 /**
- * Returns the excess load card HTML, or empty string if no unspent items.
+ * Compute the total week Signal B excess vs the composite planned target.
+ * Returns 0 when no plan data is available.
+ */
+function computeTotalWeekExcess(wk: Week, s: ReturnType<typeof getMutableState>): number {
+  const plannedB = computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
+  );
+  if (!plannedB) return 0;
+  return getWeeklyExcess(wk, plannedB, s.planStartDate);
+}
+
+/**
+ * Returns the excess load card HTML, or empty string if no excess in Tier 2 range.
  * Wire up events by calling wireExcessLoadCard() after inserting into DOM.
+ *
+ * Detection is now total-week Signal B vs plannedSignalB — not limited to unspent items.
  */
 export function renderExcessLoadCard(wk: Week | undefined): string {
   if (!wk) return '';
-  const items = wk.unspentLoadItems;
 
-  if (!items?.length) {
-    return `
-      <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:10px;padding:10px 14px;display:flex;align-items:center;justify-content:space-between">
-        <div>
-          <p style="color:var(--c-muted);font-size:12px;font-weight:500">Excess Load</p>
-          <p style="color:var(--c-faint);font-size:12px;margin-top:2px">No overflow — all activities matched to plan slots</p>
-        </div>
-      </div>`;
-  }
+  // Tier 1 auto-reduce: excess was silently absorbed — don't show the card
+  if (wk.workoutMods?.some(m => m.modReason?.startsWith('Auto:'))) return '';
 
-  const totalTL     = items.reduce((sum, i) => sum + itemTL(i), 0);
-  const totalImpact = items.reduce((sum, i) => sum + i.durationMin * (SPORTS_DB[i.sport as SportKey]?.impactPerMin ?? 0), 0);
-  const impactColor = totalImpact <= 0 ? '#16a34a'
-    : totalImpact < 4   ? '#16a34a'
-    : totalImpact < 10  ? 'var(--c-caution)'
-    :                     'var(--c-warn)';
-  const impactText = totalImpact <= 0 ? 'No leg impact'
-    : totalImpact < 4   ? 'Low leg impact'
-    : totalImpact < 10  ? 'Moderate leg impact'
-    :                     'High leg impact';
+  const _s = getMutableState();
+
+  // No plan data yet — skip (can't compute meaningful target)
+  if (!_s.historicWeeklyTSS?.length && !_s.ctlBaseline) return '';
+
+  const excess = computeTotalWeekExcess(wk, _s);
+
+  // Tier 2: amber card only for 15–40 TSS excess.
+  // Below 15: Tier 1 auto-handles. Above 40 or ACWR elevated: Tier 3 modal fires instead.
+  if (excess < 15 || excess > 40) return '';
 
   return `
     <div id="excess-load-card" style="background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:12px;cursor:pointer">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:8px">
         <div>
           <p style="color:var(--c-caution);font-size:13px;font-weight:500">Excess Activity Load</p>
-          <p style="font-size:12px;color:rgba(245,158,11,0.7);margin-top:2px">${items.length} activit${items.length === 1 ? 'y' : 'ies'} not yet applied to plan</p>
+          <p style="font-size:12px;color:rgba(245,158,11,0.7);margin-top:2px">${excess} TSS above your usual week</p>
         </div>
-        <span style="font-size:12px;color:var(--c-caution);margin-top:2px">Tap for details</span>
+        <span style="font-size:12px;color:var(--c-caution);margin-top:2px">Adjust plan</span>
       </div>
-      <div style="margin-bottom:10px">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px">
-          <span style="font-size:18px;font-weight:700;color:var(--c-black)">${totalTL}</span>
-          <span style="font-size:12px;color:var(--c-faint)">TSS unspent</span>
-        </div>
-        <p style="font-size:10px;color:var(--c-faint)">Training stress not yet applied to plan</p>
-        <div style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:6px">
-          <span style="color:${impactColor}">${impactText}</span>
-          <button id="excess-impact-info" style="font-size:9px;color:var(--c-faint);border:1px solid var(--c-border);border-radius:50%;width:14px;height:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;background:none;cursor:pointer;padding:0">?</button>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;margin-top:4px">
         <button id="excess-adjust-btn"
                 style="flex:1;padding:8px;background:rgba(245,158,11,0.15);color:var(--c-caution);font-size:12px;font-weight:500;border:none;border-radius:8px;cursor:pointer">
           Adjust Plan
@@ -132,36 +121,9 @@ export function renderExcessLoadCard(wk: Week | undefined): string {
         </button>
       </div>
       <p id="excess-dismiss-warning" style="display:none;font-size:12px;color:var(--c-warn);margin-top:8px">
-        Dismissing will remove this load without adjusting your plan. Tap Dismiss again to confirm.
+        Tap Dismiss again to confirm — this won't adjust your plan.
       </p>
     </div>`;
-}
-
-function showImpactInfoSheet(): void {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.5);display:flex;align-items:flex-end;justify-content:center';
-  overlay.innerHTML = `
-    <div style="background:var(--c-surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;padding-bottom:env(safe-area-inset-bottom,0px)">
-      <div style="padding:16px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
-        <h2 style="color:var(--c-black);font-weight:600;font-size:16px">Leg Impact</h2>
-        <button id="impact-sheet-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0">✕</button>
-      </div>
-      <div style="padding:16px;display:flex;flex-direction:column;gap:14px;font-size:14px">
-        <p style="color:var(--c-muted);line-height:1.6">Leg impact tracks musculoskeletal stress from activities that load your joints and tendons — separate from cardiovascular fitness stress (TSS).</p>
-        <p style="color:var(--c-faint);line-height:1.6">Running creates high impact per minute. Court sports like tennis and padel create moderate impact. Cycling and swimming create almost none.</p>
-        <div style="background:var(--c-bg);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px">
-          <p style="color:var(--c-faint);font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:0.05em">Impact levels</p>
-          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:#16a34a;flex-shrink:0"></div><span style="color:#16a34a">None / Low</span><span style="color:var(--c-faint);margin-left:4px">— cycling, swimming, yoga, rowing</span></div>
-          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--c-caution);flex-shrink:0"></div><span style="color:var(--c-caution)">Moderate</span><span style="color:var(--c-faint);margin-left:4px">— tennis, padel, hiking, basketball</span></div>
-          <div style="display:flex;align-items:center;gap:8px;font-size:12px"><div style="width:8px;height:8px;border-radius:50%;background:var(--c-warn);flex-shrink:0"></div><span style="color:var(--c-warn)">High</span><span style="color:var(--c-faint);margin-left:4px">— running, jump rope, stair climbing</span></div>
-        </div>
-        <p style="color:var(--c-faint);font-size:12px">High leg impact from unplanned activities may increase injury risk even if your TSS looks manageable. Consider reducing your next run if leg impact is high.</p>
-      </div>
-    </div>`;
-  document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.querySelector('#impact-sheet-close')?.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
 
 /**
@@ -172,22 +134,9 @@ export function wireExcessLoadCard(): void {
   const card = document.getElementById('excess-load-card');
   if (!card) return;
 
-  const s   = getMutableState();
-  const wk  = s.wks?.[s.w - 1];
-  if (!wk?.unspentLoadItems?.length) return;
-
-  // Tap card body → popup (not on buttons)
-  card.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('#excess-adjust-btn') || target.closest('#excess-dismiss-btn') || target.closest('#excess-impact-info')) return;
-    showExcessLoadPopup(wk.unspentLoadItems!);
-  });
-
-  // Leg impact info button
-  document.getElementById('excess-impact-info')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    showImpactInfoSheet();
-  });
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return;
 
   // Adjust Plan
   document.getElementById('excess-adjust-btn')?.addEventListener('click', (e) => {
@@ -195,7 +144,8 @@ export function wireExcessLoadCard(): void {
     triggerExcessLoadAdjustment();
   });
 
-  // Dismiss (two-tap confirmation)
+  // Dismiss (two-tap confirmation) — just dismisses the card for this render cycle
+  // by marking the week as excess-dismissed. Does not clear activity data.
   let dismissWarningShown = false;
   document.getElementById('excess-dismiss-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -205,11 +155,17 @@ export function wireExcessLoadCard(): void {
       if (warning) warning.style.display = '';
       return;
     }
-    // Second tap — confirm clear
-    const s2  = getMutableState();
+    // Second tap — add an auto-mod note so Tier 1 suppression hides the card
+    const s2 = getMutableState();
     const wk2 = s2.wks?.[s2.w - 1];
     if (wk2) {
-      wk2.unspentLoadItems = [];
+      if (!wk2.workoutMods) wk2.workoutMods = [];
+      wk2.workoutMods.push({
+        name: '__excess_dismissed__',
+        dayOfWeek: 0,
+        status: 'reduced',
+        modReason: 'Auto: excess dismissed',
+      } as any);
     }
     saveState();
     render();
@@ -217,117 +173,111 @@ export function wireExcessLoadCard(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Popup
-
-function showExcessLoadPopup(items: UnspentLoadItem[]): void {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.5);display:flex;align-items:flex-end;justify-content:center';
-
-  const totalTL = items.reduce((sum, i) => sum + itemTL(i), 0);
-
-  const itemRows = items.map(item => {
-    const tl = itemTL(item);
-    return `
-      <div style="border-top:1px solid var(--c-border);padding-top:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-          <p style="color:var(--c-black);font-size:14px;font-weight:500">${escHtml(item.displayName)}</p>
-          <span style="color:var(--c-ok);font-weight:500;font-size:14px">${tl} TSS</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-muted)">
-          <span>${Math.round(item.durationMin)} min</span>
-          <span>·</span>
-          <span>${escHtml(item.sport)}</span>
-          <span>·</span>
-          <span>${new Date(item.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
-          <span style="color:var(--c-faint);margin-left:4px">aerobic</span>
-        </div>
-      </div>`;
-  }).join('');
-
-  overlay.innerHTML = `
-    <div style="background:var(--c-surface);border-radius:16px 16px 0 0;width:100%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;padding-bottom:env(safe-area-inset-bottom,0px)">
-      <div style="padding:16px;border-bottom:1px solid var(--c-border)">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <h2 style="color:var(--c-black);font-weight:600;font-size:16px">Excess Activity Load</h2>
-          <button id="elp-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0">✕</button>
-        </div>
-        <div style="display:flex;align-items:baseline;gap:8px;margin-top:8px">
-          <span style="font-size:20px;font-weight:700;color:var(--c-black)">${totalTL}</span>
-          <span style="font-size:13px;color:var(--c-muted)">TSS unspent</span>
-        </div>
-        <p style="font-size:10px;color:var(--c-faint);margin-top:2px">Training stress not yet applied to plan</p>
-      </div>
-      <div style="flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:10px">
-        ${itemRows}
-      </div>
-      <div style="padding:12px 16px;border-top:1px solid var(--c-border);display:flex;gap:8px">
-        <button id="elp-adjust"
-                style="flex:1;padding:12px;background:rgba(245,158,11,0.15);color:var(--c-caution);font-size:14px;font-weight:500;border:none;border-radius:10px;cursor:pointer">
-          Adjust Plan
-        </button>
-        <button id="elp-close2"
-                style="padding:12px 18px;background:var(--c-bg);color:var(--c-muted);font-size:14px;font-weight:500;border:1px solid var(--c-border);border-radius:10px;cursor:pointer">
-          Close
-        </button>
-      </div>
-    </div>`;
-
-  document.body.appendChild(overlay);
-
-  const close = () => overlay.remove();
-  overlay.querySelector('#elp-close')?.addEventListener('click', close);
-  overlay.querySelector('#elp-close2')?.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  overlay.querySelector('#elp-adjust')?.addEventListener('click', () => {
-    close();
-    triggerExcessLoadAdjustment();
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Trigger reduce/replace modal
 
-function triggerExcessLoadAdjustment(): void {
-  const s  = getMutableState();
+/**
+ * Compute weighted runSpec for the week's activities.
+ * Excess from running (runSpec 1.0) → full reduction. Cycling (0.55) → smaller reduction.
+ */
+function computeWeightedRunSpec(wk: Week): number {
+  let totalRawTSS = 0;
+  let weightedSum = 0;
+  const ITRIMP_NORMALIZER = 15000;
+  const seenIds = new Set<string>();
+
+  for (const actual of Object.values(wk.garminActuals ?? {})) {
+    if (actual.garminId && seenIds.has(actual.garminId)) continue;
+    if (actual.garminId) seenIds.add(actual.garminId);
+    if (!actual.iTrimp || actual.iTrimp <= 0) continue;
+    const tss = (actual.iTrimp * 100) / ITRIMP_NORMALIZER;
+    const sportKey = normalizeSport(actual.displayName || actual.workoutName || '');
+    const cfg = (SPORTS_DB as any)[sportKey];
+    // Running: actuals from plan slots have no activityType or activityType=RUNNING
+    const aType = (actual.activityType || '').toUpperCase();
+    const isRun = aType === 'RUNNING' || aType.includes('RUN') || (!aType && actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0);
+    const runSpec = isRun ? 1.0 : (cfg?.runSpec ?? 0.35);
+    totalRawTSS += tss;
+    weightedSum += tss * runSpec;
+  }
+  for (const w of wk.adhocWorkouts ?? []) {
+    const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
+    if (rawId && seenIds.has(rawId)) continue;
+    if (rawId) seenIds.add(rawId);
+    if (!w.iTrimp || w.iTrimp <= 0) continue;
+    const tss = (w.iTrimp * 100) / ITRIMP_NORMALIZER;
+    const sportKey = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
+    const cfg = (SPORTS_DB as any)[sportKey];
+    const runSpec = cfg?.runSpec ?? 0.35;
+    totalRawTSS += tss;
+    weightedSum += tss * runSpec;
+  }
+
+  return totalRawTSS > 0 ? weightedSum / totalRawTSS : 0.7; // default mid-range
+}
+
+export function triggerExcessLoadAdjustment(): void {
+  const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
-  if (!wk?.unspentLoadItems?.length) return;
+  if (!wk) return;
 
-  const items = wk.unspentLoadItems;
+  // Compute total week excess (Signal B vs plannedSignalB)
+  const excess = computeTotalWeekExcess(wk, s);
+  if (excess <= 0) return;
 
-  // Build a combined cross-training activity from all unspent items
-  const totalDurationMin = items.reduce((sum, i) => sum + i.durationMin, 0);
-  const totalAerobic     = items.reduce((sum, i) => sum + i.aerobic, 0);
-  const totalAnaerobic   = items.reduce((sum, i) => sum + i.anaerobic, 0);
+  // Recovery trend multiplier — modulates how aggressively we reduce.
+  // Passed to buildCrossTrainingPopup which inflates runReplacementCredit accordingly.
+  const recoveryMultiplier = s.physiologyHistory?.length
+    ? computeRecoveryTrend(s.physiologyHistory)
+    : 1.0;
 
-  // Dominant sport by duration (approximation since we don't track per-item duration-weighted)
-  const sport = items[0]?.sport ?? 'Cross-training';
+  // Build a combined activity representing the total week excess.
+  // Primary source: unspent items (when present).
+  // Fallback: synthetic activity from excess TSS (iTrimp = excessTSS * 150).
+  let sport: string;
+  let combinedActivity: ReturnType<typeof createActivity>;
+  let sportLabel: string;
 
-  const avgRPE = Math.min(9, Math.max(3, Math.round(
-    (totalAerobic > 3.5 ? 7 : totalAerobic > 2.5 ? 5 : 4)
-  )));
-
-  const combinedActivity = createActivity(sport, Math.round(totalDurationMin), avgRPE, undefined, undefined, s.w);
-  // Attach most recent date
-  const mostRecent = items.reduce((a, b) => (a.date > b.date ? a : b));
-  const jsDay = new Date(mostRecent.date).getDay();
-  combinedActivity.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+  const items = wk.unspentLoadItems ?? [];
+  if (items.length > 0) {
+    sport = items[0]?.sport ?? 'cross_training';
+    const totalDurationMin = items.reduce((sum, i) => sum + i.durationMin, 0);
+    const totalAerobic = items.reduce((sum, i) => sum + i.aerobic, 0);
+    const avgRPE = Math.min(9, Math.max(3, Math.round(totalAerobic > 3.5 ? 7 : totalAerobic > 2.5 ? 5 : 4)));
+    combinedActivity = createActivity(sport, Math.round(totalDurationMin), avgRPE, undefined, undefined, s.w);
+    const mostRecent = items.reduce((a, b) => (a.date > b.date ? a : b));
+    const jsDay = new Date(mostRecent.date).getDay();
+    combinedActivity.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+    sportLabel = items.length === 1 ? items[0].displayName : `${items.length} activities`;
+  } else {
+    // No unspent items — excess came from matched activities being harder than expected.
+    // Create a synthetic activity representing the excess TSS so the suggester can
+    // size reductions correctly. iTrimp = excessTSS * 150 (inverse of TSS = iTrimp*100/15000).
+    sport = 'cross_training';
+    const syntheticDurationMin = Math.round(excess * 2); // rough estimate
+    combinedActivity = createActivity(sport, syntheticDurationMin, 5, undefined, undefined, s.w);
+    combinedActivity.iTrimp = excess * 150;
+    combinedActivity.dayOfWeek = 6; // end of week
+    sportLabel = 'Week overload';
+  }
 
   const freshWorkouts = getWeekWorkoutsForExcess().filter(w => wk.rated[w.id || w.n] === undefined);
-  const weekRuns      = workoutsToPlannedRuns(freshWorkouts, s.pac);
-  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined };
-  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
-
-  const sportLabel = items.length === 1 ? items[0].displayName : `${items.length} activities`;
+  const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
+  const ctx = {
+    raceGoal: s.rd, plannedRunsPerWeek: s.rw,
+    injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
+    runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+  };
+  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier);
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) return;
 
-    const s3  = getMutableState();
+    const s3 = getMutableState();
     const wk3 = s3.wks?.[s3.w - 1];
     if (!wk3) return;
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
-      const freshW   = getWeekWorkoutsForExcess();
+      const freshW = getWeekWorkoutsForExcess();
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
       if (!wk3.workoutMods) wk3.workoutMods = [];
       for (const adj of decision.adjustments) {
@@ -335,14 +285,13 @@ function triggerExcessLoadAdjustment(): void {
         if (!mw) continue;
         wk3.workoutMods.push({
           name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
-          // Always use "Garmin: <label>" so openActivityReReview() cleanup filter works
           modReason: `Garmin: ${sportLabel}`, confidence: mw.confidence,
           originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
         } as WorkoutMod);
       }
     }
 
-    // Clear the unspent items once plan is adjusted
+    // Clear unspent items after adjustment
     wk3.unspentLoadItems = [];
     wk3.unspentLoad = 0;
 
@@ -351,6 +300,3 @@ function triggerExcessLoadAdjustment(): void {
   });
 }
 
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}

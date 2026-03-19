@@ -57,14 +57,24 @@ export function renderTabBar(activeTab: TabId, _isSimulator?: boolean): string {
   `;
 }
 
+// Single live callback — replaced each time a view mounts. Never stacks.
+let _tabHandler: ((tab: TabId) => void) | null = null;
+
+// One permanent delegated listener on document. Set up once, never re-added.
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    const btn = (e.target as Element).closest?.('.tab-bar-btn');
+    if (btn && _tabHandler) {
+      const tab = btn.getAttribute('data-tab') as TabId;
+      if (tab) _tabHandler(tab);
+    }
+  });
+}
+
 /**
- * Wire click handlers on the tab bar buttons.
+ * Register the navigation callback for tab bar clicks.
+ * Replaces the previous callback — no listener accumulation.
  */
 export function wireTabBarHandlers(onChange: (tab: TabId) => void): void {
-  document.querySelectorAll('.tab-bar-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tab = btn.getAttribute('data-tab') as TabId;
-      if (tab) onChange(tab);
-    });
-  });
+  _tabHandler = onChange;
 }

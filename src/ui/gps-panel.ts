@@ -1,5 +1,5 @@
 import type { GpsLiveData, GpsSplit, GpsRecording } from '@/types';
-import { formatPace, formatWorkoutTime } from '@/utils';
+import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
 import { getWeekRecordings, deleteGpsRecording } from '@/gps/persistence';
 import { getState } from '@/state';
 
@@ -19,7 +19,7 @@ export function renderInlineGpsHtml(data: GpsLiveData): string {
   h += `<div class="grid grid-cols-2 gap-2 mb-1">`;
   h += `<div class="bg-white rounded p-1.5 text-center">`;
   h += `<div class="text-xs text-gray-600">Distance</div>`;
-  h += `<div class="text-lg font-bold text-green-700" id="gps-inline-distance">${(data.totalDistance / 1000).toFixed(2)} km</div>`;
+  h += `<div class="text-lg font-bold text-green-700" id="gps-inline-distance">${formatKm(data.totalDistance / 1000, getState().unitPref ?? 'km', 2)}</div>`;
   h += `</div>`;
   h += `<div class="bg-white rounded p-1.5 text-center">`;
   h += `<div class="text-xs text-gray-600">Time</div>`;
@@ -30,7 +30,9 @@ export function renderInlineGpsHtml(data: GpsLiveData): string {
   // Current pace
   h += `<div class="bg-white rounded p-1.5 text-center mb-1">`;
   h += `<div class="text-xs text-gray-600">Current Pace</div>`;
-  const paceStr = data.currentPace && data.currentPace < 1800 ? formatPace(data.currentPace) : '--:--/km';
+  const inlineUnitPref = getState().unitPref ?? 'km';
+  const paceUnit = inlineUnitPref === 'mi' ? '/mi' : '/km';
+  const paceStr = data.currentPace && data.currentPace < 1800 ? formatPace(data.currentPace, inlineUnitPref) : `--:--${paceUnit}`;
   h += `<div class="text-base font-bold" id="gps-inline-pace">${paceStr}</div>`;
   h += `</div>`;
 
@@ -60,15 +62,17 @@ export function updateInlineGps(data: GpsLiveData): void {
   const distEl = document.getElementById('gps-inline-distance');
   if (!distEl) return; // Not in DOM; render() will rebuild it
 
-  distEl.textContent = `${(data.totalDistance / 1000).toFixed(2)} km`;
+  distEl.textContent = formatKm(data.totalDistance / 1000, getState().unitPref ?? 'km', 2);
 
   const timeEl = document.getElementById('gps-inline-time');
   if (timeEl) timeEl.textContent = formatWorkoutTime(data.elapsed);
 
   const paceEl = document.getElementById('gps-inline-pace');
   if (paceEl) {
+    const updUnitPref = getState().unitPref ?? 'km';
+    const updPaceUnit = updUnitPref === 'mi' ? '/mi' : '/km';
     paceEl.textContent = data.currentPace && data.currentPace < 1800
-      ? formatPace(data.currentPace) : '--:--/km';
+      ? formatPace(data.currentPace, updUnitPref) : `--:--${updPaceUnit}`;
   }
 
   // Status
@@ -201,20 +205,21 @@ export function refreshRecordings(): void {
 }
 
 function renderRecordingsList(recordings: GpsRecording[], week: number): string {
+  const unitPref = getState().unitPref ?? 'km';
   let h = `<details class="text-xs">`;
   h += `<summary class="cursor-pointer font-medium mb-1" style="color:var(--c-muted)">Recorded Runs — Week ${week} (${recordings.length})</summary>`;
   h += `<div class="space-y-1">`;
 
   for (const rec of recordings) {
     const date = new Date(rec.date).toLocaleDateString();
-    const distKm = (rec.totalDistance / 1000).toFixed(2);
+    const distKm = formatKm(rec.totalDistance / 1000, unitPref, 2);
     const paceStr = rec.averagePace > 0 && rec.averagePace < 1800
-      ? formatPace(rec.averagePace) : '--:--/km';
+      ? formatPace(rec.averagePace, unitPref) : `--:--${unitPref === 'mi' ? '/mi' : '/km'}`;
 
     h += `<div class="flex items-center justify-between rounded p-1.5" style="background:var(--c-bg);border:1px solid var(--c-border)">`;
     h += `<div class="flex-1">`;
     h += `<div class="font-medium" style="color:var(--c-black)">${escapeHtml(rec.workoutName)}</div>`;
-    h += `<div style="color:var(--c-muted)">${date} — ${distKm} km — ${paceStr} — ${formatWorkoutTime(rec.totalElapsed)}</div>`;
+    h += `<div style="color:var(--c-muted)">${date} — ${distKm} — ${paceStr} — ${formatWorkoutTime(rec.totalElapsed)}</div>`;
     if (rec.splits.length > 0) {
       h += `<div style="color:var(--c-faint)">${rec.splits.length} split${rec.splits.length !== 1 ? 's' : ''}</div>`;
     }

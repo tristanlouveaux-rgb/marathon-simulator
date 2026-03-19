@@ -19,10 +19,12 @@ function esc(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function fmtPace(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+function fmtPace(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
+  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
+  const unit = pref === 'mi' ? '/mi' : '/km';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}${unit}`;
 }
 
 function fmtDuration(sec: number): string {
@@ -47,15 +49,15 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   const actName = actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
   const dateStr = actual.startTime
     ? new Date(actual.startTime).toLocaleDateString('en-GB', {
-        weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
-      })
+      weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
+    })
     : '';
 
   // ─── Stats grid — always 5 cells, — for missing fields ──────────────────────
   const stats: { val: string; lbl: string }[] = [
     { val: actual.distanceKm > 0.1 ? formatKm(actual.distanceKm, unitPref, 2) : '—', lbl: 'Distance' },
     { val: actual.durationSec > 0 ? fmtDuration(actual.durationSec) : '—', lbl: 'Time' },
-    { val: actual.avgPaceSecKm ? fmtPace(actual.avgPaceSecKm) : '—', lbl: 'Avg Pace' },
+    { val: actual.avgPaceSecKm ? fmtPace(actual.avgPaceSecKm, unitPref) : '—', lbl: 'Avg Pace' },
     { val: actual.avgHR ? `${actual.avgHR} bpm` : '—', lbl: 'Avg HR' },
     { val: actual.maxHR ? `${actual.maxHR} bpm` : '—', lbl: 'Max HR' },
   ];
@@ -195,12 +197,16 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   }
 
   // ─── km splits ───────────────────────────────────────────────────────────────
+  const isRunActivity = !actual.activityType || actual.activityType.includes('RUN');
   let splitsHtml = '';
-  if (actual.kmSplits && actual.kmSplits.length > 0) {
-    const splits = actual.kmSplits;
+  if (isRunActivity && actual.kmSplits && actual.kmSplits.length > 0) {
+    // Filter GPS outliers (pauses produce >900s/km, jumps produce <60s/km)
+    const splits = actual.kmSplits.filter(p => p >= 60 && p <= 900);
+    if (splits.length === 0) { /* no valid splits — skip rendering */ }
+    else {
     const minP = Math.min(...splits);
     const maxP = Math.max(...splits);
-    const range = maxP - minP || 1;
+    const range = Math.max(maxP - minP, 30); // minimum 30s range so tight runs show variation
     const rows = splits.map((pace, i) => {
       const norm = (pace - minP) / range;
       const barColor = norm < 0.33 ? '#22C55E' : norm < 0.67 ? '#EAB308' : '#EF4444';
@@ -211,16 +217,17 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           <div style="flex:1;height:5px;background:rgba(0,0,0,0.05);border-radius:3px;overflow:hidden">
             <div style="width:${barWidth}%;height:100%;background:${barColor};border-radius:3px"></div>
           </div>
-          <span style="font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;width:56px;text-align:right;flex-shrink:0">${fmtPace(pace)}</span>
+          <span style="font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;width:56px;text-align:right;flex-shrink:0">${fmtPace(pace, unitPref)}</span>
         </div>
       `;
     }).join('');
     splitsHtml = `
       <div style="margin-bottom:20px">
-        <div class="m-sec-label">km Splits</div>
+        <div class="m-sec-label">${unitPref === 'mi' ? 'mi' : 'km'} Splits</div>
         <div class="m-card" style="padding:6px 14px">${rows}</div>
       </div>
     `;
+    } // end else (valid splits)
   }
 
   return `

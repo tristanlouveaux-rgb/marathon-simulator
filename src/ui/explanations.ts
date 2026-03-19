@@ -1,6 +1,7 @@
 /**
  * Help modals and tooltips for training concepts.
  */
+import { getState } from '@/state/store';
 
 /**
  * Show RPE (Rate of Perceived Exertion) help modal with 1-10 scale breakdown.
@@ -69,7 +70,7 @@ export function showMPHelp(): void {
       <div style="display:flex;flex-direction:column;gap:8px;font-size:12px;color:var(--c-muted)">
         <p>Marathon pace work teaches your body to burn fat efficiently at race speed. It should feel <strong style="color:var(--c-black)">comfortably hard</strong> — you can say a few words but not hold a conversation.</p>
         <p>Typical RPE: <strong style="color:var(--c-caution)">5-6</strong> out of 10.</p>
-        <p style="color:var(--c-faint)">If you can't maintain the pace for the full session, it's too fast. Slow down 5-10 sec/km.</p>
+        <p style="color:var(--c-faint)">If you can't maintain the pace for the full session, it's too fast. Slow down 5-10 sec/${getState().unitPref === 'mi' ? 'mi' : 'km'}.</p>
       </div>
       <button id="btn-close-mp-help" style="width:100%;margin-top:16px;padding:8px;background:none;border:none;font-size:12px;color:var(--c-faint);cursor:pointer">Close</button>
     </div>

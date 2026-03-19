@@ -15,17 +15,67 @@ import { openActivityReReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
-import { TL_PER_MIN } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS } from '@/calculations/fitness-model';
+import { TL_PER_MIN, SPORTS_DB } from '@/constants';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin } from '@/calculations/fitness-model';
+import { normalizeSport } from '@/cross-training/activities';
+import { formatKm, fmtDesc, formatPace } from '@/utils/format';
 import { triggerExcessLoadAdjustment } from './excess-load-card';
+import { showLoadBreakdownSheet } from './home-view';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
 import type { MorningPainResponse } from '@/types/injury';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
+import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
+import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
 let _viewWeek: number | null = null; // null = current week
+
+// ─── Recovery undo — module-level delegated handler (set once, survives re-renders) ──
+// Must be outside wirePlanHandlers so it works regardless of render path.
+document.addEventListener('click', (e) => {
+  const btn = (e.target as Element).closest<HTMLElement>('.plan-recovery-undo-btn');
+  if (!btn) return;
+  e.stopPropagation();
+  const workoutName = btn.dataset.workoutName || '';
+  const dayOfWeek = btn.dataset.dayOfWeek !== undefined && btn.dataset.dayOfWeek !== ''
+    ? parseInt(btn.dataset.dayOfWeek, 10) : null;
+  const weekNum = parseInt(btn.dataset.weekNum || '0', 10);
+  const origLabel = btn.dataset.origLabel || workoutName || 'original workout';
+
+  const existing = document.getElementById('undo-adj-confirm');
+  if (existing) existing.remove();
+  const sheet = document.createElement('div');
+  sheet.id = 'undo-adj-confirm';
+  sheet.style.cssText = 'position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  sheet.innerHTML = `
+    <div style="position:absolute;inset:0;background:rgba(0,0,0,0.45)" id="undo-adj-backdrop"></div>
+    <div style="position:relative;width:100%;max-width:360px;background:var(--c-surface);border-radius:18px;padding:24px 20px 20px;z-index:1">
+      <div style="font-size:16px;font-weight:600;margin-bottom:6px">Undo adjustment?</div>
+      <div style="font-size:14px;color:var(--c-muted);margin-bottom:24px">This will restore the workout to <strong style="color:var(--c-text)">${origLabel}</strong>.</div>
+      <button id="undo-adj-confirm-btn" style="width:100%;padding:13px;border-radius:12px;border:none;background:var(--c-accent);color:#fff;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Restore original</button>
+      <button id="undo-adj-cancel-btn" style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--c-border);background:transparent;color:var(--c-text);font-size:15px;cursor:pointer;font-family:var(--f)">Cancel</button>
+    </div>`;
+  document.body.appendChild(sheet);
+  const close = () => sheet.remove();
+  document.getElementById('undo-adj-backdrop')?.addEventListener('click', close);
+  document.getElementById('undo-adj-cancel-btn')?.addEventListener('click', close);
+  document.getElementById('undo-adj-confirm-btn')?.addEventListener('click', () => {
+    close();
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[weekNum - 1];
+    if (!wk2) return;
+    // Match by name only — dayOfWeek is optional on WorkoutMod and may differ
+    // from the rendered workout (e.g. after drag-reorder). Remove all non-auto
+    // mods for this workout name so double-applications are also cleared.
+    wk2.workoutMods = (wk2.workoutMods ?? []).filter(
+      m => !(m.name === workoutName && !m.modReason?.startsWith('Auto:'))
+    );
+    saveState();
+    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+  });
+}, true); // capture phase — fires before card-header bubble handler
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
@@ -73,10 +123,10 @@ function phaseLabel(ph: string): string {
 }
 
 const PHASE_COLORS: Record<string, { bg: string; text: string }> = {
-  base:  { bg: 'rgba(59,130,246,0.1)',  text: '#2563EB' },
-  build: { bg: 'rgba(249,115,22,0.1)',  text: '#EA580C' },
-  peak:  { bg: 'rgba(239,68,68,0.1)',   text: '#DC2626' },
-  taper: { bg: 'rgba(34,197,94,0.1)',   text: '#16A34A' },
+  base: { bg: 'rgba(59,130,246,0.1)', text: '#2563EB' },
+  build: { bg: 'rgba(249,115,22,0.1)', text: '#EA580C' },
+  peak: { bg: 'rgba(239,68,68,0.1)', text: '#DC2626' },
+  taper: { bg: 'rgba(34,197,94,0.1)', text: '#16A34A' },
 };
 
 function phaseBadge(ph: string): string {
@@ -90,30 +140,18 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function fmtPacePlan(secPerKm: number): string {
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.round(secPerKm % 60);
-  return `${m}:${String(s).padStart(2, '0')}/km`;
+function fmtPacePlan(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
+  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
+  const unit = pref === 'mi' ? '/mi' : '/km';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}${unit}`;
 }
 
 function safeDetailId(id: string): string {
   return 'detail-' + id.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// ─── Load profile helper ──────────────────────────────────────────────────────
-
-function getLoadProfile(wType: string): { base: number; threshold: number; intensity: number } {
-  const t = (wType || '').toLowerCase();
-  if (t === 'easy' || t === 'recovery') return { base: 100, threshold: 0, intensity: 0 };
-  if (t === 'long') return { base: 88, threshold: 12, intensity: 0 };
-  if (t === 'threshold' || t === 'tempo') return { base: 8, threshold: 72, intensity: 20 };
-  if (t === 'vo2' || t === 'interval') return { base: 5, threshold: 15, intensity: 80 };
-  if (t === 'marathon') return { base: 25, threshold: 60, intensity: 15 };
-  if (t === 'strides') return { base: 30, threshold: 20, intensity: 50 };
-  if (t === 'gym') return { base: 0, threshold: 60, intensity: 40 };
-  if (t === 'cross' || t === 'sport') return { base: 60, threshold: 25, intensity: 15 };
-  return { base: 55, threshold: 30, intensity: 15 };
-}
 
 function fmtZoneSec(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -133,12 +171,74 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   const isDone = (typeof ratingVal === 'number' && ratingVal > 0) || !!garminActual;
   const isSkipped = ratingVal === 'skip';
 
-  // Compute planned TSS once for reuse in the banner button attr + load bars
+  // Compute planned TSS using TL_PER_MIN (same scale as fitness-model.ts)
   const _s = getState();
-  const _plannedLoad = w.t && w.t !== 'rest'
-    ? calculateWorkoutLoad(w.t, w.d || (w.rpe || w.r || 5) * 10, (w.rpe || w.r || 5) * 10, _s.pac?.e)
-    : null;
-  const plannedTSS = _plannedLoad ? (_plannedLoad.tl ?? _plannedLoad.total ?? 0) : 0;
+  const plannedTSS = (() => {
+    const t = (w.t || '').toLowerCase();
+    if (!t || t === 'rest') return 0;
+    const baseMinPerKm = _s.pac?.e ? _s.pac.e / 60 : 5.5;
+    const desc: string = w.d || '';
+    let durMin = 0;
+    const lines = desc.split('\n').filter((l: string) => l.trim());
+    let mainDesc = desc;
+    let wucdMin = 0;
+    if (lines.length >= 3 && lines[0].includes('warm up')) {
+      mainDesc = lines[1];
+      const wuKm = parseFloat((lines[0].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
+      const cdKm = parseFloat((lines[lines.length - 1].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
+      wucdMin = (wuKm + cdKm) * baseMinPerKm;
+    }
+    const intervalTimeMatch = mainDesc.match(/(\d+)×(\d+\.?\d*)min/);
+    if (intervalTimeMatch) {
+      const reps = parseInt(intervalTimeMatch[1]);
+      const repDur = parseFloat(intervalTimeMatch[2]);
+      const recMatch = mainDesc.match(/(\d+\.?\d*)\s*min\s*recovery/);
+      const recMin = recMatch ? parseFloat(recMatch[1]) : 0;
+      durMin = reps * repDur + (reps - 1) * recMin + wucdMin;
+    } else {
+      const kmMatch = mainDesc.match(/(\d+\.?\d*)km/);
+      if (kmMatch) {
+        const km = parseFloat(kmMatch[1]);
+        let paceMinPerKm = baseMinPerKm;
+        if (t === 'threshold' || t === 'tempo') paceMinPerKm = baseMinPerKm * 0.82;
+        else if (t === 'vo2' || t === 'intervals') paceMinPerKm = baseMinPerKm * 0.73;
+        else if (t === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
+        else if (t === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
+        else if (t === 'long') paceMinPerKm = baseMinPerKm * 1.03;
+        durMin = km * paceMinPerKm + wucdMin;
+      } else {
+        const minMatch = mainDesc.match(/(\d+)min/);
+        durMin = minMatch ? parseInt(minMatch[1]) + wucdMin : (wucdMin || 40);
+      }
+    }
+    if (durMin <= 0) durMin = 40;
+    const rpe = w.rpe ?? w.r ?? 5;
+
+    // Cross-training: use historical iTrimp-based rate when available,
+    // fall back to TL_PER_MIN × sport runSpec (avoids running-calibrated inflation).
+    if (t === 'cross' || t === 'gym') {
+      const sportKey = t === 'gym' ? 'strength' : normalizeSport(w.n || 'generic_sport');
+      const historicalRate = computeCrossTrainTSSPerMin(_s.wks, sportKey);
+      if (historicalRate != null) {
+        return Math.round(historicalRate * durMin);
+      }
+      const cfg = (SPORTS_DB as Record<string, { runSpec?: number }>)[sportKey];
+      const runSpec = cfg?.runSpec ?? 0.40;
+      return Math.round((TL_PER_MIN[Math.round(rpe)] ?? 1.15) * durMin * runSpec);
+    }
+
+    return Math.round((TL_PER_MIN[Math.round(rpe)] ?? 1.15) * durMin);
+  })();
+
+  // Derive HR target on the fly if not already stored on the workout
+  const _hrTarget = w.hrTarget ?? (() => {
+    const zones = calculateZones({
+      lthr: _s.ltHR ?? undefined,
+      maxHR: _s.maxHR ?? undefined,
+      restingHR: _s.restingHR ?? undefined,
+    });
+    return zones ? getWorkoutHRTarget(w.t, zones) : undefined;
+  })();
 
   let html = `<div class="plan-card-detail" id="${safeDetailId(id)}" style="display:none;border-top:1px solid var(--c-border);background:var(--c-surface)">`;
   html += `<div style="padding:14px 18px 16px">`;
@@ -170,8 +270,8 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       ? Math.round((garminActual.iTrimp * 100) / 15000)
       : dur > 0 ? Math.round(dur * (TL_PER_MIN[Math.round(rpeVal)] ?? 0.92)) : null;
     const statsArr: string[] = [];
-    if (garminActual.distanceKm > 0.1) statsArr.push(`${garminActual.distanceKm.toFixed(1)} km`);
-    if (garminActual.avgPaceSecKm) statsArr.push(fmtPacePlan(garminActual.avgPaceSecKm));
+    if (garminActual.distanceKm > 0.1) statsArr.push(formatKm(garminActual.distanceKm, _s.unitPref ?? 'km'));
+    if (garminActual.avgPaceSecKm) statsArr.push(fmtPacePlan(garminActual.avgPaceSecKm, _s.unitPref ?? 'km'));
     if (garminActual.avgHR) statsArr.push(`HR ${garminActual.avgHR}`);
     statsArr.push(`${dur} min`);
     if (actualTSS != null) statsArr.push(`TSS ${actualTSS}`);
@@ -201,7 +301,10 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       html += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(garminActual.garminId)}" style="font-size:19px;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0;line-height:1;flex-shrink:0">×</button>`;
     }
     html += `</div>`;
-    html += `<button class="plan-act-open m-btn-link" data-workout-key="${escapeHtml(id)}" data-week-num="${viewWeek}" data-planned-tss="${plannedTSS}" style="font-size:12px;display:flex;align-items:center;gap:4px;margin-bottom:10px;padding:4px 0">View full activity <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>`;
+    // Don't pass plannedTSS for cross-training — activity-detail planned bar is
+    // meaningless when RPE-assumed HR ≠ actual HR for non-running sports.
+    const detailPlannedTSS = (w.t === 'cross' || w.t === 'gym') ? 0 : plannedTSS;
+    html += `<button class="plan-act-open m-btn-link" data-workout-key="${escapeHtml(id)}" data-week-num="${viewWeek}" data-planned-tss="${detailPlannedTSS}" style="font-size:12px;display:flex;align-items:center;gap:4px;margin-bottom:10px;padding:4px 0">View full activity <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>`;
   }
 
   // ── Route map ─────────────────────────────────────────────────────────────
@@ -239,34 +342,36 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   }
 
   // ── km splits sparkline ───────────────────────────────────────────────────
-  if (garminActual?.kmSplits && garminActual.kmSplits.length > 0) {
+  const isRunAct = !garminActual?.activityType || garminActual.activityType.includes('RUN');
+  if (isRunAct && garminActual?.kmSplits && garminActual.kmSplits.length > 0) {
     const splits = garminActual.kmSplits;
     const minP = Math.min(...splits);
     const maxP = Math.max(...splits);
     const range = maxP - minP || 1;
+    const splitUnitPref = _s.unitPref ?? 'km';
+    const splitUnit = splitUnitPref === 'mi' ? 'mi' : 'km';
     html += `<div style="margin-bottom:12px">`;
-    html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:5px">km Splits</div>`;
+    html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:5px">${splitUnit} Splits</div>`;
     html += `<div style="display:flex;align-items:flex-end;gap:2px;height:28px">`;
     splits.forEach((pace, i) => {
       const norm = (pace - minP) / range;
       // Invert: faster (lower pace) = taller bar
       const barHeight = Math.round(40 + (1 - norm) * 60);
       const barColor = norm < 0.33 ? '#22C55E' : norm < 0.67 ? '#EAB308' : '#EF4444';
-      const mm = Math.floor(pace / 60);
-      const ss = String(Math.round(pace % 60)).padStart(2, '0');
-      html += `<div title="km ${i + 1}: ${mm}:${ss}/km" style="flex:1;height:${barHeight}%;background:${barColor};border-radius:2px 2px 0 0;min-width:4px"></div>`;
+      html += `<div title="${splitUnit} ${i + 1}: ${fmtPacePlan(pace, splitUnitPref)}" style="flex:1;height:${barHeight}%;background:${barColor};border-radius:2px 2px 0 0;min-width:4px"></div>`;
     });
     html += `</div>`;
     html += `<div style="display:flex;justify-content:space-between;margin-top:3px">`;
-    html += `<span style="font-size:9px;color:var(--c-faint)">km 1</span>`;
-    html += `<span style="font-size:9px;color:var(--c-faint)">km ${splits.length}</span>`;
+    html += `<span style="font-size:9px;color:var(--c-faint)">${splitUnit} 1</span>`;
+    html += `<span style="font-size:9px;color:var(--c-faint)">${splitUnit} ${splits.length}</span>`;
     html += `</div>`;
     html += `</div>`;
   }
 
   // ── Workout description ───────────────────────────────────────────────────
   if (w.d && w.d.trim()) {
-    const descHtml = escapeHtml(w.d).replace(/\n/g, '<br>');
+    const descHtml = escapeHtml(fmtDesc(w.d, _s.unitPref ?? 'km')).replace(/\n/g, '<br>');
+    // Note: fmtDesc handles both km distances and M:SS/km pace strings
     html += `<div style="font-size:13px;color:var(--c-muted);line-height:1.6;margin-bottom:14px">${descHtml}</div>`;
   }
 
@@ -282,8 +387,11 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         : Math.round((garminActual.durationSec / 60) * (TL_PER_MIN[Math.round(rpeForLoad)] ?? 0.92)))
       : null;
 
-    if (garminActual && actualTSSForBars != null && plannedTSS > 0) {
-      // Show planned vs actual comparison
+    const isCrossTraining = w.t === 'cross' || w.t === 'gym';
+
+    if (garminActual && actualTSSForBars != null && plannedTSS > 0 && !isCrossTraining) {
+      // Show planned vs actual comparison (running sessions only — cross-training
+      // intensity varies too much vs RPE assumptions to make this meaningful)
       const maxTSS = Math.max(plannedTSS, actualTSSForBars, 1);
       const plannedPct = Math.round((plannedTSS / maxTSS) * 100);
       const actualPct = Math.round((actualTSSForBars / maxTSS) * 100);
@@ -305,27 +413,19 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       html += `<span style="font-size:10px;font-weight:600;width:40px;text-align:right;flex-shrink:0" style="color:${actualColor}">${actualTSSForBars} TSS</span>`;
       html += `</div>`;
       html += `</div></div>`;
-    } else {
-      // No actual data — show planned zone profile only
-      const lp = getLoadProfile(w.t);
-      const bars = [
-        { label: 'Base', val: lp.base, color: '#3B82F6' },
-        { label: 'Threshold', val: lp.threshold, color: '#EAB308' },
-        { label: 'Intensity', val: lp.intensity, color: '#EF4444' },
-      ].filter(b => b.val > 0);
-      if (bars.length > 0) {
-        html += `<div style="margin-bottom:14px">`;
-        html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Planned Load</div>`;
-        html += `<div style="display:flex;flex-direction:column;gap:5px">`;
-        bars.forEach(({ label, val, color }) => {
-          html += `<div style="display:flex;align-items:center;gap:8px">`;
-          html += `<span style="font-size:10px;color:var(--c-muted);width:60px;flex-shrink:0">${label}</span>`;
-          html += `<div style="flex:1;height:5px;background:rgba(0,0,0,0.05);border-radius:3px;overflow:hidden"><div style="width:${val}%;height:100%;background:${color};border-radius:3px"></div></div>`;
-          html += `<span style="font-size:10px;color:var(--c-faint);width:28px;text-align:right;flex-shrink:0">${val}%</span>`;
-          html += `</div>`;
-        });
-        html += `</div></div>`;
+    } else if (plannedTSS > 0) {
+      // No actual data — show planned TSS + HR target if available
+      html += `<div style="margin-bottom:14px">`;
+      html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Planned Load</div>`;
+      html += `<div style="font-size:13px;color:var(--c-text)">~${plannedTSS} TSS</div>`;
+      if (_hrTarget) {
+        const hasStructure = (w.d || '').toLowerCase().includes('warm up');
+        const hrLine = hasStructure
+          ? `Expected HR — ${_hrTarget.zone} during effort · ${_hrTarget.min}–${_hrTarget.max} bpm`
+          : `Expected HR — ${_hrTarget.zone} · ${_hrTarget.min}–${_hrTarget.max} bpm`;
+        html += `<div style="font-size:11px;color:var(--c-muted);margin-top:3px">${hrLine}</div>`;
       }
+      html += `</div>`;
     }
   }
 
@@ -341,11 +441,11 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     html += `<span style="font-size:12px;font-weight:500;color:var(--c-ok)">Synced from ${syncSource}</span>`;
     html += `</div>`;
   } else {
-  const testType = (w as any).testType as string | undefined;
-  if (!isDone && !isSkipped && testType) {
-    // Capacity test workout — different button set
-    const safeTestType = escapeHtml(testType);
-    html += `
+    const testType = (w as any).testType as string | undefined;
+    if (!isDone && !isSkipped && testType) {
+      // Capacity test workout — different button set
+      const safeTestType = escapeHtml(testType);
+      html += `
       <div style="margin-bottom:8px">
         <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px;line-height:1.4">
           Complete the test run and report how it felt:
@@ -378,19 +478,19 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         </div>
       </div>
     `;
-  } else if (!isDone && !isSkipped) {
-    const safeId = escapeHtml(id);
-    const rpe = w.rpe || w.r || 5;
-    if (w.t === 'gym') {
-      html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
-    } else {
-      html += `<button class="plan-action-mark-done m-btn-primary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;justify-content:center;display:flex">✓ Mark as Done</button>`;
+    } else if (!isDone && !isSkipped) {
+      const safeId = escapeHtml(id);
+      const rpe = w.rpe || w.r || 5;
+      if (w.t === 'gym') {
+        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
+      } else {
+        html += `<button class="plan-action-mark-done m-btn-primary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;justify-content:center;display:flex">✓ Mark as Done</button>`;
+      }
+      const safeDesc = escapeHtml((w.d || '').replace(/\n/g, ' '));
+      html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+    } else if (isDone) {
+      html += `<button class="plan-action-unrate m-btn-secondary" data-workout-id="${escapeHtml(id)}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.7">Unmark as Done</button>`;
     }
-    const safeDesc = escapeHtml((w.d || '').replace(/\n/g, ' '));
-    html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
-  } else if (isDone) {
-    html += `<button class="plan-action-unrate m-btn-secondary" data-workout-id="${escapeHtml(id)}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.7">Unmark as Done</button>`;
-  }
   } // end synced guard
 
   // ── Move to day ───────────────────────────────────────────────────────────
@@ -412,6 +512,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
 
 function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: number): string {
   if (!wk) return '';
+  const s = getState();
   const actuals = wk.garminActuals || {};
   const adhocGarmin = (wk.adhocWorkouts || []).filter((w: any) => w.id?.startsWith('garmin-'));
   const garminMatched = wk.garminMatched || {};
@@ -467,8 +568,8 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     const source = actual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
     const dur = Math.round(actual.durationSec / 60);
     const statsArr: string[] = [];
-    if (actual.distanceKm > 0.1) statsArr.push(`${actual.distanceKm.toFixed(1)} km`);
-    if (actual.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm));
+    if (actual.distanceKm > 0.1) statsArr.push(formatKm(actual.distanceKm, s.unitPref ?? 'km'));
+    if (actual.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm, s.unitPref ?? 'km'));
     if (actual.avgHR) statsArr.push(`HR ${actual.avgHR}`);
     statsArr.push(`${dur} min`);
     const dateStr = actual.startTime ? new Date(actual.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
@@ -502,8 +603,8 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     const km = actual?.distanceKm || wAny.km || wAny.distanceKm || 0;
     const isExcess = excessGarminIds.has(rawId);
     const statsArr: string[] = [];
-    if (km > 0.1) statsArr.push(`${typeof km === 'number' ? km.toFixed(1) : km} km`);
-    if (actual?.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm));
+    if (km > 0.1) statsArr.push(typeof km === 'number' ? formatKm(km, s.unitPref ?? 'km') : formatKm(parseFloat(km), s.unitPref ?? 'km'));
+    if (actual?.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm, s.unitPref ?? 'km'));
     if (actual?.avgHR) statsArr.push(`HR ${actual.avgHR}`);
     if (dur > 0) statsArr.push(`${dur} min`);
 
@@ -695,13 +796,13 @@ function buildWorkoutCards(
       const isReduced = !isDone && !isSkipped && (w as any).status === 'reduced' && !isTimingMod((w as any).modReason);
       const distKm = w.km || w.distanceKm;
       const durationMin = w.dur;
-      let valueStr = distKm ? `${typeof distKm === 'number' ? distKm.toFixed(1) : distKm} km`
+      let valueStr = distKm ? (typeof distKm === 'number' ? formatKm(distKm, s.unitPref ?? 'km') : formatKm(parseFloat(distKm), s.unitPref ?? 'km'))
         : durationMin ? `${Math.round(durationMin)} min`
           : '';
       // For reduced workouts, parse new distance from w.d ("5.2km (was 8km)") — w.km is not updated by mods
       if (isReduced && (w as any).d) {
         const reducedKm = parseFloat((w as any).d);
-        if (!isNaN(reducedKm)) valueStr = `${reducedKm.toFixed(1)} km`;
+        if (!isNaN(reducedKm)) valueStr = formatKm(reducedKm, s.unitPref ?? 'km');
       }
 
       // Replacement detection
@@ -751,8 +852,8 @@ function buildWorkoutCards(
       if (garminAct) {
         const source = garminAct.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
         const matchStats: string[] = [];
-        if (garminAct.distanceKm > 0.1) matchStats.push(`${garminAct.distanceKm.toFixed(1)} km`);
-        if (garminAct.avgPaceSecKm) matchStats.push(fmtPacePlan(garminAct.avgPaceSecKm));
+        if (garminAct.distanceKm > 0.1) matchStats.push(formatKm(garminAct.distanceKm, s.unitPref ?? 'km'));
+        if (garminAct.avgPaceSecKm) matchStats.push(fmtPacePlan(garminAct.avgPaceSecKm, s.unitPref ?? 'km'));
         const matchDur = Math.round(garminAct.durationSec / 60);
         if (matchDur > 0) matchStats.push(`${matchDur} min`);
         const matchName = garminAct.workoutName || garminAct.displayName || '';
@@ -769,6 +870,11 @@ function buildWorkoutCards(
         </div>`;
       }
 
+      const showUndoAdj = isReduced && !(w as any).modReason?.startsWith?.('Auto:') && !isDone;
+      const undoAdjBtn = showUndoAdj
+        ? `<button class="plan-recovery-undo-btn" data-workout-name="${escapeHtml(w.n)}" data-day-of-week="${(w as any).dayOfWeek ?? ''}" data-week-num="${viewWeek}" data-orig-label="${escapeHtml((w as any).originalDistance || w.n || '')}" style="font-size:11px;color:var(--c-caution);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0">Undo adjustment</button>`
+        : '';
+
       const rightContent = isToday && !isDone
         ? `<button class="plan-start-btn m-btn-primary" data-workout-id="${id}" style="padding:7px 14px;font-size:12px">
             <span style="width:10px;height:10px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
@@ -783,12 +889,13 @@ function buildWorkoutCards(
           </div>`
           : valueStr
             ? `<div style="display:flex;align-items:center;gap:10px">
+            ${undoAdjBtn}
             <span style="font-size:13px;font-weight:400;color:var(--c-muted)">${valueStr}</span>
             <span class="plan-view-btn" data-workout-id="${id}" data-week="${viewWeek}" style="opacity:0.25;cursor:pointer;display:flex;align-items:center">
               <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
             </span>
           </div>`
-            : '';
+            : undoAdjBtn ? `<div style="display:flex;align-items:center">${undoAdjBtn}</div>` : '';
 
       // Only first card of each day gets the scroll-anchor ID (no duplicate IDs)
       const dayAnchorId = !dayFirstCardEmitted.has(dayIdx) ? `id="plan-day-${dayIdx}" ` : '';
@@ -803,12 +910,13 @@ function buildWorkoutCards(
         // "Original plan" fallback: parse from "5.2km (was 8km)" if originalDistance not set
         const wasMatch = !origDist && newDesc ? /\(was (\d+\.?\d*km)\)/.exec(newDesc) : null;
         const origLabel = origDist || (wasMatch ? wasMatch[1] : null);
+        const cardUnitPref = s.unitPref ?? 'km';
         const lines: string[] = [];
         if (newDesc) {
-          lines.push(`<div style="font-size:12px;color:var(--c-text, #333);margin-top:2px">${newDesc}</div>`);
+          lines.push(`<div style="font-size:12px;color:var(--c-text, #333);margin-top:2px">${fmtDesc(newDesc, cardUnitPref)}</div>`);
         }
         if (origLabel) {
-          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:1px">Original plan: ${origLabel}</div>`);
+          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:1px">Original plan: ${fmtDesc(origLabel, cardUnitPref)}</div>`);
         }
         reducedBadge = lines.join('');
       }
@@ -851,23 +959,38 @@ function buildWorkoutCards(
   return cards.join('');
 }
 
-// ─── Sync + Complete Week strip (rendered below Activity Log) ─────────────────
+// ─── Wrap Up Week pill (shown in header on Sunday or when all workouts done) ──
 
-function buildPlanActionStrip(s: SimulatorState, workouts: any[], viewWeek: number): string {
-  const wk = s.wks?.[viewWeek - 1];
-  const isCurrentWeek = viewWeek === s.w;
-  if (!isCurrentWeek) return '';
+/**
+ * Returns true when every non-rest workout for this week has been
+ * marked done (rated > 0 or has a garminActual) or skipped.
+ */
+function allWorkoutsDone(workouts: any[], wk: any): boolean {
+  const nonRest = workouts.filter((w: any) => w.t !== 'rest');
+  if (nonRest.length === 0) return false;
+  return nonRest.every((w: any) => {
+    const id = w.id || w.n;
+    const ratingVal = wk?.rated?.[id];
+    const hasActual = !!wk?.garminActuals?.[id];
+    return (typeof ratingVal === 'number' && ratingVal > 0) || hasActual || ratingVal === 'skip';
+  });
+}
 
-  const rated = wk?.rated ?? {};
-  const totalCount = workouts.filter((w: any) => w.t !== 'rest').length;
-  const completedCount = Object.values(rated).filter(v => typeof v === 'number' && v > 0).length;
-  const allDone = completedCount >= totalCount && totalCount > 0;
-
-  const btns: string[] = [];
-  if (allDone && !(wk as any)?.weekCompleted) btns.push(`<button id="plan-complete-week-btn" class="m-btn-primary" style="flex:1;font-size:12px">✓ Complete Week</button>`);
-  if (btns.length === 0) return '';
-
-  return `<div style="display:flex;gap:10px;padding:14px 18px 14px;border-top:1px solid var(--c-border)">${btns.join('')}</div>`;
+/**
+ * Small "Wrap up week" pill for the plan header.
+ * Visible on Sunday (day 6) or when every workout is done/skipped.
+ */
+function buildWrapUpWeekBtn(s: SimulatorState, workouts: any[], viewWeek: number): string {
+  if (viewWeek !== s.w) return '';
+  if ((s as any).wks?.[viewWeek - 1]?.weekCompleted) return '';
+  const today = ourDay(); // 6 = Sunday
+  const wk = (s as any).wks?.[viewWeek - 1];
+  const show = today === 6 || allWorkoutsDone(workouts, wk);
+  if (!show) return '';
+  return `<button id="plan-wrap-up-btn"
+    style="height:30px;padding:0 12px;border-radius:15px;border:1.5px solid var(--c-accent);
+           background:transparent;font-size:11px;font-weight:600;color:var(--c-accent);
+           cursor:pointer;letter-spacing:0.01em;white-space:nowrap">Wrap up week</button>`;
 }
 
 // ─── Injury UI ───────────────────────────────────────────────────────────────
@@ -1188,17 +1311,18 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
 
 /** Format a recorded benchmark result for display */
 function formatBenchmarkResult(result: any): string {
-  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}/km`;
+  const unitPref = getState().unitPref ?? 'km';
+  const fmtPace = (sec: number) => formatPace(sec, unitPref);
   switch (result.type) {
     case 'easy_checkin':
       return result.avgPaceSecKm ? `Easy check-in · ${fmtPace(result.avgPaceSecKm)} avg` : `Easy check-in · ${result.durationSec ? Math.round(result.durationSec / 60) + 'min' : 'logged'}`;
     case 'threshold_check':
       return result.avgPaceSecKm ? `Threshold check · ${fmtPace(result.avgPaceSecKm)}` : 'Threshold check · logged';
     case 'speed_check':
-      return result.distanceKm ? `Speed check · ${result.distanceKm.toFixed(2)} km in 12 min` : 'Speed check · logged';
+      return result.distanceKm ? `Speed check · ${formatKm(result.distanceKm, unitPref, 2)} in 12 min` : 'Speed check · logged';
     case 'race_simulation':
       return result.distanceKm && result.durationSec
-        ? `Race sim · ${result.distanceKm}km in ${Math.floor(result.durationSec / 60)}:${String(Math.round(result.durationSec % 60)).padStart(2, '0')}`
+        ? `Race sim · ${formatKm(result.distanceKm, unitPref)} in ${Math.floor(result.durationSec / 60)}:${String(Math.round(result.durationSec % 60)).padStart(2, '0')}`
         : 'Race simulation · logged';
     default: return 'Check-in recorded';
   }
@@ -1293,6 +1417,8 @@ function buildBenchmarkPanel(s: SimulatorState): string {
 function showBenchmarkEntryModal(bmType: string): void {
   type BenchmarkType = 'easy_checkin' | 'threshold_check' | 'speed_check' | 'race_simulation';
   const type = bmType as BenchmarkType;
+  const bmUnitPref = getState().unitPref ?? 'km';
+  const bmDistUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
 
   let title = '';
   let desc = '';
@@ -1300,7 +1426,7 @@ function showBenchmarkEntryModal(bmType: string): void {
 
   const paceInput = () => `
     <div style="margin-bottom:12px">
-      <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Average pace (min : sec per km)</label>
+      <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Average pace (min : sec per ${bmDistUnit})</label>
       <div style="display:flex;align-items:center;gap:8px">
         <input type="number" id="bm-pace-min" min="2" max="12" placeholder="min"
           style="flex:1;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
@@ -1327,7 +1453,7 @@ function showBenchmarkEntryModal(bmType: string): void {
       desc = 'How far did you run in 12 minutes?';
       fieldsHTML = `
         <div style="margin-bottom:12px">
-          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance covered (km)</label>
+          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance covered (${bmDistUnit})</label>
           <input type="number" id="bm-distance" step="0.01" min="0.5" max="6" placeholder="e.g. 2.80"
             style="width:100%;box-sizing:border-box;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
         </div>
@@ -1338,7 +1464,7 @@ function showBenchmarkEntryModal(bmType: string): void {
       desc = 'Log your time trial result.';
       fieldsHTML = `
         <div style="margin-bottom:10px">
-          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance (km)</label>
+          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance (${bmDistUnit})</label>
           <input type="number" id="bm-distance" step="0.1" min="1" max="42.2" placeholder="e.g. 5"
             style="width:100%;box-sizing:border-box;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
         </div>
@@ -1382,29 +1508,35 @@ function showBenchmarkEntryModal(bmType: string): void {
       case 'threshold_check': {
         const m = +(document.getElementById('bm-pace-min') as HTMLInputElement)?.value || 0;
         const sec = +(document.getElementById('bm-pace-sec') as HTMLInputElement)?.value || 0;
-        const paceSec = m * 60 + sec;
-        if (paceSec < 120 || paceSec > 720) { alert('Enter a valid pace (min:sec per km)'); return; }
+        const paceSecRaw = m * 60 + sec;
+        if (paceSecRaw < 120 || paceSecRaw > 900) { alert(`Enter a valid pace (min:sec per ${bmDistUnit})`); return; }
+        // Convert to sec/km if user entered sec/mi
+        const paceSec = bmUnitPref === 'mi' ? paceSecRaw * 1.60934 : paceSecRaw;
         overlay.remove();
         const dur = type === 'easy_checkin' ? 1800 : 1200;
         recordBenchmark(type, 'manual', undefined, dur, paceSec);
         break;
       }
       case 'speed_check': {
-        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        if (!dist || dist < 0.5) { alert('Enter a distance (km)'); return; }
+        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        if (!distRaw || distRaw < 0.5) { alert(`Enter a distance (${bmDistUnit})`); return; }
+        // Convert to km if user entered miles
+        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
         overlay.remove();
-        recordBenchmark('speed_check', 'manual', dist, 720);
+        recordBenchmark('speed_check', 'manual', distKm, 720);
         break;
       }
       case 'race_simulation': {
-        const dist = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
+        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
         const m = +(document.getElementById('bm-time-min') as HTMLInputElement)?.value || 0;
         const sec = +(document.getElementById('bm-time-sec') as HTMLInputElement)?.value || 0;
         const totalSec = m * 60 + sec;
-        if (!dist || dist < 1) { alert('Enter a distance'); return; }
+        if (!distRaw || distRaw < 1) { alert('Enter a distance'); return; }
         if (totalSec < 300) { alert('Enter a valid time'); return; }
+        // Convert to km if user entered miles
+        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
         overlay.remove();
-        recordBenchmark('race_simulation', 'manual', dist, totalSec, totalSec / dist);
+        recordBenchmark('race_simulation', 'manual', distKm, totalSec, totalSec / distKm);
         break;
       }
     }
@@ -1654,7 +1786,8 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
 
   if (wk.workoutMods && wk.workoutMods.length > 0) {
@@ -1827,11 +1960,14 @@ function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
   if (!isCurrentWeek) return '';
 
   const _hasAutoMod = (wk?.workoutMods ?? []).some(m => m.modReason?.startsWith('Auto:'));
-  const _baseline = s.signalBBaseline ?? 0;
-  const _excess = wk ? getWeeklyExcess(wk, _baseline, s.planStartDate) : 0;
-  const _hasPendingExcess = (wk?.unspentLoadItems?.length ?? 0) > 0 && !_hasAutoMod;
+  const _plannedB = wk ? computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
+  ) : 0;
+  const _excess = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate) : 0;
+  const _hasPendingExcess = _excess > 15 && !_hasAutoMod;
 
-  // Only show when there's pending excess — timing mods are surfaced inline on each card.
+  // Only show when total week Signal B is meaningfully above planned — timing mods are surfaced inline.
   if (!_hasPendingExcess) return '';
 
   const label = _excess > 0 ? `Resolve ${Math.round(_excess)} TSS extra load` : 'Resolve extra load';
@@ -1857,6 +1993,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus,
     )
     : [];
 
@@ -1894,37 +2031,37 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
   const dateRange = fmtWeekRange(s.planStartDate, viewWeek);
   const phase = wk?.ph ? phaseLabel(wk.ph) : '';
-  // TSS badge for completed weeks — show both signals if they differ meaningfully
-  const _weekRunTSS = wk && viewWeek < s.w ? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const _weekTotalTSS = wk && viewWeek < s.w ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const weekTSSBadge = _weekRunTSS > 0
-    ? (_weekTotalTSS > _weekRunTSS * 1.15
-      ? `${_weekRunTSS} run · ${_weekTotalTSS} total`
-      : `${_weekRunTSS} TSS`)
-    : '';
-  // Week load summary — planned vs actual for current/future weeks.
-  // Plan page uses Signal A (run-equivalent) — running plan vs running done.
-  // Planned load derived from historic median × phase multiplier (ISSUE-79).
-  const _plannedTSS = computePlannedWeekTSS(
+  // Week load — Signal B (full physiological, all sports) for all weeks
+  // Using Signal B everywhere so the bar always matches what the breakdown sheet shows.
+  const _weekTotalTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
+  const _plannedTSS = computePlannedSignalB(
     s.historicWeeklyTSS,
     s.ctlBaseline,
     wk?.ph ?? 'base',
     s.athleteTierOverride ?? s.athleteTier,
     s.rw,
+    undefined,
+    undefined,
+    s.sportBaselineByType,
   );
-  const _actualTSS = wk ? Math.round(computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
-  // Visual load bar — shown for current + future weeks (past weeks show weekTSSBadge instead)
-  const showLoadBar = _plannedTSS > 0 && viewWeek >= s.w;
-  const _loadBarPct = showLoadBar && _actualTSS > 0 ? Math.min(100, Math.round((_actualTSS / _plannedTSS) * 100)) : 0;
+  // Bar shown for all weeks when planned is known; over-target fills fully (no cap)
+  const _loadBarPct = _plannedTSS > 0 && _weekTotalTSS > 0
+    ? Math.round((_weekTotalTSS / _plannedTSS) * 100)
+    : 0;
   const _loadBarColor = _loadBarPct >= 100 ? 'var(--c-ok)' : _loadBarPct >= 70 ? 'var(--c-ok)' : 'var(--c-accent)';
-  const weekLoadBar = showLoadBar ? `
-    <div style="margin-top:8px;padding-bottom:12px">
+  // Fill width: at/over target = 100%, under = proportional
+  const _loadBarFill = _loadBarPct >= 100 ? 100 : _loadBarPct;
+  const weekLoadBar = _plannedTSS > 0 ? `
+    <div id="plan-load-bar-row" style="margin-top:8px;padding-bottom:12px;cursor:pointer">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
         <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Week Load (TSS)</span>
-        <span style="font-size:11px;font-weight:500;color:var(--c-muted)">${_actualTSS > 0 ? `${_actualTSS} / ${_plannedTSS}` : `${_plannedTSS} planned`}</span>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="font-size:11px;font-weight:500;color:var(--c-muted)">${_weekTotalTSS > 0 ? `${_weekTotalTSS} / ${_plannedTSS}` : `${_plannedTSS} planned`}</span>
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.3;color:var(--c-muted)"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </div>
       </div>
       <div style="height:5px;background:rgba(0,0,0,0.07);border-radius:3px;overflow:hidden">
-        <div style="height:100%;border-radius:3px;background:${_loadBarColor};width:${_loadBarPct}%;transition:width 0.3s"></div>
+        <div style="height:100%;border-radius:3px;background:${_loadBarColor};width:${_loadBarFill}%;transition:width 0.3s"></div>
       </div>
     </div>` : '';
   const canGoBack = viewWeek > 1;
@@ -1956,15 +2093,15 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
             <div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
               ${wk?.ph ? phaseBadge(wk.ph) : ''}
               ${dateRange ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${dateRange}</span>` : ''}
-              ${weekTSSBadge ? `<span title="${_weekTotalTSS > _weekRunTSS * 1.15 ? `Running-equivalent: ${_weekRunTSS} · Total body load: ${_weekTotalTSS} (includes gym &amp; cross-training at full weight)` : `Run-equivalent training stress`}" style="font-size:10px;font-weight:500;color:var(--c-muted);background:rgba(0,0,0,0.05);padding:1px 7px;border-radius:10px;letter-spacing:0.04em;cursor:help">${weekTSSBadge}</span>` : ''}
             </div>
             ${weekLoadBar}
             ${viewWeek < s.w ? `<button id="plan-jump-current" style="margin-top:4px;background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--c-accent);cursor:pointer;letter-spacing:0.01em;display:flex;align-items:center;gap:3px">&#8594; This week</button>` : ''}
           </div>
           <div style="display:flex;gap:8px;align-items:center">
             ${buildInjuryHeaderBtn(injured)}
+            ${buildWrapUpWeekBtn(s, workouts, viewWeek)}
             ${viewWeek < s.w ? `<button id="plan-edit-week-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer" title="Edit week">&#9998;</button>` : ''}
-            ${isCurrentWeek && s.w > 1 ? `<button id="plan-finish-week-btn" style="height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--c-border);background:transparent;font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;letter-spacing:0.02em">Finish week</button>` : ''}
+            ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" style="height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--c-border);background:transparent;font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;letter-spacing:0.02em">Review past week</button>` : ''}
             ${navBtn('prev', canGoBack)}
             ${navBtn('next', canGoForward)}
             <button id="plan-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
@@ -1982,9 +2119,6 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
         ${buildInjuryBanner()}
         ${buildMorningPainCheck()}
         ${buildBenchmarkPanel(s)}
-        ${buildRecoveryPill(s)}
-        ${buildRecoveryLogPanel(s)}
-        ${buildPlanActionStrip(s, workouts, viewWeek)}
         ${buildWorkoutCards(s, workouts, viewWeek)}
         ${buildActivityLog(wk, viewWeek, s.w)}
       </div>
@@ -2000,6 +2134,11 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   // Account button
   document.getElementById('plan-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
+  });
+
+  // Load bar (all weeks) → breakdown sheet
+  document.getElementById('plan-load-bar-row')?.addEventListener('click', () => {
+    showLoadBreakdownSheet(s, viewWeek);
   });
 
   // Week navigation
@@ -2042,8 +2181,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     document.body.appendChild(sheet);
   });
 
-  // Finish week button — fires week-end debrief for the PREVIOUS week
-  document.getElementById('plan-finish-week-btn')?.addEventListener('click', () => {
+  // Review past week button — fires week-end debrief for the PREVIOUS week
+  document.getElementById('plan-review-week-btn')?.addEventListener('click', () => {
     const curWeek = (getState() as any).w ?? 1;
     if (curWeek > 1) {
       import('@/ui/week-debrief').then(({ showWeekDebrief }) => {
@@ -2066,18 +2205,6 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const response = (btn as HTMLElement).dataset.response as 'worse' | 'same' | 'better';
       if (response) handleMorningPainResponse(response);
     });
-  });
-
-  // Recovery pill + log panel buttons
-  document.getElementById('plan-recovery-log')?.addEventListener('click', showRecoveryLogModal);
-  document.getElementById('plan-recovery-log-panel')?.addEventListener('click', showRecoveryLogModal);
-  document.getElementById('plan-recovery-adjust')?.addEventListener('click', () => {
-    const s = getState();
-    const history: RecoveryEntry[] = (s as any).recoveryHistory || [];
-    const today = new Date().toISOString().split('T')[0];
-    const entry = history.find(e => e.date === today);
-    if (entry) showRecoveryAdjustModal(entry);
-    else showRecoveryLogModal();
   });
 
   // Benchmark panel
@@ -2166,7 +2293,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     header.addEventListener('click', (e) => {
       const target = e.target as Element;
       // Don't expand if tapping the start button, view arrow, or activity detail link
-      if (target.closest('.plan-start-btn') || target.closest('.plan-view-btn') || target.closest('.plan-act-open')) return;
+      if (target.closest('.plan-start-btn') || target.closest('.plan-view-btn') || target.closest('.plan-act-open') || target.closest('.plan-recovery-undo-btn')) return;
 
       const card = header.closest('.plan-workout-card') as HTMLElement;
       const id = card?.getAttribute('data-workout-id');
@@ -2224,7 +2351,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const name = el.dataset.name || '';
       const rpe = parseInt(el.dataset.rpe || '5', 10);
       const type = el.dataset.type || 'easy';
-      rate(wId, name, rpe, rpe, type, false);
+      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
+      rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
       renderPlanView();
     });
   });
@@ -2239,7 +2367,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const rpe = parseInt(el.dataset.rpe || '5', 10);
       const desc = el.dataset.desc || '';
       const day = parseInt(el.dataset.day || '0', 10);
-      skip(wId, name, type, false, 0, desc, rpe, day, '');
+      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
+      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum);
       renderPlanView();
     });
   });
@@ -2350,10 +2479,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   });
 
 
-  // Complete week
-  document.getElementById('plan-complete-week-btn')?.addEventListener('click', () => {
-    next();
-    // next() triggers setOnWeekAdvance which calls renderPlanView via the hook below
+  // Wrap up week (Sunday / all-done pill in header)
+  document.getElementById('plan-wrap-up-btn')?.addEventListener('click', () => {
+    showWeekDebrief(s.w, 'complete');
   });
 
   // ─── Activity detail click-through ─────────────────────────────────────────
@@ -2479,4 +2607,9 @@ export function renderPlanView(): void {
     _viewWeek = null;
     renderPlanView();
   });
+
+  // Auto-show end-of-week debrief on Sunday (once per day)
+  if (viewWeek === s.w && shouldShowSundayDebrief()) {
+    setTimeout(() => showWeekDebrief(s.w, 'complete'), 400);
+  }
 }

@@ -14,7 +14,7 @@ import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { computeACWR, computeWeekTSS } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
@@ -417,11 +417,21 @@ export function rate(
   expected: number,
   workoutType: string,
   isSkipped: boolean,
-  avgHR?: number
+  avgHR?: number,
+  targetWeek?: number
 ): void {
   const s = getMutableState();
   if (s.w < 1 || s.w > s.wks.length) return;
-  const wk = s.wks[s.w - 1];
+  const weekIdx = (targetWeek ?? s.w) - 1;
+  const wk = s.wks[weekIdx];
+  if (!wk) return;
+
+  // Past-week retroactive rating: just record the RPE and return
+  if (targetWeek !== undefined && targetWeek < s.w) {
+    wk.rated[workoutId] = rpe;
+    saveState();
+    return;
+  }
 
   // If skipped workout being completed, remove from previous week
   if (isSkipped && s.w > 1) {
@@ -645,9 +655,19 @@ export function skip(
   desc: string,
   rpe: number,
   dayOfWeek: number,
-  dayName: string
+  dayName: string,
+  targetWeek?: number
 ): void {
   const s = getMutableState();
+
+  // Past-week retroactive skip: just mark as skipped in that week, no push
+  if (targetWeek !== undefined && targetWeek < s.w) {
+    const wk = s.wks[targetWeek - 1];
+    if (!wk) return;
+    wk.rated[workoutId] = 'skip';
+    saveState();
+    return;
+  }
 
   // Warn before skipping a long run
   if (workoutType === 'long' && !isAlreadySkipped) {
@@ -742,7 +762,8 @@ export async function next(): Promise<void> {
   const weekWorkouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
     injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-    undefined, undefined, s.w, s.tw, undefined, s.gs
+    undefined, undefined, s.w, s.tw, undefined, s.gs,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
 
   // Completion gating: count only unrated RUN workouts (exclude gym/cross/rest)
@@ -768,7 +789,8 @@ export async function next(): Promise<void> {
       const nextWeekWorkouts = generateWeekWorkouts(
         nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
         injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-        undefined, undefined, s.w + 1, s.tw, undefined, s.gs
+        undefined, undefined, s.w + 1, s.tw, undefined, s.gs,
+        getTrailingEffortScore(s.wks, s.w + 1), nextWk.scheduledAcwrStatus,
       );
       nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
     }
@@ -850,9 +872,13 @@ export async function next(): Promise<void> {
   // Calculate per-week VDOT gain from training horizon model instead of flat 0.06
   const totalExpectedVdotGain = (s.expectedFinal || s.iv) - s.iv;
   const perWeekGain = s.tw > 0 ? totalExpectedVdotGain / s.tw : 0;
-  // Apply adherence modifier: scale by what fraction of workouts were completed
+  // Apply adherence modifier: scale by what fraction of RUNNING workouts were completed.
+  // Only running contributes to VDOT gain (Signal A). Cross-training/gym build systemic
+  // fitness (Signal B) but not running-specific adaptation — per PRINCIPLES.md.
+  const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk', 'box', 'climb', 'ski', 'padel', 'football', 'soccer', 'basketball', 'rugby'];
+  const isRunName = (n: string) => !NON_RUN_KW.some(kw => n.toLowerCase().includes(kw));
   const ratedNames = Object.keys(wk.rated);
-  const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip').length;
+  const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip' && isRunName(n)).length;
   const expectedCount = s.rw || 3;
   const adherence = expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1;
   if (!isInjured) {
@@ -867,7 +893,8 @@ export async function next(): Promise<void> {
     const weekWos = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, prevSkips, s.commuteConfig,
       injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
-      undefined, undefined, s.w, s.tw, undefined, s.gs
+      undefined, undefined, s.w, s.tw, undefined, s.gs,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
     );
     // Apply mods so replaced workouts count as 0km
     if (wk.workoutMods) {
@@ -908,7 +935,10 @@ export async function next(): Promise<void> {
     }
     wk.completedKm = Math.round(weekKm * 10) / 10;
 
-    // Compute effort score from this week's RPE ratings vs expected
+    // Compute effort score from this week's RPE ratings vs expected, blended with HR effort.
+    // RPE deviation: positive = harder than planned, negative = easier.
+    // HR effort score: 1.0 = on target, >1.0 = overcooked, <1.0 = undercooked.
+    // When both signals are available, blend 60% RPE / 40% HR for a combined effort score.
     const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
     let totalDev = 0, ratedCount = 0;
     for (const wo of weekWos) {
@@ -917,7 +947,19 @@ export async function next(): Promise<void> {
       const rating = wk.rated[wId];
       if (typeof rating !== 'number') continue;
       const expected = wo.rpe || wo.r || 5;
-      totalDev += rating - expected;
+      const rpeDev = rating - expected;
+
+      // Check if this workout has an HR effort score from Strava HR data
+      const actual = wk.garminActuals?.[wId];
+      const hrScore = actual?.hrEffortScore;
+      if (hrScore != null) {
+        // Convert hrEffortScore to same scale as RPE deviation:
+        // hrScore 1.0 → 0 deviation, hrScore 1.2 → +2 deviation (overcooked)
+        const hrDev = (hrScore - 1.0) * 10; // 0.1 hrScore ≈ 1 RPE point
+        totalDev += rpeDev * 0.6 + hrDev * 0.4;
+      } else {
+        totalDev += rpeDev;
+      }
       ratedCount++;
     }
     if (ratedCount > 0 && !isInjured) {
@@ -957,15 +999,15 @@ export async function next(): Promise<void> {
     const actualTSS = wk.actualTSS != null ? wk.actualTSS : computeWeekTSS(wk, wk.rated, s.planStartDate);
     const TL_BY_TYPE: Record<string, number> = { easy: 0.92, long: 0.92, marathon_pace: 1.45, threshold: 1.78, vo2: 2.22, intervals: 2.22, hill_repeats: 2.0, progressive: 1.45, mixed: 1.45 };
     const ZONE_PROFILES: Record<string, { base: number; threshold: number; intensity: number }> = {
-      easy:          { base: 0.95, threshold: 0.04, intensity: 0.01 },
-      long:          { base: 0.90, threshold: 0.09, intensity: 0.01 },
+      easy: { base: 0.95, threshold: 0.04, intensity: 0.01 },
+      long: { base: 0.90, threshold: 0.09, intensity: 0.01 },
       marathon_pace: { base: 0.65, threshold: 0.30, intensity: 0.05 },
-      threshold:     { base: 0.25, threshold: 0.60, intensity: 0.15 },
-      vo2:           { base: 0.15, threshold: 0.35, intensity: 0.50 },
-      intervals:     { base: 0.10, threshold: 0.30, intensity: 0.60 },
-      hill_repeats:  { base: 0.15, threshold: 0.30, intensity: 0.55 },
-      progressive:   { base: 0.45, threshold: 0.40, intensity: 0.15 },
-      mixed:         { base: 0.45, threshold: 0.35, intensity: 0.20 },
+      threshold: { base: 0.25, threshold: 0.60, intensity: 0.15 },
+      vo2: { base: 0.15, threshold: 0.35, intensity: 0.50 },
+      intervals: { base: 0.10, threshold: 0.30, intensity: 0.60 },
+      hill_repeats: { base: 0.15, threshold: 0.30, intensity: 0.55 },
+      progressive: { base: 0.45, threshold: 0.40, intensity: 0.15 },
+      mixed: { base: 0.45, threshold: 0.35, intensity: 0.20 },
     };
     const nonRunTs = new Set(['rest', 'gym', 'cross', 'cross_training']);
     let pBase = 0, pThresh = 0, pIntens = 0;
@@ -975,7 +1017,7 @@ export async function next(): Promise<void> {
       const durMin = durMatch ? parseFloat(durMatch[1]) * 6 : 30;
       const tss = durMin * (TL_BY_TYPE[wo.t] ?? 1.15);
       const p = ZONE_PROFILES[wo.t] ?? { base: 0.70, threshold: 0.20, intensity: 0.10 };
-      pBase   += tss * p.base;
+      pBase += tss * p.base;
       pThresh += tss * p.threshold;
       pIntens += tss * p.intensity;
     }
@@ -987,16 +1029,16 @@ export async function next(): Promise<void> {
         if (!actual.hrZones) continue;
         const tot = actual.hrZones.z1 + actual.hrZones.z2 + actual.hrZones.z3 + actual.hrZones.z4 + actual.hrZones.z5;
         if (tot < 60) continue;
-        aBase   += (actual.hrZones.z1 + actual.hrZones.z2) / tot;
+        aBase += (actual.hrZones.z1 + actual.hrZones.z2) / tot;
         aThresh += actual.hrZones.z3 / tot;
         aIntens += (actual.hrZones.z4 + actual.hrZones.z5) / tot;
         zCount++;
       }
-      const bRatio = zCount > 0 ? aBase   / zCount : 0.70;
+      const bRatio = zCount > 0 ? aBase / zCount : 0.70;
       const tRatio = zCount > 0 ? aThresh / zCount : 0.20;
       const iRatio = zCount > 0 ? aIntens / zCount : 0.10;
       wk.carriedTSS = {
-        base:      Math.round(excess * bRatio),
+        base: Math.round(excess * bRatio),
         threshold: Math.round(excess * tRatio),
         intensity: Math.round(excess * iRatio),
       };
@@ -1057,6 +1099,8 @@ export async function next(): Promise<void> {
       s.tw += BLOCK_SIZE;
       log(`Block ${s.blockNumber} started (Weeks ${s.tw - BLOCK_SIZE + 1}–${s.tw})`);
     } else {
+      recordVdotHistory(s);
+      saveState();
       complete();
       return;
     }
@@ -1082,16 +1126,21 @@ function complete(): void {
   let fin = tv(fv, dk);
   if (s.timp > 0) fin += s.timp;
 
-  let h = `<div class="text-center py-10"><h2 class="text-2xl font-bold mb-4" style="color:var(--c-black)">Training Complete</h2>`;
-  h += `<div class="p-6 rounded-lg inline-block mb-4" style="background:var(--c-ok);color:#fff"><div class="text-xs mb-2">Final</div>`;
-  h += `<div class="text-4xl font-bold">${ft(fin)}</div></div>`;
-  h += `<div class="grid grid-cols-3 gap-3 max-w-md mx-auto text-sm">`;
-  h += `<div class="p-3 rounded border" style="background:rgba(0,0,0,0.04);border-color:var(--c-border)"><div class="text-xs" style="color:var(--c-muted)">Start</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.v.toFixed(1)}</div></div>`;
-  h += `<div class="p-3 rounded border" style="background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.3)"><div class="text-xs" style="color:var(--c-muted)">Final</div><div class="text-xl font-bold" style="color:var(--c-ok)">${fv.toFixed(1)}</div></div>`;
-  h += `<div class="p-3 rounded border" style="background:rgba(0,0,0,0.04);border-color:var(--c-border)"><div class="text-xs" style="color:var(--c-muted)">Expected</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.expectedFinal.toFixed(1)}</div></div></div></div>`;
+  let h = `<div class="text-center py-10 px-4 mt-6"><h2 class="text-2xl font-bold mb-4" style="color:var(--c-black)">Training Complete</h2>`;
+  h += `<div class="p-6 rounded-lg inline-block mb-4" style="background:var(--c-ok);color:#fff"><div class="text-xs mb-2 uppercase tracking-wide">Final Target</div>`;
+  h += `<div class="text-4xl font-bold tracking-tight">${ft(fin)}</div></div>`;
+  h += `<div class="grid grid-cols-3 gap-3 max-w-md mx-auto text-sm mt-4">`;
+  h += `<div class="p-3 rounded-xl" style="background:rgba(0,0,0,0.04);border:1px solid var(--c-border)"><div class="text-[10px] font-semibold uppercase tracking-wider mb-1" style="color:var(--c-muted)">Start</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.v.toFixed(1)}</div></div>`;
+  h += `<div class="p-3 rounded-xl" style="background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.3)"><div class="text-[10px] font-semibold uppercase tracking-wider mb-1" style="color:var(--c-ok)">Final</div><div class="text-xl font-bold" style="color:var(--c-ok)">${fv.toFixed(1)}</div></div>`;
+  h += `<div class="p-3 rounded-xl" style="background:rgba(0,0,0,0.04);border:1px solid var(--c-border)"><div class="text-[10px] font-semibold uppercase tracking-wider mb-1" style="color:var(--c-muted)">Expected</div><div class="text-xl font-bold" style="color:var(--c-black)">${s.expectedFinal.toFixed(1)}</div></div></div></div>`;
 
-  const woEl = document.getElementById('wo');
-  if (woEl) woEl.innerHTML = h;
+  const appRoot = document.getElementById('app-root');
+  if (appRoot) {
+    appRoot.innerHTML = h;
+  } else {
+    const woEl = document.getElementById('wo');
+    if (woEl) woEl.innerHTML = h;
+  }
 }
 
 /**
@@ -1533,7 +1582,8 @@ export function logActivity(): void {
   const wk = s.wks[activityWeek - 1];
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v, s.gs
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v, s.gs,
+    getTrailingEffortScore(s.wks, activityWeek), wk.scheduledAcwrStatus,
   );
 
   // -----------------------------------------------------------------------
@@ -2186,7 +2236,8 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   // Generate this week's workouts
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
-    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
 
   // Re-apply existing workoutMods so we don't double-modify

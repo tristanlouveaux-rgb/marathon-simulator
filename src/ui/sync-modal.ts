@@ -6,6 +6,8 @@
 
 import type { MatchResult, ExternalActivity } from '@/calculations/matching';
 import type { Workout } from '@/types';
+import { getState } from '@/state/store';
+import { formatKm } from '@/utils/format';
 
 export type SyncDecision = 'match' | 'keep-both' | 'ignore';
 
@@ -18,7 +20,7 @@ export function showMatchProposal(
   matchResult: MatchResult,
   onDecision: (decision: SyncDecision) => void,
 ): void {
-  const actDist = activity.distanceKm.toFixed(1);
+  const actDist = formatKm(activity.distanceKm, getState().unitPref ?? 'km', 1);
   const confBadge = matchResult.confidence === 'high'
     ? '<span style="padding:2px 6px;background:rgba(22,163,74,0.1);color:#16a34a;border:1px solid rgba(22,163,74,0.3);border-radius:4px;font-size:11px">High confidence</span>'
     : '<span style="padding:2px 6px;background:rgba(245,158,11,0.1);color:var(--c-caution);border:1px solid rgba(245,158,11,0.3);border-radius:4px;font-size:11px">Medium confidence</span>';
@@ -36,7 +38,7 @@ export function showMatchProposal(
       </div>
 
       <p style="font-size:14px;color:var(--c-muted);margin-bottom:12px">
-        We found a new activity <strong style="color:var(--c-black)">(${actDist}km)</strong> that looks like your scheduled
+        We found a new activity <strong style="color:var(--c-black)">(${actDist})</strong> that looks like your scheduled
         <strong style="color:var(--c-black)">${matchedWorkout.n}</strong> (${matchedWorkout.d}).
       </p>
 

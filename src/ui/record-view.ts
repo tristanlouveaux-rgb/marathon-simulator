@@ -11,6 +11,7 @@
 import type { GpsLiveData, SplitScheme } from '@/types';
 import {
   isTrackingActive,
+  isTrackingPaused,
   getActiveGpsData,
   getActiveWorkoutName,
   setOnTrackingStart,
@@ -20,10 +21,14 @@ import {
 } from './gps-events';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
+import { getState } from '@/state';
+import { formatKm, type UnitPref } from '@/utils/format';
 
 function navigateTab(tab: TabId): void {
   setOnTrackingTick(null);
-  if (tab === 'plan') {
+  if (tab === 'home') {
+    import('./home-view').then(({ renderHomeView }) => renderHomeView());
+  } else if (tab === 'plan') {
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   } else if (tab === 'account') {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
@@ -40,19 +45,26 @@ function formatElapsed(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-function formatPace(secPerKm: number): string {
+function formatPace(secPerKm: number, pref: UnitPref = 'km'): string {
   if (!secPerKm || secPerKm <= 0 || !isFinite(secPerKm)) return '--:--';
-  const m = Math.floor(secPerKm / 60);
-  const s = Math.floor(secPerKm % 60);
+  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
   return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function paceUnit(pref: UnitPref): string {
+  return pref === 'mi' ? '/mi' : '/km';
 }
 
 function avgPace(data: GpsLiveData): number {
   return data.totalDistance > 0 ? data.elapsed / (data.totalDistance / 1000) : 0;
 }
 
-function fmtMeters(m: number): string {
-  return m >= 1000 ? `${(m / 1000).toFixed(2)}km` : `${Math.round(m)}m`;
+function fmtMeters(m: number, pref: UnitPref = 'km'): string {
+  if (m >= 1000) return formatKm(m / 1000, pref, 2);
+  if (pref === 'mi') return `${Math.round(m * 3.28084)} ft`;
+  return `${Math.round(m)}m`;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +102,8 @@ let lastCompletedIdx = -1;
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function statsRow(elapsed: string, dist: string, pace: string, avg: string): string {
+function statsRow(elapsed: string, dist: string, pace: string, avg: string, unitPref: UnitPref = 'km'): string {
+  const unit = paceUnit(unitPref);
   return `
     <div class="grid grid-cols-4 gap-2 px-4 mb-4">
       <div class="text-center">
@@ -99,24 +112,25 @@ function statsRow(elapsed: string, dist: string, pace: string, avg: string): str
       </div>
       <div class="text-center">
         <p id="rec-dist" class="text-lg font-bold" style="color:var(--c-black)">${dist}</p>
-        <p class="text-xs" style="color:var(--c-faint)">km</p>
+        <p class="text-xs" style="color:var(--c-faint)">${unitPref}</p>
       </div>
       <div class="text-center">
         <p id="rec-pace" class="text-lg font-bold font-mono" style="color:var(--c-black)">${pace}</p>
-        <p class="text-xs" style="color:var(--c-faint)">pace</p>
+        <p class="text-xs" style="color:var(--c-muted)">pace ${unit}</p>
       </div>
       <div class="text-center">
         <p id="rec-avg-pace" class="text-2xl font-semibold font-mono" style="color:var(--c-muted)">${avg}</p>
-        <p class="text-xs" style="color:var(--c-faint)">avg</p>
+        <p class="text-xs" style="color:var(--c-faint)">avg ${unit}</p>
       </div>
     </div>
   `;
 }
 
 function controlButtons(): string {
+  const paused = isTrackingPaused();
   return `
     <div class="flex gap-3 px-4">
-      <button onclick="gpsPause()" class="flex-1 py-3 m-btn-secondary rounded-xl font-medium">Pause</button>
+      <button onclick="gpsPause()" class="flex-1 py-3 m-btn-secondary rounded-xl font-medium">${paused ? 'Resume' : 'Pause'}</button>
       <button onclick="gpsStop()" class="flex-1 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
     </div>
   `;
@@ -137,12 +151,14 @@ function recHeader(workoutName: string | null, right?: string): string {
 // ---------------------------------------------------------------------------
 
 function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
+  const unitPref = getState().unitPref ?? 'km';
   const scheme = getActiveSplitScheme();
   const totalDist = scheme?.totalDistance ?? 0;
-  const dist = (data.totalDistance / 1000).toFixed(2);
+  const distKm = data.totalDistance / 1000;
+  const dist = formatKm(distKm, unitPref, 2);
   const elapsed = formatElapsed(data.elapsed);
-  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  const avg = formatPace(avgPace(data));
+  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  const avg = formatPace(avgPace(data), unitPref);
   const pct = totalDist > 0 ? Math.min(100, (data.totalDistance / totalDist) * 100) : 0;
   const targetPace = scheme?.segments[0]?.targetPace;
 
@@ -152,10 +168,10 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
         <div id="rec-progress" class="h-full rounded-full transition-none" style="width:${pct}%;background:var(--c-ok)"></div>
       </div>
       <p class="text-xs text-center mt-1" style="color:var(--c-muted)">
-        <span id="rec-dist">${dist}</span> / ${(totalDist / 1000).toFixed(1)} km
+        <span id="rec-dist">${dist}</span> / ${formatKm(totalDist / 1000, unitPref)}
       </p>
     </div>
-  ` : `<p class="text-2xl font-bold mb-2" style="color:var(--c-black)"><span id="rec-dist">${dist}</span> km</p>`;
+  ` : `<p class="text-2xl font-bold mb-2" style="color:var(--c-black)"><span id="rec-dist">${dist}</span></p>`;
 
   return `
     <div class="flex-1 flex flex-col items-center justify-center px-6">
@@ -163,21 +179,21 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
         <span class="w-3 h-3 rounded-full animate-pulse" style="background:var(--c-warn)"></span>
         <span class="text-sm" style="color:var(--c-muted)">${workoutName ?? 'Run'}</span>
       </div>
-      ${targetPace ? `<p class="text-xs mb-4" style="color:var(--c-accent)">Target: ${formatPace(targetPace)}/km</p>` : '<div class="mb-4"></div>'}
+      ${targetPace ? `<p class="text-xs mb-4" style="color:var(--c-accent)">Target: ${formatPace(targetPace, unitPref)}${paceUnit(unitPref)}</p>` : '<div class="mb-4"></div>'}
       <p id="rec-elapsed" class="text-6xl font-bold font-mono mb-6" style="color:var(--c-black)">${elapsed}</p>
       ${progressSection}
       <div class="grid grid-cols-2 gap-6 mb-8 w-full max-w-xs mt-4">
         <div class="text-center">
           <p id="rec-pace" class="text-3xl font-bold font-mono" style="color:var(--c-black)">${pace}</p>
-          <p class="text-xs mt-1" style="color:var(--c-muted)">pace /km</p>
+          <p class="text-xs mt-1" style="color:var(--c-muted)">pace ${paceUnit(unitPref)}</p>
         </div>
         <div class="text-center">
           <p id="rec-avg-pace" class="text-2xl font-semibold font-mono" style="color:var(--c-muted)">${avg}</p>
-          <p class="text-xs mt-1" style="color:var(--c-muted)">avg /km</p>
+          <p class="text-xs mt-1" style="color:var(--c-muted)">avg ${paceUnit(unitPref)}</p>
         </div>
       </div>
       <div class="flex gap-3">
-        <button onclick="gpsPause()" class="px-6 py-3 m-btn-secondary rounded-xl font-medium">Pause</button>
+        <button onclick="gpsPause()" class="px-6 py-3 m-btn-secondary rounded-xl font-medium">${isTrackingPaused() ? 'Resume' : 'Pause'}</button>
         <button onclick="gpsStop()" class="px-6 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
       </div>
     </div>
@@ -185,6 +201,7 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
 }
 
 function patchSimpleStats(data: GpsLiveData): void {
+  const unitPref = getState().unitPref ?? 'km';
   const elapsedEl = document.getElementById('rec-elapsed');
   const distEl = document.getElementById('rec-dist');
   const paceEl = document.getElementById('rec-pace');
@@ -192,9 +209,9 @@ function patchSimpleStats(data: GpsLiveData): void {
   const progressEl = document.getElementById('rec-progress') as HTMLElement | null;
 
   if (elapsedEl) elapsedEl.textContent = formatElapsed(data.elapsed);
-  if (distEl) distEl.textContent = (data.totalDistance / 1000).toFixed(2);
-  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  if (avgEl) avgEl.textContent = formatPace(avgPace(data));
+  if (distEl) distEl.textContent = formatKm(data.totalDistance / 1000, unitPref, 2);
+  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  if (avgEl) avgEl.textContent = formatPace(avgPace(data), unitPref);
 
   if (progressEl) {
     const scheme = getActiveSplitScheme();
@@ -265,14 +282,15 @@ function buildPhasedBarHTML(data: GpsLiveData, scheme: SplitScheme): string {
 }
 
 function buildPhasedUI(data: GpsLiveData, workoutName: string | null): string {
+  const unitPref = getState().unitPref ?? 'km';
   const scheme = getActiveSplitScheme()!;
   const currentIdx = data.completedSplits.length;
   const totalSegs = scheme.segments.length;
   const currentSeg = scheme.segments[currentIdx];
   const elapsed = formatElapsed(data.elapsed);
-  const dist = (data.totalDistance / 1000).toFixed(2);
-  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  const avg = formatPace(avgPace(data));
+  const dist = formatKm(data.totalDistance / 1000, unitPref, 2);
+  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  const avg = formatPace(avgPace(data), unitPref);
   const distInSeg = data.currentSplit?.distance ?? 0;
   const remaining = currentSeg ? Math.max(0, currentSeg.distance - distInSeg) : 0;
 
@@ -282,16 +300,17 @@ function buildPhasedUI(data: GpsLiveData, workoutName: string | null): string {
       ${buildPhasedBarHTML(data, scheme)}
       <div class="m-card mx-4 p-4 mb-4">
         <p class="text-sm mb-1" style="color:var(--c-muted)">${currentSeg?.label ?? 'Complete'}</p>
-        <p id="rec-current-seg-remaining" class="text-4xl font-bold mb-1" style="color:var(--c-black)">${fmtMeters(remaining)}</p>
-        ${currentSeg?.targetPace ? `<p class="text-sm" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace)}/km</p>` : ''}
+        <p id="rec-current-seg-remaining" class="text-4xl font-bold mb-1" style="color:var(--c-black)">${fmtMeters(remaining, unitPref)}</p>
+        ${currentSeg?.targetPace ? `<p class="text-sm" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace, unitPref)}${paceUnit(unitPref)}</p>` : ''}
       </div>
-      ${statsRow(elapsed, dist, pace, avg)}
+      ${statsRow(elapsed, dist, pace, avg, unitPref)}
       ${controlButtons()}
     </div>
   `;
 }
 
 function patchPhasedStats(data: GpsLiveData): void {
+  const unitPref = getState().unitPref ?? 'km';
   const elapsedEl = document.getElementById('rec-elapsed');
   const distEl = document.getElementById('rec-dist');
   const paceEl = document.getElementById('rec-pace');
@@ -300,9 +319,9 @@ function patchPhasedStats(data: GpsLiveData): void {
   const phaseFillEl = document.getElementById('rec-phase-fill') as HTMLElement | null;
 
   if (elapsedEl) elapsedEl.textContent = formatElapsed(data.elapsed);
-  if (distEl) distEl.textContent = (data.totalDistance / 1000).toFixed(2);
-  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  if (avgEl) avgEl.textContent = formatPace(avgPace(data));
+  if (distEl) distEl.textContent = formatKm(data.totalDistance / 1000, unitPref, 2);
+  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  if (avgEl) avgEl.textContent = formatPace(avgPace(data), unitPref);
 
   const scheme = getActiveSplitScheme();
   if (!scheme) return;
@@ -312,7 +331,8 @@ function patchPhasedStats(data: GpsLiveData): void {
 
   if (remainEl && currentSeg) {
     const distInSeg = data.currentSplit?.distance ?? 0;
-    remainEl.textContent = fmtMeters(Math.max(0, currentSeg.distance - distInSeg));
+    const updUnitPref = getState().unitPref ?? 'km';
+    remainEl.textContent = fmtMeters(Math.max(0, currentSeg.distance - distInSeg), updUnitPref);
   }
 
   if (phaseFillEl && currentSeg && currentSeg.distance > 0) {
@@ -331,6 +351,14 @@ function patchPhasedStats(data: GpsLiveData): void {
 // Interval UI — rep + recovery workout
 // ---------------------------------------------------------------------------
 
+/** Format seconds as a compact time string for countdowns: "1:23" or "45s" */
+function fmtCountdown(seconds: number): string {
+  const s = Math.ceil(Math.max(0, seconds));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return m > 0 ? `${m}:${rem.toString().padStart(2, '0')}` : `${rem}s`;
+}
+
 /** Coloured phase badge from the current segment label */
 function phaseBadge(label: string): { text: string; style: string } {
   const l = label.toLowerCase();
@@ -342,14 +370,14 @@ function phaseBadge(label: string): { text: string; style: string } {
   return { text: 'ACTIVE', style: `background:rgba(0,0,0,0.06);color:var(--c-muted)` };
 }
 
-function buildSegmentListHTML(data: GpsLiveData, scheme: SplitScheme): string {
+function buildSegmentListHTML(data: GpsLiveData, scheme: SplitScheme, unitPref: UnitPref = 'km'): string {
   const currentIdx = data.completedSplits.length;
   const segments = scheme.segments;
   const compact = segments.length > 6;
 
   return segments.map((seg, i) => {
-    const distStr = fmtMeters(seg.distance);
-    const paceStr = seg.targetPace ? `${formatPace(seg.targetPace)}/km` : 'recovery';
+    const distStr = seg.durationSeconds != null ? fmtCountdown(seg.durationSeconds) : fmtMeters(seg.distance, unitPref);
+    const paceStr = seg.targetPace ? `${formatPace(seg.targetPace, unitPref)}${paceUnit(unitPref)}` : 'recovery';
     const isCompleted = i < currentIdx;
     const isCurrent = i === currentIdx;
     const isUpcoming = i > currentIdx;
@@ -380,16 +408,31 @@ function buildSegmentListHTML(data: GpsLiveData, scheme: SplitScheme): string {
 }
 
 function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string {
+  const unitPref = getState().unitPref ?? 'km';
   const scheme = getActiveSplitScheme()!;
   const currentIdx = data.completedSplits.length;
   const totalSegs = scheme.segments.length;
   const currentSeg = scheme.segments[currentIdx];
   const elapsed = formatElapsed(data.elapsed);
-  const dist = (data.totalDistance / 1000).toFixed(2);
-  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  const avg = formatPace(avgPace(data));
+  const dist = formatKm(data.totalDistance / 1000, unitPref, 2);
+  const pace = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  const avg = formatPace(avgPace(data), unitPref);
+  const isRecovery = currentSeg?.durationSeconds != null;
+  const segElapsed = data.currentSplit?.elapsed ?? 0;
   const distInSeg = data.currentSplit?.distance ?? 0;
-  const remaining = currentSeg ? Math.max(0, currentSeg.distance - distInSeg) : 0;
+
+  // Remaining value — time (s) for recovery, distance (m) for work reps
+  const remainingRaw = isRecovery
+    ? Math.max(0, currentSeg!.durationSeconds! - segElapsed)
+    : currentSeg ? Math.max(0, currentSeg.distance - distInSeg) : 0;
+
+  // Big countdown in last 5 s; formatted time otherwise
+  const remainingDisplay = isRecovery
+    ? (remainingRaw <= 5 && remainingRaw > 0
+        ? `<span style="font-size:3rem;font-weight:800;color:var(--c-warn);line-height:1">${Math.ceil(remainingRaw)}</span>`
+        : `<span class="text-2xl font-bold" style="color:var(--c-black)">${fmtCountdown(remainingRaw)} left</span>`)
+    : `<span class="text-2xl font-bold" style="color:var(--c-black)">${fmtMeters(remainingRaw, unitPref)}</span>`;
+
   const badge = phaseBadge(currentSeg?.label ?? '');
 
   return `
@@ -405,25 +448,26 @@ function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string 
       <div class="m-card mx-4 px-4 py-3 mb-3">
         <div class="flex items-baseline justify-between gap-2">
           <p class="text-sm truncate" style="color:var(--c-muted)">${currentSeg?.label ?? 'Complete'}</p>
-          <p id="rec-current-seg-remaining" class="text-2xl font-bold shrink-0" style="color:var(--c-black)">${fmtMeters(remaining)}</p>
+          <p id="rec-current-seg-remaining" class="shrink-0">${remainingDisplay}</p>
         </div>
         ${currentSeg?.targetPace
-          ? `<p class="text-xs mt-0.5" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace)}/km</p>`
-          : `<p class="text-xs mt-0.5" style="color:var(--c-faint)">jog / recover</p>`}
+          ? `<p class="text-xs mt-0.5" style="color:var(--c-accent)">${formatPace(currentSeg.targetPace, unitPref)}${paceUnit(unitPref)}</p>`
+          : `<p class="text-xs mt-0.5" style="color:var(--c-faint)">Walk or light jog</p>`}
       </div>
 
       <!-- Full segment list — fills remaining space, always visible -->
       <div id="rec-segment-list" class="mx-4 overflow-y-auto flex-1 min-h-0 mb-3 rounded-xl px-1 py-1" style="background:var(--c-bg)">
-        ${buildSegmentListHTML(data, scheme)}
+        ${buildSegmentListHTML(data, scheme, unitPref)}
       </div>
 
-      ${statsRow(elapsed, dist, pace, avg)}
+      ${statsRow(elapsed, dist, pace, avg, unitPref)}
       ${controlButtons()}
     </div>
   `;
 }
 
 function patchIntervalStats(data: GpsLiveData): void {
+  const unitPref = getState().unitPref ?? 'km';
   const elapsedEl = document.getElementById('rec-elapsed');
   const distEl = document.getElementById('rec-dist');
   const paceEl = document.getElementById('rec-pace');
@@ -433,9 +477,9 @@ function patchIntervalStats(data: GpsLiveData): void {
   const badgeEl = document.getElementById('rec-phase-badge');
 
   if (elapsedEl) elapsedEl.textContent = formatElapsed(data.elapsed);
-  if (distEl) distEl.textContent = (data.totalDistance / 1000).toFixed(2);
-  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace) : '--:--';
-  if (avgEl) avgEl.textContent = formatPace(avgPace(data));
+  if (distEl) distEl.textContent = formatKm(data.totalDistance / 1000, unitPref, 2);
+  if (paceEl) paceEl.textContent = data.currentPace && data.currentPace > 0 ? formatPace(data.currentPace, unitPref) : '--:--';
+  if (avgEl) avgEl.textContent = formatPace(avgPace(data), unitPref);
 
   const scheme = getActiveSplitScheme();
   if (!scheme) return;
@@ -444,23 +488,31 @@ function patchIntervalStats(data: GpsLiveData): void {
   const currentSeg = scheme.segments[currentIdx];
 
   if (remainEl && currentSeg) {
-    const distInSeg = data.currentSplit?.distance ?? 0;
-    remainEl.textContent = fmtMeters(Math.max(0, currentSeg.distance - distInSeg));
+    if (currentSeg.durationSeconds != null) {
+      // Time-based recovery: show countdown, big number in last 5 s
+      const segElapsed = data.currentSplit?.elapsed ?? 0;
+      const remaining = Math.max(0, currentSeg.durationSeconds - segElapsed);
+      if (remaining <= 5 && remaining > 0) {
+        remainEl.innerHTML = `<span style="font-size:3rem;font-weight:800;color:var(--c-warn);line-height:1">${Math.ceil(remaining)}</span>`;
+      } else {
+        remainEl.innerHTML = `<span class="text-2xl font-bold" style="color:var(--c-black)">${fmtCountdown(remaining)} left</span>`;
+      }
+    } else {
+      const distInSeg = data.currentSplit?.distance ?? 0;
+      remainEl.innerHTML = `<span class="text-2xl font-bold" style="color:var(--c-black)">${fmtMeters(Math.max(0, currentSeg.distance - distInSeg), unitPref)}</span>`;
+    }
   }
 
   if (listEl) {
-    listEl.innerHTML = buildSegmentListHTML(data, scheme);
+    listEl.innerHTML = buildSegmentListHTML(data, scheme, unitPref);
     if (currentIdx !== lastCompletedIdx) {
+      // Full re-render on segment change (updates badge, hint text, remaining format).
+      // Set lastCompletedIdx AFTER renderRecordView() because that function resets it to -1.
+      renderRecordView();
       lastCompletedIdx = currentIdx;
-      // Update phase badge on segment change
-      if (badgeEl && currentSeg) {
-        const badge = phaseBadge(currentSeg.label);
-        badgeEl.textContent = badge.text;
-        badgeEl.setAttribute('style', badge.style);
-        badgeEl.className = `ml-auto shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold`;
-      }
-      document.getElementById('rec-current-row')?.scrollIntoView({ block: 'nearest' });
+      return;
     }
+    document.getElementById('rec-current-row')?.scrollIntoView({ block: 'nearest' });
   }
 }
 

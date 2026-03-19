@@ -2,6 +2,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { isSimulatorMode } from '@/main';
+import { getState } from '@/state/store';
 import { isGarminConnected, isStravaConnected, getAccessToken, SUPABASE_FUNCTIONS_BASE, SUPABASE_ANON_KEY } from '@/data/supabaseClient';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 
@@ -62,13 +63,13 @@ export function renderPhysiology(container: HTMLElement, state: OnboardingState)
           <p style="font-size:12px;color:var(--c-muted);margin-bottom:12px">Fastest pace you can sustain for ~1 hour</p>
           <div style="display:flex;align-items:center;gap:8px">
             <input type="number" id="lt-min" min="2" max="10" placeholder="min"
-              value="${state.ltPace ? Math.floor(state.ltPace / 60) : ''}"
+              value="${state.ltPace ? Math.floor(((getState().unitPref ?? 'km') === 'mi' ? state.ltPace * 1.60934 : state.ltPace) / 60) : ''}"
               style="${INPUT};width:72px">
             <span style="color:var(--c-muted);font-size:16px">:</span>
             <input type="number" id="lt-sec" min="0" max="59" placeholder="sec"
-              value="${state.ltPace ? Math.floor(state.ltPace % 60) : ''}"
+              value="${state.ltPace ? Math.floor(((getState().unitPref ?? 'km') === 'mi' ? state.ltPace * 1.60934 : state.ltPace) % 60) : ''}"
               style="${INPUT};width:72px">
-            <span style="font-size:13px;color:var(--c-muted)">/km</span>
+            <span style="font-size:13px;color:var(--c-muted)">${(getState().unitPref ?? 'km') === 'mi' ? '/mi' : '/km'}</span>
           </div>
         </div>
 
@@ -232,8 +233,10 @@ function wireEventHandlers(): void {
       let populated = 0;
 
       if (snap.ltPace) {
-        (document.getElementById('lt-min') as HTMLInputElement).value = String(Math.floor(snap.ltPace / 60));
-        (document.getElementById('lt-sec') as HTMLInputElement).value = String(Math.floor(snap.ltPace % 60));
+        // Display in user's unit (Garmin returns sec/km; convert to sec/mi if needed)
+        const displayLT = (getState().unitPref ?? 'km') === 'mi' ? snap.ltPace * 1.60934 : snap.ltPace;
+        (document.getElementById('lt-min') as HTMLInputElement).value = String(Math.floor(displayLT / 60));
+        (document.getElementById('lt-sec') as HTMLInputElement).value = String(Math.floor(displayLT % 60));
         populated++;
       }
       if (snap.vo2) { (document.getElementById('vo2-input') as HTMLInputElement).value = String(Math.round(snap.vo2 * 10) / 10); populated++; }
@@ -278,7 +281,9 @@ function saveFields(): boolean {
   const ltMin = +(document.getElementById('lt-min') as HTMLInputElement)?.value || 0;
   const ltSec = +(document.getElementById('lt-sec') as HTMLInputElement)?.value || 0;
   const vo2 = +(document.getElementById('vo2-input') as HTMLInputElement)?.value || null;
-  const ltPace = (ltMin > 0 || ltSec > 0) ? ltMin * 60 + ltSec : null;
+  const ltPaceRaw = (ltMin > 0 || ltSec > 0) ? ltMin * 60 + ltSec : null;
+  // Convert sec/mi → sec/km if user entered in miles
+  const ltPace = ltPaceRaw != null && (getState().unitPref ?? 'km') === 'mi' ? ltPaceRaw / 1.60934 : ltPaceRaw;
   const restingHR = +(document.getElementById('resting-hr') as HTMLInputElement)?.value || null;
   const maxHR = +(document.getElementById('max-hr') as HTMLInputElement)?.value || null;
 

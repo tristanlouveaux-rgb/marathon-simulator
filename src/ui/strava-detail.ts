@@ -183,8 +183,9 @@ export async function drawPolylineOnCanvas(
   encoded: string,
   kmSplits?: number[],
 ): Promise<void> {
-  const coords = decodePolyline(encoded);
-  if (coords.length < 2) return;
+  // Filter [0,0] GPS artifacts before computing bounds
+  const coords = decodePolyline(encoded).filter(c => Math.abs(c[0]) > 1 || Math.abs(c[1]) > 1);
+  if (coords.length < 2) { canvas.style.display = 'none'; return; }
 
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -258,14 +259,22 @@ export async function drawPolylineOnCanvas(
   if (kmSplits && kmSplits.length > 0) {
     const minPace = Math.min(...kmSplits);
     const maxPace = Math.max(...kmSplits);
-    const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+    // Import getState lazily to avoid circular dependency
+    let unitPref: 'km' | 'mi' = 'km';
+    try { const { getState } = await import('@/state'); unitPref = getState().unitPref ?? 'km'; } catch { /* ignore */ }
+    const KM_TO_MI_PACE = 1.60934;
+    const fmtLegend = (secPerKm: number) => {
+      const sec = unitPref === 'mi' ? secPerKm * KM_TO_MI_PACE : secPerKm;
+      const unit = unitPref === 'mi' ? '/mi' : '/km';
+      return `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, '0')}${unit}`;
+    };
     ctx.font = 'bold 9px sans-serif';
     // Fast label (green end)
     ctx.fillStyle = '#22c55e';
-    ctx.fillText(`▶ ${fmt(minPace)}/km`, 4, 14);
+    ctx.fillText(`▶ ${fmtLegend(minPace)}`, 4, 14);
     // Slow label (red end)
     ctx.fillStyle = '#ef4444';
-    const slowLabel = `${fmt(maxPace)}/km ▶`;
+    const slowLabel = `${fmtLegend(maxPace)} ▶`;
     ctx.fillText(slowLabel, W - ctx.measureText(slowLabel).width - 4, 14);
   }
 
