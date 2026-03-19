@@ -1953,6 +1953,24 @@ function buildCarryOverCard(wk: Week | undefined): string {
     </div>`;
 }
 
+// ─── Km nudge card ───────────────────────────────────────────────────────────
+
+function buildKmNudgeCard(wk: Week | undefined, s: SimulatorState): string {
+  if (!wk?.kmNudge || wk.kmNudgeDismissed) return '';
+  const { workoutName, suggestedExtensionKm, originalDistanceKm } = wk.kmNudge;
+  const newKm = originalDistanceKm + suggestedExtensionKm;
+  const unitPref = s.unitPref ?? 'km';
+  return `
+    <div id="plan-km-nudge-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.3);display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:600;color:#16a34a;margin-bottom:2px">Running below target — want to add more?</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">You've been under your km floor for 2 weeks. Extend <strong>${escapeHtml(workoutName)}</strong> from ${formatKm(originalDistanceKm, unitPref)} → ${formatKm(newKm, unitPref)}?</div>
+        <button id="plan-km-nudge-apply" style="font-size:12px;font-weight:600;color:#16a34a;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:5px 12px;cursor:pointer">+ ${formatKm(suggestedExtensionKm, unitPref)} to ${escapeHtml(workoutName)}</button>
+      </div>
+      <button id="plan-km-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:16px;line-height:1;opacity:0.6" aria-label="Dismiss">×</button>
+    </div>`;
+}
+
 // ─── Adjust week row ─────────────────────────────────────────────────────────
 
 function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
@@ -2115,6 +2133,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       <!-- Workout card list -->
       <div id="plan-card-list" style="background:var(--c-bg)">
         ${buildCarryOverCard(wk)}
+        ${buildKmNudgeCard(wk, s)}
         ${buildAdjustWeekRow(wk, s)}
         ${buildInjuryBanner()}
         ${buildMorningPainCheck()}
@@ -2412,6 +2431,39 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const wk2 = s2.wks?.[s2.w - 1];
     if (!wk2) return;
     wk2.carryOverCardDismissed = true;
+    saveState();
+    renderPlanView();
+  });
+
+  // ─── Km nudge card ────────────────────────────────────────────────────────
+  document.getElementById('plan-km-nudge-apply')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[s2.w - 1];
+    if (!wk2?.kmNudge) return;
+    const { workoutName, dayOfWeek, suggestedExtensionKm, originalDistanceKm } = wk2.kmNudge;
+    const newKm = originalDistanceKm + suggestedExtensionKm;
+    // Apply as a workoutMod so it shows in the plan and can be undone
+    if (!wk2.workoutMods) wk2.workoutMods = [];
+    wk2.workoutMods = wk2.workoutMods.filter(m => !(m.name === workoutName && m.modReason?.startsWith('KmNudge:')));
+    wk2.workoutMods.push({
+      name: workoutName,
+      dayOfWeek,
+      status: 'extended',
+      modReason: `KmNudge: Running volume below floor — easy run extended`,
+      originalDistance: `${originalDistanceKm}km`,
+      newDistance: `${newKm}km easy`,
+    });
+    delete wk2.kmNudge;
+    saveState();
+    renderPlanView();
+  });
+  document.getElementById('plan-km-nudge-dismiss')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[s2.w - 1];
+    if (!wk2) return;
+    wk2.kmNudgeDismissed = true;
     saveState();
     renderPlanView();
   });

@@ -271,6 +271,8 @@ export interface Week {
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
   hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
   carryOverCardDismissed?: boolean;             // User dismissed the carry-over card for this week
+  kmNudge?: { workoutName: string; dayOfWeek?: number; suggestedExtensionKm: number; originalDistanceKm: number; }; // Under-load nudge: extend easy run
+  kmNudgeDismissed?: boolean;                   // User dismissed the km nudge for this week
   ltAutoUpdate?: {
     week: number;
     newLT: number;

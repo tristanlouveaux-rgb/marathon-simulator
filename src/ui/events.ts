@@ -1086,6 +1086,46 @@ export async function next(): Promise<void> {
         delete nextWk.weekAdjustmentReason;
         delete nextWk.scheduledAcwrStatus;
       }
+
+      // ─── Km floor nudge ────────────────────────────────────────────────────
+      // If fatigue is safe and the athlete has run below their phase km floor
+      // for 2+ consecutive weeks, suggest extending the nearest upcoming easy run.
+      // Never fires during taper (deliberately low volume) or when ACWR is elevated.
+      if (acwr.status === 'safe' && nextWk.ph !== 'taper') {
+        const mTimeSec = (s.pac?.m ?? 360) * 42.195;
+        const floorTier = mTimeSec < 3.5 * 3600 ? 'fast' : mTimeSec < 4.5 * 3600 ? 'mid' : 'finish';
+        const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
+        const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
+        const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (s.w - 2) / ((s.tw ?? 16) - 1));
+
+        // Check the two completed weeks immediately before the one we just advanced from
+        const prevWeeks = s.wks.slice(Math.max(0, s.w - 3), s.w - 1);
+        const consecutiveBelow = prevWeeks.length >= 2 &&
+          prevWeeks.every(pw => (pw.completedKm ?? 0) > 0 && (pw.completedKm ?? 0) < floorKm);
+
+        if (consecutiveBelow) {
+          const nextWorkouts = generateWeekWorkouts(
+            nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
+            null, s.recurringActivities, s.onboarding?.experienceLevel,
+            undefined, undefined, s.w, s.tw, s.v, s.gs,
+          );
+          const easyRun = nextWorkouts.find(wo =>
+            wo.t === 'easy' && !nextWk.rated[wo.id ?? wo.n]
+          );
+          if (easyRun) {
+            const distMatch = easyRun.d?.match(/(\d+\.?\d*)\s*km/i);
+            const plannedKm = distMatch ? parseFloat(distMatch[1]) : 8;
+            const extensionKm = Math.min(5, Math.max(1.5, Math.round(plannedKm * 0.20 * 2) / 2));
+            nextWk.kmNudge = {
+              workoutName: easyRun.n,
+              dayOfWeek: (easyRun as any).dayOfWeek,
+              suggestedExtensionKm: extensionKm,
+              originalDistanceKm: plannedKm,
+            };
+            log(`Week ${s.w}: km nudge — extend "${easyRun.n}" by +${extensionKm}km (${plannedKm}km → ${plannedKm + extensionKm}km)`);
+          }
+        }
+      }
     }
   }
 
