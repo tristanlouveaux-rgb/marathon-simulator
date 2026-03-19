@@ -792,6 +792,7 @@ Both views now read from the same computation path.
 | P2 | ISSUE-97: Home load graph confusing — remove? | Home | Small | Medium |
 | P2 | ISSUE-98: Activity card no load split by type | Cards | Small | Medium |
 | P3 | ISSUE-92: Onboarding historic load scan before plan start | Wizard | Medium | High |
+| P3 | ISSUE-107: Verify "Wrap up week" Sunday behaviour on device | Plan | — | Medium |
 
 
 ---
