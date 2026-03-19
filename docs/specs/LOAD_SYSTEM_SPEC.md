@@ -1,8 +1,35 @@
 # Load System Rebuild — Full Specification
 
-**Status:** Phase A ✅ · Phase B ✅ · Phase B v2 ✅ · Phase B v3 backend ✅ · Phase B v3 UI ✅ · Phase C1 backend ✅ · Phase C1 UI ✅ · Phase C2 ✅ · Phase C3 ✅ (core complete — ACWR-aware week generation ongoing)
-**Date:** 2026-02-27 (updated after Phase B v2 verification)
+**Status:** Phase A ✅ · Phase B ✅ · Phase B v2 ✅ · Phase B v3 backend ✅ · Phase B v3 UI ✅ · Phase C1 backend ✅ · Phase C1 UI ✅ · Phase C2 ✅ · Phase C3 ✅ · ACWR-aware week generation ✅ · iTRIMP calibration from Strava labels ✅
+**Date:** 2026-03-02
 **Scope:** TSS unification, ACWR injury risk, Strava history → smarter plans, athlete tier detection, HR zone matching for cross-training replacement, Volume ACWR bar.
+
+> **UX design phase: complete.** No further UX redesign work is planned. All remaining items below are backend or product logic gaps.
+
+---
+
+## 0. Remaining Gaps (not yet built)
+
+The phase-level milestones above are complete, but the following sub-features within those phases were never implemented:
+
+| # | Section | Gap | Priority |
+|---|---------|-----|----------|
+| 1 | §12.9 | ~~**Load History Chart**~~ ✅ Done — stacked area chart (aerobic/anaerobic split), time range selector (8w/16w/all). See §12.9. | High |
+| 2 | §5.6 | ~~**Minimum running km floors**~~ ✅ Done — goal-time-scaled floor, linear ramp, 2-week nudge in volume bar | High |
+| 3 | §8 | ~~**5-rule plain language reduction logic**~~ ✅ Done — all 5 rules in ACWR modal header (intensity spike / km spike / cross-training spike / consecutive / trailing zone) | Medium |
+| 4 | §6.5 | ~~**"Already completed" + "no matching run" modal flows**~~ ✅ Done — edge case panels with [Apply to next week] / [Log load only] buttons | Medium |
+| 5 | §6.3 | **Stage 2 ongoing iTRIMP refinement** — update thresholds from each confirmed planned workout with Strava match (Stage 1 calibration from labelled history is done) | Low |
+| 6 | §2 | **Athlete tier auto-update suggestion** — surface "Your training suggests you may be [Tier] — update?" when CTL sits above/below tier range for 3+ consecutive weeks | Low |
+| 7 | §13 | **Phase E: History-aware plan initialisation** — use `ctlBaseline` and `historicWeeklyZones` to suggest `rw` (runs/week) and intensity distribution at plan start. Currently only weekly km (`wkm`) is seeded from history; runs/week and zone balance are not. See §13 below. | Medium |
+
+### Supabase deployment required (your action)
+
+The `calibrate` edge function mode (iTRIMP threshold calibration from workout names) depends on an `activity_name` column that was added in migration `supabase/migrations/20260302_activity_name.sql`. This migration has **not been applied** to the production database. Until deployed:
+- `calibrate` mode returns no results
+- `s.intensityThresholds` stays at defaults (70/95 TSS/hr)
+- Stage 1 iTRIMP calibration silently no-ops
+
+The `history` mode (8-week training load pull, plan seeding) reads from existing `garmin_activities` rows — **no migration needed**, works as soon as the edge function is deployed.
 
 ---
 
@@ -655,13 +682,22 @@ See spec §6.5 for exact copy and recommendation logic.
 
 ---
 
-### 12.6 What's still being built (don't wire yet)
+### 12.6 Phase completion status
 
-Phase B v3 + Phase C1 backends are complete. The following remain:
-- Phase B v3 UI — `suggestion-modal.ts` modal header (sport info, speed, match quality, km impact) — **waiting on UX redesign**
-- Phase C1 UI — 8-week sparkline on Training tab + full chart on Stats page — **waiting on UX redesign** (see §12.8)
-- Phase C2 — history-informed onboarding wizard step — not yet built
-- Phase C3 — adaptive plan rebuild button — not yet built
+All major phases are now complete. See §0 for remaining sub-feature gaps.
+
+| Item | Status |
+|------|--------|
+| Phase B v3 UI — `suggestion-modal.ts` header (sport, effort type, matched run, km gap) | ✅ Done |
+| Phase C1 UI — 8-week sparkline (Training tab) + full chart (Stats page) | ✅ Done |
+| Phase C2 — history-informed onboarding wizard step (`strava-history.ts`) | ✅ Done |
+| Phase C3 — adaptive plan rebuild button (Account view) | ✅ Done |
+| Minimum running km floors (§5.6) | ❌ Not built |
+| "Already completed" / "no matching run" modal flows (§6.5) | ❌ Not built |
+| Stage 2 iTRIMP ongoing refinement (§6.3) | ❌ Not built |
+| Tier auto-update suggestion (§2) | ❌ Not built |
+| 5-rule plain language reduction copy (§8) | ❌ Not built |
+| `activity_name` Supabase migration deployed | ⚠️ Pending — your action |
 
 ### 12.8 Phase C1 — wiring the sparkline and history chart (UX agent)
 
@@ -699,6 +735,88 @@ if (s.stravaConnected && !s.stravaHistoryFetched) {
 // Pass s.ctlBaseline as optional 4th param — implement when wiring
 ```
 
+### 12.9 Phase D — Load History Chart ❌ NOT BUILT
+
+A richer, scrollable load history chart on the Stats page. Replaces the current 8-bar block chart with smooth area curves that show fitness trends over time.
+
+#### What it looks like
+
+One chart, two layers:
+
+```
+TSS
+ ▲
+ │        ╭───╮
+ │   ╭────╯   ╰────╮        ← Aerobic (base + threshold, blue area)
+ │───╯              ╰───────
+ │  ░░░░░░░░░░░░░░░░░░░░░░░  ← Anaerobic (intensity, orange area, stacked on top)
+ │                            ← CTL curve (white/grey line, smooth)
+ └────────────────────────── weeks
+```
+
+- **Aerobic area** (blue): `zoneBase + zoneThreshold` TSS per week — the sustainable fitness base
+- **Anaerobic area** (orange, stacked on top): `zoneIntensity` TSS per week — hard efforts
+- **CTL curve** (line overlay): rolling 42-day fitness trend — smooths over individual weeks
+- **Running km** (optional secondary axis, dashed grey line): volume context alongside load
+- **Now marker**: vertical line at the current plan week
+
+All values are in TSS — the universal currency already used everywhere in the app.
+
+#### Time range selector
+
+Three buttons below the chart: **8 weeks · 16 weeks · All**
+
+- 8 weeks: default, fast load (already cached in `historicWeeklyTSS`)
+- 16 weeks: fetches with `{ mode: 'history', weeks: 16 }` — edge function already supports up to 52
+- All: fetches with `weeks: 52` (or however far back Strava data goes)
+
+Store the extended history separately from the 8-week default so the 8-week fetch stays fast on startup.
+
+#### Tap interaction
+
+Tapping any point on the chart shows a tooltip:
+```
+Week of Mar 3
+Total TSS: 284
+  Aerobic   218  ████████████████░░░░
+  Anaerobic  66  ████░░░░░░░░░░░░░░░░
+Running km: 52km
+```
+
+#### State additions
+
+```typescript
+// SimulatorState additions
+historicWeeklyZones?: { base: number; threshold: number; intensity: number }[];  // parallel to historicWeeklyTSS
+extendedHistoryWeeks?: number;         // how many weeks are loaded beyond the default 8
+extendedHistoryTSS?: number[];         // longer window, loaded on demand
+extendedHistoryKm?: number[];
+extendedHistoryZones?: { base: number; threshold: number; intensity: number }[];
+```
+
+#### Edge function — no changes needed
+
+The `history` mode already returns `zoneBase`, `zoneThreshold`, `zoneIntensity` per row. The client just needs to:
+1. Store zone breakdown alongside `historicWeeklyTSS` (currently only total TSS is stored — minor addition to `fetchStravaHistory()`)
+2. Add a `fetchExtendedHistory(weeks: 16 | 52)` function that calls the same edge function with a larger `weeks` param and stores to the `extended*` fields
+
+#### Files to change
+
+| File | Change |
+|------|--------|
+| `src/data/stravaSync.ts` | Store `historicWeeklyZones` from `zoneBase/zoneThreshold/zoneIntensity` in `fetchStravaHistory()`; add `fetchExtendedHistory(weeks)` |
+| `src/types/state.ts` | Add `historicWeeklyZones?`, `extendedHistory*` fields |
+| `src/ui/stats-view.ts` | Replace current 8-bar chart with stacked area SVG chart; add time range selector; tap tooltip |
+
+#### Principles
+
+- SVG-based (no chart library dependency — consistent with existing sparkline approach in the codebase)
+- Mobile-first: chart fills screen width, touch-friendly tap targets
+- "Building history…" placeholder until `stravaHistoryFetched` is true
+- No data, no guilt: if fewer than 4 weeks of history exist, show a gentle "Keep training — your chart will fill in here" message rather than a sparse chart
+
+---
+
 ### 12.7 Phase B v3 — what was built (backend complete 2026-02-27)
 
 | File | What was added |
@@ -708,3 +826,63 @@ if (s.stravaConnected && !s.stravaHistoryFetched) {
 | `src/types/state.ts` | `SimulatorState.intensityThresholds?` |
 
 **To wire the Phase B v3 UI** — see §6.5 for modal design. The data is in the `actClassification` log line (`[CrossTraining] Zone classification: ...`). For the modal header, call `classifyWorkoutType()` from `universalLoad.ts` with the activity's sport/iTrimp/hrZones and use the returned `type`, `tss`, and `method`.
+
+---
+
+## 13. Phase E — History-Aware Plan Initialisation
+
+### Problem
+
+When Strava history is accepted (`stravaHistoryAccepted = true`), the wizard seeds:
+- `s.wkm` ← `detectedWeeklyKm` (weekly running km from history)
+
+But it does **not** seed:
+- `s.rw` (runs/week) — stays at the default from onboarding (usually 4–5)
+- Intensity distribution — the plan generator always starts with the same zone balance regardless of the athlete's actual training style
+
+This means a runner who trains 6 days/week at low intensity gets the same plan structure as one who runs 3 days/week with heavy interval work.
+
+### What needs to be built
+
+#### E1 — Infer `rw` from history
+
+Given `historicWeeklyTSS`, `historicWeeklyKm`, and `detectedWeeklyKm`, estimate a plausible runs/week:
+
+```
+if wkm < 25 → rw = 3
+if wkm < 40 → rw = 4
+if wkm < 55 → rw = 5
+if wkm < 70 → rw = 6
+else        → rw = min(7, rw_current)
+```
+
+Apply only when `stravaHistoryAccepted` is true and `rw` has not been manually overridden in onboarding (check `onboarding.runsPerWeek !== undefined`).
+
+Location: `src/ui/initialization.ts` after the `wkm` assignment.
+
+#### E2 — Bias zone distribution from history
+
+`historicWeeklyZones` gives a per-week `{base, threshold, intensity}` breakdown for the last 8 weeks. Average them to get the athlete's habitual zone balance, and store as:
+
+```typescript
+s.historicZoneProfile = { base: number, threshold: number, intensity: number }
+// normalised to sum to 1.0
+```
+
+In `src/workouts/scheduler.ts` or `renderer.ts`, the first 2 weeks of the plan should match the athlete's habitual zone split (rather than the plan's prescribed intensity). Subsequent weeks follow the plan prescription.
+
+This prevents "sudden load shock" on week 1 (e.g., a base-only runner immediately getting high-intensity sessions).
+
+#### E3 — Strava history screen shows inferred `rw`
+
+The `strava-history.ts` wizard step should display "We suggest starting at **N runs/week** based on your history" alongside the km and TSS summary, and allow the user to adjust before confirming.
+
+### Files to touch
+
+| File | Change |
+|---|---|
+| `src/ui/initialization.ts` | E1: infer `rw` from `detectedWeeklyKm` |
+| `src/types/state.ts` | Add `historicZoneProfile?` field |
+| `src/data/stravaSync.ts` | Compute and store `historicZoneProfile` in `fetchStravaHistory()` |
+| `src/ui/wizard/steps/strava-history.ts` | E3: show inferred `rw` in history summary |
+| `src/workouts/scheduler.ts` | E2: use `historicZoneProfile` to bias week-1/2 intensity |

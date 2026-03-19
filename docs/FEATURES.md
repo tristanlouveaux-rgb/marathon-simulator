@@ -69,6 +69,28 @@ Update the status column after running `npx vitest run`.
 **Key file**: `src/calculations/heart-rate.ts`
 **Tests**: `src/calculations/efficiency.test.ts` — ✅ Passing
 
+### 7b. HR Effort + Pace Adherence → Plan Engine (ISSUE-35 Build 1)
+**What it does**: Every synced run gets two objective scores: (1) HR effort score — how hard it was relative to the target HR zone (from Strava HR data), and (2) pace adherence — how close actual pace was to target pace from VDOT tables. These blend into the weekly `effortScore` alongside RPE, which the plan engine uses to scale future workout durations.
+
+**Weighting**: Quality sessions (threshold, VO2, marathon pace) weight pace at 35% — missing pace targets on hard workouts is the strongest signal. Easy runs weight pace at only 15%. HR fills the gap between RPE and reality.
+
+**User-facing**: Future weeks in the plan show an adaptive note explaining workouts will adjust, with context ("you missed pace targets on recent quality sessions").
+
+**Key files**: `src/calculations/heart-rate.ts` (`computeHREffortScore`), `src/calculations/activity-matcher.ts` (`computePaceAdherence`, `getHREffort`, `getPaceAdherence`), `src/ui/events.ts` (blended effort score), `src/ui/plan-view.ts` (`buildAdaptiveNote`)
+**Tests**: ⚠️ No dedicated tests yet — logic verified via existing 756 tests passing
+
+---
+
+### 7c. Workout Commentary — Coach's Notes (ISSUE-35 Build 3)
+**What it does**: Every completed activity gets 2-3 sentences of coaching commentary on its detail screen. Rules-based — picks the most relevant insights from pace adherence, HR effort, HR drift, split patterns (negative split, late fade, evenness), and HR zone distribution.
+
+**Tone**: Direct, coaching voice. Not robotic, not sycophantic. Praises good execution, flags issues with actionable context ("consider starting more conservatively"), explains how the plan adapts.
+
+**Works for all activity types** — runs get pace/split/drift analysis, cross-training gets HR effort + load commentary.
+
+**Key files**: `src/calculations/workout-insight.ts` (`generateWorkoutInsight`), `src/ui/activity-detail.ts` (renders "Coach's Notes" card)
+**Tests**: ⚠️ No dedicated tests yet
+
 ---
 
 ## Training Plan
@@ -213,21 +235,23 @@ Update the status column after running `npx vitest run`.
 
 ---
 
-### 18b. Cross-Training Load Management v2 *(designed 2026-03-04 — not yet built)*
+### 18b. Cross-Training Load Management v2 *(designed 2026-03-04 — partially built)*
 
 > Replaces the current "overflow → blocking modal" pattern with a tiered,
 > baseline-relative, timing-aware system. See PRINCIPLES.md for the "why."
+>
+> **Update 2026-03-12**: Signal B baseline data (`historicWeeklyRawTSS`,
+> `signalBBaseline`, `sportBaselineByType`) is now populated from the Strava edge
+> function. The plan bar and excess detection are being redesigned — see
+> `docs/specs/LOAD_BUDGET_SPEC.md` for the full Load Budget specification which
+> supersedes the baseline/excess sections below.
 
-#### Signal B weekly baseline
+#### Signal B weekly baseline — ✅ DATA EXISTS
 
-- New state field: `historicWeeklyRawTSS` — array of weekly raw iTRIMP totals (no runSpec)
-  from Strava history. Parallel to existing `historicWeeklyTSS` (Signal A).
-- New state field: `signalBBaseline` — 8-week EMA of `historicWeeklyRawTSS`.
-- Requires a new edge function query: `sport-history` mode on `sync-strava-activities`.
-  Groups `garmin_activities` by week, sums iTRIMP per week without runSpec discount.
-- **Fallback until edge function built**: use Signal A weekly total × 1.4 as a proxy
-  (rough conversion — understates baseline, so excess warnings will be slightly over-sensitive).
-- Excess this week = `currentWeekSignalB − signalBBaseline`.
+- `historicWeeklyRawTSS` — populated from Strava edge function `history` mode
+- `signalBBaseline` — computed in `stravaSync.ts` as **median** of weekly rawTSS (resistant to injury gaps)
+- `sportBaselineByType` — per-sport average session TSS + frequency/week
+- No proxy fallbacks needed — real Signal B data flows from the edge function
 
 #### Initialisation load graph
 
@@ -255,14 +279,12 @@ shows an 8-week chart of the athlete's historic Signal B load with:
 **Key files to modify**: `src/ui/activity-review.ts` (`autoProcessActivities`),
 `src/data/activitySync.ts`, `src/calculations/fitness-model.ts` (TSS delta).
 
-#### Tier 2 — Nudge card (15–40 TSS excess)
+#### Tier 2 — Nudge card (15–40 TSS excess) — ✅ BUILT
 
-- Amber card at top of Training tab: *"32 TSS of cross-training load waiting · Adjust week"*
-- Does NOT block or interrupt. Dismissable.
-- Tapping opens the existing reduce/replace modal flow (`triggerExcessLoadAdjustment`).
-- Card clears once the user adjusts or explicitly dismisses.
-- Existing `excess-load-card.ts` is the base for this — needs threshold-relative copy
-  and "32 TSS above your baseline" framing instead of raw TSS total.
+- Amber card: *"32 TSS above your usual week · Adjust plan"*
+- Detects from total week Signal B vs `computePlannedSignalB()` — matching irrelevant.
+- [Adjust Plan] → reduce/replace modal with `reductionTSS = excess × weightedRunSpec × recoveryMultiplier`.
+- [Dismiss] → two-tap; writes a suppression mod so card hides for the rest of the week.
 
 **Key file**: `src/ui/excess-load-card.ts`.
 
@@ -312,17 +334,14 @@ shows an 8-week chart of the athlete's historic Signal B load with:
 - Do NOT remove a quality session because of cross-training surplus.
 - These are two independent signals surfaced separately.
 
-#### Strava sport-history edge function (new)
+#### Strava sport-history edge function — ✅ RESOLVED
 
-New mode `sport-history` on `sync-strava-activities`:
-- Query `garmin_activities` for all activities since 16w ago
-- For each week: sum raw iTRIMP (no runSpec) → `weeklyRawTSS`
-- Return: `HistoryRawRow[] = { weekStart: string, rawTSS: number, breakdown: Record<sport, rawTSS> }`
-- Client stores `historicWeeklyRawTSS` in state from this response
-- Per-sport breakdown stored in `sportBaselineByType` for Phase 2 per-session calibration
+The `history` mode on `sync-strava-activities` already returns both `totalTSS` (Signal A)
+and `rawTSS` (Signal B) per week, plus `sportBreakdown` with per-sport raw TSS. No
+separate `sport-history` mode needed.
 
 **Tests to write**: timing check unit tests; baseline delta computation; Tier 1 auto-apply
-distance reduction formula.
+distance reduction formula; Load Budget integration tests (per LOAD_BUDGET_SPEC §9).
 
 **Status**: ❌ Not yet built
 
@@ -410,7 +429,7 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 - Bucket contents (Excess Load, Log Only) shown as chips. Tap × to return an activity to the tray.
 - Confirm returns confirmed matchings + bucket items to `applyReview`.
 
-**Excess Load Card** (`src/ui/excess-load-card.ts`): always visible on the Training tab. Empty state shows "No overflow" placeholder. When `wk.unspentLoadItems` is non-empty, shows amber card with aerobic/anaerobic bars, [Adjust Plan] (fires reduce/replace modal), and [Dismiss] (two-tap). Tap body for item-by-item popup.
+**Excess Load Card** (`src/ui/excess-load-card.ts`): amber card on the Training tab when total week Signal B exceeds `computePlannedSignalB()` by 15–40 TSS (Tier 2). Detection is from the full week picture — whether activities matched plan slots or not is irrelevant. Shows TSS over target and [Adjust Plan] / [Dismiss] buttons. "Adjust Plan" triggers reduce/replace modal using total excess × weightedRunSpec × recoveryMultiplier. Tier 1 (≤15 TSS): auto-suppressed. Tier 3 (>40 TSS): blocking modal fires instead.
 
 **UnspentLoadItem** (`src/types/state.ts`): `garminId`, `displayName`, `sport`, `durationMin`, `aerobic`, `anaerobic`, `date`, `reason`.
 
@@ -458,7 +477,9 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 ### 25. State Persistence
 **What it does**: Saves and restores the entire app state (your plan, ratings, injury history, settings) to the device's local storage. Includes schema migrations so old saved states upgrade cleanly when the app updates.
 
-**Key file**: `src/state/persistence.ts`
+**Supabase backup**: Every `saveState()` call also fires a background upsert to `user_plan_settings` (Supabase). On login, if localStorage is empty (wipe, reinstall, new device), the app silently restores from this backup before rendering — no user action required. Large re-fetchable arrays (`historicWeeklyTSS`, `physiologyHistory`, etc.) are excluded from the snapshot and rebuilt from Strava/Garmin on first sync.
+
+**Key files**: `src/state/persistence.ts`, `src/data/planSettingsSync.ts`
 **Tests**: `src/state/persistence.test.ts` — ✅ Passing
 
 ---
@@ -546,8 +567,9 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - `src/ui/main-view.ts` — `updateACWRBar()`, `updateLightenedWeekBanner()`, `triggerACWRReduction()`, `updateCarryBanner()`, `computeConsecutiveOverrides()`
 - `src/ui/suggestion-modal.ts` — `ACWRModalContext`, `CrossTrainingModalContext`, `showSuggestionModal()` (4th+5th param)
 - `src/workouts/plan_engine.ts` — `PlanContext.acwrStatus`, quality cap reduction
-- `src/workouts/generator.ts` — `generateWeekWorkouts()` acwrStatus param (now wired from renderer)
-- `src/ui/renderer.ts` — passes `acwrStatus` to `generateWeekWorkouts` on each render
+- `src/workouts/generator.ts` — `generateWeekWorkouts()` effortScore + acwrStatus params (wired from all call sites)
+- `src/calculations/fitness-model.ts` — `getTrailingEffortScore()` shared helper (trailing RPE from last 2 weeks)
+- `src/ui/renderer.ts`, `home-view.ts`, `plan-view.ts`, `events.ts`, `main-view.ts`, `activity-review.ts`, `recording-handler.ts`, `timing-check.ts` — all pass effortScore + acwrStatus to `generateWeekWorkouts`
 - `src/ui/events.ts` — zone carry tracking + `weekAdjustmentReason` on week-advance
 - `src/types/state.ts` — `Week.carriedTSS`, `Week.acwrOverridden`, `SimulatorState.athleteTier/athleteTierOverride`
 - `src/types/activities.ts` — `SportConfig.volumeTransfer`, `SportConfig.intermittent`

@@ -186,18 +186,21 @@ Quick reference for reading code that uses `s = getState()`:
 
 ### `generateWeekWorkouts()` call signature
 
-15 positional params. Called from `renderer.ts:render()`:
+17 positional params. Called from all UI entry points:
 
 ```ts
 generateWeekWorkouts(
   phase, runsPerWeek, raceDistance, runnerType,
   previousSkips, commuteConfig, injuryState, recurringActivities,
   fitnessLevel, hrProfile, easyPaceSecPerKm,
-  weekIndex, totalWeeks, vdot, gymSessionsPerWeek
+  weekIndex, totalWeeks, vdot, gymSessionsPerWeek,
+  effortScore, acwrStatus
 )
 ```
 
-When `weekIndex` and `totalWeeks` are provided, uses `planWeekSessions()`. Otherwise falls back to the legacy `rules_engine.ts`.
+17 positional params. When `weekIndex` and `totalWeeks` are provided, uses `planWeekSessions()`. Otherwise falls back to the legacy `rules_engine.ts`.
+
+`effortScore` (trailing RPE from `getTrailingEffortScore()`) and `acwrStatus` (from `wk.scheduledAcwrStatus`) enable the plan engine to scale workout durations (5–15% reduction) and strip quality sessions when load is high.
 
 ### State access pattern
 
@@ -449,6 +452,7 @@ The shift modulates the RPE-based `ch` value by ±10–15%. Weekly cap: ±0.3 VD
 
 | Doc | Covers |
 |-----|--------|
+| `docs/PRINCIPLES.md` | Product philosophy, three-signal load model, protection hierarchy, stats display intent |
 | `docs/FEATURES.md` | Full feature list with plain-English descriptions and test status |
 | `docs/CHANGELOG.md` | Session-by-session change history |
 | `docs/recovery-deloading-spec.md` | Recovery scoring, deload logic, adjustment rules |
