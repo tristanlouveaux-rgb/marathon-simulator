@@ -681,10 +681,8 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
-### ISSUE-96: "Start Run" goes to a blank record screen; should pre-load today's session *(P2)*
-**Symptom**: Tapping "Start Run" on the Home page navigates to the record view, but the planned workout is not pre-loaded. The user has to tap "Go" again with no context about what they should be running.
-**Fix**: Pass today's planned workout (distance, target pace, session description) into the record view when navigating from "Start Run" on the Home page.
-**Files**: `src/ui/home-view.ts`, `src/ui/record-view.ts`, `src/ui/gps-events.ts`.
+### ✅ ISSUE-96: "Start Run" pre-loads today's session *(fixed)*
+Today's planned workout (distance, target pace, session description) is passed into the record view when navigating from "Start Run" on the Home page. Confirmed working.
 
 ---
 
@@ -788,7 +786,7 @@ Both views now read from the same computation path.
 | ✅ | ISSUE-93: 8W/16W/All tabs confusing | Stats | Small | Low |
 | P2 | ISSUE-94: Activity maps too zoomed out, attribution clutter | Cards | Small | Medium |
 | P2 | ISSUE-95: Injury icon inconsistency (heart vs emoji) | UI | Small | Low |
-| P2 | ISSUE-96: Start Run goes to blank record screen | Home | Small | Medium |
+| ✅ | ISSUE-96: Start Run goes to blank record screen | Home | Small | Medium |
 | P2 | ISSUE-97: Home load graph confusing — remove? | Home | Small | Medium |
 | P2 | ISSUE-98: Activity card no load split by type | Cards | Small | Medium |
 | P3 | ISSUE-92: Onboarding historic load scan before plan start | Wizard | Medium | High |
