@@ -14,7 +14,7 @@ import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
@@ -1044,6 +1044,23 @@ export async function next(): Promise<void> {
       };
     } else {
       delete wk.carriedTSS;
+    }
+  }
+
+  // ─── Settle unspentLoadItems at week end ─────────────────────────────
+  // If the week finished at or under its planned Signal B, any items that were
+  // tagged mid-week as "excess" were already absorbed by the overall load — clear them.
+  // This prevents false carry-over into next week for weeks that ended under target.
+  {
+    const plannedB = computePlannedSignalB(
+      s.historicWeeklyTSS ?? [], s.ctlBaseline ?? 0,
+      wk.ph ?? 'base', s.athleteTierOverride ?? s.athleteTier ?? 'recreational',
+      s.rw ?? 4, undefined, undefined, s.sportBaselineByType,
+    );
+    const weekExcess = getWeeklyExcess(wk, plannedB, s.planStartDate);
+    if (weekExcess <= 0 && wk.unspentLoadItems?.length) {
+      wk.unspentLoadItems = [];
+      log(`Week ${s.w}: under planned load (${Math.round(weekExcess)} TSS excess) — unspentLoadItems cleared at advance`);
     }
   }
 
