@@ -222,7 +222,10 @@ export function triggerExcessLoadAdjustment(): void {
 
   // Compute total week excess (Signal B vs plannedSignalB)
   const excess = computeTotalWeekExcess(wk, s);
-  if (excess <= 0) return;
+  const hasCarriedItems = (wk.unspentLoadItems?.length ?? 0) > 0;
+  // Allow carry-over card to open even when current-week excess is ≤ 0 —
+  // the items were unresolved from last week and are already in state.
+  if (excess <= 0 && !hasCarriedItems) return;
 
   // Recovery trend multiplier — modulates how aggressively we reduce.
   // Passed to buildCrossTrainingPopup which inflates runReplacementCredit accordingly.

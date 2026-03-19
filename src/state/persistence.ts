@@ -5,6 +5,7 @@ import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities } from './store';
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
+import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
 
 const STATE_KEY = 'marathonSimulatorState';
 const CROSS_KEY = 'marathonSimulatorCross';
@@ -327,16 +328,31 @@ export function loadState(): boolean {
         const prevWk = migrated.wks?.[currW - 2];
         const currWk = migrated.wks?.[currW - 1];
         if (prevWk?.unspentLoadItems?.length && currWk) {
-          const existingIds = new Set((currWk.unspentLoadItems || []).map(i => i.garminId));
-          const toCarry = prevWk.unspentLoadItems.filter(i => !existingIds.has(i.garminId));
-          if (toCarry.length > 0) {
-            if (!currWk.unspentLoadItems) currWk.unspentLoadItems = [];
-            currWk.unspentLoadItems.push(...toCarry);
-            currWk.hasCarriedLoad = true;
-            // Clear carried items from previous week to avoid double-display on back-navigation
-            prevWk.unspentLoadItems = prevWk.unspentLoadItems.filter(i => existingIds.has(i.garminId));
+          // Only carry items forward if the previous week was genuinely over its planned load.
+          // If the week finished at or under target, the activities were already absorbed — don't flag.
+          const prevPlannedB = computePlannedSignalB(
+            migrated.historicWeeklyTSS ?? [], migrated.ctlBaseline ?? 0,
+            prevWk.ph ?? 'base', migrated.athleteTierOverride ?? migrated.athleteTier ?? 'recreational',
+            migrated.rw ?? 4, undefined, undefined, migrated.sportBaselineByType,
+          );
+          const prevExcess = getWeeklyExcess(prevWk, prevPlannedB, migrated.planStartDate);
+          if (prevExcess <= 0) {
+            // Week was under target — clear the items, nothing to carry
+            prevWk.unspentLoadItems = [];
             localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
-            console.log(`  Carried ${toCarry.length} unresolved excess load items from week ${currW - 1} → week ${currW}`);
+            console.log(`  Week ${currW - 1} was under planned load (excess ${Math.round(prevExcess)} TSS) — clearing unspentLoadItems`);
+          } else {
+            const existingIds = new Set((currWk.unspentLoadItems || []).map(i => i.garminId));
+            const toCarry = prevWk.unspentLoadItems.filter(i => !existingIds.has(i.garminId));
+            if (toCarry.length > 0) {
+              if (!currWk.unspentLoadItems) currWk.unspentLoadItems = [];
+              currWk.unspentLoadItems.push(...toCarry);
+              currWk.hasCarriedLoad = true;
+              // Clear carried items from previous week to avoid double-display on back-navigation
+              prevWk.unspentLoadItems = prevWk.unspentLoadItems.filter(i => existingIds.has(i.garminId));
+              localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+              console.log(`  Carried ${toCarry.length} unresolved excess load items from week ${currW - 1} → week ${currW}`);
+            }
           }
         }
       }
