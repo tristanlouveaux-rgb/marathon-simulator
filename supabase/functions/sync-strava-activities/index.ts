@@ -149,6 +149,35 @@ function calculateKmSplits(
   return splits;
 }
 
+/**
+ * Compute HR drift from raw HR + time arrays.
+ * drift% = (avgHR_2nd_half - avgHR_1st_half) / avgHR_1st_half × 100
+ * Strips first 10% (warmup). Requires ≥20 min of HR data.
+ * Only meaningful for steady-state runs (easy, long, marathon pace).
+ */
+function calculateHRDrift(
+  hrData: number[],
+  timeData: number[],
+): number | null {
+  if (!hrData || !timeData || hrData.length < 120 || hrData.length !== timeData.length) return null;
+  const totalSec = timeData[timeData.length - 1] - timeData[0];
+  if (totalSec < 1200) return null; // < 20 min
+  const startIdx = Math.floor(hrData.length * 0.10);
+  const valid: number[] = [];
+  for (let i = startIdx; i < hrData.length; i++) {
+    if (hrData[i] > 0) valid.push(hrData[i]);
+  }
+  if (valid.length < 60) return null;
+  const mid = Math.floor(valid.length / 2);
+  const avgFirst = valid.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
+  const avgSecond = valid.slice(mid).reduce((a, b) => a + b, 0) / (valid.length - mid);
+  if (avgFirst <= 0) return null;
+  return Math.round(((avgSecond - avgFirst) / avgFirst) * 1000) / 10; // one decimal
+}
+
+/** Steady-state run types where HR drift is meaningful */
+const DRIFT_TYPES = new Set(["RUNNING", "TREADMILL_RUNNING", "TRAIL_RUNNING", "VIRTUAL_RUN", "TRACK_RUNNING"]);
+
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
@@ -199,21 +228,48 @@ async function stravaGet(path: string, accessToken: string): Promise<unknown> {
 // We prefer sport_type as it gives HIIT, TrailRun, etc. rather than the catch-all "Workout".
 function mapStravaType(stravaType: string): string {
   const t = stravaType.toLowerCase();
+  // Running
   if (t === "run" || t === "virtualrun" || t === "trailrun" || t === "treadmill") return "RUNNING";
-  if (t === "ride" || t === "virtualride" || t === "ebikeride") return "CYCLING";
+  // Cycling
+  if (t === "ride" || t === "virtualride" || t === "ebikeride" || t === "gravelride" || t === "emountainbikeride" || t === "velomobile" || t === "handcycle" || t === "rollerski") return "CYCLING";
+  if (t === "mountainbikeride") return "MOUNTAIN_BIKING";
+  // Swimming
   if (t === "swim") return "SWIMMING";
-  if (t === "walk" || t === "hike") return "WALKING";
+  // Walking / hiking
+  if (t === "walk" || t === "hike" || t === "snowshoe") return "WALKING";
+  // Strength
   if (t === "weighttraining" || t === "crossfit") return "STRENGTH_TRAINING";
-  if (t === "hiit") return "HIIT";
+  // HIIT / indoor cardio
+  if (t === "hiit" || t === "highintensityintervaltraining") return "HIIT";
+  if (t === "elliptical" || t === "stairstepper" || t === "iceskate" || t === "inlineskate") return "INDOOR_CARDIO";
+  // Yoga / Pilates
   if (t === "yoga") return "YOGA";
   if (t === "pilates") return "PILATES";
-  if (t === "tennis" || t === "squash" || t === "badminton") return "TENNIS";
+  // Racket sports
+  if (t === "tennis" || t === "squash" || t === "badminton" || t === "tabletennis" || t === "racquetball") return "TENNIS";
+  if (t === "pickleball") return "PICKLEBALL";
+  // Team sports
   if (t === "soccer" || t === "football") return "SOCCER";
   if (t === "rugby") return "RUGBY";
-  if (t === "rowing" || t === "indoorrowing") return "ROWING";
+  // Rowing / paddle
+  if (t === "rowing" || t === "indoorrowing" || t === "virtualrow" || t === "canoeing") return "ROWING";
+  if (t === "standuppaddling") return "PADDLEBOARDING";
+  if (t === "kayaking") return "KAYAKING";
+  // Combat sports
   if (t === "boxing" || t === "kickboxing") return "BOXING";
-  if (t === "elliptical" || t === "stairstepper") return "INDOOR_CARDIO";
-  // "Workout" is Strava's old catch-all type — map to generic cardio
+  // Climbing
+  if (t === "rockclimbing") return "ROCK_CLIMBING";
+  // Golf
+  if (t === "golf") return "GOLF";
+  // Wheelchair
+  if (t === "wheelchair") return "WHEELCHAIR_PUSH_WALK";
+  // Skiing / snow — differentiate backcountry/nordic (aerobic) from alpine/snowboard (less aerobic)
+  if (t === "backcountryski") return "BACKCOUNTRY_SKIING";
+  if (t === "nordicski") return "NORDIC_SKIING";
+  if (t === "alpineski" || t === "snowboard") return "ALPINE_SKIING";
+  // Water / other outdoor — map to generic cardio
+  if (t === "sail" || t === "surfing" || t === "windsurf" || t === "kitesurf" || t === "skateboard") return "CARDIO";
+  // "Workout" is Strava's old catch-all type
   if (t === "workout") return "CARDIO";
   return stravaType.toUpperCase();
 }
@@ -224,12 +280,13 @@ function mapStravaType(stravaType: string): string {
 
 interface HistorySummaryRow {
   weekStart: string;       // ISO date of Monday  e.g. "2026-02-17"
-  totalTSS: number;        // Running-equivalent TSS for the week
+  totalTSS: number;        // Signal A — running-equivalent TSS (with runSpec discount)
+  rawTSS: number;          // Signal B — raw physiological TSS (no runSpec discount)
   runningKm: number;       // km from running activities only
   zoneBase: number;        // Estimated base (Z1+Z2) TSS
   zoneThreshold: number;   // Estimated threshold (Z3) TSS
   zoneIntensity: number;   // Estimated intensity (Z4+Z5) TSS
-  sportBreakdown: { sport: string; durationMin: number; tss: number }[];
+  sportBreakdown: { sport: string; durationMin: number; tss: number; rawTSS: number; sessionCount: number }[];
 }
 
 /** ISO date string of the Monday of the week containing `date` (UTC). */
@@ -250,9 +307,13 @@ function isRunningActivity(actType: string): boolean {
 function getRunSpec(actType: string): number {
   const t = actType.toUpperCase();
   if (isRunningActivity(t)) return 1.0;
-  if (t.includes("CYCLING") || t.includes("RIDE") || t.includes("CARDIO")) return 0.55;
+  // Skiing: backcountry/nordic is highly aerobic (close to running); alpine is less so
+  if (t === "NORDIC_SKIING" || t === "BACKCOUNTRY_SKIING") return 0.75;
+  if (t.includes("SKI") || t === "SNOWBOARD") return 0.55;
+  if (t.includes("CYCLING") || t.includes("RIDE") || t === "MOUNTAIN_BIKING") return 0.55;
+  if (t === "CARDIO") return 0.55; // catch-all Strava "Workout" / generic cardio
   if (t.includes("SWIMMING") || t.includes("SWIM")) return 0.20;
-  if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return 0.30;
+  if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return 0.40;
   if (t.includes("STRENGTH") || t.includes("WEIGHT")) return 0.30;
   if (t.includes("SOCCER") || t.includes("FOOTBALL")) return 0.40;
   if (t.includes("RUGBY")) return 0.35;
@@ -263,13 +324,55 @@ function getRunSpec(actType: string): number {
   return 0.40;
 }
 
+/**
+ * Duration-based TSS fallback (no HR data available).
+ * Returns running-equivalent TSS directly — do NOT apply runSpec on top.
+ * Values are per-minute rates: running ~0.70 TSS/min (42/hr moderate effort).
+ */
+function getDurationFallbackTSS(actType: string, durationMin: number): number {
+  const t = actType.toUpperCase();
+  if (isRunningActivity(t)) return durationMin * 0.70;
+  if (t === "NORDIC_SKIING" || t === "BACKCOUNTRY_SKIING") return durationMin * 0.60;
+  if (t.includes("SKI") || t === "SNOWBOARD") return durationMin * 0.45;
+  if (t.includes("CYCLING") || t.includes("RIDE") || t === "MOUNTAIN_BIKING" || t === "CARDIO") return durationMin * 0.40;
+  if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return durationMin * 0.35;
+  if (t.includes("SWIMMING") || t.includes("SWIM")) return durationMin * 0.15;
+  if (t.includes("STRENGTH") || t.includes("WEIGHT")) return durationMin * 0.20;
+  if (t.includes("ROWING")) return durationMin * 0.35;
+  if (t.includes("BOXING") || t.includes("HIIT")) return durationMin * 0.35;
+  return durationMin * 0.35; // generic cardio fallback
+}
+
+/**
+ * Signal B duration fallback — raw physiological load with NO runSpec discount.
+ * Represents cardiovascular + systemic stress regardless of running specificity.
+ * Used when iTRIMP is null; rates are per-minute physiological effort.
+ */
+function getRawFallbackTSS(actType: string, durationMin: number): number {
+  const t = actType.toUpperCase();
+  if (isRunningActivity(t)) return durationMin * 0.70;            // same as Signal A (rs=1.0)
+  if (t.includes("HIIT") || t.includes("BOXING") || t.includes("KICKBOX")) return durationMin * 0.65;
+  if (t === "NORDIC_SKIING" || t === "BACKCOUNTRY_SKIING") return durationMin * 0.65;
+  if (t.includes("CYCLING") || t.includes("RIDE") || t === "MOUNTAIN_BIKING") return durationMin * 0.60;
+  if (t.includes("SOCCER") || t.includes("FOOTBALL") || t.includes("RUGBY")) return durationMin * 0.60;
+  if (t.includes("TENNIS") || t.includes("SQUASH") || t.includes("BADMINTON") || t.includes("PADEL") || t.includes("PICKLE")) return durationMin * 0.55;
+  if (t.includes("SWIMMING") || t.includes("SWIM")) return durationMin * 0.55;
+  if (t.includes("ROWING")) return durationMin * 0.55;
+  if (t === "CARDIO" || t.includes("ALPINE_SKI") || t.includes("SNOWBOARD")) return durationMin * 0.50;
+  if (t.includes("STRENGTH") || t.includes("WEIGHT")) return durationMin * 0.45;
+  if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return durationMin * 0.30;
+  if (t.includes("YOGA") || t.includes("PILATES")) return durationMin * 0.15;
+  return durationMin * 0.50; // generic cardio fallback
+}
+
 /** Normalise activity_type to a clean sport label for the breakdown. */
 function getSportLabel(actType: string): string {
   const t = actType.toUpperCase();
   if (isRunningActivity(t)) return "running";
-  if (t.includes("CYCLING") || t.includes("RIDE")) return "cycling";
+  if (t.includes("CYCLING") || t.includes("RIDE") || t === "MOUNTAIN_BIKING") return "cycling";
   if (t.includes("SWIMMING") || t.includes("SWIM")) return "swimming";
   if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return "walking";
+  if (t.includes("SKI") || t === "SNOWBOARD") return "skiing";
   if (t.includes("STRENGTH") || t.includes("WEIGHT")) return "strength";
   if (t.includes("SOCCER") || t.includes("FOOTBALL")) return "soccer";
   if (t.includes("RUGBY")) return "rugby";
@@ -323,7 +426,11 @@ Deno.serve(async (req) => {
     if (userErr || !user) return jsonError(401, { error: "invalid_auth" });
 
     const body = await req.json().catch(() => ({}));
-    const mode: "standalone" | "history" = body.mode === "history" ? "history" : "standalone";
+    const mode: "standalone" | "history" | "calibrate" | "backfill" =
+      body.mode === "history" ? "history"
+      : body.mode === "calibrate" ? "calibrate"
+      : body.mode === "backfill" ? "backfill"
+      : "standalone";
     const afterTimestamp: number = body.after_timestamp ?? Math.floor(Date.now() / 1000) - 28 * 86400;
     const biologicalSex: "male" | "female" | undefined =
       body.biological_sex === "male" || body.biological_sex === "female" ? body.biological_sex : undefined;
@@ -341,20 +448,43 @@ Deno.serve(async (req) => {
 
       const { data: actRows, error: actErr } = await supabase
         .from("garmin_activities")
-        .select("activity_type, start_time, duration_sec, distance_m, itrimp")
+        .select("activity_type, start_time, duration_sec, distance_m, itrimp, hr_zones")
         .eq("user_id", user.id)
         .gte("start_time", historyStart.toISOString())
         .order("start_time", { ascending: true });
 
       if (actErr) return jsonError(500, { error: "db_error", details: actErr.message });
 
+      console.log(`[History] ${actRows?.length ?? 0} rows for user ${user.id.slice(0,8)} since ${historyStart.toISOString().split('T')[0]} (${weeksBack}w)`);
+
+      // Deduplicate: Garmin webhook and Strava backfill can both store the same physical
+      // activity with different garmin_id formats (numeric Garmin ID vs "strava-{id}").
+      // Rows are sorted by start_time ascending — collapse rows within a 2-min window,
+      // keeping the one with iTRIMP (Strava-processed, higher quality) over the fallback.
+      const dedupedRows: typeof actRows = [];
+      for (const row of actRows ?? []) {
+        const startMs = new Date(row.start_time as string).getTime();
+        const last = dedupedRows[dedupedRows.length - 1];
+        if (last && startMs - new Date(last.start_time as string).getTime() < 2 * 60 * 1000) {
+          // Same activity — prefer the row with iTRIMP (Strava-processed data)
+          if ((row.itrimp ?? 0) > (last.itrimp ?? 0)) {
+            dedupedRows[dedupedRows.length - 1] = row;
+          }
+        } else {
+          dedupedRows.push(row);
+        }
+      }
+      if (dedupedRows.length < (actRows?.length ?? 0)) {
+        console.log(`[History] Deduped ${(actRows?.length ?? 0) - dedupedRows.length} duplicate rows (Garmin+Strava overlap)`);
+      }
+
       const weekMap = new Map<string, HistorySummaryRow>();
 
-      for (const row of actRows ?? []) {
+      for (const row of dedupedRows) {
         const weekStart = getMondayISO(new Date(row.start_time as string));
         if (!weekMap.has(weekStart)) {
           weekMap.set(weekStart, {
-            weekStart, totalTSS: 0, runningKm: 0,
+            weekStart, totalTSS: 0, rawTSS: 0, runningKm: 0,
             zoneBase: 0, zoneThreshold: 0, zoneIntensity: 0, sportBreakdown: [],
           });
         }
@@ -364,27 +494,63 @@ Deno.serve(async (req) => {
         const isRun = isRunningActivity(actType);
         const rs = getRunSpec(actType);
 
-        // TSS: iTRIMP-normalised when available, duration-based estimate otherwise
-        const rawTSS = (row.itrimp != null && (row.itrimp as number) > 0)
-          ? ((row.itrimp as number) * 100) / 15000
-          : durationMin * 0.55;
-        const equivTSS = isRun ? rawTSS : rawTSS * rs;
+        const iTrimpVal = (row.itrimp as number | null) ?? null;
+
+        // Signal A (running-equivalent): iTRIMP × runSpec, or duration fallback already discounted
+        const equivTSS = (iTrimpVal != null && iTrimpVal > 0)
+          ? (iTrimpVal * 100) / 15000 * (isRun ? 1.0 : rs)
+          : getDurationFallbackTSS(actType, durationMin);
+
+        // Signal B (raw physiological): iTRIMP with NO runSpec discount, or raw duration fallback
+        const rawTSSVal = (iTrimpVal != null && iTrimpVal > 0)
+          ? (iTrimpVal * 100) / 15000
+          : getRawFallbackTSS(actType, durationMin);
 
         week.totalTSS += equivTSS;
+        week.rawTSS += rawTSSVal;
         if (isRun && row.distance_m) week.runningKm += (row.distance_m as number) / 1000;
 
-        const zp = estimateZoneProfile(rawTSS, durationMin);
+        // Zone distribution: prefer actual HR zone data when available (activities that went through
+        // full stream processing). Fall back to TSS-intensity estimate for avg-HR-only activities.
+        // Using actual zones gives accurate anaerobic bars for HIIT, intervals, tempo runs.
+        const storedZones = row.hr_zones as { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+        const storedZoneTotal = storedZones ? (storedZones.z1 + storedZones.z2 + storedZones.z3 + storedZones.z4 + storedZones.z5) : 0;
+        let zp: { base: number; threshold: number; intensity: number };
+        let zoneSrc: string;
+        if (storedZoneTotal > 0) {
+          // Real per-second HR zone data from the Strava stream
+          zp = {
+            base: (storedZones!.z1 + storedZones!.z2) / storedZoneTotal,
+            threshold: storedZones!.z3 / storedZoneTotal,
+            intensity: (storedZones!.z4 + storedZones!.z5) / storedZoneTotal,
+          };
+          zoneSrc = "hr";
+        } else {
+          // Use raw (pre-rs-discount) iTRIMP intensity for zone classification so high-intensity
+          // cross-training (HIIT, Hyrox, climbing) correctly shows anaerobic zones even after
+          // the running-equivalent rs discount reduces the total TSS contribution.
+          const rawTssForZone = (iTrimpVal != null && iTrimpVal > 0)
+            ? (iTrimpVal * 100) / 15000
+            : equivTSS;
+          zp = estimateZoneProfile(rawTssForZone, durationMin);
+          zoneSrc = "est";
+        }
         week.zoneBase += equivTSS * zp.base;
         week.zoneThreshold += equivTSS * zp.threshold;
         week.zoneIntensity += equivTSS * zp.intensity;
+
+        // Per-activity debug log — helps diagnose missing weeks and wrong types
+        console.log(`[History:row] ${(row.start_time as string).slice(0,10)} ${(actType||"?").padEnd(20)} ${Math.round(durationMin)}min iTRIMP=${iTrimpVal != null ? Math.round(iTrimpVal) : "null"} equivTSS=${Math.round(equivTSS)} zone=${zp.intensity > 0.15 ? "intensity" : zp.threshold > 0.4 ? "threshold" : "base"}(${zoneSrc})`);
 
         const sport = getSportLabel(actType);
         const existing = week.sportBreakdown.find((s) => s.sport === sport);
         if (existing) {
           existing.durationMin += durationMin;
           existing.tss += equivTSS;
+          existing.rawTSS += rawTSSVal;
+          existing.sessionCount += 1;
         } else {
-          week.sportBreakdown.push({ sport, durationMin, tss: equivTSS });
+          week.sportBreakdown.push({ sport, durationMin, tss: equivTSS, rawTSS: rawTSSVal, sessionCount: 1 });
         }
       }
 
@@ -393,6 +559,7 @@ Deno.serve(async (req) => {
         .map((w) => ({
           ...w,
           totalTSS: Math.round(w.totalTSS),
+          rawTSS: Math.round(w.rawTSS),
           runningKm: Math.round(w.runningKm * 10) / 10,
           zoneBase: Math.round(w.zoneBase),
           zoneThreshold: Math.round(w.zoneThreshold),
@@ -401,10 +568,56 @@ Deno.serve(async (req) => {
             ...s,
             durationMin: Math.round(s.durationMin),
             tss: Math.round(s.tss),
+            rawTSS: Math.round(s.rawTSS),
           })),
         }));
 
-      return new Response(JSON.stringify(result), {
+      // Wrap in envelope so client can log diagnostic info
+      return new Response(JSON.stringify({
+        rows: result,
+        _debug: { rowCount: actRows?.length ?? 0, historyStart: historyStart.toISOString(), weeksBack, userId: user.id.slice(0, 8) },
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // -----------------------------------------------------------------------
+    // CALIBRATE mode — return individual labelled running activities so the
+    // client can calibrate iTRIMP intensity thresholds from workout names.
+    // No Strava API call; reads from garmin_activities where activity_name is set.
+    // Returns: { name, durationMin, iTrimp }[] for running activities only.
+    // -----------------------------------------------------------------------
+    if (mode === "calibrate") {
+      const weeksBack: number = typeof body.weeks === "number" ? Math.min(body.weeks, 52) : 12;
+      const calibStart = new Date();
+      calibStart.setUTCDate(calibStart.getUTCDate() - weeksBack * 7);
+
+      const { data: calibRows, error: calibErr } = await supabase
+        .from("garmin_activities")
+        .select("activity_name, activity_type, duration_sec, itrimp")
+        .eq("user_id", user.id)
+        .gte("start_time", calibStart.toISOString())
+        .not("activity_name", "is", null)
+        .not("itrimp", "is", null)
+        .order("start_time", { ascending: false });
+
+      // activity_name column may not exist yet — return empty rather than 500
+      if (calibErr) {
+        console.warn("[Calibrate] Query failed (column may be missing):", calibErr.message);
+        return new Response(JSON.stringify([]), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      const labelled = (calibRows ?? [])
+        .filter((r) => isRunningActivity((r.activity_type as string) ?? ""))
+        .map((r) => ({
+          name: r.activity_name as string,
+          durationMin: Math.round(((r.duration_sec as number) ?? 0) / 60),
+          iTrimp: r.itrimp as number,
+        }))
+        .filter((r) => r.durationMin >= 10 && r.iTrimp > 0);
+
+      return new Response(JSON.stringify(labelled), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -430,6 +643,276 @@ Deno.serve(async (req) => {
       }
     }
 
+    // -----------------------------------------------------------------------
+    // BACKFILL mode — fetch N weeks of Strava activity history, upsert with
+    // HR-based iTRIMP. Full HR stream for most-recent ≤99 uncached activities,
+    // avg_heartrate estimate for the remainder.
+    // -----------------------------------------------------------------------
+    if (mode === "backfill") {
+      const weeksBack: number = typeof body.weeks === "number" ? Math.min(body.weeks, 52) : 16;
+      const afterTs = Math.floor(Date.now() / 1000) - weeksBack * 7 * 86400;
+
+      // 1. Fetch full activity list from Strava (paginated, per_page=200)
+      const allActivities: Array<Record<string, unknown>> = [];
+      let page = 1;
+      while (true) {
+        const batch = await stravaGet(
+          `/athlete/activities?per_page=200&after=${afterTs}&page=${page}`,
+          accessToken,
+        ) as Array<Record<string, unknown>>;
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        allActivities.push(...batch);
+        if (batch.length < 200) break;
+        page++;
+      }
+
+      if (allActivities.length === 0) {
+        return new Response(
+          JSON.stringify({ processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      // 2. Check which are already fully processed (hr_zones present in DB)
+      const allGarminIds = allActivities.map((a) => `strava-${a.id as number}`);
+      const { data: cachedRows } = await supabase
+        .from("garmin_activities")
+        .select("garmin_id, hr_zones, itrimp")
+        .eq("user_id", user.id)
+        .in("garmin_id", allGarminIds);
+
+      const cachedWithZones = new Set<string>();
+      const cachedBasic = new Set<string>();
+      const cachedWithITrimp = new Set<string>();
+      for (const r of (cachedRows ?? [])) {
+        // Only treat as "fully cached" if hr_zones has actual non-zero zone data.
+        // Activities stored with all-zero zones ({z1:0,...}) had no HR data at first sync
+        // and should be re-attempted so they can get iTRIMP from avg_heartrate.
+        const zones = r.hr_zones as { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+        const hasRealZones = zones && (zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5 > 0);
+        if (hasRealZones) cachedWithZones.add(r.garmin_id);
+        else cachedBasic.add(r.garmin_id);
+        if (r.itrimp) cachedWithITrimp.add(r.garmin_id);
+      }
+
+      // Log per-week breakdown of what Strava API returned — compare with history to find gaps
+      const stravaWeekCounts = new Map<string, number>();
+      for (const act of allActivities) {
+        const wk = getMondayISO(new Date(act.start_date as string));
+        stravaWeekCounts.set(wk, (stravaWeekCounts.get(wk) ?? 0) + 1);
+      }
+      for (const [wk, count] of [...stravaWeekCounts.entries()].sort()) {
+        console.log(`[Backfill:strava] Week ${wk}: ${count} activities`);
+      }
+      console.log(`[Backfill] Strava has ${allActivities.length} activities in ${weeksBack}w. DB has ${cachedWithZones.size} with real zones + ${cachedBasic.size} basic (${cachedBasic.size - [...cachedBasic].filter(g => cachedWithITrimp.has(g)).length} without iTRIMP).`);
+
+      // 3. Does the athlete use a HR monitor?
+      const hasHRMonitor = allActivities.some(
+        (a) => (a["average_heartrate"] as number | null) != null,
+      );
+
+      // 4. Load physiology for iTRIMP.
+      // maxHR: prefer all-time peak from activity data over daily_metrics rolling value.
+      const [{ data: physioRow2 }, { data: bfMaxHRRow }] = await Promise.all([
+        supabase
+          .from("daily_metrics")
+          .select("resting_hr, max_hr")
+          .eq("user_id", user.id)
+          .order("day_date", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("garmin_activities")
+          .select("max_hr")
+          .eq("user_id", user.id)
+          .not("max_hr", "is", null)
+          .order("max_hr", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+      const bfRestingHR: number = physioRow2?.resting_hr ?? 55;
+      const bfMaxHR: number = (bfMaxHRRow?.max_hr ?? physioRow2?.max_hr) ?? 190;
+
+      // 5. Partition uncached activities: full stream (recent ≤99) vs avg HR
+      const sorted = [...allActivities].sort(
+        (a, b) => new Date(b.start_date as string).getTime() - new Date(a.start_date as string).getTime(),
+      );
+
+      const STREAM_BUDGET = 99;
+      let streamCount = 0;
+      const needFullStream: Array<Record<string, unknown>> = [];
+      const needAvgHR: Array<Record<string, unknown>> = [];
+
+      for (const act of sorted) {
+        const gid = `strava-${act.id as number}`;
+        if (cachedWithZones.has(gid)) continue; // already fully processed
+        const hasAvgHR = (act["average_heartrate"] as number | null) != null;
+        if (hasHRMonitor && hasAvgHR && streamCount < STREAM_BUDGET) {
+          needFullStream.push(act);
+          streamCount++;
+        } else {
+          needAvgHR.push(act);
+        }
+      }
+
+      let withHRStream = 0;
+      let withAvgHR = 0;
+      const upsertErrors: string[] = []; // Collect first few errors for client-side diagnosis
+
+      // 6. Process activities needing full HR stream (one-by-one to respect rate limits)
+      for (const act of needFullStream) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
+        const isRun = actType === "RUNNING";
+        const durSec = (act.elapsed_time as number) ?? 0;
+        const movingTimeSec = (act.moving_time as number | null) ?? null;
+        const distM = (act.distance as number | null) ?? null;
+        const avgHR = (act["average_heartrate"] as number | null) ?? null;
+        const maxHRVal = (act["max_heartrate"] as number | null) ?? null;
+        const actName = (act.name as string | null) ?? null;
+        let iTrimp: number | null = null;
+        let hrZones: HRZones | null = null;
+        let kmSplits: number[] = [];
+        let hrDrift: number | null = null;
+        let avgPace: number | null = null;
+        // Use moving_time for pace (matches Strava's displayed pace which excludes pauses)
+        const paceTimeSec = (movingTimeSec && movingTimeSec > 0) ? movingTimeSec : durSec;
+        if (distM && distM > 0 && paceTimeSec > 0) avgPace = Math.round((paceTimeSec / distM) * 1000);
+
+        try {
+          const streamKeys = isRun ? "heartrate,time,distance,moving" : "heartrate,time";
+          const streamData = await stravaGet(
+            `/activities/${stravaId}/streams?keys=${streamKeys}&key_by_type=true`,
+            accessToken,
+          ) as Record<string, { data: number[] | boolean[] }>;
+
+          const hrData = streamData?.heartrate?.data as number[] | undefined;
+          const timeData = streamData?.time?.data as number[] | undefined;
+          const distData = streamData?.distance?.data as number[] | undefined;
+          const movingData = streamData?.moving?.data as boolean[] | undefined;
+
+          if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
+            iTrimp = calculateITrimp(hrData, timeData, bfRestingHR, bfMaxHR, biologicalSex);
+            hrZones = calculateHRZones(hrData, timeData, bfMaxHR);
+            // HR drift only for steady-state runs ≥ 20 min
+            if (DRIFT_TYPES.has(actType)) {
+              hrDrift = calculateHRDrift(hrData, timeData);
+            }
+          } else if (avgHR && durSec > 0) {
+            iTrimp = calculateITrimpFromSummary(avgHR, durSec, bfRestingHR, bfMaxHR, biologicalSex);
+          }
+          if (isRun && distData && timeData && distData.length === timeData.length) {
+            kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+          }
+        } catch {
+          if (avgHR && durSec > 0) {
+            iTrimp = calculateITrimpFromSummary(avgHR, durSec, bfRestingHR, bfMaxHR, biologicalSex);
+          }
+        }
+
+        const { error: upsertErr } = await supabase.from("garmin_activities").upsert({
+          user_id: user.id, garmin_id: garminId, source: "strava",
+          activity_type: actType, start_time: act.start_date as string,
+          duration_sec: durSec,
+          distance_m: distM != null ? Math.round(distM) : null,
+          avg_pace_sec_km: avgPace,
+          avg_hr: avgHR != null ? Math.round(avgHR) : null,
+          max_hr: maxHRVal != null ? Math.round(maxHRVal) : null,
+          calories: (act["calories"] as number | null) ?? null,
+          aerobic_effect: null, anaerobic_effect: null,
+          itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
+          // Store null (not all-zero object) when no HR data so activity re-enters cachedBasic
+          // on next backfill and can be reprocessed if avg_heartrate becomes available.
+          hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
+          km_splits: kmSplits.length > 0 ? kmSplits : null,
+          hr_drift: hrDrift,
+          activity_name: actName,
+        }, { onConflict: "garmin_id" });
+        if (upsertErr) {
+          console.error(`[Backfill] HR-stream upsert failed for ${garminId}:`, upsertErr.message);
+          if (upsertErrors.length < 3) upsertErrors.push(`${garminId}: ${upsertErr.message}`);
+        } else {
+          withHRStream++;
+        }
+      }
+
+      // 7. Batch-upsert activities using avg HR only (no stream needed)
+      const avgHRBatch: Record<string, unknown>[] = [];
+      for (const act of needAvgHR) {
+        const garminId = `strava-${act.id as number}`;
+        if (cachedBasic.has(garminId) && cachedWithITrimp.has(garminId)) continue; // already stored with iTRIMP
+        const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
+        const durSec = (act.elapsed_time as number) ?? 0;
+        const movingTimeSec2 = (act.moving_time as number | null) ?? null;
+        const distM = (act.distance as number | null) ?? null;
+        const avgHR = (act["average_heartrate"] as number | null) ?? null;
+        const actName = (act.name as string | null) ?? null;
+        let iTrimp: number | null = null;
+        if (avgHR && durSec > 0) {
+          iTrimp = calculateITrimpFromSummary(avgHR, durSec, bfRestingHR, bfMaxHR, biologicalSex);
+        }
+        let avgPace: number | null = null;
+        // Use moving_time for pace (matches Strava's displayed pace which excludes pauses)
+        const paceTimeSec2 = (movingTimeSec2 && movingTimeSec2 > 0) ? movingTimeSec2 : durSec;
+        if (distM && distM > 0 && paceTimeSec2 > 0) avgPace = Math.round((paceTimeSec2 / distM) * 1000);
+
+        avgHRBatch.push({
+          user_id: user.id, garmin_id: garminId, source: "strava",
+          activity_type: actType, start_time: act.start_date as string,
+          duration_sec: durSec,
+          distance_m: distM != null ? Math.round(distM) : null,
+          avg_pace_sec_km: avgPace,
+          avg_hr: avgHR != null ? Math.round(avgHR) : null,
+          max_hr: (act["max_heartrate"] as number | null) != null ? Math.round((act["max_heartrate"] as number)) : null,
+          calories: (act["calories"] as number | null) ?? null,
+          aerobic_effect: null, anaerobic_effect: null,
+          itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
+          hr_zones: null, km_splits: null,
+          activity_name: actName,
+        });
+        withAvgHR++;
+      }
+      if (avgHRBatch.length > 0) {
+        const { error: batchErr } = await supabase.from("garmin_activities").upsert(avgHRBatch, { onConflict: "garmin_id" });
+        if (batchErr) console.error("[Backfill] Avg-HR batch upsert failed:", batchErr.message);
+      }
+
+      // 8. Force-update activity_type + activity_name for ALL activities.
+      // This fixes stale types stored by old edge fn versions (e.g. CARDIO instead of BACKCOUNTRY_SKIING).
+      // Runs in batches of 100 to avoid payload limits; only touches these two fields on existing rows.
+      const typeFixBatch = allActivities.map((act) => ({
+        user_id: user.id,
+        garmin_id: `strava-${act.id as number}`,
+        source: "strava",
+        activity_type: mapStravaType((act.sport_type as string) || (act.type as string) || ""),
+        activity_name: (act.name as string | null) ?? null,
+      }));
+      for (let i = 0; i < typeFixBatch.length; i += 100) {
+        const chunk = typeFixBatch.slice(i, i + 100);
+        const { error: fixErr } = await supabase.from("garmin_activities").upsert(chunk, { onConflict: "garmin_id" });
+        if (fixErr) console.warn("[Backfill] Type-fix upsert failed:", fixErr.message);
+      }
+      console.log(`[Backfill] Updated activity_type for ${typeFixBatch.length} activities`);
+
+      console.log(`[Backfill] ${withHRStream} HR stream + ${withAvgHR} avg HR — ${allActivities.length} total activities, hasHRMonitor=${hasHRMonitor}`);
+      // Include per-week Strava breakdown in response so client can log it (server logs not visible in browser)
+      const stravaWeeksObj: Record<string, number> = {};
+      for (const [wk, count] of stravaWeekCounts.entries()) stravaWeeksObj[wk] = count;
+      return new Response(
+        JSON.stringify({
+          processed: withHRStream + withAvgHR, withHRStream, withAvgHR, hasHRMonitor,
+          stravaWeeks: stravaWeeksObj, totalStravaActivities: allActivities.length,
+          _debug: {
+            cachedWithZones: cachedWithZones.size, cachedBasic: cachedBasic.size, cachedWithITrimp: cachedWithITrimp.size,
+            needFullStream: needFullStream.length, needAvgHR: needAvgHR.length,
+            upsertErrors,
+          },
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     // Fetch Strava activities
     const activities = await stravaGet(
       `/athlete/activities?per_page=50&after=${afterTimestamp}`,
@@ -443,17 +926,29 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Load physiology context for iTRIMP from daily_metrics (Garmin webhook writes here)
-    const { data: physioRow } = await supabase
-      .from("daily_metrics")
-      .select("resting_hr, max_hr")
-      .eq("user_id", user.id)
-      .order("day_date", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // Load physiology context for iTRIMP.
+    // maxHR: prefer all-time peak from activity data (most accurate); fall back to
+    // daily_metrics rolling value (7-day Garmin peak), then age-estimate default.
+    const [{ data: physioRow }, { data: maxHRRow }] = await Promise.all([
+      supabase
+        .from("daily_metrics")
+        .select("resting_hr, max_hr")
+        .eq("user_id", user.id)
+        .order("day_date", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("garmin_activities")
+        .select("max_hr")
+        .eq("user_id", user.id)
+        .not("max_hr", "is", null)
+        .order("max_hr", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
 
     const restingHR: number = physioRow?.resting_hr ?? 55;
-    const maxHR: number = physioRow?.max_hr ?? 190;
+    const maxHR: number = (maxHRRow?.max_hr ?? physioRow?.max_hr) ?? 190;
 
     // Load cached HR zones + km splits from DB for all activities in this batch.
     // This avoids re-fetching Strava streams for activities already processed —
@@ -490,6 +985,7 @@ Deno.serve(async (req) => {
       // Fall back to type (e.g. "Workout", "Run") for older activities / API versions.
       const stravaActivityType = (act.sport_type as string) || (act.type as string) || "";
       const activityType = mapStravaType(stravaActivityType);
+      const activityName = (act.name as string | null) ?? null;
       const calories = (act["calories"] as number | null) ?? null;
       const isRun = activityType === "RUNNING";
       const mapObj = act.map as Record<string, unknown> | null;
@@ -498,12 +994,16 @@ Deno.serve(async (req) => {
       let iTrimp: number | null = null;
       let hrZones: HRZones | null = null;
       let kmSplits: number[] = [];
+      let hrDrift: number | null = null;
       let avgPaceSecKm: number | null = null;
       let needsUpsert = false; // only write to DB when we have new stream data
 
-      // Distance-based pace (Strava doesn't give avg pace directly)
-      if (distanceM && distanceM > 0 && durationSec > 0) {
-        avgPaceSecKm = Math.round((durationSec / distanceM) * 1000);
+      // Distance-based pace (Strava doesn't give avg pace directly).
+      // Use moving_time (excludes pauses) to match the pace Strava displays.
+      const movingTimeSec3 = (act.moving_time as number | null) ?? null;
+      const paceTimeSec3 = (movingTimeSec3 && movingTimeSec3 > 0) ? movingTimeSec3 : durationSec;
+      if (distanceM && distanceM > 0 && paceTimeSec3 > 0) {
+        avgPaceSecKm = Math.round((paceTimeSec3 / distanceM) * 1000);
       }
 
       const cached = cachedMap.get(garminId);
@@ -513,6 +1013,8 @@ Deno.serve(async (req) => {
         iTrimp = cached.itrimp;
         hrZones = cached.hr_zones;
         kmSplits = cached.km_splits ?? [];
+        hrDrift = cached.hr_drift ?? null;
+        // activity_name is written on next upsert when needsUpsert is true
       } else {
         // First time seeing this activity (or zones were missing) — fetch stream
         needsUpsert = true;
@@ -531,12 +1033,26 @@ Deno.serve(async (req) => {
           if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
             iTrimp = calculateITrimp(hrData, timeData, restingHR, maxHR, biologicalSex);
             hrZones = calculateHRZones(hrData, timeData, maxHR);
+            if (DRIFT_TYPES.has(activityType)) {
+              hrDrift = calculateHRDrift(hrData, timeData);
+            }
           } else if (avgHR && durationSec > 0) {
             iTrimp = calculateITrimpFromSummary(avgHR, durationSec, restingHR, maxHR, biologicalSex);
           }
 
-          if (isRun && distData && timeData && distData.length === timeData.length) {
-            kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+          if (isRun) {
+            // Prefer Strava's own splits_metric — exact match to what Strava displays
+            try {
+              const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+              const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+              if (sm?.length) {
+                kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+              }
+            } catch { /* ignore — stream fallback below */ }
+            // Fallback: compute from GPS streams if detail fetch failed or returned no splits
+            if (kmSplits.length === 0 && distData && timeData && distData.length === timeData.length) {
+              kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+            }
           }
         } catch {
           if (avgHR && durationSec > 0) {
@@ -545,9 +1061,23 @@ Deno.serve(async (req) => {
         }
       }
 
+      // Cached runs with no km_splits: fetch from Strava detail and patch DB
+      if (isRun && kmSplits.length === 0 && cached?.hr_zones) {
+        try {
+          const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+          const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+          if (sm?.length) {
+            kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+            void supabase.from("garmin_activities")
+              .update({ km_splits: kmSplits })
+              .eq("garmin_id", garminId).eq("user_id", user.id);
+          }
+        } catch { /* ignore — splits will be absent this sync */ }
+      }
+
       // Upsert into garmin_activities — only write when we fetched fresh stream data
       if (needsUpsert) {
-        await supabase.from("garmin_activities").upsert(
+        const { error: standaloneErr } = await supabase.from("garmin_activities").upsert(
           {
             user_id: user.id,
             garmin_id: garminId,
@@ -557,17 +1087,20 @@ Deno.serve(async (req) => {
             duration_sec: durationSec,
             distance_m: distanceM != null ? Math.round(distanceM) : null,
             avg_pace_sec_km: avgPaceSecKm,
-            avg_hr: avgHR,
-            max_hr: maxHrVal,
+            avg_hr: avgHR != null ? Math.round(avgHR) : null,
+            max_hr: maxHrVal != null ? Math.round(maxHrVal) : null,
             calories,
             aerobic_effect: null,
             anaerobic_effect: null,
             itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
-            hr_zones: hrZones,
+            hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
             km_splits: kmSplits.length > 0 ? kmSplits : null,
+            hr_drift: hrDrift,
+            activity_name: activityName,
           },
           { onConflict: "garmin_id" },
         );
+        if (standaloneErr) console.error(`[Standalone] Upsert failed for ${garminId}:`, standaloneErr.message);
       }
 
       rows.push({
@@ -586,6 +1119,7 @@ Deno.serve(async (req) => {
         iTrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
         hrZones: hrZones,
         kmSplits: kmSplits.length > 0 ? kmSplits : null,
+        hrDrift: hrDrift,
         polyline,
       });
     }

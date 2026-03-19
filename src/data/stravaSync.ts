@@ -54,7 +54,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
         if (!wk.garminActuals || !wk.garminMatched) continue;
@@ -67,7 +67,12 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         // but a later sync succeeded (because zones are now cached in DB, the second sync
         // returns real zones from DB instead of hitting the Strava API again).
         if (row.hrZones && !actual.hrZones) { actual.hrZones = row.hrZones as { z1: number; z2: number; z3: number; z4: number; z5: number }; extraPatched = true; }
-        if (row.kmSplits?.length && !actual.kmSplits) { actual.kmSplits = row.kmSplits; extraPatched = true; }
+        if (row.kmSplits?.length) {
+          // Always prefer DB splits (sourced from Strava splits_metric) over client-computed ones
+          const splitsChanged = !actual.kmSplits || JSON.stringify(actual.kmSplits) !== JSON.stringify(row.kmSplits);
+          if (splitsChanged) { actual.kmSplits = row.kmSplits; extraPatched = true; }
+        }
+        if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
         // Update displayName if activity type changed (e.g. WORKOUT → HIIT after edge fn redeployment)
@@ -173,11 +178,19 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
     }
     s.ctlBaseline = Math.round(ctl);
 
-    // Signal B baseline: simple average of completed weeks
-    const completedRawTSS = completedRows.map((r) => r.rawTSS ?? r.totalTSS);
-    s.signalBBaseline = completedRawTSS.length > 0
-      ? Math.round(completedRawTSS.reduce((a, b) => a + b, 0) / completedRawTSS.length)
-      : undefined;
+    // Signal B baseline: median of completed weekly rawTSS (not average).
+    // Median is resistant to injury/rest weeks that drag the average down and would
+    // cause phantom excess alerts when the user returns to normal training.
+    const completedRawTSS = completedRows.map((r) => r.rawTSS ?? r.totalTSS).filter(v => v > 0);
+    if (completedRawTSS.length > 0) {
+      const sorted = [...completedRawTSS].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      s.signalBBaseline = sorted.length % 2 === 0
+        ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+        : sorted[mid];
+    } else {
+      s.signalBBaseline = undefined;
+    }
 
     // Per-sport session baselines (Phase 2 calibration data — not yet used by reduction logic)
     // Aggregate all sport breakdown data across weeks, compute avg session rawTSS + freq/week
@@ -208,10 +221,13 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
 
     // Derive athlete tier from CTL baseline (spec §2)
     const ctlForTier = s.ctlBaseline ?? 0;
-    s.athleteTier = ctlForTier < 30 ? 'beginner'
-      : ctlForTier < 60  ? 'recreational'
-      : ctlForTier < 90  ? 'trained'
-      : ctlForTier < 120 ? 'performance'
+    // Weekly-scale thresholds (internal CTL uses weekly EMA → ÷7 = TrainingPeaks daily equivalent).
+    // These weekly values correspond to TP CTL tiers: beginner<20, recreational<40, trained<65,
+    // performance<90, elite≥90 — multiplied by 7 to match our weekly accumulation.
+    s.athleteTier = ctlForTier < 140 ? 'beginner'
+      : ctlForTier < 280 ? 'recreational'
+      : ctlForTier < 455 ? 'trained'
+      : ctlForTier < 630 ? 'performance'
       :                    'high_volume';
 
     saveState();
@@ -245,7 +261,7 @@ const LABEL_ZONES: { keywords: string[]; zone: 'easy' | 'tempo' | 'interval' }[]
   { keywords: ['easy', 'recovery', 'shake', 'jog', 'long', 'slow', 'base', 'aerobic'], zone: 'easy' },
 ];
 
-function classifyByName(name: string): 'easy' | 'tempo' | 'interval' | null {
+export function classifyByName(name: string): 'easy' | 'tempo' | 'interval' | null {
   const lower = name.toLowerCase();
   for (const { keywords, zone } of LABEL_ZONES) {
     if (keywords.some((k) => lower.includes(k))) return zone;
@@ -256,67 +272,160 @@ function classifyByName(name: string): 'easy' | 'tempo' | 'interval' | null {
 interface CalibrateRow { name: string; durationMin: number; iTrimp: number; }
 
 /**
- * Fetch individually-labelled running activities from Strava history and use
- * them to calibrate personal iTRIMP intensity thresholds.
+ * Map plan workout types and classifyByName zone labels → calibration zone.
+ * 'progressive' is intentionally excluded — it spans easy→fast finish, ambiguous.
+ * 'test_run', 'rest', 'cross', 'gym', 'strength' → undefined (not running zones).
+ */
+const TYPE_TO_ZONE: Record<string, 'easy' | 'tempo' | 'interval'> = {
+  easy: 'easy',
+  long: 'easy',
+  tempo: 'tempo',       // also used as a zone label by classifyByName
+  threshold: 'tempo',
+  marathon_pace: 'tempo',
+  vo2: 'interval',
+  intervals: 'interval',
+  interval: 'interval', // zone label from classifyByName
+};
+
+/**
+ * TSS/hr guard-rail ceilings per zone.
+ * If actual TSS/hr exceeds these, the label is probably wrong (e.g. half marathon
+ * matched to an easy run slot). The session is skipped — not used for calibration.
  *
- * Sets `s.intensityThresholds` on state. Safe to call after `fetchStravaHistory()`.
- * Requires at least 3 data points per zone to update thresholds (falls back to
- * defaults of easy≤70, tempo≤95 TSS/hr otherwise).
+ * Easy ceiling (95) = default tempo threshold. Anything above that is clearly not easy.
+ * Tempo ceiling (160) = hard race effort. Anything above that is an all-out sprint.
+ * Interval ceiling = sanity bound only (handled by the >200 check below).
+ */
+const ZONE_GUARD_CEILING: Record<'easy' | 'tempo' | 'interval', number> = {
+  easy: 95,
+  tempo: 160,
+  interval: 200,
+};
+
+/**
+ * Primary calibration path: read matched actuals directly from state.
+ * Uses `plannedType` (set at match time) to classify sessions.
+ * Falls back to classifyByName on the workoutId string for actuals without plannedType.
+ *
+ * Returns { totalCalibrated, byZone } or null if not enough data to update thresholds.
+ */
+function calibrateFromState(): { totalCalibrated: number; byZone: Record<'easy' | 'tempo' | 'interval', number[]> } {
+  const s = getMutableState();
+  const byZone: Record<'easy' | 'tempo' | 'interval', number[]> = { easy: [], tempo: [], interval: [] };
+
+  for (const wk of s.wks ?? []) {
+    if (!wk.garminActuals) continue;
+    for (const [workoutId, actual] of Object.entries(wk.garminActuals)) {
+      if (!actual.iTrimp || actual.iTrimp <= 0) continue;
+      if (!actual.durationSec || actual.durationSec < 600) continue; // ignore <10 min stubs
+
+      // Determine zone: prefer stored plannedType, fall back to workoutId name classification
+      const rawType = actual.plannedType ?? workoutId;
+      const zone = TYPE_TO_ZONE[rawType] ?? classifyByName(rawType);
+      if (!zone) continue;
+
+      const normTSS = (actual.iTrimp * 100) / 15000;
+      const tssPerHour = normTSS / (actual.durationSec / 3600);
+
+      if (tssPerHour < 10 || tssPerHour > 200) continue; // sanity bounds
+
+      // Guard rail: reject if actual effort is clearly above the zone ceiling
+      // (e.g. half marathon matched to easy run slot → TSS/hr ~110 > 95 ceiling → skip)
+      if (tssPerHour > ZONE_GUARD_CEILING[zone]) {
+        console.log(`[iTrimpCalibrate:state] Skipping ${workoutId} (planned ${rawType}): TSS/hr=${tssPerHour.toFixed(0)} > ${ZONE_GUARD_CEILING[zone]} zone ceiling`);
+        continue;
+      }
+
+      byZone[zone].push(tssPerHour);
+    }
+  }
+
+  const totalCalibrated = byZone.easy.length + byZone.tempo.length + byZone.interval.length;
+  console.log(`[iTrimpCalibrate:state] ${totalCalibrated} matched runs — easy:${byZone.easy.length} tempo:${byZone.tempo.length} interval:${byZone.interval.length}`);
+  return { totalCalibrated, byZone };
+}
+
+/**
+ * Apply calibration data to state.intensityThresholds.
+ * Shared by both the state-based and edge-fn paths.
+ */
+function applyCalibration(
+  byZone: Record<'easy' | 'tempo' | 'interval', number[]>,
+  totalCalibrated: number,
+): void {
+  const s = getMutableState();
+  const MIN_POINTS = 3;
+  const easyVals = byZone.easy;
+  const tempoVals = byZone.tempo;
+
+  if (easyVals.length >= MIN_POINTS && tempoVals.length >= MIN_POINTS) {
+    const easyUpper  = [...easyVals].sort((a, b) => a - b)[Math.floor(easyVals.length * 0.9)];
+    const tempoUpper = [...tempoVals].sort((a, b) => a - b)[Math.floor(tempoVals.length * 0.9)];
+    s.intensityThresholds = {
+      easy:  Math.round(Math.max(55, Math.min(85, easyUpper))),
+      tempo: Math.round(Math.max(75, Math.min(115, tempoUpper))),
+      calibratedFrom: totalCalibrated,
+    };
+  } else {
+    s.intensityThresholds = {
+      easy:  s.intensityThresholds?.easy  ?? 70,
+      tempo: s.intensityThresholds?.tempo ?? 95,
+      calibratedFrom: totalCalibrated,
+    };
+  }
+  saveState();
+  console.log(`[iTrimpCalibrate] ${totalCalibrated} sessions — easy≤${s.intensityThresholds.easy}, tempo≤${s.intensityThresholds.tempo}`);
+}
+
+/**
+ * Calibrate personal iTRIMP intensity thresholds.
+ *
+ * Primary path: reads matched actuals from state (uses plannedType set at match time).
+ * Fallback path: fetches individually-labelled Strava activity names from edge fn
+ *   (covers historical runs matched before plannedType was introduced).
+ *
+ * Sets `s.intensityThresholds`. Safe to call after `fetchStravaHistory()`.
  */
 export async function calibrateIntensityThresholds(weeks = 12): Promise<void> {
   try {
+    // Primary: use matched actuals already in state — no network call needed
+    const stateResult = calibrateFromState();
+    const MIN_POINTS = 3;
+    const hasEnoughStateData =
+      stateResult.byZone.easy.length >= MIN_POINTS &&
+      stateResult.byZone.tempo.length >= MIN_POINTS;
+
+    if (hasEnoughStateData) {
+      applyCalibration(stateResult.byZone, stateResult.totalCalibrated);
+      return;
+    }
+
+    // Fallback: fetch from edge fn (historical Strava activity names, pre-plannedType)
     const rows = await callEdgeFunction<CalibrateRow[]>(
       'sync-strava-activities',
       { mode: 'calibrate', weeks },
     );
 
-    if (!Array.isArray(rows) || rows.length === 0) return;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      // Still apply whatever state data we have (updates calibratedFrom count)
+      applyCalibration(stateResult.byZone, stateResult.totalCalibrated);
+      return;
+    }
 
-    // Normalise iTRIMP → TSS/hr using spec formula: normalisedTSS = (iTrimp * 100) / 15000
-    // TSS/hr = normalisedTSS / (durationMin / 60)
-    const byZone: Record<'easy' | 'tempo' | 'interval', number[]> = {
-      easy: [], tempo: [], interval: [],
-    };
-
+    // Merge edge fn rows into byZone (additive — state data already in there)
+    const merged = { ...stateResult.byZone };
     for (const row of rows) {
       const zone = classifyByName(row.name);
       if (!zone) continue;
       const normTSS = (row.iTrimp * 100) / 15000;
       const tssPerHour = normTSS / (row.durationMin / 60);
-      if (tssPerHour > 10 && tssPerHour < 200) { // sanity bounds
-        byZone[zone].push(tssPerHour);
+      if (tssPerHour > 10 && tssPerHour < 200) {
+        merged[zone].push(tssPerHour);
       }
     }
 
-    const s = getMutableState();
-    const MIN_POINTS = 3;
-
-    const easyVals = byZone.easy;
-    const tempoVals = byZone.tempo;
-    const totalCalibrated = easyVals.length + tempoVals.length + byZone.interval.length;
-
-    if (easyVals.length >= MIN_POINTS && tempoVals.length >= MIN_POINTS) {
-      // Upper bound for easy = 90th percentile of easy TSS/hr (excludes outlier hard easy days)
-      const easyUpper = easyVals.sort((a, b) => a - b)[Math.floor(easyVals.length * 0.9)];
-      // Upper bound for tempo = 90th percentile of tempo TSS/hr
-      const tempoUpper = tempoVals.sort((a, b) => a - b)[Math.floor(tempoVals.length * 0.9)];
-
-      s.intensityThresholds = {
-        easy: Math.round(Math.max(55, Math.min(85, easyUpper))),   // clamp 55–85
-        tempo: Math.round(Math.max(75, Math.min(115, tempoUpper))), // clamp 75–115
-        calibratedFrom: totalCalibrated,
-      };
-    } else {
-      // Not enough data — keep defaults but record how many we have
-      s.intensityThresholds = {
-        easy: s.intensityThresholds?.easy ?? 70,
-        tempo: s.intensityThresholds?.tempo ?? 95,
-        calibratedFrom: totalCalibrated,
-      };
-    }
-
-    saveState();
-    console.log(`[iTrimpCalibrate] ${totalCalibrated} labelled runs — easy≤${s.intensityThresholds.easy}, tempo≤${s.intensityThresholds.tempo}`);
+    const totalCalibrated = merged.easy.length + merged.tempo.length + merged.interval.length;
+    applyCalibration(merged, totalCalibrated);
   } catch (err) {
     console.warn('[iTrimpCalibrate] Failed:', err);
   }

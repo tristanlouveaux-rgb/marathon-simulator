@@ -15,6 +15,7 @@ import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { showActivityReview, autoProcessActivities } from '@/ui/activity-review';
 import type { GarminLap } from '@/types';
+import { mergeTimingMods } from '@/cross-training/timing-check';
 
 /**
  * Fetch recent Garmin activities and match them to the current week's plan.
@@ -44,6 +45,13 @@ export async function syncActivities(): Promise<void> {
     }
 
     const result = matchAndAutoComplete(rows);
+
+    // Recompute timing downgrade mods after each sync
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[s2.w - 1];
+    if (wk2 && mergeTimingMods(s2, wk2)) {
+      saveState();
+    }
 
     if (result.changed) {
       render();
@@ -143,6 +151,45 @@ export function processPendingCrossTraining(): void {
       render();
     });
   }
+}
+
+/**
+ * Open the excess load adjustment modal on-demand (called from "Adjust week" button).
+ * Bypasses the ACWR check — used when the user explicitly requests adjustment
+ * even when ACWR is not elevated.
+ */
+export function openAdjustWeekModal(): void {
+  if (_pendingModalActive) return;
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  if (!wk?.garminPending?.length) return;
+
+  let weekStart: Date | undefined;
+  let weekEnd: Date | undefined;
+  if (s.planStartDate) {
+    weekStart = new Date(s.planStartDate);
+    weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
+    weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 7);
+  }
+
+  const unprocessed = wk.garminPending.filter(item => {
+    const matched = wk.garminMatched?.[item.garminId];
+    if (matched && matched !== '__pending__') return false;
+    if (weekStart && weekEnd) {
+      const actDate = new Date(item.startTime);
+      return actDate >= weekStart && actDate < weekEnd;
+    }
+    return true;
+  });
+
+  if (unprocessed.length === 0) return;
+
+  _pendingModalActive = true;
+  autoProcessActivities(unprocessed, () => {
+    _pendingModalActive = false;
+    render();
+  }, true); // forceModal = true — bypass ACWR check
 }
 
 // ---------------------------------------------------------------------------
