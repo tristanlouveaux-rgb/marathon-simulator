@@ -157,6 +157,208 @@ export function getSleepContext(
   return { scoreAvg, scoreBest, scoreVsAvg, durationAvgSec, durationBestSec, durationVsAvg, durationVsTarget };
 }
 
+// ─── Muted sleep score colors (for bar chart — not text) ─────────────────────
+
+export function sleepScoreColorMuted(score: number): string {
+  if (score >= 75) return 'rgba(52,199,89,0.55)';
+  if (score >= 55) return 'rgba(255,159,10,0.60)';
+  return 'rgba(220,80,70,0.55)';
+}
+
+// ─── Sleep bar chart with per-day tap targets ─────────────────────────────────
+
+export interface SleepBarEntry {
+  value: number | null;
+  day: string;
+  date?: string;
+  isLatest?: boolean;
+  subLabel?: string | null;
+}
+
+/**
+ * Render a vertical bar chart for sleep scores.
+ * Each column has a `data-sleep-date` attribute for per-day tap handling.
+ * Bars are colored with muted red/amber/green; score shown above, duration below.
+ */
+export function buildSleepBarChart(entries: SleepBarEntry[]): string {
+  const BAR_MAX = 44;
+  const nums = entries.map(e => e.value).filter((v): v is number => v != null);
+  if (nums.length < 2) return `<span style="font-size:11px;color:var(--c-faint)">Building history…</span>`;
+
+  const lo = Math.min(...nums);
+  const hi = Math.max(...nums);
+  const range = hi - lo || 1;
+  const last = entries.length - 1;
+
+  const labelColor = (v: number) =>
+    v >= 75 ? 'rgba(30,160,65,0.90)' : v >= 55 ? 'rgba(185,115,20,0.90)' : 'rgba(190,55,45,0.90)';
+
+  const cols = entries.map((e, i) => {
+    const h = e.value != null ? Math.max(4, Math.round(((e.value - lo) / range) * BAR_MAX)) : 4;
+    const barCol = e.value != null ? sleepScoreColorMuted(e.value) : 'rgba(0,0,0,0.07)';
+    const isLatest = e.isLatest || i === last;
+    const dateAttr = e.date ? ` data-sleep-date="${e.date}"` : '';
+    const cursor = e.date ? 'pointer' : 'default';
+    const shadow = isLatest ? ';box-shadow:0 2px 0 0 rgba(0,0,0,0.10)' : '';
+
+    return (
+      `<div${dateAttr} style="flex:1;display:flex;flex-direction:column;align-items:stretch;cursor:${cursor};-webkit-tap-highlight-color:transparent">` +
+        // Score above bar
+        `<div style="text-align:center;font-size:9px;font-weight:600;line-height:1;margin-bottom:3px;color:${e.value != null ? labelColor(e.value) : 'var(--c-faint)'}">` +
+          (e.value != null ? String(e.value) : '—') +
+        `</div>` +
+        // Bar (bottom-aligned in fixed-height container)
+        `<div style="height:${BAR_MAX}px;display:flex;align-items:flex-end">` +
+          `<div style="width:100%;height:${h}px;background:${barCol};border-radius:4px 4px 2px 2px${shadow}"></div>` +
+        `</div>` +
+        // Day label
+        `<div style="text-align:center;font-size:9px;color:var(--c-faint);margin-top:3px;font-weight:${isLatest ? '600' : '400'}">${e.day}</div>` +
+        // Duration sub-label
+        (e.subLabel != null ? `<div style="text-align:center;font-size:8px;color:var(--c-faint);line-height:1.2;margin-top:1px">${e.subLabel}</div>` : '') +
+      `</div>`
+    );
+  }).join('');
+
+  return `<div style="display:flex;gap:5px">${cols}</div>`;
+}
+
+// ─── Stage quality analysis ───────────────────────────────────────────────────
+
+type SleepStage = 'deep' | 'rem' | 'light' | 'awake';
+
+export interface StageQuality {
+  label: string;
+  color: string;
+}
+
+/**
+ * Population-norm quality label for a sleep stage given its percentage of total sleep.
+ * Deep and REM are clinically actionable; Light is residual (no label); Awake is informational.
+ *
+ * Thresholds from sleep literature:
+ *   Deep (SWS): <13% Low, 13–20% Good, >20% Excellent
+ *   REM:        <15% Low, 15–22% Good, >22% Excellent
+ *   Awake:      ≤8% Normal, >8% Elevated
+ *   Light:      no quality label (residual stage)
+ */
+export function stageQuality(stage: SleepStage, pct: number): StageQuality {
+  switch (stage) {
+    case 'deep':
+      if (pct >= 20) return { label: 'Excellent', color: 'var(--c-ok)' };
+      if (pct >= 13) return { label: 'Good', color: 'var(--c-muted)' };
+      return { label: 'Low', color: 'var(--c-caution)' };
+    case 'rem':
+      if (pct >= 22) return { label: 'Excellent', color: 'var(--c-ok)' };
+      if (pct >= 15) return { label: 'Good', color: 'var(--c-muted)' };
+      return { label: 'Low', color: 'var(--c-caution)' };
+    case 'awake':
+      if (pct <= 8) return { label: 'Normal', color: 'var(--c-muted)' };
+      return { label: 'Elevated', color: 'var(--c-caution)' };
+    case 'light':
+    default:
+      return { label: '', color: '' };
+  }
+}
+
+// ─── Sleep Bank ───────────────────────────────────────────────────────────────
+
+export interface SleepBankResult {
+  /** Sum of (actual_sleep − sleep_need) for last 7 nights. Negative = deficit. */
+  bankSec: number;
+  /** Number of nights with duration data in the 7-day window. */
+  nightsWithData: number;
+}
+
+const DEFAULT_SLEEP_NEED_SEC = 8 * 3600; // 8h
+
+/**
+ * 7-day rolling sleep bank: sum of (actual_sleep − sleep_need) for recent nights.
+ * Negative = deficit (cumulative under-sleeping), positive = surplus.
+ */
+export function getSleepBank(
+  history: PhysiologyDayEntry[],
+  sleepNeedSec = DEFAULT_SLEEP_NEED_SEC,
+): SleepBankResult {
+  const recent = history.slice(-7).filter(d => d.sleepDurationSec != null);
+  if (recent.length === 0) return { bankSec: 0, nightsWithData: 0 };
+  const bankSec = recent.reduce((sum, d) => sum + (d.sleepDurationSec! - sleepNeedSec), 0);
+  return { bankSec: Math.round(bankSec), nightsWithData: recent.length };
+}
+
+/**
+ * Format a sleep bank value as "3h 20m deficit", "1h 10m surplus", or "Balanced".
+ * Within ±15 minutes is treated as balanced.
+ */
+export function fmtSleepBank(bankSec: number): string {
+  if (Math.abs(bankSec) < 900) return 'Balanced';
+  const abs = Math.abs(bankSec);
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const durStr = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+  return bankSec < 0 ? `${durStr} deficit` : `${durStr} surplus`;
+}
+
+// ─── Stage vs 7-day history insight ──────────────────────────────────────────
+
+/**
+ * Returns a consultant-tone insight sentence comparing today's REM or Deep stage
+ * to the 7-day rolling average from history. Returns null if not enough stage history.
+ */
+export function getStageInsight(
+  entry: PhysiologyDayEntry,
+  history: PhysiologyDayEntry[],
+): string | null {
+  if (!entry.sleepDurationSec) return null;
+
+  const todayRemPct = entry.sleepRemSec != null
+    ? (entry.sleepRemSec / entry.sleepDurationSec) * 100 : null;
+  const todayDeepPct = entry.sleepDeepSec != null
+    ? (entry.sleepDeepSec / entry.sleepDurationSec) * 100 : null;
+
+  // Try personal-average comparison first (requires 3+ prior nights)
+  const prior = history
+    .slice(-8)
+    .filter(d => d.date !== entry.date && d.sleepDurationSec != null && d.sleepRemSec != null);
+
+  if (prior.length >= 3) {
+    const avgRemPct = prior.reduce((sum, d) => sum + (d.sleepRemSec! / d.sleepDurationSec!) * 100, 0) / prior.length;
+    const deepPrior = prior.filter(d => d.sleepDeepSec != null);
+    const avgDeepPct = deepPrior.length > 0
+      ? deepPrior.reduce((sum, d) => sum + (d.sleepDeepSec! / d.sleepDurationSec!) * 100, 0) / deepPrior.length
+      : 0;
+
+    if (todayRemPct != null) {
+      const delta = todayRemPct - avgRemPct;
+      if (delta < -5) {
+        return `REM ${Math.round(todayRemPct)}% — below your ${Math.round(avgRemPct)}% 7-day average. Central fatigue risk is elevated on quality sessions today.`;
+      }
+      if (delta > 5 && todayRemPct >= 20) {
+        return `REM ${Math.round(todayRemPct)}% — above your 7-day average. Recovery quality was good.`;
+      }
+    }
+
+    if (todayDeepPct != null && avgDeepPct > 0) {
+      const delta = todayDeepPct - avgDeepPct;
+      if (delta < -4) {
+        return `Deep sleep ${Math.round(todayDeepPct)}% — below your ${Math.round(avgDeepPct)}% 7-day average. Physical repair was reduced.`;
+      }
+    }
+  }
+
+  // Fallback: flag against population norms even without personal history
+  if (todayRemPct != null && todayRemPct < 15) {
+    return `REM ${Math.round(todayRemPct)}% — below the typical 15 to 22% range. Central fatigue risk is elevated on quality sessions today.`;
+  }
+  if (todayDeepPct != null && todayDeepPct < 13) {
+    return `Deep sleep ${Math.round(todayDeepPct)}% — below the typical 13 to 20% range. Physical repair was reduced.`;
+  }
+  if (todayRemPct != null && todayRemPct >= 22) {
+    return `REM ${Math.round(todayRemPct)}% — above the typical range. Recovery quality was good.`;
+  }
+
+  return null;
+}
+
 // ─── Clean bar chart builder ─────────────────────────────────────────────────
 
 export interface BarChartEntry {

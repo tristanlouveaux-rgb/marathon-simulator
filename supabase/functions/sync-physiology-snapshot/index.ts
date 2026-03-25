@@ -50,7 +50,7 @@ Deno.serve(async (req) => {
 
             supabaseClient
                 .from('sleep_summaries')
-                .select('calendar_date, overall_sleep_score, duration_sec, deep_sec, rem_sec, awake_sec')
+                .select('calendar_date, overall_sleep_score, duration_sec, deep_sec, rem_sec, light_sec, awake_sec')
                 .eq('user_id', userId)
                 .gte('calendar_date', startDateStr),
 
@@ -70,17 +70,22 @@ Deno.serve(async (req) => {
                 .limit(1)
         ])
 
-        if (metricsRes.error) throw metricsRes.error
-        if (sleepRes.error) throw sleepRes.error
-        if (physioRes.error) throw physioRes.error
+        // Individual table errors are non-fatal — log and continue with empty data
+        if (metricsRes.error) console.warn('[sync-physiology-snapshot] daily_metrics error:', metricsRes.error.message)
+        if (sleepRes.error) console.warn('[sync-physiology-snapshot] sleep_summaries error:', sleepRes.error.message)
+        if (physioRes.error) console.warn('[sync-physiology-snapshot] physiology_snapshots error:', physioRes.error.message)
         // maxHRRes failure is non-fatal — just skip
 
-        console.log(`[sync-physiology-snapshot] Results: metrics=${metricsRes.data?.length ?? 0}, sleep=${sleepRes.data?.length ?? 0}, physio=${physioRes.data?.length ?? 0}`)
+        const metricsRows = metricsRes.error ? [] : (metricsRes.data || [])
+        const sleepRows = sleepRes.error ? [] : (sleepRes.data || [])
+        const physioRows = physioRes.error ? [] : (physioRes.data || [])
+
+        console.log(`[sync-physiology-snapshot] Results: metrics=${metricsRows.length}, sleep=${sleepRows.length}, physio=${physioRows.length}`)
 
         // Merge by date — map DB column names to client-expected names
         const mergedData = new Map<string, any>()
 
-        for (const m of metricsRes.data || []) {
+        for (const m of metricsRows) {
             mergedData.set(m.day_date, {
                 calendar_date: m.day_date,
                 resting_hr: m.resting_hr,
@@ -92,18 +97,19 @@ Deno.serve(async (req) => {
         }
 
         // Merge sleep
-        for (const s of sleepRes.data || []) {
+        for (const s of sleepRows) {
             const existing = mergedData.get(s.calendar_date) || { calendar_date: s.calendar_date }
             existing.sleep_score = s.overall_sleep_score
             existing.sleep_duration_sec = s.duration_sec ?? null
             existing.sleep_deep_sec = s.deep_sec ?? null
             existing.sleep_rem_sec = s.rem_sec ?? null
+            existing.sleep_light_sec = s.light_sec ?? null
             existing.sleep_awake_sec = s.awake_sec ?? null
             mergedData.set(s.calendar_date, existing)
         }
 
         // Merge physio
-        for (const p of physioRes.data || []) {
+        for (const p of physioRows) {
             const existing = mergedData.get(p.calendar_date) || { calendar_date: p.calendar_date }
             // Prefer vo2max from daily_metrics, fallback to physiology_snapshots
             if (!existing.vo2max && p.vo2_max_running) {

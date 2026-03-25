@@ -241,15 +241,21 @@ async function handleSleeps(
 
     // Store stage durations (seconds). These arrive in the webhook payload
     // regardless of whether the score is available yet.
+    // Note: Garmin's field naming is inconsistent — REM uses "remSleepInSeconds"
+    // (no "Duration"), while deep/awake use "...DurationInSeconds". Check both.
     const durationSec: number | null = s.durationInSeconds ?? null;
     const deepSec: number | null = s.deepSleepDurationInSeconds ?? null;
-    const remSec: number | null = s.remSleepDurationInSeconds ?? null;
+    const remSec: number | null = s.remSleepInSeconds ?? s.remSleepDurationInSeconds ?? null;
+    const lightSec: number | null = s.lightSleepDurationInSeconds ?? s.lightSleepInSeconds ?? null;
     const awakeSec: number | null = s.awakeDurationInSeconds ?? null;
 
+    // Log all top-level keys for diagnostics (helps catch future Garmin field name changes)
+    console.log(`[garmin-webhook] Sleep keys for ${calendarDate}: ${Object.keys(s).join(', ')}`);
+
     if (sleepScore != null) {
-      console.log(`[garmin-webhook] Sleep score received: ${sleepScore} (${calendarDate})`);
+      console.log(`[garmin-webhook] Sleep score received: ${sleepScore} (${calendarDate}), deep=${deepSec}s, rem=${remSec}s, light=${lightSec}s, awake=${awakeSec}s`);
     } else if (durationSec != null) {
-      console.log(`[garmin-webhook] Sleep stages only (score pending): ${(durationSec/3600).toFixed(1)}h, deep=${deepSec}s, rem=${remSec}s, awake=${awakeSec}s`);
+      console.log(`[garmin-webhook] Sleep stages only (score pending): ${(durationSec/3600).toFixed(1)}h, deep=${deepSec}s, rem=${remSec}s, light=${lightSec}s, awake=${awakeSec}s`);
     }
 
     const { error } = await supabase.from("sleep_summaries").upsert(
@@ -260,6 +266,7 @@ async function handleSleeps(
         duration_sec: durationSec,
         deep_sec: deepSec,
         rem_sec: remSec,
+        light_sec: lightSec,
         awake_sec: awakeSec,
       },
       { onConflict: "user_id,calendar_date" },

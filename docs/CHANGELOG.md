@@ -4,6 +4,193 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-22 — Coach Brain (Phase 1)
+
+- **`src/calculations/daily-coach.ts`** — new central aggregator. `computeDailyCoach(state)` collates all signals (TSB, ACWR, sleep, HRV, RPE, week load, injury, illness) and returns a `CoachState` with `stance`, `blockers`, `alertLevel`, and a fully structured `CoachSignals` payload ready for the LLM.
+- **`supabase/functions/coach-narrative/index.ts`** — new edge function. Accepts `CoachSignals`, calls `claude-haiku-4-5-20251001`, returns a 2–3 sentence coaching paragraph. System prompt enforces direct/factual tone (no motivational padding, inline bold numbers, no emoji).
+- **`src/ui/coach-modal.ts`** — Coach overlay with readiness ring (SVG arc, same pattern as Home ring), signal rows (freshness, load safety, sleep, HRV, week load), and LLM narrative card. Client-side rate limit: 3 calls/day with 4-hour cache in localStorage (`mosaic_coach_narrative_cache`). Cached narrative shown when limit is reached.
+- **"Coach" button** added to Home header (between Check-in and account) and Plan header (current week only, before Check-in). Same pill style as Check-in.
+- **`docs/BRAIN.md`** — architecture spec for the central coaching brain concept.
+
+## 2026-03-22
+
+- **Low readiness modal**: converted static option cards (Rest today, Reorder the week, Reduce intensity) into clickable buttons. Rest closes the modal; Reorder navigates to plan view; Reduce intensity calls `applyRecoveryAdjustment` (downgrade for hard sessions, easyflag for easy runs). Added `todayAnyWorkout` detection so the reduce action works even when no hard session is scheduled.
+
+## 2026-03-22 — Daily Headline Narrative (Bevel-inspired)
+
+- **`buildDailyHeadline(s)`** added to `home-view.ts` — rules-based 2-sentence insight card on the Home tab, above the readiness ring.
+- Synthesises 7 signals in priority order: recovery debt (red → orange), HRV delta vs 7-day average, sleep streak (poor nights), recent cross-training load (last 48h, from `garminActuals` + `adhocWorkouts`), ACWR status.
+- Each rule produces a headline + contextual body that differs based on whether today's session is hard or easy.
+- Returns `''` when nothing notable — no noise card shown when conditions are fine.
+- **`docs/BEVEL.md`** created: full competitive analysis, feature wishlist (sleep stages, Sleep Bank, strain, daily narrative, HRV trends, chatbot), UX notes from Bevel screenshots.
+- **`docs/UX_PATTERNS.md`**: three new sections — Daily Insight Card anatomy, Recovery Metric Tiles, Sleep Stage Breakdown Rows.
+
+## 2026-03-22 — Forecast chart redesign + visual constraints
+
+- **Forecast load chart**: replaced multi-colour bar chart with a continuous area chart — historical TSS (solid blue) flows into planned TSS (dashed blue, lighter fill). Phase labels (Base/Build/Peak/Taper) appear as small grey text under each future week's date tick. No legend, no categorical colouring.
+- **CTL chart**: removed all intermediate dots; line-only with no point markers.
+- **UX_PATTERNS.md**: added `Visual Constraints` section (max 2 colours, no decorative elements) and `Chart type rules` (ban bar charts for time-series; forecast continuation pattern).
+- **CLAUDE.md**: added pre-flight step 4 — "Visual constraints checked" before any UI code.
+
+## 2026-03-22 — Stats: CTL "Learn more" page
+
+- **CTL Learn more page**: Added "Learn more →" button to the Running Fitness Trend (CTL) chart in the Progress detail page. Tapping opens a full sub-page explaining what CTL measures, how it's calculated (including cross-training discounts), a range table with 6 tiers (Building → Elite, using the actual code thresholds at 20/40/58/75/95), how to build CTL safely, and what to expect during taper. Back button returns to the Progress detail page. Current tier highlighted inline.
+
+## 2026-03-22 — Stats: HRV baseline spectrum, dot removal, sleep neutral bars, chart clean-up
+
+- **HRV card redesigned**: Area chart replaced with Garmin-style baseline spectrum. Computes 28-day mean ± 1 stddev as a personal normal range, marks 7-day avg on the spectrum. Status label: Balanced / Low / High. Area chart kept below for trend context. Color changed to neutral gray.
+- **Dots removed**: End-of-line dots removed from ACWR trend chart and `buildPhysioChartWithBaseline`. Clean lines only.
+- **ACWR reference line labels removed**: Lines at 1.3/1.5 kept, labels stripped — spectrum bar above already explains the zones.
+- **Sleep bars neutral**: Uniform `rgba(0,0,0,0.18)` instead of red/green per score. Zone label below headline retains color.
+- **HRV + RHR cards**: Removed `cursor:pointer` and `SCROLL_CHEVRON` — no click-through exists for these cards.
+
+## 2026-03-22 — Illness mode
+
+- **Illness modal**: Check-in → Ill now opens a real modal asking "Still running (reduced intensity)" or "Full rest". Sets `illnessState` on state.
+- **Illness banner (Plan + Home)**: Amber banner with thermometer icon, day counter, severity pill, and reassurance copy. "Mark as recovered" / "Recovered" button clears state.
+- **Adherence gate**: During illness, VDOT week-advance adherence multiplier bypassed (treated as 1.0) — skips don't compound fitness reduction with an artificial penalty.
+- **No plan mutation**: Workouts untouched; user drags/skips as normal.
+
+---
+
+## 2026-03-22 — Stats page polish: color reduction, section breaks, sleep, TSB
+
+- **Color reduction**: All big metric numbers (Freshness, Injury Risk, HRV, RHR, Sleep, CTL) now always render in `var(--c-black)`; color preserved only for the zone/status badge below.
+- **Spectrum bar labels**: Removed all zone labels from the bar row — now shows only the active zone label below the bar (cleaner, no crowding).
+- **TSB chart flat line**: Y-axis now data-driven (data range + 30% padding) instead of fixed ±30 span. Chart now shows variation clearly.
+- **"Overreached" → "Well Rested"**: TSB > +12 (daily-equiv) relabelled to "Well Rested"; color updated to green.
+- **Section breaks in Readiness detail**: "Load" and "Recovery" section dividers added above Freshness/Injury Risk and HRV/RHR/Sleep groups.
+- **Section breaks in Stats opening screen**: Thin divider lines added between Progress / Fitness / Readiness cards.
+- **Sleep card**: Now merges `recoveryHistory` manual sleep entries for dates Garmin hasn't filled. Entire card is tappable → opens sleep sheet.
+- **Sleep detail button removed**: The floating "Sleep detail →" button on the Readiness detail page and in `buildRecoveryAccordionBody` removed. Sleep access is now via tapping the card.
+
+## 2026-03-22 — Redesign: Readiness detail page card layout
+
+- **`src/ui/stats-view.ts`** — All five metric cards (Freshness, Injury Risk, HRV, Resting HR, Sleep) + Running Fitness card redesigned: value moved from 16px right-aligned to 30px/weight-300 left-aligned headline; zone label below value in matching color; card title now 11px uppercase with letter-spacing; time window label (8-week / 7 days / 7 nights) in top-right with chevron replacing the old value cluster; padding 16px → 20px for breathing room; captions 10px → 11px.
+- **`buildInlineSpectrumBar`**: bar height 6px → 8px, border-radius 3px → 4px, zone labels 8px → 9px, label row height 18px → 20px.
+- **`buildACWRTrendChart`**: removed redundant 1.0 reference line; replaced unlabelled threshold lines with labeled "Elevated 1.3" / "High Risk 1.5"; removed SVG `<text>` element (distorted by `preserveAspectRatio="none"`) and deleted the 3 variables that only served it.
+
+---
+
+## 2026-03-22 — Fix: run activities logged via review screen now count as runs for load
+
+- **`src/calculations/activity-matcher.ts`** (`addAdhocWorkoutFromPending`): fixed `t` always being `'cross'` — now correctly uses `'easy'` when `item.appType === 'run'`, matching the behaviour of `addAdhocWorkout`.
+- **`src/calculations/fitness-model.ts`** (`computeWeekTSS`): adhoc workouts with a run `t` type (`easy`, `long`, `tempo`, etc.) now use `runSpec=1.0` regardless of the activity display name. Fixes activities like "General Sport 1" that were runs but got Signal A load computed at the default `0.35` cross-training discount.
+
+## 2026-03-22 — Stats: flat metric cards on Readiness detail (revised)
+
+- Stats landing kept as original 3-pillar cards. New flat metric scroll now lives inside Readiness detail page.
+- `buildReadinessDetailPage()` replaced accordion with flat cards: Freshness · Injury Risk · HRV · Resting HR · Sleep.
+- `buildACWRTrendChart()`: reference labels moved from SVG text to HTML spans to fix scaling distortion. Dots removed except last point.
+- `buildPhysioChartWithBaseline()`: removed distorted floating SVG "avg" label.
+
+## 2026-03-22 — Stats: flat metric dashboard redesign
+
+- **`src/ui/stats-view.ts`**: Replaced the 3-pillar opening screen (Progress / Fitness / Readiness cards) with a flat single-scroll layout. Each metric is a self-contained card: header row (title + value + trend arrow + chevron), spectrum bar above the chart (where applicable), fully-labelled chart, 1-line context note.
+- New cards: Freshness (TSB) · Injury Risk (ACWR) · HRV (RMSSD) · Resting HR · Sleep · Running Fitness (CTL). Plan Progress card retained at top.
+- New `buildInlineSpectrumBar()`: compact 6px bar with white gap marker and zone labels — used for Freshness, Injury Risk, Running Fitness.
+- New `buildDailyLineChartGap()`: gap-aware 7-day line chart. Null entries render as a visual break (M/L path split) with a faint dash tick. Dashed baseline reference for HRV and RHR. Hi/lo Y-axis labels.
+- HRV and RHR cards show 7-day gap-aware line; trend arrow (green ↑ for HRV, green ↓ for RHR); 7-day and 28-day avg in context line.
+- Sleep card reuses existing `buildBarChart` from sleep-insights. CTL card reuses `buildCTLLineChart`.
+- Detail pages (Readiness, Fitness, Progress) unchanged — still reachable by tapping cards. Wiring updated in `renderStatsView`.
+
+## 2026-03-22 — Fix: new week shown as fully missed after Sunday wrap-up
+
+- **`src/ui/plan-view.ts`** (`buildCalendarStrip`, `buildWorkoutCards`): Added `weekHasStarted` guard. When the user wraps up the week on Sunday and `s.w` advances to the next week (which starts Monday), the day-of-week index check `dayIdx < today` was marking Mon–Sat as "Missed" immediately. Fix: if the new week's start date is after today, no days are past.
+
+## 2026-03-22 — Recovery card: stale sleep suppression + manual sleep entry
+
+- **`src/calculations/readiness.ts`**: Added `suppressSleepIfNotToday` option to `computeRecoveryScore`. When today's Garmin sleep entry is absent and no manual entry exists, `sleepScore` is set to null — excluded from the composite and the bar is hidden entirely.
+- **`src/calculations/readiness.ts`**: Sleep acute modifier now only applies when `lastNightSleepDate === today`. Removed `isSleepDataPending()` dependency from label logic.
+- **`src/ui/home-view.ts`**: When no sleep data for today, the Sleep sub-score bar is suppressed. Only the "No sleep data from Garmin yet · Log manually" prompt shows in that section.
+- **`src/ui/home-view.ts`**: Added `showManualSleepPicker()` — centred overlay (per UX_PATTERNS.md) with a 1–10 number grid (×10 → 0–100 score). Saves to `recoveryHistory` with `source: 'manual'`, injected before `computeRecoveryScore`.
+- **`docs/UX_PATTERNS.md`**: Added "Overlays and Modals" section — always centred, never bottom-anchored.
+- **`CLAUDE.md`**: Added overlay positioning rule with UX_PATTERNS.md reference.
+
+## 2026-03-22 — Stats: Forecast tab on Total Load (TSS) chart
+
+- **`src/ui/stats-view.ts`**: Added `'forecast'` to `ChartRange` type. New `buildForecastLoadChart()` renders a bar chart of planned TSS for each remaining week in the plan, with bars coloured by training phase (blue=Base, orange=Build, purple=Peak, yellow=Taper). Current week bar is fully opaque with a dashed "Now" marker; future weeks at 70% opacity. Phase legend shown below chart.
+- Added `buildProgressRangeToggle()` — a variant of the range pill that includes an additional "Forecast" button. Used in the Progress detail page instead of `buildRangeToggle`.
+- `wireProgressRangeButtons`: early-returns on `'forecast'` to show the forecast chart without touching km/CTL charts.
+
+## 2026-03-21 — Fix: run matched to General Sport slot now labelled "Run" and counted in running km
+
+- **`src/ui/activity-review.ts`**: Store `activityType` in `GarminActual` for runs matched via the review/matching screen (was only set on the auto-complete path). Both run-matching call sites updated.
+- **`src/ui/home-view.ts`**: Updated `isRunKey` to accept an optional `activityType` arg — checks activity type first, falls back to slot-key keyword scan. Updated km filter and activity log `isRun` check to pass `activityType`. Activity label now prefers `formatActivityType(activityType)` over slot name so a run matched to a cross slot shows "Run" not "General Sport 1".
+- **`src/ui/stats-view.ts`**: `runKmFromWeek` updated same way — checks `activityType` before keyword scan.
+- **`src/state/persistence.ts`**: Migration `isRunKey` updated to check `activityType`.
+
+## 2026-03-21 — Readiness detail page: accordion redesign
+
+- **`src/ui/stats-view.ts`**: Replaced the old "Recovery & Physiology + Training Load slabs" layout with 3 accordion rows matching the home page order: **Freshness → Injury Risk → Recovery**. Each row shows the current value + coloured zone bar. Tap to expand: Freshness shows 8-week TSB trend; Injury Risk shows 8-week ACWR trend (with 1.0/1.3/1.5 reference lines); Recovery shows Sleep (bar chart + detail button), HRV (area chart with 28-day baseline reference line + value label), Resting HR (same). HRV chart now clearly titled "HRV (RMSSD)" with personal average shown. Removed dead `buildTSBMetricPage`, `buildRecoveryPhysiologySection`, and old readiness wire functions.
+
+## 2026-03-21 — Background sleep poller + accurate sleep date label
+
+- **`src/ui/home-view.ts`**: Sleep label in recovery pill sheet now shows "Last night" only when `lastNightSleepDate` is today or yesterday. Older data shows the actual date (e.g. "19 Mar: 54/100") so stale data is immediately obvious. `lastNightSleepDate` added to `PillSheetData` and wired from `recoveryResult2`.
+
+## 2026-03-21 — Background sleep poller
+
+- **`src/data/sleepPoller.ts`** (new): polls `syncPhysiologySnapshot(7)` every 3 minutes when today's sleep score is absent. Self-terminates when data arrives or after 6 hours. Exports `startSleepPollerIfNeeded()` and `isSleepDataPending()`.
+- **`src/main.ts`**: calls `startSleepPollerIfNeeded()` at the end of both Garmin sync branches (Strava+Garmin and Garmin-only) so polling begins immediately after launch if sleep is missing.
+- **`src/ui/stats-view.ts`**: readiness card sleep section shows a grey "Waiting for Garmin to send sleep data" label when `isSleepDataPending()` is true and today's score hasn't arrived yet. When data arrives the poller re-renders the active view automatically.
+
+## 2026-03-20 — Recovery advice sheet: specific session actions
+
+- **`src/ui/home-view.ts`**: `showRecoveryAdviceSheet()` now detects today's unrated quality session. If found: shows session-specific "Convert to easy run" / "Run by feel" button (calls `applyRecoveryAdjustment('downgrade')`) and "Move to [Day]" button (writes `wk.workoutMoves`, saves, re-renders). Back-to-back detection: if yesterday was a rated hard session, surfaces a warning. Generic rest/reorder/reduce rows shown only when no quality session is detected today. Imports added: `getMutableState`, `saveState`, `isHardWorkout`, `applyRecoveryAdjustment`.
+- **`CLAUDE.md`**: Added UI Copy writing style guide (consultant tone, no wellness padding, reference examples, anti-pattern table).
+- **Fix**: Removed `|| true` debug hack from Adjust button; added ACWR gate so the button routes to `triggerACWRReduction()` only when ACWR is elevated or unspent items exist.
+
+## 2026-03-20 — Week debrief "Continue" now navigates to Plan
+
+- **`src/ui/week-debrief.ts`**: Fixed `_closeAndRecord` in `review` mode — was calling `renderHomeView()`, now uses dynamic import to call `renderPlanView()`. Dynamic import required to avoid circular dependency (`plan-view.ts` → `week-debrief.ts`).
+- **`CLAUDE.md`**: Added Navigation Rules section documenting this pattern.
+
+## 2026-03-20 — Load & Taper page
+
+- **`src/ui/load-taper-view.ts`** (new): Full-page Load & Taper view. Shows this week's TSS bar + "See breakdown →" button (opens existing modal), TSS range explainer (150/350/500 thresholds), all four plan phases with descriptions (Base/Build/Peak/Taper) with the current phase highlighted, and a "Why taper makes you faster" science card. Back button returns to plan or home.
+- **`src/ui/plan-view.ts`**: `plan-load-bar-row` click now navigates to the Load & Taper page instead of opening the inline modal.
+- **`src/ui/home-view.ts`**: `home-tss-row` click now navigates to the Load & Taper page instead of opening the inline modal.
+
+## 2026-03-20 — Stats page full redesign: three-pillar architecture (Progress · Fitness · Readiness)
+
+- **`src/ui/stats-view.ts`**: Complete rewrite of the Stats page. Opening screen now shows four stacked sections: Progress card, Fitness card, Readiness card, and a flat Summary section. Each of the three primary cards taps into a dedicated single-scroll detail page with no tabs inside. Progress card shows a race-mode arc/timeline with forecast finish + on-track pill, or a fitness-mode tier progress bar for non-race users. Fitness card shows compact VDOT sparkline + VDOT value + tier label. Readiness card shows a Freshness scale bar with a properly positioned floating marker (`left: pct%` via absolute positioning — the ⓘ info icon is moved to the row title, no longer anchored to the bar left edge). Progress detail page has Phase Timeline, Training Load line chart, Running Distance line chart, and CTL line chart — all with 8w/16w/all range toggle. Fitness detail page has scale bars (Running Fitness/Aerobic Capacity/Lactate Threshold), a VDOT trend line chart with range toggle, plus race forecast and training paces. Readiness detail page has scale bars for Freshness/Short-Term Load/Load Safety/Fitness Momentum, a Freshness trend line chart with zone bands, and a Recovery & Physiology section rendered fully expanded (no accordion). All charts use SVG line/area — no bar charts anywhere. Summary section shows race predictions (Marathon/Half/10K/5K) in race mode and training paces in both modes. Scale bars now use raw TSB units (-60 to +40) per spec; ATL scale extended to 150 to match spec. Removed: old "This Week" summary card, old "Fitness" summary card with CTL number, old "More detail" accordion, Zones tab, zone stack chart.
+
+## 2026-03-19 — Feature: Week Overview + coach insight + future week draft treatment
+
+- **`src/calculations/coach-insight.ts`** (new): `computeWeekSignals` — maps effortScore, tssPct, ctlDelta, HR drift → 4 signal states. `getSignalPills` — coloured pill data for UI. `getCoachCopy` — 9-case RPE×Load decision tree with secondary modifiers (fitness direction, HR drift); returns `null` for novel/sparse combinations. `getFutureWeekCopy` — VDOT + phase + race proximity sentence for future weeks; race note guarded by `hasRace` flag. `PILL_COLORS` exported for shared use. Thresholds aligned with existing debrief logic (±1.0).
+- **`src/ui/plan-view.ts`**: "Week Overview" / "About this week" expandable toggle added below load bar. Current/past weeks: signal pills (Effort, Load, Fitness, Aerobic) + coach paragraph. Future weeks: VDOT + Phase + Load + Race chips; detailed copy naming each factor (fitness, load budget, block structure, race proximity); card list at 75% opacity; "Draft · distances ±10% · paces update weekly" banner. `fmtDescRange` helper rewrites workout descriptions with ±10% distance ranges on future week cards. `Mark as Done` / `Skip` buttons hidden for future weeks. Chevron animates on expand/collapse. Coach block hidden when effort adjustment prompt is already showing to avoid duplicate messaging.
+- **`src/ui/week-debrief.ts`**: Coach block (signal pills + paragraph) injected between metrics rows and effort adjustment prompt. Hidden when `showPacing` is true (effort prompt takes precedence). Uses shared `PILL_COLORS` and existing `tssPct` — no recomputation.
+
+## 2026-03-19 — Fix: readiness TSB and ACWR now include current week's actuals
+
+- **`src/calculations/fitness-model.ts`**: `computeSameSignalTSB` and `computeACWR` now extend their loop by 1 to include the current in-progress week (`limit = currentWeek + 1` capped at `wks.length`). Previously, today's completed activities (garminActuals, adhocWorkouts) were invisible to ATL — so Freshness stayed "+20 Fresh" and ACWR stayed low regardless of what the athlete had done that day. `computeWeekRawTSS` only counts synced actuals, so the value is 0 when nothing has been done and correctly reflects completed load once activities sync.
+
+---
+
+## 2026-03-19 — Stats page redesign v2 (area charts, less navigation, race status)
+
+- **`src/ui/stats-view.ts`**: `buildMiniTSSSparkline` converted from bars to smooth area/line (SVG path via `smoothAreaPath`). New `buildMiniVdotSparkline` for Fitness summary card — shows VDOT trend as a small area chart inline. New `buildRaceStatusBanner` for race mode users — Starting/Today/Forecast grid + progress bar shown inside the Fitness card. `buildReadinessSummaryCard` now shows TSB, ACWR, and sleep score as inline data rows. New `buildVdotSparklineLarge` (full-width, 72px, area fill) for the Fitness detail page. `buildFitnessDetailPage` now leads with VDOT sparkline above progress bars. `buildThisWeekDetailPage`: Load/Distance/Zones tab switcher killed — single load chart + 8w/16w toggle only; distance shown as stat below chart. `buildReadinessDetailPage`: segmented control removed — Training Load + Recovery on single scroll. `wireChartTabs`: simplified to range-only (no chart type tabs).
+
+---
+
+## 2026-03-19 — Garmin backfill guard: permanent → 12h TTL
+
+- **`src/data/supabaseClient.ts`**: Replaced the permanent `mosaic_garmin_backfill_empty` localStorage guard with a 12-hour TTL (`mosaic_garmin_backfill_empty_until`). **Root cause of recurring sleep not pulling**: the old guard fired permanently on the first app launch of the day (often before the morning watch sync completes), blocking all subsequent backfill attempts. The new guard expires after 12 hours so the next launch retries — after the watch has synced. Old permanent guard key is cleared on first run of the new code (migration). On success with >0 rows, guard is cleared entirely so every launch checks for fresh data.
+
+---
+
+## 2026-03-19 — Home: activity dates + unmatched activity display
+
+- **`src/ui/home-view.ts`**: Recent activity list now shows actual dates (e.g. "Mon 17 Mar") instead of "Last week"/"This week", using `act.startTime` for garminActuals and `w.garminTimestamp` for adhoc workouts. Unmatched activities (garminPending items with `__pending__` state) now surface in the Recent section with an amber "Unmatched" pill tag; tapping opens the activity review flow via `window.openActivityReReview()`.
+
+---
+
+## 2026-03-19 — Stats page redesign (3-card Whoop-style layout)
+
+- **`src/ui/stats-view.ts`**: Replaced cluttered multi-section layout with 3 clean summary cards ("This Week", "Fitness", "Readiness"), each tapping to a full detail page. Tier pill removed — replaced by VDOT + direction arrow (↑→↓). ACWR pill only shows when elevated/high. Readiness driving signal pill only when score < 60. "This Week" detail: Load / Distance / Zones chart + 8w/16w range. "Fitness" detail: progress bars + VDOT history + forecast times. "Readiness" detail: segmented control (Training Load | Sleep & HRV). `computeReadiness`, `readinessColor`, `drivingSignalLabel` added to imports.
+
+---
+
 ## 2026-03-12 — Load Budget Spec: total-week Signal B excess model
 
 - **`src/calculations/fitness-model.ts`**: New `computePlannedSignalB()` = `computePlannedWeekTSS()` + sum of `sportBaselineByType[sport].avgSessionRawTSS × sessionsPerWeek`. Plan bar and excess detection now compare Signal B vs Signal B (no cross-signal mismatch).

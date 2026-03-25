@@ -171,6 +171,15 @@ Update the status column after running `npx vitest run`.
 
 ---
 
+### 15b. Illness Mode
+**What it does**: When the user reports illness via the check-in overlay, an `illnessState` is saved to state. An amber banner appears on both the Home and Plan tabs showing day count, severity ("Still running" / "Full rest"), and reassurance that skipped workouts won't count against adherence. The plan itself is not mutated — the user continues to drag/skip workouts as normal. Illness clears when the user taps "Mark as recovered" / "Recovered". During an active illness week, the VDOT week-advance adherence multiplier is bypassed (treated as 100%) so skipped runs don't compound with reduced training load.
+
+**Key files**: `src/ui/illness-modal.ts` (modal + clearIllness), `src/ui/plan-view.ts` (buildIllnessBanner), `src/ui/home-view.ts` (buildIllnessBanner), `src/ui/checkin-overlay.ts` (wires Ill button), `src/ui/events.ts` (adherence gate), `src/types/state.ts` (illnessState field)
+**State**: `illnessState: { startDate, severity: 'light'|'resting', active: boolean }`
+**Tests**: ❌ None yet
+
+---
+
 ### 16. Recovery Engine
 **What it does**: Morning check-in system. Automatically reads Garmin sleep score, HRV (RMSSD → categorical status), and readiness (100 − stress). Falls back to 1–10 manual tap UI if no Garmin data. Scores → traffic light (green/yellow/orange/red). Orange or red triggers workout adjustment modal and inflates ATL for ACWR. One prompt per day (`lastRecoveryPromptDate` guard).
 
@@ -506,14 +515,34 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - **Signal B** (`computeWeekRawTSS`): raw physiological TSS, no runSpec discount. Used for ATL, ACWR injury risk, "This Week" load card.
 - **Signal C** (`wk.actualImpactLoad`): musculoskeletal impact. Computed, not yet surfaced in UI.
 
-**Stats Tab** (restructured 2026-03-09):
-- Above fold: "Your last 8 weeks" heading + narrative sentence; main chart card with **Load/Distance/Zones tabs** + 8w/16w/Full range tabs; "This Week" card (Signal B % of weekly target) + "Distance" card
-- **Running Fitness chart**: green CTL sparkline showing 42-day fitness trend, CTL value + trend arrow (↑/→/↓)
-- **Progress card**: Running Fitness (CTL) + VDOT position bars with ⓘ info buttons
-- **Recovery card**: Recovery Score position bar (from `computeRecoveryScore()`: HRV 45% / Sleep 35% / RHR 20%, gated on ≥3 days physiology data); clickable sub-bars for Sleep, HRV, Resting HR with 14-day sparklines; then Freshness (TSB) + Short-Term Load (ATL) + Load Safety (ACWR) position bars with ⓘ info buttons
-- **"More detail" toggle**: Training bars (Distance vs Plan, Total Load vs Plan), ATL/TSB/ACWR metrics row, ACWR gradient bar, calibration status, plus folded sections: Forecast times, Race Prediction, VDOT & Paces, Recovery & Physiology, Phase Timeline
-- **VDOT sparkline**: shows `s.vdotHistory` trend in VDOT & Paces section. Colour-coded change note. Info button explains all VDOT adjustment sources.
-- Home sparkline: mini chart below injury risk bar; tap navigates to Stats
+**Stats Tab** (redesigned 2026-03-19 — three-pillar architecture: Progress · Fitness · Readiness):
+
+**Opening screen** — four stacked sections, each card taps into a single-scroll detail page (no tabs inside detail pages):
+- **Progress card**: Race mode → horizontal arc/timeline (plan start → race day) + forecast finish badge + on-track pill. General fitness mode → tier progress bar showing % to next tier (Building/Foundation/Trained/Well-Trained/Performance/Elite based on CTL daily-equivalent)
+- **Fitness card**: Compact VDOT trend sparkline + current VDOT value + tier label; taps into Fitness detail
+- **Readiness card**: Single Freshness scale bar (gradient zones) with properly positioned floating marker at actual TSB value; taps into Readiness detail
+- **Summary** (flat, no tap-through): Race predictions (Marathon/Half/10K/5K from `vt()`) in race mode; Training paces (Easy/MP/Threshold/VO2max from `fp()`) in both modes
+
+**Progress detail page** (single scroll):
+- Phase Timeline bar (colour-coded Base/Build/Peak/Taper bands, dot at current week)
+- Training Load line chart (Signal B TSS, 8w/16w/all toggle)
+- Running Distance line chart (same toggle)
+- CTL line chart (Signal A 42-day running fitness, same toggle)
+
+**Fitness detail page** (single scroll):
+- Scale bars: Running Fitness (CTL daily-equiv), Aerobic Capacity (VDOT), Lactate Threshold — all with ⓘ info buttons
+- VDOT trend line chart (8w/16w/all toggle)
+- Race forecast detail, Forecast times, Training paces
+
+**Readiness detail page** (single scroll):
+- Scale bars (Training Load section): Freshness (TSB), Short-Term Load (ATL), Load Safety (ACWR), Fitness Momentum
+- Freshness trend line chart with zone bands (8w/16w/all toggle)
+- Recovery & Physiology (expanded — no accordion): Recovery Score bar, Sleep sparkline, HRV sparkline, RHR sparkline
+
+**Scale bar marker fix**: marker is a `left: pct%` positioned vertical bar inside position:relative container. ⓘ info icon is next to the row title, not on the bar.
+
+**Key functions**:
+- `src/ui/stats-view.ts` — `buildProgressCard_Opening()`, `buildFitnessCard_Opening()`, `buildReadinessCard_Opening()`, `buildSummarySection()`, `buildProgressDetailPage()`, `buildFitnessDetailPage()`, `buildReadinessDetailPage()`
 
 **Plan view**: Completed week headers show a muted `XX TSS` badge (Signal A).
 
@@ -622,6 +651,23 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 **Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios.
 
 ---
+
+### Coach Brain (Phase 1)
+
+**What it does**: A "Coach" button in the Home and Plan headers opens a modal that collates every available signal into a single coaching view. Shows a readiness ring (0–100 score), signal rows (freshness, load safety, sleep, HRV, week load), and a 2–3 sentence LLM-generated coaching paragraph personalised to today's training context.
+
+**Aggregator**: `computeDailyCoach(state)` gathers TSB/ACWR/sleep/HRV/RPE/week-load/injury/illness into a `CoachState` and derives a `stance` (`push | normal | reduce | rest`) and `blockers` array. Priority hierarchy: injury/illness override everything → ACWR overload → sleep deficit → readiness score.
+
+**LLM narrative**: `supabase/functions/coach-narrative` calls `claude-haiku-4-5-20251001` with structured signals as a prompt. Enforces direct/factual tone via system prompt. Rate limit: 3 calls/day, 4-hour cache in `localStorage` (`mosaic_coach_narrative_cache`). Falls back to rules-based sentence if call fails.
+
+**Key files**:
+- `src/calculations/daily-coach.ts` — aggregator + `CoachState` / `CoachSignals` types
+- `src/ui/coach-modal.ts` — modal UI (ring, signal rows, narrative card, rate limit)
+- `supabase/functions/coach-narrative/index.ts` — LLM edge function
+
+**Deployment**: `coach-narrative` edge function must be deployed and `ANTHROPIC_API_KEY` set as a Supabase secret.
+
+**Tests**: ⚠️ No automated tests
 
 ---
 

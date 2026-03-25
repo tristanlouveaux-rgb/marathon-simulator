@@ -8,6 +8,7 @@ import type { GarminActual } from '@/types';
 import { drawPolylineOnCanvas } from './strava-detail';
 import { getState } from '@/state';
 import { formatKm } from '@/utils/format';
+import { generateWorkoutInsight } from '@/calculations/workout-insight';
 
 export type ActivityDetailSource = 'plan' | 'home';
 
@@ -45,6 +46,7 @@ function fmtZoneTime(sec: number): string {
 }
 
 function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedTSS?: number, unitPref: 'km' | 'mi' = 'km'): string {
+  const s = getState();
   const source = actual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
   const actName = actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
   const dateStr = actual.startTime
@@ -230,6 +232,15 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     } // end else (valid splits)
   }
 
+  // ─── Coach insight ───────────────────────────────────────────────────────────
+  const insight = generateWorkoutInsight(actual, s);
+  const insightHtml = insight ? `
+    <div style="margin-bottom:20px">
+      <div class="m-sec-label">Coach</div>
+      <div class="m-card" style="padding:14px 16px;font-size:13px;line-height:1.55;color:var(--c-muted)">${insight}</div>
+    </div>
+  ` : '';
+
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
 
@@ -255,6 +266,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
         ${mapHtml}
         ${hrHtml}
         ${splitsHtml}
+        ${insightHtml}
       </div>
 
     </div>

@@ -880,12 +880,16 @@ export async function next(): Promise<void> {
   const ratedNames = Object.keys(wk.rated);
   const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip' && isRunName(n)).length;
   const expectedCount = s.rw || 3;
-  const adherence = expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1;
+  const isIll = !!(s as any).illnessState?.active;
+  // Illness: treat adherence as 1.0 — skips are excused, no adherence penalty.
+  // Fitness still reflects actual training (perWeekGain is computed from real activity).
+  const adherence = isIll ? 1 : (expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1);
   if (!isInjured) {
     wk.wkGain = Math.max(0, perWeekGain * adherence);
   }
   // When injured, wk.wkGain was already set to the phase-aware detraining value above
-  log(`Week ${s.w}: ${wk.wkGain >= 0 ? '+' : ''}${wk.wkGain.toFixed(3)} VDOT (${isInjured ? 'Injured — detraining' : Math.round(adherence * 100) + '% adherence'})`);
+  const gainLabel = isInjured ? 'Injured — detraining' : isIll ? 'Ill — adherence excused' : Math.round(adherence * 100) + '% adherence';
+  log(`Week ${s.w}: ${wk.wkGain >= 0 ? '+' : ''}${wk.wkGain.toFixed(3)} VDOT (${gainLabel})`);
 
   // Store completed km for this week before advancing
   {
@@ -1098,10 +1102,10 @@ export async function next(): Promise<void> {
         const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
         const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (s.w - 2) / ((s.tw ?? 16) - 1));
 
-        // Check the two completed weeks immediately before the one we just advanced from
-        const prevWeeks = s.wks.slice(Math.max(0, s.w - 3), s.w - 1);
-        const consecutiveBelow = prevWeeks.length >= 2 &&
-          prevWeeks.every(pw => (pw.completedKm ?? 0) > 0 && (pw.completedKm ?? 0) < floorKm);
+        // Check the most recently completed week (the one we just advanced from)
+        const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
+        const consecutiveBelow = prevWeeks.length >= 1 &&
+          prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
 
         if (consecutiveBelow) {
           const nextWorkouts = generateWeekWorkouts(
@@ -2481,4 +2485,55 @@ if (typeof window !== 'undefined') {
   window.dismissLTUpdate = dismissLTUpdate;
   window.removeGarminActivity = removeGarminActivity;
   window.openActivityReReview = openActivityReReview;
+}
+
+// ─── Lazy km nudge initialisation ────────────────────────────────────────────
+// Called on every plan-view render for the current week so the nudge card
+// appears even if the week was advanced before the check was introduced.
+// No-op if already set, dismissed, in taper, or ACWR is elevated.
+export function maybeInitKmNudge(): void {
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  console.log('[kmNudge] wk:', !!wk, 'kmNudge:', wk?.kmNudge, 'dismissed:', wk?.kmNudgeDismissed, 'ph:', wk?.ph);
+  if (!wk || wk.kmNudge || wk.kmNudgeDismissed) return;
+  if (wk.ph === 'taper') return;
+
+  const tier = s.athleteTierOverride ?? s.athleteTier;
+  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  console.log('[kmNudge] acwr:', acwr.status, acwr.ratio);
+  if (acwr.status !== 'safe') return;
+
+  const mTimeSec = (s.pac?.m ?? 360) * 42.195;
+  const floorTier = mTimeSec < 3.5 * 3600 ? 'fast' : mTimeSec < 4.5 * 3600 ? 'mid' : 'finish';
+  const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
+  const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
+  const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (s.w - 2) / ((s.tw ?? 16) - 1));
+
+  const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
+  console.log('[kmNudge] floorKm:', floorKm, 'prevWeeks:', prevWeeks.map(pw => pw.completedKm));
+  const below = prevWeeks.length >= 1 &&
+    prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
+  console.log('[kmNudge] below:', below);
+  if (!below) return;
+
+  const nextWorkouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
+    null, s.recurringActivities, s.onboarding?.experienceLevel,
+    undefined, undefined, s.w, s.tw, s.v, s.gs,
+  );
+  const easyRun = nextWorkouts.find(wo => wo.t === 'easy' && !wk.rated[wo.id ?? wo.n]);
+  console.log('[kmNudge] easyRun:', easyRun?.n, easyRun?.t, easyRun?.d);
+  if (!easyRun) return;
+
+  const distMatch = easyRun.d?.match(/(\d+\.?\d*)\s*km/i);
+  const plannedKm = distMatch ? parseFloat(distMatch[1]) : 8;
+  const extensionKm = Math.min(5, Math.max(1.5, Math.round(plannedKm * 0.20 * 2) / 2));
+  wk.kmNudge = {
+    workoutName: easyRun.n,
+    dayOfWeek: (easyRun as any).dayOfWeek,
+    suggestedExtensionKm: extensionKm,
+    originalDistanceKm: plannedKm,
+  };
+  saveState();
 }

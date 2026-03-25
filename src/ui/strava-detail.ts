@@ -199,11 +199,11 @@ export async function drawPolylineOnCanvas(
   const lngs = coords.map(c => c[1]);
   const minLat = Math.min(...lats), maxLat = Math.max(...lats);
   const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
-  const pad = 28;
+  const pad = 10;
 
   // Pick highest zoom level where the route fits in the canvas
   let zoom = 10;
-  for (let z = 16; z >= 10; z--) {
+  for (let z = 18; z >= 10; z--) {
     const routeW = Math.abs(mercatorX(maxLng, z) - mercatorX(minLng, z));
     const routeH = Math.abs(mercatorY(minLat, z) - mercatorY(maxLat, z));
     if (routeW <= W - pad * 2 && routeH <= H - pad * 2) {
@@ -278,14 +278,6 @@ export async function drawPolylineOnCanvas(
     ctx.fillText(slowLabel, W - ctx.measureText(slowLabel).width - 4, 14);
   }
 
-  // OSM attribution (required)
-  const attr = '© OpenStreetMap contributors';
-  ctx.font = '8px sans-serif';
-  const attrW = ctx.measureText(attr).width + 6;
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.fillRect(W - attrW, H - 14, attrW, 14);
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillText(attr, W - attrW + 3, H - 4);
 }
 
 // ---------------------------------------------------------------------------

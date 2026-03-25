@@ -90,8 +90,8 @@ async function fetchPaginated(
       );
       const rows: any[] = Array.isArray(data) ? data : (data[rowsKey] ?? []);
       all.push(...rows);
-    } catch (_) {
-      // Non-fatal: log nothing per-day to avoid log spam; errors visible at summary level
+    } catch (err) {
+      console.error(`[garmin-backfill] ${endpoint} day ${new Date(s * 1000).toISOString().split("T")[0]} error:`, String(err));
     }
   }
   return all;

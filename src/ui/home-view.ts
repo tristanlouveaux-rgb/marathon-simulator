@@ -3,21 +3,27 @@
  * Shows this-week progress, injury risk, today's workout, race countdown, recent activity.
  */
 
-import { getState } from '@/state';
+import { getState, getMutableState, saveState } from '@/state';
 import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS } from '@/calculations/fitness-model';
 import { computeReadiness, readinessColor, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
-import { getSleepInsight, fmtSleepDuration, sleepScoreColor, sleepScoreLabel, getSleepContext, buildBarChart } from '@/calculations/sleep-insights';
+import { getSleepInsight, fmtSleepDuration, sleepScoreColor, sleepScoreLabel, getSleepContext, buildBarChart, stageQuality, getSleepBank, fmtSleepBank, getStageInsight } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
+import { isHardWorkout } from '@/workouts/scheduler';
 import { isInjuryActive } from './injury/modal';
-import { formatKm, fmtDateUK, fmtDesc } from '@/utils/format';
-import { next, setOnWeekAdvance } from './events';
+import { openCheckinOverlay } from './checkin-overlay';
+import { openCoachModal } from './coach-modal';
+import { clearIllness } from './illness-modal';
+import { formatKm, fmtDateUK, fmtDesc, formatPace } from '@/utils/format';
+import { next, setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
+import { formatActivityType } from '@/calculations/activity-matcher';
+import { isSleepDataPending } from '@/data/sleepPoller';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -65,7 +71,15 @@ function fmtDate(iso: string): string {
 
 const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl',
   'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk'];
-const isRunKey = (k: string) => !NON_RUN_KW.some(kw => k.toLowerCase().includes(kw));
+/** Returns true if this garminActuals entry represents a run.
+ *  Prefers activityType (authoritative) over keyword-scanning the slot key. */
+const isRunKey = (k: string, activityType?: string | null) => {
+  if (activityType) {
+    const t = activityType.toUpperCase();
+    return t === 'RUNNING' || t.includes('RUN');
+  }
+  return !NON_RUN_KW.some(kw => k.toLowerCase().includes(kw));
+};
 
 // ─── Section builders ───────────────────────────────────────────────────────
 
@@ -200,7 +214,7 @@ function computeLoadBreakdown(
     .sort((a, b) => b.tss - a.tss);
 }
 
-export function showLoadBreakdownSheet(s: SimulatorState, weekNum?: number): void {
+export function showLoadBreakdownSheet(s: SimulatorState, weekNum?: number, returnTo: 'plan' | 'home' = 'home'): void {
   const wkIndex = (weekNum ?? s.w) - 1;
   const wk = s.wks?.[wkIndex];
   const tssActual = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
@@ -323,6 +337,9 @@ export function showLoadBreakdownSheet(s: SimulatorState, weekNum?: number): voi
           </div>
         </div>
 
+        <!-- Learn more link -->
+        <button id="lbd-learn-more" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer;text-align:center;font-family:var(--f)">Understand your load &amp; taper →</button>
+
       </div>
     </div>`;
 
@@ -330,8 +347,296 @@ export function showLoadBreakdownSheet(s: SimulatorState, weekNum?: number): voi
   const close = () => overlay.remove();
   overlay.querySelector('#lbd-close')?.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  overlay.querySelector('#lbd-learn-more')?.addEventListener('click', () => {
+    close();
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(weekNum ?? s.w, returnTo));
+  });
 }
 
+
+export function showPlanLoadBreakdownSheet(s: SimulatorState): void {
+  const completedWks = (s.wks ?? []).slice(0, Math.max(0, (s.w ?? 1) - 1));
+
+  // Aggregate computeLoadBreakdown across all completed weeks
+  const totalSegments = new Map<string, LoadSegment>();
+  for (const wk of completedWks) {
+    for (const seg of computeLoadBreakdown(wk, wk.rated ?? {}, s.planStartDate)) {
+      const existing = totalSegments.get(seg.label);
+      if (existing) {
+        existing.tss += seg.tss;
+        existing.durationMin += seg.durationMin;
+      } else {
+        totalSegments.set(seg.label, { ...seg });
+      }
+    }
+  }
+
+  const segments = Array.from(totalSegments.values())
+    .filter(seg => seg.tss > 0.5)
+    .sort((a, b) => b.tss - a.tss);
+  const totalTss = Math.round(segments.reduce((sum, seg) => sum + seg.tss, 0));
+  const weeksText = `${completedWks.length} week${completedWks.length !== 1 ? 's' : ''} completed`;
+
+  const fmtDur = (min: number) => min >= 60
+    ? `${Math.floor(min / 60)}h ${Math.round(min % 60)}m`
+    : `${Math.round(min)}m`;
+
+  const stackedBar = segments.length > 0
+    ? segments.map(seg => {
+        const pct = totalTss > 0 ? (seg.tss / totalTss) * 100 : 0;
+        return `<div style="height:100%;width:${pct.toFixed(1)}%;background:${seg.color};flex-shrink:0"></div>`;
+      }).join('')
+    : `<div style="height:100%;width:100%;background:var(--c-border)"></div>`;
+
+  const legendRows = segments.map(seg => {
+    const barWidth = totalTss > 0 ? Math.min(100, Math.round((seg.tss / totalTss) * 100)) : 0;
+    return `
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
+            <span style="font-size:14px;color:var(--c-black)">${seg.label}</span>
+            <span style="font-size:12px;color:var(--c-faint)">${fmtDur(seg.durationMin)}</span>
+          </div>
+          <span style="font-size:14px;font-weight:600;color:var(--c-black)">${Math.round(seg.tss)}</span>
+        </div>
+        <div style="background:rgba(0,0,0,0.06);border-radius:3px;height:4px;overflow:hidden">
+          <div style="background:${seg.color};height:100%;width:${barWidth}%;border-radius:3px"></div>
+        </div>
+      </div>`;
+  }).join('');
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = `
+    <div style="background:var(--c-surface);border-radius:16px;width:100%;max-width:480px;max-height:85vh;overflow-y:auto">
+      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <h2 style="font-size:16px;font-weight:600;color:var(--c-black)">Plan Load Breakdown</h2>
+          <p style="font-size:12px;color:var(--c-faint);margin-top:2px">All sports · ${weeksText}</p>
+        </div>
+        <button id="plbd-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0;line-height:1">✕</button>
+      </div>
+
+      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:16px">
+        <div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+            <span style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${totalTss.toLocaleString()}</span>
+            <span style="font-size:14px;color:var(--c-muted)">TSS total</span>
+          </div>
+          <div style="background:rgba(0,0,0,0.06);border-radius:4px;height:10px;overflow:hidden;display:flex">
+            ${stackedBar}
+          </div>
+          ${segments.length > 0 ? `
+          <div style="display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:8px">
+            ${segments.map(seg => `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-muted)"><div style="width:7px;height:7px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>${seg.label}</div>`).join('')}
+          </div>` : ''}
+        </div>
+
+        ${segments.length > 0 ? '<div style="height:1px;background:var(--c-border)"></div>' : ''}
+
+        <div style="display:flex;flex-direction:column;gap:12px">
+          ${legendRows || '<p style="color:var(--c-faint);font-size:14px;text-align:center;padding:20px 0">No activities logged yet</p>'}
+        </div>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#plbd-close')?.addEventListener('click', () => overlay.remove());
+}
+
+const RUN_TYPE_LABEL: Record<string, string> = {
+  easy: 'Easy Run', long: 'Long Run', marathon_pace: 'Marathon Pace',
+  threshold: 'Threshold', vo2: 'VO₂max', intervals: 'Intervals',
+  hill_repeats: 'Hill Repeats', progressive: 'Progressive', mixed: 'Mixed',
+  race_pace: 'Race Pace',
+};
+const IS_RUN_TYPE = (t: string) => t !== 'cross' && t !== 'gym' && t !== 'strength' && t !== 'rest';
+
+export function showRunBreakdownSheet(s: SimulatorState, weekNum?: number): void {
+  const wkIndex = (weekNum ?? s.w) - 1;
+  const wk = s.wks?.[wkIndex];
+  const unitPref = s.unitPref ?? 'km';
+  const toDisplay = (km: number) => unitPref === 'mi' ? km * 0.621371 : km;
+  const unit = unitPref === 'mi' ? 'mi' : 'km';
+  const fmtKm = (km: number) => `${toDisplay(km).toFixed(1)} ${unit}`;
+
+  const parseKmFromDesc = (desc: string): number => {
+    const matches = [...(desc || '').matchAll(/(\d+\.?\d*)\s*km/g)];
+    return matches.reduce((sum, m) => sum + parseFloat(m[1]), 0);
+  };
+
+  const runWorkouts = wk
+    ? generateWeekWorkouts(
+        wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+        null, s.recurringActivities,
+        s.onboarding?.experienceLevel, undefined, s.pac?.e, wkIndex + 1, s.tw, s.v, s.gs,
+        getTrailingEffortScore(s.wks, wkIndex + 1), wk.scheduledAcwrStatus,
+      ).filter((w: any) => IS_RUN_TYPE(w.t || ''))
+    : [];
+  const garminActuals = wk?.garminActuals ?? {};
+  const rated = wk?.rated ?? {};
+
+  let totalPlannedKm = 0;
+  let totalActualKm = 0;
+
+  const rows = runWorkouts.map((wo: any) => {
+    const woId = wo.id || wo.n;
+    const plannedKm = parseKmFromDesc(wo.d || '');
+    totalPlannedKm += plannedKm;
+    const actual = garminActuals[woId];
+    const isSkipped = rated[woId] === 'skip';
+    const isDone = !!actual || (typeof rated[woId] === 'number' && rated[woId] !== 0);
+    const actualKm = actual?.distanceKm ?? 0;
+    if (isDone && actualKm > 0) totalActualKm += actualKm;
+
+    const label = RUN_TYPE_LABEL[wo.t] ?? wo.n ?? 'Run';
+    const dur = actual?.durationSec
+      ? (actual.durationSec >= 3600
+        ? `${Math.floor(actual.durationSec / 3600)}h ${Math.round((actual.durationSec % 3600) / 60)}m`
+        : `${Math.round(actual.durationSec / 60)}m`)
+      : '';
+    const pace = actual?.avgPaceSecKm
+      ? formatPace(actual.avgPaceSecKm, unitPref)
+      : '';
+
+    const barPct = plannedKm > 0 && actualKm > 0 ? Math.min(100, Math.round((actualKm / plannedKm) * 100)) : 0;
+    const statusColor = isSkipped ? 'var(--c-faint)' : isDone ? 'var(--c-accent)' : 'var(--c-border)';
+
+    const rightSide = isSkipped
+      ? `<span style="font-size:11px;color:var(--c-faint)">Skipped</span>`
+      : isDone && actualKm > 0
+        ? `<span style="font-size:14px;font-weight:600;color:var(--c-black)">${fmtKm(actualKm)}</span>`
+        : plannedKm > 0
+          ? `<span style="font-size:13px;color:var(--c-muted)">${fmtKm(plannedKm)} planned</span>`
+          : '';
+
+    const meta = [dur, pace].filter(Boolean).join(' · ');
+
+    return `
+      <div style="display:flex;flex-direction:column;gap:5px">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:10px;height:10px;border-radius:50%;background:${statusColor};flex-shrink:0"></div>
+            <div>
+              <span style="font-size:14px;color:var(--c-black)">${label}</span>
+              ${meta ? `<span style="font-size:12px;color:var(--c-faint);margin-left:6px">${meta}</span>` : ''}
+            </div>
+          </div>
+          ${rightSide}
+        </div>
+        ${plannedKm > 0 && !isSkipped ? `
+        <div style="background:rgba(0,0,0,0.06);border-radius:3px;height:4px;overflow:hidden">
+          <div style="background:var(--c-accent);height:100%;width:${barPct}%;border-radius:3px"></div>
+        </div>` : ''}
+      </div>`;
+  });
+
+  const barScale = totalActualKm >= totalPlannedKm ? 100 / Math.max(totalActualKm, 1) : 100 / Math.max(totalPlannedKm, 1);
+  const fillPct = Math.min(100, totalActualKm * barScale);
+  const remainPct = totalActualKm < totalPlannedKm ? Math.max(0, totalPlannedKm * barScale - fillPct) : 0;
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = `
+    <div style="background:var(--c-surface);border-radius:16px;width:100%;max-width:480px;padding-bottom:0;max-height:85vh;overflow-y:auto">
+      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <h2 style="font-size:16px;font-weight:600;color:var(--c-black)">Weekly Run Breakdown</h2>
+          <p style="font-size:12px;color:var(--c-faint);margin-top:2px">Running · planned distance</p>
+        </div>
+        <button id="rbd-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0;line-height:1">✕</button>
+      </div>
+      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:16px">
+        <!-- Big number + bar -->
+        <div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
+            <span style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${fmtKm(totalActualKm)}</span>
+            <span style="font-size:14px;color:var(--c-muted)">/ ${fmtKm(totalPlannedKm)} planned</span>
+          </div>
+          <div style="background:rgba(0,0,0,0.06);border-radius:4px;height:10px;overflow:hidden;display:flex">
+            ${totalActualKm > 0 ? `<div style="height:100%;width:${fillPct.toFixed(1)}%;background:var(--c-accent);flex-shrink:0"></div>` : ''}
+            ${remainPct > 0 ? `<div style="height:100%;width:${remainPct.toFixed(1)}%;background:var(--c-border);flex-shrink:0;border-radius:0 3px 3px 0"></div>` : ''}
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:8px">
+            <div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-muted)"><div style="width:7px;height:7px;border-radius:50%;background:var(--c-accent);flex-shrink:0"></div>Running</div>
+            ${remainPct > 0 ? `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-faint)"><div style="width:7px;height:7px;border-radius:3px;background:var(--c-border);flex-shrink:0"></div>Remaining</div>` : ''}
+          </div>
+        </div>
+        ${rows.length > 0 ? '<div style="height:1px;background:var(--c-border)"></div>' : ''}
+        <!-- Run rows -->
+        <div style="display:flex;flex-direction:column;gap:12px">
+          ${rows.length > 0 ? rows.join('') : '<p style="color:var(--c-faint);font-size:14px;text-align:center;padding:20px 0">No runs scheduled this week</p>'}
+        </div>
+        <!-- Footer totals -->
+        ${totalPlannedKm > 0 ? `
+        <div style="background:var(--c-bg);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:13px;color:var(--c-muted)">Planned total</span>
+            <span style="font-size:13px;font-weight:500;color:var(--c-black)">${fmtKm(totalPlannedKm)}</span>
+          </div>
+          ${totalActualKm > 0 ? `
+          <div style="height:1px;background:var(--c-border)"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:13px;font-weight:600;color:var(--c-black)">Completed</span>
+            <span style="font-size:13px;font-weight:600;color:var(--c-black)">${fmtKm(totalActualKm)}</span>
+          </div>` : ''}
+        </div>` : ''}
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#rbd-close')?.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+}
+
+function buildIllnessBanner(s: SimulatorState): string {
+  const illness = (s as any).illnessState;
+  if (!illness?.active) return '';
+
+  const today = new Date().toISOString().split('T')[0];
+  const start = new Date(illness.startDate + 'T12:00:00');
+  const todayDate = new Date(today + 'T12:00:00');
+  const dayNum = Math.max(1, Math.round((todayDate.getTime() - start.getTime()) / 86400000) + 1);
+  const severityLabel = illness.severity === 'resting' ? 'Full rest' : 'Still running';
+  const severityDetail = illness.severity === 'resting'
+    ? 'All running replaced with rest.'
+    : 'Quality sessions → easy. Distances scaled.';
+
+  return `
+    <div id="home-illness-banner" style="margin:0 14px 8px;border-radius:16px;overflow:hidden;
+                border:1px solid rgba(0,0,0,0.08);
+                background:rgba(255,251,235,0.9);
+                box-shadow:0 1px 8px rgba(0,0,0,0.06)">
+      <div style="height:3px;background:linear-gradient(to right,#F59E0B,#F97316)"></div>
+      <div style="padding:12px 14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:7px;margin-bottom:2px">
+              <span style="font-size:13px;font-weight:600;letter-spacing:-0.01em;color:#92400E">Illness · Day ${dayNum}</span>
+              <span style="font-size:10px;font-weight:600;color:#D97706;background:rgba(245,158,11,0.12);
+                           border:1px solid rgba(245,158,11,0.2);border-radius:100px;padding:1px 7px;text-transform:uppercase;letter-spacing:0.04em">${severityLabel}</span>
+            </div>
+            <div style="font-size:11px;color:rgba(0,0,0,0.45)">${severityDetail}</div>
+          </div>
+          <button id="home-illness-recover"
+            style="flex-shrink:0;display:flex;align-items:center;gap:4px;padding:6px 11px;border-radius:100px;
+                   border:1px solid rgba(34,197,94,0.3);background:rgba(34,197,94,0.08);
+                   font-size:11px;font-weight:600;color:#15803D;cursor:pointer;white-space:nowrap">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6L9 17l-5-5"/>
+            </svg>
+            Recovered
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 function buildProgressBars(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
@@ -364,16 +669,26 @@ function buildProgressBars(s: SimulatorState): string {
   // Distance this week (running only from garmin, or completedKm)
   const kmDone = wk
     ? Object.entries(wk.garminActuals || {})
-      .filter(([k]) => isRunKey(k))
+      .filter(([k, a]) => isRunKey(k, (a as any).activityType))
       .reduce((sum, [, a]) => sum + ((a as any).distanceKm || 0), 0)
     : 0;
-  const kmPlan = (s.rw || 5) * ((s.wks?.[s.w - 1] as any)?.targetKmPerRun || 10);
+  const _parseKmFromDesc = (desc: string): number => {
+    const matches = [...(desc || '').matchAll(/(\d+\.?\d*)km/g)];
+    return matches.reduce((sum, m) => sum + parseFloat(m[1]), 0);
+  };
+  const _isRunType = (t: string) => t !== 'cross' && t !== 'gym' && t !== 'strength' && t !== 'rest';
+  const kmPlan = plannedWorkouts
+    .filter((w: any) => _isRunType(w.t || ''))
+    .reduce((sum: number, w: any) => sum + _parseKmFromDesc((w as any).d || ''), 0)
+    || (s.rw || 5) * ((s.wks?.[s.w - 1] as any)?.targetKmPerRun || 10);
 
-  // TSS this week vs plan — Signal B actual vs phase-adjusted planned target
-  // Always use computePlannedWeekTSS (not signalBBaseline) so the phase multiplier is applied,
-  // matching the modal which uses the same formula.
+  // TSS this week vs plan — Signal B (full physiological load, all sports), matching the plan header.
   const tssActual = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  const tssPlan = computePlannedWeekTSS(s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base', s.athleteTierOverride ?? s.athleteTier, s.rw);
+  const tssPlan = computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier, s.rw,
+    undefined, undefined, s.sportBaselineByType,
+  );
 
   function bar(actual: number, plan: number, fmt: (v: number) => string, planFmt: (v: number) => string): string {
     if (plan <= 0) return '';
@@ -442,16 +757,16 @@ function buildProgressBars(s: SimulatorState): string {
   let pillHtml: string;
   let pillCaption: string;
   if (acwr.ratio <= 0 || (s.w < 3)) {
-    pillHtml = `<span class="m-pill m-pill-neutral"><span class="m-pill-dot"></span>Building Consistency</span>`;
+    pillHtml = `<span class="m-pill m-pill-neutral"><span class="m-pill-dot"></span>Load Building</span>`;
     pillCaption = 'Keep logging sessions — your baseline builds over the first 4 weeks.';
   } else if (acwr.status === 'high') {
-    pillHtml = `<span class="m-pill m-pill-caution"><span class="m-pill-dot"></span>Consider slowing down</span>`;
+    pillHtml = `<span class="m-pill m-pill-caution"><span class="m-pill-dot"></span>Load Spike</span>`;
     pillCaption = 'Load is spiking. Protect recovery before next week.';
   } else if (acwr.status === 'caution') {
-    pillHtml = `<span class="m-pill m-pill-caution"><span class="m-pill-dot"></span>Training Hard!</span>`;
+    pillHtml = `<span class="m-pill m-pill-caution"><span class="m-pill-dot"></span>Load Rising</span>`;
     pillCaption = 'Load is rising fast. Keep today\'s session easy if possible.';
   } else {
-    pillHtml = `<span class="m-pill m-pill-ok"><span class="m-pill-dot"></span>On Track!</span>`;
+    pillHtml = `<span class="m-pill m-pill-ok"><span class="m-pill-dot"></span>Load Balanced</span>`;
     pillCaption = sessionsDone >= sessionsPlan
       ? 'Great week — you hit all your sessions.'
       : `${sessionsPlan - sessionsDone} session${sessionsPlan - sessionsDone > 1 ? 's' : ''} left this week.`;
@@ -465,7 +780,7 @@ function buildProgressBars(s: SimulatorState): string {
         <div class="flex flex-col gap-[7px]">
           <div class="flex justify-between items-baseline">
             <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Sessions</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${sessionsDone} / ${sessionsPlan}</span>
+            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${sessionsDone} / ${sessionsPlan}</span>
           </div>
           <div class="relative" style="height:5px">
             <div class="m-prog-track w-[88%]">${fillBar(sessionsDone, sessionsPlan)}</div>
@@ -476,7 +791,7 @@ function buildProgressBars(s: SimulatorState): string {
         <div class="flex flex-col gap-[7px]">
           <div class="flex justify-between items-baseline">
             <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Distance</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${formatKm(kmDone, s.unitPref ?? 'km')} / ${formatKm(kmPlan, s.unitPref ?? 'km', 0)}</span>
+            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${formatKm(kmDone, s.unitPref ?? 'km')} / ${formatKm(kmPlan, s.unitPref ?? 'km')}</span>
           </div>
           <div class="relative" style="height:5px">
             <div class="m-prog-track w-[88%]">${fillBar(kmDone, kmPlan)}</div>
@@ -488,7 +803,7 @@ function buildProgressBars(s: SimulatorState): string {
           <div class="flex justify-between items-baseline">
             <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Training Load (TSS)</span>
             <div class="flex items-center gap-[6px]">
-              <span class="text-[12px] font-medium" style="letter-spacing:-0.01em">${tssActual} / ${Math.round(tssPlan)} TSS</span>
+              <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${tssActual} / ${Math.round(tssPlan)} TSS</span>
               <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
             </div>
           </div>
@@ -534,57 +849,111 @@ function buildReadinessRing(s: SimulatorState): string {
   const tsb = sameSignal?.tsb ?? 0;
   const ctlNow = sameSignal?.ctl ?? 0;
 
-  // Original mixed-signal metrics still needed for 4-week CTL lookback (momentum signal)
+  // Weighted directional momentum: recent week-over-week CTL deltas weighted 4/3/2/1 (newest first)
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
-  const fourBack = metrics[metrics.length - 5]; // 4 weeks ago
-  const ctlFourWeeksAgo = fourBack?.ctl ?? ctlNow;
+  const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
+  const ctlHistory = [ctlNow, ...([4,3,2,1].map(i => metrics[metrics.length - 1 - i]?.ctl ?? ctlNow))];
+  // ctlHistory[0]=now, [1]=1wk ago, [2]=2wk, [3]=3wk, [4]=4wk
+  const momentumScore = (ctlHistory[0] - ctlHistory[1]) * 4
+                      + (ctlHistory[1] - ctlHistory[2]) * 3
+                      + (ctlHistory[2] - ctlHistory[3]) * 2
+                      + (ctlHistory[3] - ctlHistory[4]) * 1;
+  const ctlRef = ctlNow || 1;
+  const momentumThreshold = ctlRef * 0.015; // 1.5% of CTL = noise floor
 
-  // Recovery data: prefer today's manual entry, fall back to latest physiology
+  // Recovery data: prefer Garmin sleep when available; manual entry is a fallback only
   const today = new Date().toISOString().split('T')[0];
-  const manualToday = s.lastRecoveryPromptDate === today
-    ? (s.recoveryHistory ?? []).slice().reverse().find((e: any) => e.date === today && e.source === 'manual')
-    : undefined;
+  const manualToday = (s.recoveryHistory ?? []).slice().reverse().find(
+    (e: any) => e.date === today && e.source === 'manual',
+  );
   const latestPhysio = s.physiologyHistory?.slice(-1)[0];
-  const sleepScore: number | null = manualToday?.sleepScore ?? latestPhysio?.sleepScore ?? null;
+  const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
+  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestPhysio?.sleepScore ?? null;
   const hrvRmssd: number | null = latestPhysio?.hrvRmssd ?? null;
   const hrvAll = (s.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
   const hrvPersonalAvg: number | null = hrvAll.length >= 3
     ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length)
     : null;
 
+  const sleepBank = getSleepBank(s.physiologyHistory ?? []);
+
+  // ── Strain Score ───────────────────────────────────────────────────────────
+  // Today's completed Signal B TSS vs the athlete's daily baseline target.
+  // Target = signalBBaseline ÷ 7 (typical daily load). On heavy training days this
+  // naturally reads > 100%, correctly reducing readiness for more.
+  const strainWk = (s.wks ?? [])[s.w - 1];
+  const todaySignalBTSS = strainWk ? computeTodaySignalBTSS(strainWk, today) : 0;
+  const targetTSS = (s.signalBBaseline ?? 0) / 7;
+  const strainPct = targetTSS > 0 ? (todaySignalBTSS / targetTSS) * 100 : 0;
+
   const readiness: ReadinessResult = computeReadiness({
     tsb,
     acwr: acwr.ratio,
     ctlNow,
-    ctlFourWeeksAgo,
     sleepScore,
     hrvRmssd,
+    sleepHistory: s.physiologyHistory ?? [],
     hrvPersonalAvg,
+    sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     weeksOfHistory: metrics.length,
+    strainPct: todaySignalBTSS > 0 ? strainPct : null,
   });
+
+  // If the user has already trained today, swap the readiness sentence
+  const currentWk = (s.wks ?? [])[s.w - 1];
+  const trainedToday = Object.values(currentWk?.garminActuals ?? {}).some(
+    act => act.startTime?.startsWith(today)
+  );
+  const readinessSentence = trainedToday
+    ? "Done for today. Rest up — recovery is where adaptation happens."
+    : readiness.sentence;
 
   const color = readinessColor(readiness.label);
 
-  // SVG ring: 270° arc, starts bottom-left (135°), fills clockwise
-  const CX = 80, CY = 80, R = 58, SW = 10;
+  // SVG rings: 270° arc, starts bottom-left (135°), fills clockwise. 120×120 for side-by-side layout.
+  const CX = 60, CY = 60, R = 44, SW = 8;
   const START = 135;
   const SWEEP = 270;
   const fillEnd = START + (readiness.score / 100) * SWEEP;
   const trackPath = arcPath(CX, CY, R, START, START + SWEEP);
   const fillPathStr = readiness.score > 0 ? arcPath(CX, CY, R, START, Math.min(fillEnd, START + SWEEP - 0.01)) : '';
 
+  // Strain ring
+  const strainColor = strainPct >= 130 ? 'var(--c-warn)' : strainPct >= 80 ? 'var(--c-ok)' : 'var(--c-caution)';
+  const strainLabel = strainPct >= 130 ? 'Exceeded' : strainPct >= 100 ? 'Target hit' : strainPct >= 80 ? 'On target' : 'Below target';
+  const strainFillPct = Math.min(strainPct / 100, 1);
+  const strainFillEnd = START + strainFillPct * SWEEP;
+  const sTrackPath = arcPath(CX, CY, R, START, START + SWEEP);
+  const sArcFill = todaySignalBTSS > 0 && strainFillPct > 0
+    ? arcPath(CX, CY, R, START, Math.min(strainFillEnd, START + SWEEP - 0.01))
+    : '';
+
   // Sub-signal display values
   // ÷7: display in daily-equivalent units (TrainingPeaks-compatible)
   const tsbDisp = Math.round(tsb / 7);
   const tsbLabel = tsbDisp > 0 ? `+${tsbDisp}` : `${tsbDisp}`;
   const tsbZone = tsb > 0 ? 'Fresh' : tsb >= -10 ? 'Recovering' : tsb >= -25 ? 'Fatigued' : 'Overtrained';
-  const safetyLabel = acwr.ratio <= 0 ? '—' : acwr.status === 'safe' ? 'Safe' : acwr.status === 'caution' ? 'Elevated' : 'High Risk';
+  const safetyLabel = acwr.ratio <= 0 ? '—' : acwr.status === 'safe' ? 'Safe' : acwr.status === 'caution' ? 'Elevated' : acwr.status === 'high' ? 'High Risk' : 'Low';
   const safetyColor = acwr.status === 'high' ? 'var(--c-warn)' : acwr.status === 'caution' ? 'var(--c-caution)' : 'var(--c-ok)';
-  const momentumArrow = ctlNow > ctlFourWeeksAgo ? '↗' : ctlNow > ctlFourWeeksAgo * 0.95 ? '→' : '↘';
-  const momentumColor = ctlNow > ctlFourWeeksAgo ? 'var(--c-ok)' : ctlNow > ctlFourWeeksAgo * 0.9 ? 'var(--c-caution)' : 'var(--c-warn)';
+  const momentumArrow = momentumScore > momentumThreshold ? '↗' : momentumScore >= -momentumThreshold ? '→' : '↘';
+  const momentumColor = momentumScore > momentumThreshold ? 'var(--c-ok)' : momentumScore >= -momentumThreshold * 2 ? 'var(--c-caution)' : 'var(--c-warn)';
 
-  // Recovery score from physiologyHistory — uses RHR, HRV, sleep (whichever is available)
-  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? []);
+  // Recovery score from physiologyHistory — inject today's manual sleep only if Garmin hasn't sent data
+  const todayStr0 = new Date().toISOString().split('T')[0];
+  const manualSleepToday0 = (s.recoveryHistory ?? []).slice().reverse().find(
+    (e: any) => e.date === todayStr0 && e.source === 'manual',
+  );
+  const noGarminSleep0 = !(s.physiologyHistory ?? []).find(p => p.date === todayStr0 && p.sleepScore != null);
+  const physioForRecovery0 = (() => {
+    const h = s.physiologyHistory ?? [];
+    // Only inject manual sleep when Garmin hasn't sent today's data — Garmin takes priority
+    if (!manualSleepToday0?.sleepScore || !noGarminSleep0) return h;
+    const idx = h.findIndex(p => p.date === todayStr0);
+    if (idx >= 0) return h.map((p, i) => i === idx ? { ...p, sleepScore: manualSleepToday0.sleepScore } : p);
+    return [...h, { date: todayStr0, sleepScore: manualSleepToday0.sleepScore }];
+  })();
+  const suppressSleep0 = noGarminSleep0 && !manualSleepToday0?.sleepScore;
+  const recoveryResult = computeRecoveryScore(physioForRecovery0, { suppressSleepIfNotToday: suppressSleep0, manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined });
   const recoveryScoreColor = recoveryResult.hasData
     ? (recoveryResult.score! < 40 ? 'var(--c-warn)' : recoveryResult.score! < 65 ? 'var(--c-caution)' : 'var(--c-ok)')
     : 'var(--c-faint)';
@@ -612,7 +981,7 @@ function buildReadinessRing(s: SimulatorState): string {
       </div>`
     : `<div class="home-readiness-pill" data-pill="recovery" style="flex:1;min-width:80px;opacity:0.45;cursor:pointer">
         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Recovery</div>
-        <div style="font-size:11px;color:var(--c-faint)">Connect watch</div>
+        <div style="font-size:11px;color:var(--c-faint)">${recoveryResult.dataStale ? 'Sync Garmin' : 'Connect watch'}</div>
       </div>`;
 
   // Recovery row (RHR sub-caption)
@@ -630,27 +999,48 @@ function buildReadinessRing(s: SimulatorState): string {
       <div class="m-sec-label">Training Readiness</div>
       <div id="home-readiness-card" class="m-card overflow-hidden" style="cursor:pointer">
 
-        <!-- Ring + score -->
-        <div style="display:flex;flex-direction:column;align-items:center;padding:20px 16px 14px">
-          <div style="position:relative;width:160px;height:160px">
-            <svg viewBox="0 0 160 160" width="160" height="160" style="display:block;overflow:visible">
-              <!-- Background track -->
-              <path d="${trackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-              <!-- Score fill -->
-              ${fillPathStr
-      ? `<path d="${fillPathStr}" fill="none" stroke="${color}" stroke-width="${SW}" stroke-linecap="round"/>`
-      : ''}
-            </svg>
-            <!-- Center text -->
-            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-6px">
-              <div style="font-size:38px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
-              <div style="font-size:12px;font-weight:600;letter-spacing:0.01em;margin-top:2px;color:var(--c-black)">${readiness.label}</div>
+        <!-- Two rings side by side: Readiness + Strain -->
+        <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:space-around;padding:20px 16px 8px;gap:8px">
+
+          <!-- Readiness ring -->
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Readiness</div>
+            <div style="position:relative;width:120px;height:120px">
+              <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
+                <path d="${trackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
+                ${fillPathStr ? `<path d="${fillPathStr}" fill="none" stroke="${color}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+              </svg>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-4px">
+                <div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
+                <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:2px;color:var(--c-black)">${readiness.label}</div>
+              </div>
             </div>
           </div>
 
-          <!-- Sentence -->
-          <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin-top:4px;max-width:260px">${readiness.sentence}</p>
+          <!-- Strain ring -->
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Strain</div>
+            <div style="position:relative;width:120px;height:120px">
+              <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
+                <path d="${sTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
+                ${sArcFill ? `<path d="${sArcFill}" fill="none" stroke="${strainColor}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+              </svg>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-4px">
+                ${todaySignalBTSS > 0
+                  ? `<div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${strainColor}">${todaySignalBTSS}</div>
+                     <div style="font-size:9px;color:var(--c-faint);margin-top:1px">/ ${Math.round(targetTSS)} target</div>
+                     <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:2px;color:var(--c-black)">${strainLabel}</div>`
+                  : `<div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-faint)">—</div>
+                     <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:4px;color:var(--c-faint)">No activity</div>`
+                }
+              </div>
+            </div>
+          </div>
+
         </div>
+
+        <!-- Sentence -->
+        <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
 
         <!-- Expandable pills (tap ring to open; each pill tappable for detail) -->
         <div id="home-readiness-pills" style="display:none;border-top:1px solid var(--c-border);padding:12px 14px">
@@ -670,19 +1060,13 @@ function buildReadinessRing(s: SimulatorState): string {
               ${drivingTag('safety')}
             </div>
 
-            <div class="home-readiness-pill" data-pill="momentum" style="flex:1;min-width:80px;cursor:pointer;${drivingBorderStyle('momentum')}">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Momentum</div>
-              <div style="font-size:14px;font-weight:500;color:${momentumColor}">${momentumArrow} ${ctlNow > ctlFourWeeksAgo ? 'Building' : ctlNow > ctlFourWeeksAgo * 0.95 ? 'Stable' : 'Declining'}</div>
-              ${drivingTag('momentum')}
-            </div>
-
             ${recoveryPillHtml}
 
           </div>
           <p style="font-size:11px;color:var(--c-faint);margin-top:4px">${recoveryResult.hasData ? rhrCaption.replace(/ · $/, '') + (sleepScore != null ? (rhrCaption ? ' · ' : '') + `Sleep ${Math.round(sleepScore)}/100` : '') : 'Connect a watch to unlock Recovery signal.'}</p>
 
           ${readiness.score <= 59 ? `
-          <button id="readiness-adjust-btn" style="margin-top:10px;width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--c-border);cursor:pointer;font-size:13px;font-weight:500;background:rgba(0,0,0,0.04);color:var(--c-black);font-family:var(--f);text-align:left">
+          <button id="readiness-adjust-btn" style="margin-top:10px;width:100%;padding:9px 14px;border-radius:999px;border:1px solid var(--c-border);cursor:pointer;font-size:13px;font-weight:500;background:transparent;color:var(--c-black);font-family:var(--f);text-align:center">
             ${adjustText}
           </button>` : ''}
         </div>
@@ -699,7 +1083,7 @@ type PillSignal = 'fitness' | 'safety' | 'momentum' | 'recovery';
 interface PillSheetData {
   tsb: number; tsbZone: string; tsbLabel: string; fitnessScore: number;
   acwrRatio: number; safetyLabel: string;
-  ctlNow: number; ctlFourWeeksAgo: number; momentumArrow: string;
+  ctlNow: number; ctlFourWeeksAgo: number; momentumArrow: string; momentumScore: number; momentumThreshold: number;
   recoveryScore: number | null; sleepScore: number | null; rhrCaption: string; hasRecovery: boolean;
   // Rich recovery breakdown (from computeRecoveryScore)
   recoveryHasData?: boolean;
@@ -709,6 +1093,29 @@ interface PillSheetData {
   rhrSubScore?: number | null;
   rhrRawBpm?: number | null;
   rhrTrend?: string;
+  /** Most recent single-night sleep score — shown as "Last night: X/100". */
+  lastNightSleep?: number | null;
+  /** ISO date of lastNightSleep — used to show the correct label when data is stale. */
+  lastNightSleepDate?: string | null;
+  /** Most recent single-night HRV value (ms) — shown as context, not used in score. */
+  lastNightHrv?: number | null;
+  /** ISO date of lastNightHrv — used to show "2 nights ago" when not synced last night. */
+  lastNightHrvDate?: string | null;
+  /** True when data exists but is >3 days old (stale sync) */
+  recoveryDataStale?: boolean;
+  /** ISO date of most recent physiology entry */
+  recoveryLastSyncDate?: string | null;
+  // Trend context for Option-B display (7-day avg · Baseline)
+  sleepWeekAvg?: number | null;
+  sleepBaseline?: number | null;
+  hrvWeekAvg?: number | null;
+  hrvBaseline?: number | null;
+  rhrWeekAvg?: number | null;
+  rhrBaseline?: number | null;
+  /** True when no Garmin sleep score has arrived for today. */
+  noGarminSleepToday?: boolean;
+  /** Today's manually-entered sleep score (0–100), if logged by the user. */
+  manualSleepScore?: number | null;
 }
 
 function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
@@ -727,17 +1134,20 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
   let title = '', subtitle = '', body = '';
 
   if (signal === 'fitness') {
-    title = 'Freshness'; subtitle = 'How recovered you are right now';
-    const markerPct = Math.min(98, Math.max(2, ((d.tsb + 40) / 60) * 100));
-    const what = d.tsb > 0
-      ? "You're feeling fresh — your short-term load is lower than your fitness baseline."
-      : d.tsb >= -10 ? "You've trained recently but your body is handling it well."
-        : d.tsb >= -25 ? "You've built up meaningful fatigue. Your body is under training stress."
-          : "Your short-term load far exceeds your fitness baseline. Deep accumulated fatigue.";
+    title = 'Freshness'; subtitle = 'The gap between your fitness and your recent fatigue';
+    const tsbDailyVal = d.tsb / 7;
+    const markerPct = Math.min(98, Math.max(2, ((tsbDailyVal + 6) / 10) * 100));
+    const what = tsbDailyVal > 1
+      ? "Your body is well-rested and primed to perform. This is ideal territory for a race or a key session."
+      : tsbDailyVal > 0 ? "Your body is fresh — your short-term load is lower than your fitness baseline."
+        : tsbDailyVal > -2 ? "You've trained recently but your body is handling it well."
+          : tsbDailyVal > -4 ? "You've built up meaningful fatigue. Your body is under training stress."
+            : "Your body is carrying significant accumulated fatigue — short-term load has well exceeded what your fitness can absorb.";
     const action = d.tsbZone === 'Overtrained' ? 'Take 1–2 rest days. When you do train, keep effort very easy.'
       : d.tsbZone === 'Fatigued' ? 'Consider an easy effort or a lighter day to let your body recover.'
         : d.tsbZone === 'Recovering' ? 'Good balance. Session as planned.'
-          : "You're fresh — full session, or a little extra if you feel good.";
+          : d.tsbZone === 'Peaked' ? 'Perfect timing for a race or a hard key session — your body is ready to go.'
+            : "Your body is fresh — full session, or a little extra if you feel good.";
     body = `
       <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
         <div style="font-size:22px;font-weight:300;letter-spacing:-0.02em">${d.tsbLabel} <span style="font-size:13px;color:var(--c-muted)">${d.tsbZone}</span></div>
@@ -750,7 +1160,8 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
       { label: 'Fresh', flex: 10, color: 'rgba(52,199,89,0.55)' },
       { label: 'Peaked', flex: 10, color: 'rgba(52,199,89,0.85)' },
     ], markerPct)}
-      <p style="font-size:12px;color:var(--c-muted);margin-top:10px"><strong>What to do:</strong> ${action}</p>`;
+      <p style="font-size:12px;color:var(--c-muted);margin-top:10px"><strong>What to do:</strong> ${action}</p>
+      <p style="font-size:11px;color:var(--c-faint);margin-top:10px;line-height:1.5">Freshness measures whether your body has had enough time to absorb recent training. It's the gap between your long-term fitness (built over 6 weeks) and your short-term fatigue (last 7 days). Positive = more rested than usual. Negative = carrying fatigue.</p>`;
 
   } else if (signal === 'safety') {
     title = 'Load Safety (Injury Risk)'; subtitle = 'How fast your training load is increasing';
@@ -774,8 +1185,8 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
 
   } else if (signal === 'momentum') {
     title = 'Running Fitness Momentum'; subtitle = 'Whether your running fitness is trending up or down';
-    const direction = d.ctlNow > d.ctlFourWeeksAgo ? 'Building'
-      : d.ctlNow > d.ctlFourWeeksAgo * 0.95 ? 'Stable' : 'Declining';
+    const direction = d.momentumScore > d.momentumThreshold ? 'Building'
+      : d.momentumScore >= -d.momentumThreshold ? 'Stable' : 'Declining';
     const what = direction === 'Building'
       ? 'Your training load over the last 4 weeks has been increasing — your body is adapting and getting fitter.'
       : direction === 'Stable'
@@ -793,9 +1204,22 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
     title = 'Recovery'; subtitle = 'Sleep, HRV and resting heart rate';
     const recHasData = d.recoveryHasData ?? d.hasRecovery;
     if (!recHasData) {
+      const isStale = d.recoveryDataStale;
+      const lastSync = d.recoveryLastSyncDate;
+      const daysAgo = lastSync
+        ? Math.floor((Date.now() - new Date(lastSync).getTime()) / 86400000)
+        : null;
+      const staleMsg = daysAgo != null
+        ? `Your Garmin data hasn't updated in ${daysAgo} day${daysAgo === 1 ? '' : 's'} (last synced ${lastSync}).`
+        : `Your Garmin data hasn't updated recently.`;
       body = `
-        <div class="rounded-lg p-3 text-center" style="background:rgba(0,0,0,0.04)">
-          <p style="font-size:13px;color:var(--c-muted)">Connect a Garmin watch to see your recovery data — sleep score, HRV, and resting heart rate.</p>
+        <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
+          ${isStale ? `
+            <p style="font-size:13px;color:var(--c-muted);margin-bottom:10px">${staleMsg}</p>
+            <p style="font-size:13px;font-weight:500;color:var(--c-black)">Open Garmin Connect and sync your watch to update your recovery data.</p>
+          ` : `
+            <p style="font-size:13px;color:var(--c-muted)">Connect a Garmin watch to see your recovery data — sleep score, HRV, and resting heart rate.</p>
+          `}
         </div>`;
     } else {
       const rs = d.recoveryCompositeScore ?? d.recoveryScore ?? 0;
@@ -804,8 +1228,11 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
         : rs >= 55 ? 'Reasonable recovery. Listen to your body during the session.'
           : 'Prioritise sleep tonight. Consider a lighter effort today.';
 
-      // Mini position bar for each recovery metric
-      const recBar = (score: number | null | undefined, label: string, rawLine?: string) => {
+      // Mini position bar for each recovery metric.
+      // primaryRight: when set, replaces the score pill in the header (used for
+      // HRV and RHR where the raw measurement is more meaningful than the score).
+      // The score/zone is then shown as a secondary faint line below.
+      const recBar = (score: number | null | undefined, label: string, rawLine?: string, primaryRight?: string) => {
         if (score == null) return '';
         const markerPct = Math.min(98, Math.max(2, score));
         const barZones = [
@@ -816,12 +1243,19 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
         ];
         const metricZone = score >= 75 ? 'Excellent' : score >= 55 ? 'Good' : score >= 35 ? 'Fair' : 'Poor';
         const metricColor = score >= 55 ? 'var(--c-ok)' : score >= 35 ? 'var(--c-caution)' : 'var(--c-warn)';
+        const headerRight = primaryRight
+          ? `<span style="font-size:14px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${primaryRight}</span>`
+          : `<span style="font-size:11px;color:${metricColor};font-variant-numeric:tabular-nums"><strong>${Math.round(score)}/100</strong> · ${metricZone}</span>`;
+        const scoreLine = primaryRight
+          ? `<div style="font-size:10px;color:${metricColor};margin-bottom:2px;font-variant-numeric:tabular-nums">${Math.round(score)}/100 · ${metricZone}</div>`
+          : '';
         return `
           <div style="margin-top:12px">
             <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
               <span style="font-size:11px;font-weight:600;color:var(--c-black)">${label}</span>
-              <span style="font-size:11px;color:${metricColor};font-variant-numeric:tabular-nums"><strong>${Math.round(score)}/100</strong> · ${metricZone}</span>
+              ${headerRight}
             </div>
+            ${scoreLine}
             ${rawLine ? `<div style="font-size:10px;color:var(--c-faint);margin-bottom:4px">${rawLine}</div>` : ''}
             <div style="position:relative;height:8px;margin:3px 0">
               <div style="height:8px;border-radius:4px;overflow:hidden;display:flex;gap:1px">
@@ -835,28 +1269,65 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
           </div>`;
       };
 
-      const rhrRawLine = d.rhrRawBpm != null
-        ? `${d.rhrRawBpm} bpm${d.rhrTrend ? ' ' + d.rhrTrend : ''} (vs your baseline)`
-        : undefined;
-      const sleepRawLine = d.sleepScore != null
-        ? `Last night: ${d.sleepScore}/100`
-        : undefined;
+      const sleepRawLine = (() => {
+        const parts: string[] = [];
+        const today = new Date().toISOString().split('T')[0];
+        if (d.manualSleepScore != null) {
+          parts.push(`Manual: ${Math.round(d.manualSleepScore)}/100`);
+        } else if (d.lastNightSleep != null) {
+          const isLastNight = !d.lastNightSleepDate || d.lastNightSleepDate === today;
+          const sleepLabel = isLastNight ? 'Last night' : fmtDateUK(d.lastNightSleepDate!);
+          parts.push(`${sleepLabel}: ${Math.round(d.lastNightSleep)}/100`);
+        }
+        if (d.sleepWeekAvg != null)   parts.push(`7-day avg: ${d.sleepWeekAvg}/100`);
+        if (d.sleepBaseline != null)  parts.push(`Baseline: ${d.sleepBaseline}/100`);
+        return parts.length > 0 ? parts.join(' · ') : undefined;
+      })();
+      // HRV: show 7-day avg ms as primary, baseline as context
+      const hrvPrimary = d.hrvWeekAvg != null ? `${d.hrvWeekAvg} ms` : undefined;
+      const hrvRawLine = d.hrvBaseline != null ? `Baseline: ${d.hrvBaseline} ms` : undefined;
+      // RHR: show 7-day avg bpm as primary, baseline as context
+      const rhrPrimary = d.rhrWeekAvg != null ? `${d.rhrWeekAvg} bpm` : undefined;
+      const rhrRawLine = d.rhrBaseline != null ? `Baseline: ${d.rhrBaseline} bpm` : undefined;
+
+      const noGarminSleep = d.noGarminSleepToday ?? false;
+      const hasManual = d.manualSleepScore != null;
+      const sleepActionNote = noGarminSleep && !hasManual
+        ? `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+             <span style="font-size:11px;color:var(--c-muted)">No sleep data from Garmin yet</span>
+             <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-accent);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Log manually</button>
+           </div>`
+        : hasManual
+          ? `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+               <span style="font-size:11px;color:var(--c-muted)">Sleep logged manually</span>
+               <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-accent);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Edit</button>
+             </div>`
+          : `<div style="margin-top:6px;text-align:right">
+               <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-faint);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Log manually</button>
+             </div>`;
 
       body = `
         <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
           <div style="font-size:22px;font-weight:300">${Math.round(rs)}/100 <span style="font-size:13px;color:var(--c-muted)">${zone}</span></div>
           <p style="font-size:12px;color:var(--c-muted);margin-top:2px">${advice}</p>
-          <p style="font-size:10px;color:var(--c-faint);margin-top:4px">Composite of sleep score, HRV trend, and resting HR vs your 14-day baseline.</p>
-          <div id="recovery-sleep-row" style="cursor:pointer">
+          <p style="font-size:10px;color:var(--c-faint);margin-top:4px">${
+            d.noGarminSleepToday && !d.manualSleepScore
+              ? 'HRV trend and resting HR vs your 28-day baseline. Sleep not included — no data yet.'
+              : 'Composite of sleep score, HRV trend, and resting HR vs your 28-day baseline.'
+          }</p>
+          <div id="recovery-sleep-row" ${d.sleepSubScore != null ? 'style="cursor:pointer"' : ''}>
             ${recBar(d.sleepSubScore, 'Sleep', sleepRawLine)}
           </div>
-          ${recBar(d.hrvSubScore, 'HRV')}
-          ${recBar(d.rhrSubScore, 'Resting Heart Rate', rhrRawLine)}
+          ${sleepActionNote}
+          <div id="recovery-hrv-row" style="cursor:pointer">
+            ${recBar(d.hrvSubScore, 'HRV', hrvRawLine, hrvPrimary)}
+          </div>
+          <div id="recovery-rhr-row" style="cursor:pointer">
+            ${recBar(d.rhrSubScore, 'Resting Heart Rate', rhrRawLine, rhrPrimary)}
+          </div>
         </div>`;
     }
   }
-
-  const btnLabel = signal === 'recovery' ? 'Sleep detail' : 'View full breakdown in Stats';
 
   overlay.innerHTML = `
     <div class="rounded-2xl w-full max-w-lg" style="background:var(--c-surface);max-height:85vh;overflow-y:auto">
@@ -868,33 +1339,238 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
         <button id="pill-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">✕</button>
       </div>
       <div class="px-4 py-4 space-y-3 text-sm">${body}</div>
+      ${signal !== 'recovery' ? `
       <div class="px-4 pb-4">
         <button id="pill-sheet-to-stats" style="width:100%;padding:10px;border-radius:10px;border:1px solid var(--c-border);cursor:pointer;font-size:13px;font-weight:500;background:rgba(0,0,0,0.04);color:var(--c-black);font-family:var(--f)">
-          ${btnLabel}
+          View full breakdown in Stats
         </button>
-      </div>
+      </div>` : ''}
     </div>`;
 
+  overlay.dataset.pillSheet = 'recovery';
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
   overlay.querySelector('#pill-sheet-close')?.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#pill-sheet-to-stats')?.addEventListener('click', () => {
     close();
-    if (signal === 'recovery') {
-      const s3 = getState();
-      showSleepSheet(s3.physiologyHistory ?? [], s3.wks ?? []);
-    } else {
-      import('./stats-view').then(({ renderStatsView }) => renderStatsView());
-    }
+    import('./stats-view').then(({ renderStatsView }) => renderStatsView());
+  });
+  // "Log manually" button lives inside the sleep row — wire it first so it can
+  // stop propagation before the row-level handler opens the sleep history sheet.
+  overlay.querySelector('#sleep-log-manual-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    showManualSleepPicker();
   });
   overlay.querySelector('#recovery-sleep-row')?.addEventListener('click', () => {
+    // Only navigate to history when there is actual sleep data to show.
+    if (d.noGarminSleepToday && !d.manualSleepScore) return;
     close();
     const s3 = getState();
-    showSleepSheet(s3.physiologyHistory ?? [], s3.wks ?? []);
+    showSleepSheet(s3.physiologyHistory ?? [], s3.wks ?? [], () => showReadinessPillSheet(signal, d));
+  });
+  overlay.querySelector('#recovery-hrv-row')?.addEventListener('click', () => {
+    close();
+    const s3 = getState();
+    showHrvSheet(s3.physiologyHistory ?? [], () => showReadinessPillSheet(signal, d));
+  });
+  overlay.querySelector('#recovery-rhr-row')?.addEventListener('click', () => {
+    close();
+    const s3 = getState();
+    showRhrSheet(s3.physiologyHistory ?? [], () => showReadinessPillSheet(signal, d));
   });
 }
 
+
+// ─── Daily Headline Narrative ───────────────────────────────────────────────
+
+/**
+ * Synthesises today's key signals into a 2-sentence plain-English card.
+ * Returns '' when there's nothing notable to say (no noise card).
+ *
+ * Priority order:
+ *   1. Recovery debt (red)
+ *   2. Recovery debt (orange)
+ *   3. HRV significantly suppressed (>12% below 7-day avg)
+ *   4. HRV significantly elevated (>12% above 7-day avg)
+ *   5. Sleep streak (2+ poor nights in last 3)
+ *   6. Recent high-load cross-training in last 48h (padel, gym, etc.)
+ *   7. ACWR high or caution (only flags caution when today is hard)
+ *   Else: return '' — silence is better than a filler card.
+ */
+function buildDailyHeadline(s: SimulatorState): string {
+  const wk = s.wks?.[s.w - 1];
+  const prevWk = s.wks?.[s.w - 2];
+  const physio = s.physiologyHistory ?? [];
+
+  // ── HRV delta vs 7-day personal average ──────────────────────────────────
+  const latestPhysio = physio.slice(-1)[0];
+  const hrvToday: number | null = latestPhysio?.hrvRmssd ?? null;
+  const hrvAll = physio.map(p => (p as any).hrvRmssd).filter(v => v != null) as number[];
+  const hrvAvg: number | null = hrvAll.length >= 3
+    ? hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length
+    : null;
+  const hrvDeltaPct: number | null = (hrvToday != null && hrvAvg != null)
+    ? Math.round((hrvToday - hrvAvg) / hrvAvg * 100)
+    : null;
+
+  // ── Sleep streak (poor nights) ────────────────────────────────────────────
+  const last3Sleep = physio
+    .filter(d => (d as any).sleepScore != null)
+    .slice(-3)
+    .map(d => (d as any).sleepScore as number);
+  const badNights = last3Sleep.filter(sc => sc < 60).length;
+
+  // ── Recovery debt ─────────────────────────────────────────────────────────
+  const recoveryDebt = (wk as any)?.recoveryDebt as 'orange' | 'red' | undefined;
+
+  // ── Recent high-load cross-training (last 48h, current + prev week) ──────
+  const now = Date.now();
+  const ms48 = 48 * 60 * 60 * 1000;
+
+  let recentCT: { label: string; tss: number } | null = null;
+
+  function checkWkForCrossTraining(week: typeof wk) {
+    if (!week) return;
+
+    // garminActuals — skip runs
+    for (const [key, act] of Object.entries(week.garminActuals ?? {})) {
+      const a = act as any;
+      if (isRunKey(key, a.activityType)) continue;
+      if (!a.startTime) continue;
+      const actMs = new Date(a.startTime).getTime();
+      if (actMs < now - ms48 || actMs >= now) continue;
+      let tss = 0;
+      if (a.iTrimp != null && a.iTrimp > 0) {
+        tss = (a.iTrimp * 100) / 15000;
+      } else {
+        const durMin = a.durationSec > 0 ? a.durationSec / 60 : 30;
+        tss = durMin * 0.92;
+      }
+      if (tss > 25 && (!recentCT || tss > recentCT.tss)) {
+        const label = a.displayName || (a.activityType ? formatActivityType(a.activityType) : 'Activity');
+        recentCT = { label, tss: Math.round(tss) };
+      }
+    }
+
+    // adhocWorkouts — use garminTimestamp for date
+    for (const w of (week.adhocWorkouts ?? []) as any[]) {
+      const ts: string | undefined = w.garminTimestamp;
+      if (!ts) continue;
+      const actMs = new Date(ts).getTime();
+      if (actMs < now - ms48 || actMs >= now) continue;
+      let tss = 0;
+      if (w.iTrimp != null && w.iTrimp > 0) {
+        tss = (w.iTrimp * 100) / 15000;
+      } else {
+        const rpe = w.rpe ?? w.r ?? 5;
+        const durMin = parseDurMinLocal(w.d ?? '');
+        tss = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+      }
+      if (tss > 25 && (!recentCT || tss > recentCT.tss)) {
+        const label = (w.n ?? w.name ?? 'Session')
+          .replace(' (Garmin)', '').replace(' (Strava)', '');
+        recentCT = { label, tss: Math.round(tss) };
+      }
+    }
+  }
+
+  checkWkForCrossTraining(wk);
+  checkWkForCrossTraining(prevWk);
+  const recentCTFinal = recentCT as { label: string; tss: number } | null;
+
+  // ── ACWR ──────────────────────────────────────────────────────────────────
+  const tier = s.athleteTierOverride ?? s.athleteTier;
+  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+
+  // ── Today's planned workout (lightweight — just type + name) ──────────────
+  let todayIsHard = false;
+  let todayWorkoutName = '';
+  if (wk) {
+    const workouts = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+      null, s.recurringActivities,
+      s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, s.w), (wk as any).scheduledAcwrStatus,
+    );
+    // Apply day moves
+    if ((wk as any).workoutMoves) {
+      for (const [id, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
+        const w = workouts.find((wo: any) => (wo.id || wo.n) === id);
+        if (w) (w as any).dayOfWeek = newDay;
+      }
+    }
+    const jsDay = new Date().getDay();
+    const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+    const active = workouts.filter((wo: any) => wo.status !== 'skip' && wo.status !== 'replaced');
+    const todayW: any = active.find((wo: any) => wo.dayOfWeek === ourDay)
+      ?? active.filter((wo: any) => !wk.rated[wo.id || wo.n])[0]
+      ?? null;
+    if (todayW) {
+      todayIsHard = isHardWorkout(todayW.t);
+      todayWorkoutName = todayW.n || '';
+    }
+  }
+
+  // ── Priority rules ────────────────────────────────────────────────────────
+  let headline = '';
+  let body = '';
+
+  if (recoveryDebt === 'red') {
+    headline = 'Recovery is significantly suppressed';
+    body = todayIsHard
+      ? `Hard sessions on poor sleep or suppressed HRV raise injury risk and blunt the training stimulus. Converting today's ${todayWorkoutName} to easy effort is the better option.`
+      : 'Sleep or HRV is well below baseline. Easy movement or rest is appropriate today.';
+  } else if (recoveryDebt === 'orange') {
+    headline = 'Recovery below baseline';
+    body = todayIsHard
+      ? `Sleep or HRV is below your normal range. If ${todayWorkoutName} feels harder than usual, back off — forcing intensity on a poor recovery produces less adaptation, not more.`
+      : 'Sleep or HRV is below baseline. Keep today easy and prioritise sleep tonight.';
+  } else if (hrvDeltaPct !== null && hrvDeltaPct < -12) {
+    headline = `HRV ${Math.abs(hrvDeltaPct)}% below 7-day average`;
+    body = todayIsHard
+      ? `Hard sessions on suppressed HRV produce lower adaptation and carry higher injury risk. Consider moving ${todayWorkoutName} by 24 hours.`
+      : 'HRV suppression at this level typically resolves within 24–48 hours with easy training or rest.';
+  } else if (hrvDeltaPct !== null && hrvDeltaPct > 12) {
+    headline = `HRV ${hrvDeltaPct}% above 7-day average`;
+    body = todayIsHard
+      ? `Physiological recovery is strong. Conditions are good for ${todayWorkoutName}.`
+      : 'Physiological recovery is strong. No adjustments needed.';
+  } else if (badNights >= 2) {
+    headline = `${badNights} poor nights in the last ${last3Sleep.length}`;
+    body = todayIsHard
+      ? `Cumulative sleep debt suppresses training adaptation. ${todayWorkoutName} will not produce full stimulus until sleep recovers.`
+      : 'Cumulative sleep debt reduces adaptation. Prioritise an earlier bedtime tonight.';
+  } else if (recentCTFinal && recentCTFinal.tss > 30) {
+    const dayLabel = (() => {
+      const actTime = new Date(Date.now() - ms48 / 2);
+      return actTime.toISOString().split('T')[0] === new Date().toISOString().split('T')[0]
+        ? 'earlier today' : 'yesterday';
+    })();
+    headline = `${recentCTFinal.label} ${dayLabel} added ${recentCTFinal.tss} TSS`;
+    body = todayIsHard
+      ? `Combined load is elevated. Check whether today's ${todayWorkoutName} should be shifted or softened.`
+      : "Total load this week is tracking above baseline. Today's session keeps things manageable.";
+  } else if (acwr.status === 'high') {
+    headline = 'Load spike detected this week';
+    body = todayIsHard
+      ? `Acute load is significantly above chronic baseline. Reducing today's ${todayWorkoutName} intensity is the lower-risk option.`
+      : 'Acute load is significantly above chronic baseline. Rest or easy movement keeps risk down.';
+  } else if (acwr.status === 'caution' && todayIsHard) {
+    headline = 'Load is increasing faster than baseline';
+    body = `ACWR is in the caution range. ${todayWorkoutName} can proceed — monitor how you feel during the warm-up.`;
+  } else {
+    return ''; // Nothing notable — no card
+  }
+
+  return `
+    <div style="margin:12px 16px 0;padding:14px 16px;border-radius:14px;border:1px solid var(--c-border);background:var(--c-surface)">
+      <div style="font-size:13px;font-weight:600;color:var(--c-text);margin-bottom:5px">${headline}</div>
+      <div style="font-size:13px;line-height:1.55;color:var(--c-muted)">${body}</div>
+    </div>
+  `;
+}
 
 function buildTodayWorkout(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
@@ -1105,7 +1781,7 @@ function buildRecentActivity(s: SimulatorState): string {
   const prevWk = s.wks?.[s.w - 2];
 
   // Collect recent completed activities (garminActuals + adhoc from current + prev week)
-  type ActivityRow = { name: string; sub: string; value: string; icon: 'run' | 'gym' | 'swim' | 'bike'; id: string; workoutKey?: string; weekNum?: number };
+  type ActivityRow = { name: string; sub: string; value: string; icon: 'run' | 'gym' | 'swim' | 'bike'; id: string; workoutKey?: string; weekNum?: number; unmatched?: boolean; sortKey: string };
   const rows: ActivityRow[] = [];
 
   function addFromWk(week: typeof wk, weekNum: number) {
@@ -1113,25 +1789,49 @@ function buildRecentActivity(s: SimulatorState): string {
     const isCurrentWeek = weekNum === s.w;
     // Garmin synced actuals
     Object.entries(week.garminActuals || {}).forEach(([key, act]: [string, any]) => {
-      if (rows.length >= 5) return;
-      const isRun = isRunKey(key);
-      const dateStr = act.date ? fmtDate(act.date) : (isCurrentWeek ? 'This week' : 'Last week');
+      const isRun = isRunKey(key, act.activityType);
+      const dateStr = act.startTime ? fmtDate(act.startTime) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = isRun && act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationMin ? `${Math.round(act.durationMin)} min` : '';
-      const actName = act.workoutName || act.displayName
+      // Prefer the actual activity type as the label (e.g. "Run") over the plan slot name.
+      // This ensures a run matched to a General Sport slot shows "Run", not "General Sport 1".
+      const actName = (act.activityType ? formatActivityType(act.activityType) : null)
+        || act.displayName || act.workoutName
         || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-      rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum });
+      rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
     });
     // Adhoc workouts
     (week.adhocWorkouts || []).forEach((w: any) => {
-      if (rows.length >= 5) return;
-      const dateStr = isCurrentWeek ? 'This week' : 'Last week';
+      const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = w.distanceKm ? formatKm(w.distanceKm, s.unitPref ?? 'km') : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
-      rows.push({ name: w.workoutName || w.displayName || w.name || w.n || 'Workout', sub: dateStr, value: val, icon: 'run', id: w.id || w.name });
+      rows.push({ name: w.workoutName || w.displayName || w.name || w.n || 'Workout', sub: dateStr, value: val, icon: 'run', id: w.id || w.name, sortKey: w.garminTimestamp || w.date || '' });
     });
   }
 
   addFromWk(wk, s.w);
   addFromWk(prevWk, s.w - 1);
+
+  // Add unmatched pending items (garminPending where garminMatched === '__pending__')
+  function addPendingFromWk(week: typeof wk, weekNum: number) {
+    if (!week) return;
+    const garminMatched = week.garminMatched ?? {};
+    (week.garminPending ?? []).forEach(item => {
+      if (garminMatched[item.garminId] !== '__pending__') return;
+      const dateStr = item.startTime ? fmtDate(item.startTime) : (weekNum === s.w ? 'This week' : 'Last week');
+      const durationMin = Math.round(item.durationSec / 60);
+      const val = item.distanceM && item.distanceM > 100
+        ? formatKm(item.distanceM / 1000, s.unitPref ?? 'km')
+        : durationMin ? `${durationMin} min` : '';
+      const actName = formatActivityType(item.activityType);
+      const isRun = item.appType === 'run';
+      rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: item.garminId, unmatched: true, sortKey: item.startTime || '' });
+    });
+  }
+  addPendingFromWk(wk, s.w);
+  addPendingFromWk(prevWk, s.w - 1);
+
+  // Sort all activities by date descending so the most recent always appears first
+  rows.sort((a, b) => (b.sortKey > a.sortKey ? 1 : b.sortKey < a.sortKey ? -1 : 0));
+  rows.splice(8); // cap at 8 rows
 
   if (rows.length === 0) return '';
 
@@ -1143,20 +1843,23 @@ function buildRecentActivity(s: SimulatorState): string {
   }
 
   const rowsHtml = rows.map(r => `
-    <div class="m-list-item${r.workoutKey ? ' home-act-row' : ''}"
+    <div class="m-list-item${r.workoutKey ? ' home-act-row' : ''}${r.unmatched ? ' home-unmatched-row' : ''}"
       data-activity-id="${r.id}"
       ${r.workoutKey ? `data-workout-key="${r.workoutKey}" data-week-num="${r.weekNum}"` : ''}
-      style="cursor:${r.workoutKey ? 'pointer' : 'default'}">
+      style="cursor:${r.workoutKey || r.unmatched ? 'pointer' : 'default'}">
       <div style="width:34px;height:34px;border-radius:50%;background:${r.icon === 'run' ? 'rgba(78,159,229,0.08)' : 'rgba(0,0,0,0.05)'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
         ${iconSvg(r.icon)}
       </div>
-      <div style="flex:1">
-        <div style="font-size:14px;font-weight:400;letter-spacing:-0.01em;margin-bottom:1px">${r.name}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:400;letter-spacing:-0.01em;margin-bottom:1px;display:flex;align-items:center;gap:6px">
+          ${r.name}
+          ${r.unmatched ? `<span style="font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;padding:1px 5px;border-radius:3px;background:rgba(245,158,11,0.12);color:#b45309">Unmatched</span>` : ''}
+        </div>
         <div style="font-size:11px;color:var(--c-muted)">${r.sub}</div>
       </div>
-      <div style="display:flex;align-items:center;gap:8px">
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
         <span style="font-size:13px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-0.01em">${r.value}</span>
-        ${r.workoutKey ? `<span style="opacity:0.25"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>` : ''}
+        ${r.workoutKey || r.unmatched ? `<span style="opacity:0.25"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></span>` : ''}
       </div>
     </div>
   `).join('');
@@ -1208,12 +1911,15 @@ function getHomeHTML(s: SimulatorState): string {
           ${s.w && s.tw ? `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-top:2px">Week ${s.w} of ${s.tw}${s.wks?.[s.w - 1]?.ph ? ` · ${s.wks[s.w - 1].ph.charAt(0).toUpperCase() + s.wks[s.w - 1].ph.slice(1)}` : ''}</div>` : ''}
         </div>
         <div style="display:flex;align-items:center;gap:8px">
-          <button id="home-injured-btn" style="height:32px;padding:0 10px;border-radius:16px;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;cursor:pointer;color:var(--c-black);font-family:var(--f)">🩹 Report Injury</button>
+          <button id="home-coach-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap;font-family:var(--f)">Coach</button>
+          <button id="home-checkin-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap;font-family:var(--f)">Check-in</button>
           <button id="home-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
         </div>
       </div>
 
+      ${buildIllnessBanner(s)}
       ${buildProgressBars(s)}
+      ${buildDailyHeadline(s)}
       ${buildReadinessRing(s)}
       ${buildTodayWorkout(s)}
       ${buildRaceCountdown(s)}
@@ -1234,10 +1940,14 @@ function wireHomeHandlers(): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
-  // Injured button
-  document.getElementById('home-injured-btn')?.addEventListener('click', () => {
-    import('./injury/modal').then(({ openInjuryModal }) => openInjuryModal());
-  });
+  // Coach button
+  document.getElementById('home-coach-btn')?.addEventListener('click', () => openCoachModal());
+
+  // Check-in button
+  document.getElementById('home-checkin-btn')?.addEventListener('click', () => openCheckinOverlay());
+
+  // Illness banner — mark recovered
+  document.getElementById('home-illness-recover')?.addEventListener('click', () => clearIllness());
 
   // Start workout button — launches structured GPS tracking for the selected workout
   document.getElementById('home-start-btn')?.addEventListener('click', (e) => {
@@ -1290,19 +2000,29 @@ function wireHomeHandlers(): void {
       const metrics2 = computeFitnessModel(s2.wks ?? [], s2.w, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2);
       const fourBack2 = metrics2[metrics2.length - 5];
       const ctlFourWeeksAgo2 = fourBack2?.ctl ?? ctlNow2;
+      const ctlHistory2 = [ctlNow2, ...([4,3,2,1].map(i => metrics2[metrics2.length - 1 - i]?.ctl ?? ctlNow2))];
+      const momentumScore2 = (ctlHistory2[0] - ctlHistory2[1]) * 4
+                           + (ctlHistory2[1] - ctlHistory2[2]) * 3
+                           + (ctlHistory2[2] - ctlHistory2[3]) * 2
+                           + (ctlHistory2[3] - ctlHistory2[4]) * 1;
+      const momentumThreshold2 = (ctlNow2 || 1) * 0.015;
       const today2 = new Date().toISOString().split('T')[0];
-      const manualToday2 = s2.lastRecoveryPromptDate === today2
-        ? (s2.recoveryHistory ?? []).slice().reverse().find((e: any) => e.date === today2 && e.source === 'manual')
-        : undefined;
+      const manualToday2 = (s2.recoveryHistory ?? []).slice().reverse().find(
+        (e: any) => e.date === today2 && e.source === 'manual',
+      );
       const latestPhysio2 = s2.physiologyHistory?.slice(-1)[0];
-      const sleepScore2: number | null = manualToday2?.sleepScore ?? latestPhysio2?.sleepScore ?? null;
+      const garminTodaySleep2 = (s2.physiologyHistory ?? []).find(p => p.date === today2 && p.sleepScore != null);
+      const sleepScore2: number | null = garminTodaySleep2?.sleepScore ?? manualToday2?.sleepScore ?? latestPhysio2?.sleepScore ?? null;
       const hrvRmssd2: number | null = latestPhysio2?.hrvRmssd ?? null;
       const hrvAll2 = (s2.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
       const hrvPersonalAvg2: number | null = hrvAll2.length >= 3
         ? Math.round(hrvAll2.reduce((a: number, b: number) => a + b, 0) / hrvAll2.length) : null;
+      const sleepBank2 = getSleepBank(s2.physiologyHistory ?? []);
       const readiness2 = computeReadiness({
-        tsb: tsb2, acwr: acwr2.ratio, ctlNow: ctlNow2, ctlFourWeeksAgo: ctlFourWeeksAgo2,
-        sleepScore: sleepScore2, hrvRmssd: hrvRmssd2, hrvPersonalAvg: hrvPersonalAvg2,
+        tsb: tsb2, acwr: acwr2.ratio, ctlNow: ctlNow2,
+        sleepScore: sleepScore2, sleepHistory: s2.physiologyHistory ?? [],
+        hrvRmssd: hrvRmssd2, hrvPersonalAvg: hrvPersonalAvg2,
+        sleepBankSec: sleepBank2.nightsWithData >= 3 ? sleepBank2.bankSec : null,
         weeksOfHistory: metrics2.length,
       });
       let rhrCaption2 = '';
@@ -1316,15 +2036,41 @@ function wireHomeHandlers(): void {
         rhrRawBpm2 = latestPhysio2.restingHR;
         rhrCaption2 = `RHR: ${latestPhysio2.restingHR}bpm${rhrTrend2 ? ' ' + rhrTrend2 : ''} · `;
       }
-      const tsbZone2 = tsb2 > 0 ? 'Fresh' : tsb2 >= -10 ? 'Recovering' : tsb2 >= -25 ? 'Fatigued' : 'Overtrained';
-      const safetyLabel2 = acwr2.ratio <= 0 ? '—' : acwr2.status === 'safe' ? 'Safe' : acwr2.status === 'caution' ? 'Elevated' : 'High Risk';
-      const momentumArrow2 = ctlNow2 > ctlFourWeeksAgo2 ? '↗' : ctlNow2 > ctlFourWeeksAgo2 * 0.95 ? '→' : '↘';
-      const recoveryResult2 = computeRecoveryScore(s2.physiologyHistory ?? []);
+      const tsbDaily2 = Math.round(tsb2 / 7);
+      const tsbZone2 = tsbDaily2 > 1 ? 'Peaked' : tsbDaily2 > -1 ? 'Fresh' : tsbDaily2 > -2 ? 'Recovering' : tsbDaily2 > -4 ? 'Fatigued' : 'Overtrained';
+      const safetyLabel2 = acwr2.ratio <= 0 ? '—' : acwr2.status === 'safe' ? 'Safe' : acwr2.status === 'caution' ? 'Elevated' : acwr2.status === 'high' ? 'High Risk' : 'Low';
+      const momentumArrow2 = momentumScore2 > momentumThreshold2 ? '↗' : momentumScore2 >= -momentumThreshold2 ? '→' : '↘';
+      // Inject manual sleep into physiology history only when Garmin hasn't sent today's data
+      const todayStr2 = new Date().toISOString().split('T')[0];
+      const manualSleepToday2 = (s2.recoveryHistory ?? []).slice().reverse().find(
+        (e: any) => e.date === todayStr2 && e.source === 'manual',
+      );
+      const noGarminSleep2 = !(s2.physiologyHistory ?? []).find(p => p.date === todayStr2 && p.sleepScore != null);
+      const physioForRecovery2 = (() => {
+        const h = s2.physiologyHistory ?? [];
+        // Only inject manual sleep when Garmin hasn't sent today's data — Garmin takes priority
+        if (!manualSleepToday2?.sleepScore || !noGarminSleep2) return h;
+        const idx = h.findIndex(p => p.date === todayStr2);
+        if (idx >= 0) return h.map((p, i) => i === idx ? { ...p, sleepScore: manualSleepToday2.sleepScore } : p);
+        return [...h, { date: todayStr2, sleepScore: manualSleepToday2.sleepScore }];
+      })();
+      const suppressSleep2 = noGarminSleep2 && !manualSleepToday2?.sleepScore;
+      const recoveryResult2 = computeRecoveryScore(physioForRecovery2, { suppressSleepIfNotToday: suppressSleep2, manualSleepScore: noGarminSleep2 ? (manualSleepToday2?.sleepScore ?? undefined) : undefined });
+      // Trend context for Option-B display: 7-day avg and 28-day baseline per metric
+      const ph2 = physioForRecovery2;
+      const ph2h7 = ph2.slice(-7); const ph2h28 = ph2.slice(-28);
+      const avg = (arr: number[]) => arr.length > 0 ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
+      const sleepWeekAvg2 = avg(ph2h7.map(d => d.sleepScore).filter((v): v is number => v != null));
+      const sleepBaseline2 = avg(ph2h28.map(d => d.sleepScore).filter((v): v is number => v != null));
+      const hrvWeekAvg2 = avg(ph2h7.map(d => d.hrvRmssd).filter((v): v is number => v != null && v > 0));
+      const hrvBaseline2 = avg(ph2h28.map(d => d.hrvRmssd).filter((v): v is number => v != null && v > 0));
+      const rhrWeekAvg2 = avg(ph2h7.map(d => d.restingHR).filter((v): v is number => v != null && v > 0));
+      const rhrBaseline2 = avg(ph2h28.map(d => d.restingHR).filter((v): v is number => v != null && v > 0));
       showReadinessPillSheet(signal, {
-        tsb: tsb2, tsbZone: tsbZone2, tsbLabel: tsb2 > 0 ? `+${Math.round(tsb2)}` : `${Math.round(tsb2)}`,
+        tsb: tsb2, tsbZone: tsbZone2, tsbLabel: tsbDaily2 > 0 ? `+${tsbDaily2}` : `${tsbDaily2}`,
         fitnessScore: readiness2.fitnessScore,
         acwrRatio: acwr2.ratio, safetyLabel: safetyLabel2,
-        ctlNow: ctlNow2, ctlFourWeeksAgo: ctlFourWeeksAgo2, momentumArrow: momentumArrow2,
+        ctlNow: ctlNow2, ctlFourWeeksAgo: ctlFourWeeksAgo2, momentumArrow: momentumArrow2, momentumScore: momentumScore2, momentumThreshold: momentumThreshold2,
         recoveryScore: readiness2.recoveryScore, sleepScore: sleepScore2,
         rhrCaption: rhrCaption2, hasRecovery: readiness2.hasRecovery,
         recoveryHasData: recoveryResult2.hasData,
@@ -1334,6 +2080,17 @@ function wireHomeHandlers(): void {
         rhrSubScore: recoveryResult2.rhrScore,
         rhrRawBpm: rhrRawBpm2,
         rhrTrend: rhrTrend2,
+        lastNightSleep: recoveryResult2.lastNightSleep,
+        lastNightSleepDate: recoveryResult2.lastNightSleepDate,
+        lastNightHrv: recoveryResult2.lastNightHrv,
+        lastNightHrvDate: recoveryResult2.lastNightHrvDate,
+        recoveryDataStale: recoveryResult2.dataStale,
+        recoveryLastSyncDate: recoveryResult2.lastSyncDate,
+        sleepWeekAvg: sleepWeekAvg2, sleepBaseline: sleepBaseline2,
+        hrvWeekAvg: hrvWeekAvg2, hrvBaseline: hrvBaseline2,
+        rhrWeekAvg: rhrWeekAvg2, rhrBaseline: rhrBaseline2,
+        noGarminSleepToday: noGarminSleep2,
+        manualSleepScore: manualSleepToday2?.sleepScore ?? null,
       });
     });
   });
@@ -1343,18 +2100,40 @@ function wireHomeHandlers(): void {
     e.stopPropagation();
     const s2 = getState();
     const wk2 = s2.wks?.[s2.w - 1];
-    const hasUnrated = (wk2?.unspentLoadItems?.length ?? 0) > 0
-      || (wk2?.workoutMods?.some(m => !m.status) ?? false);
-    if (hasUnrated || true) {
-      // Route through ACWR reduction modal (handles swap/reduce logic)
+    const tier2 = s2.athleteTierOverride ?? s2.athleteTier;
+    const atlSeed2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
+    const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2);
+    const acwrElevated = acwr2.status === 'caution' || acwr2.status === 'high';
+    const hasUnspent = (wk2?.unspentLoadItems?.length ?? 0) > 0;
+    if (acwrElevated || hasUnspent) {
+      // ACWR is elevated or there's unspent cross-training load → plan adjustment modal
       import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
+    } else {
+      // Low readiness driven by sleep/recovery — show rest advice if there's a run to act on,
+      // otherwise navigate to plan so the user can see their week
+      const opened = showRecoveryAdviceSheet();
+      if (!opened) {
+        import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      }
     }
   });
 
-  // TSS row → load breakdown sheet
+  // TSS row → breakdown sheet
   document.getElementById('home-tss-row')?.addEventListener('click', () => {
-    const s = getState();
-    showLoadBreakdownSheet(s, s.w);
+    const s2 = getState();
+    showLoadBreakdownSheet(s2, s2.w);
+  });
+
+  // Km row → run breakdown sheet
+  document.getElementById('home-km-row')?.addEventListener('click', () => {
+    const s2 = getState();
+    showRunBreakdownSheet(s2, s2.w);
+  });
+
+  // Running Volume row (smartwatch) → run breakdown sheet
+  document.getElementById('home-km-vol-row')?.addEventListener('click', () => {
+    const s2 = getState();
+    showRunBreakdownSheet(s2, s2.w);
   });
 
   // Recent activity click-through → activity detail page
@@ -1370,6 +2149,13 @@ function wireHomeHandlers(): void {
       renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'home');
     });
   });
+
+  // Unmatched activity click → open activity review flow
+  document.querySelectorAll<HTMLElement>('.home-unmatched-row').forEach(el => {
+    el.addEventListener('click', () => {
+      (window as any).openActivityReReview?.();
+    });
+  });
 }
 
 export function renderHomeView(): void {
@@ -1383,16 +2169,13 @@ export function renderHomeView(): void {
   });
 }
 
-// ─── Sleep detail sheet ───────────────────────────────────────────────────────
+// ─── Sleep detail — full-screen dark view ────────────────────────────────────
 
-export function showSleepSheet(physiologyHistory: PhysiologyDayEntry[], wks: any[]): void {
-  const overlay = document.createElement('div');
-  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
-
+export function showSleepSheet(physiologyHistory: PhysiologyDayEntry[], wks: any[], onBack?: () => void, targetEntry?: PhysiologyDayEntry): void {
+  // ── Data preparation ────────────────────────────────────────────────────────
   const withScores = physiologyHistory.filter(d => d.sleepScore != null).slice(-7);
-  const latest = withScores[withScores.length - 1] ?? null;
+  const latest = targetEntry ?? withScores[withScores.length - 1] ?? null;
 
-  // Stale data detection
   const today = new Date().toISOString().split('T')[0];
   const latestDate = latest?.date ?? null;
   const daysSinceSync = latestDate
@@ -1401,129 +2184,729 @@ export function showSleepSheet(physiologyHistory: PhysiologyDayEntry[], wks: any
   const isStale = daysSinceSync != null && daysSinceSync >= 2;
 
   const bigScore = latest?.sleepScore != null ? Math.round(latest.sleepScore) : null;
-  const headlineColor = bigScore != null ? sleepScoreColor(bigScore) : 'var(--c-faint)';
   const scoreLabel = bigScore != null ? sleepScoreLabel(bigScore) : null;
   const durationStr = latest?.sleepDurationSec ? fmtSleepDuration(latest.sleepDurationSec) : null;
 
-  // Contextualisation vs personal history + population target
   const ctx = latest != null ? getSleepContext(physiologyHistory, latest) : null;
-  const durationAvgStr  = ctx?.durationAvgSec  ? fmtSleepDuration(ctx.durationAvgSec)  : null;
-  const durationBestStr = ctx?.durationBestSec ? fmtSleepDuration(ctx.durationBestSec) : null;
+  const durationAvgStr = ctx?.durationAvgSec ? fmtSleepDuration(ctx.durationAvgSec) : null;
   const durationTargetLabel = ctx?.durationVsTarget === 'optimal' ? 'In target range (7–9h)'
-    : ctx?.durationVsTarget === 'short' ? 'Below target (< 7h)'
-    : ctx?.durationVsTarget === 'long'  ? 'Exceeds target (> 9h)'
+    : ctx?.durationVsTarget === 'short' ? 'Below target'
+    : ctx?.durationVsTarget === 'long'  ? 'Above target (> 9h)'
     : null;
-  const durationVsAvgLabel = ctx?.durationVsAvg === 'above' ? 'Above your recent avg'
-    : ctx?.durationVsAvg === 'below' ? 'Below your recent avg'
-    : ctx?.durationVsAvg === 'on_par' ? 'On par with recent avg'
+  const scoreVsAvgLabel = ctx?.scoreVsAvg === 'above' ? 'Above weekly avg'
+    : ctx?.scoreVsAvg === 'below' ? 'Below weekly avg'
     : null;
-  const scoreVsAvgLabel = ctx?.scoreVsAvg === 'above' ? 'Sleeping better than your weekly avg'
-    : ctx?.scoreVsAvg === 'below' ? 'Sleeping below your weekly avg'
-    : ctx?.scoreVsAvg === 'on_par' ? 'On par with your weekly avg'
-    : null;
-  const durationTargetColor = ctx?.durationVsTarget === 'optimal' ? 'var(--c-ok)'
-    : ctx?.durationVsTarget === 'short' ? 'var(--c-caution)' : 'var(--c-warn)';
 
-  // Stage progress bars
-  const stageBar = (stageName: string, sec: number | null | undefined, totalSec: number | null | undefined, color: string) => {
+  const latestDateFmt = latestDate
+    ? new Date(latestDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+    : null;
+
+  // ── Dark theme palette ────────────────────────────────────────────────────
+  const DK_BG     = '#0D1117';
+  const DK_CARD   = '#161B2E';
+  const DK_BORDER = 'rgba(255,255,255,0.08)';
+  const DK_TEXT   = '#FFFFFF';
+  const DK_MUTED  = 'rgba(255,255,255,0.55)';
+  const DK_FAINT  = 'rgba(255,255,255,0.28)';
+  const COL_GREEN  = '#34C759';
+  const COL_AMBER  = '#FF9500';
+  const COL_RED    = '#FF453A';
+  const COL_BLUE   = '#0A84FF';
+  const COL_PURPLE = '#9B59B6';
+
+  const scoreColorDk = (s: number) => s >= 75 ? COL_GREEN : s >= 55 ? COL_AMBER : COL_RED;
+  const qualColorDk = (label: string) =>
+    label === 'Excellent' ? COL_GREEN : label === 'Good' ? COL_BLUE : (label === 'Low' || label === 'Elevated') ? COL_AMBER : DK_FAINT;
+  const targetColorDk = ctx?.durationVsTarget === 'optimal' ? COL_GREEN
+    : ctx?.durationVsTarget === 'short' ? COL_AMBER : DK_FAINT;
+
+  // ── Circular quality ring (SVG arc, 270 degrees, gap at bottom) ──────────
+  const R = 65;
+  const circumference = 2 * Math.PI * R;
+  const arcLen = circumference * 0.75;
+  const gapLen = circumference - arcLen;
+  const scoreArc = bigScore != null ? (bigScore / 100) * arcLen : 0;
+  const ringCol = bigScore != null ? scoreColorDk(bigScore) : DK_FAINT;
+
+  const ringHTML = `
+    <div style="position:relative;width:160px;height:160px">
+      <svg width="160" height="160" viewBox="0 0 160 160" style="position:absolute;top:0;left:0">
+        <circle cx="80" cy="80" r="${R}" fill="none"
+          stroke="rgba(255,255,255,0.10)" stroke-width="8"
+          stroke-dasharray="${arcLen.toFixed(1)} ${gapLen.toFixed(1)}"
+          stroke-dashoffset="${(-gapLen / 2).toFixed(1)}"
+          stroke-linecap="round"
+          transform="rotate(-90 80 80)"/>
+        ${bigScore != null ? `<circle cx="80" cy="80" r="${R}" fill="none"
+          stroke="${ringCol}" stroke-width="8"
+          stroke-dasharray="${scoreArc.toFixed(1)} 1000"
+          stroke-dashoffset="${(-gapLen / 2).toFixed(1)}"
+          stroke-linecap="round"
+          transform="rotate(-90 80 80)"/>` : ''}
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+        ${bigScore != null
+          ? `<div style="font-size:34px;font-weight:300;color:${DK_TEXT};line-height:1">${bigScore}</div>
+             <div style="font-size:11px;color:${DK_FAINT};margin-top:3px">quality score</div>`
+          : `<div style="font-size:13px;color:${DK_FAINT}">No data</div>`}
+      </div>
+    </div>`;
+
+  // ── Stage breakdown rows (dark) ──────────────────────────────────────────
+  type StageKey = 'deep' | 'rem' | 'light' | 'awake';
+  const stageRowDk = (name: string, stageKey: StageKey, barCol: string, sec: number | null | undefined, totalSec: number | null | undefined) => {
     if (!sec || !totalSec) return '';
     const pct = Math.round((sec / totalSec) * 100);
     const dur = fmtSleepDuration(sec);
-    const barColor = stageName === 'Awake' && pct > 15 ? 'var(--c-warn)' : color;
+    const qual = stageQuality(stageKey, pct);
+    const qc = qual.label ? qualColorDk(qual.label) : '';
+    const fillCol = stageKey === 'awake' && pct > 15 ? COL_AMBER : barCol;
     return `
-      <div style="margin-top:10px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-          <span style="font-size:12px;font-weight:600;color:var(--c-black)">${stageName}</span>
-          <span style="font-size:12px;color:var(--c-muted)">${dur} · ${pct}%</span>
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <div style="display:flex;align-items:baseline;gap:8px">
+            <span style="font-size:14px;font-weight:500;color:${DK_TEXT}">${name}</span>
+            ${qual.label ? `<span style="font-size:11px;color:${qc}">${qual.label}</span>` : ''}
+          </div>
+          <span style="font-size:12px;color:${DK_MUTED}">${dur} · ${pct}%</span>
         </div>
-        <div style="height:6px;border-radius:3px;background:rgba(0,0,0,0.07)">
-          <div style="height:6px;border-radius:3px;width:${Math.min(100, pct)}%;background:${barColor}"></div>
+        <div style="height:4px;border-radius:2px;background:rgba(255,255,255,0.08)">
+          <div style="height:4px;border-radius:2px;width:${Math.min(100, pct)}%;background:${fillCol}"></div>
         </div>
       </div>`;
   };
-  // Derive light sleep if we have enough data
-  const lightSec = (latest?.sleepDurationSec && latest?.sleepDeepSec != null && latest?.sleepRemSec != null && latest?.sleepAwakeSec != null)
-    ? Math.max(0, latest.sleepDurationSec - (latest.sleepDeepSec ?? 0) - (latest.sleepRemSec ?? 0) - (latest.sleepAwakeSec ?? 0))
-    : null;
 
-  const deepBar  = stageBar('Deep',  latest?.sleepDeepSec,  latest?.sleepDurationSec, 'var(--c-accent)');
-  const remBar   = stageBar('REM',   latest?.sleepRemSec,   latest?.sleepDurationSec, '#A855F7');
-  const lightBar = stageBar('Light', lightSec,              latest?.sleepDurationSec, 'rgba(78,159,229,0.60)');
-  const awakeBar = stageBar('Awake', latest?.sleepAwakeSec, latest?.sleepDurationSec, 'rgba(0,0,0,0.30)');
+  const lightSec = latest?.sleepLightSec != null
+    ? latest.sleepLightSec
+    : (latest?.sleepDurationSec && latest?.sleepDeepSec != null && latest?.sleepRemSec != null && latest?.sleepAwakeSec != null)
+      ? Math.max(0, latest.sleepDurationSec - (latest.sleepDeepSec ?? 0) - (latest.sleepRemSec ?? 0) - (latest.sleepAwakeSec ?? 0))
+      : null;
 
-  const hasAnyStages = !!(latest?.sleepDeepSec || latest?.sleepRemSec || latest?.sleepAwakeSec || latest?.sleepDurationSec);
-  const stagesPlaceholder = (bigScore != null && !hasAnyStages)
-    ? `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(0,0,0,0.04);font-size:11px;color:var(--c-faint);line-height:1.5">Duration and stage breakdown will appear after your next Garmin Connect sync.</div>`
+  const stageRows = [
+    stageRowDk('Deep',  'deep',  COL_BLUE,   latest?.sleepDeepSec,  latest?.sleepDurationSec),
+    stageRowDk('REM',   'rem',   COL_PURPLE, latest?.sleepRemSec,   latest?.sleepDurationSec),
+    stageRowDk('Light', 'light', 'rgba(78,159,229,0.55)', lightSec, latest?.sleepDurationSec),
+    stageRowDk('Awake', 'awake', 'rgba(255,255,255,0.25)', latest?.sleepAwakeSec, latest?.sleepDurationSec),
+  ].join('');
+  const hasStages = stageRows.length > 0;
+
+  // ── HRV + RHR tiles ──────────────────────────────────────────────────────
+  const hrvToday = latest?.hrvRmssd ?? null;
+  const rhrToday = latest?.restingHR ?? null;
+  const recentPhysio = physiologyHistory.slice(-8);
+  const hrvHistory = recentPhysio.slice(0, -1).map(p => p.hrvRmssd).filter((v): v is number => v != null);
+  const rhrHistory = recentPhysio.slice(0, -1).map(p => p.restingHR).filter((v): v is number => v != null);
+  const hrvAvg = hrvHistory.length >= 2 ? hrvHistory.reduce((a, b) => a + b, 0) / hrvHistory.length : null;
+  const rhrAvg = rhrHistory.length >= 2 ? rhrHistory.reduce((a, b) => a + b, 0) / rhrHistory.length : null;
+
+  const trendSpan = (current: number | null, avg: number | null, higherIsBetter: boolean, hasHistory: boolean) => {
+    if (current == null || avg == null || !hasHistory) return '';
+    const isUp   = higherIsBetter ? current > avg * 1.05 : current < avg * 0.95;
+    const isDown = higherIsBetter ? current < avg * 0.95 : current > avg * 1.05;
+    if (isUp)   return `<span style="font-size:11px;color:${COL_GREEN};margin-left:4px">▲</span>`;
+    if (isDown) return `<span style="font-size:11px;color:${COL_RED};margin-left:4px">▼</span>`;
+    return `<span style="font-size:11px;color:${DK_FAINT};margin-left:4px">→</span>`;
+  };
+
+  const metricTile = (label: string, value: number | null, unit: string, higherIsBetter: boolean, avg: number | null, hasHistory: boolean) =>
+    value == null ? '' : `
+      <div style="background:${DK_CARD};border-radius:12px;padding:14px 16px;flex:1;min-width:0">
+        <div style="font-size:11px;color:${DK_MUTED};margin-bottom:6px">${label}</div>
+        <div style="font-size:24px;font-weight:300;color:${DK_TEXT};line-height:1">
+          ${Math.round(value)}<span style="font-size:13px;color:${DK_FAINT};margin-left:2px">${unit}</span>${trendSpan(value, avg, higherIsBetter, hasHistory)}
+        </div>
+        ${avg != null ? `<div style="font-size:10px;color:${DK_FAINT};margin-top:4px">avg ${Math.round(avg)}${unit}</div>` : ''}
+      </div>`;
+
+  const hrvTile = metricTile('Resting HRV', hrvToday, 'ms', true, hrvAvg, hrvHistory.length >= 2);
+  const rhrTile = metricTile('Resting HR', rhrToday, 'bpm', false, rhrAvg, rhrHistory.length >= 2);
+  const hasMetricTiles = !!(hrvToday != null || rhrToday != null);
+
+  // ── Insight card ────────────────────────────────────────────────────────
+  const stageInsight = latest != null ? getStageInsight(latest, physiologyHistory) : null;
+  const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS: wks.slice(-4).map((w: any) => w.actualTSS ?? 0) });
+  const primaryInsight = stageInsight ?? generalInsight;
+  const secondaryInsight = stageInsight && generalInsight && stageInsight !== generalInsight ? generalInsight : null;
+
+  // ── Sleep bank ───────────────────────────────────────────────────────────
+  const bank = getSleepBank(physiologyHistory);
+  const bankStr = bank.nightsWithData >= 1 ? fmtSleepBank(bank.bankSec) : null;
+  const bankColorDk = bank.bankSec < -3600 ? COL_AMBER : bank.bankSec > 3600 ? COL_GREEN : DK_MUTED;
+
+  // ── Sleep bank nightly area chart ────────────────────────────────────────
+  const bankNights = physiologyHistory
+    .slice(-7)
+    .filter(d => d.sleepDurationSec != null)
+    .map(d => ({ date: d.date, delta: d.sleepDurationSec! - 28800 }));
+
+  let bankChartHTML = '';
+  if (bankNights.length >= 2) {
+    const CDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const CW = 320; const CH = 68; const CPV = 8;
+    const deltas = bankNights.map(n => n.delta);
+    const minD = Math.min(...deltas, -3600);
+    const maxD = Math.max(...deltas, 1800);
+    const cRange = maxD - minD || 1;
+    const cYOf = (v: number) => CPV + ((maxD - v) / cRange) * (CH - CPV * 2);
+    const cXOf = (i: number) => bankNights.length > 1 ? (i / (bankNights.length - 1)) * CW : CW / 2;
+    const zeroY = cYOf(0);
+    const bPts = bankNights.map((n, i) => ({ x: cXOf(i), y: cYOf(n.delta) }));
+    const bLineD = bPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const bCloseD = `L${bPts[bPts.length - 1].x.toFixed(1)},${zeroY.toFixed(1)} L${bPts[0].x.toFixed(1)},${zeroY.toFixed(1)} Z`;
+    const bXLabels = bankNights.map((n, i) => {
+      const pct = (bPts[i].x / CW * 100).toFixed(1);
+      const day = CDAYS[new Date(n.date + 'T12:00:00').getDay()];
+      return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${DK_FAINT};top:0">${day}</span>`;
+    }).join('');
+    bankChartHTML = `
+      <div style="position:relative;margin-top:12px">
+        <svg width="100%" height="${CH}" viewBox="0 0 ${CW} ${CH}" preserveAspectRatio="none">
+          <defs>
+            <clipPath id="slp-above"><rect x="0" y="0" width="${CW}" height="${zeroY.toFixed(1)}"/></clipPath>
+            <clipPath id="slp-below"><rect x="0" y="${zeroY.toFixed(1)}" width="${CW}" height="${CH - zeroY}"/></clipPath>
+          </defs>
+          <path d="${bLineD}${bCloseD}" fill="${COL_GREEN}" opacity="0.18" clip-path="url(#slp-above)"/>
+          <path d="${bLineD}${bCloseD}" fill="${COL_AMBER}" opacity="0.22" clip-path="url(#slp-below)"/>
+          <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}"
+            stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="${bLineD}" fill="none" stroke="rgba(255,255,255,0.65)"
+            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div style="position:relative;height:16px;margin-top:2px">${bXLabels}</div>
+      </div>`;
+  }
+
+  // ── 7-night score trend area chart ───────────────────────────────────────
+  let scoreTrendHTML = '';
+  if (withScores.length >= 2) {
+    const TDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const TW = 320; const TH = 60; const TPV = 6;
+    const scores = withScores.map(e => Math.round(e.sleepScore!));
+    const minS = Math.max(0, Math.min(...scores) - 8);
+    const maxS = Math.min(100, Math.max(...scores) + 8);
+    const tRange = maxS - minS || 1;
+    const tYOf = (v: number) => TPV + ((maxS - v) / tRange) * (TH - TPV * 2);
+    const tXOf = (i: number) => withScores.length > 1 ? (i / (withScores.length - 1)) * TW : TW / 2;
+    const tPts = withScores.map((e, i) => ({ x: tXOf(i), y: tYOf(e.sleepScore!) }));
+    const tLineD = tPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+    const tAreaD = `${tLineD} L${tPts[tPts.length - 1].x.toFixed(1)},${TH} L${tPts[0].x.toFixed(1)},${TH} Z`;
+    const trendCol = scores[scores.length - 1] >= scores[0] ? COL_GREEN : COL_RED;
+    const tXLabels = withScores.map((e, i) => {
+      const pct = (tPts[i].x / TW * 100).toFixed(1);
+      const day = TDAYS[new Date(e.date + 'T12:00:00').getDay()];
+      return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${DK_FAINT};bottom:0;text-align:center;line-height:1.3">${day}<br>${scores[i]}</span>`;
+    }).join('');
+    scoreTrendHTML = `
+      <div style="position:relative;margin-top:10px">
+        <svg width="100%" height="${TH}" viewBox="0 0 ${TW} ${TH}" preserveAspectRatio="none">
+          <path d="${tAreaD}" fill="${trendCol}" opacity="0.15"/>
+          <path d="${tLineD}" fill="none" stroke="${trendCol}" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <div style="position:relative;height:28px;margin-top:4px">${tXLabels}</div>
+      </div>`;
+  }
+
+  // ── Build full-screen overlay ─────────────────────────────────────────────
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50';
+  overlay.style.cssText = `background:${DK_BG};overflow-y:auto;-webkit-overflow-scrolling:touch`;
+
+  overlay.innerHTML = `
+    <div style="position:relative;display:flex;align-items:center;justify-content:center;padding:16px 20px 12px;border-bottom:1px solid ${DK_BORDER}">
+      <button id="sleep-view-back" style="position:absolute;left:20px;color:${DK_MUTED};font-size:22px;line-height:1;background:none;border:none;cursor:pointer;padding:4px">&#8592;</button>
+      <div style="text-align:center">
+        <div style="font-size:17px;font-weight:600;color:${DK_TEXT}">Sleep</div>
+        ${latestDateFmt ? `<div style="font-size:11px;color:${DK_FAINT};margin-top:1px">${latestDateFmt}</div>` : ''}
+      </div>
+    </div>
+
+    ${isStale ? `
+    <div style="margin:12px 16px 0;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,149,0,0.25);background:rgba(255,149,0,0.07)">
+      <p style="font-size:12px;color:${COL_AMBER};margin:0;line-height:1.4">Last synced ${latestDateFmt ?? ''}. Open Garmin Connect to update.</p>
+    </div>` : ''}
+
+    <div style="display:flex;flex-direction:column;align-items:center;padding:28px 20px 8px">
+      ${ringHTML}
+      ${scoreLabel ? `<div style="font-size:15px;font-weight:600;color:${ringCol};margin-top:10px">${scoreLabel}</div>` : ''}
+      ${scoreVsAvgLabel ? `<div style="font-size:11px;color:${DK_FAINT};margin-top:3px">${scoreVsAvgLabel}</div>` : ''}
+    </div>
+
+    <div style="display:flex;gap:8px;padding:0 16px">
+      ${durationStr ? `
+      <div style="background:${DK_CARD};border-radius:12px;padding:14px 16px;flex:1;min-width:0">
+        <div style="font-size:11px;color:${DK_MUTED};margin-bottom:6px">Duration</div>
+        <div style="font-size:26px;font-weight:300;color:${DK_TEXT};line-height:1">${durationStr}</div>
+        ${durationTargetLabel ? `<div style="font-size:11px;color:${targetColorDk};margin-top:4px">${durationTargetLabel}</div>` : ''}
+      </div>` : ''}
+      ${durationAvgStr ? `
+      <div style="background:${DK_CARD};border-radius:12px;padding:14px 16px;flex:1;min-width:0">
+        <div style="font-size:11px;color:${DK_MUTED};margin-bottom:6px">7-night avg</div>
+        <div style="font-size:26px;font-weight:300;color:${DK_TEXT};line-height:1">${durationAvgStr}</div>
+        <div style="font-size:11px;color:${DK_FAINT};margin-top:4px">per night</div>
+      </div>` : ''}
+    </div>
+
+    ${hasStages ? `
+    <div style="margin:20px 16px 0">
+      <div style="font-size:12px;color:${DK_FAINT};margin-bottom:14px">Last night</div>
+      ${stageRows}
+    </div>` : bigScore != null ? `
+    <div style="margin:16px 16px 0;padding:10px 14px;border-radius:10px;border:1px solid ${DK_BORDER}">
+      <p style="font-size:12px;color:${DK_FAINT};margin:0">Stage data not available. Garmin usually syncs stage breakdown within a few hours of waking.</p>
+    </div>` : `
+    <div style="padding:24px 20px;text-align:center">
+      <div style="font-size:13px;color:${DK_FAINT}">No sleep data yet. Garmin syncs within a few hours of waking.</div>
+    </div>`}
+
+    ${hasMetricTiles ? `
+    <div style="display:flex;gap:8px;padding:12px 16px 0">
+      ${hrvTile}${rhrTile}
+    </div>` : ''}
+
+    ${primaryInsight ? `
+    <div style="margin:16px 16px 0;padding:14px 16px;border-radius:14px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.10)">
+      <div style="font-size:13px;font-weight:600;color:${DK_TEXT};margin-bottom:5px">Analysis</div>
+      <div style="font-size:13px;line-height:1.55;color:${DK_MUTED}">${primaryInsight}</div>
+      ${secondaryInsight ? `<div style="font-size:12px;line-height:1.5;color:${DK_FAINT};margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.06)">${secondaryInsight}</div>` : ''}
+    </div>` : ''}
+
+    ${withScores.length >= 2 ? `
+    <div style="margin:16px 16px 0;padding:14px 16px;background:${DK_CARD};border-radius:14px">
+      <div style="font-size:12px;color:${DK_FAINT}">Last ${withScores.length} nights</div>
+      ${scoreTrendHTML}
+    </div>` : ''}
+
+    ${bankStr ? `
+    <div style="margin:12px 16px 24px;padding:14px 16px;background:${DK_CARD};border-radius:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div style="font-size:12px;color:${DK_FAINT}">Sleep bank · last ${bank.nightsWithData} night${bank.nightsWithData === 1 ? '' : 's'}</div>
+        <div style="font-size:11px;color:${DK_FAINT}">vs 8h/night</div>
+      </div>
+      <div style="font-size:28px;font-weight:300;color:${bankColorDk};margin-top:6px">${bankStr}</div>
+      ${bankChartHTML}
+    </div>` : ''}
+  `;
+
+  document.body.appendChild(overlay);
+  const close = () => { overlay.remove(); onBack?.(); };
+  overlay.querySelector('#sleep-view-back')?.addEventListener('click', close);
+}
+
+// ─── Manual sleep picker — centred overlay, 0–100 slider ─────────────────────
+function showManualSleepPicker(): void {
+  const today = new Date().toISOString().split('T')[0];
+  const existing = getState().recoveryHistory?.slice().reverse().find(
+    (e: any) => e.date === today && e.source === 'manual',
+  );
+  const initialValue = existing?.sleepScore ?? 75;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+  // Inject scoped slider styles so the thumb matches the app accent colour
+  overlay.innerHTML = `
+    <style>
+      #sleep-score-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px;
+        border-radius:2px; background:var(--c-border); outline:none; cursor:pointer; }
+      #sleep-score-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none;
+        width:22px; height:22px; border-radius:50%; background:var(--c-accent);
+        box-shadow:0 1px 4px rgba(0,0,0,0.25); }
+      #sleep-score-slider::-moz-range-thumb { width:22px; height:22px; border:none;
+        border-radius:50%; background:var(--c-accent); box-shadow:0 1px 4px rgba(0,0,0,0.25); }
+    </style>
+    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:20px;text-transform:uppercase;letter-spacing:0.06em">Last night's sleep</div>
+      <div style="text-align:center;margin-bottom:20px">
+        <span id="sleep-score-display" style="font-size:56px;font-weight:300;color:var(--c-black);font-variant-numeric:tabular-nums;line-height:1">${initialValue}</span><span style="font-size:20px;font-weight:300;color:var(--c-faint)">/100</span>
+      </div>
+      <div style="padding:4px 0 24px">
+        <input id="sleep-score-slider" type="range" min="1" max="100" value="${initialValue}">
+      </div>
+      <button id="sleep-picker-save" style="width:100%;padding:13px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Save</button>
+      <button id="sleep-picker-cancel" style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--c-border);background:transparent;color:var(--c-muted);font-size:14px;cursor:pointer;font-family:var(--f)">Cancel</button>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector('#sleep-picker-cancel')?.addEventListener('click', () => overlay.remove());
+
+  const slider = overlay.querySelector('#sleep-score-slider') as HTMLInputElement;
+  const display = overlay.querySelector('#sleep-score-display') as HTMLElement;
+  slider.addEventListener('input', () => { display.textContent = slider.value; });
+
+  overlay.querySelector('#sleep-picker-save')?.addEventListener('click', async () => {
+    const score = Number(slider.value);
+    const { getMutableState, saveState } = await import('@/state');
+    const mutable = getMutableState() as any;
+    if (!mutable.recoveryHistory) mutable.recoveryHistory = [];
+    const idx = mutable.recoveryHistory.findIndex((e: any) => e.date === today && e.source === 'manual');
+    const entry = { date: today, sleepScore: score, source: 'manual' as const };
+    if (idx >= 0) mutable.recoveryHistory[idx] = entry;
+    else mutable.recoveryHistory.push(entry);
+    if (mutable.recoveryHistory.length > 90) mutable.recoveryHistory = mutable.recoveryHistory.slice(-90);
+    saveState();
+    overlay.remove();
+    // Close any open recovery pill sheet (it's stale) and re-render home view.
+    // The user can re-tap the Recovery pill to see the updated score with Edit button.
+    document.querySelector('[data-pill-sheet="recovery"]')?.remove();
+    renderHomeView();
+  });
+}
+
+function showRecoveryAdviceSheet(): boolean {
+  const s = getState();
+  const wk = s.wks?.[s.w - 1];
+  const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+  // ── Detect today's unrated intensity workout ──────────────────────────────
+  const jsDow = new Date().getDay(); // JS: 0=Sun
+  const internalDow = jsDow === 0 ? 6 : jsDow - 1; // internal: 0=Mon, 6=Sun
+
+  // Types that warrant "convert to easy" rather than "run by feel"
+  const intensityTypes = new Set(['threshold', 'vo2', 'intervals', 'marathon_pace', 'vo2max']);
+
+  let todayWorkout: any = null;
+  let todayAnyWorkout: any = null;
+  let isIntensitySession = false;
+  let bestMoveDay: { day: number; label: string } | null = null;
+  let backToBack = false;
+
+  if (wk) {
+    const workouts = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
+      s.onboarding?.experienceLevel, undefined, undefined, s.w, s.tw, s.v, s.gs,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    ) as any[];
+
+    // Apply existing day moves so we see the current layout
+    if (wk.workoutMoves) {
+      for (const [wid, newDay] of Object.entries(wk.workoutMoves)) {
+        const w = workouts.find((wo: any) => (wo.id || wo.n) === wid);
+        if (w) w.dayOfWeek = newDay;
+      }
+    }
+
+    const rated = wk.rated ?? {};
+
+    // Today's unrated quality workout
+    todayWorkout = workouts.find((w: any) =>
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] && isHardWorkout(w.t)
+    ) ?? null;
+
+    // Any unrated running workout today (for reduce-intensity when no hard session)
+    todayAnyWorkout = todayWorkout ?? workouts.find((w: any) =>
+      w.dayOfWeek === internalDow && !rated[w.id || w.n] &&
+      w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym'
+    ) ?? null;
+
+    if (todayWorkout) {
+      isIntensitySession = intensityTypes.has(todayWorkout.t);
+
+      // Back-to-back: was yesterday a rated hard workout?
+      const yesterdayDow = internalDow === 0 ? null : internalDow - 1; // don't wrap into prev week
+      if (yesterdayDow !== null) {
+        const yesterdayWos = workouts.filter((w: any) => w.dayOfWeek === yesterdayDow && rated[w.id || w.n]);
+        backToBack = yesterdayWos.some((w: any) => isHardWorkout(w.t));
+      }
+
+      // Best move target: first later day with no hard session and not already completed
+      for (let d = internalDow + 1; d <= 6; d++) {
+        const dayWos = workouts.filter((w: any) => w.dayOfWeek === d);
+        const hasHard = dayWos.some((w: any) => isHardWorkout(w.t));
+        const allDone = dayWos.length > 0 && dayWos.every((w: any) => rated[w.id || w.n]);
+        if (!hasHard && !allDone) {
+          bestMoveDay = { day: d, label: DAY_NAMES[d] };
+          break;
+        }
+      }
+    }
+  }
+
+  // Nothing actionable today (rest day, cross-training only) — skip the modal
+  if (!todayAnyWorkout) return false;
+
+  // ── Build HTML ─────────────────────────────────────────────────────────────
+  const escName = todayWorkout ? todayWorkout.n.replace(/&/g, '&amp;').replace(/</g, '&lt;') : '';
+  const kmMatch = todayWorkout?.d?.match(/(\d+\.?\d*)km/);
+  const distStr = kmMatch ? `${kmMatch[1]}km` : '';
+
+  const todaySection = todayWorkout ? `
+    <div style="background:rgba(0,0,0,0.04);border-radius:12px;overflow:hidden">
+      <div style="padding:10px 16px 8px;border-bottom:1px solid var(--c-border)">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:10px">
+          Today — ${escName}${backToBack ? ' · back-to-back' : ''}
+        </div>
+        ${backToBack ? `<p style="font-size:12px;color:var(--c-muted);line-height:1.5;margin:0 0 10px">Yesterday was a hard session. Two consecutive quality days significantly raise injury risk and reduce adaptation quality.</p>` : ''}
+        <div style="display:flex;flex-direction:column;gap:8px;padding-bottom:4px">
+          <button id="rec-advice-convert" style="padding:12px 14px;border-radius:10px;border:1.5px solid var(--c-border);background:var(--c-bg);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer;text-align:left;font-family:var(--f)">
+            ${isIntensitySession ? 'Convert to easy run' : 'Run by feel — drop pace targets'}
+            <div style="font-size:12px;font-weight:400;color:var(--c-muted);margin-top:3px">${distStr ? `${distStr}, Zone 2 only.` : 'Same distance, Zone 2 only.'} No intensity targets.</div>
+          </button>
+          ${bestMoveDay ? `
+          <button id="rec-advice-move" style="padding:12px 14px;border-radius:10px;border:1.5px solid var(--c-border);background:var(--c-bg);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer;text-align:left;font-family:var(--f)">
+            Move to ${bestMoveDay.label}
+            <div style="font-size:12px;font-weight:400;color:var(--c-muted);margin-top:3px">Run ${escName} at full intensity on ${bestMoveDay.label} instead.</div>
+          </button>` : ''}
+        </div>
+      </div>
+    </div>` : '';
+
+  const btnStyle = 'width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:8px;text-align:left;font-family:var(--f)';
+  const btnTitle = 'font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px';
+  const btnBody = 'font-size:12px;color:var(--c-muted);line-height:1.6;margin:0';
+
+  // "Reduce intensity" only makes sense if there's a running workout today
+  const reduceBtn = todayAnyWorkout
+    ? `<button id="rec-advice-reduce" style="${btnStyle}">
+        <div style="${btnTitle}">Reduce intensity</div>
+        <p style="${btnBody}">Convert today's session to an easy effort — same distance, Zone 2 only. Aerobic stimulus without the additional stress on an under-recovered system.</p>
+      </button>`
     : '';
 
-  // 7-night bar chart
-  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const barEntries = withScores.map((e, i) => ({
-    value: e.sleepScore != null ? Math.round(e.sleepScore) : null,
-    day: DAYS[new Date(e.date + 'T12:00:00').getDay()],
-    isLatest: i === withScores.length - 1,
-    subLabel: e.sleepDurationSec ? fmtSleepDuration(e.sleepDurationSec) : null,
-  }));
-  const barChart = withScores.length >= 2 ? buildBarChart(barEntries, sleepScoreColor) : '';
+  // "Reorder the week" only makes sense when there's a hard session to move
+  const reorderBtn = todayWorkout
+    ? `<button id="rec-advice-reorder" style="${btnStyle}">
+        <div style="${btnTitle}">Reorder the week</div>
+        <p style="${btnBody}">Move today's quality session to a later day. Swap it with an easy run or rest day. Total load stays the same, the sequencing improves.</p>
+      </button>`
+    : '';
 
-  const insight = getSleepInsight({
-    history: physiologyHistory,
-    recentWeeklyTSS: wks.slice(-4).map((w: any) => w.actualTSS ?? 0),
-  });
+  const genericRows = `<button id="rec-advice-rest" style="${btnStyle}">
+      <div style="${btnTitle}">Rest today</div>
+      <p style="${btnBody}">Skip the session and carry it to later in the week. A single missed day has no meaningful impact on fitness. Sustained fatigue does.</p>
+    </button>
+    ${reorderBtn}
+    ${reduceBtn}`;
 
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
   overlay.innerHTML = `
     <div class="rounded-2xl w-full max-w-lg" style="background:var(--c-surface);max-height:85vh;overflow-y:auto">
       <div class="px-4 pt-4 pb-3 border-b flex items-center justify-between" style="border-color:var(--c-border)">
         <div>
-          <h2 class="font-semibold" style="color:var(--c-black)">Sleep</h2>
-          <p style="font-size:12px;color:var(--c-muted);margin-top:1px">From Garmin Connect</p>
+          <div style="font-size:16px;font-weight:600">Low readiness — options</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:1px">Sleep or HRV indicates incomplete recovery</div>
         </div>
-        <button id="sleep-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">&#10005;</button>
+        <button id="rec-advice-close" class="text-xl leading-none" style="color:var(--c-muted)">✕</button>
       </div>
-      <div class="px-4 py-4">
-
-        ${isStale ? `
-          <div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.20)">
-            <p style="font-size:12px;color:var(--c-caution);line-height:1.4;margin:0">Data last synced ${fmtDateUK(latestDate!)}. Open Garmin Connect and resync to update.</p>
-          </div>` : ''}
-
-        ${bigScore != null ? `
-          <div style="display:flex;gap:16px;margin-bottom:4px">
-            <div style="flex:1">
-              <div style="font-size:38px;font-weight:300;line-height:1;color:${headlineColor}">${bigScore}<span style="font-size:16px;color:var(--c-faint);margin-left:2px">/100</span></div>
-              <div style="font-size:11px;font-weight:600;color:${headlineColor};margin-top:3px">${scoreLabel}</div>
-              ${ctx?.scoreAvg != null ? `<div style="font-size:11px;color:var(--c-muted);margin-top:5px">Avg: ${ctx.scoreAvg} \u00b7 Best: ${ctx.scoreBest}</div>` : ''}
-              ${scoreVsAvgLabel ? `<div style="font-size:10px;color:var(--c-faint);margin-top:1px">${scoreVsAvgLabel}</div>` : ''}
-            </div>
-            ${durationStr ? `
-            <div style="flex:1;text-align:right">
-              <div style="font-size:30px;font-weight:300;line-height:1;color:var(--c-black)">${durationStr}</div>
-              ${durationTargetLabel ? `<div style="font-size:11px;font-weight:600;color:${durationTargetColor};margin-top:3px">${durationTargetLabel}</div>` : ''}
-              ${durationAvgStr ? `<div style="font-size:11px;color:var(--c-muted);margin-top:5px">Avg: ${durationAvgStr}${durationBestStr ? ` \u00b7 Best: ${durationBestStr}` : ''}</div>` : ''}
-              ${durationVsAvgLabel ? `<div style="font-size:10px;color:var(--c-faint);margin-top:1px">${durationVsAvgLabel}</div>` : ''}
-            </div>` : ''}
-          </div>
-
-          ${deepBar}${remBar}${lightBar}${awakeBar}
-          ${stagesPlaceholder}
-        ` : `
-          <div style="padding:12px 0;color:var(--c-faint);font-size:13px">Sleep score not yet available \u2014 Garmin usually syncs within a few hours of waking.</div>
-        `}
-
-        ${barChart ? `
-          <div style="margin-top:20px">
-            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Last ${withScores.length} nights</div>
-            ${barChart}
-          </div>` : ''}
-
-        ${insight ? `
-          <div style="margin-top:14px;padding:10px 12px;border-radius:8px;background:rgba(0,0,0,0.04);font-size:12px;color:var(--c-muted);line-height:1.5">${insight}</div>` : ''}
-
+      <div class="px-4 py-4 space-y-3 text-sm">
+        ${todaySection}
+        ${genericRows}
+        <p style="font-size:11px;color:var(--c-faint);line-height:1.5;padding:0 4px">Hard sessions only drive adaptation when recovery is adequate. Training on poor sleep raises injury risk and blunts the stimulus.</p>
       </div>
     </div>`;
 
   document.body.appendChild(overlay);
   const close = () => overlay.remove();
-  overlay.querySelector('#sleep-sheet-close')?.addEventListener('click', close);
+  overlay.querySelector('#rec-advice-close')?.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  // Convert button — downgrade today's session to easy
+  overlay.querySelector('#rec-advice-convert')?.addEventListener('click', () => {
+    close();
+    applyRecoveryAdjustment('downgrade', internalDow, todayWorkout?.n);
+  });
+
+  // Move button — shift today's session to the best available day
+  overlay.querySelector('#rec-advice-move')?.addEventListener('click', () => {
+    if (!todayWorkout || !bestMoveDay) return;
+    const ms = getMutableState();
+    const mwk = ms.wks?.[ms.w - 1];
+    if (!mwk) return;
+    if (!mwk.workoutMoves) mwk.workoutMoves = {};
+    const wid = todayWorkout.id || todayWorkout.n;
+    mwk.workoutMoves[wid] = bestMoveDay.day;
+    saveState();
+    close();
+    renderHomeView();
+  });
+
+  // Rest today — close modal; user decides not to train
+  overlay.querySelector('#rec-advice-rest')?.addEventListener('click', () => {
+    close();
+  });
+
+  // Reorder the week — navigate to plan view so user can rearrange
+  overlay.querySelector('#rec-advice-reorder')?.addEventListener('click', () => {
+    close();
+    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+  });
+
+  // Reduce intensity — downgrade today's workout to easy effort
+  overlay.querySelector('#rec-advice-reduce')?.addEventListener('click', () => {
+    close();
+    applyRecoveryAdjustment(
+      todayAnyWorkout && !isHardWorkout(todayAnyWorkout.t) ? 'easyflag' : 'downgrade',
+      internalDow,
+      todayAnyWorkout?.n,
+    );
+  });
+
+  return true;
+}
+
+// ─── HRV detail sheet ─────────────────────────────────────────────────────────
+function showHrvSheet(physiologyHistory: PhysiologyDayEntry[], onBack?: () => void): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
+
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const withData = physiologyHistory.filter(d => d.hrvRmssd != null).slice(-7);
+  const latest = withData[withData.length - 1] ?? null;
+  const latestVal = latest?.hrvRmssd != null ? Math.round(latest.hrvRmssd) : null;
+
+  // Use prior 6 days (exclude today) as baseline avg for relative comparison
+  const priorVals = withData.slice(0, -1).map(d => d.hrvRmssd!);
+  const baselineAvg = priorVals.length >= 2
+    ? priorVals.reduce((a, b) => a + b, 0) / priorVals.length
+    : null;
+
+  const allVals = withData.map(d => d.hrvRmssd!);
+  const displayAvg = allVals.length ? Math.round(allVals.reduce((a, b) => a + b, 0) / allVals.length) : null;
+  const best = allVals.length ? Math.round(Math.max(...allVals)) : null;
+
+  // Drop ratio vs personal baseline
+  const dropRatio = (latestVal != null && baselineAvg != null)
+    ? (baselineAvg - latestVal) / baselineAvg
+    : null;
+
+  // Colour relative to personal baseline; fall back to absolute if no baseline yet
+  const hrvColor = (v: number): string => {
+    if (baselineAvg != null) {
+      const ratio = (baselineAvg - v) / baselineAvg;
+      if (ratio >= 0.20) return 'var(--c-warn)';
+      if (ratio >= 0.10) return 'var(--c-caution)';
+      return 'var(--c-ok)';
+    }
+    // Absolute fallback (no prior data)
+    return v >= 60 ? 'var(--c-ok)' : v >= 40 ? 'var(--c-caution)' : 'var(--c-warn)';
+  };
+  const headlineColor = latestVal != null ? hrvColor(latestVal) : 'var(--c-faint)';
+
+  // Flag banner when today is ≥20% below baseline
+  const flagBanner = (dropRatio != null && dropRatio >= 0.20 && latestVal != null && baselineAvg != null)
+    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:rgba(255,69,58,0.08);border:1px solid rgba(255,69,58,0.22)">
+        <div style="font-size:12px;font-weight:600;color:var(--c-warn);margin-bottom:2px">HRV below baseline</div>
+        <div style="font-size:11px;color:var(--c-warn);line-height:1.5">${Math.round(dropRatio * 100)}% below your recent avg (${Math.round(baselineAvg)} ms). Consider a lighter session today.</div>
+      </div>`
+    : (dropRatio != null && dropRatio >= 0.10 && latestVal != null && baselineAvg != null)
+    ? `<div style="margin-bottom:14px;padding:10px 12px;border-radius:8px;background:rgba(255,159,10,0.08);border:1px solid rgba(255,159,10,0.22)">
+        <div style="font-size:12px;font-weight:600;color:var(--c-caution);margin-bottom:2px">Slightly suppressed HRV</div>
+        <div style="font-size:11px;color:var(--c-caution);line-height:1.5">${Math.round(dropRatio * 100)}% below your recent avg (${Math.round(baselineAvg)} ms). Listen to your body.</div>
+      </div>`
+    : '';
+
+  const barEntries = withData.map((e, i) => ({
+    value: e.hrvRmssd != null ? Math.round(e.hrvRmssd) : null,
+    day: DAYS[new Date(e.date + 'T12:00:00').getDay()],
+    isLatest: i === withData.length - 1,
+  }));
+  const barChart = withData.length >= 2 ? buildBarChart(barEntries, hrvColor, v => `${v}`) : '';
+
+  overlay.innerHTML = `
+    <div class="rounded-2xl w-full max-w-lg" style="background:var(--c-surface);max-height:85vh;overflow-y:auto">
+      <div class="px-4 pt-4 pb-3 border-b flex items-center justify-between" style="border-color:var(--c-border)">
+        <div class="flex items-center gap-3">
+          <button id="hrv-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">&#8592;</button>
+          <div>
+            <h2 class="font-semibold" style="color:var(--c-black)">HRV</h2>
+            <p style="font-size:12px;color:var(--c-muted);margin-top:1px">Heart rate variability · From Garmin Connect</p>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 py-4">
+        ${latestVal != null ? `
+          ${flagBanner}
+          <div style="display:flex;gap:16px;margin-bottom:14px">
+            <div style="flex:1">
+              <div style="font-size:38px;font-weight:300;line-height:1;color:${headlineColor}">${latestVal}<span style="font-size:16px;color:var(--c-faint);margin-left:4px">ms</span></div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:5px">Last night</div>
+            </div>
+            ${displayAvg != null ? `
+            <div style="flex:1;text-align:right">
+              <div style="font-size:13px;color:var(--c-muted)">Avg: ${displayAvg} ms · Best: ${best} ms</div>
+            </div>` : ''}
+          </div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px;line-height:1.5">Colour reflects your personal baseline — a drop of 20%+ signals to go easy today.</div>
+        ` : `
+          <div style="padding:12px 0;color:var(--c-faint);font-size:13px">HRV data not yet available — Garmin usually syncs within a few hours of waking.</div>
+        `}
+        ${barChart ? `
+          <div style="margin-top:4px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Last ${withData.length} nights (ms)</div>
+            ${barChart}
+          </div>` : ''}
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  const closeHrv = () => { overlay.remove(); onBack?.(); };
+  overlay.querySelector('#hrv-sheet-close')?.addEventListener('click', closeHrv);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHrv(); });
+}
+
+// ─── Resting HR detail sheet ──────────────────────────────────────────────────
+function showRhrSheet(physiologyHistory: PhysiologyDayEntry[], onBack?: () => void): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4';
+
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const withData = physiologyHistory.filter(d => d.restingHR != null).slice(-7);
+  const latest = withData[withData.length - 1] ?? null;
+  const latestVal = latest?.restingHR ?? null;
+
+  const vals = withData.map(d => d.restingHR!);
+  const avg = vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+  const best = vals.length ? Math.round(Math.min(...vals)) : null;
+
+  const rhrColor = (v: number) => v <= 50 ? 'var(--c-ok)' : v <= 60 ? 'rgba(52,199,89,0.75)' : v <= 70 ? 'var(--c-caution)' : 'var(--c-warn)';
+  const headlineColor = latestVal != null ? rhrColor(latestVal) : 'var(--c-faint)';
+
+  const barEntries = withData.map((e, i) => ({
+    value: e.restingHR ?? null,
+    day: DAYS[new Date(e.date + 'T12:00:00').getDay()],
+    isLatest: i === withData.length - 1,
+  }));
+  const barChart = withData.length >= 2 ? buildBarChart(barEntries, rhrColor, v => `${v}`) : '';
+
+  overlay.innerHTML = `
+    <div class="rounded-2xl w-full max-w-lg" style="background:var(--c-surface);max-height:85vh;overflow-y:auto">
+      <div class="px-4 pt-4 pb-3 border-b flex items-center justify-between" style="border-color:var(--c-border)">
+        <div class="flex items-center gap-3">
+          <button id="rhr-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">&#8592;</button>
+          <div>
+            <h2 class="font-semibold" style="color:var(--c-black)">Resting Heart Rate</h2>
+            <p style="font-size:12px;color:var(--c-muted);margin-top:1px">From Garmin Connect</p>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 py-4">
+        ${latestVal != null ? `
+          <div style="display:flex;gap:16px;margin-bottom:16px">
+            <div style="flex:1">
+              <div style="font-size:38px;font-weight:300;line-height:1;color:${headlineColor}">${latestVal}<span style="font-size:16px;color:var(--c-faint);margin-left:4px">bpm</span></div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:5px">Today</div>
+            </div>
+            ${avg != null ? `
+            <div style="flex:1;text-align:right">
+              <div style="font-size:13px;color:var(--c-muted)">Avg: ${avg} bpm · Best: ${best} bpm</div>
+            </div>` : ''}
+          </div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px;line-height:1.5">Lower resting HR indicates better cardiovascular fitness. An elevated RHR (5+ bpm above your baseline) can signal fatigue, illness, or under-recovery.</div>
+        ` : `
+          <div style="padding:12px 0;color:var(--c-faint);font-size:13px">Resting HR data not yet available — Garmin usually syncs within a few hours of waking.</div>
+        `}
+        ${barChart ? `
+          <div style="margin-top:4px">
+            <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Last ${withData.length} days (bpm)</div>
+            ${barChart}
+          </div>` : ''}
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  const closeRhr = () => { overlay.remove(); onBack?.(); };
+  overlay.querySelector('#rhr-sheet-close')?.addEventListener('click', closeRhr);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeRhr(); });
 }

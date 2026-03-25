@@ -113,19 +113,17 @@ export function resetGarminCache(): void {
 
 /**
  * Trigger the garmin-backfill edge function to pull historic dailies + sleep.
- * Fire-and-forget — logs success/failure but does not throw.
- * @param weeks Number of weeks to backfill (default 8)
- */
-/**
- * Trigger the garmin-backfill edge function to pull historic dailies + sleep.
- * Garmin Health API is push-only — the pull API returns 0 rows.
- * We guard with a localStorage flag so we only attempt once per device.
- * Call resetGarminBackfillGuard() to force a retry (e.g. after re-auth).
+ * Guards with a 12-hour TTL so we don't hammer Garmin's API, but retries
+ * automatically once the watch has had a chance to sync (vs. the old permanent guard
+ * which fired once at launch — often before the morning watch sync — then never again).
  */
 export async function triggerGarminBackfill(weeks = 8): Promise<void> {
-  const GUARD_KEY = 'mosaic_garmin_backfill_empty';
-  if (localStorage.getItem(GUARD_KEY) === '1') {
-    console.log('[garmin-backfill] Skipped — previous run returned 0 rows (push-only API)');
+  const GUARD_KEY = 'mosaic_garmin_backfill_empty_until';
+  // Migrate: remove old permanent guard set by previous app version
+  localStorage.removeItem('mosaic_garmin_backfill_empty');
+  const guardUntil = Number(localStorage.getItem(GUARD_KEY) ?? '0');
+  if (Date.now() < guardUntil) {
+    console.log(`[garmin-backfill] Skipped — throttled until ${new Date(guardUntil).toISOString()}`);
     return;
   }
   try {
@@ -136,8 +134,12 @@ export async function triggerGarminBackfill(weeks = 8): Promise<void> {
     if (result.ok) {
       console.log(`[garmin-backfill] Done — ${result.days} daily rows, ${result.sleepDays} sleep rows`);
       if (result.days === 0 && result.sleepDays === 0) {
-        localStorage.setItem(GUARD_KEY, '1');
-        console.log('[garmin-backfill] API returned 0 rows — guarding future runs');
+        // Throttle for 12 hours — watch may not have synced yet; retry later in the day
+        localStorage.setItem(GUARD_KEY, String(Date.now() + 12 * 60 * 60 * 1000));
+        console.log('[garmin-backfill] 0 rows — will retry after 12h');
+      } else {
+        // Got data — clear throttle so next launch always checks for fresh data
+        localStorage.removeItem(GUARD_KEY);
       }
     } else {
       console.warn('[garmin-backfill] Returned ok:false');
@@ -149,6 +151,8 @@ export async function triggerGarminBackfill(weeks = 8): Promise<void> {
 
 /** Reset the backfill guard so it runs again on next launch */
 export function resetGarminBackfillGuard(): void {
+  localStorage.removeItem('mosaic_garmin_backfill_empty_until');
+  // Also clear old permanent guard key in case it was set by a previous app version
   localStorage.removeItem('mosaic_garmin_backfill_empty');
 }
 

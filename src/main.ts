@@ -17,6 +17,7 @@ import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from 
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth } from '@/data/appleHealthSync';
+import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
 import '@/ui/strava-detail';
 
 /** True when running in local simulator mode (no auth required) */
@@ -159,14 +160,21 @@ async function launchApp(): Promise<void> {
               // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
               triggerGarminBackfill(4).catch(() => {}).finally(() => {
                 syncPhysiologySnapshot(28).then(() => {
-                  // If today's sleep score is missing, re-fetch recent data — Garmin
-                  // computes sleep scores 1–4h after waking, so the webhook may have
-                  // fired before the score was ready.
+                  // Re-render home view so sleep/HRV cards update without requiring
+                  // manual navigation — physiology data lands in state after the view
+                  // was first rendered, so we need an explicit refresh.
+                  if (document.getElementById('home-tss-row')) renderHomeView();
+                  // If today's sleep score is still missing, re-fetch — Garmin computes
+                  // scores 1–4h after waking so the webhook may fire before it's ready.
                   const todayStr = new Date().toISOString().split('T')[0];
                   const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
                   if (!todaySleep?.sleepScore) {
-                    refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).catch(() => {});
+                    refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
+                      if (document.getElementById('home-tss-row')) renderHomeView();
+                    }).catch(() => {});
                   }
+                  // Background poll: keep checking until Garmin pushes today's sleep
+                  startSleepPollerIfNeeded();
                 }).catch(() => {});
               });
             }
@@ -184,11 +192,16 @@ async function launchApp(): Promise<void> {
         // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
         triggerGarminBackfill(4).catch(() => {}).finally(() => {
           syncPhysiologySnapshot(28).then(() => {
+            if (document.getElementById('home-tss-row')) renderHomeView();
             const todayStr = new Date().toISOString().split('T')[0];
             const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
             if (!todaySleep?.sleepScore) {
-              refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).catch(() => {});
+              refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
+                if (document.getElementById('home-tss-row')) renderHomeView();
+              }).catch(() => {});
             }
+            // Background poll: keep checking until Garmin pushes today's sleep
+            startSleepPollerIfNeeded();
           }).catch(() => {});
         });
       }).catch(() => {});

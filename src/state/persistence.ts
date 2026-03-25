@@ -1,4 +1,5 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
+import type { GarminPendingItem } from '@/types/state';
 import { savePlanSettings } from '@/data/planSettingsSync';
 import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
@@ -299,13 +300,16 @@ export function loadState(): boolean {
     // Only sum run-type slots — exclude cross-training, gym, rest, etc. by key name.
     {
       const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk'];
-      const isRunKey = (k: string) => !NON_RUN_KW.some(kw => k.toLowerCase().includes(kw));
+      const isRunKey = (k: string, activityType?: string | null) => {
+        if (activityType) { const t = activityType.toUpperCase(); return t === 'RUNNING' || t.includes('RUN'); }
+        return !NON_RUN_KW.some(kw => k.toLowerCase().includes(kw));
+      };
       let fixedKm = false;
       for (let i = 0; i < (migrated.w || 1) - 1; i++) {
         const wk = migrated.wks?.[i];
         if (!wk) continue;
-        const entries = Object.entries((wk as any).garminActuals || {}) as Array<[string, { distanceKm?: number }]>;
-        const runEntries = entries.filter(([k]) => isRunKey(k));
+        const entries = Object.entries((wk as any).garminActuals || {}) as Array<[string, { distanceKm?: number; activityType?: string | null }]>;
+        const runEntries = entries.filter(([k, a]) => isRunKey(k, a.activityType));
         if (runEntries.length === 0) continue;
         const totalFromActuals = runEntries.reduce((sum, [, a]) => sum + (a.distanceKm || 0), 0);
         if (totalFromActuals > 0 && Math.abs(totalFromActuals - ((wk as any).completedKm || 0)) > 0.5) {
@@ -316,6 +320,32 @@ export function loadState(): boolean {
       if (fixedKm) {
         localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
         console.log('  Retroactively fixed completedKm for past weeks from garminActuals (runs only)');
+      }
+    }
+
+    // Fix adhoc workouts that were logged as cross (t='cross') but originated from a run.
+    // Bug: addAdhocWorkoutFromPending always set t='cross' even for appType='run' items.
+    // Fix: look up garminPending by garminId; if appType==='run', upgrade t to 'easy'.
+    {
+      let fixedRuns = 0;
+      for (const wk of migrated.wks || []) {
+        const pending: GarminPendingItem[] = (wk as any).garminPending || [];
+        const runPendingIds = new Set(
+          pending.filter(p => p.appType === 'run').map(p => p.garminId)
+        );
+        for (const w of (wk as any).adhocWorkouts || []) {
+          if (w.t !== 'cross') continue;
+          if (!w.id?.startsWith('garmin-')) continue;
+          const rawId = w.id.slice('garmin-'.length);
+          if (runPendingIds.has(rawId)) {
+            w.t = 'easy';
+            fixedRuns++;
+          }
+        }
+      }
+      if (fixedRuns > 0) {
+        localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+        console.log(`  Fixed ${fixedRuns} adhoc run(s) that were incorrectly stored as t='cross'`);
       }
     }
 

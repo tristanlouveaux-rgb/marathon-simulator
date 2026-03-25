@@ -6,7 +6,7 @@
 import { getMutableState, saveState } from '@/state';
 import { gp } from '@/calculations/paces';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { findMatchingWorkout, type ExternalActivity } from './matching';
+import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary } from './trimp';
 import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem } from '@/types';
@@ -618,11 +618,12 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           workoutName: match.workoutName || match.matchedWorkout?.n || undefined,
           iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
           hrZones: row.hrZones ?? null,
-          activityType: row.activity_type ?? null,
+          activityType: row.activity_type ?? (appType === 'run' ? 'RUNNING' : appType === 'gym' ? 'STRENGTH_TRAINING' : null),
           plannedType: match.matchedWorkout?.t ?? null,
           hrEffortScore: getHREffort(row.avg_hr, match.matchedWorkout?.t, s),
           paceAdherence: getPaceAdherence(row.avg_pace_sec_km, match.matchedWorkout?.t, s),
           hrDrift: row.hrDrift ?? null,
+          plannedDistanceKm: match.matchedWorkout?.d ? (parseDistanceKm(match.matchedWorkout.d) || null) : null,
         };
         wk.garminActuals[match.workoutId] = actual;
 
@@ -903,7 +904,7 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
 
   const workout: Workout = {
     id,
-    t: item.appType === 'gym' ? 'gym' : 'cross',
+    t: item.appType === 'run' ? 'easy' : item.appType === 'gym' ? 'gym' : 'cross',
     n: formatActivityType(item.activityType),
     d: description,
     r: rpe,

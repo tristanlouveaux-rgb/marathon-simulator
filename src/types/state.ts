@@ -138,6 +138,7 @@ export interface PhysiologyDayEntry {
   sleepDurationSec?: number;  // total sleep in seconds (from Garmin)
   sleepDeepSec?: number;      // deep sleep in seconds
   sleepRemSec?: number;       // REM sleep in seconds
+  sleepLightSec?: number;     // light sleep in seconds (direct from Garmin, preferred over derived)
   sleepAwakeSec?: number;     // awake time in seconds
   stressAvg?: number;
   ltPace?: number;        // sec/km — from physiology_snapshots
@@ -210,6 +211,9 @@ export interface GarminActual {
    *  1.0 = nailed it, <1.0 = ran faster than target, >1.0 = ran slower.
    *  Only computed for runs with both actual pace and a target pace from the plan. */
   paceAdherence?: number | null;
+  /** Planned distance in km at the time of matching (from the workout description).
+   *  Null if the workout description could not be parsed for a distance. */
+  plannedDistanceKm?: number | null;
 }
 
 /** Per-lap split from Garmin activity details */
@@ -420,6 +424,13 @@ export interface SimulatorState {
   rehabWeeksDone?: number;        // Weeks completed during injury (plan pointer frozen)
   lastMorningPainDate?: string;   // ISO date string of last morning pain check
   injuryState?: import('./injury').InjuryState; // Active injury state
+
+  // Illness tracking
+  illnessState?: {
+    startDate: string;              // ISO date when illness was reported
+    severity: 'light' | 'resting'; // light = still running reduced; resting = full rest
+    active: boolean;                // false once user marks recovered
+  };
 
   // Continuous (non-event) training
   continuousMode?: boolean;       // True for non-event users — plan loops instead of completing

@@ -14,7 +14,7 @@ import type { GarminPendingItem } from '@/types/state';
 import type { Workout } from '@/types/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { getState } from '@/state';
-import { formatKm } from '@/utils/format';
+import { formatKm, fmtDesc } from '@/utils/format';
 
 // ─── Day labels ───────────────────────────────────────────────────────────────
 
@@ -64,8 +64,8 @@ function workoutTypeShort(t: string): string {
 function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   const type = item.appType;
   const wt   = workout.t;
-  // Runs only match run-type slots
-  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals';
+  // Runs match run-type slots and general sport (cross) slots
+  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'cross';
   // Gym/strength can replace gym slots or run slots (a hard session can cover either)
   if (type === 'gym') return wt === 'gym';
   // Cross-training (rides, swims, walks, sports) only match cross slots
@@ -148,7 +148,7 @@ function renderScreen(
       : (!state.selectedGarminId && assignedItem) ? `<div style="font-size:10px;color:var(--c-faint);margin-top:5px">Tap to unassign</div>`
       : '';
 
-    const descSnippet = (w.d || '').slice(0, 32);
+    const descSnippet = fmtDesc(w.d || '', unitPref).slice(0, 32);
     return `
       <div class="slot-card" data-workout-id="${escHtml(wid)}"
            style="background:var(--c-surface);border:${border};border-radius:var(--r-card);padding:10px 12px;flex-shrink:0;width:160px;cursor:pointer;transition:all 0.15s;opacity:${opacity}">

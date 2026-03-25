@@ -403,7 +403,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
             <div class="rounded-lg border p-4" style="background:var(--c-surface);border-color:var(--c-border)">
               <h3 class="text-xs font-semibold uppercase tracking-wide mb-3" style="color:var(--c-faint)">This Week</h3>
               <div class="space-y-3">
-                <div>
+                <div id="home-km-row" style="cursor:pointer">
                   <div class="flex items-baseline justify-between mb-1.5">
                     <span class="text-xs" style="color:var(--c-faint)">Km</span>
                     <div class="flex items-baseline gap-1">
@@ -457,7 +457,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                     </div>
                   </div>
                   <!-- Running Volume — zoned bar -->
-                  <div class="mt-2 pt-2 border-t" style="border-color:var(--c-border)">
+                  <div id="home-km-vol-row" class="mt-2 pt-2 border-t" style="border-color:var(--c-border);cursor:pointer">
                     <div class="flex items-center justify-between mb-1">
                       <span class="text-[10px]" style="color:var(--c-faint)">Running Volume</span>
                       <div class="flex items-baseline gap-1 text-[10px]">
@@ -2071,7 +2071,7 @@ function updateLoadChart(s: SimulatorState): void {
   // Check past 2 weeks for consecutive below-floor
   const prevWeeks = (s.wks ?? []).slice(Math.max(0, currentWeek - 3), currentWeek - 1);
   const consecutiveBelow = prevWeeks.length >= 2 &&
-    prevWeeks.every(pw => (pw.completedKm ?? 0) > 0 && (pw.completedKm ?? 0) < floorKm);
+    prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
 
   const kmFloorNudgeEl = document.getElementById('stat-km-floor-nudge');
   if (kmFloorNudgeEl) {

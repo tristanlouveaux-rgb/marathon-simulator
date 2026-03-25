@@ -26,6 +26,7 @@ interface PhysiologyRow {
   sleep_duration_sec?: number | null;
   sleep_deep_sec?: number | null;
   sleep_rem_sec?: number | null;
+  sleep_light_sec?: number | null;
   sleep_awake_sec?: number | null;
   avg_stress_level?: number | null;
 }
@@ -144,6 +145,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
           sleepDurationSec: r.sleep_duration_sec ?? undefined,
           sleepDeepSec: r.sleep_deep_sec ?? undefined,
           sleepRemSec: r.sleep_rem_sec ?? undefined,
+          sleepLightSec: r.sleep_light_sec ?? undefined,
           sleepAwakeSec: r.sleep_awake_sec ?? undefined,
           stressAvg: r.avg_stress_level ?? undefined,
           ltPace: r.lt_pace_sec_km ?? undefined,

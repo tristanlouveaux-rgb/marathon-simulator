@@ -6,6 +6,13 @@
  */
 
 import type { GarminActual } from '@/types';
+import { getHREffort } from '@/calculations/activity-matcher';
+
+export interface HRProfileForInsight {
+  maxHR?: number | null;
+  restingHR?: number | null;
+  onboarding?: { age?: number };
+}
 
 /** Is this a quality workout type where pace matters significantly? */
 function isQualityType(workoutType: string | null | undefined): boolean {
@@ -123,7 +130,7 @@ function collectCandidates(a: GarminActual): Candidate[] {
       }
     } else if ((isEasy || isLong) && isRun) {
       if (hr >= 1.15) {
-        out.push({ priority: 1, text: 'Heart rate was higher than it should be for an easy run. Could be fatigue, heat, or not enough recovery. Listen to your body.' });
+        out.push({ priority: 1, text: 'Heart rate was higher than expected for an easy run. Common causes: fatigue, heat, humidity, or uneven terrain such as trails or sand.' });
       }
     } else if (!isRun) {
       // Cross-training
@@ -156,7 +163,25 @@ function collectCandidates(a: GarminActual): Candidate[] {
     } else if (fadedLate(a.kmSplits) && (isLong || quality)) {
       out.push({ priority: 2, text: 'Pace dropped off in the final kilometres. If that wasn\'t planned, consider starting a touch more conservatively next time.' });
     } else if (cv != null && cv < 0.03 && a.kmSplits.length >= 5 && isEasy) {
-      out.push({ priority: 4, text: 'Metronomic pacing — very even splits. That\'s exactly what you want on easy days.' });
+      const hasNegativeSignal = out.some(c => c.priority <= 2);
+      if (!hasNegativeSignal) out.push({ priority: 4, text: 'Very even splits throughout. Good discipline on the pacing.' });
+    }
+  }
+
+  // ── Distance adherence ─────────────────────────────────────────────────
+  if (a.plannedDistanceKm != null && a.plannedDistanceKm > 0 && a.distanceKm > 0) {
+    const ratio = a.distanceKm / a.plannedDistanceKm;
+    const diff = a.distanceKm - a.plannedDistanceKm;
+    if (isRun) {
+      if (ratio >= 1.12) {
+        out.push({ priority: 2, text: `You ran ${diff.toFixed(1)}km over the planned distance. The extra load has been carried forward to balance your upcoming sessions.` });
+      } else if (ratio >= 1.06) {
+        out.push({ priority: 4, text: `A little extra distance today — ${diff.toFixed(1)}km over plan. Good bonus mileage if energy allows.` });
+      } else if (ratio <= 0.80 && a.plannedDistanceKm >= 8) {
+        out.push({ priority: 3, text: `Distance came in ${Math.abs(diff).toFixed(1)}km short of plan. If it was a rough day, that's fine — the plan adapts.` });
+      } else if (ratio >= 0.94 && ratio <= 1.06) {
+        out.push({ priority: 5, text: 'Distance was right on target. Solid execution.' });
+      }
     }
   }
 
@@ -165,8 +190,9 @@ function collectCandidates(a: GarminActual): Candidate[] {
     const zones = a.hrZones;
     const total = zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5;
     if (total > 0) {
-      if (isEasy && highZonePct(zones) > 0.25) {
-        out.push({ priority: 2, text: `Over ${Math.round(highZonePct(zones) * 100)}% of this run was in Z4-Z5. For an easy run, you want to be mostly in Z1-Z2. Dial it back.` });
+      const nonEasyPct = Math.round((1 - lowZonePct(zones)) * 100);
+      if (isEasy && (1 - lowZonePct(zones)) > 0.25) {
+        out.push({ priority: 2, text: `${nonEasyPct}% of this run was in Z3 or above. For an easy run, the target is mostly Z1-Z2. Common causes: heat, humidity, or terrain such as sand or trails.` });
       } else if (quality && lowZonePct(zones) > 0.70) {
         out.push({ priority: 3, text: 'Most of this session was in low HR zones. Quality sessions need enough stimulus — make sure the hard portions are genuinely hard.' });
       } else if (isLong && lowZonePct(zones) > 0.85) {
@@ -183,9 +209,19 @@ function collectCandidates(a: GarminActual): Candidate[] {
 /**
  * Generate 2-3 sentence coaching insight for a completed activity.
  * Returns null if there's not enough data to say anything useful.
+ * Pass hrProfile to compute hrEffortScore on-the-fly if not stored on the actual.
  */
-export function generateWorkoutInsight(actual: GarminActual): string | null {
-  const candidates = collectCandidates(actual);
+export function generateWorkoutInsight(actual: GarminActual, hrProfile?: HRProfileForInsight): string | null {
+  let enriched = actual;
+  if (hrProfile && actual.hrEffortScore == null && actual.avgHR) {
+    const isRun = actual.activityType === 'RUNNING' || actual.activityType?.includes('RUN') || actual.plannedType != null;
+    const effectiveType = actual.plannedType ?? (isRun ? 'easy' : null);
+    if (effectiveType) {
+      const computed = getHREffort(actual.avgHR, effectiveType, hrProfile);
+      if (computed != null) enriched = { ...actual, hrEffortScore: computed };
+    }
+  }
+  const candidates = collectCandidates(enriched);
   if (candidates.length === 0) return null;
 
   // Sort by priority (lower = more important), take top 2-3

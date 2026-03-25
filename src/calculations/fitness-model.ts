@@ -107,9 +107,19 @@ export function computeWeekTSS(
       if (seenGarminIds.has(rawId)) continue;
       seenGarminIds.add(rawId);
     }
-    const sport = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
-    const cfg = (SPORTS_DB as any)[sport];
-    const runSpec = cfg?.runSpec ?? 0.35;
+    // If the workout type indicates a run, always use runSpec=1.0 regardless of name.
+    // This handles activities logged with a non-run name (e.g. "General Sport 1") that
+    // were originally classified as runs (appType='run' → t='easy').
+    const NON_RUN_TYPES = new Set(['cross', 'gym', 'strength', 'rest']);
+    const isRunType = !NON_RUN_TYPES.has(w.t ?? 'cross');
+    let runSpec: number;
+    if (isRunType) {
+      runSpec = 1.0;
+    } else {
+      const sport = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
+      const cfg = (SPORTS_DB as any)[sport];
+      runSpec = cfg?.runSpec ?? 0.35;
+    }
     if (w.iTrimp != null && w.iTrimp > 0) {
       // Strava HR stream iTrimp available — more accurate than RPE estimate
       tl += (w.iTrimp * 100) / 15000 * runSpec;
@@ -217,6 +227,68 @@ export function computeWeekRawTSS(
       seenGarminIds.add(item.garminId);
     }
     tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15); // no runSpec discount
+  }
+
+  return Math.round(tl);
+}
+
+/**
+ * Compute today's Signal B TSS from activities completed so far today.
+ * Mirrors computeWeekRawTSS but scoped to a single calendar day via startTime.
+ * Used for the live Strain Score on the Home view.
+ *
+ * @param wk    — current plan week
+ * @param today — ISO date string (YYYY-MM-DD)
+ */
+export function computeTodaySignalBTSS(wk: Week, today: string): number {
+  let tl = 0;
+  const seenGarminIds = new Set<string>();
+
+  // today's day-of-week index (0=Mon, 6=Sun) for adhocWorkout matching
+  const d = new Date(today + 'T12:00:00');
+  const ourDay = (d.getDay() + 6) % 7;
+
+  // garminActuals — filter to today by startTime
+  for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
+    if (!actual.startTime?.startsWith(today)) continue;
+    if (actual.garminId) {
+      if (seenGarminIds.has(actual.garminId)) continue;
+      seenGarminIds.add(actual.garminId);
+    }
+    if (actual.iTrimp != null && actual.iTrimp > 0) {
+      tl += normalizeiTrimp(actual.iTrimp);
+    } else {
+      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+      tl += durMin * (TL_PER_MIN[5] ?? 1.15);
+    }
+  }
+
+  // adhocWorkouts — garmin-prefixed are deduped via seenGarminIds; non-garmin matched by dayOfWeek
+  for (const w of wk.adhocWorkouts ?? []) {
+    const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
+    if (rawId) {
+      // Can't determine date for unmatched garmin adhoc without startTime — skip to avoid over-counting
+      if (seenGarminIds.has(rawId)) continue;
+      continue;
+    }
+    if ((w as any).dayOfWeek !== ourDay) continue;
+    if (w.iTrimp != null && w.iTrimp > 0) {
+      tl += (w.iTrimp * 100) / 15000;
+    } else {
+      const rpe = w.rpe ?? w.r ?? 5;
+      const durMin = parseDurMinFromDesc(w.d);
+      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+    }
+  }
+
+  // unspentLoadItems — filter by exact date match
+  for (const item of wk.unspentLoadItems ?? []) {
+    if (item.date !== today) continue;
+    if (item.garminId) {
+      if (seenGarminIds.has(item.garminId)) continue;
+      seenGarminIds.add(item.garminId);
+    }
+    tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15);
   }
 
   return Math.round(tl);
@@ -462,7 +534,8 @@ export function computeACWR(
   const tierCfg = TIER_ACWR_CONFIG[tier] ?? TIER_ACWR_CONFIG.recreational;
   const { safeUpper } = tierCfg;
 
-  const metrics = computeFitnessModel(wks, currentWeek, ctlSeed, planStartDate, atlSeed);
+  // Include the current in-progress week so ACWR reflects today's completed activities.
+  const metrics = computeFitnessModel(wks, Math.min(currentWeek + 1, wks.length), ctlSeed, planStartDate, atlSeed);
 
   if (metrics.length < 3) {
     // Not enough history for a reliable ratio
@@ -560,7 +633,10 @@ export function computeSameSignalTSB(
   ctlSeed?: number,
   planStartDate?: string,
 ): { ctl: number; atl: number; tsb: number } | null {
-  const limit = Math.min(currentWeek, wks.length);
+  // Include the current in-progress week so that today's completed activities
+  // (garminActuals, adhocWorkouts) are reflected in ATL/TSB immediately.
+  // computeWeekRawTSS returns only synced actuals, so it's 0 when nothing done yet.
+  const limit = Math.min(currentWeek + 1, wks.length);
   if (limit === 0) return null;
 
   let ctl = ctlSeed ?? 0;

@@ -6,7 +6,6 @@ const BASE: ReadinessInput = {
   tsb: 4,          // Fresh
   acwr: 1.1,       // Safe
   ctlNow: 60,
-  ctlFourWeeksAgo: 55,
   weeksOfHistory: 5,
 };
 
@@ -35,7 +34,8 @@ describe('computeReadiness — edge cases', () => {
 describe('computeReadiness — score labels', () => {
 
   it('Ready to Push when TSB fresh + ACWR safe', () => {
-    const r = computeReadiness({ ...BASE, tsb: 10, acwr: 1.0, ctlNow: 60, ctlFourWeeksAgo: 50 });
+    // TSB=25 → fitnessScore≈93, ACWR=0.9 → safetyScore≈92 → composite ≈ 92
+    const r = computeReadiness({ ...BASE, tsb: 25, acwr: 0.9 });
     expect(r.label).toBe('Ready to Push');
     expect(r.score).toBeGreaterThanOrEqual(80);
   });
@@ -48,14 +48,15 @@ describe('computeReadiness — score labels', () => {
   });
 
   it('Manage Load when TSB moderately negative', () => {
-    const r = computeReadiness({ ...BASE, tsb: -15, acwr: 1.25, ctlNow: 55, ctlFourWeeksAgo: 60 });
+    const r = computeReadiness({ ...BASE, tsb: -15, acwr: 1.25, ctlNow: 55 });
     expect(r.label).toBe('Manage Load');
     expect(r.score).toBeGreaterThanOrEqual(40);
     expect(r.score).toBeLessThan(60);
   });
 
   it('Ease Back when deeply fatigued', () => {
-    const r = computeReadiness({ ...BASE, tsb: -30, acwr: 1.1, ctlNow: 40, ctlFourWeeksAgo: 60 });
+    // TSB=-35 → fitnessScore≈7, ACWR=1.1 → safetyScore≈75 → composite ≈ 38
+    const r = computeReadiness({ ...BASE, tsb: -35, acwr: 1.1 });
     expect(r.label).toBe('Ease Back');
     expect(r.score).toBeLessThan(40);
   });
@@ -65,28 +66,56 @@ describe('computeReadiness — score labels', () => {
 describe('computeReadiness — safety floor', () => {
 
   it('ACWR > 1.5 caps score at 39 regardless of freshness', () => {
-    const r = computeReadiness({ ...BASE, tsb: 20, acwr: 1.6, ctlNow: 80, ctlFourWeeksAgo: 50, sleepScore: 90 });
+    const r = computeReadiness({ ...BASE, tsb: 20, acwr: 1.6, ctlNow: 80, sleepScore: 90 });
     expect(r.score).toBeLessThanOrEqual(39);
     expect(r.label).toBe('Ease Back');
   });
 
   it('ACWR between 1.3 and 1.5 caps score at 59', () => {
-    const r = computeReadiness({ ...BASE, tsb: 15, acwr: 1.4, ctlNow: 80, ctlFourWeeksAgo: 60, sleepScore: 90 });
+    const r = computeReadiness({ ...BASE, tsb: 15, acwr: 1.4, ctlNow: 80, sleepScore: 90 });
     expect(r.score).toBeLessThanOrEqual(59);
     expect(r.label).toBe('Manage Load');
   });
 
   it('ACWR exactly 1.5 still caps at 59', () => {
-    const r = computeReadiness({ ...BASE, tsb: 10, acwr: 1.5, ctlNow: 70, ctlFourWeeksAgo: 60 });
+    const r = computeReadiness({ ...BASE, tsb: 10, acwr: 1.5, ctlNow: 70 });
     expect(r.score).toBeLessThanOrEqual(59);
   });
 
   it('ACWR exactly 1.3 does NOT apply floor', () => {
     // At acwr=1.3 safetyScore = clamp(0,100,((2.0-1.3)/1.2)*100) = 58.3
     // So score should be driven by formula, not floor
-    const r = computeReadiness({ ...BASE, tsb: 8, acwr: 1.3, ctlNow: 65, ctlFourWeeksAgo: 60 });
+    const r = computeReadiness({ ...BASE, tsb: 8, acwr: 1.3, ctlNow: 65 });
     // No floor applied at exactly 1.3 — score could be anything
     expect(r).toBeDefined();
+  });
+
+});
+
+describe('computeReadiness — sleep floor', () => {
+
+  it('sleep < 45 caps score at 59 regardless of freshness', () => {
+    // Very fresh, safe load, but terrible sleep
+    const r = computeReadiness({ ...BASE, tsb: 20, acwr: 0.9, ctlNow: 70, sleepScore: 40 });
+    expect(r.score).toBeLessThanOrEqual(59);
+  });
+
+  it('sleep 45–59 caps score at 74 — prevents Ready to Push on a bad night', () => {
+    const r = computeReadiness({ ...BASE, tsb: 20, acwr: 0.9, ctlNow: 70, sleepScore: 54 });
+    expect(r.score).toBeLessThanOrEqual(74);
+    expect(r.label).not.toBe('Ready to Push');
+  });
+
+  it('sleep ≥ 60 does not apply floor', () => {
+    const r = computeReadiness({ ...BASE, tsb: 20, acwr: 0.9, ctlNow: 70, sleepScore: 60 });
+    // No sleep floor — score can reach Ready to Push
+    expect(r.score).toBeGreaterThan(74);
+  });
+
+  it('sleep floor overrides only when it is the binding constraint', () => {
+    // ACWR floor at 59 + sleep floor at 59 — both apply, score ≤ 59
+    const r = computeReadiness({ ...BASE, tsb: 10, acwr: 1.4, ctlNow: 70, sleepScore: 40 });
+    expect(r.score).toBeLessThanOrEqual(59);
   });
 
 });
@@ -99,22 +128,36 @@ describe('computeReadiness — recovery integration', () => {
     expect(r.recoveryScore).toBeNull();
   });
 
-  it('includes recovery when sleepScore present', () => {
+  it('includes recovery when sleepScore present — falls back to raw when no history', () => {
     const r = computeReadiness({ ...BASE, sleepScore: 80 });
     expect(r.hasRecovery).toBe(true);
-    expect(r.recoveryScore).toBe(80);
+    expect(r.recoveryScore).toBe(80); // no sleepHistory → raw fallback
   });
 
-  it('adjusts recovery score upward with positive HRV delta', () => {
-    const r = computeReadiness({ ...BASE, sleepScore: 60, hrvRmssd: 60, hrvPersonalAvg: 50 });
-    // hrvDelta = (60-50)/50 = 0.2 → +6 → recoveryScore = min(100, 60+6) = 66
-    expect(r.recoveryScore).toBeGreaterThan(60);
+  it('uses relative sleep scoring when history is available — good sleeper with bad night scores lower than raw', () => {
+    // Baseline avg = 85 (great sleeper), last night = 54 → relative score is well below raw 54
+    // Raw: 54. Relative: chronicScore=65, acuteDelta=(54-85)/85≈-0.36, modifier=-18 → ~47
+    const history = Array.from({ length: 10 }, (_, i) => ({ sleepScore: 85, date: `2026-02-${String(i + 1).padStart(2, '0')}` }));
+    const r = computeReadiness({ ...BASE, sleepScore: 54, sleepHistory: history });
+    expect(r.hasRecovery).toBe(true);
+    expect(r.recoveryScore).toBeLessThan(54); // penalised more than raw because baseline is high
   });
 
-  it('adjusts recovery score downward with negative HRV delta', () => {
-    const r = computeReadiness({ ...BASE, sleepScore: 60, hrvRmssd: 40, hrvPersonalAvg: 60 });
-    // hrvDelta = (40-60)/60 ≈ -0.333 → -10 → recoveryScore = 60-10 = 50
-    expect(r.recoveryScore).toBeLessThan(60);
+  it('good sleeper having average night scores near 65', () => {
+    // Baseline avg = 80, last night = 80 → at baseline → score ≈ 65
+    const history = Array.from({ length: 10 }, (_, i) => ({ sleepScore: 80, date: `2026-02-${String(i + 1).padStart(2, '0')}` }));
+    const r = computeReadiness({ ...BASE, sleepScore: 80, sleepHistory: history });
+    expect(r.hasRecovery).toBe(true);
+    expect(r.recoveryScore).toBeGreaterThan(55);
+    expect(r.recoveryScore).toBeLessThan(80); // relative scoring anchors baseline at 65
+  });
+
+  it('HRV does not modify recoveryScore (HRV is a composite floor only)', () => {
+    // sleepScore=60, no history → recoveryScore = raw 60. HRV only caps composite, not recoveryScore.
+    const rGoodHrv = computeReadiness({ ...BASE, sleepScore: 60, hrvRmssd: 60, hrvPersonalAvg: 50 });
+    const rBadHrv  = computeReadiness({ ...BASE, sleepScore: 60, hrvRmssd: 40, hrvPersonalAvg: 60 });
+    expect(rGoodHrv.recoveryScore).toBe(60);
+    expect(rBadHrv.recoveryScore).toBe(60);
   });
 
   it('ignores HRV when no personal average', () => {
@@ -129,19 +172,19 @@ describe('computeReadiness — recovery integration', () => {
 describe('computeReadiness — driving signal', () => {
 
   it('driving signal is safety when ACWR is very high', () => {
-    const r = computeReadiness({ ...BASE, tsb: 5, acwr: 1.8, ctlNow: 70, ctlFourWeeksAgo: 65 });
+    const r = computeReadiness({ ...BASE, tsb: 5, acwr: 1.8, ctlNow: 70 });
     expect(r.drivingSignal).toBe('safety');
   });
 
   it('driving signal is fitness when TSB very negative', () => {
-    const r = computeReadiness({ ...BASE, tsb: -35, acwr: 1.05, ctlNow: 60, ctlFourWeeksAgo: 62 });
+    const r = computeReadiness({ ...BASE, tsb: -35, acwr: 1.05 });
     expect(r.drivingSignal).toBe('fitness');
   });
 
-  it('driving signal is momentum when CTL dropped significantly', () => {
-    // TSB near 0, ACWR safe, but CTL dropped >10%
-    const r = computeReadiness({ ...BASE, tsb: 2, acwr: 1.05, ctlNow: 40, ctlFourWeeksAgo: 60 });
-    expect(r.drivingSignal).toBe('momentum');
+  it('driving signal is fitness when TSB is moderate and ACWR is safe', () => {
+    // TSB near 0 → fitnessScore ~60; ACWR 1.05 → safetyScore ~79 — fitness is lower
+    const r = computeReadiness({ ...BASE, tsb: 2, acwr: 1.05 });
+    expect(r.drivingSignal).toBe('fitness');
   });
 
 });
@@ -179,7 +222,7 @@ describe('computeReadiness — deload / taper edge cases', () => {
 
   it('deload week: low ATL, positive TSB → Ready to Push', () => {
     // After a deload: TSB rises (ATL drops), CTL steady
-    const r = computeReadiness({ ...BASE, tsb: 15, acwr: 0.85, ctlNow: 65, ctlFourWeeksAgo: 65 });
+    const r = computeReadiness({ ...BASE, tsb: 15, acwr: 0.85, ctlNow: 65 });
     expect(r.label).toBe('Ready to Push');
   });
 
@@ -201,7 +244,6 @@ describe('computeReadiness — same-signal TSB for cross-trainers', () => {
       tsb: -5,
       acwr: 1.1,
       ctlNow: 200,
-      ctlFourWeeksAgo: 190,
       weeksOfHistory: 5,
     });
     expect(result.score).toBeGreaterThan(60);
@@ -214,7 +256,6 @@ describe('computeReadiness — same-signal TSB for cross-trainers', () => {
       tsb: -30,
       acwr: 1.4,
       ctlNow: 150,
-      ctlFourWeeksAgo: 150,
       weeksOfHistory: 5,
     });
     expect(result.score).toBeLessThan(50);

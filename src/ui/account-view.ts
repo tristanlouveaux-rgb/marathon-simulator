@@ -524,30 +524,51 @@ function renderPreferencesGroup(): string {
       </div>
     </div>
     ${rowDivider()}
-    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
-      <label for="input-max-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Max HR</label>
-      <div style="display:flex;align-items:center;gap:6px">
-        <input id="input-max-hr" type="number" min="100" max="240"
-          value="${s.maxHR ?? ''}" placeholder="190"
-          style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
-        <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+    <div id="hr-display">
+      <div style="padding:6px 16px;display:flex;justify-content:flex-end">
+        <button id="btn-hr-edit" style="background:none;border:none;font-size:12px;color:var(--c-muted);cursor:pointer;padding:2px 4px">Edit</button>
+      </div>
+      <div style="padding:8px 16px 13px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:15px;color:var(--c-black)">Max HR</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span id="hr-display-max" style="font-size:14px;color:var(--c-black)">${s.maxHR ?? '—'}</span>
+          <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+        </div>
+      </div>
+      ${rowDivider()}
+      <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:15px;color:var(--c-black)">Resting HR</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span id="hr-display-resting" style="font-size:14px;color:var(--c-black)">${s.restingHR ?? '—'}</span>
+          <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+        </div>
       </div>
     </div>
-    ${rowDivider()}
-    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
-      <label for="input-resting-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Resting HR</label>
-      <div style="display:flex;align-items:center;gap:6px">
-        <input id="input-resting-hr" type="number" min="30" max="100"
-          value="${s.restingHR ?? ''}" placeholder="55"
-          style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
-        <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+    <div id="hr-edit" style="display:none">
+      <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <label for="input-max-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Max HR</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="input-max-hr" type="number" min="100" max="240"
+            value="${s.maxHR ?? ''}" placeholder="190"
+            style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+          <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+        </div>
       </div>
-    </div>
-    ${rowDivider()}
-    <div style="padding:12px 16px;display:flex;justify-content:flex-end">
-      <button id="btn-save-hr" style="padding:8px 18px;border-radius:8px;background:transparent;border:1px solid var(--c-border-strong);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">
-        Save
-      </button>
+      ${rowDivider()}
+      <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <label for="input-resting-hr" style="font-size:15px;color:var(--c-black);white-space:nowrap">Resting HR</label>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="input-resting-hr" type="number" min="30" max="100"
+            value="${s.restingHR ?? ''}" placeholder="55"
+            style="width:72px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+          <span style="font-size:13px;color:var(--c-muted)">bpm</span>
+        </div>
+      </div>
+      ${rowDivider()}
+      <div style="padding:12px 16px;display:flex;justify-content:flex-end;gap:8px">
+        <button id="btn-hr-cancel" style="padding:8px 16px;border-radius:8px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">Cancel</button>
+        <button id="btn-save-hr" style="padding:8px 18px;border-radius:8px;background:transparent;border:1px solid var(--c-border-strong);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save</button>
+      </div>
     </div>
   `);
 }
@@ -642,6 +663,16 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
+  document.getElementById('btn-hr-edit')?.addEventListener('click', () => {
+    (document.getElementById('hr-display') as HTMLElement).style.display = 'none';
+    (document.getElementById('hr-edit') as HTMLElement).style.display = '';
+  });
+
+  document.getElementById('btn-hr-cancel')?.addEventListener('click', () => {
+    (document.getElementById('hr-edit') as HTMLElement).style.display = 'none';
+    (document.getElementById('hr-display') as HTMLElement).style.display = '';
+  });
+
   document.getElementById('btn-save-hr')?.addEventListener('click', () => {
     const maxHRInput = (document.getElementById('input-max-hr') as HTMLInputElement)?.value;
     const restingHRInput = (document.getElementById('input-resting-hr') as HTMLInputElement)?.value;
@@ -653,8 +684,12 @@ function wireAccountHandlers(): void {
     if (maxHR !== null) s.maxHR = maxHR;
     if (restingHR !== null) s.restingHR = restingHR;
     saveState();
-    const btn = document.getElementById('btn-save-hr') as HTMLButtonElement;
-    if (btn) { btn.textContent = 'Saved'; btn.disabled = true; setTimeout(() => { btn.textContent = 'Save HR values'; btn.disabled = false; }, 2000); }
+    const dispMax = document.getElementById('hr-display-max');
+    const dispResting = document.getElementById('hr-display-resting');
+    if (dispMax) dispMax.textContent = s.maxHR != null ? String(s.maxHR) : '—';
+    if (dispResting) dispResting.textContent = s.restingHR != null ? String(s.restingHR) : '—';
+    (document.getElementById('hr-edit') as HTMLElement).style.display = 'none';
+    (document.getElementById('hr-display') as HTMLElement).style.display = '';
   });
 
   document.getElementById('btn-unit-km')?.addEventListener('click', () => {
@@ -832,7 +867,8 @@ function wireAccountHandlers(): void {
     }
   });
 
-  // Sync Now — routes to Strava (activities) or Garmin (activities + biometrics)
+  // Sync Now — Garmin biometrics only (sleep, HRV, VO2max).
+  // When Strava is connected it handles activities separately via btn-sync-strava.
   document.getElementById('btn-sync-now')?.addEventListener('click', async () => {
     if (syncing) return;
     syncing = true;
@@ -842,9 +878,8 @@ function wireAccountHandlers(): void {
     try {
       const sNow = getState();
       if (sNow.stravaConnected) {
-        const syncs: Promise<unknown>[] = [syncStravaActivities()];
-        if (sNow.wearable === 'garmin') syncs.push(syncPhysiologySnapshot(7));
-        await Promise.all(syncs);
+        // Strava is the activity source — this button only syncs Garmin biometrics
+        await syncPhysiologySnapshot(7);
       } else {
         await Promise.all([syncActivities(), syncPhysiologySnapshot(7)]);
       }

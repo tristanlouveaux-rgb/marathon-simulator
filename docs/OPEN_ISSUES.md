@@ -8,6 +8,212 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+## 🔴 TOP PRIORITY — Next session
+
+### ISSUE-129: plan-view.ts uncommitted work wiped by `git checkout --` (2026-03-22)
+**What happened**: Claude ran `git checkout -- src/ui/plan-view.ts` to undo cosmetic changes, which destroyed all uncommitted work on that file including: illness banner, running km bar, week overview / coach insight pills, check-in button wiring, illness mod application, future-week handling, and `planStartDate` arg to `buildCalendarStrip`.
+**Root cause**: Wrong tool — `git checkout -- <file>` nukes all uncommitted changes, not just Claude's edits. Should have used the Edit tool to manually reverse specific changes.
+**Fix applied (2026-03-22)**: Reconstructed all lost code from context + sibling files. Illness banner styling also improved: removed amber tinted background and box-shadow → `var(--c-surface)`, "Still running" badge is now neutral outline.
+**Prevention**: CLAUDE.md updated with hard rule: never use `git checkout -- <file>` to undo own changes. Use Edit tool instead.
+**To confirm**:
+1. Illness state active → banner appears on plan page with orange top bar, white card, neutral "Still running" badge
+2. "Recovered" button clears illness state
+3. Check-in button appears in plan header when not injured
+4. Running km bar appears below load bar in header
+5. Week overview toggle shows coach copy for completed weeks
+6. Future weeks show draft copy at 75% opacity
+
+---
+
+### ISSUE-130: Coach Brain — deploy edge function + Phase 2 signals *(P2, in-progress)*
+
+**Context**: Phase 1 built and type-checks clean (2026-03-22). See `docs/BRAIN.md` for full spec.
+
+**Before it works — must do first:**
+1. Deploy the edge function: `supabase functions deploy coach-narrative`
+2. Set the API key: `supabase secrets set ANTHROPIC_API_KEY=sk-ant-...`
+
+**What's built:**
+- `src/calculations/daily-coach.ts` — `computeDailyCoach(state)` aggregates all signals into `CoachState`
+- `supabase/functions/coach-narrative/index.ts` — Haiku LLM call with rate limit (3/day, 4h cache)
+- `src/ui/coach-modal.ts` — modal with readiness ring, signal rows, LLM narrative
+- Coach button in Home header + Plan header (current week only)
+
+**Phase 2 signals still to wire:**
+- VDOT history sparkline (no history stored yet — needs `vdotHistory` array)
+- Weekly aerobic efficiency trend across last 4 weeks
+- Subjective daily feeling ("How do you feel today?" — 4-option tap → `s.todayFeeling`)
+- Previous-week carry-forward: if last week's stance was `reduce`/`rest`, this week starts discounted
+
+**Other open questions:**
+- Stance vocabulary: keep readiness labels or simplify to Push / Normal / Back Off / Rest?
+- Subjective check-in: on app open or only from Coach modal?
+
+---
+
+### Read `docs/STATS_REDESIGN.md` before suggesting any to-do list
+
+When Tristan asks "what should we work on?" or "what's next?" or requests a to-do list — **direct him to `docs/STATS_REDESIGN.md` first**. The stats page redesign is the #1 priority. Walk through the suggested next session agenda in that file:
+
+1. Pick a design direction (A, B, C, or D)
+2. Define the 5-second test — what 3 things should a runner know after 5 seconds
+3. Sketch the summary page layout before touching any code
+4. Decide on depth model (single scroll vs current 2-level cards)
+5. Implement, then review with the reviewer agent
+
+Do not skip to other issues until a direction is chosen and the redesign is underway.
+
+---
+
+## 🔵 To Be Tested
+
+Issues where code has been deployed but device verification is still needed.
+
+### ISSUE-128: Recovery advice sheet — session-specific actions *(deployed 2026-03-21)*
+**What was built**: When readiness is low (sleep/HRV floor) and the user taps "Adjust", the sheet now detects today's unrated quality session and shows specific actions:
+- **"Convert to easy run"** — downgrades the session in-place via `applyRecoveryAdjustment('downgrade')`. Workout type → easy, same distance, RPE 4.
+- **"Move to [Day]"** — writes `wk.workoutMoves` to shift the session to the first later day with no hard workout already scheduled. Plan and home view update immediately.
+- **Back-to-back flag** — if yesterday was also a rated hard session, a context line appears: "Yesterday was a hard session. Two consecutive quality days significantly raise injury risk."
+- When no quality session is detected today, falls back to three generic rows (Rest / Reorder / Reduce intensity).
+- **Fix included**: Removed `|| true` debug hack from the Adjust button — it now correctly routes to the ACWR modal only when ACWR is elevated or unspent load items exist.
+
+**To confirm**:
+1. With a bad sleep score (readiness ≤ 59) — "Adjust" button appears on Home readiness ring
+2. Tap it → if today has a threshold/VO2/intervals session: sheet shows "Convert to easy run" + "Move to [Day]" buttons with the session name in the header
+3. Tap "Convert to easy run" → plan updates: session becomes easy, same distance. Confirm in Plan tab.
+4. Tap "Move to [Day]" → session shifts to that day in Plan tab; home view refreshes
+5. If today is already an easy run or rest day: sheet shows the three generic rows, no specific buttons
+6. If yesterday was a hard rated session: "· back-to-back" appears in the header + context sentence
+7. When ACWR is elevated: Adjust button routes to the ACWR reduction modal (unchanged behaviour)
+
+**Files**: `src/ui/home-view.ts`
+
+---
+
+### ISSUE-126: REM sleep data missing — field name mismatch *(fix deployed 2026-03-20)*
+**Root cause (hypothesis)**: Garmin's webhook uses `remSleepInSeconds` (no "Duration"), while the code was reading `remSleepDurationInSeconds`. The fix now checks both names.
+**Also added**: `lightSleepDurationInSeconds` / `lightSleepInSeconds` captured as `light_sec` column; diagnostic log line dumps all field names Garmin actually sends.
+**To confirm**: After next morning's Garmin sleep sync, check:
+1. Supabase `sleep_summaries` table — `rem_sec` column now has a non-null value
+2. Home sleep card — REM bar appears in the stage breakdown
+3. Edge fn logs show `[garmin-webhook] Sleep keys for DATE: ...` with `remSleepInSeconds` present
+4. If `rem_sec` still null, the log will show what field names Garmin actually sends — use that to diagnose further
+**Files**: `supabase/functions/garmin-webhook/index.ts`, `supabase/migrations/20260320_sleep_light_sec.sql`, `src/ui/home-view.ts`
+
+---
+
+### ISSUE-94: Activity card map too zoomed out *(fix deployed 2026-03-12)*
+**Fix applied**: `drawPolylineOnCanvas` filters decoded coords where `|lat| < 1 && |lng| < 1`. Canvas hidden if no valid points remain.
+**To confirm**: Open an activity with a map → should zoom tightly to where you actually ran. If the polyline was entirely garbage, the map card disappears rather than showing a broken view.
+**Files**: `strava-detail.ts`
+
+---
+
+### ISSUE-102: Cross-training load missing from wk.actualTSS *(fix deployed — forward-looking)*
+**Fix applied**: `addAdhocWorkout` + `addAdhocWorkoutFromPending` now accumulate Signal B TSS onto `wk.actualTSS`. Covers all 6 call sites in `activity-review.ts`.
+**Caveat**: Forward-looking only — activities already stored before this fix are not retroactively added. Clear state + re-sync to fully validate.
+**To confirm**: Accept a pending cross-training activity → check `wks[w-1].actualTSS` in localStorage — should increase by that session's TSS.
+**Files**: `src/ui/activity-matcher.ts`
+
+---
+
+### ISSUE-105: Garmin sleep/backfill not pulling *(fix deployed 2026-03-19)*
+**Fix applied**: Changed permanent guard `mosaic_garmin_backfill_empty` to a 12-hour TTL so the app retries later after the watch syncs. Old permanent key cleared on first run.
+**To confirm**: Launch app after morning watch sync → check console for `[garmin-backfill] Done — N daily rows, M sleep rows` with N or M > 0.
+**Files**: `src/data/supabaseClient.ts`
+
+---
+
+### ISSUE-107: Verify "Wrap up week" Sunday behaviour *(test on next Sunday)*
+**What to check**:
+1. "Wrap up week" pill appears in plan header on current week
+2. Debrief card auto-fires once (on first plan-view render that day), then not again
+3. ✕ closes without advancing week; pill stays visible so user can re-open
+4. "Complete week →" advances to the next week correctly
+5. After completing, pill no longer shows (week marked completed)
+**Files**: `src/ui/week-debrief.ts` (`shouldShowSundayDebrief`), `src/ui/plan-view.ts`
+
+---
+
+### ISSUE-114: Recovery staleness gate *(fix deployed 2026-03-19)*
+**What was built**: `computeRecoveryScore` returns `hasData: false` when most recent physiology entry is >3 days old. Grey "Sync Garmin" pill on Home; amber stale message on Stats recovery card.
+**To confirm**:
+1. App with Garmin data >3 days old → Recovery pill shows grey "Sync Garmin" (not a score)
+2. Tap the grey pill → popup reads "Your Garmin data hasn't updated in X days (last synced YYYY-MM-DD). Open Garmin Connect and sync your watch."
+3. Stats recovery card shows the same stale message in amber, not a score
+4. After syncing Garmin Connect (fresh data flows) → score reappears correctly
+5. User with fresh data (<3 days old) → no change, score shows as before
+**Files**: `src/calculations/readiness.ts`, `src/ui/home-view.ts`, `src/ui/stats-view.ts`
+
+---
+
+### ISSUE-115: Stats page redesign v2 *(deployed 2026-03-19)*
+**What was built**: 3-card Whoop-style layout with inline sparklines. Fitness detail leads with VDOT sparkline. Readiness detail = single scroll (no tab switcher). Zones chart removed.
+**To confirm on device**:
+1. Stats summary — all 3 cards show sparklines/data rows, not blank cards
+2. Tap "This Week" → load chart renders, 8w/16w toggle works, distance stat shows below
+3. Tap "Fitness" → VDOT sparkline appears first; progress bars below; race users see Starting/Today/Forecast grid
+4. Tap "Readiness" → single scroll (no tab switcher), Load bars then Recovery section
+5. Race mode only: Fitness summary card shows race forecast row with on-track/off-track status
+6. Back button on all detail pages returns to summary
+7. iOS safe areas respected on headers
+**Files**: `src/ui/stats-view.ts`
+
+---
+
+### ISSUE-125: Underload system — km floor nudge + carry-over fixes *(deployed 2026-03-19)*
+
+**What was built (km floor nudge)**:
+When Signal B fatigue is safe (ACWR `safe`) and the athlete has run below their phase km floor for 2+ consecutive completed weeks, a green nudge card appears on the Plan tab for the new week. Card offers `+ Xkm to [Easy Run]` (extends by 20% of planned distance, min 1.5km, max 5km). "Not now ×" dismisses for the week. Never fires during taper or when ACWR is caution/high.
+
+**What was built (carry-over fixes)**:
+- **False carry-over bug**: if the previous week ended *under* target, `unspentLoadItems` are now cleared at week advance (not carried forward as phantom excess). Retroactive cleanup on `loadState()` handles items already incorrectly copied.
+- **Button does nothing bug**: carry-over card tap no longer bails when current excess is near zero — it opens the popup if there are carried items, regardless of current-week excess.
+
+**To confirm — km floor nudge**:
+1. Complete 2+ weeks running below the km floor for your pace tier (fast <3:30: 20km; mid 3:30–4:30: 15km; finish 4:30+: 10km)
+2. At the start of the following week, Plan tab should show a green nudge card suggesting an easy run extension
+3. Tap `+ Xkm` → easy run in plan grows by that amount; card disappears
+4. Tap "Not now ×" → card dismissed for the week, plan unchanged
+5. Card does NOT appear during taper weeks or when ACWR is caution/high
+
+**To confirm — carry-over**:
+1. End a week *under* planned load → advance week → carry-over card should NOT appear (nothing to carry)
+2. End a week *over* planned load with cross-training → advance week → carry-over card should appear, and tapping it should open the adjustment popup
+
+**Files**: `src/ui/plan-view.ts`, `src/ui/events.ts`, `src/state/persistence.ts`, `src/ui/excess-load-card.ts`
+
+---
+
+### ISSUE-124: Home recent activity — dates + unmatched display *(fix deployed 2026-03-19)*
+**What was built**: Recent activities show actual dates (e.g. "Mon 17 Mar"). Unmatched pending items appear with amber **Unmatched** pill; tap opens activity review.
+**To confirm**:
+1. Home tab → recent activities show dates like "Mon 17 Mar", not "Last week"
+2. Sync an activity that doesn't auto-match → it should appear in Recent with an "Unmatched" pill
+3. Tap the unmatched item → activity review modal opens
+4. Matched activities still tap through to activity detail page as before
+**Files**: `src/ui/home-view.ts`
+
+---
+
+## 🟡 To Be Discussed
+
+Issues where a design decision is needed before any code work.
+
+### ISSUE-33: Can't plan 2 workouts on one day
+**Question**: Was this ever supported, or has it never been built?
+**Decision needed**: Confirm whether this is a regression (fix it) or a new feature request (scope it properly). Low priority until plan page UX is settled.
+
+---
+
+### ISSUE-97: Home load graph — remove or redesign?
+**Decision needed**: The load bar chart on Home doesn't read clearly. Options:
+- **Remove it** — rely on Stats page for load history
+- **Redesign** — add a clear axis, legend, and explanation
+**Files**: `src/ui/home-view.ts`. Connected to ISSUE-108 (daily loop / Home hierarchy).
+
+---
+
 ## P1 — Bugs (broken or actively misleading)
 
 ### ✅ ISSUE-01: Stats chart current week near-zero despite high total TSS *(fixed 2026-03-04)*
@@ -141,11 +347,8 @@ Home page load bars already have: label ("Training Load (TSS)"), actual/planned 
 
 ---
 
-### ⚠️ ISSUE-20: Activity card km splits don't match Strava *(fix deployed 2026-03-12 — needs device test on next run)*
-**Root cause**: Previous implementation computed km splits from raw GPS streams using our own interpolation. Strava's app shows splits from `splits_metric` on the detailed activity — computed server-side with GPS smoothing. The two algorithms produce different values.
-**Fix applied + deployed**: Standalone mode now calls `/activities/{id}` to get `splits_metric` directly. Pace = `moving_time * 1000 / distance` sec/km per split (exact match to Strava). Stream-based computation stays as fallback. Cached runs with no km_splits also get fetched on next sync.
-**Note on historic runs**: Runs already cached in DB with stream-based splits won't auto-correct. To fix all historic splits: run `UPDATE garmin_activities SET km_splits = NULL WHERE source = 'strava' AND activity_type = 'RUNNING';` in Supabase SQL editor, then sync again.
-**To confirm**: Complete a new run → sync Strava → open the activity → km splits should match Strava's app exactly.
+### ✅ ISSUE-20: Activity card km splits match Strava *(fixed + confirmed)*
+Standalone mode uses `splits_metric` from Strava API directly (exact match). Stream-based computation retained as fallback.
 
 ---
 
@@ -294,11 +497,90 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 
 ## P3 — New Features / Future
 
-### ISSUE-33: Can't plan 2 workouts on one day
-**Note**: Determine if this was ever supported. If not, it's a feature request. Low priority
-until plan page UX is settled.
+### ISSUE-115: Holiday mode *(P3)*
+**Symptom**: Users going on holiday have no way to pause or adjust the plan. The app continues generating planned sessions, VDOT may decay, and week-advance logic runs as if training continued.
+**Design**: A "Holiday" toggle in Account or Home. When active: plan sessions are greyed out with a "Holiday" label, no skip penalties applied, VDOT detraining paused or capped, weekly load target set to 0. User sets return date; app resumes normal week logic on return.
+**Files**: `src/ui/account-view.ts`, `src/state/store.ts` (holiday mode flag + return date), `src/ui/plan-view.ts`, `src/ui/welcome-back.ts` (skip detraining guard).
 
 ---
+
+### ISSUE-123: HR zones / LT threshold should auto-pull from Garmin, not require manual input *(P2)*
+**Symptom**: HR threshold and zone boundaries are currently entered via a manual input button. Users don't know their LT HR and won't enter it — so zones default to generic estimates.
+**Root cause**: The Garmin Health API returns `lactateThresholdBpm` in the physiology/dailies endpoint. This is already the correct value; we just aren't reading it automatically.
+**Design**:
+- On Garmin connect / first sync: auto-populate `lt_hr`, HR zones, and max HR from the Garmin physiology endpoint. No user action required.
+- Show the pulled values as read-only in Account (e.g. "LT HR: 162 bpm — from Garmin").
+- Provide a manual override toggle: "Override Garmin value" — exposes the input field. User-entered value takes precedence.
+- If Garmin returns no value and no manual entry exists, fall back to age-based estimate (current behaviour) and label it "Estimated".
+**Files**: `supabase/functions/sync-physiology-snapshot/index.ts` (read `lactateThresholdBpm`), `src/ui/account-view.ts` (display + override toggle), `src/state/store.ts` (source field: `'garmin' | 'manual' | 'estimated'`).
+
+---
+
+### ISSUE-116: Email Garmin for Auth API access *(P2 — external action required)*
+**Context**: Garmin's Health API requires OAuth2 partner approval. Current implementation may rely on a workaround or limited-access token that could break.
+**Action needed**: Email Garmin developer support to formally request Health API partner access and OAuth2 credentials. This is a business/admin task, not a code task.
+**Impact if not done**: Garmin sleep, HRV, and dailies sync (ISSUE-76, ISSUE-105) are at risk if the current auth approach is outside approved use.
+
+---
+
+### ISSUE-117: "Preview week" copy should say it will be based on last week *(P2)*
+**Symptom**: When a user looks ahead at a future plan week, the UI implies the week is already fully planned. In reality, durations, load, and pacing are generated as a factor of the preceding week's actual load and effort.
+**Design**: Change "Preview" language to something like "Based on last week — your plan adapts as you train." Add a sub-label on future week headers: "Estimated from last week's load." Remove any language that implies exact sessions are fixed in advance.
+**Files**: `src/ui/plan-view.ts` (week header, preview badge).
+
+---
+
+### ISSUE-118: Be more explicit about load matching *(P2)*
+**Symptom**: When a Strava/Garmin activity is matched to a planned session, users don't understand what "matched" means — did it count? Was the load accepted? How does it affect the plan?
+**Design**: On matched activity cards, add a brief explanation: e.g. "Matched to Tuesday's run — load counted toward your week." If a session was over/under target, show a one-line delta: "12% harder than planned." This closes the loop for users who wonder if the sync did anything.
+**Files**: `src/ui/plan-view.ts`, `src/ui/activity-review.ts`.
+
+---
+
+### ISSUE-119: Onboarding should be clearer about what the app actually does *(P2)*
+**Symptom**: New users finish setup without understanding the core promise: the app builds a personalised plan from their actual training history, adapts week to week based on how they train, and uses their watch data to adjust load. This is never stated plainly.
+**Design**: Add a single "Here's how it works" screen (3 bullets max) early in onboarding — before asking for Strava/Garmin connection. E.g.:
+- "Your plan is built from your real training history — not a generic template."
+- "Each week adapts based on how hard you actually trained."
+- "Connect Strava or Garmin so we can see your runs."
+**Files**: `src/ui/wizard/` (add a step before or during the connection prompt).
+
+---
+
+### ISSUE-120: Check-in button — includes illness, injury, and general feeling *(P3)*
+**Symptom**: There is no lightweight daily check-in for subjective wellbeing. The app has no way to know if a user is ill, injured, or just feeling flat — it can only infer from HR and load data.
+**Design**: A daily check-in button on the Home screen (optional, soft nudge). Options: "Feeling good / Feeling okay / Feeling rough / Ill / Injured." If "Ill" or "Injured": surfaces ISSUE-37 illness mode or a rest-day suggestion. If "Rough": adjusts today's session intensity with a soft note. Check-in data stored in state; feeds into ACWR/readiness commentary.
+**Files**: `src/ui/home-view.ts`, `src/state/store.ts` (daily check-in field), `src/calculations/readiness.ts`.
+
+---
+
+### ISSUE-121: Zone 2 explainer — what Kipchoge's Z2 looks like and why it matters *(P3)*
+**Design**: Add a contextual info button ("ⓘ") above the Zone 2 section in Stats HR zones chart. Tapping it opens an inline explanation:
+- What Zone 2 actually feels like (conversational pace, nasal breathing)
+- Why it's the foundation of aerobic fitness (fat oxidation, mitochondrial density)
+- The Kipchoge angle: elite athletes do 80%+ of volume in Z2 — but paired with structured tempo work
+- Caution: Z2 alone without quality sessions plateaus quickly
+Keep it short (4–5 sentences). Tone: coaching, not lecture.
+**Files**: `src/ui/stats-view.ts` (HR zones chart section).
+
+---
+
+### ISSUE-122: Onboarding should ask for training goals *(P3)*
+**Symptom**: Onboarding asks for current fitness level and race target but never asks *why* the user is training. A user training for Hyrox has completely different needs from someone who just wants to get fit or lose weight.
+**Design**: Add a goal-selection step in the wizard. Options (multi-select allowed):
+- Run faster (speed)
+- Run further (distance / endurance)
+- Get fit / improve health
+- Just run (no specific goal)
+- Build strength
+- Get in shape / lose weight
+- Hyrox
+- Triathlon
+Selected goals influence: plan tone/copy, cross-training weighting, benchmark suggestions, and coaching language. Hyrox/Triathlon selections unlock sport-specific load logic.
+**Files**: `src/ui/wizard/` (new goal step), `src/state/store.ts` (goals field), `src/types/state.ts`.
+
+---
+
 
 ### ✅ ISSUE-34: RPE → pacing logic *(resolved 2026-03-09, merged into ISSUE-60)*
 RPE capture was already built (`wk.effortScore`, `wk.rated`, `wo.rpe`). Week-end debrief (ISSUE-60) surfaces effortScore and offers rpeAdj pacing adjustment. No new capture screen built — existing per-session RPE rating is the input.
@@ -591,17 +873,6 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
-### ISSUE-107: Verify "Wrap up week" Sunday behaviour on an actual Sunday *(P3)*
-**What to check**: The "Wrap up week" pill in the plan header and the auto-show of the end-of-week debrief card are gated on `ourDay() === 6` (Sunday). Since this was built mid-week, it could not be tested on a Sunday.
-**On the next Sunday, verify**:
-1. "Wrap up week" pill appears in plan header on the current week
-2. Debrief card auto-fires once (on first plan-view render that day), then not again
-3. ✕ closes without advancing week; pill stays visible so user can re-open
-4. "Complete week →" advances to the next week correctly
-5. After completing, pill no longer shows (week marked completed)
-**Files**: `src/ui/week-debrief.ts` (`shouldShowSundayDebrief`), `src/ui/plan-view.ts` (`buildWrapUpWeekBtn`, `renderPlanView` Sunday trigger).
-
----
 
 ### ✅ ISSUE-87: Two "Load Safety" bars on Stats — kill the second one *(fixed 2026-03-12)*
 **Fix**: Removed the duplicate Load Safety bar from `stats-view.ts`.
@@ -617,26 +888,8 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
-### ⚠️ ISSUE-88: km/mile unit tag not working *(partial — session killed mid-work, 2026-03-12)*
-
-**Root cause**: `formatKm` was only wired in a handful of spots. The majority of distance displays were hardcoded `.toFixed(1) km` without reading `s.unitPref`.
-
-**What IS done** (code in working tree, not yet committed):
-- `formatKm` wired in: `plan-view.ts` (`buildWorkoutExpandedDetail`, `buildActivityLog`, `buildWorkoutCards`), `home-view.ts` (`buildTodayWorkout`, `buildNoWorkoutHero`, `buildRecentActivity`), `stats-view.ts` (distance card, Distance vs Plan bar, Running km label), `activity-detail.ts`, `activity-review.ts`, `suggestion-modal.ts`, `matching-screen.ts`, `gps-panel.ts`
-- `account-view.ts` toggle wired — persists to state, re-renders on change
-- All 779 tests pass, `npx tsc --noEmit` clean
-
-**What is STILL hardcoded (remaining work)**:
-1. `week-debrief.ts:209` — `${distanceKm} km` → needs `formatKm(distanceKm, unitPref)`
-2. `record-view.ts:159,162` — live recording distance: `toFixed(1) km` and target distance label
-3. `gps-completion-modal.ts:75` — post-run summary: `${actualDistKm.toFixed(1)} / ${plannedDistKm.toFixed(1)} km`
-4. `suggestion-modal.ts:299` — km gap line: `${kmGap} km`
-5. `wizard/steps/strava-history.ts:155,183` — `${avgKm} km/week` (onboarding; lower priority)
-6. **Pace display** — `fp()`, `formatPace()`, all `M:SS/km` strings still hardcoded. Needs a `formatPace(secPerKm, unitPref)` that converts to `/mi` when in miles mode (sec/km × 1.60934 for the number; label `/mi` not `/km`). Affects: `plan-view.ts:145`, `activity-detail.ts:25`, `gps-panel.ts:33,71,213`, `stats-view.ts:940,1434`, `main-view.ts:659,849,853,1085`, `renderer.ts:475,528`, `strava-detail.ts:266,269`
-
-**Nothing committed yet** — all session work is unsaved in the working tree.
-
----
+### ✅ ISSUE-88: km/mile unit tag not working *(fixed 2026-03-19)*
+**Fix**: `formatKm` wired across all distance display sites (`plan-view.ts`, `home-view.ts`, `stats-view.ts`, `activity-detail.ts`, `activity-review.ts`, `suggestion-modal.ts`, `matching-screen.ts`, `gps-panel.ts`, `week-debrief.ts`, `record-view.ts`, `gps-completion-modal.ts`). `account-view.ts` toggle persists to state and re-renders. Pace display (`formatPace`) also wired for `/mi` conversion. Confirmed by user.
 
 ---
 
@@ -668,11 +921,6 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
-### ⚠️ ISSUE-94: Activity card map too zoomed out *(fix applied 2026-03-12 — needs device test)*
-**Fix applied**: `drawPolylineOnCanvas` in `strava-detail.ts` now filters decoded coords where `|lat| < 1 && |lng| < 1` before computing bounds. Canvas hidden entirely if no valid points remain.
-**To test**: open an activity with a map — it should zoom tightly to where you actually ran. If it previously showed a world-scale zoom, it should now show the local route. If the polyline was entirely garbage, the map card disappears rather than showing a broken view.
-
----
 
 ### ISSUE-95: Injury icon inconsistency — heart on some screens, emoji on others *(P2)*
 **Symptom**: The injury/risk indicator uses a heart icon in some places and an unrelated emoji in others. Inconsistent iconography erodes trust and confuses users.
@@ -686,12 +934,6 @@ Today's planned workout (distance, target pace, session description) is passed i
 
 ---
 
-### ISSUE-97: Home load graph is confusing — candidate for removal *(P2)*
-**Symptom**: The load bar chart on the Home page doesn't read clearly to users. It may duplicate information already shown in the load bars or Stats page.
-**Decision needed**: Either redesign with a clear axis, legend, and explanation — or remove it and rely on the Stats page for load history.
-**Files**: `src/ui/home-view.ts`.
-
----
 
 ### ISSUE-98: Activity card shows total load only — no split by sport type *(P2)*
 **Symptom**: The load figure on activity cards is a single number (e.g. "93 TSS") with no breakdown. Users want to see e.g. "40 TSS Running / 53 TSS Tennis" to understand where the load came from.
@@ -710,15 +952,6 @@ Both views now read from the same computation path.
 
 ---
 
-### ISSUE-102: Cross-training load missing from wk.actualTSS — fix applied, untested *(P1)*
-**Symptom**: ACWR / injury risk is run-only. Padel, gym, surf, cycling contributed 0 to `wk.actualTSS`, making fatigue calculations blind to cross-training load.
-**Root cause**: `addAdhocWorkout` and `addAdhocWorkoutFromPending` in `activity-matcher.ts` pushed workouts to `wk.adhocWorkouts` but never accumulated Signal B TSS onto `wk.actualTSS`. Matched runs (high-confidence path, line 533) correctly added TSS; the adhoc paths did not.
-**Fix applied**: Both functions now compute raw iTRIMP TSS (Signal B, no runSpec) and add to `wk.actualTSS`. Covers all 6 call sites in `activity-review.ts`.
-**Caveat**: Fix is forward-looking — activities already in `wk.adhocWorkouts` from before this fix are NOT retroactively added to `wk.actualTSS`. Clear state + re-sync to fully validate.
-**Test**: Accept a pending cross-training activity → check `wks[w-1].actualTSS` in localStorage. Should increase by that session's TSS.
-**Status**: ⚠️ Code deployed, not yet confirmed on device.
-
----
 
 ### ✅ ISSUE-104: HR target label implies whole session is Z4, including warm up/cool down *(fixed 2026-03-11)*
 **Fix**: `buildWorkoutExpandedDetail` in `plan-view.ts` now detects warm up/cool down structure (checks for "warm up" in `w.d`) and appends "· main set" to the HR target label. Simple sessions show "Z4" alone; structured sessions show "Z4 · main set".
@@ -737,13 +970,8 @@ Both views now read from the same computation path.
 
 ---
 
-### ISSUE-105: Garmin webhook 401 fix — needs device test *(P1, fix deployed 2026-03-12)*
-**Root cause**: `garmin-webhook` was missing from `supabase/config.toml`. Supabase defaulted to `verify_jwt = true`, rejecting every Garmin push with 401. Sleep, dailies, and HRV data stopped flowing ~3 weeks ago.
-**Fix applied**: Added `[functions.garmin-webhook] verify_jwt = false` to `config.toml`. Redeployed with `--no-verify-jwt`. JWT verification confirmed OFF in Supabase dashboard.
-**To confirm fixed**: After next morning Garmin watch sync, check: (1) invocations tab shows 200s, (2) `sleep_summaries` has today's row with `duration_sec`/`deep_sec`/`rem_sec` populated, (3) `daily_metrics` has today's resting HR and stress.
-**Files**: `supabase/config.toml`, `supabase/functions/garmin-webhook/index.ts`, `docs/GARMIN.md`.
 
----
+
 
 ## Priority Order
 
@@ -765,10 +993,10 @@ Both views now read from the same computation path.
 | ✅ | ISSUE-19: Home load bars | Home | — | High |
 | ✅ | ISSUE-08: Training Load bar unlabelled | Stats | — | High |
 | P2 | ISSUE-89: Sleep debt tracker | Sleep sheet | Small | Medium |
-| ⚠️ | ISSUE-88: km/mile tag not working — distances done, pace + 4 screens remain | Format | Small | High |
+| ✅ | ISSUE-88: km/mile unit tag — all distances + pace wired | Format | Small | High |
 | ✅ | ISSUE-87: Two Load Safety bars — kill second one | Stats | Small | Medium |
 | ✅ | ISSUE-106: Cross-training planned TSS inflated — historical calibration + bar suppression | Calc/UI | Small | High |
-| ⚠️ | ISSUE-105: Garmin webhook 401 — fix deployed, needs device test | Edge fn | — | Critical |
+| 🔵 | ISSUE-94, 102, 105, 107, 114, 115, 124, 125, 126: see **To Be Tested** section | — | — | — |
 | ✅ | ISSUE-86: Reduce recommendation 32% cut for 2% overshoot — disproportionate | Modal | Small | High |
 | P1 | ISSUE-85: CTL 222 — inflated, corrupts all downstream calcs | Calc | Medium | Critical |
 | P1 | ISSUE-83: TSS 245/330 — looks wrong, needs audit | Calc | Small | High |
@@ -776,7 +1004,7 @@ Both views now read from the same computation path.
 | P2 | ISSUE-84: HR zones chart visually ugly | Stats/Cards | Small | Medium |
 | P2 | ISSUE-29: VDOT history | Stats | Medium | High |
 | 🔨 | ISSUE-35: HR effort signal + drift + commentary (3 builds) | Feature | Large | High |
-| P3 | ISSUE-33: 2 workouts/day | Feature | Medium | Low |
+| 🟡 | ISSUE-33: 2 workouts/day — see **To Be Discussed** section | — | — | — |
 | P3 | ISSUE-37: Illness mode | Feature | Large | Medium |
 | P3 | ISSUE-11: Auto-slot load | Feature | Large | Medium |
 | ✅ | ISSUE-99: Plan page load ≠ Stats page load | Calc | Small | High |
@@ -784,14 +1012,98 @@ Both views now read from the same computation path.
 | P2 | ISSUE-90: LT Threshold setup guidance + Garmin pull | Setup | Medium | Medium |
 | P2 | ISSUE-91: Plan restart nondeterministic profile | Wizard | Small | Medium |
 | ✅ | ISSUE-93: 8W/16W/All tabs confusing | Stats | Small | Low |
-| P2 | ISSUE-94: Activity maps too zoomed out, attribution clutter | Cards | Small | Medium |
 | P2 | ISSUE-95: Injury icon inconsistency (heart vs emoji) | UI | Small | Low |
 | ✅ | ISSUE-96: Start Run goes to blank record screen | Home | Small | Medium |
-| P2 | ISSUE-97: Home load graph confusing — remove? | Home | Small | Medium |
+| 🟡 | ISSUE-97: Home load graph — remove or redesign? — see **To Be Discussed** | — | — | — |
 | P2 | ISSUE-98: Activity card no load split by type | Cards | Small | Medium |
 | P3 | ISSUE-92: Onboarding historic load scan before plan start | Wizard | Medium | High |
-| P3 | ISSUE-107: Verify "Wrap up week" Sunday behaviour on device | Plan | — | Medium |
+| P2 | ISSUE-123: HR zones / LT threshold auto-pull from Garmin, manual as override | Account/Edge fn | Small | High |
+| P2 | ISSUE-116: Email Garmin for Auth API access (external action) | Admin | — | Critical |
+| P2 | ISSUE-117: Preview week copy → "based on last week" | Plan | Small | Medium |
+| P2 | ISSUE-118: Load matching explainer on matched activity cards | Cards | Small | Medium |
+| P2 | ISSUE-119: Onboarding — explain what the app does | Wizard | Small | High |
+| P3 | ISSUE-115: Holiday mode | Feature | Medium | High |
+| P3 | ISSUE-120: Check-in button (illness / injury / feeling) | Home | Medium | High |
+| P3 | ISSUE-121: Zone 2 explainer with Kipchoge context | Stats | Small | Medium |
+| P3 | ISSUE-122: Onboarding goal-selection step | Wizard | Medium | High |
 
+
+---
+
+## Product Improvements — Competing at the Top
+
+> Strategic product bets — features that move us from "solid training app" to genuinely competing with polished products like BEVEL. Not bugs, not UX polish. These are the things that make a runner *choose* this app over the competition.
+
+---
+
+### ISSUE-108: Daily loop — Home screen must be compelling to open every morning *(P2)*
+**Problem**: A training app lives or dies by the daily habit. If opening the app doesn't immediately give a clear, motivating answer to "what do I do today?" — users drift away.
+**Design goal**: In under 3 seconds, the home screen should show: today's workout with clear context, a single load/readiness signal, and one actionable coaching insight. No noise.
+**Current gap**: Home has multiple cards, load bars, a graph, and a recovery bar — but no clear hierarchy. The most important thing (today's session) competes with everything else.
+**Files**: `src/ui/home-view.ts`. Connected to ISSUE-97 (home load graph removal).
+
+---
+
+### ISSUE-109: Plan explainability — tell the runner *why* today's workout is this *(P3)*
+**Problem**: Plans feel generic. A runner sees "8km @ easy pace" and has no idea if this is recovery, base building, or filling a volume target. BEVEL and coaching apps explain the why.
+**Design**: Each workout card should carry a one-sentence coach rationale, e.g. "Build phase week 3 — aerobic base before threshold work starts next week." Derived from phase, week position, and VDOT relative to target.
+**Impact**: Makes the plan feel intelligent and personalised, not a generic schedule. Builds trust that the algorithm understands you.
+**Files**: `src/ui/plan-view.ts`, `src/ui/home-view.ts`, plan generation logic.
+
+---
+
+### ISSUE-110: Race day narrative — predicted time *and* what it takes to go faster *(P3)*
+**Problem**: We show a predicted marathon time (e.g. 3:12) but don't make it actionable. A runner wants to know: *what would it take to run 3:05?*
+**Design**: Below the predicted time, a single coaching sentence: "To run sub-3:10, you'd need ~4 more weeks at your current load + one extra threshold session per week." Derived from VDOT → pace mapping and plan headroom. Makes the product aspirational and coaching-forward rather than just descriptive.
+**Files**: `src/ui/stats-view.ts` (forecast section), `src/calculations/fitness-model.ts`.
+
+---
+
+### ISSUE-111: Onboarding — prove calibration before the plan starts *(P2)*
+**Problem**: When a new user finishes setup, they have no confidence the plan is actually built for them. They don't see the training history that was scanned, the load level detected, or why the plan looks the way it does.
+**Design**: After Strava/Garmin backfill, show a "We found you" summary screen before confirming the plan — e.g. "Based on your last 12 weeks: avg 47 km/week · load trending up · your strongest day is Tuesday." Then confirm. This is what a real coach does in their first session.
+**Connected to**: ISSUE-92 (historic load scan screen). ISSUE-111 is the broader onboarding hook — ISSUE-92 is the specific data summary screen.
+**Files**: `src/ui/wizard/steps/initializing.ts`, `src/data/stravaSync.ts`.
+
+---
+
+
+### ISSUE-112: Coherent visual design pass *(P2)* `[ui-ux-pro-max]`
+**Problem**: Screens have been built feature-by-feature. The result is inconsistent card styling, mixed icon languages, varying font weights, and a home/stats split that doesn't feel like one product.
+**Design goal**: One coordinated session with `ui-ux-pro-max` to establish a consistent card system, typography scale, colour use, and icon vocabulary — then apply it across all screens.
+**Known rough spots**: HR zones chart (ISSUE-84), home load graph (ISSUE-97), activity cards, stats recovery card, plan week headers.
+**Files**: Most of `src/ui/`. Tackle as a single pass, not file by file.
+
+---
+
+### ISSUE-127: REM sleep analysis — surface insights and training impact *(P3)*
+**Motivation**: Once REM data is reliably flowing (ISSUE-126), there's a coaching signal here. REM is the sleep stage most sensitive to overtraining and stress; low REM correlates with poor cognitive recovery and elevated cortisol. It's a more actionable signal than total duration.
+**Design**:
+- **Stage breakdown on Home sleep card**: show Deep / REM / Light / Awake as labelled bars with % of total (already partially built — needs REM data to populate)
+- **REM trend sparkline on Stats recovery card**: 7-day rolling REM % (target: 20–25% of total sleep). Trend down = flag
+- **Coaching insight**: if REM% < 15% for 3+ consecutive nights, show a recovery card note: "Your REM sleep has been low this week — this can blunt training adaptation. Prioritise sleep consistency."
+- **Training load link**: compare REM% against weekly TSS. Surfaces "Your hardest weeks correlate with lower REM — your body is working hard." Adds a layer of intelligence between load and recovery
+- **Dependency**: ISSUE-126 must be confirmed working first (REM data in DB)
+**Files**: `src/ui/home-view.ts` (sleep card), `src/ui/stats-view.ts` (recovery card), `src/calculations/readiness.ts` (REM% signal into recovery score)
+
+---
+
+### ISSUE-113: Shareable moments *(P3)*
+**Problem**: Every hard workout, milestone week, or PB prediction is a potential share moment. Currently there's no way to export or share anything. BEVEL and Strava capitalise heavily on this for organic growth.
+**Design**: Shareable cards for: week completed (load + distance summary), new VDOT high, predicted race time improvement, long run PB. Native share sheet via Capacitor. Optional — never forced.
+**Files**: New `src/ui/share-card.ts`. Capacitor Share plugin.
+
+---
+
+| Priority | Issue | Effort | Impact |
+|---|---|---|---|
+| P2 | ISSUE-108: Daily loop / Home hierarchy | Medium | Critical |
+| P2 | ISSUE-111: Onboarding calibration proof | Medium | High |
+| P2 | ISSUE-112: Visual design coherence pass | Large | High |
+| P3 | ISSUE-109: Plan explainability — workout why | Medium | High |
+| P3 | ISSUE-110: Race narrative — what it takes to go faster | Medium | High |
+| P3 | ISSUE-113: Shareable moments | Medium | Medium |
+| P3 | ISSUE-127: REM sleep analysis — stage breakdown, trend, training link | Medium | High |
 
 ---
 

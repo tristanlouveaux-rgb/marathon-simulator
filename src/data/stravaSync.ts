@@ -75,6 +75,10 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
+        // Update activityType if missing (e.g. entry created before field was tracked)
+        if (!actual.activityType && row.activity_type) {
+          actual.activityType = row.activity_type; extraPatched = true;
+        }
         // Update displayName if activity type changed (e.g. WORKOUT → HIIT after edge fn redeployment)
         const newDisplayName = formatActivityType(row.activity_type);
         if (actual.displayName && actual.displayName !== newDisplayName &&

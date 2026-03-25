@@ -9,6 +9,7 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/ARCHITECTURE.md` | Module map, data flows, key types, state abbreviations, subsystem notes |
 | `docs/FEATURES.md` | Every feature in plain English — what it does, key file, test status |
 | `docs/CHANGELOG.md` | Session-by-session history of significant changes |
+| `docs/UX_PATTERNS.md` | Design reference — zone bars, area charts, drill-down sub-pages, colour rules, **overlay/modal positioning** |
 
 ## Issue Tracking Workflow
 
@@ -35,6 +36,16 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
 
+## No Made-Up Numbers or Logic
+
+**Never invent constants, multipliers, thresholds, or fallback values.** If the right number is not already in the codebase or explicitly provided by Tristan, stop and ask. This applies to:
+
+- Phase multipliers (e.g. build = 1.08x, taper ramp 0.85→0.55)
+- Fallback estimates (e.g. "baseline = 40 km if no history")
+- Scoring weights, decay rates, tier thresholds, TSS conversion factors
+
+If you find yourself writing a number that isn't sourced from existing code or state, ask Tristan what it should be before writing it.
+
 ## Conventions
 
 - State abbreviations: `s.rw` (runs/week), `s.gs` (gym sessions), `s.v` (VDOT), `s.w` (current week), `s.typ` (runner type) — full table in ARCHITECTURE.md
@@ -42,6 +53,87 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - UI: Tailwind utility classes, vanilla DOM manipulation (no framework)
 - Workouts: `Workout.t` is a free string type field, not an enum
 - **Units**: All distances display via `formatKm(km, unitPref)`, all paces via `formatPace(secPerKm, unitPref)` or `fp()`, all workout descriptions via `fmtDesc(desc, unitPref)`. Never hardcode `/km`, `km`, or `/mi` in user-facing strings — always read `s.unitPref ?? 'km'` from state.
+
+## UI Pre-flight (required before writing any UI code)
+
+Before writing a single line of HTML or CSS, state out loud in your response:
+
+1. **UX_PATTERNS read** — confirm you have read `docs/UX_PATTERNS.md` in this session
+2. **Copy rules read** — confirm you have read the "UI Copy" sections in this file
+3. **Existing pattern found** — name the existing component you are modelling (e.g. "`buildInjuryBanner` for the banner structure, `openCheckinOverlay` for the modal")
+4. **Visual constraints checked** — confirm the change uses ≤ 2 non-neutral colours, adds no decorative icons, adds no tinted card backgrounds, adds no decorative gradients, uses no ALL-CAPS data labels
+
+If you cannot confirm all four, read `docs/UX_PATTERNS.md → Visual Constraints` first. Do not skip this step under time pressure.
+
+## UI Component Rules
+
+Before building any new chart, bar, or data visualisation: **read `docs/UX_PATTERNS.md`**. It defines the canonical patterns for zone bars, area charts, drill-down sub-pages, colour spectrums, empty states, and **overlay/modal positioning**.
+
+**Overlays must always be vertically centered** (`flex items-center justify-center`). Never use `items-end` (bottom sheet) — it appears off-screen on desktop and behind the keyboard on iOS. See `docs/UX_PATTERNS.md → Overlays and Modals` for the canonical HTML pattern.
+
+## Git Safety — Protecting Uncommitted Work
+
+**NEVER run `git checkout -- <file>` to undo your own changes.** This destroys ALL uncommitted work on that file — not just what you added. The user's in-progress work is unrecoverable.
+
+**The correct way to undo your own edits:**
+1. Use the Edit tool to manually reverse your specific changes.
+2. If unsure what you changed: `git diff <file>` first.
+3. `git checkout -- <file>` is only safe if `git diff <file>` shows ONLY your own changes and nothing else.
+
+**When in doubt: use Edit to undo, not git.**
+
+## Navigation Rules
+
+- **Modals close back to the view that opened them** — never navigate to Home as a side-effect of dismissing a modal. `renderHomeView()` should not appear in modal close/CTA handlers unless the modal was opened from Home.
+- **Exception — forward-navigation CTAs**: Some modals have a CTA that is a deliberate step forward (e.g. the week debrief "Continue →" logically lands on Plan so the user sees their new week). These navigate to the contextually correct view, not necessarily the opener.
+- **Circular import rule**: `plan-view.ts` imports `week-debrief.ts`. Any file already imported by `plan-view.ts` must NOT statically import `plan-view.ts` — use a dynamic import (`import('@/ui/plan-view').then(...)`) instead.
+
+## UI Copy — Writing Style
+
+All user-facing copy should read like a knowledgeable consultant, not a wellness app.
+
+**Principles:**
+- **Direct and factual.** Lead with the point. No preamble.
+- **No motivational padding.** Cut phrases like "your body needs", "you're doing great", "fitness is built in recovery, not in training". State the fact instead.
+- **Concrete over abstract.** "Volume drops 30–50%" beats "you'll be doing less". Numbers earn trust.
+- **No emoji in body copy.** Emoji are permitted in workout type badges or status icons only.
+- **Avoid second-person where the data speaks for itself.** "Sleep or HRV indicates incomplete recovery" not "your body hasn't fully recovered".
+- **Short sentences. Active voice.** Each sentence carries one idea.
+- **No em dashes (—) ever.** Rewrite the sentence instead. Use a period, comma, or "to" (e.g. "2 to 3 weeks" not "2–3 weeks" in prose). En-dashes in numeric ranges (e.g. "150–350 TSS") are fine.
+
+**Reference examples (load-taper view):**
+
+> Aerobic development at easy effort. High proportion of Zone 2 running. Load is moderate and consistent — the aim is to raise your aerobic ceiling before intensity is introduced.
+
+> Volume drops 30–50% while intensity is maintained. The goal is to clear accumulated fatigue before race day. Fitness does not decline over a 2–3 week taper — it consolidates.
+
+> Training creates fatigue that sits on top of fitness. During taper, fatigue clears while fitness remains elevated.
+
+**Anti-patterns to avoid:**
+
+| ❌ AI/wellness tone | ✅ Consultant tone |
+|---|---|
+| Your body needs more rest today | Sleep or HRV indicates incomplete recovery |
+| Pushing hard risks accumulating fatigue | Hard sessions on poor sleep raise injury risk and blunt the stimulus |
+| Fitness is built in recovery, not in training | Hard sessions only drive adaptation when recovery is adequate |
+| One missed day rarely matters | A single missed day has no meaningful impact on fitness |
+| You still get the aerobic stimulus | Aerobic stimulus without the additional stress |
+
+## UI — No Colour on Navigation Links
+
+**Never use `var(--c-accent)` on secondary navigation text buttons.** This includes "Learn more →", "Breakdown →", "View →", and any drill-down or info link. These are `var(--c-muted)`, no border, no colour.
+
+`var(--c-accent)` is reserved for form-submission CTAs only ("Save", "Confirm"). Do not use it for in-page action buttons, suggestions, or readiness nudges — these should use `background:transparent` with `border:1px solid var(--c-border)` and `color:var(--c-black)`.
+
+**Do not default to blue.** When in doubt, use a bordered pill with no fill.
+
+## UI Copy — No Emoji in Buttons or Body Copy
+
+**Never use emoji in buttons, header actions, or body copy.** This includes injury/status buttons (no 🩹, ❤️, 💪, etc.).
+
+- Emoji are only permitted in workout type badges or status icons where they are the primary visual element with no alternative
+- All header action buttons must use SVG icons or plain text labels
+- The check-in system uses plain text labels only — no icons in the button
 
 ## Quality: Cross-cutting changes
 

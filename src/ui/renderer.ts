@@ -16,6 +16,7 @@ import {
 import { ft, fp, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
 import { computeACWR, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { generateWorkoutInsight } from '@/calculations/workout-insight';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
 import { loadGpsRecording } from '@/gps/persistence';
@@ -1764,6 +1765,15 @@ function renderGarminActuals(actual: GarminActual, planned: { totalDistance: num
       h += `</div>`;
     }
     h += `</div></details>`;
+  }
+
+  // Coach insight (HR & distance analysis)
+  const insight = generateWorkoutInsight(actual);
+  if (insight) {
+    h += `<div class="mt-2 pt-2 text-xs" style="border-top:1px solid rgba(249,115,22,0.2);color:var(--c-muted)">`;
+    h += `<span class="font-medium" style="color:rgba(249,115,22,0.7)">Coach · </span>`;
+    h += insight;
+    h += `</div>`;
   }
 
   h += `</div>`;

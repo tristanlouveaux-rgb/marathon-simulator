@@ -113,7 +113,7 @@ function getModalHTML(injuryState: InjuryState): string {
         <!-- 2. Pain Level Slider -->
         <div>
           <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">
-            Pain Level: <span id="pain-value" class="font-bold" style="color:var(--c-ok)">${Math.max(1, injuryState.currentPain)}</span>/10
+            Pain Level: <span id="pain-value" class="font-bold" style="color:var(--c-black)">${Math.max(1, injuryState.currentPain)}</span>/10
           </label>
           <input
             type="range"
@@ -121,7 +121,7 @@ function getModalHTML(injuryState: InjuryState): string {
             min="1"
             max="10"
             value="${Math.max(1, injuryState.currentPain)}"
-            class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+            class="w-full h-2 rounded-lg appearance-none cursor-pointer"
             style="background:rgba(0,0,0,0.08)"
           />
           <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
@@ -145,15 +145,15 @@ function getModalHTML(injuryState: InjuryState): string {
           <label class="block text-sm font-medium mb-2" style="color:var(--c-muted)">Can you run?</label>
           <div class="flex gap-4">
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4 accent-emerald-500">
+              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4">
               <span class="text-sm" style="color:var(--c-black)">Yes</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4 accent-amber-500">
+              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4">
               <span class="text-sm" style="color:var(--c-black)">Limited / With pain</span>
             </label>
             <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4 accent-red-500">
+              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4">
               <span class="text-sm" style="color:var(--c-black)">No</span>
             </label>
           </div>
@@ -215,9 +215,9 @@ function getModalHTML(injuryState: InjuryState): string {
         </details>
 
         <!-- Note -->
-        <div class="rounded-lg p-3" style="background:var(--c-caution-bg);border:1px solid rgba(245,158,11,0.3)">
-          <p class="text-xs" style="color:var(--c-caution-text)">
-            <strong>Note:</strong> Saving will automatically activate injury mode and adjust your training plan.
+        <div class="rounded-lg p-3" style="border:1px solid var(--c-border)">
+          <p class="text-xs" style="color:var(--c-muted)">
+            Saving will automatically activate injury mode and adjust your training plan.
           </p>
         </div>
 

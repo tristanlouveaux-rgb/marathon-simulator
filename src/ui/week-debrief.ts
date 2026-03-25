@@ -27,6 +27,7 @@ import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedW
 import { formatKm } from '@/utils/format';
 import { renderHomeView } from '@/ui/home-view';
 import { next } from '@/ui/events';
+import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 
 // ─── Phase helpers (local — same mapping as plan-view) ────────────────────────
 
@@ -132,6 +133,31 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
   const effortLow   = effortScore != null && effortScore < -1.0;
   const showPacing  = effortHigh || effortLow;
 
+  // ── Coach insight ──────────────────────────────────────────────────────────
+  const _actuals = Object.values(wk.garminActuals ?? {}) as any[];
+  const _hrDriftVals = _actuals
+    .map((a: any) => a.hrDrift)
+    .filter((v: any) => typeof v === 'number' && !isNaN(v));
+  const _avgHrDrift = _hrDriftVals.length > 0
+    ? _hrDriftVals.reduce((acc: number, v: number) => acc + v, 0) / _hrDriftVals.length
+    : null;
+  const _signals = computeWeekSignals(effortScore, tssPct, ctlDelta, _avgHrDrift);
+  const _pills = getSignalPills(_signals);
+  const _coachCopy = getCoachCopy(_signals, wk.ph);
+
+  const _pillsHtml = _pills.map((p: SignalPill) => {
+    const c = PILL_COLORS[p.color];
+    return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:10px;background:${c.bg};color:${c.text};white-space:nowrap"><span style="font-size:9px;opacity:0.6;letter-spacing:0.04em">${p.label.toUpperCase()}</span>${p.value}</span>`;
+  }).join('');
+
+  // Hide coach block when the effort adjustment prompt is already showing — avoids duplicate messaging
+  const coachBlock = !showPacing && (_pills.length > 0 || _coachCopy) ? `
+    <div style="margin-top:16px;padding:14px;background:rgba(0,0,0,0.03);border-radius:10px">
+      ${_pills.length > 0 ? `<div style="display:flex;flex-wrap:wrap;gap:6px${_coachCopy ? ';margin-bottom:10px' : ''}">${_pillsHtml}</div>` : ''}
+      ${_coachCopy ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${_coachCopy}</p>` : ''}
+    </div>
+  ` : '';
+
   // Next week preview
   const nextPhase    = nextWk?.ph ?? null;
   const nextPlanned  = nextWk ? computePlannedWeekTSS(
@@ -219,6 +245,7 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
           </div>
         </div>
 
+        ${coachBlock}
         ${effortBlock}
         ${nextWeekBlock}
 
@@ -368,6 +395,6 @@ function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   if (mode === 'complete') {
     next(); // triggers setOnWeekAdvance callback → re-renders plan view
   } else {
-    renderHomeView();
+    import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
   }
 }
