@@ -455,6 +455,9 @@ export interface SimulatorState {
 
   // Display preferences
   unitPref?: 'km' | 'mi';   // Distance unit preference (default 'km')
+
+  // Sleep target — user-set override in seconds; if absent, derived from 75th percentile of last 30 nights
+  sleepTargetSec?: number;
 }
 
 /** Workout parsing result */

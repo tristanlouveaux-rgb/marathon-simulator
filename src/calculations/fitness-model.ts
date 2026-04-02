@@ -13,7 +13,7 @@
  * Safe upper bound varies by athlete tier (see TIER_ACWR_CONFIG).
  */
 
-import type { Week } from '@/types';
+import type { Week, Workout } from '@/types';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 
@@ -291,6 +291,28 @@ export function computeTodaySignalBTSS(wk: Week, today: string): number {
     tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15);
   }
 
+  return Math.round(tl);
+}
+
+/**
+ * Estimate Signal B TSS for a day's planned workouts (no actual data yet).
+ * Used as the strain target on training days so 100% = "you completed your plan".
+ *
+ * Uses the same RPE × TL_PER_MIN fallback as computeTodaySignalBTSS (no runSpec
+ * discount — Signal B counts full physiological load regardless of sport).
+ * Falls back to 0 when no workouts are scheduled for this day-of-week.
+ *
+ * @param workouts  Full week's generated workouts.
+ * @param dayOfWeek  0=Mon … 6=Sun (same convention as Workout.dayOfWeek).
+ */
+export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: number): number {
+  let tl = 0;
+  for (const w of workouts) {
+    if (w.dayOfWeek !== dayOfWeek) continue;
+    const rpe = w.rpe ?? w.r ?? 5;
+    const durMin = parseDurMinFromDesc(w.d);
+    tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+  }
   return Math.round(tl);
 }
 

@@ -3,6 +3,7 @@
  */
 
 import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken } from '@/data/supabaseClient';
+import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
@@ -513,6 +514,13 @@ function renderTrainingHistoryGroup(): string {
 
 function renderPreferencesGroup(): string {
   const s = getState();
+  const derivedTarget = deriveSleepTarget(s.physiologyHistory ?? []);
+  const effectiveTarget = s.sleepTargetSec ?? derivedTarget;
+  const effectiveTargetH = Math.floor(effectiveTarget / 3600);
+  const effectiveTargetM = Math.round((effectiveTarget % 3600) / 60);
+  const targetSource = s.sleepTargetSec != null ? 'custom' : (s.physiologyHistory ?? []).filter(d => d.sleepDurationSec != null).length >= 14 ? 'history' : 'default';
+  const targetSubLabel = targetSource === 'custom' ? 'Custom' : targetSource === 'history' ? 'From your history' : 'Default';
+
   return groupCard(`
     <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:15px;color:var(--c-black)">Distance</span>
@@ -521,6 +529,39 @@ function renderPreferencesGroup(): string {
           style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${(s.unitPref ?? 'km') === 'km' ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">km</button>
         <button id="btn-unit-mi"
           style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.unitPref === 'mi' ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">mi</button>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div id="sleep-target-display">
+      <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:15px;color:var(--c-black)">Sleep target</div>
+          <div style="font-size:11px;color:var(--c-faint);margin-top:2px">${targetSubLabel}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:15px;color:var(--c-black)">${fmtSleepDuration(effectiveTarget)}</span>
+          <button id="btn-sleep-target-edit" style="background:none;border:none;font-size:12px;color:var(--c-muted);cursor:pointer;padding:2px 4px">Edit</button>
+        </div>
+      </div>
+    </div>
+    <div id="sleep-target-edit" style="display:none">
+      <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+        <span style="font-size:15px;color:var(--c-black);white-space:nowrap">Sleep target</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <input id="input-sleep-h" type="number" min="4" max="12"
+            value="${effectiveTargetH}" placeholder="7"
+            style="width:52px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+          <span style="font-size:13px;color:var(--c-muted)">h</span>
+          <input id="input-sleep-m" type="number" min="0" max="45" step="15"
+            value="${effectiveTargetM}" placeholder="30"
+            style="width:52px;padding:7px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:14px;text-align:right;background:transparent;color:var(--c-black)">
+          <span style="font-size:13px;color:var(--c-muted)">m</span>
+        </div>
+      </div>
+      <div style="padding:0 16px 12px;display:flex;justify-content:flex-end;gap:8px">
+        ${s.sleepTargetSec != null ? `<button id="btn-sleep-target-clear" style="padding:8px 12px;border-radius:8px;background:transparent;border:none;font-size:12px;color:var(--c-muted);cursor:pointer;margin-right:auto">Use history</button>` : ''}
+        <button id="btn-sleep-target-cancel" style="padding:8px 16px;border-radius:8px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">Cancel</button>
+        <button id="btn-sleep-target-save" style="padding:8px 18px;border-radius:8px;background:transparent;border:1px solid var(--c-border-strong);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save</button>
       </div>
     </div>
     ${rowDivider()}
@@ -661,6 +702,34 @@ function wireAccountHandlers(): void {
   document.getElementById('btn-sign-out')?.addEventListener('click', async () => {
     await supabase.auth.signOut();
     renderAuthView();
+  });
+
+  document.getElementById('btn-sleep-target-edit')?.addEventListener('click', () => {
+    (document.getElementById('sleep-target-display') as HTMLElement).style.display = 'none';
+    (document.getElementById('sleep-target-edit') as HTMLElement).style.display = '';
+  });
+
+  document.getElementById('btn-sleep-target-cancel')?.addEventListener('click', () => {
+    (document.getElementById('sleep-target-edit') as HTMLElement).style.display = 'none';
+    (document.getElementById('sleep-target-display') as HTMLElement).style.display = '';
+  });
+
+  document.getElementById('btn-sleep-target-save')?.addEventListener('click', () => {
+    const h = parseInt((document.getElementById('input-sleep-h') as HTMLInputElement)?.value ?? '', 10);
+    const m = parseInt((document.getElementById('input-sleep-m') as HTMLInputElement)?.value ?? '0', 10);
+    if (isNaN(h) || h < 4 || h > 12) { alert('Sleep target must be between 4 and 12 hours'); return; }
+    const mins = isNaN(m) ? 0 : Math.round(m / 15) * 15; // snap to 15-min steps
+    getMutableState().sleepTargetSec = h * 3600 + Math.min(mins, 45) * 60;
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+  });
+
+  document.getElementById('btn-sleep-target-clear')?.addEventListener('click', () => {
+    getMutableState().sleepTargetSec = undefined;
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
   });
 
   document.getElementById('btn-hr-edit')?.addEventListener('click', () => {

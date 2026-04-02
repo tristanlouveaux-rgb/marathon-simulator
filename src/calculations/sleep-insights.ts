@@ -263,23 +263,40 @@ export function stageQuality(stage: SleepStage, pct: number): StageQuality {
 // ─── Sleep Bank ───────────────────────────────────────────────────────────────
 
 export interface SleepBankResult {
-  /** Sum of (actual_sleep − sleep_need) for last 7 nights. Negative = deficit. */
+  /** Sum of (actual_sleep − sleep_need) for last 14 nights. Negative = deficit. */
   bankSec: number;
-  /** Number of nights with duration data in the 7-day window. */
+  /** Number of nights with duration data in the 14-night window. */
   nightsWithData: number;
 }
 
-const DEFAULT_SLEEP_NEED_SEC = 8 * 3600; // 8h
+/** Fallback target when not enough history to derive a personal target. */
+const DEFAULT_SLEEP_NEED_SEC = 7 * 3600; // 7h
 
 /**
- * 7-day rolling sleep bank: sum of (actual_sleep − sleep_need) for recent nights.
+ * Derive a personalised sleep target from the 75th percentile of the last 30 nights.
+ * Requires at least 5 nights of data; falls back to 7h otherwise.
+ * Filters out entries shorter than 1h (likely bad data or naps).
+ */
+export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
+  const durs = history
+    .filter(d => d.sleepDurationSec != null && d.sleepDurationSec > 3600)
+    .slice(-30)
+    .map(d => d.sleepDurationSec!);
+  if (durs.length < 5) return DEFAULT_SLEEP_NEED_SEC;
+  const sorted = [...durs].sort((a, b) => a - b);
+  const idx = Math.floor(sorted.length * 0.75);
+  return sorted[idx];
+}
+
+/**
+ * 14-night rolling sleep bank: sum of (actual_sleep − sleep_need) for recent nights.
  * Negative = deficit (cumulative under-sleeping), positive = surplus.
  */
 export function getSleepBank(
   history: PhysiologyDayEntry[],
   sleepNeedSec = DEFAULT_SLEEP_NEED_SEC,
 ): SleepBankResult {
-  const recent = history.slice(-7).filter(d => d.sleepDurationSec != null);
+  const recent = history.slice(-14).filter(d => d.sleepDurationSec != null);
   if (recent.length === 0) return { bankSec: 0, nightsWithData: 0 };
   const bankSec = recent.reduce((sum, d) => sum + (d.sleepDurationSec! - sleepNeedSec), 0);
   return { bankSec: Math.round(bankSec), nightsWithData: recent.length };
@@ -296,6 +313,69 @@ export function fmtSleepBank(bankSec: number): string {
   const m = Math.floor((abs % 3600) / 60);
   const durStr = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
   return bankSec < 0 ? `${durStr} deficit` : `${durStr} surplus`;
+}
+
+// ─── Sleep bank line chart ────────────────────────────────────────────────────
+
+/**
+ * Render a line chart for the 14-night sleep bank.
+ * Each point is one night's delta (actual − target) in seconds.
+ * A dashed zero baseline separates surplus nights from deficit nights.
+ * A dot marks the most recent data point.
+ *
+ * @param nights     Array of { date: YYYY-MM-DD, delta: seconds } oldest-first.
+ * @param lineColor  CSS color for the line and terminal dot (match current bank state).
+ * @param dimColor   CSS color for axis labels (typically the dark-mode faint color).
+ */
+export function buildSleepBankLineChart(
+  nights: Array<{ date: string; delta: number }>,
+  lineColor: string,
+  dimColor: string,
+): string {
+  if (nights.length < 2) return '';
+
+  const W = 320; const H = 64; const PV = 10;
+  const deltas = nights.map(n => n.delta);
+  // Scale to actual data range so night-to-night variation is visible even when all
+  // nights are in deficit. Add 20% padding on each side, minimum 15 minutes.
+  const dataMin = Math.min(...deltas);
+  const dataMax = Math.max(...deltas);
+  const dataPad = Math.max((dataMax - dataMin) * 0.25, 900);
+  const minD = dataMin - dataPad;
+  const maxD = dataMax + dataPad;
+  const range = maxD - minD || 1;
+
+  const yOf = (v: number) => PV + ((maxD - v) / range) * (H - PV * 2);
+  const xOf = (i: number) => nights.length > 1 ? (i / (nights.length - 1)) * W : W / 2;
+
+  // Clamp zero line to chart bounds so it's always visible as a reference
+  const zeroY = Math.max(PV / 2, Math.min(H - PV / 2, yOf(0)));
+  const pts = nights.map((n, i) => ({ x: xOf(i), y: yOf(n.delta) }));
+  const lineD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const last = pts[pts.length - 1];
+
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  // Show every other label when there are many nights to avoid crowding
+  const step = nights.length > 10 ? 2 : 1;
+  const dayLabels = nights.map((n, i) => {
+    if (i % step !== 0 && i !== nights.length - 1) return '';
+    const pct = (xOf(i) / W * 100).toFixed(1);
+    const day = DAYS[new Date(n.date + 'T12:00:00').getDay()];
+    return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${dimColor};top:0">${day}</span>`;
+  }).join('');
+
+  return `
+    <div style="position:relative;margin-top:12px">
+      <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+        <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}"
+          stroke="rgba(255,255,255,0.20)" stroke-width="1" stroke-dasharray="4 3"/>
+        <path d="${lineD}" fill="none" stroke="${lineColor}"
+          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.5"
+          fill="${lineColor}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/>
+      </svg>
+      <div style="position:relative;height:16px;margin-top:2px">${dayLabels}</div>
+    </div>`;
 }
 
 // ─── Stage vs 7-day history insight ──────────────────────────────────────────

@@ -15,7 +15,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
-import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank } from '@/calculations/sleep-insights';
+import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import { showSleepSheet } from '@/ui/home-view';
 import { isSleepDataPending } from '@/data/sleepPoller';
 
@@ -620,7 +620,8 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
     ? Math.round(hrvAll.reduce((a: number, b: number) => a + b, 0) / hrvAll.length)
     : null;
 
-  const sleepBank = getSleepBank(s.physiologyHistory ?? []);
+  const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
+  const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
   const readiness = computeReadiness({
     tsb, acwr: acwr.ratio, ctlNow,
     sleepScore, hrvRmssd,

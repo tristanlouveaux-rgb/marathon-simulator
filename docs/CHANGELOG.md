@@ -4,6 +4,41 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-03-26 — Strain detail page (new iPhone-native design language)
+
+- **`src/ui/strain-view.ts`** — new full-screen strain detail page. Terracotta/orange gradient header with glowing orbs, animated SVG ring (orange gradient fill), 7-day rolling stat cards (minutes + kCal with sparklines), factual rules-based coaching card, and activity timeline. Date picker shows last 7 rolling days. Info button opens a strain explainer overlay. Timeline rows open an activity detail overlay (duration, distance, HR, TSS, calories). Back button returns to Home.
+- **`src/ui/home-view.ts`** — added `id="home-strain-ring"` + `cursor:pointer` to the strain ring container. Wired click handler → `renderStrainView()`. Strain ring is now tappable.
+
+## 2026-03-26 — Sleep stage analysis + sleep bank readiness floor
+
+- **`src/calculations/sleep-insights.ts`** — added `stageQuality()`: population-norm quality labels (Excellent/Good/Low/Normal/Elevated) for Deep, REM, and Awake stages. Added `getStageInsight()`: consultant-tone insight comparing today's REM/Deep to 7-day personal average; falls back to population norms when < 3 nights of history.
+- **`src/calculations/readiness.ts`** — added `sleepBankSec?: number | null` to `ReadinessInput`. Sleep bank floor: > 3h deficit caps score at 74, > 5h caps at 59.
+- **`src/ui/home-view.ts`** — `showSleepSheet` redesigned as a full-screen dark UI with quality labels on stage bars, REM/Deep vs 7-day insight card, and sleep bank line chart. All three `computeReadiness` call sites now pass `sleepBankSec` (requires >= 3 nights of data).
+- **`src/ui/stats-view.ts`** — `computeReadiness` call now passes `sleepBankSec`.
+
+## 2026-03-25 — Sleep bank redesign
+
+- **`src/types/state.ts`** — added `sleepTargetSec?: number` field; user-set sleep target override.
+- **`src/calculations/sleep-insights.ts`** — added `deriveSleepTarget()`: 75th percentile of last 30 nights (requires 14+), fallback 7.5h. Changed `getSleepBank()` window from 7 to 14 nights. Default target changed from 8h to 7.5h. Added `buildSleepBankLineChart()`: clean line chart with dashed zero baseline and terminal dot, replaces the flat area chart.
+- **`src/ui/home-view.ts`** — sleep bank now uses `s.sleepTargetSec ?? deriveSleepTarget()` as the baseline. Chart replaced with `buildSleepBankLineChart`. "vs 8h/night" label now shows the actual target (e.g. "vs 7h 30m/night"). Minimum nights to show headline raised from 1 to 3.
+- **`src/ui/stats-view.ts`** — readiness computation now uses effective sleep target.
+- **`src/ui/account-view.ts`** — new "Sleep target" row in Preferences. Shows current target and source (Custom / From your history / Default). Edit mode with hours and minutes inputs (15-min steps). "Use history" button clears the override and reverts to derived target.
+
+## 2026-03-25 — Sleep history access from Recovery pill sheet
+
+- **`src/ui/home-view.ts`** — Recovery pill sheet sleep row now navigates to sleep history even when today's Garmin sleep has not arrived yet, as long as there are past nights in `physiologyHistory`. Previously the row was completely unresponsive (and showed no pointer cursor) when `noGarminSleepToday && !manualSleepScore`. Added `hasHistoricSleep` to `PillSheetData` and threaded it from the pill click handler.
+
+## 2026-03-25 — Strain Score fixes
+
+- **`src/calculations/fitness-model.ts`** — added `computePlannedDaySignalBTSS(workouts, dayOfWeek)`. Estimates Signal B TSS for a day's planned workouts using RPE × TL_PER_MIN × duration (same fallback logic as `computeTodaySignalBTSS`). No runSpec discount — Signal B is full physiological load.
+- **`src/ui/home-view.ts` (`buildReadinessRing`)** — strain target now uses today's planned workout TSS when the plan has sessions scheduled, falling back to `signalBBaseline ÷ 7` on rest days. Fixes the bug where a hard-day target (e.g. 120 TSS long run) was being compared against a flat daily average (~40 TSS), making readiness floor at Manage Load before the session was done.
+- **`src/ui/home-view.ts` (`buildReadinessRing`)** — readiness sentence is now strain-aware. Strain ≥ 130% → "Daily load exceeded target…"; ≥ 100% → "Daily target hit. Training is complete for today."; any training → "Session logged. Rest for the remainder of the day." TSB/ACWR matrix sentence only shown when no training has occurred. Removed motivational padding from the old `trainedToday` fallback.
+- **`src/ui/home-view.ts`** — `trainedToday` now derived from `todaySignalBTSS > 0` (covers both garminActuals and adhocWorkouts) instead of inspecting garminActuals alone.
+- **`src/calculations/readiness.ts`** — `strainPct` now destructured at the top of `computeReadiness` with all other inputs (was accessed as `input.strainPct` inconsistently).
+- **`docs/strain.md`** — new design doc covering the strain model, target logic, readiness interaction, and known gaps.
+
+---
+
 ## 2026-03-22 — Coach Brain (Phase 1)
 
 - **`src/calculations/daily-coach.ts`** — new central aggregator. `computeDailyCoach(state)` collates all signals (TSB, ACWR, sleep, HRV, RPE, week load, injury, illness) and returns a `CoachState` with `stance`, `blockers`, `alertLevel`, and a fully structured `CoachSignals` payload ready for the LLM.

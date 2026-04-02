@@ -8,9 +8,9 @@ import type { SimulatorState } from '@/types';
 import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS, computePlannedDaySignalBTSS } from '@/calculations/fitness-model';
 import { computeReadiness, readinessColor, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
-import { getSleepInsight, fmtSleepDuration, sleepScoreColor, sleepScoreLabel, getSleepContext, buildBarChart, stageQuality, getSleepBank, fmtSleepBank, getStageInsight } from '@/calculations/sleep-insights';
+import { getSleepInsight, fmtSleepDuration, sleepScoreColor, sleepScoreLabel, getSleepContext, buildBarChart, stageQuality, getSleepBank, fmtSleepBank, getStageInsight, deriveSleepTarget, buildSleepBankLineChart } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
@@ -875,16 +875,25 @@ function buildReadinessRing(s: SimulatorState): string {
     ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length)
     : null;
 
-  const sleepBank = getSleepBank(s.physiologyHistory ?? []);
+  const effectiveSleepTarget0 = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
+  const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget0);
 
   // ── Strain Score ───────────────────────────────────────────────────────────
-  // Today's completed Signal B TSS vs the athlete's daily baseline target.
-  // Target = signalBBaseline ÷ 7 (typical daily load). On heavy training days this
-  // naturally reads > 100%, correctly reducing readiness for more.
+  // Today's completed Signal B TSS vs the day's target.
+  // Target: use today's planned workout TSS when the plan has sessions scheduled,
+  // otherwise fall back to signalBBaseline ÷ 7 (typical daily average).
+  // This means 100% = "you completed what was planned for today".
   const strainWk = (s.wks ?? [])[s.w - 1];
   const todaySignalBTSS = strainWk ? computeTodaySignalBTSS(strainWk, today) : 0;
-  const targetTSS = (s.signalBBaseline ?? 0) / 7;
-  const strainPct = targetTSS > 0 ? (todaySignalBTSS / targetTSS) * 100 : 0;
+  const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
+  const plannedWorkouts = strainWk ? generateWeekWorkouts(
+    strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
+    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus,
+  ) : [];
+  const plannedDayTSS = computePlannedDaySignalBTSS(plannedWorkouts, todayDayOfWeek);
+  const targetTSS = plannedDayTSS > 0 ? plannedDayTSS : Math.max((s.signalBBaseline ?? 0) / 7, 1);
+  const strainPct = todaySignalBTSS > 0 ? (todaySignalBTSS / targetTSS) * 100 : 0;
 
   const readiness: ReadinessResult = computeReadiness({
     tsb,
@@ -899,14 +908,21 @@ function buildReadinessRing(s: SimulatorState): string {
     strainPct: todaySignalBTSS > 0 ? strainPct : null,
   });
 
-  // If the user has already trained today, swap the readiness sentence
+  // Sentence: strain-aware override takes priority over the TSB/ACWR matrix sentence.
+  // When load has hit or exceeded the day's target, the TSB/ACWR sentence ("Full session.",
+  // "Session as planned." etc.) is misleading — the session is already done.
   const currentWk = (s.wks ?? [])[s.w - 1];
-  const trainedToday = Object.values(currentWk?.garminActuals ?? {}).some(
-    act => act.startTime?.startsWith(today)
-  );
-  const readinessSentence = trainedToday
-    ? "Done for today. Rest up — recovery is where adaptation happens."
-    : readiness.sentence;
+  const trainedToday = todaySignalBTSS > 0; // covers garminActuals + adhocWorkouts (both feed computeTodaySignalBTSS)
+  let readinessSentence: string;
+  if (strainPct >= 130) {
+    readinessSentence = "Daily load exceeded target. Additional training today raises injury risk.";
+  } else if (strainPct >= 100) {
+    readinessSentence = "Daily target hit. Training is complete for today.";
+  } else if (trainedToday) {
+    readinessSentence = "Session logged. Rest for the remainder of the day.";
+  } else {
+    readinessSentence = readiness.sentence;
+  }
 
   const color = readinessColor(readiness.label);
 
@@ -1018,7 +1034,7 @@ function buildReadinessRing(s: SimulatorState): string {
           </div>
 
           <!-- Strain ring -->
-          <div style="flex:1;display:flex;flex-direction:column;align-items:center">
+          <div id="home-strain-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Strain</div>
             <div style="position:relative;width:120px;height:120px">
               <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
@@ -1030,8 +1046,12 @@ function buildReadinessRing(s: SimulatorState): string {
                   ? `<div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${strainColor}">${todaySignalBTSS}</div>
                      <div style="font-size:9px;color:var(--c-faint);margin-top:1px">/ ${Math.round(targetTSS)} target</div>
                      <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:2px;color:var(--c-black)">${strainLabel}</div>`
-                  : `<div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-faint)">—</div>
-                     <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:4px;color:var(--c-faint)">No activity</div>`
+                  : plannedDayTSS > 0
+                    ? `<div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${Math.round(plannedDayTSS)}</div>
+                       <div style="font-size:9px;color:var(--c-faint);margin-top:1px">TSS target</div>
+                       <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:2px;color:var(--c-faint)">Not started</div>`
+                    : `<div style="font-size:20px;font-weight:300;letter-spacing:-0.02em;line-height:1;color:var(--c-faint)">Rest</div>
+                       <div style="font-size:10px;color:var(--c-faint);margin-top:4px">No sessions today</div>`
                 }
               </div>
             </div>
@@ -1042,8 +1062,8 @@ function buildReadinessRing(s: SimulatorState): string {
         <!-- Sentence -->
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
 
-        <!-- Expandable pills (tap ring to open; each pill tappable for detail) -->
-        <div id="home-readiness-pills" style="display:none;border-top:1px solid var(--c-border);padding:12px 14px">
+        <!-- Signal pills (always visible; each pill tappable for detail) -->
+        <div id="home-readiness-pills" style="border-top:1px solid var(--c-border);padding:12px 14px">
           <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px">
 
             <div class="home-readiness-pill" data-pill="fitness" style="flex:1;min-width:80px;cursor:pointer;${drivingBorderStyle('fitness')}">
@@ -1116,6 +1136,8 @@ interface PillSheetData {
   noGarminSleepToday?: boolean;
   /** Today's manually-entered sleep score (0–100), if logged by the user. */
   manualSleepScore?: number | null;
+  /** True when physiologyHistory contains at least one past night with a sleep score. */
+  hasHistoricSleep?: boolean;
 }
 
 function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
@@ -1315,8 +1337,12 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
               ? 'HRV trend and resting HR vs your 28-day baseline. Sleep not included — no data yet.'
               : 'Composite of sleep score, HRV trend, and resting HR vs your 28-day baseline.'
           }</p>
-          <div id="recovery-sleep-row" ${d.sleepSubScore != null ? 'style="cursor:pointer"' : ''}>
-            ${recBar(d.sleepSubScore, 'Sleep', sleepRawLine)}
+          <div id="recovery-sleep-row" ${(d.sleepSubScore != null || d.hasHistoricSleep) ? 'style="cursor:pointer"' : ''}>
+            ${d.sleepSubScore != null
+              ? recBar(d.sleepSubScore, 'Sleep', sleepRawLine)
+              : d.hasHistoricSleep
+                ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;padding:8px 0;border-top:1px solid var(--c-border)"><span style="font-size:11px;font-weight:600;color:var(--c-black)">Sleep</span><span style="font-size:11px;color:var(--c-muted)">View history ›</span></div>`
+                : ''}
           </div>
           ${sleepActionNote}
           <div id="recovery-hrv-row" style="cursor:pointer">
@@ -1363,11 +1389,13 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
     showManualSleepPicker();
   });
   overlay.querySelector('#recovery-sleep-row')?.addEventListener('click', () => {
-    // Only navigate to history when there is actual sleep data to show.
-    if (d.noGarminSleepToday && !d.manualSleepScore) return;
+    // Navigate when there is today's data OR historic nights to show.
+    if (d.noGarminSleepToday && !d.manualSleepScore && !d.hasHistoricSleep) return;
     close();
     const s3 = getState();
-    showSleepSheet(s3.physiologyHistory ?? [], s3.wks ?? [], () => showReadinessPillSheet(signal, d));
+    import('./sleep-view').then(({ renderSleepView }) => {
+      renderSleepView(undefined, s3.physiologyHistory ?? [], s3.wks ?? [], () => showReadinessPillSheet(signal, d));
+    });
   });
   overlay.querySelector('#recovery-hrv-row')?.addEventListener('click', () => {
     close();
@@ -1976,20 +2004,27 @@ function wireHomeHandlers(): void {
     next();
   });
 
-  // Readiness ring — tap toggles pills open/closed
-  const readinessCard = document.getElementById('home-readiness-card');
-  const readinessPills = document.getElementById('home-readiness-pills');
-  if (readinessCard && readinessPills) {
-    readinessCard.addEventListener('click', () => {
-      readinessPills.style.display = readinessPills.style.display === 'none' ? 'block' : 'none';
-    });
-  }
+  // Strain ring — tap opens strain detail page
+  document.getElementById('home-strain-ring')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    import('./strain-view').then(({ renderStrainView }) => renderStrainView());
+  });
+
+  // Readiness ring — tap opens recovery detail page
+  document.getElementById('home-readiness-card')?.addEventListener('click', () => {
+    import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView());
+  });
 
   // Pill info sheets — each pill opens a detail sheet; stop propagation so card doesn't toggle
   document.querySelectorAll<HTMLElement>('.home-readiness-pill[data-pill]').forEach(pill => {
     pill.addEventListener('click', (e) => {
       e.stopPropagation();
       const signal = pill.dataset.pill as PillSignal;
+      // Recovery pill navigates to the recovery detail page
+      if (signal === 'recovery') {
+        import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView());
+        return;
+      }
       const s2 = getState();
       const tier2 = s2.athleteTierOverride ?? s2.athleteTier;
       const atlSeed2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
@@ -2017,7 +2052,8 @@ function wireHomeHandlers(): void {
       const hrvAll2 = (s2.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
       const hrvPersonalAvg2: number | null = hrvAll2.length >= 3
         ? Math.round(hrvAll2.reduce((a: number, b: number) => a + b, 0) / hrvAll2.length) : null;
-      const sleepBank2 = getSleepBank(s2.physiologyHistory ?? []);
+      const effectiveSleepTarget2 = s2.sleepTargetSec ?? deriveSleepTarget(s2.physiologyHistory ?? []);
+      const sleepBank2 = getSleepBank(s2.physiologyHistory ?? [], effectiveSleepTarget2);
       const readiness2 = computeReadiness({
         tsb: tsb2, acwr: acwr2.ratio, ctlNow: ctlNow2,
         sleepScore: sleepScore2, sleepHistory: s2.physiologyHistory ?? [],
@@ -2091,6 +2127,7 @@ function wireHomeHandlers(): void {
         rhrWeekAvg: rhrWeekAvg2, rhrBaseline: rhrBaseline2,
         noGarminSleepToday: noGarminSleep2,
         manualSleepScore: manualSleepToday2?.sleepScore ?? null,
+        hasHistoricSleep: (s2.physiologyHistory ?? []).some(p => p.sleepScore != null),
       });
     });
   });
@@ -2329,52 +2366,21 @@ export function showSleepSheet(physiologyHistory: PhysiologyDayEntry[], wks: any
   const secondaryInsight = stageInsight && generalInsight && stageInsight !== generalInsight ? generalInsight : null;
 
   // ── Sleep bank ───────────────────────────────────────────────────────────
-  const bank = getSleepBank(physiologyHistory);
-  const bankStr = bank.nightsWithData >= 1 ? fmtSleepBank(bank.bankSec) : null;
+  const effectiveSleepTarget = getState().sleepTargetSec ?? deriveSleepTarget(physiologyHistory);
+  const bank = getSleepBank(physiologyHistory, effectiveSleepTarget);
+  const bankStr = bank.nightsWithData >= 3 ? fmtSleepBank(bank.bankSec) : null;
   const bankColorDk = bank.bankSec < -3600 ? COL_AMBER : bank.bankSec > 3600 ? COL_GREEN : DK_MUTED;
+  const bankTargetLabel = fmtSleepDuration(effectiveSleepTarget);
 
-  // ── Sleep bank nightly area chart ────────────────────────────────────────
+  // ── Sleep bank line chart (14 nights) ────────────────────────────────────
   const bankNights = physiologyHistory
-    .slice(-7)
+    .slice(-14)
     .filter(d => d.sleepDurationSec != null)
-    .map(d => ({ date: d.date, delta: d.sleepDurationSec! - 28800 }));
+    .map(d => ({ date: d.date, delta: d.sleepDurationSec! - effectiveSleepTarget }));
 
-  let bankChartHTML = '';
-  if (bankNights.length >= 2) {
-    const CDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const CW = 320; const CH = 68; const CPV = 8;
-    const deltas = bankNights.map(n => n.delta);
-    const minD = Math.min(...deltas, -3600);
-    const maxD = Math.max(...deltas, 1800);
-    const cRange = maxD - minD || 1;
-    const cYOf = (v: number) => CPV + ((maxD - v) / cRange) * (CH - CPV * 2);
-    const cXOf = (i: number) => bankNights.length > 1 ? (i / (bankNights.length - 1)) * CW : CW / 2;
-    const zeroY = cYOf(0);
-    const bPts = bankNights.map((n, i) => ({ x: cXOf(i), y: cYOf(n.delta) }));
-    const bLineD = bPts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-    const bCloseD = `L${bPts[bPts.length - 1].x.toFixed(1)},${zeroY.toFixed(1)} L${bPts[0].x.toFixed(1)},${zeroY.toFixed(1)} Z`;
-    const bXLabels = bankNights.map((n, i) => {
-      const pct = (bPts[i].x / CW * 100).toFixed(1);
-      const day = CDAYS[new Date(n.date + 'T12:00:00').getDay()];
-      return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${DK_FAINT};top:0">${day}</span>`;
-    }).join('');
-    bankChartHTML = `
-      <div style="position:relative;margin-top:12px">
-        <svg width="100%" height="${CH}" viewBox="0 0 ${CW} ${CH}" preserveAspectRatio="none">
-          <defs>
-            <clipPath id="slp-above"><rect x="0" y="0" width="${CW}" height="${zeroY.toFixed(1)}"/></clipPath>
-            <clipPath id="slp-below"><rect x="0" y="${zeroY.toFixed(1)}" width="${CW}" height="${CH - zeroY}"/></clipPath>
-          </defs>
-          <path d="${bLineD}${bCloseD}" fill="${COL_GREEN}" opacity="0.18" clip-path="url(#slp-above)"/>
-          <path d="${bLineD}${bCloseD}" fill="${COL_AMBER}" opacity="0.22" clip-path="url(#slp-below)"/>
-          <line x1="0" y1="${zeroY.toFixed(1)}" x2="${CW}" y2="${zeroY.toFixed(1)}"
-            stroke="rgba(255,255,255,0.18)" stroke-width="1" stroke-dasharray="4 3"/>
-          <path d="${bLineD}" fill="none" stroke="rgba(255,255,255,0.65)"
-            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <div style="position:relative;height:16px;margin-top:2px">${bXLabels}</div>
-      </div>`;
-  }
+  const bankChartHTML = bankNights.length >= 2
+    ? buildSleepBankLineChart(bankNights, bankColorDk, DK_FAINT)
+    : '';
 
   // ── 7-night score trend area chart ───────────────────────────────────────
   let scoreTrendHTML = '';
@@ -2481,7 +2487,7 @@ export function showSleepSheet(physiologyHistory: PhysiologyDayEntry[], wks: any
     <div style="margin:12px 16px 24px;padding:14px 16px;background:${DK_CARD};border-radius:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <div style="font-size:12px;color:${DK_FAINT}">Sleep bank · last ${bank.nightsWithData} night${bank.nightsWithData === 1 ? '' : 's'}</div>
-        <div style="font-size:11px;color:${DK_FAINT}">vs 8h/night</div>
+        <div style="font-size:11px;color:${DK_FAINT}">vs ${bankTargetLabel}/night</div>
       </div>
       <div style="font-size:28px;font-weight:300;color:${bankColorDk};margin-top:6px">${bankStr}</div>
       ${bankChartHTML}

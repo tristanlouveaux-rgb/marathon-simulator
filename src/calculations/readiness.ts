@@ -127,6 +127,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     tsb, acwr, ctlNow,
     sleepScore, sleepHistory, hrvRmssd, hrvPersonalAvg, sleepBankSec,
     weeksOfHistory = 0,
+    strainPct,
   } = input;
 
   // Edge case: insufficient history → safe default "On Track"
@@ -226,7 +227,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // 50–100%: linear floor 100→59 (you're getting into the session).
   // 100–130%: floor 59 (hit target — session complete, Manage Load).
   // >130%: floor 39 (well exceeded — Ease Back).
-  const sp = input.strainPct;
+  const sp = strainPct;
   if (sp != null && sp > 50) {
     let strainFloor: number;
     if (sp >= 130)      strainFloor = 39;

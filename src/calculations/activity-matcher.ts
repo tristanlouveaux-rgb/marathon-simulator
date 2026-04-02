@@ -825,7 +825,7 @@ export function formatActivityType(garminType: string): string {
     KAYAKING: 'Kayaking',
     GOLF: 'Golf',
   };
-  return map[garminType] || garminType.replace(/_/g, ' ').toLowerCase();
+  return map[garminType] || garminType.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
 /** Map app activity type to a sport string recognised by the cross-training engine */

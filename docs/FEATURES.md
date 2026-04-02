@@ -636,7 +636,32 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - **Momentum** (15% / 25%) — CTL now vs 4 weeks ago. Rising / Stable / Dropping.
 - **Recovery** (20%, greyed out if no watch) — sleep score + HRV RMSSD delta vs personal avg. "Connect watch to unlock."
 
-**Safety floor**: ACWR > 1.5 → score ≤ 39 (Ease Back); ACWR 1.3–1.5 → score ≤ 59 (Manage Load). A good sleep can't override a load spike.
+**Safety floors** (hard caps applied last, regardless of other signals):
+- ACWR > 1.5 → score ≤ 39 (Ease Back); ACWR 1.3–1.5 → score ≤ 59 (Manage Load)
+- Sleep < 45 → score ≤ 59; Sleep < 60 → score ≤ 74
+- Sleep bank > 5h deficit → score ≤ 59; > 3h → score ≤ 74
+- **Strain 50–100%** → floor slides linearly 100→59 (session in progress)
+- **Strain 100–130%** → score ≤ 59 (daily target hit)
+- **Strain > 130%** → score ≤ 39 (well exceeded target)
+
+**Strain Score** (second SVG ring, side-by-side with readiness ring):
+- Today's Signal B TSS ÷ day's target TSS × 100.
+- Target = today's planned workout TSS (estimated from RPE × TL_PER_MIN × duration). Falls back to `signalBBaseline ÷ 7` on rest days.
+- 100% = you've completed what was planned. > 100% = went beyond plan. < 100% = session in progress or rest day.
+- Colours: grey (0%) → amber (partial) → green (on target) → red (exceeded).
+- See `docs/strain.md` for full design spec and known gaps.
+- **Strain ring is now tappable** → opens `src/ui/strain-view.ts` (full-screen detail page).
+
+**Strain detail page** (`src/ui/strain-view.ts`) — new iPhone-native design language:
+- Terracotta/orange gradient header with glowing orbs; animated SVG ring (orange gradient, 1.4s cubic-bezier animation).
+- Two stat cards: "7-day mins" and "7-day kCal", each with a rolling 7-day sparkline.
+- Factual coaching card (no emoji; rules-based text keyed to strainPct thresholds).
+- Activity timeline for the selected date (from `garminActuals`); tapping a row opens a detail overlay (duration, HR, TSS, kCal).
+- Date picker: tapping the header date reveals a scrollable row of the last 7 days.
+- Info (`?`) button opens a strain explainer overlay (Signal B, thresholds table).
+- Back button returns to Home. No tab bar on this page (iPhone sub-page pattern).
+
+**Sentence logic**: Strain overrides the TSB/ACWR matrix sentence when the session is done. Strain ≥ 130% → "Daily load exceeded target. Additional training today raises injury risk." Strain ≥ 100% → "Daily target hit. Training is complete for today." Any training logged (strain > 0%) → "Session logged. Rest for the remainder of the day." No training → TSB/ACWR matrix sentence.
 
 **Score → label**: 80–100 Ready to Push (green) · 60–79 On Track (blue) · 40–59 Manage Load (amber) · 0–39 Ease Back (red)
 
@@ -646,9 +671,36 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 
 **Key files**:
 - `src/calculations/readiness.ts` — `computeReadiness()`, `readinessColor()`, `drivingSignalLabel()`
+- `src/calculations/fitness-model.ts` — `computeTodaySignalBTSS()`, `computePlannedDaySignalBTSS()`
 - `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handler
+- `docs/strain.md` — strain design doc + gap register
 
-**Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios.
+**Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios. ⚠️ No tests yet for `computeTodaySignalBTSS` or `computePlannedDaySignalBTSS`.
+
+---
+
+### 31. Sleep Detail View
+
+**What it does**: Full-screen dark-theme sleep detail opened by tapping the sleep sparkline on Home or Stats. Shows last night's quality score, duration, stage breakdown (Deep / REM / Light / Awake), HRV + RHR metric tiles, a consultant-tone insight card, 7-night score trend, and a sleep bank.
+
+**Stage quality labels**: Each stage row shows a quality label (Excellent / Good / Low / Normal / Elevated) derived from population norms:
+- Deep (SWS): <13% Low, 13–20% Good, >20% Excellent
+- REM: <15% Low, 15–22% Good, >22% Excellent
+- Awake: ≤8% Normal, >8% Elevated
+- Light: no label (residual stage)
+
+**Stage vs 7-day insight** (`getStageInsight()`): Compares today's REM and Deep percentages to the 7-day rolling average from `physiologyHistory`. Falls back to population norms if < 3 prior nights with stage data. Example output: "REM 11% — below your 18% 7-day average. Central fatigue risk is elevated on quality sessions today."
+
+**Sleep Bank** (`getSleepBank()`): 14-night rolling sum of `(actual_sleep − sleep_target)`. Sleep target = user-configured `sleepTargetSec` if set, otherwise the 75th-percentile of the last 30 nights (`deriveSleepTarget()`), with a 7h floor. Shown as "3h 20m deficit" or "1h 10m surplus" with a 14-night line chart.
+
+**Sleep bank floor on readiness**: Feeds into `computeReadiness()` as `sleepBankSec`. A 3h deficit caps readiness at 74; a 5h deficit caps at 59. Only applied when ≥ 3 nights of data available.
+
+**Key files**:
+- `src/calculations/sleep-insights.ts` — `stageQuality()`, `getSleepBank()`, `fmtSleepBank()`, `deriveSleepTarget()`, `getStageInsight()`, `buildSleepBankLineChart()`
+- `src/ui/home-view.ts` — `showSleepSheet()` (full dark UI)
+- `src/calculations/readiness.ts` — `sleepBankSec` floor in `computeReadiness()`
+
+**Tests**: ⚠️ No unit tests for new functions yet.
 
 ---
 
