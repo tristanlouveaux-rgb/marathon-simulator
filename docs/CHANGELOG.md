@@ -4,6 +4,34 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-08 — Start Workout button on plan view workout cards
+
+- **Start Workout as primary CTA** — Running workout cards in the expanded detail now show a "Start Workout" button (play icon + blue primary style) that launches GPS tracking via `window.trackWorkout()`. "Mark as Done" and "Skip" demoted to inline text links below.
+- **Header Start button expanded** — The compact Start button on the card header now appears for all current-week running workouts (was today-only). Also now correctly passes workout name/desc to the tracker (was launching empty).
+- **Gym/cross-training unchanged** — Non-running workouts keep "Mark Done" as primary since GPS tracking doesn't apply.
+- **Files**: `src/ui/plan-view.ts`
+
+## 2026-04-08 — Manual sleep input for no-watch users + greyed recovery rings
+
+- **Manual sleep card** — Users without a connected watch see a "How did you sleep last night?" card on the home view with four one-tap options: Great (90), Good (70), Poor (45), Terrible (25). Saves to `recoveryHistory` with `source: 'manual'`. Card collapses to a "Sleep logged" confirmation after entry. Reappears next day.
+- **Greyed recovery rings** — Sleep and Physiology rings on home view show at 35% opacity with "Log below" / "Connect watch" text when no physiology source is connected and no data exists. After manual entry, rings fill in with the logged score.
+- **Condition**: Only triggers when `getPhysiologySource(s) === undefined` (no watch connected at all). Apple Watch and Garmin users are unaffected.
+- **Files**: `src/ui/home-view.ts`
+
+## 2026-04-08 — Fix: adhoc cross-training activities missing HR zone data
+
+- **Fix: adhoc cross-training missing HR zones** — Activities stored only as `adhocWorkouts` (past-week cross-training, user-reviewed pending items) had no `garminActuals` entry, so HR zone data from Strava was lost. The 4-Week Load Focus card misattributed these to Low Aerobic. Fix: both `addAdhocWorkout` (past weeks) and `addAdhocWorkoutFromPending` (current week) now also create a `garminActuals` entry with `avgHR`, `hrZones`, `iTrimp`. The enrich loop also backfills missing entries for existing state.
+- **Files**: `activity-matcher.ts`, `fitness-model.ts`
+
+---
+
+## 2026-04-08 — Holiday mode
+
+- **New: Holiday mode** — Full holiday management via check-in overlay. Multi-step questionnaire (dates, running plans, holiday type), pre-holiday quality session shifting, render-time workout replacement during holiday, "Generate session" button for ad-hoc easy runs, blue banner on Home + Plan views, post-holiday welcome-back modal with TSS analysis and bridge week generation, taper overlap warning, VDOT detraining on return, multiple holiday support via `holidayHistory`.
+- **Files**: `holiday-modal.ts` (new), `checkin-overlay.ts`, `plan-view.ts`, `home-view.ts`, `main.ts`, `welcome-back.ts`, `state.ts`, `FEATURES.md`
+
+---
+
 ## 2026-04-08 — Apple Watch full physiology sync + wearable source abstraction
 
 - **New: `syncAppleHealthPhysiology()`** — Reads sleep stages (deep/REM/light/awake), HRV (SDNN), resting HR, and steps from HealthKit via `@capgo/capacitor-health` `readSamples()`. Converts to `PhysiologyDayEntry[]` and stores in `s.physiologyHistory`, same shape as the Garmin pipeline. Apple Watch users now get sleep insights, readiness scores, and recovery data.

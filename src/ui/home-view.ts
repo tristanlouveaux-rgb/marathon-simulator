@@ -20,6 +20,7 @@ import { isInjuryActive } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { openCoachModal } from './coach-modal';
 import { clearIllness } from './illness-modal';
+import { buildHolidayBannerHome, clearHoliday } from './holiday-modal';
 import { formatKm, fmtDateUK, fmtDesc, formatPace } from '@/utils/format';
 import { next, setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
@@ -864,8 +865,9 @@ function buildReadinessRing(s: SimulatorState): string {
   const ctlRef = ctlNow || 1;
   const momentumThreshold = ctlRef * 0.015; // 1.5% of CTL = noise floor
 
-  // Recovery data: prefer Garmin sleep when available; manual entry is a fallback only
+  // Recovery data: prefer watch sleep when available; manual entry is a fallback only
   const today = new Date().toISOString().split('T')[0];
+  const noWatch = !getPhysiologySource(s);
   const manualToday = (s.recoveryHistory ?? []).slice().reverse().find(
     (e: any) => e.date === today && e.source === 'manual',
   );
@@ -1128,7 +1130,7 @@ function buildReadinessRing(s: SimulatorState): string {
         <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:space-around;padding:8px 4px 8px;gap:0">
 
           <!-- Sleep ring -->
-          <div id="home-sleep-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
+          <div id="home-sleep-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && sleepScore == null ? ';opacity:0.35' : ''}">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Sleep</div>
             <div style="position:relative;width:80px;height:80px">
               <svg viewBox="0 0 120 120" width="80" height="80" style="display:block;overflow:visible">
@@ -1139,8 +1141,11 @@ function buildReadinessRing(s: SimulatorState): string {
                 ${sleepScore != null
                   ? `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${sleepRingColor}">${Math.round(sleepScore)}</div>
                      ${sleepDurationSec != null ? `<div style="font-size:8px;color:var(--c-faint);margin-top:1px">${fmtSleepDuration(sleepDurationSec)}</div>` : ''}`
-                  : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
-                     <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No data</div>`
+                  : noWatch
+                    ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Log below</div>`
+                    : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No data</div>`
                 }
               </div>
             </div>
@@ -1187,7 +1192,7 @@ function buildReadinessRing(s: SimulatorState): string {
           </div>
 
           <!-- Physiology ring (was Recovery) -->
-          <div id="home-recovery-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
+          <div id="home-recovery-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && !recoveryResult.hasData ? ';opacity:0.35' : ''}">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Physiology</div>
             <div style="position:relative;width:80px;height:80px">
               <svg viewBox="0 0 120 120" width="80" height="80" style="display:block;overflow:visible">
@@ -1198,13 +1203,34 @@ function buildReadinessRing(s: SimulatorState): string {
                 ${recoveryResult.hasData && recoveryResult.score != null
                   ? `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${recoveryScoreColor}">${recoveryResult.score}</div>
                      <div style="font-size:8px;color:var(--c-faint);margin-top:1px">/100</div>`
-                  : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
-                     <div style="font-size:8px;color:var(--c-faint);margin-top:3px">${recoveryResult.dataStale ? 'Sync watch' : 'No data'}</div>`
+                  : noWatch
+                    ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Connect watch</div>`
+                    : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">${recoveryResult.dataStale ? 'Sync watch' : 'No data'}</div>`
                 }
               </div>
             </div>
           </div>
         </div>
+
+        ${noWatch && !manualToday ? `
+        <!-- Manual sleep card (no-watch users only) -->
+        <div id="manual-sleep-card" style="margin:4px 14px 10px;padding:12px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface)">
+          <div style="font-size:13px;font-weight:500;color:var(--c-black);margin-bottom:8px">How did you sleep last night?</div>
+          <div style="display:flex;gap:6px">
+            <button class="manual-sleep-btn" data-quality="great" style="flex:1;padding:7px 0;border-radius:999px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Great</button>
+            <button class="manual-sleep-btn" data-quality="good" style="flex:1;padding:7px 0;border-radius:999px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Good</button>
+            <button class="manual-sleep-btn" data-quality="poor" style="flex:1;padding:7px 0;border-radius:999px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Poor</button>
+            <button class="manual-sleep-btn" data-quality="terrible" style="flex:1;padding:7px 0;border-radius:999px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Terrible</button>
+          </div>
+        </div>
+        ` : noWatch && manualToday ? `
+        <div style="margin:4px 14px 10px;padding:10px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface);display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:12px;color:var(--c-muted)">Sleep logged: <span style="font-weight:500;color:var(--c-black)">${manualToday.sleepScore >= 80 ? 'Great' : manualToday.sleepScore >= 60 ? 'Good' : manualToday.sleepScore >= 40 ? 'Poor' : 'Terrible'}</span></div>
+          <div style="font-size:11px;color:var(--c-faint)">${manualToday.sleepScore}/100</div>
+        </div>
+        ` : ''}
 
         <!-- Sentence -->
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
@@ -2007,6 +2033,7 @@ function getHomeHTML(s: SimulatorState): string {
       </div>
 
       ${buildIllnessBanner(s)}
+      ${buildHolidayBannerHome(s)}
       ${buildProgressBars(s)}
       ${buildReadinessRing(s)}
       ${buildTodayWorkout(s)}
@@ -2036,6 +2063,9 @@ function wireHomeHandlers(): void {
 
   // Illness banner — mark recovered
   document.getElementById('home-illness-recover')?.addEventListener('click', () => clearIllness());
+
+  // Holiday banner — end holiday
+  document.getElementById('home-holiday-end')?.addEventListener('click', () => clearHoliday());
 
   // Start workout button — launches structured GPS tracking for the selected workout
   document.getElementById('home-start-btn')?.addEventListener('click', (e) => {
@@ -2103,6 +2133,26 @@ function wireHomeHandlers(): void {
   document.getElementById('home-recovery-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView());
+  });
+
+  // Manual sleep buttons — no-watch users log sleep quality
+  document.querySelectorAll('.manual-sleep-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const quality = (btn as HTMLElement).dataset.quality as 'great' | 'good' | 'poor' | 'terrible';
+      if (!quality) return;
+      const { sleepQualityToScore } = await import('@/recovery/engine');
+      const score = sleepQualityToScore(quality);
+      const todayDate = new Date().toISOString().split('T')[0];
+      const entry = { date: todayDate, sleepScore: score, source: 'manual' as const };
+      const ms = getMutableState();
+      if (!ms.recoveryHistory) ms.recoveryHistory = [];
+      const idx = ms.recoveryHistory.findIndex((e: any) => e.date === todayDate);
+      if (idx >= 0) ms.recoveryHistory[idx] = entry;
+      else ms.recoveryHistory.push(entry);
+      if (ms.recoveryHistory.length > 30) ms.recoveryHistory = ms.recoveryHistory.slice(-30);
+      saveState();
+      renderHomeView();
+    });
   });
 
   // Adjust session button — shown when readiness ≤ 59

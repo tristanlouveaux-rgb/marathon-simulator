@@ -2238,6 +2238,16 @@ function buildRecoveryAccordionBody(
 ): string {
   if (!recovery.hasData) {
     const physSrc = getPhysiologySource(s);
+    const manualEntries = (s.recoveryHistory ?? []).filter((e: any) => e.source === 'manual');
+    if (!physSrc && manualEntries.length > 0) {
+      // No watch but user has been logging manually — show their trend
+      const recent = manualEntries.slice(-7);
+      const avg = Math.round(recent.reduce((sum: number, e: any) => sum + (e.sleepScore ?? 0), 0) / recent.length);
+      return `<div style="padding:8px 0 14px">
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:6px">${recent.length} manual sleep log${recent.length === 1 ? '' : 's'} in the last 7 days. Average: <span style="font-weight:600;color:var(--c-black)">${avg}/100</span></div>
+        <div style="font-size:11px;color:var(--c-faint)">Connect a watch for automatic HRV, resting heart rate, and sleep stage tracking.</div>
+      </div>`;
+    }
     const staleMsg = recovery.dataStale
       ? `Data last synced ${recovery.lastSyncDate ?? ''}. Open ${physSrc === 'apple' ? 'the Health app' : 'Garmin Connect'} and sync your watch.`
       : physSrc
