@@ -8,7 +8,7 @@ import type { GarminActual } from '@/types';
 import { drawPolylineOnCanvas } from './strava-detail';
 import { getState } from '@/state';
 import { formatKm } from '@/utils/format';
-import { generateWorkoutInsight } from '@/calculations/workout-insight';
+import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
 
 export type ActivityDetailSource = 'plan' | 'home';
 
@@ -56,12 +56,19 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     : '';
 
   // ─── Stats grid — always 5 cells, — for missing fields ──────────────────────
+  const elapsedPace = actual.distanceKm > 0.1 && actual.durationSec > 0
+    ? Math.round(actual.durationSec / actual.distanceKm)
+    : null;
+  const showElapsedPace = elapsedPace != null && actual.avgPaceSecKm != null && Math.abs(elapsedPace - actual.avgPaceSecKm) > 5;
+
   const stats: { val: string; lbl: string }[] = [
     { val: actual.distanceKm > 0.1 ? formatKm(actual.distanceKm, unitPref, 2) : '—', lbl: 'Distance' },
     { val: actual.durationSec > 0 ? fmtDuration(actual.durationSec) : '—', lbl: 'Time' },
-    { val: actual.avgPaceSecKm ? fmtPace(actual.avgPaceSecKm, unitPref) : '—', lbl: 'Avg Pace' },
+    { val: actual.avgPaceSecKm ? fmtPace(actual.avgPaceSecKm, unitPref) : '—', lbl: 'Pace' },
+    ...(showElapsedPace ? [{ val: fmtPace(elapsedPace!, unitPref), lbl: 'Elapsed Pace' }] : []),
     { val: actual.avgHR ? `${actual.avgHR} bpm` : '—', lbl: 'Avg HR' },
     { val: actual.maxHR ? `${actual.maxHR} bpm` : '—', lbl: 'Max HR' },
+    ...(actual.elevationGainM != null && actual.elevationGainM > 0 ? [{ val: `${Math.round(actual.elevationGainM)}m`, lbl: 'Elevation Gain' }] : []),
   ];
 
   const statsHtml = `
@@ -233,7 +240,8 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   }
 
   // ─── Coach insight ───────────────────────────────────────────────────────────
-  const insight = generateWorkoutInsight(actual, s);
+  const prev = findPreviousSession(actual.plannedType, actual.garminId, s.wks || []);
+  const insight = generateWorkoutInsight(actual, { hrProfile: s, prev, unitPref });
   const insightHtml = insight ? `
     <div style="margin-bottom:20px">
       <div class="m-sec-label">Coach</div>

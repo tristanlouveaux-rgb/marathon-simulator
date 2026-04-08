@@ -191,4 +191,123 @@ describe('Load Budget Enforcement', () => {
     const loadUsed = totalLoadReduction(popup.replaceOutcome.adjustments);
     expect(loadUsed).toBeLessThanOrEqual(popup.runReplacementCredit + 1.0);
   });
+
+  /**
+   * FLOOR CONSTRAINT TEST
+   *
+   * When floorKm is set and acwrStatus is 'safe', distance reductions should not
+   * take total planned running below the floor.
+   */
+  it('reduceOutcome should not cut total running km below floorKm when ACWR is safe', () => {
+    // 3 easy runs totalling 28km + 18km long = 46km
+    const workouts: Workout[] = [
+      { n: 'Easy Run A', t: 'easy', d: '10km', dayOfWeek: 0, aerobic: 100, anaerobic: 12, rpe: 3, r: 3 },
+      { n: 'Easy Run B', t: 'easy', d: '10km', dayOfWeek: 2, aerobic: 100, anaerobic: 12, rpe: 3, r: 3 },
+      { n: 'Easy Run C', t: 'easy', d: '8km', dayOfWeek: 4, aerobic: 80, anaerobic: 10, rpe: 3, r: 3 },
+      { n: 'Long Run', t: 'long', d: '18km', dayOfWeek: 6, aerobic: 160, anaerobic: 16, rpe: 5, r: 5 },
+    ];
+    const plannedRuns = workoutsToPlannedRuns(workouts);
+    const totalPlannedKm = plannedRuns.reduce((s, r) => s + r.plannedDistanceKm, 0);
+
+    // Heavy cross-training: should want to reduce a lot
+    const activity = createActivity('hiking', 180, 6);
+
+    const popup = buildCrossTrainingPopup(
+      {
+        raceGoal: 'marathon',
+        plannedRunsPerWeek: 4,
+        injuryMode: false,
+        floorKm: 40,       // Floor at 40km — only 6km of slack
+        acwrStatus: 'safe',
+      },
+      plannedRuns,
+      activity,
+    );
+
+    // Sum up km reductions from reduce outcome
+    const totalKmCut = popup.reduceOutcome.adjustments
+      .filter(a => a.action === 'reduce')
+      .reduce((sum, a) => sum + (a.originalDistanceKm - a.newDistanceKm), 0);
+
+    const resultingKm = totalPlannedKm - totalKmCut;
+
+    // Should not drop below 40km floor
+    expect(resultingKm).toBeGreaterThanOrEqual(40);
+
+    console.log(
+      `FLOOR TEST (safe): planned=${totalPlannedKm}km, cut=${totalKmCut.toFixed(1)}km, ` +
+      `remaining=${resultingKm.toFixed(1)}km, floor=40km`
+    );
+  });
+
+  it('reduceOutcome should ignore floor when ACWR is high (injury prevention)', () => {
+    const workouts: Workout[] = [
+      { n: 'Easy Run A', t: 'easy', d: '10km', dayOfWeek: 0, aerobic: 100, anaerobic: 12, rpe: 3, r: 3 },
+      { n: 'Easy Run B', t: 'easy', d: '10km', dayOfWeek: 2, aerobic: 100, anaerobic: 12, rpe: 3, r: 3 },
+      { n: 'Easy Run C', t: 'easy', d: '8km', dayOfWeek: 4, aerobic: 80, anaerobic: 10, rpe: 3, r: 3 },
+      { n: 'Long Run', t: 'long', d: '18km', dayOfWeek: 6, aerobic: 160, anaerobic: 16, rpe: 5, r: 5 },
+    ];
+    const plannedRuns = workoutsToPlannedRuns(workouts);
+    const totalPlannedKm = plannedRuns.reduce((s, r) => s + r.plannedDistanceKm, 0);
+
+    const activity = createActivity('hiking', 180, 6);
+
+    const popupSafe = buildCrossTrainingPopup(
+      {
+        raceGoal: 'marathon', plannedRunsPerWeek: 4, injuryMode: false,
+        floorKm: 40, acwrStatus: 'safe',
+      },
+      plannedRuns, activity,
+    );
+
+    const popupHigh = buildCrossTrainingPopup(
+      {
+        raceGoal: 'marathon', plannedRunsPerWeek: 4, injuryMode: false,
+        floorKm: 40, acwrStatus: 'high',
+      },
+      plannedRuns, activity,
+    );
+
+    const cutSafe = popupSafe.reduceOutcome.adjustments
+      .filter(a => a.action === 'reduce')
+      .reduce((sum, a) => sum + (a.originalDistanceKm - a.newDistanceKm), 0);
+
+    const cutHigh = popupHigh.reduceOutcome.adjustments
+      .filter(a => a.action === 'reduce')
+      .reduce((sum, a) => sum + (a.originalDistanceKm - a.newDistanceKm), 0);
+
+    // High ACWR should cut more aggressively (no floor constraint)
+    expect(cutHigh).toBeGreaterThanOrEqual(cutSafe);
+
+    console.log(
+      `FLOOR TEST (high vs safe): cutSafe=${cutSafe.toFixed(1)}km, cutHigh=${cutHigh.toFixed(1)}km`
+    );
+  });
+
+  it('replaceOutcome should not remove a run if it would breach floorKm', () => {
+    const workouts: Workout[] = [
+      { n: 'Easy Run', t: 'easy', d: '8km', dayOfWeek: 0, aerobic: 80, anaerobic: 10, rpe: 3, r: 3 },
+      { n: 'Long Run', t: 'long', d: '18km', dayOfWeek: 6, aerobic: 160, anaerobic: 16, rpe: 5, r: 5 },
+    ];
+    const plannedRuns = workoutsToPlannedRuns(workouts);
+
+    // Very heavy cross-training with tight floor
+    const activity = createActivity('cycling', 120, 7);
+
+    const popup = buildCrossTrainingPopup(
+      {
+        raceGoal: 'marathon', plannedRunsPerWeek: 2, injuryMode: false,
+        floorKm: 24, // floor = 24, total = 26km — only 2km slack, not enough to drop the 8km run
+        acwrStatus: 'safe',
+      },
+      plannedRuns, activity,
+    );
+
+    // Should NOT fully replace the easy run (8km > 2km slack)
+    const replacements = popup.replaceOutcome.adjustments.filter(a => a.action === 'replace');
+    for (const r of replacements) {
+      // If there's a replacement, it must not be the 8km run (would breach floor)
+      expect(r.originalDistanceKm).toBeLessThanOrEqual(2);
+    }
+  });
 });

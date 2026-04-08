@@ -434,6 +434,7 @@ Deno.serve(async (req) => {
     const afterTimestamp: number = body.after_timestamp ?? Math.floor(Date.now() / 1000) - 28 * 86400;
     const biologicalSex: "male" | "female" | undefined =
       body.biological_sex === "male" || body.biological_sex === "female" ? body.biological_sex : undefined;
+    const maxHROverride: number | null = typeof body.max_hr_override === 'number' && body.max_hr_override > 100 ? body.max_hr_override : null;
 
     const supabase = createClient(supabaseUrl, serviceKey);
 
@@ -712,8 +713,9 @@ Deno.serve(async (req) => {
       );
 
       // 4. Load physiology for iTRIMP.
-      // maxHR: prefer all-time peak from activity data over daily_metrics rolling value.
-      const [{ data: physioRow2 }, { data: bfMaxHRRow }] = await Promise.all([
+      // maxHR: 95th percentile of all activity max HRs — robust against wrist-sensor spikes.
+      // Top-N approaches still catch outliers; percentile across the full distribution is safer.
+      const [{ data: physioRow2 }, { data: bfMaxHRRows }] = await Promise.all([
         supabase
           .from("daily_metrics")
           .select("resting_hr, max_hr")
@@ -725,13 +727,27 @@ Deno.serve(async (req) => {
           .from("garmin_activities")
           .select("max_hr")
           .eq("user_id", user.id)
-          .not("max_hr", "is", null)
-          .order("max_hr", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
+          .not("max_hr", "is", null),
       ]);
       const bfRestingHR: number = physioRow2?.resting_hr ?? 55;
-      const bfMaxHR: number = (bfMaxHRRow?.max_hr ?? physioRow2?.max_hr) ?? 190;
+      let bfMaxHR: number;
+      if (maxHROverride) {
+        bfMaxHR = maxHROverride;
+        console.log(`[Backfill] Using client max HR override: ${bfMaxHR}`);
+      } else {
+        const allHRs = (bfMaxHRRows ?? []).map((r: any) => r.max_hr as number).filter((v: number) => v > 0);
+        if (allHRs.length >= 5) {
+          allHRs.sort((a: number, b: number) => a - b);
+          const p95Idx = Math.floor(allHRs.length * 0.95);
+          bfMaxHR = allHRs[Math.min(p95Idx, allHRs.length - 1)];
+          console.log(`[Backfill] Max HR from p95 of ${allHRs.length} activities: ${bfMaxHR}`);
+        } else if (allHRs.length > 0) {
+          allHRs.sort((a: number, b: number) => a - b);
+          bfMaxHR = allHRs[Math.floor(allHRs.length / 2)]; // median for small samples
+        } else {
+          bfMaxHR = (physioRow2?.max_hr) ?? 190;
+        }
+      }
 
       // 5. Partition uncached activities: full stream (recent ≤99) vs avg HR
       const sorted = [...allActivities].sort(
@@ -771,6 +787,7 @@ Deno.serve(async (req) => {
         const avgHR = (act["average_heartrate"] as number | null) ?? null;
         const maxHRVal = (act["max_heartrate"] as number | null) ?? null;
         const actName = (act.name as string | null) ?? null;
+        const elevGainM = (act["total_elevation_gain"] as number | null) ?? null;
         let iTrimp: number | null = null;
         let hrZones: HRZones | null = null;
         let kmSplits: number[] = [];
@@ -828,6 +845,7 @@ Deno.serve(async (req) => {
           km_splits: kmSplits.length > 0 ? kmSplits : null,
           hr_drift: hrDrift,
           activity_name: actName,
+          elevation_gain_m: elevGainM,
         }, { onConflict: "garmin_id" });
         if (upsertErr) {
           console.error(`[Backfill] HR-stream upsert failed for ${garminId}:`, upsertErr.message);
@@ -870,6 +888,7 @@ Deno.serve(async (req) => {
           itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
           hr_zones: null, km_splits: null,
           activity_name: actName,
+          elevation_gain_m: (act["total_elevation_gain"] as number | null) ?? null,
         });
         withAvgHR++;
       }
@@ -927,9 +946,8 @@ Deno.serve(async (req) => {
     }
 
     // Load physiology context for iTRIMP.
-    // maxHR: prefer all-time peak from activity data (most accurate); fall back to
-    // daily_metrics rolling value (7-day Garmin peak), then age-estimate default.
-    const [{ data: physioRow }, { data: maxHRRow }] = await Promise.all([
+    // maxHR: robust estimate — median of top 5 activity max HRs (filters wrist-sensor spikes).
+    const [{ data: physioRow }, { data: maxHRRows }] = await Promise.all([
       supabase
         .from("daily_metrics")
         .select("resting_hr, max_hr")
@@ -943,12 +961,27 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .not("max_hr", "is", null)
         .order("max_hr", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
+        .limit(5),
     ]);
 
     const restingHR: number = physioRow?.resting_hr ?? 55;
-    const maxHR: number = (maxHRRow?.max_hr ?? physioRow?.max_hr) ?? 190;
+    let maxHR: number;
+    if (maxHROverride) {
+      maxHR = maxHROverride;
+      console.log(`[Standalone] Using client max HR override: ${maxHR}`);
+    } else {
+      const allHRsStandalone = (maxHRRows ?? []).map((r: any) => r.max_hr as number).filter((v: number) => v > 0);
+      if (allHRsStandalone.length >= 5) {
+        allHRsStandalone.sort((a: number, b: number) => a - b);
+        const p95Idx = Math.floor(allHRsStandalone.length * 0.95);
+        maxHR = allHRsStandalone[Math.min(p95Idx, allHRsStandalone.length - 1)];
+      } else if (allHRsStandalone.length > 0) {
+        allHRsStandalone.sort((a: number, b: number) => a - b);
+        maxHR = allHRsStandalone[Math.floor(allHRsStandalone.length / 2)];
+      } else {
+        maxHR = (physioRow?.max_hr) ?? 190;
+      }
+    }
 
     // Load cached HR zones + km splits from DB for all activities in this batch.
     // This avoids re-fetching Strava streams for activities already processed —
@@ -987,6 +1020,7 @@ Deno.serve(async (req) => {
       const activityType = mapStravaType(stravaActivityType);
       const activityName = (act.name as string | null) ?? null;
       const calories = (act["calories"] as number | null) ?? null;
+      const elevationGainM = (act["total_elevation_gain"] as number | null) ?? null;
       const isRun = activityType === "RUNNING";
       const mapObj = act.map as Record<string, unknown> | null;
       const polyline = (mapObj?.summary_polyline as string | null) ?? null;
@@ -1054,12 +1088,14 @@ Deno.serve(async (req) => {
               kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
             }
           }
-        } catch {
+        } catch (streamErr: any) {
+          console.error(`[Standalone] Stream fetch FAILED for ${garminId}:`, streamErr?.message ?? streamErr);
           if (avgHR && durationSec > 0) {
             iTrimp = calculateITrimpFromSummary(avgHR, durationSec, restingHR, maxHR, biologicalSex);
           }
         }
       }
+      console.log(`[Standalone] ${garminId}: needsUpsert=${needsUpsert} iTrimp=${iTrimp?.toFixed(0) ?? 'null'} zones=${hrZones ? 'YES' : 'null'}`);
 
       // Cached runs with no km_splits: fetch from Strava detail and patch DB
       if (isRun && kmSplits.length === 0 && cached?.hr_zones) {
@@ -1097,10 +1133,12 @@ Deno.serve(async (req) => {
             km_splits: kmSplits.length > 0 ? kmSplits : null,
             hr_drift: hrDrift,
             activity_name: activityName,
+            elevation_gain_m: elevationGainM,
           },
           { onConflict: "garmin_id" },
         );
-        if (standaloneErr) console.error(`[Standalone] Upsert failed for ${garminId}:`, standaloneErr.message);
+        if (standaloneErr) console.error(`[Standalone] Upsert FAILED for ${garminId}:`, standaloneErr.message, standaloneErr.code, standaloneErr.details);
+        else console.log(`[Standalone] Upsert OK for ${garminId}`);
       }
 
       rows.push({
@@ -1121,6 +1159,7 @@ Deno.serve(async (req) => {
         kmSplits: kmSplits.length > 0 ? kmSplits : null,
         hrDrift: hrDrift,
         polyline,
+        elevationGainM,
       });
     }
 

@@ -14,7 +14,7 @@ import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
 import { initializeWeeks } from '@/workouts';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
@@ -1073,7 +1073,7 @@ export async function next(): Promise<void> {
   // reason on the next week so the banner appears when it's rendered.
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
 
   s.w++;
 
@@ -1093,41 +1093,21 @@ export async function next(): Promise<void> {
 
       // ─── Km floor nudge ────────────────────────────────────────────────────
       // If fatigue is safe and the athlete has run below their phase km floor
-      // for 2+ consecutive weeks, suggest extending the nearest upcoming easy run.
+      // for 2+ consecutive weeks, signal the plan-view card to show.
       // Never fires during taper (deliberately low volume) or when ACWR is elevated.
       if (acwr.status === 'safe' && nextWk.ph !== 'taper') {
-        const mTimeSec = (s.pac?.m ?? 360) * 42.195;
-        const floorTier = mTimeSec < 3.5 * 3600 ? 'fast' : mTimeSec < 4.5 * 3600 ? 'mid' : 'finish';
-        const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
-        const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
-        const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (s.w - 2) / ((s.tw ?? 16) - 1));
+        const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, nextWk.ph);
 
-        // Check the most recently completed week (the one we just advanced from)
         const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
         const consecutiveBelow = prevWeeks.length >= 1 &&
           prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
 
         if (consecutiveBelow) {
-          const nextWorkouts = generateWeekWorkouts(
-            nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
-            null, s.recurringActivities, s.onboarding?.experienceLevel,
-            undefined, undefined, s.w, s.tw, s.v, s.gs,
+          const hasReductions = (nextWk.workoutMods ?? []).some(
+            m => m.status === 'reduced' || m.status === 'replaced'
           );
-          const easyRun = nextWorkouts.find(wo =>
-            wo.t === 'easy' && !nextWk.rated[wo.id ?? wo.n]
-          );
-          if (easyRun) {
-            const distMatch = easyRun.d?.match(/(\d+\.?\d*)\s*km/i);
-            const plannedKm = distMatch ? parseFloat(distMatch[1]) : 8;
-            const extensionKm = Math.min(5, Math.max(1.5, Math.round(plannedKm * 0.20 * 2) / 2));
-            nextWk.kmNudge = {
-              workoutName: easyRun.n,
-              dayOfWeek: (easyRun as any).dayOfWeek,
-              suggestedExtensionKm: extensionKm,
-              originalDistanceKm: plannedKm,
-            };
-            log(`Week ${s.w}: km nudge — extend "${easyRun.n}" by +${extensionKm}km (${plannedKm}km → ${plannedKm + extensionKm}km)`);
-          }
+          nextWk.kmNudge = { floorKm, hasReductions };
+          log(`Week ${s.w}: km nudge — floor ${floorKm.toFixed(1)}km, reductions: ${hasReductions}`);
         }
       }
     }
@@ -1647,6 +1627,12 @@ export function logActivity(): void {
     getTrailingEffortScore(s.wks, activityWeek), wk.scheduledAcwrStatus,
   );
 
+  // Compute ACWR + floor for floor-aware reductions
+  const _tier = s.athleteTierOverride ?? s.athleteTier;
+  const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined);
+  const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, s.tw ?? 16, wk.ph);
+
   // -----------------------------------------------------------------------
   // Cross-training slot matching: pair logged sport with planned slots
   // Priority: 1) matching sport slot, 2) general sport slot, 3) run suggestions
@@ -1753,6 +1739,8 @@ export function logActivity(): void {
         plannedRunsPerWeek: s.rw,
         injuryMode: !!(s as any).injuryState?.active,
         runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+        floorKm: _floorKm,
+        acwrStatus: _acwr.status,
       },
       plannedRuns,
       excessActivity,
@@ -1877,6 +1865,8 @@ export function logActivity(): void {
       plannedRunsPerWeek: s.rw,
       injuryMode: !!(s as any).injuryState?.active,
       runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+      floorKm: _floorKm,
+      acwrStatus: _acwr.status,
     },
     plannedRuns,
     activity,
@@ -2494,46 +2484,26 @@ if (typeof window !== 'undefined') {
 export function maybeInitKmNudge(): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
-  console.log('[kmNudge] wk:', !!wk, 'kmNudge:', wk?.kmNudge, 'dismissed:', wk?.kmNudgeDismissed, 'ph:', wk?.ph);
   if (!wk || wk.kmNudge || wk.kmNudgeDismissed) return;
   if (wk.ph === 'taper') return;
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
-  console.log('[kmNudge] acwr:', acwr.status, acwr.ratio);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
   if (acwr.status !== 'safe') return;
 
-  const mTimeSec = (s.pac?.m ?? 360) * 42.195;
-  const floorTier = mTimeSec < 3.5 * 3600 ? 'fast' : mTimeSec < 4.5 * 3600 ? 'mid' : 'finish';
-  const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
-  const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
-  const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (s.w - 2) / ((s.tw ?? 16) - 1));
+  const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph);
 
   const prevWeeks = s.wks.slice(Math.max(0, s.w - 2), s.w - 1);
-  console.log('[kmNudge] floorKm:', floorKm, 'prevWeeks:', prevWeeks.map(pw => pw.completedKm));
   const below = prevWeeks.length >= 1 &&
     prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
-  console.log('[kmNudge] below:', below);
   if (!below) return;
 
-  const nextWorkouts = generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
-    null, s.recurringActivities, s.onboarding?.experienceLevel,
-    undefined, undefined, s.w, s.tw, s.v, s.gs,
+  // Check if cross-training reduced any runs this week
+  const hasReductions = (wk.workoutMods ?? []).some(
+    m => m.status === 'reduced' || m.status === 'replaced'
   );
-  const easyRun = nextWorkouts.find(wo => wo.t === 'easy' && !wk.rated[wo.id ?? wo.n]);
-  console.log('[kmNudge] easyRun:', easyRun?.n, easyRun?.t, easyRun?.d);
-  if (!easyRun) return;
 
-  const distMatch = easyRun.d?.match(/(\d+\.?\d*)\s*km/i);
-  const plannedKm = distMatch ? parseFloat(distMatch[1]) : 8;
-  const extensionKm = Math.min(5, Math.max(1.5, Math.round(plannedKm * 0.20 * 2) / 2));
-  wk.kmNudge = {
-    workoutName: easyRun.n,
-    dayOfWeek: (easyRun as any).dayOfWeek,
-    suggestedExtensionKm: extensionKm,
-    originalDistanceKm: plannedKm,
-  };
+  wk.kmNudge = { floorKm, hasReductions };
   saveState();
 }

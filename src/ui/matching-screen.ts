@@ -56,7 +56,7 @@ function workoutTypeShort(t: string): string {
   const map: Record<string, string> = {
     run: 'Run', easy: 'Easy run', long: 'Long run', threshold: 'Threshold',
     vo2: 'VO₂', intervals: 'Intervals', gym: 'Gym', cross: 'Sport slot',
-    marathon_pace: 'MP run', race_pace: 'Race pace', rest: 'Rest',
+    marathon_pace: 'MP run', race_pace: 'Race pace', float: 'Float', rest: 'Rest',
   };
   return map[t] ?? t;
 }
@@ -65,7 +65,7 @@ function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   const type = item.appType;
   const wt   = workout.t;
   // Runs match run-type slots and general sport (cross) slots
-  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'cross';
+  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross';
   // Gym/strength can replace gym slots or run slots (a hard session can cover either)
   if (type === 'gym') return wt === 'gym';
   // Cross-training (rides, swims, walks, sports) only match cross slots
@@ -420,9 +420,16 @@ export function showMatchingScreen(
 ): void {
   const assignments = new Map<string, string | 'reduction' | 'logonly' | null>();
   for (const p of pairings) {
-    // Overflow items start in the tray (null) so the user can manually assign them.
-    // They become Excess Load on confirm if still unassigned.
-    assignments.set(p.item.garminId, p.matchType === 'overflow' ? null : p.proposedWorkoutId);
+    if (p.proposedWorkoutId === '__reduction__') {
+      // Saved from previous review: start in the Excess Load bucket
+      assignments.set(p.item.garminId, 'reduction');
+    } else if (p.matchType === 'overflow') {
+      // Overflow items start in the tray (null) so the user can manually assign them.
+      // They become Excess Load on confirm if still unassigned.
+      assignments.set(p.item.garminId, null);
+    } else {
+      assignments.set(p.item.garminId, p.proposedWorkoutId);
+    }
   }
   // Original log-only items go to logonly bucket
   for (const item of pending.filter(i => choices[i.garminId] === 'log')) {

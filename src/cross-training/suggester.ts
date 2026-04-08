@@ -65,6 +65,15 @@ export interface AthleteContext {
   runnerType?: 'Speed' | 'Endurance' | 'Balanced';
   /** Personal iTRIMP intensity thresholds (calibrated from Strava history — Phase C2) */
   intensityThresholds?: IntensityThresholds;
+  /**
+   * Weekly running km floor for this training phase.
+   * When acwrStatus is 'safe' or 'low', reductions will not take total planned
+   * running below this floor. When ACWR is 'caution' or 'high', floor is ignored
+   * (injury prevention takes priority over aerobic volume).
+   */
+  floorKm?: number;
+  /** Current ACWR status — determines whether the km floor constraint applies. */
+  acwrStatus?: 'safe' | 'caution' | 'high' | 'low' | 'unknown';
 }
 
 /** Single adjustment to a run */
@@ -337,12 +346,13 @@ function downgradeType(wt: WorkoutType): WorkoutType {
     marathon_pace: 'easy',
     mixed: 'marathon_pace',
     progressive: 'marathon_pace',
+    float: 'marathon_pace',
   };
   return downgrades[wt] || wt;
 }
 
 function isQualityWorkout(wt: WorkoutType): boolean {
-  return ['vo2', 'intervals', 'hill_repeats', 'threshold', 'race_pace', 'marathon_pace', 'mixed', 'progressive'].includes(wt);
+  return ['vo2', 'intervals', 'hill_repeats', 'threshold', 'race_pace', 'marathon_pace', 'mixed', 'progressive', 'float'].includes(wt);
 }
 
 function computeWeeklyRunLoad(runs: PlannedRun[]): number {
@@ -470,7 +480,8 @@ function buildReduceAdjustments(
   severity: Severity,
   ctx: AthleteContext,
   preserveMin: number,
-  plannedCount: number
+  plannedCount: number,
+  allPlannedKm?: number,
 ): Adjustment[] {
   const adjustments: Adjustment[] = [];
   let remainingLoad = loadBudget;
@@ -481,6 +492,14 @@ function buildReduceAdjustments(
 
   // Minimum load worth adjusting (below this, not worth changing the plan)
   const minLoadThreshold = 5;
+
+  // ── Km floor constraint ──────────────────────────────────────────────────
+  // When ACWR is safe or low, don't reduce total planned running below the floor.
+  // When ACWR is caution or high, injury prevention wins — floor is ignored.
+  const floorActive = ctx.floorKm != null && ctx.floorKm > 0 &&
+    (ctx.acwrStatus === 'safe' || ctx.acwrStatus === 'low' || ctx.acwrStatus == null);
+  const totalPlannedKm = allPlannedKm ?? candidates.reduce((sum, c) => sum + c.run.plannedDistanceKm, 0);
+  let totalReducedKm = 0; // running total of km removed by distance reductions
 
   // Process candidates in priority order:
   // 1. Non-downgraded workouts (quality downgrades + easy reductions)
@@ -498,16 +517,23 @@ function buildReduceAdjustments(
     : raw;
   const downgraded = candidates.filter(c => c.run.alreadyDowngraded);
 
+  /** How many more km can be cut before hitting the floor (Infinity if floor is off). */
+  const floorSlack = (): number => {
+    if (!floorActive) return Infinity;
+    return Math.max(0, (totalPlannedKm - totalReducedKm) - ctx.floorKm!);
+  };
+
   const tryReduce = (pool: CandidateRun[], allowQualityDowngrade: boolean) => {
     for (const { run, runLoad } of pool) {
       if (adjustments.length >= maxAdjustments) break;
       if (remainingLoad <= minLoadThreshold) break;
 
       // Quality workout downgrade (keeps distance, reduces intensity)
+      // Downgrades don't remove km — they're always allowed regardless of floor.
       if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
-                  : run.workoutType === 'threshold' || run.workoutType === 'race_pace' ? 7
+                  : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
                   : 6;
         const downgradedRpe = newType === 'easy' ? 4 : newType === 'marathon_pace' ? 6 : 7;
         const originalLoad = computeWorkoutWeightedLoad(run.workoutType, run.plannedDistanceKm, rpe);
@@ -540,7 +566,12 @@ function buildReduceAdjustments(
         if (loadPerKm <= 0) continue;
 
         const budgetKm = remainingLoad / loadPerKm;
-        const maxReductionKm = Math.min(budgetKm, runKm * 0.40);
+        let maxReductionKm = Math.min(budgetKm, runKm * 0.40);
+
+        // Floor constraint: don't cut more km than the floor allows
+        const slack = floorSlack();
+        if (slack <= 0) continue; // already at or below floor
+        maxReductionKm = Math.min(maxReductionKm, slack);
 
         if (maxReductionKm < 0.5) continue;
 
@@ -565,6 +596,7 @@ function buildReduceAdjustments(
         });
 
         remainingLoad -= loadReduction;
+        totalReducedKm += actualReductionKm;
         continue;
       }
 
@@ -575,12 +607,20 @@ function buildReduceAdjustments(
         if (loadPerKm <= 0) continue;
 
         const budgetKm = remainingLoad / loadPerKm;
-        const maxReductionKm = Math.min(budgetKm, runKm * 0.25);
+        let maxReductionKm = Math.min(budgetKm, runKm * 0.25);
+
+        // Floor constraint on long runs: protect at least 85% of the original distance
+        // when floor is active — long runs are critical for structural adaptation.
+        const longRunFloor = floorActive ? Math.max(MIN_LONG_KM, runKm * 0.85) : MIN_LONG_KM;
+        // Also respect the weekly km floor
+        const slack = floorSlack();
+        if (slack <= 0) continue;
+        maxReductionKm = Math.min(maxReductionKm, slack);
 
         if (maxReductionKm < 1.0) continue;
 
         let newKm = runKm - maxReductionKm;
-        if (newKm < MIN_LONG_KM) newKm = MIN_LONG_KM;
+        if (newKm < longRunFloor) newKm = longRunFloor;
 
         const actualReductionKm = runKm - newKm;
         if (actualReductionKm < 0.5) continue;
@@ -600,6 +640,7 @@ function buildReduceAdjustments(
         });
 
         remainingLoad -= loadReduction;
+        totalReducedKm += actualReductionKm;
       }
     }
   };
@@ -625,7 +666,8 @@ function buildReplaceAdjustments(
   ctx: AthleteContext,
   sport: SportProfile,
   preserveMin: number,
-  plannedCount: number
+  plannedCount: number,
+  allPlannedKm?: number,
 ): Adjustment[] {
   const adjustments: Adjustment[] = [];
   let remainingLoad = loadBudget;
@@ -638,6 +680,17 @@ function buildReplaceAdjustments(
   const minLoadThreshold = 5;
   const usedIds = new Set<string>();
   const candidateKey = (r: PlannedRun) => `${r.workoutId}:${r.dayIndex}`;
+
+  // ── Km floor constraint (same logic as buildReduceAdjustments) ───────────
+  const floorActive = ctx.floorKm != null && ctx.floorKm > 0 &&
+    (ctx.acwrStatus === 'safe' || ctx.acwrStatus === 'low' || ctx.acwrStatus == null);
+  const totalPlannedKm = allPlannedKm ?? candidates.reduce((sum, c) => sum + c.run.plannedDistanceKm, 0);
+  let totalReducedKm = 0;
+
+  const floorSlack = (): number => {
+    if (!floorActive) return Infinity;
+    return Math.max(0, (totalPlannedKm - totalReducedKm) - ctx.floorKm!);
+  };
 
   // Split candidates into fresh (non-downgraded) and already-downgraded
   const freshCandidates = candidates.filter(c => !c.run.alreadyDowngraded);
@@ -664,10 +717,11 @@ function buildReplaceAdjustments(
 
       const runKm = run.plannedDistanceKm;
 
+      // Quality downgrade (keeps km — no floor impact)
       if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
-                  : run.workoutType === 'threshold' || run.workoutType === 'race_pace' ? 7
+                  : run.workoutType === 'threshold' || run.workoutType === 'race_pace' || run.workoutType === 'float' ? 7
                   : 6;
         const downgradedRpe = newType === 'easy' ? 4 : newType === 'marathon_pace' ? 6 : 7;
         const originalLoad = computeWorkoutWeightedLoad(run.workoutType, runKm, rpe);
@@ -685,11 +739,18 @@ function buildReplaceAdjustments(
         return true;
       }
 
+      // Easy run distance reduction (floor-aware)
       if (run.workoutType === 'easy') {
         const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
         if (loadPerKm <= 0) continue;
         const budgetKm = remainingLoad / loadPerKm;
-        const reduceKm = Math.min(budgetKm, runKm * 0.5);
+        let reduceKm = Math.min(budgetKm, runKm * 0.5);
+
+        // Floor constraint
+        const slack = floorSlack();
+        if (slack <= 0) continue;
+        reduceKm = Math.min(reduceKm, slack);
+
         const newKm = Math.max(MIN_EASY_KM, Math.round((runKm - reduceKm) * 10) / 10);
         const actualReductionKm = runKm - newKm;
         if (actualReductionKm < 0.5) continue;
@@ -701,17 +762,25 @@ function buildReplaceAdjustments(
           loadReduction: loadPerKm * actualReductionKm,
         });
         remainingLoad -= loadPerKm * actualReductionKm;
+        totalReducedKm += actualReductionKm;
         usedIds.add(candidateKey(run));
         return true;
       }
 
+      // Long run reduction (floor-aware)
       if (run.workoutType === 'long' && severity !== 'light') {
         const loadPerKm = runKm > 0 ? runLoad / runKm : 0;
         if (loadPerKm <= 0) continue;
         const budgetKm = remainingLoad / loadPerKm;
-        const maxReductionKm = Math.min(budgetKm, runKm * 0.3);
+        let maxReductionKm = Math.min(budgetKm, runKm * 0.3);
+
+        const longRunFloor = floorActive ? Math.max(MIN_LONG_KM, runKm * 0.85) : MIN_LONG_KM;
+        const slack = floorSlack();
+        if (slack <= 0) continue;
+        maxReductionKm = Math.min(maxReductionKm, slack);
+
         if (maxReductionKm < 1.0) continue;
-        const newKm = Math.max(MIN_LONG_KM, Math.round((runKm - maxReductionKm) * 10) / 10);
+        const newKm = Math.max(longRunFloor, Math.round((runKm - maxReductionKm) * 10) / 10);
         const actualReductionKm = runKm - newKm;
         if (actualReductionKm < 0.5) continue;
 
@@ -722,6 +791,7 @@ function buildReplaceAdjustments(
           loadReduction: loadPerKm * actualReductionKm,
         });
         remainingLoad -= loadPerKm * actualReductionKm;
+        totalReducedKm += actualReductionKm;
         usedIds.add(candidateKey(run));
         return true;
       }
@@ -734,6 +804,7 @@ function buildReplaceAdjustments(
     let madeProgress = false;
 
     // Try to replace one workout (fresh first, then downgraded)
+    // Replace removes all km — check floor before allowing it
     while (replaceIdx < replacePool.length) {
       const { run, runLoad } = replacePool[replaceIdx];
       replaceIdx++;
@@ -741,6 +812,10 @@ function buildReplaceAdjustments(
       if (runsLeft <= preserveMin) break;
       if (remainingLoad < runLoad) continue;
       if (adjustments.length >= maxAdjustments) break;
+
+      // Floor constraint: replacing removes all this run's km
+      const slack = floorSlack();
+      if (run.plannedDistanceKm > slack) continue; // would breach floor
 
       adjustments.push({
         workoutId: run.workoutId,
@@ -753,6 +828,7 @@ function buildReplaceAdjustments(
         loadReduction: runLoad,
       });
       remainingLoad -= runLoad;
+      totalReducedKm += run.plannedDistanceKm;
       runsLeft--;
       usedIds.add(candidateKey(run));
       madeProgress = true;
@@ -871,7 +947,7 @@ export function buildCrossTrainingPopup(
   for (const c of candidates) {
     const storedWL = weightedLoad(c.run.plannedAerobic, c.run.plannedAnaerobic);
     const recalcRpe = c.run.workoutType === 'vo2' || c.run.workoutType === 'intervals' ? 8
-                    : c.run.workoutType === 'threshold' || c.run.workoutType === 'race_pace' ? 7
+                    : c.run.workoutType === 'threshold' || c.run.workoutType === 'race_pace' || c.run.workoutType === 'float' ? 7
                     : c.run.workoutType === 'easy' ? 3 : 5;
     const recalcWL = computeWorkoutWeightedLoad(c.run.workoutType, c.run.plannedDistanceKm, recalcRpe);
     console.log(`  ${c.run.workoutId} (${c.run.workoutType}) ${c.run.plannedDistanceKm}km — stored: A${c.run.plannedAerobic} An${c.run.plannedAnaerobic} wl=${storedWL.toFixed(1)} | recalc wl=${recalcWL.toFixed(1)} | sim=${c.similarity.toFixed(3)}`);
@@ -905,12 +981,15 @@ export function buildCrossTrainingPopup(
   const recoveryExtra = runReplacementCredit * (recoveryMultiplier - 1.0);
   const effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
 
+  // Total planned running km from ALL runs (not just candidates) for accurate floor check
+  const allPlannedKm = weekRuns.reduce((sum, r) => sum + r.plannedDistanceKm, 0);
+
   const reduceAdjustments = buildReduceAdjustments(
-    candidates, effectiveRRC, severity, ctx, preserveMin, plannedCount
+    candidates, effectiveRRC, severity, ctx, preserveMin, plannedCount, allPlannedKm
   );
 
   const replaceAdjustments = buildReplaceAdjustments(
-    candidates, effectiveRRC, severity, ctx, sport, preserveMin, plannedCount
+    candidates, effectiveRRC, severity, ctx, sport, preserveMin, plannedCount, allPlannedKm
   );
 
   // Build outcome descriptions

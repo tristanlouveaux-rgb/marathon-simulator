@@ -40,6 +40,7 @@ interface GarminDaily {
   averageStressLevel?: number | null;
   vo2Max?: number | null;
   hrvSummary?: { lastNightAvg?: number | null } | null;
+  totalSteps?: number | null;
 }
 
 interface GarminSleep {
@@ -188,6 +189,7 @@ Deno.serve(async (req) => {
         max_hr: d.maxHeartRateInBeatsPerMinute ?? null,
         stress_avg: d.averageStressLevel ?? null,
         vo2max: d.vo2Max ?? null,
+        steps: d.totalSteps ?? null,
       };
       if (hrvVal != null) row.hrv_rmssd = hrvVal;
 

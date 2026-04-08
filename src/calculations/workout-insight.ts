@@ -1,8 +1,9 @@
 /**
  * workout-insight.ts
- * Rules-based workout commentary — coaching/direct tone, 2-3 sentences.
- * Consumes GarminActual fields (hrEffortScore, paceAdherence, hrDrift, hrZones,
- * kmSplits, avgHR, durationSec, plannedType) and returns a short insight string.
+ * Narrative coaching commentary for completed activities.
+ * Gathers raw signals (pacing, HR, elevation, load, session-to-session delta)
+ * then composes a connected 2-3 sentence paragraph — like a coach reviewing
+ * your session, not a dashboard restating numbers already visible on screen.
  */
 
 import type { GarminActual } from '@/types';
@@ -14,17 +15,21 @@ export interface HRProfileForInsight {
   onboarding?: { age?: number };
 }
 
-/** Is this a quality workout type where pace matters significantly? */
-function isQualityType(workoutType: string | null | undefined): boolean {
-  if (!workoutType) return false;
-  return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive'].includes(workoutType);
+export interface InsightOptions {
+  hrProfile?: HRProfileForInsight;
+  /** Most recent previous completed run of the same plannedType. */
+  prev?: GarminActual | null;
+  unitPref?: 'km' | 'mi';
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
-/** Coefficient of variation of km splits (0–1 scale). Lower = more even. */
+function isQualityType(t: string | null | undefined): boolean {
+  if (!t) return false;
+  return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive', 'float'].includes(t);
+}
+
 function splitCV(splits: number[]): number | null {
-  if (!splits || splits.length < 3) return null;
   const valid = splits.filter(s => s > 60 && s < 1200);
   if (valid.length < 3) return null;
   const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
@@ -33,175 +38,302 @@ function splitCV(splits: number[]): number | null {
   return Math.sqrt(variance) / mean;
 }
 
-/** Did splits show negative split pattern (second half faster)? */
-function isNegativeSplit(splits: number[]): boolean {
-  if (!splits || splits.length < 4) return false;
-  const valid = splits.filter(s => s > 60 && s < 1200);
-  if (valid.length < 4) return false;
-  const mid = Math.floor(valid.length / 2);
-  const firstAvg = valid.slice(0, mid).reduce((a, b) => a + b, 0) / mid;
-  const secondAvg = valid.slice(mid).reduce((a, b) => a + b, 0) / (valid.length - mid);
-  return secondAvg < firstAvg * 0.98; // at least 2% faster
-}
-
-/** Did splits blow up at the end (last 20% much slower)? */
-function fadedLate(splits: number[]): boolean {
-  if (!splits || splits.length < 5) return false;
-  const valid = splits.filter(s => s > 60 && s < 1200);
-  if (valid.length < 5) return false;
-  const tailStart = Math.floor(valid.length * 0.8);
-  const bodyAvg = valid.slice(0, tailStart).reduce((a, b) => a + b, 0) / tailStart;
-  const tailAvg = valid.slice(tailStart).reduce((a, b) => a + b, 0) / (valid.length - tailStart);
-  return tailAvg > bodyAvg * 1.08; // 8%+ slower in last 20%
-}
-
-/** Dominant HR zone label */
-function dominantZone(zones: { z1: number; z2: number; z3: number; z4: number; z5: number }): string | null {
-  const total = zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5;
-  if (total <= 0) return null;
-  const entries: [string, number][] = [
-    ['Z1', zones.z1], ['Z2', zones.z2], ['Z3', zones.z3], ['Z4', zones.z4], ['Z5', zones.z5],
-  ];
-  entries.sort((a, b) => b[1] - a[1]);
-  return entries[0][0];
-}
-
-/** % of time in Z4+Z5 */
-function highZonePct(zones: { z1: number; z2: number; z3: number; z4: number; z5: number }): number {
-  const total = zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5;
-  if (total <= 0) return 0;
-  return (zones.z4 + zones.z5) / total;
-}
-
-/** % of time in Z1+Z2 */
 function lowZonePct(zones: { z1: number; z2: number; z3: number; z4: number; z5: number }): number {
   const total = zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5;
   if (total <= 0) return 0;
   return (zones.z1 + zones.z2) / total;
 }
 
-// ─── insight candidates ──────────────────────────────────────────────────────
-
-interface Candidate {
-  priority: number; // lower = more important
-  text: string;
+function fmtPace(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
+  const sec = pref === 'mi' ? secPerKm * 1.60934 : secPerKm;
+  const unit = pref === 'mi' ? '/mi' : '/km';
+  const m = Math.floor(sec / 60);
+  const s = Math.round(sec % 60);
+  return `${m}:${String(s).padStart(2, '0')}${unit}`;
 }
 
-function collectCandidates(a: GarminActual): Candidate[] {
-  const out: Candidate[] = [];
+function splitHalfPace(splits: number[]): { first: number; second: number; diff: number } | null {
+  const valid = splits.filter(s => s > 60 && s < 1200);
+  if (valid.length < 4) return null;
+  const mid = Math.floor(valid.length / 2);
+  const first = Math.round(valid.slice(0, mid).reduce((a, b) => a + b, 0) / mid);
+  const second = Math.round(valid.slice(mid).reduce((a, b) => a + b, 0) / (valid.length - mid));
+  return { first, second, diff: second - first };
+}
+
+// ─── signal gathering ───────────────────────────────────────────────────────
+
+interface Signals {
+  isRun: boolean;
+  quality: boolean;
+  isEasy: boolean;
+  isLong: boolean;
+  effortMismatch: boolean;
+  isTreadmill: boolean;
+  isShort: boolean;
+
+  // Pacing
+  half: { first: number; second: number; diff: number } | null;
+  fade: boolean;
+  negative: boolean;
+  even: boolean;
+  hasSplits: boolean;
+
+  // HR
+  hrDrift: number | null;
+  hrEffort: number | null;
+  avgHR: number | null;
+
+  // Context
+  elevPerKm: number | null;
+  tssActual: number | null;
+  tssExpected: number | null;
+  tssRatio: number | null;
+  distOverKm: number | null;
+  distanceKm: number;
+
+  // Pace
+  paceAdh: number | null;
+  avgPace: number | null;
+
+  // Zones
+  lowZonePct: number | null;
+  zonesSurprising: boolean;
+
+  // Session-to-session delta
+  prevPace: number | null;
+  prevAvgHR: number | null;
+  prevHrDrift: number | null;
+
+  // Unit preference
+  unitPref: 'km' | 'mi';
+}
+
+function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, unitPref: 'km' | 'mi'): Signals {
   const isRun = a.activityType === 'RUNNING' || a.plannedType != null;
   const quality = isQualityType(a.plannedType);
-  const isEasy = a.plannedType === 'easy' || a.plannedType === 'recovery' || (!a.plannedType && isRun);
+  const isEasyLabel = a.plannedType === 'easy' || a.plannedType === 'recovery' || (!a.plannedType && isRun);
   const isLong = a.plannedType === 'long';
+  const isTreadmill = a.activityType === 'TREADMILL_RUNNING';
+  const isShort = a.distanceKm < 2 || a.durationSec < 600;
 
-  // ── Pace adherence (runs only) ──────────────────────────────────────────
-  if (a.paceAdherence != null && isRun) {
-    const pa = a.paceAdherence;
-    if (quality) {
-      if (pa >= 0.95 && pa <= 1.05) {
-        out.push({ priority: 2, text: 'Pacing was right on the money for this session. That discipline pays off on race day.' });
-      } else if (pa < 0.92) {
-        out.push({ priority: 1, text: `You pushed harder than planned — ${Math.round((1 - pa) * 100)}% faster than target pace. Make sure this was intentional; going too hot on quality days can cost you later in the week.` });
-      } else if (pa < 0.95) {
-        out.push({ priority: 3, text: 'Slightly quicker than target. Not a problem, but try to stay closer to plan on threshold sessions.' });
-      } else if (pa > 1.10) {
-        out.push({ priority: 1, text: `Pace was ${Math.round((pa - 1) * 100)}% slower than target. If you were struggling, that's good data — your plan will adapt. If conditions were tough, no stress.` });
-      } else if (pa > 1.05) {
-        out.push({ priority: 3, text: 'A touch slower than planned. Close enough — keep the effort honest and the pace will follow.' });
+  const hasHighZones = a.hrZones ? (1 - lowZonePct(a.hrZones)) > 0.40 : false;
+  const hasHighHR = a.hrEffortScore != null && a.hrEffortScore >= 1.15;
+  const effortMismatch = isEasyLabel && (hasHighZones || hasHighHR);
+  const isEasy = isEasyLabel && !effortMismatch;
+
+  const half = (a.kmSplits && a.kmSplits.length >= 4) ? splitHalfPace(a.kmSplits) : null;
+  const fade = half ? half.diff > 10 : false;
+  const negative = half ? half.diff < -10 : false;
+  const cv = (a.kmSplits && a.kmSplits.length >= 6) ? splitCV(a.kmSplits) : null;
+  const even = cv != null && cv < 0.03 && !fade && !negative;
+
+  const rawElevPerKm = (a.elevationGainM != null && a.elevationGainM > 0 && a.distanceKm > 0)
+    ? Math.round(a.elevationGainM / a.distanceKm) : null;
+
+  const durMin = a.durationSec > 0 ? a.durationSec / 60 : 0;
+  const tssActual = a.iTrimp != null && a.iTrimp > 0
+    ? Math.round((a.iTrimp * 100) / 15000)
+    : durMin > 0 ? Math.round(durMin * 0.92) : null;
+  let tssExpected: number | null = null;
+  if (a.plannedDistanceKm != null && a.plannedDistanceKm > 0) {
+    const tssPerKm = quality ? 7 : isLong ? 5 : 4;
+    tssExpected = Math.round(a.plannedDistanceKm * tssPerKm);
+  }
+  const tssRatio = (tssActual != null && tssExpected != null && tssExpected > 0)
+    ? tssActual / tssExpected : null;
+
+  const distOverKm = (a.plannedDistanceKm != null && a.plannedDistanceKm > 0 && a.distanceKm > 0)
+    ? a.distanceKm - a.plannedDistanceKm : null;
+
+  const lzp = a.hrZones ? lowZonePct(a.hrZones) : null;
+  const zonesSurprising = (quality && lzp != null && lzp > 0.70)
+    || (isEasy && lzp != null && (1 - lzp) > 0.25);
+
+  const prevPace = (prev?.avgPaceSecKm && prev.avgPaceSecKm > 0) ? prev.avgPaceSecKm : null;
+  const prevAvgHR = prev?.avgHR ?? null;
+  const prevHrDrift = prev?.hrDrift ?? null;
+
+  return {
+    isRun, quality, isEasy, isLong, effortMismatch, isTreadmill, isShort,
+    half, fade, negative, even, hasSplits: half != null,
+    hrDrift: (a.hrDrift != null && a.durationSec > 1200) ? a.hrDrift : null,
+    hrEffort: a.hrEffortScore ?? null,
+    avgHR: a.avgHR,
+    elevPerKm: (rawElevPerKm != null && rawElevPerKm >= 15) ? rawElevPerKm : null,
+    tssActual, tssExpected, tssRatio, distOverKm,
+    distanceKm: a.distanceKm,
+    paceAdh: a.paceAdherence ?? null,
+    avgPace: a.avgPaceSecKm ?? null,
+    lowZonePct: lzp, zonesSurprising,
+    prevPace, prevAvgHR, prevHrDrift,
+    unitPref,
+  };
+}
+
+// ─── narrative composition ──────────────────────────────────────────────────
+
+function composeNarrative(s: Signals): string | null {
+  if (!s.isRun) return composeCrossTraining(s);
+
+  // Short runs: only comment if something is notably off
+  if (s.isShort) {
+    if (s.quality && s.paceAdh != null && s.paceAdh < 0.92) {
+      return `${Math.round((1 - s.paceAdh) * 100)}% faster than target pace.`;
+    }
+    return null;
+  }
+
+  const sentences: string[] = [];
+  const p = s.unitPref;
+
+  // ── Lead sentence: the pacing story or pace adherence ─────────────────
+  if (s.half && s.fade) {
+    let lead = `First half averaged ${fmtPace(s.half.first, p)}, second half ${fmtPace(s.half.second, p)}.`;
+    if (s.elevPerKm) {
+      lead += ` ${s.elevPerKm}m/km of climbing likely contributed to the slowdown.`;
+    } else if (s.half.diff >= 20) {
+      lead += ` ${Math.round(s.half.diff)}s/km fade — the opening pace was not sustainable at this distance.`;
+    } else {
+      lead += ` ${Math.round(s.half.diff)}s/km fade through the run.`;
+    }
+    sentences.push(lead);
+  } else if (s.half && s.negative) {
+    let lead = `Negative split: ${fmtPace(s.half.first, p)} first half, ${fmtPace(s.half.second, p)} second half.`;
+    if (s.quality) {
+      lead += ' Controlled start into a strong finish.';
+    } else {
+      lead += ` ${Math.abs(Math.round(s.half.diff))}s/km faster in the back end.`;
+    }
+    sentences.push(lead);
+  } else if (s.half && s.even) {
+    let lead = `Consistent pacing: ${fmtPace(s.half.first, p)} to ${fmtPace(s.half.second, p)} across the run.`;
+    if (s.hrDrift != null && s.hrDrift <= 3) {
+      lead += ' HR stayed flat too. Well-controlled effort.';
+    }
+    sentences.push(lead);
+  } else if (s.quality && s.paceAdh != null) {
+    if (s.paceAdh < 0.92) {
+      const pct = Math.round((1 - s.paceAdh) * 100);
+      let lead = `${pct}% faster than target pace.`;
+      if (s.hrEffort != null && s.hrEffort >= 1.15) {
+        lead += ' HR confirms it — the body paid for the extra speed.';
+      } else if (s.hrEffort != null && s.hrEffort <= 0.85) {
+        lead += ' HR stayed low, so this may reflect a fitness gain rather than overreaching.';
+      } else {
+        lead += ' Going too hot on quality days can cost recovery later in the week.';
       }
-    } else if (isEasy || isLong) {
-      if (pa < 0.88) {
-        out.push({ priority: 1, text: 'This was meant to be easy, but your pace says otherwise. Easy days build your aerobic base — save the speed for quality sessions.' });
-      } else if (pa < 0.93) {
-        out.push({ priority: 3, text: 'Slightly faster than easy pace. Not the end of the world, but genuine easy running is where the magic happens.' });
+      sentences.push(lead);
+    } else if (s.paceAdh > 1.10) {
+      const pct = Math.round((s.paceAdh - 1) * 100);
+      let lead = `${pct}% slower than target pace.`;
+      if (s.hrEffort != null && s.hrEffort >= 1.15) {
+        lead += ' HR was elevated despite the slower pace — the body was working hard regardless.';
+      } else {
+        lead += ' The plan will adapt.';
       }
-      // Don't comment on slow easy runs — that's fine
+      sentences.push(lead);
+    } else if (s.paceAdh >= 0.95 && s.paceAdh <= 1.05) {
+      let lead = 'Pace was on target.';
+      if (s.hrEffort != null && s.hrEffort >= 1.15) {
+        lead += ' HR was higher than expected though — the session cost more than it looked.';
+      } else if (s.hrEffort != null && s.hrEffort <= 0.85) {
+        lead += ' HR was low, suggesting the effort felt comfortable. Room to push next time.';
+      }
+      sentences.push(lead);
+    }
+  } else if (s.isTreadmill && s.quality) {
+    if (s.hrEffort != null && s.hrEffort >= 1.15) {
+      sentences.push('HR was elevated relative to target. The session cost more than planned.');
+    } else if (s.hrEffort != null && s.hrEffort <= 0.85) {
+      sentences.push('HR was well under target. Either the effort was comfortable or the treadmill pace was conservative.');
     }
   }
 
-  // ── HR effort score ─────────────────────────────────────────────────────
-  if (a.hrEffortScore != null) {
-    const hr = a.hrEffortScore;
-    if (quality && isRun) {
-      if (hr >= 1.15) {
-        out.push({ priority: 2, text: 'Heart rate was running hot — your body found this harder than planned. Future sessions will account for that.' });
-      } else if (hr <= 0.85) {
-        out.push({ priority: 2, text: 'HR was well under target. Either this felt comfortable or the pace wasn\'t pushing enough. Both are useful to know.' });
-      }
-    } else if ((isEasy || isLong) && isRun) {
-      if (hr >= 1.15) {
-        out.push({ priority: 1, text: 'Heart rate was higher than expected for an easy run. Common causes: fatigue, heat, humidity, or uneven terrain such as trails or sand.' });
-      }
-    } else if (!isRun) {
-      // Cross-training
-      if (hr >= 1.20) {
-        out.push({ priority: 3, text: 'This was a tough session by heart rate standards. Your plan accounts for the extra load.' });
-      } else if (hr <= 0.80) {
-        out.push({ priority: 4, text: 'Light effort on this one — good for active recovery.' });
-      }
+  // ── Second sentence: HR context (if not already woven in) ─────────────
+  const hrMentioned = sentences.some(t => t.includes('HR'));
+  if (!hrMentioned) {
+    if (s.hrDrift != null && s.hrDrift > 8 && s.fade) {
+      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% across the session, consistent with the pace drop.`);
+    } else if (s.hrDrift != null && s.hrDrift > 8) {
+      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% from first to second half.`);
+    } else if (s.quality && s.hrEffort != null && s.hrEffort >= 1.15) {
+      sentences.push('HR was elevated relative to target. The session cost more than planned.');
+    } else if (s.quality && s.hrEffort != null && s.hrEffort <= 0.85) {
+      sentences.push('HR was well under target. Either the effort was comfortable or not quite enough to drive the intended stimulus.');
+    } else if (s.isEasy && s.hrEffort != null && s.hrEffort >= 1.15) {
+      sentences.push('HR was elevated for an easy effort. Common causes: fatigue, heat, or terrain.');
+    } else if (s.elevPerKm && !sentences.some(t => t.includes('m/km'))) {
+      sentences.push(`${s.elevPerKm}m/km average gradient. Accounts for some of the HR load independently of pace.`);
     }
   }
 
-  // ── HR drift (runs only, already filtered to steady-state > 20min) ─────
-  if (a.hrDrift != null && isRun) {
-    const drift = a.hrDrift;
-    if ((isEasy || isLong) && drift > 8) {
-      out.push({ priority: 2, text: `Heart rate drifted ${drift.toFixed(0)}% from first to second half. That's a sign your aerobic system was working hard — hydration and fueling can help, especially on longer runs.` });
-    } else if (quality && drift > 12) {
-      out.push({ priority: 3, text: `Notable HR drift of ${drift.toFixed(0)}% — your body was accumulating fatigue through the session. Normal for hard efforts, but worth tracking over time.` });
-    } else if ((isEasy || isLong) && drift <= 3 && a.durationSec > 2400) {
-      out.push({ priority: 4, text: 'Very stable heart rate throughout — a sign of good aerobic fitness at this pace.' });
+  // ── Third sentence: load context ──────────────────────────────────────
+  if (s.tssRatio != null && s.tssActual != null) {
+    if (s.tssRatio > 1.5) {
+      sentences.push(`${s.tssActual} TSS — roughly ${s.tssRatio.toFixed(1)}x what the plan expected. Plan adjusted accordingly.`);
+    } else if (s.tssRatio < 0.6 && s.tssExpected != null && s.tssExpected >= 30) {
+      sentences.push(`${s.tssActual} TSS, well under the planned load. The plan adapts.`);
+    }
+  } else if (s.distOverKm != null && !sentences.some(t => t.includes('TSS'))) {
+    if (s.distOverKm > 2) {
+      sentences.push(`${s.distOverKm.toFixed(1)} km over planned distance. Extra load carried forward.`);
+    } else if (s.distOverKm < -3 && (s.tssExpected ?? 0) >= 30) {
+      sentences.push(`${Math.abs(s.distOverKm).toFixed(1)} km short of plan.`);
     }
   }
 
-  // ── Splits consistency (runs only) ──────────────────────────────────────
-  if (a.kmSplits && a.kmSplits.length >= 3 && isRun) {
-    const cv = splitCV(a.kmSplits);
+  // ── Session-to-session comparison ─────────────────────────────────────
+  if (sentences.length < 3 && s.avgPace != null && s.prevPace != null && s.avgHR != null && s.prevAvgHR != null) {
+    const paceDiff = Math.round(s.prevPace - s.avgPace); // positive = got faster
+    const hrDiff = Math.round(s.avgHR - s.prevAvgHR);    // positive = higher HR
+    const typeLabel = s.quality ? 'quality' : s.isLong ? 'long' : 'easy';
 
-    if (isNegativeSplit(a.kmSplits) && (isLong || quality)) {
-      out.push({ priority: 3, text: 'Nice negative split — finishing faster than you started. That\'s the kind of pacing that wins races.' });
-    } else if (fadedLate(a.kmSplits) && (isLong || quality)) {
-      out.push({ priority: 2, text: 'Pace dropped off in the final kilometres. If that wasn\'t planned, consider starting a touch more conservatively next time.' });
-    } else if (cv != null && cv < 0.03 && a.kmSplits.length >= 5 && isEasy) {
-      const hasNegativeSignal = out.some(c => c.priority <= 2);
-      if (!hasNegativeSignal) out.push({ priority: 4, text: 'Very even splits throughout. Good discipline on the pacing.' });
+    if (paceDiff > 5 && hrDiff <= -2) {
+      sentences.push(`${Math.abs(paceDiff)}s/km faster than the last ${typeLabel} session at ${Math.abs(hrDiff)} bpm lower average HR.`);
+    } else if (paceDiff > 5 && hrDiff <= 3) {
+      sentences.push(`${Math.abs(paceDiff)}s/km faster than the last session of this type at similar HR.`);
+    } else if (Math.abs(paceDiff) <= 5 && hrDiff <= -3) {
+      sentences.push(`Similar pace to last time but ${Math.abs(hrDiff)} bpm lower average HR. Aerobic efficiency improving.`);
+    } else if (paceDiff < -8 && hrDiff > 3) {
+      sentences.push(`${Math.abs(paceDiff)}s/km slower than last time at ${hrDiff} bpm higher HR. Fatigue, heat, or terrain may explain the difference.`);
+    }
+  } else if (sentences.length < 3 && s.hrDrift != null && s.prevHrDrift != null) {
+    const driftDiff = s.hrDrift - s.prevHrDrift;
+    if (driftDiff < -5 && s.hrDrift < 5) {
+      sentences.push(`HR drift improved to ${s.hrDrift.toFixed(0)}% from ${s.prevHrDrift.toFixed(0)}% last session. Better aerobic control.`);
     }
   }
 
-  // ── Distance adherence ─────────────────────────────────────────────────
-  if (a.plannedDistanceKm != null && a.plannedDistanceKm > 0 && a.distanceKm > 0) {
-    const ratio = a.distanceKm / a.plannedDistanceKm;
-    const diff = a.distanceKm - a.plannedDistanceKm;
-    if (isRun) {
-      if (ratio >= 1.12) {
-        out.push({ priority: 2, text: `You ran ${diff.toFixed(1)}km over the planned distance. The extra load has been carried forward to balance your upcoming sessions.` });
-      } else if (ratio >= 1.06) {
-        out.push({ priority: 4, text: `A little extra distance today — ${diff.toFixed(1)}km over plan. Good bonus mileage if energy allows.` });
-      } else if (ratio <= 0.80 && a.plannedDistanceKm >= 8) {
-        out.push({ priority: 3, text: `Distance came in ${Math.abs(diff).toFixed(1)}km short of plan. If it was a rough day, that's fine — the plan adapts.` });
-      } else if (ratio >= 0.94 && ratio <= 1.06) {
-        out.push({ priority: 5, text: 'Distance was right on target. Solid execution.' });
-      }
+  // ── Zone surprise (only if nothing else said it) ──────────────────────
+  if (s.zonesSurprising && sentences.length < 2) {
+    if (s.quality && s.lowZonePct != null && s.lowZonePct > 0.70) {
+      sentences.push('Mostly low HR zones on a quality session. The hard segments may not have been hard enough to drive adaptation.');
+    } else if (s.isEasy && s.lowZonePct != null) {
+      const above = Math.round((1 - s.lowZonePct) * 100);
+      sentences.push(`${above}% of time above Z2. For easy runs, the target is mostly Z1-Z2.`);
     }
   }
 
-  // ── Zone distribution ──────────────────────────────────────────────────
-  if (a.hrZones) {
-    const zones = a.hrZones;
-    const total = zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5;
-    if (total > 0) {
-      const nonEasyPct = Math.round((1 - lowZonePct(zones)) * 100);
-      if (isEasy && (1 - lowZonePct(zones)) > 0.25) {
-        out.push({ priority: 2, text: `${nonEasyPct}% of this run was in Z3 or above. For an easy run, the target is mostly Z1-Z2. Common causes: heat, humidity, or terrain such as sand or trails.` });
-      } else if (quality && lowZonePct(zones) > 0.70) {
-        out.push({ priority: 3, text: 'Most of this session was in low HR zones. Quality sessions need enough stimulus — make sure the hard portions are genuinely hard.' });
-      } else if (isLong && lowZonePct(zones) > 0.85) {
-        out.push({ priority: 5, text: 'Great zone discipline on the long run — staying aerobic builds your endurance engine.' });
-      }
-    }
+  // ── Easy pace warning (genuine easy, not mismatch) ────────────────────
+  if (s.isEasy && s.paceAdh != null && s.paceAdh < 0.88 && sentences.length === 0) {
+    sentences.push('Pace was well under easy target. Easy days protect recovery for quality sessions.');
   }
 
-  return out;
+  // ── Mismatch fallback ─────────────────────────────────────────────────
+  if (s.effortMismatch && sentences.length === 0) {
+    sentences.push('Higher effort than the planned slot. The extra load is accounted for.');
+  }
+
+  if (sentences.length === 0) return null;
+  return sentences.slice(0, 3).join(' ');
+}
+
+function composeCrossTraining(s: Signals): string | null {
+  if (s.hrEffort != null && s.hrEffort >= 1.20) {
+    return 'High-effort session by heart rate. The extra load is accounted for in the plan.';
+  }
+  return null;
 }
 
 // ─── public API ──────────────────────────────────────────────────────────────
@@ -209,9 +341,19 @@ function collectCandidates(a: GarminActual): Candidate[] {
 /**
  * Generate 2-3 sentence coaching insight for a completed activity.
  * Returns null if there's not enough data to say anything useful.
- * Pass hrProfile to compute hrEffortScore on-the-fly if not stored on the actual.
+ *
+ * @param actual - The activity to analyse
+ * @param opts - Optional: hrProfile for on-the-fly hrEffortScore, prev session
+ *               for session-to-session comparison, unitPref for pace formatting.
+ *               Also accepts a bare HRProfileForInsight for backward compat.
  */
-export function generateWorkoutInsight(actual: GarminActual, hrProfile?: HRProfileForInsight): string | null {
+export function generateWorkoutInsight(actual: GarminActual, opts?: HRProfileForInsight | InsightOptions): string | null {
+  // Support legacy call signature (hrProfile directly) and new options object
+  const isLegacy = opts != null && ('maxHR' in opts || 'restingHR' in opts || 'onboarding' in opts) && !('prev' in opts) && !('unitPref' in opts) && !('hrProfile' in opts);
+  const hrProfile: HRProfileForInsight | undefined = isLegacy ? opts as HRProfileForInsight : (opts as InsightOptions)?.hrProfile;
+  const prev = isLegacy ? undefined : (opts as InsightOptions)?.prev;
+  const unitPref = isLegacy ? 'km' : ((opts as InsightOptions)?.unitPref ?? 'km');
+
   let enriched = actual;
   if (hrProfile && actual.hrEffortScore == null && actual.avgHR) {
     const isRun = actual.activityType === 'RUNNING' || actual.activityType?.includes('RUN') || actual.plannedType != null;
@@ -221,12 +363,31 @@ export function generateWorkoutInsight(actual: GarminActual, hrProfile?: HRProfi
       if (computed != null) enriched = { ...actual, hrEffortScore: computed };
     }
   }
-  const candidates = collectCandidates(enriched);
-  if (candidates.length === 0) return null;
+  const signals = gatherSignals(enriched, prev, unitPref);
+  return composeNarrative(signals);
+}
 
-  // Sort by priority (lower = more important), take top 2-3
-  candidates.sort((a, b) => a.priority - b.priority);
-  const picked = candidates.slice(0, Math.min(3, candidates.length));
+// ─── helper to find previous session of same type ───────────────────────────
 
-  return picked.map(c => c.text).join(' ');
+/**
+ * Search backwards through plan weeks for the most recent completed run
+ * of the same plannedType. Returns null if none found.
+ */
+export function findPreviousSession(
+  plannedType: string | null | undefined,
+  currentGarminId: string,
+  wks: Array<{ garminActuals?: Record<string, GarminActual> }>,
+): GarminActual | null {
+  if (!plannedType) return null;
+  for (let i = wks.length - 1; i >= 0; i--) {
+    const actuals = wks[i].garminActuals;
+    if (!actuals) continue;
+    for (const actual of Object.values(actuals)) {
+      if (actual.garminId === currentGarminId) continue;
+      if (actual.plannedType === plannedType && actual.avgPaceSecKm && actual.avgHR) {
+        return actual;
+      }
+    }
+  }
+  return null;
 }

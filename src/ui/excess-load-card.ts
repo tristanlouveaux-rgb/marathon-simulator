@@ -15,7 +15,7 @@
 import type { Week } from '@/types/state';
 import { SPORTS_DB } from '@/constants';
 import { getMutableState, saveState } from '@/state';
-import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
+import { getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeDecayedCarry, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { computeRecoveryTrend } from '@/calculations/readiness';
 import { render } from '@/ui/renderer';
 import {
@@ -27,38 +27,85 @@ import {
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { generateWeekWorkouts } from '@/workouts';
-import { gp } from '@/calculations/paces';
+import { isTimingMod } from '@/cross-training/timing-check';
 import type { WorkoutMod } from '@/types';
+import { formatKm } from '@/utils/format';
 
 // ---------------------------------------------------------------------------
-// Helper
+// Helpers
 
-function getWeekWorkoutsForExcess() {
+/**
+ * Returns the midnight timestamp (ms) for a workout in a given week.
+ * weekIdx is 0-indexed. dayOfWeek is Mon=0..Sun=6.
+ */
+function workoutDateMs(planStartDate: string, weekIdx: number, dayOfWeek: number): number {
+  const start = new Date(planStartDate);
+  start.setHours(0, 0, 0, 0);
+  return start.getTime() + (weekIdx * 7 + dayOfWeek) * 24 * 3600 * 1000;
+}
+
+/**
+ * Generates workouts for the current week (offset=0) or next week (offset=1).
+ * Must match getPlanHTML call exactly so workout names/IDs align with plan-view and wk.rated keys.
+ */
+function getWeekWorkouts(offset: 0 | 1 = 0) {
   const s = getMutableState();
-  const wk = s.wks?.[s.w - 1];
+  const weekIdx = s.w - 1 + offset; // 0-indexed
+  const wk = s.wks?.[weekIdx];
   if (!wk) return [];
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
-  const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
-  let trailingEffort = 0;
-  const lookback = Math.min(3, s.w - 1);
-  if (lookback > 0) {
-    let total = 0; let count = 0;
-    for (let i = s.w - 2; i >= s.w - 1 - lookback && i >= 0; i--) {
-      if (s.wks[i].effortScore != null) { total += s.wks[i].effortScore!; count++; }
-    }
-    if (count > 0) trailingEffort = total / count;
-  }
-  return generateWeekWorkouts(
-    wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
-    (s as any).injuryState || null, s.recurringActivities,
-    s.onboarding?.experienceLevel,
-    (s.maxHR || s.restingHR || s.onboarding?.age)
-      ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
-      : undefined,
-    gp(currentVDOT, s.lt).e, s.w, s.tw, currentVDOT, s.gs, trailingEffort,
+  const workouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+    null, s.recurringActivities,
+    s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w + offset, s.tw, s.v, s.gs,
+    getTrailingEffortScore(s.wks, s.w + offset), wk.scheduledAcwrStatus,
   );
+
+  // Apply stored workoutMods so the modal reflects the actual plan state (matching plan-view.ts).
+  for (const mod of wk.workoutMods ?? []) {
+    if (isTimingMod(mod.modReason)) continue;
+    const w = workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+    if (!w) continue;
+    if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
+    (w as any).status = mod.status;
+    if (mod.newDistance != null) (w as any).d = mod.newDistance;
+    if (mod.newType) (w as any).t = mod.newType;
+  }
+
+  return workouts.filter((w: any) => w.status !== 'replaced');
+}
+
+/**
+ * Filters a workout list to only those that can still be done or reduced:
+ * unrated AND whose actual calendar date is today or later.
+ * Uses absolute dates so workouts from a past week never appear as upcoming
+ * even if s.w hasn't advanced yet.
+ */
+function filterRemainingWorkouts<T extends { id?: string; n: string; dayOfWeek?: number }>(
+  workouts: T[],
+  wk: Week,
+  weekIdx: number,
+  planStartDate: string,
+): T[] {
+  const todayMs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
+  return workouts.filter(w => {
+    if (wk.rated[w.id || w.n] !== undefined) return false;
+    if (w.dayOfWeek == null) return true; // no fixed day — assume schedulable
+    return workoutDateMs(planStartDate, weekIdx, w.dayOfWeek) >= todayMs;
+  });
+}
+
+/**
+ * Returns true when the current week still has workouts that can be reduced
+ * (unrated and whose calendar date is today or later).
+ * Exported so plan-view.ts can determine banner label without re-generating workouts.
+ */
+export function hasRemainingWeekWorkouts(): boolean {
+  const s = getMutableState();
+  const weekIdx = s.w - 1; // 0-indexed
+  const wk = s.wks?.[weekIdx];
+  if (!wk || !s.planStartDate) return false;
+  const all = getWeekWorkouts(0);
+  return filterRemainingWorkouts(all, wk, weekIdx, s.planStartDate).length > 0;
 }
 
 
@@ -75,7 +122,8 @@ function computeTotalWeekExcess(wk: Week, s: ReturnType<typeof getMutableState>)
     s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
   );
   if (!plannedB) return 0;
-  return getWeeklyExcess(wk, plannedB, s.planStartDate);
+  const carried = computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate);
+  return getWeeklyExcess(wk, plannedB, s.planStartDate, carried);
 }
 
 /**
@@ -215,6 +263,7 @@ function computeWeightedRunSpec(wk: Week): number {
   return totalRawTSS > 0 ? weightedSum / totalRawTSS : 0.7; // default mid-range
 }
 
+
 export function triggerExcessLoadAdjustment(): void {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
@@ -242,7 +291,10 @@ export function triggerExcessLoadAdjustment(): void {
 
   const items = wk.unspentLoadItems ?? [];
   if (items.length > 0) {
-    sport = items[0]?.sport ?? 'cross_training';
+    // Use cross_training when activities span multiple sports so the modal doesn't
+    // misidentify a ski+run mix as "extra run".
+    const sportSet = new Set(items.map(i => i.sport ?? 'cross_training'));
+    sport = sportSet.size === 1 ? [...sportSet][0] : 'cross_training';
     const totalDurationMin = items.reduce((sum, i) => sum + i.durationMin, 0);
     const totalAerobic = items.reduce((sum, i) => sum + i.aerobic, 0);
     const avgRPE = Math.min(9, Math.max(3, Math.round(totalAerobic > 3.5 ? 7 : totalAerobic > 2.5 ? 5 : 4)));
@@ -250,6 +302,36 @@ export function triggerExcessLoadAdjustment(): void {
     const mostRecent = items.reduce((a, b) => (a.date > b.date ? a : b));
     const jsDay = new Date(mostRecent.date).getDay();
     combinedActivity.dayOfWeek = jsDay === 0 ? 6 : jsDay - 1;
+
+    // Look up actual iTRIMP from source activities (garminActuals + adhocWorkouts)
+    // so the popup computes load from HR data, not RPE estimation.
+    let totalITrimp = 0;
+    const seenIds = new Set<string>();
+    for (const item of items) {
+      if (seenIds.has(item.garminId)) continue;
+      seenIds.add(item.garminId);
+      let found = false;
+      for (const actual of Object.values(wk.garminActuals ?? {})) {
+        if (actual.garminId === item.garminId && actual.iTrimp != null && actual.iTrimp > 0) {
+          totalITrimp += actual.iTrimp;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const adhocId = `garmin-${item.garminId}`;
+        for (const adhoc of wk.adhocWorkouts ?? []) {
+          if (adhoc.id === adhocId && (adhoc as any).iTrimp != null && (adhoc as any).iTrimp > 0) {
+            totalITrimp += (adhoc as any).iTrimp;
+            break;
+          }
+        }
+      }
+    }
+    if (totalITrimp > 0) {
+      combinedActivity.iTrimp = totalITrimp;
+    }
+
     sportLabel = items.length === 1 ? items[0].displayName : `${items.length} activities`;
   } else {
     // No unspent items — excess came from matched activities being harder than expected.
@@ -263,14 +345,43 @@ export function triggerExcessLoadAdjustment(): void {
     sportLabel = 'Week overload';
   }
 
-  const freshWorkouts = getWeekWorkoutsForExcess().filter(w => wk.rated[w.id || w.n] === undefined);
-  const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
+  const weekIdx = s.w - 1;
+  const allWeekWorkouts = getWeekWorkouts(0);
+  const remainingWorkouts = filterRemainingWorkouts(allWeekWorkouts, wk, weekIdx, s.planStartDate ?? '');
+
+  if (remainingWorkouts.length === 0) {
+    // No remaining workouts this week — don't adjust next week's plan mid-week.
+    // The load will carry forward automatically via migration at week advance.
+    return;
+  }
+
+  // Has remaining workouts — offer to reduce/replace them.
+  const weekRuns = workoutsToPlannedRuns(remainingWorkouts, s.pac);
+  const _tier = s.athleteTierOverride ?? s.athleteTier;
+  const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined);
   const ctx = {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
     runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+    floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk?.ph),
+    acwrStatus: _acwr.status,
   };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier);
+
+  // For multi-activity case, rewrite the summary to describe the actual mix rather than
+  // attributing everything to a single session type.
+  if (items.length > 1) {
+    const excessTSS = Math.round(computeTotalWeekExcess(wk, s));
+    const loadNote = popup.tier === 'rpe' ? ' (estimated from RPE)' : '';
+    const equivKmStr = popup.equivalentEasyKm > 0
+      ? `, equivalent to ${formatKm(popup.equivalentEasyKm, s.unitPref ?? 'km')} easy running`
+      : '';
+    const impactMatch = popup.summary.match(/carries enough load to (.+?)(?:\. Consider|\.?\s*$)/);
+    const impactPart = impactMatch ? ` They carry enough load to ${impactMatch[1]}.` : '';
+    popup.summary = `Your ${items.length} extra activities generated ${excessTSS} TSS${loadNote}${equivKmStr}.${impactPart}${impactPart ? ' Consider adjusting your plan to avoid overtraining.' : ''}`;
+    popup.sportName = 'extra activities';
+  }
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) return;
@@ -280,7 +391,7 @@ export function triggerExcessLoadAdjustment(): void {
     if (!wk3) return;
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
-      const freshW = getWeekWorkoutsForExcess();
+      const freshW = getWeekWorkouts(0);
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
       if (!wk3.workoutMods) wk3.workoutMods = [];
       for (const adj of decision.adjustments) {
@@ -294,9 +405,85 @@ export function triggerExcessLoadAdjustment(): void {
       }
     }
 
-    // Clear unspent items after adjustment
-    wk3.unspentLoadItems = [];
-    wk3.unspentLoad = 0;
+    // Clear unspent items only when the user acted on them (Reduce/Replace).
+    // "Keep Plan" leaves items intact so TSS stays correct and the strip remains visible.
+    if (decision.choice !== 'keep') {
+      wk3.unspentLoadItems = [];
+      wk3.unspentLoad = 0;
+    }
+
+    saveState();
+    render();
+  }, undefined, undefined, () => {
+    // "Push to next week" — close the modal; load carries via migration. No state change needed.
+    render();
+  });
+}
+
+/**
+ * No workouts remain this week — the extra load carries to next week automatically.
+ * Show the suggestion modal targeting next week's runs so the user can absorb it there.
+ */
+function _triggerCarryoverToNextWeek(
+  excess: number,
+  sport: string,
+  sportLabel: string,
+  combinedActivity: ReturnType<typeof createActivity>,
+  recoveryMultiplier: number,
+): void {
+  const s = getMutableState();
+  const nextWk = s.wks?.[s.w]; // 0-indexed: current = s.w-1, next = s.w
+  const nextWeekWorkouts = getWeekWorkouts(1);
+
+  if (!nextWk || nextWeekWorkouts.length === 0) {
+    // No next week in plan — nothing to adjust, just clear.
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[s2.w - 1];
+    if (wk2) { wk2.unspentLoadItems = []; wk2.unspentLoad = 0; }
+    saveState();
+    render();
+    return;
+  }
+
+  const weekRuns = workoutsToPlannedRuns(nextWeekWorkouts, s.pac);
+  const _tier2 = s.athleteTierOverride ?? s.athleteTier;
+  const _atlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined);
+  const ctx = {
+    raceGoal: s.rd, plannedRunsPerWeek: s.rw,
+    injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
+    runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+    floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, nextWk?.ph),
+    acwrStatus: _acwr2.status,
+  };
+  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier);
+  popup.headline = `${Math.round(excess)} TSS carried to next week`;
+  popup.summary = `This week's extra load has been pushed to next week. Reduce next week's runs to absorb it, or keep the plan as-is.`;
+
+  showSuggestionModal(popup, sportLabel, (decision) => {
+    if (!decision) return;
+
+    const s3 = getMutableState();
+    const nextWk3 = s3.wks?.[s3.w]; // next week
+    const currWk3 = s3.wks?.[s3.w - 1]; // current week
+
+    if (decision.choice !== 'keep' && decision.adjustments.length > 0 && nextWk3) {
+      const nextW = getWeekWorkouts(1);
+      const modified = applyAdjustments(nextW, decision.adjustments, normalizeSport(sport), s3.pac);
+      if (!nextWk3.workoutMods) nextWk3.workoutMods = [];
+      for (const adj of decision.adjustments) {
+        const mw = modified.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
+        if (!mw) continue;
+        nextWk3.workoutMods.push({
+          name: mw.n, dayOfWeek: mw.dayOfWeek, status: mw.status || 'reduced',
+          modReason: `Garmin: ${sportLabel} (carried)`, confidence: mw.confidence,
+          originalDistance: mw.originalDistance, newDistance: mw.d, newType: mw.t, newRpe: mw.rpe || mw.r,
+        } as WorkoutMod);
+      }
+    }
+
+    // Clear unspent items on current week
+    if (currWk3) { currWk3.unspentLoadItems = []; currWk3.unspentLoad = 0; }
 
     saveState();
     render();

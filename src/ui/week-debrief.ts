@@ -23,7 +23,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS } from '@/calculations/fitness-model';
+import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB } from '@/calculations/fitness-model';
 import { formatKm } from '@/utils/format';
 import { renderHomeView } from '@/ui/home-view';
 import { next } from '@/ui/events';
@@ -116,12 +116,15 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
 
   // Signal B (raw physiological TSS — all sports, no runSpec discount)
   const weekRawTSS = Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate));
-  // Signal A (run-equivalent, for % of plan)
+  // Signal A (run-equivalent, still needed for coach signals)
   const actualTSS = wk.actualTSS ?? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate);
-  const plannedTSS = computePlannedWeekTSS(
-    s.historicWeeklyTSS, s.ctlBaseline, wk.ph, tier, s.rw, undefined, undefined,
+  // Signal B planned — must match the denominator used in the plan bar
+  const plannedTSS = computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk.ph, tier, s.rw, undefined, undefined, s.sportBaselineByType,
   );
-  const tssPct = plannedTSS > 0 ? Math.round((actualTSS / plannedTSS) * 100) : null;
+  // % of plan: Signal B actual vs Signal B planned (never mix signals)
+  // Expressed as delta from plan (e.g. +14% means 14% over, -10% means 10% under)
+  const tssPct = plannedTSS > 0 ? Math.round((weekRawTSS / plannedTSS) * 100) - 100 : null;
 
   // Distance: use wk.completedKm if set, otherwise sum garminActuals
   const rawKm = wk.completedKm
@@ -167,8 +170,8 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
   // ── Render ─────────────────────────────────────────────────────────────────
 
   const tssColor = tssPct == null ? 'var(--c-muted)'
-    : tssPct >= 100 ? 'var(--c-warn)'
-    : tssPct >= 80  ? 'var(--c-ok)'
+    : tssPct > 0   ? 'var(--c-warn)'
+    : tssPct >= -20 ? 'var(--c-ok)'
     : 'var(--c-caution)';
 
   const ROW = 'display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--c-border)';
@@ -237,7 +240,7 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
           </div>` : ''}
           <div style="${ROW}">
             <span style="${LABEL_STYLE}">Training load</span>
-            <span style="${VALUE_STYLE};color:${tssColor}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;color:${tssColor};margin-left:4px">(${tssPct}% of plan)</span>` : ''}</span>
+            <span style="${VALUE_STYLE};color:${tssColor}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;color:${tssColor};margin-left:4px">(${tssPct > 0 ? '+' : ''}${tssPct}% vs plan)</span>` : ''}</span>
           </div>
           <div style="${ROW};border-bottom:none">
             <span style="${LABEL_STYLE}">Running fitness</span>

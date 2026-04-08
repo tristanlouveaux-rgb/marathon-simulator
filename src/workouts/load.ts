@@ -71,6 +71,7 @@ export function calculateWorkoutLoad(
         else if (workoutType === 'vo2') paceMinPerKm = baseMinPerKm * 0.73;
         else if (workoutType === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
         else if (workoutType === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
+        else if (workoutType === 'float') paceMinPerKm = baseMinPerKm * 0.85; // blended: hard reps + MP float
         dur = km * paceMinPerKm + wucdMin;
       } else {
         // Try simple "45min"

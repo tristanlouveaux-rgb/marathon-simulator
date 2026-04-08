@@ -37,7 +37,7 @@
 | `ui/` | Dashboard, renderer, events, wizard, modals | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `activity-review.ts`, `welcome-back.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()` |
 | `constants/` | Static config, protocols, sport DB, training params | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS` |
 | `types/` | All TypeScript interfaces and type unions | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase` |
-| `data/` | Static data, Supabase client, wearable sync | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncPhysiologySnapshot()` |
+| `data/` | Static data, Supabase client, wearable sync, source routing | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts`, `sources.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncAppleHealthPhysiology()`, `syncPhysiologySnapshot()`, `getActivitySource()`, `getPhysiologySource()` |
 | `utils/` | Formatting, helpers, platform detection | `format.ts`, `helpers.ts`, `platform.ts` | Time/pace formatting, platform checks |
 | `scripts/` | Offline audit/analysis scripts | `sanity_audit.ts`, `comprehensive_audit.ts` | Not imported at runtime |
 | `testing/` | Synthetic athlete generators, forecast matrix | `synthetic-athlete.ts`, `forecast-matrix.ts` | Test utilities only |
@@ -111,7 +111,7 @@ user clicks "Complete Week"
 | Injury | `injuryState` (InjuryState), `rehabWeeksDone`, `lastMorningPainDate` |
 | Continuous mode | `continuousMode`, `blockNumber`, `benchmarkResults` |
 | Recovery | `recoveryHistory` (RecoveryEntry[]), `lastRecoveryPromptDate` |
-| Integrations | `wearable` (`'garmin' \| 'apple' \| 'strava' \| undefined`) — biometric device; `stravaConnected?: boolean` — when true, Strava is the activity source regardless of wearable; `biologicalSex` (`'male' \| 'female' \| 'prefer_not_to_say'`) — for iTRIMP β |
+| Integrations | `wearable` (legacy), `connectedSources?: { activity?, physiology? }` — use accessors in `src/data/sources.ts`; `stravaConnected?: boolean` — when true, Strava is the activity source regardless of wearable; `biologicalSex` (`'male' \| 'female' \| 'prefer_not_to_say'`) — for iTRIMP β |
 | Onboarding | `onboarding` (OnboardingState), `hasCompletedOnboarding` |
 | ACWR / Tier | `athleteTier?` — computed from CTL (5 tiers); `athleteTierOverride?` — manual override takes precedence |
 
@@ -303,13 +303,14 @@ Three ability tiers: beginner (bodyweight), novice (light weights), full (barbel
 Fire-and-forget on boot. Two separate concerns are handled independently:
 
 **Activity source** (what workouts were done) — `s.stravaConnected` takes priority:
-- **Strava connected** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. IDs namespaced `"strava-{id}"`. This path is used even for Garmin wearable users who have Strava.
-- **Garmin-only** (`!s.stravaConnected`, `s.wearable === 'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook.
-- **Apple Watch** (`s.wearable === 'apple'`): `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` (iOS native only; no-op on web).
+- **Strava connected** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. IDs namespaced `"strava-{id}"`. This path is used even for Garmin/Apple Watch users who have Strava.
+- **Garmin-only** (`!s.stravaConnected`, physiology source `'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook.
+- **Apple Watch** (activity source `'apple'`): `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` (iOS native only; no-op on web).
 
-**Biometric source** (VO2max, LT, HRV, sleep, resting HR) — always the wearable, independent of Strava:
-- **Garmin wearable**: `syncPhysiologySnapshot(7)` → `sync-physiology-snapshot` Edge Function → merges `daily_metrics`, `sleep_summaries`, `physiology_snapshots` (all written by Garmin webhook).
-- **Apple Watch**: biometrics come from `syncAppleHealth()` directly.
+**Biometric/physiology source** (sleep, HRV, resting HR, steps) — determined by `getPhysiologySource(s)` from `src/data/sources.ts`:
+- **Garmin**: `syncPhysiologySnapshot(28)` → `sync-physiology-snapshot` Edge Function → merges `daily_metrics`, `sleep_summaries`, `physiology_snapshots` (all written by Garmin webhook).
+- **Apple Watch**: `syncAppleHealthPhysiology(28)` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. On-device, no server. Sleep score computed from stage durations.
+- **Source routing**: `connectedSources.physiology` field on state, with legacy `wearable` fallback. Accessor functions in `src/data/sources.ts` centralise all branching.
 
 All activity paths produce `GarminActivityRow[]` and feed into `matchAndAutoComplete()` — identical pipeline from that point.
 

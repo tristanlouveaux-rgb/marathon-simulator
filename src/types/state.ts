@@ -141,6 +141,10 @@ export interface PhysiologyDayEntry {
   sleepLightSec?: number;     // light sleep in seconds (direct from Garmin, preferred over derived)
   sleepAwakeSec?: number;     // awake time in seconds
   stressAvg?: number;
+  steps?: number;              // total steps for this day (intra-day for today, full-day for past days)
+  activeCalories?: number;     // active kcal from Garmin epochs (non-BMR energy expenditure)
+  activeMinutes?: number;      // minutes in ACTIVE or HIGHLY_ACTIVE intensity (15-min epoch granularity)
+  highlyActiveMinutes?: number; // minutes in HIGHLY_ACTIVE intensity only
   ltPace?: number;        // sec/km — from physiology_snapshots
   ltHR?: number;          // bpm at lactate threshold — from physiology_snapshots
 }
@@ -157,6 +161,7 @@ export interface GarminPendingItem {
   startTime: string;       // ISO timestamp of when the activity occurred
   durationSec: number;
   distanceM: number | null;
+  avgPaceSecKm?: number | null;  // Strava moving pace (sec/km) — null if not from Strava or not available
   avgHR: number | null;
   maxHR: number | null;
   aerobicEffect: number | null;   // Garmin Training Effect aerobic (0-5)
@@ -165,6 +170,8 @@ export interface GarminPendingItem {
   calories: number | null;
   iTrimp?: number | null;
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+  polyline?: string | null;
+  kmSplits?: number[] | null;
 }
 
 /** Actual data from a matched Garmin activity */
@@ -214,6 +221,8 @@ export interface GarminActual {
   /** Planned distance in km at the time of matching (from the workout description).
    *  Null if the workout description could not be parsed for a distance. */
   plannedDistanceKm?: number | null;
+  /** Elevation gain in metres (from Strava total_elevation_gain). Null if unavailable. */
+  elevationGainM?: number | null;
 }
 
 /** Per-lap split from Garmin activity details */
@@ -275,7 +284,7 @@ export interface Week {
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
   hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
   carryOverCardDismissed?: boolean;             // User dismissed the carry-over card for this week
-  kmNudge?: { workoutName: string; dayOfWeek?: number; suggestedExtensionKm: number; originalDistanceKm: number; }; // Under-load nudge: extend easy run
+  kmNudge?: { floorKm: number; hasReductions: boolean; }; // Under-load nudge: signal to show km-floor card in plan view
   kmNudgeDismissed?: boolean;                   // User dismissed the km nudge for this week
   ltAutoUpdate?: {
     week: number;
@@ -378,7 +387,11 @@ export interface SimulatorState {
 
   // Integrations
   stravaConnected?: boolean;
-  wearable?: 'garmin' | 'apple' | 'strava';  // Which wearable the user connected
+  wearable?: 'garmin' | 'apple' | 'strava';  // Legacy — use accessors in src/data/sources.ts
+  connectedSources?: {
+    activity?: 'strava' | 'garmin' | 'apple' | 'polar' | 'phone';
+    physiology?: 'garmin' | 'apple' | 'whoop' | 'oura';
+  };
 
   // Physiology / accuracy
   biologicalSex?: 'male' | 'female' | 'prefer_not_to_say';  // Used for iTRIMP β coefficient (unset → male default)
@@ -446,6 +459,9 @@ export interface SimulatorState {
 
   // Garmin physiology history (last 7 days from daily_metrics)
   physiologyHistory?: PhysiologyDayEntry[];
+
+  // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal
+  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>;
 
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;

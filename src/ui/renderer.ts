@@ -16,7 +16,7 @@ import {
 import { ft, fp, formatPace, formatWorkoutTime, formatKm, fmtDesc, DAY_NAMES, DAY_NAMES_SHORT } from '@/utils';
 import { SPORTS_DB, SPORT_LABELS, LOAD_PROFILES } from '@/constants';
 import { computeACWR, getTrailingEffortScore } from '@/calculations/fitness-model';
-import { generateWorkoutInsight } from '@/calculations/workout-insight';
+import { generateWorkoutInsight, findPreviousSession } from '@/calculations/workout-insight';
 import { getActiveWorkoutName, getActiveGpsData, isTrackingActive } from './gps-events';
 import { renderInlineGpsHtml, refreshRecordings } from './gps-panel';
 import { loadGpsRecording } from '@/gps/persistence';
@@ -267,7 +267,7 @@ export function render(): void {
   const injuryState = (s as any).injuryState || null;  // Get injury state for plan adaptation
   const trailingEffort = getTrailingEffortScore(s.wks, s.w);
   const acwrAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed);
+  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed, s.signalBBaseline ?? undefined);
   let wos = generateWeekWorkouts(
     wk.ph,
     s.rw,
@@ -288,7 +288,7 @@ export function render(): void {
     currentVDOT, // vdot for plan engine (includes RPE and training gains)
     s.gs,  // gym sessions per week
     trailingEffort, // effort score for adaptive scaling
-    acwrForRender.status === 'unknown' ? undefined : acwrForRender.status // acwrStatus — reduces quality sessions when elevated
+    (acwrForRender.status === 'unknown' || acwrForRender.status === 'low') ? undefined : acwrForRender.status // acwrStatus — reduces quality sessions when elevated
   );
 
   // 1. Apply stored modifications BEFORE renaming duplicates.
@@ -911,7 +911,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     h += `<div class="border-2 p-2 rounded" style="border-color:${cardDetailBorderColor};background:${cardDetailBgStyle}">`;
 
     // Garmin-matched slot banner (cross/run slots matched via garminActuals)
-    if (garminActualsData?.displayName && !isModified && (w.t === 'cross' || w.t === 'run' || w.t === 'easy' || w.t === 'long' || w.t === 'threshold' || w.t === 'vo2' || w.t === 'marathon_pace')) {
+    if (garminActualsData?.displayName && !isModified && (w.t === 'cross' || w.t === 'run' || w.t === 'easy' || w.t === 'long' || w.t === 'threshold' || w.t === 'vo2' || w.t === 'marathon_pace' || w.t === 'float')) {
       const actName = garminActualsData.displayName;
       const dur = Math.round(garminActualsData.durationSec / 60);
       let statLine = `${dur} min`;
@@ -1560,7 +1560,7 @@ function renderCrossTrainingForm(): string {
 }
 
 function isHardWorkoutType(workoutType: string): boolean {
-  return ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'long', 'mixed', 'progressive'].includes(workoutType);
+  return ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'long', 'mixed', 'progressive', 'float'].includes(workoutType);
 }
 
 /** Get color styles for a workout type: { bgStyle, borderColor, accentColor } */
@@ -1573,6 +1573,7 @@ function getWorkoutColors(wt: string): { bgStyle: string; borderColor: string; a
       return { bgStyle: 'rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.35)', accentColor: 'var(--c-accent)', bg: '', border: '', accent: '' };
     case 'threshold':
     case 'marathon_pace':
+    case 'float':
       return { bgStyle: 'rgba(168,85,247,0.06)', borderColor: 'rgba(168,85,247,0.35)', accentColor: '#A855F7', bg: '', border: '', accent: '' };
     case 'vo2':
     case 'intervals':
@@ -1768,7 +1769,9 @@ function renderGarminActuals(actual: GarminActual, planned: { totalDistance: num
   }
 
   // Coach insight (HR & distance analysis)
-  const insight = generateWorkoutInsight(actual);
+  const s = getState();
+  const prev = findPreviousSession(actual.plannedType, actual.garminId, s.wks || []);
+  const insight = generateWorkoutInsight(actual, { prev, unitPref });
   if (insight) {
     h += `<div class="mt-2 pt-2 text-xs" style="border-top:1px solid rgba(249,115,22,0.2);color:var(--c-muted)">`;
     h += `<span class="font-medium" style="color:rgba(249,115,22,0.7)">Coach · </span>`;

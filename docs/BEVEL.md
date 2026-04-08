@@ -166,11 +166,18 @@ to our TSB concept. Their Strain ring maps to daily acute load — not yet surfa
 - Surface on Home tab — compact metric row alongside readiness ring
 - Weekly strain trend already exists as ATL bar in Stats → Readiness — keep it there
 
-**Naming**: "Strain" is the right user-facing label (direct, not jargon). Don't rename
-in code — only change the UI label. Internal variable stays Signal B / ATL.
+**Naming**: Rename user-facing label from "Strain" to "Today's Load". Internal variable
+stays Signal B / ATL. Code variable names unchanged.
 
-**Visual**: Do NOT use a circular orange ring — Whoop clone. Use a horizontal bar or
-a compact number row (same pattern as the HRV/RHR tiles in UX_PATTERNS.md).
+**Visual**: Circular ring is fine and preferred — it works as a visual hook on the home
+screen and on the detail page. Orange/terracotta colour is acceptable (existing brand colour,
+not a Whoop clone since our overall aesthetic is clearly different). Do NOT add a second
+ring alongside it (no stacked rings pattern).
+
+**Steps as future input**: When Garmin steps data is available, daily step count should
+feed into Today's Load as a low-intensity background load signal. A sedentary rest day
+and an 18,000-step rest day are meaningfully different physiological states. Placeholder
+card to be shown in the detail page until data is available.
 
 ---
 

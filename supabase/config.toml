@@ -30,3 +30,6 @@ verify_jwt = false
 
 [functions.garmin-webhook]
 verify_jwt = false
+
+[functions.sync-today-steps]
+verify_jwt = false

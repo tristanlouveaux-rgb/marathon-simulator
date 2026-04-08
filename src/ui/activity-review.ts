@@ -31,6 +31,7 @@ import {
 } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
 import { generateWeekWorkouts } from '@/workouts';
+import { calculateWorkoutLoad } from '@/workouts/load';
 import {
   findMatchingWorkout,
   type ExternalActivity,
@@ -41,11 +42,26 @@ import type { GarminPendingItem, GarminActual, WorkoutMod, UnspentLoadItem } fro
 import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
-import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeACWR, getWeeklyExcess, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { TL_PER_MIN, SPORTS_DB, SPORT_LABELS } from '@/constants';
+import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { formatKm } from '@/utils/format';
 
 // Intro screen removed — flow goes directly to matching screen
+
+// ---------------------------------------------------------------------------
+// Leg load helper
+
+function recordLegLoad(sport: SportKey, durationMin: number, timestampMs: number) {
+  const cfg = SPORTS_DB[sport];
+  const rate = cfg?.legLoadPerMin ?? 0;
+  if (rate <= 0) return;
+  const load = durationMin * rate;
+  const sportLabel = (SPORT_LABELS as Record<string, string>)[sport] ?? sport;
+  const s = getMutableState();
+  const sevenDaysMs = 7 * 24 * 3_600_000;
+  const existing = (s.recentLegLoads ?? []).filter(e => timestampMs - e.timestampMs < sevenDaysMs);
+  s.recentLegLoads = [...existing, { load, sport, sportLabel, timestampMs }];
+}
 
 // ---------------------------------------------------------------------------
 // Week workouts helper
@@ -143,13 +159,42 @@ export function showActivityReview(
  * Undoes previous processing, pre-populates with saved choices, shows review.
  * Called from the "Review Garmin activities" button in the Garmin section.
  */
-export function openActivityReReview(onDone?: () => void): void {
+export function openActivityReReview(onDone?: () => void, weekNum?: number): void {
   const s = getMutableState();
-  const wk = s.wks?.[s.w - 1];
+  // weekNum is 1-based (same as s.w). Fall back to current week.
+  const wkIdx = weekNum != null ? weekNum - 1 : s.w - 1;
+  const wk = s.wks?.[wkIdx];
   if (!wk?.garminPending?.length) return;
 
-  // Capture previous choices before undoing
+  const isPreviousWeek = wkIdx < s.w - 1;
+
+  // Previous week: plan slots have passed — silently log all still-pending items as adhoc
+  // rather than showing the full review UI for a week the user can no longer affect.
+  if (isPreviousWeek) {
+    if (!wk.garminMatched) wk.garminMatched = {};
+    for (const item of wk.garminPending) {
+      if (wk.garminMatched[item.garminId] !== '__pending__') continue;
+      const adhocId = `garmin-${item.garminId}`;
+      addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
+      wk.garminMatched[item.garminId] = adhocId;
+    }
+    saveState();
+    const done = () => { if (onDone) onDone(); else render(); };
+    done();
+    return;
+  }
+
+  // Capture previous choices AND slot assignments before undoing
   const savedChoices = { ...(wk.garminReviewChoices || {}) };
+  // Save the actual slot assignments (garminId → workoutId) so the matching screen
+  // can restore previous pairings instead of auto-proposing fresh ones.
+  const savedSlotAssignments: Record<string, string> = {};
+  for (const [garminId, matchedId] of Object.entries(wk.garminMatched || {})) {
+    if (matchedId && matchedId !== '__pending__') {
+      savedSlotAssignments[garminId] = matchedId;
+    }
+  }
+  (wk as any)._savedSlotAssignments = savedSlotAssignments;
 
   // Snapshot state so Cancel can restore it exactly
   const snapshot = {
@@ -158,6 +203,7 @@ export function openActivityReReview(onDone?: () => void): void {
     garminMatched: { ...(wk.garminMatched || {}) },
     adhocWorkouts: JSON.parse(JSON.stringify(wk.adhocWorkouts || [])),
     workoutMods: JSON.parse(JSON.stringify(wk.workoutMods || [])),
+    unspentLoadItems: JSON.parse(JSON.stringify(wk.unspentLoadItems || [])),
   };
 
   // Undo all previous Garmin processing for every pending item
@@ -175,6 +221,11 @@ export function openActivityReReview(onDone?: () => void): void {
     if (matchedId && !matchedId.startsWith('garmin-') && matchedId !== '__pending__') {
       delete wk.rated[matchedId];
       if (wk.garminActuals) delete wk.garminActuals[matchedId];
+    }
+
+    // Clear stale unspentLoadItems so re-review starts from a clean slate
+    if (wk.unspentLoadItems) {
+      wk.unspentLoadItems = wk.unspentLoadItems.filter(u => u.garminId !== id);
     }
 
     // Reset to pending so auto-review can present them again
@@ -199,13 +250,14 @@ export function openActivityReReview(onDone?: () => void): void {
     /* onCancel */ () => {
       // Restore state to exactly what it was before the user opened the review
       const s2 = getMutableState();
-      const wk2 = s2.wks?.[s2.w - 1];
+      const wk2 = s2.wks?.[wkIdx];
       if (wk2) {
         wk2.rated = snapshot.rated;
         wk2.garminActuals = snapshot.garminActuals;
         wk2.garminMatched = snapshot.garminMatched;
         wk2.adhocWorkouts = snapshot.adhocWorkouts;
         wk2.workoutMods = snapshot.workoutMods;
+        wk2.unspentLoadItems = snapshot.unspentLoadItems;
         saveState();
       }
       done();
@@ -233,7 +285,30 @@ function showMatchingEntryScreen(
     choices[item.garminId] = savedChoices?.[item.garminId] === 'log' ? 'log' : 'integrate';
   }
 
-  const pairings = proposeMatchings(pending, choices, buildMatchCache(pending, allWorkouts, wk), allWorkouts);
+  let pairings = proposeMatchings(pending, choices, buildMatchCache(pending, allWorkouts, wk), allWorkouts);
+
+  // Override auto-proposed pairings with saved slot assignments from previous review.
+  // This ensures re-review remembers where the user assigned each activity.
+  const savedSlots: Record<string, string> = (wk as any)?._savedSlotAssignments ?? {};
+  if (Object.keys(savedSlots).length > 0) {
+    pairings = pairings.map(p => {
+      const gid = p.item.garminId;
+      const savedSlot = savedSlots[gid];
+      // Only override if the saved slot is a plan slot (not adhoc 'garmin-' prefix)
+      // and the workout still exists in allWorkouts
+      if (savedSlot && !savedSlot.startsWith('garmin-') && allWorkouts.some(w => (w.id || w.n) === savedSlot)) {
+        const savedW = allWorkouts.find(w => (w.id || w.n) === savedSlot);
+        return { ...p, proposedWorkoutId: savedSlot, proposedWorkoutName: savedW?.n ?? savedSlot, confidence: 'high' as const };
+      }
+      // Items previously in excess (garmin- prefix): send directly to Excess Load bucket.
+      // '__reduction__' is a sentinel that showMatchingScreen maps to the 'reduction' assignment.
+      if (savedSlot?.startsWith('garmin-')) {
+        return { ...p, proposedWorkoutId: '__reduction__', proposedWorkoutName: null, confidence: null };
+      }
+      return p;
+    });
+  }
+
   const unrated = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
 
   let weekStartDate: Date | undefined;
@@ -269,6 +344,9 @@ function showMatchingEntryScreen(
 
       populateUnspentLoadItems(reductionItems);
 
+      // Clean up transient saved slot assignments
+      if (wkOrig) delete (wkOrig as any)._savedSlotAssignments;
+
       const toastLines = buildAssignmentLines(pending, choices, updatedChoices, confirmedMatchings, allWorkouts);
       overlay.remove();
       saveState();
@@ -276,6 +354,10 @@ function showMatchingEntryScreen(
       applyReview(pending, updatedChoices, buildMatchCache(pending, allWorkouts, wk), onComplete, confirmedMatchings);
     },
     () => {
+      // Clean up transient saved slot assignments on cancel too
+      const sCancel = getMutableState();
+      const wkCancel = sCancel.wks?.[sCancel.w - 1];
+      if (wkCancel) delete (wkCancel as any)._savedSlotAssignments;
       overlay.remove();
       if (onCancel) onCancel();
       else onComplete();
@@ -759,9 +841,9 @@ function applyReview(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0
-          ? Math.round(item.durationSec / (item.distanceM / 1000))
-          : null,
+        avgPaceSecKm: item.avgPaceSecKm != null
+          ? item.avgPaceSecKm
+          : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR,
         maxHR: item.maxHR,
         calories: item.calories,
@@ -773,11 +855,39 @@ function applyReview(
         plannedType: classifyByName(match.workoutId) ?? undefined,
         hrEffortScore: getHREffort(item.avgHR, classifyByName(match.workoutId), s),
         paceAdherence: getPaceAdherence(
-          item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+          item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
           classifyByName(match.workoutId), s),
+        iTrimp: item.iTrimp ?? null,
+        polyline: item.polyline ?? null,
+        kmSplits: item.kmSplits ?? null,
       } as GarminActual;
 
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
+
+      // Surplus: if actual distance >30% over planned, add the excess to unspentLoad
+      const matchedWorkout = allW.find(w => (w.id || w.n) === match.workoutId);
+      if (matchedWorkout) {
+        const plannedKmMatch = (matchedWorkout.d || '').match(/(\d+\.?\d*)km/);
+        const plannedKm = plannedKmMatch ? parseFloat(plannedKmMatch[1]) : 0;
+        const actualDistKm = (item.distanceM ?? 0) / 1000;
+        if (plannedKm > 0 && actualDistKm > plannedKm * 1.3) {
+          const surplusKm = actualDistKm - plannedKm;
+          const surplusDurMin = (surplusKm / actualDistKm) * (item.durationSec / 60);
+          const surplusLoads = calculateWorkoutLoad(matchedWorkout.t, surplusDurMin, rpe * 10, s.pac?.e);
+          const surplusItem: UnspentLoadItem = {
+            garminId: item.garminId + '_surplus',
+            displayName: `${match.workoutName} +${surplusKm.toFixed(1)}km surplus`,
+            sport: 'extra_run',
+            durationMin: surplusDurMin,
+            aerobic: surplusLoads.aerobic,
+            anaerobic: surplusLoads.anaerobic,
+            date: item.startTime,
+            reason: 'surplus_run',
+          };
+          wk.unspentLoadItems = [...(wk.unspentLoadItems ?? []), surplusItem];
+          wk.unspentLoad = (wk.unspentLoad || 0) + surplusLoads.aerobic + surplusLoads.anaerobic;
+        }
+      }
     } else {
       const adhocId = `garmin-${item.garminId}`;
       addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
@@ -816,11 +926,14 @@ function applyReview(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
         hrZones: item.hrZones ?? null,
+        iTrimp: item.iTrimp ?? null,
+        polyline: item.polyline ?? null,
+        kmSplits: item.kmSplits ?? null,
       } as GarminActual;
 
       const idx = planCandidates.findIndex(w => (w.id || w.n) === matchId);
@@ -854,7 +967,7 @@ function applyReview(
         garminId: item.garminId,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
@@ -913,7 +1026,7 @@ function applyReview(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
@@ -965,11 +1078,16 @@ function applyReview(
   });
   const weekRuns = workoutsToPlannedRuns(freshWorkouts, s2.pac);
 
+  const _arTier = s2.athleteTierOverride ?? s2.athleteTier;
+  const _arAtl = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
+  const _arAcwr = computeACWR(s2.wks, s2.w, _arTier, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl, s2.signalBBaseline ?? undefined);
   const ctx = {
     raceGoal: s2.rd,
     plannedRunsPerWeek: s2.rw,
     injuryMode: !!(s2 as any).injuryState,
     easyPaceSecPerKm: s2.pac?.e,
+    floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph),
+    acwrStatus: _arAcwr.status,
   };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
@@ -1036,7 +1154,7 @@ function applyReview(
       wk3.garminMatched[item.garminId] = adhocId;
     }
 
-    // Store cross-training TL and impact load
+    // Store cross-training TL, impact load, and leg load
     {
       const sport = normalizeSport(combinedActivity.sport) as SportKey;
       const cfg = SPORTS_DB[sport];
@@ -1047,6 +1165,7 @@ function applyReview(
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
+      recordLegLoad(sport, combinedActivity.duration_min, Date.now());
     }
 
     const affectedStr = affectedNames.length > 0 ? ` — adjusted: ${affectedNames.join(', ')}` : '';
@@ -1380,7 +1499,7 @@ export function autoProcessActivities(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
@@ -1427,7 +1546,7 @@ export function autoProcessActivities(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
@@ -1466,7 +1585,7 @@ export function autoProcessActivities(
         startTime: item.startTime,
         distanceKm: (item.distanceM ?? 0) / 1000,
         durationSec: item.durationSec,
-        avgPaceSecKm: item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null,
+        avgPaceSecKm: item.avgPaceSecKm != null ? item.avgPaceSecKm : (item.distanceM && item.distanceM > 0 ? Math.round(item.durationSec / (item.distanceM / 1000)) : null),
         avgHR: item.avgHR ?? null, maxHR: item.maxHR ?? null, calories: item.calories ?? null,
         aerobicEffect: item.aerobicEffect, anaerobicEffect: item.anaerobicEffect,
         displayName: formatActivityType(item.activityType),
@@ -1491,15 +1610,24 @@ export function autoProcessActivities(
     return;
   }
 
-  // Overflow → populate unspentLoadItems
+  // Overflow → populate unspentLoadItems AND log as adhoc so they appear in the
+  // activity timeline. garminMatched is set so they are not re-processed on the
+  // next launch (same pattern as gymOverflowAuto above).
   populateUnspentLoadItems(overflow);
+  for (const item of overflow) {
+    const adhocId = `garmin-${item.garminId}`;
+    if (!wk.adhocWorkouts?.some(w => w.id === adhocId)) {
+      addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
+    }
+    wk.garminMatched[item.garminId] = adhocId;
+  }
   saveState();
 
   // Tier 1: silently reduce nearest easy run when excess is small (≤ 15 TSS above baseline).
   // The unspentLoadItems remain in state so the undo can restore them.
   const _signalBBaseline = s.signalBBaseline ?? 0;
   if (!forceModal && _signalBBaseline > 0 && overflow.length > 0) {
-    const _excess = getWeeklyExcess(wk, _signalBBaseline, s.planStartDate);
+    const _excess = getWeeklyExcess(wk, _signalBBaseline, s.planStartDate, computeDecayedCarry(s.wks ?? [], s.w, _signalBBaseline, s.planStartDate));
     if (_excess > 0 && _excess <= 15) {
       const easyRun = allWorkouts.find(
         w => (w.t === 'easy' || w.t === 'e') && wk.rated[w.id || w.n] === undefined,
@@ -1546,7 +1674,7 @@ export function autoProcessActivities(
     const _s = getMutableState();
     const _tier = _s.athleteTierOverride ?? _s.athleteTier;
     const _atlSeed = (_s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (_s.gs ?? 0), 0.3));
-    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed);
+    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined);
     if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
       showAssignmentToast(autoAssignLines);
       render();
@@ -1562,7 +1690,10 @@ export function autoProcessActivities(
   const combinedActivity = buildCombinedActivity(overflow, s2);
   const freshWorkouts    = getWeekWorkoutsForReview().filter(w => wk2.rated[w.id || w.n] === undefined);
   const weekRuns         = workoutsToPlannedRuns(freshWorkouts, s2.pac);
-  const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined };
+  const _arTier2 = s2.athleteTierOverride ?? s2.athleteTier;
+  const _arAtl2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
+  const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined);
+  const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph), acwrStatus: _arAcwr2.status };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
   const sportLabel = overflow.length === 1
@@ -1613,7 +1744,7 @@ export function autoProcessActivities(
       wk3.unspentLoadItems = wk3.unspentLoadItems.filter(u => !overflowIds.has(u.garminId));
     }
 
-    // Store cross-training TL and impact load
+    // Store cross-training TL, impact load, and leg load
     {
       const sport = normalizeSport(combinedActivity.sport) as SportKey;
       const cfg = SPORTS_DB[sport];
@@ -1624,6 +1755,7 @@ export function autoProcessActivities(
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
+      recordLegLoad(sport, combinedActivity.duration_min, Date.now());
     }
 
     showAssignmentToast(autoAssignLines);

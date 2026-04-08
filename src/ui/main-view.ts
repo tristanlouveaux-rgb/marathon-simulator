@@ -18,7 +18,8 @@ import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SP
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore } from '@/calculations/fitness-model';
+import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
+import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
@@ -26,6 +27,7 @@ import { gp } from '@/calculations/paces';
 import type { WorkoutMod } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
+import { getSyncLabel, hasPhysiologySource } from '@/data/sources';
 
 /** Persists the viewed week across renderMainView() re-renders. Null = use current week. */
 let _persistedViewWeek: number | null = null;
@@ -337,7 +339,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                 ${SUPABASE_URL ? `
                 <button id="btn-sync-now" class="w-full py-2 rounded text-sm transition-colors flex items-center justify-center gap-2" style="background:rgba(0,0,0,0.05);color:var(--c-muted)">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                  ${s.stravaConnected ? 'Sync Strava' : s.wearable === 'apple' ? 'Sync Apple Watch' : 'Sync Garmin'}
+                  ${getSyncLabel(s)}
                 </button>
                 ` : ''}
               </div>
@@ -487,7 +489,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                       <span id="stat-vol-note" class="text-[10px]" style="color:var(--c-faint)"></span>
                       <span class="text-[9px]" style="color:var(--c-faint)">/ <span id="stat-vol-planned">—</span> <span id="stat-vol-planned-unit">km</span> planned</span>
                     </div>
-                    <div id="stat-km-floor-nudge" class="text-[10px] mt-1" style="color:var(--c-caution);display:none"></div>
+                    <!-- km floor nudge moved to plan-view -->
                   </div>
                   <p class="text-[10px] mt-2 mb-1" style="color:var(--c-faint)">Zone progress vs plan</p>
                   <div class="space-y-1" id="zone-bars-container">
@@ -687,13 +689,13 @@ function renderContinuousProgressPanel(s: any): string {
 
       <!-- Fitness Metrics Grid -->
       <div id="pred" class="grid grid-cols-3 gap-2 mb-6">
-        <!-- VDOT -->
+        <!-- VO2 Max -->
         <div class="rounded-lg p-3 border" style="background:rgba(0,0,0,0.03);border-color:var(--c-border)">
-          <div class="text-[10px] uppercase tracking-wider mb-1" style="color:var(--c-faint)">VDOT</div>
-          <div class="text-xl font-bold" style="color:var(--c-black)">${currentVdot.toFixed(1)}</div>
-          ${vdotPct !== 0 ? `
-            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium" style="${vdotPct > 0 ? 'background:rgba(34,197,94,0.10);color:var(--c-ok)' : 'background:rgba(239,68,68,0.10);color:var(--c-warn)'}">
-              ${vdotPct > 0 ? '↑' : '↓'} ${Math.abs(vdotPct).toFixed(1)}%
+          <div class="text-[10px] uppercase tracking-wider mb-1" style="color:var(--c-faint)">VO2 Max</div>
+          <div class="text-xl font-bold" style="color:var(--c-black)">${vo2Current ? Math.round(vo2Current) : Math.round(currentVdot)}</div>
+          ${(vo2Current ? vo2Pct : vdotPct) !== 0 ? `
+            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium" style="${(vo2Current ? vo2Pct : vdotPct) > 0 ? 'background:rgba(34,197,94,0.10);color:var(--c-ok)' : 'background:rgba(239,68,68,0.10);color:var(--c-warn)'}">
+              ${(vo2Current ? vo2Pct : vdotPct) > 0 ? '↑' : '↓'} ${Math.abs(vo2Current ? vo2Pct : vdotPct).toFixed(1)}%
             </div>
           ` : '<div class="h-4"></div>'}
         </div>
@@ -705,17 +707,6 @@ function renderContinuousProgressPanel(s: any): string {
           ${ltPct !== 0 ? `
             <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium" style="${ltPct > 0 ? 'background:rgba(34,197,94,0.10);color:var(--c-ok)' : 'background:rgba(239,68,68,0.10);color:var(--c-warn)'}">
               ${ltPct > 0 ? '↑' : '↓'} ${Math.abs(ltPct).toFixed(1)}%
-            </div>
-          ` : '<div class="h-4"></div>'}
-        </div>
-
-        <!-- VO2max -->
-        <div class="rounded-lg p-3 border" style="background:rgba(0,0,0,0.03);border-color:var(--c-border)">
-          <div class="text-[10px] uppercase tracking-wider mb-1" style="color:var(--c-faint)">VO2max</div>
-          <div class="text-xl font-bold" style="color:var(--c-accent)">${vo2Current?.toFixed(1) || '—'}</div>
-          ${vo2Pct !== 0 ? `
-            <div class="inline-flex items-center px-1.5 py-0.5 mt-1 rounded text-[10px] font-medium" style="${vo2Pct > 0 ? 'background:rgba(34,197,94,0.10);color:var(--c-ok)' : 'background:rgba(239,68,68,0.10);color:var(--c-warn)'}">
-              ${vo2Pct > 0 ? '↑' : '↓'} ${Math.abs(vo2Pct).toFixed(1)}%
             </div>
           ` : '<div class="h-4"></div>'}
         </div>
@@ -1844,7 +1835,7 @@ function updateLoadChart(s: SimulatorState): void {
   // ── Separate running vs cross-training TSS ───────────────────────────
   // Running TSS = garminActuals for run-type workouts (easy, long, threshold, vo2, marathon_pace, etc.)
   // Cross-training TSS = garminActuals for non-run adhoc + unspent items
-  const RUN_TYPES = new Set(['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'hill_repeats', 'progressive', 'mixed', 'race_pace']);
+  const RUN_TYPES = new Set(['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'hill_repeats', 'progressive', 'mixed', 'race_pace', 'float']);
   let actualRunTSS = 0, actualCrossTSS = 0;
   if (wk?.garminActuals) {
     for (const [workoutId, actual] of Object.entries(wk.garminActuals)) {
@@ -1907,7 +1898,7 @@ function updateLoadChart(s: SimulatorState): void {
   // Gray = 0→CTL (your chronic baseline); Green = CTL→plan (the target zone);
   // Amber = plan→plan×1.2 (acceptable overrun); Red = beyond that (fills rest).
   const acwrAtlSeed1 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1);
+  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1, s.signalBBaseline ?? undefined);
   const ctlWeeklyEquiv = acwrData.ctl;
   const ctlPctOfBar = barMax > 0 ? Math.min(100, (ctlWeeklyEquiv / barMax) * 100) : 0;
   const planPctOfBar = barMax > 0 ? Math.min(100, (plannedTotal / barMax) * 100) : 71;
@@ -2056,32 +2047,7 @@ function updateLoadChart(s: SimulatorState): void {
     volNoteEl.textContent = '';
   }
 
-  // §5.6 — Minimum running km floor nudge
-  // Derive goal tier from marathon pace (sec/km)
-  const marathonTimeSec = (s.pac?.m ?? 360) * 42.195;
-  const floorTier = marathonTimeSec < 3.5 * 3600 ? 'fast'        // sub 3:30
-    : marathonTimeSec < 4.5 * 3600 ? 'mid'         // 3:30–4:30
-      : 'finish';     // 4:30+
-  const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
-  const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
-  const totalWeeks = s.tw ?? 16;
-  const currentWeek = s.w ?? 1;
-  const floorKm = earlyFloor + (peakFloor - earlyFloor) * Math.min(1, (currentWeek - 1) / (totalWeeks - 1));
-
-  // Check past 2 weeks for consecutive below-floor
-  const prevWeeks = (s.wks ?? []).slice(Math.max(0, currentWeek - 3), currentWeek - 1);
-  const consecutiveBelow = prevWeeks.length >= 2 &&
-    prevWeeks.every(pw => (pw.completedKm ?? 0) < floorKm);
-
-  const kmFloorNudgeEl = document.getElementById('stat-km-floor-nudge');
-  if (kmFloorNudgeEl) {
-    if (consecutiveBelow && actualRunKm < floorKm) {
-      kmFloorNudgeEl.textContent = `Running ${s.unitPref === 'mi' ? 'mileage' : 'km'} has been below ${formatKm(floorKm, s.unitPref ?? 'km', 0)} for 2+ weeks — consider adding a short easy run`;
-      kmFloorNudgeEl.style.display = 'block';
-    } else {
-      kmFloorNudgeEl.style.display = 'none';
-    }
-  }
+  // §5.6 — Minimum running km floor nudge (moved to plan-view)
 
   // 3-zone TSS breakdown — progress vs planned per zone
   const setZoneProgress = (
@@ -2156,7 +2122,7 @@ function updateACWRBar(s: SimulatorState): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2, s.signalBBaseline ?? undefined);
 
   if (acwr.status === 'unknown' && acwr.ratio === 0) {
     const histLen = (s.historicWeeklyTSS ?? []).length;
@@ -2189,7 +2155,7 @@ function updateACWRBar(s: SimulatorState): void {
     ? `Load spike detected (${ratio.toFixed(2)}× baseline) — reduce this week`
     : acwr.status === 'caution'
       ? `Load increasing quickly (${ratio.toFixed(2)}× baseline) — consider easing off`
-      : acwr.status === 'unknown'
+      : acwr.status === 'low'
         ? `Deload / low activity (${ratio.toFixed(2)}×)`
         : `Load well-managed (${ratio.toFixed(2)}× baseline)`;
 
@@ -2403,7 +2369,7 @@ export function triggerACWRReduction(): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed3 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3, s.signalBBaseline ?? undefined);
 
   // Build popup source: use unspent items if present, else synthesise from planned load
   let durationMin: number;
@@ -2417,10 +2383,12 @@ export function triggerACWRReduction(): void {
     durationMin = items.reduce((sum, i) => sum + i.durationMin, 0);
     aerobic = items.reduce((sum, i) => sum + i.aerobic, 0);
     anaerobic = items.reduce((sum, i) => sum + i.anaerobic, 0);
-    sport = items[0]?.sport ?? 'cross-training';
+    // Use cross_training when activities span multiple sports
+    const sportSet = new Set(items.map(i => i.sport ?? 'cross_training'));
+    sport = sportSet.size === 1 ? [...sportSet][0] : 'cross_training';
     sportLabel = items.length === 1
       ? (items[0].displayName || items[0].sport?.replace(/_/g, ' ') || 'cross-training')
-      : 'cross-training load';
+      : `${items.length} activities`;
   } else {
     // Synthesise from the excess ACWR. Approximate: excess = (ratio - 1) * CTL weekly equiv.
     const excessFraction = Math.max(0, acwr.ratio - acwr.safeUpper);
@@ -2438,13 +2406,64 @@ export function triggerACWRReduction(): void {
   const combinedActivity = createActivity(sport, Math.round(durationMin), avgRPE, undefined, undefined, s.w);
   combinedActivity.dayOfWeek = new Date().getDay() === 0 ? 6 : new Date().getDay() - 1;
 
+  // Look up actual iTRIMP from source activities so popup uses HR data, not RPE.
+  if (wk.unspentLoadItems?.length) {
+    let totalITrimp = 0;
+    const seenIds = new Set<string>();
+    for (const item of wk.unspentLoadItems) {
+      if (seenIds.has(item.garminId)) continue;
+      seenIds.add(item.garminId);
+      let found = false;
+      for (const actual of Object.values(wk.garminActuals ?? {})) {
+        if (actual.garminId === item.garminId && actual.iTrimp != null && actual.iTrimp > 0) {
+          totalITrimp += actual.iTrimp;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        const adhocId = `garmin-${item.garminId}`;
+        for (const adhoc of wk.adhocWorkouts ?? []) {
+          if (adhoc.id === adhocId && (adhoc as any).iTrimp != null && (adhoc as any).iTrimp > 0) {
+            totalITrimp += (adhoc as any).iTrimp;
+            break;
+          }
+        }
+      }
+    }
+    if (totalITrimp > 0) {
+      combinedActivity.iTrimp = totalITrimp;
+    }
+  }
+
   const freshWorkouts = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
   const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
-  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined };
+  const _mvTier = s.athleteTierOverride ?? s.athleteTier;
+  const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined);
+  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
+  // For multi-activity case, rewrite summary to describe the mix rather than a single session.
+  if (wk.unspentLoadItems?.length && wk.unspentLoadItems.length > 1) {
+    const items2 = wk.unspentLoadItems;
+    const plannedB = computePlannedSignalB(
+      s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
+      s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
+    );
+    const excessTSS = Math.round(getWeeklyExcess(wk, plannedB, s.planStartDate, computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate)));
+    const loadNote = popup.tier === 'rpe' ? ' (estimated from RPE)' : '';
+    const equivKmStr = popup.equivalentEasyKm > 0
+      ? `, equivalent to ${formatKm(popup.equivalentEasyKm, s.unitPref ?? 'km')} easy running`
+      : '';
+    const impactMatch = popup.summary.match(/carries enough load to (.+?)(?:\. Consider|\.?\s*$)/);
+    const impactPart = impactMatch ? ` They carry enough load to ${impactMatch[1]}.` : '';
+    popup.summary = `Your ${items2.length} extra activities generated ${excessTSS} TSS${loadNote}${equivKmStr}.${impactPart}${impactPart ? ' Consider adjusting your plan to avoid overtraining.' : ''}`;
+    popup.sportName = 'extra activities';
+  }
+
   // Compute intensity % for ACWR context header
-  const plannedThreshold = freshWorkouts.filter(w => w.t === 'threshold' || w.t === 'marathon_pace').length;
+  const plannedThreshold = freshWorkouts.filter(w => w.t === 'threshold' || w.t === 'marathon_pace' || w.t === 'float').length;
   const plannedIntensity = freshWorkouts.filter(w => w.t === 'vo2' || w.t === 'intervals').length;
   const intensityPct = freshWorkouts.length > 0
     ? Math.round(((plannedThreshold + plannedIntensity) / freshWorkouts.length) * 100)
@@ -2454,12 +2473,12 @@ export function triggerACWRReduction(): void {
   // Rule 2 — km spike
   let actualRunKmForRule = 0;
   const plannedRunKmForRule = (getWeekWorkoutsForACWR(s) as any[])
-    .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed'].includes(w.t))
+    .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes(w.t))
     .reduce((sum: number, w: any) => { const m = (w.d ?? '').match(/(\d+\.?\d*)\s*km/); return sum + (m ? parseFloat(m[1]) : 0); }, 0);
   if (wk.garminActuals) {
     for (const [wId, act] of Object.entries(wk.garminActuals)) {
       const pw = getWeekWorkoutsForACWR(s).find((w: any) => (w.id || w.n) === wId);
-      if (pw && ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed'].includes((pw as any).t)) {
+      if (pw && ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes((pw as any).t)) {
         actualRunKmForRule += (act as any).distanceKm ?? 0;
       }
     }
@@ -2509,8 +2528,9 @@ export function triggerACWRReduction(): void {
       }
     }
 
-    // Clear unspent items if they were the source
-    if (wk3.unspentLoadItems?.length) {
+    // Clear unspent items only when the user acted on them (Reduce/Replace).
+    // "Keep Plan" leaves items intact so TSS stays correct and the plan strip remains visible.
+    if (decision.choice !== 'keep' && wk3.unspentLoadItems?.length) {
       wk3.unspentLoadItems = [];
       wk3.unspentLoad = 0;
     }
@@ -2780,16 +2800,19 @@ function wireEventHandlers(): void {
     const btn = document.getElementById('btn-sync-now') as HTMLButtonElement;
     if (!btn || btn.disabled) return;
     const s2 = getState();
-    const syncLabel = s2.stravaConnected ? 'Sync Strava' : s2.wearable === 'apple' ? 'Sync Apple Watch' : 'Sync Garmin';
+    const syncLabel = getSyncLabel(s2);
     const svgSync = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>`;
     btn.disabled = true;
     btn.innerHTML = `<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg> Syncing...`;
     try {
       if (s2.stravaConnected) {
-        // Strava for activities; also sync Garmin biometrics if wearable is Garmin
+        // Strava for activities; also sync physiology from the connected source
         const syncs: Promise<unknown>[] = [syncStravaActivities()];
-        if (s2.wearable === 'garmin') syncs.push(syncPhysiologySnapshot(7));
+        if (hasPhysiologySource(s2, 'garmin')) syncs.push(syncPhysiologySnapshot(7));
+        else if (hasPhysiologySource(s2, 'apple')) syncs.push(syncAppleHealthPhysiology(7));
         await Promise.all(syncs);
+      } else if (hasPhysiologySource(s2, 'apple')) {
+        await Promise.all([syncAppleHealth(), syncAppleHealthPhysiology(7)]);
       } else {
         await Promise.all([syncActivities(), syncPhysiologySnapshot(7)]);
       }

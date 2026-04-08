@@ -3,14 +3,14 @@
  * ================
  * Phase 7: Day-proximity → quality session downgrade (suggestion).
  *
- * When a high-load activity (Signal B ≥ 30 TSS) is completed the day before
+ * When a high-load activity (Signal B ≥ 50 TSS) is completed the day before
  * a quality run (threshold, vo2, long), a suggestion mod is generated.
  *
  * The downgrade magnitude scales with prior day TSS:
- *   30–49 TSS  → 1 intensity step down, no distance cut
- *   50–74 TSS  → 1 step down + 10% shorter
- *   75–99 TSS  → 2 steps down + 20% shorter
- *   100+ TSS   → 2 steps down + 25% shorter
+ *   50–74 TSS  → 1 intensity step down, no distance cut
+ *   75–99 TSS  → 1 step down + 10% shorter
+ *   100–124 TSS → 2 steps down + 15% shorter
+ *   125+ TSS   → 2 steps down + 25% shorter
  *
  * Floor: max(3 km, reduced distance) — approx. 20 min minimum.
  *
@@ -27,7 +27,7 @@ import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
 
 const QUALITY_TYPES = new Set(['threshold', 'vo2', 'long']);
-const SIGNAL_B_TRIGGER = 30;       // TSS: minimum to show any suggestion
+const SIGNAL_B_TRIGGER = 50;       // TSS: minimum to show any suggestion
 const MIN_DISTANCE_KM  = 3;        // Floor: ~20 min including warm-up
 export const TIMING_MOD_PREFIX = 'Timing:';
 
@@ -62,10 +62,10 @@ interface DowngradeTier {
 }
 
 function getTier(tssYesterday: number): DowngradeTier {
-  if (tssYesterday >= 100) return { steps: 2, distReduction: 0.25 };
-  if (tssYesterday >= 75)  return { steps: 2, distReduction: 0.20 };
-  if (tssYesterday >= 50)  return { steps: 1, distReduction: 0.10 };
-  return                          { steps: 1, distReduction: 0 };    // 30–49
+  if (tssYesterday >= 125) return { steps: 2, distReduction: 0.25 };
+  if (tssYesterday >= 100) return { steps: 2, distReduction: 0.15 };
+  if (tssYesterday >= 75)  return { steps: 1, distReduction: 0.10 };
+  return                          { steps: 1, distReduction: 0 };    // 50–74
 }
 
 /** Apply distance reduction with floor, returning new distance string. */
@@ -96,8 +96,14 @@ function adhocSignalBTSS(iTrimp: number | null | undefined, durationMin: number,
 }
 
 function dayOfWeekFromISO(isoTimestamp: string, weekStartISO: string): number {
-  const diff = Math.floor((new Date(isoTimestamp).getTime() - new Date(weekStartISO).getTime()) / 86400000);
-  return diff >= 0 && diff < 7 ? diff : -1;
+  const actDate = new Date(isoTimestamp);
+  const weekStart = new Date(weekStartISO);
+  const diff = Math.floor((actDate.getTime() - weekStart.getTime()) / 86400000);
+  if (diff < 0 || diff >= 7) return -1;
+  // Remap to scheduler convention (0=Monday) — weekStartISO may not be a Monday
+  const weekStartJsDay = weekStart.getUTCDay(); // JS: 0=Sun
+  const offset = (weekStartJsDay + 6) % 7;      // Convert to 0=Mon
+  return (diff + offset) % 7;
 }
 
 // ─── Day TSS map ──────────────────────────────────────────────────────────────
@@ -137,10 +143,19 @@ export function applyTimingDowngradesFromWorkouts(
   wk: Week,
   workouts: Array<{ id?: string; n: string; t: string; d?: string; dayOfWeek?: number; r?: number; rpe?: number }>,
   weekStartISO: string,
+  prevWeek?: Week,
+  prevWeekStartISO?: string,
 ): WorkoutMod[] {
   if (!wk || !workouts.length) return [];
 
   const dayTSS = buildDayTSSMap(wk, weekStartISO);
+
+  // Carry over Sunday (day 6) TSS from previous week so Monday quality sessions see it
+  if (prevWeek && prevWeekStartISO && !dayTSS.has(6)) {
+    const prevMap = buildDayTSSMap(prevWeek, prevWeekStartISO);
+    const sundayTSS = prevMap.get(6) ?? 0;
+    if (sundayTSS > 0) dayTSS.set(6, Math.max(dayTSS.get(6) ?? 0, sundayTSS));
+  }
   const rated  = wk.rated ?? {};
   const mods: WorkoutMod[] = [];
 
@@ -233,7 +248,9 @@ export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
     }
   }
 
-  const newTimingMods = applyTimingDowngradesFromWorkouts(wk, workouts, ws);
+  const prevWk = s.wks?.find((w: Week) => w.w === wk.w - 1);
+  const prevWs = prevWk ? weekStartISO(s.planStartDate, prevWk.w) : undefined;
+  const newTimingMods = applyTimingDowngradesFromWorkouts(wk, workouts, ws, prevWk, prevWs);
   const nonTimingMods = (wk.workoutMods ?? []).filter(m => !isTimingMod(m.modReason));
 
   const oldTiming = (wk.workoutMods ?? []).filter(m => isTimingMod(m.modReason));

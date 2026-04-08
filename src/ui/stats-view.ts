@@ -9,6 +9,7 @@ import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
+import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
 import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, type FitnessMetrics } from '@/calculations/fitness-model';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
@@ -16,7 +17,7 @@ import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
-import { showSleepSheet } from '@/ui/home-view';
+import { renderSleepView } from '@/ui/sleep-view';
 import { isSleepDataPending } from '@/data/sleepPoller';
 
 // ---------------------------------------------------------------------------
@@ -393,8 +394,8 @@ const INFO_TEXTS: Record<string, string> = {
   tsb: 'Form (TSB = Running Fitness − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
   acwr: 'Load Ratio (Fatigue ÷ Running Fitness) — compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
   momentum: 'Running Fitness Momentum — your 4-week trend in running fitness (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped — try to stay consistent, since skipping sessions compounds quickly.',
-  vdot: 'Your VDOT score reflects your current running fitness. It adjusts automatically based on: how your recent runs felt vs. what was planned (RPE feedback), analysis of your training data over time, and updates to your threshold pace from GPS workouts.',
-  aerobic: 'Aerobic Capacity (VO2max equivalent) — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. Zones are sex-calibrated using ACSM standards. This is your Daniels VDOT score, which closely tracks VO2max.',
+  vdot: 'VO2 Max reflects your aerobic ceiling, the primary predictor of endurance potential. When a device value is available (Garmin, Strava), that is shown directly. Otherwise it is estimated from training data using the Daniels VDOT model. Zones are sex-calibrated using ACSM standards.',
+  aerobic: 'VO2 Max — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. When connected to a device (Garmin, Strava), the reported value is shown. Otherwise it is estimated from training data. Zones are sex-calibrated using ACSM standards.',
   lt: 'Lactate Threshold (LT) pace — the fastest pace you can sustain without accumulating lactic acid. The most trainable of the three metrics. A higher LT pace (further right on the bar) means you can race faster at aerobic effort.',
   freshness: 'Freshness (TSB) — your training stress balance. Positive = rested and ready to perform. Negative = carrying fatigue. Target race day TSB between +5 and +15 for peak performance.',
 };
@@ -551,27 +552,38 @@ function buildProgressCard_Opening(s: SimulatorState): string {
 // 2. Fitness Card
 
 function buildFitnessCard_Opening(s: SimulatorState): string {
-  const vdot = computeCurrentVDOT(s);
+  const vo2display = s.vo2 ?? computeCurrentVDOT(s);
+  const isEstimated = s.vo2 == null;
+  const vo2hist = getVO2History(s);
+  const hasDeviceVO2 = vo2hist.length >= 2;
   const vdotHist = s.vdotHistory ?? [];
 
-  // VDOT tier label
+  // VO2 Max tier label
   const isFemale = s.biologicalSex === 'female';
   const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
   const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
-  const aerZoneIdx = aerBreaks.findIndex(b => vdot < b);
+  const aerZoneIdx = aerBreaks.findIndex(b => vo2display < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
 
-  // Trend
+  // Trend: prefer device VO2 history, fall back to VDOT
   let trendArrow = '→';
   let trendColor = 'var(--c-faint)';
-  if (vdotHist.length >= 2) {
+  if (hasDeviceVO2) {
+    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+    trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
+    trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
+  } else if (vdotHist.length >= 2) {
     const d = vdotHist[vdotHist.length - 1].vdot - vdotHist[vdotHist.length - 2].vdot;
     trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
     trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
   }
 
-  // Compact VDOT sparkline
-  const miniVdot = buildMiniVdotSparkline(vdotHist);
+  // Sparkline: device VO2 history or VDOT history
+  const miniSparkline = hasDeviceVO2
+    ? buildMiniVO2Sparkline(vo2hist)
+    : buildMiniVdotSparkline(vdotHist);
+
+  const vo2Label = isEstimated ? 'VO2 Max (est.)' : 'VO2 Max';
 
   return `
     <div id="stats-card-fitness" style="padding:0 18px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
@@ -580,14 +592,14 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
         <div style="display:flex;align-items:flex-start;justify-content:space-between">
           <div>
             <div style="display:flex;align-items:baseline;gap:6px">
-              <div style="font-size:40px;font-weight:200;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${vdot > 0 ? vdot.toFixed(1) : '—'}</div>
-              <span style="font-size:22px;font-weight:300;color:var(--c-faint);line-height:1">→</span>
+              <div style="font-size:40px;font-weight:200;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${vo2display > 0 ? Math.round(vo2display) : '—'}</div>
+              <span style="font-size:22px;font-weight:300;color:${trendColor};line-height:1">${trendArrow}</span>
             </div>
-            <div style="font-size:12px;color:var(--c-muted);margin-top:3px">VDOT · ${aerZone}</div>
+            <div style="font-size:12px;color:var(--c-muted);margin-top:3px">${vo2Label} · ${aerZone}</div>
           </div>
           <div style="font-size:11px;color:var(--c-faint);padding-top:4px">Tap for detail ›</div>
         </div>
-        ${miniVdot}
+        ${miniSparkline}
       </div>
     </div>`;
 }
@@ -597,13 +609,13 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
 
 function buildReadinessCard_Opening(s: SimulatorState): string {
   // Mirror exactly what the home page computes so both show the same score
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
   const tsb = sameSignal?.tsb ?? 0;
   const ctlNow = sameSignal?.ctl ?? 0;
 
   const tier = s.athleteTier ?? 'recreational';
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
 
@@ -622,6 +634,7 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
 
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
+  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? []);
   const readiness = computeReadiness({
     tsb, acwr: acwr.ratio, ctlNow,
     sleepScore, hrvRmssd,
@@ -629,6 +642,8 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
     weeksOfHistory: metrics.length,
+    precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
+    acwrSafeUpper: acwr.safeUpper,
   });
 
   const hasData = ctlNow > 0;
@@ -1428,10 +1443,10 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     ],
   });
 
-  // Bar 2: Aerobic Capacity (VDOT)
-  const vdot = s.v ?? 0;
+  // Bar 2: VO2 Max (device value preferred, computed VDOT fallback)
+  const vo2bar = s.vo2 ?? computeCurrentVDOT(s);
   const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
-  const aerZoneIdx = aerBreaks.findIndex(b => vdot < b);
+  const aerZoneIdx = aerBreaks.findIndex(b => vo2bar < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
   const aerZones = isFemale
     ? [
@@ -1450,14 +1465,14 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
         { label: 'Performance',  fraction: 10/60, color: 'rgba(147,51,234,0.28)'  },
         { label: 'Elite',        fraction: 10/60, color: 'rgba(109,40,217,0.35)'  },
       ];
-  const aerSubtitle = s.vo2 ? `Garmin VO2max: ${Math.round(s.vo2)}` : undefined;
+  const aerSubtitle = s.vo2 == null ? 'Estimated from training data' : undefined;
   const vdotHasHistory = (s.vdotHistory?.length ?? 0) > 3;
   const aerBar = buildOnePositionBar({
-    title: 'Aerobic Capacity',
+    title: 'VO2 Max',
     infoId: 'aerobic',
     detailId: vdotHasHistory ? 'vdot' : undefined,
-    value: vdot > 0 ? vdot : null,
-    valueLabel: vdot.toFixed(1),
+    value: vo2bar > 0 ? vo2bar : null,
+    valueLabel: Math.round(vo2bar).toString(),
     zoneName: aerZone,
     scaleMin: 20,
     scaleMax: 80,
@@ -1516,14 +1531,19 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     </div>`;
 }
 
-/** Large full-width VDOT line chart. */
-function buildVdotLineChart(history: Array<{ week: number; vdot: number; date?: string }>, range: ChartRange): string {
-  const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
-  const sliced = sliceCount !== undefined ? history.slice(-sliceCount) : history;
-  const n = sliced.length;
+/** Extract VO2 Max history from physiologyHistory (device data). */
+function getVO2History(s: SimulatorState): Array<{ date: string; value: number }> {
+  return (s.physiologyHistory ?? [])
+    .filter(d => d.vo2max != null && d.vo2max > 0)
+    .map(d => ({ date: d.date, value: d.vo2max! }));
+}
+
+/** Generic line chart for a dated value series (VO2 Max or VDOT). */
+function buildVO2LineChart(data: Array<{ date: string; value: number }>): string {
+  const n = data.length;
   if (n < 2) return chartEmptyState(110);
 
-  const vals = sliced.map(h => h.vdot);
+  const vals = data.map(d => d.value);
   const lo = Math.min(...vals) - 1;
   const hi = Math.max(...vals) + 1;
   const range2 = hi - lo || 1;
@@ -1546,11 +1566,11 @@ function buildVdotLineChart(history: Array<{ week: number; vdot: number; date?: 
     const labelY = Number(cy) > 18 ? Number(cy) - 8 : Number(cy) + 14;
     return `
       <circle cx="${cx}" cy="${cy}" r="${isLast ? 3.5 : 2}" fill="${isLast ? strokeColor : 'rgba(0,0,0,0.2)'}" stroke="white" stroke-width="${isLast ? 1.5 : 1}"/>
-      ${isLast ? `<text x="${cx}" y="${labelY.toFixed(1)}" font-size="10" fill="${strokeColor}" text-anchor="middle" font-weight="600">${v.toFixed(1)}</text>` : ''}`;
+      ${isLast ? `<text x="${cx}" y="${labelY.toFixed(1)}" font-size="10" fill="${strokeColor}" text-anchor="middle" font-weight="600">${Math.round(v)}</text>` : ''}`;
   }).join('');
 
-  const firstDate = sliced[0].date?.slice(5) ?? `Wk ${sliced[0].week}`;
-  const lastDate  = sliced[n - 1].date?.slice(5) ?? `Wk ${sliced[n-1].week}`;
+  const firstDate = data[0].date.slice(5);
+  const lastDate  = data[n - 1].date.slice(5);
 
   return `
     <div style="position:relative">
@@ -1564,7 +1584,30 @@ function buildVdotLineChart(history: Array<{ week: number; vdot: number; date?: 
     </div>`;
 }
 
-/** VDOT change note. */
+/** Fallback: VDOT line chart when no device VO2 data exists. */
+function buildVdotLineChart(history: Array<{ week: number; vdot: number; date?: string }>, range: ChartRange): string {
+  const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
+  const sliced = sliceCount !== undefined ? history.slice(-sliceCount) : history;
+  return buildVO2LineChart(sliced.map(h => ({ date: h.date ?? `Wk ${h.week}`, value: h.vdot })));
+}
+
+/** VO2 Max change note from device history. */
+function buildVO2ChangeNote(data: Array<{ date: string; value: number }>): string {
+  if (data.length < 2) return '';
+  const latest = data[data.length - 1];
+  const prev   = data[data.length - 2];
+  const delta  = latest.value - prev.value;
+  const absDelta = Math.abs(delta).toFixed(0);
+  if (Math.abs(delta) < 0.5) {
+    return `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">Stable over the last ${data.length} days.</div>`;
+  } else if (delta < 0) {
+    return `<div style="font-size:11px;color:var(--c-warn);margin-top:4px">↓ ${absDelta} since ${prev.date}.</div>`;
+  } else {
+    return `<div style="font-size:11px;color:var(--c-ok);margin-top:4px">↑ ${absDelta} since ${prev.date}.</div>`;
+  }
+}
+
+/** Fallback: VDOT change note when no device VO2 data exists. */
 function buildVdotChangeNote(history: Array<{ week: number; vdot: number; date?: string }>): string {
   if (history.length < 2) return '';
   const latest = history[history.length - 1];
@@ -1573,11 +1616,11 @@ function buildVdotChangeNote(history: Array<{ week: number; vdot: number; date?:
   const absDelta = Math.abs(delta).toFixed(1);
   const sinceDate = prev.date ?? `week ${prev.week}`;
   if (Math.abs(delta) < 0.1) {
-    return `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">Steady — consistent with your recent training.</div>`;
+    return `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">Steady, consistent with recent training.</div>`;
   } else if (delta < 0) {
-    return `<div style="font-size:11px;color:var(--c-warn);margin-top:4px">↓ ${absDelta} pts since ${sinceDate} — your recent runs have felt harder than planned, or your threshold pace was recalibrated.</div>`;
+    return `<div style="font-size:11px;color:var(--c-warn);margin-top:4px">↓ ${absDelta} pts since ${sinceDate}. Recent runs have felt harder than planned, or threshold pace was recalibrated.</div>`;
   } else {
-    return `<div style="font-size:11px;color:var(--c-ok);margin-top:4px">↑ ${absDelta} pts since ${sinceDate} — fitness is building.</div>`;
+    return `<div style="font-size:11px;color:var(--c-ok);margin-top:4px">↑ ${absDelta} pts since ${sinceDate}. Fitness is building.</div>`;
   }
 }
 
@@ -1586,12 +1629,26 @@ function buildFitnessDetailPage(s: SimulatorState): string {
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
   const latest  = metrics[metrics.length - 1];
   const ctl = latest?.ctl ?? 0;
+  const vo2hist = getVO2History(s);
   const vdotHist = s.vdotHistory ?? [];
-  const vdot = computeCurrentVDOT(s);
-  const vdotTrend = vdotHist.length >= 2
-    ? vdotHist[vdotHist.length - 1].vdot - vdotHist[vdotHist.length - 2].vdot : 0;
-  const vdotArrow = vdotTrend > 0.1 ? '↑' : vdotTrend < -0.1 ? '↓' : '→';
-  const vdotColor = vdotTrend > 0.1 ? 'var(--c-ok)' : vdotTrend < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
+  const hasDeviceVO2 = vo2hist.length >= 2;
+  const vo2detail = s.vo2 ?? computeCurrentVDOT(s);
+  const isEstimated = s.vo2 == null;
+
+  // Trend arrow: use device VO2 history if available, else VDOT history
+  let trendArrow = '→';
+  let trendColor = 'var(--c-faint)';
+  if (hasDeviceVO2) {
+    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+    trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
+    trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
+  } else if (vdotHist.length >= 2) {
+    const d = vdotHist[vdotHist.length - 1].vdot - vdotHist[vdotHist.length - 2].vdot;
+    trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
+    trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
+  }
+
+  const hasChart = hasDeviceVO2 || vdotHist.length >= 2;
   const unitPref: UnitPref = s.unitPref ?? 'km';
 
   return `
@@ -1603,21 +1660,21 @@ function buildFitnessDetailPage(s: SimulatorState): string {
         <!-- Scale bars -->
         ${buildProgressScaleBars(s, ctl, metrics)}
 
-        <!-- VDOT Trend Chart -->
-        ${vdotHist.length >= 2 ? `
+        <!-- VO2 Max Trend Chart -->
+        ${hasChart ? `
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
             <div>
-              <div style="font-size:12px;font-weight:600;color:var(--c-black)">Aerobic Capacity (VDOT)</div>
+              <div style="font-size:12px;font-weight:600;color:var(--c-black)">VO2 Max${isEstimated ? ' (est.)' : ''}</div>
               <div style="display:flex;align-items:baseline;gap:6px;margin-top:2px">
-                <span style="font-size:22px;font-weight:300;color:var(--c-black)">${vdot > 0 ? vdot.toFixed(1) : '—'}</span>
-                <span style="font-size:16px;color:${vdotColor}">${vdotArrow}</span>
+                <span style="font-size:22px;font-weight:300;color:var(--c-black)">${vo2detail > 0 ? Math.round(vo2detail) : '—'}</span>
+                <span style="font-size:16px;color:${trendColor}">${trendArrow}</span>
               </div>
             </div>
-            ${buildRangeToggle('8w', 'fitness-range-btn')}
+            ${!hasDeviceVO2 ? buildRangeToggle('8w', 'fitness-range-btn') : ''}
           </div>
-          <div id="fitness-vdot-chart">${buildVdotLineChart(vdotHist, '8w')}</div>
-          ${buildVdotChangeNote(vdotHist)}
+          <div id="fitness-vdot-chart">${hasDeviceVO2 ? buildVO2LineChart(vo2hist) : buildVdotLineChart(vdotHist, '8w')}</div>
+          ${hasDeviceVO2 ? buildVO2ChangeNote(vo2hist) : buildVdotChangeNote(vdotHist)}
         </div>` : ''}
 
         <!-- Race forecast -->
@@ -1689,46 +1746,52 @@ function buildCTLMetricPage(s: SimulatorState): string {
 }
 
 function buildVDOTMetricPage(s: SimulatorState): string {
-  const hist = s.vdotHistory ?? [];
-  const vdot = computeCurrentVDOT(s);
+  const vo2hist = getVO2History(s);
+  const hasDeviceVO2 = vo2hist.length >= 2;
+  const vo2metric = s.vo2 ?? computeCurrentVDOT(s);
+  const isEstimated = s.vo2 == null;
 
-  const vals = hist.map(h => h.vdot);
-  const n = vals.length;
-  const lo = Math.min(...vals) - 1;
-  const hi = Math.max(...vals) + 1;
-  const range2 = hi - lo || 1;
-  const W = 320, H = 120;
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, ((v - lo) / range2) * (H - 8));
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const trend = vals.length >= 2 ? vals[n-1] - vals[n-2] : 0;
-  const rising = trend >= -0.05;
-  const strokeColor = rising ? 'rgba(52,199,89,0.85)' : 'rgba(255,69,58,0.80)';
-  const fillColor   = rising ? 'rgba(52,199,89,0.12)' : 'rgba(255,69,58,0.10)';
-  const trendArrow = trend > 0.1 ? '↑' : trend < -0.1 ? '↓' : '→';
-  const trendColor = trend > 0.1 ? 'var(--c-ok)' : trend < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
+  // Trend from device VO2 history or VDOT history
+  let trendArrow = '→';
+  let trendColor = 'var(--c-faint)';
+  if (hasDeviceVO2) {
+    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+    trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
+    trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
+  } else {
+    const hist = s.vdotHistory ?? [];
+    if (hist.length >= 2) {
+      const d = hist[hist.length - 1].vdot - hist[hist.length - 2].vdot;
+      trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
+      trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
+    }
+  }
 
-  const labelStep = n > 20 ? 4 : n > 12 ? 2 : 1;
-  const labels = buildWeekLabels(n, labelStep);
+  // Build chart from device data or VDOT fallback
+  const chartHtml = hasDeviceVO2
+    ? buildVO2LineChart(vo2hist)
+    : (() => {
+        const hist = s.vdotHistory ?? [];
+        return buildVO2LineChart(hist.map(h => ({ date: h.date ?? `Wk ${h.week}`, value: h.vdot })));
+      })();
+
+  const changeNote = hasDeviceVO2
+    ? buildVO2ChangeNote(vo2hist)
+    : buildVdotChangeNote(s.vdotHistory ?? []);
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildMetricSubHeader('Aerobic Capacity')}
+      ${buildMetricSubHeader('VO2 Max')}
       <div style="padding:18px;overflow-y:auto">
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
-          <span style="font-size:28px;font-weight:300;color:var(--c-black)">${vdot > 0 ? vdot.toFixed(1) : '—'}</span>
+          <span style="font-size:28px;font-weight:300;color:var(--c-black)">${vo2metric > 0 ? Math.round(vo2metric) : '—'}</span>
           <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">VDOT · Daniels aerobic capacity score</div>
+        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${isEstimated ? 'Estimated from training data (VDOT)' : 'From device'}</div>
         <div class="m-card" style="padding:16px">
-          <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-            <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-            <path d="${topPath}" fill="none" stroke="${strokeColor}" stroke-width="1.5"/>
-          </svg>
-          <div style="display:flex;justify-content:space-between;padding:3px 0 0">${labels}</div>
+          ${chartHtml}
         </div>
+        ${changeNote}
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
@@ -2174,11 +2237,13 @@ function buildRecoveryAccordionBody(
   recovery: import('@/calculations/readiness').RecoveryScoreResult,
 ): string {
   if (!recovery.hasData) {
-    return `<div style="padding:8px 0 14px;font-size:12px;color:${recovery.dataStale ? 'var(--c-caution)' : 'var(--c-faint)'}">
-      ${recovery.dataStale
-        ? `Data last synced ${recovery.lastSyncDate ?? ''}. Open Garmin Connect and sync your watch.`
-        : 'Connect a Garmin or Apple Watch to see your recovery breakdown.'}
-    </div>`;
+    const physSrc = getPhysiologySource(s);
+    const staleMsg = recovery.dataStale
+      ? `Data last synced ${recovery.lastSyncDate ?? ''}. Open ${physSrc === 'apple' ? 'the Health app' : 'Garmin Connect'} and sync your watch.`
+      : physSrc
+        ? 'No recovery data yet. Sleep and HRV data will appear after your next night of tracked sleep.'
+        : 'Connect a watch or recovery device to see your recovery breakdown.';
+    return `<div style="padding:8px 0 14px;font-size:12px;color:${recovery.dataStale ? 'var(--c-caution)' : 'var(--c-faint)'}">${staleMsg}</div>`;
   }
 
   // Sleep
@@ -2249,6 +2314,31 @@ function buildReadinessDetailPage(s: SimulatorState): string {
 // ══════════════════════════════════════════════════════════════════════════════
 // SPARKLINE HELPERS (reused across opening cards)
 // ══════════════════════════════════════════════════════════════════════════════
+
+function buildMiniVO2Sparkline(data: Array<{ date: string; value: number }>): string {
+  if (data.length < 3) return '';
+  const vals = data.map(d => d.value);
+  const n = vals.length;
+  const lo = Math.min(...vals) - 0.5;
+  const hi = Math.max(...vals) + 0.5;
+  const range = hi - lo || 1;
+  const W = 320, H = 32;
+  const xOf = (i: number) => (i / (n - 1)) * W;
+  const yOf = (v: number) => H - Math.max(2, ((v - lo) / range) * (H - 4));
+  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
+  const topPath = smoothAreaPath(pts);
+  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
+  const lastVal = vals[n - 1];
+  const prevVal = vals[n - 2];
+  const color = lastVal >= prevVal - 0.05 ? 'rgba(52,199,89,' : 'rgba(255,69,58,';
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible;margin:10px 0 4px">
+      <path d="${areaPath}" fill="${color}0.15)" stroke="none"/>
+      <path d="${topPath}" fill="none" stroke="${color}0.80)" stroke-width="1.8"/>
+      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5"/>
+    </svg>`;
+}
 
 function buildMiniVdotSparkline(history: Array<{ week: number; vdot: number; date?: string }>): string {
   if (history.length < 3) return '';
@@ -2400,7 +2490,7 @@ function buildDailyLineChartGap(
 // Individual metric cards
 
 function buildFreshnessCard(s: SimulatorState): string {
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
   const tsb = sameSignal?.tsb ?? 0;
   const ctl = sameSignal?.ctl ?? 0;
   const tsbD = Math.round(tsb / 7);
@@ -2449,16 +2539,18 @@ function buildFreshnessCard(s: SimulatorState): string {
 function buildInjuryRiskCard(s: SimulatorState): string {
   const tier = (s as any).athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
   const ratio = acwr.ratio;
-  const acwrZone = ratio <= 0 ? '—' : ratio <= 1.3 ? 'Safe' : ratio <= 1.5 ? 'Elevated' : 'High Risk';
-  const acwrColor = ratio > 1.5 ? 'var(--c-warn)' : ratio > 1.3 ? 'var(--c-caution)' : 'var(--c-ok)';
+  const safeUpper = acwr.safeUpper;
+  const cautionUpper = safeUpper + 0.2;
+  const acwrZone = ratio <= 0 ? '—' : ratio <= safeUpper ? 'Safe' : ratio <= cautionUpper ? 'Elevated' : 'High Risk';
+  const acwrColor = ratio > cautionUpper ? 'var(--c-warn)' : ratio > safeUpper ? 'var(--c-caution)' : 'var(--c-ok)';
   const acwrMarker = ratio > 0 ? Math.min(98, Math.max(2, (ratio / 2.0) * 100)) : null;
 
   const specBar = buildInlineSpectrumBar([
-    { label: 'Safe',      fraction: 1.3/2.0, color: 'rgba(52,199,89,0.55)'  },
+    { label: 'Safe',      fraction: safeUpper/2.0, color: 'rgba(52,199,89,0.55)'  },
     { label: 'Elevated',  fraction: 0.2/2.0, color: 'rgba(255,159,10,0.55)' },
-    { label: 'High Risk', fraction: 0.5/2.0, color: 'rgba(255,69,58,0.55)'  },
+    { label: 'High Risk', fraction: (2.0 - cautionUpper)/2.0, color: 'rgba(255,69,58,0.55)'  },
   ], acwrMarker, acwrZone);
 
   const chart = buildACWRTrendChart(s);
@@ -2467,7 +2559,7 @@ function buildInjuryRiskCard(s: SimulatorState): string {
   return `
     <div id="stats-card-acwr" class="m-card" style="padding:20px;margin-bottom:10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Injury Risk</span>
+        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Load Ratio</span>
         <span style="display:flex;align-items:center;font-size:11px;color:var(--c-faint)">8-week${SCROLL_CHEVRON}</span>
       </div>
       <div style="margin-bottom:14px">
@@ -2476,7 +2568,7 @@ function buildInjuryRiskCard(s: SimulatorState): string {
       </div>
       ${specBar}
       ${chart}
-      <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Load ratio over 8 weeks. Above 1.3 = elevated injury risk.</div>
+      <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Load ratio over 8 weeks. Above ${safeUpper.toFixed(1)} = elevated injury risk.</div>
     </div>`;
 }
 
@@ -2830,6 +2922,8 @@ function wireProgressRangeButtons(s: SimulatorState): void {
 function wireFitnessRangeButtons(s: SimulatorState): void {
   const vdotChart = document.getElementById('fitness-vdot-chart');
   if (!vdotChart) return;
+
+  // Range toggle only shown for VDOT fallback (device VO2 chart has no range toggle)
   const vdotHist = s.vdotHistory ?? [];
 
   document.querySelectorAll<HTMLButtonElement>('.fitness-range-btn').forEach(btn => {
@@ -2873,7 +2967,7 @@ function wireReadinessAccordion(s: SimulatorState): void {
     // Header chevron → latest night
     const hdr = document.getElementById('stats-sleep-card-header');
     if (hdr) {
-      const openLatest = () => showSleepSheet(physioHistory, wks);
+      const openLatest = () => renderSleepView(undefined, physioHistory, wks, () => renderStatsView());
       hdr.addEventListener('click', openLatest);
       hdr.addEventListener('touchend', (e) => { e.preventDefault(); openLatest(); }, { passive: false });
     }
@@ -2884,7 +2978,7 @@ function wireReadinessAccordion(s: SimulatorState): void {
       if (!date) return;
       const entry = physioHistory.find(d => d.date === date);
       if (!entry) return;
-      const open = () => showSleepSheet(physioHistory, wks, undefined, entry);
+      const open = () => renderSleepView(entry.date, physioHistory, wks, () => renderStatsView());
       bar.addEventListener('click', (e) => { e.stopPropagation(); open(); });
       bar.addEventListener('touchend', (e) => { e.preventDefault(); e.stopPropagation(); open(); }, { passive: false });
     });

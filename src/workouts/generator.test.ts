@@ -41,8 +41,8 @@ describe('Workout Generator', () => {
         const workouts = generateWeekWorkouts('build', 5, 'marathon', 'Balanced');
         const types = workouts.map(w => w.t);
 
-        // Build phase prioritizes race_pace and threshold
-        expect(types.some(t => t === 'race_pace' || t === 'threshold')).toBe(true);
+        // Build phase prioritizes race_pace, threshold, or float
+        expect(types.some(t => t === 'race_pace' || t === 'threshold' || t === 'float')).toBe(true);
       });
 
       it('should generate race pace and mixed/progressive in peak phase', () => {
@@ -51,7 +51,7 @@ describe('Workout Generator', () => {
 
         // Peak phase should have quality workouts (depends on workout library availability)
         const hasQuality = types.some(t =>
-          t === 'race_pace' || t === 'threshold' || t === 'mixed' || t === 'progressive'
+          t === 'race_pace' || t === 'threshold' || t === 'mixed' || t === 'progressive' || t === 'float'
         );
         expect(hasQuality).toBe(true);
       });

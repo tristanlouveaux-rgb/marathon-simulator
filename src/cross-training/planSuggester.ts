@@ -76,6 +76,7 @@ function isQualityWorkout(wt: string): boolean {
     'marathon_pace',
     'mixed',
     'progressive',
+    'float',
   ].includes(wt);
 }
 

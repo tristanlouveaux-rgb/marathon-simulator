@@ -38,6 +38,17 @@ export const LONG_VARIANTS = [
   { id: 'long_with_blocks' },
 ];
 
+// Float fartlek variants — hard reps at 10K/HM effort, "float" recovery at ~MP
+// Science: moderate-effort recovery trains MCT1/MCT4 lactate transporters (Brooks 2009).
+// Sustained blood lactate at 2–3 mmol/L during float segments forces aerobic adaptation
+// under mild acidosis — mimicking the metabolic profile of marathon racing (Coyle 2007).
+export const FLOAT_VARIANTS = [
+  { id: 'float_6x3_2', reps: 6, repMin: 3, floatMin: 2 },   // 30min main set, classic Hudson format
+  { id: 'float_5x4_2', reps: 5, repMin: 4, floatMin: 2 },   // longer reps, sustained clearance
+  { id: 'float_8x2_2', reps: 8, repMin: 2, floatMin: 2 },   // shorter/sharper, more transitions
+  { id: 'float_4x5_3', reps: 4, repMin: 5, floatMin: 3 },   // Canova-style longer blocks
+];
+
 // ---------------------------------------------------------------------------
 // Ability band
 // ---------------------------------------------------------------------------
@@ -212,6 +223,32 @@ export function mpWorkMinutes(
   return Math.round(mins);
 }
 
+/**
+ * Float fartlek work minutes (hard rep time only, not counting float recovery).
+ * Only for half/marathon, build/peak phases, intermediate+ ability.
+ * Replaces one quality slot per week when conditions are met.
+ */
+export function floatWorkMinutes(
+  race: RaceDistance, ability: AbilityBand, phase: TrainingPhase
+): number {
+  // Float only for half/marathon — shorter races don't benefit (race effort is above LT)
+  if (race !== 'marathon' && race !== 'half') return 0;
+  // Build and peak only — base is aerobic development, taper clears fatigue
+  if (phase !== 'build' && phase !== 'peak') return 0;
+  // Intermediate+ only — requires pacing discipline to hold float (not jog, not tempo)
+  const eligible: AbilityBand[] = ['intermediate', 'advanced', 'elite'];
+  if (!eligible.includes(ability)) return 0;
+
+  const base: Record<AbilityBand, number> = {
+    beginner: 0, novice: 0, intermediate: 18, advanced: 22, elite: 26,
+  };
+  let mins = base[ability];
+  if (race === 'half') mins *= 0.8;
+  if (phase === 'build') mins *= 0.90;
+  // peak: 1.0
+  return Math.round(mins);
+}
+
 // ---------------------------------------------------------------------------
 // Workout priority by race + phase (ported from Python)
 // ---------------------------------------------------------------------------
@@ -219,14 +256,14 @@ export function mpWorkMinutes(
 function workoutPriority(race: RaceDistance, phase: TrainingPhase): SlotType[] {
   if (race === 'marathon') {
     if (phase === 'base') return ['threshold', 'vo2', 'marathon_pace'];
-    if (phase === 'build') return ['marathon_pace', 'threshold', 'vo2'];
-    if (phase === 'peak') return ['marathon_pace', 'vo2', 'threshold'];
+    if (phase === 'build') return ['marathon_pace', 'float', 'threshold', 'vo2'];
+    if (phase === 'peak') return ['marathon_pace', 'float', 'vo2', 'threshold'];
     return ['threshold']; // taper
   }
   if (race === 'half') {
     if (phase === 'base') return ['threshold', 'vo2'];
-    if (phase === 'build') return ['threshold', 'vo2', 'marathon_pace'];
-    if (phase === 'peak') return ['vo2', 'threshold'];
+    if (phase === 'build') return ['threshold', 'float', 'vo2', 'marathon_pace'];
+    if (phase === 'peak') return ['vo2', 'float', 'threshold'];
     return ['threshold'];
   }
   if (race === '10k') {
@@ -376,6 +413,22 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
         totalMinutes: workMins + 20,
         workMinutes: workMins,
         variantId: 'mp_continuous',
+        notes: qualityNote,
+      });
+    } else if (slot === 'float') {
+      const workMins = Math.round(floatWorkMinutes(raceDistance, ability, phase) * dMult);
+      if (workMins <= 0) continue; // skip if not eligible (beginner/novice, base/taper, 5K/10K)
+      const variant = FLOAT_VARIANTS[Math.max(0, (weekIndex - 1)) % FLOAT_VARIANTS.length];
+      const totalMins = Math.round(variant.reps * (variant.repMin + variant.floatMin) + 15);
+      intents.push({
+        dayIndex: dayIdx++,
+        slot: 'float',
+        totalMinutes: Math.round(totalMins * dMult),
+        workMinutes: workMins,
+        reps: variant.reps,
+        repMinutes: variant.repMin,
+        recoveryMinutes: variant.floatMin,
+        variantId: variant.id,
         notes: qualityNote,
       });
     }

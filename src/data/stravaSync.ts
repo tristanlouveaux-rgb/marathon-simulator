@@ -33,6 +33,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
       {
         after_timestamp: afterTimestamp,
         biological_sex: s.biologicalSex,
+        max_hr_override: s.maxHR ?? undefined,
       },
     );
 
@@ -54,12 +55,25 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; elevationGainM?: number | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
-        if (!wk.garminActuals || !wk.garminMatched) continue;
+        if (!wk.garminMatched) continue;
         const workoutId = wk.garminMatched[row.garmin_id];
         if (!workoutId || workoutId === '__pending__' || workoutId === 'log-only') continue;
+
+        // Patch adhoc workouts (unmatched activities accepted by user)
+        if (workoutId.startsWith('garmin-')) {
+          const adhoc = (wk.adhocWorkouts ?? []).find(w => w.id === workoutId) as any;
+          if (adhoc) {
+            if (row.polyline && !adhoc.polyline) { adhoc.polyline = row.polyline; extraPatched = true; }
+            if (row.kmSplits?.length && !adhoc.kmSplits?.length) { adhoc.kmSplits = row.kmSplits; extraPatched = true; }
+            if (row.hrZones && !adhoc.hrZones) { adhoc.hrZones = row.hrZones; extraPatched = true; }
+          }
+          continue;
+        }
+
+        if (!wk.garminActuals) continue;
         const actual = wk.garminActuals[workoutId];
         if (!actual) continue;
         // Update hrZones when the row has them and the actual doesn't yet — happens when an
@@ -73,8 +87,13 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           if (splitsChanged) { actual.kmSplits = row.kmSplits; extraPatched = true; }
         }
         if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
+        if (row.elevationGainM != null && actual.elevationGainM == null) { actual.elevationGainM = row.elevationGainM; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
+        // Heal avgPaceSecKm: prefer DB moving-time pace over elapsed-time computation
+        if (row.avg_pace_sec_km != null && actual.avgPaceSecKm !== row.avg_pace_sec_km) {
+          actual.avgPaceSecKm = row.avg_pace_sec_km; extraPatched = true;
+        }
         // Update activityType if missing (e.g. entry created before field was tracked)
         if (!actual.activityType && row.activity_type) {
           actual.activityType = row.activity_type; extraPatched = true;
@@ -88,6 +107,23 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
       }
     }
     if (extraPatched) saveState();
+
+    // Derive maxHR from Strava activities if not set (Apple Watch users don't get it
+    // from physiology sync). Uses 95th percentile of max_hr values from recent activities,
+    // filtering wrist-sensor spikes. Matches the server-side computation in the edge function.
+    if (!s.maxHR) {
+      const maxHrs = activityRows
+        .map(r => r.max_hr)
+        .filter((hr): hr is number => hr != null && hr > 100 && hr < 230);
+      if (maxHrs.length >= 3) {
+        maxHrs.sort((a, b) => a - b);
+        const idx = Math.floor(maxHrs.length * 0.95);
+        const derived = maxHrs[Math.min(idx, maxHrs.length - 1)];
+        s.maxHR = derived;
+        saveState();
+        console.log(`[StravaSync] Derived maxHR=${derived} from ${maxHrs.length} activities (95th pct)`);
+      }
+    }
 
     // Recompute timing downgrade mods after each sync
     const sAfter = getMutableState();
@@ -470,7 +506,7 @@ export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult>
     const s = getMutableState();
     const result = await callEdgeFunction<BackfillResult>(
       'sync-strava-activities',
-      { mode: 'backfill', weeks, biological_sex: s.biologicalSex },
+      { mode: 'backfill', weeks, biological_sex: s.biologicalSex, max_hr_override: s.maxHR ?? undefined },
     );
     console.log(`[StravaBackfill] Done — ${result?.processed ?? 0} new activities (${result?.withHRStream ?? 0} HR stream + ${result?.withAvgHR ?? 0} avg HR), hasHRMonitor=${result?.hasHRMonitor}, totalStrava=${result?.totalStravaActivities ?? '?'}`);
     if (result?._debug) {

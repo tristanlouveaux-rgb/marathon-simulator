@@ -1,7 +1,7 @@
 import type { WorkoutDefinition, RaceDistance, RunnerType } from '@/types';
 
 /** Workout type categories */
-export type WorkoutCategory = 'vo2' | 'threshold' | 'race_pace' | 'mixed' | 'progressive' | 'marathon_pace';
+export type WorkoutCategory = 'vo2' | 'threshold' | 'race_pace' | 'mixed' | 'progressive' | 'marathon_pace' | 'float';
 
 /** Workout library structure */
 export type WorkoutLibrary = Record<
@@ -50,12 +50,14 @@ export const WO: WorkoutLibrary = {
         { n: '800m@HM', d: '8×800 @ HM, 90s', r: 8 },
         { n: 'Jack Fultz', d: '20×400 @ HM, 200m', r: 8 }
       ],
+      float: [{ n: 'Float Fartlek', d: '6×3min @ 10K, 2min float @ MP', r: 7 }],
       progressive: [{ n: 'Fast Finish', d: '21km: last 5 @ HM', r: 7 }]
     },
     Balanced: {
       vo2: [{ n: '1200m', d: '4×1200 @ 5K, 3min', r: 9 }],
       threshold: [{ n: 'Long Tempo', d: '40min @ threshold', r: 7 }],
       race_pace: [{ n: 'Jack Fultz', d: '20×400 @ HM, 200m', r: 8 }],
+      float: [{ n: 'Float Fartlek', d: '5×4min @ 10K, 2min float @ MP', r: 7 }],
       mixed: [{ n: 'Nell Rojas', d: '6.5@MP, 2.5@10K, 3@HM', r: 8 }],
       progressive: [{ n: 'Fast Finish', d: '21km: last 5 @ HM', r: 7 }]
     },
@@ -63,6 +65,7 @@ export const WO: WorkoutLibrary = {
       vo2: [{ n: '1K', d: '5×1K @ 5K, 3min', r: 8 }],
       threshold: [{ n: 'Long Tempo', d: '45min @ threshold', r: 7 }],
       race_pace: [{ n: 'Jack Fultz', d: '20×400 @ HM, 200m', r: 8 }],
+      float: [{ n: 'Float Fartlek', d: '5×4min @ 10K, 3min float @ MP', r: 7 }],
       progressive: [{ n: 'Fast Finish', d: '23km: last 8 @ HM', r: 8 }]
     }
   },
@@ -73,6 +76,7 @@ export const WO: WorkoutLibrary = {
         { n: 'MP Intro', d: '3×10min @ MP, 3min', r: 5 },
         { n: 'MP', d: '2×10km @ MP, 2min', r: 6 },
       ],
+      float: [{ n: 'Float Fartlek', d: '6×3min @ 10K, 2min float @ MP', r: 7 }],
       progressive: [{ n: 'Progressive', d: '26km: last 8 @ MP', r: 7 }]
     },
     Balanced: {
@@ -80,6 +84,10 @@ export const WO: WorkoutLibrary = {
       marathon_pace: [
         { n: 'MP Intro', d: '3×12min @ MP, 3min', r: 5 },
         { n: 'MP', d: '2×12km @ MP, 2min', r: 6 },
+      ],
+      float: [
+        { n: 'Float Fartlek', d: '5×4min @ 10K, 2min float @ MP', r: 7 },
+        { n: 'Float Long', d: '24km: alternating 3km @ MP / 2km float', r: 7 },
       ],
       mixed: [{ n: 'Nell Rojas', d: '10@MP, 4@10K, 5@HM', r: 8 }],
       progressive: [{ n: 'Progressive', d: '29km: last 10 @ MP', r: 7 }]
@@ -89,6 +97,10 @@ export const WO: WorkoutLibrary = {
       marathon_pace: [
         { n: 'MP Intro', d: '3×15min @ MP, 3min', r: 5 },
         { n: 'Long MP', d: '20km @ MP', r: 6 },
+      ],
+      float: [
+        { n: 'Float Fartlek', d: '4×5min @ 10K, 3min float @ MP', r: 7 },
+        { n: 'Float Long', d: '28km: alternating 3km @ MP / 2km float', r: 7 },
       ],
       progressive: [{ n: 'Race Sim', d: '32km: last 12 @ MP', r: 8 }]
     }
@@ -119,5 +131,6 @@ export const LOAD_PROFILES: Record<string, {
   'hill_repeats':  { aerobic: 0.40, anaerobic: 0.60, base: 0.10, threshold: 0.30, intensity: 0.60 },
   'mixed':         { aerobic: 0.60, anaerobic: 0.40, base: 0.30, threshold: 0.40, intensity: 0.30 },
   'progressive':   { aerobic: 0.70, anaerobic: 0.30, base: 0.35, threshold: 0.45, intensity: 0.20 },
+  'float':         { aerobic: 0.65, anaerobic: 0.35, base: 0.20, threshold: 0.50, intensity: 0.30 },
   'gym':           { aerobic: 0.20, anaerobic: 0.80, base: 0.05, threshold: 0.20, intensity: 0.75 },
 };

@@ -4,7 +4,7 @@
  */
 
 import { getState } from '@/state';
-import { computeWeekRawTSS, computePlannedSignalB } from '@/calculations/fitness-model';
+import { computeWeekRawTSS, computePlannedSignalB, computeDecayedCarry } from '@/calculations/fitness-model';
 import { showLoadBreakdownSheet } from './home-view';
 
 // ─── Phase config ────────────────────────────────────────────────────────────
@@ -85,6 +85,31 @@ function buildTssExplainer(): string {
     </div>`;
 }
 
+// ─── Carry-through section ───────────────────────────────────────────────────
+
+function buildCarryThroughSection(currentCarry: number): string {
+  const carryNote = currentCarry > 0
+    ? `<div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--c-border);display:flex;justify-content:space-between;align-items:center">
+        <span style="font-size:13px;color:var(--c-caution)">Carried into this week</span>
+        <span style="font-size:13px;font-weight:600;color:var(--c-caution)">${currentCarry} TSS</span>
+      </div>`
+    : '';
+  return `
+    <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:10px">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black)">Carry-through</div>
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
+        Training load does not reset at week boundaries. Excess from one week creates residual fatigue that decays into the next.
+      </p>
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
+        The decay follows a 7-day time constant and updates daily. On Monday after a heavy week, roughly 61% of the excess remains. By Thursday, 40%. By the following Sunday, 22%. The carried load decreases through the week as the body recovers. This week's own activities are unaffected.
+      </p>
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
+        If last week exceeded its target by 100 TSS, Monday's effective load includes approximately 61 TSS of residual fatigue. By Friday that drops to around 35 TSS. This is when plan adjustments matter most: early in the week, when residual fatigue is highest.
+      </p>
+      ${carryNote}
+    </div>`;
+}
+
 // ─── Phase cards ─────────────────────────────────────────────────────────────
 
 function buildPhaseCards(currentPh: string): string {
@@ -136,7 +161,7 @@ export function renderLoadTaperView(viewWeek?: number, returnTo: 'plan' | 'home'
   const wk = s.wks?.[weekNum - 1];
   const ph = wk?.ph ?? 'base';
 
-  const tssActual = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
+  const _tssRawLtp = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   const tssPlan = Math.round(computePlannedSignalB(
     s.historicWeeklyTSS,
     s.ctlBaseline,
@@ -147,6 +172,9 @@ export function renderLoadTaperView(viewWeek?: number, returnTo: 'plan' | 'home'
     undefined,
     s.sportBaselineByType,
   ));
+
+  const _tssCarryLtp = computeDecayedCarry(s.wks ?? [], weekNum, tssPlan, s.planStartDate);
+  const tssActual = _tssRawLtp + _tssCarryLtp;
 
   const barPct = tssPlan > 0 ? Math.min(100, Math.round((tssActual / tssPlan) * 100)) : 0;
   const barColor = barPct >= 100 ? 'var(--c-ok)' : barPct >= 70 ? 'var(--c-ok)' : 'var(--c-accent)';
@@ -190,6 +218,8 @@ export function renderLoadTaperView(viewWeek?: number, returnTo: 'plan' | 'home'
         </div>
 
         ${buildTssExplainer()}
+
+        ${buildCarryThroughSection(_tssCarryLtp)}
 
         <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);padding:4px 2px 0">Plan structure</div>
 

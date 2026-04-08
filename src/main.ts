@@ -4,20 +4,23 @@
  */
 
 import './styles.css';
-import { loadState, getState } from '@/state';
+import { loadState, getState, getMutableState, saveState } from '@/state';
 import { restorePlanFromSupabase } from '@/data/planSettingsSync';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
 import { advanceWeekToToday, recordAppOpen } from '@/ui/welcome-back';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
-import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio } from '@/data/physiologySync';
+import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
+import { healMissingITrimp } from '@/calculations/activity-matcher';
+import { setAthleteNormalizer } from '@/calculations/fitness-model';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
-import { syncAppleHealth } from '@/data/appleHealthSync';
+import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
+import { getActivitySource, hasPhysiologySource } from '@/data/sources';
 import '@/ui/strava-detail';
 
 /** True when running in local simulator mode (no auth required) */
@@ -79,10 +82,32 @@ async function launchApp(): Promise<void> {
   }
   const state = getState();
 
+  // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
+  setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
+
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
+    if (healMissingITrimp()) saveState(); // back-fill iTrimp for actuals synced before profile HR was set
+
+    // One-time cleanup: wk1 contained dummy test data (rawTSS ~1309) that inflates CTL.
+    // Clear garminActuals and adhocWorkouts from wk1 so the EMA seed is the only baseline.
+    const ms = getMutableState();
+    const wk1 = ms.wks?.[0];
+    if (wk1 && !(wk1 as any)._dummyDataCleared) {
+      const { computeWeekRawTSS } = await import('@/calculations/fitness-model');
+      const wk1TSS = computeWeekRawTSS(wk1, wk1.rated ?? {}, ms.planStartDate);
+      if (wk1TSS > 800) {
+        console.log(`[Cleanup] wk1 rawTSS=${wk1TSS} — clearing dummy data`);
+        wk1.garminActuals = {};
+        wk1.adhocWorkouts = [];
+        wk1.unspentLoadItems = [];
+        wk1.rated = {};
+        (wk1 as any)._dummyDataCleared = true;
+        saveState();
+      }
+    }
     recordAppOpen();
     renderHomeView();
     // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
@@ -140,11 +165,19 @@ async function launchApp(): Promise<void> {
 
   // Sync wearable data on launch (skip in simulator mode — no auth)
   if (!isSimulatorMode()) {
-    const wearable = state.wearable;
+    const activitySrc = getActivitySource(state);
 
-    if (wearable === 'apple') {
-      // Apple Watch: activities + biometrics via HealthKit (iOS only — no-op on web)
+    if (activitySrc === 'apple') {
+      // Apple Watch: activities via HealthKit (iOS only — no-op on web)
       syncAppleHealth().catch(() => {});
+      // Physiology: sleep, HRV, resting HR, steps from HealthKit
+      syncAppleHealthPhysiology(28).then((updated) => {
+        if (updated) {
+          const ps = getState();
+          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+          if (document.getElementById('home-tss-row')) renderHomeView();
+        }
+      }).catch(() => {});
     } else if (state.stravaConnected) {
       // Strava is the activity source for any user who has it connected.
       // Garmin wearable users also get a biometric sync (VO2max, LT, HRV, sleep).
@@ -154,12 +187,29 @@ async function launchApp(): Promise<void> {
           // Re-render home view if it's still active so TSS reflects post-sync state
           if (document.getElementById('home-tss-row')) renderHomeView();
         }).catch(() => {});
-        if (wearable === 'garmin') {
+        if (hasPhysiologySource(state, 'apple')) {
+          // Apple Watch physiology: sleep, HRV, resting HR, steps from HealthKit
+          syncAppleHealthPhysiology(28).then((updated) => {
+            if (updated) {
+              const ps = getState();
+              setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+              if (document.getElementById('home-tss-row')) renderHomeView();
+            }
+          }).catch(() => {});
+        } else if (hasPhysiologySource(state, 'garmin')) {
           isGarminConnected().then((garminOk) => {
             if (garminOk) {
               // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
               triggerGarminBackfill(4).catch(() => {}).finally(() => {
+                // Fetch today's steps immediately (fast — single epoch window)
+                syncTodaySteps().then(() => {
+                  if (document.getElementById('home-tss-row')) renderHomeView();
+                }).catch(() => {});
+
                 syncPhysiologySnapshot(28).then(() => {
+                  // Re-set normalizer in case physiology sync updated HR profile
+                  const ps = getState();
+                  setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
                   // Re-render home view so sleep/HRV cards update without requiring
                   // manual navigation — physiology data lands in state after the view
                   // was first rendered, so we need an explicit refresh.
@@ -191,7 +241,14 @@ async function launchApp(): Promise<void> {
         processPendingCrossTraining();
         // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
         triggerGarminBackfill(4).catch(() => {}).finally(() => {
+          // Fetch today's steps immediately (fast — single epoch window)
+          syncTodaySteps().then(() => {
+            if (document.getElementById('home-tss-row')) renderHomeView();
+          }).catch(() => {});
+
           syncPhysiologySnapshot(28).then(() => {
+            const ps2 = getState();
+            setAthleteNormalizer(ps2.ltHR, ps2.restingHR, ps2.maxHR);
             if (document.getElementById('home-tss-row')) renderHomeView();
             const todayStr = new Date().toISOString().split('T')[0];
             const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
@@ -324,3 +381,27 @@ if (document.readyState === 'loading') {
 } else {
   bootstrap();
 }
+
+// Re-sync physiology whenever the app comes back to the foreground.
+// This keeps sleep/HRV/steps current without requiring a manual pull-to-refresh.
+// Throttled to at most once every 5 minutes.
+let _lastForegroundSync = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  const now = Date.now();
+  if (now - _lastForegroundSync < 5 * 60 * 1000) return;
+  _lastForegroundSync = now;
+  const s = getState();
+
+  if (hasPhysiologySource(s, 'garmin')) {
+    syncTodaySteps().then(() => {
+      if (document.getElementById('home-tss-row')) renderHomeView();
+    }).catch(() => {});
+  } else if (hasPhysiologySource(s, 'apple')) {
+    // HealthKit is local — re-read on every foreground resume so new sleep/HRV
+    // data that arrived while the app was backgrounded gets picked up immediately.
+    syncAppleHealthPhysiology(7).then((updated) => {
+      if (updated && document.getElementById('home-tss-row')) renderHomeView();
+    }).catch(() => {});
+  }
+});

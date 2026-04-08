@@ -40,7 +40,7 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
   // ---- Categorise workouts ----
   const long = workouts.find(w => w.t === 'long');
   const quality = workouts.filter(w =>
-    ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive'].includes(w.t)
+    ['threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive', 'float'].includes(w.t)
   );
   const commute = workouts.filter(w => w.commute === true);
   const crossTraining = workouts.filter(w => CROSS_TYPES.includes(w.t) && !w.commute);
@@ -48,7 +48,7 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
     !w.commute &&
     !CROSS_TYPES.includes(w.t) &&
     (w.t === 'easy' ||
-    !['long', 'threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive'].includes(w.t))
+    !['long', 'threshold', 'vo2', 'race_pace', 'marathon_pace', 'intervals', 'mixed', 'progressive', 'float'].includes(w.t))
   );
 
   // Clear pre-assigned days on cross-training (generator may pre-set these,

@@ -42,6 +42,7 @@ export interface SportConfig {
   recoveryMult?: number;   // Recovery cost multiplier (>=1 for team sports, <1 for low impact)
   extendedModel?: ExtendedModel;  // Future: decoupled fitness/fatigue model (read but not scored)
   impactPerMin?: number;   // Musculoskeletal impact load per minute (0 for cycling/swimming)
+  legLoadPerMin?: number;  // Leg fatigue load per minute — vertical sports highest, flat sustained moderate, 0 for non-leg
   volumeTransfer?: number; // GPS km credit toward running volume bar (0–1). Only GPS sports with real distance.
   intermittent?: boolean;  // True for sports with high-HR bursts + rest (football, rugby, basketball)
 }

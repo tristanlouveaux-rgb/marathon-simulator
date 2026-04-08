@@ -17,8 +17,10 @@ const GREEN_D  = '#16A34A';
 const TEXT_M   = '#0F172A';
 const TEXT_S   = '#64748B';
 const TEXT_L   = '#94A3B8';
-const RING_R   = 46;
-const RING_C   = +(2 * Math.PI * RING_R).toFixed(2); // ≈ 289.03
+const RING_R    = 46;
+const RING_C    = +(2 * Math.PI * RING_R).toFixed(2); // ≈ 289.03
+const MINI_R    = 20;
+const MINI_CIRC = +(2 * Math.PI * MINI_R).toFixed(2);
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -119,6 +121,29 @@ function trendArrow(direction: 'up' | 'down' | 'flat'): string {
   return ``;
 }
 
+/** Small ring matching the main recovery ring style — score centred, label below. */
+function miniRing(score: number | null, label: string): string {
+  const pct    = score != null ? Math.min(Math.max(score, 0), 100) : 0;
+  const offset = +(MINI_CIRC * (1 - pct / 100)).toFixed(2);
+  const color  = score == null  ? '#E2E8F0'
+    : score >= 70 ? GREEN_B
+    : score >= 45 ? '#F59E0B'
+    : '#EF4444';
+  return `<div style="text-align:center">
+    <div style="position:relative;width:52px;height:52px;margin:0 auto">
+      <svg style="width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 52 52">
+        <circle cx="26" cy="26" r="${MINI_R}" fill="rgba(255,255,255,0.9)" stroke="#F1F5F9" stroke-width="5"/>
+        <circle cx="26" cy="26" r="${MINI_R}" fill="none" stroke="${color}" stroke-width="5" stroke-linecap="round"
+          stroke-dasharray="${MINI_CIRC}" stroke-dashoffset="${offset}"/>
+      </svg>
+      <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
+        <span style="font-size:13px;font-weight:700;color:${score != null ? TEXT_M : TEXT_L}">${score != null ? score : '—'}</span>
+      </div>
+    </div>
+    <div style="font-size:11px;color:${TEXT_L};margin-top:5px;letter-spacing:0.03em">${label}</div>
+  </div>`;
+}
+
 function statusBadge(label: string, color: string): string {
   const isGood = color === GREEN_D;
   return `<div style="display:flex;align-items:center;gap:5px">
@@ -131,12 +156,24 @@ function statusBadge(label: string, color: string): string {
 
 // ── Coaching card ─────────────────────────────────────────────────────────────
 
-function coachingText(score: number | null, hrv: number | null, rhr: number | null, hrvTrendLabel: string): { headline: string; body: string } {
+function coachingText(
+  score: number | null,
+  hrv: number | null,
+  rhr: number | null,
+  hrvTrendLabel: string,
+  hrvSubScore: number | null,
+): { headline: string; body: string } {
   if (score === null || (!hrv && !rhr)) {
     return { headline: 'No data available', body: 'Sync Garmin for recovery metrics. HRV and resting HR require at least 3 nights of data.' };
   }
   const hrvStr = hrv ? `${hrv.toFixed(1)} ms` : null;
   const rhrStr = rhr ? `${Math.round(rhr)} bpm` : null;
+
+  // Detect the paradox: today's reading up but chronic trend still suppressed.
+  // hrvTrendLabel starts with '+' when today is above the 7-day avg.
+  const acuteUp       = !!hrvTrendLabel.startsWith('+');
+  const chronicLow    = hrvSubScore != null && hrvSubScore < 65;
+  const hrvParadox    = hrv != null && acuteUp && chronicLow;
 
   if (score >= 75) {
     return {
@@ -145,14 +182,20 @@ function coachingText(score: number | null, hrv: number | null, rhr: number | nu
     };
   }
   if (score >= 50) {
+    const hrvLine = hrvParadox
+      ? `HRV at ${hrvStr} — today's reading is up, but the 7-day trend remains below your personal norm.`
+      : hrvStr ? `HRV at ${hrvStr}.` : '';
     return {
       headline: 'Adequate recovery',
-      body: `${hrvStr ? `HRV at ${hrvStr}.` : ''} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Recovery adequate for planned training. Avoid additional high-intensity work.`.trim(),
+      body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Recovery adequate for planned training. Avoid additional high-intensity work.`.trim(),
     };
   }
+  const hrvLine = hrvParadox
+    ? `HRV at ${hrvStr} — today's reading is up, but the 7-day trend remains suppressed below your personal norm.`
+    : hrvStr ? `HRV at ${hrvStr}, below baseline.` : '';
   return {
     headline: 'Recovery limited',
-    body: `${hrvStr ? `HRV at ${hrvStr}, below baseline.` : ''} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Elevated physiological load. Reduce session intensity or take a rest day.`.trim(),
+    body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Elevated physiological load. Reduce session intensity or take a rest day.`.trim(),
   };
 }
 
@@ -221,7 +264,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const history = s.physiologyHistory ?? [];
 
   // Recovery score — always today's composite
-  const recoveryResult = computeRecoveryScore(history, { suppressSleepIfNotToday: false });
+  const recoveryResult = computeRecoveryScore(history);
   const score = recoveryResult.score;
   const ringPct = Math.min(Math.max(score ?? 0, 0), 100);
   const targetOffset = +(RING_C * (1 - ringPct / 100)).toFixed(2);
@@ -237,11 +280,15 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const rhr7  = last7Dates.map(d => history.find(e => e.date === d)?.restingHR ?? 0);
   const day7Labels = last7Dates.map((d, i) => i === 6 ? 'Today' : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' }));
 
-  const todayHrv = entry?.hrvRmssd ?? null;
-  const todayRhr = entry?.restingHR ?? null;
+  // Entry may exist from step sync but lack HRV/RHR (Garmin pushes those later).
+  // Fall back to the most recent entry that has the value. Do NOT fall back for
+  // sleep — sleep is date-specific and should show "—" if missing.
+  const todayHrv = entry?.hrvRmssd ?? [...history].reverse().find(e => e.hrvRmssd != null)?.hrvRmssd ?? null;
+  const todayRhr = entry?.restingHR ?? [...history].reverse().find(e => e.restingHR != null)?.restingHR ?? null;
   const todaySleep = entry?.sleepScore ?? null;
   const todaySleepDur = entry?.sleepDurationSec ?? null;
 
+  const { hrvDataSufficient, hrvScore: hrvSubScore, sleepScore: sleepSubScore, rhrScore: rhrSubScore } = recoveryResult;
   const hrvT = hrvTrend(hrv7, todayHrv);
   const rhrT = rhrTrend(rhr7, todayRhr);
 
@@ -254,7 +301,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const { line: rhrChartLine, area: rhrChartArea } = chartPaths(rhr7);
 
   // Coaching
-  const { headline: coachHead, body: coachBody } = coachingText(score, todayHrv, todayRhr, hrvT.label);
+  const { headline: coachHead, body: coachBody } = coachingText(score, todayHrv, todayRhr, hrvT.label, hrvSubScore);
 
   // Sleep label + progress
   const sleepLabel = todaySleep == null ? null
@@ -274,13 +321,39 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
     ">${fmtDateShort(d, today)}</button>`;
   }).join('');
 
-  // HRV change vs last week label
+  // 7-day averages and 28-day baselines — mirrors what computeRecoveryScore uses for scoring.
+  const baseline28 = history.slice(-28);
   const hrvLast = hrv7.filter(v => v > 0);
   const hrvAvg = hrvLast.length > 0 ? hrvLast.reduce((a, b) => a + b, 0) / hrvLast.length : null;
   const rhrLast = rhr7.filter(v => v > 0);
   const rhrAvg = rhrLast.length > 0 ? rhrLast.reduce((a, b) => a + b, 0) / rhrLast.length : null;
-  const hrvChangePct = todayHrv && hrvAvg ? ((todayHrv - hrvAvg) / hrvAvg * 100) : null;
-  const rhrChangeBpm = todayRhr && rhrAvg ? (todayRhr - rhrAvg) : null;
+
+  const baselineHrvs = baseline28.map(d => d.hrvRmssd).filter((v): v is number => v != null && v > 0);
+  const baselineRhrs = baseline28.map(d => d.restingHR).filter((v): v is number => v != null && v > 0);
+  const baselineHrvAvg = baselineHrvs.length >= 3 ? baselineHrvs.reduce((a, b) => a + b, 0) / baselineHrvs.length : null;
+  const baselineRhrAvg = baselineRhrs.length >= 3 ? baselineRhrs.reduce((a, b) => a + b, 0) / baselineRhrs.length : null;
+
+  const hrvVsBaseline = hrvAvg != null && baselineHrvAvg != null ? ((hrvAvg - baselineHrvAvg) / baselineHrvAvg * 100) : null;
+  const rhrVsBaseline = rhrAvg != null && baselineRhrAvg != null ? (rhrAvg - baselineRhrAvg) : null;
+
+  // HRV tile: chronic badge (driven by score, not acute delta) + context line vs 28-day baseline.
+  const hrvChronicBadge = hrvSubScore == null ? null
+    : hrvSubScore >= 65 ? { label: 'Normal', color: GREEN_D }
+    : hrvSubScore >= 45 ? { label: 'Slightly suppressed', color: '#F59E0B' }
+    : { label: 'Below personal norm', color: '#F59E0B' };
+  const hrvAcuteStr = hrvVsBaseline != null
+    ? `7-day avg ${hrvVsBaseline > 0 ? '+' : ''}${hrvVsBaseline.toFixed(0)}% vs 28-day baseline`
+    : null;
+
+  // RHR tile: same pattern — chronic badge from score, context line shows 7-day avg vs 28-day baseline.
+  // rhrSubScore is inverted (lower RHR = better), so score < 65 means RHR is elevated vs baseline.
+  const rhrChronicBadge = rhrSubScore == null ? null
+    : rhrSubScore >= 65 ? { label: 'Normal', color: GREEN_D }
+    : rhrSubScore >= 45 ? { label: 'Slightly elevated', color: '#F59E0B' }
+    : { label: 'Elevated vs baseline', color: '#F59E0B' };
+  const rhrAcuteStr = rhrVsBaseline != null
+    ? `7-day avg ${rhrVsBaseline > 0 ? '+' : ''}${rhrVsBaseline.toFixed(0)} bpm vs 28-day baseline`
+    : null;
 
   const dayLabelRow = day7Labels.map(l => `<span style="font-size:10px;font-weight:500;color:${TEXT_L};letter-spacing:0.04em;text-transform:uppercase">${l}</span>`).join('');
 
@@ -381,6 +454,14 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
           </div>
         </div>
 
+        <!-- Sub-scores row -->
+        ${recoveryResult.hasData ? `
+        <div class="r-fade" style="animation-delay:0.14s;display:flex;justify-content:center;gap:28px;margin:-8px 0 24px">
+          ${hrvSubScore != null ? miniRing(hrvSubScore, 'HRV') : ''}
+          ${sleepSubScore != null ? miniRing(sleepSubScore, 'Sleep') : ''}
+          ${rhrSubScore != null ? miniRing(rhrSubScore, 'RHR') : ''}
+        </div>` : ''}
+
         <!-- HRV + RHR tiles -->
         <div class="r-fade" style="animation-delay:0.18s;padding:0 16px;display:flex;gap:14px;margin-bottom:14px">
 
@@ -395,14 +476,16 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
               ${todayHrv != null ? `<span style="font-size:13px;font-weight:500;color:${TEXT_S}">ms</span>` : ''}
               <div style="margin-left:auto">${trendArrow(hrvT.direction)}</div>
             </div>
-            ${statusBadge(hrvT.statusLabel, hrvT.statusColor)}
-            <div style="height:40px;margin-top:12px;margin-left:-4px;margin-right:-4px">
+            ${hrvChronicBadge ? statusBadge(hrvChronicBadge.label, hrvChronicBadge.color) : ''}
+            ${hrvAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${hrvAcuteStr}</div>` : ''}
+            <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
               ${hrvLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:100%;overflow:visible" preserveAspectRatio="none">
                 <defs><linearGradient id="hrvFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
                 <path d="${hrvArea}" fill="url(#hrvFillMini)"/>
                 <path d="${hrvLine}" fill="none" stroke="${GREEN_A}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>` : `<div style="color:${TEXT_L};font-size:11px;padding-top:12px">No data</div>`}
             </div>
+            ${todayHrv != null && !hrvDataSufficient ? `<div style="font-size:11px;color:${TEXT_L};margin-top:6px;line-height:1.4">Score improves after 10 nights of data.</div>` : ''}
           </div>
 
           <!-- RHR tile -->
@@ -416,8 +499,9 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
               ${todayRhr != null ? `<span style="font-size:13px;font-weight:500;color:${TEXT_S}">bpm</span>` : ''}
               <div style="margin-left:auto">${trendArrow(rhrT.direction)}</div>
             </div>
-            ${statusBadge(rhrT.statusLabel, rhrT.statusColor)}
-            <div style="height:40px;margin-top:12px;margin-left:-4px;margin-right:-4px">
+            ${rhrChronicBadge ? statusBadge(rhrChronicBadge.label, rhrChronicBadge.color) : ''}
+            ${rhrAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${rhrAcuteStr}</div>` : ''}
+            <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
               ${rhrLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:100%;overflow:visible" preserveAspectRatio="none">
                 <defs><linearGradient id="rhrFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
                 <path d="${rhrArea}" fill="url(#rhrFillMini)"/>
@@ -488,8 +572,8 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
                   <span style="font-size:14px;font-weight:500;color:${TEXT_S}">ms</span>
                 </div>
               </div>
-              ${hrvChangePct != null ? `<div style="background:${hrvChangePct >= 0 ? '#F0FDF4' : '#FEF3C7'};color:${hrvChangePct >= 0 ? GREEN_D : '#92400E'};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase">
-                ${hrvChangePct >= 0 ? '+' : ''}${hrvChangePct.toFixed(1)}% vs avg
+              ${hrvVsBaseline != null ? `<div style="background:${hrvVsBaseline >= 0 ? '#F0FDF4' : '#FEF3C7'};color:${hrvVsBaseline >= 0 ? GREEN_D : '#92400E'};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase">
+                ${hrvVsBaseline >= 0 ? '+' : ''}${hrvVsBaseline.toFixed(1)}% vs baseline
               </div>` : ''}
             </div>
             <div style="height:120px;position:relative">
@@ -519,8 +603,8 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
                   <span style="font-size:14px;font-weight:500;color:${TEXT_S}">bpm</span>
                 </div>
               </div>
-              ${rhrChangeBpm != null ? `<div style="background:${rhrChangeBpm <= 0 ? '#F0FDF4' : '#FEF3C7'};color:${rhrChangeBpm <= 0 ? GREEN_D : '#92400E'};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase">
-                ${rhrChangeBpm >= 0 ? '+' : ''}${rhrChangeBpm.toFixed(1)} bpm
+              ${rhrVsBaseline != null ? `<div style="background:${rhrVsBaseline <= 0 ? '#F0FDF4' : '#FEF3C7'};color:${rhrVsBaseline <= 0 ? GREEN_D : '#92400E'};padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase">
+                ${rhrVsBaseline >= 0 ? '+' : ''}${rhrVsBaseline.toFixed(1)} bpm vs baseline
               </div>` : ''}
             </div>
             <div style="height:120px;position:relative">

@@ -7,9 +7,10 @@ import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insigh
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
-import { syncAppleHealth } from '@/data/appleHealthSync';
+import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { isSimulatorMode } from '@/main';
+import { getPhysiologySource, hasPhysiologySource } from '@/data/sources';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { getState, getMutableState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
@@ -44,8 +45,8 @@ export async function renderAccountView(): Promise<void> {
 
   const s = getState();
 
-  // Only check Garmin status when the user has a Garmin wearable (or no preference set yet)
-  if (!isSimulatorMode() && s.wearable !== 'apple' && s.wearable !== 'strava') {
+  // Only check Garmin status when Garmin is the physiology source (or no device chosen yet)
+  if (!isSimulatorMode() && (hasPhysiologySource(s, 'garmin') || !s.wearable)) {
     await checkGarminStatus();
   }
   checkingGarmin = false;
@@ -169,8 +170,9 @@ function getAccountHTML(): string {
   const s = getState();
   const email = getUserEmail();
   const sim = isSimulatorMode();
-  const useApple = s.wearable === 'apple';
-  const useStravaStandalone = s.wearable === 'strava';
+  const physSrc = getPhysiologySource(s);
+  const useApple = physSrc === 'apple';
+  const useStravaStandalone = s.wearable === 'strava' || (!physSrc && !useApple && s.stravaConnected);
   const useGarmin = !useApple && !useStravaStandalone;
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
@@ -971,8 +973,11 @@ function wireAccountHandlers(): void {
     rerender();
 
     try {
-      await syncAppleHealth();
-      syncResultMsg = 'Sync complete — check your plan for updated activities.';
+      await Promise.all([
+        syncAppleHealth(),
+        syncAppleHealthPhysiology(28),
+      ]);
+      syncResultMsg = 'Sync complete — activities, sleep, and recovery updated.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;

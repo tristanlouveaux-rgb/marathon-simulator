@@ -46,16 +46,16 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
 export const IMP: WorkoutImportance = {
   '5k': { easy: 0.4, vo2: 0.95, threshold: 0.8, intervals: 0.95, long: 0.5 },
   '10k': { easy: 0.5, vo2: 0.9, threshold: 0.9, intervals: 0.9, race_pace: 0.85, long: 0.7 },
-  'half': { easy: 0.6, vo2: 0.7, threshold: 0.95, race_pace: 0.9, mixed: 0.85, long: 0.95, progressive: 0.9 },
-  'marathon': { easy: 0.8, vo2: 0.7, intervals: 0.7, threshold: 0.9, race_pace: 0.85, marathon_pace: 0.95, mixed: 0.9, long: 1.0, progressive: 0.95 }
+  'half': { easy: 0.6, vo2: 0.7, threshold: 0.95, race_pace: 0.9, mixed: 0.85, long: 0.95, progressive: 0.9, float: 0.85 },
+  'marathon': { easy: 0.8, vo2: 0.7, intervals: 0.7, threshold: 0.9, race_pace: 0.85, marathon_pace: 0.95, mixed: 0.9, long: 1.0, progressive: 0.95, float: 0.90 }
 };
 
 /** Time impact penalties (seconds) when skipping workouts */
 export const TIM: TimeImpact = {
   '5k': { easy: 5, vo2: 20, threshold: 15, intervals: 20, long: 10 },
   '10k': { easy: 8, vo2: 18, threshold: 15, intervals: 18, race_pace: 15, long: 15 },
-  'half': { easy: 10, vo2: 15, threshold: 25, race_pace: 20, mixed: 18, long: 30, progressive: 25 },
-  'marathon': { easy: 15, threshold: 30, marathon_pace: 35, mixed: 25, long: 60, progressive: 35 }
+  'half': { easy: 10, vo2: 15, threshold: 25, race_pace: 20, mixed: 18, long: 30, progressive: 25, float: 20 },
+  'marathon': { easy: 15, threshold: 30, marathon_pace: 35, mixed: 25, long: 60, progressive: 35, float: 28 }
 };
 
 /** Taper nominal weeks by race distance */

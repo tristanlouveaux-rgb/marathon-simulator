@@ -13,8 +13,25 @@
  * Safe upper bound varies by athlete tier (see TIER_ACWR_CONFIG).
  */
 
-import type { Week, Workout } from '@/types';
+import type { Week, Workout, PhysiologyDayEntry } from '@/types';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
+
+/**
+ * Passive strain: TSS per minute of non-workout active time.
+ *
+ * Garmin epochs classify each 15-min window as SEDENTARY / ACTIVE / HIGHLY_ACTIVE.
+ * Subtracting known workout duration from total active minutes gives passive active
+ * time (commuting, errands, work stress, etc.).
+ *
+ * Uses TL_PER_MIN[2] = 0.45 (RPE 2, light effort) for passive active minutes.
+ * This avoids the double-counting problem with step-based TSS (running steps
+ * counted in both workout iTRIMP and step TSS).
+ *
+ * Calibration: 120 non-workout active minutes × 0.45 = 54 TSS.
+ * A typical office worker has ~30-60 active minutes; a city commuter ~90-120.
+ * Reference: WHOOP counts all non-workout HR elevation toward daily strain.
+ */
+export const PASSIVE_TSS_PER_ACTIVE_MIN = TL_PER_MIN[2]; // 0.45
 import { normalizeSport } from '@/cross-training/activities';
 
 /**
@@ -46,11 +63,38 @@ export interface FitnessMetrics {
 export const CTL_DECAY = Math.exp(-7 / 42);  // ≈ 0.847
 export const ATL_DECAY = Math.exp(-7 / 7);   // ≈ 0.368
 
-/** Normalise iTRIMP to a TSS-equivalent TL value (≈55 for easy 60min) */
-function normalizeiTrimp(itrimp: number): number {
-  // Using typical LTHR_HRR for average athlete
-  const NORMALIZER = 15000;
-  return (itrimp * 100) / NORMALIZER;
+/**
+ * Compute the per-athlete iTRIMP normalizer from lactate threshold HR.
+ * Based on Coggan hrTSS: 1 hour at LTHR = 100 TSS.
+ * normalizer = 3600 × LTHR_HRR × e^(β × LTHR_HRR) where β = 1.92 (male default).
+ * Falls back to 15000 when LTHR data is unavailable.
+ */
+export function computeAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: number): number {
+  if (!ltHR || !restingHR || !maxHR || maxHR <= restingHR || ltHR <= restingHR || ltHR >= maxHR) {
+    return 15000; // fallback
+  }
+  const hrr = (ltHR - restingHR) / (maxHR - restingHR);
+  const beta = 1.92; // Banister male coefficient (standard)
+  return 3600 * hrr * Math.exp(beta * hrr);
+}
+
+/** Convenience: compute normalizer from a state-like object. */
+export function getNormalizerFromState(s: { ltHR?: number; restingHR?: number; maxHR?: number }): number {
+  return computeAthleteNormalizer(s.ltHR, s.restingHR, s.maxHR);
+}
+
+// Module-level normalizer — set once on startup via setAthleteNormalizer(),
+// then used by all iTRIMP→TSS conversions. Falls back to 15000 if never set.
+let _athleteNorm = 15000;
+
+/** Call once on startup (and when HR profile changes) to set the per-athlete normalizer. */
+export function setAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: number): void {
+  _athleteNorm = computeAthleteNormalizer(ltHR, restingHR, maxHR);
+}
+
+/** Normalise iTRIMP to a TSS-equivalent TL value. 1 hour at LTHR = 100 TSS. */
+function normalizeiTrimp(itrimp: number, normalizer?: number): number {
+  return (itrimp * 100) / (normalizer ?? _athleteNorm);
 }
 
 /** Parse duration in minutes from an adhoc workout description (e.g. "45min · 12 Feb") */
@@ -72,6 +116,7 @@ export function computeWeekTSS(
   wk: Week,
   ratedMap: Record<string, number | 'skip'>,
   planStartDate?: string,
+  norm?: number,
 ): number {
   // Always recompute from raw data — wk.actualTSS may be stale/corrupted
   // (ISSUE-85: cross-training was accumulated without runSpec discount).
@@ -122,7 +167,7 @@ export function computeWeekTSS(
     }
     if (w.iTrimp != null && w.iTrimp > 0) {
       // Strava HR stream iTrimp available — more accurate than RPE estimate
-      tl += (w.iTrimp * 100) / 15000 * runSpec;
+      tl += normalizeiTrimp(w.iTrimp, norm) * runSpec;
     } else {
       const rpe = w.rpe ?? 5;
       const durMin = parseDurMinFromDesc(w.d);
@@ -133,6 +178,8 @@ export function computeWeekTSS(
   // Unspent load items (cross-training overflow not matched to a plan slot).
   // Filter to this week's date range when planStartDate is known — carry-over items
   // from previous weeks retain their original dates and must not inflate this week's TSS.
+  // Skip 'surplus_run' items — the full activity is already counted in garminActuals above;
+  // adding the surplus portion again would double-count that load.
   let weekStartMs: number | null = null;
   let weekEndMs: number | null = null;
   if (planStartDate && wk.w != null) {
@@ -140,6 +187,7 @@ export function computeWeekTSS(
     weekEndMs = weekStartMs + 7 * 86400000;
   }
   for (const item of wk.unspentLoadItems ?? []) {
+    if (item.reason === 'surplus_run') continue;
     if (weekStartMs !== null && weekEndMs !== null && item.date) {
       const itemMs = new Date(item.date).getTime();
       if (itemMs < weekStartMs || itemMs >= weekEndMs) continue;
@@ -168,6 +216,7 @@ export function computeWeekRawTSS(
   wk: Week,
   ratedMap: Record<string, number | 'skip'>,
   planStartDate?: string,
+  norm?: number,
 ): number {
   let tl = 0;
 
@@ -202,7 +251,7 @@ export function computeWeekRawTSS(
       seenGarminIds.add(rawId);
     }
     if (w.iTrimp != null && w.iTrimp > 0) {
-      tl += (w.iTrimp * 100) / 15000; // no runSpec discount
+      tl += normalizeiTrimp(w.iTrimp, norm); // no runSpec discount
     } else {
       const rpe = w.rpe ?? w.r ?? 5;
       const durMin = parseDurMinFromDesc(w.d);
@@ -211,6 +260,8 @@ export function computeWeekRawTSS(
   }
 
   // Unspent load items — runSpec = 1.0
+  // Skip 'surplus_run' items — the full activity is already counted in garminActuals above;
+  // the surplus portion is part of that activity and must not be added again.
   let weekStartMs: number | null = null;
   let weekEndMs: number | null = null;
   if (planStartDate && wk.w != null) {
@@ -218,6 +269,7 @@ export function computeWeekRawTSS(
     weekEndMs = weekStartMs + 7 * 86400000;
   }
   for (const item of wk.unspentLoadItems ?? []) {
+    if (item.reason === 'surplus_run') continue;
     if (weekStartMs !== null && weekEndMs !== null && item.date) {
       const itemMs = new Date(item.date).getTime();
       if (itemMs < weekStartMs || itemMs >= weekEndMs) continue;
@@ -239,9 +291,17 @@ export function computeWeekRawTSS(
  *
  * @param wk    — current plan week
  * @param today — ISO date string (YYYY-MM-DD)
+ * @param passiveActivity — today's epoch data { activeMinutes, highlyActiveMinutes } from Garmin.
+ *                          Null = no data, passive strain excluded.
  */
-export function computeTodaySignalBTSS(wk: Week, today: string): number {
+export function computeTodaySignalBTSS(
+  wk: Week,
+  today: string,
+  passiveActivity?: { activeMinutes?: number; highlyActiveMinutes?: number } | null,
+  norm?: number,
+): number {
   let tl = 0;
+  let workoutMinutes = 0; // track to subtract from active minutes later
   const seenGarminIds = new Set<string>();
 
   // today's day-of-week index (0=Mon, 6=Sun) for adhocWorkout matching
@@ -255,29 +315,42 @@ export function computeTodaySignalBTSS(wk: Week, today: string): number {
       if (seenGarminIds.has(actual.garminId)) continue;
       seenGarminIds.add(actual.garminId);
     }
+    const actDurMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+    workoutMinutes += actDurMin;
     if (actual.iTrimp != null && actual.iTrimp > 0) {
       tl += normalizeiTrimp(actual.iTrimp);
     } else {
-      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
-      tl += durMin * (TL_PER_MIN[5] ?? 1.15);
+      tl += actDurMin * (TL_PER_MIN[5] ?? 1.15);
     }
   }
 
-  // adhocWorkouts — garmin-prefixed are deduped via seenGarminIds; non-garmin matched by dayOfWeek
+  // adhocWorkouts — garmin-prefixed filtered by garminTimestamp; non-garmin matched by dayOfWeek
   for (const w of wk.adhocWorkouts ?? []) {
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {
-      // Can't determine date for unmatched garmin adhoc without startTime — skip to avoid over-counting
       if (seenGarminIds.has(rawId)) continue;
+      // Use garminTimestamp (stored by addAdhocWorkoutFromPending) to filter by date
+      const ts = (w as any).garminTimestamp as string | undefined;
+      if (!ts?.startsWith(today)) continue;
+      seenGarminIds.add(rawId);
+      const adhocDur = parseDurMinFromDesc(w.d);
+      workoutMinutes += adhocDur;
+      if (w.iTrimp != null && w.iTrimp > 0) {
+        tl += normalizeiTrimp(w.iTrimp, norm);
+      } else {
+        const rpe = w.rpe ?? w.r ?? 5;
+        tl += adhocDur * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+      }
       continue;
     }
     if ((w as any).dayOfWeek !== ourDay) continue;
+    const adhocDur2 = parseDurMinFromDesc(w.d);
+    workoutMinutes += adhocDur2;
     if (w.iTrimp != null && w.iTrimp > 0) {
-      tl += (w.iTrimp * 100) / 15000;
+      tl += normalizeiTrimp(w.iTrimp, norm);
     } else {
       const rpe = w.rpe ?? w.r ?? 5;
-      const durMin = parseDurMinFromDesc(w.d);
-      tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+      tl += adhocDur2 * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
     }
   }
 
@@ -291,7 +364,58 @@ export function computeTodaySignalBTSS(wk: Week, today: string): number {
     tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15);
   }
 
+  // Passive strain: non-workout active minutes contribute background TSS.
+  // Subtract workout duration from total active minutes to avoid double-counting
+  // (epochs include workout time as HIGHLY_ACTIVE).
+  if (passiveActivity?.activeMinutes != null && passiveActivity.activeMinutes > 0) {
+    const passiveActiveMin = Math.max(0, passiveActivity.activeMinutes - workoutMinutes);
+    tl += passiveActiveMin * PASSIVE_TSS_PER_ACTIVE_MIN;
+  }
+
   return Math.round(tl);
+}
+
+/**
+ * Estimate duration in minutes for a planned workout.
+ * Handles km-based descriptions (most common), interval formats, and min-based fallback.
+ * Pace multipliers by workout type match the plan-view planned-TSS calculation exactly.
+ *
+ * @param w             Planned workout.
+ * @param baseMinPerKm  Easy pace in min/km (s.pac.e / 60). Defaults to 5.5 if unknown.
+ */
+export function estimateWorkoutDurMin(w: Workout, baseMinPerKm: number): number {
+  const t = (w.t || '').toLowerCase();
+  const desc: string = w.d || '';
+  const lines = desc.split('\n').filter((l: string) => l.trim());
+  let mainDesc = desc;
+  let wucdMin = 0;
+  if (lines.length >= 3 && lines[0].includes('warm up')) {
+    mainDesc = lines[1];
+    const wuKm = parseFloat((lines[0].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
+    const cdKm = parseFloat((lines[lines.length - 1].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
+    wucdMin = (wuKm + cdKm) * baseMinPerKm;
+  }
+  const intervalTimeMatch = mainDesc.match(/(\d+)×(\d+\.?\d*)min/);
+  if (intervalTimeMatch) {
+    const reps = parseInt(intervalTimeMatch[1]);
+    const repDur = parseFloat(intervalTimeMatch[2]);
+    const recMatch = mainDesc.match(/(\d+\.?\d*)\s*min\s*recovery/);
+    const recMin = recMatch ? parseFloat(recMatch[1]) : 0;
+    return Math.max(reps * repDur + (reps - 1) * recMin + wucdMin, 1);
+  }
+  const kmMatch = mainDesc.match(/(\d+\.?\d*)km/);
+  if (kmMatch) {
+    const km = parseFloat(kmMatch[1]);
+    let paceMinPerKm = baseMinPerKm;
+    if (t === 'threshold' || t === 'tempo') paceMinPerKm = baseMinPerKm * 0.82;
+    else if (t === 'vo2' || t === 'intervals') paceMinPerKm = baseMinPerKm * 0.73;
+    else if (t === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
+    else if (t === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
+    else if (t === 'long') paceMinPerKm = baseMinPerKm * 1.03;
+    return Math.max(km * paceMinPerKm + wucdMin, 1);
+  }
+  const minMatch = mainDesc.match(/(\d+)min/);
+  return Math.max(minMatch ? parseInt(minMatch[1]) + wucdMin : (wucdMin || 40), 1);
 }
 
 /**
@@ -302,31 +426,88 @@ export function computeTodaySignalBTSS(wk: Week, today: string): number {
  * discount — Signal B counts full physiological load regardless of sport).
  * Falls back to 0 when no workouts are scheduled for this day-of-week.
  *
- * @param workouts  Full week's generated workouts.
- * @param dayOfWeek  0=Mon … 6=Sun (same convention as Workout.dayOfWeek).
+ * @param workouts      Full week's generated workouts.
+ * @param dayOfWeek     0=Mon … 6=Sun (same convention as Workout.dayOfWeek).
+ * @param baseMinPerKm  Easy pace in min/km (s.pac.e / 60). Defaults to 5.5.
  */
-export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: number): number {
+export function computePlannedDaySignalBTSS(workouts: Workout[], dayOfWeek: number, baseMinPerKm = 5.5): number {
   let tl = 0;
   for (const w of workouts) {
     if (w.dayOfWeek !== dayOfWeek) continue;
     const rpe = w.rpe ?? w.r ?? 5;
-    const durMin = parseDurMinFromDesc(w.d);
+    const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
     tl += durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
   }
   return Math.round(tl);
 }
 
 /**
+ * Compute decayed carry-forward from previous weeks' excess TSS.
+ *
+ * Uses real-time daily decay so the carry genuinely clears as the week
+ * progresses. This week's own activities are unaffected (they stay constant);
+ * only the residual from previous weeks degrades.
+ *
+ * Each previous week's excess is approximated at its midpoint (activities
+ * spread Mon-Sun, midpoint ≈ Wed/Thu). Decay uses the 7-day ATL time
+ * constant measured from that midpoint to right now:
+ *
+ *   Monday after a heavy week:    e^(-3.5/7) ≈ 0.61 → 61% remains
+ *   Thursday after a heavy week:  e^(-6.5/7) ≈ 0.40 → 40% remains
+ *   Sunday (full week later):     e^(-10.5/7) ≈ 0.22 → 22% remains
+ *
+ * Recomputes each week's excess from scratch using getWeeklyExcess (Signal B
+ * vs planned) rather than reading wk.carriedTSS.
+ *
+ * Looks back up to 3 weeks. Uses the current planned baseline as a stable
+ * approximation for all lookback weeks (baseline changes slowly via CTL EMA).
+ */
+export function computeDecayedCarry(
+  wks: Week[],
+  currentWeek: number,
+  plannedBaseline: number,
+  planStartDate?: string,
+): number {
+  if (!plannedBaseline || !planStartDate) return 0;
+
+  const nowMs = new Date().setHours(12, 0, 0, 0); // noon today
+  const planStartMs = new Date(planStartDate).getTime();
+  const ATL_TAU = 7; // 7-day time constant
+
+  let total = 0;
+  const maxLookback = Math.min(3, currentWeek - 1);
+  for (let age = 1; age <= maxLookback; age++) {
+    const idx = currentWeek - 1 - age; // 0-indexed
+    const wk = wks[idx];
+    if (!wk) continue;
+    // Raw excess for that week (no carry — avoids circularity)
+    const weekExcess = getWeeklyExcess(wk, plannedBaseline, planStartDate);
+    if (weekExcess <= 0) continue;
+    // Days from midpoint of that week to now
+    const weekMidMs = planStartMs + (currentWeek - 1 - age) * 7 * 86400000 + 3.5 * 86400000;
+    const daysElapsed = Math.max(0, (nowMs - weekMidMs) / 86400000);
+    const decay = Math.exp(-daysElapsed / ATL_TAU);
+    total += weekExcess * decay;
+  }
+  return Math.round(total);
+}
+
+/**
  * Weekly Signal B excess above the athlete's historical baseline.
  * Returns 0 if no baseline is available (prevents phantom reductions on new users).
+ *
+ * When carriedLoad is provided (decayed excess from previous weeks), it is added
+ * to the actual side — training load does not reset at week boundaries.
  */
 export function getWeeklyExcess(
   wk: Week,
   signalBBaseline: number,
   planStartDate?: string,
+  carriedLoad?: number,
 ): number {
   if (!signalBBaseline) return 0;
-  return Math.max(0, computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate) - signalBBaseline);
+  const actual = computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate) + (carriedLoad ?? 0);
+  return Math.max(0, actual - signalBBaseline);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,7 +523,7 @@ export function getWeeklyExcess(
  * cross-training activity. For it we scan ALL non-running actuals rather than
  * trying to match a specific sport name (Strava labels will vary).
  */
-export function computeCrossTrainTSSPerMin(wks: Week[] | undefined | null, sportKey: string): number | null {
+export function computeCrossTrainTSSPerMin(wks: Week[] | undefined | null, sportKey: string, norm?: number): number | null {
   if (!wks?.length) return null;
   const isGeneric = sportKey === 'generic_sport';
   const seen = new Set<string>();
@@ -364,7 +545,7 @@ export function computeCrossTrainTSSPerMin(wks: Week[] | undefined | null, sport
         if (sport !== sportKey) continue;
       }
       const durMin = actual.durationSec / 60;
-      const tss = (actual.iTrimp * 100) / 15000;
+      const tss = normalizeiTrimp(actual.iTrimp, norm);
       samples.push(tss / durMin);
     }
   }
@@ -513,7 +694,7 @@ export function computePlannedSignalB(
 // ACWR — Acute:Chronic Workload Ratio
 // ---------------------------------------------------------------------------
 
-export type AthleteACWRStatus = 'safe' | 'caution' | 'high' | 'unknown';
+export type AthleteACWRStatus = 'safe' | 'caution' | 'high' | 'low' | 'unknown';
 
 export interface AthleteACWR {
   ratio: number;          // ATL / CTL
@@ -533,16 +714,220 @@ export const TIER_ACWR_CONFIG: Record<string, { safeUpper: number; label: string
 };
 
 /**
+ * Compute rolling 7-day (acute) and 28-day (chronic) load from actual daily TSS.
+ * Returns null if fewer than 14 days of plan data available.
+ *
+ * For days before the plan started, uses signalBSeed / 7 as a daily fill so that
+ * early plan weeks have a reasonable chronic baseline. This fill naturally phases
+ * out as real data fills the 28-day window.
+ */
+export function computeRollingLoadRatio(
+  wks: Week[],
+  planStartDate: string,
+  signalBSeed?: number,
+  norm?: number,
+): { acute: number; chronic: number } | null {
+  const now = new Date();
+  now.setHours(12, 0, 0, 0);
+  const planStart = new Date(planStartDate + 'T12:00:00');
+  const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
+
+  // Need at least 14 days since plan start for a meaningful chronic window
+  const daysSincePlanStart = Math.floor((now.getTime() - planStart.getTime()) / 86400000);
+  if (daysSincePlanStart < 14 && seedDaily === 0) return null;
+
+  // Collect daily Signal B TSS for the last 28 days (index 0 = 27 days ago)
+  const daily: number[] = [];
+  for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - daysAgo);
+    const dateStr = d.toISOString().split('T')[0];
+
+    const elapsed = Math.floor((d.getTime() - planStart.getTime()) / 86400000);
+    const weekIdx = Math.floor(elapsed / 7);
+
+    if (weekIdx < 0 || weekIdx >= wks.length) {
+      // Before plan or beyond plan — use historical daily average
+      daily.push(seedDaily);
+    } else {
+      daily.push(computeTodaySignalBTSS(wks[weekIdx], dateStr, null, norm));
+    }
+  }
+
+  const acute   = daily.slice(-7).reduce((a, b) => a + b, 0);
+  const chronic = daily.reduce((a, b) => a + b, 0) / 4; // 28-day sum / 4 = weekly average
+  return { acute, chronic };
+}
+
+// ── Daily load history (for rolling-load chart) ──────────────────────────────
+
+export interface ZoneLoad {
+  lowAerobic: number;   // z1 + z2 load-weighted TSS
+  highAerobic: number;  // z3 + z4
+  anaerobic: number;    // z5
+}
+
+export interface DailyLoadEntry {
+  date: string;       // ISO YYYY-MM-DD
+  tss: number;        // Signal B TSS for the day
+  zoneLoad: ZoneLoad; // per-day zone breakdown (load-weighted)
+  activities: Array<{
+    name: string;     // display name or activity type
+    tss: number;
+    durationMin: number;
+    avgHR?: number | null;
+    hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
+  }>;
+}
+
+/**
+ * Build 28-day daily load history with per-day activity breakdown.
+ * Used by the rolling-load detail view.
+ */
+export function getDailyLoadHistory(
+  wks: Week[],
+  planStartDate: string,
+  signalBSeed?: number,
+  norm?: number,
+  maxHR?: number,
+): DailyLoadEntry[] {
+  const now = new Date();
+  now.setHours(12, 0, 0, 0);
+  const planStart = new Date(planStartDate + 'T12:00:00');
+  const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
+
+  const entries: DailyLoadEntry[] = [];
+  for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - daysAgo);
+    const dateStr = d.toISOString().split('T')[0];
+
+    const elapsed = Math.floor((d.getTime() - planStart.getTime()) / 86400000);
+    const weekIdx = Math.floor(elapsed / 7);
+
+    if (weekIdx < 0 || weekIdx >= wks.length) {
+      entries.push({ date: dateStr, tss: Math.round(seedDaily), activities: [], zoneLoad: { lowAerobic: 0, highAerobic: 0, anaerobic: 0 } });
+      continue;
+    }
+
+    const wk = wks[weekIdx];
+    const tss = computeTodaySignalBTSS(wk, dateStr, null, norm);
+    const activities: DailyLoadEntry['activities'] = [];
+    const seenIds = new Set<string>();
+
+    // Collect activities for this day
+    for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
+      if (!actual.startTime?.startsWith(dateStr)) continue;
+      if (actual.garminId) {
+        if (seenIds.has(actual.garminId)) continue;
+        seenIds.add(actual.garminId);
+      }
+      const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
+      let actTss = 0;
+      if (actual.iTrimp != null && actual.iTrimp > 0) {
+        actTss = normalizeiTrimp(actual.iTrimp);
+      } else {
+        actTss = durMin * (TL_PER_MIN[5] ?? 1.15);
+      }
+      const name = actual.displayName ?? actual.workoutName
+        ?? (actual.activityType ? actual.activityType.charAt(0) + actual.activityType.slice(1).toLowerCase().replace(/_/g, ' ') : 'Activity');
+      activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin), avgHR: actual.avgHR ?? null, hrZones: actual.hrZones ?? null });
+    }
+
+    // Adhoc workouts
+    const ourDay = (d.getDay() + 6) % 7;
+    for (const w of wk.adhocWorkouts ?? []) {
+      const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
+      if (rawId) {
+        if (seenIds.has(rawId)) continue;
+        const ts = (w as any).garminTimestamp as string | undefined;
+        if (!ts?.startsWith(dateStr)) continue;
+        seenIds.add(rawId);
+      } else {
+        if ((w as any).dayOfWeek !== ourDay) continue;
+      }
+      const durMin = parseDurMinFromDesc(w.d);
+      let actTss = 0;
+      if (w.iTrimp != null && w.iTrimp > 0) {
+        actTss = normalizeiTrimp(w.iTrimp, norm);
+      } else {
+        const rpe = w.rpe ?? w.r ?? 5;
+        actTss = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+      }
+      const name = w.n ?? w.t ?? 'Activity';
+      // Don't double-count if already seen via garminActuals
+      if (!activities.some(a => a.name === name && Math.abs(a.durationMin - Math.round(durMin)) < 2)) {
+        activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin) });
+      }
+    }
+
+    // Compute per-day zone load: for each activity with HR zones, distribute TSS
+    // proportionally by time spent in each zone bucket.
+    // When hrZones is missing but avgHR is available, estimate zone from avgHR.
+    const zoneLoad: ZoneLoad = { lowAerobic: 0, highAerobic: 0, anaerobic: 0 };
+    for (const a of activities) {
+      if (a.hrZones) {
+        const { z1, z2, z3, z4, z5 } = a.hrZones;
+        const total = z1 + z2 + z3 + z4 + z5;
+        if (total > 0) {
+          const lo = a.tss * (z1 + z2) / total;
+          const hi = a.tss * (z3 + z4) / total;
+          const an = a.tss * z5 / total;
+          zoneLoad.lowAerobic += lo;
+          zoneLoad.highAerobic += hi;
+          zoneLoad.anaerobic += an;
+          console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} HR-ZONES z1=${z1} z2=${z2} z3=${z3} z4=${z4} z5=${z5} → lo=${lo.toFixed(0)} hi=${hi.toFixed(0)} an=${an.toFixed(0)}`);
+          continue;
+        } else {
+          console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} hrZones present but total=0`, a.hrZones);
+        }
+      }
+      // Estimate zone from avgHR when stream data is unavailable.
+      // Uses same %maxHR thresholds as calculateHRZones in the edge function.
+      if (a.avgHR && a.avgHR > 0 && maxHR && maxHR > 0) {
+        const pct = a.avgHR / maxHR;
+        const bucket = pct >= 0.90 ? 'anaerobic' : pct >= 0.70 ? 'highAerobic' : 'lowAerobic';
+        if (pct >= 0.90)      zoneLoad.anaerobic += a.tss;
+        else if (pct >= 0.70) zoneLoad.highAerobic += a.tss;
+        else                  zoneLoad.lowAerobic += a.tss;
+        console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} avgHR=${a.avgHR} maxHR=${maxHR} pct=${(pct*100).toFixed(0)}% → ${bucket}`);
+        continue;
+      }
+      // Last resort — attribute to low aerobic
+      console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} NO HR DATA (avgHR=${a.avgHR}, hrZones=${JSON.stringify(a.hrZones)}) → lowAerobic`);
+      zoneLoad.lowAerobic += a.tss;
+    }
+    entries.push({ date: dateStr, tss: Math.round(tss), activities, zoneLoad });
+  }
+  return entries;
+}
+
+/**
  * Compute the Acute:Chronic Workload Ratio for the current point in the plan.
  *
  * Requires at least 3 weeks of history for a meaningful signal — returns
  * status='unknown' until that threshold is met.
  *
+ * When signalBSeed is provided (recommended), both CTL and ATL use Signal B
+ * (raw physiological TSS, no runSpec discount). This correctly handles cross-training
+ * athletes whose Signal A CTL understates their true chronic load — using a mixed
+ * signal (Signal A CTL, Signal B ATL) causes ACWR to appear artificially low.
+ *
+ * Two computation modes:
+ * 1. **Rolling (preferred)**: When planStartDate is available, uses a true rolling
+ *    7-day (acute) / 28-day (chronic) window over actual daily TSS. No weekly
+ *    bucket artifacts — a half marathon on Saturday is fully reflected on Sunday.
+ *    Pre-plan days are filled with signalBSeed / 7 (historical daily average).
+ * 2. **Weekly EMA (fallback)**: When planStartDate is missing or rolling data is
+ *    insufficient, falls back to the EMA-based approach on completed weeks only.
+ *
  * @param wks - All weeks in the plan
- * @param currentWeek - Current 1-indexed week number (computes up to but not including this week)
+ * @param currentWeek - Current 1-indexed week number
  * @param athleteTier - Optional athlete tier key; defaults to 'recreational'
- * @param ctlSeed - Optional CTL seed from Strava history (seeds the CTL loop instead of starting from 0)
- * @param planStartDate - ISO date string used to filter unspentLoadItems to their correct week
+ * @param ctlSeed - Signal A CTL seed from Strava history (legacy fallback path only)
+ * @param planStartDate - ISO date string; required for rolling mode
+ * @param atlSeed - Signal B ATL seed (legacy fallback path only)
+ * @param signalBSeed - Signal B historical baseline — used as pre-plan daily fill
  */
 export function computeACWR(
   wks: Week[],
@@ -551,22 +936,63 @@ export function computeACWR(
   ctlSeed?: number,
   planStartDate?: string,
   atlSeed?: number,
+  signalBSeed?: number,
+  norm?: number,
 ): AthleteACWR {
   const tier = athleteTier ?? 'recreational';
   const tierCfg = TIER_ACWR_CONFIG[tier] ?? TIER_ACWR_CONFIG.recreational;
   const { safeUpper } = tierCfg;
 
-  // Include the current in-progress week so ACWR reflects today's completed activities.
-  const metrics = computeFitnessModel(wks, Math.min(currentWeek + 1, wks.length), ctlSeed, planStartDate, atlSeed);
+  let ctl: number;
+  let atl: number;
 
-  if (metrics.length < 3) {
-    // Not enough history for a reliable ratio
-    const latest = metrics[metrics.length - 1];
-    return { ratio: 0, safeUpper, status: 'unknown', atl: latest?.atl ?? 0, ctl: latest?.ctl ?? 0 };
+  // ── Rolling 7d/28d approach (preferred) ──────────────────────────────────────
+  // Uses actual daily TSS from activities. No weekly-bucket artifacts: a hard
+  // session on Saturday is immediately reflected on Sunday, and a partial week
+  // doesn't cliff-drop the ratio.
+  if (planStartDate && wks.length > 0) {
+    const rolling = computeRollingLoadRatio(wks, planStartDate, signalBSeed, norm);
+    if (rolling) {
+      ctl = rolling.chronic;
+      atl = rolling.acute;
+
+      if (ctl < 1) {
+        return { ratio: 0, safeUpper, status: 'unknown', atl, ctl };
+      }
+
+      const ratio = atl / ctl;
+      let status: AthleteACWRStatus;
+      if (ratio < 0.8) status = 'low';
+      else if (ratio <= safeUpper) status = 'safe';
+      else if (ratio <= safeUpper + 0.2) status = 'caution';
+      else status = 'high';
+      return { ratio, safeUpper, status, atl, ctl };
+    }
   }
 
-  const latest = metrics[metrics.length - 1];
-  const { ctl, atl } = latest;
+  // ── Weekly EMA fallback ──────────────────────────────────────────────────────
+  // Used when planStartDate is missing or rolling data is insufficient.
+  const completedLimit = Math.min(Math.max(0, currentWeek - 1), wks.length);
+
+  if (completedLimit < 3) {
+    return { ratio: 0, safeUpper, status: 'unknown', atl: 0, ctl: 0 };
+  }
+
+  if (signalBSeed != null) {
+    const result = computeSameSignalTSB(wks, Math.max(0, currentWeek - 1), signalBSeed, planStartDate);
+    if (!result) return { ratio: 0, safeUpper, status: 'unknown', atl: 0, ctl: 0 };
+    ctl = result.ctl;
+    atl = result.atl;
+  } else {
+    const metrics = computeFitnessModel(wks, completedLimit, ctlSeed, planStartDate, atlSeed);
+    if (metrics.length < 3) {
+      const latest = metrics[metrics.length - 1];
+      return { ratio: 0, safeUpper, status: 'unknown', atl: latest?.atl ?? 0, ctl: latest?.ctl ?? 0 };
+    }
+    const latest = metrics[metrics.length - 1];
+    ctl = latest.ctl;
+    atl = latest.atl;
+  }
 
   if (ctl < 1) {
     // CTL too low to compute a meaningful ratio (first few weeks of zero training)
@@ -577,7 +1003,7 @@ export function computeACWR(
 
   let status: AthleteACWRStatus;
   if (ratio < 0.8) {
-    status = 'unknown'; // undertraining / intentional deload
+    status = 'low'; // undertraining / intentional deload
   } else if (ratio <= safeUpper) {
     status = 'safe';
   } else if (ratio <= safeUpper + 0.2) {
@@ -587,6 +1013,28 @@ export function computeACWR(
   }
 
   return { ratio, safeUpper, status, atl, ctl };
+}
+
+/**
+ * Compute the weekly running km floor for a given training week.
+ * Floor scales linearly from an early-phase minimum to a peak-phase target,
+ * based on the athlete's marathon pace tier.
+ * Returns 0 during taper (volume drop is deliberate, not a problem to fix).
+ *
+ * Tiers: fast (sub 3:30) → 20–35 km, mid (3:30–4:30) → 15–25 km, finish (4:30+) → 10–18 km.
+ */
+export function computeRunningFloorKm(
+  marathonPaceSecPerKm: number | undefined,
+  currentWeek: number,
+  totalWeeks: number,
+  phase?: string,
+): number {
+  if (phase === 'taper') return 0;
+  const mTimeSec = (marathonPaceSecPerKm ?? 360) * 42.195;
+  const floorTier = mTimeSec < 3.5 * 3600 ? 'fast' : mTimeSec < 4.5 * 3600 ? 'mid' : 'finish';
+  const peakFloor = floorTier === 'fast' ? 35 : floorTier === 'mid' ? 25 : 18;
+  const earlyFloor = floorTier === 'fast' ? 20 : floorTier === 'mid' ? 15 : 10;
+  return earlyFloor + (peakFloor - earlyFloor) * Math.min(1, Math.max(0, (currentWeek - 2)) / Math.max(1, totalWeeks - 1));
 }
 
 /**
@@ -605,6 +1053,7 @@ export function computeFitnessModel(
   ctlSeed?: number,
   planStartDate?: string,
   atlSeed?: number,
+  norm?: number,
 ): FitnessMetrics[] {
   const results: FitnessMetrics[] = [];
   let ctl = ctlSeed ?? 0;
@@ -614,9 +1063,9 @@ export function computeFitnessModel(
   for (let i = 0; i < limit; i++) {
     const wk = wks[i];
     const rated = wk.rated ?? {};
-    const weekTSS = computeWeekTSS(wk, rated, planStartDate);
+    const weekTSS = computeWeekTSS(wk, rated, planStartDate, norm);
     // Signal B: raw physiological TSS (no runSpec discount) — used for ATL/fatigue
-    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate);
+    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate, norm);
 
     // When user overrode a reduction recommendation, add 15% synthetic ATL debt.
     // Recovery debt from check-in adds further ATL inflation (orange +10%, red +20%).
@@ -654,11 +1103,12 @@ export function computeSameSignalTSB(
   currentWeek: number,
   ctlSeed?: number,
   planStartDate?: string,
+  norm?: number,
 ): { ctl: number; atl: number; tsb: number } | null {
-  // Include the current in-progress week so that today's completed activities
-  // (garminActuals, adhocWorkouts) are reflected in ATL/TSB immediately.
-  // computeWeekRawTSS returns only synced actuals, so it's 0 when nothing done yet.
-  const limit = Math.min(currentWeek + 1, wks.length);
+  // s.w is 1-indexed: wks[s.w-1] is the current week. limit = currentWeek (not +1)
+  // so the loop covers wks[0..s.w-1], including today's completed activities without
+  // inadvertently processing wks[s.w] (next week, 0 actuals) which would collapse ATL.
+  const limit = Math.min(currentWeek, wks.length);
   if (limit === 0) return null;
 
   let ctl = ctlSeed ?? 0;
@@ -667,7 +1117,7 @@ export function computeSameSignalTSB(
   for (let i = 0; i < limit; i++) {
     const wk = wks[i];
     const rated = wk.rated ?? {};
-    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate);
+    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate, norm);
 
     // ATL inflation from overrides/recovery debt still applies (reflects suppressed fatigue)
     let atlMultiplier = 1.0;

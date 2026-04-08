@@ -125,11 +125,12 @@ export function renderFitness(container: HTMLElement, state: OnboardingState): v
                 </svg>
               </div>
               <div>
-                <h3 style="font-size:14px;font-weight:500;color:var(--c-black)">Apple Watch will sync automatically</h3>
-                <p style="font-size:12px;color:var(--c-muted);margin-top:2px">Workouts sync each time you open the app on your iPhone.</p>
+                <h3 style="font-size:14px;font-weight:500;color:var(--c-black)">Apple Watch syncs sleep, HRV, and recovery</h3>
+                <p style="font-size:12px;color:var(--c-muted);margin-top:2px">Data syncs from HealthKit each time you open the app.</p>
               </div>
             </div>
-            <p style="font-size:12px;color:var(--c-faint);margin-top:10px">You can also enter your fitness data manually below.</p>
+            <p style="font-size:12px;color:var(--c-muted);margin-top:10px;line-height:1.4">For the most accurate training load tracking, also connect Strava. Strava provides detailed heart rate data from your runs, which Mosaic uses to measure workout intensity and calibrate your plan.</p>
+            <p style="font-size:12px;color:var(--c-faint);margin-top:6px">You can connect Strava on the next screen, or later in Settings.</p>
           </div>
           ` : ''}
 
@@ -182,7 +183,7 @@ function wireEventHandlers(state: OnboardingState): void {
   // No → skip physiology step entirely
   document.getElementById('has-watch-no')?.addEventListener('click', () => {
     updateOnboarding({ hasSmartwatch: false, ltPace: null, vo2max: null, restingHR: null, maxHR: null, watchType: undefined });
-    updateState({ wearable: undefined });
+    updateState({ wearable: undefined, connectedSources: undefined });
     saveState();
     goToStep('initializing');
   });
@@ -191,7 +192,7 @@ function wireEventHandlers(state: OnboardingState): void {
   document.getElementById('watch-garmin')?.addEventListener('click', () => {
     if (state.watchType !== 'garmin') _garminConnected = null;
     updateOnboarding({ watchType: 'garmin' });
-    updateState({ wearable: 'garmin' });
+    updateState({ wearable: 'garmin', connectedSources: { physiology: 'garmin' } });
     saveState();
     rerender();
   });
@@ -199,7 +200,7 @@ function wireEventHandlers(state: OnboardingState): void {
   // Device picker: Apple Watch
   document.getElementById('watch-apple')?.addEventListener('click', () => {
     updateOnboarding({ watchType: 'apple' });
-    updateState({ wearable: 'apple' });
+    updateState({ wearable: 'apple', connectedSources: { physiology: 'apple' } });
     saveState();
     rerender();
   });
@@ -208,7 +209,7 @@ function wireEventHandlers(state: OnboardingState): void {
   document.getElementById('watch-strava')?.addEventListener('click', () => {
     if (state.watchType !== 'strava') _stravaConnected = null;
     updateOnboarding({ watchType: 'strava' });
-    updateState({ wearable: 'strava' as any });
+    updateState({ wearable: 'strava' as any, connectedSources: undefined });
     saveState();
     rerender();
   });
@@ -252,7 +253,12 @@ function wireEventHandlers(state: OnboardingState): void {
     if (state.hasSmartwatch === null) return;
     const fresh = getOnboardingState();
     if (fresh?.watchType) {
-      updateState({ wearable: fresh.watchType as any });
+      const wt = fresh.watchType as 'garmin' | 'apple' | 'strava';
+      const physiology = (wt === 'garmin' || wt === 'apple') ? wt : undefined;
+      updateState({
+        wearable: wt,
+        connectedSources: physiology ? { physiology } : undefined,
+      });
       saveState();
     }
     nextStep();

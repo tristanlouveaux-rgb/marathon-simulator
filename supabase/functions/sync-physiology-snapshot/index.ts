@@ -40,10 +40,10 @@ Deno.serve(async (req) => {
         // Query daily_metrics with correct column names matching webhook schema
         // Webhook writes: garmin_user_id, day_date, resting_hr, hrv_rmssd, stress_avg, vo2max
         // Explicit user_id filter (defense in depth alongside RLS)
-        const [metricsRes, sleepRes, physioRes, maxHRRes] = await Promise.all([
+        const [metricsRes, sleepRes, physioRes, latestPhysioRes, maxHRRes] = await Promise.all([
             supabaseClient
                 .from('daily_metrics')
-                .select('day_date, resting_hr, max_hr, hrv_rmssd, stress_avg, vo2max')
+                .select('day_date, resting_hr, max_hr, hrv_rmssd, stress_avg, vo2max, steps, active_calories, active_minutes, highly_active_minutes')
                 .eq('user_id', userId)
                 .gte('day_date', startDateStr)
                 .order('day_date', { ascending: true }),
@@ -60,27 +60,38 @@ Deno.serve(async (req) => {
                 .eq('user_id', userId)
                 .gte('calendar_date', startDateStr),
 
-            // All-time peak max HR across every stored activity (Garmin + Strava)
+            // Latest physiology snapshot regardless of date — LT and VO2max from Garmin
+            // are pushed infrequently (only when values change), so the most recent row
+            // may be older than the daily metrics date window.
+            supabaseClient
+                .from('physiology_snapshots')
+                .select('calendar_date, vo2_max_running, lactate_threshold_pace, lt_heart_rate')
+                .eq('user_id', userId)
+                .order('calendar_date', { ascending: false })
+                .limit(1),
+
+            // Robust max HR: 95th percentile of all activity max HRs.
+            // Wrist sensors produce spikes; percentile filters them automatically.
             supabaseClient
                 .from('garmin_activities')
                 .select('max_hr')
                 .eq('user_id', userId)
                 .not('max_hr', 'is', null)
-                .order('max_hr', { ascending: false })
-                .limit(1)
         ])
 
         // Individual table errors are non-fatal — log and continue with empty data
         if (metricsRes.error) console.warn('[sync-physiology-snapshot] daily_metrics error:', metricsRes.error.message)
         if (sleepRes.error) console.warn('[sync-physiology-snapshot] sleep_summaries error:', sleepRes.error.message)
         if (physioRes.error) console.warn('[sync-physiology-snapshot] physiology_snapshots error:', physioRes.error.message)
+        if (latestPhysioRes.error) console.warn('[sync-physiology-snapshot] latestPhysio error:', latestPhysioRes.error.message)
         // maxHRRes failure is non-fatal — just skip
 
         const metricsRows = metricsRes.error ? [] : (metricsRes.data || [])
         const sleepRows = sleepRes.error ? [] : (sleepRes.data || [])
         const physioRows = physioRes.error ? [] : (physioRes.data || [])
+        const latestPhysioRow = (!latestPhysioRes.error && latestPhysioRes.data?.[0]) ? latestPhysioRes.data[0] : null
 
-        console.log(`[sync-physiology-snapshot] Results: metrics=${metricsRows.length}, sleep=${sleepRows.length}, physio=${physioRows.length}`)
+        console.log(`[sync-physiology-snapshot] Results: metrics=${metricsRows.length}, sleep=${sleepRows.length}, physio=${physioRows.length}, latestPhysio=${latestPhysioRow ? latestPhysioRow.calendar_date : 'none'}`)
 
         // Merge by date — map DB column names to client-expected names
         const mergedData = new Map<string, any>()
@@ -93,6 +104,10 @@ Deno.serve(async (req) => {
                 hrv_rmssd: m.hrv_rmssd,
                 avg_stress_level: m.stress_avg,
                 vo2max: m.vo2max,
+                steps: m.steps ?? null,
+                active_calories: m.active_calories ?? null,
+                active_minutes: m.active_minutes ?? null,
+                highly_active_minutes: m.highly_active_minutes ?? null,
             })
         }
 
@@ -123,9 +138,28 @@ Deno.serve(async (req) => {
         const mergedDays = Array.from(mergedData.values())
             .sort((a, b) => a.calendar_date.localeCompare(b.calendar_date))
 
-        const allTimeMaxHR: number | null = maxHRRes.data?.[0]?.max_hr ?? null
+        // Robust max HR: 95th percentile of all activity max HRs (filters wrist-sensor spikes)
+        const allMaxHRs = (maxHRRes.data ?? []).map((r: any) => r.max_hr as number).filter(v => v > 0)
+        let allTimeMaxHR: number | null = null
+        if (allMaxHRs.length >= 5) {
+            allMaxHRs.sort((a: number, b: number) => a - b)
+            const p95Idx = Math.floor(allMaxHRs.length * 0.95)
+            allTimeMaxHR = allMaxHRs[Math.min(p95Idx, allMaxHRs.length - 1)]
+        } else if (allMaxHRs.length > 0) {
+            allMaxHRs.sort((a: number, b: number) => a - b)
+            allTimeMaxHR = allMaxHRs[Math.floor(allMaxHRs.length / 2)]
+        }
 
-        return new Response(JSON.stringify({ days: mergedDays, maxHR: allTimeMaxHR }), {
+        // Include the latest physiology row (potentially older than the date window)
+        // so the client can use it for LT/VO2 even if Garmin hasn't pushed recently
+        const latestPhysio = latestPhysioRow ? {
+            calendar_date: latestPhysioRow.calendar_date,
+            vo2_max_running: latestPhysioRow.vo2_max_running,
+            lactate_threshold_pace: latestPhysioRow.lactate_threshold_pace,
+            lt_heart_rate: latestPhysioRow.lt_heart_rate,
+        } : null
+
+        return new Response(JSON.stringify({ days: mergedDays, maxHR: allTimeMaxHR, latestPhysio }), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             status: 200,
         })

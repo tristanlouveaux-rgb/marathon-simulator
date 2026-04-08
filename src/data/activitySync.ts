@@ -93,6 +93,8 @@ let _pendingModalActive = false;
 function isBatchSync(items: ReturnType<typeof getMutableState>['wks'][0]['garminPending']): boolean {
   if (!items || items.length === 0) return false;
   if (items.length >= 3) return true;
+  // Runs always go to Activity Review so the user can match them to a plan slot
+  if (items.some(i => i.appType === 'run')) return true;
   const oldest = items.reduce((a, b) => (a.startTime < b.startTime ? a : b));
   const ageMs = Date.now() - new Date(oldest.startTime).getTime();
   return ageMs > 24 * 60 * 60 * 1000;

@@ -5,13 +5,13 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import type { SimulatorState, Week } from '@/types';
+import type { SimulatorState, Week, Workout } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, findGarminRunForWeek, getBenchmarkOptions, recordBenchmark, skipBenchmark, maybeInitKmNudge } from './events';
-import { openActivityReReview } from './activity-review';
+import { openActivityReReview, showActivityReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { openCoachModal } from './coach-modal';
@@ -19,10 +19,10 @@ import { applyIllnessMods, clearIllness, openIllnessModal } from './illness-moda
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry } from '@/calculations/fitness-model';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatKm, fmtDesc, formatPace } from '@/utils/format';
-import { triggerExcessLoadAdjustment } from './excess-load-card';
+import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showLoadBreakdownSheet, showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getCoachCopy, getFutureWeekCopy, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
@@ -181,41 +181,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     const t = (w.t || '').toLowerCase();
     if (!t || t === 'rest') return 0;
     const baseMinPerKm = _s.pac?.e ? _s.pac.e / 60 : 5.5;
-    const desc: string = w.d || '';
-    let durMin = 0;
-    const lines = desc.split('\n').filter((l: string) => l.trim());
-    let mainDesc = desc;
-    let wucdMin = 0;
-    if (lines.length >= 3 && lines[0].includes('warm up')) {
-      mainDesc = lines[1];
-      const wuKm = parseFloat((lines[0].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
-      const cdKm = parseFloat((lines[lines.length - 1].match(/^(\d+\.?\d*)km/) || [])[1] || '0');
-      wucdMin = (wuKm + cdKm) * baseMinPerKm;
-    }
-    const intervalTimeMatch = mainDesc.match(/(\d+)×(\d+\.?\d*)min/);
-    if (intervalTimeMatch) {
-      const reps = parseInt(intervalTimeMatch[1]);
-      const repDur = parseFloat(intervalTimeMatch[2]);
-      const recMatch = mainDesc.match(/(\d+\.?\d*)\s*min\s*recovery/);
-      const recMin = recMatch ? parseFloat(recMatch[1]) : 0;
-      durMin = reps * repDur + (reps - 1) * recMin + wucdMin;
-    } else {
-      const kmMatch = mainDesc.match(/(\d+\.?\d*)km/);
-      if (kmMatch) {
-        const km = parseFloat(kmMatch[1]);
-        let paceMinPerKm = baseMinPerKm;
-        if (t === 'threshold' || t === 'tempo') paceMinPerKm = baseMinPerKm * 0.82;
-        else if (t === 'vo2' || t === 'intervals') paceMinPerKm = baseMinPerKm * 0.73;
-        else if (t === 'race_pace') paceMinPerKm = baseMinPerKm * 0.78;
-        else if (t === 'marathon_pace') paceMinPerKm = baseMinPerKm * 0.87;
-        else if (t === 'long') paceMinPerKm = baseMinPerKm * 1.03;
-        durMin = km * paceMinPerKm + wucdMin;
-      } else {
-        const minMatch = mainDesc.match(/(\d+)min/);
-        durMin = minMatch ? parseInt(minMatch[1]) + wucdMin : (wucdMin || 40);
-      }
-    }
-    if (durMin <= 0) durMin = 40;
+    const durMin = estimateWorkoutDurMin(w, baseMinPerKm);
     const rpe = w.rpe ?? w.r ?? 5;
 
     // Cross-training: use historical iTrimp-based rate when available,
@@ -526,7 +492,12 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
   if (totalItems === 0) return '';
 
   const matchedCount = Object.keys(actuals).length + adhocGarmin.length;
-  const excessLoad = Math.round((wk as any).unspentLoad || 0);
+  const _plannedBForLog = computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
+  );
+  const _carriedForLog = computeDecayedCarry(s.wks ?? [], wk.w ?? s.w, _plannedBForLog, s.planStartDate);
+  const excessLoad = _plannedBForLog > 0 ? Math.round(getWeeklyExcess(wk, _plannedBForLog, s.planStartDate, _carriedForLog)) : 0;
 
   let h = `<div style="border-top:1px solid var(--c-border)">`;
 
@@ -601,24 +572,28 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
   for (const w of adhocGarmin) {
     const wAny = w as any;
     const rawId = (w.id || '').slice('garmin-'.length);
-    const actual = wk?.garminActuals?.[rawId];
-    const name = wAny.n || actual?.displayName || 'Activity';
-    const dur = actual?.durationSec ? Math.round(actual.durationSec / 60) : (wAny.dur || 0);
-    const km = actual?.distanceKm || wAny.km || wAny.distanceKm || 0;
+    // garminActuals is keyed by plan slot ID, not garminId — never matches adhoc items.
+    // All stats come from the fields stored directly on the adhoc workout by addAdhocWorkoutFromPending.
+    const name = wAny.n || 'Activity';
+    const dur = wAny.garminDurationMin || wAny.dur || 0;
+    const km = wAny.garminDistKm || wAny.km || wAny.distanceKm || 0;
+    const avgHR = wAny.garminAvgHR;
+    const paceSecPerKm = wAny.garminDistKm > 0.1 && wAny.garminDurationMin > 0
+      ? Math.round((wAny.garminDurationMin * 60) / wAny.garminDistKm)
+      : null;
     const isExcess = excessGarminIds.has(rawId);
     const statsArr: string[] = [];
     if (km > 0.1) statsArr.push(typeof km === 'number' ? formatKm(km, s.unitPref ?? 'km') : formatKm(parseFloat(km), s.unitPref ?? 'km'));
-    if (actual?.avgPaceSecKm) statsArr.push(fmtPacePlan(actual.avgPaceSecKm, s.unitPref ?? 'km'));
-    if (actual?.avgHR) statsArr.push(`HR ${actual.avgHR}`);
+    if (paceSecPerKm) statsArr.push(fmtPacePlan(paceSecPerKm, s.unitPref ?? 'km'));
+    if (avgHR) statsArr.push(`HR ${avgHR}`);
     if (dur > 0) statsArr.push(`${dur} min`);
 
-    const hasActual = !!actual;
     const dotColor = isExcess ? 'var(--c-caution)' : 'var(--c-accent)';
     const tagHtml = isExcess
       ? `<span style="font-size:9px;font-weight:600;color:var(--c-caution);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:4px;padding:2px 6px">Excess</span>`
       : `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:4px;padding:2px 6px">Logged</span>`;
 
-    h += `<div class="m-list-item${hasActual ? ' plan-act-open' : ''}"${hasActual ? ` data-workout-key="${escapeHtml(rawId)}" data-week-num="${viewWeek}"` : ''} style="cursor:${hasActual ? 'pointer' : 'default'}">`;
+    h += `<div class="m-list-item plan-adhoc-open" data-adhoc-id="${escapeHtml(w.id || '')}" data-week-num="${viewWeek}" style="cursor:pointer">`;
     h += `<div style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></div>`;
     h += `<div style="flex:1;min-width:0">`;
     h += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
@@ -626,7 +601,7 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     h += `</div>`;
     h += `<div style="display:flex;align-items:center;gap:6px">`;
     h += tagHtml;
-    if (hasActual) h += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+    h += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
     h += `</div>`;
     h += `</div>`;
   }
@@ -1988,7 +1963,19 @@ function markRecoveryPrompted(): void {
 
 function buildCarryOverCard(wk: Week | undefined): string {
   if (!wk?.hasCarriedLoad || wk.carryOverCardDismissed) return '';
-  const count = wk.unspentLoadItems?.length ?? 0;
+  // Only count items whose date falls BEFORE this week's start — items added via
+  // populateUnspentLoadItems for current-week excess are not carry-overs.
+  const s = getState();
+  let weekStartIso = '';
+  if (s.planStartDate && wk.w != null) {
+    const d = new Date(s.planStartDate);
+    d.setDate(d.getDate() + (wk.w - 1) * 7);
+    weekStartIso = d.toISOString().slice(0, 10);
+  }
+  const carriedItems = weekStartIso
+    ? (wk.unspentLoadItems ?? []).filter(i => i.date < weekStartIso)
+    : (wk.unspentLoadItems ?? []);
+  const count = carriedItems.length;
   if (count === 0) return '';
   return `
     <div id="plan-carry-over-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.3);display:flex;align-items:flex-start;justify-content:space-between;gap:10px;cursor:pointer">
@@ -2002,19 +1989,108 @@ function buildCarryOverCard(wk: Week | undefined): string {
 
 // ─── Km nudge card ───────────────────────────────────────────────────────────
 
-function buildKmNudgeCard(wk: Week | undefined, s: SimulatorState): string {
+interface KmNudgeCandidate {
+  workoutName: string;
+  dayOfWeek: number;
+  currentDistanceKm: number;
+  extensionKm: number;
+  wasReduced: boolean;
+}
+
+/**
+ * Compute candidate easy runs that could be extended to bring running km toward the floor.
+ * For cross-training-reduced runs: can restore up to the amount removed.
+ * For unreduced runs: can extend up to 20% of planned km, clamped 1.5–5km.
+ */
+function computeKmNudgeCandidates(
+  workouts: Workout[],
+  wk: Week,
+  floorKm: number,
+): KmNudgeCandidate[] {
+  const mods = wk.workoutMods ?? [];
+  const candidates: KmNudgeCandidate[] = [];
+
+  for (const w of workouts) {
+    // Only uncompleted easy runs (not already rated, not already KmNudge-extended)
+    if (w.t !== 'easy') continue;
+    if (wk.rated[w.id ?? w.n]) continue;
+    if (mods.some(m => m.name === w.n && m.modReason?.startsWith('KmNudge:'))) continue;
+
+    const distMatch = w.d?.match(/(\d+\.?\d*)\s*km/i);
+    const currentKm = distMatch ? parseFloat(distMatch[1]) : 0;
+    if (currentKm <= 0) continue;
+
+    // Check if this run was reduced by cross-training
+    const reduceMod = mods.find(m =>
+      m.name === w.n &&
+      (m.status === 'reduced') &&
+      !m.modReason?.startsWith('KmNudge:') &&
+      !m.modReason?.startsWith('Auto:')
+    );
+
+    let maxAddKm: number;
+    let wasReduced = false;
+    if (reduceMod?.originalDistance) {
+      const origMatch = reduceMod.originalDistance.match(/(\d+\.?\d*)\s*km/i);
+      const originalKm = origMatch ? parseFloat(origMatch[1]) : currentKm;
+      maxAddKm = originalKm - currentKm;
+      wasReduced = maxAddKm > 0;
+    } else {
+      maxAddKm = Math.min(5, Math.max(1.5, Math.round(currentKm * 0.20 * 2) / 2));
+    }
+
+    if (maxAddKm < 1.0) continue;
+
+    candidates.push({
+      workoutName: w.n,
+      dayOfWeek: w.dayOfWeek ?? 0,
+      currentDistanceKm: currentKm,
+      extensionKm: Math.round(maxAddKm * 10) / 10,
+      wasReduced,
+    });
+  }
+
+  return candidates;
+}
+
+function buildKmNudgeCard(wk: Week | undefined, s: SimulatorState, workouts: Workout[]): string {
   if (!wk?.kmNudge || wk.kmNudgeDismissed) return '';
-  const { workoutName, suggestedExtensionKm, originalDistanceKm } = wk.kmNudge;
-  const newKm = originalDistanceKm + suggestedExtensionKm;
+  // Guard against legacy format (old state without floorKm)
+  if (!('floorKm' in wk.kmNudge)) return '';
+
+  const { floorKm, hasReductions } = wk.kmNudge;
   const unitPref = s.unitPref ?? 'km';
+  const candidates = computeKmNudgeCandidates(workouts, wk, floorKm);
+  if (candidates.length === 0) return '';
+
+  const headline = hasReductions
+    ? 'Running km low, but load has been high'
+    : 'Running below target';
+
+  const body = hasReductions
+    ? `Some runs were reduced for load management. Getting the distance in at easy effort keeps aerobic development on track. Floor: ${formatKm(floorKm, unitPref, 0)}/week.`
+    : `Running km has been below ${formatKm(floorKm, unitPref, 0)} for 2+ weeks. Consider extending an easy run.`;
+
+  const buttons = candidates.map(c => {
+    const newKm = c.currentDistanceKm + c.extensionKm;
+    const label = `+ ${formatKm(c.extensionKm, unitPref)} to ${escapeHtml(c.workoutName)}`;
+    const detail = `${formatKm(c.currentDistanceKm, unitPref)} → ${formatKm(newKm, unitPref)}`;
+    return `<button class="km-nudge-apply-btn" data-name="${escapeHtml(c.workoutName)}" data-day="${c.dayOfWeek}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:#16a34a;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:5px 12px;cursor:pointer;width:100%;text-align:left">`
+      + `<span>${label}</span><span style="font-weight:400;color:var(--c-muted);font-size:11px">${detail}</span></button>`;
+  }).join('');
+
   return `
-    <div id="plan-km-nudge-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.3);display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
-      <div style="flex:1;min-width:0">
-        <div style="font-size:12px;font-weight:600;color:#16a34a;margin-bottom:2px">Running below target — want to add more?</div>
-        <div style="font-size:11px;color:var(--c-muted);margin-bottom:8px">You've been under your km floor for 2 weeks. Extend <strong>${escapeHtml(workoutName)}</strong> from ${formatKm(originalDistanceKm, unitPref)} → ${formatKm(newKm, unitPref)}?</div>
-        <button id="plan-km-nudge-apply" style="font-size:12px;font-weight:600;color:#16a34a;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:5px 12px;cursor:pointer">+ ${formatKm(suggestedExtensionKm, unitPref)} to ${escapeHtml(workoutName)}</button>
+    <div id="plan-km-nudge-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.3)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:600;color:#16a34a;margin-bottom:2px">${headline}</div>
+          <div style="font-size:11px;color:var(--c-muted)">${body}</div>
+        </div>
+        <button id="plan-km-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:16px;line-height:1;opacity:0.6" aria-label="Dismiss">×</button>
       </div>
-      <button id="plan-km-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:16px;line-height:1;opacity:0.6" aria-label="Dismiss">×</button>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${buttons}
+      </div>
     </div>`;
 }
 
@@ -2024,25 +2100,38 @@ function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
   const isCurrentWeek = wk?.w === s.w;
   if (!isCurrentWeek) return '';
 
-  const _hasAutoMod = (wk?.workoutMods ?? []).some(m => m.modReason?.startsWith('Auto:'));
   const _plannedB = wk ? computePlannedSignalB(
     s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
     s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
   ) : 0;
-  const _excess = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate) : 0;
-  const _hasPendingExcess = _excess > 15 && !_hasAutoMod;
+  const _carriedForStrip = computeDecayedCarry(s.wks ?? [], s.w, _plannedB, s.planStartDate);
+  const _excessThisWeek = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate) : 0;
+  const _excess = wk ? getWeeklyExcess(wk, _plannedB, s.planStartDate, _carriedForStrip) : 0;
+  const _hasPendingExcess = _excess > 15;
+  const carryPortion = Math.round(_carriedForStrip);
 
-  // Only show when total week Signal B is meaningfully above planned — timing mods are surfaced inline.
+  // Only show when total effective load exceeds planned — carry alone (under target) is informational only.
   if (!_hasPendingExcess) return '';
 
-  const label = _excess > 0 ? `Resolve ${Math.round(_excess)} TSS extra load` : 'Resolve extra load';
+  const _hasRemaining = hasRemainingWeekWorkouts();
+  const excess = Math.round(_excess);
+
+  const stripLabel = carryPortion > 0 && carryPortion >= excess * 0.3
+    ? `${excess} TSS excess (${carryPortion} from last week)`
+    : `${excess} TSS excess`;
+
+  if (!_hasRemaining) {
+    return `
+      <div style="padding:6px 18px;border-bottom:1px solid rgba(245,158,11,0.2);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:12px;color:var(--c-caution)">${stripLabel}</span>
+      </div>`;
+  }
 
   return `
-    <div style="padding:10px 16px 0">
-      <button id="plan-adjust-week-btn" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--c-caution);background:rgba(245,158,11,0.06);color:var(--c-caution);font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f);text-align:left">
-        ${label} →
-      </button>
-    </div>`;
+    <button id="plan-adjust-week-btn" style="width:100%;padding:7px 18px;background:transparent;border:none;border-bottom:1px solid rgba(245,158,11,0.2);display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-family:var(--f)">
+      <span style="font-size:12px;color:var(--c-caution)">${stripLabel}</span>
+      <span style="font-size:11px;color:var(--c-muted)">Adjust plan</span>
+    </button>`;
 }
 
 // ─── Week Overview (coach signals) ───────────────────────────────────────────
@@ -2193,7 +2282,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
   // Week load — Signal B (full physiological, all sports) for all weeks
   // Using Signal B everywhere so the bar always matches what the breakdown sheet shows.
-  const _weekTotalTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
+  const _weekRawTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   const _plannedTSS = computePlannedSignalB(
     s.historicWeeklyTSS,
     s.ctlBaseline,
@@ -2204,6 +2293,9 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     undefined,
     s.sportBaselineByType,
   );
+  // Include decayed carry from previous weeks in the effective total
+  const _weekCarry = isCurrentWeek ? computeDecayedCarry(s.wks ?? [], s.w, _plannedTSS, s.planStartDate) : 0;
+  const _weekTotalTSS = _weekRawTSS + _weekCarry;
   // Bar shown for all weeks when planned is known; over-target fills fully (no cap)
   const _loadBarPct = _plannedTSS > 0 && _weekTotalTSS > 0
     ? Math.round((_weekTotalTSS / _plannedTSS) * 100)
@@ -2279,17 +2371,19 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
             </div>
             ${weekLoadBar}
             ${weekKmBar}
-            ${viewWeek < s.w ? `<button id="plan-jump-current" style="margin-top:4px;background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--c-accent);cursor:pointer;letter-spacing:0.01em;display:flex;align-items:center;gap:3px">&#8594; This week</button>` : ''}
           </div>
-          <div style="display:flex;gap:8px;align-items:center">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            <div style="display:flex;gap:8px;align-items:center">
             ${isCurrentWeek ? `<button id="plan-coach-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap">Coach</button>` : ''}
             ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
             ${buildWrapUpWeekBtn(s, workouts, viewWeek)}
-            ${viewWeek < s.w ? `<button id="plan-edit-week-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer" title="Edit week">&#9998;</button>` : ''}
+
             ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" style="height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--c-border);background:transparent;font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;letter-spacing:0.02em">Review past week</button>` : ''}
             ${navBtn('prev', canGoBack)}
             ${navBtn('next', canGoForward)}
             <button id="plan-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
+            </div>
+            ${viewWeek < s.w ? `<button id="plan-jump-current" style="background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--c-black);cursor:pointer;letter-spacing:0.01em;display:flex;align-items:center;gap:3px">&#8594; Go to Current Week</button>` : ''}
           </div>
         </div>
 
@@ -2303,7 +2397,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       <div id="plan-card-list" style="background:var(--c-bg);${isFutureWeek ? 'opacity:0.75' : ''}">
         ${isFutureWeek ? `<div style="margin:8px 16px 0;padding:10px 14px;background:rgba(0,0,0,0.04);border-radius:8px;font-size:12px;font-weight:500;color:var(--c-muted);line-height:1.5">Draft — final workouts depend on the preceding week's performance.</div>` : ''}
         ${buildCarryOverCard(wk)}
-        ${buildKmNudgeCard(wk, s)}
+        ${buildKmNudgeCard(wk, s, workouts)}
         ${buildAdjustWeekRow(wk, s)}
         ${buildInjuryBanner()}
         ${buildIllnessBanner()}
@@ -2377,25 +2471,6 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   });
 
   // Edit week button (shown only on current week)
-  document.getElementById('plan-edit-week-btn')?.addEventListener('click', () => {
-    const sheet = document.createElement('div');
-    sheet.id = 'plan-edit-week-sheet';
-    sheet.style.cssText = 'position:fixed;bottom:0;left:0;right:0;z-index:9999;background:var(--c-surface);border-radius:16px 16px 0 0;padding:24px 20px 40px;box-shadow:0 -4px 24px rgba(0,0,0,0.12)';
-    sheet.innerHTML = `
-      <div style="width:36px;height:4px;background:var(--c-border);border-radius:2px;margin:0 auto 20px"></div>
-      <div style="font-size:17px;font-weight:600;letter-spacing:-0.01em;margin-bottom:10px">Edit past week</div>
-      <div style="font-size:14px;color:var(--c-muted);line-height:1.5">Tap a session card to mark it as done or skipped. Watch-synced sessions are locked.</div>
-      <button id="plan-edit-week-close" style="margin-top:24px;width:100%;padding:13px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;cursor:pointer;color:var(--c-black);font-family:var(--f)">Close</button>
-    `;
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,0.35)';
-    const close = () => { sheet.remove(); overlay.remove(); };
-    overlay.addEventListener('click', close);
-    sheet.querySelector('#plan-edit-week-close')?.addEventListener('click', close);
-    document.body.appendChild(overlay);
-    document.body.appendChild(sheet);
-  });
-
   // Review past week button — fires week-end debrief for the PREVIOUS week
   document.getElementById('plan-review-week-btn')?.addEventListener('click', () => {
     const curWeek = (getState() as any).w ?? 1;
@@ -2631,27 +2706,72 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   });
 
   // ─── Km nudge card ────────────────────────────────────────────────────────
-  document.getElementById('plan-km-nudge-apply')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const s2 = getMutableState();
-    const wk2 = s2.wks?.[s2.w - 1];
-    if (!wk2?.kmNudge) return;
-    const { workoutName, dayOfWeek, suggestedExtensionKm, originalDistanceKm } = wk2.kmNudge;
-    const newKm = originalDistanceKm + suggestedExtensionKm;
-    // Apply as a workoutMod so it shows in the plan and can be undone
-    if (!wk2.workoutMods) wk2.workoutMods = [];
-    wk2.workoutMods = wk2.workoutMods.filter(m => !(m.name === workoutName && m.modReason?.startsWith('KmNudge:')));
-    wk2.workoutMods.push({
-      name: workoutName,
-      dayOfWeek,
-      status: 'extended',
-      modReason: `KmNudge: Running volume below floor — easy run extended`,
-      originalDistance: `${originalDistanceKm}km`,
-      newDistance: `${newKm}km easy`,
+  document.querySelectorAll<HTMLElement>('.km-nudge-apply-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const s2 = getMutableState();
+      const wk2 = s2.wks?.[s2.w - 1];
+      if (!wk2?.kmNudge || !('floorKm' in wk2.kmNudge)) return;
+
+      // Re-compute candidates to get data for the clicked button
+      const nudgeWorkouts = generateWeekWorkouts(
+        wk2.ph, s2.rw, s2.rd, s2.typ, [], s2.commuteConfig || undefined,
+        null, s2.recurringActivities,
+        s2.onboarding?.experienceLevel, undefined, s2.pac?.e, s2.w, s2.tw, s2.v, s2.gs,
+        getTrailingEffortScore(s2.wks, s2.w), wk2.scheduledAcwrStatus,
+      );
+      // Apply existing mods so distances reflect current state
+      for (const mod of (wk2.workoutMods ?? [])) {
+        const w = nudgeWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+        if (w && !mod.modReason?.startsWith('Timing:')) {
+          if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
+          (w as any).d = mod.newDistance;
+          (w as any).status = mod.status;
+        }
+      }
+      const candidates = computeKmNudgeCandidates(nudgeWorkouts, wk2, wk2.kmNudge.floorKm);
+      const targetName = btn.dataset.name ?? '';
+      const targetDay = parseInt(btn.dataset.day ?? '-1', 10);
+      const candidate = candidates.find(c => c.workoutName === targetName && c.dayOfWeek === targetDay);
+      if (!candidate) return;
+
+      const newKm = Math.round((candidate.currentDistanceKm + candidate.extensionKm) * 10) / 10;
+      if (!wk2.workoutMods) wk2.workoutMods = [];
+      // Remove any existing KmNudge mod for this workout
+      wk2.workoutMods = wk2.workoutMods.filter(m => !(m.name === candidate.workoutName && m.modReason?.startsWith('KmNudge:')));
+
+      if (candidate.wasReduced) {
+        // Run was reduced by cross-training — update the existing reduce mod's distance
+        const existingMod = wk2.workoutMods.find(m =>
+          m.name === candidate.workoutName && m.status === 'reduced'
+        );
+        if (existingMod) {
+          existingMod.newDistance = `${newKm}km easy`;
+          existingMod.modReason += ' + KmNudge: volume restored';
+        } else {
+          wk2.workoutMods.push({
+            name: candidate.workoutName,
+            dayOfWeek: candidate.dayOfWeek,
+            status: 'extended',
+            modReason: `KmNudge: Running volume below floor — easy run extended`,
+            originalDistance: `${candidate.currentDistanceKm}km`,
+            newDistance: `${newKm}km easy`,
+          });
+        }
+      } else {
+        wk2.workoutMods.push({
+          name: candidate.workoutName,
+          dayOfWeek: candidate.dayOfWeek,
+          status: 'extended',
+          modReason: `KmNudge: Running volume below floor — easy run extended`,
+          originalDistance: `${candidate.currentDistanceKm}km`,
+          newDistance: `${newKm}km easy`,
+        });
+      }
+
+      saveState();
+      renderPlanView();
     });
-    delete wk2.kmNudge;
-    saveState();
-    renderPlanView();
   });
   document.getElementById('plan-km-nudge-dismiss')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -2718,12 +2838,24 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   });
 
   // ─── Activity log review buttons ───────────────────────────────────────────
-  document.getElementById('plan-review-btn')?.addEventListener('click', () => {
-    openActivityReReview(() => renderPlanView());
-  });
-  document.getElementById('plan-review-btn-2')?.addEventListener('click', () => {
-    openActivityReReview(() => renderPlanView());
-  });
+  const _reviewClick = () => {
+    const _s = getMutableState();
+    const _wk = _s.wks?.[_s.w - 1];
+    if (!_wk) return;
+
+    const _pending = (_wk.garminPending ?? []).filter(
+      p => (_wk.garminMatched?.[p.garminId] ?? '__pending__') === '__pending__',
+    );
+    if (_pending.length > 0) {
+      // Still-unprocessed items: process them without undoing prior decisions
+      showActivityReview(_pending, () => renderPlanView());
+    } else {
+      // All items processed: full re-review (undoes, shows with saved slot assignments)
+      openActivityReReview(() => renderPlanView());
+    }
+  };
+  document.getElementById('plan-review-btn')?.addEventListener('click', _reviewClick);
+  document.getElementById('plan-review-btn-2')?.addEventListener('click', _reviewClick);
 
 
   // Wrap up week (Sunday / all-done pill in header)
@@ -2744,6 +2876,38 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const plannedTSSAttr = parseInt(el.dataset.plannedTss || '0', 10) || 0;
       const { renderActivityDetail } = await import('./activity-detail');
       renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'plan', plannedTSSAttr || undefined);
+    });
+  });
+
+  // ─── Adhoc activity detail click-through (Excess / Logged) ─────────────────
+  document.querySelectorAll<HTMLElement>('.plan-adhoc-open').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const adhocId = el.dataset.adhocId || '';
+      const weekNum = parseInt(el.dataset.weekNum || '0', 10);
+      if (!adhocId || !weekNum) return;
+      const s2 = getState();
+      const wk2 = s2.wks?.[weekNum - 1];
+      const w = (wk2?.adhocWorkouts || []).find((aw: any) => aw.id === adhocId) as any;
+      if (!w) return;
+      const fakeActual = {
+        garminId: w.id || '',
+        startTime: w.garminTimestamp ?? null,
+        distanceKm: w.garminDistKm ?? w.distanceKm ?? 0,
+        durationSec: (w.garminDurationMin ?? w.durationMin ?? 0) * 60,
+        avgPaceSecKm: w.garminAvgPace ?? null,
+        avgHR: w.garminAvgHR ?? null,
+        maxHR: w.garminMaxHR ?? null,
+        calories: w.garminCalories ?? null,
+        iTrimp: w.iTrimp ?? null,
+        hrZones: w.hrZones ?? null,
+        polyline: w.polyline ?? null,
+        kmSplits: w.kmSplits ?? null,
+        activityType: w.activityType ?? null,
+        displayName: w.workoutName || w.displayName || w.name || w.n || 'Activity',
+      };
+      const { renderActivityDetail } = await import('./activity-detail');
+      renderActivityDetail(fakeActual as any, fakeActual.displayName, 'plan');
     });
   });
 

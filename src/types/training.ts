@@ -42,7 +42,8 @@ export type WorkoutType =
   | 'intervals'
   | 'mixed'
   | 'progressive'
-  | 'hill_repeats';
+  | 'hill_repeats'
+  | 'float';
 
 /** Training phase */
 export type TrainingPhase = 'base' | 'build' | 'peak' | 'taper';

@@ -1,7 +1,7 @@
 import type { Workout, RaceDistance, RunnerType } from '@/types';
 
 /** Workout slot type for plan engine */
-export type SlotType = 'easy' | 'long' | 'threshold' | 'vo2' | 'marathon_pace' | 'progressive';
+export type SlotType = 'easy' | 'long' | 'threshold' | 'vo2' | 'marathon_pace' | 'progressive' | 'float';
 
 /** Time-based session intent from plan engine */
 export interface SessionIntent {
@@ -148,6 +148,34 @@ export function intentToWorkout(
       };
     }
 
+    case 'float': {
+      // Float fartlek: hard reps at 10K/HM effort with "float" recovery at ~MP
+      // Recovery is moderate (not jog), training lactate clearance under load
+      const tenKLabel = easyPaceSecPerKm ? `${fmtPace(easyPaceSecPerKm * 0.84)}/km` : '10K pace';
+      const floatLabel = mpLabel; // Float recovery ≈ marathon pace
+      if (reps && repMinutes && recoveryMinutes) {
+        const mainSet = `${reps}×${fmtMin(repMinutes)}min @ ${tenKLabel}, ${fmtMin(recoveryMinutes)}min float @ ${floatLabel}`;
+        const sessionMin = reps * repMinutes + (reps - 1) * recoveryMinutes;
+        const wucd = wucdKm(sessionMin, easyPaceSecPerKm);
+        return {
+          t: 'float',
+          n: nameForSlot(slot, intent),
+          d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
+          r: 7,
+          rpe: 7,
+        };
+      }
+      // Continuous float (float long run): alternating blocks at MP and float pace
+      const km = minutesToKm(totalMinutes, easyPaceSecPerKm);
+      return {
+        t: 'float',
+        n: 'Float Long Run',
+        d: `${km}km: alternating 3km @ ${mpLabel} / 2km @ ${floatLabel}`,
+        r: 6,
+        rpe: 6,
+      };
+    }
+
     default: {
       const km = minutesToKm(totalMinutes, easyPaceSecPerKm);
       return {
@@ -208,6 +236,10 @@ function nameForSlot(slot: SlotType, intent: SessionIntent): string {
     }
     case 'marathon_pace': return 'Marathon Pace';
     case 'progressive': return 'Progressive Run';
+    case 'float': {
+      if (intent.reps) return `Float Fartlek ${intent.reps}×${fmtMin(intent.repMinutes!)}`;
+      return 'Float Long Run';
+    }
     default: return 'Run';
   }
 }

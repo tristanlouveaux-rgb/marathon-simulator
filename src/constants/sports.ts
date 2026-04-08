@@ -33,34 +33,41 @@ export const IMPACT_PER_KM: Record<string, number> = {
   vo2: 1.5,
   intervals: 1.5,
   race_pace: 1.35,
+  float: 1.25,
 };
 
 /** Sports database - configuration for cross-training activities */
 export const SPORTS_DB: Record<SportKey, SportConfig> = {
-  soccer:        { mult: 1.35, noReplace: ['long'], runSpec: 0.40, recoveryMult: 1.20, impactPerMin: 0.12, volumeTransfer: 0.7, intermittent: true },
-  rugby:         { mult: 1.50, noReplace: ['long'], runSpec: 0.35, recoveryMult: 1.30, impactPerMin: 0.12, volumeTransfer: 0.7, intermittent: true },
-  basketball:    { mult: 1.25, noReplace: ['long'], runSpec: 0.45, recoveryMult: 1.15, impactPerMin: 0.12, volumeTransfer: 0,   intermittent: true },
+  // legLoadPerMin tiers:
+  //   Vertical (eccentric + concentric, gravity-loaded):  hiking/skiing/stair_climbing = 0.50
+  //   Sustained flat leg drive:  rowing = 0.35, cycling/elliptical = 0.25
+  //   Intermittent leg:  skating = 0.18, soccer/rugby/basketball/crossfit = 0.15, padel/dancing/jump_rope = 0.10
+  //   Minimal:  walking = 0.05
+  //   Not legs:  swimming/climbing/boxing/martial_arts/yoga/pilates/strength = 0 (omitted)
+  soccer:        { mult: 1.35, noReplace: ['long'], runSpec: 0.40, recoveryMult: 1.20, impactPerMin: 0.12, legLoadPerMin: 0.15, volumeTransfer: 0.7, intermittent: true },
+  rugby:         { mult: 1.50, noReplace: ['long'], runSpec: 0.35, recoveryMult: 1.30, impactPerMin: 0.12, legLoadPerMin: 0.15, volumeTransfer: 0.7, intermittent: true },
+  basketball:    { mult: 1.25, noReplace: ['long'], runSpec: 0.45, recoveryMult: 1.15, impactPerMin: 0.12, legLoadPerMin: 0.15, volumeTransfer: 0,   intermittent: true },
   tennis:        { mult: 1.20, noReplace: [], runSpec: 0.50, recoveryMult: 1.10, impactPerMin: 0.05, volumeTransfer: 0 },
   swimming:      { mult: 0.65, noReplace: [], runSpec: 0.20, recoveryMult: 0.90, impactPerMin: 0.00, volumeTransfer: 0 },
-  cycling:       { mult: 0.75, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.00, volumeTransfer: 0 },
+  cycling:       { mult: 0.75, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.25, volumeTransfer: 0 },
   strength:      { mult: 1.10, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.08, volumeTransfer: 0 },
   extra_run:     { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 }, // km-based for runs
-  hiking:        { mult: 0.80, noReplace: [], runSpec: 0.45, recoveryMult: 0.95, impactPerMin: 0.06, volumeTransfer: 0.4 },
-  rowing:        { mult: 0.85, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.00, volumeTransfer: 0 },
+  hiking:        { mult: 0.80, noReplace: [], runSpec: 0.45, recoveryMult: 0.95, impactPerMin: 0.06, legLoadPerMin: 0.50, volumeTransfer: 0.4 },
+  rowing:        { mult: 0.85, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.35, volumeTransfer: 0 },
   yoga:          { mult: 0.40, noReplace: [], runSpec: 0.10, recoveryMult: 0.85, impactPerMin: 0.02, volumeTransfer: 0 },
   martial_arts:  { mult: 1.30, noReplace: ['long'], runSpec: 0.30, recoveryMult: 1.20, impactPerMin: 0.10, volumeTransfer: 0, intermittent: true },
   climbing:      { mult: 0.70, noReplace: [], runSpec: 0.15, recoveryMult: 1.00, impactPerMin: 0.05, volumeTransfer: 0 },
   boxing:        { mult: 1.40, noReplace: ['long'], runSpec: 0.25, recoveryMult: 1.20, impactPerMin: 0.10, volumeTransfer: 0, intermittent: true },
-  crossfit:      { mult: 1.30, noReplace: [], runSpec: 0.40, recoveryMult: 1.20, impactPerMin: 0.10, volumeTransfer: 0 },
+  crossfit:      { mult: 1.30, noReplace: [], runSpec: 0.40, recoveryMult: 1.20, impactPerMin: 0.10, legLoadPerMin: 0.15, volumeTransfer: 0 },
   pilates:       { mult: 0.45, noReplace: [], runSpec: 0.10, recoveryMult: 0.85, impactPerMin: 0.02, volumeTransfer: 0 },
-  dancing:       { mult: 0.90, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.04, volumeTransfer: 0 },
-  skiing:        { mult: 0.90, noReplace: [], runSpec: 0.50, recoveryMult: 1.00, impactPerMin: 0.07, volumeTransfer: 0 },
-  skating:       { mult: 0.75, noReplace: [], runSpec: 0.40, recoveryMult: 0.95, impactPerMin: 0.04, volumeTransfer: 0 },
-  elliptical:    { mult: 0.80, noReplace: [], runSpec: 0.65, recoveryMult: 0.90, impactPerMin: 0.00, volumeTransfer: 0 },
-  stair_climbing:{ mult: 0.85, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.06, volumeTransfer: 0.3 },
-  jump_rope:     { mult: 1.10, noReplace: [], runSpec: 0.50, recoveryMult: 1.05, impactPerMin: 0.08, volumeTransfer: 0.2 },
-  walking:       { mult: 0.35, noReplace: [], runSpec: 0.30, recoveryMult: 0.80, impactPerMin: 0.03, volumeTransfer: 0.3 },
-  padel:         { mult: 1.15, noReplace: [], runSpec: 0.45, recoveryMult: 1.05, impactPerMin: 0.05, volumeTransfer: 0 },
+  dancing:       { mult: 0.90, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.04, legLoadPerMin: 0.10, volumeTransfer: 0 },
+  skiing:        { mult: 0.90, noReplace: [], runSpec: 0.50, recoveryMult: 1.00, impactPerMin: 0.07, legLoadPerMin: 0.50, volumeTransfer: 0 },
+  skating:       { mult: 0.75, noReplace: [], runSpec: 0.40, recoveryMult: 0.95, impactPerMin: 0.04, legLoadPerMin: 0.18, volumeTransfer: 0 },
+  elliptical:    { mult: 0.80, noReplace: [], runSpec: 0.65, recoveryMult: 0.90, impactPerMin: 0.00, legLoadPerMin: 0.25, volumeTransfer: 0 },
+  stair_climbing:{ mult: 0.85, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.06, legLoadPerMin: 0.50, volumeTransfer: 0.3 },
+  jump_rope:     { mult: 1.10, noReplace: [], runSpec: 0.50, recoveryMult: 1.05, impactPerMin: 0.08, legLoadPerMin: 0.10, volumeTransfer: 0.2 },
+  walking:       { mult: 0.35, noReplace: [], runSpec: 0.30, recoveryMult: 0.80, impactPerMin: 0.03, legLoadPerMin: 0.05, volumeTransfer: 0.3 },
+  padel:         { mult: 1.15, noReplace: [], runSpec: 0.45, recoveryMult: 1.05, impactPerMin: 0.05, legLoadPerMin: 0.10, volumeTransfer: 0 },
   generic_sport: { mult: 0.90, noReplace: [], runSpec: 0.40, recoveryMult: 1.00, impactPerMin: 0.04, volumeTransfer: 0.2 },
   hybrid_test_sport: {
     mult: 1.0,

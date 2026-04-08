@@ -77,24 +77,26 @@ async function fetchNarrative(coach: CoachState): Promise<string> {
     return cache?.narrative ?? buildFallbackNarrative(coach);
   }
 
-  const result = await callEdgeFunction<{ narrative: string }>('coach-narrative', coach.signals as unknown as Record<string, unknown>);
-  const narrative = result.narrative?.trim() || buildFallbackNarrative(coach);
+  try {
+    const result = await callEdgeFunction<{ narrative: string }>('coach-narrative', coach.signals as unknown as Record<string, unknown>);
+    const narrative = result.narrative?.trim() || buildFallbackNarrative(coach);
 
-  saveCache({
-    date: today,
-    calls: calls + 1,
-    narrative,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
+    saveCache({
+      date: today,
+      calls: calls + 1,
+      narrative,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
 
-  return narrative;
+    return narrative;
+  } catch {
+    return buildFallbackNarrative(coach);
+  }
 }
 
 /** Rules-based fallback if LLM call fails or returns empty. */
 function buildFallbackNarrative(coach: CoachState): string {
-  if (coach.blockers.includes('injury')) return 'Injury active — follow your rehab plan and avoid impact load.';
-  if (coach.blockers.includes('illness')) return 'Illness active — full rest until symptoms clear for 48 hours.';
-  return coach.readiness.sentence;
+  return coach.primaryMessage;
 }
 
 // ─── SVG arc helpers ──────────────────────────────────────────────────────────

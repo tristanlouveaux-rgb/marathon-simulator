@@ -1257,7 +1257,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
       const steadySec = easyPaceSecPerKm && mpSec ? (easyPaceSecPerKm + mpSec) / 2 : 0;
       const steadyStr = steadySec ? fmtPace(steadySec) : 'steady pace';
 
-      const toMarathon = new Set(['vo2', 'intervals', 'threshold', 'race_pace', 'tempo', 'hill_repeats', 'mixed']);
+      const toMarathon = new Set(['vo2', 'intervals', 'threshold', 'race_pace', 'tempo', 'hill_repeats', 'mixed', 'float']);
       const toSteady = new Set(['marathon_pace', 'progressive']);
 
       // Extract main set from multi-line description (strip WU/CD)
@@ -1378,7 +1378,7 @@ export function applyInjuryAdaptations(workouts: Workout[], injuryState: InjuryS
 
       if (evaluatedState.currentPain >= 5) {
         return workouts.map(workout => {
-          if (['vo2', 'intervals', 'threshold', 'race_pace', 'hill_repeats'].includes(workout.t)) {
+          if (['vo2', 'intervals', 'threshold', 'race_pace', 'hill_repeats', 'float'].includes(workout.t)) {
             return {
               ...workout,
               t: 'cross',

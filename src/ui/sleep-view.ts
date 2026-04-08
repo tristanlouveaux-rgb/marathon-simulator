@@ -6,6 +6,7 @@
 
 import { getState } from '@/state';
 import type { PhysiologyDayEntry } from '@/types/state';
+import { TL_PER_MIN } from '@/constants';
 import {
   getSleepInsight,
   fmtSleepDuration,
@@ -14,9 +15,12 @@ import {
   stageQuality,
   getSleepBank,
   fmtSleepBank,
+  fmtNightlyShortfall,
   getStageInsight,
   deriveSleepTarget,
   buildSleepBankLineChart,
+  computeLoadAdjustedTarget,
+  computeSleepDebt,
 } from '@/calculations/sleep-insights';
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
@@ -153,9 +157,13 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const today  = new Date().toISOString().split('T')[0];
   const days7  = getLast7Days(today);
 
-  // Find entry for display date
+  // Find entry for display date.
+  // Only fall back to the most recent scored entry when viewing a past date.
+  // For today, show no data rather than silently mirroring yesterday's numbers.
   const withScores = physiologyHistory.filter(d => d.sleepScore != null);
-  const entry = physiologyHistory.find(d => d.date === displayDate) ?? withScores[withScores.length - 1] ?? null;
+  const exactEntry = physiologyHistory.find(d => d.date === displayDate) ?? null;
+  const entry = exactEntry ?? (displayDate !== today ? (withScores[withScores.length - 1] ?? null) : null);
+  const noDataForDate = exactEntry == null;
 
   const bigScore    = entry?.sleepScore != null ? Math.round(entry.sleepScore) : null;
   const scoreLabel  = bigScore != null ? sleepScoreLabel(bigScore) : null;
@@ -167,6 +175,15 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   // Context
   const ctx             = entry != null ? getSleepContext(physiologyHistory, entry) : null;
   const durationAvgStr  = ctx?.durationAvgSec ? fmtSleepDuration(ctx.durationAvgSec) : null;
+  const score7Days = physiologyHistory.slice(-7).filter(d => d.sleepScore != null);
+  const avgScore7  = score7Days.length >= 3
+    ? Math.round(score7Days.reduce((s, d) => s + d.sleepScore!, 0) / score7Days.length)
+    : null;
+
+  const avg30Days = physiologyHistory.slice(-30).filter(d => d.sleepDurationSec != null);
+  const avg30Str  = avg30Days.length >= 14
+    ? fmtSleepDuration(Math.round(avg30Days.reduce((s, d) => s + d.sleepDurationSec!, 0) / avg30Days.length))
+    : null;
   const durationTarget  = ctx?.durationVsTarget === 'optimal' ? 'In target range (7–9h)'
     : ctx?.durationVsTarget === 'short' ? 'Below target'
     : ctx?.durationVsTarget === 'long'  ? 'Above target'
@@ -204,17 +221,104 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS: wks.slice(-4).map((w: any) => w.actualTSS ?? 0) });
   const primaryInsight = stageInsight ?? generalInsight;
 
+  // Daily Signal B TSS by date — Signal B = raw physiological load, no runSpec discount.
+  // Two sources: garminActuals (matched runs) and adhocWorkouts (cross-training accepted by user).
+  // For activities without HR data, falls back to duration × TL_PER_MIN[rpe].
+  const dailyTSSByDate: Record<string, number> = {};
+  const state = getState();
+
+  for (const wk of (state.wks ?? [])) {
+    // Source 1: matched runs in garminActuals
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      const a = actual as any;
+      if (!a.startTime) continue;
+      const date = (a.startTime as string).split('T')[0];
+      const tss = (a.iTrimp != null && a.iTrimp > 0)
+        ? (a.iTrimp * 100) / 15000
+        : 0; // no RPE available on garminActuals — skip rather than guess
+      if (tss > 0) dailyTSSByDate[date] = (dailyTSSByDate[date] ?? 0) + tss;
+    }
+
+    // Source 2: cross-training accepted via activity review (stored as adhocWorkouts)
+    const seenGarminIds = new Set<string>();
+    for (const w of (wk.adhocWorkouts ?? [])) {
+      const wo = w as any;
+      if (!wo.id?.startsWith('garmin-')) continue;
+      const rawId = (wo.id as string).slice('garmin-'.length);
+      if (rawId && seenGarminIds.has(rawId)) continue;
+      if (rawId) seenGarminIds.add(rawId);
+      const date: string | null = wo.garminTimestamp ? (wo.garminTimestamp as string).split('T')[0] : null;
+      if (!date) continue;
+      // Signal B: no runSpec discount — physiological load counts regardless of sport
+      const tss = (wo.iTrimp != null && wo.iTrimp > 0)
+        ? (wo.iTrimp * 100) / 15000
+        : (wo.garminDurationMin != null && wo.rpe != null)
+          ? (wo.garminDurationMin as number) * (TL_PER_MIN[Math.round(wo.rpe as number)] ?? 1.15)
+          : 0;
+      if (tss > 0) dailyTSSByDate[date] = (dailyTSSByDate[date] ?? 0) + tss;
+    }
+  }
+
   // Sleep bank
-  const effectiveSleepTarget = getState().sleepTargetSec ?? deriveSleepTarget(physiologyHistory);
-  const bank        = getSleepBank(physiologyHistory, effectiveSleepTarget);
-  const bankStr     = bank.nightsWithData >= 3 ? fmtSleepBank(bank.bankSec) : null;
-  const bankTargetL = fmtSleepDuration(effectiveSleepTarget);
-  const bankColor   = bank.bankSec < -3600 ? '#FF9500' : bank.bankSec > 3600 ? '#34C759' : '#64748B';
-  const bankNights  = physiologyHistory
-    .slice(-14)
+  const effectiveSleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physiologyHistory);
+  const athleteTier           = state.athleteTier ?? 'recreational';
+  const hasEnoughHistory      = physiologyHistory.filter(d => d.sleepDurationSec != null).length >= 5;
+
+  // Yesterday's load-adjusted target (for transparency card)
+  const yesterday             = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayStr          = yesterday.toISOString().split('T')[0];
+  const yesterdayTSS          = dailyTSSByDate[yesterdayStr] ?? 0;
+  const lastNightTarget       = computeLoadAdjustedTarget(effectiveSleepTarget, yesterdayTSS, athleteTier);
+  const lastNightLoadBonus    = lastNightTarget - effectiveSleepTarget;
+
+  // Today's load bonus — heavy exercise today raises tonight's sleep target.
+  const todayTSS              = dailyTSSByDate[today] ?? 0;
+  const tonightLoadBonusSec   = computeLoadAdjustedTarget(effectiveSleepTarget, todayTSS, athleteTier) - effectiveSleepTarget;
+
+  const bank            = getSleepBank(physiologyHistory, effectiveSleepTarget);
+  const debtSec         = hasEnoughHistory ? computeSleepDebt(physiologyHistory, dailyTSSByDate, athleteTier, effectiveSleepTarget) : null;
+  const nightlyStr      = bank.nightsWithData >= 3 ? fmtNightlyShortfall(bank.avgNightlyShortfallSec) : null;
+  const bankTargetL     = fmtSleepDuration(effectiveSleepTarget);
+
+  // Headline: debt > 1h dominates over nightly average — they can tell contradictory stories.
+  // "On target" nightly avg + 2h debt is confusing; show the debt as the primary signal.
+  const debtDominates   = debtSec != null && debtSec > 3600;
+  const fmtDebt = (s: number): string => {
+    const h = Math.floor(s / 3600); const m = Math.floor((s % 3600) / 60);
+    return h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+  };
+  const bankHeadline    = debtDominates
+    ? fmtDebt(debtSec!)
+    : (nightlyStr ?? null);
+  const bankSubLabel    = debtDominates ? 'sleep debt' : null;
+  // Only show nightly-avg context when it adds information. "On target" contradicts a large debt
+  // (debt uses load-adjusted targets per night; avg uses the flat base — they diverge legitimately).
+  const bankNightlyCtx  = debtDominates && nightlyStr && nightlyStr !== 'On target' ? `7-night avg: ${nightlyStr}` : null;
+  // Recovery target: base + debt-scaled extension + quality bump if recent quality is poor.
+  // Debt bands from Walker/Van Dongen sleep extension research.
+  // Quality bump: poor quality (avg score < 65) means less restorative sleep → need more time.
+  // Bump is one band up, capped so it doesn't push the target past +60 min.
+  const poorQuality = avgScore7 != null && avgScore7 < 65;
+  const rawIncrementSec = debtSec == null ? 0
+    : debtSec < 5400  ? 1200   // < 1.5h debt  → +20 min
+    : debtSec < 10800 ? 1800   // 1.5–3h debt  → +30 min
+    : debtSec < 18000 ? 2700   // 3–5h debt    → +45 min
+    :                   3600;  // > 5h debt     → +60 min
+  // Poor quality bumps one band up (e.g. +30 min → +45 min), max +60 min
+  const recoveryIncrementSec = poorQuality
+    ? Math.min(rawIncrementSec === 1200 ? 1800 : rawIncrementSec === 1800 ? 2700 : rawIncrementSec === 2700 ? 3600 : 3600, 3600)
+    : rawIncrementSec;
+  const recoveryTargetSec  = effectiveSleepTarget + recoveryIncrementSec + tonightLoadBonusSec;
+  const recoveryTargetStr  = fmtSleepDuration(recoveryTargetSec);
+  const bankTotalStr    = !debtDominates && debtSec != null && debtSec > 900 ? fmtSleepBank(-debtSec) : null;
+  const bankColor       = debtDominates
+    ? (debtSec! > 7200 ? '#FF9500' : '#F59E0B')
+    : (bank.avgNightlyShortfallSec < -1800 ? '#FF9500' : bank.avgNightlyShortfallSec > 1800 ? '#34C759' : '#64748B');
+  const bankNights      = physiologyHistory
+    .slice(-7)
     .filter(d => d.sleepDurationSec != null)
     .map(d => ({ date: d.date, delta: d.sleepDurationSec! - effectiveSleepTarget }));
-  const bankChartHTML = bankNights.length >= 2
+  const bankChartHTML   = bankNights.length >= 2
     ? buildSleepBankLineChart(bankNights, bankColor, '#CBD5E1')
     : '';
 
@@ -352,67 +456,104 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
           </div>
         </div>
 
-        <!-- Duration + avg tiles -->
-        ${durationStr || durationAvgStr ? `
-        <div class="sl-fade" style="animation-delay:0.14s;display:flex;gap:10px;padding:0 16px;margin-bottom:14px">
-          ${durationStr ? `
-          <div style="flex:1;background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
-            <div style="font-size:11px;color:#94A3B8;margin-bottom:6px">Duration</div>
-            <div style="font-size:26px;font-weight:300;color:#0F172A;line-height:1">${durationStr}</div>
-            ${durationTarget ? `<div style="font-size:11px;color:${targetCol};margin-top:4px">${durationTarget}</div>` : ''}
-          </div>` : ''}
-          ${durationAvgStr ? `
-          <div style="flex:1;background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
-            <div style="font-size:11px;color:#94A3B8;margin-bottom:6px">7-night avg</div>
-            <div style="font-size:26px;font-weight:300;color:#0F172A;line-height:1">${durationAvgStr}</div>
-            <div style="font-size:11px;color:#94A3B8;margin-top:4px">per night</div>
-          </div>` : ''}
+        <!-- ── Last night ──────────────────────────────────────────────── -->
+
+        <!-- No data for today banner -->
+        ${noDataForDate && displayDate === today ? `
+        <div class="sl-fade" style="animation-delay:0.14s;margin:0 16px 10px;padding:12px 14px;border-radius:12px;border:1px solid rgba(148,163,184,0.3);background:white">
+          <p style="font-size:13px;font-weight:600;color:#0F172A;margin:0 0 4px">No sleep data yet for today</p>
+          <p style="font-size:12px;color:#64748B;margin:0;line-height:1.45">Open the Garmin Connect app and sync your device to pull in last night's data.</p>
         </div>` : ''}
 
         <!-- Stale banner -->
         ${isStale ? `
-        <div class="sl-fade" style="animation-delay:0.16s;margin:0 16px 14px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,149,0,0.25);background:white">
+        <div class="sl-fade" style="animation-delay:0.14s;margin:0 16px 10px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,149,0,0.25);background:white">
           <p style="font-size:12px;color:#FF9500;margin:0;line-height:1.4">Last synced ${latestFmt ?? ''}. Open Garmin Connect to update.</p>
+        </div>` : ''}
+
+        <!-- Duration tile -->
+        ${durationStr ? `
+        <div class="sl-fade" style="animation-delay:0.14s;padding:0 16px;margin-bottom:10px">
+          <div style="background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+            <div style="font-size:11px;color:#94A3B8;margin-bottom:6px">Last night</div>
+            <div style="font-size:26px;font-weight:300;color:#0F172A;line-height:1">${durationStr}</div>
+            ${durationTarget ? `<div style="font-size:11px;color:${targetCol};margin-top:4px">${durationTarget}</div>` : ''}
+          </div>
         </div>` : ''}
 
         <!-- Sleep stages -->
         ${hasStages ? `
-        <div class="sl-fade" style="animation-delay:0.20s;margin:0 16px 14px">
+        <div class="sl-fade" style="animation-delay:0.18s;margin:0 16px 14px">
           <div style="background:white;border-radius:20px;padding:18px 18px 4px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
             <div style="font-size:12px;color:#94A3B8;margin-bottom:14px">Sleep stages</div>
             ${stageRows}
           </div>
         </div>` : bigScore != null ? `
-        <div class="sl-fade" style="animation-delay:0.20s;margin:0 16px 14px;padding:12px 16px;background:white;border-radius:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        <div class="sl-fade" style="animation-delay:0.18s;margin:0 16px 14px;padding:12px 16px;background:white;border-radius:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
           <p style="font-size:12px;color:#94A3B8;margin:0">Stage breakdown not available. Garmin typically syncs within a few hours of waking.</p>
-        </div>` : `
-        <div style="padding:24px;text-align:center">
-          <div style="font-size:13px;color:#94A3B8">No sleep data. Garmin syncs within a few hours of waking.</div>
-        </div>`}
+        </div>` : ''}
 
-        <!-- Analysis card -->
+        <!-- ── Analysis ────────────────────────────────────────────────── -->
+
         ${primaryInsight ? `
-        <div class="sl-fade" style="animation-delay:0.24s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        <div class="sl-fade" style="animation-delay:0.22s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
           <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:6px">Analysis</div>
           <div style="font-size:13px;line-height:1.55;color:#64748B">${primaryInsight}</div>
         </div>` : ''}
 
-        <!-- 7-night trend -->
-        ${scoreTrendChart(physiologyHistory) ? `
-        <div class="sl-fade" style="animation-delay:0.28s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
-          <div style="font-size:12px;color:#94A3B8;margin-bottom:2px">Last 7 nights</div>
-          ${scoreTrendChart(physiologyHistory)}
+        <!-- ── Weekly summary ──────────────────────────────────────────── -->
+
+        <!-- 7-night + 30-day avg tiles -->
+        ${durationAvgStr || avg30Str ? `
+        <div class="sl-fade" style="animation-delay:0.26s;display:flex;gap:10px;padding:0 16px;margin-bottom:10px">
+          ${durationAvgStr ? `
+          <div style="flex:1;background:white;border-radius:20px;padding:14px 16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+            <div style="font-size:11px;color:#94A3B8;margin-bottom:5px">7-night avg</div>
+            <div style="font-size:22px;font-weight:300;color:#0F172A;line-height:1">${durationAvgStr}</div>
+            <div style="font-size:11px;color:#94A3B8;margin-top:3px">per night</div>
+            ${avgScore7 != null ? `<div style="font-size:11px;color:${scoreColor(avgScore7)};margin-top:4px;padding-top:4px;border-top:1px solid #F1F5F9">Score ${avgScore7}/100</div>` : ''}
+          </div>` : ''}
+          ${avg30Str ? `
+          <div style="flex:1;background:white;border-radius:20px;padding:14px 16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+            <div style="font-size:11px;color:#94A3B8;margin-bottom:5px">30-day avg</div>
+            <div style="font-size:22px;font-weight:300;color:#0F172A;line-height:1">${avg30Str}</div>
+            <div style="font-size:11px;color:#94A3B8;margin-top:3px">per night</div>
+          </div>` : ''}
         </div>` : ''}
 
+        <!-- ── Sleep debt ───────────────────────────────────────────────── -->
+
         <!-- Sleep bank -->
-        ${bankStr ? `
-        <div class="sl-fade" style="animation-delay:0.32s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        ${bankHeadline || !hasEnoughHistory ? `
+        <div class="sl-fade" style="animation-delay:0.30s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          ${!hasEnoughHistory ? `
+            <div style="font-size:12px;color:#94A3B8;margin-bottom:4px">Sleep target</div>
+            <div style="font-size:15px;font-weight:500;color:#1e293b">${bankTargetL}/night</div>
+            <div style="font-size:12px;color:#94A3B8;margin-top:4px">Personalises after 5 nights of data</div>
+          ` : `
           <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <div style="font-size:12px;color:#94A3B8">Sleep bank · last ${bank.nightsWithData} night${bank.nightsWithData === 1 ? '' : 's'}</div>
-            <div style="font-size:11px;color:#94A3B8">vs ${bankTargetL}/night</div>
+            <div style="font-size:${debtDominates ? '13px' : '12px'};font-weight:${debtDominates ? '600' : '400'};color:${debtDominates ? '#0F172A' : '#94A3B8'}">${debtDominates ? 'Tonight\'s target' : `7-night avg · vs ${bankTargetL} base`}</div>
+            <div style="font-size:11px;color:#94A3B8">${bank.nightsWithData} night${bank.nightsWithData === 1 ? '' : 's'}</div>
           </div>
-          <div style="font-size:28px;font-weight:300;color:${bankColor};margin-top:6px">${bankStr}</div>
+          <div style="font-size:${debtDominates ? '34px' : '28px'};font-weight:${debtDominates ? '400' : '300'};color:${debtDominates ? '#0F172A' : bankColor};margin-top:${debtDominates ? '4px' : '6px'}">${debtDominates ? recoveryTargetStr : bankHeadline}</div>
+          ${debtDominates ? `<div style="font-size:13px;color:#94A3B8;margin-top:1px">Base ${bankTargetL}${recoveryIncrementSec > 0 ? ` + ${Math.round(recoveryIncrementSec / 60)} min debt recovery` : ''}${tonightLoadBonusSec > 0 ? ` + ${Math.round(tonightLoadBonusSec / 60)} min from high exercise load` : ''}</div>` : (bankSubLabel ? `<div style="font-size:13px;color:${bankColor};margin-top:1px">${bankSubLabel}</div>` : '')}
+          ${debtDominates ? `<div style="font-size:12px;color:${bankColor};margin-top:8px;font-weight:500">${bankHeadline} sleep debt · ${bank.nightsWithData} nights</div>
+          <div style="font-size:11px;color:#94A3B8;margin-top:3px">Based on duration shortfall vs nightly target.${poorQuality ? ' Tonight\'s target raised — recent sleep quality is below average.' : ''}</div>` : ''}
+          ${bankNightlyCtx ? `<div style="font-size:12px;color:#94A3B8;margin-top:2px">${bankNightlyCtx}</div>` : ''}
+          ${bankTotalStr ? `<div style="font-size:12px;color:#94A3B8;margin-top:2px">Sleep debt: ${bankTotalStr}</div>` : ''}
           ${bankChartHTML}
+          ${!debtDominates ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #F1F5F9;font-size:11px;color:#94A3B8;line-height:1.6">
+            Last night target: ${fmtSleepDuration(lastNightTarget)}
+            ${lastNightLoadBonus > 300 ? ` · Base ${bankTargetL} + ${Math.round(lastNightLoadBonus / 60)} min load bonus (${Math.round(yesterdayTSS)} TSS)` : yesterdayTSS > 0 ? ` · Base ${bankTargetL} (${Math.round(yesterdayTSS)} TSS, load bonus &lt;5 min)` : ` · Base ${bankTargetL}, rest day`}
+          </div>` : ''}
+          `}
+        </div>` : ''}
+
+        <!-- 7-night score trend -->
+        ${scoreTrendChart(physiologyHistory) ? `
+        <div class="sl-fade" style="animation-delay:0.34s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="font-size:12px;color:#94A3B8;margin-bottom:2px">Last 7 nights</div>
+          ${scoreTrendChart(physiologyHistory)}
         </div>` : ''}
 
       </div>

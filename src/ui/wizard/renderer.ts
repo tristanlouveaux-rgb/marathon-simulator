@@ -158,6 +158,8 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       const s = getMutableState();
       s.hasCompletedOnboarding = true;
       saveState();
+      document.getElementById('onboarding-banner')?.remove();
+      document.getElementById('wizard-return-btn')?.remove();
       import('@/ui/main-view').then(({ renderMainView }) => {
         renderMainView();
       });
@@ -175,6 +177,8 @@ function transitionToMainView(): void {
   const s = getMutableState();
   s.hasCompletedOnboarding = true;
   saveState();
+  document.getElementById('onboarding-banner')?.remove();
+  document.getElementById('wizard-return-btn')?.remove();
   import('@/ui/main-view').then(({ renderMainView }) => {
     renderMainView();
   });

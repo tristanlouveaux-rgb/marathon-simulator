@@ -10,7 +10,7 @@ export interface RecoveryEntry {
   sleepScore: number;        // 0-100
   readiness?: number;        // 0-100 (Garmin)
   hrvStatus?: 'balanced' | 'low' | 'unbalanced' | 'strained';
-  source: 'garmin' | 'manual';
+  source: 'garmin' | 'apple' | 'manual';
 }
 
 export type RecoveryLevel = 'green' | 'yellow' | 'orange' | 'red';

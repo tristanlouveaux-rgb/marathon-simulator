@@ -105,6 +105,22 @@ Update the status column after running `npx vitest run`.
 
 ---
 
+### 8b. Float Workouts
+**What it does**: Adds float fartlek and float long run workouts to training plans for half-marathon and marathon distances. Float workouts use moderate-effort "float" recovery (at approximately marathon pace) instead of jogging between hard reps. This trains lactate clearance under sustained load, mimicking race-day metabolic demands.
+
+**Who gets them**: Half-marathon and marathon plans, build and peak phases only, intermediate ability band or above. Endurance-type runners get a 1.15x priority bias (they benefit most from practicing moderate-effort running). Speed-type runners get 0.90x (lower priority). Hybrid athletes qualify at intermediate level.
+
+**Formats**:
+- Float fartlek: hard reps at 10K effort with float recovery at MP (e.g. 6x3min @ 10K, 2min float @ MP). Four rotating variants.
+- Float long run (Balanced/Endurance marathon only): alternating MP and float segments over 24 to 28km.
+
+**Science**: Moderate-effort recovery trains MCT1/MCT4 lactate transporters (Brooks 2009). Sustained blood lactate at 2 to 3 mmol/L during float segments forces aerobic adaptation under mild acidosis. Marathon specificity: fractional VO2max utilisation correlates with performance (Coyle 2007). Canova's "special block" approach for elite marathon prep.
+
+**Key files**: `src/workouts/plan_engine.ts` (FLOAT_VARIANTS, floatWorkMinutes), `src/workouts/intent_to_workout.ts` (float case), `src/constants/workouts.ts` (library entries + load profile), `src/workouts/rules_engine.ts` (priority/bias/phase)
+**Tests**: `src/workouts/generator.test.ts` — ✅ Passing
+
+---
+
 ### 9. Workout Descriptions
 **What it does**: Formats each workout into a human-readable description. Interval sessions get multi-line format with warm-up, main set, and cool-down. Easy/long runs get a single-line distance + pace. Descriptions drive load calculation and pace display.
 
@@ -239,7 +255,9 @@ Update the status column after running `npx vitest run`.
 
 **How to test manually**: Log a high-intensity cross-training activity (e.g. 60min interval cycling with HR data). In the suggestion popup, check that the quality run (threshold/VO2) is ranked above easy runs in the candidate list. Console shows `[CrossTraining] Zone classification: ...` and the candidate similarity scores.
 
-**Key files**: `src/cross-training/suggester.ts`, `src/ui/suggestion-modal.ts`
+**Km floor nudge (plan-view card)**: When running km has been below the phase floor for 2+ weeks and ACWR is safe, a card shows at the top of the plan view. If cross-training reduced runs this week, the card explains the tension (load high, km low) and offers per-run buttons to partially restore reduced easy runs. Users choose which run to extend. Cap: never exceed original pre-reduction distance. Non-reduced easy runs can be extended up to 20% (1.5 to 5km). Gated by ACWR safe (injury prevention takes priority).
+
+**Key files**: `src/cross-training/suggester.ts`, `src/ui/suggestion-modal.ts`, `src/ui/plan-view.ts` (km nudge card)
 **Tests**: `src/cross-training/suggester.test.ts`, `src/cross-training/universalLoad.test.ts` (classifier tests), `src/cross-training/matcher.test.ts`, `src/cross-training/boxing-bug.test.ts`, `src/cross-training/km-budget.test.ts` — ✅ Passing
 
 ---
@@ -415,13 +433,15 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **Data source strategy** — two separate concerns:
 - **Activity source** (what happened): Strava if connected, otherwise Garmin webhook or Apple Watch
-- **Biometric source** (physiology — VO2max, LT, HRV, sleep, resting HR): always the wearable (Garmin or Apple Watch), independent of Strava
+- **Biometric source** (physiology — VO2max, LT, HRV, sleep, resting HR): always the wearable (Garmin or Apple Watch), independent of Strava. Source routing uses `connectedSources` state field with accessor functions in `src/data/sources.ts`.
 
-**Strava path** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. Activity IDs namespaced as `"strava-{id}"`. Garmin users who also have Strava use this path for activities AND get a Garmin physiology sync in parallel.
+**Strava path** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. Activity IDs namespaced as `"strava-{id}"`. Garmin users who also have Strava use this path for activities AND get a Garmin physiology sync in parallel. Apple Watch users who have Strava get Strava for activities AND HealthKit for physiology in parallel.
 
-**Garmin-only path** (`!s.stravaConnected`, `s.wearable === 'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook → Supabase `garmin_activities` table.
+**Garmin-only path** (`!s.stravaConnected`, physiology source `'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook → Supabase `garmin_activities` table.
 
-**Apple Watch path**: `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` on-device (iOS native only; no-op on web). Workout IDs namespaced as `"apple-…"` to prevent dedup collisions.
+**Apple Watch activity path**: `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` on-device (iOS native only; no-op on web). Workout IDs namespaced as `"apple-…"` to prevent dedup collisions.
+
+**Apple Watch physiology path** ✅: `syncAppleHealthPhysiology()` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. Converts to `PhysiologyDayEntry[]` and stores in `s.physiologyHistory`. Sleep score computed from stage breakdown (duration 55%, deep 25%, REM 20%). Runs on launch for Apple Watch users (both Apple-only and Strava+Apple Watch).
 
 **Week filtering**: Only activities within the current plan week (`planStartDate + (w-1)*7` to `+7`) are presented. Cross-week bleed from re-syncs is suppressed.
 
@@ -519,7 +539,7 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 
 **Opening screen** — four stacked sections, each card taps into a single-scroll detail page (no tabs inside detail pages):
 - **Progress card**: Race mode → horizontal arc/timeline (plan start → race day) + forecast finish badge + on-track pill. General fitness mode → tier progress bar showing % to next tier (Building/Foundation/Trained/Well-Trained/Performance/Elite based on CTL daily-equivalent)
-- **Fitness card**: Compact VDOT trend sparkline + current VDOT value + tier label; taps into Fitness detail
+- **Fitness card**: Compact VO2 Max sparkline + current value (device when available, VDOT fallback labelled "est.") + tier label; taps into Fitness detail
 - **Readiness card**: Single Freshness scale bar (gradient zones) with properly positioned floating marker at actual TSB value; taps into Readiness detail
 - **Summary** (flat, no tap-through): Race predictions (Marathon/Half/10K/5K from `vt()`) in race mode; Training paces (Easy/MP/Threshold/VO2max from `fp()`) in both modes
 
@@ -530,8 +550,8 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - CTL line chart (Signal A 42-day running fitness, same toggle)
 
 **Fitness detail page** (single scroll):
-- Scale bars: Running Fitness (CTL daily-equiv), Aerobic Capacity (VDOT), Lactate Threshold — all with ⓘ info buttons
-- VDOT trend line chart (8w/16w/all toggle)
+- Scale bars: Running Fitness (CTL daily-equiv), VO2 Max (device preferred, VDOT fallback), Lactate Threshold — all with ⓘ info buttons
+- VO2 Max trend line chart (8w/16w/all toggle)
 - Race forecast detail, Forecast times, Training paces
 
 **Readiness detail page** (single scroll):
@@ -644,35 +664,42 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - **Strain 100–130%** → score ≤ 59 (daily target hit)
 - **Strain > 130%** → score ≤ 39 (well exceeded target)
 
-**Strain Score** (second SVG ring, side-by-side with readiness ring):
+**Today's Strain Score** (ring label renamed from "Strain"):
 - Today's Signal B TSS ÷ day's target TSS × 100.
-- Target = today's planned workout TSS (estimated from RPE × TL_PER_MIN × duration). Falls back to `signalBBaseline ÷ 7` on rest days.
-- 100% = you've completed what was planned. > 100% = went beyond plan. < 100% = session in progress or rest day.
-- Colours: grey (0%) → amber (partial) → green (on target) → red (exceeded).
-- See `docs/strain.md` for full design spec and known gaps.
-- **Strain ring is now tappable** → opens `src/ui/strain-view.ts` (full-screen detail page).
+- Target = today's planned workout TSS (estimated from RPE × TL_PER_MIN × duration). On rest days (planned sessions = 0), target is 0 — no baseline fallback applied.
+- Rest day: ring shows "Rest day" in grey; if any activity logged, shows "X TSS logged" sub-label. No % on rest days.
+- 100% = you've completed what was planned. > 100% = went beyond plan. < 100% = session in progress.
+- Colours: grey (rest/0%) → amber (partial) → green (on target) → red (exceeded).
+- **Strain ring is tappable** → opens `src/ui/strain-view.ts` (full-screen detail page).
 
-**Strain detail page** (`src/ui/strain-view.ts`) — new iPhone-native design language:
-- Terracotta/orange gradient header with glowing orbs; animated SVG ring (orange gradient, 1.4s cubic-bezier animation).
-- Two stat cards: "7-day mins" and "7-day kCal", each with a rolling 7-day sparkline.
-- Factual coaching card (no emoji; rules-based text keyed to strainPct thresholds).
+**Strain detail page** (`src/ui/strain-view.ts`) — answers "What did I do today and how hard was it?":
+- Terracotta/orange gradient header with animated SVG ring (orange gradient, 1.4s cubic-bezier). Rest days show "Rest day" with grey ring.
+- 7-day week position bars: one row per day (Mon–Sun) of the current plan week. Each row shows day label, horizontal bar with actual TSS filled against planned TSS track, today highlighted in orange, future days show ghost track only.
 - Activity timeline for the selected date (from `garminActuals`); tapping a row opens a detail overlay (duration, HR, TSS, kCal).
+- Steps placeholder card: "Daily steps / — / Garmin steps coming soon".
 - Date picker: tapping the header date reveals a scrollable row of the last 7 days.
 - Info (`?`) button opens a strain explainer overlay (Signal B, thresholds table).
 - Back button returns to Home. No tab bar on this page (iPhone sub-page pattern).
 
-**Sentence logic**: Strain overrides the TSB/ACWR matrix sentence when the session is done. Strain ≥ 130% → "Daily load exceeded target. Additional training today raises injury risk." Strain ≥ 100% → "Daily target hit. Training is complete for today." Any training logged (strain > 0%) → "Session logged. Rest for the remainder of the day." No training → TSB/ACWR matrix sentence.
+**Sentence logic**: A single `primaryMessage` from `computeDailyCoach()` replaces the old separate readiness sentence + HRV banner. Priority chain: injury/illness blockers → strain complete/exceeded → ACWR spike → combined sleep + HRV → poor sleep → deep HRV drop → sleep debt → ACWR caution → moderate sleep/HRV → recovery driving signal → recent cross-training → session in progress → taper phase → HRV elevated → positive conditions (fresh/safe/good recovery with workout-aware copy) → CTL trend → week RPE → TSB/ACWR matrix fallback. Every tier produces workout-aware copy (references today's planned session name, hard vs easy).
 
-**Score → label**: 80–100 Ready to Push (green) · 60–79 On Track (blue) · 40–59 Manage Load (amber) · 0–39 Ease Back (red)
+**Score → label**: 80–100 Ready to Push (green) · 60–79 On Track (blue) · 40–59 Manage Load (amber) · 0–39 Ease Back (red). When ACWR > 1.5 hard floor is active, label overrides to **Overreaching** (red).
 
-**Tap behaviour**: First tap expands sub-metric pills. Second tap triggers action — injury modal if injured, ACWR reduction if elevated, or Stats tab if all clear.
+**Home layout (triangle)**: Readiness ring top-centre (120px, larger), Sleep + Strain rings side by side below (100px each). Tapping Readiness ring opens `readiness-view.ts`. Tapping Sleep opens `sleep-view.ts`. Tapping Strain opens `strain-view.ts`. The Freshness/Load Ratio/Recovery pill row has been moved off the home page into `readiness-view.ts`.
+
+**Adjust button**: Shown below the sentence when readiness ≤ 59. Text varies by driving signal (Swap to easy run / Reduce session load / Take it lighter today / Keep consistency).
+
+**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active), and sub-signal cards: Freshness (TSB daily-equivalent + zone + hours countdown pill), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
 
 **No Jargon Policy**: ATL/CTL/TSB/ACWR never shown in user-facing copy. Info sheets use both: "Running Fitness (CTL)", "Freshness (TSB)", etc.
 
 **Key files**:
 - `src/calculations/readiness.ts` — `computeReadiness()`, `readinessColor()`, `drivingSignalLabel()`
+- `src/calculations/daily-coach.ts` — `computeDailyCoach()`, `derivePrimaryMessage()` (unified sentence logic)
 - `src/calculations/fitness-model.ts` — `computeTodaySignalBTSS()`, `computePlannedDaySignalBTSS()`
-- `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handler
+- `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handlers
+- `src/ui/readiness-view.ts` — Readiness detail page (new)
+- `src/ui/rolling-load-view.ts` — Rolling Load detail page: 28-day angular chart + 7-day activity breakdown
 - `docs/strain.md` — strain design doc + gap register
 
 **Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios. ⚠️ No tests yet for `computeTodaySignalBTSS` or `computePlannedDaySignalBTSS`.

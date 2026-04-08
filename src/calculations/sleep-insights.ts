@@ -263,18 +263,24 @@ export function stageQuality(stage: SleepStage, pct: number): StageQuality {
 // ─── Sleep Bank ───────────────────────────────────────────────────────────────
 
 export interface SleepBankResult {
-  /** Sum of (actual_sleep − sleep_need) for last 14 nights. Negative = deficit. */
+  /** Sum of (actual_sleep − sleep_need) for last 7 nights. Negative = deficit. */
   bankSec: number;
-  /** Number of nights with duration data in the 14-night window. */
+  /** Average per-night shortfall: bankSec / nightsWithData. Negative = under target. */
+  avgNightlyShortfallSec: number;
+  /** Number of nights with duration data in the 7-night window. */
   nightsWithData: number;
 }
 
+/** Science-backed floor and ceiling for the base sleep target. */
+const SLEEP_TARGET_FLOOR_SEC = 7 * 3600;   // 7h — below this, measurable cognitive impairment (Van Dongen)
+const SLEEP_TARGET_CEIL_SEC  = 8 * 3600;   // 8h — above this, diminishing returns for most adults (Walker/NIH)
+
 /** Fallback target when not enough history to derive a personal target. */
-const DEFAULT_SLEEP_NEED_SEC = 7 * 3600; // 7h
+const DEFAULT_SLEEP_NEED_SEC = SLEEP_TARGET_FLOOR_SEC;
 
 /**
- * Derive a personalised sleep target from the 75th percentile of the last 30 nights.
- * Requires at least 5 nights of data; falls back to 7h otherwise.
+ * Derive a personalised base sleep target from the 65th percentile of the last 30 nights,
+ * clamped to [7h, 8h]. Requires at least 5 nights of data; falls back to 7h otherwise.
  * Filters out entries shorter than 1h (likely bad data or naps).
  */
 export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
@@ -284,22 +290,124 @@ export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
     .map(d => d.sleepDurationSec!);
   if (durs.length < 5) return DEFAULT_SLEEP_NEED_SEC;
   const sorted = [...durs].sort((a, b) => a - b);
-  const idx = Math.floor(sorted.length * 0.75);
-  return sorted[idx];
+  const idx = Math.floor(sorted.length * 0.65);
+  const pct65 = sorted[idx];
+  return Math.max(SLEEP_TARGET_FLOOR_SEC, Math.min(SLEEP_TARGET_CEIL_SEC, pct65));
+}
+
+// ─── Load-adjusted nightly target ────────────────────────────────────────────
+
+/** Minutes of additional sleep per TSS point (k = 0.25 min/TSS). */
+const LOAD_BONUS_K_SEC = 0.25 * 60; // 15 seconds per TSS point
+
+/** Maximum load bonus in seconds, by athlete tier. */
+const TIER_LOAD_CAPS_SEC: Record<string, number> = {
+  beginner:     20 * 60,
+  recreational: 30 * 60,
+  trained:      40 * 60,
+  performance:  50 * 60,
+  high_volume:  60 * 60,
+};
+
+/**
+ * Compute the load-adjusted sleep target for a single night.
+ * base + min(yesterdayTSS × 0.25min, tier cap).
+ * Maximum possible target: 8h base + 60min cap = 9h (high_volume only).
+ */
+export function computeLoadAdjustedTarget(
+  baseSec: number,
+  yesterdayTSS: number,
+  athleteTier: string,
+): number {
+  const cap = TIER_LOAD_CAPS_SEC[athleteTier] ?? TIER_LOAD_CAPS_SEC.recreational;
+  const bonus = Math.min(yesterdayTSS * LOAD_BONUS_K_SEC, cap);
+  return Math.round(baseSec + bonus);
+}
+
+// ─── Exponential sleep debt ───────────────────────────────────────────────────
+
+/**
+ * Exponential decay constant for sleep debt — 4-day half-life.
+ * Same maths as ATL in the Banister model.
+ * After 4 days of full sleep, residual debt ~50%. After 8 days, ~25%.
+ */
+const DEBT_DECAY = Math.exp(-Math.LN2 / 4);
+
+/**
+ * Sleep quality multiplier based on REM and deep stage proportions.
+ *
+ * Science basis:
+ *  - REM target 22% (Walker/NIH midpoint of 20–25% normal range).
+ *    REM deprivation studies (Dijk/Czeisler) show ~40% impairment at severe deficit.
+ *    Weight: 60% — dominates because REM drives cognitive + central fatigue recovery.
+ *  - Deep (SWS) target 18% (Hausswirth et al. — higher for athletes post-load vs 13–23% pop. range).
+ *    Weight: 40% — physical repair, HGH, immune function.
+ *  - Floor 0.60: Van Dongen worst-case impairment ~40%; below 60% effective is implausible.
+ *  - Ceiling 1.10: excellent stages can slightly offset shorter duration but capped conservatively.
+ *
+ * Returns null when stage data is absent — caller falls back to raw duration.
+ */
+export function sleepQualityMultiplier(entry: PhysiologyDayEntry): number | null {
+  const { sleepDurationSec, sleepRemSec, sleepDeepSec } = entry;
+  if (!sleepDurationSec || sleepDurationSec === 0) return null;
+  if (sleepRemSec == null || sleepDeepSec == null) return null;
+
+  const remPct  = sleepRemSec  / sleepDurationSec;
+  const deepPct = sleepDeepSec / sleepDurationSec;
+
+  const REM_TARGET  = 0.22;
+  const DEEP_TARGET = 0.18;
+
+  const remRatio  = Math.min(remPct  / REM_TARGET,  1.15);
+  const deepRatio = Math.min(deepPct / DEEP_TARGET, 1.15);
+
+  const quality = 0.60 * remRatio + 0.40 * deepRatio;
+  return Math.max(0.60, Math.min(1.10, quality));
 }
 
 /**
- * 14-night rolling sleep bank: sum of (actual_sleep − sleep_need) for recent nights.
+ * Compute accumulated sleep debt via exponential decay (4-day half-life).
+ * Debt builds when actual sleep < load-adjusted target; decays each day.
+ * Forward-only: starts at 0 and builds from available physiologyHistory.
+ * dailyTSSByDate: Record<YYYY-MM-DD, Signal B TSS> — computed from garminActuals.
+ */
+export function computeSleepDebt(
+  history: PhysiologyDayEntry[],
+  dailyTSSByDate: Record<string, number>,
+  athleteTier: string,
+  baseSleepNeedSec?: number,
+): number {
+  const base = baseSleepNeedSec ?? DEFAULT_SLEEP_NEED_SEC;
+  // Ensure oldest-first — decay weights depend on correct chronological order.
+  const sorted = [...history].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  let debt = 0;
+  for (const entry of sorted) {
+    debt *= DEBT_DECAY;
+    if (entry.sleepDurationSec == null) continue;
+    const tss = dailyTSSByDate[entry.date] ?? 0;
+    const target = computeLoadAdjustedTarget(base, tss, athleteTier);
+    // Debt is duration-based only — quality is used separately to adjust tonight's target.
+    // Applying quality as a multiplier here causes compounding that produces unrealistic totals.
+    const shortfall = Math.max(0, target - entry.sleepDurationSec);
+    debt += shortfall;
+  }
+  return Math.round(debt);
+}
+
+/**
+ * 7-night rolling sleep bank: sum of (actual_sleep − sleep_need) for recent nights.
  * Negative = deficit (cumulative under-sleeping), positive = surplus.
+ * Matches Oura/Eight Sleep standard of a 7-night window.
  */
 export function getSleepBank(
   history: PhysiologyDayEntry[],
   sleepNeedSec = DEFAULT_SLEEP_NEED_SEC,
 ): SleepBankResult {
-  const recent = history.slice(-14).filter(d => d.sleepDurationSec != null);
-  if (recent.length === 0) return { bankSec: 0, nightsWithData: 0 };
+  const recent = history.slice(-7).filter(d => d.sleepDurationSec != null);
+  if (recent.length === 0) return { bankSec: 0, avgNightlyShortfallSec: 0, nightsWithData: 0 };
   const bankSec = recent.reduce((sum, d) => sum + (d.sleepDurationSec! - sleepNeedSec), 0);
-  return { bankSec: Math.round(bankSec), nightsWithData: recent.length };
+  const avgNightlyShortfallSec = Math.round(bankSec / recent.length);
+  return { bankSec: Math.round(bankSec), avgNightlyShortfallSec, nightsWithData: recent.length };
 }
 
 /**
@@ -313,6 +421,19 @@ export function fmtSleepBank(bankSec: number): string {
   const m = Math.floor((abs % 3600) / 60);
   const durStr = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
   return bankSec < 0 ? `${durStr} deficit` : `${durStr} surplus`;
+}
+
+/**
+ * Format average nightly shortfall as "52 min short/night", "18 min extra/night", or "On target".
+ * Within ±10 minutes is treated as on target.
+ */
+export function fmtNightlyShortfall(avgShortfallSec: number): string {
+  if (Math.abs(avgShortfallSec) < 600) return 'On target';
+  const abs = Math.abs(avgShortfallSec);
+  const h = Math.floor(abs / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const durStr = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+  return avgShortfallSec < 0 ? `${durStr} short/night` : `${durStr} extra/night`;
 }
 
 // ─── Sleep bank line chart ────────────────────────────────────────────────────
@@ -364,16 +485,43 @@ export function buildSleepBankLineChart(
     return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${dimColor};top:0">${day}</span>`;
   }).join('');
 
+  // Y-axis delta labels (±Xm relative to target)
+  const fmtDeltaLabel = (sec: number): string => {
+    const abs = Math.abs(Math.round(sec / 60));
+    if (abs < 5) return 'target';
+    const h = Math.floor(abs / 60); const m = abs % 60;
+    const s = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
+    return (sec >= 0 ? '+' : '\u2212') + s;
+  };
+  // Clamp % positions so labels don't fall outside the SVG container
+  const clampPct = (v: number) => Math.max(5, Math.min(95, v));
+  const topLabelPct  = clampPct(yOf(dataMax) / H * 100).toFixed(1);
+  const zeroLabelPct = clampPct(zeroY / H * 100).toFixed(1);
+  const botLabelPct  = clampPct(yOf(dataMin) / H * 100).toFixed(1);
+  // Suppress top/bot label if too close to zero line (would overlap)
+  const topFarEnough = Math.abs(yOf(dataMax) - zeroY) > 12;
+  const botFarEnough = Math.abs(yOf(dataMin) - zeroY) > 12;
+  // Labels sit in the 40px right-padding zone so they never overlap the line
+  const labelStyle = `position:absolute;right:0;font-size:9px;color:${dimColor};transform:translateY(-50%);line-height:1;white-space:nowrap`;
+  const yAxisHTML = `
+    ${topFarEnough ? `<div style="${labelStyle};top:${topLabelPct}%">${fmtDeltaLabel(dataMax)}</div>` : ''}
+    <div style="${labelStyle};top:${zeroLabelPct}%">target</div>
+    ${botFarEnough ? `<div style="${labelStyle};top:${botLabelPct}%">${fmtDeltaLabel(dataMin)}</div>` : ''}
+  `;
+
   return `
     <div style="position:relative;margin-top:12px">
-      <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-        <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}"
-          stroke="rgba(255,255,255,0.20)" stroke-width="1" stroke-dasharray="4 3"/>
-        <path d="${lineD}" fill="none" stroke="${lineColor}"
-          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-        <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.5"
-          fill="${lineColor}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/>
-      </svg>
+      <div style="position:relative;padding-right:44px">
+        <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+          <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}"
+            stroke="rgba(255,255,255,0.20)" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="${lineD}" fill="none" stroke="${lineColor}"
+            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.5"
+            fill="${lineColor}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/>
+        </svg>
+        ${yAxisHTML}
+      </div>
       <div style="position:relative;height:16px;margin-top:2px">${dayLabels}</div>
     </div>`;
 }

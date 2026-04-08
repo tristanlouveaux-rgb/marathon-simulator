@@ -31,6 +31,9 @@ export interface GarminActivityRow {
   iTrimp?: number | null;
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
   hrDrift?: number | null;
+  polyline?: string | null;
+  kmSplits?: number[] | null;
+  elevationGainM?: number | null;
 }
 
 /** Map Garmin activity type to app activity type */
@@ -132,6 +135,7 @@ function getTargetPace(
     case 'easy': case 'long': return paces.e;
     case 'threshold': case 'tempo': return paces.t;
     case 'marathon_pace': return paces.m;
+    case 'float': return paces.m; // session average: hard reps at 10K + float recovery at MP ≈ MP
     case 'vo2': case 'intervals': return paces.i;
     case 'race_pace': return paces.t; // close approximation
     case 'progressive': return (paces.e + paces.t) / 2; // midpoint
@@ -161,7 +165,7 @@ export function computePaceAdherence(
 /** Is this a quality workout type where pace matters significantly? */
 export function isQualityType(workoutType: string | null | undefined): boolean {
   if (!workoutType) return false;
-  return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive'].includes(workoutType);
+  return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive', 'float'].includes(workoutType);
 }
 
 /**
@@ -544,6 +548,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     let runAutoCompletions = 0;
 
     for (const row of weekRows) {
+      // Skip activities already fully processed (matched to a plan slot or logged as adhoc).
+      // '__pending__' is not a final state — those are re-tried on each sync.
+      const existingMatch = wk.garminMatched![row.garmin_id];
+      if (existingMatch && existingMatch !== '__pending__') continue;
+
       const appType = mapGarminType(row.activity_type);
 
       if (appType !== 'run') {
@@ -565,6 +574,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             startTime: row.start_time,
             durationSec: row.duration_sec,
             distanceM: row.distance_m ?? null,
+            avgPaceSecKm: row.avg_pace_sec_km ?? null,
             avgHR: row.avg_hr ?? null,
             maxHR: row.max_hr ?? null,
             aerobicEffect: row.aerobic_effect ?? null,
@@ -573,6 +583,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             calories: row.calories ?? null,
             iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
             hrZones: row.hrZones ?? null,
+            polyline: row.polyline ?? null,
+            kmSplits: row.kmSplits ?? null,
           };
           if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
             wk.garminPending!.push(item);
@@ -624,6 +636,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           paceAdherence: getPaceAdherence(row.avg_pace_sec_km, match.matchedWorkout?.t, s),
           hrDrift: row.hrDrift ?? null,
           plannedDistanceKm: match.matchedWorkout?.d ? (parseDistanceKm(match.matchedWorkout.d) || null) : null,
+          elevationGainM: row.elevationGainM ?? null,
         };
         wk.garminActuals[match.workoutId] = actual;
 
@@ -682,6 +695,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           startTime: row.start_time,
           durationSec: row.duration_sec,
           distanceM: row.distance_m ?? null,
+          avgPaceSecKm: row.avg_pace_sec_km ?? null,
           avgHR: row.avg_hr ?? null,
           maxHR: row.max_hr ?? null,
           aerobicEffect: row.aerobic_effect ?? null,
@@ -690,6 +704,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           calories: row.calories ?? null,
           iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
           hrZones: row.hrZones ?? null,
+          polyline: row.polyline ?? null,
+          kmSplits: row.kmSplits ?? null,
         };
         if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
           wk.garminPending!.push(pendingItem);
@@ -718,6 +734,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             startTime: row.start_time,
             durationSec: row.duration_sec,
             distanceM: row.distance_m ?? null,
+            avgPaceSecKm: row.avg_pace_sec_km ?? null,
             avgHR: row.avg_hr ?? null,
             maxHR: row.max_hr ?? null,
             aerobicEffect: row.aerobic_effect ?? null,
@@ -726,6 +743,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             calories: row.calories ?? null,
             iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
             hrZones: row.hrZones ?? null,
+            polyline: row.polyline ?? null,
+            kmSplits: row.kmSplits ?? null,
           };
           if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
             wk.garminPending!.push(item);
@@ -846,6 +865,8 @@ export function mapAppTypeToSport(appType: string): string {
 /** Add a Garmin activity as an ad-hoc workout visible in the Garmin section */
 function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: string, rpe: number): void {
   if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+  // Avoid duplicates on re-sync
+  if (wk.adhocWorkouts.some(w => w.id === id)) return;
 
   const distKm = (row.distance_m ?? 0) / 1000;
   const durationMin = Math.round(row.duration_sec / 60);
@@ -888,6 +909,46 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
  * Add an ad-hoc Garmin workout from a GarminPendingItem.
  * Called by activitySync after the user decides 'keep' in the suggestion modal.
  */
+/**
+ * Startup healing pass: for any garminActual that has avgHR but null iTrimp,
+ * recompute iTrimp from the current profile restingHR + maxHR.
+ * This avoids requiring a full re-sync when profile HR values were missing at
+ * the time the activity was first processed.
+ * Returns true if any actuals were updated (so callers can save state).
+ */
+export function healMissingITrimp(): boolean {
+  const s = getMutableState();
+  if (!s.restingHR || !s.maxHR) return false;
+  const sex = s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
+  let changed = false;
+  for (const wk of s.wks ?? []) {
+    // Heal garminActuals (auto-matched or user-reviewed matched activities)
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      if (actual.iTrimp != null && actual.iTrimp > 0) continue;
+      if (!actual.avgHR || !actual.durationSec) continue;
+      const computed = calculateITrimpFromSummary(actual.avgHR, actual.durationSec, s.restingHR, s.maxHR, sex);
+      if (computed != null && computed > 0) {
+        actual.iTrimp = computed;
+        changed = true;
+      }
+    }
+    // Heal adhoc workouts (unmatched pending items accepted by user)
+    for (const w of wk.adhocWorkouts ?? []) {
+      const wa = w as any;
+      if (wa.iTrimp != null && wa.iTrimp > 0) continue;
+      const avgHR: number | null = wa.garminAvgHR ?? null;
+      const durationSec: number = (wa.garminDurationMin ?? 0) * 60;
+      if (!avgHR || !durationSec) continue;
+      const computed = calculateITrimpFromSummary(avgHR, durationSec, s.restingHR, s.maxHR, sex);
+      if (computed != null && computed > 0) {
+        wa.iTrimp = computed;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id: string, rpe: number): void {
   if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
   // Avoid duplicates
@@ -917,8 +978,13 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   (workout as any).garminDistKm = distKm;
   (workout as any).garminDurationMin = durationMin;
   (workout as any).garminAvgHR = item.avgHR ?? null;
+  (workout as any).garminMaxHR = item.maxHR ?? null;
   (workout as any).garminCalories = item.calories ?? null;
   (workout as any).garminAvgPace = null; // pending items don't have avg pace
+  (workout as any).iTrimp = item.iTrimp ?? null;
+  (workout as any).hrZones = item.hrZones ?? null;
+  (workout as any).polyline = item.polyline ?? null;
+  (workout as any).kmSplits = item.kmSplits ?? null;
   wk.adhocWorkouts.push(workout);
 
   // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)

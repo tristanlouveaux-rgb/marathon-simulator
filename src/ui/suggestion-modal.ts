@@ -44,13 +44,15 @@ export interface ACWRModalContext {
  * Show the suggestion popup modal with 3 global choices.
  * When acwrContext is provided, an ACWR explanation header is rendered at the top.
  * When crossTrainingCtx is provided, a sport/effort header is rendered below ACWR context.
+ * When onPushToNextWeek is provided, a "Push to next week" button is shown between Reduce and Keep Plan.
  */
 export function showSuggestionModal(
   popup: SuggestionPopup,
   sportName: string,
   onComplete: (decision: SuggestionDecision | null) => void,
   acwrContext?: ACWRModalContext,
-  crossTrainingCtx?: CrossTrainingModalContext
+  crossTrainingCtx?: CrossTrainingModalContext,
+  onPushToNextWeek?: () => void,
 ): void {
   const unitPref = getState().unitPref ?? 'km';
   const severityStyles = {
@@ -419,6 +421,16 @@ export function showSuggestionModal(
         </button>
         ` : ''}
 
+        <!-- PUSH TO NEXT WEEK option (only shown when callback provided) -->
+        ${onPushToNextWeek ? `
+        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;border:1.5px solid var(--c-border-strong);background:var(--c-bg);cursor:pointer">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <span style="font-weight:700;color:var(--c-black);font-size:16px">Push to next week</span>
+          </div>
+          <p style="color:var(--c-muted);font-size:13px">Keep this week unchanged. The excess load carries to next week.</p>
+        </button>
+        ` : ''}
+
         <!-- KEEP option -->
         <button id="choice-keep" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
@@ -478,9 +490,11 @@ export function showSuggestionModal(
     if (e.target === overlay) close(null, []);
   });
 
-  // CRITICAL: Prevent clicks on <details>/<summary> from bubbling to parent button.
-  overlay.querySelectorAll('details').forEach(details => {
-    details.addEventListener('click', (e) => {
+  // Prevent the <summary> toggle click from bubbling to the parent choice button.
+  // Only block the summary toggle itself — clicks on expanded content should
+  // still reach the button so the user can select the option by clicking anywhere on the card.
+  overlay.querySelectorAll('details summary').forEach(summary => {
+    summary.addEventListener('click', (e) => {
       e.stopPropagation();
     });
   });
@@ -491,6 +505,11 @@ export function showSuggestionModal(
   });
   overlay.querySelector('#choice-log-load-only')?.addEventListener('click', () => {
     close('keep', []);
+  });
+
+  overlay.querySelector('#choice-push-next-week')?.addEventListener('click', () => {
+    close(null, []);
+    onPushToNextWeek?.();
   });
 
   overlay.querySelector('#choice-replace')?.addEventListener('click', () => {

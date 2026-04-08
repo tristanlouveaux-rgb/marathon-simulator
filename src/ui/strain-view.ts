@@ -10,8 +10,11 @@ import {
   computeTodaySignalBTSS,
   computePlannedDaySignalBTSS,
   getTrailingEffortScore,
+  estimateWorkoutDurMin,
 } from '@/calculations/fitness-model';
+import { TL_PER_MIN } from '@/constants';
 import { generateWeekWorkouts } from '@/workouts';
+import { isTimingMod } from '@/cross-training/timing-check';
 import { formatActivityType } from '@/calculations/activity-matcher';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
@@ -28,6 +31,20 @@ const RING_CIRC = +(2 * Math.PI * RING_R).toFixed(2); // ≈ 358.14
 function weekIdxForDate(date: string, planStartDate: string): number {
   const ms = new Date(date + 'T12:00:00').getTime() - new Date(planStartDate + 'T12:00:00').getTime();
   return Math.max(0, Math.floor(ms / (7 * 24 * 3600 * 1000)));
+}
+
+/** Resolve the correct week index, trusting s.w for dates in the current plan week.
+ *  weekIdxForDate can disagree with s.w when planStartDate doesn't align with Monday. */
+function resolveWkIdx(date: string, s: SimulatorState): number {
+  if (!s.planStartDate) return s.w - 1;
+  // Current plan week date range (authoritative, from s.w)
+  const startD = new Date(s.planStartDate + 'T12:00:00');
+  startD.setDate(startD.getDate() + (s.w - 1) * 7);
+  const endD = new Date(startD);
+  endD.setDate(endD.getDate() + 6);
+  const dateMs = new Date(date + 'T12:00:00').getTime();
+  if (dateMs >= startD.getTime() && dateMs <= endD.getTime()) return s.w - 1;
+  return weekIdxForDate(date, s.planStartDate);
 }
 
 function fmtDateLong(date: string): string {
@@ -62,9 +79,39 @@ function fmtDurMin(durationSec: number): string {
 
 function activitiesForDate(date: string, wks: Week[]): GarminActual[] {
   const out: GarminActual[] = [];
+  const seenGarminIds = new Set<string>();
+
   for (const wk of wks) {
+    // Plan-matched actuals
     for (const a of Object.values(wk.garminActuals ?? {})) {
-      if (a.startTime?.startsWith(date)) out.push(a);
+      if (!a.startTime?.startsWith(date)) continue;
+      if (a.garminId) {
+        if (seenGarminIds.has(a.garminId)) continue;
+        seenGarminIds.add(a.garminId);
+      }
+      out.push(a);
+    }
+    // Garmin-prefixed adhoc workouts (unmatched / log-only activities)
+    for (const w of wk.adhocWorkouts ?? []) {
+      const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
+      if (!rawId) continue;
+      const ts = (w as any).garminTimestamp as string | undefined;
+      if (!ts?.startsWith(date)) continue;
+      if (seenGarminIds.has(rawId)) continue;
+      seenGarminIds.add(rawId);
+      out.push({
+        garminId: rawId,
+        startTime: ts ?? null,
+        distanceKm: (w as any).garminDistKm ?? 0,
+        durationSec: Math.round(((w as any).garminDurationMin ?? 0) * 60),
+        avgPaceSecKm: null,
+        avgHR: (w as any).garminAvgHR ?? null,
+        maxHR: (w as any).garminMaxHR ?? null,
+        calories: (w as any).garminCalories ?? null,
+        iTrimp: (w as any).iTrimp ?? null,
+        displayName: w.n,
+        activityType: (w as any).activityType ?? null,
+      } as GarminActual);
     }
   }
   return out;
@@ -106,50 +153,108 @@ function getLast7Days(today: string, s: SimulatorState): DayData[] {
   return days;
 }
 
+// Rest-day overreach threshold: 33% of average training-day TSS.
+// Based on Whoop's ~33% recovery-day cap, Seiler's polarised model (Zone 1 recovery
+// sessions ≈ 25-35% of a hard session), and TrainingPeaks rest-day TSS guidance.
+const REST_DAY_OVERREACH_RATIO = 0.33;
+
 function getStrainForDate(
   date: string,
   s: SimulatorState,
-): { strainPct: number; actualTSS: number; targetTSS: number } {
+): { strainPct: number; adhocPct: number; actualTSS: number; targetTSS: number; isRestDay: boolean; plannedDayTSS: number; isOverreaching: boolean; matchedActivityDay: boolean } {
   const today = new Date().toISOString().split('T')[0];
   const isToday = date === today;
   const wks = s.wks ?? [];
 
   // Actual Signal B TSS
   let actualTSS = 0;
+  const wkIdx = resolveWkIdx(date, s);
   if (s.planStartDate) {
-    const wk = wks[weekIdxForDate(date, s.planStartDate)];
+    const wk = wks[wkIdx];
     if (wk) actualTSS = computeTodaySignalBTSS(wk, date);
   } else {
     const acts = activitiesForDate(date, wks);
     actualTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / 15000 : sum, 0);
   }
 
-  // Target TSS
-  let targetTSS: number;
-  if (isToday) {
-    // Use today's planned workout TSS (same logic as home-view buildReadinessRing)
-    const wk = wks[s.w - 1];
-    if (wk) {
-      const dayOfWeek = (new Date(date + 'T12:00:00').getDay() + 6) % 7;
-      const plannedWorkouts = generateWeekWorkouts(
-        wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-        null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-        s.w, s.tw, s.v, s.gs, getTrailingEffortScore(wks, s.w), wk.scheduledAcwrStatus,
-      );
-      const plannedDay = computePlannedDaySignalBTSS(plannedWorkouts, dayOfWeek);
-      targetTSS = plannedDay > 0 ? plannedDay : Math.max((s.signalBBaseline ?? 0) / 7, 1);
-    } else {
-      targetTSS = Math.max((s.signalBBaseline ?? 0) / 7, 1);
+  // Target TSS — use planned session TSS only. No baseline fallback (rest days have target 0).
+  const dayOfWeek = (new Date(date + 'T12:00:00').getDay() + 6) % 7;
+  let plannedDayTSS = 0;
+  const wkForPlan = wks[wkIdx];
+  let plannedWorkouts: any[] = [];
+  if (wkForPlan) {
+    const viewWeek = wkIdx + 1;
+    plannedWorkouts = generateWeekWorkouts(
+      wkForPlan.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+      null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
+      viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wkForPlan.scheduledAcwrStatus,
+    );
+    // Apply day moves so planned TSS matches what the plan view shows
+    if (wkForPlan.workoutMoves) {
+      for (const [workoutId, newDay] of Object.entries(wkForPlan.workoutMoves)) {
+        const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
+        if (w) (w as any).dayOfWeek = newDay;
+      }
     }
-  } else {
-    // Historical — compare against daily baseline
-    targetTSS = Math.max((s.signalBBaseline ?? 0) / 7, 1);
+    // Apply distance/type/RPE mods so TSS matches plan card
+    if (wkForPlan.workoutMods) {
+      for (const mod of wkForPlan.workoutMods) {
+        const w = isTimingMod(mod.modReason)
+          ? plannedWorkouts.find((wo: any) => wo.n === mod.name)
+          : plannedWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+        if (w && !isTimingMod(mod.modReason)) {
+          (w as any).d = mod.newDistance;
+          if (mod.newType) (w as any).t = mod.newType;
+          if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
+        }
+      }
+    }
+    const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
+    // Exclude cross-training from planned strain targets
+    const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
+    plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, dayOfWeek, baseMinPerKm);
   }
 
+  // Per-session average: CTL / training days (uses all workouts for count)
+  const baseMinPerKmSess = s.pac?.e ? s.pac.e / 60 : 5.5;
+  const trainingDayCount = wkForPlan ? [0,1,2,3,4,5,6]
+    .filter(d => computePlannedDaySignalBTSS(plannedWorkouts, d, baseMinPerKmSess) > 0).length || 4 : 4;
+  const perSessionAvg = (s.ctlBaseline ?? 0) / trainingDayCount;
+
+  // Detect matched activity on a day with no generated workout
+  let matchedActivityDay = false;
+  if (plannedDayTSS === 0 && wkForPlan) {
+    for (const [, act] of Object.entries(wkForPlan.garminActuals ?? {})) {
+      if (!act.startTime?.startsWith(date)) continue;
+      matchedActivityDay = true;
+      break;
+    }
+  }
+
+  const hasPlannedWorkout = plannedDayTSS > 0;
+  const isRestDay = !hasPlannedWorkout && !matchedActivityDay;
+
+  // Rest-day overreach: activity exceeds 50% of per-session average
+  const restDayThreshold = perSessionAvg * 0.5;
+  const isOverreaching = isRestDay && actualTSS > 0 && perSessionAvg > 0 && actualTSS > restDayThreshold;
+
+  // Strain %: planned days compare vs plan, adhoc days compare vs per-session avg
+  const targetTSS = hasPlannedWorkout ? plannedDayTSS : (matchedActivityDay ? Math.round(perSessionAvg) : 0);
+  let strainPct = 0;
+  if (hasPlannedWorkout && actualTSS > 0 && plannedDayTSS > 0) {
+    strainPct = (actualTSS / plannedDayTSS) * 100;
+  }
+  const adhocPct = matchedActivityDay && perSessionAvg > 0 ? (actualTSS / perSessionAvg) * 100 : 0;
+
   return {
-    strainPct: actualTSS > 0 ? (actualTSS / targetTSS) * 100 : 0,
+    strainPct,
+    adhocPct,
     actualTSS,
     targetTSS,
+    isRestDay,
+    plannedDayTSS,
+    isOverreaching,
+    matchedActivityDay,
   };
 }
 
@@ -186,22 +291,33 @@ function coachingText(
   targetTSS: number,
   isToday: boolean,
   weekKm: number,
+  isRestDay: boolean,
+  isOverreaching: boolean,
 ): string {
   const actual = Math.round(actualTSS);
   const target = Math.round(targetTSS);
   const kmNote = weekKm > 0.5 ? ` ${weekKm.toFixed(1)} km logged this week.` : '';
 
-  if (!isToday) {
-    if (actual === 0) return target > 0 ? `No activities recorded. ${target} TSS daily baseline.` : 'Rest day.';
-    if (strainPct >= 130) return `${actual} TSS — ${Math.round(strainPct - 100)}% above daily baseline.${kmNote}`;
-    return `${actual} TSS logged against a ${target} TSS daily baseline.${kmNote}`;
+  // Rest day — two states only: good or overreaching
+  if (isRestDay) {
+    if (isOverreaching) return `${actual} TSS on a rest day. This level of activity impairs recovery. Keep it light or take it fully off.`;
+    if (actual > 0) return `${actual} TSS logged. Light activity on rest days is fine for recovery.${kmNote}`;
+    return 'Rest day. No sessions scheduled.';
   }
 
+  // Training day (past)
+  if (!isToday) {
+    if (actual === 0) return target > 0 ? `No activities recorded. ${target} TSS planned.` : 'Rest day.';
+    if (strainPct >= 130) return `${actual} TSS — ${Math.round(strainPct - 100)}% above the ${target} TSS plan.${kmNote}`;
+    return `${actual} TSS logged against ${target} TSS planned.${kmNote}`;
+  }
+
+  // Training day (today)
   if (strainPct >= 130) return `Daily load exceeded target. ${actual} TSS logged against ${target} TSS planned. Avoid additional training today.`;
   if (strainPct >= 100) return `Daily target reached. ${actual} TSS logged against ${target} TSS planned. Training complete for today.${kmNote}`;
   if (strainPct > 0)    return `${actual} TSS logged. ${Math.round(strainPct)}% of the ${target} TSS target reached.${kmNote}`;
   if (target > 0)       return `No load logged yet. ${target} TSS planned for today.${kmNote}`;
-  return 'Rest day. No sessions scheduled today.';
+  return 'Rest day. No sessions scheduled.';
 }
 
 // ── Activity icon (sport-specific SVG) ───────────────────────────────────────
@@ -227,40 +343,178 @@ function activityIcon(type: string): string {
 
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
+// ── Week bar days ─────────────────────────────────────────────────────────────
+
+interface WeekBarDay {
+  date: string;
+  label: string;
+  plannedTSS: number;
+  actualTSS: number;
+  isToday: boolean;
+  isFuture: boolean;
+}
+
+function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): WeekBarDay[] {
+  const wks = s.wks ?? [];
+  const wkIdx = resolveWkIdx(displayDate, s);
+  const wk = wks[wkIdx];
+  if (!wk) return [];
+
+  // Mon-Sun dates of the plan week containing displayDate
+  const weekStartDate = s.planStartDate
+    ? (() => {
+        const d = new Date(s.planStartDate + 'T12:00:00');
+        d.setDate(d.getDate() + wkIdx * 7);
+        return d;
+      })()
+    : (() => {
+        const d = new Date(displayDate + 'T12:00:00');
+        const dow = (d.getDay() + 6) % 7;
+        d.setDate(d.getDate() - dow);
+        return d;
+      })();
+
+  const viewWeek = wkIdx + 1;
+  const plannedWorkouts = generateWeekWorkouts(
+    wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
+    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
+    viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wk.scheduledAcwrStatus,
+  );
+  // Apply day moves so bar TSS matches what the plan view shows
+  if (wk.workoutMoves) {
+    for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
+      const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
+      if (w) (w as any).dayOfWeek = newDay;
+    }
+  }
+  // Apply distance/type/RPE mods so bar TSS matches plan card
+  if (wk.workoutMods) {
+    for (const mod of wk.workoutMods) {
+      const w = isTimingMod(mod.modReason)
+        ? plannedWorkouts.find((wo: any) => wo.n === mod.name)
+        : plannedWorkouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
+      if (w && !isTimingMod(mod.modReason)) {
+        (w as any).d = mod.newDistance;
+        if (mod.newType) (w as any).t = mod.newType;
+        if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
+      }
+    }
+  }
+
+  // Exclude cross-training from planned bars (consistent with strain target logic)
+  const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
+  const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  return dayLabels.map((label, i) => {
+    const d = new Date(weekStartDate);
+    d.setDate(weekStartDate.getDate() + i);
+    const date = d.toISOString().split('T')[0];
+    const isFuture = date > today;
+    const plannedTSS = computePlannedDaySignalBTSS(runWorkouts, i, s.pac?.e ? s.pac.e / 60 : 5.5);
+    const actualTSS = !isFuture ? computeTodaySignalBTSS(wk, date) : 0;
+    return { date, label, plannedTSS, actualTSS, isToday: date === today, isFuture };
+  });
+}
+
+function buildWeekBarsHTML(weekBarDays: WeekBarDay[]): string {
+  if (weekBarDays.length === 0) return '';
+  const maxRef = Math.max(...weekBarDays.map(d => d.plannedTSS), 1);
+
+  const rows = weekBarDays.map((day, i) => {
+    const isLast = i === weekBarDays.length - 1;
+    let fillPct = 0;
+    if (!day.isFuture && day.actualTSS > 0 && day.plannedTSS > 0) {
+      fillPct = Math.min((day.actualTSS / day.plannedTSS) * 100, 100);
+    }
+    const trackWidth = day.isFuture ? 20 : (day.plannedTSS > 0 ? (day.plannedTSS / maxRef) * 100 : 20);
+
+    let tssLabel: string;
+    if (day.isFuture) {
+      tssLabel = '';
+    } else if (day.plannedTSS === 0) {
+      tssLabel = day.actualTSS > 0 ? `${Math.round(day.actualTSS)}` : 'Rest';
+    } else {
+      tssLabel = day.actualTSS > 0 ? `${Math.round(day.actualTSS)}` : '—';
+    }
+
+    const labelColor = day.isToday ? ORANGE_B : '#999';
+    const labelWeight = day.isToday ? '600' : '400';
+    const fillColor = day.isToday ? ORANGE_B : 'rgba(0,0,0,0.22)';
+    const trackOpacity = day.isFuture ? 0.3 : (day.plannedTSS > 0 ? 1 : 0.4);
+
+    return `
+      <div style="display:flex;align-items:center;gap:10px;${isLast ? '' : 'margin-bottom:8px;'}">
+        <div style="width:28px;font-size:11px;color:${labelColor};font-weight:${labelWeight}">${day.label}</div>
+        <div style="flex:1;height:5px;border-radius:3px;background:rgba(0,0,0,0.06);position:relative;overflow:visible">
+          <div style="position:absolute;inset-y:0;left:0;width:${trackWidth.toFixed(1)}%;height:5px;border-radius:3px;background:rgba(0,0,0,0.06);opacity:${trackOpacity}"></div>
+          ${fillPct > 0 ? `<div style="position:absolute;inset-y:0;left:0;width:${(fillPct / 100 * trackWidth).toFixed(1)}%;height:5px;border-radius:3px;background:${fillColor}"></div>` : ''}
+        </div>
+        <div style="width:30px;font-size:11px;color:#999;text-align:right">${tssLabel}</div>
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="s-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
+      <div style="background:white;border-radius:20px;padding:16px 20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
+        <div style="font-size:13px;font-weight:600;color:#111;margin-bottom:14px">This week</div>
+        ${rows}
+      </div>
+    </div>`;
+}
+
 function getStrainHTML(s: SimulatorState, displayDate: string): string {
   const today = new Date().toISOString().split('T')[0];
   const isToday = displayDate === today;
 
-  const { strainPct, actualTSS, targetTSS } = getStrainForDate(displayDate, s);
+  const { strainPct, adhocPct, actualTSS, targetTSS, isRestDay, plannedDayTSS, isOverreaching, matchedActivityDay } = getStrainForDate(displayDate, s);
   const displayData = getDayData(displayDate, s);
   const sevenDays = getLast7Days(today, s);
+  const weekBarDays = getWeekBarDays(displayDate, s, today);
+
+  // Strain zone label based on day type
+  const strainZone = matchedActivityDay
+    ? (adhocPct >= 150 ? 'High' : adhocPct >= 80 ? 'Optimal' : adhocPct >= 50 ? 'Moderate' : 'Light')
+    : (strainPct >= 130 ? 'Exceeded' : strainPct >= 100 ? 'Complete' : strainPct >= 80 ? 'On target' : 'Below target');
 
   // Ring
-  const ringPct = Math.min(strainPct, 100);
-  const targetOffset = +(RING_CIRC * (1 - ringPct / 100)).toFixed(2);
-  const ringColor = strainPct >= 130 ? '#FF3B30' : strainPct >= 100 ? '#34C759' : `url(#strainGrad)`;
+  let ringPct: number;
+  let ringColor: string;
+  if (isRestDay) {
+    ringPct = isOverreaching ? 100 : 0;
+    ringColor = isOverreaching ? '#FF3B30' : `url(#strainGrad)`;
+  } else if (matchedActivityDay) {
+    ringPct = Math.min(adhocPct / 130 * 100, 100); // 130% of per-session avg = full ring
+    ringColor = adhocPct >= 150 ? '#FF3B30' : adhocPct >= 80 ? '#34C759' : `url(#strainGrad)`;
+  } else {
+    ringPct = Math.min(strainPct, 100);
+    ringColor = strainPct >= 130 ? '#FF3B30' : strainPct >= 100 ? '#34C759' : `url(#strainGrad)`;
+  }
 
-  // Stat cards — 7-day totals + sparklines
-  const durationVals = sevenDays.map(d => Math.round(d.durationMin));
-  const calVals      = sevenDays.map(d => d.calories ?? 0);
-  const totalDurMin  = sevenDays.reduce((sum, d) => sum + d.durationMin, 0);
-  const hasAnyCals   = sevenDays.some(d => d.calories != null);
-  const totalCal     = hasAnyCals ? sevenDays.reduce((sum, d) => sum + (d.calories ?? 0), 0) : null;
-  const durPath      = sparklinePath(durationVals);
-  const calPath      = sparklinePath(calVals);
-
-  // Week km for coaching note
-  const currentWk = s.wks?.[s.w - 1];
-  const weekKm = currentWk
-    ? Object.values(currentWk.garminActuals ?? {}).reduce((sum, a) => sum + (a.distanceKm ?? 0), 0)
-    : 0;
-
-  // Coaching text
-  const coaching = coachingText(strainPct, actualTSS, targetTSS, isToday, weekKm);
-  const coachHeadline = strainPct >= 130 ? 'Exceeded target'
-    : strainPct >= 100 ? 'Target reached'
-    : strainPct > 0 ? 'Session in progress'
-    : 'No load recorded';
+  // Ring inner content
+  let ringInnerHTML: string;
+  if (isRestDay && isOverreaching) {
+    ringInnerHTML = `
+      <div style="font-size:22px;font-weight:300;color:rgba(255,255,255,0.9);line-height:1">Rest day</div>
+      <div style="font-size:18px;font-weight:600;color:#FF3B30;margin-top:4px">${Math.round(actualTSS)} TSS</div>
+      <div style="font-size:10px;color:rgba(255,255,255,0.6);margin-top:2px">High for a rest day</div>`;
+  } else if (isRestDay) {
+    ringInnerHTML = `
+      <div style="font-size:22px;font-weight:300;color:rgba(255,255,255,0.7);line-height:1">Rest day</div>
+      ${actualTSS > 0 ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:5px">${Math.round(actualTSS)} TSS logged</div>` : ''}`;
+  } else if (matchedActivityDay && actualTSS > 0) {
+    ringInnerHTML = `
+      <div style="display:flex;align-items:baseline;color:white;font-weight:700;text-shadow:0 1px 8px rgba(0,0,0,0.25)">
+        <span style="font-size:42px;letter-spacing:-0.03em;line-height:1">${Math.round(actualTSS)}</span>
+        <span style="font-size:16px;margin-left:3px;font-weight:400;opacity:0.7">TSS</span>
+      </div>
+      <span style="color:${strainPct >= 150 ? '#FF6B6B' : strainPct >= 80 ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.6)'};font-size:12px;font-weight:600;margin-top:2px;text-shadow:0 1px 4px rgba(0,0,0,0.2)">${strainZone}</span>`;
+  } else {
+    ringInnerHTML = `
+      <div style="display:flex;align-items:baseline;color:white;font-weight:700;text-shadow:0 1px 8px rgba(0,0,0,0.25)">
+        <span style="font-size:52px;letter-spacing:-0.03em;line-height:1">${Math.round(strainPct)}</span>
+        <span style="font-size:22px;margin-left:1px">%</span>
+      </div>
+      <span style="color:rgba(255,255,255,0.78);font-size:11px;font-weight:500;margin-top:-2px;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Today's Strain</span>`;
+  }
 
   // Date picker pills (last 7 days, oldest → today)
   const datePills = sevenDays.map(d => {
@@ -360,7 +614,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
           </button>
 
           <div style="text-align:center">
-            <div style="font-size:20px;font-weight:600;color:white;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Strain</div>
+            <div style="font-size:20px;font-weight:600;color:white;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Today's Strain</div>
             <button id="strain-date-btn" style="
               display:flex;align-items:center;gap:4px;margin:3px auto 0;
               font-size:12px;color:rgba(255,255,255,0.78);font-weight:500;
@@ -413,64 +667,27 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
               />
             </svg>
             <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:6px">
-              <div style="display:flex;align-items:baseline;color:white;font-weight:700;text-shadow:0 1px 8px rgba(0,0,0,0.25)">
-                <span style="font-size:52px;letter-spacing:-0.03em;line-height:1">${Math.round(strainPct)}</span>
-                <span style="font-size:22px;margin-left:1px">%</span>
-              </div>
-              <span style="color:rgba(255,255,255,0.78);font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;margin-top:-2px;text-shadow:0 1px 4px rgba(0,0,0,0.2)">strain</span>
+              ${ringInnerHTML}
             </div>
           </div>
         </div>
 
-        <!-- Stat cards -->
-        <div class="s-fade" style="animation-delay:0.18s;padding:0 16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-
-          <!-- Duration -->
-          <div style="background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
-            <div style="display:flex;align-items:center;gap:6px;color:#9CA3AF;margin-bottom:10px">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-              <span style="font-size:12px;font-weight:500">7-day mins</span>
-            </div>
-            <div style="display:flex;align-items:baseline">
-              <span style="font-size:28px;font-weight:600;color:#111;line-height:1">${Math.round(totalDurMin)}</span>
-              <span style="font-size:14px;font-weight:500;color:#111;margin-left:2px">m</span>
-            </div>
-            <div style="margin-top:14px;height:32px">
-              ${durPath ? `<svg viewBox="0 0 100 30" style="width:100%;height:100%;overflow:visible"><path d="${durPath}" fill="none" stroke="${ORANGE_B}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
-            </div>
-          </div>
-
-          <!-- Calories -->
-          <div style="background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
-            <div style="display:flex;align-items:center;gap:6px;color:#9CA3AF;margin-bottom:10px">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
-              <span style="font-size:12px;font-weight:500">7-day kCal</span>
-            </div>
-            <div style="display:flex;align-items:baseline">
-              <span style="font-size:28px;font-weight:600;color:#111;line-height:1">${totalCal != null ? Math.round(totalCal) : '—'}</span>
-              ${totalCal != null ? `<span style="font-size:12px;font-weight:500;color:#888;margin-left:4px">kCal</span>` : ''}
-            </div>
-            <div style="margin-top:14px;height:32px">
-              ${calPath && totalCal != null ? `<svg viewBox="0 0 100 30" style="width:100%;height:100%;overflow:visible"><path d="${calPath}" fill="none" stroke="${ORANGE_A}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
-            </div>
-          </div>
-        </div>
-
-        <!-- Coaching card -->
-        <div class="s-fade" style="animation-delay:0.28s;padding:0 16px;margin-bottom:20px">
-          <div style="
-            background:rgba(255,255,255,0.95);border-radius:20px;padding:18px 20px;
-            box-shadow:0 4px 20px -2px rgba(0,0,0,0.05);border:1px solid rgba(255,255,255,0.8);
-          ">
-            <div style="font-size:15px;font-weight:600;color:#111;margin-bottom:6px">${coachHeadline}</div>
-            <p style="font-size:14px;line-height:1.6;color:#555;margin:0">${coaching}</p>
-          </div>
-        </div>
+        <!-- Week day bars -->
+        ${buildWeekBarsHTML(weekBarDays)}
 
         <!-- Timeline -->
-        <div class="s-fade" style="animation-delay:0.38s;padding:0 16px">
+        <div class="s-fade" style="animation-delay:0.28s;padding:0 16px;margin-bottom:14px">
           <h2 style="font-size:15px;font-weight:600;color:#111;margin:0 0 12px 4px">Timeline</h2>
           ${timelineHTML}
+        </div>
+
+        <!-- Steps placeholder -->
+        <div class="s-fade" style="animation-delay:0.38s;padding:0 16px">
+          <div style="background:white;border-radius:20px;padding:16px 20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
+            <div style="font-size:12px;color:#9CA3AF;margin-bottom:8px">Daily steps</div>
+            <div style="font-size:28px;font-weight:300;color:#999;line-height:1">—</div>
+            <div style="font-size:11px;color:#bbb;margin-top:6px">Garmin steps coming soon</div>
+          </div>
         </div>
 
       </div>
@@ -490,7 +707,7 @@ function showStrainInfoOverlay(): void {
   overlay.innerHTML = `
     <div style="background:white;border-radius:24px;padding:24px;max-width:380px;width:100%">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <h2 style="font-size:17px;font-weight:700;margin:0;color:#111">What is Strain?</h2>
+        <h2 style="font-size:17px;font-weight:700;margin:0;color:#111">What is Today's Strain?</h2>
         <button id="strain-info-close" style="
           border:none;background:rgba(0,0,0,0.07);border-radius:50%;
           width:32px;height:32px;cursor:pointer;color:#555;
@@ -572,8 +789,10 @@ function showActivityDetail(act: GarminActual): void {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 function wireStrainHandlers(s: SimulatorState, displayDate: string): void {
-  const { strainPct } = getStrainForDate(displayDate, s);
-  const ringPct = Math.min(strainPct, 100);
+  const { strainPct, adhocPct, isRestDay, isOverreaching, matchedActivityDay } = getStrainForDate(displayDate, s);
+  const ringPct = isRestDay ? (isOverreaching ? 100 : 0)
+    : matchedActivityDay ? Math.min(adhocPct / 130 * 100, 100)
+    : Math.min(strainPct, 100);
 
   // Animate ring after first paint
   setTimeout(() => {

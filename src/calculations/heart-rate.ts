@@ -123,6 +123,12 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
     case 'threshold':
     case 'marathon_pace':
       return makeTarget('Z4', zones.z4, 'Threshold');
+    case 'float':
+      // Hard reps at 10K effort + float recovery at MP — session average sits in Z3-4
+      return makeTarget('Z3-4', {
+        min: zones.z3.min,
+        max: zones.z4.max,
+      }, 'Float (session avg)');
     case 'vo2':
     case 'intervals':
       // Session average includes recovery jogs — target Z4 not Z5

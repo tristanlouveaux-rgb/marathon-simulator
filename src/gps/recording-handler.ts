@@ -11,7 +11,7 @@ import { render } from '@/ui/renderer';
 import { openGpsCompletionModal, type CompletionData } from '@/ui/gps-completion-modal';
 import { deleteGpsRecording } from '@/gps/persistence';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { getTrailingEffortScore } from '@/calculations/fitness-model';
+import { getTrailingEffortScore, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { parseDistanceKm } from '@/calculations/matching';
 import { createActivity, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { showSuggestionModal } from '@/ui/suggestion-modal';
@@ -167,12 +167,18 @@ function handleImpromptuRun(
     }
 
     const plannedRuns = workoutsToPlannedRuns(weekWorkouts, ms.pac);
+    const _tier = ms.athleteTierOverride ?? ms.athleteTier;
+    const _atlSeed = (ms.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (ms.gs ?? 0), 0.3));
+    const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined);
+    const _floorKm = computeRunningFloorKm(ms.pac?.m, ms.w, ms.tw ?? 16, week?.ph);
     const popup = buildCrossTrainingPopup(
       {
         raceGoal: ms.rd,
         plannedRunsPerWeek: ms.rw,
         injuryMode: !!(ms as any).injuryState?.active,
         runnerType: ms.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined,
+        floorKm: _floorKm,
+        acwrStatus: _acwr.status,
       },
       plannedRuns,
       activity,
@@ -234,7 +240,7 @@ function handleImpromptuRun(
 }
 
 // Run types whose intensity is "quality" (not easy/long)
-const QUALITY_RUN_TYPES = new Set(['threshold', 'vo2', 'intervals', 'race_pace', 'mixed', 'progressive', 'hill_repeats']);
+const QUALITY_RUN_TYPES = new Set(['threshold', 'vo2', 'intervals', 'race_pace', 'mixed', 'progressive', 'hill_repeats', 'float']);
 
 /**
  * Find the best planned run to match an impromptu recording.

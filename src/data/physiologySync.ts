@@ -29,25 +29,39 @@ interface PhysiologyRow {
   sleep_light_sec?: number | null;
   sleep_awake_sec?: number | null;
   avg_stress_level?: number | null;
+  steps?: number | null;
+  active_calories?: number | null;
+  active_minutes?: number | null;
+  highly_active_minutes?: number | null;
 }
 
 /** Full response envelope from sync-physiology-snapshot */
 interface PhysiologyResponse {
   days: PhysiologyRow[];
   maxHR: number | null;
+  /** Latest physiology_snapshots row (no date filter) — for infrequent metrics like LT */
+  latestPhysio: {
+    calendar_date: string;
+    vo2_max_running: number | null;
+    lactate_threshold_pace: number | null;
+    lt_heart_rate: number | null;
+  } | null;
 }
 
 /**
  * Build a RecoveryEntry from a single PhysiologyDayEntry.
- * Uses Garmin stress level (inverted) as readiness and RMSSD for HRV status.
+ * Uses stress level (inverted, Garmin-only) as readiness and RMSSD for HRV status.
  */
-export function buildRecoveryEntryFromPhysio(physio: PhysiologyDayEntry): RecoveryEntry {
+export function buildRecoveryEntryFromPhysio(
+  physio: PhysiologyDayEntry,
+  source: 'garmin' | 'apple' = 'garmin',
+): RecoveryEntry {
   return {
     date: physio.date,
     sleepScore: physio.sleepScore ?? 50,
     readiness: physio.stressAvg != null ? Math.round(100 - physio.stressAvg) : undefined,
     hrvStatus: physio.hrvRmssd != null ? rmssdToHrvStatus(physio.hrvRmssd) : undefined,
-    source: 'garmin',
+    source,
   };
 }
 
@@ -78,20 +92,26 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
     );
 
     const rows = data.days ?? [];
-    if (rows.length === 0) return empty;
+    const hasRows = rows.length > 0;
+    const hasLatestPhysio = data.latestPhysio != null;
+    if (!hasRows && !hasLatestPhysio) return empty;
 
     // Pick the newest row (last in array, or first if pre-sorted desc)
-    const latest = rows[rows.length - 1];
-    if (!latest) return empty;
+    const latest = hasRows ? rows[rows.length - 1] : {} as PhysiologyRow;
 
     const s = getMutableState();
     let changed = false;
 
     const result: PhysiologySnapshot = { vo2: null, restingHR: null, maxHR: null, ltPace: null, ltHR: null };
 
-    if (latest.vo2max != null && latest.vo2max > 0) {
-      result.vo2 = latest.vo2max;
-      s.vo2 = latest.vo2max;
+    // VO2max: prefer daily_metrics, fall back to latestPhysio (all-time)
+    const vo2Value = (latest.vo2max != null && latest.vo2max > 0)
+      ? latest.vo2max
+      : (data.latestPhysio?.vo2_max_running ?? null);
+
+    if (vo2Value != null && vo2Value > 0) {
+      result.vo2 = vo2Value;
+      s.vo2 = vo2Value;
       changed = true;
     }
 
@@ -108,24 +128,34 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       changed = true;
     }
 
-    if (latest.lt_pace_sec_km != null && latest.lt_pace_sec_km > 0) {
+    // LT pace: prefer the date-windowed latest, fall back to latestPhysio (all-time)
+    const ltPaceValue = (latest.lt_pace_sec_km != null && latest.lt_pace_sec_km > 0)
+      ? latest.lt_pace_sec_km
+      : (data.latestPhysio?.lactate_threshold_pace ?? null);
+
+    if (ltPaceValue != null && ltPaceValue > 0) {
       // Sanity check: derived VDOT from this LT pace must be within ±8 of s.v.
       // If it's further off, the Garmin LT measurement is stale or from a different
       // fitness level and should not overwrite s.lt (which would misguide physioAdj).
-      const ltDerivedVdot = cv(10000, latest.lt_pace_sec_km * 10);
+      const ltDerivedVdot = cv(10000, ltPaceValue * 10);
       const vdotDeviation = Math.abs(ltDerivedVdot - (s.v || 40));
       if (vdotDeviation <= 8) {
-        result.ltPace = latest.lt_pace_sec_km;
-        s.lt = latest.lt_pace_sec_km;
+        result.ltPace = ltPaceValue;
+        s.lt = ltPaceValue;
         changed = true;
       } else {
-        console.warn(`[PhysiologySync] LT pace ${latest.lt_pace_sec_km}s/km (VDOT≈${ltDerivedVdot.toFixed(1)}) skipped — ${vdotDeviation.toFixed(1)} pts from s.v=${s.v}. Likely stale Garmin data.`);
+        console.warn(`[PhysiologySync] LT pace ${ltPaceValue}s/km (VDOT≈${ltDerivedVdot.toFixed(1)}) skipped — ${vdotDeviation.toFixed(1)} pts from s.v=${s.v}. Likely stale Garmin data.`);
       }
     }
 
-    if (latest.lt_heart_rate != null && latest.lt_heart_rate > 0) {
-      result.ltHR = latest.lt_heart_rate;
-      s.ltHR = latest.lt_heart_rate;
+    // LT heart rate: prefer the date-windowed latest, fall back to latestPhysio (all-time)
+    const ltHRValue = (latest.lt_heart_rate != null && latest.lt_heart_rate > 0)
+      ? latest.lt_heart_rate
+      : (data.latestPhysio?.lt_heart_rate ?? null);
+
+    if (ltHRValue != null && ltHRValue > 0) {
+      result.ltHR = ltHRValue;
+      s.ltHR = ltHRValue;
       changed = true;
     }
 
@@ -148,6 +178,10 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
           sleepLightSec: r.sleep_light_sec ?? undefined,
           sleepAwakeSec: r.sleep_awake_sec ?? undefined,
           stressAvg: r.avg_stress_level ?? undefined,
+          steps: r.steps ?? undefined,
+          activeCalories: r.active_calories ?? undefined,
+          activeMinutes: r.active_minutes ?? undefined,
+          highlyActiveMinutes: r.highly_active_minutes ?? undefined,
           ltPace: r.lt_pace_sec_km ?? undefined,
           ltHR: r.lt_heart_rate ?? undefined,
         }))
@@ -166,5 +200,50 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
     // Non-fatal — app continues without fresh physiology data
     console.warn('[PhysiologySync] Failed to sync:', err);
     return empty;
+  }
+}
+
+/**
+ * Fetch today's step count from Garmin epoch summaries (15-min windows).
+ * Updates today's entry in s.physiologyHistory so the strain ring can show
+ * passive load as the day progresses.
+ *
+ * Safe to call at any time (launch, foreground resume, manual pull-to-refresh).
+ * Silently skips if Garmin is not connected.
+ *
+ * Returns the step count, or null if the call failed or Garmin isn't connected.
+ */
+export async function syncTodaySteps(): Promise<number | null> {
+  try {
+    const data = await callEdgeFunction<{
+      ok: boolean; steps: number; activeCalories: number;
+      activeMinutes: number; highlyActiveMinutes: number; epochCount: number;
+    }>('sync-today-steps', {});
+    if (!data.ok) return null;
+
+    const steps = data.steps ?? 0;
+    const activeCalories = data.activeCalories ?? 0;
+    const activeMinutes = data.activeMinutes ?? 0;
+    const highlyActiveMinutes = data.highlyActiveMinutes ?? 0;
+    const today = new Date().toISOString().split('T')[0];
+    const s = getMutableState();
+
+    // Update or insert today's entry in physiologyHistory
+    const history = s.physiologyHistory ?? [];
+    const todayIdx = history.findIndex(e => e.date === today);
+    const patch = { steps, activeCalories, activeMinutes, highlyActiveMinutes };
+    if (todayIdx >= 0) {
+      history[todayIdx] = { ...history[todayIdx], ...patch };
+    } else {
+      history.push({ date: today, ...patch });
+    }
+    s.physiologyHistory = history.sort((a, b) => a.date.localeCompare(b.date));
+    saveState();
+
+    console.log(`[PhysiologySync] Today steps updated: ${steps} (${data.epochCount} epochs)`);
+    return steps;
+  } catch (err) {
+    console.warn('[PhysiologySync] syncTodaySteps failed:', err);
+    return null;
   }
 }

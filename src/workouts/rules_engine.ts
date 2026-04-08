@@ -3,7 +3,7 @@ import type { RaceDistance, RunnerType, TrainingPhase } from '@/types';
 /** Workout slot type */
 export type SlotType =
   | 'long' | 'marathon_pace' | 'threshold' | 'easy' | 'vo2'
-  | 'hill_repeats' | 'progressive' | 'race_pace' | 'mixed' | 'intervals';
+  | 'hill_repeats' | 'progressive' | 'race_pace' | 'mixed' | 'intervals' | 'float';
 
 /** Context for slot generation */
 export interface SlotContext {
@@ -29,7 +29,7 @@ interface FitnessLimits {
 
 const QUALITY_TYPES: SlotType[] = [
   'threshold', 'vo2', 'race_pace', 'marathon_pace',
-  'intervals', 'mixed', 'hill_repeats', 'progressive',
+  'intervals', 'mixed', 'hill_repeats', 'progressive', 'float',
 ];
 
 function isQualitySession(wt: SlotType): boolean {
@@ -50,13 +50,13 @@ export function minRunsRequired(target: RaceDistance): number {
 function basePriorityOrder(target: RaceDistance): SlotType[] {
   switch (target) {
     case 'marathon':
-      return ['long', 'marathon_pace', 'threshold', 'easy', 'vo2', 'hill_repeats', 'progressive', 'race_pace', 'mixed', 'intervals'];
+      return ['long', 'marathon_pace', 'float', 'threshold', 'easy', 'vo2', 'hill_repeats', 'progressive', 'race_pace', 'mixed', 'intervals'];
     case 'half':
-      return ['long', 'threshold', 'race_pace', 'easy', 'vo2', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'marathon_pace'];
+      return ['long', 'threshold', 'float', 'race_pace', 'easy', 'vo2', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'marathon_pace'];
     case '10k':
-      return ['threshold', 'vo2', 'long', 'race_pace', 'easy', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'marathon_pace'];
+      return ['threshold', 'vo2', 'long', 'race_pace', 'easy', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'float', 'marathon_pace'];
     case '5k':
-      return ['vo2', 'threshold', 'race_pace', 'long', 'easy', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'marathon_pace'];
+      return ['vo2', 'threshold', 'race_pace', 'long', 'easy', 'hill_repeats', 'progressive', 'mixed', 'intervals', 'float', 'marathon_pace'];
   }
 }
 
@@ -73,12 +73,17 @@ function runnerTypeBias(target: RaceDistance, runnerType: RunnerType): Record<Sl
     bias['marathon_pace'] = (bias['marathon_pace'] || 1) * 1.10;
     bias['vo2'] = (bias['vo2'] || 1) * 0.90;
     bias['intervals'] = (bias['intervals'] || 1) * 0.90;
+    // Float teaches patience at moderate effort — useful but lower priority for speed types
+    bias['float'] = (bias['float'] || 1) * 0.90;
   } else if (runnerType === 'Endurance') {
     // Endurance runners need more speed stimulus
     bias['vo2'] = (bias['vo2'] || 1) * 1.10;
     bias['intervals'] = (bias['intervals'] || 1) * 1.10;
     bias['hill_repeats'] = (bias['hill_repeats'] || 1) * 1.05;
     bias['threshold'] = (bias['threshold'] || 1) * 0.95;
+    // Float is especially valuable for endurance types — forces moderate-effort running
+    // instead of defaulting to slow-and-steady recovery
+    bias['float'] = (bias['float'] || 1) * 1.15;
     if (target === 'half' || target === 'marathon') {
       bias['long'] = (bias['long'] || 1) * 1.05;
     }
@@ -113,13 +118,13 @@ function fitnessLevelLimits(level: string): FitnessLimits {
 function phaseMultipliers(phase: TrainingPhase): Record<string, number> {
   switch (phase) {
     case 'base':
-      return { threshold: 1.2, easy: 1.3, long: 1.1, vo2: 0.7, race_pace: 0.5, marathon_pace: 0.6 };
+      return { threshold: 1.2, easy: 1.3, long: 1.1, vo2: 0.7, race_pace: 0.5, marathon_pace: 0.6, float: 0.3 };
     case 'build':
-      return { threshold: 1.1, race_pace: 1.2, marathon_pace: 1.1, vo2: 1.0, progressive: 1.1 };
+      return { threshold: 1.1, race_pace: 1.2, marathon_pace: 1.1, vo2: 1.0, progressive: 1.1, float: 1.15 };
     case 'peak':
-      return { race_pace: 1.3, mixed: 1.2, progressive: 1.2, vo2: 1.1, threshold: 0.9 };
+      return { race_pace: 1.3, mixed: 1.2, progressive: 1.2, vo2: 1.1, threshold: 0.9, float: 1.1 };
     case 'taper':
-      return { easy: 1.5, race_pace: 1.1, threshold: 0.7, vo2: 0.5, long: 0.8, marathon_pace: 0.7 };
+      return { easy: 1.5, race_pace: 1.1, threshold: 0.7, vo2: 0.5, long: 0.8, marathon_pace: 0.7, float: 0.3 };
   }
 }
 
