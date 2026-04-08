@@ -95,10 +95,10 @@ export function nextStep(): void {
   const currentIdx = STEP_ORDER.indexOf(s.onboarding.currentStep);
   let nextIdx = currentIdx + 1;
 
-  // Skip strava-history for non-Strava users
+  // Skip strava-history if Strava is not connected (shouldn't happen — Strava is required)
   while (nextIdx < STEP_ORDER.length &&
     STEP_ORDER[nextIdx] === 'strava-history' &&
-    s.onboarding.watchType !== 'strava') {
+    !s.stravaConnected) {
     nextIdx++;
   }
 
@@ -135,7 +135,7 @@ export function previousStep(): void {
   // Skip 'strava-history' when going back if user is not a Strava user
   while (prevIdx > 0 && (
     STEP_ORDER[prevIdx] === 'initializing' ||
-    (STEP_ORDER[prevIdx] === 'strava-history' && s.onboarding.watchType !== 'strava')
+    (STEP_ORDER[prevIdx] === 'strava-history' && !s.stravaConnected)
   )) {
     prevIdx--;
   }
