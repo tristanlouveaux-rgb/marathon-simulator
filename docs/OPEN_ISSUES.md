@@ -185,6 +185,22 @@ All items in this section have been confirmed working on device.
 
 ---
 
+### ISSUE-136: Garmin step count never populates in `daily_metrics.steps` *(P2, investigating)*
+
+**Problem**: Strain view always shows "No step data for this day". `daily_metrics.steps` is NULL for every row even though Garmin is pushing `dailies` webhooks successfully.
+
+**Status 2026-04-14**: Webhook `handleDailies` was missing `steps: d.totalSteps` — fixed and deployed. Two subsequent dailies pushes were processed by the webhook (confirmed via `[garmin-webhook] Daily metric stored` logs at 19:46 and 20:06) but `steps` column is still NULL.
+
+**Hypothesis**: The Garmin webhook dailies payload may not include `totalSteps` (despite the Health API docs saying it does for the backfill endpoint), or uses a different field name in the webhook vs. the REST pull endpoint. Diagnostic logging added to webhook: next push will log all top-level payload keys and try `totalSteps` / `steps` / `stepsCount` aliases.
+
+**Next step**: After next Garmin sync, check `garmin-webhook` logs for `Dailies payload keys for ...` and `Dailies step-ish fields: ...` lines. If a different field name appears, update `handleDailies` to use it.
+
+**Also affected — same symptom, same cause likely**: `vo2max`, `active_calories`, `active_minutes`, `highly_active_minutes` are also NULL in `daily_metrics`. All are set from the dailies payload (`d.vo2Max`, etc.). If the payload structure is different than expected, all these fields would be missing together.
+
+**Files**: `supabase/functions/garmin-webhook/index.ts` (diagnostic logging added), `supabase/functions/sync-today-steps/index.ts` (now reads DB directly).
+
+---
+
 ### ISSUE-134: Garmin LT threshold not syncing — `userMetrics` push not enabled *(P2, blocked)*
 
 **Status 2026-04-14**: Confirmed still broken. `lt_thresholds` table is entirely empty. `physiology_snapshot_daily.lt_pace_sec_per_km` is NULL across every row. Garmin webhook logs show only `dailies` and `stressDetails` pushes — zero `userMetrics` pushes have ever arrived.

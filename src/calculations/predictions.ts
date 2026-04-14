@@ -292,6 +292,44 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
   return { forecastVdot, forecastTime: tv(forecastVdot, raceDistKm) };
 }
 
+/**
+ * Low-volume detraining adjustment for watch-derived fitness.
+ *
+ * Garmin/Apple LT and VO2 estimates update only from running activities,
+ * so they stay elevated after training stops. Coyle 1984 and Mujika &
+ * Padilla 2000 show meaningful endurance loss by week 2-3 of inactivity,
+ * with fractional utilization (the marathon-critical term in Joyner &
+ * Coyle 2008's decomposition) decaying faster than VO2max itself.
+ *
+ * Effect strengthens with distance: marathon LT/VO2 predictions overstate
+ * fitness most when running volume is low because marathon pace is set by
+ * fractional utilization, which is the most training-sensitive term.
+ * 5K/10K are more VO2-limited and less affected.
+ *
+ * @param weeklyRunKm  4-week running-km average; undefined = no adjustment
+ * @returns multiplier in [0, 1] applied to LT + VO2 weights; complement
+ *          shifts onto PB (the peak-fitness anchor).
+ */
+function lowVolumeDiscount(targetDist: number, weeklyRunKm?: number): number {
+  if (weeklyRunKm == null) return 1.0;
+
+  // Distance sensitivity: marathon hit hardest, 5K barely touched.
+  const distSensitivity =
+    targetDist >= 42195 ? 1.0 :
+    targetDist >= 21097 ? 0.7 :
+    targetDist >= 10000 ? 0.4 :
+    /* 5K */              0.2;
+
+  // Volume bands (running-km/wk): below 20 we start discounting, below 10 max.
+  let severity: number;
+  if (weeklyRunKm >= 30)      severity = 0.0;
+  else if (weeklyRunKm >= 20) severity = 0.15;
+  else if (weeklyRunKm >= 10) severity = 0.30;
+  else                        severity = 0.45;
+
+  return 1 - severity * distSensitivity;
+}
+
 export function blendPredictions(
   targetDist: number,
   pbs: PBs,
@@ -300,7 +338,8 @@ export function blendPredictions(
   b: number,
   runnerType: string,
   recentRun: RecentRun | null,
-  athleteTier?: string
+  athleteTier?: string,
+  weeklyRunKm?: number
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
@@ -349,6 +388,17 @@ export function blendPredictions(
   const tPB = predictFromPB(targetDist, pbs, b);
   const tLT = predictFromLT(targetDist, ltPace, runnerType, athleteTier);
   const tVO2 = predictFromVO2(targetDist, vo2max);
+
+  // Low-volume detraining: watch LT/VO2 stay elevated without running.
+  // Shift weight from LT+VO2 onto PB proportionally to the discount.
+  const watchTrust = lowVolumeDiscount(targetDist, weeklyRunKm);
+  if (watchTrust < 1.0 && tPB != null) {
+    const ltShed = w.lt * (1 - watchTrust);
+    const vo2Shed = w.vo2 * (1 - watchTrust);
+    w.lt = w.lt * watchTrust;
+    w.vo2 = w.vo2 * watchTrust;
+    w.pb = w.pb + ltShed + vo2Shed;
+  }
 
   let wRecent = tRecent && hasRecent ? (w.recent || 0) : 0;
   let wPB = tPB ? w.pb : 0;

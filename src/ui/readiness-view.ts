@@ -365,12 +365,19 @@ function getReadinessHTML(s: SimulatorState): string {
     effectiveSleepTarget,
   );
   const debtHours = cumulativeDebtSec > 0 ? Math.round(cumulativeDebtSec / 3600 * 10) / 10 : 0;
+  const sleepHistLabel = sleepHistScore != null
+    ? (sleepHistScore >= 80 ? 'Strong' : sleepHistScore >= 65 ? 'Steady' : sleepHistScore >= 50 ? 'Low' : 'Poor')
+    : '';
+  const sleepHistMeta = sleepHistAvg != null
+    ? `14d avg ${sleepHistAvg}${debtHours > 0 ? ` · ${debtHours}h debt` : ''}`
+    : '';
   const sleepHistCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Sleep History</div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
-      <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${sleepHistColor};line-height:1">${sleepHistScore != null ? sleepHistScore : '—'}</div>
-      ${sleepHistAvg != null ? `<div style="font-size:14px;color:${TEXT_S}">14d avg ${sleepHistAvg}${debtHours > 0 ? `, ${debtHours}h debt` : ''}</div>` : ''}
+      <div style="font-size:24px;font-weight:600;color:${sleepHistColor};line-height:1">${sleepHistScore != null ? sleepHistScore : '—'}</div>
+      ${sleepHistLabel ? `<div style="font-size:13px;color:#94A3B8">${sleepHistLabel}</div>` : ''}
     </div>
+    ${sleepHistMeta ? `<div style="font-size:12px;color:${TEXT_S};margin-top:4px">${sleepHistMeta}</div>` : ''}
     <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${
       sleepHistScore == null
         ? 'Not enough sleep data yet. Needs at least 3 nights in the last 14 days.'
