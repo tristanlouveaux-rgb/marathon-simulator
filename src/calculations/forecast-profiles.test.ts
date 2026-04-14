@@ -199,8 +199,8 @@ const PROFILES: TestProfile[] = [
     experienceLevel: 'intermediate',
     runsPerWeek: 5, recurringActivities: [], activeLifestyle: false,
     planDurationWeeks: 20, raceDistance: 'marathon',
-    baselineRange: [10800, 12900],
-    forecastRange: [9900, 12300],
+    baselineRange: [10500, 12900],  // lower bound: tier-aware LT mult (audit #8)
+    forecastRange: [9600, 12300],   // lower bound: marathon max_gain reduced (audit #10)
   },
   {
     name: '8. Endurance → 5K',

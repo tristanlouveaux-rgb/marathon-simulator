@@ -190,30 +190,30 @@ export function showSuggestionModal(
     let zoneAdvice: string;
     if (consecutiveIntensityWeeks != null && consecutiveIntensityWeeks >= 3) {
       // Rule 4 — consecutive intensity-heavy weeks
-      zoneAdvice = `Your last ${consecutiveIntensityWeeks} weeks have been intensity-heavy. Replacing one interval session with an easy run will protect your aerobic base.`;
+      zoneAdvice = `Your last ${consecutiveIntensityWeeks} weeks have been intensity-heavy. Pulling back on intervals protects your aerobic base.`;
     } else if (crossTrainingCause) {
       // Rule 3 — cross-training drove the spike
       const sportLabel = crossTrainingCause === 'generic_sport'
         ? 'cross-training'
         : (SPORT_LABELS[crossTrainingCause as keyof typeof SPORT_LABELS]
             ?? crossTrainingCause.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())).toLowerCase();
-      zoneAdvice = `A heavy ${sportLabel} session pushed your total load above baseline. Your running plan can stay mostly intact — reduce by replacing one easy run with a rest day or lighter session.`;
+      zoneAdvice = `A ${sportLabel} session added load on top of your planned running. The adjustments below bring the week back in line. Quality sessions are preserved where possible.`;
     } else if (kmSpiked) {
       // Rule 2 — running km spiked (mechanical risk)
-      zoneAdvice = 'Your running km spiked this week. Heart rate load is fine — this is a mechanical risk (tendons, bones). Shorten the long run and one easy run rather than cutting intensity.';
+      zoneAdvice = 'Your running km spiked this week. Heart rate load is fine. The risk here is mechanical (tendons, bones), so volume should come down before intensity.';
     } else if (iHeavy) {
       // Rule 1 — ACWR elevated + intensity-heavy
-      zoneAdvice = `Your load is ${pctAboveBaseline}% above your usual weekly volume and most of it was high-intensity work. Cut intervals first — they're the biggest fatigue driver. Threshold sessions next.`;
+      zoneAdvice = `Your load is ${pctAboveBaseline}% above your usual weekly volume and most of it was high-intensity work. Intensity is the biggest fatigue driver, so it should come down before volume.`;
     } else {
       // Rule 5 — trailing zone mix / general
-      zoneAdvice = `Your load has built quickly. The safest cut is your longest run — it carries the most volume. Keep quality sessions if your intensity ratio is within range.`;
+      zoneAdvice = `Your load has built quickly. The safest cuts are to your highest-volume runs. Quality sessions stay intact where possible.`;
     }
     // Human-consequence headline: reference actual load vs baseline (not vs safety ceiling)
     const humanConsequence = status === 'high'
-      ? `You've been training ${pctAboveBaseline}% above your usual weekly load. Your body needs extra recovery before your next hard effort.`
+      ? `This week is ${pctAboveBaseline}% above your usual weekly load. Extra recovery is needed before the next hard effort.`
       : pctAboveCeiling <= 5
       ? `Your load is just above the safe ceiling (${ratio.toFixed(2)}× vs ${safeUpper.toFixed(1)}×). A small adjustment is enough.`
-      : `This week is running ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`;
+      : `This week is ${pctAboveBaseline}% above your usual load. Recovery between sessions matters more than usual.`;
     return `
       <div style="padding:16px 20px 0">
         <div style="${statusBg};border-radius:10px;padding:14px 16px;margin-bottom:4px">
@@ -387,6 +387,12 @@ export function showSuggestionModal(
       <!-- 3 Global Choices -->
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
 
+        ${!hasReductions && !hasReplacements ? `
+        <div style="padding:12px 14px;border-radius:10px;background:var(--c-surface);border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);line-height:1.5">
+          Your remaining runs are already at minimum intensity and distance. The extra load can't be absorbed by trimming this week's plan. Push it to next week or keep the plan and accept the added stimulus.
+        </div>
+        ` : ''}
+
         <!-- REPLACE option (only show if there are replacements) -->
         ${hasReplacements ? `
         <button id="choice-replace" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;border:1.5px solid var(--c-border-strong);background:var(--c-bg);cursor:pointer">
@@ -423,19 +429,20 @@ export function showSuggestionModal(
 
         <!-- PUSH TO NEXT WEEK option (only shown when callback provided) -->
         ${onPushToNextWeek ? `
-        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;border:1.5px solid var(--c-border-strong);background:var(--c-bg);cursor:pointer">
+        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !hasReplacements ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:var(--c-black);font-size:16px">Push to next week</span>
+            <span style="font-weight:700;color:${!hasReductions && !hasReplacements ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Push to next week</span>
+            ${!hasReductions && !hasReplacements ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
           </div>
           <p style="color:var(--c-muted);font-size:13px">Keep this week unchanged. The excess load carries to next week.</p>
         </button>
         ` : ''}
 
         <!-- KEEP option -->
-        <button id="choice-keep" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
+        <button id="choice-keep" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !onPushToNextWeek ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:var(--c-ok);font-size:16px">Keep Plan</span>
-            ${!hasReductions ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
+            <span style="font-weight:700;color:${!hasReductions && !onPushToNextWeek ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Keep Plan</span>
+            ${!hasReductions && !onPushToNextWeek ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
           </div>
           <p style="color:var(--c-muted);font-size:13px">Keep your running plan unchanged.</p>
           ${keepWarning ? `<p style="color:var(--c-caution);font-size:12px;margin-top:6px">${keepWarning}</p>` : ''}

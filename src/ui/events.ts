@@ -945,19 +945,30 @@ export async function next(): Promise<void> {
     // When both signals are available, blend 60% RPE / 40% HR for a combined effort score.
     const nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
     let totalDev = 0, ratedCount = 0;
-    for (const wo of weekWos) {
+    let rpeTotal = 0, rpeCount = 0;
+    let hrTotal = 0, hrCount = 0;
+    // Include both planned workouts and adhoc runs (excess runs logged from Strava)
+    const allRunsForEffort = [
+      ...weekWos,
+      ...(wk.adhocWorkouts ?? []).filter((w: any) => w.id?.startsWith('garmin-') && !nonRunTypes.includes(w.t)),
+    ];
+    for (const wo of allRunsForEffort) {
       if (nonRunTypes.includes(wo.t)) continue;
       const wId = wo.id || wo.n;
       const rating = wk.rated[wId];
       if (typeof rating !== 'number') continue;
       const expected = wo.rpe || wo.r || 5;
       const rpeDev = rating - expected;
+      rpeTotal += rpeDev;
+      rpeCount++;
 
       // Check if this workout has an HR effort score from Strava HR data
       const actual = wk.garminActuals?.[wId];
       const hrScore = actual?.hrEffortScore;
       if (hrScore != null) {
-        // Convert hrEffortScore to same scale as RPE deviation:
+        hrTotal += hrScore;
+        hrCount++;
+        // Convert hrEffortScore to same scale as RPE deviation for legacy blend:
         // hrScore 1.0 → 0 deviation, hrScore 1.2 → +2 deviation (overcooked)
         const hrDev = (hrScore - 1.0) * 10; // 0.1 hrScore ≈ 1 RPE point
         totalDev += rpeDev * 0.6 + hrDev * 0.4;
@@ -968,6 +979,13 @@ export async function next(): Promise<void> {
     }
     if (ratedCount > 0 && !isInjured) {
       wk.effortScore = totalDev / ratedCount;
+    }
+    // Store separate signals for coaching and workout generation
+    if (rpeCount > 0 && !isInjured) {
+      wk.rpeEffort = rpeTotal / rpeCount;
+    }
+    if (hrCount > 0 && !isInjured) {
+      wk.hrEffort = hrTotal / hrCount;
     }
   }
 
@@ -2064,7 +2082,9 @@ export function updateExerciseBreakdown(): void {
  * Check if the given week is a benchmark week (every 4th week within continuous mode).
  */
 export function isBenchmarkWeek(weekNumber: number, continuousMode: boolean): boolean {
-  return continuousMode && weekNumber > 0 && weekNumber % 4 === 0;
+  // Post-deload: first week of each new block (week 5, 9, 13, …).
+  // This is when the athlete is freshest after the deload recovery week.
+  return continuousMode && weekNumber > 4 && (weekNumber - 1) % 4 === 0;
 }
 
 /**
@@ -2423,9 +2443,10 @@ export function removeGarminActivity(garminId: string): void {
     if (!workoutId) continue;
 
     found = true;
+    const adhocId = `garmin-${garminId}`;
+    const wasSlotMatched = !workoutId.startsWith('garmin-');
 
     // Remove from ad-hoc workouts list (garmin adhoc id is "garmin-<garminId>")
-    const adhocId = `garmin-${garminId}`;
     if (wk.adhocWorkouts) {
       wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== adhocId && (w.id || w.n) !== workoutId);
     }
@@ -2437,15 +2458,23 @@ export function removeGarminActivity(garminId: string): void {
       );
     }
 
-    // Remove from pending queue so the activity can be re-matched on next sync
-    if (wk.garminPending) {
-      wk.garminPending = wk.garminPending.filter(p => p.garminId !== garminId);
-    }
-
-    // Clean up all tracking maps — removing from garminMatched allows re-processing on next sync
+    // Un-rate the plan slot
     if (wk.rated) delete wk.rated[workoutId];
-    delete wk.garminMatched[garminId];
-    if (wk.garminActuals) delete wk.garminActuals[workoutId];
+
+    if (wasSlotMatched) {
+      // Slot-matched activity: unassign from the plan slot but keep the activity visible.
+      // Set garminMatched back to __pending__ so it appears in review / pending banner
+      // and can be re-assigned or logged as adhoc.
+      wk.garminMatched[garminId] = '__pending__';
+      if (wk.garminActuals) delete wk.garminActuals[workoutId];
+    } else {
+      // Adhoc activity (garmin-* workoutId): fully remove — user wants it gone.
+      delete wk.garminMatched[garminId];
+      if (wk.garminPending) {
+        wk.garminPending = wk.garminPending.filter(p => p.garminId !== garminId);
+      }
+      if (wk.garminActuals) delete wk.garminActuals[workoutId];
+    }
 
     break; // garminId can only exist in one week's garminMatched
   }

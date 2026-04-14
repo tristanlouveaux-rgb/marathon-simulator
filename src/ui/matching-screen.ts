@@ -72,8 +72,9 @@ function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   return wt === 'cross';
 }
 
-function escHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function escHtml(s: string | null | undefined): string {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /** Type priority for tray sort: runs first, gym second, cross/other last */

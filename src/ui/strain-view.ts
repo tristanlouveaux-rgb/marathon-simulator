@@ -11,20 +11,31 @@ import {
   computePlannedDaySignalBTSS,
   getTrailingEffortScore,
   estimateWorkoutDurMin,
+  computeDayTargetTSS,
+  computePassiveTSS,
+  PASSIVE_TSS_PER_ACTIVE_MIN,
+  REST_DAY_OVERREACH_RATIO,
+  type TargetTSSRange,
 } from '@/calculations/fitness-model';
+import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN } from '@/constants';
 import { generateWeekWorkouts } from '@/workouts';
 import { isTimingMod } from '@/cross-training/timing-check';
 import { formatActivityType } from '@/calculations/activity-matcher';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const CREAM     = '#FDF7F2';
+const CREAM     = '#FAF9F6';
 const GRAD_BG   = 'linear-gradient(180deg, #2d1810 0%, #4a2518 40%, #5d3020 100%)';
 const ORANGE_A  = '#FF9A44';
 const ORANGE_B  = '#FF512F';
-const RING_R    = 57;
-const RING_CIRC = +(2 * Math.PI * RING_R).toFixed(2); // ≈ 358.14
+const TEXT_M    = '#0F172A';
+const TEXT_S    = '#64748B';
+const TEXT_L    = '#94A3B8';
+const RING_R    = 46;
+const RING_CIRC = +(2 * Math.PI * RING_R).toFixed(2);
 
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
@@ -153,34 +164,59 @@ function getLast7Days(today: string, s: SimulatorState): DayData[] {
   return days;
 }
 
-// Rest-day overreach threshold: 33% of average training-day TSS.
-// Based on Whoop's ~33% recovery-day cap, Seiler's polarised model (Zone 1 recovery
-// sessions ≈ 25-35% of a hard session), and TrainingPeaks rest-day TSS guidance.
-const REST_DAY_OVERREACH_RATIO = 0.33;
 
-function getStrainForDate(
-  date: string,
-  s: SimulatorState,
-): { strainPct: number; adhocPct: number; actualTSS: number; targetTSS: number; isRestDay: boolean; plannedDayTSS: number; isOverreaching: boolean; matchedActivityDay: boolean } {
+interface StrainForDate {
+  actualTSS: number;
+  target: TargetTSSRange;
+  plannedDayTSS: number;
+  passiveTSS: number;
+  isRestDay: boolean;
+  isOverreaching: boolean;
+  matchedActivityDay: boolean;
+  readinessLabel: string | null;
+  /** Marker colour: white (normal), amber (Manage Load), red (Ease Back/Overreaching) */
+  markerColor: string;
+}
+
+function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?: ReadinessLabel | null): StrainForDate {
   const today = new Date().toISOString().split('T')[0];
-  const isToday = date === today;
   const wks = s.wks ?? [];
-
-  // Actual Signal B TSS
-  let actualTSS = 0;
   const wkIdx = resolveWkIdx(date, s);
+  const wkForPlan = wks[wkIdx];
+
+  // ── Actual Signal B TSS (logged activities) ────────────────────────────
+  let loggedTSS = 0;
+  const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
   if (s.planStartDate) {
     const wk = wks[wkIdx];
-    if (wk) actualTSS = computeTodaySignalBTSS(wk, date);
+    if (wk) loggedTSS = computeTodaySignalBTSS(wk, date, physioEntry);
   } else {
     const acts = activitiesForDate(date, wks);
-    actualTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / 15000 : sum, 0);
+    loggedTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / 15000 : sum, 0);
   }
 
-  // Target TSS — use planned session TSS only. No baseline fallback (rest days have target 0).
+  // ── Passive TSS (steps + unlogged active minutes) ──────────────────────
+  const loggedActivities = activitiesForDate(date, wks).map(a => ({
+    durationSec: a.durationSec,
+    activityType: a.activityType,
+  }));
+  const passiveTSS = computePassiveTSS(
+    physioEntry?.steps,
+    physioEntry?.activeMinutes,
+    loggedActivities,
+    s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN,
+  );
+  // COUPLING: computeTodaySignalBTSS includes passive via activeMinutes internally.
+  // computePassiveTSS may add step-based TSS on top. Only add the excess.
+  // If computeTodaySignalBTSS ever changes to include passive TSS directly, update this.
+  const passiveExcess = Math.max(0, passiveTSS - (physioEntry?.activeMinutes != null
+    ? Math.max(0, (physioEntry.activeMinutes - loggedActivities.reduce((s2, a) => s2 + a.durationSec / 60, 0))) * (s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN)
+    : 0));
+  const actualTSS = loggedTSS + Math.round(passiveExcess);
+
+  // ── Planned day TSS ────────────────────────────────────────────────────
   const dayOfWeek = (new Date(date + 'T12:00:00').getDay() + 6) % 7;
   let plannedDayTSS = 0;
-  const wkForPlan = wks[wkIdx];
   let plannedWorkouts: any[] = [];
   if (wkForPlan) {
     const viewWeek = wkIdx + 1;
@@ -189,14 +225,12 @@ function getStrainForDate(
       null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
       viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wkForPlan.scheduledAcwrStatus,
     );
-    // Apply day moves so planned TSS matches what the plan view shows
     if (wkForPlan.workoutMoves) {
       for (const [workoutId, newDay] of Object.entries(wkForPlan.workoutMoves)) {
         const w = plannedWorkouts.find((wo: any) => (wo.id || wo.n) === workoutId);
         if (w) (w as any).dayOfWeek = newDay;
       }
     }
-    // Apply distance/type/RPE mods so TSS matches plan card
     if (wkForPlan.workoutMods) {
       for (const mod of wkForPlan.workoutMods) {
         const w = isTimingMod(mod.modReason)
@@ -210,18 +244,20 @@ function getStrainForDate(
       }
     }
     const baseMinPerKm = s.pac?.e ? s.pac.e / 60 : 5.5;
-    // Exclude cross-training from planned strain targets
     const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
     plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, dayOfWeek, baseMinPerKm);
   }
 
-  // Per-session average: CTL / training days (uses all workouts for count)
+  // ── Per-session average + day type ─────────────────────────────────────
+  // Based on planned week TSS (tracks plan intent, not CTL history)
   const baseMinPerKmSess = s.pac?.e ? s.pac.e / 60 : 5.5;
+  const runWorkoutsForAvg = plannedWorkouts.filter((w: any) => w.t !== 'cross');
   const trainingDayCount = wkForPlan ? [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(plannedWorkouts, d, baseMinPerKmSess) > 0).length || 4 : 4;
-  const perSessionAvg = (s.ctlBaseline ?? 0) / trainingDayCount;
+    .filter(d => computePlannedDaySignalBTSS(runWorkoutsForAvg, d, baseMinPerKmSess) > 0).length || 4 : 4;
+  const plannedWeekTSS = [0,1,2,3,4,5,6]
+    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkoutsForAvg, d, baseMinPerKmSess), 0);
+  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
 
-  // Detect matched activity on a day with no generated workout
   let matchedActivityDay = false;
   if (plannedDayTSS === 0 && wkForPlan) {
     for (const [, act] of Object.entries(wkForPlan.garminActuals ?? {})) {
@@ -230,31 +266,42 @@ function getStrainForDate(
       break;
     }
   }
-
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityDay;
 
-  // Rest-day overreach: activity exceeds 50% of per-session average
-  const restDayThreshold = perSessionAvg * 0.5;
+  // ── Readiness label (for target modulation + marker colour) ────────────
+  // Only applies for today — past days display unmodulated targets.
+  // Passed through from the caller (home-view precomputes readiness).
+  const readinessLabel: ReadinessLabel | null = (date === today && todayReadinessLabel) ? todayReadinessLabel : null;
+
+  // ── Readiness-modulated target TSS range ─────────────────────────────────
+  const target = computeDayTargetTSS(
+    plannedDayTSS,
+    readinessLabel as any,
+    perSessionAvg,
+    isRestDay,
+    matchedActivityDay,
+  );
+
+  // ── Overreaching check ─────────────────────────────────────────────────
+  const restDayThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
   const isOverreaching = isRestDay && actualTSS > 0 && perSessionAvg > 0 && actualTSS > restDayThreshold;
 
-  // Strain %: planned days compare vs plan, adhoc days compare vs per-session avg
-  const targetTSS = hasPlannedWorkout ? plannedDayTSS : (matchedActivityDay ? Math.round(perSessionAvg) : 0);
-  let strainPct = 0;
-  if (hasPlannedWorkout && actualTSS > 0 && plannedDayTSS > 0) {
-    strainPct = (actualTSS / plannedDayTSS) * 100;
-  }
-  const adhocPct = matchedActivityDay && perSessionAvg > 0 ? (actualTSS / perSessionAvg) * 100 : 0;
+  // ── Marker colour ──────────────────────────────────────────────────────
+  let markerColor = 'white';
+  if (readinessLabel === 'Manage Load') markerColor = '#F59E0B'; // amber
+  else if (readinessLabel === 'Ease Back' || readinessLabel === 'Overreaching') markerColor = '#EF4444'; // red
 
   return {
-    strainPct,
-    adhocPct,
     actualTSS,
-    targetTSS,
-    isRestDay,
+    target,
     plannedDayTSS,
+    passiveTSS: Math.round(passiveExcess),
+    isRestDay,
     isOverreaching,
     matchedActivityDay,
+    readinessLabel,
+    markerColor,
   };
 }
 
@@ -436,7 +483,7 @@ function buildWeekBarsHTML(weekBarDays: WeekBarDay[]): string {
       tssLabel = day.actualTSS > 0 ? `${Math.round(day.actualTSS)}` : '—';
     }
 
-    const labelColor = day.isToday ? ORANGE_B : '#999';
+    const labelColor = day.isToday ? ORANGE_B : TEXT_L;
     const labelWeight = day.isToday ? '600' : '400';
     const fillColor = day.isToday ? ORANGE_B : 'rgba(0,0,0,0.22)';
     const trackOpacity = day.isFuture ? 0.3 : (day.plannedTSS > 0 ? 1 : 0.4);
@@ -448,72 +495,127 @@ function buildWeekBarsHTML(weekBarDays: WeekBarDay[]): string {
           <div style="position:absolute;inset-y:0;left:0;width:${trackWidth.toFixed(1)}%;height:5px;border-radius:3px;background:rgba(0,0,0,0.06);opacity:${trackOpacity}"></div>
           ${fillPct > 0 ? `<div style="position:absolute;inset-y:0;left:0;width:${(fillPct / 100 * trackWidth).toFixed(1)}%;height:5px;border-radius:3px;background:${fillColor}"></div>` : ''}
         </div>
-        <div style="width:30px;font-size:11px;color:#999;text-align:right">${tssLabel}</div>
+        <div style="width:30px;font-size:11px;color:${TEXT_L};text-align:right">${tssLabel}</div>
       </div>`;
   }).join('');
 
   return `
     <div class="s-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
-      <div style="background:white;border-radius:20px;padding:16px 20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
-        <div style="font-size:13px;font-weight:600;color:#111;margin-bottom:14px">This week</div>
+      <div style="background:white;border-radius:16px;padding:16px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+        <div style="font-size:13px;font-weight:600;color:${TEXT_M};margin-bottom:14px">This week</div>
         ${rows}
       </div>
     </div>`;
 }
 
-function getStrainHTML(s: SimulatorState, displayDate: string): string {
+function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLabel?: ReadinessLabel | null): string {
   const today = new Date().toISOString().split('T')[0];
   const isToday = displayDate === today;
 
-  const { strainPct, adhocPct, actualTSS, targetTSS, isRestDay, plannedDayTSS, isOverreaching, matchedActivityDay } = getStrainForDate(displayDate, s);
+  const strain = getStrainForDate(displayDate, s, todayReadinessLabel);
+  const { actualTSS, target, isRestDay, isOverreaching, matchedActivityDay, passiveTSS } = strain;
   const displayData = getDayData(displayDate, s);
   const sevenDays = getLast7Days(today, s);
   const weekBarDays = getWeekBarDays(displayDate, s, today);
 
-  // Strain zone label based on day type
-  const strainZone = matchedActivityDay
-    ? (adhocPct >= 150 ? 'High' : adhocPct >= 80 ? 'Optimal' : adhocPct >= 50 ? 'Moderate' : 'Light')
-    : (strainPct >= 130 ? 'Exceeded' : strainPct >= 100 ? 'Complete' : strainPct >= 80 ? 'On target' : 'Below target');
+  // ── Ring: multi-colour segments — green → orange → red ─────────────
+  // ringMax = max(2 × target.hi, actual × 1.25) — ring never overflows
+  const ringMax = Math.max(target.hi * 2, actualTSS * 1.25, 1);
 
-  // Ring
-  let ringPct: number;
-  let ringColor: string;
-  if (isRestDay) {
-    ringPct = isOverreaching ? 100 : 0;
-    ringColor = isOverreaching ? '#FF3B30' : `url(#strainGrad)`;
-  } else if (matchedActivityDay) {
-    ringPct = Math.min(adhocPct / 130 * 100, 100); // 130% of per-session avg = full ring
-    ringColor = adhocPct >= 150 ? '#FF3B30' : adhocPct >= 80 ? '#34C759' : `url(#strainGrad)`;
-  } else {
-    ringPct = Math.min(strainPct, 100);
-    ringColor = strainPct >= 130 ? '#FF3B30' : strainPct >= 100 ? '#34C759' : `url(#strainGrad)`;
+  // Status label
+  let statusLabel = '';
+  let statusColor = 'rgba(255,255,255,0.6)';
+  if (isRestDay && isOverreaching) {
+    statusLabel = 'High for a rest day';
+    statusColor = '#FF6B6B';
+  } else if (target.mid > 0 && actualTSS > target.hi) {
+    statusLabel = 'Load exceeded';
+    statusColor = '#FF6B6B';
+  } else if (target.mid > 0 && actualTSS >= target.lo) {
+    statusLabel = 'Target reached';
+    statusColor = '#34C759';
   }
+
+  // Segment arc lengths (in SVG dasharray units)
+  // Green: 0 → min(actual, target.lo)
+  // Orange: target.lo → min(actual, target.hi)
+  // Red: target.hi → actual
+  const hasTarget = target.mid > 0;
+  const greenEnd = hasTarget ? Math.min(actualTSS, target.lo) : actualTSS;
+  const orangeEnd = hasTarget ? Math.min(Math.max(actualTSS - target.lo, 0), target.hi - target.lo) : 0;
+  const redEnd = hasTarget ? Math.max(actualTSS - target.hi, 0) : 0;
+
+  const greenPct = Math.min((greenEnd / ringMax) * 100, 100);
+  const orangePct = Math.min((orangeEnd / ringMax) * 100, 100);
+  const redPct = Math.min((redEnd / ringMax) * 100, 100);
+
+  const greenArc = RING_CIRC * (greenPct / 100);
+  const orangeArc = RING_CIRC * (orangePct / 100);
+  const redArc = RING_CIRC * (redPct / 100);
+
+  // Conic-gradient stops (smooth blend between segments).
+  // Each stop is multiplied by --strain-arc (0→1) so the whole arc sweeps in on reveal.
+  // BLEND = half-width of each color-to-color transition, in degrees (wide for a long blend).
+  // FADE  = length of the soft transparent→colour fade at each end of the arc.
+  const BLEND = 18;
+  const FADE = 4;
+  const toDeg = (arc: number) => (arc / RING_CIRC) * 360;
+  const gEnd = toDeg(greenArc);
+  const oEnd = toDeg(greenArc + orangeArc);
+  const totalDeg = toDeg(greenArc + orangeArc + redArc);
+  const stop = (deg: number) => `calc(${deg.toFixed(3)} * var(--strain-arc) * 1deg)`;
+  const ringGradient = (() => {
+    const s: string[] = [];
+    if (totalDeg <= 0) return '';
+    // Soft fade-in from transparent at 0 → first colour at FADE deg.
+    s.push(`transparent 0deg`);
+    s.push(`#34C759 ${stop(FADE)}`);
+    if (orangeArc > 0) {
+      s.push(`#34C759 ${stop(Math.max(FADE, gEnd - BLEND))}`);
+      s.push(`#FF9500 ${stop(gEnd + BLEND)}`);
+      if (redArc > 0) {
+        s.push(`#FF9500 ${stop(Math.max(gEnd + BLEND, oEnd - BLEND))}`);
+        s.push(`#FF3B30 ${stop(oEnd + BLEND)}`);
+        s.push(`#FF3B30 ${stop(Math.max(oEnd + BLEND, totalDeg - FADE))}`);
+      } else {
+        s.push(`#FF9500 ${stop(Math.max(gEnd + BLEND, totalDeg - FADE))}`);
+      }
+    } else if (redArc > 0) {
+      s.push(`#34C759 ${stop(Math.max(FADE, gEnd - BLEND))}`);
+      s.push(`#FF3B30 ${stop(gEnd + BLEND)}`);
+      s.push(`#FF3B30 ${stop(Math.max(gEnd + BLEND, totalDeg - FADE))}`);
+    } else {
+      s.push(`#34C759 ${stop(Math.max(FADE, totalDeg - FADE))}`);
+    }
+    // Soft fade-out to transparent at totalDeg.
+    s.push(`transparent ${stop(totalDeg)}`);
+    s.push(`transparent 360deg`);
+    return `conic-gradient(from -90deg, ${s.join(', ')})`;
+  })();
+
+
+  // Target label: show range
+  const targetLabel = target.mid > 0
+    ? (target.lo === target.hi ? `${target.mid}` : `${target.lo}\u2013${target.hi}`)
+    : '';
 
   // Ring inner content
   let ringInnerHTML: string;
-  if (isRestDay && isOverreaching) {
+  if (isRestDay && actualTSS === 0) {
     ringInnerHTML = `
-      <div style="font-size:22px;font-weight:300;color:rgba(255,255,255,0.9);line-height:1">Rest day</div>
-      <div style="font-size:18px;font-weight:600;color:#FF3B30;margin-top:4px">${Math.round(actualTSS)} TSS</div>
-      <div style="font-size:10px;color:rgba(255,255,255,0.6);margin-top:2px">High for a rest day</div>`;
-  } else if (isRestDay) {
-    ringInnerHTML = `
-      <div style="font-size:22px;font-weight:300;color:rgba(255,255,255,0.7);line-height:1">Rest day</div>
-      ${actualTSS > 0 ? `<div style="font-size:11px;color:rgba(255,255,255,0.5);margin-top:5px">${Math.round(actualTSS)} TSS logged</div>` : ''}`;
-  } else if (matchedActivityDay && actualTSS > 0) {
-    ringInnerHTML = `
-      <div style="display:flex;align-items:baseline;color:white;font-weight:700;text-shadow:0 1px 8px rgba(0,0,0,0.25)">
-        <span style="font-size:42px;letter-spacing:-0.03em;line-height:1">${Math.round(actualTSS)}</span>
-        <span style="font-size:16px;margin-left:3px;font-weight:400;opacity:0.7">TSS</span>
-      </div>
-      <span style="color:${strainPct >= 150 ? '#FF6B6B' : strainPct >= 80 ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.6)'};font-size:12px;font-weight:600;margin-top:2px;text-shadow:0 1px 4px rgba(0,0,0,0.2)">${strainZone}</span>`;
+      <div style="font-size:22px;font-weight:300;color:${TEXT_S};line-height:1">Rest day</div>
+      ${targetLabel ? `<div style="font-size:11px;color:${TEXT_L};margin-top:5px">Target ${targetLabel} TSS</div>` : ''}`;
   } else {
     ringInnerHTML = `
-      <div style="display:flex;align-items:baseline;color:white;font-weight:700;text-shadow:0 1px 8px rgba(0,0,0,0.25)">
-        <span style="font-size:52px;letter-spacing:-0.03em;line-height:1">${Math.round(strainPct)}</span>
-        <span style="font-size:22px;margin-left:1px">%</span>
+      <div style="display:flex;align-items:baseline;color:${TEXT_M};font-weight:700">
+        <span style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1">${Math.round(actualTSS)}</span>
+        <span style="font-size:16px;margin-left:3px;font-weight:400;color:${TEXT_S}">TSS</span>
       </div>
-      <span style="color:rgba(255,255,255,0.78);font-size:11px;font-weight:500;margin-top:-2px;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Today's Strain</span>`;
+      ${targetLabel
+        ? `<div style="font-size:11px;color:${TEXT_S};margin-top:3px">Target ${targetLabel} TSS</div>`
+        : `<div style="font-size:11px;color:${TEXT_L};margin-top:3px">${isRestDay ? 'Rest day' : 'No target'}</div>`
+      }
+      ${statusLabel ? `<div style="font-size:10px;font-weight:600;color:${statusColor};margin-top:2px">${statusLabel}</div>` : ''}`;
   }
 
   // Date picker pills (last 7 days, oldest → today)
@@ -522,8 +624,8 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
     return `<button class="strain-date-pill" data-date="${d.date}" style="
       padding:6px 16px;border-radius:100px;border:none;cursor:pointer;
       font-size:13px;font-weight:${active ? '600' : '400'};font-family:var(--f);
-      background:${active ? 'rgba(255,255,255,0.22)' : 'transparent'};
-      color:${active ? 'white' : 'rgba(255,255,255,0.55)'};
+      background:${active ? 'rgba(0,0,0,0.06)' : 'transparent'};
+      color:${active ? TEXT_M : TEXT_S};
       backdrop-filter:${active ? 'blur(8px)' : 'none'};
       white-space:nowrap;transition:background 0.15s,color 0.15s;
     ">${fmtDateShort(d.date, today)}</button>`;
@@ -537,12 +639,13 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
         const name = a.displayName || a.workoutName || formatActivityType(a.activityType ?? '');
         const timeStr = a.startTime ? fmtTime(a.startTime) : '';
         const durStr  = fmtDurMin(a.durationSec);
+        const calStr  = a.calories != null && a.calories > 0 ? `${a.calories} kcal` : '';
         const tss     = a.iTrimp != null ? Math.round((a.iTrimp * 100) / 15000) : null;
         return `
           <div class="strain-act-row" data-garmin-id="${a.garminId}" style="
             display:flex;align-items:center;gap:12px;
-            background:white;border-radius:20px;padding:12px 16px;
-            box-shadow:0 4px 20px -2px rgba(0,0,0,0.05);
+            background:white;border-radius:16px;padding:12px 16px;
+            box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);
             cursor:pointer;margin-bottom:10px;
             transition:transform 0.1s;
           ">
@@ -560,8 +663,8 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
               ">${tss}</div>` : ''}
             </div>
             <div style="flex:1;min-width:0">
-              <div style="font-size:15px;font-weight:600;color:#111">${name}</div>
-              <div style="font-size:13px;color:#999;margin-top:1px">${timeStr}${timeStr && durStr ? ' · ' : ''}${durStr}</div>
+              <div style="font-size:15px;font-weight:600;color:${TEXT_M}">${name}</div>
+              <div style="font-size:13px;color:${TEXT_L};margin-top:1px">${[timeStr, durStr, calStr].filter(Boolean).join(' · ')}</div>
             </div>
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ccc" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
           </div>`;
@@ -572,12 +675,28 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
       #strain-view { box-sizing: border-box; }
       #strain-view *, #strain-view *::before, #strain-view *::after { box-sizing: inherit; }
       @keyframes strainFloatUp {
-        from { opacity:0; transform:translateY(10px); }
-        to   { opacity:1; transform:translateY(0); }
+        from { opacity:0; transform:translateY(16px) scale(0.97); }
+        to   { opacity:1; transform:translateY(0) scale(1); }
       }
-      .s-fade { opacity:0; animation:strainFloatUp 0.55s ease-out forwards; }
+      /* Registered custom property — animating it drives the conic-gradient sweep
+         AND the end-cap rotation (inherits:true so descendants read the animated value). */
+      @property --strain-arc {
+        syntax: '<number>';
+        inherits: true;
+        initial-value: 0;
+      }
+      @keyframes strainArcSweep {
+        from { --strain-arc: 0; }
+        to   { --strain-arc: 1; }
+      }
+      @keyframes strainCapFade {
+        from { opacity: 0; }
+        to   { opacity: 1; }
+      }
+      .s-fade { opacity:0; animation:strainFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .strain-act-row:active { transform:scale(0.98); }
-      .strain-date-pill:hover { background:rgba(255,255,255,0.15)!important; color:white!important; }
+      .strain-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
+      ${skyAnimationCSS('str')}
     </style>
 
     <div id="strain-view" style="
@@ -585,16 +704,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      <!-- ── Dark gradient top ───────────────────────────────────────── -->
-      <div style="
-        position:absolute;top:0;left:0;right:0;height:480px;
-        background:${GRAD_BG};overflow:hidden;pointer-events:none;z-index:0;
-      ">
-        <div style="position:absolute;width:280px;height:280px;border-radius:50%;background:${ORANGE_A};filter:blur(80px);opacity:0.5;top:-50px;left:-80px"></div>
-        <div style="position:absolute;width:240px;height:240px;border-radius:50%;background:${ORANGE_B};filter:blur(80px);opacity:0.45;top:150px;right:-60px"></div>
-        <div style="position:absolute;width:150px;height:150px;border-radius:50%;background:#E5AA86;filter:blur(60px);opacity:0.4;bottom:60px;left:25%"></div>
-        <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 55%,${CREAM})"></div>
-      </div>
+      ${buildSkyBackground('str', 'teal')}
 
       <!-- ── Scrollable content ──────────────────────────────────────── -->
       <div style="position:relative;z-index:10;padding-bottom:48px">
@@ -607,17 +717,18 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
         ">
           <button id="strain-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
-            background:rgba(255,255,255,0.15);backdrop-filter:blur(8px);
-            display:flex;align-items:center;justify-content:center;color:white;
+            background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);
+            box-shadow:0 1px 4px rgba(0,0,0,0.08);
+            display:flex;align-items:center;justify-content:center;color:${TEXT_M};
           ">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
 
           <div style="text-align:center">
-            <div style="font-size:20px;font-weight:600;color:white;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Today's Strain</div>
+            <div style="font-size:20px;font-weight:700;color:${TEXT_M}">Today's Strain</div>
             <button id="strain-date-btn" style="
               display:flex;align-items:center;gap:4px;margin:3px auto 0;
-              font-size:12px;color:rgba(255,255,255,0.78);font-weight:500;
+              font-size:12px;color:${TEXT_S};font-weight:500;
               background:none;border:none;cursor:pointer;font-family:var(--f);
             ">
               ${fmtDateLong(displayDate)}
@@ -627,8 +738,9 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
 
           <button id="strain-info-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
-            background:rgba(255,255,255,0.2);backdrop-filter:blur(8px);
-            display:flex;align-items:center;justify-content:center;color:white;
+            background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);
+            box-shadow:0 1px 4px rgba(0,0,0,0.08);
+            display:flex;align-items:center;justify-content:center;color:${TEXT_M};
           ">
             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
           </button>
@@ -644,29 +756,47 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
 
         <!-- Ring -->
         <div class="s-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div style="
-            position:relative;width:220px;height:220px;
-            display:flex;align-items:center;justify-content:center;
-            background:rgba(255,255,255,0.18);backdrop-filter:blur(20px);
-            border-radius:50%;border:1px solid rgba(255,255,255,0.3);
-            box-shadow:0 8px 60px -10px rgba(0,0,0,0.35);
-          ">
-            <svg width="180" height="180" viewBox="0 0 130 130" style="transform:rotate(-90deg)">
-              <defs>
-                <linearGradient id="strainGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="${ORANGE_A}"/>
-                  <stop offset="100%" stop-color="${ORANGE_B}"/>
-                </linearGradient>
-              </defs>
-              <circle cx="65" cy="65" r="${RING_R}" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="12"/>
-              <circle id="strain-ring-circle" cx="65" cy="65" r="${RING_R}" fill="none"
-                stroke="${ringColor}" stroke-width="12" stroke-linecap="round"
-                stroke-dasharray="${RING_CIRC}"
-                stroke-dashoffset="${RING_CIRC}"
-                style="transition:stroke-dashoffset 1.4s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
-              />
+          <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;${ringGradient ? `animation:strainArcSweep 1.4s cubic-bezier(0.2,0.8,0.2,1) 0.15s both;` : ''}">
+            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <!-- Track (inner fill + grey track stroke) -->
+              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
             </svg>
-            <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:6px">
+            ${ringGradient ? `
+            <!-- Smoothly-blended colour ring via conic-gradient, masked to ring shape.
+                 Inherits --strain-arc from .strain-ring-wrap so its stops animate 0→1. -->
+            <div id="strain-ring-gradient" style="
+              position:absolute;inset:0;border-radius:50%;
+              background:${ringGradient};
+              -webkit-mask:radial-gradient(circle closest-side at 50% 50%,
+                transparent 0 80%, rgba(0,0,0,0.35) 82%, #000 85% 98.5%, rgba(0,0,0,0.35) 99.6%, transparent 100%);
+              mask:radial-gradient(circle closest-side at 50% 50%,
+                transparent 0 80%, rgba(0,0,0,0.35) 82%, #000 85% 98.5%, rgba(0,0,0,0.35) 99.6%, transparent 100%);
+            "></div>
+            <!-- Round cap at start (12 o'clock, always green since arc begins green) -->
+            <div class="strain-cap" style="
+              position:absolute;top:0;left:46%;width:8%;aspect-ratio:1;
+              border-radius:50%;background:#34C759;
+              box-shadow:0 1px 3px rgba(0,0,0,0.08);
+              animation:strainCapFade 0.4s ease-out 0.15s both;
+            "></div>
+            <!-- Round cap at arc end. Outer wrapper rotates with --strain-arc; cap at 12 o'clock inside. -->
+            <div class="strain-cap-rotator" style="
+              position:absolute;inset:0;pointer-events:none;
+              transform:rotate(calc(var(--strain-arc) * ${totalDeg.toFixed(2)}deg));
+            ">
+              <div class="strain-cap" style="
+                position:absolute;top:0;left:46%;width:8%;aspect-ratio:1;
+                border-radius:50%;background:${redArc > 0 ? '#FF3B30' : orangeArc > 0 ? '#FF9500' : '#34C759'};
+                box-shadow:0 1px 3px rgba(0,0,0,0.08);
+                animation:strainCapFade 0.4s ease-out 0.15s both;
+              "></div>
+            </div>` : ''}
+            <div style="
+              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
+              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
+              width:180px;height:180px;border-radius:50%;
+              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
+            ">
               ${ringInnerHTML}
             </div>
           </div>
@@ -677,22 +807,42 @@ function getStrainHTML(s: SimulatorState, displayDate: string): string {
 
         <!-- Timeline -->
         <div class="s-fade" style="animation-delay:0.28s;padding:0 16px;margin-bottom:14px">
-          <h2 style="font-size:15px;font-weight:600;color:#111;margin:0 0 12px 4px">Timeline</h2>
+          <h2 style="font-size:17px;font-weight:700;color:${TEXT_M};margin:0 0 16px 2px;letter-spacing:-0.01em">Timeline</h2>
           ${timelineHTML}
         </div>
 
-        <!-- Steps placeholder -->
+        <!-- Steps + passive strain -->
         <div class="s-fade" style="animation-delay:0.38s;padding:0 16px">
-          <div style="background:white;border-radius:20px;padding:16px 20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05)">
-            <div style="font-size:12px;color:#9CA3AF;margin-bottom:8px">Daily steps</div>
-            <div style="font-size:28px;font-weight:300;color:#999;line-height:1">—</div>
-            <div style="font-size:11px;color:#bbb;margin-top:6px">Garmin steps coming soon</div>
+          <div style="background:white;border-radius:16px;padding:16px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+            <div style="font-size:12px;color:${TEXT_L};margin-bottom:8px">Daily steps</div>
+            ${(() => {
+              const physio = (s.physiologyHistory ?? []).find(e => e.date === displayDate);
+              const steps = physio?.steps;
+              if (steps != null && steps > 0) {
+                return `
+                  <div style="font-size:28px;font-weight:300;color:${TEXT_M};line-height:1">${steps.toLocaleString()}</div>
+                  ${passiveTSS > 0 ? `<div style="font-size:11px;color:${TEXT_L};margin-top:6px">${passiveTSS} passive TSS from background activity</div>` : ''}`;
+              }
+              return `
+                <div style="font-size:28px;font-weight:300;color:${TEXT_L};line-height:1">\u2014</div>
+                <div style="font-size:11px;color:${TEXT_L};margin-top:6px">No step data for this day</div>`;
+            })()}
           </div>
         </div>
 
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Info overlay ──────────────────────────────────────────────────────────────
@@ -705,28 +855,30 @@ function showStrainInfoOverlay(): void {
     background:rgba(0,0,0,0.5);
   `;
   overlay.innerHTML = `
-    <div style="background:white;border-radius:24px;padding:24px;max-width:380px;width:100%">
+    <div style="background:white;border-radius:16px;padding:24px;max-width:380px;width:100%">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <h2 style="font-size:17px;font-weight:700;margin:0;color:#111">What is Today's Strain?</h2>
+        <h2 style="font-size:17px;font-weight:700;margin:0;color:${TEXT_M}">What is Today's Strain?</h2>
         <button id="strain-info-close" style="
           border:none;background:rgba(0,0,0,0.07);border-radius:50%;
-          width:32px;height:32px;cursor:pointer;color:#555;
+          width:32px;height:32px;cursor:pointer;color:${TEXT_S};
           display:flex;align-items:center;justify-content:center;font-size:16px;
         ">✕</button>
       </div>
-      <p style="font-size:14px;line-height:1.6;color:#555;margin:0 0 12px">
-        Strain is today's completed physiological load as a percentage of the day's target. 100% means the planned session is done.
+      <p style="font-size:14px;line-height:1.6;color:${TEXT_S};margin:0 0 12px">
+        The ring shows total physiological load (TSS) for the day. Colour changes as load increases relative to the target range.
       </p>
-      <p style="font-size:14px;line-height:1.6;color:#555;margin:0 0 16px">
-        It uses <strong>Signal B</strong> — raw physiological load with no sport discount. A 60-minute padel session and a 60-minute easy run at the same intensity contribute equally.
+      <p style="font-size:14px;line-height:1.6;color:${TEXT_S};margin:0 0 12px">
+        Load includes logged activities plus passive strain from steps and unlogged movement. Uses <strong>Signal B</strong> (raw physiological load, no sport discount).
+      </p>
+      <p style="font-size:14px;line-height:1.6;color:${TEXT_S};margin:0 0 16px">
+        The target adjusts based on readiness. When recovery is suppressed, the target drops automatically.
       </p>
       <div style="background:#FFF3ED;border-radius:14px;padding:14px">
-        <div style="font-size:11px;font-weight:600;color:${ORANGE_B};margin-bottom:10px;letter-spacing:0.05em">THRESHOLDS</div>
-        <div style="font-size:13px;color:#555;line-height:2">
-          <div><strong style="color:#111">0–50%</strong> — No readiness effect. Session underway.</div>
-          <div><strong style="color:#111">50–100%</strong> — Readiness floor applies progressively.</div>
-          <div><strong style="color:#111">100%+</strong> — Target hit. No additional training recommended.</div>
-          <div><strong style="color:#111">130%+</strong> — Load well exceeded. Injury risk elevated.</div>
+        <div style="font-size:11px;font-weight:600;color:${ORANGE_B};margin-bottom:10px;letter-spacing:0.05em">RING COLOURS</div>
+        <div style="font-size:13px;color:${TEXT_S};line-height:2">
+          <div><strong style="color:#34C759">Green</strong> — below target range, building toward it</div>
+          <div><strong style="color:#FF9500">Orange</strong> — inside target range</div>
+          <div><strong style="color:#FF3B30">Red</strong> — above target range, load exceeded</div>
         </div>
       </div>
     </div>
@@ -736,71 +888,13 @@ function showStrainInfoOverlay(): void {
   document.getElementById('strain-info-close')?.addEventListener('click', () => overlay.remove());
 }
 
-// ── Activity detail overlay ───────────────────────────────────────────────────
-
-function showActivityDetail(act: GarminActual): void {
-  const name    = act.displayName || act.workoutName || formatActivityType(act.activityType ?? '');
-  const timeStr = act.startTime ? fmtTime(act.startTime) : '—';
-  const tss     = act.iTrimp != null ? Math.round((act.iTrimp * 100) / 15000) : null;
-
-  const rows = [
-    { label: 'Duration',      value: fmtDurMin(act.durationSec) },
-    { label: 'Distance',      value: (act.distanceKm ?? 0) > 0.05 ? `${act.distanceKm!.toFixed(2)} km` : '—' },
-    { label: 'Avg HR',        value: act.avgHR != null ? `${act.avgHR} bpm` : '—' },
-    { label: 'Max HR',        value: act.maxHR != null ? `${act.maxHR} bpm` : '—' },
-    { label: 'Signal B TSS',  value: tss != null ? String(tss) : '—' },
-    { label: 'Calories',      value: act.calories != null ? `${act.calories} kCal` : '—' },
-  ];
-
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position:fixed;inset:0;z-index:300;
-    display:flex;align-items:center;justify-content:center;padding:20px;
-    background:rgba(0,0,0,0.5);
-  `;
-  overlay.innerHTML = `
-    <div style="background:white;border-radius:24px;padding:24px;max-width:380px;width:100%">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px">
-        <div>
-          <div style="font-size:18px;font-weight:700;color:#111">${name}</div>
-          <div style="font-size:13px;color:#999;margin-top:3px">${timeStr}</div>
-        </div>
-        <button id="act-detail-close" style="
-          border:none;background:rgba(0,0,0,0.07);border-radius:50%;
-          width:32px;height:32px;cursor:pointer;color:#555;flex-shrink:0;
-          display:flex;align-items:center;justify-content:center;font-size:16px;
-        ">✕</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        ${rows.map(r => `
-          <div style="background:#F8F8F8;border-radius:14px;padding:14px">
-            <div style="font-size:11px;color:#999;margin-bottom:5px;font-weight:500">${r.label}</div>
-            <div style="font-size:20px;font-weight:600;color:#111">${r.value}</div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-  document.getElementById('act-detail-close')?.addEventListener('click', () => overlay.remove());
-}
-
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-function wireStrainHandlers(s: SimulatorState, displayDate: string): void {
-  const { strainPct, adhocPct, isRestDay, isOverreaching, matchedActivityDay } = getStrainForDate(displayDate, s);
-  const ringPct = isRestDay ? (isOverreaching ? 100 : 0)
-    : matchedActivityDay ? Math.min(adhocPct / 130 * 100, 100)
-    : Math.min(strainPct, 100);
+function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadinessLabel?: ReadinessLabel | null): void {
+  // Ring reveal is handled by CSS (#strain-ring-gradient opacity animation).
 
-  // Animate ring after first paint
-  setTimeout(() => {
-    const circle = document.getElementById('strain-ring-circle') as SVGCircleElement | null;
-    if (circle) {
-      circle.style.strokeDashoffset = String((RING_CIRC * (1 - ringPct / 100)).toFixed(2));
-    }
-  }, 50);
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
 
   // Back → home
   document.getElementById('strain-back-btn')?.addEventListener('click', () => {
@@ -825,7 +919,7 @@ function wireStrainHandlers(s: SimulatorState, displayDate: string): void {
   // Info overlay
   document.getElementById('strain-info-btn')?.addEventListener('click', () => showStrainInfoOverlay());
 
-  // Timeline activity detail
+  // Timeline activity detail — navigate to full activity detail page
   document.querySelectorAll<HTMLElement>('.strain-act-row').forEach(row => {
     row.addEventListener('click', () => {
       const gid = row.dataset.garminId;
@@ -833,19 +927,23 @@ function wireStrainHandlers(s: SimulatorState, displayDate: string): void {
       const act = (s.wks ?? [])
         .flatMap(wk => Object.values(wk.garminActuals ?? {}))
         .find(a => a.garminId === gid);
-      if (act) showActivityDetail(act);
+      if (!act) return;
+      const name = act.displayName || act.workoutName || formatActivityType(act.activityType ?? '') || 'Activity';
+      import('./activity-detail').then(({ renderActivityDetail }) => {
+        renderActivityDetail(act, name, 'strain');
+      });
     });
   });
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-export function renderStrainView(date?: string): void {
+export function renderStrainView(date?: string, readinessLabel?: ReadinessLabel | null): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
   const today = new Date().toISOString().split('T')[0];
   const displayDate = date ?? today;
-  container.innerHTML = getStrainHTML(s, displayDate);
-  wireStrainHandlers(s, displayDate);
+  container.innerHTML = getStrainHTML(s, displayDate, readinessLabel);
+  wireStrainHandlers(s, displayDate, readinessLabel);
 }

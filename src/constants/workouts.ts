@@ -122,6 +122,7 @@ export const LOAD_PROFILES: Record<string, {
   base?: number; threshold?: number; intensity?: number;
 }> = {
   'easy':          { aerobic: 0.95, anaerobic: 0.05, base: 0.94, threshold: 0.05, intensity: 0.01 },
+  'recovery':      { aerobic: 0.98, anaerobic: 0.02, base: 0.99, threshold: 0.01, intensity: 0.00 },
   'long':          { aerobic: 0.90, anaerobic: 0.10, base: 0.88, threshold: 0.10, intensity: 0.02 },
   'threshold':     { aerobic: 0.70, anaerobic: 0.30, base: 0.15, threshold: 0.65, intensity: 0.20 },
   'vo2':           { aerobic: 0.50, anaerobic: 0.50, base: 0.10, threshold: 0.35, intensity: 0.55 },

@@ -1,8 +1,9 @@
 /**
- * Week-End Debrief
+ * Week-End Debrief — 3-step flow
  *
- * A focused modal that fires once at the end of each training week.
- * Replaces the welcome-back modal (ISSUE-81).
+ * Step 1: Week Summary (metrics, signals, coach copy)
+ * Step 2: Analysis Animation (~2.5s checklist with progress bar)
+ * Step 3: Suggested Plan (adjusted vs standard, change annotations)
  *
  * Trigger paths:
  *   1. User taps "Wrap up week" button in the current week header (plan-view)
@@ -12,22 +13,18 @@
  *   3. Auto: on plan-view render on Sunday (guarded by lastDebriefShownDate)
  *      → mode 'complete'
  *
- * Content:
- *   - Distance completed
- *   - Total training load (TSS)
- *   - Running Fitness (CTL value + delta)
- *   - Effort trend — if effortScore significantly off, offer one pacing adjustment
- *   - Next week preview (phase + planned TSS)
- *
  * Internal names (ATL/CTL/TSB/rpeAdj) must NOT appear in user-facing copy.
  */
 
 import { getState, getMutableState, saveState } from '@/state';
-import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB } from '@/calculations/fitness-model';
+import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore } from '@/calculations/fitness-model';
 import { formatKm } from '@/utils/format';
-import { renderHomeView } from '@/ui/home-view';
 import { next } from '@/ui/events';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
+import { planWeekSessions, effortMultiplier } from '@/workouts/plan_engine';
+import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
+import { generateWeekWorkouts } from '@/workouts/generator';
+import { getHREffort } from '@/calculations/activity-matcher';
 
 // ─── Phase helpers (local — same mapping as plan-view) ────────────────────────
 
@@ -48,31 +45,39 @@ function phaseBadge(ph: string): string {
   return `<span style="font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;background:${c.bg};color:${c.text}">${label}</span>`;
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
+
+const ANALYSIS_STEPS = [
+  'Analysing heart rate data',
+  'Comparing pace vs HR targets',
+  'Factoring in RPE feedback',
+  'Evaluating training load vs plan',
+  'Checking recovery signals',
+  'Building next week',
+];
+
+const STEP_DELAY_MS = 500; // time per analysis step
+const RING_RADIUS = 56;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS; // ~351.86
+const TOTAL_ANIMATION_MS = ANALYSIS_STEPS.length * STEP_DELAY_MS + 600; // total ring fill duration
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Check if the week-end debrief should fire automatically (missed-week path).
- * Returns true if the completed week has not yet been debriefed.
- */
 export function shouldAutoDebrief(): boolean {
   const s = getState() as any;
-  const completedWeek = (s.w ?? 1) - 1; // previous week (now complete)
+  const completedWeek = (s.w ?? 1) - 1;
   if (completedWeek < 1) return false;
   if ((s.lastDebriefWeek ?? 0) >= completedWeek) return false;
   return true;
 }
 
-/**
- * Check if the Sunday end-of-week debrief should auto-show.
- * Returns true when:
- *   - Today is Sunday (ourDay() === 6)
- *   - The debrief hasn't been auto-shown today yet
- */
 export function shouldShowSundayDebrief(): boolean {
   const s = getState() as any;
   if (!s.wks || !s.w || !s.hasCompletedOnboarding) return false;
   const js = new Date().getDay();
-  const isSunday = js === 0; // Sunday in JS land
+  const isSunday = js === 0;
   if (!isSunday) return false;
   const today = new Date().toISOString().split('T')[0];
   if ((s.lastDebriefShownDate ?? '') === today) return false;
@@ -80,27 +85,24 @@ export function shouldShowSundayDebrief(): boolean {
 }
 
 /**
- * Show the week-end debrief.
- *
- * @param forWeek   Week number to summarise. Defaults to s.w - 1 (auto/review path).
- *                  Pass s.w for the Sunday/complete path.
- * @param mode      'complete' → CTA calls next() to advance week.
- *                  'review'  → CTA just closes and records (week already advanced).
+ * Show the week-end debrief (Step 1: Summary).
  */
-export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 'review'): void {
+export function showWeekDebrief(
+  forWeek?: number,
+  mode: 'complete' | 'review' = 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
+): void {
+  // Dedupe: if a debrief modal is already mounted, don't stack another (breaks handlers).
+  if (document.getElementById('week-debrief-modal')) return;
   const s = getState() as any;
   const weekNum = forWeek ?? (s.w ?? 1) - 1;
-  if (weekNum < 1 || !s.wks?.[weekNum - 1]) return;
-
-  // Mark as shown today (prevents auto re-fire on same day even if cancelled)
-  const ms = getMutableState() as any;
-  ms.lastDebriefShownDate = new Date().toISOString().split('T')[0];
-  saveState();
+  if (weekNum < 1 || !s.wks?.[weekNum - 1]) {
+    return;
+  }
 
   const wk = s.wks[weekNum - 1];
-  const nextWk = s.wks[weekNum] ?? null;
 
-  // ── Compute metrics ────────────────────────────────────────────────────────
+  // ── Compute metrics ──────────────────────────────────────────────────────
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeedMultiplier = 1 + Math.min(0.1 * (s.gs ?? 0), 0.3);
@@ -111,32 +113,87 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
   const ctlNow  = metrics[weekNum - 1]?.ctl  ?? null;
   const ctlPrev = metrics[weekNum - 2]?.ctl  ?? null;
   const ctlDelta = ctlNow != null && ctlPrev != null ? Math.round((ctlNow - ctlPrev) * 10) / 10 : null;
-  // Display CTL as daily-equivalent (÷7)
   const ctlDisplay = ctlNow != null ? Math.round((ctlNow / 7) * 10) / 10 : null;
 
-  // Signal B (raw physiological TSS — all sports, no runSpec discount)
   const weekRawTSS = Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate));
-  // Signal A (run-equivalent, still needed for coach signals)
-  const actualTSS = wk.actualTSS ?? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate);
-  // Signal B planned — must match the denominator used in the plan bar
   const plannedTSS = computePlannedSignalB(
     s.historicWeeklyTSS, s.ctlBaseline, wk.ph, tier, s.rw, undefined, undefined, s.sportBaselineByType,
   );
-  // % of plan: Signal B actual vs Signal B planned (never mix signals)
-  // Expressed as delta from plan (e.g. +14% means 14% over, -10% means 10% under)
   const tssPct = plannedTSS > 0 ? Math.round((weekRawTSS / plannedTSS) * 100) - 100 : null;
 
-  // Distance: use wk.completedKm if set, otherwise sum garminActuals
   const rawKm = wk.completedKm
     ?? Object.values(wk.garminActuals ?? {}).reduce((sum: number, a: any) => sum + (a.distanceKm ?? 0), 0);
   const distanceKm = rawKm > 0 ? Math.round(rawKm * 10) / 10 : null;
 
-  const effortScore: number | null = wk.effortScore ?? null;
-  const effortHigh  = effortScore != null && effortScore >  1.0;
-  const effortLow   = effortScore != null && effortScore < -1.0;
-  const showPacing  = effortHigh || effortLow;
+  // Compute RPE effort and HR effort separately — two distinct signals.
+  // RPE effort: how hard users rated workouts vs expected (deviation scale, +/- from 0).
+  // HR effort: average hrEffortScore from garminActuals (1.0 = on target, >1.0 = overcooked).
+  let rpeScore: number | null = wk.rpeEffort ?? wk.effortScore ?? null; // prefer pure RPE, fall back to legacy blend
+  let avgHrEffort: number | null = null;
 
-  // ── Coach insight ──────────────────────────────────────────────────────────
+  // Compute on-the-fly from this week's data (always prefer fresh over stored).
+  const _RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  const _nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+  {
+    // Generate workouts the same way events.ts does (wk.workouts is not populated until advance)
+    const prevSkips = weekNum > 1 ? (s.wks[weekNum - 2]?.skip ?? []) : [];
+    const injuryState = s.injuryState?.active ? s.injuryState : null;
+    const weekWos = generateWeekWorkouts(
+      wk.ph, s.rw, s.rd, s.typ, prevSkips, s.commuteConfig,
+      injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
+      undefined, undefined, weekNum, s.tw, undefined, s.gs,
+      getTrailingEffortScore(s.wks, weekNum), wk.scheduledAcwrStatus,
+    );
+    // Apply mods so replaced workouts have correct RPE
+    if (wk.workoutMods) {
+      for (const mod of wk.workoutMods as any[]) {
+        const wo = weekWos.find((w: any) => w.n === mod.name && (mod.dayOfWeek == null || w.dayOfWeek === mod.dayOfWeek));
+        if (wo && mod.newRpe != null) { (wo as any).rpe = mod.newRpe; (wo as any).r = mod.newRpe; }
+      }
+    }
+    const allRunsForEffort = [
+      ...weekWos,
+      ...(wk.adhocWorkouts ?? []).filter((w: any) => w.id?.startsWith('garmin-') && !_nonRunTypes.includes(w.t)),
+    ];
+
+    let rpeTotalDev = 0, rpeCount = 0;
+    let hrTotal = 0, hrCount = 0;
+
+    // RPE: iterate workouts to get correct expected RPE (same as events.ts)
+    for (const wo of allRunsForEffort) {
+      if (_nonRunTypes.includes((wo as any).t)) continue;
+      const wId = (wo as any).id || (wo as any).n;
+      const rating = wk.rated?.[wId];
+      if (typeof rating !== 'number') continue;
+      const expected = (wo as any).rpe || (wo as any).r || 5;
+      rpeTotalDev += rating - expected;
+      rpeCount++;
+    }
+
+    // HR effort: iterate actuals for hrEffortScore (stored or computed on-the-fly)
+    // Build workout lookup by ID so we can get plannedType for on-the-fly computation
+    const _woById: Record<string, any> = {};
+    for (const wo of allRunsForEffort) _woById[(wo as any).id || (wo as any).n] = wo;
+
+    for (const [wId, actual] of Object.entries(wk.garminActuals ?? {}) as [string, any][]) {
+      if (!_RUN_TYPES.has(actual?.activityType ?? '')) continue;
+      let hrScore = actual?.hrEffortScore ?? null;
+      // Compute on-the-fly if not stored but we have avgHR and a workout type
+      if (hrScore == null && actual?.avgHR) {
+        const woType = actual?.plannedType ?? _woById[wId]?.t ?? null;
+        if (woType) hrScore = getHREffort(actual.avgHR, woType, s);
+      }
+      if (hrScore != null) {
+        hrTotal += hrScore;
+        hrCount++;
+      }
+    }
+
+    if (rpeCount > 0) rpeScore = rpeTotalDev / rpeCount;
+    if (hrCount > 0) avgHrEffort = hrTotal / hrCount;
+  }
+
+  // ── Coach insight ────────────────────────────────────────────────────────
   const _actuals = Object.values(wk.garminActuals ?? {}) as any[];
   const _hrDriftVals = _actuals
     .map((a: any) => a.hrDrift)
@@ -144,94 +201,81 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
   const _avgHrDrift = _hrDriftVals.length > 0
     ? _hrDriftVals.reduce((acc: number, v: number) => acc + v, 0) / _hrDriftVals.length
     : null;
-  const _signals = computeWeekSignals(effortScore, tssPct, ctlDelta, _avgHrDrift);
+  const _signals = computeWeekSignals(rpeScore, avgHrEffort, tssPct, ctlDelta, _avgHrDrift);
   const _pills = getSignalPills(_signals);
   const _coachCopy = getCoachCopy(_signals, wk.ph);
 
-  const _pillsHtml = _pills.map((p: SignalPill) => {
-    const c = PILL_COLORS[p.color];
-    return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:10px;background:${c.bg};color:${c.text};white-space:nowrap"><span style="font-size:9px;opacity:0.6;letter-spacing:0.04em">${p.label.toUpperCase()}</span>${p.value}</span>`;
-  }).join('');
-
-  // Hide coach block when the effort adjustment prompt is already showing — avoids duplicate messaging
-  const coachBlock = !showPacing && (_pills.length > 0 || _coachCopy) ? `
+  const coachNarrative = _coachCopy ? `
     <div style="margin-top:16px;padding:14px;background:rgba(0,0,0,0.03);border-radius:10px">
-      ${_pills.length > 0 ? `<div style="display:flex;flex-wrap:wrap;gap:6px${_coachCopy ? ';margin-bottom:10px' : ''}">${_pillsHtml}</div>` : ''}
-      ${_coachCopy ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${_coachCopy}</p>` : ''}
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${_coachCopy}</p>
     </div>
   ` : '';
 
-  // Next week preview
-  const nextPhase    = nextWk?.ph ?? null;
-  const nextPlanned  = nextWk ? computePlannedWeekTSS(
-    s.historicWeeklyTSS, s.ctlBaseline, nextWk.ph, tier, s.rw,
-  ) : null;
+  // ── Render Step 1: Summary ─────────────────────────────────────────────
 
-  // ── Render ─────────────────────────────────────────────────────────────────
-
-  const tssColor = tssPct == null ? 'var(--c-muted)'
-    : tssPct > 0   ? 'var(--c-warn)'
-    : tssPct >= -20 ? 'var(--c-ok)'
+  // Arrow colour only — used for directional indicators, not values
+  const tssArrowColor = tssPct == null ? 'var(--c-muted)'
+    : tssPct > 10  ? 'var(--c-warn)'
+    : tssPct >= -25 ? 'var(--c-ok)'
     : 'var(--c-caution)';
 
   const ROW = 'display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid var(--c-border)';
   const LABEL_STYLE = 'font-size:14px;color:var(--c-muted);font-weight:500';
   const VALUE_STYLE = 'font-size:15px;font-weight:700;letter-spacing:-0.02em';
+  const SIGNAL_VALUE = 'font-size:14px;font-weight:600;color:var(--c-black)';
 
-  // Running Fitness row: show current value and delta
-  const fitnessValue = ctlDisplay != null
-    ? ctlDisplay.toString()
-    : '—';
+  const fitnessValue = ctlDisplay != null ? ctlDisplay.toString() : '—';
   const fitnessDelta = ctlDelta != null && ctlDelta !== 0
     ? `<span style="font-size:12px;font-weight:500;color:${ctlDelta > 0 ? 'var(--c-ok)' : 'var(--c-warn)'};margin-left:4px">${ctlDelta > 0 ? '↑' : '↓'} ${Math.abs(ctlDelta)}</span>`
     : '';
 
-  const effortBlock = showPacing ? `
-    <div style="margin-top:16px;padding:14px;background:rgba(0,0,0,0.04);border-radius:10px">
-      <p style="font-size:14px;line-height:1.5;margin:0 0 12px;color:var(--c-black)">${
-        effortHigh
-          ? 'Your runs felt harder than planned this week. Adjust pacing down for next week?'
-          : 'Your runs felt easier than planned. Adjust pacing up slightly?'
-      }</p>
-      <label style="display:flex;align-items:center;gap:10px;font-size:14px;font-weight:500;cursor:pointer">
-        <input type="checkbox" id="debrief-pacing-toggle" checked style="width:18px;height:18px;accent-color:var(--c-accent)">
-        <span>${effortHigh ? 'Ease back on target paces' : 'Push slightly harder'}</span>
-      </label>
-    </div>
-  ` : '';
+  // Sort signals: green (good) → neutral → amber (caution) → red (concern)
+  const _pillOrder: Record<string, number> = { green: 0, neutral: 1, amber: 2, red: 3 };
+  _pills.sort((a, b) => (_pillOrder[a.color] ?? 1) - (_pillOrder[b.color] ?? 1));
 
-  const nextWeekBlock = nextPhase ? `
-    <div style="margin-top:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      <span style="font-size:12px;color:var(--c-muted);font-weight:500">Next week</span>
-      ${phaseBadge(nextPhase)}
-      ${nextPlanned ? `<span style="font-size:12px;color:var(--c-muted)">~${Math.round(nextPlanned)} TSS planned</span>` : ''}
-    </div>
-  ` : '';
+  // Build signal rows for the unified table (last row drops border)
+  // Coloured arrow only, value text stays neutral
+  const _arrowForPill = (p: SignalPill): string => {
+    const arrowColor = p.color === 'green' ? 'var(--c-ok)'
+      : p.color === 'red' ? 'var(--c-warn)'
+      : p.color === 'amber' ? 'var(--c-caution)'
+      : '';
+    if (!arrowColor) return ''; // neutral = no arrow
+    const arrow = p.color === 'green' ? '↑' : p.color === 'red' ? '↓' : '→';
+    return `<span style="color:${arrowColor};margin-right:4px">${arrow}</span>`;
+  };
 
-  const ctaLabel = mode === 'complete' ? 'Complete week →' : 'Continue →';
+  const signalRowsHtml = _pills.map((p: SignalPill, i: number) => {
+    const isLast = i === _pills.length - 1;
+    return `
+    <div style="${ROW}${isLast ? ';border-bottom:none' : ''}">
+      <span style="${LABEL_STYLE}">${p.label}</span>
+      <span style="${SIGNAL_VALUE}">${_arrowForPill(p)}${p.value}</span>
+    </div>`;
+  }).join('');
+
+  // CTA label depends on mode
+  const ctaLabel = mode === 'complete' ? 'Generate next week' : 'Continue →';
 
   const html = `
     <div id="week-debrief-modal"
       style="position:fixed;inset:0;z-index:2000;background:rgba(0,0,0,0.45);
              display:flex;align-items:center;justify-content:center;padding:20px">
-      <div style="width:100%;max-width:400px;background:var(--c-surface);
+      <div id="debrief-card" style="width:100%;max-width:400px;background:var(--c-surface);
                   border-radius:20px;padding:24px 20px 20px;
                   box-shadow:0 8px 40px rgba(0,0,0,0.18);
                   max-height:85vh;overflow-y:auto">
 
         <!-- Header -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
-          <div style="display:flex;align-items:center;gap:8px">
-            ${wk.ph ? phaseBadge(wk.ph) : ''}
-            <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em">Week ${weekNum}</span>
-          </div>
+        <div style="position:relative;text-align:center;margin-bottom:18px">
+          <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} — Week ${weekNum}</span>
           <button id="debrief-cancel"
-            style="width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
+            style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
                    background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
-                   display:flex;align-items:center;justify-content:center;flex-shrink:0">✕</button>
+                   display:flex;align-items:center;justify-content:center">✕</button>
         </div>
 
-        <!-- Metrics -->
+        <!-- Unified metrics + signals table -->
         <div style="border-top:1px solid var(--c-border)">
           ${distanceKm != null ? `
           <div style="${ROW}">
@@ -240,22 +284,21 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
           </div>` : ''}
           <div style="${ROW}">
             <span style="${LABEL_STYLE}">Training load</span>
-            <span style="${VALUE_STYLE};color:${tssColor}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;color:${tssColor};margin-left:4px">(${tssPct > 0 ? '+' : ''}${tssPct}% vs plan)</span>` : ''}</span>
+            <span style="${VALUE_STYLE}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;margin-left:4px"><span style="color:${tssArrowColor}">${tssPct > 0 ? '↑' : tssPct < 0 ? '↓' : '→'}</span> <span style="color:var(--c-muted)">${tssPct > 0 ? '+' : ''}${tssPct}% vs plan</span></span>` : ''}</span>
           </div>
-          <div style="${ROW};border-bottom:none">
+          <div style="${ROW}${_pills.length === 0 ? ';border-bottom:none' : ''}">
             <span style="${LABEL_STYLE}">Running fitness</span>
             <span style="${VALUE_STYLE}">${fitnessValue}${fitnessDelta}</span>
           </div>
+          ${signalRowsHtml}
         </div>
 
-        ${coachBlock}
-        ${effortBlock}
-        ${nextWeekBlock}
+        ${coachNarrative}
 
         <div id="debrief-cta-area" style="margin-top:20px">
           <button id="debrief-continue"
             style="width:100%;padding:14px;border-radius:12px;border:none;
-                   background:var(--c-accent);color:#fff;font-size:15px;font-weight:600;
+                   background:var(--c-black);color:#fff;font-size:15px;font-weight:600;
                    cursor:pointer;font-family:var(--f);letter-spacing:-0.01em">${ctaLabel}</button>
         </div>
       </div>
@@ -263,126 +306,459 @@ export function showWeekDebrief(forWeek?: number, mode: 'complete' | 'review' = 
   `;
 
   document.body.insertAdjacentHTML('beforeend', html);
-  _wireHandlers(weekNum, effortScore, showPacing, mode);
+  _wireStep1Handlers(weekNum, rpeScore, mode, debugOverride);
 }
 
-// ─── Event wiring ─────────────────────────────────────────────────────────────
+// ─── Step 1 Handlers ─────────────────────────────────────────────────────────
 
-function _wireHandlers(
+function _wireStep1Handlers(
   weekNum: number,
   effortScore: number | null,
-  showPacing: boolean,
   mode: 'complete' | 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
 ): void {
   document.getElementById('debrief-cancel')?.addEventListener('click', () => {
     document.getElementById('week-debrief-modal')?.remove();
-    // Do NOT set lastDebriefWeek — cancel means "I'll come back to this"
   });
 
   document.getElementById('debrief-continue')?.addEventListener('click', () => {
-    if (showPacing) {
-      const toggle = document.getElementById('debrief-pacing-toggle') as HTMLInputElement | null;
-      if (toggle?.checked && effortScore != null) {
-        _applyPacingAdj(effortScore);
-      }
-    }
     if (mode === 'complete') {
-      _handleUncompletedSessions(weekNum, mode);
+      _showAnalysisAnimation(weekNum, effortScore, mode, debugOverride);
     } else {
       _closeAndRecord(weekNum, mode);
     }
   });
 }
 
-/**
- * Check for uncompleted sessions and either show a prompt or proceed directly.
- */
-function _handleUncompletedSessions(weekNum: number, mode: 'complete' | 'review'): void {
-  const s = getMutableState() as any;
-  const wk = s.wks?.[weekNum - 1];
-  if (!wk) {
-    _closeAndRecord(weekNum, mode);
-    return;
-  }
+// ─── Step 2: Analysis Animation ──────────────────────────────────────────────
 
-  const workouts: any[] = wk.workouts ?? [];
-  const rated: Record<string, any> = wk.rated ?? {};
+function _showAnalysisAnimation(
+  weekNum: number,
+  effortScore: number | null,
+  mode: 'complete' | 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
+): void {
+  const card = document.getElementById('debrief-card');
+  if (!card) return;
 
-  // Find sessions already pushed from THIS week to next (to avoid double-push)
-  const alreadyPushedIds = new Set<string>(
-    (wk.skip ?? []).map((entry: any) => entry.workout?.id).filter(Boolean)
-  );
+  // Build checklist HTML — circles start as light border, fill black with white tick on complete
+  const stepsHtml = ANALYSIS_STEPS.map((label, i) => `
+    <div id="analysis-step-${i}" style="display:flex;align-items:center;gap:12px;padding:7px 0;opacity:0;transform:translateY(4px);transition:opacity 0.3s ease,transform 0.3s ease">
+      <div id="analysis-check-${i}" style="width:22px;height:22px;border-radius:50%;border:1.5px solid var(--c-border);background:transparent;
+           display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.25s ease">
+        <svg width="10" height="8" viewBox="0 0 10 8" fill="none" style="opacity:0;transition:opacity 0.15s ease">
+          <path d="M1 4L3.5 6.5L9 1" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <span style="font-size:14px;color:var(--c-black);font-weight:500">${label}</span>
+    </div>
+  `).join('');
 
-  // Uncompleted = not rated AND not already in this week's skip array
-  const uncompleted = workouts.filter((w: any) => {
-    const id = w.id || w.n;
-    return rated[id] === undefined && !alreadyPushedIds.has(id);
-  });
+  const ringSize = RING_RADIUS * 2 + 16; // viewBox padding
 
-  if (uncompleted.length === 0) {
-    _closeAndRecord(weekNum, mode);
-    return;
-  }
+  card.innerHTML = `
+    <!-- Header -->
+    <div style="position:relative;text-align:center;margin-bottom:24px">
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">Analysing week ${weekNum}</span>
+      <button id="debrief-cancel"
+        style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
+               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
+               display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
 
-  // Show inline prompt inside the debrief modal
-  const ctaArea = document.getElementById('debrief-cta-area');
-  if (!ctaArea) {
-    _closeAndRecord(weekNum, mode);
-    return;
-  }
+    <!-- Circular progress (smooth single transition) -->
+    <div style="display:flex;justify-content:center;margin-bottom:28px">
+      <div style="position:relative;width:${ringSize}px;height:${ringSize}px">
+        <svg width="${ringSize}" height="${ringSize}" viewBox="0 0 ${ringSize} ${ringSize}" style="transform:rotate(-90deg)">
+          <circle cx="${ringSize / 2}" cy="${ringSize / 2}" r="${RING_RADIUS}" stroke="var(--c-border)" stroke-width="6" fill="none"/>
+          <circle id="analysis-progress-circle" cx="${ringSize / 2}" cy="${ringSize / 2}" r="${RING_RADIUS}" stroke="var(--c-black)" stroke-width="6" fill="none"
+                  stroke-dasharray="${RING_CIRCUMFERENCE}" stroke-dashoffset="${RING_CIRCUMFERENCE}" stroke-linecap="round"
+                  style="transition:stroke-dashoffset ${TOTAL_ANIMATION_MS}ms cubic-bezier(0.4, 0, 0.2, 1)"/>
+        </svg>
+        <div id="analysis-progress-label" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em">0%</div>
+      </div>
+    </div>
 
-  const count = uncompleted.length;
-  const label = count === 1 ? '1 session' : `${count} sessions`;
-  ctaArea.innerHTML = `
-    <p style="font-size:14px;color:var(--c-black);margin:0 0 14px;text-align:center">
-      ${label} weren't completed this week. What would you like to do?
-    </p>
-    <div style="display:flex;gap:10px;justify-content:center">
-      <button id="debrief-push-sessions" class="m-btn-primary" style="flex:1;font-size:14px;padding:12px 0;text-align:center">Move to next week</button>
-      <button id="debrief-drop-sessions" class="m-btn-secondary" style="flex:1;font-size:14px;padding:12px 0;text-align:center;opacity:0.7">Drop them</button>
+    <!-- Checklist -->
+    <div style="padding:0 4px">
+      ${stepsHtml}
     </div>
   `;
 
-  document.getElementById('debrief-push-sessions')?.addEventListener('click', () => {
-    const nextWk = s.wks?.[weekNum]; // index weekNum = week weekNum+1
-    if (nextWk) {
-      for (const w of uncompleted) {
-        const id = w.id || w.n;
-        // Mark as skipped in this week
-        if (!wk.rated) wk.rated = {};
-        wk.rated[id] = 'skip';
-        // Push to next week's skip list
-        if (!nextWk.skip) nextWk.skip = [];
-        nextWk.skip.push({
-          n: w.n || '',
-          t: w.t || 'easy',
-          workout: {
-            id,
-            n: w.n || '',
-            t: w.t || 'easy',
-            d: w.d || '',
-            rpe: w.rpe || w.r || 5,
-            r: w.rpe || w.r || 5,
-            dayOfWeek: w.dayOfWeek,
-            dayName: w.dayName || '',
-          },
-          skipCount: 1,
-        });
-      }
-      saveState();
-    }
-    _closeAndRecord(weekNum, mode);
+  // Re-wire cancel
+  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
+    document.getElementById('week-debrief-modal')?.remove();
   });
 
-  document.getElementById('debrief-drop-sessions')?.addEventListener('click', () => {
+  // Start animation
+  _runAnalysisAnimation(weekNum, effortScore, mode, debugOverride);
+}
+
+function _runAnalysisAnimation(
+  weekNum: number,
+  effortScore: number | null,
+  mode: 'complete' | 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
+): void {
+  const total = ANALYSIS_STEPS.length;
+  const progressCircle = document.getElementById('analysis-progress-circle');
+  const progressLabel = document.getElementById('analysis-progress-label');
+
+  // Kick off one smooth CSS transition for the full ring fill (0 → 100%)
+  requestAnimationFrame(() => {
+    if (progressCircle) {
+      progressCircle.setAttribute('stroke-dashoffset', '0');
+    }
+  });
+
+  // Animate the % label with requestAnimationFrame for smooth counting
+  const animStart = performance.now();
+  const animDuration = TOTAL_ANIMATION_MS;
+  const tickLabel = () => {
+    const elapsed = performance.now() - animStart;
+    const pct = Math.min(100, Math.round((elapsed / animDuration) * 100));
+    if (progressLabel) progressLabel.textContent = `${pct}%`;
+    if (pct < 100) requestAnimationFrame(tickLabel);
+  };
+  requestAnimationFrame(tickLabel);
+
+  // Step through checklist items on a timer (visual only — ring runs independently)
+  for (let i = 0; i < total; i++) {
+    // Fade in + slide up
+    setTimeout(() => {
+      const stepEl = document.getElementById(`analysis-step-${i}`);
+      if (stepEl) {
+        stepEl.style.opacity = '1';
+        stepEl.style.transform = 'translateY(0)';
+      }
+    }, i * STEP_DELAY_MS);
+
+    // Mark step complete — solid black circle, white tick
+    setTimeout(() => {
+      const checkEl = document.getElementById(`analysis-check-${i}`);
+      if (checkEl) {
+        checkEl.style.borderColor = 'var(--c-black)';
+        checkEl.style.background = 'var(--c-black)';
+        const svg = checkEl.querySelector('svg');
+        if (svg) (svg as unknown as HTMLElement).style.opacity = '1';
+      }
+    }, i * STEP_DELAY_MS + STEP_DELAY_MS * 0.7);
+  }
+
+  // After all steps + ring complete, transition to plan
+  setTimeout(
+    () => _showPlanPreview(weekNum, effortScore, mode, debugOverride),
+    TOTAL_ANIMATION_MS + 200,
+  );
+}
+
+// ─── Step 3: Plan Preview ────────────────────────────────────────────────────
+
+function _showPlanPreview(
+  weekNum: number,
+  effortScore: number | null,
+  mode: 'complete' | 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
+): void {
+  const card = document.getElementById('debrief-card');
+  if (!card) return;
+
+  try {
+    _renderPlanPreview(card, weekNum, effortScore, mode, debugOverride);
+  } catch (err) {
+    card.innerHTML = `
+      <div style="text-align:center;padding:24px 8px">
+        <p style="font-size:14px;color:var(--c-black);margin:0 0 12px">Couldn't generate next week's plan.</p>
+        <p style="font-size:12px;color:var(--c-muted);margin:0 0 16px">${(err as Error)?.message ?? 'Unknown error'}</p>
+        <button id="debrief-error-close" style="padding:10px 20px;border-radius:10px;border:1px solid var(--c-border);background:transparent;cursor:pointer">Close</button>
+      </div>
+    `;
+    document.getElementById('debrief-error-close')?.addEventListener('click', () => {
+      document.getElementById('week-debrief-modal')?.remove();
+    });
+  }
+}
+
+function _renderPlanPreview(
+  card: HTMLElement,
+  weekNum: number,
+  effortScore: number | null,
+  mode: 'complete' | 'review',
+  debugOverride?: { effort?: number; acwrStatus?: 'safe' | 'caution' | 'high' },
+): void {
+  const s = getState() as any;
+  const nextWeekIdx = weekNum + 1; // 1-based week number for next week
+  const nextWk = s.wks?.[weekNum]; // 0-based array index
+  const nextPhase = nextWk?.ph ?? s.wks?.[weekNum - 1]?.ph ?? 'base';
+
+  // Build plan context shared between adjusted and standard
+  const baseCtx = {
+    runsPerWeek: s.rw ?? 3,
+    raceDistance: s.rd ?? 'marathon',
+    runnerType: s.typ ?? 'balanced',
+    phase: nextPhase,
+    fitnessLevel: s.onboarding?.experienceLevel ?? 'intermediate',
+    weekIndex: nextWeekIdx,
+    totalWeeks: s.tw ?? 16,
+    vdot: s.v ?? 45,
+  };
+
+  // Trailing effort score and ACWR status (with debug override)
+  const trailingEffort = debugOverride?.effort ?? getTrailingEffortScore(s.wks ?? [], nextWeekIdx);
+  const acwrStatus = debugOverride?.acwrStatus ?? nextWk?.scheduledAcwrStatus ?? 'safe';
+
+  // Generate ADJUSTED plan (with effort + ACWR context)
+  const adjustedIntents = planWeekSessions({
+    ...baseCtx,
+    effortScore: trailingEffort,
+    acwrStatus,
+  });
+
+  // Generate STANDARD plan (no effort adjustment, no ACWR reduction)
+  const standardIntents = planWeekSessions({
+    ...baseCtx,
+    // No effortScore, no acwrStatus — vanilla plan
+  });
+
+  // Convert intents to workouts for display
+  const easyPace = s.pac?.e;
+  const adjustedWorkouts = adjustedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+  const standardWorkouts = standardIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
+
+  // Build per-workout annotations first — they define what "visibly different" means
+  const easyPaceSec = easyPace ?? 360; // fallback 6:00/km
+  const perWorkoutAnnotations: string[] = adjustedIntents.map((adj, i) => {
+    const std = standardIntents[i];
+    if (!std) return '';
+    // Different workout type = always annotate
+    if (adj.slot !== std.slot) return `Was ${_sessionTypeLabel(std.slot as string).toLowerCase()} in standard plan`;
+    // Compute km difference
+    const adjKm = adj.totalMinutes / (easyPaceSec / 60);
+    const stdKm = std.totalMinutes / (easyPaceSec / 60);
+    const kmDiff = adjKm - stdKm;
+    if (Math.abs(kmDiff) < 1) return ''; // < 1km = not worth showing
+    return `${kmDiff < 0 ? '↓' : '↑'} ${Math.abs(Math.round(kmDiff * 10) / 10)}km vs standard`;
+  });
+
+  // Plans are "visibly different" only when at least one workout has a real annotation.
+  // Sub-1km volume tweaks would render identical workout lines, so don't bother showing
+  // a Standard toggle the user can't tell apart.
+  const visiblyDifferent = perWorkoutAnnotations.some(a => a !== '');
+
+  // Textual adjustments list only when plans actually look different
+  const changes = visiblyDifferent
+    ? _computeChanges(adjustedIntents, standardIntents, trailingEffort, acwrStatus)
+    : [];
+
+  const changesHtml = changes.length > 0 ? `
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:600;color:var(--c-muted);margin-bottom:6px;letter-spacing:0.02em">Adjustments</div>
+      ${changes.map(c => `
+        <div style="font-size:13px;color:var(--c-black);line-height:1.5;padding:1px 0">${c}</div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  const workoutsHtml = _renderWorkoutList(adjustedWorkouts, perWorkoutAnnotations);
+  const standardWorkoutsHtml = _renderWorkoutList(standardWorkouts, []);
+
+  const noChangesNote = !visiblyDifferent ? `
+    <div style="margin-bottom:16px">
+      <p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">No adjustments needed. Recent effort and training load are tracking to plan.</p>
+    </div>
+  ` : '';
+
+  card.innerHTML = `
+    <!-- Header -->
+    <div style="position:relative;text-align:center;margin-bottom:18px">
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase — Week ${nextWeekIdx}</span>
+      <button id="debrief-cancel"
+        style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
+               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
+               display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
+
+    ${noChangesNote}
+
+    <!-- Plan toggle (only if plans are visibly different) -->
+    ${visiblyDifferent ? `
+    <div style="display:flex;gap:0;margin-bottom:16px;border-radius:10px;overflow:hidden;border:1px solid var(--c-border)">
+      <button id="plan-toggle-adjusted" style="flex:1;padding:9px 0;font-size:13px;font-weight:600;border:none;cursor:pointer;
+              background:var(--c-black);color:#fff;font-family:var(--f);transition:all 0.2s ease">Adjusted plan</button>
+      <button id="plan-toggle-standard" style="flex:1;padding:9px 0;font-size:13px;font-weight:600;border:none;cursor:pointer;
+              background:transparent;color:var(--c-muted);font-family:var(--f);transition:all 0.2s ease">Standard plan</button>
+    </div>
+    ` : ''}
+
+    <!-- Workout lists (adjustments text inside adjusted div so it hides on toggle) -->
+    <div id="plan-adjusted" style="display:block">${changesHtml}${workoutsHtml}</div>
+    <div id="plan-standard" style="display:none">${standardWorkoutsHtml}</div>
+
+    <!-- CTA -->
+    <div id="debrief-cta-area" style="margin-top:20px">
+      <button id="debrief-accept"
+        style="width:100%;padding:14px;border-radius:12px;border:none;
+               background:var(--c-black);color:#fff;font-size:15px;font-weight:600;
+               cursor:pointer;font-family:var(--f);letter-spacing:-0.01em">Accept plan</button>
+    </div>
+  `;
+
+  _wireStep3Handlers(weekNum, effortScore, mode, visiblyDifferent);
+}
+
+function _renderWorkoutList(workouts: any[], annotations: string[]): string {
+  if (workouts.length === 0) return '<p style="font-size:13px;color:var(--c-muted);text-align:center;padding:16px 0">No sessions generated</p>';
+
+  return workouts.map((w, i) => {
+    const typeLabel = _sessionTypeLabel(w.t);
+    const typeBg = _sessionTypeBg(w.t);
+    const annotation = annotations[i] || '';
+    return `
+      <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--c-border)">
+        <span style="font-size:11px;font-weight:600;padding:3px 8px;border-radius:8px;background:${typeBg};color:var(--c-black);white-space:nowrap;min-width:56px;text-align:center">${typeLabel}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600;color:var(--c-black);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.n}</div>
+          <div style="font-size:12px;color:var(--c-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${w.d || ''}</div>
+          ${annotation ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${annotation}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function _sessionTypeLabel(t: string): string {
+  const map: Record<string, string> = {
+    easy: 'Easy', long: 'Long', threshold: 'Tempo', vo2: 'VO2',
+    marathon_pace: 'MP', progressive: 'Prog', float: 'Float',
+  };
+  return map[t] || t;
+}
+
+function _sessionTypeBg(t: string): string {
+  const map: Record<string, string> = {
+    easy: 'rgba(0,0,0,0.05)',
+    long: 'rgba(59,130,246,0.1)',
+    threshold: 'rgba(249,115,22,0.1)',
+    vo2: 'rgba(239,68,68,0.1)',
+    marathon_pace: 'rgba(147,51,234,0.1)',
+    progressive: 'rgba(249,115,22,0.1)',
+    float: 'rgba(0,0,0,0.05)',
+  };
+  return map[t] || 'rgba(0,0,0,0.05)';
+}
+
+// ─── Change detection ────────────────────────────────────────────────────────
+
+function _computeChanges(
+  adjusted: SessionIntent[],
+  standard: SessionIntent[],
+  trailingEffort: number,
+  acwrStatus: string,
+): string[] {
+  const changes: string[] = [];
+
+  // 1. Effort multiplier change
+  const eMult = trailingEffort !== 0 ? effortMultiplier(trailingEffort) : 1.0;
+  if (eMult < 0.97) {
+    const pct = Math.round((1 - eMult) * 100);
+    changes.push(`Volume scaled down ${pct}% based on recent effort feedback`);
+  } else if (eMult > 1.03) {
+    const pct = Math.round((eMult - 1) * 100);
+    changes.push(`Volume scaled up ${pct}% based on recent effort feedback`);
+  }
+
+  // 2. ACWR-driven changes
+  if (acwrStatus === 'caution') {
+    changes.push('1 quality session replaced with easy (training load elevated)');
+  } else if (acwrStatus === 'high') {
+    changes.push('2 quality sessions replaced with easy (training load high)');
+    changes.push('Long run capped at last week\'s distance');
+  }
+
+  // 3. Session count difference
+  const adjQuality = adjusted.filter(i => i.slot !== 'easy').length;
+  const stdQuality = standard.filter(i => i.slot !== 'easy').length;
+  if (adjQuality < stdQuality && acwrStatus === 'safe') {
+    // Only report if not already covered by ACWR annotation
+    changes.push(`Quality sessions: ${adjQuality} (down from ${stdQuality})`);
+  }
+
+  // 4. Total volume difference
+  const adjTotal = adjusted.reduce((sum, i) => sum + i.totalMinutes, 0);
+  const stdTotal = standard.reduce((sum, i) => sum + i.totalMinutes, 0);
+  if (stdTotal > 0) {
+    const volDiff = Math.round(((adjTotal - stdTotal) / stdTotal) * 100);
+    if (Math.abs(volDiff) >= 5 && eMult >= 0.97 && eMult <= 1.03) {
+      // Only show if not already covered by effort multiplier annotation
+      changes.push(`Total session time ${volDiff > 0 ? 'up' : 'down'} ${Math.abs(volDiff)}%`);
+    }
+  }
+
+  // 5. Long run difference
+  const adjLong = adjusted.find(i => i.slot === 'long');
+  const stdLong = standard.find(i => i.slot === 'long');
+  if (adjLong && stdLong && adjLong.totalMinutes !== stdLong.totalMinutes) {
+    const diff = adjLong.totalMinutes - stdLong.totalMinutes;
+    if (Math.abs(diff) >= 3) {
+      changes.push(`Long run ${diff < 0 ? 'reduced' : 'increased'} by ${Math.abs(diff)} min`);
+    }
+  }
+
+  return changes;
+}
+
+// ─── Step 3 Handlers ─────────────────────────────────────────────────────────
+
+function _wireStep3Handlers(
+  weekNum: number,
+  effortScore: number | null,
+  mode: 'complete' | 'review',
+  visiblyDifferent: boolean,
+): void {
+  // Cancel
+  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
+    document.getElementById('week-debrief-modal')?.remove();
+  });
+
+  // Plan toggle
+  if (visiblyDifferent) {
+    let showingAdjusted = true;
+
+    const btnAdj = document.getElementById('plan-toggle-adjusted');
+    const btnStd = document.getElementById('plan-toggle-standard');
+    const planAdj = document.getElementById('plan-adjusted');
+    const planStd = document.getElementById('plan-standard');
+
+    const setToggle = (adjusted: boolean) => {
+      showingAdjusted = adjusted;
+      if (btnAdj) {
+        btnAdj.style.background = adjusted ? 'var(--c-black)' : 'transparent';
+        btnAdj.style.color = adjusted ? '#fff' : 'var(--c-muted)';
+      }
+      if (btnStd) {
+        btnStd.style.background = adjusted ? 'transparent' : 'var(--c-black)';
+        btnStd.style.color = adjusted ? 'var(--c-muted)' : '#fff';
+      }
+      if (planAdj) planAdj.style.display = adjusted ? 'block' : 'none';
+      if (planStd) planStd.style.display = adjusted ? 'none' : 'block';
+    };
+
+    btnAdj?.addEventListener('click', () => setToggle(true));
+    btnStd?.addEventListener('click', () => setToggle(false));
+  }
+
+  // Accept
+  document.getElementById('debrief-accept')?.addEventListener('click', () => {
+    // Apply pacing adjustment if effort was significantly off
+    if (effortScore != null && (effortScore > 1.0 || effortScore < -1.0)) {
+      _applyPacingAdj(effortScore);
+    }
     _closeAndRecord(weekNum, mode);
   });
 }
 
-/**
- * Apply a small rpeAdj change proportional to effortScore.
- * Cap at ±0.5 VDOT per adjustment to prevent overcorrection.
- */
+// ─── Shared helpers (unchanged from original) ────────────────────────────────
+
 function _applyPacingAdj(effortScore: number): void {
   const s = getMutableState() as any;
   const adj = Math.max(-0.5, Math.min(0.5, -effortScore * 0.25));
@@ -393,6 +769,12 @@ function _applyPacingAdj(effortScore: number): void {
 function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   const s = getMutableState() as any;
   s.lastDebriefWeek = weekNum;
+  s.lastDebriefShownDate = new Date().toISOString().split('T')[0];
+  if (mode === 'complete') {
+    // Only mark week as fully debriefed (with plan preview) in complete mode.
+    // This is what gates advanceWeekToToday — review-only doesn't count.
+    s.lastCompleteDebriefWeek = weekNum;
+  }
   saveState();
   document.getElementById('week-debrief-modal')?.remove();
   if (mode === 'complete') {
@@ -400,4 +782,18 @@ function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   } else {
     import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
   }
+}
+
+// ─── Dev helper ──────────────────────────────────────────────────────────────
+// Expose a quick way to preview a genuinely different adjusted plan without
+// waiting for real hard weeks to accumulate. In the devtools console:
+//   __previewAdjustedPlan()              → effort=2.5, acwr=caution
+//   __previewAdjustedPlan(3, 'high')     → max effort, acwr=high (deload)
+if (typeof window !== 'undefined') {
+  (window as any).__previewAdjustedPlan = (
+    effort: number = 2.5,
+    acwrStatus: 'safe' | 'caution' | 'high' = 'caution',
+  ) => {
+    showWeekDebrief(undefined, 'complete', { effort, acwrStatus });
+  };
 }

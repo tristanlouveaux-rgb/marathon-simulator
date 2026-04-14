@@ -83,6 +83,9 @@ export async function syncActivities(): Promise<void> {
 /** Guard to prevent two concurrent review screens from running simultaneously */
 let _pendingModalActive = false;
 
+/** Reset the guard — called by stravaSync before processPendingCrossTraining */
+export function resetPendingModalGuard(): void { _pendingModalActive = false; }
+
 /**
  * Returns true when the pending items constitute a "backlog" that warrants
  * the full Activity Review screen rather than silent auto-processing.
@@ -122,6 +125,16 @@ export function processPendingCrossTraining(): void {
     weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
     weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 7);
+  }
+
+  // Drop malformed pending items (missing garminId, activityType, or startTime).
+  // These can't be rendered or processed — carrying them forward just crashes the review UI.
+  const beforeMalformed = wk.garminPending.length;
+  wk.garminPending = wk.garminPending.filter(item =>
+    !!item && !!item.garminId && !!item.activityType && !!item.startTime,
+  );
+  if (wk.garminPending.length !== beforeMalformed) {
+    console.warn(`[ActivitySync] Dropped ${beforeMalformed - wk.garminPending.length} malformed pending item(s)`);
   }
 
   // Filter to items not yet reviewed AND from the current week

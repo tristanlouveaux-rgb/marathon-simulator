@@ -189,6 +189,12 @@ async function handleDailies(
 
     if (!dayDate) continue;
 
+    // Diagnostic: log all top-level keys in the dailies payload so we can
+    // identify which field carries step count (Garmin docs say totalSteps
+    // but the actual webhook payload may use a different name).
+    console.log(`[garmin-webhook] Dailies payload keys for ${dayDate}: ${Object.keys(d).join(', ')}`);
+    console.log(`[garmin-webhook] Dailies step-ish fields: totalSteps=${d.totalSteps}, steps=${d.steps}, stepsCount=${d.stepsCount}`);
+
     // Only include hrv_rmssd if the dailies payload actually has HRV data.
     // Otherwise we'd overwrite a value previously stored by handleHrv().
     const hrvFromDaily = d.hrvSummary?.lastNight ?? d.hrvSummary?.lastNightAvg ?? undefined;
@@ -199,6 +205,7 @@ async function handleDailies(
       max_hr: d.maxHeartRateInBeatsPerMinute ?? null,
       stress_avg: d.averageStressLevel ?? null,
       vo2max: d.vo2Max ?? null,
+      steps: d.totalSteps ?? null,
     };
     if (hrvFromDaily != null) {
       row.hrv_rmssd = hrvFromDaily;

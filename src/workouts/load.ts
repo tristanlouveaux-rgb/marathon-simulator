@@ -66,6 +66,7 @@ export function calculateWorkoutLoad(
         const km = parseFloat(kmMatch[1]);
         let paceMinPerKm = baseMinPerKm;
         if (workoutType === 'easy') paceMinPerKm = baseMinPerKm;
+        else if (workoutType === 'recovery') paceMinPerKm = baseMinPerKm * 1.12; // ~+40-45 s/km on a 6:00/km base, RPE 3, zone 1 only
         else if (workoutType === 'long') paceMinPerKm = baseMinPerKm * 1.03;
         else if (workoutType === 'threshold') paceMinPerKm = baseMinPerKm * 0.82;
         else if (workoutType === 'vo2') paceMinPerKm = baseMinPerKm * 0.73;

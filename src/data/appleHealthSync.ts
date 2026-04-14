@@ -42,10 +42,11 @@ function isNativeiOS(): boolean {
 }
 
 /** All HealthKit data types we read. Single combined authorization request. */
-const ALL_READ_TYPES = [
+const ALL_READ_TYPES: string[] = [
   'calories', 'distance', 'heartRate',               // workouts
   'sleep', 'restingHeartRate', 'heartRateVariability', 'steps',  // physiology
-] as const;
+  'appleExerciseTime',                                // exercise ring (active minutes)
+];
 
 /** Cached auth flag — avoid re-prompting on every call within the same session. */
 let _authRequested = false;
@@ -57,7 +58,7 @@ let _authRequested = false;
 async function ensureAuthorization(): Promise<typeof import('@capgo/capacitor-health')['Health']> {
   const { Health } = await import('@capgo/capacitor-health');
   if (!_authRequested) {
-    await Health.requestAuthorization({ read: [...ALL_READ_TYPES] });
+    await Health.requestAuthorization({ read: ALL_READ_TYPES as any });
     _authRequested = true;
   }
   return Health;
@@ -173,11 +174,12 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     const nowISO = new Date().toISOString();
 
     // Fetch all data types in parallel (all local HealthKit queries, no network)
-    const [sleepResult, rhrResult, hrvResult, stepsResult] = await Promise.all([
+    const [sleepResult, rhrResult, hrvResult, stepsResult, exerciseResult] = await Promise.all([
       Health.readSamples({ dataType: 'sleep', startDate: sinceISO, endDate: nowISO, limit: 2000, ascending: true }),
       Health.readSamples({ dataType: 'restingHeartRate', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
       Health.readSamples({ dataType: 'heartRateVariability', startDate: sinceISO, endDate: nowISO, limit: 100, ascending: true }),
       Health.queryAggregated({ dataType: 'steps', startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }),
+      Health.queryAggregated({ dataType: 'appleExerciseTime' as any, startDate: sinceISO, endDate: nowISO, bucket: 'day', aggregation: 'sum' }),
     ]);
 
     // ── Group sleep samples into nights ────────────────────────────────────
@@ -224,6 +226,15 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       stepsByDate.set(date, sample.value);
     }
 
+    // ── Index exercise minutes by date ────────────────────────────────────
+    // Apple Watch Exercise ring = periods where HR was in exercise zone.
+    // Maps directly to our activeMinutes field (same as Garmin epoch active minutes).
+    const exerciseByDate = new Map<string, number>();
+    for (const sample of exerciseResult.samples) {
+      const date = sample.startDate.split('T')[0];
+      exerciseByDate.set(date, Math.round(sample.value));
+    }
+
     // ── Build PhysiologyDayEntry per date ──────────────────────────────────
     // Collect all dates that have any data
     const allDates = new Set<string>();
@@ -231,6 +242,7 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     for (const d of rhrByDate.keys()) allDates.add(d);
     for (const d of hrvByDate.keys()) allDates.add(d);
     for (const d of stepsByDate.keys()) allDates.add(d);
+    for (const d of exerciseByDate.keys()) allDates.add(d);
 
     if (allDates.size === 0) return false;
 
@@ -261,6 +273,10 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
       // Steps
       const steps = stepsByDate.get(date);
       if (steps != null && steps > 0) entry.steps = Math.round(steps);
+
+      // Exercise minutes (Apple Watch exercise ring → activeMinutes)
+      const exerciseMin = exerciseByDate.get(date);
+      if (exerciseMin != null && exerciseMin > 0) entry.activeMinutes = exerciseMin;
 
       entries.push(entry);
     }
@@ -356,7 +372,7 @@ function pickDefined(apple: PhysiologyDayEntry, existing: PhysiologyDayEntry): P
   const result: Partial<PhysiologyDayEntry> = {};
   const keys: (keyof PhysiologyDayEntry)[] = [
     'sleepScore', 'sleepDurationSec', 'sleepDeepSec', 'sleepRemSec',
-    'sleepLightSec', 'sleepAwakeSec', 'restingHR', 'hrvRmssd', 'steps',
+    'sleepLightSec', 'sleepAwakeSec', 'restingHR', 'hrvRmssd', 'steps', 'activeMinutes',
   ];
   for (const k of keys) {
     if (existing[k] == null && apple[k] != null) {

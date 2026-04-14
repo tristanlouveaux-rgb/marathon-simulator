@@ -2,7 +2,7 @@
  * Account page — user email, wearable connection status, sync controls, sign out.
  */
 
-import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken } from '@/data/supabaseClient';
+import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard } from '@/data/supabaseClient';
 import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
@@ -880,6 +880,7 @@ function wireAccountHandlers(): void {
   // Garmin: Connect
   document.getElementById('btn-connect-garmin')?.addEventListener('click', async () => {
     const errorEl = document.getElementById('garmin-error');
+    resetGarminBackfillGuard();
     try {
       const token = await getAccessToken();
       const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/garmin-auth-start`, {

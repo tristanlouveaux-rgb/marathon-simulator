@@ -10,7 +10,8 @@
 
 export interface WeekSignals {
   rpe: 'hard' | 'on-target' | 'easy' | null;
-  load: 'over' | 'on-plan' | 'under' | null;
+  hrEffort: 'overcooked' | 'on-target' | 'undercooked' | null;
+  load: 'high-over' | 'over' | 'on-plan' | 'under' | null;
   fitness: 'up' | 'flat' | 'down' | null;
   hrDrift: 'efficient' | 'moderate' | 'stressed' | null;
 }
@@ -29,21 +30,32 @@ export const PILL_COLORS: Record<string, { bg: string; text: string }> = {
 };
 
 export function computeWeekSignals(
-  effortScore: number | null,
+  rpeScore: number | null,
+  hrEffortScore: number | null,
   tssPct: number | null,
   ctlDelta: number | null,
   avgHrDrift: number | null,
 ): WeekSignals {
+  // RPE: perceived effort deviation from expected (positive = harder than planned)
   const rpe: WeekSignals['rpe'] =
-    effortScore == null ? null :
-    effortScore > 1.0 ? 'hard' :
-    effortScore < -1.0 ? 'easy' :
+    rpeScore == null ? null :
+    rpeScore > 1.0 ? 'hard' :
+    rpeScore < -1.0 ? 'easy' :
     'on-target';
 
+  // HR effort: objective effort from HR data (1.0 = on target, >1.0 = overcooked)
+  const hrEffort: WeekSignals['hrEffort'] =
+    hrEffortScore == null ? null :
+    hrEffortScore > 1.1 ? 'overcooked' :
+    hrEffortScore < 0.85 ? 'undercooked' :
+    'on-target';
+
+  // tssPct is a delta from plan: +10 means 10% over, -25 means 25% under
   const load: WeekSignals['load'] =
     tssPct == null ? null :
-    tssPct > 110 ? 'over' :
-    tssPct >= 75 ? 'on-plan' :
+    tssPct > 30 ? 'high-over' :
+    tssPct > 10 ? 'over' :
+    tssPct >= -25 ? 'on-plan' :
     'under';
 
   const fitness: WeekSignals['fitness'] =
@@ -58,75 +70,102 @@ export function computeWeekSignals(
     avgHrDrift < 0.08 ? 'moderate' :
     'stressed';
 
-  return { rpe, load, fitness, hrDrift };
+  return { rpe, hrEffort, load, fitness, hrDrift };
 }
 
 export function getSignalPills(signals: WeekSignals): SignalPill[] {
   const pills: SignalPill[] = [];
 
+  // Perceived effort — from user RPE ratings vs expected
   if (signals.rpe != null) {
     const map = {
-      hard: { value: 'Hard', color: 'red' },
-      'on-target': { value: 'On target', color: 'green' },
-      easy: { value: 'Easy', color: 'green' },
+      hard: { value: 'Harder than expected', color: 'red' },
+      'on-target': { value: 'As expected', color: 'green' },
+      easy: { value: 'Easier than expected', color: 'green' },
     } as const;
-    pills.push({ label: 'Effort', ...map[signals.rpe] });
+    pills.push({ label: 'Perceived effort', ...map[signals.rpe] });
+  } else {
+    pills.push({ label: 'Perceived effort', value: '—', color: 'neutral' });
   }
 
+  // HR effort — objective effort from heart rate data
+  if (signals.hrEffort != null) {
+    const map = {
+      overcooked: { value: 'Above target zone', color: 'red' },
+      'on-target': { value: 'In target zone', color: 'green' },
+      undercooked: { value: 'Below target zone', color: 'green' },
+    } as const;
+    pills.push({ label: 'Heart rate effort', ...map[signals.hrEffort] });
+  } else {
+    pills.push({ label: 'Heart rate effort', value: '—', color: 'neutral' });
+  }
+
+  // Training volume — TSS vs plan
   if (signals.load != null) {
     const map = {
+      'high-over': { value: 'Well above plan', color: 'red' },
       over: { value: 'Above plan', color: 'amber' },
       'on-plan': { value: 'On plan', color: 'green' },
       under: { value: 'Below plan', color: 'amber' },
     } as const;
-    pills.push({ label: 'Load', ...map[signals.load] });
+    pills.push({ label: 'Training volume', ...map[signals.load] });
+  } else {
+    pills.push({ label: 'Training volume', value: '—', color: 'neutral' });
   }
 
+  // Running fitness — CTL delta week-over-week
   if (signals.fitness != null) {
     const map = {
-      up: { value: '↑ Rising', color: 'green' },
-      flat: { value: '→ Steady', color: 'neutral' },
-      down: { value: '↓ Dipping', color: 'red' },
+      up: { value: 'Improving', color: 'green' },
+      flat: { value: 'Steady', color: 'neutral' },
+      down: { value: 'Declining', color: 'red' },
     } as const;
-    pills.push({ label: 'Fitness', ...map[signals.fitness] });
+    pills.push({ label: 'Running fitness', ...map[signals.fitness] });
+  } else {
+    pills.push({ label: 'Running fitness', value: '—', color: 'neutral' });
   }
 
+  // HR during sessions — average HR drift across runs
   if (signals.hrDrift != null) {
     const map = {
-      efficient: { value: 'Efficient', color: 'green' },
-      moderate: { value: 'Moderate', color: 'neutral' },
-      stressed: { value: 'Stressed', color: 'red' },
+      efficient: { value: 'Stable', color: 'green' },
+      moderate: { value: 'Moderate rise', color: 'neutral' },
+      stressed: { value: 'Significant rise', color: 'red' },
     } as const;
-    pills.push({ label: 'Aerobic', ...map[signals.hrDrift] });
+    pills.push({ label: 'HR during sessions', ...map[signals.hrDrift] });
+  } else {
+    pills.push({ label: 'HR during sessions', value: '—', color: 'neutral' });
   }
 
   return pills;
 }
 
 export function getCoachCopy(signals: WeekSignals, phase?: string): string | null {
-  const { rpe, load, fitness, hrDrift } = signals;
+  const { rpe, hrEffort, load, fitness, hrDrift } = signals;
   const canPushMore = load === 'under' && phase !== 'taper';
 
   if (rpe == null && load == null) return null;
 
   let copy = '';
 
+  const isOver = load === 'over' || load === 'high-over';
+
   // Primary: RPE × Load matrix
-  if (rpe === 'hard' && load === 'over') {
-    copy = "Last week was hard and high volume — a taxing combination. This week backs off to let your body absorb the work.";
+  if (rpe === 'hard' && isOver) {
+    copy = "Last week was hard and high volume. This week backs off to let your body absorb the work.";
   } else if (rpe === 'hard' && load === 'on-plan') {
-    copy = "Runs felt tougher than planned last week, though you hit your load target. Paces may be slightly ambitious — this week adjusts based on your effort feedback.";
+    copy = "Runs felt tougher than planned last week, though you hit your load target. Paces may be slightly ambitious. This week adjusts based on your effort feedback.";
   } else if (rpe === 'hard' && load === 'under') {
-    copy = "Last week's effort was high but volume came in below target — an unusual pattern. Possibly one tough session pulling up the average. Worth keeping an eye on.";
-  } else if (rpe === 'easy' && load === 'over') {
-    copy = "Last week was high volume and felt controlled — a strong sign your fitness is building. Great week.";
+    copy = "Last week's effort was high but volume came in below target. An unusual pattern. Possibly one tough session pulling up the average. Worth keeping an eye on.";
+  } else if (rpe === 'easy' && isOver) {
+    copy = "Last week was high volume and felt controlled. A strong sign your fitness is building.";
   } else if (rpe === 'easy' && load === 'on-plan') {
     copy = "Last week was solid. Effort was well within range and load was on target. Fitness is building steadily.";
   } else if (rpe === 'easy' && load === 'under') {
-    copy = "Last week was light and effort was low. That's fine — easy mileage is always welcome if energy allows."
+    copy = "Last week was light and effort was low. Easy mileage is always welcome if energy allows."
       + (canPushMore ? " If you're feeling fresh, this week is a good opportunity to add a little more." : "");
-  } else if (rpe === 'on-target' && load === 'over') {
-    copy = "Last week's load came in above plan but effort stayed appropriate — your fitness is handling the volume well. This week eases back slightly.";
+  } else if (rpe === 'on-target' && isOver) {
+    copy = "Last week's load came in above plan but effort stayed appropriate. Your fitness is handling the volume well. This week eases back slightly.";
   } else if (rpe === 'on-target' && load === 'on-plan') {
     copy = "Last week tracked to plan. Consistent, well-executed.";
   } else if (rpe === 'on-target' && load === 'under') {
@@ -141,7 +180,7 @@ export function getCoachCopy(signals: WeekSignals, phase?: string): string | nul
       : "Effort was right on target last week.";
   } else if (load != null) {
     // Only load known
-    copy = load === 'over'
+    copy = isOver
       ? "Last week's load came in above plan. This week is dialled back slightly."
       : load === 'under'
       ? "Last week's load came in below plan." + (canPushMore ? " If you're feeling good, this week is a chance to make it up." : " This week holds steady.")
@@ -154,15 +193,22 @@ export function getCoachCopy(signals: WeekSignals, phase?: string): string | nul
   const additions: string[] = [];
 
   if (fitness === 'up' && rpe === 'easy') {
-    additions.push("Running efficiency is improving — paces will sharpen slightly this week.");
+    additions.push("Running efficiency is improving. Paces will sharpen slightly this week.");
   } else if (fitness === 'down' && rpe === 'hard') {
     additions.push("Combined with the effort score, a recovery week may be due soon.");
   }
 
+  // RPE vs HR divergence — a meaningful coaching signal
+  if (rpe === 'hard' && hrEffort === 'on-target') {
+    additions.push("Runs felt hard but HR stayed in zone. Possible fatigue, stress, or heat, not a fitness issue.");
+  } else if (rpe === 'easy' && hrEffort === 'overcooked') {
+    additions.push("Runs felt controlled but HR ran high. Possible dehydration, poor sleep, or early signs of overreaching.");
+  }
+
   if (hrDrift === 'stressed' && rpe === 'hard') {
-    additions.push("HR drift was high — your aerobic system was under significant stress.");
+    additions.push("HR drift was high. Your aerobic system was under significant stress.");
   } else if (hrDrift === 'efficient' && (rpe === 'easy' || rpe === 'on-target')) {
-    additions.push("Low HR drift — your aerobic base is strengthening.");
+    additions.push("Low HR drift. Your aerobic base is strengthening.");
   }
 
   if (additions.length > 0) copy += ' ' + additions.join(' ');
@@ -230,5 +276,5 @@ export function getFutureWeekCopy(
     ? ` With ${weeksToRace} week${weeksToRace === 1 ? '' : 's'} to race day, volume is managed carefully.`
     : '';
 
-  return `This is a draft ${phaseDesc} week. Paces are calibrated to your current fitness (VDOT ${Math.round(vdot * 10) / 10}). Volume is set from your recent training load — we track how much you've been doing to avoid ramping too fast. Workout types follow your ${phase} block structure.${raceNote} Distances are estimates; everything locks in as your training progresses.`;
+  return `This is a draft ${phaseDesc} week. Paces are calibrated to your current fitness (VDOT ${Math.round(vdot * 10) / 10}). Volume is set from your recent training load. We track how much you've been doing to avoid ramping too fast. Workout types follow your ${phase} block structure.${raceNote} Distances are estimates; everything locks in as your training progresses.`;
 }

@@ -200,7 +200,9 @@ export class GpsTracker {
     if (this.currentSegmentIdx >= segments.length) return;
 
     const segment = segments[this.currentSegmentIdx];
-    const now = Date.now();
+    // Use last GPS point timestamp for consistency (not Date.now())
+    const lastPoint = this.points.length > 0 ? this.points[this.points.length - 1] : null;
+    const now = lastPoint ? lastPoint.timestamp : Date.now();
     const segmentElapsed = Math.max(0, (now - this.segmentStartMs - this.segmentPauseMs) / 1000);
 
     const isDone = segment.durationSeconds != null
@@ -223,8 +225,8 @@ export class GpsTracker {
       this.segmentDistance = segment.durationSeconds != null ? 0 : this.segmentDistance - segment.distance;
       this.currentSegmentIdx++;
 
-      // Reset segment timer for the next segment
-      this.segmentStartMs = now;
+      // Reset segment timer for the next segment (use point timestamp for consistency)
+      this.segmentStartMs = lastPoint ? lastPoint.timestamp : Date.now();
       this.segmentPauseMs = 0;
 
       // Notify split listeners

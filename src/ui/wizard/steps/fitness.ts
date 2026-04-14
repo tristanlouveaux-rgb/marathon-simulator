@@ -2,7 +2,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, goToStep, updateOnboarding, getOnboardingState } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { isSimulatorMode } from '@/main';
-import { getAccessToken, SUPABASE_FUNCTIONS_BASE, SUPABASE_ANON_KEY, isGarminConnected, isStravaConnected } from '@/data/supabaseClient';
+import { getAccessToken, SUPABASE_FUNCTIONS_BASE, SUPABASE_ANON_KEY, isGarminConnected, isStravaConnected, resetGarminBackfillGuard } from '@/data/supabaseClient';
 import { updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 
@@ -239,6 +239,7 @@ function wireEventHandlers(state: OnboardingState): void {
   // Connect Garmin button (wizard)
   document.getElementById('btn-wizard-garmin')?.addEventListener('click', async () => {
     const errorEl = document.getElementById('wizard-garmin-error');
+    resetGarminBackfillGuard();
     try {
       const token = await getAccessToken();
       const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/garmin-auth-start`, {

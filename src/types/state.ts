@@ -276,7 +276,9 @@ export interface Week {
   injuryCheckedIn?: boolean;                    // Whether injury was updated this week
   passedCapacityTests?: string[];               // Capacity tests passed this week
   completedKm?: number;                         // Total km completed this week (stored on week advance)
-  effortScore?: number;                          // Average (actual RPE - expected RPE) for rated run workouts
+  effortScore?: number;                          // Average (actual RPE - expected RPE) for rated run workouts (legacy blended)
+  rpeEffort?: number;                            // Pure RPE deviation: avg(rating - expected) across rated runs
+  hrEffort?: number;                             // Average hrEffortScore from Strava HR data (1.0 = on target)
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
   scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time — passed to generator
   carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
@@ -422,6 +424,7 @@ export interface SimulatorState {
   historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
   historicWeeklyZones?: { base: number; threshold: number; intensity: number }[];  // Zone breakdown per week
   ctlBaseline?: number;                     // Signal A CTL — 42-day EMA of run-equiv load; seeds fitness model
+  tssPerActiveMinute?: number;              // Personal TSS per active minute, calibrated from logged activities
   signalBBaseline?: number;                 // Signal B baseline — 8-week EMA of raw physiological TSS; used for excess load thresholds
   sportBaselineByType?: Record<string, {    // Per-sport session averages from history (Phase 2 calibration)
     avgSessionRawTSS: number;               //   avg raw TSS per session
@@ -444,6 +447,24 @@ export interface SimulatorState {
     severity: 'light' | 'resting'; // light = still running reduced; resting = full rest
     active: boolean;                // false once user marks recovered
   };
+
+  // Holiday tracking
+  holidayState?: {
+    startDate: string;              // ISO YYYY-MM-DD
+    endDate: string;                // ISO YYYY-MM-DD
+    canRun: 'yes' | 'maybe' | 'no';
+    holidayType: 'relaxation' | 'active' | 'working';
+    active: boolean;
+    preHolidayShifts?: Record<string, number>;  // workoutId → new dayOfWeek
+    welcomeBackShown?: boolean;
+    preHolidayWeeklyTSS?: number;   // snapshot for rebuild calibration
+  };
+  holidayHistory?: Array<{
+    startDate: string;
+    endDate: string;
+    holidayType: 'relaxation' | 'active' | 'working';
+    actualTSSRatio?: number;
+  }>;
 
   // Continuous (non-event) training
   continuousMode?: boolean;       // True for non-event users — plan loops instead of completing

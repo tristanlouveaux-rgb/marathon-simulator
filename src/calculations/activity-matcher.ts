@@ -427,9 +427,106 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
   }
 
+  let enrichChanged = false;
+
+  // ── Resolve stale __pending__ items in past weeks ──────────────────────────
+  // When a non-run activity is queued as __pending__ in week N (current week),
+  // and the week advances to N+1 before the user reviews it, the item becomes
+  // orphaned: globalProcessed prevents reprocessing, and processPendingCrossTraining
+  // only looks at the current week. Auto-resolve these as adhoc workouts.
+  const rowByGarminId = new Map<string, GarminActivityRow>();
+  for (const row of rows) rowByGarminId.set(row.garmin_id, row);
+
+  for (let wi = 0; wi < s.wks.length; wi++) {
+    const weekIdx = wi + 1;
+    if (weekIdx >= s.w) continue; // only past weeks
+    const wk = s.wks[wi];
+    if (!wk.garminPending?.length || !wk.garminMatched) continue;
+
+    for (const item of wk.garminPending) {
+      if (wk.garminMatched[item.garminId] !== '__pending__') continue;
+
+      // Resolve: log as adhoc in that past week
+      const id = `garmin-${item.garminId}`;
+      if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+      if (wk.adhocWorkouts.some(w => w.id === id)) {
+        // Already exists as adhoc — just fix the garminMatched pointer
+        wk.garminMatched[item.garminId] = id;
+        enrichChanged = true;
+        continue;
+      }
+
+      const row = rowByGarminId.get(item.garminId);
+      const rpe = row
+        ? deriveRPE(row, 5, s.maxHR, s.restingHR, s.onboarding?.age)
+        : 5;
+
+      // Use addAdhocWorkoutFromPending-style logic (inline to avoid circular dep)
+      const distKm = (item.distanceM ?? 0) / 1000;
+      const durationMin = Math.round(item.durationSec / 60);
+      const startDate = new Date(item.startTime);
+      const dateStr = startDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+      const timeStr = startDate.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const distPart = distKm > 0.1 ? `${distKm.toFixed(1)}km in ` : '';
+      const description = `${distPart}${durationMin}min · ${dateStr} ${timeStr}`;
+
+      const workout: Workout = {
+        id,
+        t: item.appType === 'run' ? 'easy' : item.appType === 'gym' ? 'gym' : 'cross',
+        n: formatActivityType(item.activityType),
+        d: description,
+        r: rpe,
+        rpe,
+      };
+      (workout as any).garminTimestamp = item.startTime;
+      (workout as any).garminDistKm = distKm;
+      (workout as any).garminDurationMin = durationMin;
+      (workout as any).garminAvgHR = item.avgHR ?? null;
+      (workout as any).garminMaxHR = item.maxHR ?? null;
+      (workout as any).garminCalories = item.calories ?? null;
+      (workout as any).garminAvgPace = item.avgPaceSecKm ?? null;
+      (workout as any).iTrimp = item.iTrimp ?? null;
+      (workout as any).hrZones = item.hrZones ?? null;
+      (workout as any).polyline = item.polyline ?? null;
+      (workout as any).kmSplits = item.kmSplits ?? null;
+      wk.adhocWorkouts.push(workout);
+
+      // Create garminActuals entry for zone data
+      if (!wk.garminActuals) wk.garminActuals = {};
+      if (!wk.garminActuals[id]) {
+        wk.garminActuals[id] = {
+          garminId: item.garminId,
+          startTime: item.startTime,
+          distanceKm: distKm,
+          durationSec: item.durationSec,
+          avgPaceSecKm: item.avgPaceSecKm ?? null,
+          avgHR: item.avgHR,
+          maxHR: item.maxHR,
+          calories: item.calories,
+          iTrimp: item.iTrimp ?? null,
+          hrZones: item.hrZones ?? null,
+          displayName: formatActivityType(item.activityType),
+          activityType: item.activityType,
+          polyline: item.polyline ?? null,
+          kmSplits: item.kmSplits ?? null,
+        };
+      }
+
+      // Signal B TSS
+      const rawITrimp = item.iTrimp ?? null;
+      const rawTSS = (rawITrimp != null && rawITrimp > 0)
+        ? (rawITrimp * 100) / 15000
+        : durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+      wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
+
+      wk.garminMatched[item.garminId] = id;
+      enrichChanged = true;
+      console.log(`[ActivityMatcher] Resolved stale pending ${item.activityType} (${item.garminId}) → adhoc in past week ${weekIdx}`);
+    }
+  }
+
   // Re-enrich already-matched runs when DB now has hrZones / iTrimp that state is missing.
   // This self-heals actuals that were matched before sync-activities returned these fields.
-  let enrichChanged = false;
   for (const row of rows) {
     if (!globalProcessed.has(row.garmin_id)) continue;
     // Prefer the DB / stream-computed iTrimp (most accurate).
@@ -449,7 +546,33 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       if (!workoutId || workoutId === '__pending__') continue;
       const actual = week.garminActuals?.[workoutId];
       console.log(`[Enrich] ${row.garmin_id} → workoutId=${workoutId} actual=${actual ? 'found' : 'missing'} freshITrimp=${freshITrimp?.toFixed(0)} storedITrimp=${actual?.iTrimp?.toFixed(0)}`);
-      if (!actual) break;
+      if (!actual) {
+        // Create garminActuals entry for adhoc cross-training activities that only
+        // existed as adhocWorkouts. This allows HR zone data to flow through.
+        if (workoutId.startsWith('garmin-')) {
+          if (!week.garminActuals) week.garminActuals = {};
+          week.garminActuals[workoutId] = {
+            garminId: row.garmin_id,
+            startTime: row.start_time,
+            distanceKm: row.distance_m != null ? row.distance_m / 1000 : 0,
+            durationSec: row.duration_sec,
+            avgPaceSecKm: row.avg_pace_sec_km,
+            avgHR: row.avg_hr,
+            maxHR: row.max_hr,
+            calories: row.calories,
+            iTrimp: freshITrimp,
+            hrZones: freshZones,
+            displayName: formatActivityType(row.activity_type),
+            activityType: row.activity_type,
+            polyline: row.polyline ?? null,
+            kmSplits: row.kmSplits ?? null,
+            elevationGainM: row.elevationGainM ?? null,
+          };
+          enrichChanged = true;
+          console.log(`[Enrich] Created garminActuals entry for adhoc ${workoutId} with hrZones=${!!freshZones} iTrimp=${freshITrimp?.toFixed(0)}`);
+        }
+        break;
+      }
       if (freshITrimp != null && actual.iTrimp !== freshITrimp) {
         actual.iTrimp = freshITrimp;
         enrichChanged = true;
@@ -563,6 +686,28 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           const rpe = deriveRPE(row, 5, s.maxHR, s.restingHR, s.onboarding?.age);
           addAdhocWorkout(wk, row, appType === 'gym' ? 'gym' : 'cross', id, rpe);
           wk.garminMatched![row.garmin_id] = id;
+          // Also create garminActuals entry so HR zone data is available
+          // for zone load breakdown (adhoc workouts can't carry hrZones)
+          if (!wk.garminActuals) wk.garminActuals = {};
+          if (!wk.garminActuals[id]) {
+            wk.garminActuals[id] = {
+              garminId: row.garmin_id,
+              startTime: row.start_time,
+              distanceKm: (row.distance_m ?? 0) / 1000,
+              durationSec: row.duration_sec,
+              avgPaceSecKm: row.avg_pace_sec_km,
+              avgHR: row.avg_hr,
+              maxHR: row.max_hr,
+              calories: row.calories,
+              iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+              hrZones: row.hrZones ?? null,
+              displayName: formatActivityType(row.activity_type),
+              activityType: row.activity_type,
+              polyline: row.polyline ?? null,
+              kmSplits: row.kmSplits ?? null,
+              elevationGainM: row.elevationGainM ?? null,
+            };
+          }
           changed = true;
           console.log(`[ActivityMatcher] Past week ${weekIdx}: logged ${row.activity_type} as adhoc`);
         } else {
@@ -670,7 +815,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           );
           const surplusItem: UnspentLoadItem = {
             garminId: row.garmin_id + '_surplus',
-            displayName: `${match.matchedWorkout.n} +${surplusKm.toFixed(1)}km surplus`,
+            displayName: 'Running',
             sport: 'extra_run',
             durationMin: (surplusKm / actualDistKm) * (row.duration_sec / 60),
             aerobic: surplusLoads.aerobic,
@@ -768,7 +913,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 }
 
 /** Format Garmin activity type for display — exported so activitySync.ts can use it */
-export function formatActivityType(garminType: string): string {
+export function formatActivityType(garminType: string | null | undefined): string {
+  if (!garminType) return 'Activity';
   const map: Record<string, string> = {
     RUNNING: 'Run',
     TREADMILL_RUNNING: 'Treadmill Run',
@@ -986,6 +1132,27 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
   (workout as any).polyline = item.polyline ?? null;
   (workout as any).kmSplits = item.kmSplits ?? null;
   wk.adhocWorkouts.push(workout);
+
+  // Also create garminActuals entry so HR zone data is available for zone load breakdown
+  if (!wk.garminActuals) wk.garminActuals = {};
+  if (!wk.garminActuals[id]) {
+    wk.garminActuals[id] = {
+      garminId: item.garminId,
+      startTime: item.startTime,
+      distanceKm: distKm,
+      durationSec: item.durationSec,
+      avgPaceSecKm: item.avgPaceSecKm ?? null,
+      avgHR: item.avgHR,
+      maxHR: item.maxHR,
+      calories: item.calories,
+      iTrimp: item.iTrimp ?? null,
+      hrZones: item.hrZones ?? null,
+      displayName: formatActivityType(item.activityType),
+      activityType: item.activityType,
+      polyline: item.polyline ?? null,
+      kmSplits: item.kmSplits ?? null,
+    };
+  }
 
   // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)
   const rawITrimp = item.iTrimp ?? null;

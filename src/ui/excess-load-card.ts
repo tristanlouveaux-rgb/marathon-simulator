@@ -13,7 +13,7 @@
  */
 
 import type { Week } from '@/types/state';
-import { SPORTS_DB } from '@/constants';
+import { SPORTS_DB, TL_PER_MIN } from '@/constants';
 import { getMutableState, saveState } from '@/state';
 import { getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeDecayedCarry, computeACWR, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { computeRecoveryTrend } from '@/calculations/readiness';
@@ -367,20 +367,32 @@ export function triggerExcessLoadAdjustment(): void {
     floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk?.ph),
     acwrStatus: _acwr.status,
   };
-  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier);
+  // Pass overshoot TSS so the suggester caps the reduction budget to only what's needed.
+  // `excess` is already the week-level overshoot (computeWeekRawTSS - plannedSignalB).
+  const plannedB = computePlannedSignalB(
+    s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
+    s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
+  );
+  const targetTSS = plannedB ?? 0;
+  const activityTSS = combinedActivity.iTrimp
+    ? combinedActivity.iTrimp * 100 / 15000
+    : items.reduce((sum, it) => sum + it.durationMin * (TL_PER_MIN[5] ?? 1.15), 0);
+
+  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, recoveryMultiplier, excess);
 
   // For multi-activity case, rewrite the summary to describe the actual mix rather than
   // attributing everything to a single session type.
   if (items.length > 1) {
-    const excessTSS = Math.round(computeTotalWeekExcess(wk, s));
+    const roundedActivityTSS = Math.round(activityTSS);
     const loadNote = popup.tier === 'rpe' ? ' (estimated from RPE)' : '';
     const equivKmStr = popup.equivalentEasyKm > 0
       ? `, equivalent to ${formatKm(popup.equivalentEasyKm, s.unitPref ?? 'km')} easy running`
       : '';
-    const impactMatch = popup.summary.match(/carries enough load to (.+?)(?:\. Consider|\.?\s*$)/);
-    const impactPart = impactMatch ? ` They carry enough load to ${impactMatch[1]}.` : '';
-    popup.summary = `Your ${items.length} extra activities generated ${excessTSS} TSS${loadNote}${equivKmStr}.${impactPart}${impactPart ? ' Consider adjusting your plan to avoid overtraining.' : ''}`;
+    const targetNote = targetTSS ? ` Adjustments bring your week back to ~${Math.round(targetTSS)} TSS target.` : '';
+    popup.summary = `${roundedActivityTSS} TSS${loadNote} from ${items.length} extra activities${equivKmStr}.${targetNote}`;
     popup.sportName = 'extra activities';
+  } else if (targetTSS) {
+    popup.summary += ` Adjustments bring your week back to ~${Math.round(targetTSS)} TSS target.`;
   }
 
   showSuggestionModal(popup, sportLabel, (decision) => {

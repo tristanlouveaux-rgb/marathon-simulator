@@ -678,14 +678,16 @@ Deno.serve(async (req) => {
       const allGarminIds = allActivities.map((a) => `strava-${a.id as number}`);
       const { data: cachedRows } = await supabase
         .from("garmin_activities")
-        .select("garmin_id, hr_zones, itrimp")
+        .select("garmin_id, hr_zones, itrimp, calories")
         .eq("user_id", user.id)
         .in("garmin_id", allGarminIds);
 
       const cachedWithZones = new Set<string>();
       const cachedBasic = new Set<string>();
       const cachedWithITrimp = new Set<string>();
+      const cachedCalories = new Map<string, number>();
       for (const r of (cachedRows ?? [])) {
+        if (r.calories != null && r.calories > 0) cachedCalories.set(r.garmin_id, r.calories);
         // Only treat as "fully cached" if hr_zones has actual non-zero zone data.
         // Activities stored with all-zero zones ({z1:0,...}) had no HR data at first sync
         // and should be re-attempted so they can get iTRIMP from avg_heartrate.
@@ -822,12 +824,28 @@ Deno.serve(async (req) => {
           if (isRun && distData && timeData && distData.length === timeData.length) {
             kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
           }
+          // Fetch detail for calories + run splits (already doing per-activity calls)
+          if (isRun || (act["calories"] as number | null) == null) {
+            try {
+              const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+              if ((act["calories"] as number | null) == null && detail.calories != null) {
+                (act as any).calories = detail.calories;
+              }
+              if (isRun && kmSplits.length === 0) {
+                const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+                if (sm?.length) {
+                  kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+                }
+              }
+            } catch { /* ignore */ }
+          }
         } catch {
           if (avgHR && durSec > 0) {
             iTrimp = calculateITrimpFromSummary(avgHR, durSec, bfRestingHR, bfMaxHR, biologicalSex);
           }
         }
 
+        const bfCalories = (act["calories"] as number | null) ?? cachedCalories.get(garminId) ?? null;
         const { error: upsertErr } = await supabase.from("garmin_activities").upsert({
           user_id: user.id, garmin_id: garminId, source: "strava",
           activity_type: actType, start_time: act.start_date as string,
@@ -836,7 +854,7 @@ Deno.serve(async (req) => {
           avg_pace_sec_km: avgPace,
           avg_hr: avgHR != null ? Math.round(avgHR) : null,
           max_hr: maxHRVal != null ? Math.round(maxHRVal) : null,
-          calories: (act["calories"] as number | null) ?? null,
+          calories: bfCalories,
           aerobic_effect: null, anaerobic_effect: null,
           itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
           // Store null (not all-zero object) when no HR data so activity re-enters cachedBasic
@@ -883,7 +901,7 @@ Deno.serve(async (req) => {
           avg_pace_sec_km: avgPace,
           avg_hr: avgHR != null ? Math.round(avgHR) : null,
           max_hr: (act["max_heartrate"] as number | null) != null ? Math.round((act["max_heartrate"] as number)) : null,
-          calories: (act["calories"] as number | null) ?? null,
+          calories: (act["calories"] as number | null) ?? cachedCalories.get(garminId) ?? null,
           aerobic_effect: null, anaerobic_effect: null,
           itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
           hr_zones: null, km_splits: null,
@@ -896,6 +914,23 @@ Deno.serve(async (req) => {
         const { error: batchErr } = await supabase.from("garmin_activities").upsert(avgHRBatch, { onConflict: "garmin_id" });
         if (batchErr) console.error("[Backfill] Avg-HR batch upsert failed:", batchErr.message);
       }
+
+      // 7b. Heal missing calories for avg-HR batch activities via detail endpoint (capped at 15)
+      const missingCalAvgHR = needAvgHR.filter(a => (a["calories"] as number | null) == null);
+      let calHealed = 0;
+      for (const act of missingCalAvgHR) {
+        if (calHealed >= 15) break;
+        const stravaId = act.id as number;
+        try {
+          const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+          if (detail.calories != null) {
+            await supabase.from("garmin_activities").update({ calories: detail.calories as number })
+              .eq("garmin_id", `strava-${stravaId}`).eq("user_id", user.id);
+            calHealed++;
+          }
+        } catch { break; } // stop on rate limit
+      }
+      if (calHealed > 0) console.log(`[Backfill] Healed calories for ${calHealed} avg-HR activities via detail endpoint`);
 
       // 8. Force-update activity_type + activity_name for ALL activities.
       // This fixes stale types stored by old edge fn versions (e.g. CARDIO instead of BACKCOUNTRY_SKIING).
@@ -990,21 +1025,39 @@ Deno.serve(async (req) => {
     const garminIds = activities.map((a) => `strava-${a.id as number}`);
     const { data: cachedRows } = await supabase
       .from("garmin_activities")
-      .select("garmin_id, itrimp, hr_zones, km_splits")
+      .select("garmin_id, itrimp, hr_zones, km_splits, calories")
       .eq("user_id", user.id)
       .in("garmin_id", garminIds);
 
-    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null }>();
+    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null }>();
     for (const r of (cachedRows ?? [])) {
       cachedMap.set(r.garmin_id, {
         itrimp: r.itrimp ?? null,
         hr_zones: r.hr_zones ?? null,
         km_splits: r.km_splits ?? null,
+        calories: r.calories ?? null,
       });
+    }
+
+    // Also look up calories from Garmin webhook rows (different garmin_id, same start_time).
+    // Garmin webhooks often have calories when Strava doesn't.
+    const startTimes = activities.map((a) => a.start_date as string);
+    const { data: garminCalRows } = await supabase
+      .from("garmin_activities")
+      .select("start_time, calories")
+      .eq("user_id", user.id)
+      .not("garmin_id", "like", "strava-%")
+      .in("start_time", startTimes)
+      .not("calories", "is", null)
+      .gt("calories", 0);
+    const garminCalByTime = new Map<string, number>();
+    for (const r of (garminCalRows ?? [])) {
+      garminCalByTime.set(r.start_time, r.calories);
     }
 
     // Process each activity: use cached stream data when available; fetch fresh otherwise.
     const rows: Record<string, unknown>[] = [];
+    let calHealCount = 0; // cap detail fetches for cached activities missing calories
 
     for (const act of activities) {
       const stravaId = act.id as number;
@@ -1019,7 +1072,6 @@ Deno.serve(async (req) => {
       const stravaActivityType = (act.sport_type as string) || (act.type as string) || "";
       const activityType = mapStravaType(stravaActivityType);
       const activityName = (act.name as string | null) ?? null;
-      const calories = (act["calories"] as number | null) ?? null;
       const elevationGainM = (act["total_elevation_gain"] as number | null) ?? null;
       const isRun = activityType === "RUNNING";
       const mapObj = act.map as Record<string, unknown> | null;
@@ -1041,6 +1093,8 @@ Deno.serve(async (req) => {
       }
 
       const cached = cachedMap.get(garminId);
+      // Strava list endpoint often returns null calories; fall back to DB (strava row), then Garmin webhook row, then detail endpoint
+      let calories = (act["calories"] as number | null) ?? cached?.calories ?? garminCalByTime.get(startTime) ?? null;
 
       if (cached?.hr_zones) {
         // Already processed — return cached zones without touching the Strava API
@@ -1048,7 +1102,17 @@ Deno.serve(async (req) => {
         hrZones = cached.hr_zones;
         kmSplits = cached.km_splits ?? [];
         hrDrift = cached.hr_drift ?? null;
-        // activity_name is written on next upsert when needsUpsert is true
+        // Heal: cached activity still missing calories — fetch detail endpoint once (capped at 10)
+        if (calories == null && calHealCount < 10) {
+          try {
+            const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+            if (detail.calories != null) {
+              calories = detail.calories as number;
+              needsUpsert = true; // persist to DB
+            }
+            calHealCount++;
+          } catch { /* ignore — likely rate limited */ }
+        }
       } else {
         // First time seeing this activity (or zones were missing) — fetch stream
         needsUpsert = true;
@@ -1074,17 +1138,23 @@ Deno.serve(async (req) => {
             iTrimp = calculateITrimpFromSummary(avgHR, durationSec, restingHR, maxHR, biologicalSex);
           }
 
-          if (isRun) {
-            // Prefer Strava's own splits_metric — exact match to what Strava displays
+          // Fetch detail endpoint: runs need splits_metric, all activities need calories
+          // One call per new activity — cached activities skip this entire block
+          if (isRun || calories == null) {
             try {
               const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
-              const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
-              if (sm?.length) {
-                kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+              if (calories == null && detail.calories != null) {
+                calories = detail.calories as number;
+              }
+              if (isRun) {
+                const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+                if (sm?.length) {
+                  kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+                }
               }
             } catch { /* ignore — stream fallback below */ }
             // Fallback: compute from GPS streams if detail fetch failed or returned no splits
-            if (kmSplits.length === 0 && distData && timeData && distData.length === timeData.length) {
+            if (isRun && kmSplits.length === 0 && distData && timeData && distData.length === timeData.length) {
               kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
             }
           }
@@ -1109,6 +1179,27 @@ Deno.serve(async (req) => {
               .eq("garmin_id", garminId).eq("user_id", user.id);
           }
         } catch { /* ignore — splits will be absent this sync */ }
+      }
+
+      // Heal hr_drift for activities cached before the column existed:
+      // hr_zones is set but hr_drift is NULL. Re-fetch the HR stream once and patch DB.
+      if (cached?.hr_zones && cached.hr_drift == null && DRIFT_TYPES.has(activityType) && durationSec >= 1200) {
+        try {
+          const streamData = await stravaGet(
+            `/activities/${stravaId}/streams?keys=heartrate,time&key_by_type=true`,
+            accessToken,
+          ) as Record<string, { data: number[] | boolean[] }>;
+          const hrData = streamData?.heartrate?.data as number[] | undefined;
+          const timeData = streamData?.time?.data as number[] | undefined;
+          if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
+            hrDrift = calculateHRDrift(hrData, timeData);
+            if (hrDrift != null) {
+              void supabase.from("garmin_activities")
+                .update({ hr_drift: hrDrift })
+                .eq("garmin_id", garminId).eq("user_id", user.id);
+            }
+          }
+        } catch { /* ignore — drift will be absent this sync */ }
       }
 
       // Upsert into garmin_activities — only write when we fetched fresh stream data

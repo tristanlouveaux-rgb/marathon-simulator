@@ -39,7 +39,8 @@ export function generateWeekWorkouts(
   vdot?: number,
   gymSessionsPerWeek?: number,
   effortScore?: number,
-  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'
+  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown',
+  forceDeload?: boolean
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here.
@@ -59,6 +60,7 @@ export function generateWeekWorkouts(
       vdot: vdot || 45,
       effortScore,
       acwrStatus,
+      forceDeload,
     });
     for (const intent of intents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));

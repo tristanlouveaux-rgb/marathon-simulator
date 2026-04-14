@@ -192,9 +192,11 @@ function buildIntervalScheme(match: RegExpMatchArray, paces: Paces): SplitScheme
       targetPace: workPace,
     });
     if (i < reps - 1 && restSeconds > 0) {
+      // Estimate recovery distance from easy pace jog
+      const recoveryDist = (restSeconds / paces.e) * 1000;
       segments.push({
         label: `Recovery ${i + 1}`,
-        distance: 0,
+        distance: recoveryDist,
         durationSeconds: restSeconds,
         targetPace: null,
       });
@@ -227,9 +229,10 @@ function buildTimeIntervalScheme(match: RegExpMatchArray, paces: Paces): SplitSc
       targetPace: workPace,
     });
     if (i < reps - 1 && restSeconds > 0) {
+      const recoveryDist = (restSeconds / paces.e) * 1000;
       segments.push({
         label: `Recovery ${i + 1}`,
-        distance: 0,
+        distance: recoveryDist,
         durationSeconds: restSeconds,
         targetPace: null,
       });

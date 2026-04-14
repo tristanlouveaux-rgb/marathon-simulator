@@ -9,14 +9,15 @@ import { restorePlanFromSupabase } from '@/data/planSettingsSync';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
-import { advanceWeekToToday, recordAppOpen } from '@/ui/welcome-back';
+import { advanceWeekToToday, recordAppOpen, isWeekPendingDebrief } from '@/ui/welcome-back';
+import { checkHolidayEnd, showHolidayWelcomeBack } from '@/ui/holiday-modal';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp } from '@/calculations/activity-matcher';
-import { setAthleteNormalizer } from '@/calculations/fitness-model';
+import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
-import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores } from '@/data/supabaseClient';
+import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
@@ -29,9 +30,68 @@ export function isSimulatorMode(): boolean {
 }
 
 /**
+ * Debounced home-view refresh. Multiple async syncs land on startup (Strava
+ * activities, physiology snapshot, today's steps, sleep refresh) and each
+ * used to trigger its own full re-render, causing 3–5 visible flickers.
+ * Calls within the debounce window collapse to a single render on the trailing
+ * edge. The initial launch render still goes through renderHomeView() directly.
+ */
+let _homeRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleHomeRefresh(): void {
+  if (!document.getElementById('home-tss-row')) return;
+  if (_homeRefreshTimer) return;
+  _homeRefreshTimer = setTimeout(() => {
+    _homeRefreshTimer = null;
+    scheduleHomeRefresh();
+  }, 150);
+}
+
+/**
+ * Global safety net: if any uncaught error or unhandled promise rejection
+ * happens after launch, tear down any full-screen overlays so the user is
+ * never left staring at a blank backdrop. This is a defence-in-depth measure
+ * for the class of bug where a sync routine opens an overlay and then crashes
+ * mid-render — the silent .catch() handlers in fire-and-forget syncs would
+ * otherwise hide the failure entirely.
+ *
+ * IDs listed here are full-viewport overlays that, if orphaned, would obscure
+ * the home view. The list is intentionally narrow — modals like check-in or
+ * coach are user-initiated and should not be force-closed.
+ */
+const FULLSCREEN_OVERLAY_IDS = ['activity-review-overlay'];
+function teardownOrphanedOverlays(): void {
+  for (const id of FULLSCREEN_OVERLAY_IDS) {
+    document.getElementById(id)?.remove();
+  }
+}
+function installGlobalErrorSafetyNet(): void {
+  window.addEventListener('error', (e) => {
+    console.error('[GlobalError]', e.error || e.message);
+    teardownOrphanedOverlays();
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error('[UnhandledRejection]', e.reason);
+    teardownOrphanedOverlays();
+  });
+}
+installGlobalErrorSafetyNet();
+
+/**
  * Initialize application on DOM ready
  */
 async function bootstrap(): Promise<void> {
+  // After Garmin re-auth, the callback redirects back with ?garmin=connected.
+  // Clear the backfill throttle guard so the next launch pulls fresh data
+  // instead of sitting on a stale 12h skip from the broken-auth period.
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('garmin') === 'connected') {
+    resetGarminBackfillGuard();
+    resetGarminCache();
+    params.delete('garmin');
+    const clean = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (clean ? `?${clean}` : ''));
+  }
+
   // Simulator mode: skip auth entirely for local dev/testing
   if (isSimulatorMode()) {
     await launchApp();
@@ -85,10 +145,37 @@ async function launchApp(): Promise<void> {
   // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
   setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
 
+  // Calibrate personal TSS-per-active-minute from logged activities
+  const calibrated = calibrateTssPerActiveMinute(state.wks);
+  if (calibrated != null) {
+    const ms0 = getMutableState();
+    ms0.tssPerActiveMinute = calibrated;
+    saveState();
+  }
+
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
+
+    // If s.w advanced past a week that never had a full debrief (with plan preview),
+    // roll back so the debrief fires in 'complete' mode.
+    {
+      const _ms = getMutableState() as any;
+      // One-time migration (v3): reseed lastCompleteDebriefWeek from lastDebriefWeek - 1
+      // so previously "stuck" users whose step-3 click was inadvertent get their debrief back.
+      if (!_ms._debriefGateV3) {
+        _ms.lastCompleteDebriefWeek = Math.max(0, ((_ms.lastDebriefWeek ?? _ms.w) ?? 1) - 1);
+        _ms._debriefGateV3 = true;
+        saveState();
+      }
+      const lastComplete = _ms.lastCompleteDebriefWeek ?? 0;
+      if (_ms.w > lastComplete + 1) {
+        _ms.w = lastComplete + 1;
+        saveState();
+      }
+    }
+
     if (healMissingITrimp()) saveState(); // back-fill iTrimp for actuals synced before profile HR was set
 
     // One-time cleanup: wk1 contained dummy test data (rawTSS ~1309) that inflates CTL.
@@ -108,12 +195,141 @@ async function launchApp(): Promise<void> {
         saveState();
       }
     }
+    // Cleanup: if holidayState exists with active=true but endDate has passed, force-clear it.
+    // This handles interrupted end flows from before the fix.
+    // Scrub during-holiday artifacts (adhoc sessions, forceDeload) but PRESERVE
+    // post-holiday bridge mods (_holidayBridgeScale, weekAdjustmentReason, __holiday_bridge__)
+    // which were deliberately written by showHolidayWelcomeBack and need to persist.
+    {
+      const hs = ms.holidayState;
+      const nowISO = new Date().toISOString().split('T')[0];
+      const isActiveAndValid = hs?.active && hs.endDate && nowISO <= hs.endDate;
+      if (hs && !isActiveAndValid) {
+        delete (ms as any).holidayState;
+        for (const wk of (ms.wks || [])) {
+          if (wk.adhocWorkouts?.length) {
+            wk.adhocWorkouts = wk.adhocWorkouts.filter((w: any) => !(w.id || '').startsWith('holiday-'));
+          }
+          delete (wk as any).forceDeload;
+        }
+        saveState();
+      }
+    }
+
+    // One-time repair: reverse VDOT docking + bridge mods from a same-day cancelled holiday.
+    // The old code triggered welcome-back even for holidays that lasted 0 days.
+    if (!(ms as any)._holidayRepairDone) {
+      const hh = ms.holidayHistory;
+      if (hh?.length) {
+        const last = hh[hh.length - 1];
+        const daysActive = Math.round((new Date(last.endDate + 'T12:00:00').getTime() - new Date(last.startDate + 'T12:00:00').getTime()) / 86400000) + 1;
+        if (daysActive < 3) {
+          // This was a trivially short holiday — undo VDOT loss (add back ~0.6)
+          // and clear any bridge mods it wrote
+          if (ms.v) ms.v = Math.round((ms.v + 0.6) * 10) / 10;
+          for (const wk of (ms.wks || [])) {
+            wk.workoutMods = (wk.workoutMods || []).filter(m => !m.modReason?.startsWith('Post-holiday'));
+            if ((wk as any)._holidayBridgeScale) delete (wk as any)._holidayBridgeScale;
+            if ((wk as any)._holidayBridgeDowngrade) delete (wk as any)._holidayBridgeDowngrade;
+            if (wk.weekAdjustmentReason?.startsWith('Post-holiday')) wk.weekAdjustmentReason = undefined;
+          }
+          hh.pop(); // remove the bad history entry
+          console.log('[Cleanup] Reversed VDOT docking from same-day cancelled holiday');
+        }
+      }
+      (ms as any)._holidayRepairDone = true;
+      saveState();
+    }
+    // One-time cleanup: remove spurious holiday adhoc sessions (holiday-* IDs)
+    // that were added by the old silent "Generate session" button before the chooser was built.
+    if (!(ms as any)._holidayAdhocCleaned) {
+      for (const wk of (ms.wks || [])) {
+        if (wk.adhocWorkouts?.length) {
+          wk.adhocWorkouts = wk.adhocWorkouts.filter((w: any) => !(w.id || '').startsWith('holiday-'));
+        }
+      }
+      (ms as any)._holidayAdhocCleaned = true;
+      saveState();
+    }
+    // One-time cleanup: remove strava-test-* entries injected by test-rpe.js
+    // that were not fully cleaned (garminActuals, rated, unspentLoadItems were missed).
+    if (!(ms as any)._testDataCleaned3) {
+      let cleaned = 0;
+      for (const wk of (ms.wks || [])) {
+        if (wk.garminActuals) {
+          for (const key of Object.keys(wk.garminActuals)) {
+            if (key.includes('strava-test-')) {
+              delete wk.garminActuals[key];
+              cleaned++;
+            }
+          }
+        }
+        if (wk.adhocWorkouts?.length) {
+          const before = wk.adhocWorkouts.length;
+          wk.adhocWorkouts = wk.adhocWorkouts.filter((w: any) => !(w.id || '').includes('strava-test-'));
+          cleaned += before - wk.adhocWorkouts.length;
+        }
+        if (wk.garminPending?.length) {
+          wk.garminPending = wk.garminPending.filter((p: any) => !(p.garminId || '').includes('strava-test-'));
+        }
+        if (wk.garminMatched) {
+          for (const k of Object.keys(wk.garminMatched)) {
+            if (k.includes('strava-test-')) delete wk.garminMatched[k];
+          }
+        }
+        if (wk.rated) {
+          for (const k of Object.keys(wk.rated)) {
+            if (k.includes('strava-test-')) delete wk.rated[k];
+          }
+        }
+        if (wk.unspentLoadItems?.length) {
+          const before = wk.unspentLoadItems.length;
+          wk.unspentLoadItems = wk.unspentLoadItems.filter((item: any) => !(item.garminId || '').includes('strava-test-'));
+          cleaned += before - wk.unspentLoadItems.length;
+        }
+      }
+      // Also fix surplus unspentLoadItems that leaked workout descriptions as displayName
+      for (const wk of (ms.wks || [])) {
+        for (const item of (wk.unspentLoadItems ?? [])) {
+          if ((item as any).reason === 'surplus_run' && item.displayName !== 'Running') {
+            item.displayName = 'Running';
+            cleaned++;
+          }
+        }
+      }
+      (ms as any)._testDataCleaned3 = true;
+      if (cleaned > 0) console.log(`[Cleanup] Cleaned ${cleaned} stale entries`);
+      saveState();
+    }
     recordAppOpen();
-    renderHomeView();
-    // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
-    import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
-      if (shouldAutoDebrief()) showWeekDebrief();
-    });
+
+    // Check if holiday ended while the app was closed — show welcome-back before home
+    if (checkHolidayEnd()) {
+      showHolidayWelcomeBack(() => {
+        renderHomeView();
+        const pendingDebrief2 = isWeekPendingDebrief();
+        import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
+          if (pendingDebrief2) {
+            showWeekDebrief((getState() as any).w, 'complete');
+          } else if (shouldAutoDebrief()) {
+            showWeekDebrief();
+          }
+        });
+      });
+    } else {
+      renderHomeView();
+      // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
+      // If calendar is ahead of s.w (advance was held pending debrief), show in 'complete' mode
+      // so the user gets the full flow: summary → animation → plan preview → advance.
+      const pendingDebrief = isWeekPendingDebrief();
+      import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
+        if (pendingDebrief) {
+          showWeekDebrief((getState() as any).w, 'complete');
+        } else if (shouldAutoDebrief()) {
+          showWeekDebrief();
+        }
+      });
+    }
   } else {
     // Show onboarding wizard
     initWizard();
@@ -175,7 +391,7 @@ async function launchApp(): Promise<void> {
         if (updated) {
           const ps = getState();
           setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
-          if (document.getElementById('home-tss-row')) renderHomeView();
+          scheduleHomeRefresh();
         }
       }).catch(() => {});
     } else if (state.stravaConnected) {
@@ -185,7 +401,7 @@ async function launchApp(): Promise<void> {
         if (!stravaOk) return;
         syncStravaActivities().then(() => {
           // Re-render home view if it's still active so TSS reflects post-sync state
-          if (document.getElementById('home-tss-row')) renderHomeView();
+          scheduleHomeRefresh();
         }).catch(() => {});
         if (hasPhysiologySource(state, 'apple')) {
           // Apple Watch physiology: sleep, HRV, resting HR, steps from HealthKit
@@ -193,17 +409,17 @@ async function launchApp(): Promise<void> {
             if (updated) {
               const ps = getState();
               setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
-              if (document.getElementById('home-tss-row')) renderHomeView();
+              scheduleHomeRefresh();
             }
           }).catch(() => {});
         } else if (hasPhysiologySource(state, 'garmin')) {
           isGarminConnected().then((garminOk) => {
             if (garminOk) {
               // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-              triggerGarminBackfill(4).catch(() => {}).finally(() => {
+              triggerGarminBackfill(8).catch(() => {}).finally(() => {
                 // Fetch today's steps immediately (fast — single epoch window)
                 syncTodaySteps().then(() => {
-                  if (document.getElementById('home-tss-row')) renderHomeView();
+                  scheduleHomeRefresh();
                 }).catch(() => {});
 
                 syncPhysiologySnapshot(28).then(() => {
@@ -213,14 +429,14 @@ async function launchApp(): Promise<void> {
                   // Re-render home view so sleep/HRV cards update without requiring
                   // manual navigation — physiology data lands in state after the view
                   // was first rendered, so we need an explicit refresh.
-                  if (document.getElementById('home-tss-row')) renderHomeView();
+                  scheduleHomeRefresh();
                   // If today's sleep score is still missing, re-fetch — Garmin computes
                   // scores 1–4h after waking so the webhook may fire before it's ready.
                   const todayStr = new Date().toISOString().split('T')[0];
                   const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
                   if (!todaySleep?.sleepScore) {
                     refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
-                      if (document.getElementById('home-tss-row')) renderHomeView();
+                      scheduleHomeRefresh();
                     }).catch(() => {});
                   }
                   // Background poll: keep checking until Garmin pushes today's sleep
@@ -236,25 +452,25 @@ async function launchApp(): Promise<void> {
       isGarminConnected().then((connected) => {
         if (!connected) return;
         syncActivities().then(() => {
-          if (document.getElementById('home-tss-row')) renderHomeView();
+          scheduleHomeRefresh();
         }).catch(() => {});
         processPendingCrossTraining();
         // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-        triggerGarminBackfill(4).catch(() => {}).finally(() => {
+        triggerGarminBackfill(8).catch(() => {}).finally(() => {
           // Fetch today's steps immediately (fast — single epoch window)
           syncTodaySteps().then(() => {
-            if (document.getElementById('home-tss-row')) renderHomeView();
+            scheduleHomeRefresh();
           }).catch(() => {});
 
           syncPhysiologySnapshot(28).then(() => {
             const ps2 = getState();
             setAthleteNormalizer(ps2.ltHR, ps2.restingHR, ps2.maxHR);
-            if (document.getElementById('home-tss-row')) renderHomeView();
+            scheduleHomeRefresh();
             const todayStr = new Date().toISOString().split('T')[0];
             const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
             if (!todaySleep?.sleepScore) {
               refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
-                if (document.getElementById('home-tss-row')) renderHomeView();
+                scheduleHomeRefresh();
               }).catch(() => {});
             }
             // Background poll: keep checking until Garmin pushes today's sleep
@@ -395,13 +611,13 @@ document.addEventListener('visibilitychange', () => {
 
   if (hasPhysiologySource(s, 'garmin')) {
     syncTodaySteps().then(() => {
-      if (document.getElementById('home-tss-row')) renderHomeView();
+      scheduleHomeRefresh();
     }).catch(() => {});
   } else if (hasPhysiologySource(s, 'apple')) {
     // HealthKit is local — re-read on every foreground resume so new sleep/HRV
     // data that arrived while the app was backgrounded gets picked up immediately.
     syncAppleHealthPhysiology(7).then((updated) => {
-      if (updated && document.getElementById('home-tss-row')) renderHomeView();
+      if (updated) scheduleHomeRefresh();
     }).catch(() => {});
   }
 });

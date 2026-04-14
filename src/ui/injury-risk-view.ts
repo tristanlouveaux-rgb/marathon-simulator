@@ -1,5 +1,5 @@
 /**
- * Injury Risk detail page — same design language as freshness-view / recovery-view.
+ * Load Ratio detail page — same design language as freshness-view / recovery-view.
  * Sky-blue watercolour background, amber/red palette for risk.
  * Shows ACWR ratio, acute vs chronic load, weekly trend, zone reference, science backing.
  */
@@ -14,10 +14,12 @@ import {
   CTL_DECAY,
   ATL_DECAY,
 } from '@/calculations/fitness-model';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const APP_BG  = '#F8FAFC';
+const APP_BG  = '#FAF9F6';
 const TEXT_M  = '#0F172A';
 const TEXT_S  = '#64748B';
 const TEXT_L  = '#94A3B8';
@@ -38,7 +40,7 @@ function acwrZone(ratio: number, safeUpper: number): AcwrZone {
 
 // ── Coaching text ─────────────────────────────────────────────────────────────
 
-function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic: number): { headline: string; body: string } {
+function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic: number, latestWeekRatio?: number): { headline: string; body: string } {
   if (ratio <= 0) {
     return { headline: 'Insufficient data', body: 'At least 14 days of activity data needed to compute load ratio. Keep logging activities.' };
   }
@@ -48,71 +50,39 @@ function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic
   const acuteDisp = Math.round(acute);
   const chronicDisp = Math.round(chronic);
 
+  const weeklyContext = latestWeekRatio != null && Math.abs(latestWeekRatio - ratio) > 0.15
+    ? latestWeekRatio > ratio
+      ? ` However, the most recent completed week hit ${latestWeekRatio.toFixed(1)}x${latestWeekRatio > safeUpper ? ', above the safe zone' : ', at the upper end of the safe zone'}. Today's ratio (${ratioStr}) is lower because injury risk accumulates across weeks, not just the latest one.`
+      : ` The most recent completed week was ${latestWeekRatio.toFixed(1)}x, lower than the rolling average as prior weeks were heavier.`
+    : '';
+
   if (zone.label === 'Low') {
     return {
       headline: 'Training below baseline',
-      body: `Load ratio at ${ratioStr}. This week's load (${acuteDisp} TSS) is well below the 4-week average (${chronicDisp} TSS). This is normal during a deload or recovery week.`,
+      body: `This week's load (${acuteDisp} TSS) is well below the 4-week average (${chronicDisp} TSS). Normal during a deload or recovery week.${weeklyContext}`,
     };
   }
   if (zone.label === 'Optimal') {
     return {
       headline: 'Load increase is within range',
-      body: `Load ratio at ${ratioStr}. This week's load (${acuteDisp} TSS) is close to the 4-week average (${chronicDisp} TSS). The body is adapted to the current training level.`,
+      body: `This week's load (${acuteDisp} TSS) is close to the 4-week average (${chronicDisp} TSS). The body is adapted to the current training level.${weeklyContext}`,
     };
   }
   if (zone.label === 'High') {
     return {
       headline: 'Load increasing faster than adaptation',
-      body: `Load ratio at ${ratioStr}. This week's load (${acuteDisp} TSS) exceeds the 4-week average (${chronicDisp} TSS) by more than the safe margin. Monitor for soreness and prioritise sleep.`,
+      body: `This week's load (${acuteDisp} TSS) exceeds the 4-week average (${chronicDisp} TSS) by more than the safe margin. Monitor for soreness and prioritise sleep.${weeklyContext}`,
     };
   }
   return {
     headline: 'Load spike detected',
-    body: `Load ratio at ${ratioStr}. This week's load (${acuteDisp} TSS) is significantly above the 4-week average (${chronicDisp} TSS). Reduce volume or intensity.`,
+    body: `This week's load (${acuteDisp} TSS) is significantly above the 4-week average (${chronicDisp} TSS). Reduce volume or intensity.${weeklyContext}`,
   };
 }
 
 // ── SVG watercolour background ────────────────────────────────────────────────
 
-function skyBackground(): string {
-  return `
-    <div style="position:absolute;top:0;left:0;width:100%;height:480px;overflow:hidden;pointer-events:none;z-index:0">
-      <svg style="width:100%;height:100%" viewBox="0 0 400 480" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="irSkyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#B8D4F0"/>
-            <stop offset="30%" stop-color="#D6E8F8"/>
-            <stop offset="70%" stop-color="#EAF2FB"/>
-            <stop offset="100%" stop-color="#F8FAFC"/>
-          </linearGradient>
-          <linearGradient id="irMountFar" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#7BAED0" stop-opacity="0.6"/>
-            <stop offset="100%" stop-color="#E0F0FC" stop-opacity="0.05"/>
-          </linearGradient>
-          <linearGradient id="irMountMid" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#5A98C0" stop-opacity="0.75"/>
-            <stop offset="100%" stop-color="#C0DDF0" stop-opacity="0.1"/>
-          </linearGradient>
-          <linearGradient id="irMist" x1="0%" y1="100%" x2="0%" y2="0%">
-            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
-            <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.5"/>
-            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
-          </linearGradient>
-          <filter id="irBlur"><feGaussianBlur stdDeviation="6"/></filter>
-          <filter id="irHeavy"><feGaussianBlur stdDeviation="20"/></filter>
-          <filter id="irWc"><feTurbulence type="fractalNoise" baseFrequency="0.008" numOctaves="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/><feGaussianBlur stdDeviation="1.5"/></filter>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#irSkyGrad)"/>
-        <ellipse cx="200" cy="130" rx="100" ry="80" fill="#E8F0FF" filter="url(#irBlur)" opacity="0.5"/>
-        <path d="M-60,190 Q20,150 80,180 T200,160 T350,170 T460,150 L460,480 L-60,480 Z" fill="url(#irMountFar)" filter="url(#irWc)"/>
-        <path d="M-40,270 Q50,210 130,250 T280,220 T420,250 L420,480 L-40,480 Z" fill="url(#irMountMid)" filter="url(#irWc)"/>
-        <ellipse cx="280" cy="285" rx="120" ry="40" fill="#FFFFFF" opacity="0.45" filter="url(#irHeavy)"/>
-        <path d="M0,370 Q100,330 200,370 T400,350 L400,480 L0,480 Z" fill="url(#irMist)" filter="url(#irBlur)"/>
-        <path d="M0,410 Q150,390 300,420 T400,410 L400,480 L0,480 Z" fill="url(#irMist)" opacity="0.7" filter="url(#irHeavy)"/>
-      </svg>
-      <div style="position:absolute;bottom:0;left:0;width:100%;height:120px;background:linear-gradient(to top,${APP_BG},transparent)"></div>
-    </div>`;
-}
+function skyBackground(): string { return buildSkyBackground('ir', 'grey'); }
 
 // ── Weekly ACWR trend ─────────────────────────────────────────────────────────
 
@@ -147,9 +117,13 @@ function acwrBarChart(entries: WeekAcwrEntry[], safeUpper: number): string {
   const maxRatio = Math.max(2.0, ...recent.map(e => e.ratio));
   const barAreaH = 120;
 
-  // Safe zone band
-  const safeTopPct = ((maxRatio - safeUpper) / maxRatio) * 100;
-  const safeBotPct = ((maxRatio - 0.8) / maxRatio) * 100;
+  // Safe zone band — must use same scale as bars (barAreaH - 8 usable, anchored to bottom)
+  const usableH = barAreaH - 8;
+  const safeBotPx = (0.8 / maxRatio) * usableH;
+  const safeTopPx = (safeUpper / maxRatio) * usableH;
+  // Convert to CSS: positioned from bottom of the barAreaH container
+  const safeBandBottomPct = ((barAreaH - safeBotPx) / barAreaH) * 100;
+  const safeBandTopPct = ((barAreaH - safeTopPx) / barAreaH) * 100;
 
   const bars = recent.map((e) => {
     const ratio = e.ratio;
@@ -185,13 +159,11 @@ function acwrBarChart(entries: WeekAcwrEntry[], safeUpper: number): string {
 
   return `
     <div style="position:relative">
-      <div style="position:absolute;left:0;right:0;top:${safeTopPct}%;bottom:${100 - safeBotPct}%;background:rgba(34,197,94,0.06);border-top:1px dashed rgba(34,197,94,0.3);border-bottom:1px dashed rgba(34,197,94,0.3);pointer-events:none;z-index:0"></div>
+      <div style="position:absolute;left:0;right:0;top:${safeBandTopPct.toFixed(1)}%;bottom:${(100 - safeBandBottomPct).toFixed(1)}%;background:rgba(34,197,94,0.06);border-top:1px dashed rgba(34,197,94,0.3);border-bottom:1px dashed rgba(34,197,94,0.3);pointer-events:none;z-index:0"></div>
       <div style="display:flex;gap:8px;align-items:flex-end;padding:4px 0;position:relative;z-index:1">${bars}</div>
     </div>
-    <div style="display:flex;justify-content:space-between;margin-top:4px">
-      <span style="font-size:10px;color:rgba(34,197,94,0.6)">Optimal zone: 0.8 to ${safeUpper.toFixed(1)}</span>
-    </div>
     <div style="font-size:12px;color:${TEXT_S};margin-top:8px;line-height:1.4">${commentary}</div>
+    <div style="font-size:11px;color:${TEXT_L};margin-top:8px;line-height:1.4">Green band: optimal zone (0.8 to ${safeUpper.toFixed(1)})</div>
   `;
 }
 
@@ -323,10 +295,11 @@ function getInjuryRiskHTML(s: SimulatorState): string {
   const ringGradA = zone.label === 'Very High' ? '#EF4444' : zone.label === 'High' ? '#F59E0B' : zone.label === 'Optimal' ? '#22C55E' : '#94A3B8';
   const ringGradB = zone.label === 'Very High' ? '#DC2626' : zone.label === 'High' ? '#D97706' : zone.label === 'Optimal' ? '#16A34A' : '#64748B';
 
-  const { headline, body } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic);
+  const latestWeekRatio = weeklyAcwr.length > 0 ? weeklyAcwr[weeklyAcwr.length - 1].ratio : undefined;
+  const { headline, body } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic, latestWeekRatio);
 
   const card = (title: string, content: string, delay: string) =>
-    `<div class="ir-fade" style="animation-delay:${delay};background:white;border-radius:20px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04);margin-bottom:14px">
+    `<div class="ir-fade" style="animation-delay:${delay};background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:14px">${title}</div>
       ${content}
     </div>`;
@@ -335,8 +308,9 @@ function getInjuryRiskHTML(s: SimulatorState): string {
     <style>
       #ir-view { box-sizing:border-box; }
       #ir-view *, #ir-view *::before, #ir-view *::after { box-sizing:inherit; }
-      @keyframes irFloatUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-      .ir-fade { opacity:0; animation:irFloatUp 0.55s ease-out forwards; }
+      @keyframes irFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .ir-fade { opacity:0; animation:irFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${skyAnimationCSS('ir')}
     </style>
 
     <div id="ir-view" style="
@@ -357,7 +331,7 @@ function getInjuryRiskHTML(s: SimulatorState): string {
           ">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em">Load Ratio</div>
+          <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em">Load Ratio & Injury Risk</div>
           <div style="width:36px"></div>
         </div>
 
@@ -401,7 +375,7 @@ function getInjuryRiskHTML(s: SimulatorState): string {
 
         <!-- Coaching card -->
         <div class="ir-fade" style="animation-delay:0.14s;padding:0 16px;margin-bottom:14px">
-          <div style="background:white;border-radius:20px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:6px">${headline}</div>
             <div style="font-size:13px;color:${TEXT_S};line-height:1.55">${body}</div>
           </div>
@@ -421,12 +395,25 @@ function getInjuryRiskHTML(s: SimulatorState): string {
         </div>
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────────
 
 function wireInjuryRiskHandlers(): void {
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
+
   // Animate ring
   setTimeout(() => {
     const circle = document.getElementById('ir-ring-circle');

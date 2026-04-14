@@ -395,6 +395,28 @@ export function loadState(): boolean {
       }
     }
 
+    // Repair s.v if it was corrupted by repeated detraining on a clamped plan.
+    // Bug: advanceWeekToToday applied detraining using the full calendar gap even
+    // when s.w was clamped to plan length, so every launch compounded the loss.
+    // Repair: reset to s.iv, then apply one correct round of detraining for
+    // inactive weeks (those with wkGain ≈ 0).
+    if (migrated.iv && migrated.v && migrated.v < migrated.iv * 0.9) {
+      const inactiveWeeks = (migrated.wks || [])
+        .slice(0, (migrated.w || 1) - 1)
+        .filter((wk: { wkGain: number }) => !wk.wkGain || wk.wkGain <= 0).length;
+      // Inline computeVdotLoss: 1.2%/wk for first 2, 0.8%/wk after
+      let loss = 0;
+      for (let i = 0; i < inactiveWeeks; i++) {
+        const rate = i < 2 ? 0.012 : 0.008;
+        loss += (migrated.iv - loss) * rate;
+      }
+      loss = Math.round(loss * 10) / 10;
+      const repaired = Math.max(Math.round((migrated.iv - loss) * 10) / 10, 20);
+      console.log(`  Repairing corrupted s.v: ${migrated.v} → ${repaired} (s.iv=${migrated.iv}, ${inactiveWeeks} inactive weeks, loss=${loss})`);
+      migrated.v = repaired;
+      localStorage.setItem(STATE_KEY, JSON.stringify(migrated));
+    }
+
     setState(migrated);
     console.log('Loaded saved state from localStorage');
     console.log(`  Initial: ${ft(loaded.initialBaseline || 0)}, Current: ${ft(loaded.currentFitness || 0)}, Forecast: ${ft(loaded.forecastTime || 0)}`);

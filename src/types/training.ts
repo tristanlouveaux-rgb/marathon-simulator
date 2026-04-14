@@ -34,6 +34,7 @@ export type AbilityBand = 'beginner' | 'novice' | 'intermediate' | 'advanced' | 
 /** Workout type identifiers */
 export type WorkoutType =
   | 'easy'
+  | 'recovery'
   | 'long'
   | 'threshold'
   | 'vo2'

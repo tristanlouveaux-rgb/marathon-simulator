@@ -526,7 +526,12 @@ function buildReduceAdjustments(
   const tryReduce = (pool: CandidateRun[], allowQualityDowngrade: boolean) => {
     for (const { run, runLoad } of pool) {
       if (adjustments.length >= maxAdjustments) break;
-      if (remainingLoad <= minLoadThreshold) break;
+      // Don't short-circuit on an empty adjustment list: when the budget is capped
+      // tightly (small overshoot vs. large RRC) effectiveRRC can drop below the
+      // threshold before any candidate is considered, which silently hides the
+      // Reduce option even when a quality downgrade is available. Always attempt
+      // at least one adjustment; only bail once we've already proposed something.
+      if (adjustments.length > 0 && remainingLoad <= minLoadThreshold) break;
 
       // Quality workout downgrade (keeps distance, reduces intensity)
       // Downgrades don't remove km — they're always allowed regardless of floor.
@@ -542,7 +547,11 @@ function buildReduceAdjustments(
 
         if (loadReduction <= minLoadThreshold) continue;
 
-        const actualReduction = Math.min(loadReduction, remainingLoad);
+        // Quality downgrade is all-or-nothing — we change the workout type, we
+        // don't partially shrink it. Record the true loadReduction even if it
+        // exceeds remainingLoad; the controlled overshoot is preferable to
+        // suppressing the only viable Reduce option.
+        const actualReduction = adjustments.length === 0 ? loadReduction : Math.min(loadReduction, remainingLoad);
 
         adjustments.push({
           workoutId: run.workoutId,
@@ -869,6 +878,20 @@ export function buildCrossTrainingPopup(
    * Capped at +20 TSS equivalent to prevent catastrophic over-reduction.
    */
   recoveryMultiplier = 1.0,
+  /**
+   * Maximum TSS worth of reductions to apply. When the projected week total
+   * only slightly exceeds the target, the caller passes the overshoot TSS so
+   * adjustments only remove enough load to bring the week back to target.
+   * Converted to load units internally using EASY_LOAD_PER_KM.
+   */
+  maxReductionTSS?: number,
+  /**
+   * Hard cap on the number of adjustments to propose. Overrides the severity-based
+   * cap when set. Used when the ACWR modal determines a small, specific adjustment
+   * is enough (e.g. ratio barely above ceiling) and multi-workout changes would be
+   * disproportionate. 1 → single adjustment, 2 → at most heavy severity, etc.
+   */
+  maxAdjustments?: number,
 ): SuggestionPopup {
   const warnings: string[] = [];
 
@@ -979,18 +1002,55 @@ export function buildCrossTrainingPopup(
   // Cap the additional recovery contribution at 20 TSS equivalent (spec §6 guardrail).
   // Recovery modulates reduction aggressiveness — doesn't dominate it.
   const recoveryExtra = runReplacementCredit * (recoveryMultiplier - 1.0);
-  const effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
+  let effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
+
+  // Cap budget to only the overshoot amount — don't reduce more than needed to hit target.
+  // Use equivalentEasyKm to derive TSS capacity of full RRC, then scale proportionally.
+  // Also dampen adjustment severity: small overshoot shouldn't touch many workouts.
+  let adjustmentSeverity = severity; // may be dampened; severity stays for headline
+  if (maxReductionTSS != null && maxReductionTSS >= 0 && equivalentEasyKm > 0) {
+    const easyPaceMin = (ctx.easyPaceSecPerKm ?? 360) / 60;
+    const fullRrcTSS = equivalentEasyKm * easyPaceMin * 0.92; // total TSS the full RRC would reduce
+    if (fullRrcTSS > 0) {
+      const capFraction = Math.min(1, maxReductionTSS / fullRrcTSS);
+      if (capFraction < 1) {
+        console.log(`[CrossTraining] Budget capped: ${maxReductionTSS.toFixed(0)} TSS overshoot / ${fullRrcTSS.toFixed(0)} TSS full RRC → ${(capFraction * 100).toFixed(0)}% budget`);
+        effectiveRRC = effectiveRRC * capFraction;
+        // Dampen adjustment count: small overshoot shouldn't touch many workouts
+        if (capFraction <= 0.35) {
+          adjustmentSeverity = 'light'; // max 1 adjustment
+        } else if (capFraction <= 0.65 && severity === 'extreme') {
+          adjustmentSeverity = 'heavy'; // max 2 adjustments
+        }
+      }
+    }
+  }
+
+  // Hard cap on number of adjustments — overrides severity when caller requires a
+  // specific, small change (e.g. ACWR barely above ceiling → single easy-run trim).
+  if (maxAdjustments != null) {
+    if (maxAdjustments <= 1) {
+      adjustmentSeverity = 'light';
+    } else if (maxAdjustments <= 2 && adjustmentSeverity === 'extreme') {
+      adjustmentSeverity = 'heavy';
+    }
+  }
 
   // Total planned running km from ALL runs (not just candidates) for accurate floor check
   const allPlannedKm = weekRuns.reduce((sum, r) => sum + r.plannedDistanceKm, 0);
 
   const reduceAdjustments = buildReduceAdjustments(
-    candidates, effectiveRRC, severity, ctx, preserveMin, plannedCount, allPlannedKm
+    candidates, effectiveRRC, adjustmentSeverity, ctx, preserveMin, plannedCount, allPlannedKm
   );
 
-  const replaceAdjustments = buildReplaceAdjustments(
-    candidates, effectiveRRC, severity, ctx, sport, preserveMin, plannedCount, allPlannedKm
-  );
+  // When budget is capped to overshoot, don't offer replacements — only reduce/downgrade.
+  // Replacing an entire run is disproportionate when the overshoot is small.
+  const budgetWasCapped = (maxReductionTSS != null || maxAdjustments != null) && adjustmentSeverity !== severity;
+  const replaceAdjustments = budgetWasCapped
+    ? reduceAdjustments // reuse reduce adjustments — no replacements
+    : buildReplaceAdjustments(
+        candidates, effectiveRRC, adjustmentSeverity, ctx, sport, preserveMin, plannedCount, allPlannedKm
+      );
 
   // Build outcome descriptions
   const keepDescription = 'Keep your running plan unchanged. Be mindful of accumulated fatigue.';
@@ -1033,36 +1093,12 @@ export function buildCrossTrainingPopup(
                    severity === 'heavy' ? 'Heavy training load' :
                    'Sport session logged';
 
-  // Describe actual impact from the reduce adjustments (the recommended option)
-  const impactAdjs = reduceAdjustments.length > 0 ? reduceAdjustments : replaceAdjustments;
-  const impactParts = impactAdjs.map(a => {
-    if (a.action === 'downgrade') {
-      const paceLabel = downgradePaceLabel(a);
-      return `reduce the pace of your ${a.workoutId} to ${paceLabel} pace`;
-    }
-    if (a.action === 'replace') {
-      return a.newDistanceKm > 0
-        ? `convert your ${a.workoutId} to a ${a.newDistanceKm}km shakeout`
-        : `replace your ${a.workoutId}`;
-    }
-    const reductionKm = Math.round((a.originalDistanceKm - a.newDistanceKm) * 10) / 10;
-    return `reduce your ${a.workoutId} by ${reductionKm}km`;
-  });
-  const impactDescription = impactParts.length > 0
-    ? impactParts.length === 1
-      ? impactParts[0]
-      : impactParts.slice(0, -1).join(', ') + ' and ' + impactParts[impactParts.length - 1]
-    : '';
-
   const loadTierNote = loadResult.tier === 'rpe' ? ' (estimated from RPE)' : '';
   let summary: string;
-  if (impactDescription) {
-    summary = `Your ${activity.duration_min} min ${sportDisplayName} session${loadTierNote} carries enough load to ${impactDescription}.`;
-  } else {
-    summary = `Your ${activity.duration_min} min ${sportDisplayName} session${loadTierNote} has minimal impact on your running plan.`;
-  }
   if (severity !== 'light') {
-    summary += ' Consider adjusting your plan to avoid overtraining.';
+    summary = `${activity.duration_min} min ${sportDisplayName}${loadTierNote}. Consider adjusting your plan.`;
+  } else {
+    summary = `${activity.duration_min} min ${sportDisplayName}${loadTierNote}. Minimal impact on your running plan.`;
   }
 
   // Warnings

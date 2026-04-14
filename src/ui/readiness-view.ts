@@ -284,11 +284,10 @@ function getReadinessHTML(s: SimulatorState): string {
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Today's Strain</div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
       ${isRestDay || isAdhoc
-        ? `<div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${strainColor};line-height:1">${Math.round(todaySignalBTSS)}</div>
-           <div style="font-size:14px;color:${TEXT_S}">TSS</div>
-           <div style="font-size:14px;font-weight:600;color:${strainColor}">${strainLabel}</div>`
-        : `<div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${strainColor};line-height:1">${Math.round(activeStrainPct)}%</div>
-           <div style="font-size:14px;font-weight:600;color:${strainColor}">${strainLabel}</div>`
+        ? `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${Math.round(todaySignalBTSS)} TSS</div>
+           <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
+        : `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${Math.round(activeStrainPct)}%</div>
+           <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
       }
     </div>
     <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${
@@ -308,20 +307,17 @@ function getReadinessHTML(s: SimulatorState): string {
       : `~${Math.ceil(fatigueDecayHours / 24)}d`)
     : null;
   const fatigueDecayLine = fatigueDecayStr != null
-    ? `<div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border)">
-        <span style="display:inline-block;background:var(--c-bg);border:1px solid var(--c-border);border-radius:12px;padding:2px 10px;font-size:13px;font-weight:600;color:${tsbColor}">${fatigueDecayStr}</span>
-        <span style="font-size:12px;color:${TEXT_S}">to baseline</span>
-      </div>`
+    ? `<div style="font-size:12px;color:${TEXT_S};margin-top:4px">${fatigueDecayStr} to baseline</div>`
     : '';
 
   const freshCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Freshness</div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
-      <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${tsbColor};line-height:1">${tsbLabel}</div>
-      <div style="font-size:14px;font-weight:600;color:${tsbColor}">${tsbZone}</div>
+      <div style="font-size:24px;font-weight:600;color:${tsbColor};line-height:1">${tsbLabel}</div>
+      <div style="font-size:13px;color:#94A3B8">${tsbZone}</div>
     </div>
-    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${freshnessExplanation(tsb)}</div>
     ${fatigueDecayLine}
+    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${freshnessExplanation(tsb)}</div>
   `, 'rdn-card-freshness');
 
   const isLoadRatioDriving = readiness.hardFloor === 'acwr';
@@ -329,16 +325,22 @@ function getReadinessHTML(s: SimulatorState): string {
   const injuryCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Load Ratio</div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
-      <div style="font-size:24px;font-weight:600;color:${safetyColor};line-height:1">${safetyLabel}</div>
-      <div style="font-size:13px;color:#94A3B8">${acwrRatioStr}</div>
+      <div style="font-size:24px;font-weight:600;color:${safetyColor};line-height:1">${acwrRatioStr}</div>
+      <div style="font-size:13px;color:#94A3B8">${safetyLabel}</div>
     </div>
-    ${acuteChronicStr ? `<div style="font-size:12px;color:${TEXT_S};margin-top:4px;margin-bottom:4px">${acuteChronicStr}</div>` : ''}
+    ${acuteChronicStr ? `<div style="font-size:12px;color:${TEXT_S};margin-top:4px">${acuteChronicStr}</div>` : ''}
     <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${loadRatioExplanation(acwr.status, acwr.ratio)}</div>
   `, 'rdn-card-injury', loadRatioCardBorder);
 
+  const recLabel = recoveryResult.hasData && recoveryResult.score != null
+    ? (recoveryResult.score >= 80 ? 'Strong' : recoveryResult.score >= 65 ? 'Moderate' : recoveryResult.score >= 50 ? 'Low' : 'Poor')
+    : '';
   const recoveryCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Physiology</div>
-    <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${recScoreColor};line-height:1;margin-bottom:4px">${recValueStr}</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+      <div style="font-size:24px;font-weight:600;color:${recScoreColor};line-height:1">${recValueStr}</div>
+      ${recLabel ? `<div style="font-size:13px;color:#94A3B8">${recLabel}</div>` : ''}
+    </div>
     <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${recoveryExplanation(recoveryResult.score ?? null, recoveryResult.hasData)}</div>
     ${(noGarminSleep && !(manualToday as any)?.sleepScore) ? `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;padding-top:10px;border-top:1px solid var(--c-border)">

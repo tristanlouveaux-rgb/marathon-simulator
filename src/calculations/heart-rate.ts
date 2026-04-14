@@ -121,6 +121,7 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
         max: Math.min(zones.z2.max, zones.z3.min),
       }, 'Long Run');
     case 'threshold':
+    case 'tempo':
     case 'marathon_pace':
       return makeTarget('Z4', zones.z4, 'Threshold');
     case 'float':
@@ -150,8 +151,20 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
         min: zones.z3.min,
         max: zones.z4.max,
       }, 'Hills (session avg)');
+    case 'recovery':
+      return makeTarget('Z1-2', {
+        min: zones.z1.min,
+        max: zones.z2.max,
+      }, 'Recovery');
+    case 'test_run':
+    case 'steady':
+      return makeTarget('Z3', zones.z3, 'Steady');
     default:
-      return undefined;
+      // Fallback: assume Z2-3 for any unknown running workout type
+      return makeTarget('Z2-3', {
+        min: zones.z2.min,
+        max: zones.z3.max,
+      }, 'General');
   }
 }
 

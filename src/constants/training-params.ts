@@ -7,7 +7,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
     '5k': { beginner: 10.0, novice: 8.0, intermediate: 6.0, advanced: 4.0, elite: 2.5 },
     '10k': { beginner: 11.0, novice: 9.0, intermediate: 7.0, advanced: 5.0, elite: 3.0 },
     'half': { beginner: 12.0, novice: 10.0, intermediate: 8.0, advanced: 6.0, elite: 3.5 },
-    'marathon': { beginner: 8.0, novice: 7.0, intermediate: 6.0, advanced: 6.5, elite: 4.0 }
+    'marathon': { beginner: 8.0, novice: 6.8, intermediate: 5.5, advanced: 4.5, elite: 3.5 }
   },
 
   // Time constant (tau) for adaptation - smaller = faster gains

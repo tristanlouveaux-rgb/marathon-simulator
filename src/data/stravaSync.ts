@@ -13,7 +13,7 @@ import { callEdgeFunction } from './supabaseClient';
 import { matchAndAutoComplete, formatActivityType, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
-import { processPendingCrossTraining } from './activitySync';
+import { processPendingCrossTraining, resetPendingModalGuard } from './activitySync';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 
 /**
@@ -50,6 +50,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     }
 
     const result = matchAndAutoComplete(activityRows);
+    console.log(`[StravaSync] matchAndAutoComplete: changed=${result.changed}, pending=${result.pending.length}, pending garminIds=[${result.pending.map(p => p.garminId).join(', ')}]`);
 
     // Patch hrZones + kmSplits + displayName onto garminActuals for already-matched activities.
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
@@ -88,6 +89,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         }
         if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
         if (row.elevationGainM != null && actual.elevationGainM == null) { actual.elevationGainM = row.elevationGainM; extraPatched = true; }
+        if (row.calories != null && actual.calories == null) { actual.calories = row.calories; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
         // Heal avgPaceSecKm: prefer DB moving-time pace over elapsed-time computation
@@ -106,6 +108,35 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         }
       }
     }
+    // Second pass: patch calories by start_time for Garmin-webhook-matched activities.
+    // The garmin_id loop above only matches strava-{id} rows, but activities matched via
+    // Garmin webhook have a numeric garmin_id. Match by start_time to bridge the gap.
+    const calByTime = new Map<string, number>();
+    for (const row of activityRows as GarminActivityRow[]) {
+      if (row.calories != null && row.calories > 0) {
+        calByTime.set(row.start_time, row.calories);
+      }
+    }
+    for (const wk of s.wks || []) {
+      // Patch garminActuals
+      if (wk.garminActuals) {
+        for (const [wid, actual] of Object.entries(wk.garminActuals)) {
+          if (actual.calories != null && actual.calories > 0) continue;
+          if (!actual.startTime) continue;
+          const cal = calByTime.get(actual.startTime);
+          if (cal != null) { actual.calories = cal; extraPatched = true; }
+        }
+      }
+      // Patch adhocWorkouts (garminCalories field used by detail view)
+      for (const w of (wk.adhocWorkouts ?? []) as any[]) {
+        if (w.garminCalories != null && w.garminCalories > 0) continue;
+        const ts = w.garminTimestamp ?? w.startTime;
+        if (!ts) continue;
+        const cal = calByTime.get(ts);
+        if (cal != null) { w.garminCalories = cal; extraPatched = true; }
+      }
+    }
+
     if (extraPatched) saveState();
 
     // Derive maxHR from Strava activities if not set (Apple Watch users don't get it
@@ -134,7 +165,20 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
 
     if (result.changed) render();
 
-    // Reset pending modal guard if no modal is open, then process any pending items
+    // Log current week pending state for debugging
+    const _wkDbg = getMutableState().wks?.[getMutableState().w - 1];
+    const _pendingDbg = (_wkDbg?.garminPending ?? []).filter((p: any) => _wkDbg?.garminMatched?.[p.garminId] === '__pending__');
+    console.log(`[StravaSync] Before processPending: ${_pendingDbg.length} pending items, garminActuals keys=[${Object.keys(_wkDbg?.garminActuals ?? {}).join(', ')}], adhocWorkouts=${(_wkDbg?.adhocWorkouts ?? []).length}`);
+
+    // Reset pending modal guard if no modal is open (mirrors activitySync.ts),
+    // then process any pending items. Without this reset, a cancelled review in a
+    // previous session leaves _pendingModalActive stuck at true, silently blocking
+    // all future pending processing.
+    if (!document.getElementById('activity-review-overlay') &&
+        !document.getElementById('suggestion-modal')) {
+      // Access the module-level guard via re-export
+      resetPendingModalGuard();
+    }
     processPendingCrossTraining();
 
     console.log(`[StravaSync] processed ${activityRows.length} activities, ${result.pending.length} queued for review`);

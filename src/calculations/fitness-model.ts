@@ -14,7 +14,10 @@
  */
 
 import type { Week, Workout, PhysiologyDayEntry } from '@/types';
+import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
+import { normalizeSport } from '@/cross-training/activities';
+import { computeRecoveryScore } from '@/calculations/readiness';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -32,7 +35,197 @@ import { TL_PER_MIN, SPORTS_DB } from '@/constants';
  * Reference: WHOOP counts all non-workout HR elevation toward daily strain.
  */
 export const PASSIVE_TSS_PER_ACTIVE_MIN = TL_PER_MIN[2]; // 0.45
-import { normalizeSport } from '@/cross-training/activities';
+
+/**
+ * Step-based passive TSS: 1 TSS per 1,000 passive steps.
+ *
+ * Derivation (Banister TRIMP at Zone 1 walking intensity):
+ *   Walking cadence ~110 spm (Himann 1988) → 1,000 steps ≈ 9 min.
+ *   Walking HR ≈ 50-55% HRmax → HRR ≈ 0.20-0.30.
+ *   Banister TRIMP/min = HRR × 0.64 × exp(1.92 × HRR) ≈ 0.19 at HRR=0.25.
+ *   9 min × 0.19 = 1.7 raw TRIMP → normalizeiTrimp(1.7, 15000) ≈ 0.011.
+ *   BUT TL_PER_MIN[2]=0.45 for RPE2 gives 9 × 0.45 = 4.05 — much higher.
+ *   Compromise: 1.0 TSS per 1,000 steps. Conservative enough that background
+ *   walking (5-10k steps) adds 5-10 TSS — meaningful on rest days, noise on
+ *   training days. Consistent with WHOOP passive strain magnitudes.
+ *
+ * Used as a floor when activeMinutes undercount low-intensity walking.
+ */
+export const PASSIVE_TSS_PER_1000_STEPS = 1.0;
+
+/**
+ * Estimated step cadences for subtracting workout steps from daily total.
+ * Running: Cavanagh & Kram (1989) report 160-180 spm; 170 is median for recreational.
+ * Walking: Himann (1988) report 100-120 spm; 110 is typical for adults.
+ * Cycling/swimming/strength: 0 (no meaningful step contribution).
+ */
+const CADENCE_RUNNING_SPM = 170;
+const CADENCE_WALKING_SPM = 110;
+
+// ── Target TSS ────────────────────────────────────────────────────────────────
+
+/**
+ * Readiness-modulated daily target TSS.
+ *
+ * Training days: base target = plannedDayTSS from the plan engine.
+ * Adhoc days (unplanned activity): base target = perSessionAvg.
+ * Rest days: base target = 30% of perSessionAvg (Menzies 2010: active recovery
+ *   at ~30% of training load improves next-day performance vs complete rest).
+ *
+ * Modulation (Buchheit & Laursen 2013, autoregulation):
+ *   - Primed / On Track: 100% of base (plan holds)
+ *   - Manage Load: 100% of base (visual nudge only — amber marker)
+ *   - Ease Back: 80% of base (Halson 2014: 20-30% load reduction on suppressed recovery)
+ *   - Overreaching: 75% of base (Gabbett 2016: ACWR spike reduction)
+ */
+const EASE_BACK_MULT     = 0.80;
+const OVERREACHING_MULT  = 0.75;
+const REST_DAY_TARGET_FRAC = 0.30;
+
+/**
+ * Rest-day overreach threshold: 33% of per-session average.
+ * Based on Whoop's ~33% recovery-day cap, Seiler's polarised model (Zone 1 recovery
+ * sessions ≈ 25-35% of a hard session), and TrainingPeaks rest-day TSS guidance.
+ */
+export const REST_DAY_OVERREACH_RATIO = 0.33;
+
+export interface TargetTSSRange {
+  lo: number;   // lower bound
+  mid: number;  // midpoint (used for ring scaling)
+  hi: number;   // upper bound
+}
+
+/**
+ * Target range widths by day type.
+ * Training: ±15% — accounts for pace/effort execution variation.
+ * Adhoc:    ±30% — wider, no specific plan to match.
+ * Rest:     0 to base — anything above the base is overreaching.
+ */
+const TRAINING_RANGE = 0.15;
+const ADHOC_RANGE    = 0.30;
+
+export function computeDayTargetTSS(
+  plannedDayTSS: number,
+  readinessLabel: ReadinessLabel | null,
+  perSessionAvg: number,
+  isRestDay: boolean,
+  isAdhocDay: boolean,
+): TargetTSSRange {
+  // Base target
+  let base: number;
+  if (isRestDay) {
+    base = perSessionAvg * REST_DAY_TARGET_FRAC;
+  } else if (isAdhocDay) {
+    base = perSessionAvg;
+  } else {
+    base = plannedDayTSS;
+  }
+
+  // Readiness modulation
+  if (readinessLabel === 'Ease Back')     base *= EASE_BACK_MULT;
+  if (readinessLabel === 'Overreaching')  base *= OVERREACHING_MULT;
+
+  // Range
+  let lo: number, hi: number;
+  if (isRestDay) {
+    lo = 0;
+    hi = Math.round(base);
+  } else if (isAdhocDay) {
+    lo = Math.round(base * (1 - ADHOC_RANGE));
+    hi = Math.round(base * (1 + ADHOC_RANGE));
+  } else {
+    lo = Math.round(base * (1 - TRAINING_RANGE));
+    hi = Math.round(base * (1 + TRAINING_RANGE));
+  }
+
+  return { lo, mid: Math.round(base), hi };
+}
+
+// ── Passive TSS ───────────────────────────────────────────────────────────────
+
+/**
+ * Compute passive (non-workout) TSS from daily physiology data.
+ *
+ * Two signals, take the higher:
+ *   A. Passive steps → TSS via PASSIVE_TSS_PER_1000_STEPS (catches low-intensity walking)
+ *   B. Passive active minutes → TSS via tssPerActiveMinute (catches high-intensity unlogged activity)
+ *
+ * Both signals subtract logged workout contribution to avoid double-counting:
+ *   - Steps: subtract estimated workout steps (duration × sport cadence)
+ *   - Minutes: subtract logged workout minutes (simple duration sum)
+ *
+ * @param totalSteps        — total daily steps from physiologyHistory
+ * @param activeMinutes     — total active minutes from Garmin epochs / Apple Watch exercise ring
+ * @param loggedActivities  — today's logged activities (for subtraction)
+ * @param tssPerActiveMinute — personal calibration, or PASSIVE_TSS_PER_ACTIVE_MIN fallback
+ */
+export function computePassiveTSS(
+  totalSteps: number | undefined,
+  activeMinutes: number | undefined,
+  loggedActivities: Array<{ durationSec: number; activityType?: string | null }>,
+  tssPerActiveMinute: number = PASSIVE_TSS_PER_ACTIVE_MIN,
+): number {
+  // Sum logged workout contribution for subtraction
+  let loggedMinutes = 0;
+  let loggedSteps = 0;
+  for (const act of loggedActivities) {
+    const durMin = act.durationSec / 60;
+    loggedMinutes += durMin;
+    const type = (act.activityType ?? '').toUpperCase();
+    if (type.includes('RUN'))                            loggedSteps += durMin * CADENCE_RUNNING_SPM;
+    else if (type.includes('WALK') || type.includes('HIKE')) loggedSteps += durMin * CADENCE_WALKING_SPM;
+    // Cycling, swimming, strength: 0 steps
+  }
+
+  // Signal A: passive steps
+  let tssFromSteps = 0;
+  if (totalSteps != null && totalSteps > 0) {
+    const passiveSteps = Math.max(0, totalSteps - loggedSteps);
+    tssFromSteps = (passiveSteps / 1000) * PASSIVE_TSS_PER_1000_STEPS;
+  }
+
+  // Signal B: passive active minutes
+  let tssFromMinutes = 0;
+  if (activeMinutes != null && activeMinutes > 0) {
+    const passiveActiveMin = Math.max(0, activeMinutes - loggedMinutes);
+    tssFromMinutes = passiveActiveMin * tssPerActiveMinute;
+  }
+
+  return Math.round(Math.max(tssFromSteps, tssFromMinutes));
+}
+
+// ── Personal calibration ──────────────────────────────────────────────────────
+
+/**
+ * Calibrate personal TSS-per-active-minute from logged activities.
+ * Mirrors computeCrossTrainTSSPerMin pattern: scans garminActuals with
+ * both iTrimp and durationSec, computes median(TSS / durationMin).
+ *
+ * Returns null when < 5 qualifying samples (fallback to PASSIVE_TSS_PER_ACTIVE_MIN).
+ */
+export function calibrateTssPerActiveMinute(wks: Week[] | undefined | null, norm?: number): number | null {
+  if (!wks?.length) return null;
+  const MIN_SAMPLES = 5;
+  const MIN_DURATION_SEC = 900; // 15 min minimum
+  const seen = new Set<string>();
+  const ratios: number[] = [];
+
+  for (const wk of wks) {
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      if (!actual.iTrimp || actual.iTrimp <= 0) continue;
+      if (!actual.durationSec || actual.durationSec < MIN_DURATION_SEC) continue;
+      if (actual.garminId && seen.has(actual.garminId)) continue;
+      if (actual.garminId) seen.add(actual.garminId);
+      const tss = normalizeiTrimp(actual.iTrimp, norm);
+      const durMin = actual.durationSec / 60;
+      ratios.push(tss / durMin);
+    }
+  }
+
+  if (ratios.length < MIN_SAMPLES) return null;
+  ratios.sort((a, b) => a - b);
+  return ratios[Math.floor(ratios.length / 2)]; // median
+}
 
 /**
  * Compute trailing effort score from the last 2 completed weeks with effort data.
@@ -243,7 +436,9 @@ export function computeWeekRawTSS(
   // Adhoc workouts — runSpec = 1.0 (full physiological cost, Signal B)
   // Include ALL adhoc workouts regardless of ID prefix: Garmin-synced ('garmin-'),
   // GPS-recorded (UUID), and any other manually logged entries.
+  // Skip holiday-generated sessions ('holiday-') — these are suggestions, not real activity.
   for (const w of wk.adhocWorkouts ?? []) {
+    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
     // Extract garminId from the adhoc workout id (format: 'garmin-<garminId>')
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {
@@ -325,7 +520,9 @@ export function computeTodaySignalBTSS(
   }
 
   // adhocWorkouts — garmin-prefixed filtered by garminTimestamp; non-garmin matched by dayOfWeek
+  // Skip holiday-generated sessions ('holiday-') — these are suggestions, not real activity.
   for (const w of wk.adhocWorkouts ?? []) {
+    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {
       if (seenGarminIds.has(rawId)) continue;
@@ -704,13 +901,23 @@ export interface AthleteACWR {
   ctl: number;
 }
 
-/** Per-tier ACWR thresholds and display labels (from spec §2) */
+/**
+ * Per-tier ACWR thresholds and display labels.
+ *
+ * Range compressed to 1.3-1.5 (was 1.2-1.6) based on science audit:
+ * - Gabbett 2016: 0.8-1.3 "sweet spot" is the only range with direct evidence
+ * - ACWR >= 1.5 consistently associated with elevated injury risk across populations
+ * - Lolli et al. 2019: absolute thresholds are questionable (ratio coupling artifact)
+ * - No published per-tier thresholds exist; these are pragmatic interpolations
+ *   within the empirically supported 1.3-1.5 range
+ * - Higher chronic load (fitness) is protective (Hulin 2016), justifying the gradient
+ */
 export const TIER_ACWR_CONFIG: Record<string, { safeUpper: number; label: string }> = {
-  beginner:     { safeUpper: 1.2, label: 'Building' },
-  recreational: { safeUpper: 1.3, label: 'Foundation' },
-  trained:      { safeUpper: 1.4, label: 'Trained / Well-Trained' },
-  performance:  { safeUpper: 1.5, label: 'Performance' },
-  high_volume:  { safeUpper: 1.6, label: 'Elite' },
+  beginner:     { safeUpper: 1.30, label: 'Building' },
+  recreational: { safeUpper: 1.35, label: 'Foundation' },
+  trained:      { safeUpper: 1.40, label: 'Trained / Well-Trained' },
+  performance:  { safeUpper: 1.45, label: 'Performance' },
+  high_volume:  { safeUpper: 1.50, label: 'Elite' },
 };
 
 /**
@@ -834,9 +1041,10 @@ export function getDailyLoadHistory(
       activities.push({ name, tss: Math.round(actTss), durationMin: Math.round(durMin), avgHR: actual.avgHR ?? null, hrZones: actual.hrZones ?? null });
     }
 
-    // Adhoc workouts
+    // Adhoc workouts — skip holiday-generated sessions (suggestions, not real activity)
     const ourDay = (d.getDay() + 6) % 7;
     for (const w of wk.adhocWorkouts ?? []) {
+      if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
       const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
       if (rawId) {
         if (seenIds.has(rawId)) continue;
@@ -870,31 +1078,22 @@ export function getDailyLoadHistory(
         const { z1, z2, z3, z4, z5 } = a.hrZones;
         const total = z1 + z2 + z3 + z4 + z5;
         if (total > 0) {
-          const lo = a.tss * (z1 + z2) / total;
-          const hi = a.tss * (z3 + z4) / total;
-          const an = a.tss * z5 / total;
-          zoneLoad.lowAerobic += lo;
-          zoneLoad.highAerobic += hi;
-          zoneLoad.anaerobic += an;
-          console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} HR-ZONES z1=${z1} z2=${z2} z3=${z3} z4=${z4} z5=${z5} → lo=${lo.toFixed(0)} hi=${hi.toFixed(0)} an=${an.toFixed(0)}`);
+          zoneLoad.lowAerobic += a.tss * (z1 + z2) / total;
+          zoneLoad.highAerobic += a.tss * (z3 + z4) / total;
+          zoneLoad.anaerobic += a.tss * z5 / total;
           continue;
-        } else {
-          console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} hrZones present but total=0`, a.hrZones);
         }
       }
       // Estimate zone from avgHR when stream data is unavailable.
       // Uses same %maxHR thresholds as calculateHRZones in the edge function.
       if (a.avgHR && a.avgHR > 0 && maxHR && maxHR > 0) {
         const pct = a.avgHR / maxHR;
-        const bucket = pct >= 0.90 ? 'anaerobic' : pct >= 0.70 ? 'highAerobic' : 'lowAerobic';
         if (pct >= 0.90)      zoneLoad.anaerobic += a.tss;
         else if (pct >= 0.70) zoneLoad.highAerobic += a.tss;
         else                  zoneLoad.lowAerobic += a.tss;
-        console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} avgHR=${a.avgHR} maxHR=${maxHR} pct=${(pct*100).toFixed(0)}% → ${bucket}`);
         continue;
       }
       // Last resort — attribute to low aerobic
-      console.log(`[ZoneLoad] ${dateStr} "${a.name}" TSS=${a.tss} NO HR DATA (avgHR=${a.avgHR}, hrZones=${JSON.stringify(a.hrZones)}) → lowAerobic`);
       zoneLoad.lowAerobic += a.tss;
     }
     entries.push({ date: dateStr, tss: Math.round(tss), activities, zoneLoad });
@@ -1131,4 +1330,116 @@ export function computeSameSignalTSB(
   }
 
   return { ctl, atl, tsb: ctl - atl };
+}
+
+/**
+ * Stacked session recovery: "To Baseline" hours.
+ *
+ * Walks forward chronologically through recent sessions (current week + last 3 days of
+ * previous week). Each session adds `8 × TSS / ctlDaily × recoveryMult × recoveryAdj`
+ * hours to the running total. Elapsed time ticks down between sessions and after the last.
+ *
+ * recoveryAdj comes from sleep/HRV/RHR (computeRecoveryScore).
+ * recoveryMult comes from sport type (SPORTS_DB).
+ */
+export function computeToBaseline(
+  wks: Week[],
+  completedWeek: number,
+  ctlDaily: number,
+  planStartDate: string | undefined,
+  physiologyHistory: PhysiologyDayEntry[] | undefined,
+): { hours: number; totalHours: number } | null {
+  if (!planStartDate || ctlDaily <= 0) return null;
+
+  const weekStartDate = new Date(planStartDate + 'T12:00:00');
+  weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
+  const nowMs = Date.now();
+
+  // Global recovery adjustment from sleep/HRV/RHR
+  let recoveryAdj = 1.0;
+  const recScore = computeRecoveryScore(physiologyHistory ?? []);
+  if (recScore?.score != null) {
+    recoveryAdj = 1.0 + (50 - recScore.score) * 0.006;
+    recoveryAdj = Math.max(0.7, Math.min(1.3, recoveryAdj));
+  }
+
+  // Collect recent days
+  type DayEntry = { date: string; tss: number; noonMs: number; weekIdx: number };
+  const recentDays: DayEntry[] = [];
+
+  // Previous week's last 3 days
+  if (completedWeek > 0) {
+    const prevWk = wks[completedWeek - 1];
+    if (prevWk) {
+      for (let d = 4; d < 7; d++) {
+        const dayD = new Date(weekStartDate);
+        dayD.setDate(dayD.getDate() - (7 - d));
+        const dayDate = dayD.toISOString().split('T')[0];
+        const tss = computeTodaySignalBTSS(prevWk, dayDate);
+        recentDays.push({ date: dayDate, tss, noonMs: dayD.getTime(), weekIdx: completedWeek - 1 });
+      }
+    }
+  }
+
+  // Current week: day 0 to today
+  const todayLocal = new Date();
+  todayLocal.setHours(12, 0, 0, 0);
+  const daysToCheck = Math.max(0, Math.round((todayLocal.getTime() - weekStartDate.getTime()) / 86400000)) + 1;
+  const currentWk = wks[completedWeek];
+  for (let d = 0; d < daysToCheck; d++) {
+    const dayD = new Date(weekStartDate);
+    dayD.setDate(dayD.getDate() + d);
+    const dayDate = dayD.toISOString().split('T')[0];
+    const tss = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
+    recentDays.push({ date: dayDate, tss, noonMs: dayD.getTime(), weekIdx: completedWeek });
+  }
+
+  const sessions = recentDays
+    .filter(d => d.tss > 10)
+    .sort((a, b) => a.noonMs - b.noonMs);
+
+  if (sessions.length === 0) return null;
+
+  let runningRecoveryMs = 0;
+  let lastEndMs = sessions[0].noonMs;
+  let totalRecoverySum = 0;
+
+  for (const session of sessions) {
+    let weightedRecoveryMult = 1.0;
+    let sessionEndMs = session.noonMs;
+    const wk = wks[session.weekIdx];
+    if (wk?.garminActuals) {
+      let totalTss = 0;
+      let weightedSum = 0;
+      for (const [, actual] of Object.entries(wk.garminActuals)) {
+        if (!actual.startTime?.startsWith(session.date)) continue;
+        const sportKey = actual.activityType ? normalizeSport(actual.activityType) : 'generic_sport';
+        const config = SPORTS_DB[sportKey];
+        const rm = config?.recoveryMult ?? 1.0;
+        const actTss = actual.iTrimp ? actual.iTrimp / 150 : (actual.durationSec ?? 0) / 60;
+        totalTss += actTss;
+        weightedSum += actTss * rm;
+        const startMs = new Date(actual.startTime).getTime();
+        const endMs = startMs + (actual.durationSec ?? 0) * 1000;
+        if (endMs > sessionEndMs) sessionEndMs = endMs;
+      }
+      if (totalTss > 0) weightedRecoveryMult = weightedSum / totalTss;
+    }
+
+    const elapsed = Math.max(0, sessionEndMs - lastEndMs);
+    runningRecoveryMs = Math.max(0, runningRecoveryMs - elapsed);
+
+    const sessionRecovery = 8 * session.tss / ctlDaily * weightedRecoveryMult * recoveryAdj;
+    runningRecoveryMs += sessionRecovery * 3600000;
+    totalRecoverySum += sessionRecovery;
+    lastEndMs = sessionEndMs;
+  }
+
+  const elapsedSinceLast = Math.max(0, nowMs - lastEndMs);
+  runningRecoveryMs = Math.max(0, runningRecoveryMs - elapsedSinceLast);
+
+  return {
+    hours: Math.round(runningRecoveryMs / 3600000),
+    totalHours: Math.round(totalRecoverySum),
+  };
 }

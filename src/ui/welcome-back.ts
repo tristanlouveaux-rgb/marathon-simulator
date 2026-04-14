@@ -13,7 +13,7 @@
  * per calendar day (prevents re-showing on multiple app opens).
  */
 
-import { getMutableState, saveState } from '@/state';
+import { getState, getMutableState, saveState } from '@/state';
 
 const GAP_SEEN_KEY = 'mosaic_gap_seen';
 const LAST_OPENED_KEY = 'mosaic_last_opened_at';
@@ -53,6 +53,17 @@ export function detectMissedWeeks(): number {
  *
  * Safe to call when gap = 0 (no-op) or repeatedly (idempotent within a day).
  */
+/**
+ * Returns true if the calendar is ahead of s.w because advance was held back
+ * pending a debrief. main.ts uses this to auto-show the debrief in 'complete' mode.
+ */
+export function isWeekPendingDebrief(): boolean {
+  const s = getState() as any;
+  if (!s.planStartDate || !s.w || !s.hasCompletedOnboarding) return false;
+  const target = computeCurrentCalendarWeek(s);
+  return target > s.w;
+}
+
 export function advanceWeekToToday(): void {
   const gap = detectMissedWeeks();
   if (gap <= 0) return;
@@ -87,13 +98,23 @@ export function advanceWeekToToday(): void {
     }
   }
 
-  // Clamp to the smaller of target and available weeks
-  const effectiveMax = Math.min(s.tw ?? s.wks?.length ?? s.w, s.wks?.length ?? s.w);
-  s.w = Math.min(targetWeek, effectiveMax);
+  // Don't advance past a week that hasn't had a full debrief (with plan preview).
+  // lastCompleteDebriefWeek is only set after the complete flow (animation + plan preview),
+  // not after review-only debriefs. This ensures users always see the full wrap-up.
+  const lastComplete = (s as any).lastCompleteDebriefWeek ?? 0;
+  const debriefCap = lastComplete + 1;
 
-  // Apply VDOT detraining silently
-  if (s.v && gap > 0) {
-    const loss = computeVdotLoss(s.v, gap);
+  // Clamp to the smaller of target, available weeks, and debrief cap
+  const effectiveMax = Math.min(s.tw ?? s.wks?.length ?? s.w, s.wks?.length ?? s.w);
+  const oldW = s.w;
+  s.w = Math.min(targetWeek, effectiveMax, debriefCap);
+
+  // Apply VDOT detraining only for weeks actually advanced (not the full
+  // calendar gap). When s.w is clamped (plan ended), actualAdvance = 0
+  // and no detraining is applied — prevents compounding on every launch.
+  const actualAdvance = s.w - oldW;
+  if (s.v && actualAdvance > 0) {
+    const loss = computeVdotLoss(s.v, actualAdvance);
     if (loss > 0) s.v = Math.max(Math.round((s.v - loss) * 10) / 10, 20);
   }
 
@@ -114,7 +135,7 @@ export function advanceWeekToToday(): void {
  * Based on ~1.2% VO2max loss/week (weeks 1–2), ~0.8% thereafter.
  * Diminishing returns modelled by compounding the loss.
  */
-function computeVdotLoss(currentVdot: number, weeksGap: number): number {
+export function computeVdotLoss(currentVdot: number, weeksGap: number): number {
   let loss = 0;
   for (let i = 0; i < weeksGap; i++) {
     const rate = i < 2 ? 0.012 : 0.008;

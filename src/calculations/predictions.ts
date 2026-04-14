@@ -1,6 +1,6 @@
 import type { PBs, RecentRun, RaceDistance, RunnerType } from '@/types';
 import type { OnboardingState } from '@/types/onboarding';
-import { rdKm, tv } from './vdot';
+import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
 
@@ -104,52 +104,80 @@ export function predictFromRecent(
 }
 
 /**
- * LT predictor with runner-type multipliers
+ * LT predictor with runner-type and tier-aware multipliers.
  *
  * Multipliers convert LT pace (threshold/~60min effort) to predicted race pace.
  * Lower multiplier = faster predicted time.
  *
- * Semantics:
- * - Speed (high b, better at short): lower 5K mult (0.95), higher marathon mult (1.14)
- * - Endurance (low b, better at long): higher 5K mult (0.92), lower marathon mult (1.09)
+ * Crossover effect:
+ * - Speed (high b): lower 5K mult, higher marathon mult
+ * - Endurance (low b): higher 5K mult, lower marathon mult
  *
- * This produces correct predictions:
- * - Speed types are faster at 5K, slower at marathon
- * - Endurance types are slower at 5K, faster at marathon
+ * Tier effect (marathon only):
+ * Elite/performance runners sustain closer to LT pace over marathon distance
+ * (better fat oxidation, glycogen sparing, pacing). Recreational/beginner
+ * runners lose more efficiency. Supported by critical speed research showing
+ * faster marathoners sustain ~93% critical speed vs ~79% for slower runners.
+ * 5K/10K/HM multipliers are stable across tiers.
  *
  * @param targetDist - Target distance in meters
  * @param ltPaceSecPerKm - LT pace in seconds per km
  * @param runnerType - Runner type string
+ * @param athleteTier - Athlete tier for marathon-specific adjustment
  * @returns Predicted time in seconds, or null
  */
 export function predictFromLT(
   targetDist: number,
   ltPaceSecPerKm: number | null,
-  runnerType: string
+  runnerType: string,
+  athleteTier?: string
 ): number | null {
   if (!ltPaceSecPerKm) return null;
 
-  // Multipliers tuned for correct semantics:
-  // - Speed (high-b, better at short): lower mult at 5K (0.92), higher mult at marathon (1.14)
-  // - Endurance (low-b, better at long): higher mult at 5K (0.95), lower mult at marathon (1.09)
-  // This creates the crossover effect where speed types are faster at short distances
-  // and endurance types are faster at long distances.
+  // 5K/10K/HM: stable across tiers, literature-supported ranges
   const mult: Record<number, Record<string, number>> = {
     5000: { speed: 0.92, balanced: 0.935, endurance: 0.95 },
     10000: { speed: 0.98, balanced: 0.995, endurance: 1.01 },
     21097: { speed: 1.03, balanced: 1.045, endurance: 1.06 },
-    42195: { speed: 1.14, balanced: 1.115, endurance: 1.09 }
   };
 
-  // Fix case sensitivity - convert to lowercase
+  // Marathon: tier-aware. Research shows marathon pace = 104-114% of LT pace,
+  // with fitter athletes closer to the low end (Daniels tables, critical speed
+  // studies). Beginners lose more efficiency over 42K (fuelling, pacing, EIMD).
+  const marathonMult: Record<string, Record<string, number>> = {
+    high_volume:  { speed: 1.08, balanced: 1.06, endurance: 1.04 },
+    performance:  { speed: 1.08, balanced: 1.06, endurance: 1.04 },
+    trained:      { speed: 1.10, balanced: 1.08, endurance: 1.06 },
+    recreational: { speed: 1.12, balanced: 1.10, endurance: 1.08 },
+    beginner:     { speed: 1.14, balanced: 1.115, endurance: 1.09 },
+  };
+
   const runnerTypeLower = runnerType ? runnerType.toLowerCase() : 'balanced';
-  // Find closest canonical distance if exact match missing
+
+  // Find closest canonical distance
   let distKey = targetDist;
-  if (!mult[distKey]) {
-    const canonical = [5000, 10000, 21097, 42195];
+  const canonical = [5000, 10000, 21097, 42195];
+  if (!mult[distKey] && distKey !== 42195) {
     distKey = canonical.reduce((best, d) => Math.abs(d - targetDist) < Math.abs(best - targetDist) ? d : best);
   }
-  const m = mult[distKey] ? mult[distKey][runnerTypeLower] : 1.0;
+
+  let m: number;
+  if (distKey === 42195) {
+    // Derive tier from LT pace (running-specific) rather than using athleteTier
+    // directly, which may reflect total cross-training CTL and overestimate
+    // marathon-specific endurance. LT pace at ~60min effort → approximate VDOT
+    // via 10K equivalent, then map to tier.
+    const ltVdot = cv(10000, ltPaceSecPerKm * 10);
+    const runTier = ltVdot >= 60 ? 'high_volume'
+      : ltVdot >= 52 ? 'performance'
+      : ltVdot >= 45 ? 'trained'
+      : ltVdot >= 38 ? 'recreational'
+      :                'beginner';
+    const tierMult = marathonMult[runTier] || marathonMult.recreational;
+    m = tierMult[runnerTypeLower] ?? 1.10;
+  } else {
+    m = mult[distKey]?.[runnerTypeLower] ?? 1.0;
+  }
 
   return ltPaceSecPerKm * (targetDist / 1000) * m;
 }
@@ -271,7 +299,8 @@ export function blendPredictions(
   vo2max: number | null,
   b: number,
   runnerType: string,
-  recentRun: RecentRun | null
+  recentRun: RecentRun | null,
+  athleteTier?: string
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
@@ -318,7 +347,7 @@ export function blendPredictions(
 
   const tRecent = predictFromRecent(targetDist, recentRun, pbs, b);
   const tPB = predictFromPB(targetDist, pbs, b);
-  const tLT = predictFromLT(targetDist, ltPace, runnerType);
+  const tLT = predictFromLT(targetDist, ltPace, runnerType, athleteTier);
   const tVO2 = predictFromVO2(targetDist, vo2max);
 
   let wRecent = tRecent && hasRecent ? (w.recent || 0) : 0;

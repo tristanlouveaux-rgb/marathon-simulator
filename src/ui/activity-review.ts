@@ -151,7 +151,15 @@ export function showActivityReview(
   // Use persisted choices as fallback (re-review preserves previous assignments)
   const sAr = getMutableState();
   const effectiveSavedChoices = savedChoices ?? sAr.wks?.[sAr.w - 1]?.garminReviewChoices;
-  showMatchingEntryScreen(overlay, pending, onComplete, effectiveSavedChoices, onCancel);
+  try {
+    showMatchingEntryScreen(overlay, pending, onComplete, effectiveSavedChoices, onCancel);
+  } catch (err) {
+    // If building the matching screen throws, tear down the overlay so the user
+    // isn't left staring at a blank full-screen backdrop. Log so we can diagnose.
+    console.error('[activity-review] showMatchingEntryScreen crashed — removing overlay', err);
+    overlay.remove();
+    throw err;
+  }
 }
 
 /**
@@ -762,6 +770,111 @@ function buildAssignmentLines(
 }
 
 // ---------------------------------------------------------------------------
+// RPE rating prompt — shown after Strava activities are matched to planned workouts
+
+interface MatchedRunInfo {
+  workoutId: string;
+  workoutName: string;
+  autoRpe: number;
+  distanceKm: number;
+  durationMin: number;
+}
+
+function showRpePrompt(
+  matchedRuns: MatchedRunInfo[],
+  onDone: () => void,
+): void {
+  if (matchedRuns.length === 0) { onDone(); return; }
+
+  const s = getMutableState();
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) { onDone(); return; }
+
+  const RPE_LABELS: Record<number, string> = {
+    1: 'Very easy', 2: 'Easy', 3: 'Easy', 4: 'Moderate',
+    5: 'Moderate', 6: 'Hard', 7: 'Hard', 8: 'Very hard',
+    9: 'Max effort', 10: 'Max effort',
+  };
+  const rpeColorVar = (v: number): string =>
+    v <= 3 ? 'var(--c-ok)' : v <= 6 ? 'var(--c-caution)' : 'var(--c-warn)';
+
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  const rows = matchedRuns.map((run, i) => {
+    const unitPref = getState().unitPref ?? 'km';
+    const dist = formatKm(run.distanceKm, unitPref);
+    const mins = Math.round(run.durationMin);
+    const colour = rpeColorVar(run.autoRpe);
+    return `
+      <div style="padding:12px 0;${i > 0 ? 'border-top:1px solid var(--c-border)' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:13px;font-weight:600;color:var(--c-black)">${run.workoutName}</span>
+          <span style="font-size:11px;color:var(--c-muted)">${dist} · ${mins} min</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <input type="range" min="1" max="10" step="1" value="${run.autoRpe}"
+                 data-wid="${run.workoutId}" class="rpe-slider"
+                 style="flex:1;accent-color:${colour};height:4px">
+          <span class="rpe-val" data-wid="${run.workoutId}"
+                style="font-size:15px;font-weight:700;color:${colour};min-width:20px;text-align:center">${run.autoRpe}</span>
+        </div>
+        <div class="rpe-label" data-wid="${run.workoutId}"
+             style="font-size:10px;color:${colour};margin-top:2px">${RPE_LABELS[run.autoRpe] ?? ''}</div>
+      </div>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+      <div style="font-size:15px;font-weight:600;color:var(--c-black);margin-bottom:4px">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</div>
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px">Rate perceived effort (1 = very easy, 10 = maximum)</div>
+      ${rows}
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button id="rpe-skip" style="flex:1;height:40px;border-radius:12px;border:1px solid var(--c-border);
+                background:transparent;font-size:13px;font-weight:600;color:var(--c-muted);cursor:pointer">Skip</button>
+        <button id="rpe-save" style="flex:1;height:40px;border-radius:12px;border:none;
+                background:var(--c-accent);font-size:13px;font-weight:600;color:#fff;cursor:pointer">Save</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  // Wire sliders
+  overlay.querySelectorAll<HTMLInputElement>('.rpe-slider').forEach(slider => {
+    slider.addEventListener('input', () => {
+      const wid = slider.dataset.wid!;
+      const val = parseInt(slider.value, 10);
+      const colour = rpeColorVar(val);
+      const valSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-val[data-wid="${wid}"]`);
+      const labelSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-label[data-wid="${wid}"]`);
+      if (valSpan) { valSpan.textContent = String(val); valSpan.style.color = colour; }
+      if (labelSpan) { labelSpan.textContent = RPE_LABELS[val] ?? ''; labelSpan.style.color = colour; }
+      slider.style.accentColor = colour;
+    });
+  });
+
+  const applyAndClose = (save: boolean) => {
+    if (save && wk) {
+      overlay.querySelectorAll<HTMLInputElement>('.rpe-slider').forEach(slider => {
+        const wid = slider.dataset.wid!;
+        const val = parseInt(slider.value, 10);
+        wk.rated[wid] = val;
+      });
+      saveState();
+    }
+    overlay.remove();
+    onDone();
+  };
+
+  overlay.querySelector('#rpe-save')!.addEventListener('click', () => applyAndClose(true));
+  overlay.querySelector('#rpe-skip')!.addEventListener('click', () => applyAndClose(false));
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) applyAndClose(false);
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Apply
 
 function applyReview(
@@ -778,6 +891,7 @@ function applyReview(
 
   if (!wk.garminMatched) wk.garminMatched = {};
   const usedWorkoutIds = new Set<string>();
+  const matchedRunsForRpe: MatchedRunInfo[] = [];
 
   // Persist the user's choices so re-review can pre-populate them.
   // Skip when confirmedMatchings is provided: the matching-screen callback already saved the
@@ -864,6 +978,14 @@ function applyReview(
 
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
 
+      matchedRunsForRpe.push({
+        workoutId: match.workoutId,
+        workoutName: match.workoutName,
+        autoRpe: rpe,
+        distanceKm: (item.distanceM ?? 0) / 1000,
+        durationMin: item.durationSec / 60,
+      });
+
       // Surplus: if actual distance >30% over planned, add the excess to unspentLoad
       const matchedWorkout = allW.find(w => (w.id || w.n) === match.workoutId);
       if (matchedWorkout) {
@@ -876,7 +998,7 @@ function applyReview(
           const surplusLoads = calculateWorkoutLoad(matchedWorkout.t, surplusDurMin, rpe * 10, s.pac?.e);
           const surplusItem: UnspentLoadItem = {
             garminId: item.garminId + '_surplus',
-            displayName: `${match.workoutName} +${surplusKm.toFixed(1)}km surplus`,
+            displayName: 'Running',
             sport: 'extra_run',
             durationMin: surplusDurMin,
             aerobic: surplusLoads.aerobic,
@@ -892,6 +1014,14 @@ function applyReview(
       const adhocId = `garmin-${item.garminId}`;
       addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
       wk.garminMatched[item.garminId] = adhocId;
+      // Excess runs still deserve an RPE prompt
+      matchedRunsForRpe.push({
+        workoutId: adhocId,
+        workoutName: formatActivityType(item.activityType),
+        autoRpe: rpe,
+        distanceKm: (item.distanceM ?? 0) / 1000,
+        durationMin: item.durationSec / 60,
+      });
     }
   }
 
@@ -1058,7 +1188,7 @@ function applyReview(
   if (remainingCross.length === 0) {
     saveState();
     render();
-    onComplete();
+    showRpePrompt(matchedRunsForRpe, onComplete);
     return;
   }
 
@@ -1173,7 +1303,7 @@ function applyReview(
 
     saveState();
     render();
-    onComplete();
+    showRpePrompt(matchedRunsForRpe, onComplete);
   });
 }
 
@@ -1428,6 +1558,7 @@ export function autoProcessActivities(
 
   if (!wk.garminMatched) wk.garminMatched = {};
   const usedWorkoutIds = new Set<string>();
+  const autoMatchedRuns: MatchedRunInfo[] = [];
 
   // Persist integrate choice for all items (so re-review pre-populates correctly)
   if (!wk.garminReviewChoices) wk.garminReviewChoices = {};
@@ -1474,6 +1605,13 @@ export function autoProcessActivities(
       const idx = planCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
+      autoMatchedRuns.push({
+        workoutId: match.workoutId,
+        workoutName: match.workoutName,
+        autoRpe: rpe,
+        distanceKm: (item.distanceM ?? 0) / 1000,
+        durationMin: item.durationSec / 60,
+      });
       const runW = allWorkouts.find(w => (w.id || w.n) === match.workoutId);
       const runDay = runW?.dayOfWeek !== undefined ? ` ${DAY_SHORT_AR[runW.dayOfWeek]}` : '';
       autoAssignLines.push(`${formatActivityType(item.activityType)} → ${match.workoutName}${runDay}`);
@@ -1606,7 +1744,7 @@ export function autoProcessActivities(
     saveState();
     showAssignmentToast(autoAssignLines);
     render();
-    onComplete();
+    showRpePrompt(autoMatchedRuns, onComplete);
     return;
   }
 
@@ -1620,6 +1758,16 @@ export function autoProcessActivities(
       addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
     }
     wk.garminMatched[item.garminId] = adhocId;
+    // Excess runs still deserve an RPE prompt
+    if (item.appType === 'run') {
+      autoMatchedRuns.push({
+        workoutId: adhocId,
+        workoutName: formatActivityType(item.activityType),
+        autoRpe: deriveItemRPE(item, s),
+        distanceKm: (item.distanceM ?? 0) / 1000,
+        durationMin: item.durationSec / 60,
+      });
+    }
   }
   saveState();
 
@@ -1659,7 +1807,7 @@ export function autoProcessActivities(
             saveState();
             showAssignmentToast(autoAssignLines);
             render();
-            onComplete();
+            showRpePrompt(autoMatchedRuns, onComplete);
             return;
           }
         }
@@ -1678,7 +1826,7 @@ export function autoProcessActivities(
     if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
       showAssignmentToast(autoAssignLines);
       render();
-      onComplete();
+      showRpePrompt(autoMatchedRuns, onComplete);
       return;
     }
   }
@@ -1705,7 +1853,7 @@ export function autoProcessActivities(
       // User dismissed modal — keep unspentLoadItems (excess load card shows on training tab)
       showAssignmentToast(autoAssignLines);
       render();
-      onComplete();
+      showRpePrompt(autoMatchedRuns, onComplete);
       return;
     }
 
@@ -1761,7 +1909,7 @@ export function autoProcessActivities(
     showAssignmentToast(autoAssignLines);
     saveState();
     render();
-    onComplete();
+    showRpePrompt(autoMatchedRuns, onComplete);
   });
 }
 

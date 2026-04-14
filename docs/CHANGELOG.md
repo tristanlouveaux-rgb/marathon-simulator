@@ -4,6 +4,16 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-14 — Garmin step/LT sync debugging
+
+- **Webhook `handleDailies` now stores steps**: added `steps: d.totalSteps ?? null` to the upsert row. Also added diagnostic logging of all payload keys and step-ish field aliases (`totalSteps`, `steps`, `stepsCount`) to identify which field Garmin actually sends, since two dailies pushes landed after the fix but `daily_metrics.steps` stayed NULL.
+- **`sync-today-steps` edge function**: rewritten to read directly from `daily_metrics` instead of calling Garmin's epoch API (which returned `401 app_not_approved`). Function is now a simple DB read — webhook is the data source.
+- **LT threshold (ISSUE-134)**: confirmed still blocked. `lt_thresholds` empty; `physiology_snapshot_daily.lt_pace_sec_per_km` all NULL; zero `userMetrics` pushes have ever arrived. Blocked on Garmin developer portal access to enable User Metrics subscription.
+
+## 2026-04-14 — Strain timeline rows open full activity detail page
+
+- Tapping a Timeline row on the Strain view now navigates to the full activity detail page instead of a small overlay with summary stats. Back button returns to Strain view. `ActivityDetailSource` extended with `'strain'`. Removed dead `showActivityDetail` overlay in `src/ui/strain-view.ts`; routing added in `src/ui/activity-detail.ts`.
+
 ## 2026-04-14 — Strain ring: colour blend + rounded caps + sweep-in reveal
 
 - Replaced the three separate SVG arcs (hard butt-cap junctions) with a single `conic-gradient` masked to ring shape via feathered radial-gradient stops (semi-opaque bands at 82% and 99.6%) so the inner/outer edges are anti-aliased.

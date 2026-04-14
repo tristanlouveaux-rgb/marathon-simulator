@@ -12,13 +12,15 @@ import {
   type DailyLoadEntry,
   type ZoneLoad,
 } from '@/calculations/fitness-model';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
 const PAGE_BG  = '#FAF9F6';
-const TEXT_M   = '#2C3131';
-const TEXT_S   = '#6B7280';
-const TEXT_L   = '#9CA3AF';
+const TEXT_M   = '#0F172A';
+const TEXT_S   = '#64748B';
+const TEXT_L   = '#94A3B8';
 
 const CHART_STROKE = '#64748B';
 
@@ -26,7 +28,12 @@ const ZONE_LOW_AEROBIC  = '#67C9D0';
 const ZONE_HIGH_AEROBIC = '#E8924C';
 const ZONE_ANAEROBIC    = '#D06B98';
 
-const CARD = `background:#fff;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04),0 6px 16px rgba(0,0,0,0.04)`;
+const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
+
+const AMBER_A   = '#E8924C';
+const AMBER_B   = '#D97706';
+const RING_R    = 46;
+const RING_CIRC = +(2 * Math.PI * RING_R).toFixed(2);
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
@@ -34,118 +41,66 @@ function fmtDateCompact(date: string): string {
   return new Date(date + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 }
 
-// ── Warm background (mountains + clouds) ────────────────────────────────────
+// ── Dark hero gradient with integrated mountains ────────────────────────────
 
-function warmBackground(): string {
-  return `
-    <div style="position:absolute;top:0;left:0;width:100%;height:380px;overflow:hidden;pointer-events:none;z-index:0">
-      <svg style="width:100%;height:100%" viewBox="0 0 400 380" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="rlSky" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#DCC8AC"/>
-            <stop offset="30%" stop-color="#E8D8C4"/>
-            <stop offset="65%" stop-color="#F0E4D4"/>
-            <stop offset="100%" stop-color="${PAGE_BG}"/>
-          </linearGradient>
-          <filter id="rlSoft"><feGaussianBlur stdDeviation="2.5"/></filter>
-          <filter id="rlCloud"><feGaussianBlur stdDeviation="6"/></filter>
-          <linearGradient id="rlMtn1" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(160,130,100,0.40)"/>
-            <stop offset="100%" stop-color="rgba(175,150,125,0.15)"/>
-          </linearGradient>
-          <linearGradient id="rlMtn2" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="rgba(170,140,110,0.30)"/>
-            <stop offset="100%" stop-color="rgba(185,160,135,0.10)"/>
-          </linearGradient>
-        </defs>
-        <!-- Sky -->
-        <rect width="400" height="380" fill="url(#rlSky)"/>
-        <!-- Sun glow -->
-        <ellipse cx="310" cy="50" rx="60" ry="45" fill="rgba(255,230,190,0.55)" filter="url(#rlCloud)"/>
-        <ellipse cx="310" cy="50" rx="30" ry="25" fill="rgba(255,240,210,0.40)" filter="url(#rlCloud)"/>
-        <!-- Clouds -->
-        <ellipse cx="60" cy="60" rx="60" ry="16" fill="rgba(255,255,255,0.65)" filter="url(#rlCloud)"/>
-        <ellipse cx="110" cy="52" rx="45" ry="13" fill="rgba(255,255,255,0.55)" filter="url(#rlCloud)"/>
-        <ellipse cx="220" cy="38" rx="50" ry="14" fill="rgba(255,255,255,0.50)" filter="url(#rlCloud)"/>
-        <ellipse cx="350" cy="85" rx="40" ry="11" fill="rgba(255,255,255,0.45)" filter="url(#rlCloud)"/>
-        <ellipse cx="160" cy="75" rx="30" ry="10" fill="rgba(255,255,255,0.35)" filter="url(#rlCloud)"/>
-        <!-- Distant mountain range -->
-        <path d="M-20,210 L30,160 L70,180 L120,135 L165,165 L210,130 L260,155 L310,120 L360,145 L420,115 L420,380 L-20,380 Z"
-              fill="url(#rlMtn1)" filter="url(#rlSoft)"/>
-        <!-- Mid-ground ridge -->
-        <path d="M-20,240 L40,210 L90,228 L140,195 L200,218 L260,190 L330,212 L400,198 L420,205 L420,380 L-20,380 Z"
-              fill="url(#rlMtn2)" filter="url(#rlSoft)"/>
-        <!-- Foreground hills -->
-        <path d="M-20,275 Q60,250 140,262 Q220,275 300,258 Q370,248 420,255 L420,380 L-20,380 Z"
-              fill="rgba(195,172,148,0.15)"/>
-      </svg>
-      <div style="position:absolute;bottom:0;left:0;width:100%;height:100px;background:linear-gradient(to top,${PAGE_BG},transparent)"></div>
-    </div>`;
-}
+function heroBackground(): string { return buildSkyBackground('rl', 'deepBlue'); }
 
 // ── Chart builder (sharp angular lines, HTML labels) ────────────────────────
 
-function buildDailyLoadChart(entries: DailyLoadEntry[], dailyAvg: number): string {
+function buildDailyLoadChart(entries: DailyLoadEntry[]): string {
   const n = entries.length;
   if (n < 2) return '';
 
-  const W = 320, H = 150;
-  const padT = 12, padB = 6;
-  const usableH = H - padT - padB;
+  const CHART_FILL = 'rgba(100,116,139,0.12)';
+  const W = 320, H = 65, padL = 6, padR = 6;
+  const usableW = W - padL - padR;
 
   const vals = entries.map(e => e.tss);
-  const maxVal = Math.max(...vals, dailyAvg * 1.1, 10);
-  const scaleMax = maxVal > 200 ? Math.ceil(maxVal / 100) * 100
-    : maxVal > 100 ? Math.ceil(maxVal / 50) * 50
-    : Math.ceil(maxVal / 25) * 25;
+  const maxVal = Math.max(...vals, 10) * 1.1;
 
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => padT + usableH - Math.max(0, (v / scaleMax) * usableH);
+  const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
+  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
 
   // Sharp angular polyline
-  const pts = entries.map((e, i) => `${xOf(i).toFixed(1)},${yOf(e.tss).toFixed(1)}`);
-  const linePath = `M ${pts.join(' L ')}`;
+  const pts: [number, number][] = entries.map((e, i) => [xOf(i), yOf(e.tss)]);
+  const topPath = `M ${pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ')}`;
+  const areaPath = `${topPath} L ${xOf(n - 1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
-  // Subtle grid lines
-  const gridStep = scaleMax > 200 ? 100 : scaleMax > 100 ? 50 : 25;
+  // Grid lines (matching stats-view pattern)
+  const gridStep = maxVal <= 50 ? 10 : maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
   const gridLines: string[] = [];
-  for (let v = gridStep; v <= scaleMax; v += gridStep) {
+  for (let v = gridStep; v <= maxVal * 0.95; v += gridStep) {
     const gy = yOf(v).toFixed(1);
-    gridLines.push(`<line x1="0" y1="${gy}" x2="${W}" y2="${gy}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>`);
+    gridLines.push(`<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>`);
   }
 
-  // Average dashed line
-  const avgY = yOf(dailyAvg).toFixed(1);
-
-  // Y-axis labels (HTML-positioned, right-aligned outside chart)
-  const yLabels: string[] = [];
-  for (let v = gridStep; v <= scaleMax; v += gridStep) {
-    const topPct = ((yOf(v) / H) * 100).toFixed(1);
-    yLabels.push(`<span style="position:absolute;right:0;top:${topPct}%;transform:translateY(-50%);font-size:9px;color:${TEXT_L};font-variant-numeric:tabular-nums">${v}</span>`);
+  // Y-axis labels
+  const yAxisHtml: string[] = [];
+  for (let v = gridStep; v <= maxVal * 0.95; v += gridStep) {
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:${TEXT_L};line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
   }
 
-  // Day labels (HTML-positioned)
+  // Day labels
+  const labelStep = n > 20 ? 7 : n > 12 ? 4 : 1;
   const dayLabels = entries.map((e, i) => {
-    if (i !== 0 && i !== n - 1 && i % 7 !== 0) return '';
+    if (i !== 0 && i !== n - 1 && i % labelStep !== 0) return '';
     const d = new Date(e.date + 'T12:00:00');
     const label = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const leftPct = ((xOf(i) / W) * 100).toFixed(1);
-    return `<span style="position:absolute;left:${leftPct}%;transform:translateX(-50%);font-size:9px;color:${TEXT_L};white-space:nowrap">${label}</span>`;
+    const isCurrent = i === n - 1;
+    return `<span style="position:absolute;left:${leftPct}%;transform:translateX(-50%);font-size:9px;color:${isCurrent ? TEXT_M : TEXT_L};font-weight:${isCurrent ? '600' : '400'};white-space:nowrap">${label}</span>`;
   }).join('');
 
-  // Chart area width excludes the y-label gutter
   return `
-    <div style="position:relative;margin:8px 0 4px;padding-right:36px">
-      <div style="position:relative">
-        <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
-          ${gridLines.join('')}
-          <line x1="0" y1="${avgY}" x2="${W}" y2="${avgY}" stroke="rgba(0,0,0,0.12)" stroke-width="1" stroke-dasharray="4 3"/>
-          <path d="${linePath}" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <div style="position:absolute;top:0;right:0;width:36px;height:100%">${yLabels.join('')}</div>
-      <div style="position:relative;height:18px;margin-top:6px">${dayLabels}</div>
-    </div>`;
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${gridLines.join('')}
+        <path d="${areaPath}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
+    </div>
+    <div style="position:relative;height:18px;margin-top:4px;padding-right:36px">${dayLabels}</div>`;
 }
 
 // ── Activity list (last 7 days) ─────────────────────────────────────────────
@@ -213,10 +168,10 @@ function buildDailyZoneBars(entries: DailyLoadEntry[]): string {
     return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
       <div style="height:${BAR_H}px;display:flex;flex-direction:column;justify-content:flex-end;width:100%;padding:0 3px">
         <div style="font-size:8px;font-weight:600;color:${TEXT_S};text-align:center;margin-bottom:2px;font-variant-numeric:tabular-nums">${tssLabel}</div>
-        <div style="display:flex;flex-direction:column;border-radius:4px;overflow:hidden">
-          ${anaH > 0.5 ? `<div style="height:${anaH.toFixed(1)}px;background:${ZONE_ANAEROBIC}"></div>` : ''}
-          ${highH > 0.5 ? `<div style="height:${highH.toFixed(1)}px;background:${ZONE_HIGH_AEROBIC}"></div>` : ''}
-          ${lowH > 0.5 ? `<div style="height:${lowH.toFixed(1)}px;background:${ZONE_LOW_AEROBIC}"></div>` : ''}
+        <div style="position:relative;display:flex;flex-direction:column;border-radius:4px;overflow:hidden">
+          ${anaH > 0.5 ? `<div style="height:${anaH.toFixed(1)}px;background:${ZONE_ANAEROBIC};position:relative">${anaH >= 14 ? `<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:7px;font-weight:600;color:rgba(255,255,255,0.85);font-variant-numeric:tabular-nums">${Math.round(anaerobic)}</span>` : ''}</div>` : ''}
+          ${highH > 0.5 ? `<div style="height:${highH.toFixed(1)}px;background:${ZONE_HIGH_AEROBIC};position:relative">${highH >= 14 ? `<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:7px;font-weight:600;color:rgba(255,255,255,0.85);font-variant-numeric:tabular-nums">${Math.round(highAerobic)}</span>` : ''}</div>` : ''}
+          ${lowH > 0.5 ? `<div style="height:${lowH.toFixed(1)}px;background:${ZONE_LOW_AEROBIC};position:relative">${lowH >= 14 ? `<span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:7px;font-weight:600;color:rgba(255,255,255,0.85);font-variant-numeric:tabular-nums">${Math.round(lowAerobic)}</span>` : ''}</div>` : ''}
         </div>
       </div>
       <div style="font-size:9px;color:${TEXT_L}">${dayLabel}</div>
@@ -342,12 +297,7 @@ function getRollingLoadHTML(s: SimulatorState): string {
     ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, atlSeed, undefined, s.maxHR)
     : [];
 
-  // Daily average for chart reference line
-  const dailyAvg = entries.length > 0
-    ? entries.reduce((sum, e) => sum + e.tss, 0) / entries.length
-    : 0;
-
-  const chart = entries.length >= 2 ? buildDailyLoadChart(entries, dailyAvg) : '';
+  const chart = entries.length >= 2 ? buildDailyLoadChart(entries) : '';
   const hasZoneData = entries.some(e => e.zoneLoad.lowAerobic + e.zoneLoad.highAerobic + e.zoneLoad.anaerobic > 0);
   const dailyZoneBars = hasZoneData ? buildDailyZoneBars(entries) : '';
   const zoneBalance = hasZoneData ? buildZoneBalance(entries) : '';
@@ -358,47 +308,121 @@ function getRollingLoadHTML(s: SimulatorState): string {
     ? `${fmtDateCompact(entries[0].date)} \u2013 ${fmtDateCompact(entries[entries.length - 1].date)}`
     : '';
 
+  // Ring: 7-day load as % of chronic (100% = matching, 130% = full ring)
+  const loadRatio = chronicTSS > 0 ? rollingTSS / chronicTSS : 0;
+  const ringPct = Math.min(loadRatio / 1.3 * 100, 100); // 130% of chronic = full ring
+  const ringOffset = +(RING_CIRC * (1 - ringPct / 100)).toFixed(2);
+  const ringColor = rollingTSS > chronicTSS * 1.3 ? '#FF3B30'
+    : rollingTSS > chronicTSS * 0.8 ? '#34C759'
+    : '#94A3B8';
+
   return `
-    <div class="mosaic-page" style="background:${PAGE_BG};position:relative;overflow-y:auto">
-      ${warmBackground()}
+    <style>
+      #rl-view { box-sizing:border-box; }
+      #rl-view *, #rl-view *::before, #rl-view *::after { box-sizing:inherit; }
+      @keyframes rlFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .rl-fade { opacity:0; animation:rlFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${skyAnimationCSS('rl')}
+    </style>
 
-      <div style="position:relative;z-index:1;max-width:480px;margin:0 auto;padding:0 20px">
+    <div id="rl-view" style="
+      position:relative;min-height:100vh;background:${PAGE_BG};
+      font-family:var(--f);overflow-x:hidden;
+    ">
+      ${heroBackground()}
+
+      <div style="position:relative;z-index:10;padding-bottom:48px">
+
         <!-- Header -->
-        <div style="padding:max(16px, env(safe-area-inset-top)) 0 12px;display:flex;align-items:center;justify-content:space-between">
-          <div style="display:flex;align-items:center;gap:8px">
-            <button id="rl-back-btn" style="width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:none;border:none;cursor:pointer;font-size:18px;color:${TEXT_M};font-family:var(--f);margin-left:-8px">←</button>
-            <div style="font-size:18px;font-weight:600;letter-spacing:-0.02em;color:${TEXT_M}">Rolling Load</div>
+        <div style="
+          padding:56px 20px 12px;
+          display:flex;align-items:center;justify-content:space-between;
+          position:sticky;top:0;z-index:50;
+        ">
+          <button id="rl-back-btn" style="
+            width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
+            background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);
+            box-shadow:0 1px 4px rgba(0,0,0,0.08);
+            display:flex;align-items:center;justify-content:center;color:${TEXT_M};
+          ">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+
+          <div style="text-align:center">
+            <div style="font-size:20px;font-weight:700;color:${TEXT_M}">Rolling Load</div>
+            ${dateRange ? `<div style="font-size:12px;color:${TEXT_S};margin-top:3px;font-weight:500">${dateRange}</div>` : ''}
           </div>
-          ${dateRange ? `<div style="font-size:11px;color:${TEXT_S};font-weight:500;padding:4px 10px;border-radius:100px;background:rgba(0,0,0,0.04)">${dateRange}</div>` : ''}
+
+          <div style="width:36px"></div>
         </div>
 
-        <!-- Hero card -->
-        <div style="${CARD};padding:20px;margin:8px 0 16px">
-          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:${TEXT_S};margin-bottom:10px">7-Day Rolling Load</div>
-          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
-            <span style="font-size:44px;font-weight:300;color:${heroColor};line-height:1;letter-spacing:-0.03em">${rollingTSS}</span>
-            <span style="font-size:15px;color:${TEXT_S};font-weight:400">TSS</span>
-            <span style="font-size:11px;font-weight:600;color:${pillColor};background:${pillBg};padding:3px 10px;border-radius:100px;margin-left:4px">${rollingLabel}</span>
+        <!-- Ring -->
+        <div class="rl-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
+          <div style="
+            position:relative;width:220px;height:220px;
+            display:flex;align-items:center;justify-content:center;
+          ">
+            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <defs>
+                <linearGradient id="rlRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="${AMBER_A}"/>
+                  <stop offset="100%" stop-color="${AMBER_B}"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
+              <circle id="rl-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
+                stroke="${ringColor === '#34C759' ? ringColor : ringColor === '#FF3B30' ? ringColor : 'url(#rlRingGrad)'}"
+                stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="${RING_CIRC}"
+                stroke-dashoffset="${RING_CIRC}"
+                style="transition:stroke-dashoffset 1.4s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
+              />
+            </svg>
+            <div style="
+              position:absolute;width:180px;height:180px;border-radius:50%;
+              background:rgba(255,255,255,0.75);backdrop-filter:blur(12px);
+              box-shadow:inset 0 0 12px rgba(255,255,255,0.5);
+              display:flex;flex-direction:column;align-items:center;justify-content:center;
+              top:50%;left:50%;transform:translate(-50%,-50%);padding-top:4px;
+            ">
+              <div style="display:flex;align-items:baseline;color:${TEXT_M};font-weight:700">
+                <span style="font-size:48px;letter-spacing:-0.03em;line-height:1;font-weight:700">${rollingTSS}</span>
+                <span style="font-size:14px;margin-left:3px;font-weight:400;color:${TEXT_S}">TSS</span>
+              </div>
+              <span style="color:${TEXT_S};font-size:12px;font-weight:500;margin-top:4px">${rollingLabel}</span>
+              <span style="color:${TEXT_L};font-size:11px;margin-top:2px">28d avg: ${chronicTSS}</span>
+            </div>
           </div>
-          <div style="font-size:13px;color:${TEXT_S}">28-day avg: ${chronicTSS} TSS</div>
-          ${chart ? `<div style="margin-top:16px">${chart}</div>` : ''}
         </div>
+
+        <!-- Chart card -->
+        ${chart ? `
+        <div class="rl-fade" style="animation-delay:0.14s;padding:0 16px;margin-bottom:14px">
+          <div style="${CARD};padding:20px">
+            <div style="font-size:12px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Daily load, 28 days</div>
+            ${chart}
+          </div>
+        </div>` : ''}
 
         ${dailyZoneBars ? `
         <!-- Exercise load -->
-        <div style="${CARD};padding:20px;margin-bottom:16px">
-          <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:14px">Exercise Load</div>
-          ${dailyZoneBars}
+        <div class="rl-fade" style="animation-delay:0.20s;padding:0 16px;margin-bottom:14px">
+          <div style="${CARD};padding:20px">
+            <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:14px">7-Day Exercise Load</div>
+            ${dailyZoneBars}
+          </div>
         </div>` : ''}
 
         ${zoneBalance ? `
         <!-- 4-week zone balance -->
-        <div style="${CARD};padding:20px;margin-bottom:16px">
-          ${zoneBalance}
+        <div class="rl-fade" style="animation-delay:0.26s;padding:0 16px;margin-bottom:14px">
+          <div style="${CARD};padding:20px">
+            ${zoneBalance}
+          </div>
         </div>` : ''}
 
         <!-- Activity breakdown -->
-        <div style="margin-bottom:24px">
+        <div class="rl-fade" style="animation-delay:0.32s;padding:0 16px;margin-bottom:24px">
           <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:8px;padding-left:4px">Last 7 days</div>
           <div style="${CARD};padding:16px 20px">
             ${activityList}
@@ -406,12 +430,45 @@ function getRollingLoadHTML(s: SimulatorState): string {
         </div>
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Event wiring ─────────────────────────────────────────────────────────────
 
-function wireRollingLoadHandlers(): void {
+function animateChartDrawOn(): void {
+  requestAnimationFrame(() => {
+    document.querySelectorAll<SVGPathElement>('path.chart-draw').forEach(path => {
+      const len = path.getTotalLength();
+      path.style.strokeDasharray = String(len);
+      path.style.strokeDashoffset = String(len);
+      path.getBoundingClientRect();
+      path.style.transition = 'stroke-dashoffset 1.2s ease-out';
+      path.style.strokeDashoffset = '0';
+    });
+  });
+}
+
+function wireRollingLoadHandlers(ringOffset: number): void {
+  wireTabBarHandlers(navigateTab);
+
+  // Animate ring
+  setTimeout(() => {
+    const circle = document.getElementById('rl-ring-circle') as SVGCircleElement | null;
+    if (circle) circle.style.strokeDashoffset = String(ringOffset.toFixed(2));
+  }, 50);
+
+  animateChartDrawOn();
+
   document.getElementById('rl-back-btn')?.addEventListener('click', () => {
     import('./readiness-view').then(({ renderReadinessView }) => renderReadinessView());
   });
@@ -423,6 +480,15 @@ export function renderRollingLoadView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
-  container.innerHTML = getRollingLoadHTML(s);
-  wireRollingLoadHandlers();
+  const html = getRollingLoadHTML(s);
+  container.innerHTML = html;
+  // Extract ringOffset from the rendered state
+  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed);
+  const rollingTSS = Math.round(acwr.atl);
+  const chronicTSS = Math.round(acwr.ctl);
+  const loadRatio = chronicTSS > 0 ? rollingTSS / chronicTSS : 0;
+  const ringPct = Math.min(loadRatio / 1.3 * 100, 100);
+  const ringOffset = +(RING_CIRC * (1 - ringPct / 100)).toFixed(2);
+  wireRollingLoadHandlers(ringOffset);
 }

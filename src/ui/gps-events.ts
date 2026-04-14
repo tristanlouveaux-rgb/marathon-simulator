@@ -99,11 +99,21 @@ export async function startTracking(
 
   const started = await activeTracker.start();
   if (!started) {
-    activeTracker = null;
-    activeWorkoutName = null;
-    activeWorkoutDesc = null;
-    alert('GPS permission denied');
-    return;
+    // GPS denied — fall back to timer-only mode (no distance/pace, but
+    // elapsed time and time-based splits still work)
+    const { MockGpsProvider } = await import('@/gps/providers/mock-provider');
+    const timerProvider = new MockGpsProvider();
+    activeTracker = new GpsTracker(timerProvider, activeScheme ?? undefined);
+    activeTracker.onUpdate(updateInlineGps);
+    activeTracker.onSplitComplete((_split, allDone) => {
+      if (allDone) workoutCompleteAlert(); else splitAlert();
+    });
+    await activeTracker.start(); // MockGpsProvider always grants
+    // Push a synthetic point to transition from 'acquiring' to 'tracking'
+    // so tick() and the timer work (accuracy 0 = perfect, bypasses the >30 filter)
+    timerProvider.pushPoint({
+      lat: 0, lng: 0, altitude: null, accuracy: 0, speed: 0, timestamp: Date.now(),
+    });
   }
 
   // Update elapsed time display every second; tick() also fires time-based segment advances

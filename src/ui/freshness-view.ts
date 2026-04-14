@@ -11,13 +11,17 @@ import {
   computeFitnessModel,
   computeWeekRawTSS,
   computeTodaySignalBTSS,
+  computeToBaseline,
   CTL_DECAY,
   ATL_DECAY,
 } from '@/calculations/fitness-model';
 
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const APP_BG  = '#F8FAFC';
+const APP_BG  = '#FAF9F6';
 const BLUE_A  = '#60A5FA';   // blue-400
 const BLUE_B  = '#3B82F6';   // blue-500
 const BLUE_D  = '#2563EB';   // blue-600
@@ -49,100 +53,9 @@ function tsbBarColor(rawTsb: number): string {
 
 // ── Coaching text ─────────────────────────────────────────────────────────────
 
-function freshnessCoaching(tsb: number, _ctl: number, _atl: number, weeksOfData: number): { headline: string; body: string } {
-  if (weeksOfData < 3) {
-    return { headline: 'Building baseline', body: 'At least 3 completed weeks of data needed. Freshness becomes reliable once there is enough training history to separate fitness from fatigue.' };
-  }
-
-  const zone = tsbZone(tsb);
-  const d = Math.round(Math.abs(tsb) / 7);
-
-  if (zone.label === 'Fresh') {
-    return {
-      headline: 'Ready for hard effort',
-      body: `Fatigue has cleared faster than fitness has decayed. TSB at +${d} means the body is primed for a quality session or race effort.`,
-    };
-  }
-  if (zone.label === 'Recovering') {
-    return {
-      headline: 'Mild fatigue, normal balance',
-      body: `TSB at -${d}. Slight residual fatigue from recent training. Normal state during consistent training. No action needed.`,
-    };
-  }
-  if (zone.label === 'Fatigued') {
-    return {
-      headline: 'Fatigue building',
-      body: `TSB at -${d}. Recent load is above what the body is adapted to. Expected during build phases. Legs may feel heavy. An easy day or two brings this back.`,
-    };
-  }
-  if (zone.label === 'Heavy') {
-    return {
-      headline: 'Heavy fatigue',
-      body: `TSB at -${d}. Sustained hard training. Expect sore legs and reduced performance. Easy sessions or rest until this clears.`,
-    };
-  }
-  if (zone.label === 'Overloaded') {
-    return {
-      headline: 'Significant fatigue accumulation',
-      body: `TSB at -${d}. Rest or very easy movement only. Hard sessions at this level will not produce useful adaptation.`,
-    };
-  }
-  return {
-    headline: 'Recovery week needed',
-    body: `TSB at -${d}. Sustained overload. Full rest days needed before resuming any structured training.`,
-  };
-}
-
 // ── SVG watercolour background (shared with recovery) ─────────────────────────
 
-function skyBackground(): string {
-  return `
-    <div style="position:absolute;top:0;left:0;width:100%;height:480px;overflow:hidden;pointer-events:none;z-index:0">
-      <svg style="width:100%;height:100%" viewBox="0 0 400 480" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="fSkyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#B8D4F0"/>
-            <stop offset="30%" stop-color="#D6E8F8"/>
-            <stop offset="70%" stop-color="#EAF2FB"/>
-            <stop offset="100%" stop-color="#F8FAFC"/>
-          </linearGradient>
-          <linearGradient id="fMountFar" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#7BAED0" stop-opacity="0.6"/>
-            <stop offset="60%" stop-color="#9CC4E0" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="#E0F0FC" stop-opacity="0.05"/>
-          </linearGradient>
-          <linearGradient id="fMountMid" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#5A98C0" stop-opacity="0.75"/>
-            <stop offset="50%" stop-color="#82B8D8" stop-opacity="0.4"/>
-            <stop offset="100%" stop-color="#C0DDF0" stop-opacity="0.1"/>
-          </linearGradient>
-          <linearGradient id="fMountNear" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#4A9CC8" stop-opacity="0.5"/>
-            <stop offset="40%" stop-color="#6AB8D8" stop-opacity="0.35"/>
-            <stop offset="100%" stop-color="#98D4E8" stop-opacity="0.15"/>
-          </linearGradient>
-          <linearGradient id="fMist" x1="0%" y1="100%" x2="0%" y2="0%">
-            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
-            <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.5"/>
-            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
-          </linearGradient>
-          <filter id="fBlur"><feGaussianBlur stdDeviation="6"/></filter>
-          <filter id="fHeavy"><feGaussianBlur stdDeviation="20"/></filter>
-          <filter id="fWc"><feTurbulence type="fractalNoise" baseFrequency="0.008" numOctaves="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/><feGaussianBlur stdDeviation="1.5"/></filter>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#fSkyGrad)"/>
-        <ellipse cx="200" cy="130" rx="100" ry="80" fill="#E8F0FF" filter="url(#fBlur)" opacity="0.5"/>
-        <path d="M-60,190 Q20,150 80,180 T200,160 T350,170 T460,150 L460,480 L-60,480 Z" fill="url(#fMountFar)" filter="url(#fWc)"/>
-        <ellipse cx="100" cy="210" rx="80" ry="25" fill="white" filter="url(#fHeavy)" opacity="0.45"/>
-        <path d="M-40,270 Q50,210 130,250 T280,220 T420,250 L420,480 L-40,480 Z" fill="url(#fMountMid)" filter="url(#fWc)"/>
-        <ellipse cx="280" cy="285" rx="120" ry="40" fill="#FFFFFF" opacity="0.45" filter="url(#fHeavy)"/>
-        <path d="M-20,350 Q60,290 150,330 T320,310 T440,340 L440,480 L-20,480 Z" fill="url(#fMountNear)" filter="url(#fWc)"/>
-        <path d="M0,370 Q100,330 200,370 T400,350 L400,480 L0,480 Z" fill="url(#fMist)" filter="url(#fBlur)"/>
-        <path d="M0,410 Q150,390 300,420 T400,410 L400,480 L0,480 Z" fill="url(#fMist)" opacity="0.7" filter="url(#fHeavy)"/>
-      </svg>
-      <div style="position:absolute;bottom:0;left:0;width:100%;height:120px;background:linear-gradient(to top,${APP_BG},transparent)"></div>
-    </div>`;
-}
+function skyBackground(): string { return buildSkyBackground('frs', 'blue'); }
 
 // ── Weekly TSB data ───────────────────────────────────────────────────────────
 
@@ -177,7 +90,7 @@ function getWeeklyTsbHistory(s: SimulatorState): WeekTsbEntry[] {
 
 // ── Bar chart ─────────────────────────────────────────────────────────────────
 
-function tsbBarChart(entries: WeekTsbEntry[]): string {
+function tsbBarChart(entries: WeekTsbEntry[], liveTsbDaily?: number): string {
   if (entries.length < 2) return '<div style="color:#94A3B8;font-size:13px;padding:8px 0">Not enough data for a trend chart. At least 2 completed weeks needed.</div>';
 
   const recent = entries.slice(-8); // last 8 weeks
@@ -227,6 +140,16 @@ function tsbBarChart(entries: WeekTsbEntry[]): string {
   else if (latest > 0) commentary = 'Freshness stable and positive. Rested.';
   else if (latest >= -3) commentary = 'Freshness stable near zero. Normal training balance.';
   else commentary = `Freshness stable at ${latest}. Currently ${latestZone.toLowerCase()}.`;
+
+  // Note when live TSB differs from last completed week (fatigue clearing mid-week)
+  if (liveTsbDaily != null && latest !== liveTsbDaily) {
+    const diff = liveTsbDaily - latest;
+    if (diff > 0) {
+      commentary += ` Current freshness has improved to ${liveTsbDaily > 0 ? '+' : ''}${liveTsbDaily} as fatigue clears during the week.`;
+    } else if (diff < -2) {
+      commentary += ` Current freshness has dropped to ${liveTsbDaily} from load added this week.`;
+    }
+  }
 
   return `
     <div style="display:flex;gap:8px;align-items:stretch;padding:4px 0;overflow:visible">${bars}</div>
@@ -347,9 +270,36 @@ function getFreshnessHTML(s: SimulatorState): string {
 
   // TSB from completed weeks
   const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, seed, s.planStartDate);
-  const tsb = sameSignal?.tsb ?? 0;
-  const ctl = sameSignal?.ctl ?? 0;
-  const atl = sameSignal?.atl ?? 0;
+  const tsbWeekEnd = sameSignal?.tsb ?? 0;
+  const ctlWeekEnd = sameSignal?.ctl ?? 0;
+  const atlWeekEnd = sameSignal?.atl ?? 0;
+
+  // Intra-week decay: ATL and CTL at week-end don't reflect rest days in the current week.
+  // Apply continuous decay from the end of the completed week to today, plus any
+  // current-week load on each day (daily EMA step with same time constants).
+  const ATL_DAILY_DECAY = Math.exp(-1 / 7);   // daily step for 7-day time constant
+  const CTL_DAILY_DECAY = Math.exp(-1 / 42);  // daily step for 42-day time constant
+  let atl = atlWeekEnd;
+  let ctl = ctlWeekEnd;
+  if (s.planStartDate) {
+    // Use date arithmetic (not ms) to avoid DST offset errors
+    const weekStartDate = new Date(s.planStartDate + 'T12:00:00'); // noon avoids DST edge
+    weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
+    const today = new Date();
+    today.setHours(12, 0, 0, 0);
+    const daysIntoWeek = Math.max(0, Math.round((today.getTime() - weekStartDate.getTime()) / 86400000));
+    const currentWk = (s.wks ?? [])[completedWeek];
+    for (let d = 0; d < daysIntoWeek; d++) {
+      const dayD = new Date(weekStartDate);
+      dayD.setDate(dayD.getDate() + d);
+      const dayDate = dayD.toISOString().split('T')[0];
+      const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
+      const weekEquiv = dayTSS * 7;
+      atl = atl * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
+      ctl = ctl * CTL_DAILY_DECAY + weekEquiv * (1 - CTL_DAILY_DECAY);
+    }
+  }
+  const tsb = ctl - atl;
 
   // Fitness model for week count
   const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
@@ -369,61 +319,69 @@ function getFreshnessHTML(s: SimulatorState): string {
   const targetOffset = +(RING_C * (1 - ringPct / 100)).toFixed(2);
   const ringColor = zone.color;
 
-  // Coaching
-  const { headline, body } = freshnessCoaching(tsb, ctl, atl, weeksOfData);
+  // ── Recovery countdown — two models ──────────────────────────────────────────
+  //
+  //  1. "To Baseline" — stacked session recovery (Garmin/Firstbeat-style).
+  //     See computeToBaseline() in fitness-model.ts.
+  //
+  //  2. "To Fully Clear" — TSB-based: hours until TSB ≥ 0 (ATL decays to CTL).
 
-  // Fatigue decay projection — estimate hours until daily TSB reaches -3
-  let fatigueDecayHours: number | null = null;
-  if (tsbDisp < -3 && atl > 0) {
-    const targetWeeklyTsb = -3 * 7; // daily -3 in weekly units
-    const targetAtl = ctl - targetWeeklyTsb; // ATL at which TSB = target
-    if (atl > targetAtl && targetAtl > 0) {
-      const days = -7 * Math.log(targetAtl / atl);
-      fatigueDecayHours = Math.max(1, Math.round(days * 24));
-    }
+  const ctlDaily = ctl / 7;
+
+  const baseline = computeToBaseline(s.wks ?? [], completedWeek, ctlDaily, s.planStartDate, s.physiologyHistory);
+  const sessionRecoveryHours = baseline?.hours ?? null;
+  const sessionTotalHours = baseline?.totalHours ?? null;
+
+  // Full Fresh: hours until TSB ≥ 0 (ATL decays to CTL)
+  let freshHours: number | null = null;
+  if (tsb < 0 && atl > ctl && ctl > 0) {
+    const days = -7 * Math.log(ctl / atl);
+    freshHours = Math.max(1, Math.round(days * 24));
   }
-  const fatigueDecayStr = fatigueDecayHours != null
-    ? (fatigueDecayHours < 72 ? `${fatigueDecayHours}` : `${Math.ceil(fatigueDecayHours / 24)}`)
-    : null;
-  const fatigueDecayUnit = fatigueDecayHours != null
-    ? (fatigueDecayHours < 72 ? 'Hours' : 'Days')
-    : null;
 
-  // Recovery status — compare today's load to determine if recovery is progressing
-  const today = new Date().toISOString().split('T')[0];
-  const wks = s.wks ?? [];
-  const currentWk = wks[s.w ?? 0];
-  const prevWk = wks[Math.max(0, (s.w ?? 0) - 1)];
-  const todayTSS = currentWk ? computeTodaySignalBTSS(currentWk, today) : 0;
-  // Check yesterday too — may be in previous week (e.g. Monday, yesterday = Sunday)
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-  const yesterdayTSS = (currentWk ? computeTodaySignalBTSS(currentWk, yesterday) : 0)
-    || (prevWk ? computeTodaySignalBTSS(prevWk, yesterday) : 0);
-
-  let recoveryStatus: 'recovering' | 'paused' | 'fresh' = 'fresh';
-  let recoveryStatusLabel = '';
-  let recoveryStatusDesc = '';
-  if (tsbDisp >= -3) {
-    recoveryStatus = 'fresh';
-    recoveryStatusLabel = 'Recovered';
-    recoveryStatusDesc = 'Fatigue has cleared. Ready for normal training.';
-  } else if (todayTSS > 30) {
-    recoveryStatus = 'paused';
-    recoveryStatusLabel = 'Recovery Paused';
-    recoveryStatusDesc = 'Session logged today. Recovery timeline extended.';
-  } else if (yesterdayTSS > 50) {
-    recoveryStatus = 'paused';
-    recoveryStatusLabel = 'Recovery Delayed';
-    recoveryStatusDesc = 'Yesterday\'s session added load. Expect slower clearance.';
-  } else {
-    recoveryStatus = 'recovering';
-    recoveryStatusLabel = 'Recovering as Expected';
-    recoveryStatusDesc = 'No significant load in the last 24h. Fatigue clearing normally.';
+  function fmtDecay(hours: number | null): { str: string; unit: string } | null {
+    if (hours == null || hours <= 0) return null;
+    if (hours < 72) return { str: `${hours}`, unit: 'Hours' };
+    return { str: `${Math.ceil(hours / 24)}`, unit: 'Days' };
   }
+  const recoveryDecay = fmtDecay(sessionRecoveryHours);
+  const freshDecay = fmtDecay(freshHours);
+
+  // Recovery ring color based on absolute hours remaining (not percentage)
+  // Thresholds reflect how concerning the remaining time is, not just progress
+  function hoursToColor(hours: number | null, thresholds: [number, number, number]): string {
+    if (hours == null || hours <= 0) return '#22C55E'; // green = done
+    const [greenBelow, amberBelow, redAbove] = thresholds;
+    const stops: [number, number, number][] = [
+      [34, 197, 94],   // green  #22C55E
+      [234, 179, 8],   // amber  #EAB308
+      [249, 115, 22],  // orange #F97316
+      [239, 68, 68],   // red    #EF4444
+    ];
+    let pct: number;
+    if (hours <= greenBelow) pct = 0;
+    else if (hours <= amberBelow) pct = 0.33 + 0.33 * ((hours - greenBelow) / (amberBelow - greenBelow));
+    else if (hours <= redAbove) pct = 0.66 + 0.34 * ((hours - amberBelow) / (redAbove - amberBelow));
+    else pct = 1;
+    const t = pct * (stops.length - 1);
+    const i = Math.min(Math.floor(t), stops.length - 2);
+    const f = t - i;
+    const r = Math.round(stops[i][0] + (stops[i + 1][0] - stops[i][0]) * f);
+    const g = Math.round(stops[i][1] + (stops[i + 1][1] - stops[i][1]) * f);
+    const b = Math.round(stops[i][2] + (stops[i + 1][2] - stops[i][2]) * f);
+    return `rgb(${r},${g},${b})`;
+  }
+  // Recovery: < 6h green, 6-16h amber, 16-30h orange, > 30h red
+  const recoveryRingColor = hoursToColor(sessionRecoveryHours, [6, 16, 30]);
+  // Full fresh: < 24h green, 24-48h amber, 48-96h orange, > 96h red
+  const freshRingColor = hoursToColor(freshHours, [24, 48, 96]);
+
+  // Status logic removed — explanations are now inline in the recovery card
+  // alongside each number (baseline implication, fresh implication, TSB explanation).
 
   // Card builder
   const card = (title: string, content: string, delay: string) =>
-    `<div class="f-fade" style="animation-delay:${delay};background:white;border-radius:20px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04);margin-bottom:14px">
+    `<div class="f-fade" style="animation-delay:${delay};background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:14px">${title}</div>
       ${content}
     </div>`;
@@ -432,8 +390,9 @@ function getFreshnessHTML(s: SimulatorState): string {
     <style>
       #fresh-view { box-sizing:border-box; }
       #fresh-view *, #fresh-view *::before, #fresh-view *::after { box-sizing:inherit; }
-      @keyframes fFloatUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-      .f-fade { opacity:0; animation:fFloatUp 0.55s ease-out forwards; }
+      @keyframes fFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .f-fade { opacity:0; animation:fFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${skyAnimationCSS('frs')}
     </style>
 
     <div id="fresh-view" style="
@@ -464,8 +423,8 @@ function getFreshnessHTML(s: SimulatorState): string {
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
                 <linearGradient id="freshGauge" x1="0%" y1="100%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="${BLUE_A}"/>
-                  <stop offset="100%" stop-color="${BLUE_D}"/>
+                  <stop offset="0%" stop-color="${zone.color === '#22C55E' ? '#4ADE80' : zone.color === '#EF4444' ? '#F87171' : zone.color === '#F59E0B' ? '#FBBF24' : BLUE_A}"/>
+                  <stop offset="100%" stop-color="${zone.color === '#22C55E' ? '#16A34A' : zone.color === '#EF4444' ? '#DC2626' : zone.color === '#F59E0B' ? '#D97706' : BLUE_D}"/>
                 </linearGradient>
                 <filter id="freshGlow" x="-20%" y="-20%" width="140%" height="140%">
                   <feGaussianBlur stdDeviation="4" result="blur"/>
@@ -496,50 +455,96 @@ function getFreshnessHTML(s: SimulatorState): string {
         </div>
 
         <!-- Recovery countdown -->
-        ${fatigueDecayStr != null ? (() => {
-          const maxHours = 96; // 4 days = full ring
-          const remaining = Math.min(fatigueDecayHours ?? 0, maxHours);
-          const pct = remaining / maxHours; // 1.0 = full ring (lots of fatigue), 0.0 = empty (recovered)
-          const circ = 2 * Math.PI * 34;
-          const offset = circ * (1 - pct); // ring drains as hours decrease
-          const statusColor = recoveryStatus === 'paused' ? 'var(--c-caution)' : recoveryStatus === 'recovering' ? ringColor : 'var(--c-ok)';
+        ${(recoveryDecay || freshDecay) ? (() => {
+          const maxHoursRecovery = 48;
+          const maxHoursFresh = 96;
+
+          function miniRing(hours: number | null, maxH: number, label: string, sublabel: string, color: string, decay: { str: string; unit: string } | null): string {
+            if (!decay) return `
+              <div style="text-align:center;flex:1">
+                <div style="position:relative;width:64px;height:64px;margin:0 auto">
+                  <svg viewBox="0 0 64 64" width="64" height="64" style="transform:rotate(-90deg)">
+                    <circle cx="32" cy="32" r="27" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="5"/>
+                  </svg>
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+                    <div style="font-size:13px;font-weight:600;color:var(--c-ok);line-height:1">0</div>
+                  </div>
+                </div>
+                <div style="font-size:11px;font-weight:600;color:${TEXT_M};margin-top:6px">${label}</div>
+                <div style="font-size:10px;color:${TEXT_S};margin-top:1px">${sublabel}</div>
+              </div>`;
+            const remaining = Math.min(hours ?? 0, maxH);
+            const pct = remaining / maxH;
+            const circ = 2 * Math.PI * 27;
+            const offset = circ * (1 - pct);
+            return `
+              <div style="text-align:center;flex:1">
+                <div style="position:relative;width:64px;height:64px;margin:0 auto">
+                  <svg viewBox="0 0 64 64" width="64" height="64" style="transform:rotate(-90deg)">
+                    <circle cx="32" cy="32" r="27" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="5"/>
+                    <circle cx="32" cy="32" r="27" fill="none"
+                      stroke="${color}" stroke-width="5" stroke-linecap="round"
+                      stroke-dasharray="${circ.toFixed(1)}"
+                      stroke-dashoffset="${offset.toFixed(1)}"
+                    />
+                  </svg>
+                  <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
+                    <div style="font-size:16px;font-weight:700;color:${color};line-height:1">${decay.str}</div>
+                    <div style="font-size:9px;font-weight:500;color:${TEXT_S};margin-top:1px">${decay.unit}</div>
+                  </div>
+                </div>
+                <div style="font-size:11px;font-weight:600;color:${TEXT_M};margin-top:6px">${label}</div>
+                <div style="font-size:10px;color:${TEXT_S};margin-top:1px">${sublabel}</div>
+              </div>`;
+          }
+
+          // Build unified commentary tying all three numbers together
+          const baselineStr = recoveryDecay
+            ? `${recoveryDecay.str} ${recoveryDecay.unit.toLowerCase()}`
+            : '0 hours';
+          const freshStr = freshDecay
+            ? `${freshDecay.str} ${freshDecay.unit.toLowerCase()}`
+            : null;
+
+          // Training direction based on combined state
+          let direction: string;
+          if (weeksOfData < 3) {
+            direction = 'Freshness needs at least 3 completed weeks of training data. These numbers will stabilise as more sessions are logged.';
+          } else if (sessionRecoveryHours == null || sessionRecoveryHours <= 0) {
+            // At baseline — direction depends on chronic load
+            if (tsbDisp >= 0) {
+              direction = 'All fatigue cleared. Peak performance window for a key session or race.';
+            } else if (tsbDisp >= -5) {
+              direction = `Session fatigue cleared. ${freshStr ? `${freshStr} until fully clear.` : ''} Normal training can continue.`;
+            } else if (tsbDisp >= -15) {
+              direction = `Session fatigue cleared, but accumulated load is elevated at ${tsbLabel}. Easy or moderate sessions are fine. Avoid stacking hard efforts.${freshStr ? ` ${freshStr} until fully clear.` : ''}`;
+            } else {
+              direction = `Session fatigue cleared, but cumulative load is high at ${tsbLabel}. Easy sessions only. Hard efforts at this level do not produce useful adaptation.${freshStr ? ` ${freshStr} of easy training or rest to fully clear.` : ''}`;
+            }
+          } else if (sessionRecoveryHours <= 6) {
+            direction = `${baselineStr} until recent session fatigue clears. Light activity is fine. Hard sessions best delayed.${freshStr ? ` ${freshStr} until all accumulated load clears.` : ''}`;
+          } else if (sessionRecoveryHours <= 16) {
+            direction = `${baselineStr} until recent session fatigue clears. Easy movement only. Avoid intensity.${freshStr ? ` ${freshStr} until fully clear.` : ''}`;
+          } else {
+            direction = `${baselineStr} of recovery needed from recent sessions. Rest or very easy movement. Hard sessions will not produce useful adaptation.${freshStr ? ` ${freshStr} until all accumulated load clears.` : ''}`;
+          }
+
           return `
         <div class="f-fade" style="animation-delay:0.12s;padding:0 16px;margin-bottom:14px">
-          <div style="background:white;border-radius:20px;padding:24px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04);display:flex;align-items:center;gap:20px">
-            <div style="position:relative;width:80px;height:80px;flex-shrink:0">
-              <svg viewBox="0 0 80 80" width="80" height="80" style="transform:rotate(-90deg)">
-                <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(0,0,0,0.06)" stroke-width="6"/>
-                <circle cx="40" cy="40" r="34" fill="none"
-                  stroke="${statusColor}" stroke-width="6" stroke-linecap="round"
-                  stroke-dasharray="${circ.toFixed(1)}"
-                  stroke-dashoffset="${offset.toFixed(1)}"
-                />
-              </svg>
-              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center">
-                <div style="font-size:22px;font-weight:700;color:${statusColor};line-height:1">${fatigueDecayStr}</div>
-                <div style="font-size:10px;font-weight:500;color:${TEXT_S};margin-top:1px">${fatigueDecayUnit}</div>
-              </div>
+          <div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+            <div style="display:flex;gap:12px;justify-content:center;margin-bottom:16px">
+              ${miniRing(sessionRecoveryHours, maxHoursRecovery, 'To Baseline', 'Session fatigue', recoveryRingColor, recoveryDecay)}
+              ${miniRing(freshHours, maxHoursFresh, 'Fully Clear', 'All fatigue', freshRingColor, freshDecay)}
             </div>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:13px;font-weight:600;color:${TEXT_M};margin-bottom:4px">${recoveryStatusLabel}</div>
-              <div style="font-size:12px;color:${TEXT_S};line-height:1.45">${recoveryStatusDesc}</div>
-            </div>
+            <div style="font-size:13px;color:${TEXT_S};line-height:1.55">${direction}</div>
           </div>
         </div>`;
         })() : ''}
 
-        <!-- Coaching card -->
-        <div class="f-fade" style="animation-delay:0.14s;padding:0 16px;margin-bottom:14px">
-          <div style="background:white;border-radius:20px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
-            <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:6px">${headline}</div>
-            <div style="font-size:13px;color:${TEXT_S};line-height:1.55">${body}</div>
-          </div>
-        </div>
-
         <!-- Cards -->
         <div style="padding:0 16px">
 
-          ${card('Weekly Trend', tsbBarChart(weeklyTsb), '0.22s')}
+          ${card('Weekly Trend', tsbBarChart(weeklyTsb, tsbDisp), '0.22s')}
 
           ${card('Fitness vs Fatigue', fitnessVsFatigueCard(ctl, atl), '0.30s')}
 
@@ -550,7 +555,17 @@ function getFreshnessHTML(s: SimulatorState): string {
         </div>
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────────
@@ -573,6 +588,9 @@ function wireFreshnessHandlers(): void {
       circle.style.strokeDashoffset = `${target}`;
     }
   }, 50);
+
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
 
   // Back → readiness
   document.getElementById('fresh-back-btn')?.addEventListener('click', () => {

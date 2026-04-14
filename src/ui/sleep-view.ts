@@ -6,7 +6,6 @@
 
 import { getState } from '@/state';
 import type { PhysiologyDayEntry } from '@/types/state';
-import { TL_PER_MIN } from '@/constants';
 import {
   getSleepInsight,
   fmtSleepDuration,
@@ -21,15 +20,19 @@ import {
   buildSleepBankLineChart,
   computeLoadAdjustedTarget,
   computeSleepDebt,
+  buildDailySignalBTSS,
 } from '@/calculations/sleep-insights';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ──────────────────────────────────────────────────────────────
 
-const CREAM      = '#FDF7F2';
-const GRAD_BG    = 'linear-gradient(180deg, #1a0d2e 0%, #2d1a4a 40%, #3d2460 100%)';
+const CREAM      = '#FAF9F6';
+const TEXT_M     = '#0F172A';
+const TEXT_S     = '#64748B';
 const PURPLE_A   = '#A78BFA';   // violet-400
 const PURPLE_B   = '#8B5CF6';   // violet-500
-const RING_R     = 57;
+const RING_R     = 46;
 const RING_CIRC  = +(2 * Math.PI * RING_R).toFixed(2);
 
 // ── Date helpers ───────────────────────────────────────────────────────────────
@@ -119,36 +122,33 @@ function stageRow(name: string, key: StageKey, barCol: string, sec: number | nul
     </div>`;
 }
 
-// ── 7-night trend chart ────────────────────────────────────────────────────────
+// ── 7-night score bar chart ───────────────────────────────────────────────────
 
 function scoreTrendChart(entries: PhysiologyDayEntry[]): string {
   const withScores = entries.filter(d => d.sleepScore != null).slice(-7);
   if (withScores.length < 2) return '';
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const TW = 320; const TH = 60; const TPV = 6;
   const scores = withScores.map(e => Math.round(e.sleepScore!));
-  const minS = Math.max(0, Math.min(...scores) - 8);
-  const maxS = Math.min(100, Math.max(...scores) + 8);
-  const range = maxS - minS || 1;
-  const yOf = (v: number) => TPV + ((maxS - v) / range) * (TH - TPV * 2);
-  const xOf = (i: number) => withScores.length > 1 ? (i / (withScores.length - 1)) * TW : TW / 2;
-  const pts = withScores.map((e, i) => ({ x: xOf(i), y: yOf(e.sleepScore!) }));
-  const lineD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const areaD = `${lineD} L${pts[pts.length - 1].x.toFixed(1)},${TH} L${pts[0].x.toFixed(1)},${TH} Z`;
-  const trendCol = scores[scores.length - 1] >= scores[0] ? '#34C759' : '#FF453A';
-  const xLabels = withScores.map((e, i) => {
-    const pct = (pts[i].x / TW * 100).toFixed(1);
+  const BAR_H = 100;
+
+  const bars = withScores.map((e, i) => {
+    const score = scores[i];
     const day = DAYS[new Date(e.date + 'T12:00:00').getDay()];
-    return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:#94A3B8;bottom:0;text-align:center;line-height:1.3">${day}<br>${scores[i]}</span>`;
-  }).join('');
-  return `
-    <div style="position:relative;margin-top:10px">
-      <svg width="100%" height="${TH}" viewBox="0 0 ${TW} ${TH}" preserveAspectRatio="none">
-        <path d="${areaD}" fill="${trendCol}" opacity="0.15"/>
-        <path d="${lineD}" fill="none" stroke="${trendCol}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-      <div style="position:relative;height:28px;margin-top:4px">${xLabels}</div>
+    const barPct = score; // 0-100 maps directly to %
+    const barHeight = (barPct / 100) * BAR_H;
+    const color = score >= 75 ? '#34C759' : score >= 55 ? PURPLE_B : '#FF9500';
+
+    return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
+      <div style="height:${BAR_H}px;display:flex;flex-direction:column;justify-content:flex-end;width:100%;padding:0 4px">
+        <div style="font-size:9px;font-weight:600;color:#64748B;text-align:center;margin-bottom:2px;font-variant-numeric:tabular-nums">${score}</div>
+        <div style="height:${barHeight.toFixed(1)}px;background:${color};border-radius:4px;opacity:0.85;min-height:2px"></div>
+      </div>
+      <div style="font-size:9px;color:#94A3B8">${day}</div>
     </div>`;
+  }).join('');
+
+  return `
+    <div style="display:flex;gap:2px;margin-top:10px">${bars}</div>`;
 }
 
 // ── Main HTML ──────────────────────────────────────────────────────────────────
@@ -221,43 +221,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const generalInsight = getSleepInsight({ history: physiologyHistory, recentWeeklyTSS: wks.slice(-4).map((w: any) => w.actualTSS ?? 0) });
   const primaryInsight = stageInsight ?? generalInsight;
 
-  // Daily Signal B TSS by date — Signal B = raw physiological load, no runSpec discount.
-  // Two sources: garminActuals (matched runs) and adhocWorkouts (cross-training accepted by user).
-  // For activities without HR data, falls back to duration × TL_PER_MIN[rpe].
-  const dailyTSSByDate: Record<string, number> = {};
   const state = getState();
-
-  for (const wk of (state.wks ?? [])) {
-    // Source 1: matched runs in garminActuals
-    for (const actual of Object.values(wk.garminActuals ?? {})) {
-      const a = actual as any;
-      if (!a.startTime) continue;
-      const date = (a.startTime as string).split('T')[0];
-      const tss = (a.iTrimp != null && a.iTrimp > 0)
-        ? (a.iTrimp * 100) / 15000
-        : 0; // no RPE available on garminActuals — skip rather than guess
-      if (tss > 0) dailyTSSByDate[date] = (dailyTSSByDate[date] ?? 0) + tss;
-    }
-
-    // Source 2: cross-training accepted via activity review (stored as adhocWorkouts)
-    const seenGarminIds = new Set<string>();
-    for (const w of (wk.adhocWorkouts ?? [])) {
-      const wo = w as any;
-      if (!wo.id?.startsWith('garmin-')) continue;
-      const rawId = (wo.id as string).slice('garmin-'.length);
-      if (rawId && seenGarminIds.has(rawId)) continue;
-      if (rawId) seenGarminIds.add(rawId);
-      const date: string | null = wo.garminTimestamp ? (wo.garminTimestamp as string).split('T')[0] : null;
-      if (!date) continue;
-      // Signal B: no runSpec discount — physiological load counts regardless of sport
-      const tss = (wo.iTrimp != null && wo.iTrimp > 0)
-        ? (wo.iTrimp * 100) / 15000
-        : (wo.garminDurationMin != null && wo.rpe != null)
-          ? (wo.garminDurationMin as number) * (TL_PER_MIN[Math.round(wo.rpe as number)] ?? 1.15)
-          : 0;
-      if (tss > 0) dailyTSSByDate[date] = (dailyTSSByDate[date] ?? 0) + tss;
-    }
-  }
+  const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? []);
 
   // Sleep bank
   const effectiveSleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physiologyHistory);
@@ -314,12 +279,35 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const bankColor       = debtDominates
     ? (debtSec! > 7200 ? '#FF9500' : '#F59E0B')
     : (bank.avgNightlyShortfallSec < -1800 ? '#FF9500' : bank.avgNightlyShortfallSec > 1800 ? '#34C759' : '#64748B');
+  // Nightly vs base target chart — always orange
   const bankNights      = physiologyHistory
     .slice(-7)
     .filter(d => d.sleepDurationSec != null)
     .map(d => ({ date: d.date, delta: d.sleepDurationSec! - effectiveSleepTarget }));
+  const scoreTrendHTML  = scoreTrendChart(physiologyHistory);
+  const combinedCard    = bankNights.length >= 2 || scoreTrendHTML;
   const bankChartHTML   = bankNights.length >= 2
-    ? buildSleepBankLineChart(bankNights, bankColor, '#CBD5E1')
+    ? buildSleepBankLineChart(bankNights, '#F97316', '#CBD5E1', !!scoreTrendHTML)
+    : '';
+
+  // Cumulative debt chart (uses load-adjusted targets per night)
+  const debtNights = physiologyHistory
+    .slice(-7)
+    .filter(d => d.sleepDurationSec != null)
+    .map(d => {
+      const dayTSS = dailyTSSByDate[d.date] ?? 0;
+      const adjustedTarget = computeLoadAdjustedTarget(effectiveSleepTarget, dayTSS, athleteTier);
+      return { date: d.date, delta: d.sleepDurationSec! - adjustedTarget };
+    });
+  // Running cumulative total
+  let cumulative = 0;
+  const cumulativeNights = debtNights.map(n => {
+    cumulative += n.delta;
+    return { date: n.date, delta: cumulative };
+  });
+  const debtColor = cumulative < 0 ? '#EF4444' : '#34C759';
+  const cumulativeChartHTML = cumulativeNights.length >= 2
+    ? buildSleepBankLineChart(cumulativeNights, debtColor, '#CBD5E1', !!scoreTrendHTML)
     : '';
 
   // Date picker pills
@@ -328,9 +316,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     return `<button class="sleep-date-pill" data-date="${d}" style="
       padding:6px 16px;border-radius:100px;border:none;cursor:pointer;
       font-size:13px;font-weight:${active ? '600' : '400'};font-family:var(--f);
-      background:${active ? 'rgba(255,255,255,0.22)' : 'transparent'};
-      color:${active ? 'white' : 'rgba(255,255,255,0.55)'};
-      backdrop-filter:${active ? 'blur(8px)' : 'none'};
+      background:${active ? 'rgba(0,0,0,0.06)' : 'transparent'};
+      color:${active ? TEXT_M : TEXT_S};
       white-space:nowrap;transition:background 0.15s,color 0.15s;
     ">${fmtDateShort(d, today)}</button>`;
   }).join('');
@@ -346,11 +333,12 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       #sleep-view { box-sizing: border-box; }
       #sleep-view *, #sleep-view *::before, #sleep-view *::after { box-sizing: inherit; }
       @keyframes sleepFloatUp {
-        from { opacity:0; transform:translateY(10px); }
-        to   { opacity:1; transform:translateY(0); }
+        from { opacity:0; transform:translateY(16px) scale(0.97); }
+        to   { opacity:1; transform:translateY(0) scale(1); }
       }
-      .sl-fade { opacity:0; animation:sleepFloatUp 0.55s ease-out forwards; }
-      .sleep-date-pill:hover { background:rgba(255,255,255,0.15)!important; color:white!important; }
+      .sl-fade { opacity:0; animation:sleepFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .sleep-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
+      ${skyAnimationCSS('slp')}
     </style>
 
     <div id="sleep-view" style="
@@ -358,19 +346,10 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      <!-- Dark gradient hero -->
-      <div style="
-        position:absolute;top:0;left:0;right:0;height:480px;
-        background:${GRAD_BG};overflow:hidden;pointer-events:none;z-index:0;
-      ">
-        <div style="position:absolute;width:260px;height:260px;border-radius:50%;background:${PURPLE_A};filter:blur(90px);opacity:0.45;top:-60px;left:-70px"></div>
-        <div style="position:absolute;width:220px;height:220px;border-radius:50%;background:${PURPLE_B};filter:blur(80px);opacity:0.4;top:160px;right:-50px"></div>
-        <div style="position:absolute;width:150px;height:150px;border-radius:50%;background:#6D28D9;filter:blur(60px);opacity:0.35;bottom:70px;left:30%"></div>
-        <div style="position:absolute;inset:0;background:linear-gradient(to bottom,transparent 55%,${CREAM})"></div>
-      </div>
+      ${buildSkyBackground('slp', 'indigo')}
 
       <!-- Scrollable content -->
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;padding-bottom:48px;max-width:480px;margin:0 auto">
 
         <!-- Header -->
         <div style="
@@ -380,17 +359,18 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
         ">
           <button id="sleep-back-btn" style="
             width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
-            background:rgba(255,255,255,0.15);backdrop-filter:blur(8px);
-            display:flex;align-items:center;justify-content:center;color:white;
+            background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);
+            box-shadow:0 1px 4px rgba(0,0,0,0.08);
+            display:flex;align-items:center;justify-content:center;color:${TEXT_M};
           ">
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
 
           <div style="text-align:center">
-            <div style="font-size:20px;font-weight:600;color:white;text-shadow:0 1px 4px rgba(0,0,0,0.2)">Sleep</div>
+            <div style="font-size:20px;font-weight:700;color:${TEXT_M}">Sleep</div>
             <button id="sleep-date-btn" style="
               display:flex;align-items:center;gap:4px;margin:3px auto 0;
-              font-size:12px;color:rgba(255,255,255,0.78);font-weight:500;
+              font-size:12px;color:${TEXT_S};font-weight:500;
               background:none;border:none;cursor:pointer;font-family:var(--f);
             ">
               ${fmtDateLong(displayDate)}
@@ -411,14 +391,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
 
         <!-- Ring -->
         <div class="sl-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div style="
-            position:relative;width:220px;height:220px;
-            display:flex;align-items:center;justify-content:center;
-            background:rgba(255,255,255,0.18);backdrop-filter:blur(20px);
-            border-radius:50%;border:1px solid rgba(255,255,255,0.3);
-            box-shadow:0 8px 60px -10px rgba(0,0,0,0.35);
-          ">
-            <svg width="160" height="160" viewBox="0 0 160 160" style="position:absolute">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
                 <linearGradient id="sleepRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
                   <stop offset="0%" stop-color="${PURPLE_A}"/>
@@ -426,32 +400,35 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
                 </linearGradient>
               </defs>
               <!-- Track -->
-              <circle cx="80" cy="80" r="${RING_R}"
+              <circle cx="50" cy="50" r="${RING_R}"
                 fill="none"
-                stroke="rgba(255,255,255,0.15)"
-                stroke-width="9"
-                stroke-linecap="round"
-                transform="rotate(-90 80 80)"/>
+                fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)"
+                stroke-width="8"
+                stroke-linecap="round"/>
               <!-- Fill -->
-              ${bigScore != null ? `<circle id="sleep-ring-circle" cx="80" cy="80" r="${RING_R}"
+              ${bigScore != null ? `<circle id="sleep-ring-circle" cx="50" cy="50" r="${RING_R}"
                 fill="none"
                 stroke="${bigScore >= 75 ? '#34C759' : bigScore >= 55 ? 'url(#sleepRingGrad)' : '#FF9500'}"
-                stroke-width="9"
+                stroke-width="8"
                 stroke-linecap="round"
                 stroke-dasharray="${RING_CIRC}"
                 stroke-dashoffset="${RING_CIRC}"
-                transform="rotate(-90 80 80)"
                 style="transition:stroke-dashoffset 1.0s cubic-bezier(0.34,1.2,0.64,1)"/>` : ''}
             </svg>
             <!-- Centre text -->
-            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1">
+            <div style="
+              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
+              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
+              width:180px;height:180px;border-radius:50%;
+              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
+            ">
               ${bigScore != null
-                ? `<div style="display:flex;align-items:flex-start;color:white">
-                    <span style="font-size:52px;font-weight:700;letter-spacing:-0.03em;line-height:1">${bigScore}</span>
-                    <span style="font-size:20px;font-weight:700;line-height:1;margin-top:5px">/100</span>
+                ? `<div style="display:flex;align-items:baseline;color:${TEXT_M}">
+                    <span style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1">${bigScore}</span>
+                    <span style="font-size:14px;font-weight:500;line-height:1;margin-left:2px;color:${TEXT_S}">/100</span>
                    </div>
-                   <span style="font-size:13px;color:rgba(255,255,255,0.7);margin-top:2px">${scoreLabel ?? ''}</span>`
-                : `<span style="font-size:14px;color:rgba(255,255,255,0.5)">No data</span>`}
+                   <span style="font-size:12px;color:${TEXT_S};margin-top:4px;font-weight:500">${scoreLabel ?? ''}</span>`
+                : `<span style="font-size:14px;color:#94A3B8">No data</span>`}
             </div>
           </div>
         </div>
@@ -465,8 +442,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
           <p style="font-size:12px;color:#64748B;margin:0;line-height:1.45">Open the Garmin Connect app and sync your device to pull in last night's data.</p>
         </div>` : ''}
 
-        <!-- Stale banner -->
-        ${isStale ? `
+        <!-- Stale banner — only when viewing today, not historic dates -->
+        ${isStale && displayDate === today ? `
         <div class="sl-fade" style="animation-delay:0.14s;margin:0 16px 10px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,149,0,0.25);background:white">
           <p style="font-size:12px;color:#FF9500;margin:0;line-height:1.4">Last synced ${latestFmt ?? ''}. Open Garmin Connect to update.</p>
         </div>` : ''}
@@ -474,7 +451,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
         <!-- Duration tile -->
         ${durationStr ? `
         <div class="sl-fade" style="animation-delay:0.14s;padding:0 16px;margin-bottom:10px">
-          <div style="background:white;border-radius:20px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="background:white;border-radius:16px;padding:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:11px;color:#94A3B8;margin-bottom:6px">Last night</div>
             <div style="font-size:26px;font-weight:300;color:#0F172A;line-height:1">${durationStr}</div>
             ${durationTarget ? `<div style="font-size:11px;color:${targetCol};margin-top:4px">${durationTarget}</div>` : ''}
@@ -484,19 +461,19 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
         <!-- Sleep stages -->
         ${hasStages ? `
         <div class="sl-fade" style="animation-delay:0.18s;margin:0 16px 14px">
-          <div style="background:white;border-radius:20px;padding:18px 18px 4px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="background:white;border-radius:16px;padding:18px 18px 4px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:12px;color:#94A3B8;margin-bottom:14px">Sleep stages</div>
             ${stageRows}
           </div>
         </div>` : bigScore != null ? `
-        <div class="sl-fade" style="animation-delay:0.18s;margin:0 16px 14px;padding:12px 16px;background:white;border-radius:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        <div class="sl-fade" style="animation-delay:0.18s;margin:0 16px 14px;padding:12px 16px;background:white;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
           <p style="font-size:12px;color:#94A3B8;margin:0">Stage breakdown not available. Garmin typically syncs within a few hours of waking.</p>
         </div>` : ''}
 
         <!-- ── Analysis ────────────────────────────────────────────────── -->
 
         ${primaryInsight ? `
-        <div class="sl-fade" style="animation-delay:0.22s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        <div class="sl-fade" style="animation-delay:0.22s;margin:0 16px 14px;padding:16px;background:white;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
           <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:6px">Analysis</div>
           <div style="font-size:13px;line-height:1.55;color:#64748B">${primaryInsight}</div>
         </div>` : ''}
@@ -507,14 +484,14 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
         ${durationAvgStr || avg30Str ? `
         <div class="sl-fade" style="animation-delay:0.26s;display:flex;gap:10px;padding:0 16px;margin-bottom:10px">
           ${durationAvgStr ? `
-          <div style="flex:1;background:white;border-radius:20px;padding:14px 16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="flex:1;background:white;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:11px;color:#94A3B8;margin-bottom:5px">7-night avg</div>
             <div style="font-size:22px;font-weight:300;color:#0F172A;line-height:1">${durationAvgStr}</div>
             <div style="font-size:11px;color:#94A3B8;margin-top:3px">per night</div>
             ${avgScore7 != null ? `<div style="font-size:11px;color:${scoreColor(avgScore7)};margin-top:4px;padding-top:4px;border-top:1px solid #F1F5F9">Score ${avgScore7}/100</div>` : ''}
           </div>` : ''}
           ${avg30Str ? `
-          <div style="flex:1;background:white;border-radius:20px;padding:14px 16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+          <div style="flex:1;background:white;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="font-size:11px;color:#94A3B8;margin-bottom:5px">30-day avg</div>
             <div style="font-size:22px;font-weight:300;color:#0F172A;line-height:1">${avg30Str}</div>
             <div style="font-size:11px;color:#94A3B8;margin-top:3px">per night</div>
@@ -523,42 +500,56 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
 
         <!-- ── Sleep debt ───────────────────────────────────────────────── -->
 
-        <!-- Sleep bank -->
-        ${bankHeadline || !hasEnoughHistory ? `
-        <div class="sl-fade" style="animation-delay:0.30s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
-          ${!hasEnoughHistory ? `
-            <div style="font-size:12px;color:#94A3B8;margin-bottom:4px">Sleep target</div>
-            <div style="font-size:15px;font-weight:500;color:#1e293b">${bankTargetL}/night</div>
-            <div style="font-size:12px;color:#94A3B8;margin-top:4px">Personalises after 5 nights of data</div>
-          ` : `
-          <div style="display:flex;justify-content:space-between;align-items:baseline">
-            <div style="font-size:${debtDominates ? '13px' : '12px'};font-weight:${debtDominates ? '600' : '400'};color:${debtDominates ? '#0F172A' : '#94A3B8'}">${debtDominates ? 'Tonight\'s target' : `7-night avg · vs ${bankTargetL} base`}</div>
-            <div style="font-size:11px;color:#94A3B8">${bank.nightsWithData} night${bank.nightsWithData === 1 ? '' : 's'}</div>
-          </div>
-          <div style="font-size:${debtDominates ? '34px' : '28px'};font-weight:${debtDominates ? '400' : '300'};color:${debtDominates ? '#0F172A' : bankColor};margin-top:${debtDominates ? '4px' : '6px'}">${debtDominates ? recoveryTargetStr : bankHeadline}</div>
-          ${debtDominates ? `<div style="font-size:13px;color:#94A3B8;margin-top:1px">Base ${bankTargetL}${recoveryIncrementSec > 0 ? ` + ${Math.round(recoveryIncrementSec / 60)} min debt recovery` : ''}${tonightLoadBonusSec > 0 ? ` + ${Math.round(tonightLoadBonusSec / 60)} min from high exercise load` : ''}</div>` : (bankSubLabel ? `<div style="font-size:13px;color:${bankColor};margin-top:1px">${bankSubLabel}</div>` : '')}
-          ${debtDominates ? `<div style="font-size:12px;color:${bankColor};margin-top:8px;font-weight:500">${bankHeadline} sleep debt · ${bank.nightsWithData} nights</div>
-          <div style="font-size:11px;color:#94A3B8;margin-top:3px">Based on duration shortfall vs nightly target.${poorQuality ? ' Tonight\'s target raised — recent sleep quality is below average.' : ''}</div>` : ''}
-          ${bankNightlyCtx ? `<div style="font-size:12px;color:#94A3B8;margin-top:2px">${bankNightlyCtx}</div>` : ''}
-          ${bankTotalStr ? `<div style="font-size:12px;color:#94A3B8;margin-top:2px">Sleep debt: ${bankTotalStr}</div>` : ''}
-          ${bankChartHTML}
-          ${!debtDominates ? `<div style="margin-top:10px;padding-top:10px;border-top:1px solid #F1F5F9;font-size:11px;color:#94A3B8;line-height:1.6">
-            Last night target: ${fmtSleepDuration(lastNightTarget)}
-            ${lastNightLoadBonus > 300 ? ` · Base ${bankTargetL} + ${Math.round(lastNightLoadBonus / 60)} min load bonus (${Math.round(yesterdayTSS)} TSS)` : yesterdayTSS > 0 ? ` · Base ${bankTargetL} (${Math.round(yesterdayTSS)} TSS, load bonus &lt;5 min)` : ` · Base ${bankTargetL}, rest day`}
-          </div>` : ''}
-          `}
+        <!-- Tonight's target -->
+        ${hasEnoughHistory && debtDominates ? `
+        <div class="sl-fade" style="animation-delay:0.30s;margin:0 16px 14px;padding:16px;background:white;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+          <div style="font-size:12px;color:#94A3B8;margin-bottom:6px">Tonight's target</div>
+          <div style="font-size:34px;font-weight:300;color:#0F172A;line-height:1">${recoveryTargetStr}</div>
+          <div style="font-size:12px;color:#94A3B8;margin-top:6px;line-height:1.5">Base ${bankTargetL}${recoveryIncrementSec > 0 ? ` + ${Math.round(recoveryIncrementSec / 60)} min debt recovery` : ''}${tonightLoadBonusSec > 0 ? ` + ${Math.round(tonightLoadBonusSec / 60)} min from high exercise load` : ''}</div>
+        </div>` : !hasEnoughHistory ? `
+        <div class="sl-fade" style="animation-delay:0.30s;margin:0 16px 14px;padding:16px;background:white;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+          <div style="font-size:12px;color:#94A3B8;margin-bottom:4px">Sleep target</div>
+          <div style="font-size:15px;font-weight:500;color:#1e293b">${bankTargetL}/night</div>
+          <div style="font-size:12px;color:#94A3B8;margin-top:4px">Personalises after 5 nights of data</div>
         </div>` : ''}
 
-        <!-- 7-night score trend -->
-        ${scoreTrendChart(physiologyHistory) ? `
-        <div class="sl-fade" style="animation-delay:0.34s;margin:0 16px 14px;padding:16px;background:white;border-radius:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.04)">
+        <!-- Last 7 nights: duration + debt + score combined -->
+        ${combinedCard ? `
+        <div class="sl-fade" style="animation-delay:0.32s;margin:0 16px 14px;padding:16px;background:white;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
           <div style="font-size:12px;color:#94A3B8;margin-bottom:2px">Last 7 nights</div>
-          ${scoreTrendChart(physiologyHistory)}
+          ${bankChartHTML ? `
+          <div style="margin-bottom:8px">
+            <div style="font-size:10px;color:#94A3B8;margin-top:10px;margin-bottom:-8px">Duration vs ${bankTargetL} target</div>
+            ${bankChartHTML}
+          </div>` : ''}
+          ${cumulativeChartHTML ? `
+          <div style="margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <div style="font-size:10px;color:#94A3B8">Cumulative sleep debt</div>
+              <div style="font-size:11px;font-weight:600;color:${debtColor}">${debtSec != null && debtSec > 900 ? fmtDebt(debtSec) + ' debt' : debtSec != null && debtSec < -900 ? fmtDebt(Math.abs(debtSec)) + ' surplus' : 'On target'}</div>
+            </div>
+            ${cumulativeChartHTML}
+          </div>` : ''}
+          ${scoreTrendHTML ? `
+          <div>
+            <div style="font-size:10px;color:#94A3B8;margin-bottom:-6px">Sleep score</div>
+            ${scoreTrendHTML}
+          </div>` : ''}
         </div>` : ''}
 
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Handlers ───────────────────────────────────────────────────────────────────
@@ -576,6 +567,9 @@ function wireSleepHandlers(physiologyHistory: PhysiologyDayEntry[], wks: any[], 
       }
     }
   }, 50);
+
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
 
   // Back
   document.getElementById('sleep-back-btn')?.addEventListener('click', () => {

@@ -12,6 +12,7 @@ export interface PlanContext {
   vdot: number;
   effortScore?: number;  // Trailing effort score from recent weeks (used for adaptive scaling)
   acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR injury risk — reduces quality sessions when elevated
+  forceDeload?: boolean; // Holiday week — treated as deload regardless of cycle position
 }
 
 // ---------------------------------------------------------------------------
@@ -305,7 +306,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   } = ctx;
 
   const ability = abilityBandFromVdot(vdot, fitnessLevel);
-  const deload = isDeloadWeek(weekIndex, ability);
+  const deload = ctx.forceDeload || isDeloadWeek(weekIndex, ability);
   const eMult = ctx.effortScore != null ? effortMultiplier(ctx.effortScore) : 1.0;
   const dMult = (deload ? deloadMultiplier(ability) : 1.0) * eMult;
 
