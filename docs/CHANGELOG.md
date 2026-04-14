@@ -4,6 +4,13 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-14 — Readiness cards: consistent value presentation
+
+- Standardised all six sub-signal cards on the 7-Day Rolling Load blueprint: `[24px/600 number+unit] [13px #94A3B8 status word]`, optional `[12px TEXT_S metadata line]`, then the description paragraph.
+- Dropped the 32px/300 thin-numeric style previously used by Strain, Freshness, Physiology, and Sleep History.
+- Freshness: removed the pill for "to baseline"; it is now a plain metadata line. Load Ratio: swapped so the ratio (e.g. `1.15×`) is the headline and the label (`Optimal`) is the muted status. Physiology and Sleep History: added status words (`Strong`/`Moderate`/`Low`/`Poor`).
+- Files: `src/ui/readiness-view.ts`.
+
 ## 2026-04-14 — Garmin step/LT sync debugging
 
 - **Webhook `handleDailies` now stores steps**: added `steps: d.totalSteps ?? null` to the upsert row. Also added diagnostic logging of all payload keys and step-ish field aliases (`totalSteps`, `steps`, `stepsCount`) to identify which field Garmin actually sends, since two dailies pushes landed after the fix but `daily_metrics.steps` stayed NULL.
