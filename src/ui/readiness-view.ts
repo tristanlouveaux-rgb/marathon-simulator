@@ -15,83 +15,33 @@ import {
   computePlannedDaySignalBTSS,
   estimateWorkoutDurMin,
   getTrailingEffortScore,
+  computeToBaseline,
+  REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import {
   computeReadiness,
   readinessColor,
   computeRecoveryScore,
 } from '@/calculations/readiness';
-import { getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
+import { getSleepBank, deriveSleepTarget, computeSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { TL_PER_MIN } from '@/constants';
 import { computeDailyCoach } from '@/calculations/daily-coach';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const APP_BG = '#F8FAFC';
+const APP_BG = '#FAF9F6';
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
-const RING_R = 57;
+const RING_R = 46;
 const RING_C = +(2 * Math.PI * RING_R).toFixed(2);
 
 // ── Sky background (same visual language as recovery-view) ────────────────────
 // Gradient IDs are prefixed "rdn" to avoid conflicts when both views exist in DOM
 
-function skyBackground(): string {
-  return `
-    <div style="position:absolute;top:0;left:0;width:100%;height:480px;overflow:hidden;pointer-events:none;z-index:0">
-      <svg style="width:100%;height:100%" viewBox="0 0 400 480" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="rdnSkyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#C5DFF8"/>
-            <stop offset="30%" stop-color="#E3F0FA"/>
-            <stop offset="70%" stop-color="#F0F7FC"/>
-            <stop offset="100%" stop-color="#F8FAFC"/>
-          </linearGradient>
-          <linearGradient id="rdnMountFar" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#8BB8D8" stop-opacity="0.6"/>
-            <stop offset="60%" stop-color="#A8CDE8" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="#E8F4FC" stop-opacity="0.05"/>
-          </linearGradient>
-          <linearGradient id="rdnMountMid" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#6BA3C9" stop-opacity="0.75"/>
-            <stop offset="50%" stop-color="#8FC4E3" stop-opacity="0.4"/>
-            <stop offset="100%" stop-color="#C8E6F5" stop-opacity="0.1"/>
-          </linearGradient>
-          <linearGradient id="rdnMountNear" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#5CB8A8" stop-opacity="0.5"/>
-            <stop offset="40%" stop-color="#7ACCB8" stop-opacity="0.35"/>
-            <stop offset="100%" stop-color="#A8E0D4" stop-opacity="0.15"/>
-          </linearGradient>
-          <linearGradient id="rdnMistLayer" x1="0%" y1="100%" x2="0%" y2="0%">
-            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
-            <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.5"/>
-            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
-          </linearGradient>
-          <linearGradient id="rdnSunGlow" x1="50%" y1="50%" r="50%">
-            <stop offset="0%" stop-color="#FFF8E7" stop-opacity="0.8"/>
-            <stop offset="100%" stop-color="#FEF9E7" stop-opacity="0"/>
-          </linearGradient>
-          <filter id="rdnSoftBlur"><feGaussianBlur stdDeviation="6"/></filter>
-          <filter id="rdnHeavyBlur"><feGaussianBlur stdDeviation="20"/></filter>
-          <filter id="rdnWc"><feTurbulence type="fractalNoise" baseFrequency="0.008" numOctaves="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/><feGaussianBlur stdDeviation="1.5"/></filter>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#rdnSkyGrad)"/>
-        <ellipse cx="200" cy="130" rx="100" ry="80" fill="url(#rdnSunGlow)" filter="url(#rdnSoftBlur)" opacity="0.7"/>
-        <path d="M-60,190 Q20,150 80,180 T200,160 T350,170 T460,150 L460,480 L-60,480 Z" fill="url(#rdnMountFar)" filter="url(#rdnWc)"/>
-        <ellipse cx="100" cy="210" rx="80" ry="25" fill="white" filter="url(#rdnHeavyBlur)" opacity="0.45"/>
-        <ellipse cx="320" cy="195" rx="60" ry="20" fill="white" filter="url(#rdnHeavyBlur)" opacity="0.35"/>
-        <path d="M-40,270 Q50,210 130,250 T280,220 T420,250 L420,480 L-40,480 Z" fill="url(#rdnMountMid)" filter="url(#rdnWc)"/>
-        <ellipse cx="280" cy="285" rx="120" ry="40" fill="#FFFFFF" opacity="0.45" filter="url(#rdnHeavyBlur)"/>
-        <path d="M-20,350 Q60,290 150,330 T320,310 T440,340 L440,480 L-20,480 Z" fill="url(#rdnMountNear)" filter="url(#rdnWc)"/>
-        <path d="M0,370 Q100,330 200,370 T400,350 L400,480 L0,480 Z" fill="url(#rdnMistLayer)" filter="url(#rdnSoftBlur)"/>
-        <path d="M0,410 Q150,390 300,420 T400,410 L400,480 L0,480 Z" fill="url(#rdnMistLayer)" opacity="0.7" filter="url(#rdnHeavyBlur)"/>
-        <ellipse cx="50" cy="90" rx="40" ry="15" fill="white" filter="url(#rdnHeavyBlur)" opacity="0.28"/>
-        <ellipse cx="350" cy="110" rx="30" ry="12" fill="white" filter="url(#rdnHeavyBlur)" opacity="0.22"/>
-      </svg>
-      <div style="position:absolute;bottom:0;left:0;width:100%;height:120px;background:linear-gradient(to top,${APP_BG},transparent)"></div>
-    </div>`;
-}
+function skyBackground(): string { return buildSkyBackground('rdn', 'blue'); }
 
 // ── Explanatory copy ──────────────────────────────────────────────────────────
 
@@ -128,11 +78,37 @@ function getReadinessHTML(s: SimulatorState): string {
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
-  // Use completed weeks only for TSB — a partial current week creates false "Fresh" readings
+  // Use completed weeks for TSB seed, then apply intra-week decay to get live value
   const completedWeek = Math.max(0, s.w - 1);
   const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
-  const tsb = sameSignal?.tsb ?? 0;
-  const ctlNow = sameSignal?.ctl ?? 0;
+  const atlWeekEnd = sameSignal?.atl ?? 0;
+  const ctlWeekEnd = sameSignal?.ctl ?? 0;
+
+  // Intra-week decay: daily ATL/CTL decay from end of completed week to today,
+  // incorporating current-week load. Matches freshness-view logic.
+  const ATL_DAILY_DECAY = Math.exp(-1 / 7);
+  const CTL_DAILY_DECAY = Math.exp(-1 / 42);
+  let atlLive = atlWeekEnd;
+  let ctlLive = ctlWeekEnd;
+  if (s.planStartDate) {
+    const weekStartDate = new Date(s.planStartDate + 'T12:00:00');
+    weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
+    const todayDate = new Date();
+    todayDate.setHours(12, 0, 0, 0);
+    const daysIntoWeek = Math.max(0, Math.round((todayDate.getTime() - weekStartDate.getTime()) / 86400000));
+    const currentWk = (s.wks ?? [])[completedWeek];
+    for (let d = 0; d < daysIntoWeek; d++) {
+      const dayD = new Date(weekStartDate);
+      dayD.setDate(dayD.getDate() + d);
+      const dayDate = dayD.toISOString().split('T')[0];
+      const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
+      const weekEquiv = dayTSS * 7;
+      atlLive = atlLive * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
+      ctlLive = ctlLive * CTL_DAILY_DECAY + weekEquiv * (1 - CTL_DAILY_DECAY);
+    }
+  }
+  const tsb = ctlLive - atlLive;
+  const ctlNow = ctlLive;
   const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
 
   const today = new Date().toISOString().split('T')[0];
@@ -141,11 +117,13 @@ function getReadinessHTML(s: SimulatorState): string {
   );
   const latestPhysio = s.physiologyHistory?.slice(-1)[0];
   const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
+  const latestWithSleep = (s.physiologyHistory ?? []).slice().reverse().find(p => p.sleepScore != null);
   const sleepScore: number | null = garminTodaySleep?.sleepScore
     ?? (manualToday as any)?.sleepScore
-    ?? latestPhysio?.sleepScore
+    ?? latestWithSleep?.sleepScore
     ?? null;
-  const hrvRmssd: number | null = latestPhysio?.hrvRmssd ?? null;
+  const latestWithHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null);
+  const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
   const hrvAll = (s.physiologyHistory ?? [])
     .map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
   const hrvPersonalAvg: number | null = hrvAll.length >= 3
@@ -164,8 +142,10 @@ function getReadinessHTML(s: SimulatorState): string {
     return [...h, { date: today, sleepScore: (manualToday as any).sleepScore }];
   })();
   const suppressSleep = noGarminSleep && !(manualToday as any)?.sleepScore;
+  const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
   const recoveryResult = computeRecoveryScore(physioForRecovery, {
     manualSleepScore: noGarminSleep ? ((manualToday as any)?.sleepScore ?? undefined) : undefined,
+    sleepDebtSec: sleepDebtForRecovery,
   });
 
   // ── Strain % (must match home-view logic so readiness score is consistent) ──
@@ -187,10 +167,12 @@ function getReadinessHTML(s: SimulatorState): string {
   // Exclude cross-training from planned strain targets
   const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
   const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKmR);
-  // Per-session average: CTL / training days (uses all workouts for count)
+  // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
   const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(plannedWorkouts, d, baseMinPerKmR) > 0).length || 4;
-  const perSessionAvg = (s.ctlBaseline ?? 0) / trainingDayCount;
+    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmR) > 0).length || 4;
+  const plannedWeekTSS = [0,1,2,3,4,5,6]
+    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmR), 0);
+  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
   // Detect matched activity on a day with no generated workout
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
@@ -203,7 +185,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
   // Rest-day overreach: activity exceeds 50% of per-session average
-  const restDayOverreachThreshold = perSessionAvg * 0.5;
+  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
   const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
   // Strain: planned days vs plan, adhoc vs per-session avg
   const strainPct = hasPlannedWorkout && todaySignalBTSS > 0 && plannedDayTSS > 0
@@ -242,24 +224,12 @@ function getReadinessHTML(s: SimulatorState): string {
   const tsbZone = tsbDisp > 0 ? 'Fresh' : tsbDisp >= -3 ? 'Recovering' : tsbDisp >= -8 ? 'Fatigued' : tsbDisp >= -15 ? 'Heavy' : tsbDisp >= -25 ? 'Overloaded' : 'Overreaching';
   const tsbColor = tsbDisp > 0 ? 'var(--c-ok)' : tsbDisp >= -3 ? 'var(--c-accent)' : tsbDisp >= -15 ? 'var(--c-caution)' : 'var(--c-warn)';
 
-  // ── Fatigue decay projection ──────────────────────────────────────────────
-  // ATL decays with 7-day time constant. Estimate days until TSB/7 reaches -3 (mild fatigue).
-  // TSB = CTL - ATL, so ATL = CTL - TSB. Derive from known values.
-  // TSB(d) = CTL - ATL × e^(-d/7). CTL moves slowly (42-day constant), treat as constant.
-  const ctlForDecay = sameSignal?.ctl ?? 0;
-  const atlNow = sameSignal?.atl ?? (ctlForDecay > 0 ? ctlForDecay - tsb : 0);
-  let fatigueDecayHours: number | null = null;
-  if (tsbDisp < -3 && atlNow > 0) {
-    // Solve: CTL - ATL × e^(-d/7) = -3 × 7 (target weekly TSB = -21)
-    // e^(-d/7) = (CTL - targetTSB) / ATL  where targetTSB = -21
-    // d = -7 × ln((CTL + 21) / ATL)
-    const targetWeeklyTsb = -3 * 7;
-    const targetAtl = ctlForDecay - targetWeeklyTsb; // ATL value when TSB reaches target
-    if (atlNow > targetAtl && targetAtl > 0) {
-      const days = -7 * Math.log(targetAtl / atlNow);
-      fatigueDecayHours = Math.max(1, Math.round(days * 24));
-    }
-  }
+  // ── To Baseline — stacked session recovery ──────────────────────────────────
+  // Same model as freshness page: all recent sessions stacked, sport-adjusted,
+  // sleep/HRV-adjusted. See computeToBaseline() in fitness-model.ts.
+  const ctlForBaseline = (sameSignal?.ctl ?? 0) / 7;
+  const baselineResult = computeToBaseline(s.wks ?? [], completedWeek, ctlForBaseline, s.planStartDate, s.physiologyHistory);
+  const fatigueDecayHours = baselineResult?.hours ?? null;
 
   // ── Load Ratio sub-signal ───────────────────────────────────────────────────
   const safetyLabel = acwr.ratio <= 0 ? '—'
@@ -277,7 +247,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const chronicDaily = Math.round(acwr.ctl / 7);
   const acuteChronicStr = acwr.ratio > 0 ? `7d: ${Math.round(acwr.atl)} TSS / 28d avg: ${Math.round(acwr.ctl)} TSS` : '';
   const recScoreColor = recoveryResult.hasData
-    ? (recoveryResult.score! < 40 ? 'var(--c-warn)' : recoveryResult.score! < 65 ? 'var(--c-caution)' : 'var(--c-ok)')
+    ? (recoveryResult.score! >= 80 ? 'var(--c-ok)' : recoveryResult.score! >= 65 ? 'var(--c-ok-muted)' : recoveryResult.score! >= 50 ? 'var(--c-caution)' : 'var(--c-warn)')
     : TEXT_S;
   const recValueStr = recoveryResult.hasData && recoveryResult.score != null
     ? `${recoveryResult.score}/100` : '—';
@@ -306,7 +276,7 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // ── Card builder ───────────────────────────────────────────────────────────
   const card = (content: string, id?: string, extraStyle?: string) =>
-    `<div ${id ? `id="${id}"` : ''} style="background:white;border-radius:20px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.05);margin-bottom:12px;cursor:pointer;${extraStyle ?? ''}">${content}</div>`;
+    `<div ${id ? `id="${id}"` : ''} style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:12px;cursor:pointer;${extraStyle ?? ''}">${content}</div>`;
 
   // Adhoc activity on a non-planned day: show TSS + adhocPct label (no plan to compare %)
   const isAdhoc = matchedActivityToday && !hasPlannedWorkout;
@@ -340,7 +310,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const fatigueDecayLine = fatigueDecayStr != null
     ? `<div style="display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:8px;border-top:1px solid var(--c-border)">
         <span style="display:inline-block;background:var(--c-bg);border:1px solid var(--c-border);border-radius:12px;padding:2px 10px;font-size:13px;font-weight:600;color:${tsbColor}">${fatigueDecayStr}</span>
-        <span style="font-size:12px;color:${TEXT_S}">to clear with easy training or rest</span>
+        <span style="font-size:12px;color:${TEXT_S}">to baseline</span>
       </div>`
     : '';
 
@@ -377,15 +347,53 @@ function getReadinessHTML(s: SimulatorState): string {
     </div>` : ''}
   `, 'rdn-card-recovery');
 
+  // Sleep History card — 14d rolling average, debt-adjusted
+  const sleepHistAvg = recoveryResult.sleepHistoryAvg;
+  const sleepHistScore = recoveryResult.sleepHistoryScore;
+  const sleepHistColor = sleepHistScore != null
+    ? (sleepHistScore >= 80 ? 'var(--c-ok)' : sleepHistScore >= 65 ? 'var(--c-ok-muted)' : sleepHistScore >= 50 ? 'var(--c-caution)' : 'var(--c-warn)')
+    : TEXT_S;
+  // Match Sleep detail view: use load-adjusted cumulative debt with exponential decay,
+  // not the simple 7-night bank. The bank feeds the recovery score; the card shows the
+  // same debt number the user sees when they tap through.
+  const cumulativeDebtSec = computeSleepDebt(
+    s.physiologyHistory ?? [],
+    buildDailySignalBTSS(s.wks ?? []),
+    s.athleteTier ?? 'recreational',
+    effectiveSleepTarget,
+  );
+  const debtHours = cumulativeDebtSec > 0 ? Math.round(cumulativeDebtSec / 3600 * 10) / 10 : 0;
+  const sleepHistCard = card(`
+    <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Sleep History</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+      <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;color:${sleepHistColor};line-height:1">${sleepHistScore != null ? sleepHistScore : '—'}</div>
+      ${sleepHistAvg != null ? `<div style="font-size:14px;color:${TEXT_S}">14d avg ${sleepHistAvg}${debtHours > 0 ? `, ${debtHours}h debt` : ''}</div>` : ''}
+    </div>
+    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${
+      sleepHistScore == null
+        ? 'Not enough sleep data yet. Needs at least 3 nights in the last 14 days.'
+        : debtHours >= 2 && sleepHistScore < 65
+          ? `Cumulative sleep debt of ${debtHours}h is impairing recovery. Duration deficit compounds even when individual night scores appear adequate.`
+          : debtHours >= 2
+            ? `Sleep quality scores are reasonable but ${debtHours}h of cumulative duration debt is accumulating. Prioritise sleep duration.`
+            : sleepHistScore >= 75
+              ? 'Sleep trend is consistent. No recovery concern from chronic sleep.'
+              : sleepHistScore >= 55
+                ? 'Sleep trend is slightly depressed. Minor effect on recovery capacity.'
+                : 'Sleep trend is poor. Cumulative sleep restriction impairs recovery and adaptation.'
+    }</div>
+  `, 'rdn-card-sleep-history');
+
   return `
     <style>
       #rdn-view { box-sizing:border-box; }
       #rdn-view *, #rdn-view *::before, #rdn-view *::after { box-sizing:inherit; }
-      @keyframes rdnFloatUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-      .rdn-fade { opacity:0; animation:rdnFloatUp 0.55s ease-out forwards; }
+      @keyframes rdnFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .rdn-fade { opacity:0; animation:rdnFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${skyAnimationCSS('rdn')}
     </style>
 
-    <div id="rdn-view" style="
+    <div id="rdn-view" data-readiness-label="${readiness.label}" style="
       position:relative;min-height:100vh;background:${APP_BG};
       font-family:var(--f);overflow-x:hidden;
     ">
@@ -414,24 +422,24 @@ function getReadinessHTML(s: SimulatorState): string {
         <!-- Ring -->
         <div class="rdn-fade" style="animation-delay:0.05s;display:flex;flex-direction:column;align-items:center;margin:12px 0 28px">
           <div style="
-            position:relative;width:160px;height:160px;
+            position:relative;width:220px;height:220px;
             display:flex;align-items:center;justify-content:center;
             background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);
             border-radius:50%;border:1px solid rgba(255,255,255,0.6);
             box-shadow:0 6px 40px -8px rgba(0,0,0,0.15);
           ">
-            <svg width="160" height="160" viewBox="0 0 130 130" style="position:absolute;inset:0">
-              <circle cx="65" cy="65" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="10"/>
-              <circle id="rdn-ring-circle" cx="65" cy="65" r="${RING_R}" fill="none"
-                stroke="${ringColor}" stroke-width="10" stroke-linecap="round"
+            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+              <circle id="rdn-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
+                stroke="${ringColor}" stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}"
                 stroke-dashoffset="${RING_C}"
                 data-target-offset="${targetOffset}"
-                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform:rotate(-90deg);transform-origin:50% 50%"
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
               />
             </svg>
             <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
-              <div style="font-size:42px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${ringColor}">${score}</div>
+              <div style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1;color:${ringColor}">${score}</div>
               <div style="font-size:12px;font-weight:600;color:${TEXT_M};margin-top:4px">${readiness.label}</div>
             </div>
           </div>
@@ -447,6 +455,7 @@ function getReadinessHTML(s: SimulatorState): string {
           ${freshCard}
           ${injuryCard}
           ${recoveryCard}
+          ${sleepHistCard}
           ${acwr.atl > 0 ? (() => {
             const rollingTSS = Math.round(acwr.atl);
             const chronicTSS = Math.round(acwr.ctl);
@@ -465,7 +474,17 @@ function getReadinessHTML(s: SimulatorState): string {
 
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Event wiring ──────────────────────────────────────────────────────────────
@@ -477,6 +496,9 @@ function wireReadinessHandlers(): void {
     const target = (circle as HTMLElement | null)?.dataset.targetOffset;
     if (circle && target) circle.style.strokeDashoffset = target;
   }, 50);
+
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
 
   // Back → home
   document.getElementById('rdn-back-btn')?.addEventListener('click', () => {
@@ -498,11 +520,16 @@ function wireReadinessHandlers(): void {
   });
 
   document.getElementById('rdn-card-strain')?.addEventListener('click', () => {
-    import('./strain-view').then(({ renderStrainView }) => renderStrainView());
+    const label = document.getElementById('rdn-view')?.dataset.readinessLabel ?? null;
+    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any));
   });
 
   document.getElementById('rdn-card-rolling-load')?.addEventListener('click', () => {
     import('./rolling-load-view').then(({ renderRollingLoadView }) => renderRollingLoadView());
+  });
+
+  document.getElementById('rdn-card-sleep-history')?.addEventListener('click', () => {
+    import('./sleep-view').then(({ renderSleepView }) => renderSleepView(undefined, undefined, undefined, () => renderReadinessView()));
   });
 
   // Sleep sync nudge — pull fresh physiology then re-render

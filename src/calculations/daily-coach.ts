@@ -18,10 +18,11 @@ import {
   getTrailingEffortScore,
   computeTodaySignalBTSS,
   computePlannedDaySignalBTSS,
+  REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
-import { getSleepInsight, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
+import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
 
@@ -70,6 +71,11 @@ export interface CoachSignals {
   injuryLocation: string | null;
   illnessActive: boolean;
   illnessSeverity: string | null;
+
+  // Athlete context
+  athleteTier: string | null;
+  recoveryScore: number | null;
+  acwrSafeUpper: number | null;
 
   // Plan context
   weekNumber: number;
@@ -149,9 +155,12 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
 
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
   const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(plannedWorkouts, d, baseMinPerKm) > 0).length || 4;
-  const perSessionAvg = (s.ctlBaseline ?? 0) / trainingDayCount;
-  const isRestDayOverreaching = isRestDay && todayTSS > 0 && perSessionAvg > 0 && todayTSS > perSessionAvg * 0.5;
+    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKm) > 0).length || 4;
+  // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
+  const plannedWeekTSS = [0,1,2,3,4,5,6]
+    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKm), 0);
+  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
+  const isRestDayOverreaching = isRestDay && todayTSS > 0 && perSessionAvg > 0 && todayTSS > perSessionAvg * REST_DAY_OVERREACH_RATIO;
 
   const strainPct = hasPlannedWorkout && todayTSS > 0 && plannedDayTSS > 0
     ? (todayTSS / plannedDayTSS) * 100 : 0;
@@ -198,11 +207,20 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   // ── Recovery metrics ──────────────────────────────────────────────────────
   const latestPhysio = physio.slice(-1)[0] ?? null;
-  const sleepScore: number | null = latestPhysio?.sleepScore ?? null;
-  const hrvRmssd: number | null = latestPhysio?.hrvRmssd ?? null;
-  const hrvAll = physio.map(p => p.hrvRmssd).filter((v): v is number => v != null);
-  const hrvPersonalAvg: number | null = hrvAll.length >= 3
-    ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length)
+  const latestWithSleep = physio.slice().reverse().find(p => p.sleepScore != null) ?? null;
+  const sleepScore: number | null = latestWithSleep?.sleepScore ?? null;
+  const latestWithHrv = physio.slice().reverse().find(p => p.hrvRmssd != null) ?? null;
+  const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
+  // 7-day avg vs 28-day baseline (matches recovery-view formula).
+  // Previous code used last-night vs all-time mean, causing the coach nudge
+  // to contradict the recovery card.
+  const hrv7 = physio.slice(-7).map(p => p.hrvRmssd).filter((v): v is number => v != null && v > 0);
+  const hrvAvg7d: number | null = hrv7.length > 0
+    ? hrv7.reduce((a, b) => a + b, 0) / hrv7.length
+    : null;
+  const baseline28Hrvs = physio.slice(-28).map(p => p.hrvRmssd).filter((v): v is number => v != null && v > 0);
+  const hrvPersonalAvg: number | null = baseline28Hrvs.length >= 3
+    ? Math.round(baseline28Hrvs.reduce((a, b) => a + b, 0) / baseline28Hrvs.length)
     : null;
 
   const sleepScores7 = physio.slice(-7).map(p => p.sleepScore).filter((v): v is number => v != null);
@@ -212,12 +230,17 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   const sleepTarget = s.sleepTargetSec ?? deriveSleepTarget(physio);
   const sleepBank = getSleepBank(physio, sleepTarget);
-  const sleepBankHours = sleepBank.nightsWithData >= 3
-    ? Math.round((sleepBank.bankSec / 3600) * 10) / 10
+  const dailyTSSByDate = buildDailySignalBTSS(wks);
+  const sleepDebtSec = sleepBank.nightsWithData >= 3
+    ? computeSleepDebt(physio, dailyTSSByDate, tier ?? 'recreational', sleepTarget)
+    : null;
+  const sleepBankHours = sleepDebtSec != null
+    ? -Math.round((sleepDebtSec / 3600) * 10) / 10
     : null;
 
   // ── Readiness ─────────────────────────────────────────────────────────────
-  const recoveryResult = computeRecoveryScore(physio);
+  const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
+  const recoveryResult = computeRecoveryScore(physio, { sleepDebtSec: sleepDebtForRecovery });
   const readiness = computeReadiness({
     tsb,
     acwr: acwr.ratio,
@@ -258,8 +281,16 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     : null;
 
   const trailingEffort = getTrailingEffortScore(wks, currentWeekIdx);
+  // Compute average HR effort from garminActuals
+  const _runTypes = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  const hrEffortVals = actuals
+    .filter(a => _runTypes.has(a.activityType ?? '') && a.hrEffortScore != null)
+    .map(a => a.hrEffortScore as number);
+  const avgHrEffort = hrEffortVals.length > 0
+    ? hrEffortVals.reduce((a, b) => a + b, 0) / hrEffortVals.length : null;
   const weekSignals = computeWeekSignals(
-    wk?.effortScore ?? trailingEffort ?? null,
+    wk?.rpeEffort ?? wk?.effortScore ?? trailingEffort ?? null,
+    avgHrEffort,
     tssPct,
     ctlDelta,
     avgHrDrift,
@@ -307,7 +338,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     stance = 'reduce';
   } else if (readiness.label === 'Manage Load') {
     stance = readiness.score < 50 ? 'reduce' : 'normal';
-  } else if (readiness.label === 'Ready to Push') {
+  } else if (readiness.label === 'Primed') {
     stance = 'push';
   } else {
     stance = 'normal';
@@ -337,7 +368,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
     sleepLastNight: sleepScore,
     sleepAvg7d,
-    hrv: hrvRmssd,
+    hrv: hrvAvg7d != null ? Math.round(hrvAvg7d) : hrvRmssd,
     hrvBaseline: hrvPersonalAvg,
     sleepBankHours,
 
@@ -351,6 +382,10 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     injuryLocation,
     illnessActive,
     illnessSeverity,
+
+    athleteTier: tier ?? null,
+    recoveryScore: recoveryResult.hasData && recoveryResult.score != null ? Math.round(recoveryResult.score) : null,
+    acwrSafeUpper: Math.round(acwr.safeUpper * 100) / 100,
 
     weekNumber: s.w,
     totalWeeks: s.tw,
@@ -457,15 +492,42 @@ function derivePrimaryMessage(
       : `HRV ${Math.abs(hrvPct!)}% below baseline. Keep effort low today.`;
   }
 
-  // Heavy sleep debt
-  if (sig.sleepBankHours != null && sig.sleepBankHours < -5) {
+  // Heavy sleep debt — only lead with this when recovery is the driving signal.
+  // When freshness or load safety is worse, defer to Tier 3 where it becomes secondary context.
+  const heavySleepDebt = sig.sleepBankHours != null && sig.sleepBankHours < -5;
+  if (heavySleepDebt && readiness.drivingSignal === 'recovery') {
     if (trained)
       return sessionHeavy
-        ? `${Math.abs(sig.sleepBankHours)}h sleep debt. Hard session won't produce full adaptation until sleep recovers.`
-        : `${Math.abs(sig.sleepBankHours)}h sleep debt. Light session today, prioritise sleep tonight.`;
+        ? `${Math.abs(sig.sleepBankHours!)}h sleep debt. Hard session won't produce full adaptation until sleep recovers.`
+        : `${Math.abs(sig.sleepBankHours!)}h sleep debt. Light session today, prioritise sleep tonight.`;
     return hard
-      ? `${Math.abs(sig.sleepBankHours)}h sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
-      : `${Math.abs(sig.sleepBankHours)}h sleep debt this week. Prioritise sleep.`;
+      ? `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
+      : `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. Prioritise sleep.`;
+  }
+
+  // Freshness-driven message when fitness is the biggest drag on readiness.
+  // Gate on readiness not being Primed (< 75) — aligns with the label bands.
+  if (readiness.drivingSignal === 'fitness' && sig.readinessScore < 75) {
+    const debtSuffix = heavySleepDebt ? ` ${Math.abs(sig.sleepBankHours!)}h sleep debt compounds recovery.` : '';
+    const fatigueLevel = sig.tsb <= -15 ? 'Fatigue is high' : sig.tsb <= -8 ? 'Fatigue is building' : 'Freshness is below normal';
+    if (trained)
+      return sessionHeavy
+        ? `${fatigueLevel}. Heavy session adds to accumulated load.${debtSuffix}`
+        : `${fatigueLevel}. Light session was the right call.${debtSuffix}`;
+    return hard
+      ? `${fatigueLevel}. Monitor effort on ${wn}. Back off if RPE feels high.${debtSuffix}`
+      : `${fatigueLevel}. Easy effort is appropriate today.${debtSuffix}`;
+  }
+
+  // Heavy sleep debt — fitness isn't the driver but sleep debt is significant
+  if (heavySleepDebt) {
+    if (trained)
+      return sessionHeavy
+        ? `${Math.abs(sig.sleepBankHours!)}h sleep debt. Hard session won't produce full adaptation until sleep recovers.`
+        : `${Math.abs(sig.sleepBankHours!)}h sleep debt. Light session today, prioritise sleep tonight.`;
+    return hard
+      ? `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
+      : `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. Prioritise sleep.`;
   }
 
   // ── Tier 3: Amber signals ──────────────────────────────────────────────

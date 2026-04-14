@@ -5,7 +5,7 @@
 /* ─── Mosaic Design System ───────────────────────────────────────────────── */
 
 :root {
-  --c-bg:           #FDFCF7;
+  --c-bg:           #FAF9F6;
   --c-surface:      #FFFFFF;
   --c-black:        #1A1A1A;
   --c-muted:        #555555;
@@ -17,6 +17,8 @@
 
   /* Status — ratio-based, never applied to full backgrounds */
   --c-ok:           #22C55E;
+  --c-ok-muted:     #6EC867;
+  --c-ok-strong:    #15803D;
   --c-caution:      #F59E0B;
   --c-warn:         #EF4444;
   --c-ok-bg:        #DCFCE7;
@@ -25,7 +27,7 @@
   --c-caution-text: #92400E;
 
   /* Radii */
-  --r-card:  6px;
+  --r-card:  16px;
   --r-pill:  100px;
 
   /* Font */
@@ -72,8 +74,9 @@ body {
 
 .m-card {
   background: var(--c-surface);
-  border: 1px solid var(--c-border);
+  border: none;
   border-radius: var(--r-card);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.06);
 }
 
 .m-card-strong {
@@ -125,7 +128,7 @@ body {
 /* ─── Buttons ────────────────────────────────────────────────────────────── */
 
 .m-btn-primary {
-  background: var(--c-accent);
+  background: var(--c-black);
   color: white;
   border: none;
   border-radius: var(--r-pill);
@@ -137,11 +140,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  box-shadow: 0 2px 8px rgba(78,159,229,0.32);
   letter-spacing: 0.01em;
   transition: background 0.15s;
 }
-.m-btn-primary:active { background: var(--c-accent-dark); }
+.m-btn-primary:active { background: #333; }
 
 .m-btn-secondary {
   background: transparent;

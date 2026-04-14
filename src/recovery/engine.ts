@@ -26,12 +26,13 @@ export interface RecoveryStatus {
 // ---------------------------------------------------------------------------
 
 const SLEEP_GREEN = 70;
-const SLEEP_RED = 30;
+const SLEEP_GOOD = 65;
+const SLEEP_RED = 50;
 const SLEEP_TREND_THRESHOLD = 50; // Days with sleep < 50 count as "low"
 
-const READINESS_GREEN = 60;
-const READINESS_ORANGE = 40;
-const READINESS_RED = 30;
+const READINESS_GREEN = 80;
+const READINESS_ORANGE = 50;
+const READINESS_RED = 40;
 
 // ---------------------------------------------------------------------------
 // Engine

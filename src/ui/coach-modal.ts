@@ -156,7 +156,7 @@ function buildCoachModalHtml(coach: CoachState): string {
 
   // Stance label
   const stanceMap: Record<string, string> = {
-    push: 'Ready to Push',
+    push: 'Primed',
     normal: 'On Track',
     reduce: 'Manage Load',
     rest: 'Rest',
@@ -179,9 +179,10 @@ function buildCoachModalHtml(coach: CoachState): string {
     : signals.acwrStatus === 'caution' ? 'Elevated' : 'Safe';
 
   const sleepColor = signals.sleepLastNight == null ? 'var(--c-faint)'
-    : signals.sleepLastNight >= 75 ? 'var(--c-ok)'
-    : signals.sleepLastNight >= 55 ? 'var(--c-caution)'
-    : 'var(--c-danger)';
+    : signals.sleepLastNight >= 80 ? 'var(--c-ok)'
+    : signals.sleepLastNight >= 65 ? 'var(--c-ok-muted)'
+    : signals.sleepLastNight >= 50 ? 'var(--c-caution)'
+    : 'var(--c-warn)';
   const sleepVal = signals.sleepLastNight != null ? String(signals.sleepLastNight) : '—';
   const sleepSub = signals.sleepAvg7d != null ? `7-day avg: ${signals.sleepAvg7d}` : '';
 

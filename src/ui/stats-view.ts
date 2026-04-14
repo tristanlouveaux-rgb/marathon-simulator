@@ -15,9 +15,11 @@ import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TI
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
+import { blendPredictions } from '@/calculations/predictions';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import { renderSleepView } from '@/ui/sleep-view';
+import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 
 // ---------------------------------------------------------------------------
@@ -36,6 +38,46 @@ function navigateTab(tab: TabId): void {
 }
 
 // ---------------------------------------------------------------------------
+// Chart design tokens (UX_PATTERNS § Charts)
+
+const CHART_STROKE = '#64748B';         // muted slate — line charts
+const CHART_FILL   = 'rgba(100,116,139,0.12)'; // area fill under line
+const CHART_FILL_LIGHT = 'rgba(100,116,139,0.06)'; // forecast/projected area fill
+const CHART_STROKE_DIM = 'rgba(100,116,139,0.5)'; // forecast/dashed lines
+
+/** Trigger draw-on animation for all .chart-draw paths in the DOM. */
+function animateChartDrawOn(): void {
+  requestAnimationFrame(() => {
+    document.querySelectorAll<SVGPathElement>('path.chart-draw').forEach(path => {
+      const len = path.getTotalLength();
+      path.style.strokeDasharray = String(len);
+      path.style.strokeDashoffset = String(len);
+      // Force reflow so the initial state is applied before transition
+      path.getBoundingClientRect();
+      path.style.transition = 'stroke-dashoffset 1.2s ease-out';
+      path.style.strokeDashoffset = '0';
+    });
+  });
+}
+
+/** Subtle horizontal grid lines for charts (UX_PATTERNS § Charts). */
+function chartGridLines(
+  maxVal: number,
+  yOf: (v: number) => number,
+  W: number,
+  padL = 0,
+  padR = 0,
+): string {
+  const step = maxVal <= 50 ? 10 : maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
+  const lines: string[] = [];
+  for (let v = step; v <= maxVal * 0.95; v += step) {
+    const gy = yOf(v).toFixed(1);
+    lines.push(`<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>`);
+  }
+  return lines.join('');
+}
+
+// ---------------------------------------------------------------------------
 // Data helpers
 
 function computeCurrentVDOT(s: SimulatorState): number {
@@ -44,6 +86,36 @@ function computeCurrentVDOT(s: SimulatorState): number {
     if (s.wks?.[i]) wg += s.wks[i].wkGain;
   }
   return s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+}
+
+/**
+ * Find the most recent running garminActual and return it as a RecentRun.
+ * Keeps s.rec fresh from actual Strava/Garmin data rather than stale onboarding
+ * input. No HR scaling — the blend engine already handles sub-race efforts via
+ * its PB/LT/VO2 weighting and recency decay.
+ */
+function deriveRecentRunFromActuals(s: SimulatorState): { d: number; t: number; weeksAgo: number } | null {
+  for (let wi = Math.min(s.w - 1, (s.wks?.length ?? 0) - 1); wi >= 0; wi--) {
+    const wk = s.wks?.[wi];
+    if (!wk) continue;
+    const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
+    if (!actuals) continue;
+
+    const runs: { distKm: number; durSec: number; startTime?: string }[] = [];
+    for (const val of Object.values(actuals)) {
+      const a = val as any;
+      const aType = (a.activityType || '').toUpperCase();
+      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
+      if (!a.distanceKm || a.distanceKm < 2 || !a.durationSec) continue;
+      runs.push({ distKm: a.distanceKm, durSec: a.durationSec, startTime: a.startTime });
+    }
+    if (runs.length === 0) continue;
+
+    runs.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''));
+    const best = runs[0];
+    return { d: best.distKm, t: best.durSec, weeksAgo: (s.w - 1) - wi };
+  }
+  return null;
 }
 
 function last7(
@@ -186,19 +258,11 @@ function getChartData(s: SimulatorState, range: ChartRange): {
 // SVG helpers
 
 /** Build a smooth SVG path through points as cubic bezier segments. */
+/** Sharp angular polyline path (no bezier smoothing). */
 function smoothAreaPath(pts: [number, number][]): string {
   if (pts.length === 0) return '';
-  if (pts.length === 1) return `M ${pts[0][0]} ${pts[0][1]}`;
-  let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  for (let i = 1; i < pts.length; i++) {
-    const p = pts[i - 1];
-    const c = pts[i];
-    const tension = 0.35;
-    const cp1x = p[0] + (c[0] - p[0]) * tension;
-    const cp2x = c[0] - (c[0] - p[0]) * tension;
-    d += ` C ${cp1x.toFixed(1)} ${p[1].toFixed(1)}, ${cp2x.toFixed(1)} ${c[1].toFixed(1)}, ${c[0].toFixed(1)} ${c[1].toFixed(1)}`;
-  }
-  return d;
+  if (pts.length === 1) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+  return `M ${pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ')}`;
 }
 
 /** Build week date labels for an N-point chart. */
@@ -219,7 +283,7 @@ function buildWeekLabels(n: number, labelStep = 1): string {
 }
 
 /** Empty-state placeholder for charts with insufficient data. */
-function chartEmptyState(height = 130): string {
+function chartEmptyState(height = 65): string {
   return `<div style="height:${height}px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:rgba(0,0,0,0.02);border-radius:10px">
     <div style="font-size:13px;color:var(--c-muted);text-align:center">Not enough data yet</div>
     <div style="font-size:11px;color:var(--c-faint);text-align:center">Needs at least 3 sessions</div>
@@ -625,8 +689,10 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
     (e: any) => e.date === today && e.source === 'manual',
   );
   const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
-  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestPhysio?.sleepScore ?? null;
-  const hrvRmssd: number | null = latestPhysio?.hrvRmssd ?? null;
+  const latestWithSleep = (s.physiologyHistory ?? []).slice().reverse().find(p => p.sleepScore != null);
+  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestWithSleep?.sleepScore ?? null;
+  const latestWithHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null);
+  const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
   const hrvAll = (s.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
   const hrvPersonalAvg: number | null = hrvAll.length >= 3
     ? Math.round(hrvAll.reduce((a: number, b: number) => a + b, 0) / hrvAll.length)
@@ -634,7 +700,8 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
 
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
-  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? []);
+  const sleepDebtForRecovery2 = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
+  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? [], { sleepDebtSec: sleepDebtForRecovery2 });
   const readiness = computeReadiness({
     tsb, acwr: acwr.ratio, ctlNow,
     sleepScore, hrvRmssd,
@@ -687,14 +754,26 @@ function buildSummarySection(s: SimulatorState): string {
   // Forecast times (race mode only)
   let forecastRows = '';
   if (isRaceMode && vdot >= 20) {
+    const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
+    const liveRec2 = deriveRecentRunFromActuals(s) ?? s.rec ?? null;
     const distances = [
-      { label: 'Marathon', km: 42.195 },
-      { label: 'Half',     km: 21.0975 },
-      { label: '10K',      km: 10 },
-      { label: '5K',       km: 5 },
+      { label: 'Marathon', dist: 42195, km: 42.195 },
+      { label: 'Half',     dist: 21097, km: 21.0975 },
+      { label: '10K',      dist: 10000, km: 10 },
+      { label: '5K',       dist: 5000,  km: 5 },
     ];
     forecastRows = distances.map(d => {
-      const timeSec = vt(d.km, vdot);
+      let timeSec: number;
+      if (hasBlendInputs) {
+        const blended = blendPredictions(
+          d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
+          s.b ?? 1.06, s.typ ?? 'Balanced', liveRec2,
+          s.athleteTier ?? undefined,
+        );
+        timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
+      } else {
+        timeSec = vt(d.km, vdot);
+      }
       return `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border)">
           <span style="font-size:13px;color:var(--c-muted)">${d.label}</span>
@@ -708,7 +787,8 @@ function buildSummarySection(s: SimulatorState): string {
   return `
     <div style="padding:0 18px 18px">
       <div class="m-card" style="padding:16px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Race Predictions</div>
+        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Current Race Estimates</div>
+        <div style="font-size:10px;color:var(--c-faint);margin-bottom:6px">Estimated finish times if racing today</div>
         ${forecastRows}
       </div>
     </div>`;
@@ -731,10 +811,6 @@ function buildStatsSummary(s: SimulatorState): string {
         <div style="height:1px;background:var(--c-border)"></div>
       </div>
       ${buildFitnessCard_Opening(s)}
-      <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
-        <div style="height:1px;background:var(--c-border)"></div>
-      </div>
-      ${buildReadinessCard_Opening(s)}
       ${buildSummarySection(s)}
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
@@ -816,14 +892,12 @@ function buildLoadLineChart(s: SimulatorState, range: ChartRange, cssClass: stri
   const { tss, histWeekCount } = data;
   const n = tss.length;
 
-  if (n < 3 || tss.every(v => v === 0)) return chartEmptyState(155);
+  if (n < 3 || tss.every(v => v === 0)) return chartEmptyState(75);
 
-  const W = 320, H = 130, padL = 6, padR = 6;
+  const W = 320, H = 65, padL = 6, padR = 6;
   const usableW = W - padL - padR;
 
-  const baseline = s.ctlBaseline ?? null;
-  const showRefLines = !!baseline && histWeekCount >= 4;
-  const maxVal = Math.max(...tss, showRefLines ? (baseline ?? 0) * 1.25 : 0, 1) * 1.1;
+  const maxVal = Math.max(...tss, 1) * 1.1;
 
   const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
   const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
@@ -832,33 +906,23 @@ function buildLoadLineChart(s: SimulatorState, range: ChartRange, cssClass: stri
   const topPath = smoothAreaPath(pts);
   const areaPath = `${topPath} L ${xOf(n-1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
-  let refLines = '';
-  if (showRefLines) {
-    const by = yOf(baseline!);
-    const ey = yOf(baseline! * 1.2);
-    refLines = `
-      <line x1="${padL}" y1="${by.toFixed(0)}" x2="${W - padR}" y2="${by.toFixed(0)}" stroke="rgba(0,0,0,0.18)" stroke-width="0.8" stroke-dasharray="3 3"/>
-      <line x1="${padL}" y1="${ey.toFixed(0)}" x2="${W - padR}" y2="${ey.toFixed(0)}" stroke="rgba(245,158,11,0.4)" stroke-width="0.8" stroke-dasharray="3 3"/>`;
-  }
-
   const tickStep = maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
-    const topPx = yOf(v).toFixed(1);
-    yAxisHtml.push(`<span style="position:absolute;top:${topPx}px;right:4px;transform:translateY(-50%);font-size:8px;color:rgba(0,0,0,0.25);line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
   }
 
   const labelStep = n > 20 ? 4 : n > 12 ? 2 : 1;
   const labels = buildWeekLabels(n, labelStep);
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-        ${refLines}
-        <path d="${areaPath}" fill="rgba(99,149,255,0.18)" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="rgba(99,149,255,0.35)" stroke-width="1.5"/>
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
+        <path d="${areaPath}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${yAxisHtml.join('')}</div>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
@@ -869,7 +933,7 @@ function buildForecastLoadChart(s: SimulatorState): string {
   const currentWeekIdx = (s.w ?? 1) - 1;
   const futureWks = wks.slice(currentWeekIdx, currentWeekIdx + 8);
 
-  if (futureWks.length === 0) return chartEmptyState(155);
+  if (futureWks.length === 0) return chartEmptyState(75);
 
   // Build phase groups for weekInPhase context
   const phaseGroups: { phase: string; start: number; end: number }[] = [];
@@ -914,7 +978,7 @@ function buildForecastLoadChart(s: SimulatorState): string {
   const N = allTSS.length;
   const splitIdx = histN - 1; // last historical point = first forecast point
 
-  const W = 320, H = 130, padL = 6, padR = 6;
+  const W = 320, H = 65, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...allTSS, 1) * 1.1;
 
@@ -937,7 +1001,7 @@ function buildForecastLoadChart(s: SimulatorState): string {
   const tickStep = maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
-    yAxisHtml.push(`<span style="position:absolute;top:${yOf(v).toFixed(1)}px;right:4px;transform:translateY(-50%);font-size:8px;color:rgba(0,0,0,0.25);line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
   }
 
   // Phase labels: show at each phase change (first week of a new phase)
@@ -968,14 +1032,15 @@ function buildForecastLoadChart(s: SimulatorState): string {
   }).join('');
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-        <path d="${fAreaPath}" fill="rgba(99,149,255,0.07)" stroke="none"/>
-        <path d="${histArea}" fill="rgba(99,149,255,0.18)" stroke="none"/>
-        <path d="${histTop}" fill="none" stroke="rgba(99,149,255,0.35)" stroke-width="1.5"/>
-        <path d="${fSmooth}" fill="none" stroke="rgba(99,149,255,0.25)" stroke-width="1.5"/>
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
+        <path d="${fAreaPath}" fill="${CHART_FILL_LIGHT}" stroke="none"/>
+        <path d="${histArea}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${histTop}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="${fSmooth}" fill="none" stroke="${CHART_STROKE_DIM}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${yAxisHtml.join('')}${phaseLabelsHtml}</div>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}${phaseLabelsHtml}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${xLabels}</div>
     </div>`;
 }
@@ -986,7 +1051,7 @@ function buildForecastKmChart(s: SimulatorState): string {
   const currentWeekIdx = (s.w ?? 1) - 1;
   const futureWks = wks.slice(currentWeekIdx, currentWeekIdx + 8);
 
-  if (futureWks.length === 0) return chartEmptyState(110);
+  if (futureWks.length === 0) return chartEmptyState(55);
 
   // Phase context helper (same as in buildForecastLoadChart)
   const phaseGroups: { phase: string; start: number; end: number }[] = [];
@@ -1020,7 +1085,7 @@ function buildForecastKmChart(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
   const display = unitPref === 'mi' ? allKm.map(v => v * 0.621371) : allKm;
 
-  const W = 320, H = 110, padL = 6, padR = 6;
+  const W = 320, H = 55, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...display, 1) * 1.1;
 
@@ -1042,7 +1107,7 @@ function buildForecastKmChart(s: SimulatorState): string {
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
     const label = unitPref === 'mi' ? `${Math.round(v)}mi` : `${Math.round(v)}`;
-    yAxisHtml.push(`<span style="position:absolute;top:${yOf(v).toFixed(1)}px;right:4px;transform:translateY(-50%);font-size:8px;color:rgba(0,0,0,0.25);line-height:1;font-variant-numeric:tabular-nums">${label}</span>`);
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${label}</span>`);
   }
 
   // Phase labels
@@ -1072,14 +1137,15 @@ function buildForecastKmChart(s: SimulatorState): string {
   }).join('');
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-        <path d="${fAreaPath}" fill="rgba(99,149,255,0.07)" stroke="none"/>
-        <path d="${histArea}" fill="rgba(99,149,255,0.18)" stroke="none"/>
-        <path d="${histTop}" fill="none" stroke="rgba(99,149,255,0.35)" stroke-width="1.5"/>
-        <path d="${fSmooth}" fill="none" stroke="rgba(99,149,255,0.25)" stroke-width="1.5"/>
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
+        <path d="${fAreaPath}" fill="${CHART_FILL_LIGHT}" stroke="none"/>
+        <path d="${histArea}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${histTop}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="${fSmooth}" fill="none" stroke="${CHART_STROKE_DIM}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${yAxisHtml.join('')}${phaseLabelsHtml}</div>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}${phaseLabelsHtml}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${xLabels}</div>
     </div>`;
 }
@@ -1090,11 +1156,11 @@ function buildRunDistanceLineChart(s: SimulatorState, range: ChartRange): string
   const { km } = data;
   const n = km.length;
 
-  if (n < 3 || km.every(v => v === 0)) return chartEmptyState(110);
+  if (n < 3 || km.every(v => v === 0)) return chartEmptyState(55);
 
   const unitPref = s.unitPref ?? 'km';
   const displayKm = unitPref === 'mi' ? km.map(v => v * 0.621371) : km;
-  const W = 320, H = 100, padL = 6, padR = 6;
+  const W = 320, H = 50, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...displayKm, 1) * 1.15;
 
@@ -1105,15 +1171,24 @@ function buildRunDistanceLineChart(s: SimulatorState, range: ChartRange): string
   const topPath = smoothAreaPath(pts);
   const areaPath = `${topPath} L ${xOf(n-1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
+  // Y-axis labels
+  const tickStep = maxVal <= 20 ? 5 : maxVal <= 50 ? 10 : maxVal <= 100 ? 20 : 25;
+  const yAxisHtml: string[] = [];
+  for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
+  }
+
   const labelStep = n > 20 ? 4 : n > 12 ? 2 : 1;
   const labels = buildWeekLabels(n, labelStep);
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-        <path d="${areaPath}" fill="rgba(99,149,255,0.18)" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="rgba(99,149,255,0.35)" stroke-width="1.5"/>
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
+        <path d="${areaPath}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
@@ -1121,15 +1196,15 @@ function buildRunDistanceLineChart(s: SimulatorState, range: ChartRange): string
 /** CTL line chart (Signal A, daily-equivalent). */
 function buildCTLLineChart(s: SimulatorState, range: ChartRange): string {
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
-  if (metrics.length < 3) return chartEmptyState(110);
+  if (metrics.length < 3) return chartEmptyState(55);
 
   const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
   const sliced = sliceCount !== undefined ? metrics.slice(-sliceCount) : metrics;
   const n = sliced.length;
-  if (n < 3) return chartEmptyState(110);
+  if (n < 3) return chartEmptyState(55);
 
   const ctlVals = sliced.map(m => m.ctl / 7); // daily-equivalent
-  const W = 320, H = 100, padL = 6, padR = 6;
+  const W = 320, H = 50, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...ctlVals, 1) * 1.2;
 
@@ -1145,17 +1220,26 @@ function buildCTLLineChart(s: SimulatorState, range: ChartRange): string {
   const nowX = xOf(n - 1);
   const nowLine = `<line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="rgba(52,199,89,0.15)" stroke-width="2"/>`;
 
+  // Y-axis labels
+  const tickStep = maxVal <= 30 ? 10 : maxVal <= 60 ? 15 : maxVal <= 120 ? 30 : 50;
+  const yAxisHtml: string[] = [];
+  for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
+  }
+
   const labelStep = n > 20 ? 4 : n > 12 ? 2 : 1;
   const labels = buildWeekLabels(n, labelStep);
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
         <path d="${areaPath}" fill="rgba(52,199,89,0.15)" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="rgba(52,199,89,0.80)" stroke-width="1.5"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="rgba(52,199,89,0.80)" stroke-width="1.5" stroke-linejoin="round"/>
         ${nowLine}
         ${dots}
       </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
@@ -1172,6 +1256,11 @@ function buildProgressDetailPage(s: SimulatorState): string {
   let totalCalories = 0;
   let caloriesTracked = false;
   let totalLoad = 0;
+  // PB tracking: fastest elapsed time for runs covering at least 5k, 10k, 21.1k
+  let fastest5kSec = Infinity;
+  let fastest10kSec = Infinity;
+  let fastestHalfSec = Infinity;
+  const allWks = s.wks ?? [];
   for (const wk of completedWks) {
     const seenIds = new Set<string>();
     for (const actual of Object.values(wk.garminActuals ?? {})) {
@@ -1182,6 +1271,12 @@ function buildProgressDetailPage(s: SimulatorState): string {
         totalRunKm += actual.distanceKm;
         totalRuns++;
         longestRunKm = Math.max(longestRunKm, actual.distanceKm);
+        // PB: use avg pace to estimate time for standard distances
+        if (actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0) {
+          if (actual.distanceKm >= 5) fastest5kSec = Math.min(fastest5kSec, 5 * actual.avgPaceSecKm);
+          if (actual.distanceKm >= 10) fastest10kSec = Math.min(fastest10kSec, 10 * actual.avgPaceSecKm);
+          if (actual.distanceKm >= 21.0975) fastestHalfSec = Math.min(fastestHalfSec, 21.0975 * actual.avgPaceSecKm);
+        }
       }
       totalTimeSec += actual.durationSec;
       if (actual.calories != null && actual.calories > 0) {
@@ -1191,13 +1286,37 @@ function buildProgressDetailPage(s: SimulatorState): string {
     }
     totalLoad += computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
   }
+  // Also scan current week for PBs and totals
+  const currentWk = allWks[(s.w ?? 1) - 1];
+  if (currentWk) {
+    const seenIds = new Set<string>();
+    for (const actual of Object.values(currentWk.garminActuals ?? {})) {
+      if (actual.garminId && seenIds.has(actual.garminId)) continue;
+      if (actual.garminId) seenIds.add(actual.garminId);
+      const isRun = !actual.displayName || !!actual.workoutName;
+      if (isRun && actual.distanceKm > 0 && actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0) {
+        if (actual.distanceKm >= 5) fastest5kSec = Math.min(fastest5kSec, 5 * actual.avgPaceSecKm);
+        if (actual.distanceKm >= 10) fastest10kSec = Math.min(fastest10kSec, 10 * actual.avgPaceSecKm);
+        if (actual.distanceKm >= 21.0975) fastestHalfSec = Math.min(fastestHalfSec, 21.0975 * actual.avgPaceSecKm);
+      }
+    }
+  }
   const weeksCompleted = completedWks.length;
   const avgKmWeek = weeksCompleted > 0 ? totalRunKm / weeksCompleted : 0;
-  const plannedRuns = (s.rw ?? 3) * weeksCompleted;
-  const adhesionPct = plannedRuns > 0 ? Math.min(100, Math.round((totalRuns / plannedRuns) * 100)) : 0;
+  const adherence = computePlanAdherence(s);
+  const adhesionPct = adherence.pct ?? 0;
   const totalHours = Math.floor(totalTimeSec / 3600);
   const totalMins  = Math.round((totalTimeSec % 3600) / 60);
   const timeStr = totalHours > 0 ? `${totalHours}h ${totalMins}m` : `${totalMins}m`;
+  // Format elapsed time as H:MM:SS or MM:SS
+  const fmtElapsed = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s2 = Math.round(sec % 60);
+    const mm = String(m).padStart(2, '0');
+    const ss = String(s2).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+  };
   const statRow = (label: string, value: string) => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--c-border)">
       <span style="font-size:13px;color:var(--c-muted)">${label}</span>
@@ -1212,10 +1331,14 @@ function buildProgressDetailPage(s: SimulatorState): string {
 
         <!-- Stats table -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
+          ${statRow('Total Distance', totalRunKm > 0 ? formatKm(totalRunKm, unitPref) : '—')}
           ${statRow('Total Runs', String(totalRuns))}
           ${statRow('Avg / week', formatKm(avgKmWeek, unitPref))}
           ${statRow('Longest Run', longestRunKm > 0 ? formatKm(longestRunKm, unitPref) : '—')}
-          ${statRow('Plan Adherence', plannedRuns > 0 ? `${adhesionPct}%` : '—')}
+          ${fastest5kSec < Infinity ? statRow('Fastest 5k', fmtElapsed(fastest5kSec)) : ''}
+          ${fastest10kSec < Infinity ? statRow('Fastest 10k', fmtElapsed(fastest10kSec)) : ''}
+          ${fastestHalfSec < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(fastestHalfSec)) : ''}
+          ${statRow('Plan Adherence', adherence.pct != null ? `${adhesionPct}%` : '—')}
           ${statRow('Time Active', totalTimeSec > 0 ? timeStr : '—')}
           ${caloriesTracked ? statRow('Calories Burnt', `${Math.round(totalCalories).toLocaleString()} kcal`) : ''}
           <div id="stats-progress-load-row" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
@@ -1541,13 +1664,13 @@ function getVO2History(s: SimulatorState): Array<{ date: string; value: number }
 /** Generic line chart for a dated value series (VO2 Max or VDOT). */
 function buildVO2LineChart(data: Array<{ date: string; value: number }>): string {
   const n = data.length;
-  if (n < 2) return chartEmptyState(110);
+  if (n < 2) return chartEmptyState(55);
 
   const vals = data.map(d => d.value);
   const lo = Math.min(...vals) - 1;
   const hi = Math.max(...vals) + 1;
   const range2 = hi - lo || 1;
-  const W = 320, H = 100;
+  const W = 320, H = 50;
   const xOf = (i: number) => (i / (n - 1)) * W;
   const yOf = (v: number) => H - Math.max(2, ((v - lo) / range2) * (H - 8));
   const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
@@ -1574,9 +1697,9 @@ function buildVO2LineChart(data: Array<{ date: string; value: number }>): string
 
   return `
     <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H + 16}" width="100%" height="${H + 16}" preserveAspectRatio="none" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H + 16}" width="100%" style="display:block;overflow:visible">
         <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="${strokeColor}" stroke-width="2"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="2"/>
         ${dots}
         <text x="0" y="${H + 14}" font-size="9" fill="var(--c-faint)">${firstDate}</text>
         <text x="${W}" y="${H + 14}" font-size="9" fill="var(--c-faint)" text-anchor="end">${lastDate}</text>
@@ -1706,7 +1829,7 @@ function buildCTLMetricPage(s: SimulatorState): string {
   const n = vals.length;
   const currentCtl = vals[n - 1] ?? 0;
 
-  const W = 320, H = 130, padL = 6, padR = 6;
+  const W = 320, H = 65, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...vals, 1) * 1.15;
   const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
@@ -1718,7 +1841,7 @@ function buildCTLMetricPage(s: SimulatorState): string {
   const tickStep = maxVal <= 50 ? 10 : maxVal <= 100 ? 25 : 50;
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
-    yAxisHtml.push(`<span style="position:absolute;top:${yOf(v).toFixed(1)}px;right:4px;transform:translateY(-50%);font-size:8px;color:rgba(0,0,0,0.25);line-height:1">${v}</span>`);
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1">${v}</span>`);
   }
 
   const labelStep = n > 20 ? 4 : n > 12 ? 2 : 1;
@@ -1731,12 +1854,13 @@ function buildCTLMetricPage(s: SimulatorState): string {
         <div style="margin-bottom:4px;font-size:28px;font-weight:300;color:var(--c-black)">${currentCtl}</div>
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">Daily-equivalent CTL · 42-day running average</div>
         <div class="m-card" style="padding:16px">
-          <div style="position:relative">
-            <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
-              <path d="${areaPath}" fill="rgba(99,149,255,0.18)" stroke="none"/>
-              <path d="${topPath}" fill="none" stroke="rgba(99,149,255,0.85)" stroke-width="1.5"/>
+          <div style="position:relative;padding-right:36px">
+            <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+              ${chartGridLines(maxVal, yOf, W, padL, padR)}
+              <path d="${areaPath}" fill="${CHART_FILL}" stroke="none"/>
+              <path d="${topPath}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
             </svg>
-            <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${yAxisHtml.join('')}</div>
+            <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
             <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
           </div>
         </div>
@@ -1809,7 +1933,7 @@ function buildLTMetricPage(s: SimulatorState): string {
   const lo = Math.min(...vals) - 5;
   const hi = Math.max(...vals) + 5;
   const range2 = hi - lo || 1;
-  const W = 320, H = 120;
+  const W = 320, H = 60;
   const xOf = (i: number) => (i / (n - 1)) * W;
   const yOf = (v: number) => H - Math.max(2, ((hi - v) / range2) * (H - 8)); // inverted: lower pace = higher on chart
   const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
@@ -1836,9 +1960,9 @@ function buildLTMetricPage(s: SimulatorState): string {
         </div>
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">Lactate threshold pace · from Garmin</div>
         <div class="m-card" style="padding:16px">
-          <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+          <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
             <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-            <path d="${topPath}" fill="none" stroke="${strokeColor}" stroke-width="1.5"/>
+            <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round"/>
           </svg>
           <div style="display:flex;justify-content:space-between;padding:3px 0 0">
             <span style="font-size:9px;color:var(--c-faint)">${firstDate}</span>
@@ -1902,7 +2026,8 @@ function buildRaceProgressDetail(s: SimulatorState): string {
     </div>`;
 }
 
-/** Forecast times card (standalone). */
+/** Forecast times card (standalone). Uses blendPredictions (LT, VO2, PB, recent
+ *  run) when available; falls back to pure VDOT-to-time when no watch data. */
 function buildForecastTimesCard(s: SimulatorState): string {
   const vdot = computeCurrentVDOT(s);
   if (!vdot || vdot < 20) return '';
@@ -1915,15 +2040,29 @@ function buildForecastTimesCard(s: SimulatorState): string {
     return `${m}:${String(sc).padStart(2,'0')}`;
   };
 
+  const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
+  // Use HR-scaled recent run from garminActuals instead of stale onboarding rec
+  const liveRec = deriveRecentRunFromActuals(s) ?? s.rec ?? null;
+
   const distances = [
-    { label: 'Marathon', km: 42.195 },
-    { label: 'Half',     km: 21.0975 },
-    { label: '10K',      km: 10 },
-    { label: '5K',       km: 5 },
+    { label: 'Marathon', dist: 42195, km: 42.195 },
+    { label: 'Half',     dist: 21097, km: 21.0975 },
+    { label: '10K',      dist: 10000, km: 10 },
+    { label: '5K',       dist: 5000,  km: 5 },
   ];
 
   const rows = distances.map((d, i) => {
-    const timeSec = vt(d.km, vdot);
+    let timeSec: number;
+    if (hasBlendInputs) {
+      const blended = blendPredictions(
+        d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
+        s.b ?? 1.06, s.typ ?? 'Balanced', liveRec,
+        s.athleteTier ?? undefined,
+      );
+      timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
+    } else {
+      timeSec = vt(d.km, vdot);
+    }
     const isLast = i === distances.length - 1;
     return `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${isLast ? '' : 'border-bottom:1px solid var(--c-border)'}">
@@ -1934,7 +2073,8 @@ function buildForecastTimesCard(s: SimulatorState): string {
 
   return `
     <div class="m-card" style="padding:14px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Race Predictions</div>
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:2px">Current Race Estimates</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:8px">Estimated finish times if racing today</div>
       ${rows}
     </div>`;
 }
@@ -1972,15 +2112,15 @@ function buildPacesCard(s: SimulatorState, unitPref: UnitPref): string {
 /** TSB trend line chart. */
 function buildTSBLineChart(s: SimulatorState, range: ChartRange): string {
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
-  if (metrics.length < 3) return chartEmptyState(130);
+  if (metrics.length < 3) return chartEmptyState(65);
 
   const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
   const sliced = sliceCount !== undefined ? metrics.slice(-sliceCount) : metrics;
   const n = sliced.length;
-  if (n < 3) return chartEmptyState(130);
+  if (n < 3) return chartEmptyState(65);
 
   const tsbVals = sliced.map(m => m.tsb);
-  const W = 320, H = 120, padL = 6, padR = 6;
+  const W = 320, H = 60, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const rawMin = Math.min(...tsbVals);
   const rawMax = Math.max(...tsbVals);
@@ -2004,18 +2144,26 @@ function buildTSBLineChart(s: SimulatorState, range: ChartRange): string {
   const labelStep = n > 12 ? 2 : 1;
   const labels = buildWeekLabels(n, labelStep);
 
+  // Y-axis labels at key reference values
+  const tsbRefVals = [-10, 0, 15].filter(v => v >= minV && v <= maxV);
+  const tsbYAxisHtml = tsbRefVals.map(v => {
+    const label = v > 0 ? `+${v}` : String(v);
+    return `<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${label}</span>`;
+  }).join('');
+
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
         <!-- Zone background bands -->
         <rect x="${padL}" y="${y15}" width="${usableW}" height="${(Number(zeroY) - Number(y15)).toFixed(1)}" fill="rgba(52,199,89,0.07)"/>
         <rect x="${padL}" y="${zeroY}" width="${usableW}" height="${(Number(yn10) - Number(zeroY)).toFixed(1)}" fill="rgba(78,159,229,0.06)"/>
         <!-- Zero reference line only -->
         <line x1="${padL}" y1="${zeroY}" x2="${W - padR}" y2="${zeroY}" stroke="rgba(0,0,0,0.12)" stroke-width="0.8" stroke-dasharray="3 3"/>
         <!-- Area fill + line -->
-        <path d="${areaPath}" fill="rgba(99,149,255,0.10)" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="rgba(99,149,255,0.85)" stroke-width="1.5"/>
+        <path d="${areaPath}" fill="${CHART_FILL}" stroke="none"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${CHART_STROKE}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${tsbYAxisHtml}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
@@ -2027,7 +2175,7 @@ function buildPhysioAreaChart(
 ): string {
   const nums = entries.map(e => e.value).filter((v): v is number => v != null);
   if (nums.length < 2) return '';
-  const W = 320, H = 56;
+  const W = 320, H = 28;
   const lo = Math.min(...nums);
   const hi = Math.max(...nums);
   const pad = Math.max((hi - lo) * 0.20, 2);
@@ -2046,9 +2194,9 @@ function buildPhysioAreaChart(
   ).join('');
   return `
     <div style="margin-top:6px">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
         <path d="${areaPath}" fill="${color}" fill-opacity="0.12" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="${topPath}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
       <div style="display:flex;justify-content:space-between;padding:2px 0 0">${dayLabels}</div>
     </div>`;
@@ -2066,7 +2214,7 @@ function buildPhysioChartWithBaseline(
 ): string {
   const nums = entries.map(e => e.value).filter((v): v is number => v != null);
   if (nums.length < 2) return '';
-  const W = 320, H = 72;
+  const W = 320, H = 36;
   const allVals = baselineValue != null ? [...nums, baselineValue] : nums;
   const lo = Math.min(...allVals);
   const hi = Math.max(...allVals);
@@ -2094,10 +2242,10 @@ function buildPhysioChartWithBaseline(
 
   return `
     <div style="margin-top:8px">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
         ${baselineLine}
         <path d="${areaPath}" fill="${color}" fill-opacity="0.10" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="${topPath}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
       <div style="display:flex;justify-content:space-between;padding:2px 0 0">${dayLabels}</div>
     </div>`;
@@ -2107,13 +2255,13 @@ function buildPhysioChartWithBaseline(
 function buildACWRTrendChart(s: SimulatorState): string {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
-  if (metrics.length < 3) return chartEmptyState(110);
+  if (metrics.length < 3) return chartEmptyState(55);
   const sliced = metrics.slice(-8);
   const n = sliced.length;
-  if (n < 3) return chartEmptyState(110);
+  if (n < 3) return chartEmptyState(55);
 
   const acwrVals = sliced.map(m => m.ctl > 0 ? Math.min(2.5, m.atl / m.ctl) : 0);
-  const W = 320, H = 110, padL = 6, padR = 6;
+  const W = 320, H = 55, padL = 6, padR = 6;
   const usableW = W - padL - padR;
   const maxVal = Math.max(...acwrVals, 1.6) * 1.1;
 
@@ -2125,31 +2273,34 @@ function buildACWRTrendChart(s: SimulatorState): string {
   const areaPath = `${topPath} L ${xOf(n-1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
   const lastV = acwrVals[n - 1];
-  const lineColor = lastV > 1.5 ? 'rgba(255,69,58,0.80)' : lastV > 1.3 ? 'rgba(255,159,10,0.80)' : 'rgba(99,149,255,0.85)';
-  const areaColor = lastV > 1.5 ? 'rgba(255,69,58,0.10)' : lastV > 1.3 ? 'rgba(255,159,10,0.10)' : 'rgba(99,149,255,0.10)';
+  const lineColor = lastV > 1.5 ? 'rgba(255,69,58,0.80)' : lastV > 1.3 ? 'rgba(255,159,10,0.80)' : CHART_STROKE;
+  const areaColor = lastV > 1.5 ? 'rgba(255,69,58,0.10)' : lastV > 1.3 ? 'rgba(255,159,10,0.10)' : CHART_FILL;
 
   const refs: Array<{ v: number; color: string }> = [
     { v: 1.3, color: 'rgba(255,159,10,0.40)' },
     { v: 1.5, color: 'rgba(255,69,58,0.40)'  },
   ];
 
-  // Reference lines only — no labels (spectrum bar above already explains zones)
   const refLinesSvg = refs.filter(r => yOf(r.v) > 4 && yOf(r.v) < H - 4).map(r => {
     const ry = yOf(r.v).toFixed(1);
     return `<line x1="${padL}" y1="${ry}" x2="${W-padR}" y2="${ry}" stroke="${r.color}" stroke-width="0.8" stroke-dasharray="3 3"/>`;
   }).join('');
-  const refLabelsHtml = '';
+  // Y-axis labels at reference thresholds
+  const acwrYAxisHtml = refs.filter(r => yOf(r.v) > 4 && yOf(r.v) < H - 4).map(r =>
+    `<span style="position:absolute;top:${(yOf(r.v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:${r.color.replace(',0.40)', ',0.8)')};line-height:1;font-variant-numeric:tabular-nums">${r.v}</span>`
+  ).join('');
 
   const labels = buildWeekLabels(n, n > 12 ? 2 : 1);
 
   return `
-    <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
         ${refLinesSvg}
         <path d="${areaPath}" fill="${areaColor}" stroke="none"/>
-        <path d="${topPath}" fill="none" stroke="${lineColor}" stroke-width="1.5"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${lineColor}" stroke-width="1.5" stroke-linejoin="round"/>
       </svg>
-      <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${refLabelsHtml}</div>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${acwrYAxisHtml}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
@@ -2343,10 +2494,10 @@ function buildMiniVO2Sparkline(data: Array<{ date: string; value: number }>): st
   const color = lastVal >= prevVal - 0.05 ? 'rgba(52,199,89,' : 'rgba(255,69,58,';
 
   return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible;margin:10px 0 4px">
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;margin:10px 0 4px">
       <path d="${areaPath}" fill="${color}0.15)" stroke="none"/>
       <path d="${topPath}" fill="none" stroke="${color}0.80)" stroke-width="1.8"/>
-      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5"/>
+      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
     </svg>`;
 }
 
@@ -2368,10 +2519,10 @@ function buildMiniVdotSparkline(history: Array<{ week: number; vdot: number; dat
   const color = lastVal >= prevVal - 0.05 ? 'rgba(52,199,89,' : 'rgba(255,69,58,';
 
   return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible;margin:10px 0 4px">
+    <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;margin:10px 0 4px">
       <path d="${areaPath}" fill="${color}0.15)" stroke="none"/>
       <path d="${topPath}" fill="none" stroke="${color}0.80)" stroke-width="1.8"/>
-      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5"/>
+      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
     </svg>`;
 }
 
@@ -2466,7 +2617,7 @@ function buildDailyLineChartGap(
   }
   const lastVal = lastValidIdx >= 0 ? entries[lastValidIdx].value! : null;
   const lastDot = lastVal != null
-    ? `<circle cx="${xOf(lastValidIdx).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3.5" fill="${color}" stroke="white" stroke-width="1.5"/>`
+    ? `<circle cx="${xOf(lastValidIdx).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3.5" fill="${color}" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>`
     : '';
 
   const gapMarks = entries.map((e, i) => {
@@ -2476,8 +2627,8 @@ function buildDailyLineChartGap(
   }).join('');
 
   const yAxisHtml = `
-    <span style="position:absolute;top:${yOf(hi).toFixed(1)}px;right:2px;transform:translateY(-50%);font-size:7px;color:rgba(0,0,0,0.22);line-height:1;font-variant-numeric:tabular-nums">${Math.round(hi)}</span>
-    <span style="position:absolute;top:${yOf(lo).toFixed(1)}px;right:2px;transform:translateY(-50%);font-size:7px;color:rgba(0,0,0,0.22);line-height:1;font-variant-numeric:tabular-nums">${Math.round(lo)}</span>`;
+    <span style="position:absolute;top:${(yOf(hi) / H * 100).toFixed(1)}%;right:2px;transform:translateY(-50%);font-size:7px;color:rgba(0,0,0,0.22);line-height:1;font-variant-numeric:tabular-nums">${Math.round(hi)}</span>
+    <span style="position:absolute;top:${(yOf(lo) / H * 100).toFixed(1)}%;right:2px;transform:translateY(-50%);font-size:7px;color:rgba(0,0,0,0.22);line-height:1;font-variant-numeric:tabular-nums">${Math.round(lo)}</span>`;
 
   const dayLabels = entries.map(e =>
     `<span style="font-size:8px;color:${e.value != null ? 'var(--c-faint)' : 'rgba(0,0,0,0.15)'}">${e.day}</span>`
@@ -2485,13 +2636,13 @@ function buildDailyLineChartGap(
 
   return `
     <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
         ${baselineSvg}
         ${gapMarks}
-        <path d="${linePath}" fill="none" stroke="${color}" stroke-width="1.5"/>
+        <path d="${linePath}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>
         ${lastDot}
       </svg>
-      <div style="position:absolute;top:0;left:0;right:0;height:${H}px;pointer-events:none">${yAxisHtml}</div>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml}</div>
       <div style="display:flex;justify-content:space-between;padding:3px 0 0">${dayLabels}</div>
     </div>`;
 }
@@ -2916,6 +3067,7 @@ function wireProgressRangeButtons(s: SimulatorState): void {
       if (range === 'forecast') {
         if (loadChart) loadChart.innerHTML = buildForecastLoadChart(s);
         if (kmChart)   kmChart.innerHTML   = buildForecastKmChart(s);
+        animateChartDrawOn();
         return;
       }
       if (range === '16w' && !s.extendedHistoryTSS?.length) {
@@ -2925,6 +3077,7 @@ function wireProgressRangeButtons(s: SimulatorState): void {
       if (loadChart) loadChart.innerHTML = buildLoadLineChart(s, range, 'progress-range-btn');
       if (kmChart)   kmChart.innerHTML   = buildRunDistanceLineChart(s, range);
       if (ctlChart)  ctlChart.innerHTML  = buildCTLLineChart(s, range);
+      animateChartDrawOn();
     });
   });
 }
@@ -2946,6 +3099,7 @@ function wireFitnessRangeButtons(s: SimulatorState): void {
         b.style.boxShadow = active ? '0 1px 2px rgba(0,0,0,0.08)' : 'none';
       });
       vdotChart.innerHTML = buildVdotLineChart(vdotHist, range);
+      animateChartDrawOn();
     });
   });
 }
@@ -3012,6 +3166,7 @@ function renderProgressDetail(s: SimulatorState): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   container.innerHTML = buildProgressDetailPage(s);
+  animateChartDrawOn();
   wireTabBarHandlers(navigateTab);
   wireDetailBack(s);
   wireProgressRangeButtons(s);
@@ -3037,6 +3192,7 @@ function renderFitnessDetail(s: SimulatorState): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   container.innerHTML = buildFitnessDetailPage(s);
+  animateChartDrawOn();
   wireTabBarHandlers(navigateTab);
   wireDetailBack(s);
   wireInfoButtons();
@@ -3052,14 +3208,17 @@ function wireMetricDetailButtons(s: SimulatorState): void {
       if (!container) return;
       if (id === 'ctl') {
         container.innerHTML = buildCTLMetricPage(s);
+        animateChartDrawOn();
         wireTabBarHandlers(navigateTab);
         wireMetricBack(s);
       } else if (id === 'vdot') {
         container.innerHTML = buildVDOTMetricPage(s);
+        animateChartDrawOn();
         wireTabBarHandlers(navigateTab);
         wireMetricBack(s);
       } else if (id === 'lt') {
         container.innerHTML = buildLTMetricPage(s);
+        animateChartDrawOn();
         wireTabBarHandlers(navigateTab);
         wireMetricBack(s);
       }
@@ -3075,15 +3234,6 @@ function wireMetricBack(s: SimulatorState): void {
   const go = () => renderFitnessDetail(s);
   btn.addEventListener('click', go);
   btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
-}
-
-function renderReadinessDetail(s: SimulatorState): void {
-  const container = document.getElementById('app-root');
-  if (!container) return;
-  container.innerHTML = buildReadinessDetailPage(s);
-  wireTabBarHandlers(navigateTab);
-  wireDetailBack(s);
-  wireReadinessAccordion(s);
 }
 
 // ---------------------------------------------------------------------------
@@ -3113,6 +3263,5 @@ export function renderStatsView(): void {
 
   tapHandler('stats-card-progress',  () => renderProgressDetail(s));
   tapHandler('stats-card-fitness',   () => renderFitnessDetail(s));
-  tapHandler('stats-card-readiness', () => renderReadinessDetail(s));
 
 }

@@ -7,10 +7,13 @@
 import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry } from '@/types/state';
 import { computeRecoveryScore } from '@/calculations/readiness';
+import { getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
+import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const APP_BG   = '#F8FAFC';
+const APP_BG   = '#FAF9F6';
 const GREEN_A  = '#4ADE80';
 const GREEN_B  = '#22C55E';
 const GREEN_D  = '#16A34A';
@@ -83,9 +86,9 @@ function sparklinePaths(values: number[], w = 120, h = 40): { line: string; area
   return { line: d, area };
 }
 
-/** Larger 7-day chart paths (300×120 viewBox) */
+/** Larger 7-day chart paths (300×60 viewBox) */
 function chartPaths(values: number[]): { line: string; area: string } {
-  return sparklinePaths(values, 300, 120);
+  return sparklinePaths(values, 300, 60);
 }
 
 // ── Trend helpers ─────────────────────────────────────────────────────────────
@@ -126,8 +129,9 @@ function miniRing(score: number | null, label: string): string {
   const pct    = score != null ? Math.min(Math.max(score, 0), 100) : 0;
   const offset = +(MINI_CIRC * (1 - pct / 100)).toFixed(2);
   const color  = score == null  ? '#E2E8F0'
-    : score >= 70 ? GREEN_B
-    : score >= 45 ? '#F59E0B'
+    : score >= 80 ? '#22C55E'
+    : score >= 65 ? '#6EC867'
+    : score >= 50 ? '#F59E0B'
     : '#EF4444';
   return `<div style="text-align:center">
     <div style="position:relative;width:52px;height:52px;margin:0 auto">
@@ -162,12 +166,27 @@ function coachingText(
   rhr: number | null,
   hrvTrendLabel: string,
   hrvSubScore: number | null,
+  sleepScore: number | null,
+  sleepDurationSec: number | null,
 ): { headline: string; body: string } {
   if (score === null || (!hrv && !rhr)) {
     return { headline: 'No data available', body: 'Sync Garmin for recovery metrics. HRV and resting HR require at least 3 nights of data.' };
   }
   const hrvStr = hrv ? `${hrv.toFixed(1)} ms` : null;
   const rhrStr = rhr ? `${Math.round(rhr)} bpm` : null;
+
+  // Sleep context sentence
+  let sleepLine = '';
+  if (sleepScore != null) {
+    const durHrs = sleepDurationSec != null ? (sleepDurationSec / 3600).toFixed(1) : null;
+    if (sleepScore >= 80) {
+      sleepLine = durHrs ? `Sleep score ${sleepScore} (${durHrs}h), well recovered.` : `Sleep score ${sleepScore}, well recovered.`;
+    } else if (sleepScore >= 60) {
+      sleepLine = durHrs ? `Sleep score ${sleepScore} (${durHrs}h), adequate.` : `Sleep score ${sleepScore}, adequate.`;
+    } else {
+      sleepLine = durHrs ? `Sleep score ${sleepScore} (${durHrs}h), below target.` : `Sleep score ${sleepScore}, below target.`;
+    }
+  }
 
   // Detect the paradox: today's reading up but chronic trend still suppressed.
   // hrvTrendLabel starts with '+' when today is above the 7-day avg.
@@ -178,7 +197,7 @@ function coachingText(
   if (score >= 75) {
     return {
       headline: 'Recovery optimal',
-      body: `${hrvStr ? `HRV at ${hrvStr}, ${hrvTrendLabel}.` : ''} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Physiological markers indicate full recovery. Normal session load appropriate today.`.trim(),
+      body: `${hrvStr ? `HRV at ${hrvStr}, ${hrvTrendLabel}.` : ''} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} ${sleepLine} Physiological markers indicate full recovery. Normal session load appropriate today.`.trim(),
     };
   }
   if (score >= 50) {
@@ -187,7 +206,7 @@ function coachingText(
       : hrvStr ? `HRV at ${hrvStr}.` : '';
     return {
       headline: 'Adequate recovery',
-      body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Recovery adequate for planned training. Avoid additional high-intensity work.`.trim(),
+      body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} ${sleepLine} Recovery adequate for planned training. Avoid additional high-intensity work.`.trim(),
     };
   }
   const hrvLine = hrvParadox
@@ -195,67 +214,11 @@ function coachingText(
     : hrvStr ? `HRV at ${hrvStr}, below baseline.` : '';
   return {
     headline: 'Recovery limited',
-    body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} Elevated physiological load. Reduce session intensity or take a rest day.`.trim(),
+    body: `${hrvLine} ${rhrStr ? `Resting HR at ${rhrStr}.` : ''} ${sleepLine} Elevated physiological load. Reduce session intensity or take a rest day.`.trim(),
   };
 }
 
-// ── SVG watercolour background ────────────────────────────────────────────────
-
-function skyBackground(): string {
-  return `
-    <div style="position:absolute;top:0;left:0;width:100%;height:480px;overflow:hidden;pointer-events:none;z-index:0">
-      <svg style="width:100%;height:100%" viewBox="0 0 400 480" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-          <linearGradient id="skyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#C5DFF8"/>
-            <stop offset="30%" stop-color="#E3F0FA"/>
-            <stop offset="70%" stop-color="#F0F7FC"/>
-            <stop offset="100%" stop-color="#F8FAFC"/>
-          </linearGradient>
-          <linearGradient id="mountFar" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#8BB8D8" stop-opacity="0.6"/>
-            <stop offset="60%" stop-color="#A8CDE8" stop-opacity="0.3"/>
-            <stop offset="100%" stop-color="#E8F4FC" stop-opacity="0.05"/>
-          </linearGradient>
-          <linearGradient id="mountMid" x1="0%" y1="0%" x2="0%" y2="100%">
-            <stop offset="0%" stop-color="#6BA3C9" stop-opacity="0.75"/>
-            <stop offset="50%" stop-color="#8FC4E3" stop-opacity="0.4"/>
-            <stop offset="100%" stop-color="#C8E6F5" stop-opacity="0.1"/>
-          </linearGradient>
-          <linearGradient id="mountNear" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="#5CB8A8" stop-opacity="0.5"/>
-            <stop offset="40%" stop-color="#7ACCB8" stop-opacity="0.35"/>
-            <stop offset="100%" stop-color="#A8E0D4" stop-opacity="0.15"/>
-          </linearGradient>
-          <linearGradient id="mistLayer" x1="0%" y1="100%" x2="0%" y2="0%">
-            <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.95"/>
-            <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.5"/>
-            <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
-          </linearGradient>
-          <linearGradient id="sunGlow" x1="50%" y1="50%" r="50%">
-            <stop offset="0%" stop-color="#FFF8E7" stop-opacity="0.8"/>
-            <stop offset="100%" stop-color="#FEF9E7" stop-opacity="0"/>
-          </linearGradient>
-          <filter id="softBlur"><feGaussianBlur stdDeviation="6"/></filter>
-          <filter id="heavyBlur"><feGaussianBlur stdDeviation="20"/></filter>
-          <filter id="wc"><feTurbulence type="fractalNoise" baseFrequency="0.008" numOctaves="4" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3" xChannelSelector="R" yChannelSelector="G"/><feGaussianBlur stdDeviation="1.5"/></filter>
-        </defs>
-        <rect width="100%" height="100%" fill="url(#skyGrad)"/>
-        <ellipse cx="200" cy="130" rx="100" ry="80" fill="url(#sunGlow)" filter="url(#softBlur)" opacity="0.7"/>
-        <path d="M-60,190 Q20,150 80,180 T200,160 T350,170 T460,150 L460,480 L-60,480 Z" fill="url(#mountFar)" filter="url(#wc)"/>
-        <ellipse cx="100" cy="210" rx="80" ry="25" fill="white" filter="url(#heavyBlur)" opacity="0.45"/>
-        <ellipse cx="320" cy="195" rx="60" ry="20" fill="white" filter="url(#heavyBlur)" opacity="0.35"/>
-        <path d="M-40,270 Q50,210 130,250 T280,220 T420,250 L420,480 L-40,480 Z" fill="url(#mountMid)" filter="url(#wc)"/>
-        <ellipse cx="280" cy="285" rx="120" ry="40" fill="#FFFFFF" opacity="0.45" filter="url(#heavyBlur)"/>
-        <path d="M-20,350 Q60,290 150,330 T320,310 T440,340 L440,480 L-20,480 Z" fill="url(#mountNear)" filter="url(#wc)"/>
-        <path d="M0,370 Q100,330 200,370 T400,350 L400,480 L0,480 Z" fill="url(#mistLayer)" filter="url(#softBlur)"/>
-        <path d="M0,410 Q150,390 300,420 T400,410 L400,480 L0,480 Z" fill="url(#mistLayer)" opacity="0.7" filter="url(#heavyBlur)"/>
-        <ellipse cx="50" cy="90" rx="40" ry="15" fill="white" filter="url(#heavyBlur)" opacity="0.28"/>
-        <ellipse cx="350" cy="110" rx="30" ry="12" fill="white" filter="url(#heavyBlur)" opacity="0.22"/>
-      </svg>
-      <div style="position:absolute;bottom:0;left:0;width:100%;height:120px;background:linear-gradient(to top,${APP_BG},transparent)"></div>
-    </div>`;
-}
+function skyBackground(): string { return buildSkyBackground('rec', 'blue'); }
 
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
@@ -264,11 +227,14 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const history = s.physiologyHistory ?? [];
 
   // Recovery score — always today's composite
-  const recoveryResult = computeRecoveryScore(history);
+  const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(history);
+  const sleepBank = getSleepBank(history, effectiveSleepTarget);
+  const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
+  const recoveryResult = computeRecoveryScore(history, { sleepDebtSec: sleepDebtForRecovery });
   const score = recoveryResult.score;
   const ringPct = Math.min(Math.max(score ?? 0, 0), 100);
   const targetOffset = +(RING_C * (1 - ringPct / 100)).toFixed(2);
-  const ringColor = ringPct >= 70 ? GREEN_B : ringPct >= 45 ? '#F59E0B' : '#EF4444';
+  const ringColor = ringPct >= 80 ? GREEN_B : ringPct >= 65 ? '#6EC867' : ringPct >= 50 ? '#F59E0B' : '#EF4444';
 
   // Selected date entry
   const entry: PhysiologyDayEntry | undefined = history.find(e => e.date === displayDate)
@@ -285,10 +251,15 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   // sleep — sleep is date-specific and should show "—" if missing.
   const todayHrv = entry?.hrvRmssd ?? [...history].reverse().find(e => e.hrvRmssd != null)?.hrvRmssd ?? null;
   const todayRhr = entry?.restingHR ?? [...history].reverse().find(e => e.restingHR != null)?.restingHR ?? null;
+  // For display tiles: date-specific, show "—" if today's sleep hasn't arrived.
   const todaySleep = entry?.sleepScore ?? null;
   const todaySleepDur = entry?.sleepDurationSec ?? null;
+  // For coaching narrative: use the most recent sleep data (last night's is relevant context).
+  const latestWithSleep = [...history].reverse().find(e => e.sleepScore != null);
+  const coachSleep = latestWithSleep?.sleepScore ?? null;
+  const coachSleepDur = latestWithSleep?.sleepDurationSec ?? null;
 
-  const { hrvDataSufficient, hrvScore: hrvSubScore, sleepScore: sleepSubScore, rhrScore: rhrSubScore } = recoveryResult;
+  const { hrvDataSufficient, hrvScore: hrvSubScore, sleepScore: sleepSubScore, rhrScore: rhrSubScore, sleepHistoryAvg: sleepHistAvg } = recoveryResult;
   const hrvT = hrvTrend(hrv7, todayHrv);
   const rhrT = rhrTrend(rhr7, todayRhr);
 
@@ -301,11 +272,11 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const { line: rhrChartLine, area: rhrChartArea } = chartPaths(rhr7);
 
   // Coaching
-  const { headline: coachHead, body: coachBody } = coachingText(score, todayHrv, todayRhr, hrvT.label, hrvSubScore);
+  const { headline: coachHead, body: coachBody } = coachingText(score, todayHrv, todayRhr, hrvT.label, hrvSubScore, coachSleep, coachSleepDur);
 
   // Sleep label + progress
   const sleepLabel = todaySleep == null ? null
-    : todaySleep >= 85 ? 'Optimal' : todaySleep >= 65 ? 'Good' : 'Low';
+    : todaySleep >= 80 ? 'Optimal' : todaySleep >= 65 ? 'Good' : 'Low';
   const sleepBadgeColor = sleepLabel === 'Optimal' ? '#8B5CF6' : sleepLabel === 'Good' ? '#3B82F6' : '#F59E0B';
 
   // Date pills
@@ -361,8 +332,9 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
     <style>
       #rec-view { box-sizing:border-box; }
       #rec-view *, #rec-view *::before, #rec-view *::after { box-sizing:inherit; }
-      @keyframes recFloatUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
-      .r-fade { opacity:0; animation:recFloatUp 0.55s ease-out forwards; }
+      @keyframes recFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .r-fade { opacity:0; animation:recFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${skyAnimationCSS('rec')}
       .rec-date-pill:hover { background:rgba(34,197,94,0.1)!important; }
     </style>
 
@@ -386,7 +358,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
           </button>
 
           <div style="text-align:center">
-            <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em">Recovery</div>
+            <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em">Physiology</div>
             <button id="rec-date-btn" style="
               display:flex;align-items:center;gap:4px;margin:3px auto 0;
               font-size:12px;color:${TEXT_S};font-weight:500;
@@ -456,9 +428,10 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
 
         <!-- Sub-scores row -->
         ${recoveryResult.hasData ? `
-        <div class="r-fade" style="animation-delay:0.14s;display:flex;justify-content:center;gap:28px;margin:-8px 0 24px">
+        <div class="r-fade" style="animation-delay:0.14s;display:flex;justify-content:center;gap:20px;margin:-8px 0 24px">
           ${hrvSubScore != null ? miniRing(hrvSubScore, 'HRV') : ''}
           ${sleepSubScore != null ? miniRing(sleepSubScore, 'Sleep') : ''}
+          ${recoveryResult.sleepHistoryScore != null ? miniRing(recoveryResult.sleepHistoryScore, 'Sleep Hist') : ''}
           ${rhrSubScore != null ? miniRing(rhrSubScore, 'RHR') : ''}
         </div>` : ''}
 
@@ -466,7 +439,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
         <div class="r-fade" style="animation-delay:0.18s;padding:0 16px;display:flex;gap:14px;margin-bottom:14px">
 
           <!-- HRV tile -->
-          <div style="flex:1;background:white;border-radius:24px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.03),0 0 3px rgba(0,0,0,0.02)">
+          <div style="flex:1;background:white;border-radius:16px;padding:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${TEXT_L}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
               <span style="font-size:14px;font-weight:600;color:${TEXT_S}">Resting HRV</span>
@@ -479,7 +452,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
             ${hrvChronicBadge ? statusBadge(hrvChronicBadge.label, hrvChronicBadge.color) : ''}
             ${hrvAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${hrvAcuteStr}</div>` : ''}
             <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
-              ${hrvLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:100%;overflow:visible" preserveAspectRatio="none">
+              ${hrvLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:40px;display:block;overflow:visible">
                 <defs><linearGradient id="hrvFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
                 <path d="${hrvArea}" fill="url(#hrvFillMini)"/>
                 <path d="${hrvLine}" fill="none" stroke="${GREEN_A}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -489,7 +462,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
           </div>
 
           <!-- RHR tile -->
-          <div style="flex:1;background:white;border-radius:24px;padding:16px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.03),0 0 3px rgba(0,0,0,0.02)">
+          <div style="flex:1;background:white;border-radius:16px;padding:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="${TEXT_L}" stroke="${TEXT_L}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
               <span style="font-size:14px;font-weight:600;color:${TEXT_S}">Resting HR</span>
@@ -502,7 +475,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
             ${rhrChronicBadge ? statusBadge(rhrChronicBadge.label, rhrChronicBadge.color) : ''}
             ${rhrAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${rhrAcuteStr}</div>` : ''}
             <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
-              ${rhrLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:100%;overflow:visible" preserveAspectRatio="none">
+              ${rhrLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:40px;display:block;overflow:visible">
                 <defs><linearGradient id="rhrFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
                 <path d="${rhrArea}" fill="url(#rhrFillMini)"/>
                 <path d="${rhrLine}" fill="none" stroke="${GREEN_A}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -514,7 +487,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
         <!-- Sleep card -->
         ${todaySleep != null || todaySleepDur != null ? `
         <div class="r-fade" style="animation-delay:0.25s;padding:0 16px;margin-bottom:14px">
-          <div id="rec-sleep-card" style="background:white;border-radius:24px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.03),0 0 3px rgba(0,0,0,0.02);cursor:pointer">
+          <div id="rec-sleep-card" style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);cursor:pointer">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
               <div style="display:flex;align-items:center;gap:8px">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B5CF6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
@@ -560,8 +533,8 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
           <h2 style="font-size:17px;font-weight:700;color:${TEXT_M};margin:0 0 16px 2px;letter-spacing:-0.01em">Detailed Metrics</h2>
 
           <!-- HRV chart -->
-          ${hrvChartLine ? `<div style="background:white;border-radius:24px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.03),0 0 3px rgba(0,0,0,0.02);margin-bottom:14px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+          ${hrvChartLine ? `<div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
               <div>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="${TEXT_S}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -576,23 +549,23 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
                 ${hrvVsBaseline >= 0 ? '+' : ''}${hrvVsBaseline.toFixed(1)}% vs baseline
               </div>` : ''}
             </div>
-            <div style="height:120px;position:relative">
-              <svg width="100%" height="100%" viewBox="0 0 300 120" preserveAspectRatio="none">
+            <div style="position:relative">
+              <svg width="100%" viewBox="0 0 300 60" style="display:block">
                 <defs>
                   <linearGradient id="hrvChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0.05"/></linearGradient>
                   <linearGradient id="hrvChartLine" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#86EFAC"/><stop offset="100%" stop-color="${GREEN_B}"/></linearGradient>
                 </defs>
-                <g stroke="#F1F5F9" stroke-width="1" stroke-dasharray="4 4"><line x1="0" y1="20" x2="300" y2="20"/><line x1="0" y1="60" x2="300" y2="60"/><line x1="0" y1="100" x2="300" y2="100"/></g>
+                <g stroke="#F1F5F9" stroke-width="1" stroke-dasharray="4 4"><line x1="0" y1="15" x2="300" y2="15"/><line x1="0" y1="30" x2="300" y2="30"/><line x1="0" y1="45" x2="300" y2="45"/></g>
                 <path d="${hrvChartArea}" fill="url(#hrvChartFill)"/>
-                <path d="${hrvChartLine}" fill="none" stroke="url(#hrvChartLine)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="${hrvChartLine}" fill="none" stroke="url(#hrvChartLine)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:8px;padding:0 2px">${dayLabelRow}</div>
           </div>` : ''}
 
           <!-- RHR chart -->
-          ${rhrChartLine ? `<div style="background:white;border-radius:24px;padding:20px;box-shadow:0 4px 20px -2px rgba(0,0,0,0.03),0 0 3px rgba(0,0,0,0.02);margin-bottom:20px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px">
+          ${rhrChartLine ? `<div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:20px">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
               <div>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="${TEXT_S}" stroke="${TEXT_S}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
@@ -607,35 +580,32 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
                 ${rhrVsBaseline >= 0 ? '+' : ''}${rhrVsBaseline.toFixed(1)} bpm vs baseline
               </div>` : ''}
             </div>
-            <div style="height:120px;position:relative">
-              <svg width="100%" height="100%" viewBox="0 0 300 120" preserveAspectRatio="none">
+            <div style="position:relative">
+              <svg width="100%" viewBox="0 0 300 60" style="display:block">
                 <defs><linearGradient id="rhrChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0.05"/></linearGradient></defs>
-                <g stroke="#F1F5F9" stroke-width="1" stroke-dasharray="4 4"><line x1="0" y1="20" x2="300" y2="20"/><line x1="0" y1="60" x2="300" y2="60"/><line x1="0" y1="100" x2="300" y2="100"/></g>
+                <g stroke="#F1F5F9" stroke-width="1" stroke-dasharray="4 4"><line x1="0" y1="15" x2="300" y2="15"/><line x1="0" y1="30" x2="300" y2="30"/><line x1="0" y1="45" x2="300" y2="45"/></g>
                 <path d="${rhrChartArea}" fill="url(#rhrChartFill)"/>
-                <path d="${rhrChartLine}" fill="none" stroke="${GREEN_B}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="${rhrChartLine}" fill="none" stroke="${GREEN_B}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </div>
             <div style="display:flex;justify-content:space-between;margin-top:8px;padding:0 2px">${dayLabelRow}</div>
           </div>` : ''}
 
-          <!-- Sleep detail CTA -->
-          <button id="rec-sleep-btn" style="
-            width:100%;background:white;border-radius:20px;padding:16px 18px;
-            display:flex;justify-content:space-between;align-items:center;
-            box-shadow:0 4px 20px -2px rgba(0,0,0,0.03);border:none;cursor:pointer;
-            font-family:var(--f);transition:box-shadow 0.15s;
-          ">
-            <div style="display:flex;align-items:center;gap:12px">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${TEXT_M}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-              <span style="font-size:15px;font-weight:700;color:${TEXT_M}">View Sleep Details</span>
-            </div>
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${TEXT_S}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-          </button>
         </div>
 
       </div>
     </div>
+    ${renderTabBar('home')}
   `;
+}
+
+// ── Navigation ───────────────────────────────────────────────────────────────
+
+function navigateTab(tab: TabId): void {
+  if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
+  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
+  else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
 
 // ── Info overlay ──────────────────────────────────────────────────────────────
@@ -644,9 +614,9 @@ function showRecoveryInfoOverlay(): void {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,0.4)';
   overlay.innerHTML = `
-    <div style="background:white;border-radius:24px;padding:24px;max-width:380px;width:100%">
+    <div style="background:white;border-radius:16px;padding:24px;max-width:380px;width:100%">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-        <h2 style="font-size:17px;font-weight:700;margin:0;color:${TEXT_M}">What is Recovery?</h2>
+        <h2 style="font-size:17px;font-weight:700;margin:0;color:${TEXT_M}">What is Physiology?</h2>
         <button id="rec-info-close" style="border:none;background:rgba(0,0,0,0.07);border-radius:50%;width:32px;height:32px;cursor:pointer;color:${TEXT_S};display:flex;align-items:center;justify-content:center;font-size:16px">✕</button>
       </div>
       <p style="font-size:14px;line-height:1.6;color:${TEXT_S};margin:0 0 12px">
@@ -674,7 +644,9 @@ function showRecoveryInfoOverlay(): void {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
-  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? []);
+  const effTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
+  const sb = getSleepBank(s.physiologyHistory ?? [], effTarget);
+  const recoveryResult = computeRecoveryScore(s.physiologyHistory ?? [], { sleepDebtSec: sb.bankSec < 0 ? Math.abs(sb.bankSec) : 0 });
   const ringPct = Math.min(Math.max(recoveryResult.score ?? 0, 0), 100);
 
   // Animate ring
@@ -684,6 +656,9 @@ function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
       circle.style.strokeDashoffset = String((RING_C * (1 - ringPct / 100)).toFixed(2));
     }
   }, 50);
+
+  // Tab bar
+  wireTabBarHandlers(navigateTab);
 
   // Back → home
   document.getElementById('rec-back-btn')?.addEventListener('click', () => {
@@ -715,7 +690,6 @@ function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
     });
   };
   document.getElementById('rec-sleep-card')?.addEventListener('click', openSleepView);
-  document.getElementById('rec-sleep-btn')?.addEventListener('click', openSleepView);
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────

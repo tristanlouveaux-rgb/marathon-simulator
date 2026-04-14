@@ -9,7 +9,7 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
 import { computeReadiness, readinessColor, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
@@ -20,13 +20,14 @@ import { isInjuryActive } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { openCoachModal } from './coach-modal';
 import { clearIllness } from './illness-modal';
-import { buildHolidayBannerHome, clearHoliday } from './holiday-modal';
+import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
 import { formatKm, fmtDateUK, fmtDesc, formatPace } from '@/utils/format';
-import { next, setOnWeekAdvance, applyRecoveryAdjustment } from './events';
+import { setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { isSleepDataPending } from '@/data/sleepPoller';
+import { computePlanAdherence } from '@/calculations/plan-adherence';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
@@ -88,14 +89,14 @@ const isRunKey = (k: string, activityType?: string | null) => {
 
 // ─── Load Breakdown Sheet ───────────────────────────────────────────────────
 
-interface LoadSegment {
+export interface LoadSegment {
   label: string;
   tss: number;
   durationMin: number;
   color: string;
 }
 
-function sportColor(sport: string): string {
+export function sportColor(sport: string): string {
   const s = normalizeSport(sport);
   const map: Record<string, string> = {
     cycling: '#10b981',
@@ -116,6 +117,21 @@ function sportColor(sport: string): string {
   return map[s] ?? '#6b7280';
 }
 
+const BREAKDOWN_SHADES = [
+  '#1e3a8a',
+  '#1d4ed8',
+  '#2563eb',
+  '#3b82f6',
+  '#60a5fa',
+  '#93c5fd',
+  '#bfdbfe',
+];
+
+export function breakdownShade(index: number): string {
+  const i = Math.max(0, Math.min(index, BREAKDOWN_SHADES.length - 1));
+  return BREAKDOWN_SHADES[i];
+}
+
 function normalizeiTrimpLocal(itrimp: number): number {
   return (itrimp * 100) / 15000;
 }
@@ -129,7 +145,7 @@ function parseDurMinLocal(d: string): number {
  * Compute a per-sport breakdown of Signal B TSS for the current week.
  * Mirrors computeWeekRawTSS exactly (same dedup, same formulas) but groups by label.
  */
-function computeLoadBreakdown(
+export function computeLoadBreakdown(
   wk: Week,
   ratedMap: Record<string, number | 'skip'>,
   planStartDate?: string,
@@ -145,6 +161,12 @@ function computeLoadBreakdown(
     } else {
       segments.set(label, { label, tss, durationMin, color });
     }
+  }
+
+  // Normalize running-type display names to a single "Running" label
+  const RUN_LABELS = new Set(['run', 'trail run', 'treadmill run', 'virtual run', 'track run']);
+  function normalizeRunLabel(label: string): string {
+    return RUN_LABELS.has(label.toLowerCase()) ? 'Running' : label;
   }
 
   // Matched activities (garminActuals) — primarily runs
@@ -165,17 +187,26 @@ function computeLoadBreakdown(
       tss = durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
     }
     // Label: use displayName for cross-training slots, else "Running"
-    const label = (actual.displayName && !actual.workoutName) ? actual.displayName : 'Running';
+    const rawLabel = (actual.displayName && !actual.workoutName) ? actual.displayName : 'Running';
+    const label = normalizeRunLabel(rawLabel);
     const color = label === 'Running' ? '#3b82f6' : sportColor(label.toLowerCase());
+    console.log(`[LoadBreakdown] garminActual wid="${workoutId}" gid=${actual.garminId} label="${label}" tss=${tss.toFixed(0)} dur=${durationMin.toFixed(0)}m wn=${actual.workoutName ?? '-'} dn=${actual.displayName ?? '-'} iTrimp=${actual.iTrimp ?? '-'}`);
     add(label, tss, durationMin, color);
   }
 
   // Adhoc workouts — all types, no runSpec discount for Signal B
+  // Skip user-generated sessions (not real activity — just suggestions)
   for (const w of wk.adhocWorkouts ?? []) {
+    if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    // Dedup by garminId — check both id prefix and direct garminId property
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
-    if (rawId) {
-      if (seenGarminIds.has(rawId)) continue;
-      seenGarminIds.add(rawId);
+    const garminId = rawId ?? (w as any).garminId ?? null;
+    if (garminId) {
+      if (seenGarminIds.has(garminId)) {
+        console.log(`[LoadBreakdown] DEDUP adhoc id="${w.id}" n="${w.n}" garminId=${garminId}`);
+        continue;
+      }
+      seenGarminIds.add(garminId);
     }
     let tss: number;
     let durationMin: number;
@@ -188,7 +219,9 @@ function computeLoadBreakdown(
       tss = durationMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
     }
     const sport = normalizeSport(w.n.replace(' (Garmin)', '').toLowerCase());
-    const label = w.n.replace(' (Garmin)', '').replace(' (Strava)', '');
+    const rawLabel = w.n.replace(' (Garmin)', '').replace(' (Strava)', '');
+    const label = normalizeRunLabel(rawLabel);
+    console.log(`[LoadBreakdown] adhoc id="${w.id}" n="${w.n}" label="${label}" tss=${tss.toFixed(0)} dur=${durationMin.toFixed(0)}m garminId=${garminId ?? 'none'}`);
     add(label, tss, durationMin, sportColor(sport));
   }
 
@@ -199,17 +232,25 @@ function computeLoadBreakdown(
     weekStartMs = new Date(planStartDate).getTime() + (wk.w - 1) * 7 * 86400000;
     weekEndMs = weekStartMs + 7 * 86400000;
   }
+  console.log(`[LoadBreakdown] unspentLoadItems count=${(wk.unspentLoadItems ?? []).length}`);
   for (const item of wk.unspentLoadItems ?? []) {
     if (weekStartMs !== null && weekEndMs !== null && item.date) {
       const itemMs = new Date(item.date).getTime();
-      if (itemMs < weekStartMs || itemMs >= weekEndMs) continue;
+      if (itemMs < weekStartMs || itemMs >= weekEndMs) {
+        console.log(`[LoadBreakdown] unspent SKIPPED (out of week range) gid=${item.garminId} dn="${item.displayName}" date=${item.date}`);
+        continue;
+      }
     }
     if (item.garminId) {
-      if (seenGarminIds.has(item.garminId)) continue;
+      if (seenGarminIds.has(item.garminId)) {
+        console.log(`[LoadBreakdown] unspent DEDUP gid=${item.garminId} dn="${item.displayName}"`);
+        continue;
+      }
       seenGarminIds.add(item.garminId);
     }
     const tss = item.durationMin * (TL_PER_MIN[5] ?? 1.15);
-    add(item.displayName, tss, item.durationMin, sportColor(item.sport));
+    console.log(`[LoadBreakdown] unspent gid=${item.garminId} dn="${item.displayName}" sport=${item.sport} tss=${tss.toFixed(0)} dur=${item.durationMin.toFixed(0)}m reason=${(item as any).reason ?? '-'} date=${item.date ?? '-'}`);
+    add(normalizeRunLabel(item.displayName), tss, item.durationMin, sportColor(item.sport));
   }
 
   return Array.from(segments.values())
@@ -217,167 +258,6 @@ function computeLoadBreakdown(
     .sort((a, b) => b.tss - a.tss);
 }
 
-export function showLoadBreakdownSheet(s: SimulatorState, weekNum?: number, returnTo: 'plan' | 'home' = 'home'): void {
-  const wkIndex = (weekNum ?? s.w) - 1;
-  const wk = s.wks?.[wkIndex];
-  const _tssRawBreakdown = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
-  // Use computePlannedSignalB so the target matches the plan bar exactly (same corrected formula).
-  // Derive the cross-training component for display; running = remainder.
-  let crossTrainingBudget = 0;
-  if (s.sportBaselineByType) {
-    for (const sport of Object.values(s.sportBaselineByType)) {
-      crossTrainingBudget += sport.avgSessionRawTSS * sport.sessionsPerWeek;
-    }
-  }
-  crossTrainingBudget = Math.round(crossTrainingBudget);
-  const tssPlan = computePlannedSignalB(s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base', s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType);
-  const runningTSSPlan = Math.max(0, tssPlan - crossTrainingBudget);
-  // Decayed carry from previous weeks — added to the effective total
-  const viewWeek = weekNum ?? s.w;
-  const _tssCarryBreakdown = computeDecayedCarry(s.wks ?? [], viewWeek, tssPlan, s.planStartDate);
-  const tssActual = _tssRawBreakdown + _tssCarryBreakdown;
-
-  const segments = wk ? computeLoadBreakdown(wk, wk.rated ?? {}, s.planStartDate) : [];
-  // Use tssActual (from computeWeekRawTSS) as the authoritative total so bar widths
-  // always match the number shown on the home page. Never use the sum of rounded segments.
-  const totalTss = tssActual;
-
-  // Stacked bar segments — proportions relative to tssActual so widths add up exactly
-  // When over target, fill the full bar width (100%); when under, scale to target position
-  const barDenom = Math.max(totalTss, tssPlan, 1);
-  const barScale = totalTss >= tssPlan ? 100 / totalTss : 100 / tssPlan;
-  const stackedBar = totalTss > 0
-    ? segments.map(seg => {
-      const pct = seg.tss * barScale;
-      return `<div style="height:100%;width:${pct.toFixed(1)}%;background:${seg.color};flex-shrink:0"></div>`;
-    }).join('')
-    : `<div style="height:100%;width:4%;background:var(--c-border);flex-shrink:0;border-radius:3px"></div>`;
-
-  // Remaining planned — only shown when under target
-  const remaining = Math.max(0, Math.round(tssPlan) - tssActual);
-  const remainingPct = remaining > 5 ? remaining * barScale : 0;
-  const remainingBar = remaining > 5
-    ? `<div style="height:100%;width:${remainingPct.toFixed(1)}%;background:var(--c-border);flex-shrink:0;border-radius:0 3px 3px 0"></div>`
-    : '';
-
-  // Legend rows
-  const legendRows = segments.map(seg => {
-    const barWidth = totalTss > 0 ? Math.min(100, Math.round((seg.tss / totalTss) * 100)) : 0;
-    const dur = seg.durationMin >= 60
-      ? `${Math.floor(seg.durationMin / 60)}h ${Math.round(seg.durationMin % 60)}m`
-      : `${Math.round(seg.durationMin)}m`;
-    return `
-      <div style="display:flex;flex-direction:column;gap:5px">
-        <div style="display:flex;align-items:center;justify-content:space-between">
-          <div style="display:flex;align-items:center;gap:8px">
-            <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
-            <span style="font-size:14px;color:var(--c-black)">${seg.label}</span>
-            <span style="font-size:12px;color:var(--c-faint)">${dur}</span>
-          </div>
-          <span style="font-size:14px;font-weight:600;color:var(--c-black)">${Math.round(seg.tss)}</span>
-        </div>
-        <div style="background:rgba(0,0,0,0.06);border-radius:3px;height:4px;overflow:hidden">
-          <div style="background:${seg.color};height:100%;width:${barWidth}%;border-radius:3px"></div>
-        </div>
-      </div>`;
-  }).join('');
-
-  const emptyState = segments.length === 0
-    ? `<p style="color:var(--c-faint);font-size:14px;text-align:center;padding:20px 0">No activities logged yet this week</p>`
-    : '';
-
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;padding:16px';
-  overlay.innerHTML = `
-    <div style="background:var(--c-surface);border-radius:16px;width:100%;max-width:480px;padding-bottom:0;max-height:85vh;overflow-y:auto">
-      <div style="padding:16px 18px 12px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
-        <div>
-          <h2 style="font-size:16px;font-weight:600;color:var(--c-black)">Weekly Load Breakdown</h2>
-          <p style="font-size:12px;color:var(--c-faint);margin-top:2px">All sports · running + cross-training</p>
-        </div>
-        <button id="lbd-close" style="color:var(--c-muted);font-size:18px;background:none;border:none;cursor:pointer;padding:0;line-height:1">✕</button>
-      </div>
-
-      <div style="padding:16px 18px;display:flex;flex-direction:column;gap:16px">
-
-        <!-- Big number + stacked bar -->
-        <div>
-          <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:10px">
-            <span style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${tssActual}</span>
-            <span style="font-size:14px;color:var(--c-muted)">/ ${Math.round(tssPlan)} TSS target</span>
-          </div>
-          <div style="background:rgba(0,0,0,0.06);border-radius:4px;height:10px;overflow:hidden;display:flex">
-            ${stackedBar}
-            ${remainingBar}
-          </div>
-          ${segments.length > 0 ? `
-          <div style="display:flex;flex-wrap:wrap;gap:6px 10px;margin-top:8px">
-            ${segments.map(seg => `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-muted)"><div style="width:7px;height:7px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>${seg.label}</div>`).join('')}
-            ${remaining > 5 ? `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--c-faint)"><div style="width:7px;height:7px;border-radius:3px;background:var(--c-border);flex-shrink:0"></div>Remaining</div>` : ''}
-          </div>` : ''}
-        </div>
-
-        <!-- Divider -->
-        ${segments.length > 0 ? '<div style="height:1px;background:var(--c-border)"></div>' : ''}
-
-        <!-- Sport rows -->
-        <div style="display:flex;flex-direction:column;gap:12px">
-          ${legendRows}
-          ${emptyState}
-        </div>
-
-        <!-- Carried load from last week — same format as sport rows -->
-        ${_tssCarryBreakdown > 0 ? (() => {
-          const carryBarWidth = tssActual > 0 ? Math.min(100, Math.round((_tssCarryBreakdown / tssActual) * 100)) : 0;
-          return `
-        <div style="display:flex;flex-direction:column;gap:5px">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div style="display:flex;align-items:center;gap:8px">
-              <div style="width:10px;height:10px;border-radius:50%;background:var(--c-caution);flex-shrink:0"></div>
-              <span style="font-size:14px;color:var(--c-black)">Carried from last week</span>
-            </div>
-            <span style="font-size:14px;font-weight:600;color:var(--c-black)">${_tssCarryBreakdown}</span>
-          </div>
-          <div style="background:rgba(0,0,0,0.06);border-radius:3px;height:4px;overflow:hidden">
-            <div style="background:var(--c-caution);height:100%;width:${carryBarWidth}%;border-radius:3px"></div>
-          </div>
-        </div>`;
-        })() : ''}
-
-        <!-- Planned target footer -->
-        <div style="background:var(--c-bg);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:13px;color:var(--c-muted)">Running planned</span>
-            <span style="font-size:13px;font-weight:500;color:var(--c-black)">${runningTSSPlan} TSS</span>
-          </div>
-          ${crossTrainingBudget > 0 ? `
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:13px;color:var(--c-muted)">Cross-training expected</span>
-            <span style="font-size:13px;font-weight:500;color:var(--c-black)">${crossTrainingBudget} TSS</span>
-          </div>` : ''}
-          <div style="height:1px;background:var(--c-border)"></div>
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <span style="font-size:13px;font-weight:600;color:var(--c-black)">Total target</span>
-            <span style="font-size:13px;font-weight:600;color:var(--c-black)">${Math.round(tssPlan)} TSS</span>
-          </div>
-        </div>
-
-        <!-- Learn more link -->
-        <button id="lbd-learn-more" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer;text-align:center;font-family:var(--f)">Understand your load &amp; taper →</button>
-
-      </div>
-    </div>`;
-
-  document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.querySelector('#lbd-close')?.addEventListener('click', close);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-  overlay.querySelector('#lbd-learn-more')?.addEventListener('click', () => {
-    close();
-    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(weekNum ?? s.w, returnTo));
-  });
-}
 
 
 export function showPlanLoadBreakdownSheet(s: SimulatorState): void {
@@ -399,7 +279,8 @@ export function showPlanLoadBreakdownSheet(s: SimulatorState): void {
 
   const segments = Array.from(totalSegments.values())
     .filter(seg => seg.tss > 0.5)
-    .sort((a, b) => b.tss - a.tss);
+    .sort((a, b) => b.tss - a.tss)
+    .map((seg, i) => ({ ...seg, color: breakdownShade(i) }));
   const totalTss = Math.round(segments.reduce((sum, seg) => sum + seg.tss, 0));
   const weeksText = `${completedWks.length} week${completedWks.length !== 1 ? 's' : ''} completed`;
 
@@ -663,20 +544,32 @@ function buildIllnessBanner(s: SimulatorState): string {
   `;
 }
 
-function buildProgressBars(s: SimulatorState): string {
+export function buildProgressBars(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
 
-  // Sessions done this week — prefer synced activity count (Strava or Garmin) over rated count
-  const syncedSessions = wk
-    ? Object.keys(wk.garminActuals || {}).length
-    + (wk.adhocWorkouts || []).filter((w: any) =>
-      w.id?.startsWith('garmin-') || w.id?.startsWith('strava-')
-    ).length
-    : 0;
-  const ratedSessions = wk
-    ? Object.values(wk.rated || {}).filter(v => typeof v === 'number' && v > 0).length
-    : 0;
-  const sessionsDone = Math.max(syncedSessions, ratedSessions);
+  // Sessions done this week — dedupe by unique garmin/strava activity id.
+  // addAdhocWorkoutFromPending writes the SAME id into both garminActuals AND adhocWorkouts,
+  // so adding their counts double-counts synced adhoc activities.
+  // garminActuals keys (e.g. "garmin-strava-XXX") match adhocWorkouts ids, so we track
+  // actuals keys separately and skip adhoc entries that already exist as an actual.
+  const doneIds = new Set<string>();
+  const actualsKeys = new Set<string>();
+  if (wk) {
+    for (const [key, act] of Object.entries(wk.garminActuals || {})) {
+      const id = (act as any)?.garminId || key;
+      if (id) doneIds.add(id);
+      actualsKeys.add(key);
+    }
+    for (const w of (wk.adhocWorkouts || []) as any[]) {
+      // Skip adhoc entries whose id matches a garminActuals key (already counted above)
+      if (w.id && actualsKeys.has(w.id)) continue;
+      // Manual adhoc workouts (no garmin/strava prefix) only count once they're rated.
+      const isSynced = w.id?.startsWith('garmin-') || w.id?.startsWith('strava-');
+      if (isSynced) doneIds.add(w.id);
+      else if (wk.rated?.[w.id] && wk.rated[w.id] !== 'skip') doneIds.add(w.id);
+    }
+  }
+  const sessionsDone = doneIds.size;
   // Count all planned non-rest sessions (runs + gym + cross-training + adhoc)
   const plannedWorkouts = wk
     ? generateWeekWorkouts(
@@ -718,110 +611,75 @@ function buildProgressBars(s: SimulatorState): string {
   const _tssCarry = computeDecayedCarry(s.wks ?? [], s.w, tssPlan, s.planStartDate);
   const tssActual = _tssRaw + _tssCarry;
 
-  function bar(actual: number, plan: number, fmt: (v: number) => string, planFmt: (v: number) => string): string {
-    if (plan <= 0) return '';
-    const ratio = actual / plan;
-    const overRatio = Math.max(0, ratio - 1);
-
-    // Bar fill: cap the visual at 88% of container width
-    // Within 88%: green portion = min(ratio, 1) × 88, amber = overshoot portion
-    const greenWidth = Math.min(ratio, 1) * 88;
-    const amberWidth = Math.min(overRatio, 0.3) * 88; // cap amber at 30% over
-    const totalWidth = greenWidth + amberWidth;
-
-    // Overflow label (+X%)
-    const overPct = Math.round(overRatio * 100);
-    const overLabel = overPct >= 5
-      ? `<span class="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold" style="color:${overPct >= 30 ? 'var(--c-warn)' : 'var(--c-caution)'}">${overPct >= 30 ? '+' + overPct + '%' : '+' + overPct + '%'}</span>`
-      : '';
-
-    // Colour: grey until 70%, then green, cap segments for over-target
-    let fillStyle: string;
-    if (ratio < 0.7) {
-      fillStyle = `background:var(--c-muted);width:${totalWidth}%`;
-    } else if (ratio <= 1.05) {
-      fillStyle = `background:var(--c-ok);width:${totalWidth}%`;
-    } else {
-      // green to target, amber cap
-      const targetPx = Math.min(1, 1) * 88; // target position within 88%
-      fillStyle = `background:linear-gradient(to right, var(--c-ok) ${(88 / totalWidth * 100).toFixed(1)}%, var(--c-warn) ${(88 / totalWidth * 100).toFixed(1)}%);width:${totalWidth}%`;
-    }
-
-    return `<div class="m-prog-fill" style="${fillStyle}"></div>`;
-  }
-
-  // Simplified colour logic
   function fillBar(actual: number, plan: number): string {
     if (plan <= 0) return '';
     const ratio = actual / plan;
-    const capWidth = 88; // max bar % width
-    const targetPct = Math.min(ratio, 1) * capWidth;
-    const overPct = Math.min(Math.max(0, ratio - 1), 0.42) * capWidth;
-    const totalWidth = targetPct + overPct;
-
-    if (ratio < 0.7) {
-      return `<div class="m-prog-fill" style="width:${totalWidth}%;background:var(--c-muted)"></div>`;
-    }
-    if (ratio <= 1.05) {
-      return `<div class="m-prog-fill" style="width:${totalWidth}%;background:var(--c-ok)"></div>`;
-    }
-    // overshoot: green body + red cap via gradient
-    const greenPct = (targetPct / totalWidth * 100).toFixed(1);
-    return `<div class="m-prog-fill" style="width:${totalWidth}%;background:linear-gradient(to right,var(--c-ok) ${greenPct}%,var(--c-warn) ${greenPct}%)"></div>`;
-  }
-
-  function overLabel(actual: number, plan: number, label = ''): string {
-    if (plan <= 0) return '';
-    const overPct = Math.round(((actual / plan) - 1) * 100);
-    if (overPct < 5) return '';
-    const text = label ? `+${overPct}% ${label}` : `+${overPct}%`;
-    return `<span class="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold" style="color:var(--c-warn)">${text}</span>`;
+    const width = Math.min(ratio, 1) * 100;
+    // Two bands only: grey if under 70%, green otherwise.
+    // Doing more than planned is not a warning — ACWR/injury risk surface that separately.
+    const color = ratio < 0.7 ? 'var(--c-muted)' : 'var(--c-ok)';
+    return `<div class="m-prog-fill" style="width:${width}%;background:${color}"></div>`;
   }
 
   return `
-    <div class="section px-[18px] mb-[14px]">
-      <div class="m-sec-label">This Week</div>
-      <div class="m-card p-4 flex flex-col gap-[13px]">
+    <div style="padding:0 16px;margin-bottom:14px" class="hf" data-delay="0.08">
+      <div id="this-week-card" style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden;cursor:pointer">
+        <div style="position:relative;z-index:1;padding:16px 20px 18px;display:flex;flex-direction:column;gap:13px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:10px;font-weight:600;color:var(--c-faint);letter-spacing:0.1em;text-transform:uppercase">This Week</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25;color:var(--c-muted)"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </div>
 
-        <div class="flex flex-col gap-[7px]">
-          <div class="flex justify-between items-baseline">
-            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Sessions</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${sessionsDone} / ${sessionsPlan}</span>
-          </div>
-          <div class="relative" style="height:5px">
-            <div class="m-prog-track w-[88%]">${fillBar(sessionsDone, sessionsPlan)}</div>
-            ${overLabel(sessionsDone, sessionsPlan)}
-          </div>
-        </div>
-
-        <div class="flex flex-col gap-[7px]">
-          <div class="flex justify-between items-baseline">
-            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Distance</span>
-            <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${formatKm(kmDone, s.unitPref ?? 'km')} / ${formatKm(kmPlan, s.unitPref ?? 'km')}</span>
-          </div>
-          <div class="relative" style="height:5px">
-            <div class="m-prog-track w-[88%]">${fillBar(kmDone, kmPlan)}</div>
-            ${overLabel(kmDone, kmPlan)}
-          </div>
-        </div>
-
-        <div id="home-tss-row" class="flex flex-col gap-[7px]" style="cursor:pointer">
-          <div class="flex justify-between items-baseline">
-            <span class="text-[11px] font-semibold" style="color:var(--c-muted)">Training Load (TSS)</span>
-            <div class="flex items-center gap-[6px]">
-              <span class="text-[12px] font-medium" style="letter-spacing:-0.01em;color:var(--c-black)">${tssActual} / ${Math.round(tssPlan)} TSS</span>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.25"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.02em">Sessions</span>
+              <span style="font-size:13px;font-weight:400;letter-spacing:-0.02em;color:var(--c-black)">${sessionsDone}<span style="color:var(--c-faint)"> / ${sessionsPlan}</span></span>
             </div>
+            <div class="m-prog-track" style="background:rgba(0,0,0,0.08)">${fillBar(sessionsDone, sessionsPlan)}</div>
           </div>
-          <div class="relative" style="height:5px">
-            <div class="m-prog-track w-[88%]">${fillBar(tssActual, tssPlan)}</div>
-            ${overLabel(tssActual, tssPlan, 'excess load')}
-          </div>
-        </div>
 
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.02em">Distance</span>
+              <span style="font-size:13px;font-weight:400;letter-spacing:-0.02em;color:var(--c-black)">${formatKm(kmDone, s.unitPref ?? 'km')}<span style="color:var(--c-faint)"> / ${formatKm(kmPlan, s.unitPref ?? 'km')}</span></span>
+            </div>
+            <div class="m-prog-track" style="background:rgba(0,0,0,0.08)">${fillBar(kmDone, kmPlan)}</div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;align-items:baseline">
+              <span style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.02em">Training Load</span>
+              <span style="font-size:13px;font-weight:400;letter-spacing:-0.02em;color:var(--c-black)">${tssActual}<span style="color:var(--c-faint)"> / ${Math.round(tssPlan)} TSS</span></span>
+            </div>
+            <div class="m-prog-track" style="background:rgba(0,0,0,0.08)">${fillBar(tssActual, tssPlan)}</div>
+          </div>
+
+          ${buildAdherenceRow(s)}
+        </div>
       </div>
     </div>
   `;
+}
+
+// ─── Plan Adherence Row ─────────────────────────────────────────────────────
+
+function buildAdherenceRow(s: SimulatorState): string {
+  const { pct, totalPlanned, totalCompleted } = computePlanAdherence(s);
+  if (pct == null) return '';
+
+  const width = Math.min(pct, 100);
+  const color = pct < 70 ? 'var(--c-muted)' : 'var(--c-ok)';
+
+  return `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.02em">Plan Adherence</span>
+        <span style="font-size:13px;font-weight:400;letter-spacing:-0.02em;color:var(--c-black)">${totalCompleted}<span style="color:var(--c-faint)"> / ${totalPlanned} runs</span></span>
+      </div>
+      <div class="m-prog-track" style="background:rgba(0,0,0,0.08)">
+        <div class="m-prog-fill" style="width:${width}%;background:${color}"></div>
+      </div>
+    </div>`;
 }
 
 // ─── SVG arc helpers ────────────────────────────────────────────────────────
@@ -873,8 +731,12 @@ function buildReadinessRing(s: SimulatorState): string {
   );
   const latestPhysio = s.physiologyHistory?.slice(-1)[0];
   const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
-  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestPhysio?.sleepScore ?? null;
-  const hrvRmssd: number | null = latestPhysio?.hrvRmssd ?? null;
+  // Fall back to the most recent entry that has a sleep score (not just the absolute last entry,
+  // which may be today's dailies row before Garmin has pushed the sleep score).
+  const latestWithSleep = (s.physiologyHistory ?? []).slice().reverse().find(p => p.sleepScore != null);
+  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestWithSleep?.sleepScore ?? null;
+  const latestWithHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null);
+  const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
   const hrvAll = (s.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
   const hrvPersonalAvg: number | null = hrvAll.length >= 3
     ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length)
@@ -912,10 +774,12 @@ function buildReadinessRing(s: SimulatorState): string {
   // handled by matched-activity zones when it actually happens.
   const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
   const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKmH);
-  // Per-session average: CTL / number of training days (uses all workouts for count)
+  // Per-session average: planned week TSS / training day count (tracks plan intent, not CTL history)
   const trainingDayCount = [0,1,2,3,4,5,6]
-    .filter(d => computePlannedDaySignalBTSS(plannedWorkouts, d, baseMinPerKmH) > 0).length || 4;
-  const perSessionAvg = (s.ctlBaseline ?? 0) / trainingDayCount;
+    .filter(d => computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH) > 0).length || 4;
+  const plannedWeekTSS = [0,1,2,3,4,5,6]
+    .reduce((sum, d) => sum + computePlannedDaySignalBTSS(runWorkouts, d, baseMinPerKmH), 0);
+  const perSessionAvg = trainingDayCount > 0 ? plannedWeekTSS / trainingDayCount : 0;
   // Detect matched activity on a day with no generated workout
   let matchedActivityToday = false;
   if (plannedDayTSS === 0 && strainWk) {
@@ -929,7 +793,7 @@ function buildReadinessRing(s: SimulatorState): string {
   const hasPlannedWorkout = plannedDayTSS > 0;
   const isRestDay = !hasPlannedWorkout && !matchedActivityToday;
   // Rest-day overreach: activity exceeds a typical light session (50% of per-session avg)
-  const restDayOverreachThreshold = perSessionAvg * 0.5;
+  const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
   const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
   // Strain: two scales for different purposes.
   // Linear (actual/target × 100) — used for the readiness floor thresholds.
@@ -958,7 +822,8 @@ function buildReadinessRing(s: SimulatorState): string {
     if (idx >= 0) return h.map((p, i) => i === idx ? { ...p, sleepScore: manualSleepToday0.sleepScore } : p);
     return [...h, { date: todayStr0, sleepScore: manualSleepToday0.sleepScore }];
   })();
-  const recoveryResult = computeRecoveryScore(physioForRecovery0, { manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined });
+  const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
+  const recoveryResult = computeRecoveryScore(physioForRecovery0, { manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined, sleepDebtSec: sleepDebtForRecovery });
 
   const readiness: ReadinessResult = computeReadiness({
     tsb,
@@ -1008,35 +873,50 @@ function buildReadinessRing(s: SimulatorState): string {
   const trackPath = arcPath(CX, CY, R, START, START + SWEEP);
   const fillPathStr = readiness.score > 0 ? arcPath(CX, CY, R, START, Math.min(fillEnd, START + SWEEP - 0.01)) : '';
 
-  // Strain zone: safe range depends on day type
-  // Matched/adhoc: zones relative to per-session average (CTL / training days)
-  const adhocPct = matchedActivityToday && perSessionAvg > 0 ? (todaySignalBTSS / perSessionAvg) * 100 : 0;
+  // ── Strain ring: absolute TSS with target marker ────────────────────────
+  // Readiness-modulated target range (matches strain-view logic)
+  const strainTarget = computeDayTargetTSS(
+    plannedDayTSS,
+    readiness.label as any,
+    perSessionAvg,
+    isRestDay,
+    matchedActivityToday,
+  );
+  // Auto-scaling: ringMax = max(2 × target.hi, actual × 1.25)
+  const strainRingMax = Math.max(strainTarget.hi * 2, todaySignalBTSS * 1.25, 1);
+
+  // Colour: orange (working) → green (in range) → red (exceeded)
   let strainColor: string;
   let strainLabel: string;
-  if (isRestDay) {
-    strainColor = isRestDayOverreaching ? 'var(--c-warn)' : (todaySignalBTSS > 0 ? 'var(--c-ok)' : 'var(--c-faint)');
-    strainLabel = isRestDayOverreaching ? 'Overreaching' : (todaySignalBTSS > 0 ? 'Active rest' : 'Rest day');
-  } else if (matchedActivityToday) {
-    strainColor = adhocPct >= 150 ? 'var(--c-warn)' : adhocPct >= 80 ? 'var(--c-ok)' : 'var(--c-faint)';
-    strainLabel = adhocPct >= 150 ? 'High' : adhocPct >= 80 ? 'Optimal' : adhocPct >= 50 ? 'Moderate' : 'Light';
+  if (isRestDay && isRestDayOverreaching) {
+    strainColor = 'var(--c-warn)';
+    strainLabel = 'High for rest day';
+  } else if (strainTarget.mid > 0 && todaySignalBTSS > strainTarget.hi * 1.3) {
+    strainColor = 'var(--c-warn)';
+    strainLabel = 'Load exceeded';
+  } else if (strainTarget.mid > 0 && todaySignalBTSS >= strainTarget.lo) {
+    strainColor = 'var(--c-ok)';
+    strainLabel = todaySignalBTSS > strainTarget.hi ? 'Above target' : 'Target reached';
+  } else if (todaySignalBTSS > 0) {
+    strainColor = 'var(--c-caution)';
+    strainLabel = todaySignalBTSS < strainTarget.lo * 0.5 ? 'Light' : 'Building';
   } else {
-    strainColor = strainPctLinear >= 130 ? 'var(--c-warn)' : strainPctLinear >= 80 ? 'var(--c-ok)' : 'var(--c-caution)';
-    strainLabel = strainPctLinear >= 130 ? 'Exceeded' : strainPctLinear >= 100 ? 'Complete' : strainPctLinear >= 80 ? 'On target' : 'Below target';
+    strainColor = 'var(--c-faint)';
+    strainLabel = isRestDay ? 'Rest day' : (hasPlannedWorkout ? 'Not started' : 'Rest day');
   }
-  // Ring fill: planned days use plan %, adhoc uses session %, rest only fills on overreach
-  const strainFillPct = isRestDay
-    ? (isRestDayOverreaching ? 1 : 0)
-    : matchedActivityToday
-      ? Math.min(adhocPct / 130, 1) // 130% of session avg = full ring
-      : Math.min(strainPctLog / 100, 1);
+
+  // Ring fill: TSS as fraction of ringMax
+  const strainFillPct = todaySignalBTSS > 0 ? Math.min(todaySignalBTSS / strainRingMax, 1) : 0;
   const strainFillEnd = START + strainFillPct * SWEEP;
   const sTrackPath = arcPath(CX, CY, R, START, START + SWEEP);
   const sArcFill = strainFillPct > 0
     ? arcPath(CX, CY, R, START, Math.min(strainFillEnd, START + SWEEP - 0.01))
     : '';
 
+  // Target dashes removed — too noisy at 66px ring size
+
   // Sleep ring
-  const sleepEntry = garminTodaySleep ?? latestPhysio;
+  const sleepEntry = garminTodaySleep ?? latestWithSleep;
   const sleepDurationSec = sleepEntry?.sleepDurationSec ?? null;
   const sleepRingColor = sleepScore != null ? sleepScoreColor(sleepScore) : 'var(--c-faint)';
   const sleepFillEnd = START + ((sleepScore ?? 0) / 100) * SWEEP;
@@ -1057,7 +937,7 @@ function buildReadinessRing(s: SimulatorState): string {
   const momentumColor = momentumScore > momentumThreshold ? 'var(--c-ok)' : momentumScore >= -momentumThreshold * 2 ? 'var(--c-caution)' : 'var(--c-warn)';
 
   const recoveryScoreColor = recoveryResult.hasData
-    ? (recoveryResult.score! < 40 ? 'var(--c-warn)' : recoveryResult.score! < 65 ? 'var(--c-caution)' : 'var(--c-ok)')
+    ? (recoveryResult.score! >= 80 ? 'var(--c-ok)' : recoveryResult.score! >= 65 ? 'var(--c-ok-muted)' : recoveryResult.score! >= 50 ? 'var(--c-caution)' : 'var(--c-warn)')
     : 'var(--c-faint)';
 
   // Recovery ring arc paths
@@ -1105,41 +985,40 @@ function buildReadinessRing(s: SimulatorState): string {
   }
 
   return `
-    <div class="section px-[18px] mb-[14px]">
-      <div class="m-sec-label">Training Readiness</div>
-      <div id="home-readiness-card" class="m-card overflow-hidden">
+    <div style="padding:0 16px;margin-bottom:10px" class="hf" data-delay="0.18">
+      <div id="home-readiness-card" style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
 
         <!-- Readiness hero ring — top centre -->
-        <div style="display:flex;justify-content:center;padding:24px 8px 4px">
+        <div style="display:flex;justify-content:center;padding:20px 8px 10px">
           <div id="home-readiness-ring" style="display:flex;flex-direction:column;align-items:center;cursor:pointer">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Readiness</div>
-            <div style="position:relative;width:140px;height:140px">
-              <svg viewBox="0 0 120 120" width="140" height="140" style="display:block;overflow:visible">
+            <div style="position:relative;width:120px;height:120px">
+              <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
                 <path d="${trackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${fillPathStr ? `<path d="${fillPathStr}" fill="none" stroke="${color}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+                ${fillPathStr ? (() => { const arcLen = Math.ceil(2 * Math.PI * R * (readiness.score / 100) * (SWEEP / 360)); return `<path d="${fillPathStr}" fill="none" stroke="${color}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${arcLen}" stroke-dashoffset="${arcLen}" class="arc-anim"/>`; })() : ''}
               </svg>
-              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-4px">
-                <div style="font-size:34px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
-                <div style="font-size:11px;font-weight:600;letter-spacing:0.01em;margin-top:3px;color:var(--c-black)">${readiness.label}</div>
+              <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
+                <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
+                <div style="font-size:10px;font-weight:600;letter-spacing:0.01em;margin-top:4px;color:var(--c-black)">${readiness.label}</div>
               </div>
             </div>
           </div>
         </div>
 
         <!-- Sub-signals row: Sleep · Strain · Physiology -->
-        <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:space-around;padding:8px 4px 8px;gap:0">
+        <div style="display:flex;flex-direction:row;align-items:flex-start;justify-content:space-around;padding:6px 8px 12px;gap:0">
 
           <!-- Sleep ring -->
           <div id="home-sleep-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && sleepScore == null ? ';opacity:0.35' : ''}">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Sleep</div>
-            <div style="position:relative;width:80px;height:80px">
-              <svg viewBox="0 0 120 120" width="80" height="80" style="display:block;overflow:visible">
+            <div style="position:relative;width:66px;height:66px">
+              <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <path d="${slTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${slArcFill ? `<path d="${slArcFill}" fill="none" stroke="${sleepRingColor}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+                ${slArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((sleepScore ?? 0) / 100) * (SWEEP / 360)); return `<path d="${slArcFill}" fill="none" stroke="${sleepRingColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 ${sleepScore != null
-                  ? `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${sleepRingColor}">${Math.round(sleepScore)}</div>
+                  ? `<div style="font-size:17px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${sleepRingColor}">${Math.round(sleepScore)}</div>
                      ${sleepDurationSec != null ? `<div style="font-size:8px;color:var(--c-faint);margin-top:1px">${fmtSleepDuration(sleepDurationSec)}</div>` : ''}`
                   : noWatch
                     ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
@@ -1152,41 +1031,23 @@ function buildReadinessRing(s: SimulatorState): string {
           </div>
 
           <!-- Strain ring -->
-          <div id="home-strain-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
+          <div id="home-strain-ring" data-readiness-label="${readiness.label}" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Strain</div>
-            <div style="position:relative;width:80px;height:80px">
-              <svg viewBox="0 0 120 120" width="80" height="80" style="display:block;overflow:visible">
+            <div style="position:relative;width:66px;height:66px">
+              <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <path d="${sTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${sArcFill ? `<path d="${sArcFill}" fill="none" stroke="${strainColor}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+                ${sArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * strainFillPct * (SWEEP / 360)); return `<path d="${sArcFill}" fill="none" stroke="${strainColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
-                ${(() => {
-                  const parts: string[] = [];
-                  if (todaySteps != null && todaySteps > 0) parts.push(`${todaySteps.toLocaleString()} steps`);
-                  if (todayActiveMin != null && todayActiveMin > 0) parts.push(`${todayActiveMin}min active`);
-                  const stepsLine = parts.length > 0
-                    ? `<div style="font-size:8px;color:var(--c-faint);margin-top:2px">${parts.join(' · ')}</div>`
-                    : '';
-                  if (isRestDay) {
-                    // Rest day: show TSS if any, zone label
-                    return `<div style="font-size:16px;font-weight:300;letter-spacing:-0.02em;line-height:1;color:${todaySignalBTSS > 0 ? strainColor : 'var(--c-faint)'}">${todaySignalBTSS > 0 ? Math.round(todaySignalBTSS) : 'Rest'}</div>
-                     <div style="font-size:8px;color:var(--c-faint);margin-top:3px">${todaySignalBTSS > 0 ? 'TSS' : 'No sessions'}</div>
-                     ${todaySignalBTSS > 0 ? `<div style="font-size:9px;font-weight:600;letter-spacing:0.01em;margin-top:1px;color:${strainColor}">${strainLabel}</div>` : ''}${stepsLine}`;
-                  } else if (todaySignalBTSS > 0) {
-                    // Trained today (planned or adhoc): show TSS + zone label, no "/ X target"
-                    return `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${strainColor}">${Math.round(todaySignalBTSS)}</div>
-                       <div style="font-size:8px;color:var(--c-faint);margin-top:1px">TSS</div>
-                       <div style="font-size:9px;font-weight:600;letter-spacing:0.01em;margin-top:1px;color:${strainColor}">${strainLabel}</div>${stepsLine}`;
-                  } else if (hasPlannedWorkout) {
-                    // Planned but not started
-                    return `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">${Math.round(plannedDayTSS)}</div>
-                       <div style="font-size:8px;color:var(--c-faint);margin-top:1px">TSS planned</div>
-                       <div style="font-size:9px;font-weight:600;letter-spacing:0.01em;margin-top:1px;color:var(--c-faint)">Not started</div>${stepsLine}`;
-                  } else {
-                    return `<div style="font-size:16px;font-weight:300;letter-spacing:-0.02em;line-height:1;color:var(--c-faint)">Rest</div>
-                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No sessions</div>${stepsLine}`;
-                  }
-                })()}
+                ${todaySignalBTSS > 0
+                  ? `<div style="font-size:19px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${strainColor}">${Math.round(todaySignalBTSS)}</div>
+                     <div style="font-size:8px;color:var(--c-faint);margin-top:2px">TSS</div>`
+                  : hasPlannedWorkout
+                    ? `<div style="font-size:17px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-faint)">\u2014</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:1px">TSS</div>`
+                    : `<div style="font-size:16px;font-weight:300;letter-spacing:-0.02em;line-height:1;color:var(--c-faint)">Rest</div>
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No sessions</div>`
+                }
               </div>
             </div>
           </div>
@@ -1194,14 +1055,14 @@ function buildReadinessRing(s: SimulatorState): string {
           <!-- Physiology ring (was Recovery) -->
           <div id="home-recovery-ring" style="flex:1;display:flex;flex-direction:column;align-items:center;cursor:pointer${noWatch && !recoveryResult.hasData ? ';opacity:0.35' : ''}">
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Physiology</div>
-            <div style="position:relative;width:80px;height:80px">
-              <svg viewBox="0 0 120 120" width="80" height="80" style="display:block;overflow:visible">
+            <div style="position:relative;width:66px;height:66px">
+              <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
                 <path d="${recTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${recArcFill ? `<path d="${recArcFill}" fill="none" stroke="${recoveryScoreColor}" stroke-width="${SW}" stroke-linecap="round"/>` : ''}
+                ${recArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((recoveryResult.score ?? 0) / 100) * (SWEEP / 360)); return `<path d="${recArcFill}" fill="none" stroke="${recoveryScoreColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 ${recoveryResult.hasData && recoveryResult.score != null
-                  ? `<div style="font-size:20px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${recoveryScoreColor}">${recoveryResult.score}</div>
+                  ? `<div style="font-size:17px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${recoveryScoreColor}">${recoveryResult.score}</div>
                      <div style="font-size:8px;color:var(--c-faint);margin-top:1px">/100</div>`
                   : noWatch
                     ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
@@ -1236,7 +1097,7 @@ function buildReadinessRing(s: SimulatorState): string {
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
 
         ${readiness.score <= 59 ? `
-        <div style="padding:0 14px 14px">
+        <div style="padding:0 14px 16px">
           <button id="readiness-adjust-btn" style="width:100%;padding:9px 14px;border-radius:999px;border:1px solid var(--c-border);cursor:pointer;font-size:13px;font-weight:500;background:transparent;color:var(--c-black);font-family:var(--f);text-align:center">
             ${adjustText}
           </button>
@@ -1425,8 +1286,8 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
           { l: 'Good', f: 20, c: 'rgba(52,199,89,0.45)' },
           { l: 'Excellent', f: 25, c: 'rgba(52,199,89,0.75)' },
         ];
-        const metricZone = score >= 75 ? 'Excellent' : score >= 55 ? 'Good' : score >= 35 ? 'Fair' : 'Poor';
-        const metricColor = score >= 55 ? 'var(--c-ok)' : score >= 35 ? 'var(--c-caution)' : 'var(--c-warn)';
+        const metricZone = score >= 80 ? 'Excellent' : score >= 65 ? 'Good' : score >= 50 ? 'Fair' : 'Poor';
+        const metricColor = score >= 80 ? 'var(--c-ok)' : score >= 65 ? 'var(--c-ok-muted)' : score >= 50 ? 'var(--c-caution)' : 'var(--c-warn)';
         const headerRight = primaryRight
           ? `<span style="font-size:14px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${primaryRight}</span>`
           : `<span style="font-size:11px;color:${metricColor};font-variant-numeric:tabular-nums"><strong>${Math.round(score)}/100</strong> · ${metricZone}</span>`;
@@ -1632,34 +1493,34 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
   ].filter(Boolean);
 
   const metaHtml = metaItems.map((item, i) => `
-    <div class="flex flex-col gap-[2px] flex-1 ${i > 0 ? 'border-l pl-[14px]' : ''}" style="${i > 0 ? 'border-color:rgba(0,0,0,0.09)' : ''}">
+    <div style="display:flex;flex-direction:column;gap:2px;flex:1;${i > 0 ? 'border-left:1px solid rgba(0,0,0,0.09);padding-left:14px' : ''}">
       <span style="font-size:16px;font-weight:400;letter-spacing:-0.02em">${item!.val}</span>
-      <span class="text-[10px] font-semibold uppercase tracking-[0.08em]" style="color:var(--c-faint)">${item!.lbl}</span>
+      <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">${item!.lbl}</span>
     </div>
   `).join('');
 
   const viewBtn = act.workoutKey
-    ? `<button id="home-today-view-activity-btn" data-workout-key="${act.workoutKey}" data-week-num="${act.weekNum}" class="m-pill m-pill-ok" style="cursor:pointer"><span class="m-pill-dot"></span>Done · View</button>`
-    : `<span class="m-pill m-pill-ok" style="pointer-events:none"><span class="m-pill-dot"></span>Done</span>`;
+    ? `<button id="home-today-view-activity-btn" data-workout-key="${act.workoutKey}" data-week-num="${act.weekNum}" style="cursor:pointer;padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);font-size:12px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Done · View</button>`
+    : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
   return `
-    <div class="workout-hero-bg mb-[14px]">
-      <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.9" width="200" height="200" viewBox="0 0 200 200" fill="none">
-        <circle cx="100" cy="100" r="30" stroke="rgba(78,159,229,0.18)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="55" stroke="rgba(78,159,229,0.14)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="82" stroke="rgba(78,159,229,0.10)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="112" stroke="rgba(78,159,229,0.07)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="145" stroke="rgba(78,159,229,0.04)" stroke-width="1"/>
-        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
-        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
+    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
+      <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
+        <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.12)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="55" stroke="rgba(0,0,0,0.09)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="82" stroke="rgba(0,0,0,0.07)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="112" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="145" stroke="rgba(0,0,0,0.035)" stroke-width="1"/>
+        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
+        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
       </svg>
-      <div class="relative z-10 px-[22px] py-[20px]">
-        <div class="flex justify-between items-start mb-[14px]">
-          <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
+      <div style="position:relative;z-index:1;padding:20px 22px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+          <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
           ${viewBtn}
         </div>
         <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;margin-bottom:5px">${act.name}</div>
-        <div class="flex gap-0 items-center pt-[14px]" style="border-top:1px solid rgba(0,0,0,0.09)">
+        <div style="display:flex;align-items:center;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09)">
           ${metaHtml}
         </div>
       </div>
@@ -1753,41 +1614,41 @@ function buildTodayWorkout(s: SimulatorState): string {
   ].filter(Boolean);
 
   const metaHtml = metaItems.map((item, i) => `
-    <div class="flex flex-col gap-[2px] flex-1 ${i > 0 ? 'border-l pl-[14px]' : ''}" style="${i > 0 ? 'border-color:rgba(0,0,0,0.09)' : ''}">
+    <div style="display:flex;flex-direction:column;gap:2px;flex:1;${i > 0 ? 'border-left:1px solid rgba(0,0,0,0.09);padding-left:14px' : ''}">
       <span style="font-size:16px;font-weight:400;letter-spacing:-0.02em">${item!.val}</span>
-      <span class="text-[10px] font-semibold uppercase tracking-[0.08em]" style="color:var(--c-faint)">${item!.lbl}</span>
+      <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">${item!.lbl}</span>
     </div>
   `).join('');
 
   const startBtn = !alreadyRated
-    ? `<button id="home-start-btn" data-workout-id="${workoutId}" data-name="${name.replace(/"/g, '&quot;')}" data-desc="${rawDesc.replace(/"/g, '&quot;')}" class="m-btn-primary">
+    ? `<button id="home-start-btn" data-workout-id="${workoutId}" data-name="${name.replace(/"/g, '&quot;')}" data-desc="${rawDesc.replace(/"/g, '&quot;')}" style="background:var(--c-black);color:#fff;border:none;border-radius:100px;padding:9px 18px;font-size:13px;font-weight:600;font-family:var(--f);cursor:pointer;display:inline-flex;align-items:center;gap:6px;letter-spacing:0.01em">
         <span style="width:12px;height:12px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
         Start
       </button>`
     : matchedActual
-      ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" class="m-pill m-pill-ok" style="cursor:pointer"><span class="m-pill-dot"></span>Done · View</button>`
-      : `<span class="m-pill m-pill-ok" style="pointer-events:none"><span class="m-pill-dot"></span>Done</span>`;
+      ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" style="cursor:pointer;padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);font-size:12px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Done · View</button>`
+      : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
   return `
-    <div class="workout-hero-bg mb-[14px]">
-      <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none;opacity:0.9" width="200" height="200" viewBox="0 0 200 200" fill="none">
-        <circle cx="100" cy="100" r="30" stroke="rgba(78,159,229,0.18)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="55" stroke="rgba(78,159,229,0.14)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="82" stroke="rgba(78,159,229,0.10)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="112" stroke="rgba(78,159,229,0.07)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="145" stroke="rgba(78,159,229,0.04)" stroke-width="1"/>
-        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
-        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(78,159,229,0.08)" stroke-width="0.8"/>
+    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
+      <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
+        <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.12)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="55" stroke="rgba(0,0,0,0.09)" stroke-width="1.2"/>
+        <circle cx="100" cy="100" r="82" stroke="rgba(0,0,0,0.07)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="112" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="145" stroke="rgba(0,0,0,0.035)" stroke-width="1"/>
+        <line x1="100" y1="0" x2="100" y2="200" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
+        <line x1="0" y1="100" x2="200" y2="100" stroke="rgba(0,0,0,0.06)" stroke-width="0.8"/>
       </svg>
-      <div class="relative z-10 px-[22px] py-[20px]">
-        <div class="flex justify-between items-start mb-[14px]">
-          <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
+      <div style="position:relative;z-index:1;padding:20px 22px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+          <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
           ${startBtn}
         </div>
         <div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1.05;margin-bottom:5px">${name}</div>
-        ${desc ? `<div class="m-text-caption mb-[16px]">${desc}</div>` : ''}
+        ${desc ? `<div style="font-size:11px;color:var(--c-muted);line-height:1.4;margin-bottom:16px">${desc}</div>` : ''}
         ${exercises.length > 0 ? `
-        <details class="mb-[16px]" style="cursor:pointer">
+        <details style="cursor:pointer;margin-bottom:16px">
           <summary style="list-style:none;font-size:12px;font-weight:600;letter-spacing:0.04em;color:var(--c-faint);text-transform:uppercase;display:flex;align-items:center;gap:6px">
             <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" style="transition:transform 0.15s;flex-shrink:0"><path d="M2 3l3 4 3-4"/></svg>
             Exercises (${exercises.length})
@@ -1796,9 +1657,9 @@ function buildTodayWorkout(s: SimulatorState): string {
             ${exercises.map((ex: string) => `<div style="font-size:13px;color:var(--c-muted);line-height:1.4;padding-left:4px">• ${ex}</div>`).join('')}
           </div>
         </details>` : ''}
-        <div class="flex gap-0 items-center pt-[14px]" style="border-top:1px solid rgba(0,0,0,0.09)">
+        <div style="display:flex;align-items:center;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09)">
           ${metaHtml}
-          <button id="home-view-plan-btn" class="m-btn-link ml-auto pl-[14px]" style="border-left:1px solid rgba(0,0,0,0.09);white-space:nowrap">
+          <button id="home-view-plan-btn" style="margin-left:auto;padding-left:14px;border-left:1px solid rgba(0,0,0,0.09);white-space:nowrap;background:none;border-top:none;border-right:none;border-bottom:none;padding-top:0;padding-bottom:0;padding-right:0;font-size:12px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f);display:inline-flex;align-items:center;gap:3px">
             View
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
@@ -1832,22 +1693,22 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
   }
 
   return `
-    <div class="workout-hero-bg mb-[14px]" style="background:#F7F5F0">
+    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
       <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
-        <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="60" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="95" stroke="rgba(0,0,0,0.04)" stroke-width="1"/>
-        <circle cx="100" cy="100" r="135" stroke="rgba(0,0,0,0.03)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="60" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="95" stroke="rgba(0,0,0,0.05)" stroke-width="1"/>
+        <circle cx="100" cy="100" r="135" stroke="rgba(0,0,0,0.04)" stroke-width="1"/>
       </svg>
-      <div class="relative z-10 px-[22px] py-[20px]">
-        <div class="flex justify-between items-start mb-[14px]">
-          <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
+      <div style="position:relative;z-index:1;padding:20px 22px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px">
+          <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint)">${DAY_LABELS[ourDay]} · Today</span>
         </div>
         <div style="font-size:22px;font-weight:300;letter-spacing:-0.03em;opacity:0.45;margin-bottom:5px">${title}</div>
-        <div class="m-text-caption mb-[16px]">${subtitle}</div>
-        <div class="flex justify-between items-center pt-[14px]" style="border-top:1px solid rgba(0,0,0,0.09)">
-          <span class="text-[12px]" style="color:var(--c-muted)">${nextLabel}</span>
-          <button id="home-view-plan-btn" class="m-btn-link">
+        <div style="font-size:11px;color:var(--c-muted);line-height:1.4;margin-bottom:16px">${subtitle}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid rgba(0,0,0,0.09)">
+          <span style="font-size:12px;color:var(--c-muted)">${nextLabel}</span>
+          <button id="home-view-plan-btn" style="background:none;border:none;padding:0;font-size:12px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f);display:inline-flex;align-items:center;gap:3px">
             View plan
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
@@ -1857,33 +1718,6 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
   `;
 }
 
-function buildRaceCountdown(s: SimulatorState): string {
-  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate;
-  const raceName = s.selectedMarathon?.name || 'Your Race';
-  if (!raceDate || s.continuousMode) return '';
-
-  const days = daysUntil(raceDate);
-  if (days <= 0) return '';
-
-  const weeks = Math.floor(days / 7);
-  const display = days <= 14 ? `${days}` : `${weeks}`;
-  const unit = days <= 14 ? 'days' : 'weeks';
-
-  return `
-    <div class="px-[18px] mb-[14px]">
-      <div class="m-card px-[18px] py-[14px] flex items-center justify-between">
-        <div class="flex flex-col gap-[3px]">
-          <span class="text-[10px] font-semibold uppercase tracking-[0.1em]" style="color:var(--c-faint)">Race Day</span>
-          <span style="font-size:15px;font-weight:400;letter-spacing:-0.02em">${raceName}</span>
-        </div>
-        <div class="flex items-baseline gap-[5px]">
-          <span style="font-size:44px;font-weight:300;letter-spacing:-0.05em;line-height:1">${display}</span>
-          <span style="font-size:13px;color:var(--c-muted)">${unit}</span>
-        </div>
-      </div>
-    </div>
-  `;
-}
 
 function buildRecentActivity(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
@@ -1896,8 +1730,12 @@ function buildRecentActivity(s: SimulatorState): string {
   function addFromWk(week: typeof wk, weekNum: number) {
     if (!week) return;
     const isCurrentWeek = weekNum === s.w;
-    // Garmin synced actuals
+    // Build set of adhoc garmin IDs to avoid duplicates — addAdhocWorkoutFromPending
+    // creates entries in both garminActuals and adhocWorkouts with the same garmin-* key.
+    const adhocIds = new Set((week.adhocWorkouts || []).filter((w: any) => w.id?.startsWith('garmin-')).map((w: any) => w.id));
+    // Garmin synced actuals (skip garmin-* keys that have a matching adhocWorkout)
     Object.entries(week.garminActuals || {}).forEach(([key, act]: [string, any]) => {
+      if (key.startsWith('garmin-') && adhocIds.has(key)) return;
       const isRun = isRunKey(key, act.activityType);
       const dateStr = act.startTime ? fmtDate(act.startTime) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationSec ? `${Math.round(act.durationSec / 60)} min` : '';
@@ -1980,73 +1818,128 @@ function buildRecentActivity(s: SimulatorState): string {
   }).join('');
 
   return `
-    <div class="px-[18px] mb-[14px]">
-      <div class="m-sec-label">Recent</div>
-      <div class="m-card overflow-hidden">${rowsHtml}</div>
+    <div style="padding:0 16px;margin-bottom:14px" class="hf" data-delay="0.32">
+      <div style="font-size:12px;font-weight:600;color:#64748B;margin-bottom:8px">Recent</div>
+      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">${rowsHtml}</div>
     </div>
   `;
 }
 
 function buildSyncActions(s: SimulatorState): string {
-  const wk = s.wks?.[s.w - 1];
   const hasPending = (s as any).pendingActivities?.length > 0;
-  const allRated = wk
-    ? Object.values(wk.rated || {}).filter(v => (typeof v === 'number' && v > 0) || v === 'skip').length >= (s.rw || 5)
-    : false;
-
-  const buttons: string[] = [];
-  if (hasPending) {
-    buttons.push(`<button id="home-sync-btn" class="m-btn-secondary flex-1">↻ Sync Activities</button>`);
-  }
-  if (allRated && !(wk as any)?.weekCompleted) {
-    buttons.push(`<button id="home-complete-week-btn" class="m-btn-secondary flex-1">✓ Complete Week</button>`);
-  }
-  if (buttons.length === 0) return '';
+  if (!hasPending) return '';
 
   return `
-    <div class="px-[18px] mb-[14px] flex gap-[10px]">
-      ${buttons.join('')}
+    <div style="padding:0 16px;margin-bottom:14px;display:flex;gap:10px">
+      <button id="home-sync-btn" class="m-btn-secondary flex-1">↻ Sync Activities</button>
     </div>
   `;
 }
 
 // ─── Main render ────────────────────────────────────────────────────────────
 
+function getHomePlanName(s: SimulatorState): string {
+  if (s.continuousMode) return 'Fitness Plan';
+  const labels: Record<string, string> = {
+    '5k': '5K Plan', '10k': '10K Plan',
+    half: 'Half Marathon Plan', marathon: 'Marathon Plan',
+  };
+  return labels[s.rd] || 'Training Plan';
+}
+
 function getHomeHTML(s: SimulatorState): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
-  return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
+  const userName = s.onboarding?.name || null;
+  const planTitle = userName ? `${userName}'s ${getHomePlanName(s)}` : `Your ${getHomePlanName(s)}`;
 
-      <!-- Header -->
-      <div style="padding:14px 18px 10px;display:flex;justify-content:space-between;align-items:center">
-        <div>
-          <div style="font-size:24px;font-weight:600;letter-spacing:-0.03em;color:var(--c-black);line-height:1.1">Mosaic</div>
-          ${s.w && s.tw ? `<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-top:2px">Week ${s.w} of ${s.tw}${s.wks?.[s.w - 1]?.ph ? ` · ${s.wks[s.w - 1].ph.charAt(0).toUpperCase() + s.wks[s.w - 1].ph.slice(1)}` : ''}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <button id="home-coach-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap;font-family:var(--f)">Coach</button>
-          <button id="home-checkin-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap;font-family:var(--f)">Check-in</button>
-          <button id="home-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
+  // Race countdown for hero header
+  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate;
+  const raceName = s.selectedMarathon?.name || null;
+  const raceDays = raceDate && !s.continuousMode ? daysUntil(raceDate) : 0;
+  const hasRaceCountdown = raceDays > 0;
+  const raceCountdownDisplay = raceDays <= 14 ? `${raceDays}` : `${Math.floor(raceDays / 7)}`;
+  const raceCountdownUnit = raceDays <= 14 ? 'days' : 'weeks';
+
+  // Phase label
+  const phase = s.wks?.[s.w - 1]?.ph;
+  const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
+
+  return `
+    <style>
+      @keyframes floatUp {
+        from { opacity:0; transform:translateY(16px) scale(0.97); }
+        to   { opacity:1; transform:translateY(0) scale(1); }
+      }
+      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes barGrow { from { width:0% } }
+      .m-prog-fill { animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .arc-anim { animation:arcSweep 1s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes arcSweep { to { stroke-dashoffset:0 } }
+    </style>
+    <div class="mosaic-page" style="background:#FAF9F6;position:relative">
+      <!-- Full-page sky gradient — same as plan page -->
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%)"></div>
+        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="hmBlur"><feGaussianBlur stdDeviation="20"/></filter>
+            <filter id="hmSoft"><feGaussianBlur stdDeviation="6"/></filter>
+          </defs>
+          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#hmSoft)" opacity="0.6"/>
+          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#hmBlur)" opacity="0.35"/>
+          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#hmBlur)" opacity="0.25"/>
+          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#hmSoft)"/>
+          <path d="M-20,350 Q100,330 220,345 T440,335 L440,600 L-20,600 Z" fill="rgba(255,255,255,0.15)"/>
+        </svg>
+      </div>
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
+
+      <!-- Header bar: profile + race countdown -->
+      <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px" class="hf" data-delay="0.02">
+        ${hasRaceCountdown ? `
+          <div style="display:flex;align-items:baseline;gap:3px;padding:4px 12px;border-radius:100px;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,0.06)">
+            <span style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:#0F172A;line-height:1">${raceCountdownDisplay}</span>
+            <span style="font-size:11px;font-weight:500;color:#64748B">${raceCountdownUnit}</span>
+          </div>
+        ` : ''}
+        <button id="home-account-btn" style="width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;cursor:pointer;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.08)">${initials || 'Me'}</button>
+      </div>
+
+      <!-- Hero: title + phase + date — centered, matching Plan page -->
+      <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
+        <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${planTitle}</div>
+        ${phaseLabel ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:10px;letter-spacing:-0.01em">${phaseLabel}</div>` : ''}
+        ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">Week ${s.w} of ${s.tw}</div>` : ''}
+        ${hasRaceCountdown && raceName ? `<div style="font-size:13px;font-weight:500;color:#94A3B8;margin-top:4px">${raceName}</div>` : ''}
+
+        <!-- Action buttons -->
+        <div style="display:flex;justify-content:center;gap:8px;margin-top:18px">
+          <button id="home-coach-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Coach</button>
+          <button id="home-checkin-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Check-in</button>
         </div>
       </div>
 
       ${buildIllnessBanner(s)}
       ${buildHolidayBannerHome(s)}
-      ${buildProgressBars(s)}
-      ${buildReadinessRing(s)}
       ${buildTodayWorkout(s)}
-      ${buildRaceCountdown(s)}
+      ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
 
+      </div>
     </div>
     ${renderTabBar('home', isSimulatorMode())}
   `;
 }
 
 function wireHomeHandlers(): void {
+  // Stagger floatUp animations
+  document.querySelectorAll<HTMLElement>('.hf[data-delay]').forEach(el => {
+    el.style.animationDelay = el.dataset.delay + 's';
+  });
+
   // Tab bar
   wireTabBarHandlers(navigateTab);
 
@@ -2064,8 +1957,13 @@ function wireHomeHandlers(): void {
   // Illness banner — mark recovered
   document.getElementById('home-illness-recover')?.addEventListener('click', () => clearIllness());
 
-  // Holiday banner — end holiday
-  document.getElementById('home-holiday-end')?.addEventListener('click', () => clearHoliday());
+  // Holiday banner — end or cancel holiday
+  document.getElementById('home-holiday-end')?.addEventListener('click', () => {
+    const hs = getState().holidayState;
+    const today = new Date().toISOString().split('T')[0];
+    if (hs && today < hs.startDate) cancelScheduledHoliday(() => renderHomeView());
+    else clearHoliday(() => renderHomeView());
+  });
 
   // Start workout button — launches structured GPS tracking for the selected workout
   document.getElementById('home-start-btn')?.addEventListener('click', (e) => {
@@ -2084,18 +1982,21 @@ function wireHomeHandlers(): void {
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
 
-  // "Done · View" pill on today's hero — opens activity detail for the matched actual
-  document.getElementById('home-today-view-activity-btn')?.addEventListener('click', async () => {
-    const btn = document.getElementById('home-today-view-activity-btn') as HTMLElement | null;
-    if (!btn) return;
-    const workoutKey = btn.dataset.workoutKey || '';
-    const weekNum = parseInt(btn.dataset.weekNum || '0', 10);
-    if (!workoutKey || !weekNum) return;
-    const s2 = getState();
-    const actual = s2.wks?.[weekNum - 1]?.garminActuals?.[workoutKey];
-    if (!actual) return;
-    const { renderActivityDetail } = await import('./activity-detail');
-    renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'home');
+  // "Done · View" pill on today's hero — open activity detail
+  document.getElementById('home-today-view-activity-btn')?.addEventListener('click', () => {
+    const btn = document.getElementById('home-today-view-activity-btn');
+    const workoutKey = btn?.dataset.workoutKey;
+    const weekNum = Number(btn?.dataset.weekNum || 0);
+    const st = getState();
+    const wk = (st.wks ?? [])[weekNum - 1];
+    const actual = wk?.garminActuals?.[workoutKey ?? ''];
+    if (actual) {
+      import('./activity-detail').then(({ renderActivityDetail }) => {
+        renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey || 'Activity', 'home', undefined, workoutKey);
+      });
+    } else {
+      import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    }
   });
 
   // Sync button → go to plan (which has sync)
@@ -2103,15 +2004,12 @@ function wireHomeHandlers(): void {
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
 
-  // Complete week button
-  document.getElementById('home-complete-week-btn')?.addEventListener('click', () => {
-    next();
-  });
 
   // Strain ring — tap opens strain detail page
   document.getElementById('home-strain-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    import('./strain-view').then(({ renderStrainView }) => renderStrainView());
+    const label = document.getElementById('home-strain-ring')?.dataset.readinessLabel ?? null;
+    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any));
   });
 
   // Sleep ring — tap opens sleep detail page
@@ -2178,10 +2076,10 @@ function wireHomeHandlers(): void {
     }
   });
 
-  // TSS row → breakdown sheet
+  // TSS row → Load & Taper page
   document.getElementById('home-tss-row')?.addEventListener('click', () => {
     const s2 = getState();
-    showLoadBreakdownSheet(s2, s2.w);
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(s2.w, 'home'));
   });
 
   // Km row → run breakdown sheet
@@ -2196,17 +2094,19 @@ function wireHomeHandlers(): void {
     showRunBreakdownSheet(s2, s2.w);
   });
 
-  // Recent activity click-through → activity detail page
+  // Recent activity click-through → open activity detail
   document.querySelectorAll<HTMLElement>('.home-act-row').forEach(el => {
-    el.addEventListener('click', async () => {
-      const workoutKey = el.dataset.workoutKey || '';
-      const weekNum = parseInt(el.dataset.weekNum || '0', 10);
-      if (!workoutKey || !weekNum) return;
-      const s2 = getState();
-      const actual = s2.wks?.[weekNum - 1]?.garminActuals?.[workoutKey];
-      if (!actual) return;
-      const { renderActivityDetail } = await import('./activity-detail');
-      renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'home');
+    el.addEventListener('click', () => {
+      const workoutKey = el.dataset.workoutKey;
+      const weekNum = Number(el.dataset.weekNum || 0);
+      const st = getState();
+      const wk = (st.wks ?? [])[weekNum - 1];
+      const actual = wk?.garminActuals?.[workoutKey ?? ''];
+      if (actual) {
+        import('./activity-detail').then(({ renderActivityDetail }) => {
+          renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey || 'Activity', 'home', undefined, workoutKey);
+        });
+      }
     });
   });
 
@@ -2219,33 +2119,26 @@ function wireHomeHandlers(): void {
     });
   });
 
-  // Adhoc activity click → activity detail page
+  // Adhoc activity click → open activity detail
   document.querySelectorAll<HTMLElement>('.home-adhoc-row').forEach(el => {
-    el.addEventListener('click', async () => {
-      const adhocIdx = parseInt(el.dataset.adhocIdx ?? '', 10);
-      const weekNum = parseInt(el.dataset.weekNum ?? '0', 10);
-      if (isNaN(adhocIdx) || !weekNum) return;
-      const s2 = getState();
-      const w = s2.wks?.[weekNum - 1]?.adhocWorkouts?.[adhocIdx] as any;
-      if (!w) return;
-      const fakeActual = {
-        garminId: w.id || '',
-        startTime: w.garminTimestamp ?? null,
-        distanceKm: w.garminDistKm ?? w.distanceKm ?? 0,
-        durationSec: (w.garminDurationMin ?? w.durationMin ?? 0) * 60,
-        avgPaceSecKm: w.garminAvgPace ?? null,
-        avgHR: w.garminAvgHR ?? null,
-        maxHR: w.garminMaxHR ?? null,
-        calories: w.garminCalories ?? null,
-        iTrimp: w.iTrimp ?? null,
-        hrZones: w.hrZones ?? null,
-        polyline: w.polyline ?? null,
-        kmSplits: w.kmSplits ?? null,
-        activityType: w.activityType ?? null,
-        displayName: w.workoutName || w.displayName || w.name || w.n || 'Workout',
-      };
-      const { renderActivityDetail } = await import('./activity-detail');
-      renderActivityDetail(fakeActual as any, fakeActual.displayName, 'home');
+    el.addEventListener('click', () => {
+      const weekNum = Number(el.dataset.weekNum || 0);
+      const adhocIdx = Number(el.dataset.adhocIdx || 0);
+      const st = getState();
+      const wk = (st.wks ?? [])[weekNum - 1];
+      const adhoc = (wk?.adhocWorkouts ?? [])[adhocIdx] as any;
+      if (adhoc) {
+        const fakeActual = {
+          startTime: adhoc.garminTimestamp || '',
+          durationSec: (adhoc.garminDurationMin || adhoc.durationMin || 0) * 60,
+          distanceKm: adhoc.garminDistKm || adhoc.distanceKm || 0,
+          activityType: adhoc.activityType || '',
+          displayName: adhoc.displayName || adhoc.workoutName || adhoc.name || 'Workout',
+        };
+        import('./activity-detail').then(({ renderActivityDetail }) => {
+          renderActivityDetail(fakeActual as any, fakeActual.displayName, 'home');
+        });
+      }
     });
   });
 }
@@ -2259,6 +2152,7 @@ export function renderHomeView(): void {
   setOnWeekAdvance(() => {
     window.location.reload();
   });
+
 }
 
 // ─── Manual sleep picker — centred overlay, 0–100 slider ─────────────────────

@@ -2,7 +2,8 @@ import { getState, getMutableState } from '@/state/store';
 import type { SimulatorState } from '@/types';
 import { saveState } from '@/state/persistence';
 import { render, attachTrackRunHandlers } from './renderer';
-import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance, isBenchmarkWeek, findGarminRunForWeek, getBenchmarkOptions, getBenchmarkDefault, recordBenchmark, skipBenchmark } from './events';
+import { next, updateFitness, reset, editSettings, logActivity, setOnWeekAdvance, isBenchmarkWeek } from './events';
+import { openBenchmarkOverlay } from './benchmark-overlay';
 import { setOnTrackingStart, setOnTrackingStop } from './gps-events';
 import { attachRecordingsHandlers } from './gps-panel';
 import { ft, fp, fmtDateUK, formatKm } from '@/utils/format';
@@ -13,13 +14,12 @@ import { initializeSimulator } from '@/state/initialization';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
-import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
 import { TL_PER_MIN, LOAD_PROFILES, LOAD_PER_MIN_BY_INTENSITY, SPORT_ALIASES, SPORTS_DB } from '@/constants';
 import { syncActivities } from '@/data/activitySync';
 import { syncStravaActivities } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
-import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { computeACWR, computeWeekTSS, computeWeekRawTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
 import { SUPABASE_URL } from '@/data/supabaseClient';
 import { normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments, createActivity } from '@/cross-training';
 import { showSuggestionModal, type ACWRModalContext } from '@/ui/suggestion-modal';
@@ -726,104 +726,70 @@ function renderContinuousProgressPanel(s: any): string {
     }"></div>
           `).join('')}
         </div>
-        ${blockWeek === 4 ? `<p class="text-xs mt-2" style="color:var(--c-accent)">Deload week — lighter training + optional check-in</p>` : blockWeek === 3 ? `<p class="text-xs mt-2" style="color:#F97316">Intensify week — peak training load</p>` : ''}
+        ${blockWeek === 4 ? `<p class="text-xs mt-2" style="color:var(--c-accent)">Deload week — lighter training to clear fatigue</p>` : blockWeek === 3 ? `<p class="text-xs mt-2" style="color:#F97316">Intensify week — peak training load</p>` : ''}
       </div>
     </div>
   `;
 }
 
 /**
- * Render the optional benchmark check-in panel (shown on benchmark weeks for continuous mode users).
- * Uses the 4-tier benchmark system with smart defaults based on focus × experienceLevel.
+ * Render the optional benchmark check-in panel (shown on post-deload weeks for continuous mode users).
+ * Compact status card — delegates to the benchmark overlay for option selection.
  */
 function renderBenchmarkPanel(s: any): string {
   if (!s.continuousMode) return '';
   if (!isBenchmarkWeek(s.w, true)) return '';
-  // Never suggest hard efforts on deload/recovery weeks
-  const ability = abilityBandFromVdot(s.v ?? 40, s.onboarding?.experienceLevel ?? 'intermediate');
-  if (isDeloadWeek(s.w, ability)) return '';
 
-  // Check if benchmark already recorded/skipped for this week
   const existing = s.benchmarkResults?.find((b: any) => b.week === s.w);
-  if (existing) {
-    if (existing.source === 'skipped') {
-      return `
-        <div class="rounded-lg p-4 mb-4" style="background:rgba(0,0,0,0.04);border:1px solid var(--c-border)">
-          <div class="flex items-center gap-2">
-            <svg class="w-4 h-4" style="color:var(--c-faint)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/>
-            </svg>
-            <p class="text-sm" style="color:var(--c-muted)">Check-in skipped this block — no worries, keep training!</p>
-          </div>
-        </div>
-      `;
-    }
-    // Show recorded result
-    const resultDetails = formatBenchmarkResult(existing);
+
+  if (existing?.source === 'skipped') {
     return `
-      <div class="rounded-lg p-4 mb-4" style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.30)">
-        <div class="flex items-center gap-2 mb-1">
-          <svg class="w-4 h-4" style="color:var(--c-ok)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-          </svg>
-          <span class="text-sm font-medium" style="color:var(--c-ok)">Check-in Recorded</span>
-          ${existing.source === 'garmin' ? '<span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(249,115,22,0.10);color:#F97316;border:1px solid rgba(249,115,22,0.20)">From watch</span>' : ''}
-        </div>
-        <p class="text-xs" style="color:var(--c-muted)">${resultDetails}</p>
+      <div class="rounded-lg p-4 mb-4" style="background:rgba(0,0,0,0.04);border:1px solid var(--c-border)">
+        <p class="text-sm" style="color:var(--c-muted)">Check-in skipped this block.</p>
       </div>
     `;
   }
 
-  const options = getBenchmarkOptions(s.onboarding?.trainingFocus, s.onboarding?.experienceLevel);
-  const garminRun = findGarminRunForWeek(s.w);
+  if (existing) {
+    const resultText = formatBenchmarkResult(existing);
+    return `
+      <div class="rounded-lg p-4 mb-4" style="background:rgba(34,197,94,0.06);border:1px solid rgba(34,197,94,0.15)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <span style="font-size:13px;font-weight:600;color:var(--c-black)">Check-in recorded</span>
+          ${existing.source === 'garmin' ? `<span style="font-size:10px;font-weight:600;color:var(--c-muted);border:1px solid var(--c-border-strong);padding:2px 8px;border-radius:100px;letter-spacing:0.02em">From watch</span>` : ''}
+        </div>
+        <p class="text-xs" style="color:var(--c-muted)">${resultText}</p>
+      </div>
+    `;
+  }
 
+  // Check if benchmark workout already added
+  const wk = s.wks?.[s.w - 1];
+  const hasBenchmarkWorkout = wk?.adhocWorkouts?.some((w: any) => w.id?.startsWith('benchmark-'));
+
+  if (hasBenchmarkWorkout) {
+    return `
+      <div class="rounded-lg p-4 mb-4" style="border:1px solid var(--c-border)">
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:3px">Check-in workout added</div>
+        <p class="text-xs" style="color:var(--c-muted)">Complete the workout and results will be recorded from your watch.</p>
+      </div>
+    `;
+  }
+
+  // Not started — prompt to open overlay
   return `
-    <div class="rounded-lg p-4 mb-4" style="background:rgba(78,159,229,0.06);border:1px solid rgba(78,159,229,0.30)">
-      <div class="flex items-start gap-3">
-        <div class="flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center" style="background:rgba(78,159,229,0.12)">
-          <svg class="w-5 h-5" style="color:var(--c-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
-          </svg>
+    <div class="rounded-lg p-4 mb-4" style="border:1px solid var(--c-border)">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:2px">Fitness check-in available</div>
+          <div style="font-size:12px;color:#64748B">Post-deload. Good time to measure fitness.</div>
         </div>
-        <div class="flex-1">
-          <h3 class="text-sm font-semibold mb-1" style="color:var(--c-accent)">Optional Check-in</h3>
-          <p class="text-xs mb-3" style="color:var(--c-muted)">See how your fitness is tracking. Totally optional — skip anytime.</p>
-
-          ${garminRun ? `
-            <div class="rounded-lg p-3 mb-3" style="background:rgba(249,115,22,0.07);border:1px solid rgba(249,115,22,0.20)">
-              <div class="flex items-center gap-2 mb-1">
-                <svg class="w-4 h-4" style="color:#F97316" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M15.387 17.944l-2.089-4.116h-3.065L15.387 24l5.15-10.172h-3.066m-7.008-5.599l2.836 5.598h4.172L10.463 0l-7 13.828h4.169"/>
-                </svg>
-                <span class="text-xs font-medium" style="color:#F97316">Run detected from watch</span>
-              </div>
-              <p class="text-xs" style="color:var(--c-muted)">${garminRun.duration_min}min run · RPE ${garminRun.rpe}</p>
-              <button id="btn-benchmark-auto" class="mt-2 px-4 py-2 text-xs font-medium rounded-lg transition-colors" style="background:var(--c-ok);color:white">
-                Use This Run as Check-in
-              </button>
-            </div>
-          ` : ''}
-
-          <!-- Benchmark options (smart default first) -->
-          <div class="space-y-2 mb-3">
-            ${options.map((opt, _idx) => `
-              <button class="btn-benchmark-option w-full text-left p-3 rounded-lg border transition-colors" style="${opt.recommended
-      ? 'background:rgba(78,159,229,0.08);border-color:rgba(78,159,229,0.40)'
-      : 'background:rgba(0,0,0,0.03);border-color:var(--c-border)'
-    }" data-bm-type="${opt.type}">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium" style="${opt.recommended ? 'color:var(--c-accent)' : 'color:var(--c-black)'}">${opt.label}</span>
-                  ${opt.recommended ? '<span class="text-xs px-2 py-0.5 rounded-full" style="background:rgba(78,159,229,0.12);color:var(--c-accent)">Recommended</span>' : ''}
-                </div>
-                <p class="text-xs mt-0.5" style="color:var(--c-faint)">${opt.description}</p>
-              </button>
-            `).join('')}
-          </div>
-
-          <button id="btn-benchmark-skip" class="w-full py-2 text-xs font-medium rounded-lg transition-colors" style="background:rgba(0,0,0,0.05);color:var(--c-muted)">
-            Skip this check-in
-          </button>
-        </div>
+        <button id="btn-home-benchmark-open"
+          style="padding:8px 16px;border-radius:100px;border:1px solid var(--c-border);
+                 background:transparent;font-size:12px;font-weight:600;color:#0F172A;
+                 cursor:pointer;font-family:var(--f);white-space:nowrap">
+          Choose
+        </button>
       </div>
     </div>
   `;
@@ -852,144 +818,6 @@ function formatBenchmarkResult(result: any): string {
     default:
       return 'Check-in recorded';
   }
-}
-
-/**
- * Show manual benchmark entry modal for a specific benchmark type.
- */
-function showBenchmarkEntryModal(bmType: string): void {
-  const type = bmType as import('@/types/state').BenchmarkType;
-  const bmUnitPref = getState().unitPref ?? 'km';
-  const bmDistUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
-  const bmPaceUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
-
-  // Build the right input fields based on benchmark type
-  let fieldsHTML = '';
-  let title = '';
-  let desc = '';
-
-  switch (type) {
-    case 'easy_checkin':
-      title = 'Easy Check-in';
-      desc = 'Log a 30-min steady run. Enter your average pace.';
-      fieldsHTML = renderPaceInput();
-      break;
-    case 'threshold_check':
-      title = 'Threshold Check';
-      desc = 'Log your 20-min "comfortably hard" effort. Enter your average pace.';
-      fieldsHTML = renderPaceInput();
-      break;
-    case 'speed_check':
-      title = 'Speed Check (12-min test)';
-      desc = 'How far did you run in 12 minutes?';
-      fieldsHTML = `
-        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance covered (${bmDistUnit})</label>
-        <input type="number" id="bm-distance" step="0.01" min="0.5" max="6"
-          class="w-full rounded-lg px-3 py-2 text-sm mb-4" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-          placeholder="e.g. 2.80">
-      `;
-      break;
-    case 'race_simulation':
-      title = 'Race Simulation';
-      desc = 'Log your time trial result.';
-      fieldsHTML = `
-        <label class="block text-xs mb-1" style="color:var(--c-muted)">Distance (${bmDistUnit})</label>
-        <input type="number" id="bm-distance" step="0.1" min="1" max="42.2"
-          class="w-full rounded-lg px-3 py-2 text-sm mb-3" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-          placeholder="e.g. 5">
-        <label class="block text-xs mb-1" style="color:var(--c-muted)">Time</label>
-        <div class="flex gap-2 mb-4">
-          <input type="number" id="bm-time-min" min="5" max="300"
-            class="flex-1 rounded-lg px-3 py-2 text-sm" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-            placeholder="min">
-          <span class="self-center" style="color:var(--c-faint)">:</span>
-          <input type="number" id="bm-time-sec" min="0" max="59"
-            class="flex-1 rounded-lg px-3 py-2 text-sm" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-            placeholder="sec">
-        </div>
-      `;
-      break;
-  }
-
-  const overlay = document.createElement('div');
-  overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
-  overlay.innerHTML = `
-    <div class="rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border:1px solid var(--c-border)">
-      <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">${title}</h3>
-      <p class="text-sm mb-4" style="color:var(--c-muted)">${desc}</p>
-      ${fieldsHTML}
-      <div class="flex flex-col gap-2">
-        <button id="btn-bm-submit" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:white">
-          Save
-        </button>
-        <button id="btn-bm-cancel" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.05);color:var(--c-muted)">
-          Cancel
-        </button>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-
-  overlay.querySelector('#btn-bm-submit')?.addEventListener('click', () => {
-    switch (type) {
-      case 'easy_checkin':
-      case 'threshold_check': {
-        const m = +(document.getElementById('bm-pace-min') as HTMLInputElement)?.value || 0;
-        const sec = +(document.getElementById('bm-pace-sec') as HTMLInputElement)?.value || 0;
-        const paceSecRaw = m * 60 + sec;
-        if (paceSecRaw < 120 || paceSecRaw > 900) { alert(`Enter a valid pace (min:sec per ${bmPaceUnit})`); return; }
-        // Convert to sec/km if user entered sec/mi
-        const paceSec = bmUnitPref === 'mi' ? paceSecRaw * 1.60934 : paceSecRaw;
-        overlay.remove();
-        const dur = type === 'easy_checkin' ? 1800 : 1200; // 30 min / 20 min
-        recordBenchmark(type, 'manual', undefined, dur, paceSec);
-        break;
-      }
-      case 'speed_check': {
-        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        if (!distRaw || distRaw < 0.5) { alert(`Enter a distance (${bmDistUnit})`); return; }
-        // Convert to km if user entered miles
-        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
-        overlay.remove();
-        recordBenchmark('speed_check', 'manual', distKm, 720); // 12 min
-        break;
-      }
-      case 'race_simulation': {
-        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        const m = +(document.getElementById('bm-time-min') as HTMLInputElement)?.value || 0;
-        const sec = +(document.getElementById('bm-time-sec') as HTMLInputElement)?.value || 0;
-        const totalSec = m * 60 + sec;
-        if (!distRaw || distRaw < 1) { alert('Enter a distance'); return; }
-        if (totalSec < 300) { alert('Enter a valid time'); return; }
-        // Convert to km if user entered miles
-        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
-        overlay.remove();
-        const avgPace = totalSec / distKm; // sec/km
-        recordBenchmark('race_simulation', 'manual', distKm, totalSec, avgPace);
-        break;
-      }
-    }
-  });
-
-  overlay.querySelector('#btn-bm-cancel')?.addEventListener('click', () => overlay.remove());
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-}
-
-/** Reusable pace input HTML */
-function renderPaceInput(): string {
-  const paceUnit = getState().unitPref === 'mi' ? 'mi' : 'km';
-  return `
-    <label class="block text-xs mb-1" style="color:var(--c-muted)">Average pace (min:sec per ${paceUnit})</label>
-    <div class="flex gap-2 mb-4">
-      <input type="number" id="bm-pace-min" min="2" max="12"
-        class="flex-1 rounded-lg px-3 py-2 text-sm" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-        placeholder="min">
-      <span class="self-center" style="color:var(--c-faint)">:</span>
-      <input type="number" id="bm-pace-sec" min="0" max="59"
-        class="flex-1 rounded-lg px-3 py-2 text-sm" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-black)"
-        placeholder="sec">
-    </div>
-  `;
 }
 
 // ---------------------------------------------------------------------------
@@ -1202,9 +1030,9 @@ function renderRecoveryLog(s: any): string {
   const last7 = history.slice(-7);
 
   const dotColorStyle = (score: number): string => {
-    if (score >= 70) return 'var(--c-ok)';
+    if (score >= 80) return 'var(--c-ok)';
+    if (score >= 65) return 'var(--c-ok-muted)';
     if (score >= 50) return 'var(--c-caution)';
-    if (score >= 30) return '#F97316';
     return 'var(--c-warn)';
   };
 
@@ -2438,27 +2266,70 @@ export function triggerACWRReduction(): void {
 
   const freshWorkouts = getWeekWorkoutsForACWR(s).filter(w => wk.rated[w.id || w.n] === undefined);
   const weekRuns = workoutsToPlannedRuns(freshWorkouts, s.pac);
-  const _mvTier = s.athleteTierOverride ?? s.athleteTier;
-  const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined);
-  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
-  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
-  // For multi-activity case, rewrite summary to describe the mix rather than a single session.
-  if (wk.unspentLoadItems?.length && wk.unspentLoadItems.length > 1) {
-    const items2 = wk.unspentLoadItems;
+  // Compute overshoot: only reduce enough to bring projected week back to target.
+  let overshootTSS: number | undefined;
+  let targetTSS: number | undefined;
+  if (wk.unspentLoadItems?.length) {
     const plannedB = computePlannedSignalB(
       s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
       s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
     );
-    const excessTSS = Math.round(getWeeklyExcess(wk, plannedB, s.planStartDate, computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate)));
+    if (plannedB) {
+      targetTSS = plannedB;
+      const currentTSS = computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate);
+      const carried = computeDecayedCarry(s.wks ?? [], s.w, plannedB, s.planStartDate);
+      const paceMinPerKm = (s.pac?.e ?? 360) / 60;
+      const TYPE_RPE: Record<string, number> = { easy: 4, long: 4, threshold: 7, marathon_pace: 6, float: 6, vo2: 8, intervals: 8, progressive: 5 };
+      const remainingRunTSS = weekRuns
+        .filter(r => r.status === 'planned')
+        .reduce((sum, r) => {
+          const rpe = TYPE_RPE[r.workoutType] ?? 5;
+          const durMin = r.plannedDistanceKm * paceMinPerKm * (rpe >= 7 ? 0.85 : 1.0);
+          return sum + durMin * (TL_PER_MIN[rpe] ?? 1.15);
+        }, 0);
+      const projectedTotal = currentTSS + (carried ?? 0) + remainingRunTSS;
+      if (projectedTotal <= plannedB) {
+        console.log(`[ACWRReduction] Skipping — projected ${Math.round(projectedTotal)} TSS ≤ target ${Math.round(plannedB)}. Remaining runs won't exceed target.`);
+        return;
+      }
+      overshootTSS = projectedTotal - plannedB;
+      console.log(`[ACWRReduction] Overshoot ${Math.round(overshootTSS)} TSS (projected ${Math.round(projectedTotal)} vs target ${Math.round(plannedB)})`);
+    }
+  }
+
+  const _mvTier = s.athleteTierOverride ?? s.athleteTier;
+  const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined);
+  const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
+  // When ACWR is barely above the ceiling (≤5%) OR below it, a single small
+  // adjustment is enough. Matches the "A small adjustment is enough" copy in
+  // the ACWR modal header exactly. Only applies when not in 'high' status.
+  const pctAboveCeiling = _mvAcwr.safeUpper > 0
+    ? (_mvAcwr.ratio / _mvAcwr.safeUpper - 1) * 100
+    : 0;
+  const maxAdjustments = (_mvAcwr.status !== 'high' && pctAboveCeiling <= 5) ? 1 : undefined;
+  const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity, undefined, 1.0, overshootTSS, maxAdjustments);
+
+  // Append target note to summary (single-activity case)
+  if (targetTSS && !(wk.unspentLoadItems?.length && wk.unspentLoadItems.length > 1)) {
+    popup.summary += ` Adjustments bring your week back to ~${Math.round(targetTSS)} TSS target.`;
+  }
+
+  // For multi-activity case, rewrite summary to describe the mix rather than a single session.
+  if (wk.unspentLoadItems?.length && wk.unspentLoadItems.length > 1) {
+    const items2 = wk.unspentLoadItems;
+    // Compute TSS from the activities themselves (not week excess over baseline).
+    // Use aggregated iTrimp if available (HR-based), otherwise duration × RPE-5 rate.
+    const activityTSS = combinedActivity.iTrimp
+      ? Math.round(combinedActivity.iTrimp * 100 / 15000)
+      : Math.round(items2.reduce((sum, it) => sum + it.durationMin * (TL_PER_MIN[5] ?? 1.15), 0));
     const loadNote = popup.tier === 'rpe' ? ' (estimated from RPE)' : '';
     const equivKmStr = popup.equivalentEasyKm > 0
       ? `, equivalent to ${formatKm(popup.equivalentEasyKm, s.unitPref ?? 'km')} easy running`
       : '';
-    const impactMatch = popup.summary.match(/carries enough load to (.+?)(?:\. Consider|\.?\s*$)/);
-    const impactPart = impactMatch ? ` They carry enough load to ${impactMatch[1]}.` : '';
-    popup.summary = `Your ${items2.length} extra activities generated ${excessTSS} TSS${loadNote}${equivKmStr}.${impactPart}${impactPart ? ' Consider adjusting your plan to avoid overtraining.' : ''}`;
+    const targetNote = targetTSS ? ` Adjustments bring your week back to ~${Math.round(targetTSS)} TSS target.` : '';
+    popup.summary = `${activityTSS} TSS${loadNote} from ${items2.length} extra activities${equivKmStr}.${targetNote}`;
     popup.sportName = 'extra activities';
   }
 
@@ -2484,9 +2355,13 @@ export function triggerACWRReduction(): void {
     }
   }
   const kmSpiked = plannedRunKmForRule > 0 && actualRunKmForRule > plannedRunKmForRule * 1.3;
-  // Rule 3 — cross-training cause
+  // Rule 3 — cross-training cause (heaviest non-running item). Surplus-run items are
+  // a mechanical concern handled by Rule 2 (kmSpiked), not Rule 3.
   const crossTrainingCause = (wk.unspentLoadItems?.length && sport !== 'running')
-    ? (wk.unspentLoadItems[0]?.sport ?? undefined)
+    ? (wk.unspentLoadItems
+        .filter(i => i.reason !== 'surplus_run' && i.sport !== 'running')
+        .slice()
+        .sort((a, b) => (b.aerobic + b.anaerobic) - (a.aerobic + a.anaerobic))[0]?.sport ?? undefined)
     : undefined;
   // Rule 4 — consecutive intensity-heavy weeks from historicWeeklyZones
   const histZones = s.historicWeeklyZones ?? [];
@@ -2872,27 +2747,8 @@ function wireEventHandlers(): void {
     showRunnerTypeModal(s.typ || 'Hybrid', planStarted);
   });
 
-  // Benchmark buttons (continuous mode)
-  document.getElementById('btn-benchmark-auto')?.addEventListener('click', () => {
-    const garminRun = findGarminRunForWeek(s.w);
-    if (garminRun) {
-      // Auto-pull: use the smart default type and record from Garmin data
-      const defaultBm = getBenchmarkDefault(s.onboarding?.trainingFocus, s.onboarding?.experienceLevel);
-      recordBenchmark(defaultBm.type, 'garmin', undefined, garminRun.duration_min * 60);
-    }
-  });
-
-  // Benchmark option buttons (the 4-tier menu)
-  document.querySelectorAll('.btn-benchmark-option').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const bmType = (btn as HTMLElement).dataset.bmType;
-      if (bmType) showBenchmarkEntryModal(bmType);
-    });
-  });
-
-  document.getElementById('btn-benchmark-skip')?.addEventListener('click', () => {
-    skipBenchmark();
-  });
+  // Benchmark — open overlay
+  document.getElementById('btn-home-benchmark-open')?.addEventListener('click', () => openBenchmarkOverlay());
 
   // Morning Pain Check buttons
   document.getElementById('btn-morning-pain-worse')?.addEventListener('click', () => {

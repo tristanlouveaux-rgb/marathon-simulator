@@ -6,6 +6,7 @@
  */
 
 import type { PhysiologyDayEntry } from '@/types/state';
+import { TL_PER_MIN } from '@/constants';
 
 export interface SleepInsightInput {
   /** Physiology history, chronological oldest-first. */
@@ -82,8 +83,9 @@ export function fmtSleepDuration(sec: number): string {
 
 /** Colour token for a sleep score. */
 export function sleepScoreColor(score: number): string {
-  if (score >= 75) return 'var(--c-ok)';
-  if (score >= 55) return 'var(--c-caution)';
+  if (score >= 80) return 'var(--c-ok)';
+  if (score >= 65) return 'var(--c-ok-muted)';
+  if (score >= 50) return 'var(--c-caution)';
   return 'var(--c-warn)';
 }
 
@@ -160,8 +162,9 @@ export function getSleepContext(
 // ─── Muted sleep score colors (for bar chart — not text) ─────────────────────
 
 export function sleepScoreColorMuted(score: number): string {
-  if (score >= 75) return 'rgba(52,199,89,0.55)';
-  if (score >= 55) return 'rgba(255,159,10,0.60)';
+  if (score >= 80) return 'rgba(52,199,89,0.55)';
+  if (score >= 65) return 'rgba(110,200,103,0.55)';
+  if (score >= 50) return 'rgba(255,159,10,0.60)';
   return 'rgba(220,80,70,0.55)';
 }
 
@@ -327,46 +330,57 @@ export function computeLoadAdjustedTarget(
 // ─── Exponential sleep debt ───────────────────────────────────────────────────
 
 /**
- * Exponential decay constant for sleep debt — 4-day half-life.
- * Same maths as ATL in the Banister model.
- * After 4 days of full sleep, residual debt ~50%. After 8 days, ~25%.
+ * Exponential decay constant for sleep debt — 7-day half-life.
+ * After 7 days of full sleep, residual debt ~50%. After 14 days, ~25%.
+ *
+ * Previously 4-day (borrowed from ATL Banister model). Changed to 7-day based on:
+ * - Banks & Dinges (2007): recovery from chronic sleep loss is not achieved quickly
+ * - Belenky et al. (2003): cognitive deficits persist beyond 3 nights of recovery sleep
+ * - Industry: Oura uses 14-day lookback, WHOOP says debt "follows you for days"
+ * - 7-day half-life means 2-week-old debt is at 25% — aligns with 14-day lookback convention
  */
-const DEBT_DECAY = Math.exp(-Math.LN2 / 4);
+const DEBT_DECAY = Math.exp(-Math.LN2 / 7);
+
 
 /**
- * Sleep quality multiplier based on REM and deep stage proportions.
- *
- * Science basis:
- *  - REM target 22% (Walker/NIH midpoint of 20–25% normal range).
- *    REM deprivation studies (Dijk/Czeisler) show ~40% impairment at severe deficit.
- *    Weight: 60% — dominates because REM drives cognitive + central fatigue recovery.
- *  - Deep (SWS) target 18% (Hausswirth et al. — higher for athletes post-load vs 13–23% pop. range).
- *    Weight: 40% — physical repair, HGH, immune function.
- *  - Floor 0.60: Van Dongen worst-case impairment ~40%; below 60% effective is implausible.
- *  - Ceiling 1.10: excellent stages can slightly offset shorter duration but capped conservatively.
- *
- * Returns null when stage data is absent — caller falls back to raw duration.
+ * Build a Record<YYYY-MM-DD, Signal B TSS> from plan weeks.
+ * Signal B = raw physiological load (no runSpec discount).
+ * Two sources: garminActuals (matched runs) and adhocWorkouts (cross-training).
  */
-export function sleepQualityMultiplier(entry: PhysiologyDayEntry): number | null {
-  const { sleepDurationSec, sleepRemSec, sleepDeepSec } = entry;
-  if (!sleepDurationSec || sleepDurationSec === 0) return null;
-  if (sleepRemSec == null || sleepDeepSec == null) return null;
-
-  const remPct  = sleepRemSec  / sleepDurationSec;
-  const deepPct = sleepDeepSec / sleepDurationSec;
-
-  const REM_TARGET  = 0.22;
-  const DEEP_TARGET = 0.18;
-
-  const remRatio  = Math.min(remPct  / REM_TARGET,  1.15);
-  const deepRatio = Math.min(deepPct / DEEP_TARGET, 1.15);
-
-  const quality = 0.60 * remRatio + 0.40 * deepRatio;
-  return Math.max(0.60, Math.min(1.10, quality));
+export function buildDailySignalBTSS(wks: any[]): Record<string, number> {
+  const byDate: Record<string, number> = {};
+  for (const wk of wks) {
+    for (const actual of Object.values(wk.garminActuals ?? {})) {
+      const a = actual as any;
+      if (!a.startTime) continue;
+      const date = (a.startTime as string).split('T')[0];
+      const tss = (a.iTrimp != null && a.iTrimp > 0)
+        ? (a.iTrimp * 100) / 15000
+        : 0;
+      if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
+    }
+    const seenGarminIds = new Set<string>();
+    for (const w of (wk.adhocWorkouts ?? [])) {
+      const wo = w as any;
+      if (!wo.id?.startsWith('garmin-')) continue;
+      const rawId = (wo.id as string).slice('garmin-'.length);
+      if (rawId && seenGarminIds.has(rawId)) continue;
+      if (rawId) seenGarminIds.add(rawId);
+      const date: string | null = wo.garminTimestamp ? (wo.garminTimestamp as string).split('T')[0] : null;
+      if (!date) continue;
+      const tss = (wo.iTrimp != null && wo.iTrimp > 0)
+        ? (wo.iTrimp * 100) / 15000
+        : (wo.garminDurationMin != null && wo.rpe != null)
+          ? (wo.garminDurationMin as number) * (TL_PER_MIN[Math.round(wo.rpe as number)] ?? 1.15)
+          : 0;
+      if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
+    }
+  }
+  return byDate;
 }
 
 /**
- * Compute accumulated sleep debt via exponential decay (4-day half-life).
+ * Compute accumulated sleep debt via exponential decay (7-day half-life).
  * Debt builds when actual sleep < load-adjusted target; decays each day.
  * Forward-only: starts at 0 and builds from available physiologyHistory.
  * dailyTSSByDate: Record<YYYY-MM-DD, Signal B TSS> — computed from garminActuals.
@@ -452,13 +466,12 @@ export function buildSleepBankLineChart(
   nights: Array<{ date: string; delta: number }>,
   lineColor: string,
   dimColor: string,
+  hideDayLabels?: boolean,
 ): string {
   if (nights.length < 2) return '';
 
-  const W = 320; const H = 64; const PV = 10;
+  const W = 300; const H = 100; const PV = 12;
   const deltas = nights.map(n => n.delta);
-  // Scale to actual data range so night-to-night variation is visible even when all
-  // nights are in deficit. Add 20% padding on each side, minimum 15 minutes.
   const dataMin = Math.min(...deltas);
   const dataMax = Math.max(...deltas);
   const dataPad = Math.max((dataMax - dataMin) * 0.25, 900);
@@ -469,14 +482,18 @@ export function buildSleepBankLineChart(
   const yOf = (v: number) => PV + ((maxD - v) / range) * (H - PV * 2);
   const xOf = (i: number) => nights.length > 1 ? (i / (nights.length - 1)) * W : W / 2;
 
-  // Clamp zero line to chart bounds so it's always visible as a reference
   const zeroY = Math.max(PV / 2, Math.min(H - PV / 2, yOf(0)));
   const pts = nights.map((n, i) => ({ x: xOf(i), y: yOf(n.delta) }));
   const lineD = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   const last = pts[pts.length - 1];
 
+  // Area fill from line to zero baseline — split into surplus (above) and deficit (below)
+  const areaD = `${lineD} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${pts[0].x.toFixed(1)},${zeroY.toFixed(1)} Z`;
+  // Unique clip IDs based on chart instance (use first date to avoid collisions)
+  const clipId = `slb-${nights[0].date.replace(/-/g, '')}`;
+  const strokeColor = lineColor;
+
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  // Show every other label when there are many nights to avoid crowding
   const step = nights.length > 10 ? 2 : 1;
   const dayLabels = nights.map((n, i) => {
     if (i % step !== 0 && i !== nights.length - 1) return '';
@@ -485,44 +502,24 @@ export function buildSleepBankLineChart(
     return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${dimColor};top:0">${day}</span>`;
   }).join('');
 
-  // Y-axis delta labels (±Xm relative to target)
-  const fmtDeltaLabel = (sec: number): string => {
-    const abs = Math.abs(Math.round(sec / 60));
-    if (abs < 5) return 'target';
-    const h = Math.floor(abs / 60); const m = abs % 60;
-    const s = h > 0 ? (m > 0 ? `${h}h ${m}m` : `${h}h`) : `${m}m`;
-    return (sec >= 0 ? '+' : '\u2212') + s;
-  };
-  // Clamp % positions so labels don't fall outside the SVG container
-  const clampPct = (v: number) => Math.max(5, Math.min(95, v));
-  const topLabelPct  = clampPct(yOf(dataMax) / H * 100).toFixed(1);
-  const zeroLabelPct = clampPct(zeroY / H * 100).toFixed(1);
-  const botLabelPct  = clampPct(yOf(dataMin) / H * 100).toFixed(1);
-  // Suppress top/bot label if too close to zero line (would overlap)
-  const topFarEnough = Math.abs(yOf(dataMax) - zeroY) > 12;
-  const botFarEnough = Math.abs(yOf(dataMin) - zeroY) > 12;
-  // Labels sit in the 40px right-padding zone so they never overlap the line
-  const labelStyle = `position:absolute;right:0;font-size:9px;color:${dimColor};transform:translateY(-50%);line-height:1;white-space:nowrap`;
-  const yAxisHTML = `
-    ${topFarEnough ? `<div style="${labelStyle};top:${topLabelPct}%">${fmtDeltaLabel(dataMax)}</div>` : ''}
-    <div style="${labelStyle};top:${zeroLabelPct}%">target</div>
-    ${botFarEnough ? `<div style="${labelStyle};top:${botLabelPct}%">${fmtDeltaLabel(dataMin)}</div>` : ''}
-  `;
+  // Y-axis label: just "target" on the dashed baseline
+  const zeroLabelPct = Math.max(5, Math.min(95, zeroY / H * 100)).toFixed(1);
+  const yAxisHTML = `<span style="position:absolute;right:0;top:${zeroLabelPct}%;transform:translateY(-50%);font-size:8px;color:#9CA3AF;font-weight:500;white-space:nowrap">target</span>`;
 
   return `
     <div style="position:relative;margin-top:12px">
-      <div style="position:relative;padding-right:44px">
-        <svg width="100%" height="${H}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+      <div style="position:relative;padding-right:36px">
+        <svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block;overflow:visible">
           <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}"
-            stroke="rgba(255,255,255,0.20)" stroke-width="1" stroke-dasharray="4 3"/>
-          <path d="${lineD}" fill="none" stroke="${lineColor}"
-            stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="3.5"
-            fill="${lineColor}" stroke="rgba(0,0,0,0.25)" stroke-width="1.5"/>
+            stroke="rgba(0,0,0,0.10)" stroke-width="1" stroke-dasharray="4 3"/>
+          <path d="${lineD}" fill="none" stroke="${strokeColor}"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="4"
+            fill="${strokeColor}" stroke="white" stroke-width="2"/>
         </svg>
-        ${yAxisHTML}
+        <div style="position:absolute;top:0;right:0;width:36px;height:100%">${yAxisHTML}</div>
       </div>
-      <div style="position:relative;height:16px;margin-top:2px">${dayLabels}</div>
+      ${hideDayLabels ? '' : `<div style="position:relative;height:16px;margin-top:4px">${dayLabels}</div>`}
     </div>`;
 }
 

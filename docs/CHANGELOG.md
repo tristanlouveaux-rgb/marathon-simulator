@@ -4,6 +4,490 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-14 — Strain ring: colour blend + rounded caps + sweep-in reveal
+
+- Replaced the three separate SVG arcs (hard butt-cap junctions) with a single `conic-gradient` masked to ring shape via feathered radial-gradient stops (semi-opaque bands at 82% and 99.6%) so the inner/outer edges are anti-aliased.
+- Wide 18° blend zones at each segment junction and 4° soft transparent→colour fades at each end of the arc.
+- Rounded caps at both ends (like the recovery ring): a static green cap at 12 o'clock and a colour-matched cap at the arc's end that rotates with the sweep.
+- Clockwise sweep reveal from 12 o'clock via a registered `@property --strain-arc` (inherits:true) animated 0→1. The conic-gradient stops and the end-cap rotator both read the animated value, so arc + cap sweep in together.
+- `src/ui/strain-view.ts`.
+
+## 2026-04-14 — HR drift heal-on-read for pre-migration activities
+
+- **Root cause**: activities cached before migration `20260312_hr_drift.sql` have `hr_zones` populated but `hr_drift = NULL`. The standalone sync path short-circuits on `cached?.hr_zones` and returns `hrDrift: null` without re-fetching the stream, so existing activities never get drift backfilled even after the column was added.
+- **Fix**: added a heal-on-read block in `supabase/functions/sync-strava-activities/index.ts` (mirrors the existing `km_splits` heal pattern). When `cached.hr_zones` is set but `cached.hr_drift` is null and activity type is in `DRIFT_TYPES` with duration ≥ 20 min, re-fetch the HR stream, compute drift, patch DB, and return it on the row. Client-side patching in `src/data/stravaSync.ts` and `src/calculations/activity-matcher.ts` already handles null→value backfill on actuals.
+
+## 2026-04-14 — Debrief gating: week no longer advances until "Accept plan"
+
+- **Week advance now gated on completing the full debrief flow.** New state field `lastCompleteDebriefWeek` is set only when the user clicks "Accept plan" in step 3 (plan preview). `advanceWeekToToday()` clamps `s.w` to `lastCompleteDebriefWeek + 1`, so dismissing the debrief (X) keeps it pending and re-fires on next launch. `src/ui/welcome-back.ts`, `src/ui/week-debrief.ts`, `src/types/state.ts`.
+- **Auto-fire pending debrief in complete mode.** `main.ts` checks `isWeekPendingDebrief()` on launch and opens the debrief with `mode='complete'` so the user gets the full summary → animation → plan preview flow, not the review variant.
+- **One-time migration (`_debriefGateV3`)** reseeds `lastCompleteDebriefWeek = max(0, lastDebriefWeek - 1)` and rolls `s.w` back to the pending week so users previously auto-advanced past an incomplete debrief see it again.
+- **Fixed stacked-modal bug** where `renderHomeView()` re-triggered the debrief on every render, mounting duplicate `#week-debrief-modal` nodes and breaking click handlers (the user saw the modal but couldn't click "Generate next week"). `showWeekDebrief` now bails if a modal is already mounted, and the home-view auto-trigger was removed (launch-time trigger in `main.ts` is sufficient).
+- **Removed dead `_handleUncompletedSessions` branch.** `wk.workouts` is never populated on the Week object so the "Move to next week / Drop them" UI never rendered — accept handler now calls `_closeAndRecord` directly.
+
+## 2026-04-14 — Color standardisation + coach commentary ties to driving signal
+
+- **Strain ring now blends colours + sweeps in on open**: single `conic-gradient` masked to ring shape with wide 18° blend zones at each junction and 4° soft fades at each end. Mask uses feathered radial-gradient stops so the inner/outer ring edges are anti-aliased (no hard outline). Clockwise sweep reveal from 12 o'clock via a registered `@property --strain-arc` animated 0→1, which scales every conic-gradient stop. `src/ui/strain-view.ts`.
+- **Universal 4-tier colors for sleep/recovery scores**: ≥ 80 bright green, ≥ 65 muted green, ≥ 50 amber, < 50 red. `--c-ok-muted` now `#6EC867` (more saturated than prior `#93D18B`). Applied across home rings, physiology mini-rings, recovery log dots, sleep cards, coach modal.
+- **Readiness ring keeps its own label-based color scheme** (Primed=bright green, On Track=muted green, Manage Load=amber, Ease Back/Overreaching=red) with thresholds 75/55/35 — different from sleep/recovery because the semantics differ (score 62 = "train as planned" for readiness, but only "mediocre sleep" for sleep score).
+- **Recovery pill threshold relaxed**: `SLEEP_GREEN` in `recovery/engine.ts` dropped from 80 back to 70 so sleep scores in the 70s no longer trigger yellow + adjustment prompt.
+- **Coach primary message respects driving signal**: when freshness is the weakest readiness sub-score (`drivingSignal === 'fitness'`), the coach leads with freshness and appends sleep debt as secondary context. Previously, a 5h+ sleep debt would dominate the message even when freshness was the bigger drag on the composite score. Eliminates mixed messaging between readiness page (showed "On Track") and coach copy (said "prioritise sleep").
+- **Removed debug console.log** from `computeRecoveryScore` in `readiness.ts`.
+- **Sleep History card is now tappable**: opens the Sleep detail view with back returning to Readiness. `src/ui/readiness-view.ts`.
+- **Sleep History debt matches Sleep detail view**: card previously showed a 7-night simple bank (e.g. "0.9h debt") while the Sleep detail view showed the load-adjusted cumulative debt with exponential decay (e.g. "5h 30m debt"). Card now calls `computeSleepDebt(...)` so both surfaces show the same number. The simple bank still feeds the recovery score (unchanged). `src/ui/readiness-view.ts`.
+
+## 2026-04-13 — Stats page cleanup + rolling load chart alignment
+
+- **Total Load chart**: removed misleading "avg" and "ease" reference lines (were comparing Signal A ctlBaseline against Signal B chart data). Removed dashed lines. Clean tick labels at every step (100, 200, 300, 400).
+- **Progress stats**: added Total Distance, Fastest 5k, Fastest 10k, Fastest Half Marathon rows. PB rows only appear when a qualifying run exists. Times estimated from avg pace on runs covering at least that distance.
+- **Rolling load chart**: aligned to stats page format. Added area fill, matched grid line style, removed "avg" reference line, added draw-on animation, matched container structure (padding-right gutter, percentage-based y-axis labels).
+
+## 2026-04-13 — Debrief gated on completion + HR effort signal fixes
+
+- **Week advance gated on debrief**: `advanceWeekToToday()` no longer advances `s.w` past a week that hasn't been debriefed (`lastDebriefWeek + 1` cap). Debrief always opens in `complete` mode with the full flow (summary, animation, plan preview).
+- **`tempo` added to `getWorkoutHRTarget`**: was falling through to `default: undefined`, causing `hrEffortScore = null`. Also added `recovery`, `steady`, `test_run`, and a general Z2-3 fallback for unknown types.
+- **RPE and HR effort split into two signals**: `WeekSignals.hrEffort` added, `computeWeekSignals` takes 5 params, debrief/plan-view/daily-coach all updated. Separate `rpeEffort` and `hrEffort` stored on Week object.
+- **Debrief RPE fix**: was iterating empty `wk.workouts` (never populated). Now calls `generateWeekWorkouts()` to get the correct expected RPE per workout.
+- **Debrief HR on-the-fly computation**: if `hrEffortScore` is null on a garminActual, computes it from `avgHR` + workout type + HR zones.
+- **ISSUE-133 logged**: `hrDrift` not computed by edge function for most activities.
+
+## 2026-04-13 — Fix compounding VDOT detraining + blend race predictions
+
+- **Compounding detraining bug**: `advanceWeekToToday()` applied detraining using the full calendar gap even when `s.w` was clamped to plan length. Every app launch past plan end re-applied the full gap, dropping `s.v` from 51.4 to 24.5. Fix: use `actualAdvance` (weeks `s.w` actually moved), not raw gap.
+- **State repair**: one-time migration detects `s.v < 0.9 * s.iv`, resets to `s.iv`, then applies one correct round of detraining for inactive weeks (wkGain = 0).
+- **Race Predictions now use blended model**: Both Race Predictions cards (stats summary and standalone) now use `blendPredictions()` which weights LT pace (55-70%), VO2max (15-20%), PBs, and recent runs. Previously used pure VDOT-to-time (Daniels), ignoring watch data entirely. Falls back to VDOT when no watch/PB data available.
+- **Marathon LT multiplier now running-specific**: `predictFromLT` was using `athleteTier` (derived from total cross-training CTL) to pick the marathon multiplier, putting cross-trained athletes into "high_volume" tier with the most aggressive 1.06 multiplier even if their running fitness didn't justify it. Now derives the marathon-only tier from LT pace itself via `cv(10000, ltPace * 10)` mapped to VDOT bands (≥60 high_volume, ≥52 performance, ≥45 trained, ≥38 recreational, else beginner). 5K/10K/HM multipliers unchanged (already stable across tiers).
+- **Recent run auto-derived from garminActuals**: Race Prediction cards now pick the most recent running activity from `garminActuals` rather than the stale onboarding `s.rec` value. Ensures recent Strava/Garmin runs feed the blend even if the user never edited their "recent run" field post-onboarding.
+- **Card labels clarified**: "Race Predictions" → "Current Race Estimates" with subtitle "Estimated finish times if racing today", so users understand these are current-fitness estimates, not end-of-plan targets.
+
+## 2026-04-13 — RPE and HR effort split into separate signals
+
+- **Two distinct coaching signals**: Perceived effort (RPE) and Heart rate effort are now independent signals in `WeekSignals`, the week debrief, Plan page overview, and daily coach. Previously blended into a single `effortScore`.
+- **New `hrEffort` field on WeekSignals**: `'overcooked' | 'on-target' | 'undercooked' | null`, computed from average `hrEffortScore` across running garminActuals.
+- **`computeWeekSignals` now takes 5 params**: `(rpeScore, avgHrEffortScore, tssPct, ctlDelta, avgHrDrift)`. All callers updated (plan-view, daily-coach, week-debrief).
+- **Debrief signal pills**: now show 5 rows (Perceived effort, Heart rate effort, Training volume, Running fitness, HR during sessions) with neutral fallback when data is unavailable.
+- **RPE/HR divergence coaching**: `getCoachCopy` detects when RPE and HR disagree (e.g. "Runs felt hard but HR stayed in zone") and provides specific coaching insight.
+- **Separate storage on Week**: `rpeEffort` (pure RPE deviation) and `hrEffort` (average hrEffortScore) now stored alongside the legacy blended `effortScore` in events.ts week-advance flow.
+- **Em-dash cleanup**: all user-facing copy in coach-insight.ts rewritten to use periods instead of em-dashes per style guide.
+- **`high-over` load signal restored**: pill map and coach copy now correctly handle `tssPct > 30` ("Well above plan", red).
+
+## 2026-04-13 — Fitness check-in redesign (continuous mode)
+
+- **Timing changed**: check-in now triggers on the first week of a new block (post-deload, week 5/9/13/...) instead of during the deload week itself. This is when the athlete is freshest and a fitness test is most meaningful.
+- **Workout generation replaces manual entry**: selecting a check-in type now generates a structured workout (via `intentToWorkout`, same as the session generator) and adds it to the current week's plan. No more manual pace/distance entry modal.
+- **New overlay**: `benchmark-overlay.ts` provides a centered modal with clean post-deload context. Auto-triggers on post-deload weeks if no benchmark recorded yet.
+- **Simplified plan-view and home-view cards**: inline option pickers replaced with compact status cards that open the overlay. States: prompt, workout added, completed, skipped.
+- **Removed bottom-sheet entry modals** from both plan-view and main-view.
+
+## 2026-04-13 — Fix compounding VDOT detraining bug
+
+- **Root cause**: `advanceWeekToToday()` applied detraining using the full calendar gap even when `s.w` was clamped to plan length. When the user was past the end of their plan, every app launch re-applied the full gap's detraining to `s.v`, compounding the loss. `s.v` dropped from 51.4 to 24.5 (race predictions showed 5:32 marathon instead of ~3:12).
+- **Fix**: detraining now uses `actualAdvance` (weeks `s.w` actually moved forward), not the raw calendar gap. When clamped, `actualAdvance = 0` and no detraining fires.
+- **State repair**: one-time migration detects `s.v < 0.9 * s.iv`, resets to `s.iv`, then applies one correct round of detraining for inactive weeks (wkGain = 0).
+
+## 2026-04-13 — Stats chart standardisation + draw-on animation
+
+- **Garmin webhook now stores steps**: `handleDailies` was missing `steps: d.totalSteps` — webhook stored HR, stress, VO2max but silently dropped step count. Historical steps only came from backfill; daily webhook pushes had no steps. Fixed and deployed.
+
+- **Y-axis labels added** to Running Distance, CTL, TSB, and ACWR charts. Previously had grid lines but no numbers.
+- **Reference line labels** added to Total Load chart: "avg" and "ease" in the y-axis gutter next to their dashed lines.
+- **ACWR threshold labels** — 1.3 and 1.5 reference values shown in the y-axis gutter with matching colours.
+- **TSB reference labels** — key values (-10, 0, +15) shown in the y-axis gutter.
+- **Sharp angular lines** — replaced bezier-smoothed curves (`smoothAreaPath`) with sharp polylines across all Stats/Physiology charts. Weekly data now matches the angular style defined in UX_PATTERNS.
+- **Slate strokes** — swapped all inline `rgba(99,149,255,...)` blue chart colours to shared constants (`CHART_STROKE=#64748B`, `CHART_FILL`, `CHART_FILL_LIGHT`, `CHART_STROKE_DIM`). Semantic colours (green CTL, red/amber ACWR) unchanged.
+- **Grid lines** — added `chartGridLines()` helper. Load, forecast, distance, CTL, and ACWR charts now show subtle horizontal grid lines (`rgba(0,0,0,0.05)`, 0.5px).
+- **Y-axis gutter** — charts with y-axis labels now use `padding-right:36px` on the wrapper with `right:0` labels (was `right:4px` without padding). Label font: 9px, `#94A3B8`.
+- **Removed `preserveAspectRatio="none"`** from all 15 SVG chart instances. Charts now scale proportionally from viewBox.
+- **`stroke-linejoin="round"`** added to all chart line paths for consistent angular rendering.
+- **Sparkline draw-on animation** — chart line paths with `class="chart-draw"` animate via `stroke-dashoffset` on page load (1.2s ease-out). `animateChartDrawOn()` called after each detail page render and range toggle.
+
+## 2026-04-13 — Home page hero redesign and layout restructure
+
+- **Hero header** — centered layout matching Plan page: "[Name]'s [Plan Type]" at 48px/700, phase at 17px/700, week at 14px/500. Race countdown as frosted glass pill top-right (when in race mode). Profile avatar top-right.
+- **Card reorder** — Today's Workout first, then Readiness. This Week progress bars moved to Plan page (current week only).
+- **"Done" pill restyled** — removed green `m-pill-ok` background, replaced with neutral frosted glass bordered pill matching app design system.
+- **This Week on Plan** — full progress card (sessions, distance, TSS bars) now renders on Plan page for the current week, replacing the simpler km/load bars. Past/future weeks keep the compact bars.
+
+## 2026-04-12 — Shared watercolour background + dark→light conversion
+
+- **Shared sky-background module** — `src/ui/sky-background.ts` with 6 palettes (blue, indigo, teal, deepBlue, slate, grey) and parameterized drift animation. All detail pages now use `buildSkyBackground()` instead of inline SVG.
+- **Rolling Load** — dark gradient hero replaced with deepBlue watercolour. Header, ring container, and ring text converted from white-on-dark to dark-on-light with frosted inner circle.
+- **Load & Taper** — dark slate gradient replaced with slate watercolour. Full dark→light conversion: header, ring, text.
+- **Injury Risk** — inline watercolour SVG (40+ lines) replaced with shared module call (`grey` palette). Animation CSS added.
+- **Sleep, Strain** — converted in prior pass (indigo, teal palettes).
+- **Physiology, Readiness, Freshness** — already light; switched to shared module (blue palette).
+
+## 2026-04-12 — Sleep History as 4th recovery signal
+
+- **Recovery composite reweighted** — HRV 50%, Last Night Sleep 25%, Sleep History 25% (was HRV 55%, Sleep 45%). RHR remains override-only.
+- **Sleep History signal** — 14-day rolling average of sleep scores, penalised by cumulative sleep debt (~3pts per hour of debt). Raw Garmin/Apple scores used directly (no z-scoring, unlike HRV).
+- **Asymmetric sleep weighting** — when last night is worse than history avg, weight shifts to 35/15 (last night/history) from 25/25. Acute sleep loss has disproportionate next-day impact (Fullagar 2015, Reilly & Edwards 2007).
+- **Sleep debt feeds into recovery composite** — ensures physiology and readiness pages tell the same story. No more "82% recovered" alongside "5.5h debt, prioritise sleep."
+- **4th mini-ring on Physiology detail page** — "Sleep Hist" ring shows debt-adjusted score alongside HRV, Sleep, and RHR sub-scores. Home page stays at 3 rings.
+- **Sleep History card on readiness detail page** — shows debt-adjusted score with 14d avg context and debt callout.
+- **Science log updated** — Van Dongen 2003, Halson 2014, Fullagar 2015, Reilly & Edwards 2007, Walsh/IOC 2021 cited.
+
+## 2026-04-13 — Load breakdown dedup and label fixes
+
+- **Running label normalization** — "Run", "Trail Run", "Treadmill Run", "Virtual Run", "Track Run" all merge under "Running" in the load breakdown bar. Previously "Run" and "Running" appeared as separate rows.
+- **Adhoc workout dedup fix** — load breakdown now checks `garminId` property directly on adhoc workouts, not just the `garmin-` id prefix. Prevents double-counting when a run exists in both garminActuals and adhocWorkouts.
+- **Surplus run label fix** — surplus distance items no longer leak the planned workout description (e.g. "Threshold 5x5 +9.0km surplus") as the sport label. Now merges under "Running".
+
+## 2026-04-13 — Home page hero and layout redesign
+
+- **Hero header** — replaced "Mosaic" brand header with personalised "[Name]'s [Plan Type]" (e.g. "Tristan's Marathon Plan") at 28px/700. Phase label and week number below. Dynamic: reads `onboarding.name`, `rd`, and `continuousMode` from state.
+- **Race countdown in hero** — if in race mode, countdown shows as a frosted glass pill (top-right) with race name below the week line. Separate race countdown card removed.
+- **Card reorder** — Today's Workout first, then Readiness, then This Week. Previously: This Week, Readiness, Today's Workout.
+- **Action buttons** — Coach and Check-in moved below the title block. Profile avatar stays top-right.
+- **Card styling** — all cards switched from warm beige (`#F5F0E8`/`#F7F5F0`) to white `#fff`. SVG circles removed from This Week, kept on Today's Workout. Side margins unified to 16px.
+- **Background** — full-page light blue sky gradient (`#C5DFF8 → #FAF9F6`), frosted glass buttons. Same visual language as Plan page.
+
+## 2026-04-12 — Strain ring multi-colour segments + glass effect
+
+- **Strain ring redesign** — ring now uses 3 colour segments: green (below target range), orange (inside target range), red (above target range). Replaces the previous single-colour fill + dashed target marker approach. Each segment animates in sequence on load.
+- **Glass container** — ring container updated to a clearer glass effect: lower background opacity (`0.08`), stronger blur (`40px`), subtle inner glow, reduced border opacity.
+- **Info overlay updated** — "Target Marker" section replaced with "Ring Colours" explaining the green/orange/red scheme.
+
+## 2026-04-12 — Design token standardisation
+
+- **`docs/UX_PATTERNS.md`** — Codified Physiology page as the canonical design reference. Added typography scale, ring size standard (hero r=46, mini r=20), spacing standards (card padding 16px, hero height 480px), and flagged legacy values.
+- **Text colours standardised** to `#0F172A` / `#64748B` / `#94A3B8` (slate family) across all views. Replaced legacy `#111`/`#555`/`#999` in strain-view, `#2C3131`/`#6B7280`/`#9CA3AF` in rolling-load-view, load-taper-view, activity-detail, and inline instances in sleep-view and home-view.
+- **Hero ring radius** standardised to 46 (was 57) in sleep-view, strain-view, readiness-view, rolling-load-view, load-taper-view.
+- **Hero metric font** standardised to 48px/700 across all pages (was 36px/300 in sleep, 42px/300 in strain/readiness, 36px/300 in rolling-load/load-taper).
+- **Page title weight** standardised to 700 (was 600 in sleep-view, strain-view).
+- **Section heading** in strain-view updated from 15px/600 to 17px/700 to match Physiology.
+- **Load-taper hero height** fixed from 460px to 480px.
+- **Ring SVG structure** standardised across all pages: container 220×220, viewBox `0 0 100 100`, center 50,50, stroke-width 8 (matching Physiology). Previously varied: Readiness was 160×160 container, Sleep used 160×160 SVG with 80,80 center, Strain/Rolling Load used 180×180 SVG with 65,65 center and stroke-width 12.
+
+## 2026-04-12 — HRV baseline consistency fix
+
+- **`src/calculations/daily-coach.ts`** — Coach nudge HRV percentage now uses the same formula as the recovery card: 7-day average vs 28-day baseline. Previously used last-night value vs all-time mean, causing contradictions (e.g. card shows +9%, nudge shows -22%).
+
+## 2026-04-12 — RPE rating system
+
+- **`src/ui/activity-detail.ts`** — New RPE card on activity detail page. Shows current rating (colour-coded green/amber/red matching the canonical RPE scale) or "Tap to rate" if unrated. Tapping opens a slider overlay (1-10) that saves to `wk.rated[workoutId]`.
+- **`src/ui/activity-review.ts`** — RPE prompt now also shown for excess (unmatched) runs, not just slot-matched ones. Both auto-process and batch-review paths updated. Slider colour now tracks effort level (green 1-3, amber 4-6, red 7-10). Fixed hardcoded `km` unit in prompt to use `formatKm()`.
+- **`src/ui/events.ts`** — `effortScore` computation now includes adhoc `garmin-` runs so excess-run RPE ratings feed into weekly debrief signals and plan adjustments.
+- **`src/ui/home-view.ts`**, **`src/ui/plan-view.ts`** — Pass `workoutId` through to `renderActivityDetail` so the RPE card appears on activities opened from both views.
+
+## 2026-04-12 — Plan tab full rebuild (round 2)
+
+- **Hero background** — phase-keyed dark gradient (slate for base, brown for build, rose for peak, blue-grey for taper). Rolling hills SVG, warm glow orbs, bottom fade to `--c-bg`. Matches the design language of Sleep, Load/Taper, Rolling Load.
+- **TSS progress ring** — 100px ring in the hero showing actual vs planned TSS. Animates on mount. White stroke below 70%, full white at 70%+, green at 100%.
+- **Header** — "Week 8 / 10" as 28px white hero text. Phase label + date range as subtle white-on-dark text below. Nav arrows and profile as frosted glass buttons (`backdrop-filter:blur`).
+- **Action buttons** — Coach, Check-in, Wrap up week as frosted glass pills on the hero. Review past week and + Add session as secondary CARD-shadow buttons below the hero. Removed uniform pill row.
+- **Week Overview removed** — collapsible section with coach copy killed entirely.
+- **Status clarity** — "Logged" now shows green, "Missed" shows amber, both at 600 weight. Distinguishable at a glance.
+- **Workout card spacing** — equal 15px vertical padding on all rows including rest days.
+- **Progress bars** — in their own CARD-shadow card below the hero.
+- **Staggered floatUp** — all sections animate in with `plan-fade` class.
+
+### Previous round (same date)
+- **Calendar strip** — removed. 7 coloured circle dots + click-to-scroll handler + `DAY_LETTER` constant deleted.
+- **Workout rows** — collapsed 7 status colours (green/blue/amber for Done/Today/Missed/Adjusted/Replaced/Skipped/Upcoming) into 1 accent: warm terracotta `#C4553A` on Today only. All past/future labels use neutral `var(--c-faint)`. Done rows get slightly stronger `var(--c-muted)` presence. Green dot on matched activities removed, caution/orange on undo/timing-mod/replaced removed.
+- **Workout cards** — flat `border-top` rows converted to individual CARD shadow cards (`box-shadow`, `border-radius:16px`, `margin:6px 16px`) with staggered `floatUp` animation.
+- **Banners** — all 7 (carry-over, km-nudge, adjust-week, illness, injury, morning-pain, benchmark) rebuilt to use shared `PLAN_CARD_STYLE` constant. Removed: gradient accent bars, tinted backgrounds (amber/green/blue), 6-colour injury phase configs, multi-colour pain level, sun icon box, emoji in benchmarks, green "Recovered" buttons. All now neutral white card with shadow.
+- **Activity log** — wrapped in a card. Coloured dots (ok/caution/accent) and badges (Matched green, Excess amber, Pending amber) all neutralised to muted pills.
+- **Page container** — `max-width:480px;margin:0 auto` added.
+- **Header buttons** — `flex-wrap:wrap` added to right button row for iPhone, so Coach/Check-in/nav pills wrap cleanly.
+
+## 2026-04-12 — Fix Garmin daily metrics not reaching the app
+
+- **Symptom**: daily metrics (RHR, HRV, VO2max, stress) not showing in app despite Garmin webhook pushing data successfully. Sleep unaffected.
+- **Root cause**: migration `20260407_daily_metrics_steps.sql` (adding `steps`, `active_calories`, `active_minutes`, `highly_active_minutes` to `daily_metrics`) was never applied to prod. `sync-physiology-snapshot`'s SELECT included these columns, so the query errored, returning zero daily metrics rows. Sleep was unaffected (separate query on `sleep_summaries`). Backfill also failed silently on every upsert, triggering the 12h throttle guard.
+- **DB fix (applied manually)**: ran `20260407_daily_metrics_steps.sql` and `20260408_coach_narrative_limits.sql` against prod.
+- **`src/main.ts`** — Detects `?garmin=connected` query param (set by `garmin-auth-callback` redirect) and clears the backfill throttle guard + Garmin cache on return. Strips the param from the URL afterward. Bumped both `triggerGarminBackfill(4)` calls to `triggerGarminBackfill(8)` (the edge function max).
+- **`src/ui/account-view.ts`** — "Connect Garmin" button now calls `resetGarminBackfillGuard()` before redirecting to OAuth.
+- **`src/ui/wizard/steps/fitness.ts`** — Same guard-clear added to wizard Garmin connect button.
+
+## 2026-04-11 — Debounce home re-renders on startup
+
+- **Symptom**: on launch, the home view visibly refreshed 3–5 times in quick succession before settling.
+- **Root cause**: `main.ts` fired an initial `renderHomeView()` after `advanceWeekToToday`, then each async sync (Strava activities, `syncTodaySteps`, `syncPhysiologySnapshot`, `refreshRecentSleepScores`) triggered its own full re-render as it landed. For a Strava+Garmin user, up to five sequential renders ran in the first few seconds, each visible as a flicker.
+- **`src/main.ts`** — Added `scheduleHomeRefresh()`, a 150 ms trailing-edge debounce around `renderHomeView()`. All twelve post-sync call sites (startup chains + `visibilitychange` handler) now go through it; the initial launch render still calls `renderHomeView()` directly so first paint is unchanged. The cascade of post-sync refreshes now collapses into a single render.
+
+## 2026-04-11 — Breakdown card: distinct blue shades per activity
+
+- **`src/ui/home-view.ts`** — Previously, the weekly load breakdown used `sportColor()` which gave the same grey fallback to any activity that wasn't in the hard-coded sport map ("HIIT", "Alpine Skiing", "Run", plus most adhoc workout titles), while matched running slots were forced to `#3b82f6`. The result was three or four rows painted with one of two colours. Added `breakdownShade(index)` exporting a 7-step monochromatic blue ramp (`#1e3a8a` → `#bfdbfe`). Segments are already sorted descending by TSS, so the largest row gets the darkest shade.
+- **`src/ui/load-taper-view.ts`** — `buildBreakdownCard` remaps `seg.color` through `breakdownShade` before rendering the stacked bar, legend, and per-row bars. Keeps the "one data hue" rule (all shades of blue) while giving each row a distinct step.
+- **`src/ui/home-view.ts`** — `showPlanLoadBreakdownSheet` applies the same remap after sort so the plan-wide breakdown matches.
+
+## 2026-04-11 — Load & Taper ring shows true % when over target
+
+- **`src/ui/load-taper-view.ts`** — `barPct` was clamped to `Math.min(100, ...)` before rendering the "X% of target" label, so a week at 345 TSS against a 268 target displayed "100% of target" instead of "129%". The clamp has been moved to `ringPct` only (ring arc still caps visually at 100%); the text label now shows the true percentage.
+
+## 2026-04-11 — ACWR modal: attribution, severity, and copy alignment
+
+- **`src/ui/main-view.ts`** — `crossTrainingCause` (Rule 3) was picking `wk.unspentLoadItems[0]` — the first item in insertion order. When a user did multiple cross-training sessions in the same week (e.g. padel + gym), the copy could attribute the load spike to whichever was stored first. Now sorts by `aerobic + anaerobic` and picks the heaviest non-running item. Surplus-run items are explicitly excluded — those are mechanical (Rule 2), not cross-training (Rule 3).
+- **`src/ui/main-view.ts`** — When ACWR is only marginally above the ceiling (≤5%, e.g. 1.52× vs 1.5×), `triggerACWRReduction` now passes `maxAdjustments: 1` to `buildCrossTrainingPopup`. Previously, the modal header said "A small adjustment is enough" but the Reduce option listed 2+ changes (easy-run trim + quality downgrade) — a direct contradiction. Now a single small cut is suggested, matching the copy.
+- **`src/cross-training/suggester.ts`** — New `maxAdjustments?: number` parameter on `buildCrossTrainingPopup`. Overrides severity-based adjustment count: `1` forces light severity (single adjustment), `2` caps extreme at heavy. Also suppresses replace-option alternatives (small overshoots shouldn't trigger full run replacements).
+- **`src/ui/suggestion-modal.ts`** — All 5 rules rewritten to be action-agnostic. Rules 1, 2, 4, 5 previously prescribed specific adjustment counts ("Cut intervals first. Threshold sessions next", "Shorten the long run and one easy run", "Replacing one interval session"), which created contradictions whenever the suggester output a different count (especially when `maxAdjustments: 1` forces a single adjustment). Each rule now describes the CAUSE and direction (intensity first / volume first) and leaves specifics to the cards. Em dashes removed throughout per the writing style guide. `humanConsequence` high-status copy reworded to drop "Your body needs" (wellness-app tone).
+
+## 2026-04-11 — Fix blank-page crash from malformed pending activities
+
+- **Symptom**: on launch, the app flashed for a second then went completely blank.
+- **Root cause**: `syncStravaActivities` → `processPendingCrossTraining` → `showActivityReview` creates a full-screen `activity-review-overlay` backdrop *before* building its content. A legacy Strava pending item had `activityType === undefined` (first crash) and another had `garminId === undefined` (second crash). `formatActivityType(undefined).replace(...)` and `escHtml(undefined).replace(...)` both threw. The caller's `.catch(() => {})` swallowed the error, but the empty cream overlay stayed in the DOM covering the entire screen.
+- **`src/data/activitySync.ts`** — `processPendingCrossTraining` now drops malformed pending items (missing `garminId`, `activityType`, or `startTime`) upstream with a `console.warn`. These items can't be rendered or assigned; dropping them is safer than carrying them forward.
+- **`src/ui/activity-review.ts`** — `showActivityReview` now wraps `showMatchingEntryScreen` in try/catch. If anything in the matching UI throws, the full-screen overlay is torn down instead of left as an invisible blank backdrop. Prevents this entire class of bug from producing a blank page.
+- **`src/calculations/activity-matcher.ts`** — `formatActivityType` accepts `string | null | undefined`, returns `'Activity'` for nullish input. Protects ~30 call sites.
+- **`src/ui/matching-screen.ts`** — `escHtml` accepts `string | null | undefined`, returns empty string for nullish input.
+- **`src/main.ts`** — Global safety net: `window.error` and `window.unhandledrejection` listeners now log the error and tear down any orphaned full-screen overlays (currently `activity-review-overlay`). Defence-in-depth so a future crash in fire-and-forget syncs (which all use silent `.catch(() => {})`) can never produce a blank page again.
+
+## 2026-04-10 — Week debrief: circular progress + smarter plan toggle
+
+- **`src/ui/week-debrief.ts`** — Analysis animation now uses an SVG circular progress ring (r=32, stroke-linecap round) that fills to 100% as the checklist completes. The centre shows a live percentage. Replaces the flat linear bar.
+- **Adjusted/Standard toggle now only appears when plans are *visibly* different.** The previous gate was `changes.length > 0`, which triggered on things like "volume scaled down 8%" — real in minutes, but invisible once distances round to the nearest km. New gate is `visiblyDifferent = perWorkoutAnnotations.some(a => a !== '')`, so the toggle only shows when at least one workout has a meaningful change (type swap or ≥1km difference). When plans render identically the user sees a single plan with a "No adjustments needed" note.
+- **Dev helper**: `__previewAdjustedPlan(effort, acwrStatus)` exposed on `window` — call from devtools to preview a genuinely different plan (default: effort=2.5, acwr=caution) without waiting for real hard weeks to accumulate.
+
+## 2026-04-12 — Plan Adherence: standalone calc + tests
+
+- **`src/calculations/plan-adherence.ts`** — Extracted adherence logic into a standalone pure function (`computePlanAdherence`). Regenerates each past week's plan, applies workoutMods for reductions, matches against garminActuals with ≥95% distance threshold. Pushed workouts excluded from source week. Stats-view now uses the same function instead of its old crude `totalRuns / (rw × weeks)` calc.
+- **`src/calculations/plan-adherence.test.ts`** — 7 tests: empty state, threshold constant, current week exclusion, pushed workouts, reduced-down targets, completion counting.
+
+## 2026-04-10 — Running Plan Adherence on Home
+
+- **`src/ui/home-view.ts`** — "Plan Adherence" row in the This Week progress card. Shows cumulative % of planned runs completed across all completed weeks. Current in-progress week excluded entirely. Cross-training and ad-hoc runs excluded.
+
+## 2026-04-10 — RPE rating prompt after Strava sync
+
+- **`src/ui/activity-review.ts`** — After Strava/Garmin activities are matched to planned workouts, a lightweight RPE slider overlay (1-10) now prompts the user to rate how hard each matched run felt. Defaults to the auto-derived RPE from HR/Garmin data. Dismissing or tapping "Skip" keeps the auto value. Tapping "Save" writes the user's ratings to `wk.rated[workoutId]`, improving the effortScore signal used in weekly debrief and plan adjustments.
+- Wired into both `applyReview` (batch review flow) and `autoProcessActivities` (single-activity auto-match flow).
+
+## 2026-04-10 — Activity log sorted by date
+
+- **`src/ui/plan-view.ts`** — Activity log items (matched, adhoc/excess, pending) were rendered in three separate unsorted loops. Collected all items into a single array with `startTime` timestamps and sort ascending before rendering, so activities always appear in chronological order.
+
+## 2026-04-10 — Overshoot-only reduction budget for cross-training
+
+- **Problem**: suggestion modal offered aggressive reductions (replace easy run + downgrade both quality sessions) even when cross-training only slightly exceeded target. The full RRC (run replacement credit) was used regardless of how much overshoot existed.
+- **Fix**: `budgetCapFraction` parameter added to `buildCrossTrainingPopup`. Callers compute `overshootTSS / activityTSS` and cap the reduction budget proportionally. If projected week TSS (current + remaining runs) only exceeds target by 20 TSS but the activity contributed 80 TSS, the budget is capped at 25% of RRC. Both `triggerACWRReduction` (main-view.ts) and `triggerExcessLoadAdjustment` (excess-load-card.ts) pass the cap.
+- **Summary text updated**: modal now communicates "Adjustments bring your week back to ~268 TSS target" so the user understands why specific reductions are proposed.
+
+## 2026-04-10 — UI overhaul: Home page (#10)
+
+- **Design system alignment**: all cards use inline CARD shadow (no borders), section labels 12px weight-600 (removed `m-sec-label` ALL-CAPS)
+- **Staggered floatUp animations** on all sections (header, progress bars, readiness, workout hero, race countdown, recent activity)
+- **max-width 480px** wrapper on all content
+- **Race countdown moved to top** (position 3, after banners) in race mode; stays below workout in general fitness mode
+- **Workout hero circles** opacity boosted for more visible pattern (0.18→0.28 etc.)
+- **View plan button** colour fixed: `var(--c-muted)` instead of `var(--c-accent)` (navigation link rule)
+- **Dead code removed**: `showLoadBreakdownSheet` (~160 lines, replaced by Load/Taper page navigation), unused `bar()` function
+- All Tailwind utility classes in section builders replaced with inline styles for consistency
+
+## 2026-04-10 — Fix: calories fallback in Strava sync edge function
+
+- All three Strava sync paths (standalone, backfill HR-stream, backfill avg-HR batch) now fall back to cached DB calories when Strava returns null
+- Client-side `stravaSync.ts` patch copies DB calories onto existing garminActuals during sync
+
+## 2026-04-10 — Week-end debrief: 3-step flow (Summary → Analysis → Plan Preview)
+
+- **Refactored** `week-debrief.ts` from a single-screen modal into a 3-step flow
+- **Step 1**: Week summary with metrics (distance, training load, running fitness) and coach signal pills — CTA triggers analysis
+- **Step 2**: Analysis animation (~2.5s) with progress bar and stepped checklist ticking through HR data, RPE, training load, recovery, and plan generation
+- **Step 3**: Suggested plan showing next week's sessions with type badges. "Adjustments applied" card lists what changed (effort scaling, ACWR quality reduction, long run capping). Toggle between adjusted and standard plan. Accept proceeds to week advance.
+- Generates two plans via `planWeekSessions()`: adjusted (with trailing effortScore + ACWR) and standard (vanilla). Diffs computed automatically for change annotations.
+- Pacing adjustment (rpeAdj) now applied automatically when effortScore is significantly off (no checkbox — integrated into the adjusted plan flow)
+
+## 2026-04-10 — Fix: calories coverage across all activity types
+
+- **Bug**: Strava list endpoint (`/athlete/activities`) often returns null calories. Only runs had a detail fetch (for splits), so non-runs never got calories from Strava.
+- **Fix (standalone)**: detail endpoint (`/activities/{id}`) now fetched for all new activities when calories is null (not just runs). One extra call per new activity, cached activities skip it entirely. Also reads calories from the detail response for runs (was ignored before).
+- **Fix (fallback)**: all three sync paths (backfill HR-stream, backfill avg-HR batch, standalone) fall back to cached DB calories when Strava returns null
+- Client-side `stravaSync.ts` patch copies DB calories onto existing garminActuals during sync
+- DB coverage before fix: RUNNING 6/20, HIIT 12/25, SKIING 1/15, TENNIS 0/12
+- **Backfill mode**: detail endpoint now fetched for calories in HR-stream loop (piggybacked on existing per-activity calls) and avg-HR batch (capped at 15)
+- **Standalone heal**: cached activities missing calories get a detail fetch (capped at 10 per sync)
+- **Adhoc workout patch**: `garminCalories` on adhoc workout objects now patched via start_time matching
+
+## 2026-04-10 — Fix: multi-activity "0 TSS" + summary simplification + below-target guard
+
+- **Bug 1**: multi-activity summary showed "generated 0 TSS" while simultaneously showing 25km equiv and "Very heavy" severity. Root cause: `getWeeklyExcess()` returns `max(0, weekTotal - baseline)`, which is 0 when below target. Fix: compute TSS from the items' own iTrimp/duration instead.
+- **Bug 2**: suggestion modal offered run reductions even when week TSS was below target and completing remaining runs wouldn't exceed it. Root cause: `triggerACWRReduction` fired on any unspent items regardless of week load context. Fix: added guard in `triggerACWRReduction` — projects `currentTSS + carried + remainingRunTSS` vs `plannedSignalB`; skips the modal if projected total stays within target.
+- **Summary simplified**: removed per-workout impact text from summary paragraph (redundant with "View changes" sections). Multi: "33 TSS from 2 extra activities, equivalent to 25.0 km easy running." Single: "50 min padel. Consider adjusting your plan."
+
+## 2026-04-10 — Science audit #10: Marathon max gain ceiling
+
+- **Full marathon row** in `max_gain_pct` revised: 8.0, 7.0, 6.0, 6.5, 4.0 → 8.0, 6.8, 5.5, 4.5, 3.5
+- Old advanced (6.5%) was higher than intermediate (6.0%), violating diminishing returns
+- New values calibrated against HERITAGE study and Midgley 2007 meta-analysis; realised gains verified to be strictly decreasing across all tiers
+- Forecast profile test #7 (Speed → Marathon) baseline range adjusted for combined effect of audit #8 (LT mult) and #10
+- All 819 tests passing
+
+## 2026-04-10 — Science audit #9: Sleep quality weights
+
+- **Deleted dead `sleepQualityMultiplier`** function (60/40 REM/Deep) — was never called
+- Actual sleep score comes from Garmin natively or `computeSleepScore` for Apple Watch (55% duration, 25% deep, 20% REM)
+- Apple Watch weights audited and kept: duration-dominant with slight deep bias aligns with athletic recovery literature
+- SCIENCE_LOG updated with Apple Watch scoring rationale
+
+## 2026-04-10 — UI overhaul: Activity Detail page
+
+- **Design system alignment**: stats grid cells use CARD shadow (no borders), all section labels use 12px weight-600 (removed ALL-CAPS `m-sec-label`)
+- **Staggered entrance animations** on every section (stats, load, map, HR zones, splits, coach)
+- **Tab bar** added (Home highlighted)
+- **Max-width 480px** content wrapper
+- **Colour tokens**: consistent `TEXT_M`, `TEXT_S`, `TEXT_L` throughout
+- **No hero background** (functional drill-down page, matches Home/Plan pattern)
+- **File**: `src/ui/activity-detail.ts`
+
+## 2026-04-10 — Science audit #8: LT multiplier matrix tier-aware marathon
+
+- **Marathon LT multipliers** now vary by athlete tier (was single row for all athletes)
+- Elite/performance: 1.04-1.08, trained: 1.06-1.10, recreational: 1.08-1.12, beginner: 1.09-1.14
+- 5K/10K/HM multipliers unchanged (stable across fitness levels)
+- Rationale: research shows marathon pace = 104-114% of LT pace, with fitter athletes at the low end
+- Optional `athleteTier` param added to `predictFromLT` and `blendPredictions`
+- All 23 prediction tests passing
+
+## 2026-04-10 — Science audit #6: ACWR tier thresholds compressed
+
+- **ACWR safe upper bounds** compressed from 1.2-1.6 to 1.3-1.5 range
+- Beginner 1.30, recreational 1.35, trained 1.40, performance 1.45, high_volume 1.50
+- Rationale: no published per-tier ACWR thresholds exist; old range overstated the evidence. New range stays within Gabbett's 0.8-1.3 sweet spot (beginners) to the 1.5 danger threshold (elite)
+- Lolli et al. 2019 limitation documented: absolute ACWR thresholds may be ratio coupling artifacts
+- All 33 readiness tests passing
+
+## 2026-04-10 — UI overhaul: Load & Taper detail page + breakdown integration
+
+- **Weekly Load Breakdown sheet eliminated** — content (sport rows, stacked bar, carry, target footer) integrated directly into the Load & Taper page as the first card after the ring
+- **Home TSS row** and **Plan load bar** now navigate to Load & Taper page instead of opening the sheet overlay
+- **Warm earth hero background** with rolling plains SVG landscape, matching the per-page theme system
+- **Progress ring** showing weekly TSS completion (amber gradient, green at 100%, grey when low)
+- **Phase badge pill** centered below ring (Base/Build/Peak/Taper with phase colour)
+- **Card system aligned** to design system: 16px radius, dual shadow, no borders
+- **Entrance animations** with staggered floatUp per card
+- **Tab bar** added (Home highlighted)
+- **Max-width 480px** content wrapper
+- **Copy cleanup**: removed em dashes, replaced with periods/commas per UI copy rules
+- **Removed ALL-CAPS** from section headers inside cards (kept only for the "Plan structure" label above the phase cards)
+- **File**: `src/ui/load-taper-view.ts`
+
+## 2026-04-10 — Readiness: tier-aware safety, new labels, recalibrated floors
+
+- **Tier-aware safety sub-score** — ACWR-to-score mapping now anchored to athlete's personal `safeUpper` (was fixed at 2.0 ceiling). Same ACWR gives different scores for different tiers: ACWR 1.35 = comfortable for elite (safeUpper 1.6), concerning for beginner (safeUpper 1.2).
+- **New labels** — "Ready to Push" renamed to "Primed" (aligns with Garmin's "Prime" terminology). Thresholds recalibrated for non-linear curves: Primed >= 75, On Track >= 55, Manage Load >= 35, Ease Back < 35.
+- **Dark green for Primed** — new CSS variable `--c-ok-strong` (#15803D) distinguishes Primed from On Track visually.
+- **Hard floors recalibrated** — all caps shifted to match new label boundaries (54 = top of Manage Load, 34 = top of Ease Back, 74 = below Primed). Recovery floor base lowered from 40 to 35.
+- **Files**: `src/calculations/readiness.ts`, `src/ui/coach-modal.ts`, `src/ui/strain-view.ts`, `src/calculations/daily-coach.ts`, `src/calculations/fitness-model.ts`, `src/styles.css`
+
+## 2026-04-10 — Fix: Readiness page freshness now uses live intra-week TSB
+
+- **Bug**: Readiness page showed end-of-last-completed-week TSB (e.g. -22), while Freshness detail page applied intra-week daily ATL/CTL decay to show live value (e.g. -13). The two pages disagreed.
+- **Fix**: Readiness page now applies the same intra-week decay logic (daily ATL/CTL step with current-week load), so both pages show the same live freshness.
+- **File**: `src/ui/readiness-view.ts`
+
+## 2026-04-10 — Strain system cleanup: plan-based targets, readiness passthrough, overreach threshold
+
+- **perSessionAvg** now derived from current week's planned TSS (not CTL baseline). Tracks plan intent: build phases prescribe higher targets, taper phases lower ones. Changed in `home-view.ts`, `strain-view.ts`, `readiness-view.ts`, `daily-coach.ts`.
+- **Readiness label** now passed through from home/readiness views to strain detail page. Target modulation and marker colour (amber/red) now work correctly for today. Past days still show unmodulated targets.
+- **Rest-day overreach threshold** changed from 50% to 33% of per-session average. Constant `REST_DAY_OVERREACH_RATIO` (0.33) centralised in `fitness-model.ts`, replaces 4 hardcoded `* 0.5` sites. Aligned with Whoop's ~33% recovery-day cap and Seiler's polarised model.
+- **COUPLING tag** added to passive TSS excess calculation in `strain-view.ts` to flag tight dependency on `computeTodaySignalBTSS`.
+- **Home strain ring** "not started" state now shows em dash instead of target range (target communicated visually by dashes on ring arc).
+
+## 2026-04-10 — Readiness sub-scores: non-linear power curves
+
+- **Fitness sub-score** now uses power curve (exponent 1.2) instead of linear mapping. TSB daily 0 = 39% (was 45%), TSB -10 = 21% (was 27%). Mild non-linearity — fatigued end drops faster while fresh end stays comfortable.
+- **Safety sub-score** now uses power curve (exponent 1.6). ACWR 1.3 = 42% (was 58%), ACWR 1.5 = 25% (was 42%). Strong non-linearity reflecting Gabbett's finding that injury risk accelerates exponentially above the safe zone.
+- **Weights unchanged** at 35/30/35. The dynamism comes from the curved sub-scores, not shifting weights. Hard floors remain as a safety net.
+- **Files**: `src/calculations/readiness.ts`
+
+## 2026-04-10 — Fix: stale pending activities disappearing from log
+
+- **Bug**: Non-run activities (skiing, HIIT, etc.) queued as `__pending__` in the current week would become invisible if the week advanced before the user reviewed them. `globalProcessed` prevented reprocessing, `processPendingCrossTraining` only checks the current week, and the pending banner only renders for the current week.
+- **Fix**: `matchAndAutoComplete` now scans past weeks for stale `__pending__` items on every sync and auto-resolves them as adhoc workouts with garminActuals entries, so they appear in the activity log and count toward load.
+- **Fix**: Activity log duplicates + wrong badges. `addAdhocWorkoutFromPending` creates both `adhocWorkouts` and `garminActuals` entries with the same `garmin-*` key. The log rendered both (once "Matched", once "Excess"). Now: if a `garmin-*` key has a matching adhocWorkout, only the adhoc loop renders it (correct badge). If the adhoc was removed via ×, the garminActuals loop renders it as Logged/Excess (not "Matched"). Same dedup applied to Home RECENT list. Load counting in `fitness-model.ts` was already deduped via `seenGarminIds`.
+- **Files**: `src/calculations/activity-matcher.ts`, `src/ui/plan-view.ts`, `src/ui/home-view.ts`
+
+## 2026-04-10 — Leg load decay: 3-layer model
+
+- **Base half-life raised from 36h to 48h** — better matches EIMD functional recovery window (72-96h, Clarkson & Hubal 2002). 48h is the DOMS peak midpoint.
+- **Sport-specific scaling** — half-life multiplied by `recoveryMult` from SPORTS_DB. Swimming (0.90) = 43h, cycling (0.95) = 46h, rugby (1.30) = 62h. Higher-impact sports take longer to clear.
+- **Re-loading penalty** — exercising on fatigued legs extends the half-life by 1.3x per subsequent session within 72h (capped at 3 reloads = 2.2x max). A hike Monday + run Tuesday pushes the hike's effective half-life from 46h to 60h, keeping the warning active through Wednesday. Models the principle that eccentric exercise on damaged fibres delays recovery.
+- **Files**: `src/calculations/readiness.ts`
+
+## 2026-04-09 — Sleep debt half-life: 4 days to 7 days
+
+- **DEBT_DECAY changed** from `exp(-ln(2)/4)` (4-day half-life) to `exp(-ln(2)/7)` (7-day half-life). Debt now clears more slowly: a 2-hour deficit takes ~7 days of full sleep to halve, not 4.
+- **Rationale**: 4-day was borrowed from ATL Banister model, not sleep science. Banks & Dinges (2007) and Belenky et al. (2003) show performance deficits from chronic restriction persist well beyond 3-4 days of recovery. Oura uses 14-day lookback, WHOOP states debt "follows you for days." 7-day half-life means 2-week-old debt is at 25%, aligning with industry 14-day windows.
+- **Files**: `src/calculations/sleep-insights.ts`
+
+## 2026-04-09 — Recovery score: RHR as SD-based override, not weighted input
+
+- **RHR removed from weighted composite** — recovery score now `HRV * 0.55 + Sleep * 0.45` (was HRV 0.45 + Sleep 0.35 + RHR 0.20). RHR is a high-specificity, low-sensitivity signal (Buchheit 2014) that adds noise when weighted continuously but has strong diagnostic value when genuinely elevated.
+- **Graduated RHR hard floor** — when 7d avg RHR is elevated above 28-day baseline by >= 2 SD, recovery score is capped: 2.0-2.5 SD -> cap 55, 2.5-3.0 SD -> cap 40, >= 3.0 SD -> cap 25. Uses personal SD (not absolute bpm) to handle inter-individual variation (e.g. athlete with 41-48 bpm normal range has SD ~2.5, so 2 SD trigger = ~49 bpm).
+- **rhrOverride field** added to `RecoveryScoreResult` — contains `deviationSD` and `cap` when override is active, so UI and coach narrative can explain why the score is capped.
+- **Coach narrative updated** — system prompt now describes the new model.
+- **Files**: `src/calculations/readiness.ts`, `supabase/functions/coach-narrative/index.ts`
+
+## 2026-04-09 — Strain target + passive strain + ring redesign
+
+- **Strain ring redesign** — ring now shows absolute TSS with auto-scaling (`ringMax = max(2 × target, actual × 1.25)`) instead of percentage fill. White target marker dot on the ring arc at the target position. Marker turns amber on Manage Load, red on Ease Back/Overreaching. Inner content shows actual TSS number + "Target X TSS" label.
+- **Readiness-modulated daily target** — new `computeDayTargetTSS()` function. Training days: 100% of planned TSS. Ease Back: 80%. Overreaching: 75%. Rest days: 30% of per-session average. Adhoc days: per-session average.
+- **Passive strain from steps** — new `computePassiveTSS()` takes two signals (steps + active minutes), uses the higher. Subtracts logged workout steps (170 spm running, 110 spm walking) and duration to prevent double-counting. 1 TSS per 1,000 passive steps.
+- **Personal TSS calibration** — `calibrateTssPerActiveMinute()` computes median TSS/min from 5+ logged activities. Stored as `s.tssPerActiveMinute`. Called on startup.
+- **Apple Watch exercise minutes** — syncs `appleExerciseTime` (Exercise ring) via HealthKit, stored as `activeMinutes` in physiologyHistory. Same field Garmin epoch data uses.
+- **Steps card on strain page** — replaces the placeholder with actual step count from physiologyHistory + passive TSS attribution.
+- **Files**: `src/calculations/fitness-model.ts`, `src/ui/strain-view.ts`, `src/data/appleHealthSync.ts`, `src/main.ts`, `src/types/state.ts`
+
+---
+
+## 2026-04-09 — Session generator (general purpose)
+
+- **Generate session on plan view** — new "Generate session" button below workout cards (current week only). Two-step modal: pick session type (Easy, Long, Threshold, VO2 Intervals, Marathon Pace, Progressive) then set distance or time via slider. Generates structured workouts via `intentToWorkout` with warm-up/cool-down, paces from VDOT, and interval structure. Replaces the holiday-only session chooser.
+- **Holiday "Generate session" now uses the same modal** — available on all holiday modes including "no running planned".
+- **Holiday mods skip user-generated sessions** — `applyHolidayMods` no longer converts `holiday-*` sessions back to rest/optional. Sessions the user deliberately created are preserved.
+- **One generated session per day per type** — generating on a day that already has a holiday-generated session replaces it instead of stacking duplicates.
+- **Adhoc sessions skipped in TSS** — `adhoc-*` prefixed sessions (like `holiday-*`) are suggestions, not completed activity. Excluded from `computeWeekRawTSS`, `computeTodaySignalBTSS`, and `getDailyLoadHistory`.
+- **Files**: `src/ui/session-generator.ts` (new), `src/ui/plan-view.ts`, `src/ui/holiday-modal.ts`, `src/calculations/fitness-model.ts`, `src/ui/home-view.ts`
+
+## 2026-04-09 — Stacked session recovery ("To Baseline") + freshness label clarity
+
+- **Session recovery now stacks** all recent sessions (current week + last 3 days of previous week) instead of only counting the last workout. Walk-forward model: each session adds `8 × TSS / ctlDaily × recoveryMult × recoveryAdj` hours to a running total, with elapsed time ticking down between sessions. Matches Garmin/Firstbeat stacking behaviour.
+- **Readiness pill linked** to the same stacked baseline number (was a separate TSB-to-minus-3 calculation that produced a confusingly similar but different number).
+- **Freshness page ring labels** renamed: "Recovery"/"Last session" to "To Baseline"/"Session fatigue", "Full Fresh"/"Fatigue clearance" to "Fully Clear"/"All fatigue".
+- **Status headline** now distinguishes "At Baseline" (session fatigue cleared, accumulated load still elevated) from "Fully Fresh" (TSB non-negative). Fixes confusing "Recovered" label when TSB is deeply negative.
+- **Shared `computeToBaseline()`** extracted to `fitness-model.ts` so both readiness and freshness views use identical logic.
+- **Files**: `src/calculations/fitness-model.ts`, `src/ui/freshness-view.ts`, `src/ui/readiness-view.ts`
+
+## 2026-04-09 — Coach narrative: scientific context + missing signals
+
+- **System prompt now explains every signal** the LLM receives: how readiness is a weighted composite with hard floors, that TSB is weekly (divide by 7 for daily-equivalent), that ACWR safe thresholds are tier-dependent, that HRV is z-scored against a 28-day personal baseline (not absolute), sleep bank semantics, CTL trend meaning, and week TSS interpretation.
+- **Two new rules** added: always divide TSB by 7 before judging freshness; consider athlete tier when interpreting ACWR.
+- **Three new signals** wired through to the LLM: `athleteTier` (so it can interpret ACWR thresholds correctly), `recoveryScore` (composite HRV/sleep/RHR score), and `acwrSafeUpper` (the tier-specific safe threshold, shown inline with the ACWR value).
+- **Files**: `supabase/functions/coach-narrative/index.ts`, `src/calculations/daily-coach.ts`
+
+## 2026-04-09 — SCIENCE_LOG.md comprehensive backfill
+
+- **Backfilled ~30 entries** covering every calculation, model, and formula in the codebase. Previously had 7 entries (recovery countdown, TSB clearance, intra-week decay, CTL/ATL EMA, iTRIMP normalisation, readiness score, recovery score). Now covers: iTRIMP calculation, VDOT (Daniels), pace zones, fatigue exponent, HR zones, effort scoring, efficiency shift detection, LT estimation, stream processing, athlete normalizer, ACWR, rolling load, same-signal TSB, passive strain, universal load currency (all 4 tiers), saturation curve, goal-distance adjustment, SPORTS_DB constants, RPE load/split, leg load decay, workout load profiles, race prediction blending, LT multiplier matrix, training horizon (VDOT gain), skip penalty, expected physiology trajectory, sleep debt model, sleep insights, activity matching, plan engine phases, session budgets, quality session management, workout importance, variant rotation, Signal A vs B.
+- **Files**: `docs/SCIENCE_LOG.md`
+
+## 2026-04-09 — Holiday mode audit fixes
+
+- **Bridge mods survive restart** — `main.ts` cleanup was wiping `_holidayBridgeScale`, `weekAdjustmentReason`, and `__holiday_bridge__` workoutMods on every launch, making post-holiday bridge weeks a single-session illusion. Cleanup now only removes during-holiday artifacts (adhoc sessions, forceDeload), preserving deliberate post-holiday plan adjustments.
+- **forceDeload cleanup on all end paths** — Extracted `clearForceDeloadFlags()` helper. Short-holiday cancel, long-holiday manual end, and auto-detection on launch all now clean forceDeload flags from holiday weeks. Previously only `cancelScheduledHoliday` did this.
+- **Unit-aware session chooser** — Holiday session chooser labels now use `formatKm()` and `formatPace()` instead of hardcoded `km` and `/km`. Workout descriptions use internal `Nkm` format (converted by `fmtDesc` at render time).
+- **Pre-holiday shift range** — Fixed off-by-one: quality sessions 2 days before holiday start are now eligible for shifting (was only 1 day before).
+- **parseKmFromDesc sums structured descriptions** — For descriptions like `1km warm up + 8km threshold + 1km cool down`, now returns 10km total instead of 1km (the first match). Prevents bridge scaling from producing 0.7km workouts.
+- **Replaced `window.location.reload()` with re-renders** — all four reload paths now use dynamic `import('./plan-view')` or caller-supplied `onComplete` callback. Home-view callers pass `renderHomeView`, plan-view callers get `renderPlanView` by default.
+- **`generateWorkoutsForWeek` helper** — extracted the 12-parameter `generateWeekWorkouts` call into a single helper. Reduces fragility if the generator signature changes.
+- **Test coverage** — 27 tests in `src/ui/holiday-modal.test.ts` covering parseKmFromDesc, isWeekInHoliday, getHolidayDaysForWeek, applyHolidayMods, applyBridgeMods_renderTime.
+- **Files**: `src/ui/holiday-modal.ts`, `src/main.ts`, `src/ui/plan-view.ts`, `src/ui/home-view.ts`
+
+## 2026-04-09 — Holiday TSS leak fix + session-based recovery countdown + full fresh
+
+- **Holiday TSS leak fix** — `computeTodaySignalBTSS` and `getDailyLoadHistory` were missing the `holiday-` prefix filter on adhoc workouts. Holiday-generated suggestion sessions (which are not real activity) were counted toward daily strain TSS, inflating the Strain page number. Added `if (w.id?.startsWith('holiday-')) continue;` to both functions, matching the existing filter in `computeWeekRawTSS`.
+- **Files**: `src/calculations/fitness-model.ts`
+
+## 2026-04-09 — Session-based recovery countdown + full fresh
+
+- **Recovery ring** — replaced the old TSB-clearance countdown (which used the 7-day ATL time constant and always showed multi-day estimates) with a session-based recovery model: `recoveryHours = 8 × lastSessionTSS / ctlDaily × recoveryMult × recoveryAdj`, minus hours already elapsed since the session. Scales linearly with load relative to fitness, matching EPOC-based models (Garmin/Firstbeat) across the full intensity range (easy ~6h, moderate ~12h, race ~54h).
+- **Sport-specific recovery** — uses weighted-average `recoveryMult` from SPORTS_DB for the last session's activities (e.g. swimming 0.9, cycling 0.95, rugby 1.3). Weights by each activity's iTRIMP contribution.
+- **Recovery score adjustment** — when physiology data is available (sleep, HRV, RHR), adjusts recovery time by up to ±30%. Poor recovery (score 20) slows recovery 1.3×; good recovery (score 80) speeds it 0.8×.
+- **Dynamic ring colours** — both rings transition from red (high remaining) through amber to green (near recovered) based on progress percentage.
+- **Full Fresh ring** — hours until TSB reaches 0 (ATL decays to CTL). Useful for taper planning, not single-session recovery.
+- **Intra-week ATL decay** — ATL/CTL now updated day-by-day within the current week using daily EMA steps, fixing the issue where week-boundary-only updates ignored rest days. DST-safe date arithmetic (noon anchoring, `setDate` instead of ms offsets).
+- **Files**: `src/ui/freshness-view.ts`
+
 ## 2026-04-08 — Start Workout button on plan view workout cards
 
 - **Start Workout as primary CTA** — Running workout cards in the expanded detail now show a "Start Workout" button (play icon + blue primary style) that launches GPS tracking via `window.trackWorkout()`. "Mark as Done" and "Skip" demoted to inline text links below.

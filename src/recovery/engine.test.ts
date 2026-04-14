@@ -64,7 +64,7 @@ describe('computeRecoveryStatus', () => {
 
   it('low readiness → orange', () => {
     const entry: RecoveryEntry = {
-      date: '2025-01-15', sleepScore: 75, readiness: 35, source: 'garmin'
+      date: '2025-01-15', sleepScore: 85, readiness: 45, source: 'garmin'
     };
     const result = computeRecoveryStatus(entry, []);
     expect(result.level).toBe('orange');
@@ -73,7 +73,7 @@ describe('computeRecoveryStatus', () => {
 
   it('low HRV → orange', () => {
     const entry: RecoveryEntry = {
-      date: '2025-01-15', sleepScore: 75, hrvStatus: 'low', source: 'garmin'
+      date: '2025-01-15', sleepScore: 85, hrvStatus: 'low', source: 'garmin'
     };
     const result = computeRecoveryStatus(entry, []);
     expect(result.level).toBe('orange');
@@ -81,7 +81,7 @@ describe('computeRecoveryStatus', () => {
 
   it('good sleep with good readiness → green', () => {
     const entry: RecoveryEntry = {
-      date: '2025-01-15', sleepScore: 80, readiness: 65, source: 'garmin'
+      date: '2025-01-15', sleepScore: 85, readiness: 85, source: 'garmin'
     };
     const result = computeRecoveryStatus(entry, []);
     expect(result.level).toBe('green');

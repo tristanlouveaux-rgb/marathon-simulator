@@ -10,21 +10,25 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { isDeloadWeek, abilityBandFromVdot } from '@/workouts/plan_engine';
-import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, findGarminRunForWeek, getBenchmarkOptions, recordBenchmark, skipBenchmark, maybeInitKmNudge } from './events';
+import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWeek, maybeInitKmNudge } from './events';
 import { openActivityReReview, showActivityReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
 import { openCoachModal } from './coach-modal';
 import { applyIllnessMods, clearIllness, openIllnessModal } from './illness-modal';
+import { applyHolidayMods, buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
+import { openSessionGenerator } from './session-generator';
+import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-overlay';
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry } from '@/calculations/fitness-model';
 import { normalizeSport } from '@/cross-training/activities';
+import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
 import { formatKm, fmtDesc, formatPace } from '@/utils/format';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
-import { showLoadBreakdownSheet, showRunBreakdownSheet } from './home-view';
-import { computeWeekSignals, getSignalPills, getCoachCopy, getFutureWeekCopy, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
+import { showRunBreakdownSheet, buildProgressBars } from './home-view';
+import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
 import type { MorningPainResponse } from '@/types/injury';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
@@ -35,6 +39,7 @@ import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 // ─── Module state ────────────────────────────────────────────────────────────
 
 let _viewWeek: number | null = null; // null = current week
+let _workoutLookup: Map<string, { n: string; d: string }> = new Map();
 
 // ─── Recovery undo — module-level delegated handler (set once, survives re-renders) ──
 // Must be outside wirePlanHandlers so it works regardless of render path.
@@ -98,7 +103,6 @@ function navigateTab(tab: TabId): void {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const DAY_LETTER = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 function ourDay(): number {
   const js = new Date().getDay();
@@ -132,6 +136,14 @@ const PHASE_COLORS: Record<string, { bg: string; text: string }> = {
   peak: { bg: 'rgba(239,68,68,0.1)', text: '#DC2626' },
   taper: { bg: 'rgba(34,197,94,0.1)', text: '#16A34A' },
 };
+
+// Single accent used to highlight "today" in workout rows.
+// Warm terracotta, matches Load/Taper hero.
+const TODAY_ACCENT = '#C4553A';
+
+// Shared CARD shadow system for banners / notice cards on the Plan page.
+// Matches the aesthetic of Rolling Load / Load-Taper / Sleep.
+const PLAN_CARD_STYLE = 'background:var(--c-surface);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)';
 
 function phaseBadge(ph: string): string {
   if (!ph) return '';
@@ -451,13 +463,26 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     } else if (!isDone && !isSkipped) {
       const safeId = escapeHtml(id);
       const rpe = w.rpe || w.r || 5;
-      if (w.t === 'gym') {
-        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
-      } else {
-        html += `<button class="plan-action-mark-done m-btn-primary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;justify-content:center;display:flex">✓ Mark as Done</button>`;
-      }
       const safeDesc = escapeHtml((w.d || '').replace(/\n/g, ' '));
-      html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+      const isRunType = w.t && w.t !== 'gym' && w.t !== 'cross' && w.t !== 'rest';
+      if (isRunType) {
+        // Start Workout — primary CTA for running workouts
+        html += `<button class="plan-detail-start-btn m-btn-primary" data-workout-id="${safeId}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;justify-content:center;display:flex;align-items:center;gap:6px">
+            <span style="width:10px;height:10px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
+            Start Workout</button>`;
+        // Mark as Done + Skip — demoted to inline text links
+        html += `<div style="display:flex;gap:12px;justify-content:center;margin-top:4px">`;
+        html += `<button class="plan-action-mark-done" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Mark as Done</button>`;
+        html += `<span style="color:var(--c-border)">·</span>`;
+        html += `<button class="plan-action-skip" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Skip</button>`;
+        html += `</div>`;
+      } else if (w.t === 'gym') {
+        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
+        html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+      } else {
+        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
+        html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+      }
     } else if (isDone) {
       html += `<button class="plan-action-unrate m-btn-secondary" data-workout-id="${escapeHtml(id)}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.7">Unmark as Done</button>`;
     }
@@ -488,10 +513,14 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
   const garminMatched = wk.garminMatched || {};
   const pendingItems = (wk.garminPending || []).filter(p => garminMatched[p.garminId] === '__pending__');
 
-  const totalItems = Object.keys(actuals).length + adhocGarmin.length + pendingItems.length;
+  // Deduplicate: garmin-* keys in garminActuals that also exist in adhocGarmin are the same activity.
+  // Count each activity once. Orphaned garmin-* actuals (adhoc removed via ×) are counted from actuals.
+  const adhocIds = new Set(adhocGarmin.map((w: any) => w.id || ''));
+  const dedupedActualKeys = Object.keys(actuals).filter(k => !(k.startsWith('garmin-') && adhocIds.has(k)));
+  const totalItems = dedupedActualKeys.length + adhocGarmin.length + pendingItems.length;
   if (totalItems === 0) return '';
 
-  const matchedCount = Object.keys(actuals).length + adhocGarmin.length;
+  const matchedCount = dedupedActualKeys.length + adhocGarmin.length;
   const _plannedBForLog = computePlannedSignalB(
     s.historicWeeklyTSS, s.ctlBaseline, wk.ph ?? 'base',
     s.athleteTierOverride ?? s.athleteTier, s.rw, undefined, undefined, s.sportBaselineByType,
@@ -499,34 +528,34 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
   const _carriedForLog = computeDecayedCarry(s.wks ?? [], wk.w ?? s.w, _plannedBForLog, s.planStartDate);
   const excessLoad = _plannedBForLog > 0 ? Math.round(getWeeklyExcess(wk, _plannedBForLog, s.planStartDate, _carriedForLog)) : 0;
 
-  let h = `<div style="border-top:1px solid var(--c-border)">`;
+  let h = `<div class="fade" style="margin:10px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE};animation-delay:0.12s">`;
 
   // Header
-  h += `<div style="padding:12px 18px 0;display:flex;align-items:center;justify-content:space-between">`;
+  h += `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">`;
   h += `<div>`;
-  h += `<span class="m-sec-label" style="margin-bottom:0">Activity Log</span>`;
+  h += `<span style="font-size:12px;font-weight:600;color:var(--c-black)">Activity Log</span>`;
   if (matchedCount > 0) {
     h += `<span style="font-size:11px;color:var(--c-muted);margin-left:8px">${matchedCount} matched`;
-    if (excessLoad > 0) h += ` · <span style="color:var(--c-caution)">+${excessLoad} excess TSS</span>`;
+    if (excessLoad > 0) h += ` · +${excessLoad} excess TSS`;
     h += `</span>`;
   }
   h += `</div>`;
   if (viewWeek === currentWeek) {
-    h += `<button id="plan-review-btn" class="m-btn-link" style="font-size:12px">`;
+    h += `<button id="plan-review-btn" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font-family:var(--f);font-weight:500">`;
     if (pendingItems.length > 0) h += `${pendingItems.length} pending · `;
-    h += `Review <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>`;
+    h += `Review <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline;vertical-align:middle"><path d="M9 18l6-6-6-6"/></svg></button>`;
   }
   h += `</div>`;
 
   // Pending banner
   if (pendingItems.length > 0 && viewWeek === currentWeek) {
-    h += `<div style="margin:10px 18px 0;padding:10px 12px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.25);border-radius:var(--r-card);display:flex;align-items:center;justify-content:space-between;gap:8px">`;
+    h += `<div style="margin-bottom:8px;padding:10px 12px;border:1px solid var(--c-border-strong);border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">`;
     h += `<div>`;
-    h += `<div style="font-size:13px;font-weight:600;color:var(--c-caution)">${pendingItems.length} activit${pendingItems.length === 1 ? 'y' : 'ies'} pending review</div>`;
+    h += `<div style="font-size:13px;font-weight:600;color:var(--c-black)">${pendingItems.length} activit${pendingItems.length === 1 ? 'y' : 'ies'} pending review</div>`;
     const types = [...new Set(pendingItems.map(p => p.appType || p.activityType))].slice(0, 3).join(', ');
     if (types) h += `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${types}</div>`;
     h += `</div>`;
-    h += `<button id="plan-review-btn-2" class="m-btn-secondary" style="font-size:12px;padding:6px 14px;flex-shrink:0">Review</button>`;
+    h += `<button id="plan-review-btn-2" style="font-size:12px;padding:7px 14px;flex-shrink:0;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">Review</button>`;
     h += `</div>`;
   }
 
@@ -534,13 +563,23 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
 
   h += `<div style="padding:8px 0 4px">`;
 
-  // Matched plan-slot activities (garminActuals) — these replaced a planned session
+  // Build set of adhoc garmin IDs so we can deduplicate garminActuals entries
+  // that are also present as adhocWorkouts (created together by addAdhocWorkoutFromPending).
+  const adhocGarminIds = new Set(adhocGarmin.map((w: any) => w.id || ''));
+
+  // Collect all items into a single array with sortable timestamps, then render sorted by date.
+  type LogEntry = { sortTime: number; html: string };
+  const logEntries: LogEntry[] = [];
+
+  // garminActuals entries: plan-slot matches show "Matched", orphaned garmin-* entries
+  // (adhoc was removed via ×) show "Logged". Skip garmin-* entries that still have
+  // a corresponding adhocWorkout — the adhoc loop renders those with correct Logged/Excess badge.
   for (const [workoutId, a] of Object.entries(actuals)) {
+    if (workoutId.startsWith('garmin-') && adhocGarminIds.has(workoutId)) continue;
     const actual = a as any;
-    // Show actual activity name (displayName) for cross-training; for runs workoutName is the plan slot name
+    const isAdhocOrphan = workoutId.startsWith('garmin-');
     const activityName = actual.displayName || actual.workoutName || workoutId;
-    const slotName = actual.workoutName && actual.workoutName !== actual.displayName ? actual.workoutName : null;
-    const source = actual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
+    const slotName = !isAdhocOrphan && actual.workoutName && actual.workoutName !== actual.displayName ? actual.workoutName : null;
     const dur = Math.round(actual.durationSec / 60);
     const statsArr: string[] = [];
     if (actual.distanceKm > 0.1) statsArr.push(formatKm(actual.distanceKm, s.unitPref ?? 'km'));
@@ -549,31 +588,37 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     statsArr.push(`${dur} min`);
     const dateStr = actual.startTime ? new Date(actual.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
 
-    h += `<div class="m-list-item plan-act-open" data-workout-key="${escapeHtml(workoutId)}" data-week-num="${viewWeek}" style="cursor:pointer">`;
-    h += `<div style="width:7px;height:7px;border-radius:50%;background:var(--c-ok);flex-shrink:0"></div>`;
-    h += `<div style="flex:1;min-width:0">`;
-    h += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(activityName)}</div>`;
+    const isExcess = isAdhocOrphan && excessGarminIds.has(workoutId.slice('garmin-'.length));
+    const badgeLabel = isAdhocOrphan ? (isExcess ? 'Excess' : 'Logged') : 'Matched';
+    const badgeHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${badgeLabel}</span>`;
+
+    let row = `<div class="m-list-item plan-act-open" data-workout-key="${escapeHtml(workoutId)}" data-week-num="${viewWeek}" style="cursor:pointer">`;
+    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
+    row += `<div style="flex:1;min-width:0">`;
+    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(activityName)}</div>`;
     const subParts = [...statsArr];
     if (dateStr) subParts.push(dateStr);
     if (slotName) subParts.push(`→ ${slotName}`);
-    h += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${subParts.join(' · ')}</div>`;
-    h += `</div>`;
-    h += `<div style="display:flex;align-items:center;gap:6px">`;
-    h += `<span style="font-size:9px;font-weight:600;color:var(--c-ok);background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:4px;padding:2px 6px">Matched</span>`;
-    h += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+    row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${subParts.join(' · ')}</div>`;
+    row += `</div>`;
+    row += `<div style="display:flex;align-items:center;gap:6px">`;
+    row += badgeHtml;
+    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
     if (actual.garminId) {
-      h += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(actual.garminId)}" style="font-size:20px;line-height:1;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">×</button>`;
+      row += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(actual.garminId)}" style="font-size:20px;line-height:1;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">×</button>`;
     }
-    h += `</div>`;
-    h += `</div>`;
+    row += `</div>`;
+    row += `</div>`;
+
+    const sortTime = actual.startTime ? new Date(actual.startTime).getTime() : 0;
+    logEntries.push({ sortTime, html: row });
   }
 
   // Adhoc garmin/strava activities — logged only or excess load
   for (const w of adhocGarmin) {
     const wAny = w as any;
     const rawId = (w.id || '').slice('garmin-'.length);
-    // garminActuals is keyed by plan slot ID, not garminId — never matches adhoc items.
-    // All stats come from the fields stored directly on the adhoc workout by addAdhocWorkoutFromPending.
+    // Stats come from fields stored directly on the adhoc workout by addAdhocWorkoutFromPending.
     const name = wAny.n || 'Activity';
     const dur = wAny.garminDurationMin || wAny.dur || 0;
     const km = wAny.garminDistKm || wAny.km || wAny.distanceKm || 0;
@@ -587,94 +632,68 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     if (paceSecPerKm) statsArr.push(fmtPacePlan(paceSecPerKm, s.unitPref ?? 'km'));
     if (avgHR) statsArr.push(`HR ${avgHR}`);
     if (dur > 0) statsArr.push(`${dur} min`);
+    const adhocTime = wAny.garminTimestamp || wAny.startTime;
+    const adhocDateStr = adhocTime ? new Date(adhocTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    if (adhocDateStr) statsArr.push(adhocDateStr);
 
-    const dotColor = isExcess ? 'var(--c-caution)' : 'var(--c-accent)';
-    const tagHtml = isExcess
-      ? `<span style="font-size:9px;font-weight:600;color:var(--c-caution);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:4px;padding:2px 6px">Excess</span>`
-      : `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:4px;padding:2px 6px">Logged</span>`;
+    const tagLabel = isExcess ? 'Excess' : 'Logged';
+    const tagHtml = `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">${tagLabel}</span>`;
 
-    h += `<div class="m-list-item plan-adhoc-open" data-adhoc-id="${escapeHtml(w.id || '')}" data-week-num="${viewWeek}" style="cursor:pointer">`;
-    h += `<div style="width:7px;height:7px;border-radius:50%;background:${dotColor};flex-shrink:0"></div>`;
-    h += `<div style="flex:1;min-width:0">`;
-    h += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
-    if (statsArr.length) h += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
-    h += `</div>`;
-    h += `<div style="display:flex;align-items:center;gap:6px">`;
-    h += tagHtml;
-    h += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
-    h += `</div>`;
-    h += `</div>`;
+    let row = `<div class="m-list-item plan-adhoc-open" data-adhoc-id="${escapeHtml(w.id || '')}" data-week-num="${viewWeek}" style="cursor:pointer">`;
+    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
+    row += `<div style="flex:1;min-width:0">`;
+    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
+    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
+    row += `</div>`;
+    row += `<div style="display:flex;align-items:center;gap:6px">`;
+    row += tagHtml;
+    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+    row += `</div>`;
+    row += `</div>`;
+
+    const sortTime = adhocTime ? new Date(adhocTime).getTime() : 0;
+    logEntries.push({ sortTime, html: row });
   }
+
+  // Pending items as individual rows — ensures unassigned / not-yet-reviewed activities
+  // are always visible in the log (not just as an aggregate banner count).
+  for (const p of pendingItems) {
+    const dur = Math.round(p.durationSec / 60);
+    const distKm = (p.distanceM ?? 0) / 1000;
+    const statsArr: string[] = [];
+    if (distKm > 0.1) statsArr.push(formatKm(distKm, s.unitPref ?? 'km'));
+    if (p.avgPaceSecKm) statsArr.push(fmtPacePlan(p.avgPaceSecKm, s.unitPref ?? 'km'));
+    if (p.avgHR) statsArr.push(`HR ${p.avgHR}`);
+    if (dur > 0) statsArr.push(`${dur} min`);
+    const dateStr = p.startTime ? new Date(p.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    if (dateStr) statsArr.push(dateStr);
+    const name = formatActivityType(p.activityType);
+
+    let row = `<div class="m-list-item" style="cursor:pointer">`;
+    row += `<div style="width:5px;height:5px;border-radius:50%;background:var(--c-faint);flex-shrink:0"></div>`;
+    row += `<div style="flex:1;min-width:0">`;
+    row += `<div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</div>`;
+    if (statsArr.length) row += `<div style="font-size:11px;color:var(--c-muted);margin-top:1px">${statsArr.join(' · ')}</div>`;
+    row += `</div>`;
+    row += `<div style="display:flex;align-items:center;gap:6px">`;
+    row += `<span style="font-size:9px;font-weight:600;color:var(--c-muted);background:rgba(0,0,0,0.04);border:1px solid var(--c-border);border-radius:100px;padding:2px 7px">Pending</span>`;
+    row += `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
+    row += `</div>`;
+    row += `</div>`;
+
+    const sortTime = p.startTime ? new Date(p.startTime).getTime() : 0;
+    logEntries.push({ sortTime, html: row });
+  }
+
+  // Sort all entries by date (oldest first)
+  logEntries.sort((a, b) => b.sortTime - a.sortTime);
+  for (const entry of logEntries) h += entry.html;
 
   h += `</div></div>`;
   return h;
 }
 
 // ─── Calendar strip ───────────────────────────────────────────────────────────
-
-function buildCalendarStrip(
-  workouts: any[],
-  rated: Record<string, number | 'skip'>,
-  viewWeek: number,
-  currentWeek: number,
-  planStartDate?: string,
-): string {
-  const today = ourDay();
-  const isCurrentWeek = viewWeek === currentWeek;
-
-  const days = DAY_LETTER.map((letter, dayIdx) => {
-    const dayWorkouts = workouts.filter((w: any) => w.dayOfWeek === dayIdx);
-    const isRest = dayWorkouts.length === 0 || dayWorkouts.every((w: any) => w.t === 'rest');
-    const isToday = isCurrentWeek && dayIdx === today;
-    const isPast = viewWeek < currentWeek || (isCurrentWeek && dayIdx < today);
-
-    // Status
-    let anyRated = false;
-    let anySkipped = false;
-    if (!isRest) {
-      for (const w of dayWorkouts) {
-        const id = w.id || w.n;
-        const r = rated[id];
-        if (typeof r === 'number' && r > 0) anyRated = true;
-        if (r === 'skip') anySkipped = true;
-      }
-    }
-
-    let dotBg: string;
-    let dotContent: string;
-    let opacity = '1';
-
-    if (isRest) {
-      dotBg = 'transparent';
-      dotContent = `<span style="font-size:12px;color:var(--c-faint)">—</span>`;
-    } else if (anyRated) {
-      dotBg = 'var(--c-ok)';
-      dotContent = `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"/></svg>`;
-    } else if (anySkipped) {
-      dotBg = 'rgba(0,0,0,0.12)';
-      dotContent = `<span style="font-size:11px;color:var(--c-muted)">×</span>`;
-    } else if (isToday) {
-      dotBg = 'var(--c-accent)';
-      dotContent = `<span style="width:5px;height:5px;border-radius:50%;background:white;display:block"></span>`;
-    } else if (isPast) {
-      dotBg = 'rgba(0,0,0,0.08)';
-      dotContent = `<span style="width:5px;height:5px;border-radius:50%;background:var(--c-muted);display:block"></span>`;
-      opacity = '0.5';
-    } else {
-      dotBg = 'transparent';
-      dotContent = `<span style="width:5px;height:5px;border-radius:50%;border:1.5px solid rgba(0,0,0,0.25);display:block"></span>`;
-    }
-
-    return `
-      <div class="plan-day-pill" data-day="${dayIdx}" style="display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;flex:1;opacity:${opacity}">
-        <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${isToday ? 'var(--c-accent)' : 'var(--c-faint)'}">${letter}</span>
-        <div style="width:26px;height:26px;border-radius:50%;background:${dotBg};display:flex;align-items:center;justify-content:center;${isToday ? 'box-shadow:0 0 0 2px var(--c-accent)' : ''}">${dotContent}</div>
-      </div>
-    `;
-  }).join('');
-
-  return `<div style="display:flex;gap:0;padding:12px 18px 10px">${days}</div>`;
-}
 
 // ─── Workout cards ────────────────────────────────────────────────────────────
 
@@ -689,6 +708,18 @@ function buildWorkoutCards(
   const isCurrentWeek = viewWeek === s.w;
   const jsDay = new Date().getDay();
   const actualToday = jsDay === 0 ? 6 : jsDay - 1;
+
+  // Check if today actually falls within this week's date range.
+  // If the week ended (e.g. week not wrapped up yet), don't mark any day as "today".
+  let todayInRange = false;
+  if (isCurrentWeek && s.planStartDate) {
+    const wkStart = weekStartDate(s.planStartDate, viewWeek);
+    const wkEnd = new Date(wkStart);
+    wkEnd.setDate(wkEnd.getDate() + 6);
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    todayInRange = now >= wkStart && now <= wkEnd;
+  }
 
   // Pre-compute effective dayOfWeek for each workout based on garminActual startTime
   const effectiveDay = new Map<string, number>();
@@ -726,7 +757,7 @@ function buildWorkoutCards(
       // Rest day row — also a drop target
       dayFirstCardEmitted.add(dayIdx);
       cards.push(`
-        <div id="plan-day-${dayIdx}" class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:10px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
+        <div id="plan-day-${dayIdx}" class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:15px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
           <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);width:36px">${DAY_SHORT[dayIdx]}</span>
           <span class="plan-drop-label" style="font-size:12px;color:var(--c-faint);letter-spacing:0.02em">Rest</span>
         </div>
@@ -750,15 +781,15 @@ function buildWorkoutCards(
     for (const w of dayWorkouts) {
       const id = w.id || w.n;
       const ratingVal = rated[id];
-      const isToday = isCurrentWeek && dayIdx === actualToday;
-      const isPast = viewWeek < s.w || (isCurrentWeek && dayIdx < actualToday);
+      const isToday = isCurrentWeek && todayInRange && dayIdx === actualToday;
+      const isPast = viewWeek < s.w || (isCurrentWeek && !todayInRange) || (isCurrentWeek && todayInRange && dayIdx < actualToday);
       const isRest = w.t === 'rest' || w.n?.toLowerCase().includes('rest');
 
       if (isRest) {
         const dayAnchorId = !dayFirstCardEmitted.has(dayIdx) ? `id="plan-day-${dayIdx}" ` : '';
         dayFirstCardEmitted.add(dayIdx);
         cards.push(`
-          <div ${dayAnchorId}class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:10px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
+          <div ${dayAnchorId}class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:15px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
             <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);width:36px">${DAY_SHORT[dayIdx]}</span>
             <span class="plan-drop-label" style="font-size:12px;color:var(--c-faint);letter-spacing:0.02em">Rest</span>
           </div>
@@ -791,40 +822,32 @@ function buildWorkoutCards(
         ? (wk?.adhocWorkouts || []).find((a: any) => a.dayOfWeek === w.dayOfWeek && !(a.id || '').startsWith('garmin-'))
         : null;
 
-      // Status label + color
+      // Status label (neutral text — colour reserved for Today only)
       let statusLabel: string;
-      let statusColor: string;
-      if (isDone) {
-        statusLabel = garminAct ? 'Logged' : 'Done';
-        statusColor = 'var(--c-ok)';
-      } else if (isReplaced) {
-        statusLabel = 'Replaced';
-        statusColor = 'var(--c-caution)';
-      } else if (isReduced) {
-        statusLabel = 'Adjusted';
-        statusColor = 'var(--c-caution)';
-      } else if (isSkipped) {
-        statusLabel = 'Skipped';
-        statusColor = 'var(--c-muted)';
-      } else if (isToday) {
-        statusLabel = 'Today';
-        statusColor = 'var(--c-accent)';
-      } else if (isPast) {
-        statusLabel = 'Missed';
-        statusColor = 'var(--c-caution)';
-      } else {
-        statusLabel = 'Upcoming';
-        statusColor = 'var(--c-faint)';
-      }
+      if (isDone) statusLabel = garminAct ? 'Logged' : 'Done';
+      else if (isReplaced) statusLabel = 'Replaced';
+      else if ((w as any).status === 'holiday') statusLabel = 'Holiday';
+      else if ((w as any).id?.startsWith('holiday-') || (w as any).id?.startsWith('adhoc-')) statusLabel = 'Added';
+      else if (isReduced) statusLabel = 'Adjusted';
+      else if (isSkipped) statusLabel = 'Skipped';
+      else if (isToday) statusLabel = 'Today';
+      else if (isPast) statusLabel = 'Missed';
+      else statusLabel = 'Upcoming';
 
-      // Card border: colour-coded left stripe
-      let borderLeft = '';
-      if (isDone) borderLeft = 'border-left:3px solid var(--c-ok);';
-      else if (isToday) borderLeft = 'border-left:3px solid var(--c-accent);';
-      else if (isPast && !isSkipped && !isReplaced) borderLeft = 'border-left:3px solid rgba(245,158,11,0.35);';
+      // Visual hierarchy: Today = terracotta accent, Logged = solid muted, Missed = faint + italic
+      const dayLabelColor = isToday
+        ? TODAY_ACCENT
+        : (isDone ? 'var(--c-black)' : (isPast && !isDone && !isSkipped ? 'var(--c-faint)' : 'var(--c-faint)'));
+      const statusLabelColor = isToday
+        ? TODAY_ACCENT
+        : isDone ? '#34C759'
+        : (isPast && !isDone && !isSkipped) ? '#FF9500'
+        : 'var(--c-faint)';
+      const statusLabelWeight = isDone || (isPast && !isDone && !isSkipped) ? '600' : '400';
+      const borderLeft = isToday ? `border-left:3px solid ${TODAY_ACCENT};` : '';
 
-      const headerPad = (borderLeft && !isToday) ? '13px 18px 13px 15px' : isToday ? '14px 18px 14px 15px' : '13px 18px';
-      const nameOpacity = isSkipped || isReplaced ? '0.5' : '1';
+      const headerPad = isToday ? '16px 18px 16px 15px' : '15px 18px';
+      const nameOpacity = isSkipped || isReplaced ? '0.45' : (isPast && !isDone ? '0.55' : '1');
       const nameDecoration = isReplaced ? 'line-through' : 'none';
 
       // Build inline activity match / replacement sub-row
@@ -838,28 +861,35 @@ function buildWorkoutCards(
         if (matchDur > 0) matchStats.push(`${matchDur} min`);
         const matchName = garminAct.workoutName || garminAct.displayName || '';
         actMatchRow = `<div class="plan-act-open" data-workout-key="${escapeHtml(id)}" data-week-num="${viewWeek}" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer">
-          <div style="width:6px;height:6px;border-radius:50%;background:var(--c-ok);flex-shrink:0"></div>
           <span style="font-size:11px;color:var(--c-muted)">${matchName ? escapeHtml(matchName) + ' · ' : ''}${source}${matchStats.length ? ' · ' + matchStats.join(' · ') : ''}</span>
-          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </div>`;
       } else if (isReplaced && replacedByAdhoc) {
         const repName = (replacedByAdhoc as any).n || (replacedByAdhoc as any).name || 'Cross-training';
         const repDur = (replacedByAdhoc as any).dur || (replacedByAdhoc as any).durationMin || 0;
         actMatchRow = `<div style="display:flex;align-items:center;gap:5px;margin-top:3px">
-          <span style="font-size:11px;color:var(--c-caution)">→ ${escapeHtml(repName)}${repDur ? ` · ${Math.round(repDur)} min` : ''}</span>
+          <span style="font-size:11px;color:var(--c-muted)">→ ${escapeHtml(repName)}${repDur ? ` · ${Math.round(repDur)} min` : ''}</span>
         </div>`;
       }
 
       const showUndoAdj = isReduced && !(w as any).modReason?.startsWith?.('Auto:') && !isDone;
       const undoAdjBtn = showUndoAdj
-        ? `<button class="plan-recovery-undo-btn" data-workout-name="${escapeHtml(w.n)}" data-day-of-week="${(w as any).dayOfWeek ?? ''}" data-week-num="${viewWeek}" data-orig-label="${escapeHtml((w as any).originalDistance || w.n || '')}" style="font-size:11px;color:var(--c-caution);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0">Undo adjustment</button>`
+        ? `<button class="plan-recovery-undo-btn" data-workout-name="${escapeHtml(w.n)}" data-day-of-week="${(w as any).dayOfWeek ?? ''}" data-week-num="${viewWeek}" data-orig-label="${escapeHtml((w as any).originalDistance || w.n || '')}" style="font-size:11px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0;text-decoration:underline;text-underline-offset:2px">Undo adjustment</button>`
         : '';
 
-      const rightContent = isToday && !isDone
-        ? `<button class="plan-start-btn m-btn-primary" data-workout-id="${id}" style="padding:7px 14px;font-size:12px">
+      const isRunnable = w.t && w.t !== 'gym' && w.t !== 'cross' && w.t !== 'rest';
+      const showHeaderStart = isCurrentWeek && !isDone && isRunnable;
+      const isUserGenerated = (w as any).id?.startsWith('holiday-') || (w as any).id?.startsWith('adhoc-');
+      const deleteBtn = isUserGenerated && !isDone
+        ? `<button class="plan-adhoc-delete-btn" data-workout-id="${id}" data-week-num="${viewWeek}"
+            style="padding:7px 10px;font-size:11px;border-radius:8px;border:1px solid var(--c-border);
+                   background:transparent;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Remove</button>`
+        : '';
+      const rightContent = showHeaderStart
+        ? `<div style="display:flex;gap:6px;align-items:center">${deleteBtn}<button class="plan-start-btn m-btn-primary" data-workout-id="${id}" data-week-num="${viewWeek}" style="padding:7px 14px;font-size:12px">
             <span style="width:10px;height:10px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
             Start
-          </button>`
+          </button></div>`
         : isDone
           ? `<div style="display:flex;align-items:center;gap:10px">
             <span style="font-size:13px;font-weight:500;color:var(--c-muted)">${valueStr}</span>
@@ -906,22 +936,22 @@ function buildWorkoutCards(
       const autoReduceRow = _isAutoMod
         ? `<div style="padding:6px 18px 10px;border-top:1px dashed var(--c-border);display:flex;align-items:center;justify-content:space-between;gap:8px">
             <span style="font-size:11px;color:var(--c-muted)">${escapeHtml(_autoReduceNote)}</span>
-            <button class="plan-auto-undo-btn" data-workout-id="${escapeHtml(id)}" style="font-size:11px;color:var(--c-caution);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0">Undo</button>
+            <button class="plan-auto-undo-btn" data-workout-id="${escapeHtml(id)}" style="font-size:11px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0;text-decoration:underline;text-underline-offset:2px">Undo</button>
           </div>`
         : '';
 
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
       cards.push(`
-        <div ${dayAnchorId}class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="border-top:1px solid var(--c-border);background:var(--c-surface);${borderLeft}">
+        <div ${dayAnchorId}class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="border-top:1px solid var(--c-border);${borderLeft}">
           <div class="plan-card-header" style="display:flex;align-items:center;padding:${headerPad};gap:12px;cursor:pointer">
             <div style="width:36px;flex-shrink:0">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:${statusColor};line-height:1.2">${DAY_SHORT[dayIdx]}</div>
-              <div style="font-size:9px;color:${statusColor};margin-top:1px">${statusLabel}</div>
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:${dayLabelColor};line-height:1.2">${DAY_SHORT[dayIdx]}</div>
+              <div style="font-size:9px;font-weight:${statusLabelWeight};color:${statusLabelColor};margin-top:1px">${statusLabel}</div>
             </div>
             <div style="flex:1;min-width:0">
               <div style="font-size:15px;font-weight:400;letter-spacing:-0.01em;opacity:${nameOpacity};text-decoration:${nameDecoration};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
               ${actMatchRow}
-              ${isTimingMod((w as any).modReason) && !isDone ? `<div style="display:flex;align-items:center;gap:4px;margin-top:3px"><span style="font-size:10px;font-weight:600;color:#F97316;background:rgba(249,115,22,0.1);border-radius:4px;padding:1px 6px">Suggestion — hard session yesterday</span></div>` : ''}
+              ${isTimingMod((w as any).modReason) && !isDone ? `<div style="margin-top:3px"><span style="font-size:10px;font-weight:500;color:var(--c-muted);letter-spacing:0.01em">Suggestion — hard session yesterday</span></div>` : ''}
               ${reducedBadge}
             </div>
             <div style="flex-shrink:0;display:flex;align-items:center;gap:6px">
@@ -958,19 +988,25 @@ function allWorkoutsDone(workouts: any[], wk: any): boolean {
 
 /**
  * Small "Wrap up week" pill for the plan header.
- * Visible on Sunday (day 6) or when every workout is done/skipped.
+ * Visible on Sunday (day 6), after the week's Sunday has passed, or when every workout is done/skipped.
  */
 function buildWrapUpWeekBtn(s: SimulatorState, workouts: any[], viewWeek: number): string {
   if (viewWeek !== s.w) return '';
   if ((s as any).wks?.[viewWeek - 1]?.weekCompleted) return '';
   const today = ourDay(); // 6 = Sunday
   const wk = (s as any).wks?.[viewWeek - 1];
-  const show = today === 6 || allWorkoutsDone(workouts, wk);
+  // Show if: it's Sunday, the week's Sunday has already passed, or all workouts are done
+  let pastWeekEnd = false;
+  if (s.planStartDate) {
+    const weekEnd = weekStartDate(s.planStartDate, viewWeek);
+    weekEnd.setDate(weekEnd.getDate() + 6); // Sunday of this plan week
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    pastWeekEnd = now > weekEnd;
+  }
+  const show = today === 6 || pastWeekEnd || allWorkoutsDone(workouts, wk);
   if (!show) return '';
-  return `<button id="plan-wrap-up-btn"
-    style="height:30px;padding:0 12px;border-radius:15px;border:1.5px solid var(--c-accent);
-           background:transparent;font-size:11px;font-weight:600;color:var(--c-accent);
-           cursor:pointer;letter-spacing:0.01em;white-space:nowrap">Wrap up week</button>`;
+  return `<button id="plan-wrap-up-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Wrap up week</button>`;
 }
 
 // ─── Injury UI ───────────────────────────────────────────────────────────────
@@ -982,22 +1018,9 @@ function buildWrapUpWeekBtn(s: SimulatorState, workouts: any[], viewWeek: number
 function buildInjuryHeaderBtn(injured: boolean, isCurrentWeek: boolean): string {
   if (!isCurrentWeek) return '';
   if (injured) {
-    return `
-      <button id="plan-injury-update"
-        style="padding:5px 11px;border-radius:100px;
-               border:1px solid rgba(234,88,12,0.3);background:transparent;
-               cursor:pointer;font-size:11px;font-weight:600;color:#92400E;white-space:nowrap">
-        In Recovery
-      </button>
-    `;
+    return `<button id="plan-injury-update" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(234,88,12,0.12);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#92400E;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">In Recovery</button>`;
   }
-  return `
-    <button id="plan-checkin-btn"
-      style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;
-             cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap">
-      Check-in
-    </button>
-  `;
+  return `<button id="plan-checkin-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Check-in</button>`;
 }
 
 /**
@@ -1019,30 +1042,25 @@ function buildIllnessBanner(): string {
     : 'Quality sessions → easy. Distances scaled to 50–60%.';
 
   return `
-    <div id="illness-banner" style="margin:14px 16px 0;border-radius:14px;overflow:hidden;
-                border:1px solid rgba(0,0,0,0.08);background:var(--c-surface)">
-      <div style="height:3px;background:linear-gradient(to right,#F59E0B,#F97316)"></div>
-      <div style="padding:14px 16px">
-        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
-              <span style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black)">Illness · Day ${dayNum}</span>
-              <span style="font-size:10px;font-weight:600;color:var(--c-muted);border:1px solid var(--c-border);border-radius:100px;padding:1px 8px;text-transform:uppercase;letter-spacing:0.04em">${severityLabel}</span>
-            </div>
-            <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${severityDetail} Skipped workouts don't count against adherence.</div>
+    <div id="illness-banner" style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:12px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+            <span style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black)">Illness · Day ${dayNum}</span>
+            <span style="font-size:10px;font-weight:600;color:var(--c-muted);border:1px solid var(--c-border-strong);border-radius:100px;padding:2px 8px;letter-spacing:0.02em">${severityLabel}</span>
           </div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${severityDetail} Skipped workouts don't count against adherence.</div>
         </div>
-        <div style="display:flex;gap:8px">
-          <button id="illness-update-btn" class="m-btn-secondary"
-            style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center">
-            Change
-          </button>
-          <button id="illness-mark-recovered" class="m-btn-primary"
-            style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center;
-                   background:var(--c-ok);border-color:var(--c-ok)">
-            Recovered
-          </button>
-        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="illness-update-btn"
+          style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">
+          Change
+        </button>
+        <button id="illness-mark-recovered"
+          style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#fff;font-weight:500;cursor:pointer;font-family:var(--f)">
+          Recovered
+        </button>
       </div>
     </div>
   `;
@@ -1058,32 +1076,25 @@ function buildInjuryBanner(): string {
   const protocol = INJURY_PROTOCOLS[inj.type];
   const displayName = protocol?.displayName || inj.type;
 
-  // Phase config
-  const phaseConfig: Record<string, { label: string; accent: string; bg: string; text: string; dot: string }> = {
-    acute: { label: 'Acute — Rest', accent: '#EF4444,#DC2626', bg: 'rgba(254,242,242,0.85)', text: '#991B1B', dot: '#EF4444' },
-    rehab: { label: 'Rehabilitation', accent: '#F59E0B,#F97316', bg: 'rgba(255,251,235,0.85)', text: '#92400E', dot: '#F59E0B' },
-    test_capacity: { label: 'Capacity Testing', accent: '#8B5CF6,#A855F7', bg: 'rgba(245,243,255,0.85)', text: '#5B21B6', dot: '#8B5CF6' },
-    return_to_run: { label: 'Return to Run', accent: '#3B82F6,#2563EB', bg: 'rgba(239,246,255,0.85)', text: '#1E40AF', dot: '#3B82F6' },
-    graduated_return: { label: 'Graduated Return', accent: '#06B6D4,#0891B2', bg: 'rgba(236,254,255,0.85)', text: '#155E75', dot: '#06B6D4' },
-    resolved: { label: 'Resolved', accent: '#22C55E,#16A34A', bg: 'rgba(240,253,244,0.85)', text: '#15803D', dot: '#22C55E' },
+  // Phase label (text only — no colour)
+  const phaseLabels: Record<string, string> = {
+    acute: 'Acute — Rest',
+    rehab: 'Rehabilitation',
+    test_capacity: 'Capacity Testing',
+    return_to_run: 'Return to Run',
+    graduated_return: 'Graduated Return',
+    resolved: 'Resolved',
   };
-  const pc = phaseConfig[inj.injuryPhase] || phaseConfig['rehab'];
+  const phaseLabelText = phaseLabels[inj.injuryPhase] || 'Rehabilitation';
 
-  // Pain colour
-  const painColor = inj.currentPain === 0 ? '#22C55E'
-    : inj.currentPain <= 3 ? '#F59E0B'
-      : inj.currentPain <= 6 ? '#F97316'
-        : '#EF4444';
-
-  // Can-run badge
-  const canRunMap = {
-    yes: { label: 'Can run', bg: 'rgba(34,197,94,0.12)', color: '#15803D' },
-    limited: { label: 'Limited running', bg: 'rgba(245,158,11,0.12)', color: '#92400E' },
-    no: { label: 'No running', bg: 'rgba(239,68,68,0.10)', color: '#991B1B' },
+  // Can-run label (text only — opacity-coded by severity)
+  const canRunLabels = {
+    yes: 'Can run',
+    limited: 'Limited running',
+    no: 'No running',
   };
-  const cr = canRunMap[inj.canRun] || canRunMap['no'];
+  const canRunText = canRunLabels[inj.canRun] || canRunLabels['no'];
 
-  // Return-to-run level label
   const levelLabel = inj.injuryPhase === 'return_to_run'
     ? getReturnToRunLevelLabel(inj.returnToRunLevel || 1)
     : inj.injuryPhase === 'graduated_return'
@@ -1093,80 +1104,43 @@ function buildInjuryBanner(): string {
   const isReturnPhase = inj.injuryPhase === 'return_to_run' || inj.injuryPhase === 'graduated_return';
 
   return `
-    <div style="margin:14px 16px 0;border-radius:16px;overflow:hidden;
-                border:1px solid rgba(0,0,0,0.08);
-                background:${pc.bg};
-                box-shadow:0 1px 8px rgba(0,0,0,0.06)">
+    <div style="margin:14px 16px 0;padding:16px;${PLAN_CARD_STYLE}">
 
-      <!-- Phase accent bar -->
-      <div style="height:3px;background:linear-gradient(to right,${pc.accent})"></div>
-
-      <div style="padding:16px">
-
-        <!-- Top row: injury name + pain level -->
-        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:11px">
-          <div style="flex:1;min-width:0;padding-right:12px">
-            <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;
-                        color:${pc.text};opacity:0.7;margin-bottom:3px">
-              Recovery Mode
-            </div>
-            <div style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black);
-                        overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-              ${displayName}
-            </div>
-            <div style="font-size:12px;color:${pc.text};margin-top:2px;font-weight:500">
-              ${pc.label}
-            </div>
-          </div>
-
-          <!-- Pain level -->
-          <div style="text-align:right;flex-shrink:0">
-            <div style="font-size:10px;color:rgba(0,0,0,0.38);margin-bottom:2px;font-weight:500">Pain</div>
-            <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${painColor}">
-              ${inj.currentPain}<span style="font-size:13px;color:rgba(0,0,0,0.25);font-weight:400">/10</span>
-            </div>
+      <!-- Top row: injury name + pain level -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div style="flex:1;min-width:0;padding-right:12px">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Recovery mode</div>
+          <div style="font-size:17px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${displayName}</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:3px;font-weight:500">${phaseLabelText}</div>
+        </div>
+        <div style="text-align:right;flex-shrink:0">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Pain</div>
+          <div style="font-size:30px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:var(--c-black)">
+            ${inj.currentPain}<span style="font-size:13px;color:var(--c-faint);font-weight:400">/10</span>
           </div>
         </div>
+      </div>
 
-        <!-- Can-run badge + optional level -->
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
-          <span style="display:inline-flex;align-items:center;gap:5px;padding:4px 11px;
-                       border-radius:100px;font-size:11px;font-weight:600;
-                       background:${cr.bg};color:${cr.color}">
-            <span style="width:5px;height:5px;border-radius:50%;background:currentColor;display:inline-block"></span>
-            ${cr.label}
-          </span>
-          ${levelLabel ? `<span style="font-size:11px;color:rgba(0,0,0,0.38);font-weight:400">${levelLabel}</span>` : ''}
-        </div>
+      <!-- Can-run + optional level -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px">
+        <span style="display:inline-flex;align-items:center;padding:4px 11px;border-radius:100px;font-size:11px;font-weight:600;border:1px solid var(--c-border-strong);color:var(--c-muted);letter-spacing:0.01em">${canRunText}</span>
+        ${levelLabel ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${levelLabel}</span>` : ''}
+      </div>
 
-        ${isReturnPhase ? `
-        <!-- Medical note -->
-        <div style="padding:9px 11px;border-radius:9px;
-                    background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.18);
-                    margin-bottom:14px">
-          <p style="font-size:11px;color:#92400E;line-height:1.55;margin:0">
-            Not medical advice. Consult a sports physiotherapist if pain persists or worsens.
-            Never push through sharp pain.
-          </p>
-        </div>` : ''}
+      ${isReturnPhase ? `
+      <div style="padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.03);margin-bottom:14px">
+        <p style="font-size:11px;color:var(--c-muted);line-height:1.55;margin:0">Not medical advice. Consult a sports physiotherapist if pain persists or worsens. Never push through sharp pain.</p>
+      </div>` : ''}
 
-        <!-- Actions -->
-        <div style="display:flex;gap:8px">
-          <button id="plan-injury-update" class="m-btn-secondary"
-            style="flex:1;font-size:13px;padding:10px 0;text-align:center;justify-content:center">
-            Update injury
-          </button>
-          <button id="plan-injury-recovered" class="m-btn-primary"
-            style="flex:1;font-size:13px;padding:10px 0;text-align:center;justify-content:center;
-                   background:#22C55E;border-color:#22C55E;display:flex;align-items:center;gap:5px">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20 6L9 17l-5-5"/>
-            </svg>
-            I'm Recovered
-          </button>
-        </div>
-
+      <div style="display:flex;gap:8px">
+        <button id="plan-injury-update"
+          style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">
+          Update injury
+        </button>
+        <button id="plan-injury-recovered"
+          style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#fff;font-weight:500;cursor:pointer;font-family:var(--f)">
+          I'm recovered
+        </button>
       </div>
     </div>
   `;
@@ -1190,80 +1164,18 @@ function buildMorningPainCheck(): string {
   const protocol = INJURY_PROTOCOLS[inj.type];
   const injName = protocol?.displayName || inj.type;
 
+  const btnBase = 'padding:12px 0;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:13px;font-weight:500;color:var(--c-black);font-family:var(--f)';
+
   return `
-    <div id="morning-pain-check"
-      style="margin:12px 16px 0;border-radius:16px;overflow:hidden;
-             border:1px solid rgba(59,130,246,0.18);
-             background:rgba(239,246,255,0.85);
-             box-shadow:0 1px 6px rgba(59,130,246,0.08)">
-
-      <!-- Accent bar -->
-      <div style="height:3px;background:linear-gradient(to right,#60A5FA,#818CF8)"></div>
-
-      <div style="padding:16px">
-        <!-- Header row -->
-        <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:13px">
-          <!-- Sun icon -->
-          <div style="width:36px;height:36px;border-radius:10px;
-                      background:rgba(96,165,250,0.12);border:1px solid rgba(96,165,250,0.2);
-                      display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#3B82F6"
-                 stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="5"/>
-              <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-            </svg>
-          </div>
-          <div>
-            <div style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black);margin-bottom:2px">
-              Morning check-in
-            </div>
-            <div style="font-size:12px;color:rgba(0,0,0,0.45);line-height:1.4">
-              How does your ${injName.toLowerCase()} feel vs yesterday?
-              <span style="display:inline-block;margin-left:4px;padding:1px 7px;border-radius:100px;
-                           font-size:10px;font-weight:600;background:rgba(59,130,246,0.1);color:#1E40AF">
-                Pain: ${pain}/10
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Response buttons -->
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">
-
-          <button class="plan-morning-pain-btn" data-response="worse"
-            style="padding:10px 0;border-radius:10px;border:1px solid rgba(239,68,68,0.25);
-                   background:rgba(254,242,242,0.7);cursor:pointer;
-                   display:flex;flex-direction:column;align-items:center;gap:4px">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#EF4444"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 5v14M5 12l7 7 7-7"/>
-            </svg>
-            <span style="font-size:12px;font-weight:600;color:#991B1B">Worse</span>
-          </button>
-
-          <button class="plan-morning-pain-btn" data-response="same"
-            style="padding:10px 0;border-radius:10px;border:1px solid rgba(0,0,0,0.1);
-                   background:rgba(0,0,0,0.03);cursor:pointer;
-                   display:flex;flex-direction:column;align-items:center;gap:4px">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 12h14"/>
-            </svg>
-            <span style="font-size:12px;font-weight:600;color:var(--c-muted)">Same</span>
-          </button>
-
-          <button class="plan-morning-pain-btn" data-response="better"
-            style="padding:10px 0;border-radius:10px;border:1px solid rgba(34,197,94,0.25);
-                   background:rgba(240,253,244,0.7);cursor:pointer;
-                   display:flex;flex-direction:column;align-items:center;gap:4px">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#22C55E"
-                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 19V5M5 12l7-7 7 7"/>
-            </svg>
-            <span style="font-size:12px;font-weight:600;color:#15803D">Better</span>
-          </button>
-
-        </div>
+    <div id="morning-pain-check" style="margin:12px 16px 0;padding:16px;${PLAN_CARD_STYLE}">
+      <div style="margin-bottom:13px">
+        <div style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black);margin-bottom:3px">Morning check-in</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">How does your ${injName.toLowerCase()} feel vs yesterday? <span style="color:var(--c-faint);font-weight:500">· Pain ${pain}/10</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">
+        <button class="plan-morning-pain-btn" data-response="worse" style="${btnBase}">Worse</button>
+        <button class="plan-morning-pain-btn" data-response="same" style="${btnBase}">Same</button>
+        <button class="plan-morning-pain-btn" data-response="better" style="${btnBase}">Better</button>
       </div>
     </div>
   `;
@@ -1303,24 +1215,21 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
   if (!container) return;
 
   const msgs = {
-    worse: { text: 'Logged. Extra rest added to today — hang in there.', dot: '#EF4444', bg: 'rgba(254,242,242,0.9)', border: 'rgba(239,68,68,0.2)' },
-    same: { text: 'Logged. Steady as she goes — consistency is the plan.', dot: '#3B82F6', bg: 'rgba(239,246,255,0.9)', border: 'rgba(59,130,246,0.2)' },
-    better: { text: 'Great news — improvement logged. Keep up the good work.', dot: '#22C55E', bg: 'rgba(240,253,244,0.9)', border: 'rgba(34,197,94,0.2)' },
+    worse: 'Logged. Extra rest added to today.',
+    same: 'Logged. Steady as she goes.',
+    better: 'Improvement logged.',
   };
-  const m = msgs[response];
+  const text = msgs[response];
 
   container.style.transition = 'opacity 0.2s';
   container.style.opacity = '0';
   setTimeout(() => {
     container.innerHTML = `
-      <div style="padding:14px 16px;display:flex;align-items:center;gap:10px;
-                  background:${m.bg};border-radius:16px;border:1px solid ${m.border}">
-        <span style="width:8px;height:8px;border-radius:50%;background:${m.dot};flex-shrink:0"></span>
-        <span style="font-size:13px;color:var(--c-black);line-height:1.4">${m.text}</span>
+      <div style="padding:14px 16px;${PLAN_CARD_STYLE}">
+        <span style="font-size:13px;color:var(--c-muted);line-height:1.4">${text}</span>
       </div>
     `;
     container.style.opacity = '1';
-    container.style.borderRadius = '16px';
     container.style.border = 'none';
     container.style.background = 'transparent';
     container.style.boxShadow = 'none';
@@ -1351,222 +1260,70 @@ function formatBenchmarkResult(result: any): string {
 }
 
 /**
- * Optional fitness check-in panel — shown on benchmark weeks for continuous mode users.
+ * Optional fitness check-in panel — shown on post-deload weeks for continuous mode users.
+ * Compact status card: not yet started → open overlay | workout added | completed | skipped.
  */
 function buildBenchmarkPanel(s: SimulatorState): string {
   if (!(s as any).continuousMode) return '';
   if (!isBenchmarkWeek(s.w, true)) return '';
-  // Never suggest hard efforts on deload/recovery weeks
-  const ability = abilityBandFromVdot((s as any).v ?? 40, (s as any).onboarding?.experienceLevel ?? 'intermediate');
-  if (isDeloadWeek(s.w, ability)) return '';
 
   const existing = (s as any).benchmarkResults?.find((b: any) => b.week === s.w);
-  if (existing) {
-    if (existing.source === 'skipped') {
-      return `
-        <div class="m-card" style="margin:0 14px 10px;padding:12px 14px;display:flex;align-items:center;gap:10px">
-          <span style="font-size:18px">📊</span>
-          <span style="font-size:13px;color:var(--c-muted)">Check-in skipped this block — keep training!</span>
-        </div>
-      `;
-    }
-    const resultText = formatBenchmarkResult(existing);
+
+  // Skipped
+  if (existing?.source === 'skipped') {
     return `
-      <div class="m-card" style="margin:0 14px 10px;padding:12px 14px;border-left:3px solid var(--c-ok)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
-          <span style="font-size:14px">✅</span>
-          <span style="font-size:13px;font-weight:600;color:var(--c-ok)">Check-in Recorded</span>
-          ${existing.source === 'garmin' ? `<span style="font-size:11px;font-weight:600;color:#ea580c;background:#ffedd5;padding:2px 7px;border-radius:10px">From watch</span>` : ''}
-        </div>
-        <div style="font-size:12px;color:var(--c-muted)">${resultText}</div>
+      <div style="margin:12px 16px 0;padding:13px 15px;${PLAN_CARD_STYLE}">
+        <span style="font-size:12px;color:var(--c-muted)">Check-in skipped this block.</span>
       </div>
     `;
   }
 
-  const options = getBenchmarkOptions((s.onboarding as any)?.trainingFocus, (s.onboarding as any)?.experienceLevel);
-  const garminRun = findGarminRunForWeek(s.w);
-
-  return `
-    <div class="m-card" style="margin:0 14px 10px;padding:14px;border-left:3px solid var(--c-accent)">
-      <div style="display:flex;align-items:flex-start;gap:12px">
-        <div style="width:38px;height:38px;border-radius:50%;background:rgba(59,130,246,0.12);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-          <span style="font-size:18px">📈</span>
+  // Recorded (from watch or generated workout completed)
+  if (existing && existing.source !== 'skipped') {
+    const resultText = formatBenchmarkResult(existing);
+    return `
+      <div style="margin:12px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">
+          <span style="font-size:13px;font-weight:600;color:var(--c-black)">Check-in recorded</span>
+          ${existing.source === 'garmin' ? `<span style="font-size:10px;font-weight:600;color:var(--c-muted);border:1px solid var(--c-border-strong);padding:2px 8px;border-radius:100px;letter-spacing:0.02em">From watch</span>` : ''}
         </div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:2px">Optional fitness check-in</div>
-          <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px">See how your fitness is tracking — skip anytime.</div>
-
-          ${garminRun ? `
-            <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:10px">
-              <div style="font-size:12px;font-weight:600;color:#ea580c;margin-bottom:2px">🏃 Run detected from watch</div>
-              <div style="font-size:12px;color:var(--c-muted);margin-bottom:8px">${(garminRun as any).duration_min}min run · RPE ${(garminRun as any).rpe}</div>
-              <button id="btn-benchmark-auto"
-                style="font-size:12px;font-weight:600;color:var(--c-ok);background:none;border:none;cursor:pointer;padding:0">
-                Use as check-in →
-              </button>
-            </div>
-          ` : ''}
-
-          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px">
-            ${options.map((opt: any) => `
-              <button class="btn-benchmark-option"
-                data-bm-type="${opt.type}"
-                style="text-align:left;padding:10px 12px;border-radius:10px;border:1.5px solid ${opt.recommended ? 'var(--c-accent)' : 'var(--c-border)'};background:${opt.recommended ? 'rgba(59,130,246,0.06)' : 'transparent'};cursor:pointer">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
-                  <span style="font-size:13px;font-weight:600;color:${opt.recommended ? 'var(--c-accent)' : 'var(--c-black)'}">
-                    ${opt.label}
-                  </span>
-                  ${opt.recommended ? `<span style="font-size:11px;font-weight:600;color:var(--c-accent);background:rgba(59,130,246,0.1);padding:2px 8px;border-radius:10px">Best for you</span>` : ''}
-                </div>
-                <div style="font-size:11px;color:var(--c-muted)">${opt.description}</div>
-              </button>
-            `).join('')}
-          </div>
-
-          <button id="btn-benchmark-skip"
-            style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">
-            Skip this check-in
-          </button>
-        </div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${resultText}</div>
       </div>
-    </div>
-  `;
-}
-
-/**
- * Bottom-sheet modal for manually entering benchmark results.
- */
-function showBenchmarkEntryModal(bmType: string): void {
-  type BenchmarkType = 'easy_checkin' | 'threshold_check' | 'speed_check' | 'race_simulation';
-  const type = bmType as BenchmarkType;
-  const bmUnitPref = getState().unitPref ?? 'km';
-  const bmDistUnit = bmUnitPref === 'mi' ? 'mi' : 'km';
-
-  let title = '';
-  let desc = '';
-  let fieldsHTML = '';
-
-  const paceInput = () => `
-    <div style="margin-bottom:12px">
-      <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Average pace (min : sec per ${bmDistUnit})</label>
-      <div style="display:flex;align-items:center;gap:8px">
-        <input type="number" id="bm-pace-min" min="2" max="12" placeholder="min"
-          style="flex:1;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-        <span style="font-size:16px;color:var(--c-muted);font-weight:600">:</span>
-        <input type="number" id="bm-pace-sec" min="0" max="59" placeholder="sec"
-          style="flex:1;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-      </div>
-    </div>
-  `;
-
-  switch (type) {
-    case 'easy_checkin':
-      title = 'Easy Check-in';
-      desc = '30-min steady run at comfortable pace.';
-      fieldsHTML = paceInput();
-      break;
-    case 'threshold_check':
-      title = 'Threshold Check';
-      desc = '20-min "comfortably hard" effort. Enter average pace.';
-      fieldsHTML = paceInput();
-      break;
-    case 'speed_check':
-      title = 'Speed Check (12-min test)';
-      desc = 'How far did you run in 12 minutes?';
-      fieldsHTML = `
-        <div style="margin-bottom:12px">
-          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance covered (${bmDistUnit})</label>
-          <input type="number" id="bm-distance" step="0.01" min="0.5" max="6" placeholder="e.g. 2.80"
-            style="width:100%;box-sizing:border-box;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-        </div>
-      `;
-      break;
-    case 'race_simulation':
-      title = 'Race Simulation';
-      desc = 'Log your time trial result.';
-      fieldsHTML = `
-        <div style="margin-bottom:10px">
-          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Distance (${bmDistUnit})</label>
-          <input type="number" id="bm-distance" step="0.1" min="1" max="42.2" placeholder="e.g. 5"
-            style="width:100%;box-sizing:border-box;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-        </div>
-        <div style="margin-bottom:12px">
-          <label style="font-size:12px;color:var(--c-muted);display:block;margin-bottom:6px">Time (min : sec)</label>
-          <div style="display:flex;align-items:center;gap:8px">
-            <input type="number" id="bm-time-min" min="5" max="300" placeholder="min"
-              style="flex:1;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-            <span style="font-size:16px;color:var(--c-muted);font-weight:600">:</span>
-            <input type="number" id="bm-time-sec" min="0" max="59" placeholder="sec"
-              style="flex:1;background:var(--c-faint);border:1px solid var(--c-border-strong);border-radius:8px;padding:10px 12px;font-size:15px;color:var(--c-black);outline:none;-webkit-appearance:none">
-          </div>
-        </div>
-      `;
-      break;
+    `;
   }
 
-  const overlay = document.createElement('div');
-  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);display:flex;align-items:flex-end;justify-content:center;z-index:9999;';
-  overlay.innerHTML = `
-    <div style="background:var(--c-surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:0 0 env(safe-area-inset-bottom,0)">
-      <div style="display:flex;justify-content:center;padding:12px 0 4px">
-        <div style="width:36px;height:4px;border-radius:2px;background:var(--c-border-strong)"></div>
+  // Check if a benchmark workout was already added to this week
+  const wk = s.wks?.[s.w - 1];
+  const hasBenchmarkWorkout = wk?.adhocWorkouts?.some((w: Workout) => w.id?.startsWith('benchmark-'));
+
+  if (hasBenchmarkWorkout) {
+    return `
+      <div style="margin:12px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:3px">Check-in workout added</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">Complete the workout and results will be recorded automatically from your watch.</div>
       </div>
-      <div style="padding:16px 20px 28px">
-        <div style="font-size:17px;font-weight:700;color:var(--c-black);margin-bottom:4px">${title}</div>
-        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px">${desc}</div>
-        ${fieldsHTML}
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <button id="btn-bm-submit" class="m-btn-primary" style="width:100%">Save result</button>
-          <button id="btn-bm-cancel" class="m-btn-secondary" style="width:100%">Cancel</button>
+    `;
+  }
+
+  // Not started — show prompt to open overlay
+  return `
+    <div style="margin:12px 16px 0;padding:16px;${PLAN_CARD_STYLE}">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:2px">Fitness check-in available</div>
+          <div style="font-size:12px;color:#64748B;line-height:1.4">Post-deload. Good time to measure fitness.</div>
         </div>
+        <button id="btn-benchmark-open"
+          style="padding:8px 16px;border-radius:100px;border:1px solid var(--c-border);
+                 background:transparent;font-size:12px;font-weight:600;color:#0F172A;
+                 cursor:pointer;font-family:var(--f);white-space:nowrap">
+          Choose
+        </button>
       </div>
     </div>
   `;
-  document.body.appendChild(overlay);
-
-  overlay.querySelector('#btn-bm-submit')?.addEventListener('click', () => {
-    switch (type) {
-      case 'easy_checkin':
-      case 'threshold_check': {
-        const m = +(document.getElementById('bm-pace-min') as HTMLInputElement)?.value || 0;
-        const sec = +(document.getElementById('bm-pace-sec') as HTMLInputElement)?.value || 0;
-        const paceSecRaw = m * 60 + sec;
-        if (paceSecRaw < 120 || paceSecRaw > 900) { alert(`Enter a valid pace (min:sec per ${bmDistUnit})`); return; }
-        // Convert to sec/km if user entered sec/mi
-        const paceSec = bmUnitPref === 'mi' ? paceSecRaw * 1.60934 : paceSecRaw;
-        overlay.remove();
-        const dur = type === 'easy_checkin' ? 1800 : 1200;
-        recordBenchmark(type, 'manual', undefined, dur, paceSec);
-        break;
-      }
-      case 'speed_check': {
-        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        if (!distRaw || distRaw < 0.5) { alert(`Enter a distance (${bmDistUnit})`); return; }
-        // Convert to km if user entered miles
-        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
-        overlay.remove();
-        recordBenchmark('speed_check', 'manual', distKm, 720);
-        break;
-      }
-      case 'race_simulation': {
-        const distRaw = +(document.getElementById('bm-distance') as HTMLInputElement)?.value;
-        const m = +(document.getElementById('bm-time-min') as HTMLInputElement)?.value || 0;
-        const sec = +(document.getElementById('bm-time-sec') as HTMLInputElement)?.value || 0;
-        const totalSec = m * 60 + sec;
-        if (!distRaw || distRaw < 1) { alert('Enter a distance'); return; }
-        if (totalSec < 300) { alert('Enter a valid time'); return; }
-        // Convert to km if user entered miles
-        const distKm = bmUnitPref === 'mi' ? distRaw / 0.621371 : distRaw;
-        overlay.remove();
-        recordBenchmark('race_simulation', 'manual', distKm, totalSec, totalSec / distKm);
-        break;
-      }
-    }
-  });
-
-  overlay.querySelector('#btn-bm-cancel')?.addEventListener('click', () => overlay.remove());
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
 }
+
 
 // ─── Recovery ─────────────────────────────────────────────────────────────────
 
@@ -1661,9 +1418,9 @@ function buildRecoveryLogPanel(s: SimulatorState): string {
   const last7 = history.slice(-7);
 
   const dotStyle = (score: number): string => {
-    if (score >= 70) return 'background:var(--c-ok)';
-    if (score >= 50) return 'background:#f59e0b';
-    if (score >= 30) return 'background:#f97316';
+    if (score >= 80) return 'background:var(--c-ok)';
+    if (score >= 65) return 'background:var(--c-ok-muted)';
+    if (score >= 50) return 'background:var(--c-caution)';
     return 'background:var(--c-warn)';
   };
 
@@ -1978,12 +1735,12 @@ function buildCarryOverCard(wk: Week | undefined): string {
   const count = carriedItems.length;
   if (count === 0) return '';
   return `
-    <div id="plan-carry-over-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(245,158,11,0.07);border:1px solid rgba(245,158,11,0.3);display:flex;align-items:flex-start;justify-content:space-between;gap:10px;cursor:pointer">
+    <div id="plan-carry-over-card" style="margin:12px 16px 0;padding:13px 15px;${PLAN_CARD_STYLE};display:flex;align-items:flex-start;justify-content:space-between;gap:10px;cursor:pointer">
       <div style="flex:1;min-width:0">
-        <div style="font-size:12px;font-weight:600;color:var(--c-caution);margin-bottom:2px">Unresolved load from last week</div>
-        <div style="font-size:11px;color:var(--c-muted)">${count} cross-training ${count === 1 ? 'activity' : 'activities'} carried over — tap to adjust this week</div>
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:2px">Unresolved load from last week</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${count} cross-training ${count === 1 ? 'activity' : 'activities'} carried over. Tap to adjust this week.</div>
       </div>
-      <button id="plan-carry-over-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:16px;line-height:1;opacity:0.6" aria-label="Dismiss">×</button>
+      <button id="plan-carry-over-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
     </div>`;
 }
 
@@ -2075,18 +1832,18 @@ function buildKmNudgeCard(wk: Week | undefined, s: SimulatorState, workouts: Wor
     const newKm = c.currentDistanceKm + c.extensionKm;
     const label = `+ ${formatKm(c.extensionKm, unitPref)} to ${escapeHtml(c.workoutName)}`;
     const detail = `${formatKm(c.currentDistanceKm, unitPref)} → ${formatKm(newKm, unitPref)}`;
-    return `<button class="km-nudge-apply-btn" data-name="${escapeHtml(c.workoutName)}" data-day="${c.dayOfWeek}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:#16a34a;background:rgba(34,197,94,0.12);border:1px solid rgba(34,197,94,0.35);border-radius:8px;padding:5px 12px;cursor:pointer;width:100%;text-align:left">`
+    return `<button class="km-nudge-apply-btn" data-name="${escapeHtml(c.workoutName)}" data-day="${c.dayOfWeek}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--c-black);background:transparent;border:1px solid var(--c-border-strong);border-radius:10px;padding:9px 13px;cursor:pointer;width:100%;text-align:left;font-family:var(--f)">`
       + `<span>${label}</span><span style="font-weight:400;color:var(--c-muted);font-size:11px">${detail}</span></button>`;
   }).join('');
 
   return `
-    <div id="plan-km-nudge-card" style="margin:12px 16px 0;padding:12px 14px;border-radius:12px;background:rgba(34,197,94,0.07);border:1px solid rgba(34,197,94,0.3)">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+    <div id="plan-km-nudge-card" style="margin:12px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
         <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:600;color:#16a34a;margin-bottom:2px">${headline}</div>
-          <div style="font-size:11px;color:var(--c-muted)">${body}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:2px">${headline}</div>
+          <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${body}</div>
         </div>
-        <button id="plan-km-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:16px;line-height:1;opacity:0.6" aria-label="Dismiss">×</button>
+        <button id="plan-km-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
       </div>
       <div style="display:flex;flex-direction:column;gap:6px">
         ${buttons}
@@ -2122,15 +1879,15 @@ function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
 
   if (!_hasRemaining) {
     return `
-      <div style="padding:6px 18px;border-bottom:1px solid rgba(245,158,11,0.2);display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:12px;color:var(--c-caution)">${stripLabel}</span>
+      <div style="padding:8px 18px;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:12px;color:var(--c-muted);font-weight:500">${stripLabel}</span>
       </div>`;
   }
 
   return `
-    <button id="plan-adjust-week-btn" style="width:100%;padding:7px 18px;background:transparent;border:none;border-bottom:1px solid rgba(245,158,11,0.2);display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-family:var(--f)">
-      <span style="font-size:12px;color:var(--c-caution)">${stripLabel}</span>
-      <span style="font-size:11px;color:var(--c-muted)">Adjust plan</span>
+    <button id="plan-adjust-week-btn" style="width:100%;padding:9px 18px;background:transparent;border:none;border-bottom:1px solid var(--c-border);display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-family:var(--f)">
+      <span style="font-size:12px;color:var(--c-muted);font-weight:500">${stripLabel}</span>
+      <span style="font-size:11px;color:var(--c-muted);text-decoration:underline;text-underline-offset:2px">Adjust plan</span>
     </button>`;
 }
 
@@ -2143,37 +1900,7 @@ function _renderPills(pills: SignalPill[]): string {
   }).join('');
 }
 
-function buildWeekOverview(
-  pills: SignalPill[],
-  coachCopy: string | null,
-  futureWeekCopy: string | null,
-  isFutureWeek: boolean,
-): string {
-  const hasContent = pills.length > 0 || coachCopy || futureWeekCopy;
-  if (!hasContent) return '';
-
-  const label = isFutureWeek ? 'About this week' : 'Week overview';
-
-  const contentHtml = isFutureWeek
-    ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${futureWeekCopy ?? ''}</p>`
-    : `${pills.length > 0 ? `<div style="display:flex;flex-wrap:wrap;gap:6px${coachCopy ? ';margin-bottom:10px' : ''}">${_renderPills(pills)}</div>` : ''}
-       ${coachCopy ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${coachCopy}</p>` : ''}`;
-
-  return `
-    <div style="padding:0 0 4px">
-      <button id="plan-week-overview-toggle"
-        style="display:flex;align-items:center;background:none;border:none;padding:8px 0 4px;cursor:pointer;font-family:var(--f)">
-        <span style="display:inline-flex;align-items:center;gap:5px;border:1px solid var(--c-border, rgba(0,0,0,0.12));border-radius:20px;padding:3px 8px 3px 9px">
-          <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">${label}</span>
-          <span id="plan-week-overview-chevron" style="font-size:10px;color:var(--c-muted);display:inline-block;transition:transform 0.2s">▾</span>
-        </span>
-      </button>
-      <div id="plan-week-overview-content" style="display:none;padding-bottom:8px">
-        ${contentHtml}
-      </div>
-    </div>
-  `;
-}
+// buildWeekOverview removed — pills now rendered inline in header
 
 // ─── Main render ─────────────────────────────────────────────────────────────
 
@@ -2188,9 +1915,18 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus, (wk as any).forceDeload,
     )
     : [];
+
+  // Merge user-generated sessions (holiday or adhoc) into the workout list so they render as cards
+  if (wk?.adhocWorkouts) {
+    for (const aw of wk.adhocWorkouts) {
+      if ((aw.id || '').startsWith('holiday-') || (aw.id || '').startsWith('adhoc-')) {
+        workouts.push(aw);
+      }
+    }
+  }
 
   // Apply mods
   if (wk?.workoutMods) {
@@ -2228,6 +1964,28 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   const _illness = (s as any).illnessState;
   if (_illness?.active && isCurrentWeek) {
     applyIllnessMods(workouts, _illness.severity);
+  }
+
+  // Apply holiday modifications in memory (render-time only)
+  // Only for active holidays where today >= startDate (not future scheduled holidays)
+  // Also verify endDate hasn't passed — prevents stale state from applying mods
+  const _holiday = s.holidayState;
+  const _today = new Date().toISOString().split('T')[0];
+  if (_holiday?.active && _today >= _holiday.startDate && _today <= _holiday.endDate
+      && s.planStartDate && isWeekInHoliday(viewWeek, s.planStartDate, _holiday)) {
+    const holidayDays = getHolidayDaysForWeek(viewWeek, s.planStartDate, _holiday);
+    applyHolidayMods(workouts, _holiday.canRun, holidayDays);
+  }
+
+  // Apply post-holiday bridge scaling (render-time only)
+  if (wk) {
+    applyBridgeMods_renderTime(workouts, wk);
+  }
+
+  // Populate workout lookup for Start button click handlers
+  _workoutLookup = new Map();
+  for (const w of workouts) {
+    _workoutLookup.set(w.id || w.n, { n: w.n || '', d: w.d || '' });
   }
 
   const dateRange = fmtWeekRange(s.planStartDate, viewWeek);
@@ -2318,26 +2076,59 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     </div>` : '';
   // ── Week Overview signals ───────────────────────────────────────────────────
   const isFutureWeek = viewWeek > s.w;
-  const _effortScore = wk?.effortScore ?? null;
+  // Compute RPE on-the-fly from rated workouts (same as events.ts / week-debrief)
+  const _nonRunTypes = ['cross', 'cross_training', 'strength', 'rest', 'capacity_test', 'gym'];
+  let _effortScore: number | null = wk?.rpeEffort ?? wk?.effortScore ?? null;
+  {
+    const allRunsForEffort = [
+      ...workouts,
+      ...(wk?.adhocWorkouts ?? []).filter((w: any) => w.id?.startsWith('garmin-') && !_nonRunTypes.includes(w.t)),
+    ];
+    let rpeTotalDev = 0, rpeCount = 0;
+    for (const wo of allRunsForEffort) {
+      if (_nonRunTypes.includes((wo as any).t)) continue;
+      const wId = (wo as any).id || (wo as any).n;
+      const rating = rated[wId];
+      if (typeof rating !== 'number') continue;
+      const expected = (wo as any).rpe || (wo as any).r || 5;
+      rpeTotalDev += rating - expected;
+      rpeCount++;
+    }
+    if (rpeCount > 0) _effortScore = rpeTotalDev / rpeCount;
+  }
   const _tssPct = _plannedTSS > 0 && _weekTotalTSS > 0
     ? Math.round((_weekTotalTSS / _plannedTSS) * 100) : null;
   const _actuals = Object.values(wk?.garminActuals ?? {}) as any[];
   const _hrDriftVals = _actuals.map((a: any) => a.hrDrift).filter((v: any) => typeof v === 'number' && !isNaN(v));
   const _avgHrDrift = _hrDriftVals.length > 0
     ? _hrDriftVals.reduce((acc: number, v: number) => acc + v, 0) / _hrDriftVals.length : null;
+  // Compute average HR effort from garminActuals (stored or on-the-fly)
+  const _RUN_TYPES_PV = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  // Build workout lookup for plannedType fallback
+  const _woByIdPV: Record<string, any> = {};
+  for (const wo of workouts) _woByIdPV[(wo as any).id || (wo as any).n] = wo;
+  const _hrEffortVals: number[] = [];
+  for (const [wId, actual] of Object.entries(wk?.garminActuals ?? {}) as [string, any][]) {
+    if (!_RUN_TYPES_PV.has(actual?.activityType ?? '')) continue;
+    let hrScore = actual?.hrEffortScore ?? null;
+    if (hrScore == null && actual?.avgHR) {
+      const woType = actual?.plannedType ?? _woByIdPV[wId]?.t ?? null;
+      if (woType) hrScore = getHREffort(actual.avgHR, woType, s);
+    }
+    if (hrScore != null) _hrEffortVals.push(hrScore);
+  }
+  const _avgHrEffort = _hrEffortVals.length > 0
+    ? _hrEffortVals.reduce((acc, v) => acc + v, 0) / _hrEffortVals.length : null;
   let _wgAccum = 0;
   for (let i = 0; i < viewWeek - 1; i++) _wgAccum += (s.wks[i]?.wkGain ?? 0);
   const _effectiveVdot = (s.v ?? 0) + _wgAccum + (s.rpeAdj ?? 0) + (s.physioAdj ?? 0);
-  const _signals = computeWeekSignals(_effortScore, _tssPct, null, _avgHrDrift);
+  const _signals = computeWeekSignals(_effortScore, _avgHrEffort, _tssPct, null, _avgHrDrift);
   const _acwrStatus = (viewWeek === s.w + 1) ? (wk?.scheduledAcwrStatus ?? null) : null;
   const _weeksToRace = s.tw - viewWeek + 1;
   const _pills = isFutureWeek
     ? getFutureWeekPills(_effectiveVdot, wk?.ph ?? 'base', _acwrStatus, _weeksToRace, !s.continuousMode)
     : getSignalPills(_signals);
-  const _coachCopy = isFutureWeek ? null : getCoachCopy(_signals, wk?.ph);
-  const _futureWeekCopy = isFutureWeek
-    ? getFutureWeekCopy(wk?.ph ?? 'base', viewWeek, s.tw, _effectiveVdot, !s.continuousMode) : null;
-  const weekOverviewHtml = buildWeekOverview(_pills, _coachCopy, _futureWeekCopy, isFutureWeek);
+  // Coach copy and future week copy removed with Week Overview section
 
   const canGoBack = viewWeek > 1;
   const canGoForward = viewWeek < s.tw;
@@ -2347,64 +2138,122 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
   const navBtn = (dir: 'prev' | 'next', enabled: boolean) => `
     <button id="plan-week-${dir}" class="plan-nav-btn"
-      style="width:32px;height:32px;border-radius:50%;border:1px solid ${enabled ? 'var(--c-border-strong)' : 'var(--c-border)'};background:transparent;display:flex;align-items:center;justify-content:center;cursor:${enabled ? 'pointer' : 'default'};opacity:${enabled ? '1' : '0.25'}">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        ${dir === 'prev' ? '<path d="M15 18l-6-6 6-6"/>' : '<path d="M9 18l6-6-6-6"/>'}
+      style="width:36px;height:36px;border-radius:50%;border:none;cursor:${enabled ? 'pointer' : 'default'};
+        background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);
+        display:flex;align-items:center;justify-content:center;
+        box-shadow:0 1px 4px rgba(0,0,0,0.08);
+        opacity:${enabled ? '1' : '0.3'}">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0F172A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        ${dir === 'prev' ? '<polyline points="15 18 9 12 15 6"/>' : '<polyline points="9 18 15 12 9 6"/>'}
       </svg>
     </button>
   `;
 
+  // ── Wrap up week (conditional) ──
+  const _wrapBtn = buildWrapUpWeekBtn(s, workouts, viewWeek);
+
+  // ── Light background tints per phase (like physiology sky) ──
+  const _phaseBg: Record<string, { top: string; mid: string }> = {
+    base:  { top: '#C5DFF8', mid: '#E3F0FA' },   // cool blue sky
+    build: { top: '#F0D9C4', mid: '#F5E8DC' },   // warm amber
+    peak:  { top: '#F0C4C4', mid: '#F5DCDC' },   // warm rose
+    taper: { top: '#C5DFF8', mid: '#E3F0FA' },   // cool blue (same as physiology)
+  };
+  const _pb = _phaseBg[wk?.ph ?? 'base'] ?? _phaseBg.base;
+
+  // Design tokens — same as physiology page
+  const _TM = '#0F172A';
+  const _TS = '#64748B';
+  const _TL = '#94A3B8';
+  const _BG = '#FAF9F6';
+
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
+    <style>
+      #plan-view { box-sizing:border-box; }
+      #plan-view *, #plan-view *::before, #plan-view *::after { box-sizing:inherit; }
+      @keyframes planFloat { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .plan-fade { opacity:0; animation:planFloat 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes barGrow { from { width:0% } }
+      .m-prog-fill { animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+    </style>
 
-      <!-- Header -->
-      <div style="padding:14px 18px 0;border-bottom:1px solid var(--c-border)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div>
-            <div style="display:flex;align-items:center;gap:8px;font-size:18px;font-weight:600;letter-spacing:-0.02em;line-height:1.1">
-              Week ${viewWeek} of ${s.tw}
-              ${isCurrentWeek ? `<span style="font-size:11px;font-weight:600;color:var(--c-ok);background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.25);border-radius:20px;padding:2px 8px;letter-spacing:0.01em">This week</span>` : ''}
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;margin-top:4px;flex-wrap:wrap">
-              ${wk?.ph ? phaseBadge(wk.ph) : ''}
-              ${dateRange ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${dateRange}</span>` : ''}
-            </div>
-            ${weekLoadBar}
-            ${weekKmBar}
-          </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
-            <div style="display:flex;gap:8px;align-items:center">
-            ${isCurrentWeek ? `<button id="plan-coach-btn" style="padding:5px 11px;border-radius:100px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:11px;font-weight:600;color:var(--c-muted);white-space:nowrap">Coach</button>` : ''}
-            ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
-            ${buildWrapUpWeekBtn(s, workouts, viewWeek)}
+    <div id="plan-view" style="position:relative;min-height:100vh;background:${_BG};font-family:var(--f);overflow-x:hidden">
 
-            ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" style="height:32px;padding:0 12px;border-radius:16px;border:1px solid var(--c-border);background:transparent;font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;letter-spacing:0.02em">Review past week</button>` : ''}
+      <!-- Background — full-page gradient, phase-tinted, fading to cream -->
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg, ${_pb.top} 0%, ${_pb.mid} 15%, #F0F7FC 35%, #F5F8FB 55%, ${_BG} 80%)"></div>
+        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="plBlur"><feGaussianBlur stdDeviation="20"/></filter>
+            <filter id="plSoft"><feGaussianBlur stdDeviation="6"/></filter>
+          </defs>
+          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#plSoft)" opacity="0.6"/>
+          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#plBlur)" opacity="0.35"/>
+          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#plBlur)" opacity="0.25"/>
+          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#plSoft)"/>
+          <path d="M-20,350 Q100,330 220,345 T440,335 L440,600 L-20,600 Z" fill="rgba(255,255,255,0.15)"/>
+        </svg>
+      </div>
+
+      <div style="position:relative;z-index:10;padding-bottom:48px">
+
+        <!-- Header bar: nav + profile -->
+        <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between">
+          <div style="display:flex;align-items:center;gap:8px">
             ${navBtn('prev', canGoBack)}
             ${navBtn('next', canGoForward)}
-            <button id="plan-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f)">${initials || 'Me'}</button>
-            </div>
-            ${viewWeek < s.w ? `<button id="plan-jump-current" style="background:transparent;border:none;padding:0;font-size:11px;font-weight:600;color:var(--c-black);cursor:pointer;letter-spacing:0.01em;display:flex;align-items:center;gap:3px">&#8594; Go to Current Week</button>` : ''}
+          </div>
+          <button id="plan-account-btn" style="
+            width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
+            background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);
+            display:flex;align-items:center;justify-content:center;
+            font-size:12px;font-weight:600;color:${_TM};font-family:var(--f);
+            box-shadow:0 1px 4px rgba(0,0,0,0.08);
+          ">${initials || 'Me'}</button>
+        </div>
+
+        <!-- Hero: Week + phase + date + actions — all one block -->
+        <div class="plan-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 0">
+          <div style="font-size:48px;font-weight:700;color:${_TM};letter-spacing:-0.03em;line-height:1">
+            Week ${viewWeek}<span style="font-weight:300;color:${_TS}"> / ${s.tw}</span>
+          </div>
+          ${wk?.ph ? `<div style="font-size:17px;font-weight:700;color:${_TM};margin-top:10px;letter-spacing:-0.01em">${phaseLabel(wk.ph)}</div>` : ''}
+          ${dateRange ? `<div style="font-size:14px;font-weight:500;color:${_TS};margin-top:4px">${dateRange}</div>` : ''}
+          ${viewWeek < s.w ? `<div style="margin-top:8px"><button id="plan-jump-current" style="background:none;border:none;padding:0;font-size:13px;font-weight:600;color:${_TS};cursor:pointer;font-family:var(--f)">Go to current week \u2192</button></div>` : ''}
+
+          <!-- Action buttons — part of the hero block -->
+          <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
+            ${isCurrentWeek ? `<button id="plan-coach-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Coach</button>` : ''}
+            ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
+            ${_wrapBtn}
+            ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Review past week</button>` : ''}
+            ${viewWeek === s.w ? `<button id="plan-generate-session" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">+ Add session</button>` : ''}
           </div>
         </div>
 
-        ${weekOverviewHtml}
+        <!-- This Week progress (current week only) -->
+        ${isCurrentWeek ? `<div class="plan-fade" style="animation-delay:0.12s;margin-top:20px">${buildProgressBars(s)}</div>` : (weekLoadBar || weekKmBar ? `
+        <div class="plan-fade" style="animation-delay:0.12s;margin:20px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+          ${weekLoadBar}
+          ${weekKmBar}
+        </div>` : '')}
 
-        <!-- 7-day calendar strip -->
-        ${buildCalendarStrip(workouts, rated, viewWeek, s.w, s.planStartDate)}
-      </div>
-
-      <!-- Workout card list -->
-      <div id="plan-card-list" style="background:var(--c-bg);${isFutureWeek ? 'opacity:0.75' : ''}">
-        ${isFutureWeek ? `<div style="margin:8px 16px 0;padding:10px 14px;background:rgba(0,0,0,0.04);border-radius:8px;font-size:12px;font-weight:500;color:var(--c-muted);line-height:1.5">Draft — final workouts depend on the preceding week's performance.</div>` : ''}
-        ${buildCarryOverCard(wk)}
-        ${buildKmNudgeCard(wk, s, workouts)}
-        ${buildAdjustWeekRow(wk, s)}
-        ${buildInjuryBanner()}
-        ${buildIllnessBanner()}
-        ${buildMorningPainCheck()}
-        ${buildBenchmarkPanel(s)}
-        ${buildWorkoutCards(s, workouts, viewWeek)}
-        ${buildActivityLog(wk, viewWeek, s.w)}
+        <!-- Workout card list -->
+        <div id="plan-card-list" style="padding:12px 0 16px;${isFutureWeek ? 'opacity:0.75' : ''}">
+          ${isFutureWeek ? `<div class="plan-fade" style="animation-delay:0.16s;margin:4px 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:${_TS};line-height:1.5">Draft. Final workouts depend on the preceding week's performance.</div>` : ''}
+          ${buildCarryOverCard(wk)}
+          ${buildKmNudgeCard(wk, s, workouts)}
+          ${buildAdjustWeekRow(wk, s)}
+          ${buildInjuryBanner()}
+          ${buildIllnessBanner()}
+          ${buildHolidayBannerPlan(s)}
+          ${buildMorningPainCheck()}
+          ${buildBenchmarkPanel(s)}
+          <div class="plan-fade" style="animation-delay:0.18s;margin:10px 16px 0;${PLAN_CARD_STYLE};overflow:hidden">
+            ${buildWorkoutCards(s, workouts, viewWeek)}
+          </div>
+          ${buildActivityLog(wk, viewWeek, s.w)}
+        </div>
       </div>
 
     </div>
@@ -2420,25 +2269,22 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
-  // Load bar → breakdown sheet
+  // Load bar → Load & Taper page (compact bars on past/future weeks)
   document.getElementById('plan-load-bar-row')?.addEventListener('click', () => {
-    showLoadBreakdownSheet(s, viewWeek, 'plan');
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan'));
   });
 
-  // Km bar → run breakdown sheet
+  // Km bar → run breakdown sheet (compact bars on past/future weeks)
   document.getElementById('plan-km-bar-row')?.addEventListener('click', () => {
     showRunBreakdownSheet(s, viewWeek);
   });
 
-  // Week Overview expand/collapse
-  document.getElementById('plan-week-overview-toggle')?.addEventListener('click', () => {
-    const content = document.getElementById('plan-week-overview-content');
-    const chevron = document.getElementById('plan-week-overview-chevron');
-    if (!content) return;
-    const isOpen = content.style.display !== 'none';
-    content.style.display = isOpen ? 'none' : 'block';
-    if (chevron) chevron.style.transform = isOpen ? '' : 'rotate(180deg)';
+  // This Week card (from buildProgressBars on current week) — whole card → Load & Taper
+  document.getElementById('this-week-card')?.addEventListener('click', () => {
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan'));
   });
+
+  // (Week overview toggle removed — pills now inline)
 
   // Coach button
   document.getElementById('plan-coach-btn')?.addEventListener('click', () => openCoachModal());
@@ -2449,6 +2295,35 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   // Illness banner
   document.getElementById('illness-mark-recovered')?.addEventListener('click', () => clearIllness());
   document.getElementById('illness-update-btn')?.addEventListener('click', () => openIllnessModal());
+
+  // Holiday banner
+  document.getElementById('holiday-end-btn')?.addEventListener('click', () => clearHoliday());
+  document.getElementById('holiday-generate-btn')?.addEventListener('click', () => openSessionGenerator());
+  document.getElementById('holiday-cancel-btn')?.addEventListener('click', () => cancelScheduledHoliday());
+  document.getElementById('holiday-change-btn')?.addEventListener('click', () => {
+    cancelScheduledHoliday(() => {}); // no-op: modal opens immediately after
+    openHolidayModal();
+  });
+
+  // Delete user-generated session (holiday or adhoc)
+  document.querySelectorAll('.plan-adhoc-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const el = e.currentTarget as HTMLElement;
+      const wkId = el.dataset.workoutId || '';
+      const weekNum = parseInt(el.dataset.weekNum || '0', 10);
+      const ms = getMutableState();
+      const wk2 = ms.wks?.[weekNum - 1];
+      if (wk2?.adhocWorkouts) {
+        wk2.adhocWorkouts = wk2.adhocWorkouts.filter((w: any) => (w.id || w.n) !== wkId);
+        saveState();
+        renderPlanView();
+      }
+    });
+  });
+
+  // Generate session button (current week only)
+  document.getElementById('plan-generate-session')?.addEventListener('click', () => openSessionGenerator());
 
   // Week navigation
   document.getElementById('plan-week-prev')?.addEventListener('click', () => {
@@ -2496,27 +2371,9 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // Benchmark panel
-  document.getElementById('btn-benchmark-skip')?.addEventListener('click', () => {
-    skipBenchmark();
-    renderPlanView();
-  });
-  document.getElementById('btn-benchmark-auto')?.addEventListener('click', () => {
-    const s = getState();
-    const garminRun = findGarminRunForWeek(s.w);
-    if (garminRun) {
-      const options = getBenchmarkOptions((s.onboarding as any)?.trainingFocus, (s.onboarding as any)?.experienceLevel);
-      const recommended = options.find((o: any) => o.recommended);
-      const type = recommended?.type || 'easy_checkin';
-      recordBenchmark(type as any, 'garmin', (garminRun as any).distance_km, (garminRun as any).duration_min * 60);
-    }
-  });
-  document.querySelectorAll('.btn-benchmark-option').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const bmType = (btn as HTMLElement).dataset.bmType;
-      if (bmType) showBenchmarkEntryModal(bmType);
-    });
-  });
+  // Benchmark panel — open overlay or trigger auto-show
+  document.getElementById('btn-benchmark-open')?.addEventListener('click', () => openBenchmarkOverlay());
+  maybeTriggerBenchmarkOverlay();
 
   // Capacity test buttons (injury return-to-run phase)
   document.querySelectorAll('.plan-capacity-test-btn').forEach(btn => {
@@ -2545,21 +2402,18 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   };
   document.addEventListener('keydown', keyHandler);
 
-  // Calendar strip — tap day → scroll to that card
-  document.querySelectorAll('.plan-day-pill').forEach(el => {
-    el.addEventListener('click', () => {
-      const dayIdx = el.getAttribute('data-day');
-      const card = document.getElementById(`plan-day-${dayIdx}`);
-      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  });
-
-  // Start button — go to record view
-  document.querySelectorAll('.plan-start-btn').forEach(el => {
-    el.addEventListener('click', () => {
-      import('./record-view').then(({ renderRecordView }) => renderRecordView());
-    });
-  });
+  // Start button (header + expanded detail) — look up workout from module-level lookup
+  const startHandler = (e: Event) => {
+    e.stopPropagation();
+    const btn = e.currentTarget as HTMLElement;
+    const wkId = btn.dataset.workoutId || '';
+    const workout = _workoutLookup.get(wkId);
+    const name = workout?.n || wkId;
+    const desc = workout?.d || '';
+    if (window.trackWorkout) window.trackWorkout(name, desc);
+  };
+  document.querySelectorAll('.plan-start-btn').forEach(el => el.addEventListener('click', startHandler));
+  document.querySelectorAll('.plan-detail-start-btn').forEach(el => el.addEventListener('click', startHandler));
 
   // View arrow → expand workout card inline (tap the card header to toggle)
   document.querySelectorAll('.plan-view-btn').forEach(el => {
@@ -2860,6 +2714,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // Wrap up week (Sunday / all-done pill in header)
   document.getElementById('plan-wrap-up-btn')?.addEventListener('click', () => {
+    console.log('[plan-view] plan-wrap-up-btn clicked, s.w=', s.w);
     showWeekDebrief(s.w, 'complete');
   });
 
@@ -2875,7 +2730,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       if (!actual) return;
       const plannedTSSAttr = parseInt(el.dataset.plannedTss || '0', 10) || 0;
       const { renderActivityDetail } = await import('./activity-detail');
-      renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'plan', plannedTSSAttr || undefined);
+      renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'plan', plannedTSSAttr || undefined, workoutKey);
     });
   });
 
