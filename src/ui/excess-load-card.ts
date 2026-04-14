@@ -35,16 +35,6 @@ import { formatKm } from '@/utils/format';
 // Helpers
 
 /**
- * Returns the midnight timestamp (ms) for a workout in a given week.
- * weekIdx is 0-indexed. dayOfWeek is Mon=0..Sun=6.
- */
-function workoutDateMs(planStartDate: string, weekIdx: number, dayOfWeek: number): number {
-  const start = new Date(planStartDate);
-  start.setHours(0, 0, 0, 0);
-  return start.getTime() + (weekIdx * 7 + dayOfWeek) * 24 * 3600 * 1000;
-}
-
-/**
  * Generates workouts for the current week (offset=0) or next week (offset=1).
  * Must match getPlanHTML call exactly so workout names/IDs align with plan-view and wk.rated keys.
  */
@@ -82,16 +72,15 @@ function getWeekWorkouts(offset: 0 | 1 = 0) {
  */
 function filterRemainingWorkouts<T extends { id?: string; n: string; dayOfWeek?: number }>(
   workouts: T[],
-  wk: Week,
-  weekIdx: number,
-  planStartDate: string,
+  _wk: Week,
+  _weekIdx: number,
+  _planStartDate: string,
 ): T[] {
-  const todayMs = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); })();
-  return workouts.filter(w => {
-    if (wk.rated[w.id || w.n] !== undefined) return false;
-    if (w.dayOfWeek == null) return true; // no fixed day — assume schedulable
-    return workoutDateMs(planStartDate, weekIdx, w.dayOfWeek) >= todayMs;
-  });
+  // "Remaining" = unrated only. Past-day unrated runs stay eligible so the user
+  // can replan the rest of the week — e.g. if Wednesday's tempo was missed and
+  // today is Friday, the suggester can still downgrade it to absorb extra load
+  // from cross-training done after it was scheduled.
+  return workouts.filter(w => _wk.rated[w.id || w.n] === undefined);
 }
 
 /**

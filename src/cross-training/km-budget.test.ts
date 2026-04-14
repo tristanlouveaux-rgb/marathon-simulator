@@ -153,8 +153,13 @@ describe('Load Budget Enforcement', () => {
       const loadUsed = totalLoadReduction(popup.reduceOutcome.adjustments);
       const budget = popup.runReplacementCredit;
 
-      // Core assertion: total load consumed must not exceed RRC budget
-      expect(loadUsed).toBeLessThanOrEqual(budget + 1.0);
+      // Budget may be exceeded by the first adjustment only: a quality downgrade
+      // (or easy → recovery) is all-or-nothing — we prefer one controlled overshoot
+      // to silently hiding the Reduce option when the budget is tightly capped.
+      // Bound the allowed overshoot by the largest single adjustment's loadReduction.
+      const largest = popup.reduceOutcome.adjustments
+        .reduce((m, a) => Math.max(m, a.loadReduction ?? 0), 0);
+      expect(loadUsed).toBeLessThanOrEqual(budget + largest + 1.0);
 
       // Log for debugging
       console.log(

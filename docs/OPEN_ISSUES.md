@@ -16,6 +16,31 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-137: Excess-load modal hides Reduce option when a tempo remains *(P1, fix pending confirmation — 2026-04-15)*
+
+**Problem**: When extra cross-training load pushes the week over target, the modal only shows Push / Keep — even when a tempo or other quality workout is still on the plan. "Recommended" green appears on Keep with no explanation.
+**Root cause**: `suggester.ts:1002-1018` caps the reduction budget by `capFraction = maxReductionTSS / fullRrcTSS`. When the overshoot is small relative to the full run-replacement credit, `effectiveRRC` drops below `minLoadThreshold` (5 load units). `buildReduceAdjustments` then short-circuits at line 529 before any candidate is evaluated, silently returning zero adjustments.
+**Fix applied**:
+- `suggester.ts:529`: only break when at least one adjustment has been proposed.
+- `suggester.ts:545`: first quality downgrade records its true `loadReduction` instead of a tiny budget-clipped number (controlled overshoot preferred to silent suppression).
+- `suggestion-modal.ts`: when `!hasReductions && !hasReplacements`, show an explanation banner and move the "Recommended" green from Keep → Push (carrying forward is the better default; Keep is the fallback).
+- `km-budget.test.ts`: assertion loosened to allow overshoot by ≤ single largest adjustment's load.
+**Status**: Awaiting Tristan to reproduce on-device with the screenshot scenario (5 cross-training activities, tempo remaining) and confirm Reduce now appears.
+
+---
+
+### ISSUE-138: Recovery workout tier added (easy → recovery downgrade) *(P2, provisional constants — 2026-04-15)*
+
+**Problem**: When remaining runs are all already at or near the running floor and all easy, the suggester has no lever to absorb excess load — Reduce returns empty.
+**Fix applied**: Introduced a new `'recovery'` `WorkoutType` as the bottom of the intensity ladder. `downgradeType` chain extended: `… → marathon_pace → easy → recovery`. Easy distance-reduction branch now falls back to an easy → recovery conversion when the floor blocks a km cut (preserves distance, reduces load). Recovery counts toward `floorKm` at 1.0x (simplest — movement is movement).
+**Wiring**: Type def (`types/training.ts`), load profile (`constants/workouts.ts`), pace in `workouts/load.ts`, HR zone (`heart-rate.ts` → Z1), matcher pace (`activity-matcher.ts`), renderer colour (`renderer.ts`).
+**Provisional constants flagged for review** (written while Tristan was away; see `docs/SCIENCE_LOG.md`):
+  - `LOAD_PROFILES.recovery = { aerobic: 0.98, anaerobic: 0.02, base: 0.99, threshold: 0.01, intensity: 0 }` — extrapolated from easy (0.95/0.05/…).
+  - Pace multiplier `baseMinPerKm * 1.12` — ≈ +43 s/km on a 6:00/km easy base. Middle of the +30 to +60 s/km literature range for recovery runs. Tristan to confirm or override.
+**Status**: Type-safe, all cross-training tests pass. Needs on-device test (easy-only week that gets pushed over target — expect Reduce to offer easy → recovery) and sign-off on the two provisional constants.
+
+---
+
 ### ISSUE-133: HR drift not computed for activities — "HR during sessions" always shows "—" *(P3)*
 
 **Problem**: The "HR during sessions" signal in the week debrief always shows "—" because `hrDrift` is `undefined` on all garminActuals.
@@ -185,19 +210,13 @@ All items in this section have been confirmed working on device.
 
 ---
 
-### ISSUE-136: Garmin step count never populates in `daily_metrics.steps` *(P2, investigating)*
+### ✅ ISSUE-136: Garmin step count never populates in `daily_metrics.steps` — FIXED 2026-04-14
 
-**Problem**: Strain view always shows "No step data for this day". `daily_metrics.steps` is NULL for every row even though Garmin is pushing `dailies` webhooks successfully.
+**Root cause**: Garmin's webhook dailies payload uses field name `steps`, not `totalSteps`. The `totalSteps` field is only used by the REST pull / backfill endpoint. The webhook was storing `d.totalSteps ?? null`, which was always undefined → NULL.
 
-**Status 2026-04-14**: Webhook `handleDailies` was missing `steps: d.totalSteps` — fixed and deployed. Two subsequent dailies pushes were processed by the webhook (confirmed via `[garmin-webhook] Daily metric stored` logs at 19:46 and 20:06) but `steps` column is still NULL.
+**Fix**: `handleDailies` now reads `d.steps ?? d.totalSteps ?? d.stepsCount` as the step value. Also added `active_calories` (`d.activeKilocalories`), `active_minutes` (`d.moderateIntensityDurationInSeconds + d.vigorousIntensityDurationInSeconds`, fallback `d.activeDurationInSeconds`), and `highly_active_minutes` (`d.vigorousIntensityDurationInSeconds`). Confirmed on-device: steps flowing to strain view.
 
-**Hypothesis**: The Garmin webhook dailies payload may not include `totalSteps` (despite the Health API docs saying it does for the backfill endpoint), or uses a different field name in the webhook vs. the REST pull endpoint. Diagnostic logging added to webhook: next push will log all top-level payload keys and try `totalSteps` / `steps` / `stepsCount` aliases.
-
-**Next step**: After next Garmin sync, check `garmin-webhook` logs for `Dailies payload keys for ...` and `Dailies step-ish fields: ...` lines. If a different field name appears, update `handleDailies` to use it.
-
-**Also affected — same symptom, same cause likely**: `vo2max`, `active_calories`, `active_minutes`, `highly_active_minutes` are also NULL in `daily_metrics`. All are set from the dailies payload (`d.vo2Max`, etc.). If the payload structure is different than expected, all these fields would be missing together.
-
-**Files**: `supabase/functions/garmin-webhook/index.ts` (diagnostic logging added), `supabase/functions/sync-today-steps/index.ts` (now reads DB directly).
+**Related**: `sync-today-steps` edge function rewritten to read directly from `daily_metrics` (previously called Garmin epoch API which returned `401 app_not_approved`). Webhook is now the single source of truth for steps.
 
 ---
 

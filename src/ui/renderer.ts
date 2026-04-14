@@ -1569,6 +1569,8 @@ function getWorkoutColors(wt: string): { bgStyle: string; borderColor: string; a
   switch (wt) {
     case 'easy':
       return { bgStyle: 'rgba(34,197,94,0.06)', borderColor: 'rgba(34,197,94,0.35)', accentColor: 'var(--c-ok)', bg: '', border: '', accent: '' };
+    case 'recovery':
+      return { bgStyle: 'rgba(34,197,94,0.03)', borderColor: 'rgba(34,197,94,0.2)', accentColor: 'var(--c-ok)', bg: '', border: '', accent: '' };
     case 'long':
       return { bgStyle: 'rgba(59,130,246,0.06)', borderColor: 'rgba(59,130,246,0.35)', accentColor: 'var(--c-accent)', bg: '', border: '', accent: '' };
     case 'threshold':

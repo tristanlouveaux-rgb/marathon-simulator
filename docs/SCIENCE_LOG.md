@@ -16,6 +16,142 @@ This log documents **formulas and implementation**. The research docs document *
 
 ---
 
+## Recovery Run Workout Tier (2026-04-15, provisional)
+
+**Context**: Added `'recovery'` as a new `WorkoutType` to extend the suggester's downgrade ladder. Previous bottom rung was `'easy'`; when the running floor blocked distance reduction on an all-easy week, the suggester had no lever and silently declined to offer Reduce.
+
+**Definition**: A pure zone 1, RPE 3 session intended for blood flow and active rest rather than aerobic adaptation. Distinct from easy in intent (recovery, not stimulus) and intensity (zone 1, not zone 2).
+
+### Pace
+`paceMinPerKm = baseMinPerKm * 1.12`, where `baseMinPerKm` is easy pace.
+- On a 6:00/km easy base: ≈ 6:43/km (+43 s/km).
+- On a 5:00/km easy base: ≈ 5:36/km (+36 s/km).
+
+**Defensibility**: Literature typically places recovery pace at easy + 30 to 60 s/km (Daniels' *Running Formula*; Magness, *The Science of Running*). The 1.12 multiplier sits in the middle of that range and scales with individual ability (faster runners get a smaller absolute offset, appropriate because their easy pace is already lower).
+
+**Limitations**:
+- Multiplicative offset is an approximation; a fixed absolute offset (e.g. +40 s/km regardless of base) would be equally defensible and arguably simpler. Flagged for Tristan's sign-off.
+- Does not account for terrain, heat, or fatigue state — same as the rest of the pace model.
+
+### Load profile
+```
+LOAD_PROFILES.recovery = { aerobic: 0.98, anaerobic: 0.02, base: 0.99, threshold: 0.01, intensity: 0 }
+```
+Compared to easy at `{ aerobic: 0.95, anaerobic: 0.05, base: 0.94, threshold: 0.05, intensity: 0.01 }`.
+
+**Defensibility**: Recovery runs sit below the aerobic threshold (LT1/ventilatory threshold 1). No meaningful contribution to threshold or intensity zones. Anaerobic is near-zero but non-zero to handle edge cases (short accelerations, hills). The small delta vs. easy reflects the fact that both are predominantly aerobic — the difference is zone 1 (recovery) vs. zone 2 (easy).
+
+**Limitations**:
+- Constants are extrapolated from the easy profile rather than calibrated from data. Flagged provisional.
+- The load-per-minute rate still uses `LOAD_PER_MIN_BY_INTENSITY[3]` (RPE 3). Recovery load is therefore ~60% of easy load for the same duration, which matches the intended feature behaviour (enough reduction to absorb excess, not so much that the session is pointless).
+
+### Downgrade chain integration
+`downgradeType` in `src/cross-training/suggester.ts` now maps `easy → recovery`. Easy distance-reduction branch falls through to easy → recovery conversion when the floor blocks distance cuts (preserves volume, reduces load).
+
+**Defensibility**: The ladder (vo2/intervals → threshold → marathon_pace → easy → recovery) mirrors the standard Daniels intensity hierarchy. Adding recovery as the bottom rung gives one more lever without introducing a novel training concept.
+
+### Floor treatment
+Recovery km count toward `floorKm` at 1.0x (same as easy).
+
+**Rationale**: The floor exists to prevent total running volume collapse. Recovery running still contributes to volume — joint loading, running economy, neuromuscular coordination — even if the aerobic stimulus is lower. Counting at 1.0x avoids a cascade where downgrading to recovery triggers further floor violations. This is a pragmatic choice; a 0.5x weighting could be argued (half the stimulus, half the credit) but adds complexity for limited signal.
+
+**Known limitations of the tier overall**:
+- Recovery is only reached via downgrade, never scheduled directly by the plan generator. The suggester is the sole producer.
+- Pace and load constants are provisional until Tristan confirms.
+
+---
+
+## Volume-Scaled Marathon LT Multiplier (2026-04-15)
+
+**Problem.** Fractional utilization at marathon pace — how high a % of VO2max/LT you can hold for 2.5+ hours — is trained primarily by long runs and sustained weekly running volume. A fit athlete (e.g. 4:12/km LT) who stopped running cannot sustain the same fraction of LT over 42K as a fully trained athlete with the same LT value. The existing marathon LT multiplier in `predictFromLT` varied by tier (derived from LT pace) but was blind to current running volume — so a detrained-but-historically-fast athlete got the aggressive 1.06 multiplier regardless of recent km.
+
+**Physiological basis.**
+
+Joyner & Coyle (2008) decompose marathon performance as:
+
+```
+Marathon pace ≈ VO2max × fractional_utilization × running_economy
+```
+
+Fractional utilization is the most volume-sensitive term. Research across ability levels shows elites sustain ~85-88% VO2max at marathon pace versus ~70-75% for undertrained runners. The differentiator is not VO2max or LT ceiling — those are aerobic capacity markers — but the ability to defend pace in the final 10-12 km, which requires glycogen-sparing fat oxidation, muscular fatigue resistance, and pacing discipline. All volume-dependent.
+
+Coyle (1984) shows rapid decline in these specific adaptations with inactivity (capillary density, mitochondrial enzyme activity, glycogen storage), faster than VO2max itself.
+
+**Implementation.** In `predictFromLT`, after picking the LT-derived tier multiplier, apply a volume bump:
+
+```
+weeklyRunKm ≥ 50 → +0.00   (fully volume-trained, tier multiplier unchanged)
+weeklyRunKm ≥ 30 → +0.02   (moderate training, mild penalty)
+weeklyRunKm ≥ 15 → +0.05   (light training, meaningful fractional-utilization cost)
+weeklyRunKm < 15 → +0.08   (essentially untrained for marathon distance)
+
+m = min(tierMult + volBump, 1.14)  // capped at beginner tier max
+```
+
+Example: a 4:12/km LT athlete (tier "performance", balanced type) is normally multiplier 1.06 → 3:07 marathon. At 10 km/wk running volume they get 1.14 → 3:22 marathon. Same aerobic ceiling, ~15 minutes slower because they cannot hold it.
+
+**Why bands not a formula.** Research gives us the shape (inverse exponential saturation) but not a validated functional form across the low-volume range. Bands are transparent and clamped; a formula would imply spurious precision.
+
+**Scope.** Marathon only (`targetDist === 42195`). 5K/10K/HM fractional utilization is less volume-sensitive — those races are more VO2-limited and less dependent on fat oxidation or glycogen defense. Their LT multipliers remain stable across volumes.
+
+**Interaction with low-volume weight discount.** The existing `lowVolumeDiscount` shifts LT+VO2 weight onto PB at low volume. For marathon, LT and volume adjustment now both move the prediction slower, but in different ways: (a) volume makes the LT prediction itself slower, (b) weight shift reduces LT's influence on the blend. Compounding is modest (~1-2 min) and directionally correct — both expressing "marathon-specific readiness is compromised."
+
+**Known limitations.**
+- Volume bands (50/30/15 km/wk) are pragmatic, not outcome-calibrated.
+- Doesn't distinguish long-run presence specifically — 30 km/wk of 5 × 6K runs is different from 30 km/wk with one 20K run. Former is arguably less marathon-ready.
+- Caps at 1.14 even at truly zero volume; real marathons at zero training could blow up 4:00+. Cap prevents absurd predictions but means the model under-penalises at the extreme low end.
+
+**References.**
+- Joyner MJ, Coyle EF (2008). *J Physiol* — "Endurance exercise performance: the physiology of champions."
+- Coyle EF et al. (1984). *JAP* — Detraining loss of adaptations.
+- Billat V et al. (2003). *MSSE* — Fractional utilization differences between marathon tiers.
+- Daniels J. *Daniels' Running Formula* (3rd ed.) — Marathon pace = 84-88% vVO2max tables, implicitly volume-tiered.
+
+---
+
+## Low-Volume Detraining Discount on Watch LT/VO2 (2026-04-14)
+
+**Problem.** Garmin/Apple watches estimate LT pace and VO2max from running activities only. When the user stops running, these values persist at their last measurement. `blendPredictions` weights LT at 55% and VO2 at 15% for marathon, so stale-elevated watch values drive an optimistic race prediction even when the athlete is clearly detrained.
+
+**Physiological basis.**
+
+1. **Endurance metrics decay fast.** Coyle et al. (1984) and Mujika & Padilla's review (*Sports Medicine* 2000) document ~6–7% VO2max loss in 2–3 weeks of inactivity, with larger losses in capillary density, mitochondrial enzyme activity, and blood volume over the same window.
+
+2. **Marathon depends on fractional utilization most.** Joyner & Coyle (2008) decompose endurance performance into VO2max × fractional utilization × running economy. Fractional utilization (the % of VO2max sustainable over race duration) is the most training-sensitive term and the dominant determinant of marathon pace. It decays faster than VO2max itself because it's limited by fat oxidation, glycogen sparing, and fatigue resistance — all training-volume-dependent.
+
+3. **Distance sensitivity.** 5K is more VO2-limited and less reliant on fractional utilization. Marathon is the opposite. So detraining hits marathon predictions hardest.
+
+**Implementation.** `lowVolumeDiscount(targetDist, weeklyRunKm)` in `predictions.ts`:
+
+```
+severity = 0.00   if km/wk ≥ 30
+         = 0.15   if km/wk ≥ 20
+         = 0.30   if km/wk ≥ 10
+         = 0.45   otherwise
+
+distSensitivity = 1.0 (42K) | 0.7 (HM) | 0.4 (10K) | 0.2 (5K)
+watchTrust = 1 − severity × distSensitivity
+```
+
+Applied multiplicatively to LT and VO2 weights; the shed weight transfers to PB (which reflects the athlete's peak realised fitness). No mutation of `s.lt` or `s.vo2` themselves — watch values are preserved for display, only their *trust* in the blend is discounted.
+
+**Example** (marathon, 8 km/wk running volume): severity 0.45, distSensitivity 1.0, watchTrust = 0.55. Original weights (with recent run): LT 0.55, VO2 0.15, PB 0.05, recent 0.25 → adjusted: LT 0.30, VO2 0.08, PB 0.37, recent 0.25. PB becomes the dominant signal, which is correct when watch data is stale.
+
+**4-week volume window.** Chosen because (a) endurance adaptations from a single week don't meaningfully restore fractional utilization, (b) physiology research on detraining uses weeks not days, (c) it matches the recency decay already applied to `recentRun` weighting. Running-only (no cross-training) because LT/VO2 estimates are running-specific.
+
+**Known limitations.**
+- Volume thresholds (30/20/10 km/wk) are pragmatic bands, not calibrated against outcome data. A 20 km/wk ultra-runner may be well-trained for marathon, and a 30 km/wk sprinter isn't. The bands assume a "typical recreational-to-trained" marathoner distribution.
+- Does not distinguish quality of running (all-easy vs mixed). A user doing 15 km/wk of hard tempo is more marathon-ready than 15 km/wk all-easy, but the discount treats them the same.
+- PB ceiling not applied (user rejected this) — blend can still produce a prediction faster than PB if LT + VO2 point that way and volume is high. By design.
+
+**References.**
+- Coyle EF et al. (1984). *JAP* — "Time course of loss of adaptations after stopping prolonged intense endurance training."
+- Mujika I, Padilla S (2000). *Sports Medicine* — "Detraining: loss of training-induced physiological and performance adaptations."
+- Joyner MJ, Coyle EF (2008). *J Physiol* — "Endurance exercise performance: the physiology of champions."
+- Bassett DR, Howley ET (2000). *MSSE* — "Limiting factors for maximum oxygen uptake and determinants of endurance performance."
+
+---
+
 ## Readiness Color Scheme & Coach Priority (2026-04-14)
 
 **Two color systems, different semantics.**

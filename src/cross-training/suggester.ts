@@ -344,6 +344,7 @@ function downgradeType(wt: WorkoutType): WorkoutType {
     threshold: 'marathon_pace',
     race_pace: 'marathon_pace',
     marathon_pace: 'easy',
+    easy: 'recovery',
     mixed: 'marathon_pace',
     progressive: 'marathon_pace',
     float: 'marathon_pace',
@@ -577,9 +578,28 @@ function buildReduceAdjustments(
         const budgetKm = remainingLoad / loadPerKm;
         let maxReductionKm = Math.min(budgetKm, runKm * 0.40);
 
-        // Floor constraint: don't cut more km than the floor allows
+        // Floor constraint: don't cut more km than the floor allows.
+        // When floor is tight, fall back to an easy → recovery intensity downgrade
+        // (keeps distance, reduces load). Recovery preserves volume toward the floor.
         const slack = floorSlack();
-        if (slack <= 0) continue; // already at or below floor
+        if (slack <= 0) {
+          const recoveryLoad = computeWorkoutWeightedLoad('recovery', runKm, 3);
+          const loadReduction = Math.max(0, runLoad - recoveryLoad);
+          if (loadReduction <= minLoadThreshold) continue;
+          const actualReduction = adjustments.length === 0 ? loadReduction : Math.min(loadReduction, remainingLoad);
+          adjustments.push({
+            workoutId: run.workoutId,
+            dayIndex: run.dayIndex,
+            action: 'downgrade',
+            originalType: run.workoutType,
+            originalDistanceKm: runKm,
+            newType: 'recovery',
+            newDistanceKm: runKm,
+            loadReduction: actualReduction,
+          });
+          remainingLoad -= actualReduction;
+          continue;
+        }
         maxReductionKm = Math.min(maxReductionKm, slack);
 
         if (maxReductionKm < 0.5) continue;

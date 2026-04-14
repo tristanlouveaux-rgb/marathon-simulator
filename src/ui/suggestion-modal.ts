@@ -387,7 +387,7 @@ export function showSuggestionModal(
       <!-- 3 Global Choices -->
       <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
 
-        ${!hasReductions && !hasReplacements ? `
+        ${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? `
         <div style="padding:12px 14px;border-radius:10px;background:var(--c-surface);border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);line-height:1.5">
           Your remaining runs are already at minimum intensity and distance. The extra load can't be absorbed by trimming this week's plan. Push it to next week or keep the plan and accept the added stimulus.
         </div>
@@ -429,10 +429,10 @@ export function showSuggestionModal(
 
         <!-- PUSH TO NEXT WEEK option (only shown when callback provided) -->
         ${onPushToNextWeek ? `
-        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !hasReplacements ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
+        <button id="choice-push-next-week" style="width:100%;text-align:left;padding:14px 16px;border-radius:12px;${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? 'border:2px solid var(--c-ok);background:rgba(34,197,94,0.04)' : 'border:1.5px solid var(--c-border-strong);background:var(--c-bg)'};cursor:pointer">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-            <span style="font-weight:700;color:${!hasReductions && !hasReplacements ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Push to next week</span>
-            ${!hasReductions && !hasReplacements ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
+            <span style="font-weight:700;color:${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? 'var(--c-ok)' : 'var(--c-black)'};font-size:16px">Push to next week</span>
+            ${!hasReductions && !hasReplacements && !popup.noMatchingRun && !popup.alreadyCompletedMatch ? '<span style="font-size:11px;background:rgba(34,197,94,0.15);color:var(--c-ok);padding:2px 8px;border-radius:4px">Recommended</span>' : ''}
           </div>
           <p style="color:var(--c-muted);font-size:13px">Keep this week unchanged. The excess load carries to next week.</p>
         </button>

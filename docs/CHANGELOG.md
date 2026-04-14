@@ -4,6 +4,65 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-15 — Volume-scaled marathon LT multiplier
+
+- **Marathon LT multiplier now volume-aware**: `predictFromLT` applies a bump to the marathon multiplier based on 4-week running volume (+0.00 at ≥50 km/wk, +0.02 ≥30, +0.05 ≥15, +0.08 otherwise), capped at 1.14. Expresses fractional utilization loss: a fit athlete (4:12/km LT) at 10 km/wk running volume now predicts 3:22 instead of 3:07 — same aerobic ceiling, can't hold as high a % of it for 42K without volume. Marathon only; 5K/10K/HM unchanged. Full rationale in `docs/SCIENCE_LOG.md` — Joyner & Coyle 2008, Billat 2003, Coyle 1984.
+- **`blendPredictions` forwards `weeklyRunKm` to `predictFromLT`**: stats-view already computed this for the low-volume weight discount; now it also drives the multiplier adjustment.
+
+## 2026-04-15 — Readiness: "On Track" recoloured neutral
+
+- `readinessColor()` in `src/calculations/readiness.ts` now returns `--c-muted` for `On Track` instead of `--c-ok-muted`. A 59 score sitting near the bottom of the 55–74 band was rendering in celebratory green, which overstated the signal. Primed stays green, Manage Load stays amber, Ease Back/Overreaching stays red.
+
+---
+
+## 2026-04-15 — Chart sizing: tablet/wide viewports no longer render oversized SVGs
+
+- **Root cause**: several SVG charts used `viewBox` + `width:100%` with no explicit `height`. Browsers scale the SVG proportionally to the viewBox aspect ratio, so a 300×60 viewBox on a 900px-wide tablet card rendered ~180px tall. Affected the stats-view Fitness card sparkline (`buildMiniVO2Sparkline` / `buildMiniVdotSparkline`), the VO2 Max detail chart (`buildVO2LineChart`), and the recovery-view Detailed Metrics HRV/RHR charts.
+- **Fix**: added explicit pixel `height` and `preserveAspectRatio="none"` on each SVG so they fill the card width but cap vertical size. Stroke paths use `vector-effect="non-scaling-stroke"` to stay crisp under horizontal stretch.
+- **VO2 Max detail endpoint label**: the `<text>` showing the latest value (e.g. "51") lived inside the SVG and scaled with the viewBox, appearing huge on wide viewports. Removed — the big number above the chart is not redundant. Also moved the first/last date labels out of the SVG into an HTML row below.
+- **VO2 Max chart — dots removed**: per-point `<circle>` markers became thin ellipses under `preserveAspectRatio="none"` and made the line look broken into segments. Dropped them. The chart now mirrors the recovery-view HRV/RHR detail style: smooth area + 2.5px rounded stroke with a linear-gradient fill, no markers.
+- **Recovery tiles (HRV / Resting HR)**: killed the tiny 40px sparklines that conveyed little beyond the existing trend arrow and "+22% vs baseline" text. Replaced with a new `baselineRangeBar` — a slim horizontal pill showing the current value's position inside the 28-day min/max range, with a tick at the baseline average and min/avg/max labels below. More informative per vertical pixel.
+- **Sleep Bank / Sleep Debt trend charts** (`buildSleepBankLineChart`): same unbounded-SVG issue, rendered ~300px tall on wide viewports. Capped at `height="100"` with `preserveAspectRatio="none"` + non-scaling strokes. Dropped the endpoint circle marker since it distorts into an ellipse when the SVG is stretched horizontally; the line naturally terminates at the latest point.
+
+---
+
+## 2026-04-15 — Plan drag-and-drop: no flicker on drop
+
+- `plan-view.ts` drop handlers (workout-card reorder and rest-day drop zone) now defer the full `renderPlanView()` to `requestAnimationFrame` instead of calling it synchronously inside the `drop` event. State save (`mergeTimingMods` + `saveState`) still runs synchronously. The previous flicker came from rebuilding DOM while the dragged card was mid-cleanup (still at `opacity: 0.4` pre-dragend); deferring one frame lets the browser finish the drag transition before the innerHTML swap.
+
+---
+
+## 2026-04-15 — Strain ring: green dominant, red anchored at target; warm-red sky
+
+- `strain-view.ts` ring scale changed from `ringMax = max(target.hi × 2, actual × 1.25)` to `max(target.hi × 1.1, actual)`. With this, `target.hi` sits at ~91% of the ring when inside target (green dominates), and once exceeded the ring closes fully at 360° — the red end-cap meets the green start-cap at the top with no visible gap. Conic-gradient wrap stops are skipped when `totalDeg ≥ 360 − 2·CAP_PAD` to preserve stop monotonicity.
+- New `red` palette added to `sky-background.ts` (warm coral/red at the same saturation as the existing `teal` palette). Strain view switched from `teal` to `red` — effort page now reads warm instead of cool. Teal palette retained for backwards compat.
+
+---
+
+## 2026-04-15 — Excess-load modal: Reduce available on tempo weeks + recovery tier
+
+- **Budget-cap bug (ISSUE-137)**: `suggester.ts` `buildReduceAdjustments` silently returned zero adjustments when the overshoot was small relative to the full run-replacement credit — `effectiveRRC` fell below the 5-load threshold and the loop short-circuited before any candidate was considered. Fixed by breaking only after at least one adjustment is proposed, and allowing the first quality downgrade's true `loadReduction` (controlled overshoot is preferable to silently hiding the Reduce option).
+- **Modal copy (ISSUE-137)**: when no reductions or replacements are possible, the suggestion modal now shows an explanation banner ("remaining runs already at minimum intensity and distance") and moves the green "Recommended" pill from Keep → Push. Keep is only recommended when Push isn't available.
+- **Recovery workout tier (ISSUE-138)**: new `'recovery'` `WorkoutType`. Extends the downgrade ladder (`… → marathon_pace → easy → recovery`) so the suggester can absorb excess load on all-easy weeks where the running floor blocks distance reduction. Easy → recovery preserves distance but cuts load (zone 1 only, RPE 3, pace ≈ easy + 43 s/km). Wired through load profile, pace, HR zone (Z1), matcher, and renderer colour. `LOAD_PROFILES.recovery` and the pace multiplier (1.12) are provisional and flagged for Tristan's sign-off.
+- **Test**: `km-budget.test.ts` budget-consumption assertion loosened to allow overshoot by ≤ largest single adjustment's load (matches the new first-adjustment semantics).
+- **Past-day unrated runs stay reducible (ISSUE-137 follow-up)**: `filterRemainingWorkouts` in `excess-load-card.ts` previously excluded runs whose scheduled day had passed, even if unrated — so a Friday excess-load modal couldn't see Wednesday's un-logged tempo. Now the filter is unrated-only; past-day unrated runs stay eligible so the user can replan the rest of the week. `workoutDateMs` helper removed (no remaining callers).
+- **Redundant copy suppressed**: the new "remaining runs at minimum" banner and the green "Recommended" on Push only fire now when the candidate list is empty due to floor constraints — not when the suggester has already surfaced the blue `noMatchingRun` / `alreadyCompletedMatch` forward-apply banner. Avoids two competing calls-to-action in the same modal.
+
+---
+
+## 2026-04-14 — HR drift heal-on-read for pre-migration activities
+
+- **Root cause**: activities cached before migration `20260312_hr_drift.sql` have `hr_zones` populated but `hr_drift = NULL`. The standalone sync path short-circuits on `cached?.hr_zones` and returns `hrDrift: null` without re-fetching the stream, so existing activities never get drift backfilled even after the column was added.
+- **Fix**: added a heal-on-read block in `supabase/functions/sync-strava-activities/index.ts` (mirrors the existing `km_splits` heal pattern). When `cached.hr_zones` is set but `cached.hr_drift` is null and activity type is in `DRIFT_TYPES` with duration ≥ 20 min, re-fetch the HR stream, compute drift, patch DB, and return it on the row. Client-side patching in `src/data/stravaSync.ts` and `src/calculations/activity-matcher.ts` already handles null→value backfill on actuals.
+- **Coach copy**: the `>8%` drift sentence in `workout-insight.ts` now only fires on easy/long runs (gated on `!s.quality`) and explains drift in layman's terms — rising HR at steady pace points to heat, dehydration, fatigue, or pace too aggressive. On quality sessions (intervals/threshold/tempo) drift >8% is expected and the callout is suppressed.
+
+## 2026-04-14 — Readiness: strain card always visible, 130% bucket fixed, coach mentions big session
+
+- Today's Strain card now renders unconditionally (previously hidden when `todaySignalBTSS === 0`). Zero-activity states: planned day shows `0% / Not started / "Planned session not yet logged."`; rest day shows `0 TSS / Rest day / "Scheduled rest day. No activity expected."`
+- Fixed green-at-130% bug. Strain pct is now rounded before bucketing, so the displayed `130%` correctly lands in the `Exceeded / warn` state instead of `Complete / ok`. Same rounding applied to adhoc pct and to the daily-coach `sp >= 130` branch.
+- Coach top-line sentence now references actual TSS when the session is done or exceeded: "Big session logged (344 TSS). Daily target well exceeded — recovery is the priority for the next 24 hours." instead of the generic "Daily load target reached."
+- Files: `src/ui/readiness-view.ts`, `src/calculations/daily-coach.ts`.
+
 ## 2026-04-14 — Readiness cards: consistent value presentation
 
 - Standardised all six sub-signal cards on the 7-Day Rolling Load blueprint: `[24px/600 number+unit] [13px #94A3B8 status word]`, optional `[12px TEXT_S metadata line]`, then the description paragraph.
@@ -11,10 +70,10 @@ Session-by-session record of significant changes. Most recent first.
 - Freshness: removed the pill for "to baseline"; it is now a plain metadata line. Load Ratio: swapped so the ratio (e.g. `1.15×`) is the headline and the label (`Optimal`) is the muted status. Physiology and Sleep History: added status words (`Strong`/`Moderate`/`Low`/`Poor`).
 - Files: `src/ui/readiness-view.ts`.
 
-## 2026-04-14 — Garmin step/LT sync debugging
+## 2026-04-14 — Garmin steps + active minutes now flow to strain (ISSUE-136 fixed)
 
-- **Webhook `handleDailies` now stores steps**: added `steps: d.totalSteps ?? null` to the upsert row. Also added diagnostic logging of all payload keys and step-ish field aliases (`totalSteps`, `steps`, `stepsCount`) to identify which field Garmin actually sends, since two dailies pushes landed after the fix but `daily_metrics.steps` stayed NULL.
-- **`sync-today-steps` edge function**: rewritten to read directly from `daily_metrics` instead of calling Garmin's epoch API (which returned `401 app_not_approved`). Function is now a simple DB read — webhook is the data source.
+- **Webhook `handleDailies` now stores steps correctly**: Garmin's webhook payload uses field name `steps`, not `totalSteps` (the latter is REST/backfill only). Accept all three aliases (`steps ?? totalSteps ?? stepsCount`). Also captures `active_calories` (`activeKilocalories`), `active_minutes` (`moderateIntensityDurationInSeconds + vigorousIntensityDurationInSeconds`), and `highly_active_minutes` (`vigorousIntensityDurationInSeconds`). Confirmed on-device: strain view now shows step counts.
+- **`sync-today-steps` edge function**: rewritten to read directly from `daily_metrics` instead of calling Garmin's epoch API (which returned `401 app_not_approved`). Webhook is now the single source of truth for steps.
 - **LT threshold (ISSUE-134)**: confirmed still blocked. `lt_thresholds` empty; `physiology_snapshot_daily.lt_pace_sec_per_km` all NULL; zero `userMetrics` pushes have ever arrived. Blocked on Garmin developer portal access to enable User Metrics subscription.
 
 ## 2026-04-14 — Strain timeline rows open full activity detail page
@@ -23,10 +82,9 @@ Session-by-session record of significant changes. Most recent first.
 
 ## 2026-04-14 — Strain ring: colour blend + rounded caps + sweep-in reveal
 
-- Replaced the three separate SVG arcs (hard butt-cap junctions) with a single `conic-gradient` masked to ring shape via feathered radial-gradient stops (semi-opaque bands at 82% and 99.6%) so the inner/outer edges are anti-aliased.
-- Wide 18° blend zones at each segment junction and 4° soft transparent→colour fades at each end of the arc.
-- Rounded caps at both ends (like the recovery ring): a static green cap at 12 o'clock and a colour-matched cap at the arc's end that rotates with the sweep.
-- Clockwise sweep reveal from 12 o'clock via a registered `@property --strain-arc` (inherits:true) animated 0→1. The conic-gradient stops and the end-cap rotator both read the animated value, so arc + cap sweep in together.
+- Single SVG holds both the grey track AND a round-capped coloured arc. The arc is built with an SVG `<mask>`: a stroked circle with `stroke-linecap="round"` defines the visible region; an `<foreignObject>` containing a `conic-gradient` div is clipped by that mask, so the ring gets native rounded caps at BOTH ends and smooth colour blending along its path.
+- Wide 20° blend zones at each segment junction (green↔orange and orange↔red interpolate over ~40° each).
+- Classic stroke-dashoffset reveal restored: dashoffset animates from arc-length to 0 over 1.4s, so the arc draws clockwise from 12 o'clock. Caps move with the arc natively — no separate DOM cap elements, no floating dots, no positioning drift.
 - `src/ui/strain-view.ts`.
 
 ## 2026-04-14 — HR drift heal-on-read for pre-migration activities
@@ -76,6 +134,7 @@ Session-by-session record of significant changes. Most recent first.
 - **Marathon LT multiplier now running-specific**: `predictFromLT` was using `athleteTier` (derived from total cross-training CTL) to pick the marathon multiplier, putting cross-trained athletes into "high_volume" tier with the most aggressive 1.06 multiplier even if their running fitness didn't justify it. Now derives the marathon-only tier from LT pace itself via `cv(10000, ltPace * 10)` mapped to VDOT bands (≥60 high_volume, ≥52 performance, ≥45 trained, ≥38 recreational, else beginner). 5K/10K/HM multipliers unchanged (already stable across tiers).
 - **Recent run auto-derived from garminActuals**: Race Prediction cards now pick the most recent running activity from `garminActuals` rather than the stale onboarding `s.rec` value. Ensures recent Strava/Garmin runs feed the blend even if the user never edited their "recent run" field post-onboarding.
 - **Card labels clarified**: "Race Predictions" → "Current Race Estimates" with subtitle "Estimated finish times if racing today", so users understand these are current-fitness estimates, not end-of-plan targets.
+- **Low-volume detraining discount on watch LT/VO2**: Watches estimate LT and VO2max from running activities only and don't decay these values when training stops. `blendPredictions` now accepts a 4-week running-km average and reduces LT + VO2 weights (transferring weight to PB) based on volume bands, scaled by distance sensitivity (marathon hit hardest, 5K barely). Rationale in `docs/SCIENCE_LOG.md` — Coyle 1984, Mujika & Padilla 2000, Joyner & Coyle 2008 on fractional utilization decay.
 
 ## 2026-04-13 — RPE and HR effort split into separate signals
 

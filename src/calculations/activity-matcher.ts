@@ -133,6 +133,7 @@ function getTargetPace(
   const paces = gp(s.v, s.lt);
   switch (workoutType) {
     case 'easy': case 'long': return paces.e;
+    case 'recovery': return paces.e; // matched against easy-paced runs; true recovery pace is easy + 40-45 s/km
     case 'threshold': case 'tempo': return paces.t;
     case 'marathon_pace': return paces.m;
     case 'float': return paces.m; // session average: hard reps at 10K + float recovery at MP ≈ MP

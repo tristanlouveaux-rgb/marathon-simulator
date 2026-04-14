@@ -295,6 +295,10 @@ Ad-hoc workout generation from plan view. Two-step modal: pick session type then
 
 **How to test manually**: Log a high-intensity cross-training activity (e.g. 60min interval cycling with HR data). In the suggestion popup, check that the quality run (threshold/VO2) is ranked above easy runs in the candidate list. Console shows `[CrossTraining] Zone classification: ...` and the candidate similarity scores.
 
+**Recovery tier (2026-04-15)**: Intensity ladder extends to a new `'recovery'` workout type (zone 1, RPE 3, easy pace + ~43 s/km, reduced load profile). When the km floor blocks a distance cut on an all-easy week, the suggester downgrades easy → recovery instead — preserves volume, absorbs excess load. Constants provisional pending Tristan sign-off (see `SCIENCE_LOG`).
+
+**Budget-cap fix (2026-04-15, ISSUE-137)**: Previously, a tightly capped reduction budget (small overshoot vs. large RRC) could shrink `effectiveRRC` below `minLoadThreshold`, silently suppressing all Reduce adjustments — even when a tempo remained that could have been downgraded. Now guarantees at least one quality downgrade attempt; first adjustment records its true `loadReduction` even if it overshoots budget (controlled overshoot preferred to silent suppression). Modal copy also updated: explanation banner when no reductions are possible; "Recommended" green moves from Keep → Push when that path is available.
+
 **Km floor nudge (plan-view card)**: When running km has been below the phase floor for 2+ weeks and ACWR is safe, a card shows at the top of the plan view. If cross-training reduced runs this week, the card explains the tension (load high, km low) and offers per-run buttons to partially restore reduced easy runs. Users choose which run to extend. Cap: never exceed original pre-reduction distance. Non-reduced easy runs can be extended up to 20% (1.5 to 5km). Gated by ACWR safe (injury prevention takes priority).
 
 **Key files**: `src/cross-training/suggester.ts`, `src/ui/suggestion-modal.ts`, `src/ui/plan-view.ts` (km nudge card)

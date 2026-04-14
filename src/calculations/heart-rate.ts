@@ -114,6 +114,8 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
   switch (workoutType) {
     case 'easy':
       return makeTarget('Z2', zones.z2, 'Easy');
+    case 'recovery':
+      return makeTarget('Z1', zones.z1, 'Recovery');
     case 'long':
       // Upper Z2 for long runs
       return makeTarget('Z2', {
