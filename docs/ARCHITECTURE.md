@@ -168,6 +168,7 @@ Quick reference for reading code that uses `s = getState()`:
 | `s.pbs` | Personal bests | `PBs` {k5, k10, h, m} |
 | `s.rec` | Recent race | `RecentRun \| null` |
 | `s.timp` | Total time impact (skips) | `number` |
+| `s.tssPerActiveMinute` | Personal TSS/min calibrated from activities | `number \| undefined` |
 | `wk.ph` | Week's training phase | `TrainingPhase` |
 | `wk.wkGain` | Week's VDOT gain | `number` |
 | `wk.rated` | Workout ratings | `Record<string, number \| 'skip'>` |
@@ -446,6 +447,97 @@ When a workout is rated with an average HR, `calculateEfficiencyShift()` cross-c
 - High RPE + Low HR (intervals only) → negative shift (central fatigue signal)
 
 The shift modulates the RPE-based `ch` value by ±10–15%. Weekly cap: ±0.3 VDOT units regardless.
+
+---
+
+## Page Map
+
+Complete navigation graph. Every full-page view, its entry points, and where its back button goes.
+
+### Tab Pages (bottom tab bar)
+
+| Page | File | Render | Opens |
+|------|------|--------|-------|
+| Home | `ui/home-view.ts` | `renderHomeView()` | Strain, Sleep, Readiness, Recovery, Activity Detail, Load Taper, Coach Modal, Check-in Overlay, Week Debrief |
+| Plan | `ui/plan-view.ts` | `renderPlanView()` | Activity Detail, Load Taper, Record, Coach Modal, Check-in, Illness Modal, Week Debrief, Activity Review, Suggestion Modal |
+| Record | `ui/record-view.ts` | `renderRecordView()` | GPS Panel (inline), GPS Completion Modal |
+| Stats | `ui/stats-view.ts` | `renderStatsView()` | Sleep View |
+| Account | `ui/account-view.ts` | `renderAccountView()` | Auth View, Wizard (re-onboard) |
+
+### Detail Pages (back button navigation)
+
+| Page | File | Render | Opened by | Back to |
+|------|------|--------|-----------|---------|
+| Readiness | `ui/readiness-view.ts` | `renderReadinessView()` | Home (readiness pill) | Home |
+| Strain | `ui/strain-view.ts` | `renderStrainView(date?)` | Home (strain card), Readiness | Home |
+| Recovery | `ui/recovery-view.ts` | `renderRecoveryView(date?)` | Home (recovery card), Readiness | Home |
+| Sleep | `ui/sleep-view.ts` | `renderSleepView(date?, ..., onBack?)` | Home, Recovery, Readiness, Stats | Caller-controlled via `onBack` param |
+| Freshness | `ui/freshness-view.ts` | `renderFreshnessView()` | Readiness | Readiness |
+| Load Ratio & Injury Risk | `ui/injury-risk-view.ts` | `renderInjuryRiskView()` | Readiness | Readiness |
+| Rolling Load | `ui/rolling-load-view.ts` | `renderRollingLoadView()` | Readiness | Readiness |
+| Load/Taper | `ui/load-taper-view.ts` | `renderLoadTaperView(week?, returnTo)` | Home, Plan | Caller-controlled via `returnTo` param |
+| Activity Detail | `ui/activity-detail.ts` | `renderActivityDetail(actual, ..., returnView)` | Home, Plan | Caller-controlled via `returnView` param |
+
+### Modals and Overlays (no page swap)
+
+| Modal | File | Render | Opened by |
+|-------|------|--------|-----------|
+| Coach | `ui/coach-modal.ts` | `openCoachModal()` | Home, Plan |
+| Check-in | `ui/checkin-overlay.ts` | `openCheckinOverlay()` | Home, Plan |
+| Illness | `ui/illness-modal.ts` | `openIllnessModal()` | Check-in, Plan |
+| Injury | `ui/injury/modal.ts` | `openInjuryModal()` | Check-in, Plan |
+| Week Debrief | `ui/week-debrief.ts` | `showWeekDebrief(week?, mode)` | Home (auto), Plan |
+| Activity Review | `ui/activity-review.ts` | `showActivityReview(pending, onDone?)` | Plan, Home, Events |
+| Matching Screen | `ui/matching-screen.ts` | `showMatchingScreen(pairings, onConfirm)` | Activity Review |
+| Suggestion | `ui/suggestion-modal.ts` | `showSuggestionModal(popup, ...)` | Events, Activity Review, Excess Load Card |
+| GPS Completion | `ui/gps-completion-modal.ts` | `openGpsCompletionModal(data)` | Recording Handler |
+| Sync | `ui/sync-modal.ts` | `showMatchProposal(...)` | Renderer, Excess Load Card |
+
+### Wizard (onboarding flow)
+
+Entry: `main.ts` (first boot) or Account (re-onboard). Exit: `renderMainView()` which delegates to `renderPlanView()`.
+
+Step order: Welcome, Goals, Background, Volume, Performance, Fitness, Strava History (conditional), Physiology, Initializing (auto), Runner Type, Assessment.
+
+### Navigation Graph
+
+```
+main.ts
+  ├── (no auth)       → auth-view
+  ├── (new user)      → wizard → plan-view
+  └── (returning)     → home-view (primary landing)
+
+Tab bar: Home ↔ Plan ↔ Record ↔ Stats ↔ Account
+
+home-view
+  ├── strain-view (back → home)
+  ├── readiness-view (back → home)
+  │     ├── freshness-view (back → readiness)
+  │     ├── load-ratio-view (back → readiness)
+  │     ├── rolling-load-view (back → readiness)
+  │     ├── recovery-view (back → home)
+  │     │     └── sleep-view (back → recovery)
+  │     └── strain-view (back → home)
+  ├── sleep-view (back → home)
+  ├── recovery-view (back → home)
+  ├── activity-detail (back → home)
+  └── load-taper-view (back → home or plan)
+```
+
+### Design Themes by Page
+
+Each detail page has its own background theme. See `docs/UX_PATTERNS.md` for the full per-page theme table.
+
+| Page | Theme | Palette |
+|------|-------|---------|
+| Rolling Load | Warm mountains + clouds | Sand/cream/peach |
+| Strain | Dark gradient hero | Deep brown/orange |
+| Readiness | Mountain mist | Blue-grey/teal/white |
+| Recovery | Sky gradient | Sky blue/white |
+| Sleep | (TBD) | Cool blue/indigo |
+| Freshness | (TBD) | Green/sage |
+| Load/Taper | (TBD) | Warm earth |
+| Stats | (TBD) | Neutral warm |
 
 ---
 

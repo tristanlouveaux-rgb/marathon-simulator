@@ -16,6 +16,16 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-133: HR drift not computed for activities — "HR during sessions" always shows "—" *(P3)*
+
+**Problem**: The "HR during sessions" signal in the week debrief always shows "—" because `hrDrift` is `undefined` on all garminActuals.
+**Root cause**: `hrDrift` comes from `row.hrDrift` in the DB, which is populated by the edge function during Strava sync. The edge function either doesn't compute HR drift for all activities, or doesn't store it in the DB column.
+**Desired behaviour**: For steady-state runs >20 minutes with HR stream data, compute drift (second-half avg HR / first-half avg HR) in the edge function and store in `garmin_activities.hr_drift`.
+**Impact**: "HR during sessions" signal in debrief and plan-view week overview. Low priority since it's one of five signals and the others now work.
+**Files**: `supabase/functions/sync-strava-activities/index.ts` (needs drift computation), `src/calculations/activity-matcher.ts` (reads `row.hrDrift`).
+
+---
+
 ### ISSUE-131: Resting HR used for iTRIMP should be a rolling average, not today's snapshot *(P2)*
 
 **Problem**: `s.restingHR` holds a single daily snapshot value. On days where resting HR spikes (illness, stress, poor sleep), iTRIMP is computed with an inflated resting HR, which compresses HRR and understates load for all activities that day.
@@ -52,6 +62,30 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 **Paywall gate (not yet implemented):**
 LLM narrative card is premium-only. Free users see the `readiness.sentence` in place of the narrative card. The rest of the modal (ring + signal rows + stance) is free. Wire `coach-modal.ts` to check a subscription field before calling `fetchNarrative()`.
+
+---
+
+### ISSUE-135: Race prediction marathon time optimistic when VO2/LT stale *(P3, partially addressed)*
+
+**Symptom**: Race Predictions marathon showed 3:07 for a user with a 3:12 PB who hasn't been running much. Now lands at ~3:09 after fixes, which the user has accepted as reasonable given stale watch data.
+
+**What shipped (2026-04-13)**:
+- **Marathon tier now running-specific**: `predictFromLT` derives the marathon multiplier tier from LT pace itself (`cv(10000, ltPace * 10)` → VDOT band) rather than from `athleteTier` (total cross-training CTL). Previously cross-trained athletes got "high_volume" tier (1.06 mult) regardless of running fitness.
+- **Recent run auto-derived from garminActuals**: Blend now uses the most recent running activity rather than the stale onboarding `s.rec`.
+- **Card relabeled** "Current Race Estimates" with subtitle "Estimated finish times if racing today" so users understand it's current-fitness, not end-of-plan.
+- `s.v` compounding detraining bug fixed (51.4 → 24.5 corruption); state repair migration added.
+- LT physiology sync will self-heal now that `s.v` is repaired (±8 VDOT deviation guard no longer rejects).
+- Rewired both Race Prediction cards to `blendPredictions()` (LT/VO2/PB/recent blend) instead of pure VDOT-to-time.
+
+**Rejected approaches** (do not revisit without discussion):
+- **PB ceiling** — user explicitly: "I don't want a cap at PB that's not the point". Blended prediction can legitimately be faster than PB if the evidence (LT, VO2, recent pace) supports it.
+- **HR-scaled recent run extrapolation** — tested and made marathon worse (scaled-up 10K projects too aggressively over 42K). Reverted to raw garminActual data.
+
+**What remains**:
+- Residual 3:09 optimism likely comes from stale VO2 (`s.vo2=56` vs chart shows ~47). Will resolve when physiology sync updates VO2 from the watch (self-healing path in place now that `s.v` is correct).
+- Could optionally reduce VO2 weight when no recent running activity in last ~2 weeks, but probably not worth it if the self-heal works.
+
+**Files**: `src/calculations/predictions.ts`, `src/ui/stats-view.ts`, `src/ui/welcome-back.ts`, `src/state/persistence.ts`
 
 ---
 
@@ -151,17 +185,21 @@ All items in this section have been confirmed working on device.
 
 ---
 
-### ISSUE-134: Garmin LT threshold not syncing — `userMetrics` push not enabled *(P2)*
+### ISSUE-134: Garmin LT threshold not syncing — `userMetrics` push not enabled *(P2, blocked)*
 
-**Problem**: Garmin Connect shows LT pace of 4:23/km but the app shows 4:12/km (from the LT estimator). The `physiology_snapshots` table has null for `lactate_threshold_pace` going back as far as records exist. Garmin is not pushing `userMetrics` webhooks.
+**Status 2026-04-14**: Confirmed still broken. `lt_thresholds` table is entirely empty. `physiology_snapshot_daily.lt_pace_sec_per_km` is NULL across every row. Garmin webhook logs show only `dailies` and `stressDetails` pushes — zero `userMetrics` pushes have ever arrived.
 
-**Root cause**: The `userMetrics` push type is not enabled in the Garmin developer portal. The webhook handler (`garmin-webhook/index.ts` line 59, `handleUserMetrics`) and the DB table (`physiology_snapshots`) are both wired correctly, but Garmin never sends the payload.
+**Blocked on**: Garmin developer portal access (Tristan flagged ongoing portal access issues on 2026-04-14). The app/dev console needs the **User Metrics** push subscription enabled. The webhook handler (`garmin-webhook/index.ts` line 59, `handleUserMetrics`) and the DB tables are wired correctly — we just never receive the payload.
 
-**Fix needed**: Log into the Garmin developer portal (developer.garmin.com) and enable the **User Metrics** push subscription for the app. Once enabled, Garmin will push LT pace, LT HR, and VO2max after qualifying activities.
+**Once portal access is restored**:
+1. Enable the **User Metrics** data type / push subscription for the app in developer.garmin.com
+2. Trigger a qualifying Garmin activity (or wait for Garmin to recompute)
+3. Verify `[garmin-webhook] Physiology snapshot saved` appears in webhook logs
+4. Verify `physiology_snapshots.lactate_threshold_pace` populates
 
-**Edge function prep already done**: `sync-physiology-snapshot` now queries the latest `physiology_snapshots` row without a date filter (deployed 2026-04-07), so once data lands in the table it will pull through to state immediately regardless of how infrequently Garmin pushes.
+**Edge function prep already done**: `sync-physiology-snapshot` queries the latest `physiology_snapshots` row without a date filter (deployed 2026-04-07), so once data lands in the table it will pull through to state immediately regardless of how infrequently Garmin pushes.
 
-**Files**: Garmin developer portal (external), `supabase/functions/garmin-webhook/index.ts` (handler exists), `supabase/functions/sync-physiology-snapshot/index.ts` (updated), `src/data/physiologySync.ts` (updated).
+**Files**: Garmin developer portal (external, blocked), `supabase/functions/garmin-webhook/index.ts` (handler exists), `supabase/functions/sync-physiology-snapshot/index.ts` (updated), `src/data/physiologySync.ts` (updated).
 
 ---
 
@@ -491,10 +529,9 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 
 ---
 
-### ISSUE-115: Holiday mode *(P3)*
-**Symptom**: Users going on holiday have no way to pause or adjust the plan. The app continues generating planned sessions, VDOT may decay, and week-advance logic runs as if training continued.
-**Design**: A "Holiday" toggle in Account or Home. When active: plan sessions are greyed out with a "Holiday" label, no skip penalties applied, VDOT detraining paused or capped, weekly load target set to 0. User sets return date; app resumes normal week logic on return.
-**Files**: `src/ui/account-view.ts`, `src/state/store.ts` (holiday mode flag + return date), `src/ui/plan-view.ts`, `src/ui/welcome-back.ts` (skip detraining guard).
+### ISSUE-115: Holiday mode *(P3)* — IMPLEMENTED, bugs fixed 2026-04-09
+**Status**: Feature fully built. Audit on 2026-04-09 found and fixed: bridge mods wiped on app restart (main.ts cleanup too aggressive), forceDeload flags not cleaned on short-holiday cancel or manual end, hardcoded km units in session chooser (now uses formatKm/formatPace), pre-holiday shift range off by one, parseKmFromDesc returning warm-up km instead of total for structured descriptions.
+**Files**: `src/ui/holiday-modal.ts`, `src/main.ts`, `src/ui/plan-view.ts`, `src/ui/home-view.ts`, `src/ui/checkin-overlay.ts`, `src/types/state.ts`.
 
 ---
 
@@ -1001,7 +1038,7 @@ Both views now read from the same computation path.
 | P2 | ISSUE-117: Preview week copy → "based on last week" | Plan | Small | Medium |
 | P2 | ISSUE-118: Load matching explainer on matched activity cards | Cards | Small | Medium |
 | P2 | ISSUE-119: Onboarding — explain what the app does | Wizard | Small | High |
-| P3 | ISSUE-115: Holiday mode | Feature | Medium | High |
+| ~~P3~~ | ~~ISSUE-115: Holiday mode~~ | ~~Feature~~ | ~~Medium~~ | ~~High~~ | Implemented + bugs fixed 2026-04-09 |
 | P3 | ISSUE-120: Check-in button (illness / injury / feeling) | Home | Medium | High |
 | P3 | ISSUE-121: Zone 2 explainer with Kipchoge context | Stats | Small | Medium |
 | P3 | ISSUE-122: Onboarding goal-selection step | Wizard | Medium | High |
@@ -1107,6 +1144,86 @@ Both views now read from the same computation path.
 | P2 | ISSUE-128: Sleep analysis — 7-day rolling window, not today's snapshot | Low | High |
 | P3 | ISSUE-127: REM sleep analysis — stage breakdown, trend, training link | Medium | High |
 | P3 | ISSUE-132: Apple Watch advanced metrics (temp, power, form, SpO2) | Large | High |
+
+---
+
+## Future Builds — Major Feature Tracks
+
+> These are standalone product tracks with their own design docs. Not bugs, not polish. Each one is a multi-week build that expands the product into a new capability.
+
+---
+
+### FUTURE-01: Workout to Watch — Garmin + Apple Watch Push
+
+**Doc**: [`docs/WorkoutWatch.md`](WorkoutWatch.md)
+
+**What**: Push structured workouts (warm-up, intervals, targets, cool-down) to Garmin watches via the Training API so users execute them with live pace/HR guidance on the wrist. Apple Watch via WorkoutKit as Phase 2.
+
+**Why it matters**: The app generates detailed structured workouts but users currently have no way to follow them live during execution. This is the gap between "training plan" and "coaching platform". Every competitor (TrainingPeaks, Garmin Coach, COROS) syncs to the watch.
+
+**Garmin path (Phase 1, ~7-10 days)**:
+- OAuth already built. Same Bearer token works for Training API.
+- New edge function: `garmin-push-workout` (create + schedule)
+- New mapper: `src/garmin/workout-mapper.ts` (SplitScheme to Garmin JSON)
+- UI: "Send to Garmin" per workout + "Send Week" in plan header
+- Prerequisite: enable "Workout Import" permission on Garmin Developer Portal consumer key
+
+**Apple Watch path (Phase 2, ~9-12 days)**:
+- Custom Capacitor plugin (Swift) bridging WorkoutKit
+- HealthKit entitlements currently missing from iOS project (must fix first)
+- WorkoutKit available iOS 17+ / watchOS 10+
+
+**Status**: Design doc complete. Ready to build.
+
+---
+
+### FUTURE-02: Triathlon Mode — Multi-Sport Plan Engine
+
+**Doc**: [`docs/TRIATHLON.md`](TRIATHLON.md)
+
+**What**: Extend the plan engine to generate swim/bike/run training plans for 70.3 and Ironman distances. Per-discipline fitness tracking, brick sessions, multi-sport weekly scheduling.
+
+**Why it matters**: The adaptive engine, load model, and activity sync infrastructure are sport-agnostic. Triathlon is the natural expansion. The user base overlaps heavily (marathon runners who move to triathlon). No competitor does adaptive triathlon plans well.
+
+**Key components**:
+- Race profiles: 70.3 and Ironman with distance/time targets
+- Per-discipline load tracking: swim CTL, bike CTL, run CTL (Signal A per sport)
+- Workout library: swim sets (CSS-based), bike sessions (FTP-based), brick workouts
+- Scheduler: multi-sport week layout respecting recovery between disciplines
+- Activity matching: Strava/Garmin already classify swim/bike/run — matching logic extends
+- Onboarding: swim CSS, bike FTP, existing run VDOT — three calibration paths
+
+**Architecture impact**: Plan generator needs sport-aware workout templates. Fitness model needs per-discipline CTL/ATL. State schema adds `swimFTP`, `bikeFTP`, discipline-level metrics. UI needs discipline tabs or filters on plan/stats views.
+
+**Status**: Full architecture doc written. Planning phase. Blocked on: confirming demand signal from users.
+
+---
+
+### FUTURE-03: The Brain — AI Coaching Intelligence
+
+**Doc**: [`docs/BRAIN.md`](BRAIN.md)
+
+**What**: A central coaching coordinator (`daily-coach.ts`) that collates all signals (sleep, HRV, load, injury, illness, ACWR) into a single `CoachState` — the authoritative answer to "what should I do today?". Optional LLM layer generates a coaching narrative paragraph.
+
+**Why it matters**: The app collects rich signal (sleep, HRV, load, injury, HR drift, RPE) but each system fires in isolation. No single function answers "given everything we know, what's the coaching stance for today?" This is what makes a coach valuable — connecting signals that individually seem fine but together indicate a problem.
+
+**Key components**:
+- `daily-coach.ts` (rules-based coordinator) — **Phase 1 built**, computes stance/blockers/alerts
+- Coach modal — **built**, surfaces readiness ring + 5 signal rows + narrative card
+- `coach-narrative` edge function (Haiku LLM call) — **built but not deployed**
+- Phase 0 hardening: JWT auth, server-side rate limiting, spend cap, input validation — **not started**
+- Phase 2: subjective daily feeling, VDOT history trend, aerobic efficiency trend, REM% signal
+- Paywall: LLM narrative is premium. Rules-based stance is free.
+
+**Status**: Phase 1 built. Needs edge function deployment, hardening (Phase 0), and paywall infrastructure before going live.
+
+---
+
+| Track | Doc | Effort | Status | Dependencies |
+|---|---|---|---|---|
+| FUTURE-01: Workout to Watch | [`WorkoutWatch.md`](WorkoutWatch.md) | 7-10 days (Garmin), 9-12 days (Apple) | Design complete, ready to build | Garmin: Workout Import permission. Apple: HealthKit entitlements |
+| FUTURE-02: Triathlon Mode | [`TRIATHLON.md`](TRIATHLON.md) | Large (multi-week) | Architecture doc written, planning | User demand signal |
+| FUTURE-03: The Brain | [`BRAIN.md`](BRAIN.md) | Phase 0-1: 1 week. Phase 2+: ongoing | Phase 1 built, needs deployment + hardening | Anthropic API key, paywall infra |
 
 ---
 

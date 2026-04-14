@@ -169,6 +169,14 @@ Update the status column after running `npx vitest run`.
 
 ---
 
+### 12b. Running Plan Adherence
+**What it does**: Tracks what percentage of planned runs have been completed across all completed weeks. A run counts as completed if a matched Strava activity covers ≥95% of the target distance (post-reduction if the run was reduced). Cross-training and ad-hoc runs are excluded. Current in-progress week is excluded entirely so the number doesn't drop every Monday. Pushed workouts are excluded from their source week and scored in the week they land in.
+
+**Key file**: `src/calculations/plan-adherence.ts` (`computePlanAdherence`), `src/ui/home-view.ts` (`buildAdherenceRow`)
+**Tests**: `src/calculations/plan-adherence.test.ts` — ✅ 7 passing
+
+---
+
 ## Injury & Recovery
 
 ---
@@ -192,6 +200,38 @@ Update the status column after running `npx vitest run`.
 
 **Key files**: `src/ui/illness-modal.ts` (modal + clearIllness), `src/ui/plan-view.ts` (buildIllnessBanner), `src/ui/home-view.ts` (buildIllnessBanner), `src/ui/checkin-overlay.ts` (wires Ill button), `src/ui/events.ts` (adherence gate), `src/types/state.ts` (illnessState field)
 **State**: `illnessState: { startDate, severity: 'light'|'resting', active: boolean }`
+**Tests**: ❌ None yet
+
+---
+
+### 15c. Holiday Mode
+**What it does**: When the user reports a holiday via the check-in overlay, a multi-step questionnaire collects dates, running plans ("yes/maybe/no"), and holiday type (relaxation/active/working). The system then:
+- Shifts quality sessions within 2 days of holiday start forward (pre-holiday shift)
+- Replaces workouts during holiday with advisory text based on running plans (rest, optional easy run, or easy-only)
+- Shows a blue banner on Home and Plan views with day count, run status, and "End holiday" / "Generate session" buttons
+- "Generate session" creates an ad-hoc easy run at 60% of normal session distance
+- On holiday end (by date or manual): welcome-back modal analyzes actual TSS logged during holiday, classifies activity level (very active >70%, moderate 30-70%, sedentary <30%), builds 1-3 bridge weeks with scaled workouts, applies VDOT detraining
+- Taper overlap: warned during questionnaire, taper weeks never modified by bridge rebuild
+- Multiple holidays supported per training block via `holidayHistory`
+
+**Key files**: `src/ui/holiday-modal.ts` (questionnaire, mods, banners, welcome-back), `src/ui/plan-view.ts` (banner + mods), `src/ui/home-view.ts` (banner), `src/ui/checkin-overlay.ts` (wires Holiday button), `src/main.ts` (holiday end detection on launch), `src/types/state.ts` (holidayState + holidayHistory)
+**State**: `holidayState: { startDate, endDate, canRun, holidayType, active, preHolidayShifts?, welcomeBackShown?, preHolidayWeeklyTSS? }`, `holidayHistory: Array<{ startDate, endDate, holidayType, actualTSSRatio? }>`
+**Tests**: ✅ `src/ui/holiday-modal.test.ts` — 27 tests covering parseKmFromDesc, isWeekInHoliday, getHolidayDaysForWeek, applyHolidayMods, applyBridgeMods_renderTime
+
+---
+
+### 15b. Session Generator
+
+Ad-hoc workout generation from plan view. Two-step modal: pick session type then set distance or time.
+
+- Session types: Easy, Long, Threshold, VO2 Intervals, Marathon Pace, Progressive
+- Distance/time toggle with slider, secondary estimate (time from distance or vice versa)
+- Generates structured workouts via `intentToWorkout` (warm-up/cool-down, paces from VDOT, interval reps)
+- Added as `adhoc-*` prefixed workout in current week's `adhocWorkouts`
+- Excluded from TSS calculations (suggestions, not completed activity)
+- Also used by holiday banner "Generate session" button (replaces the old holiday-only chooser)
+
+**Key files**: `src/ui/session-generator.ts`
 **Tests**: ❌ None yet
 
 ---
@@ -429,7 +469,7 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 ---
 
 ### 23. Wearable Activity Sync & Review (Garmin + Apple Watch + Strava)
-**What it does**: On startup, syncs recent workouts and matches them to the current week's planned workouts. Matched activities are auto-completed with a derived RPE. Overflow activities surface for manual plan adjustment.
+**What it does**: On startup, syncs recent workouts and matches them to the current week's planned workouts. Matched activities are auto-completed with a derived RPE, then the user is prompted with an RPE slider (1-10) to rate how hard each matched run felt. The slider defaults to the auto-derived RPE; dismissing keeps the auto value. Overflow activities surface for manual plan adjustment.
 
 **Data source strategy** — two separate concerns:
 - **Activity source** (what happened): Strava if connected, otherwise Garmin webhook or Apple Watch
@@ -494,12 +534,12 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 ---
 
 ### 24. Continuous Mode
-**What it does**: For runners who aren't training toward a specific race. Instead of a fixed plan ending on race day, the app cycles through repeating 4-week blocks (base → build → intensify → deload). Optional benchmark check-ins at the end of each block measure progress.
+**What it does**: For runners who aren't training toward a specific race. Instead of a fixed plan ending on race day, the app cycles through repeating 4-week blocks (base → build → intensify → deload). Optional benchmark check-ins at the start of each new block (post-deload, when freshest) measure progress.
 
 **Key files**: `src/workouts/plan_engine.ts` (block cycling), `src/state/initialization.ts`
 **Tests**: `src/ui/continuous-mode.test.ts` — ✅ Passing
 
-**Benchmark check-in UI** (in `src/ui/plan-view.ts`): Shown on benchmark weeks for continuous mode users. Three states: pending (option picker + Garmin auto-detect), recorded (result + source badge), skipped. Manual entry modal (bottom-sheet) handles pace input (easy/threshold), distance (speed check), or distance+time (race simulation).
+**Benchmark check-in UI** (in `src/ui/benchmark-overlay.ts`): Centered overlay shown on post-deload weeks (week 5, 9, 13, ...). Selecting a check-in type generates a structured workout via `intentToWorkout` (same as session generator) and adds it to the week's plan. Four states in the plan-view card: prompt (open overlay), workout added (awaiting completion), recorded (from watch), skipped. No manual entry — results come from watch/Strava data after the workout is completed.
 
 ---
 
@@ -513,16 +553,29 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 ---
 
-### 26. Missed Week Detection + Week-End Debrief
-**What it does**: On app open after a missed week, `detectMissedWeeks()` silently applies VDOT detraining and advances the plan pointer (no modal). At week end, a focused debrief sheet fires (once per week, guarded by `lastDebriefWeek`):
+### 26. Missed Week Detection + Week-End Debrief (3-Step Flow)
+**What it does**: On app open after a missed week, `detectMissedWeeks()` silently applies VDOT detraining and advances the plan pointer (no modal). At week end, a 3-step debrief flow fires (once per week, guarded by `lastDebriefWeek`):
+
+**Step 1 — Week Summary**:
 - Phase badge + "Week N complete"
-- Training load % vs planned, distance km, Running Fitness delta (CTL ↑/→/↓)
-- If effort score significantly high/low: offers one pacing adjustment toggle (applies ±rpeAdj, capped at ±0.5 VDOT)
-- Next week preview (phase + planned TSS)
+- Training load % vs planned, distance km, Running Fitness delta (CTL direction)
+- Coach signal pills (Effort, Load, Fitness, HR drift) + coach narrative copy
+- CTA: "Generate next week" (complete mode) or "Continue" (review mode)
 
-Two trigger paths: user taps "Finish week" in the plan page current week header, or auto-trigger on app open after week advance.
+**Step 2 — Analysis Animation** (~2.5s):
+- Progress bar fills across the modal top
+- Stepped checklist ticks through: HR data, pace vs HR targets, RPE feedback, training load, recovery signals, plan generation
+- Transitions to Step 3 on completion
 
-**Key files**: `src/ui/week-debrief.ts`, `src/ui/welcome-back.ts` (state logic only), `src/main.ts`
+**Step 3 — Suggested Plan**:
+- Shows next week's generated sessions with type badges (Easy, Long, Tempo, VO2, MP)
+- "Adjustments applied" card listing what changed: effort scaling, ACWR-driven quality reduction, long run capping, volume changes
+- Toggle between "Adjusted plan" (with effort/ACWR context) and "Standard plan" (vanilla)
+- Accept button proceeds to uncompleted session handling, then advances the week
+
+Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on Sunday, or auto-trigger on app open after week advance.
+
+**Key files**: `src/ui/week-debrief.ts`, `src/ui/welcome-back.ts` (state logic only), `src/main.ts`, `src/workouts/plan_engine.ts` (plan generation + effortMultiplier)
 **Tests**: ⚠️ No automated tests
 
 ---
@@ -654,7 +707,7 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 - **Freshness** (35% / 40% without recovery) — TSB. Ranges from Overtrained → Peaked.
 - **Load Safety** (30% / 35%) — ACWR. Safe / Moderate Risk / High Risk.
 - **Momentum** (15% / 25%) — CTL now vs 4 weeks ago. Rising / Stable / Dropping.
-- **Recovery** (20%, greyed out if no watch) — sleep score + HRV RMSSD delta vs personal avg. "Connect watch to unlock."
+- **Recovery** (20%, greyed out if no watch) — composite of HRV (50%), Last Night Sleep (25%), Sleep History 7d avg (25%). All sleep inputs z-scored against 28-day personal baseline internally; display shows raw Garmin/Apple scores. RHR acts as override only (cap when elevated >= 2 SD).
 
 **Safety floors** (hard caps applied last, regardless of other signals):
 - ACWR > 1.5 → score ≤ 39 (Ease Back); ACWR 1.3–1.5 → score ≤ 59 (Manage Load)
@@ -689,14 +742,14 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 
 **Adjust button**: Shown below the sentence when readiness ≤ 59. Text varies by driving signal (Swap to easy run / Reduce session load / Take it lighter today / Keep consistency).
 
-**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active), and sub-signal cards: Freshness (TSB daily-equivalent + zone + hours countdown pill), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
+**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
 
 **No Jargon Policy**: ATL/CTL/TSB/ACWR never shown in user-facing copy. Info sheets use both: "Running Fitness (CTL)", "Freshness (TSB)", etc.
 
 **Key files**:
 - `src/calculations/readiness.ts` — `computeReadiness()`, `readinessColor()`, `drivingSignalLabel()`
 - `src/calculations/daily-coach.ts` — `computeDailyCoach()`, `derivePrimaryMessage()` (unified sentence logic)
-- `src/calculations/fitness-model.ts` — `computeTodaySignalBTSS()`, `computePlannedDaySignalBTSS()`
+- `src/calculations/fitness-model.ts` — `computeTodaySignalBTSS()`, `computePlannedDaySignalBTSS()`, `computeDayTargetTSS()`, `computePassiveTSS()`, `calibrateTssPerActiveMinute()`
 - `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handlers
 - `src/ui/readiness-view.ts` — Readiness detail page (new)
 - `src/ui/rolling-load-view.ts` — Rolling Load detail page: 28-day angular chart + 7-day activity breakdown
@@ -737,7 +790,7 @@ Two trigger paths: user taps "Finish week" in the plan page current week header,
 
 **Aggregator**: `computeDailyCoach(state)` gathers TSB/ACWR/sleep/HRV/RPE/week-load/injury/illness into a `CoachState` and derives a `stance` (`push | normal | reduce | rest`) and `blockers` array. Priority hierarchy: injury/illness override everything → ACWR overload → sleep deficit → readiness score.
 
-**LLM narrative**: `supabase/functions/coach-narrative` calls `claude-haiku-4-5-20251001` with structured signals as a prompt. Enforces direct/factual tone via system prompt. Rate limit: 3 calls/day, 4-hour cache in `localStorage` (`mosaic_coach_narrative_cache`). Falls back to rules-based sentence if call fails.
+**LLM narrative**: `supabase/functions/coach-narrative` calls `claude-haiku-4-5-20251001` with structured signals as a prompt. System prompt includes scientific context for every signal (how readiness is computed, what TSB weekly-to-daily conversion means, tier-dependent ACWR thresholds, z-score HRV interpretation, sleep bank semantics) so the LLM interprets numbers correctly rather than relying on general knowledge. Enforces direct/factual tone. Rate limit: 3 calls/day, 4-hour cache in `localStorage` (`mosaic_coach_narrative_cache`). Falls back to rules-based sentence if call fails.
 
 **Key files**:
 - `src/calculations/daily-coach.ts` — aggregator + `CoachState` / `CoachSignals` types

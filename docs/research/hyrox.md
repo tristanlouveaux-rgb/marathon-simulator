@@ -348,3 +348,897 @@ Questions (only if you want the programme rules to be fully specified rather tha
 	•	What equipment can Mosaic assume for most users (sled access is the big one): always / sometimes / rarely?
 	•	Do you want station prescriptions in time-cap format (e.g., 3’ AMRAP) or fixed reps by default?
 
+---
+
+# Part 2: Architecture and Implementation Plan
+
+> Extending Mosaic from a running/triathlon training simulator to support HYROX race preparation and year-round hybrid fitness.
+
+**Status**: Planning (not yet implemented)
+**Target formats**: HYROX Open (Rx weights), HYROX Pro (heavier weights)
+**Design principle**: Same adaptive engine, same UX patterns, component-based hybrid sessions using the three-dimensional load model defined in Part 1.
+
+---
+
+## 7. State Schema Changes
+
+### 7.1 New Top-Level Fields on SimulatorState
+
+```typescript
+// Event type — determines which plan engine runs
+eventType?: ‘running’ | ‘triathlon’ | ‘hyrox’;  // undefined = running (backward compat)
+
+// HYROX-specific config (only present when eventType === ‘hyrox’)
+hyroxConfig?: {
+  format: ‘open’ | ‘pro’;              // Open (Rx weights) vs Pro (heavier)
+  athleteBand: AbilityBand;             // total_beginner through competitive (reuse existing)
+  hyroxPhase: ‘base’ | ‘build’ | ‘peak’ | ‘taper’;  // per §3.2
+
+  // Equipment availability
+  stationAccess: {
+    sled: ‘always’ | ‘sometimes’ | ‘never’;
+    skiErg: boolean;
+    rowErg: boolean;
+    wallBallTarget: boolean;
+  };
+
+  // Third currency tracking
+  weeklyMTL: number;                    // current week’s accumulated MusculoTendon Load
+  mtlCap: number;                       // per-band cap (from §3.3)
+  mtlHistory: number[];                 // trailing weekly MTL values
+
+  // Athlete bias detection (from §D)
+  athleteBias?: ‘quick_but_weak’ | ‘strong_but_slow’ | ‘balanced’;
+
+  // Station benchmarks (optional, seconds to complete)
+  stationBenchmarks?: {
+    skiErg?: number;
+    sledPush?: number;
+    sledPull?: number;
+    burpeeBroadJumps?: number;
+    rowErg?: number;
+    farmerCarry?: number;
+    sandbagLunges?: number;
+    wallBalls?: number;
+  };
+
+  // Race PBs
+  hyroxPB?: number;                     // total finish time in seconds
+  runSplitPBs?: number[];               // 8 x 1km split times
+  stationSplitPBs?: Partial<Record<string, number>>;
+
+  // Race target
+  targetFinishTime?: number;            // seconds
+
+  // Sessions per week
+  runsPerWeek: number;                  // 2-4
+  stationSessionsPerWeek: number;       // 2-3
+  bricksPerWeek: number;                // 1-2
+};
+```
+
+### 7.2 Workout Type Extension
+
+```typescript
+// Add discipline field to Workout interface
+export interface Workout {
+  // ... existing fields ...
+  discipline?: ‘run’ | ‘station’ | ‘brick_hyrox’ | ‘swim’ | ‘bike’ | ‘brick’;
+
+  // HYROX component-based structure
+  hyroxComponents?: Array<{
+    type: ‘run_segment’ | ‘station’;
+    stationType?: HyroxStation;
+    durationMin?: number;
+    distanceKm?: number;
+    reps?: number;
+    loadKg?: number;
+    targetRPE?: number;
+  }>;
+
+  // 3D load outputs
+  musculoTendonLoad?: number;   // MTL for this workout (per §3.3)
+}
+
+// Station enum matching taxonomy in §3.1
+type HyroxStation =
+  | ‘ski_erg’
+  | ‘sled_push’
+  | ‘sled_pull’
+  | ‘burpee_broad_jumps’
+  | ‘row_erg’
+  | ‘farmer_carry’
+  | ‘sandbag_lunges’
+  | ‘wall_balls’;
+```
+
+### 7.3 New Types
+
+```typescript
+// HYROX workout types
+type HyroxWorkoutType =
+  | ‘hyrox_brick’              // run segments + station components (the core specificity session)
+  | ‘hyrox_station_technique’  // station skill work, low load
+  | ‘hyrox_station_density’    // station work for time / AMRAP
+  | ‘hyrox_run_intervals’      // running intervals (standard)
+  | ‘hyrox_run_tempo’          // threshold/tempo run
+  | ‘hyrox_easy_run’           // easy aerobic run
+  | ‘hyrox_mini_brick’;        // shortened brick (2-3 rounds)
+
+// Session intent for HYROX plan engine
+interface HyroxSessionIntent {
+  type: HyroxWorkoutType;
+  discipline: ‘run’ | ‘station’ | ‘brick_hyrox’;
+  targetDurationMin?: number;
+  targetAerobicLoad?: number;
+  targetAnaerobicLoad?: number;
+  targetMTL?: number;
+  intensity: ‘low’ | ‘moderate’ | ‘hard’;
+  stations?: HyroxStation[];        // which stations are included
+  rounds?: number;                  // for bricks: number of run+station rounds
+  isKeySession?: boolean;           // protected from replacement
+  biasResponse?: ‘station_emphasis’ | ‘run_emphasis’;  // from §D bias rules
+}
+```
+
+### 7.4 Backward Compatibility
+
+- `eventType` defaults to `’running’` when undefined
+- All existing state fields remain unchanged
+- `hyroxConfig` is only present when `eventType === ‘hyrox’`
+- Running-only users see zero difference. The plan engine branches on `eventType` at the top.
+
+---
+
+## 8. Plan Engine: HYROX Generation
+
+### 8.1 Architecture
+
+The HYROX plan engine generates workouts using the component-based model and three-dimensional load targeting defined in Part 1. It does **not** replace the running plan engine. Instead:
+
+```
+eventType === ‘running’    → plan_engine.ts (existing, unchanged)
+eventType === ‘triathlon’  → plan_engine.triathlon.ts (separate)
+eventType === ‘hyrox’      → plan_engine.hyrox.ts (new)
+```
+
+### 8.2 Generation Flow
+
+```
+generateHyroxWeek(ctx: HyroxPlanContext)
+  1. Determine target weekly 3D load budget: [aerobicTarget, anaerobicTarget, mtlTarget]
+     based on phase, week index, ability band, and deload status (per §3.2)
+  2. Check athlete bias (§D) → adjust session distribution
+  3. Generate run intents (2-4/week depending on band)
+  4. Generate station intents (2-3/week)
+  5. Generate brick intent(s) (1-2/week, key specificity session)
+  6. Validate total 3D load against budget; scale if needed
+  7. Enforce MTL cap (§G safety rules)
+  8. Pass all intents to HYROX scheduler
+  9. Convert intents to Workout objects with component-based descriptions
+  10. Calculate 3D load for each workout
+  11. Return Workout[]
+```
+
+### 8.3 Session Selection by Phase (per §3.2)
+
+**Base phase:**
+- Runs: 2 easy + optional strides
+- Stations: 2 technique sessions (scaled loads, focus on movement quality)
+- Brick: 1 mini brick every 2 weeks (2-3 rounds, short run + erg stations)
+- MTL: low. Prioritise tissue tolerance over load.
+
+**Build phase:**
+- Runs: 1 easy + 1 quality (tempo or intervals)
+- Stations: 1 technique + 1 density (higher RPE, time-capped sets)
+- Brick: 1 key brick/week (4-6 rounds with mixed stations)
+- MTL: moderate. Introduce eccentric stations (lunges, wall balls) progressively.
+
+**Peak phase:**
+- Runs: 1 easy + 1 quality (race-pace intervals or threshold)
+- Stations: 1 density + 1 race-simulation set
+- Brick: 1 key brick (6-8 rounds, include eccentric-tax stations) + 1 mini brick
+- MTL: high but within cap. Last runs at race pace under station fatigue.
+
+**Taper phase (per §3.7, §F):**
+- All session volumes reduced 40-60% (competitive) or 30-55% (beginner/novice)
+- Maintain 1 race-pace intensity touch per type (run, station, brick)
+- No novel eccentric overload in final 5-10 days (§G)
+
+### 8.4 Bias-Responsive Session Selection (per §D)
+
+```
+if (bias === ‘quick_but_weak’) {
+  // Add 1 station emphasis session weekly
+  // Reduce run intensity density slightly
+  // Focus on wall balls, lunges, sled — the stations that slow them down
+}
+
+if (bias === ‘strong_but_slow’) {
+  // Keep station dose but shift one station day to lower MTL (erg-focused)
+  // Increase run quality focus (threshold/interval)
+  // Protect key run sessions from reduction
+}
+```
+
+### 8.5 Adaptive Adjustments
+
+Same mechanisms as running mode, extended to 3D:
+
+- **Readiness/recovery:** Orange/red recovery status → reduce volume or drop quality sessions
+- **ACWR (per-dimension):** If run ACWR > 1.3, reduce run volume. If MTL ACWR spike, reduce station density.
+- **RPE feedback:** Consistently high RPE → reduce next week’s volume. Low RPE → allow progression.
+- **MTL cap enforcement (§G):** If weekly MTL exceeds band cap from any source (HYROX + other sports), automatically REDUCE/DOWNGRADE next high-MTL session.
+
+### 8.6 Weekly Load Calculation
+
+```
+weeklyTarget = {
+  aerobicLoad: bandBase.aerobic × phaseMultiplier × recoveryWeekMultiplier,
+  anaerobicLoad: bandBase.anaerobic × phaseMultiplier × recoveryWeekMultiplier,
+  mtl: bandBase.mtl × phaseMultiplier × recoveryWeekMultiplier
+}
+```
+
+Recovery week multiplier: 0.60 to 0.75 (per §C: reduce total 3D load by 25-40%).
+
+**Key integration point:** `src/workouts/generator.ts:generateWeekWorkouts()` (17 params). This orchestrates the full pipeline. It needs to branch on `eventType` before calling the plan engine:
+```typescript
+if (s.eventType === ‘hyrox’) {
+  intents = planHyroxWeek(hyroxCtx);
+} else if (s.eventType === ‘triathlon’) {
+  intents = planTriathlonWeek(triCtx);
+} else {
+  intents = planWeekSessions(ctx);
+}
+```
+
+**Reusable from `planWeekSessions()` (`src/workouts/plan_engine.ts`):**
+- `abilityBandFromVdot()` — sport-agnostic
+- `isDeloadWeek()` — sport-agnostic (same 3/4/5-week cycle, per §C)
+- `effortMultiplier()` — sport-agnostic (RPE feedback scaling)
+- Quality cap logic — reusable (max hard days per rolling 3-day window, per §A)
+
+---
+
+## 9. Scheduler: HYROX Week Layout
+
+### 9.1 Hard Constraints (per §A)
+
+1. No more than 2 high-intensity days in any rolling 3-day window, where “high-intensity” = anaerobicLoad above threshold OR MTL above threshold
+2. At least 1 full rest day per week
+3. Key brick on Saturday (or user-configured long day)
+4. No high-MTL session the day before a quality run (eccentric fatigue impairs running mechanics, per brick/transition evidence in §3.5)
+
+### 9.2 Soft Constraints
+
+1. Station variety across the week (don’t repeat same station category back-to-back)
+2. Erg stations (low MTL) preferred adjacent to quality runs
+3. Eccentric-heavy stations (lunges, wall balls, burpee BJ) spaced at least 48h apart
+4. Easy run as “bookend” session around harder days
+
+### 9.3 Default Templates by Band (per §4.4)
+
+**total_beginner (year-round):**
+```
+Mon: easy run + optional mobility
+Tue: station technique (scaled)
+Wed: rest
+Thu: mini brick (short run + erg)
+Fri: rest
+Sat: easy run
+Sun: rest
+```
+
+**novice (race build):**
+```
+Mon: easy run + strides
+Tue: key brick (1km + station repeats, 4-5 rounds)
+Wed: rest
+Thu: station emphasis (wall balls/lunges scaled)
+Fri: rest or easy run
+Sat: tempo/threshold blend
+Sun: rest
+```
+
+**intermediate (race build):**
+```
+Mon: easy run
+Tue: key brick (6x1km + mixed stations, last runs faster)
+Wed: rest or easy run
+Thu: stations (wall balls/lunges + limited burpee exposure)
+Fri: rest
+Sat: tempo with race-pace touches
+Sun: rest or station technique
+```
+
+**competitive/hybrid (race build):**
+```
+Mon: easy run
+Tue: key brick (7-8 rounds)
+Wed: rest or easy run
+Thu: secondary brick (lighter flow, 3-4 rounds)
+Fri: rest
+Sat: run sharpening (short intervals + station touch)
+Sun: rest
+```
+
+### 9.4 Scheduler Implementation
+
+The existing `src/workouts/scheduler.ts:assignDefaultDays()` uses a 5-phase algorithm. For HYROX:
+
+**Option A: Extend existing scheduler.** Add station/brick to `HARD_WORKOUT_TYPES`. Teach it MTL-aware spacing.
+**Option B: Template-based scheduler for HYROX.** Use the templates above, then apply constraint validation.
+
+**Recommendation:** Option B. The HYROX week structure is different enough from pure running that a template approach is cleaner:
+```typescript
+function scheduleHyroxWeek(intents: HyroxSessionIntent[], band: AbilityBand): Workout[] {
+  const template = HYROX_TEMPLATES[band];
+  // Place key brick first (anchored day)
+  // Fill station and run slots from template
+  // Validate against hard constraints (rolling 3-day window, MTL spacing)
+  // Adjust if constraints violated
+}
+```
+
+---
+
+## 10. Workout Library: Stations and Bricks
+
+### 10.1 Station Workout Description Format
+
+HYROX workouts are component-based. Each station component has:
+```
+Station: Wall Balls (20 reps @ 6kg/9kg)
+Station: Sled Push (50m @ Open/Pro weight)
+Station: SkiErg (1000m)
+```
+
+### 10.2 Brick Workout Format
+
+```
+HYROX Brick (5 rounds)
+---
+Round 1: 1km run @ easy-moderate + SkiErg 1000m
+Round 2: 1km run @ moderate + Sled Push 50m
+Round 3: 1km run @ moderate + Sled Pull 50m
+Round 4: 1km run @ moderate-hard + Burpee Broad Jumps 80m
+Round 5: 1km run @ hard + Row 1000m
+---
+Target: ~55-65 min total | RPE 7-8
+```
+
+### 10.3 Station Technique Session Format
+
+```
+Station Technique (3 stations, 3 rounds each)
+---
+Wall Balls: 3x10 @ 50% race weight, focus on rhythm
+Farmer Carry: 3x25m @ race weight, focus on trunk stiffness
+SkiErg: 3x250m @ moderate, focus on catch timing
+---
+Target: ~25-30 min | RPE 5-6
+```
+
+### 10.4 Station Density Session Format
+
+```
+Station Density (AMRAP-style)
+---
+4 min AMRAP: Wall Balls @ race weight
+Rest 2 min
+4 min AMRAP: Sandbag Lunges @ race weight
+Rest 2 min
+4 min AMRAP: Burpee Broad Jumps
+---
+Target: ~25-30 min | RPE 7-8
+```
+
+### 10.5 Progression Rules (per §C)
+
+Progress one variable at a time week-to-week in bricks:
+1. **Rounds** (add 1 round per week)
+2. **Run intensity** (easy → moderate → race pace for later rounds)
+3. **Station density** (increase rest reduction, time-cap sets)
+4. **External load** (scale from 50% to race weight over build phase)
+
+### 10.6 Intent-to-Workout Conversion
+
+Parallel to `src/workouts/intent_to_workout.ts:intentToWorkout()`:
+
+```typescript
+function hyroxIntentToWorkout(intent: HyroxSessionIntent, config: HyroxConfig): Workout {
+  if (intent.type === ‘hyrox_brick’) {
+    return buildBrickWorkout(intent.rounds, intent.stations, config);
+  }
+  if (intent.type === ‘hyrox_station_technique’) {
+    return buildStationTechniqueWorkout(intent.stations, config);
+  }
+  // ... etc
+}
+```
+
+**Reusable:** `intentToWorkout()` handles run intents unchanged (easy, tempo, threshold, intervals). Only station and brick intents need new conversion functions.
+
+---
+
+## 11. Fitness Model: Three-Dimensional Tracking
+
+### 11.1 How MTL Integrates with Existing Load Signals
+
+The current app uses three signals (`src/calculations/fitness-model.ts`):
+
+| Signal | Current | HYROX Adaptation |
+|--------|---------|-----------------|
+| **Signal A** (run-equiv, runSpec-discounted) | Running Fitness CTL | Unchanged for run sessions. Station/brick sessions contribute via runSpec discount (HYROX stations ≈ 0.30 runSpec). |
+| **Signal B** (raw physiological, no discount) | ACWR, Total Load, Freshness | Unchanged. All TSS adds at full value. Station sRPE × duration feeds Signal B. |
+| **Signal C** (impact load) | Day-before injury risk | Extended: station components contribute impact load based on station taxonomy (§4.1). |
+| **MTL (new)** | N/A | Third currency per §3.3. Tracks peripheral musculoskeletal/tendon strain. |
+
+### 11.2 Weekly MTL Computation (per §3.3)
+
+For each workout component:
+```
+componentMTL = IL × modalityFactor × impactFactor × (1 + externalLoadFactor)
+where IL = duration_minutes × sRPE
+```
+
+Weekly MTL = sum of all component MTLs, then apply saturation:
+```
+effectiveMTL = MTL_cap × (1 − exp(−rawMTL / MTL_cap))
+```
+
+MTL cap by ability band (values to be confirmed by Tristan):
+```
+total_beginner: MTL_cap = [TBD]
+beginner: MTL_cap = [TBD]
+novice: MTL_cap = [TBD]
+intermediate: MTL_cap = [TBD]
+advanced: MTL_cap = [TBD]
+competitive: MTL_cap = [TBD]
+```
+
+### 11.3 MTL in ACWR
+
+Compute MTL-specific ACWR alongside existing aerobic/anaerobic ACWR:
+```
+mtlACWR = mtlATL / mtlCTL
+```
+Where mtlATL and mtlCTL use the same decay constants (7d / 42d) applied to daily MTL values.
+
+If mtlACWR > 1.3, flag for station volume reduction (same escalation logic as existing ACWR system).
+
+### 11.4 Implementation
+
+`src/calculations/fitness-model.ts` already has:
+- `computeWeekTSS()` (Signal A) and `computeWeekRawTSS()` (Signal B)
+- `CTL_DECAY = Math.exp(-7/42)` and `ATL_DECAY = Math.exp(-7/7)`
+
+For HYROX, add:
+```typescript
+export function computeWeekMTL(wk: Week): number {
+  // Sum MTL across all completed workouts in the week
+  // Apply saturation curve
+  // Return effectiveMTL
+}
+
+export function computeMTLFitnessFatigue(weeks: Week[]): { mtlCTL: number; mtlATL: number } {
+  // Same EMA logic as existing CTL/ATL, applied to weekly MTL values
+}
+```
+
+---
+
+## 12. Activity Sync and Matching
+
+### 12.1 How HYROX Activities Appear in Strava
+
+HYROX training sessions typically appear in Strava as:
+- **Run segments:** Normal `Run` activities
+- **Station-only sessions:** `Workout`, `WeightTraining`, or `CrossFit` activity types
+- **Full HYROX race:** Sometimes `Run` (if recorded on running watch), sometimes `Workout`
+- **Bricks (run + stations):** Typically a single `Workout` or `Run` activity covering the full session
+
+The current `mapGarminType()` in `src/calculations/activity-matcher.ts` maps `HIIT` and `CROSSFIT` to cross-training. In HYROX mode, these should be treated as primary training activities.
+
+### 12.2 Matching Logic Changes
+
+Current matcher (`matchAndAutoComplete()`, line 411): scores on day proximity + distance + type affinity.
+
+HYROX matcher adds:
+- **Discipline matching:** Station activities (Workout/CrossFit/WeightTraining) can match station or brick workouts. Run activities match run or brick workouts.
+- **Duration matching for stations:** Since station sessions are time-based, match on duration proximity (planned 30 min vs actual 35 min = within 20%).
+- **Brick matching:** If a Run and a Workout/CrossFit activity occur on the same day, attempt to match them as a brick.
+
+### 12.3 Load Calculation for Synced Activities
+
+For HYROX activities matched to planned workouts:
+- Run activities: existing iTRIMP pipeline, unchanged
+- Station activities: `sRPE × duration` for Signal B. Apply station taxonomy factors (§4.1) for MTL.
+- When no HR data (common for gym-based station work): use planned RPE as fallback.
+
+### 12.4 Cross-Training Reclassification
+
+In HYROX mode, station work is primary training. The cross-training gate needs a mode-aware branch:
+```typescript
+function isCrossTraining(activityType: string, eventType: string): boolean {
+  if (eventType === ‘hyrox’) {
+    // In HYROX mode, runs and station-type activities are primary
+    return ![‘run’, ‘crossfit’, ‘workout’, ‘weight_training’, ‘hiit’].includes(activityType);
+  }
+  // Running mode: only runs are primary
+  return activityType !== ‘run’;
+}
+```
+
+---
+
+## 13. Wizard / Onboarding
+
+### 13.1 Flow Branching
+
+The wizard adds a mode selection step early:
+
+```
+Step 1: What are you training for?
+  [ ] Marathon / Half / 10K / 5K          → existing running flow
+  [ ] Triathlon (70.3 or Ironman)         → triathlon flow
+  [ ] HYROX                              → HYROX flow
+  [ ] General fitness (no race)           → existing continuous mode
+```
+
+### 13.2 HYROX-Specific Wizard Steps
+
+After selecting HYROX:
+
+1. **Format selection:** Open or Pro
+2. **Race date** (optional): same as current event selection
+3. **Experience level:** Map to ability band
+   - “Never done a HYROX or similar” → total_beginner/beginner
+   - “Done 1-2 HYROX events” → novice
+   - “Regular HYROX competitor” → intermediate
+   - “Competitive (sub-70 min)” → advanced/competitive
+4. **Recent HYROX time** (optional): if known, refines ability band and enables finish-time prediction
+5. **Running background:** existing PB / experience flow (reused from running mode)
+6. **Equipment access:**
+   - “Do you have regular access to a sled?” → always / sometimes / never
+   - “SkiErg and/or RowErg available?” → checkboxes
+   - “Wall ball target?” → yes / no
+   This drives station substitution (§3.4 replacement matrix): if no sled, plan uses hill pushes / treadmill incline.
+7. **Sessions per week:** How many total sessions? (4-8). Suggested split shown based on band.
+8. **Wearable connection:** same as current
+9. **Gym / strength:** reuse existing
+
+### 13.3 Estimating Starting Fitness
+
+When HYROX finish time is known:
+- Map to ability band using finish time thresholds
+- Derive run fitness from run split PBs (feed into existing VDOT pipeline)
+- Station fitness from station splits (if available) or estimated from band
+
+When no HYROX time:
+- Use running PBs for run fitness (existing pipeline)
+- Use experience level for station fitness (band-based defaults)
+- Station benchmarks recommended in first 4-6 weeks (§3.6)
+
+### 13.4 Initialization
+
+`initializeHyrox(onboardingState)` runs when `eventType === ‘hyrox’`:
+1. Run fitness from PBs (reuse existing VDOT calculation)
+2. Set ability band from HYROX time or experience level
+3. Set phase schedule (base/build/peak/taper per §3.2)
+4. Set MTL cap for band (§3.3)
+5. Set station access and configure replacement matrix (§3.4)
+6. Set weekly session targets per band (§A)
+7. Finish-time forecast (§4.5, if enough data)
+
+---
+
+## 14. UI Changes
+
+### 14.1 Design Principle
+
+Same UX patterns, same visual language. The HYROX UI is the running UI with component-based session awareness, not a new app.
+
+### 14.2 Home View
+
+Current: shows this week’s workouts as cards.
+
+HYROX: same card layout, but:
+- **Brick cards** show component breakdown (run segments + station list)
+- **Station cards** show station names and load/reps
+- **Weekly load bar** shows 3D load: aerobic (blue), anaerobic (amber), MTL (red/orange)
+- **MTL budget indicator** shows weekly MTL vs cap (progress bar)
+
+### 14.3 Plan View
+
+Current: week-by-week running plan with phase labels.
+
+HYROX: same structure, but:
+- Each week shows session type counts (e.g., “R3 S2 B1” for 3 runs, 2 stations, 1 brick)
+- Phase labels from §3.2 (base/build/peak/taper)
+- Weekly volume shown as total 3D load
+- Brick sessions marked with a component icon
+
+### 14.4 Stats View
+
+Current: CTL/ATL/TSB chart, weekly volume, zone distribution.
+
+HYROX: adds:
+- **3D load chart:** stacked area showing aerobic + anaerobic + MTL over time
+- **Station benchmark progress:** per-station time chart (if benchmarks recorded)
+- **Run pace trend** (unchanged from running mode)
+- **Athlete bias indicator:** “Quick but weak” / “Strong but slow” / “Balanced” with trending
+
+### 14.5 Station Detail Cards
+
+When tapping a station workout, show:
+- Station name and load/reps
+- 3D load contribution (how much aerobic/anaerobic/MTL this station adds)
+- Technique cues (e.g., “Wall balls: full squat depth, push the ball from the chest, find a rhythm”)
+- Replacement options (what to do if equipment unavailable)
+
+### 14.6 Colour Coding
+
+Session type colours (small indicators only, per UX_PATTERNS.md):
+
+| Type | Colour | Rationale |
+|------|--------|-----------|
+| Run | Green (`var(--c-run)`) | Consistent with triathlon mode |
+| Station | Orange | Functional fitness association |
+| Brick | Split gradient or dual-dot | Combination indicator |
+
+These are accent indicators only (small dots, chart lines). Per UX_PATTERNS.md, no tinted card backgrounds.
+
+---
+
+## 15. Rollout Plan
+
+### Phase 0: Stabilise Running Mode (prerequisite)
+Fix open P1 bugs (CTL 222, TSS percentages). These touch `fitness-model.ts` and load calculations that HYROX will build on.
+
+### Phase 1: Types and State Schema
+- Add `’hyrox’` to `eventType`
+- Add `HyroxConfig`, `HyroxStation`, `HyroxSessionIntent` types
+- Add `hyroxComponents` and `musculoTendonLoad` to `Workout`
+- Ensure all existing tests pass (running mode unaffected)
+- **No UI changes yet.**
+
+### Phase 2: Wizard Fork
+- Add HYROX option to mode selection
+- Build HYROX-specific onboarding steps
+- Equipment survey
+- Store in `hyroxConfig`
+- Result: user can onboard for HYROX, but sees empty plan
+
+### Phase 3: Plan Engine (HYROX)
+- New `plan_engine.hyrox.ts`
+- Run session generator (reuses existing run intents)
+- Station session generator (technique, density)
+- Brick session generator (component-based)
+- Phase-appropriate session selection (§3.2)
+- Bias detection and response (§D)
+
+### Phase 4: Scheduler
+- Template-based HYROX week layout
+- MTL-aware hard-day separation
+- Station variety constraints
+- Brick placement logic
+
+### Phase 5: Load Model (MTL Integration)
+- `computeWeekMTL()` function
+- MTL saturation curve (§3.3)
+- MTL cap enforcement (§G)
+- MTL-aware ACWR
+- 3D load output on each workout
+
+### Phase 6: UI
+- Home view: component-based workout cards, 3D load bars
+- Plan view: session type counts, phase labels
+- Stats view: 3D load chart, station benchmarks
+- Station detail cards
+
+### Phase 7: Activity Matching
+- Mode-aware activity classification
+- Station activity matching (duration-based)
+- Brick detection from sequential activities
+- MTL calculation for synced activities
+
+### Phase 8: Race Prediction
+- Finish time model (§4.5): Total = 8×(fatigued 1km) + Σ station times
+- Bias-aware prediction (station bottleneck identification)
+- Training response tracking (finish time trend)
+
+---
+
+## 16. Deep Integration Walkthrough
+
+This section walks through every stage of the user journey and identifies exactly where HYROX breaks the current system.
+
+### 16.1 Onboarding / Wizard
+
+**Current flow** (`src/ui/wizard/controller.ts`, `src/ui/wizard/renderer.ts`):
+```
+welcome → goals → background → volume → performance →
+fitness → strava-history (conditional) → physiology →
+initializing → runner-type → assessment → main-view
+```
+
+**Step 2: Goals** — `raceDistance` is `’5k’ | ‘10k’ | ‘half’ | ‘marathon’`. No HYROX option.
+- **Fix:** Add sport selection card: Running / Triathlon / HYROX. If HYROX, show format selection (Open/Pro) instead of running distances. Race browser needs HYROX events or custom-date-only path.
+
+**Step 3: Background** — `experienceLevel` uses `RunnerExperience` enum (running-specific).
+- **Fix:** For HYROX, experience maps to ability band (§3.2). Running experience is still collected separately to feed VDOT. Add: “HYROX experience” selector (never/1-2 events/regular/competitive).
+
+**Step 4: Volume** — `runsPerWeek` is the primary planning variable.
+- **Fix:** Replace with total sessions. Suggested split: “3 runs + 2 stations + 1 brick” for novice. User can adjust per category.
+
+**Step 5: Performance** — `PBs` interface is running-only.
+- **Fix:** Add optional HYROX finish time and station split inputs. Running PBs still collected for VDOT pipeline.
+
+**Step 9: Initializing** — `initializeSimulator()` is entirely running-specific.
+- **Fix:** Fork. `initializeHyrox(onboardingState)` runs when HYROX selected (see §13.4).
+
+**Step 10: Runner Type** — Speed/Balanced/Endurance from running fatigue exponent.
+- **Options:**
+  - **(A) Drop for HYROX.** Simplest.
+  - **(B) HYROX archetype.** Replace with bias detection: “Quick but weak” / “Strong but slow” / “Balanced” (§D).
+- **Recommendation:** Option B. Directly maps to plan adaptation rules.
+
+### 16.2 Plan Generation
+
+**Current system** (`src/workouts/plan_engine.ts:planWeekSessions()`):
+Calculates ability band → determines deload → applies effort multiplier → caps quality → fills slots greedily from priority list.
+
+**Problems for HYROX:**
+1. **Volume is single-sport:** `totalMinutes` is all running. No concept of station or brick time.
+2. **Quality cap is global:** “Max 2 quality sessions” doesn’t distinguish station quality from run quality.
+3. **Priority list is running-specific:** Threshold vs VO2 vs marathon pace ordering only makes sense for running.
+4. **No 3D load budgeting:** Current system budgets aerobic/anaerobic only.
+
+**Solution:** Parallel HYROX planner that generates intents by type (run/station/brick), then merges. Reuses `abilityBandFromVdot()`, `isDeloadWeek()`, `effortMultiplier()`. Adds 3D load budgeting and MTL cap enforcement.
+
+### 16.3 Intent-to-Workout Conversion
+
+**Current system** (`src/workouts/intent_to_workout.ts`):
+Converts `SessionIntent` → `Workout` with human-readable descriptions using pace ratios.
+
+**Problems:**
+1. **No component-based descriptions:** Stations need “SkiErg 1000m + Sled Push 50m” format, not “5.2km @ 5:00/km”.
+2. **No 3D load output:** Current `calculateWorkoutLoad()` returns aerobic/anaerobic only.
+
+**Solution:** Add `hyroxIntentToWorkout()` for station and brick intents. Run intents reuse existing `intentToWorkout()` unchanged. Add `musculoTendonLoad` calculation using station taxonomy factors from §4.1.
+
+### 16.4 Scheduler
+
+**Current system** (`src/workouts/scheduler.ts:assignDefaultDays()`):
+5-phase algorithm. `HARD_WORKOUT_TYPES` only includes running types.
+
+**Problems:**
+1. **No MTL-aware spacing:** A high-MTL station session (lunges, wall balls) followed by a quality run is problematic.
+2. **Hard-day detection is run-only.**
+3. **No brick anchoring.**
+
+**Solution:** Template-based HYROX scheduler (§9.4). Apply hard-day separation using both anaerobic AND MTL thresholds per §A.
+
+### 16.5 Daily Interaction: Rating, Skipping, Moving
+
+**Current system** (`src/ui/events.ts`):
+- `rate()`: Records RPE, computes VDOT adjustment.
+- `skip()`: First skip → push to next week. Second skip → drop.
+
+**For HYROX:**
+- **Rating:** RPE for the whole session (not per-component). Feed into effort multiplier unchanged. VDOT adjustment only from run sessions.
+- **Skipping:** Same push-to-next-week logic. If a brick is skipped, push the full brick (not split into run + station).
+- **MTL impact of skipping:** If a high-MTL session is skipped, the weekly MTL drops. No compensatory MTL increase next week (avoid eccentric overload spikes).
+
+### 16.6 Activity Sync
+
+**Current system** (`src/data/activitySync.ts`, `src/calculations/activity-matcher.ts`):
+Activities classified by `mapGarminType()`. Runs auto-match. Everything else → cross-training queue.
+
+**Problems:**
+1. Station activities (Workout/CrossFit/HIIT) classified as cross-training.
+2. No component-level matching.
+
+**Fix:** In HYROX mode, treat station-type activities as primary. Auto-match to station/brick slots by day proximity + duration. Cross-training modal does not fire for station activities.
+
+### 16.7 Load and Fitness Model
+
+**Current system** (`src/calculations/fitness-model.ts`):
+- Signal A: `computeWeekTSS()` (runSpec discount)
+- Signal B: `computeWeekRawTSS()` (full physiological load)
+- CTL/ATL/TSB from these signals.
+
+**Problems:**
+1. **No MTL tracking.** Station mechanical strain not captured.
+2. **Station work gets heavy runSpec discount (0.30).** For HYROX athletes, station work IS the training.
+
+**Solution:**
+- Signal A: Station work keeps existing runSpec (0.30) for running fitness CTL. HYROX athletes’ running fitness is still primarily built through running.
+- Signal B: Unchanged. All load at full value.
+- MTL (new): Computed per §3.3, with its own CTL/ATL track.
+- Athlete tier: For HYROX, derive from combined CTL (Signal B) not running-only CTL, so high-volume HYROX athletes are correctly classified.
+
+### 16.8 Readiness and Daily Coaching
+
+**Current system** (`src/calculations/readiness.ts`):
+Readiness composite: 35% freshness (TSB) + 30% load safety (ACWR) + 35% recovery (HRV/sleep/RHR).
+
+**For HYROX:**
+- **Overall readiness:** Use combined TSB and ACWR (unchanged).
+- **MTL-aware coaching:** If MTL is spiking (mtlACWR > 1.3), coach suggests reducing station density or switching to erg-based (low-MTL) stations.
+- **Pre-race eccentric warning:** In the final 5-10 days, flag any planned session with high-MTL stations (lunges, wall balls, burpee BJ). Suggest DOWNGRADE to technique-only or erg-based alternatives per §G.
+
+### 16.9 Stats and Progress
+
+**Current system** (`src/ui/stats-view.ts`):
+Weekly load bar, CTL/ATL/TSB chart, zone distribution, running km trend, VDOT trend.
+
+**HYROX additions:**
+- **3D load chart:** Stacked area showing aerobic (blue) + anaerobic (amber) + MTL (red) over time. Replaces the single-dimension load bar.
+- **Station benchmark tracking:** If the user records station benchmark times (§3.6), show per-station time trends.
+- **Finish time projection:** Based on §4.5 forecasting model. Show predicted total time with run/station split breakdown.
+- **Bias indicator:** Show current classification (quick-but-weak / strong-but-slow / balanced) and how it’s trending based on recent benchmarks.
+
+---
+
+## 17. Open Questions
+
+These need Tristan’s input before implementation:
+
+### Architecture
+1. **Shared or separate plan engines?** Recommendation: separate (`plan_engine.hyrox.ts`). Same rationale as triathlon.
+2. **MTL cap values by band?** The research doc defines the saturation curve formula but not the specific cap values per ability band.
+
+### UX
+3. **Component-based workout cards:** Show full round breakdown or summarised? (“5 rounds: 1km run + mixed stations” vs listing each round)
+4. **3D load visualisation:** Stacked bar, stacked area, or three separate bars?
+5. **Station benchmarks:** In-app benchmark protocol or manual entry only?
+
+### Training Model
+6. **Default MTL cap values by band:** Per CLAUDE.md, no made-up numbers. The saturation curve formula is from the research doc but specific caps need confirmation.
+7. **Station load coefficients (§4.1):** The research doc provides relative 0-10 values. These need validation against real HYROX training data.
+8. **modalityFactor / impactFactor / externalLoadFactor defaults:** Listed in §3.3 as “tuneable.” Confirm starting values.
+
+### Data
+9. **Station detection from Strava:** Can we infer station type from HR patterns in a Workout activity? Or always manual?
+10. **HYROX race result parsing:** Any structured format available from HYROX timing systems?
+
+### Scope
+11. **Doubles strategy:** Support HYROX Doubles (shared workload)? Architecture should allow but not build now.
+12. **Gym/strength integration:** How does existing `gym.ts` interact with HYROX station work? Are they separate or does station work replace gym sessions?
+13. **HYROX Relay:** Different event format with single-station specialisation. Out of scope for now?
+
+---
+
+## Appendix A: Glossary
+
+| Term | Meaning |
+|------|---------|
+| **HYROX** | Standardised fitness race: 8 x 1km run + 8 functional workout stations, always in the same order. |
+| **HYROX Open** | Standard format with Rx (prescribed) weights. |
+| **HYROX Pro** | Heavier station weights for competitive athletes. |
+| **HIFT** | High-Intensity Functional Training. The broader category HYROX belongs to (Brandt et al., 2025). |
+| **MTL** | MusculoTendon Load. The third load currency (alongside aerobic and anaerobic) capturing eccentric damage, bracing stress, loaded carries, and impact/plyometric exposure (§3.3). |
+| **sRPE** | Session RPE. Perceived exertion for the entire session on a 1-10 scale. Base unit for internal load: IL = duration_min x sRPE (Haddad et al., 2017). |
+| **IL** | Internal Load. duration_minutes x sRPE. The base input to all load calculations. |
+| **modalityFactor** | Multiplier reflecting how much musculoskeletal strain a given modality produces per unit of internal load. E.g., easy run 0.6, sled push 1.2, burpee broad jumps 1.3 (§3.3). |
+| **impactFactor** | Multiplier for ground-contact / plyometric stress. Erg 0.7, run 1.0, bounding/jumps 1.2 to 1.4 (§3.3). |
+| **externalLoadFactor** | Scaling factor for external weight relative to bodyweight. Capped. Applies to loaded stations like sled, farmer carry, lunges (§3.3). |
+| **MTL cap** | Per-band weekly ceiling on effective MTL. Prevents excessive peripheral strain accumulation. Uses saturation curve: effectiveMTL = MTL_cap x (1 - exp(-rawMTL / MTL_cap)) (§3.3). |
+| **3D load** | The three-dimensional load vector: [aerobicLoad, anaerobicLoad, MTL]. Used for session similarity scoring and weekly budgeting. |
+| **Specificity penalty** | Multiplier (0 to 1) applied when substituting a planned session with a less-specific alternative. E.g., sled push replaced by hill push = 0.90 penalty (§3.4). |
+| **Brick (HYROX)** | A session with 2+ run segments interleaved with 2+ station components, simulating race structure. The core specificity session. |
+| **Station taxonomy** | Classification of the 8 HYROX stations by fatigue signature: heavy grind/bracing (sled), eccentric quad + gait disruption (lunges, wall balls, burpee BJ), cyclical erg (SkiErg, Row), grip + trunk stiffness (farmer carry) (§3.1). |
+| **ACWR** | Acute:Chronic Workload Ratio. ATL / CTL. Used as a load-spike detector. Debated as an absolute injury predictor (Zouhal et al., 2021). |
+| **CTL** | Chronic Training Load. 42-day exponential moving average of training load. Represents fitness. |
+| **ATL** | Acute Training Load. 7-day exponential moving average. Represents fatigue. |
+| **TSB** | Training Stress Balance. CTL minus ATL. Positive = fresh, negative = fatigued. |
+| **Quick but weak** | Athlete bias where run splits are good but station times are poor and pace decays sharply after stations (§D). |
+| **Strong but slow** | Athlete bias where station times are good but run pace is poor even early in the race (§D). |
+| **Eccentric overload** | High volume of lengthening-under-load contractions (lunges, wall balls, burpee BJ). Causes delayed muscle soreness and impairs subsequent running. Novel eccentric exposure avoided in final 5 to 10 days pre-race (§G). |
+| **AMRAP** | As Many Reps/Rounds As Possible. A time-capped station density format. |
+| **EMOM** | Every Minute On the Minute. A pacing format for station work. |
+| **Compromised running** | Running under station-induced peripheral fatigue. The defining performance challenge of HYROX (§5). |
+

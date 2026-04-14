@@ -10,6 +10,7 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/FEATURES.md` | Every feature in plain English — what it does, key file, test status |
 | `docs/CHANGELOG.md` | Session-by-session history of significant changes |
 | `docs/UX_PATTERNS.md` | Design reference — zone bars, area charts, drill-down sub-pages, colour rules, **overlay/modal positioning** |
+| `docs/SCIENCE_LOG.md` | Scientific rationale for every model/formula — constants, derivations, limitations, literature references |
 
 ## Issue Tracking Workflow
 
@@ -45,6 +46,17 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - Scoring weights, decay rates, tier thresholds, TSS conversion factors
 
 If you find yourself writing a number that isn't sourced from existing code or state, ask Tristan what it should be before writing it.
+
+## Scientific Defensibility
+
+Every model, formula, or algorithm that drives a user-facing number must be scientifically defensible. When building or modifying any calculation:
+
+1. **State the science**: Before implementing, explain the physiological or statistical basis. Name the model (e.g. Banister impulse-response, EPOC decay) or cite the principle.
+2. **Justify every constant**: If a number is derived from literature, say which. If empirically calibrated, say against what. If it's a pragmatic shortcut, say why it's acceptable.
+3. **Log the rationale**: After implementing, add an entry to `docs/SCIENCE_LOG.md` with the formula, what each term means, why it's defensible, and what the known limitations are.
+4. **Flag what's weak**: Every model has assumptions. Call them out explicitly (e.g. "linear scaling is a simplification of bi-exponential EPOC decay").
+
+`docs/SCIENCE_LOG.md` is the permanent record. Future sessions must check it before modifying any model to understand why decisions were made.
 
 ## Conventions
 

@@ -13,3 +13,15 @@ mcp.json
 *.docx
 *.odt
 ~$*
+
+# Scratch / design references — not source of truth
+*.png
+Recovery_score_ux.html
+Strain*_Ux.md
+test-rpe*.js
+
+# Separate subproject
+marque-cli/
+
+# Supabase CLI transient state
+supabase/.temp/
