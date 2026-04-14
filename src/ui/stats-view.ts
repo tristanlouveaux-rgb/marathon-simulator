@@ -94,6 +94,29 @@ function computeCurrentVDOT(s: SimulatorState): number {
  * input. No HR scaling — the blend engine already handles sub-race efforts via
  * its PB/LT/VO2 weighting and recency decay.
  */
+/** 4-week running-km average from garminActuals (runs only, ≥2 km). */
+function recentRunningVolumePerWeek(s: SimulatorState): number {
+  const currentIdx = Math.min(s.w - 1, (s.wks?.length ?? 0) - 1);
+  const startIdx = Math.max(0, currentIdx - 3);
+  let totalKm = 0;
+  let weeksCounted = 0;
+  for (let wi = startIdx; wi <= currentIdx; wi++) {
+    const wk = s.wks?.[wi];
+    if (!wk) continue;
+    weeksCounted++;
+    const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
+    if (!actuals) continue;
+    for (const val of Object.values(actuals)) {
+      const a = val as any;
+      const aType = (a.activityType || '').toUpperCase();
+      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
+      if (!a.distanceKm || a.distanceKm < 2) continue;
+      totalKm += a.distanceKm;
+    }
+  }
+  return weeksCounted > 0 ? totalKm / weeksCounted : 0;
+}
+
 function deriveRecentRunFromActuals(s: SimulatorState): { d: number; t: number; weeksAgo: number } | null {
   for (let wi = Math.min(s.w - 1, (s.wks?.length ?? 0) - 1); wi >= 0; wi--) {
     const wk = s.wks?.[wi];
@@ -756,6 +779,7 @@ function buildSummarySection(s: SimulatorState): string {
   if (isRaceMode && vdot >= 20) {
     const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
     const liveRec2 = deriveRecentRunFromActuals(s) ?? s.rec ?? null;
+    const liveKmPerWeek2 = recentRunningVolumePerWeek(s);
     const distances = [
       { label: 'Marathon', dist: 42195, km: 42.195 },
       { label: 'Half',     dist: 21097, km: 21.0975 },
@@ -768,7 +792,7 @@ function buildSummarySection(s: SimulatorState): string {
         const blended = blendPredictions(
           d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
           s.b ?? 1.06, s.typ ?? 'Balanced', liveRec2,
-          s.athleteTier ?? undefined,
+          s.athleteTier ?? undefined, liveKmPerWeek2,
         );
         timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
       } else {
