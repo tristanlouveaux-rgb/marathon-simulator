@@ -114,6 +114,60 @@ LLM narrative card is premium-only. Free users see the `readiness.sentence` in p
 
 ---
 
+### ISSUE-145: Speed-profile marathon baseline too optimistic *(P1, logged 2026-04-16, not acted on)*
+
+**Symptom**: `forecast-profiles.test.ts > Per-profile pipeline tests > 7. Speed → Marathon` has been failing since the science-audit change that raised the lower bound of the expected baseline range. One test fails, 35 in the same file pass.
+
+**Exact failure**:
+```
+baseline 2:51:53 should be in [2:55:00, 3:35:00]:
+expected 10313.44 to be greater than or equal to 10500
+```
+Predicted baseline marathon time is **~3 minutes 7 seconds faster** than the assertion floor. Not a crash — the pipeline returns a valid number — but it's outside the expected-physiological-range the science audit laid down.
+
+**Profile under test** (`forecast-profiles.test.ts:195`):
+- 5K PB 18:00 (`k5:1080`) · 10K PB 38:00 (`k10:2280`) · no half-marathon or marathon PB
+- LT pace 3:45/km (`ltPace:225`) · no VO2max · no recent race
+- `confirmedRunnerType: 'Speed'` · intermediate · 5 runs/wk · 20-week plan
+- Expected baseline range `[2:55:00, 3:35:00]` — comment on line 202 says lower bound was raised by science audit #8 (tier-aware LT multiplier)
+
+**Root-cause diagnosis** (investigated in this session):
+The baseline comes from `blendPredictions()` in `predictions.ts`. With this input vector:
+- `predictFromPB(42195, pbs, b=1.077)` → extrapolates 10K PB to 42195m via Riegel with `b≈1.077`. Yields **~2:59:00**. Riegel under-penalises speed runners at marathon distance because `b` computed from k5→k10 only doesn't capture the endurance-specific drop-off past 21K.
+- `predictFromLT(42195, 225, 'Speed', tier)` → derives tier from `cv(10000, 2250)` ≈ VDOT 51-52, which sits **right on the 'trained' (≥45) / 'performance' (≥52) boundary**. At `performance · speed` the multiplier is **1.08** → **~2:50:53**. At `trained · speed` it's **1.10** → **~2:54:03**. Tiny numerical jitter in `cv()` decides which side of the boundary you land on.
+- `predictFromVO2` returns `null` (profile has no vo2max).
+- `predictFromVolume` (Tanda) returns `null` (no `weeklyRunKm` / `avgPaceSecPerKm` passed in).
+
+Because VO2 and Tanda are both null, the no-recent marathon base weights `{pb: 0.10, lt: 0.45, vo2: 0.15, tanda: 0.30}` collapse to just `pb=0.10 + lt=0.75` (Tanda's weight is explicitly redistributed to LT on line 460-463; VO2's weight just shrinks the denominator). **LT predictor ends up carrying 88% of the blend.** Under `performance` tier this produces `0.10·10745 + 0.75·10253` normalised by 0.85 = **10311s = 2:51:51** — matches the failing assertion (`10313.44`).
+
+**Summary of what's wrong**:
+1. The `predictFromLT` marathon multiplier at `performance · speed` (1.08) is too aggressive for a speed-profile runner with no half-marathon or marathon PB. A true "sub-18 5K, never raced past 10K" speed runner typically first-marathons in 2:55–3:10, not 2:51. The multiplier was calibrated on runners whose marathon fitness has been demonstrated, not extrapolated.
+2. `predictFromPB`'s Riegel extrapolation with `b` derived from k5→k10 alone under-corrects the endurance drop-off over 21–42K. `safeB = min(b, 1.15)` caps extreme cases but doesn't lower-bound for speed runners. Speed runners need a *higher* fatigue exponent when extrapolating past HM distance without a long-race PB anchor.
+3. The blend weights leave LT at 75% (plus VO2's 15% effectively available when VO2 is null) when both VO2 and Tanda are missing. No safety net against an optimistic LT predictor.
+4. The performance/trained tier boundary at VDOT=52 is a hard cutoff that flips the marathon mult from 1.10 → 1.08 with a ~2 minute discontinuity. Linear interpolation between tiers (rather than a step function) would reduce boundary jitter.
+
+**Why the test is set up this way**: The science audit (see `SCIENCE_LOG.md` on tier-aware LT multipliers, search "audit #8") raised the lower bound of the Speed → Marathon baseline range to 10500 precisely to encode the "no marathon history = more endurance uncertainty" physiological reality. The test is correct about the range. The code's predictors are the bit that's optimistic.
+
+**User impact**: A runner onboarding with a fast 5K/10K but no marathon experience will see a slightly optimistic first-marathon prediction. They may pace off this estimate on race day and blow up. The error is **~3 minutes** at the `performance` tier boundary and **~30 seconds** at `trained`. Both are within "wrong but plausible" range for race-day pacing decisions.
+
+**Possible fixes (pick one or combine)**:
+a. Raise `marathonMult['performance']['speed']` from 1.08 to 1.10, `marathonMult['trained']['speed']` from 1.10 to 1.12. Reduces optimism by 200-300s directly.
+b. Add a "no HM/M PB" penalty: when `pbs.h == null && pbs.m == null` and `targetDist === 42195`, apply an extra 2-3% multiplier to both `predictFromPB` and `predictFromLT` outputs to encode endurance uncertainty.
+c. Cap `predictFromPB`'s closest-anchor selection: when extrapolating past 21K with only 5K/10K anchors, blend toward a fallback safe exponent rather than using `b` from just two short distances.
+d. Smooth the tier boundary: linear interpolation of `marathonMult` between tier cut-points instead of a step function.
+e. When both VO2 and Tanda are null and `targetDist === 42195`, bump `w.pb` and dampen `w.lt` so LT doesn't dominate.
+
+**Why not act now**:
+- Per `CLAUDE.md`: "Never invent constants, multipliers, thresholds, or fallback values". Raising 1.08 → 1.10 needs either literature backing or a calibration pass against a runner cohort.
+- Per `CLAUDE.md` scientific-defensibility rules: any change requires stating the physiological basis, justifying the new constant, and logging in `SCIENCE_LOG.md`.
+- This is a full science-audit item, not a quick fix. Deserves a dedicated session.
+
+**Files implicated**: `src/calculations/predictions.ts` (lines 147-180 marathon multipliers, 48-63 `predictFromPB`, 384-470 `blendPredictions` weights). Test: `src/calculations/forecast-profiles.test.ts:195-204`. Science log entry to update: `docs/SCIENCE_LOG.md` (the "tier-aware LT multiplier / audit #8" section).
+
+**Related**: ISSUE-135 (marathon optimism from stale VO2) — different root cause (physiology not updated) but same user-facing symptom (race prediction too fast).
+
+---
+
 ### Read `docs/STATS_REDESIGN.md` before suggesting any to-do list
 
 When Tristan asks "what should we work on?" or "what's next?" or requests a to-do list — **direct him to `docs/STATS_REDESIGN.md` first**. The stats page redesign is the #1 priority. Walk through the suggested next session agenda in that file:
@@ -1155,6 +1209,87 @@ Both views now read from the same computation path.
 
 ---
 
+### ✅ ISSUE-133: Guided runs — skip/extend desync the tracker's SplitScheme *(P1, fixed 2026-04-15)*
+**What**: `GuideController.skipStep()` and `extendCurrentStep(sec)` mutated the engine's `Timeline` but not the tracker's `SplitScheme`, so splits/per-km cues/adherence drifted after a user tapped "Skip rest" or "+30s".
+**Fix**: Added public `skipSegment()` and `extendSegment(sec)` on `GpsTracker`. `GuideController.skipStep()` / `extendCurrentStep()` now accept an optional tracker adapter and advance both representations in lockstep. `gps-events.ts` exposes `guidedSkipStep()` / `guidedExtendCurrentStep()` helpers wired from the rest overlay (via dynamic import to break the cycle).
+**Status**: Typecheck + 122 tests pass. Still needs on-device confirmation during a real interval session. ISSUE-137 (single parser) is the longer-term architectural fix.
+**Files**: `src/gps/tracker.ts`, `src/guided/controller.ts`, `src/ui/gps-events.ts`, `src/ui/guided-overlay.ts`.
+
+---
+
+### ✅ ISSUE-134: Guided runs — iOS WKWebView blockers (voice, haptics, silent switch) — FIXED 2026-04-16 (pending on-device verification)
+**What was**: Voice + haptic stack had never been tested on a real iPhone. Web Speech unreliable in WKWebView, `navigator.vibrate` silent on iOS, silent switch muted everything.
+**Fix shipped**:
+- App renamed to Mosaic (`com.mosaic.training`). `Info.plist` gained `NSMotionUsageDescription` and `audio` in `UIBackgroundModes` so voice can keep speaking while the screen is locked.
+- `@capacitor/haptics` installed and wired as a runtime adapter inside `src/guided/haptics.ts`. Native → `Haptics.impact` (Taptic Engine), browsers → `navigator.vibrate`. Existing tests unaffected — the injectable `HapticAdapter` interface is preserved.
+- New local SPM plugin `@mosaic/guided-voice` at `ios-plugins/guided-voice/`, Swift target `ios/Sources/GuidedVoicePlugin/GuidedVoicePlugin.swift`. Wraps `AVSpeechSynthesizer`; activates `AVAudioSession(.playback, .voicePrompt, [.duckOthers, .mixWithOthers])` around every utterance — `.playback` overrides the silent switch. Deactivates with `.notifyOthersOnDeactivation` on the delegate finish / cancel callback.
+- `src/guided/voice.ts` routes `speak()`/`cancel()` through `registerPlugin<GuidedVoicePlugin>('GuidedVoice')` when `Capacitor.isNativePlatform()`; Web Speech is the browser fallback. `composePhrase` stays pure so tests pass unchanged.
+- Plugin registered as a proper local npm package (`npm install file:./ios-plugins/guided-voice`) so `npx cap sync ios` auto-adds it to `packageClassList` and to `CapApp-SPM/Package.swift`. Keeping the Swift file inline under `CapApp-SPM/Sources/` would have been silently stripped on every sync.
+**Pending on-device verification** per CLAUDE.md rule: install on iPhone, flip the silent switch, lock the screen mid-run, confirm voice + haptics fire and music ducks.
+**Files**: `capacitor.config.ts`, `ios/App/App/Info.plist`, `ios/App/App.xcodeproj/project.pbxproj`, `src/guided/haptics.ts`, `src/guided/voice.ts`, `ios-plugins/guided-voice/**`, `docs/IOS_SETUP.md`.
+
+---
+
+### ✅ ISSUE-135: Guided runs — cues fire late or not at all when screen is locked *(P1, interim fix 2026-04-16)*
+**What**: The tracker's 1s `setInterval` (which drives engine updates) is throttled heavily when the webview is backgrounded or the screen is locked. The user pockets the phone and voice cues stop. This defeats the guided experience for the majority of the run.
+**Interim fix (web-only)**: Screen Wake Lock API acquired inside `startTracking` when a `GuideController` is created and `guidedKeepScreenOn !== false` (default ON). Released on `stopTracking` (both branches), `disableActiveGuide`, and when the user toggles it off. Re-acquires automatically on `visibilitychange → visible` since browsers release the lock on tab-hide. Graceful no-op on unsupported browsers (Safari pre-16.4). New Account → Preferences toggle ("Keep screen on") below the voice-rate slider, disabled with "Not supported on this browser" sub-label when the API is missing.
+**Follow-up**: FUTURE-03 Live Activity / Capacitor `@capacitor-community/keep-awake` on native shells will supersede this when the phone is pocketed.
+**Files**: `src/utils/wake-lock.ts` (new), `src/utils/wake-lock.test.ts` (new, 11 tests), `src/ui/gps-events.ts`, `src/ui/account-view.ts`, `src/types/state.ts`.
+
+---
+
+### ✅ ISSUE-136: Guided runs — music ducking not implemented *(P2, fixed 2026-04-16 via ISSUE-134 native plugin)*
+**Fix**: `GuidedVoicePlugin.swift` activates `AVAudioSession` with category `.playback`, mode `.voicePrompt`, and options `[.duckOthers, .mixWithOthers]` before each utterance and deactivates with `.notifyOthersOnDeactivation` on finish / cancel. On iOS the app will dip Spotify/Apple Music while the voice speaks and restore it after. Web fallback (`SpeechSynthesisUtterance`) has no ducking equivalent — speech plays over music at full volume as it did before, but this is only the development path.
+**Status**: Implemented in code. Needs on-device confirmation that ducking behaves as expected against Apple Music and Spotify.
+**Files**: `ios-plugins/guided-voice/ios/Sources/GuidedVoicePlugin/GuidedVoicePlugin.swift`, `src/guided/voice.ts` (native bridge via `@capacitor/core registerPlugin('GuidedVoice')`).
+
+---
+
+### ✅ ISSUE-137: Guided runs — two parsers for one workout description *(P2, architectural, fixed 2026-04-16)*
+**Fix**: `buildSplitScheme` is now a thin adapter over `buildTimeline`. The split scheme is derived by walking the `Timeline` steps and mapping: rep → single paced segment, recovery → untimed segment with `durationSeconds`, warmup/cooldown → single paced segment at easy pace, single-block distance/time work → per-km splits, progressive (2-step easy+fast) → per-km easy + per-km "Fast km N of M". Timeline was extended to cover formats split-scheme already handled but timeline did not: (1) literal paces `"4:49/km"` in interval time / distance-at-pace expressions, (2) optional `(~790m)` / `(~3.2km)` parentheticals after zone tokens, (3) `{N}km <descriptor>` forms like `"5km warmup jog"`. New anti-regression test in `integration.test.ts` iterates every split-scheme test input and asserts the timeline is non-empty + structured where expected + all paced segments trace back to a timeline step pace.
+**Files**: `src/guided/timeline.ts`, `src/gps/split-scheme.ts`, `src/guided/integration.test.ts`, `docs/ARCHITECTURE.md`.
+
+---
+
+### ✅ ISSUE-138: Guided runs — rest overlay leaks on tab navigation *(P2, fixed 2026-04-15)*
+**Fix**: `tab-bar.ts` delegated click handler unmounts the guided overlay on any non-Record tab. `record-view.ts` re-mounts the overlay on re-entry if a `GuideController` is still active (the controller re-emits / `mountGuidedOverlay` re-renders immediately when the current step is recovery).
+**Files**: `src/ui/tab-bar.ts`, `src/ui/record-view.ts`.
+
+---
+
+### ✅ ISSUE-139: Guided runs — mid-run settings changes silently ignored *(P3, fixed 2026-04-15)*
+**Fix**: `gps-events.ts` exposes `disableActiveGuide()` and `setActiveGuideSplitAnnouncements(bool)`. Account toggles now forward to the active controller (destroy on "Off", forward split toggle live). Re-enabling mid-run still requires stopping and restarting (fresh `GuideController` needs a workout+paces, which only `startTracking` holds).
+**Files**: `src/ui/gps-events.ts`, `src/ui/account-view.ts`.
+**Files**: `src/ui/account-view.ts` (toggle handlers), `src/ui/gps-events.ts` (export a control surface).
+
+---
+
+### ✅ ISSUE-140: Guided runs — adherence uses one tolerance for every step type *(P3, fixed 2026-04-15)*
+**Fix**: `ADHERENCE_TOLERANCE_BY_KIND` map: work ±4, warmup/cooldown ±10, other ±5 (recovery is always untimed). `classifyPace` takes a kind argument; `summariseAdherence` passes the categorised kind through. Tests updated for the new bands.
+**Files**: `src/guided/adherence.ts`, `src/guided/adherence.test.ts`.
+
+---
+
+### ✅ ISSUE-141: Guided runs — end-to-end integration test missing *(P2, fixed 2026-04-15)*
+**Fix**: `src/guided/integration.test.ts` drives a single structured workout description through both parsers (`buildTimeline` + `buildSplitScheme`) and asserts they produce compatible work-rep counts, that the controller emits `stepStart` cues in strictly increasing step order and reaches `timelineComplete`, that the cue log captures every emitted event, and that `summariseAdherence` classifies synthetic splits correctly under the new per-kind tolerances. Uncovered the exact seam ISSUE-137 warns about: the initial test description ("…60s recovery") failed `buildSplitScheme` silently — confirmed the need for a single parser but tangential to this test.
+**Files**: `src/guided/integration.test.ts` (new, 4 tests).
+
+---
+
+### ✅ ISSUE-142: Guided runs — speech rate hard-coded to 1.0 *(P3, fixed 2026-04-15)*
+**Fix**: Added `guidedVoiceRate` to state (0.8–1.4, default 1.0). Slider in Account → Preferences below the two toggles; value saved on change, forwarded live to the active `VoiceCoach` via `GuideController.setVoiceRate`. `VoiceCoach.setRate` clamps to the valid range.
+**Files**: `src/types/state.ts`, `src/ui/account-view.ts`, `src/guided/voice.ts`, `src/guided/controller.ts`, `src/ui/gps-events.ts`.
+
+### ✅ ISSUE-143: Guided runs — +30s has no cap *(P3, fixed 2026-04-15)*
+**Fix**: Engine records `originalDurationSec` on first extend; caps extensions at 2× original. `extendCurrentStep` now returns the actual seconds applied so the tracker's SplitScheme stays in sync even when clipped. Overlay's +30s button is disabled (faded, `cursor:not-allowed`) when remaining allowance < 30s.
+**Files**: `src/guided/timeline.ts`, `src/guided/engine.ts`, `src/guided/controller.ts`, `src/ui/guided-overlay.ts`.
+
+### ✅ ISSUE-144: Guided runs — no observability for in-run cues *(P3, fixed 2026-04-15)*
+**Fix**: `GuideController` now pushes every `CueEvent` into a 100-entry ring buffer (`getCueLog()`), tagged with timestamp, run-elapsed seconds, step idx/label and event type. `stopTracking()` attaches the log to the `GpsRecording` as the optional `cueLog` field. Not surfaced in UI — debug-only, available on the stored recording for support diagnostics.
+**Files**: `src/types/gps.ts`, `src/guided/controller.ts`, `src/ui/gps-events.ts`.
+
+---
+
 ### ISSUE-132: Apple Watch — extend HealthKit plugin for advanced metrics *(P3, future build)*
 **What**: `@capgo/capacitor-health` does not expose several HealthKit data types that Apple Watch captures and Garmin doesn't (or does worse). These need a plugin contribution or fork to access.
 **Data to add**:
@@ -1209,6 +1344,28 @@ Both views now read from the same computation path.
 - WorkoutKit available iOS 17+ / watchOS 10+
 
 **Status**: Design doc complete. Ready to build.
+
+---
+
+### FUTURE-03: Guided Runs — Lock-Screen Live Activity (iOS) + Foreground Notification (Android)
+
+**What**: Surface a live-updating lock-screen view for a tracked run. On iOS this is ActivityKit / Live Activity (step in, duration, pace, next rep) with Dynamic Island support. On Android this is a persistent foreground-service notification with the same content.
+
+**Why it matters**: The in-app guided-runs build (voice cues, rest overlay, engine, haptics) is complete and end-to-end wired. The remaining gap is glanceability: during a run the user locks the phone and loses access to the current step, remaining distance, or next rep. Competitors (Strava, Nike Run Club, Garmin Connect) all offer this. Without it, the guided experience only works phone-in-hand.
+
+**iOS path (~5–7 days)**:
+- Add a Widget Extension target in Xcode (must be done in Xcode, not Capacitor CLI)
+- SwiftUI views for the Lock Screen and Dynamic Island presentations
+- Small custom Capacitor plugin (Swift) exposing `startActivity`, `updateActivity({step, remaining, pace, next})`, `endActivity` to JS
+- Wire calls from `GuideController` or `gps-events.ts` on step transitions + tick
+- Live Activity requires iOS 16.1+
+
+**Android path (~4–6 days, deferred until Android is in scope)**:
+- `npm install @capacitor/android` + `npx cap add android` (scaffolds ~50 files)
+- Reuse `@transistorsoft/capacitor-background-geolocation` foreground service notification (already bundled), OR write a custom Capacitor plugin for a dedicated "guided run" notification with live text
+- Update notification title/body on step transitions
+
+**Status**: Parked. Android is not a current priority. iOS Live Activity is a future build — in-app guided runs (step 5 of the original 8-step plan) is shipped. Steps 6 (Android notification) and 7 (iOS Live Activity) are now unified under this FUTURE entry.
 
 ---
 

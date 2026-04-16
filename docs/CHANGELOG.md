@@ -4,14 +4,269 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
-## 2026-04-15 — Volume-scaled marathon LT multiplier
+## 2026-04-16 — Race forecast surface: Home card + full-page chart, modal removed
 
-- **Marathon LT multiplier now volume-aware**: `predictFromLT` applies a bump to the marathon multiplier based on 4-week running volume (+0.00 at ≥50 km/wk, +0.02 ≥30, +0.05 ≥15, +0.08 otherwise), capped at 1.14. Expresses fractional utilization loss: a fit athlete (4:12/km LT) at 10 km/wk running volume now predicts 3:22 instead of 3:07 — same aerobic ceiling, can't hold as high a % of it for 42K without volume. Marathon only; 5K/10K/HM unchanged. Full rationale in `docs/SCIENCE_LOG.md` — Joyner & Coyle 2008, Billat 2003, Coyle 1984.
-- **`blendPredictions` forwards `weeklyRunKm` to `predictFromLT`**: stats-view already computed this for the low-volume weight discount; now it also drives the multiplier adjustment.
+- **`src/ui/prediction-breakdown.ts` deleted.** The "Why this prediction?" modal launched from `cv-tile`, `fc-tile`, the Stats race-estimate row, and the wizard plan-preview "Why this time ›" link is gone. It rendered "—" for users without enough run history (most onboarding states) and duplicated the Stats forecast table in a less informative format.
+- **`src/ui/home-view.ts`** — New `buildRaceForecastCard(s)` placed between today's-workout and readiness ring, race mode only (`!s.continuousMode && s.rd && s.initialBaseline`). Shows distance label, large predicted finish time, target time, and signed delta vs target ("On pace" / `+N min` / `−N min`, U+2212 minus). Tap opens the new race forecast page.
+- **`src/ui/race-forecast-view.ts` (new)** — Full-page forecast view modelled on `rolling-load-view.ts`. Hero ring (gradient amber → red as forecast lags goal, fill = % through plan), Started · Now · Forecast stat row, line chart of race-time progression at `s.rd`. Solid stroke for `s.vdotHistory` actuals (converted via `tv(vdot, rdKm(s.rd))`), dashed continuation to `s.forecastTime` at week `s.tw`, horizontal dashed reference line at `s.initialBaseline` with HTML "Goal" label in the right gutter. "Add a quality session" CTA appears when not in taper, `s.epw < 7`, and forecast lags goal by ≥ 20 min — bumps `s.rw + s.epw` then re-runs `refreshBlendedFitness` (mirrors the `goal-add-session` lever in plan-view). Race-day pacing disclaimer footnote.
+- **`src/ui/main-view.ts`** — Plan predictions row trimmed from 3 to 2 columns. "Current" column dropped (was driven by `s.currentFitness`, the same number the stats page already shows on the race row). Forecast column now carries the signed-delta subline ("+13 min vs target" / "On pace vs target"). `cv-tile` and `fc-tile` IDs and their (now-removed) modal handlers gone.
+- **`src/ui/stats-view.ts`** — Race-estimate row matching `s.rd` now renders an inline signed delta ("+13 min" / "On pace") to the left of the time, race mode only. Other distances stay unannotated. The `.race-est-row` no longer opens the deleted modal.
+- Delta convention: `forecast − goal` (positive = slower, negative = faster). Always uses Unicode minus `\u2212`, not a hyphen.
 
-## 2026-04-15 — Readiness: "On Track" recoloured neutral
+## 2026-04-16 — Running VO2 Max alignment with Garmin Connect
 
-- `readinessColor()` in `src/calculations/readiness.ts` now returns `--c-muted` for `On Track` instead of `--c-ok-muted`. A 59 score sitting near the bottom of the 55–74 band was rendering in celebratory green, which overstated the signal. Primed stays green, Manage Load stays amber, Ease Back/Overreaching stays red.
+- **`supabase/functions/garmin-backfill/index.ts`** now fetches `/wellness-api/rest/userMetrics` in parallel with dailies/sleep/HRV and upserts into `physiology_snapshots` (`vo2_max_running`, `lactate_threshold_pace`, `lt_heart_rate`). Previously the backfill only touched `daily_metrics.vo2max` (the crude dailies field) and relied on live webhook `userMetrics` pushes for the running-specific value; since those events are sporadic, state could stay stale for weeks when Garmin Connect had updated. Response JSON gains `physiologyDays` count.
+- **VO2 priority flipped** in both `supabase/functions/sync-physiology-snapshot/index.ts` (merge step) and `src/data/physiologySync.ts` (client hydration). `physiology_snapshots.vo2_max_running` (running-specific, from `userMetrics`) now wins over `daily_metrics.vo2max` (generic dailies value that can include cycling/cardio estimates and diverges from what Garmin Connect shows under "Running VO2 Max"). Previously the generic value took precedence, so a correct `vo2_max_running` row could be masked by a stale cross-sport dailies value. `s.vo2`, `s.lt`, and `s.ltHR` all hydrate from this fixed chain.
+
+## 2026-04-16 — Sleep debt chart aligned to headline value
+
+- **Sleep page cumulative debt chart no longer contradicts its own headline.** `src/calculations/sleep-insights.ts` now exports `computeSleepDebtSeries()` — the per-night trajectory of the same exponential-decay recurrence (`debt = debt × 0.9057 + max(0, target − actual)`) used by `computeSleepDebt()`. The latter now delegates to the series (returning the last element), so headline and chart share one source of truth.
+- **`src/ui/sleep-view.ts`** — Replaced the naive "sum of (actual − target) over last 7 nights" chart data with `computeSleepDebtSeries(...).slice(-7)` plotted as `−debt`. The chart's last point now equals the headline value exactly. Surpluses no longer cancel debt 1-for-1 (matches Rupp 2009 / Arnal 2015 evidence that recovery sleep is less efficient than arithmetic implies). Chart will drift up toward the target line with good nights, not snap back to it.
+
+## 2026-04-16 — iOS platform bootstrap (ISSUE-134)
+
+- **App renamed to Mosaic.** Bundle id `com.mosaic.training`, display name `Mosaic`. Updated `capacitor.config.ts`, the baked `ios/App/App/capacitor.config.json`, `Info.plist` `CFBundleDisplayName`, the location usage strings, and `PRODUCT_BUNDLE_IDENTIFIER` in both Debug and Release configs of `App.xcodeproj/project.pbxproj`.
+- **Haptics routed through `@capacitor/haptics` on native.** `src/guided/haptics.ts` now selects its default adapter at runtime: native (Taptic Engine via `Haptics.impact`) when `Capacitor.isNativePlatform()`, navigator.vibrate in browsers. Patterns are emulated by chaining `impact` calls on setTimeout — short ticks map to `ImpactStyle.Light`, longer pulses to `.Medium`. The injectable `HapticAdapter` interface is preserved so controller tests are unaffected.
+- **Info.plist: motion + audio background.** Added `NSMotionUsageDescription` ("Mosaic uses motion data to detect steps and cadence while you run.") and added `audio` to `UIBackgroundModes` so the `GuidedVoice` plugin can speak with the screen locked.
+- **GuidedVoice plugin packaged locally.** Moved the Swift source from `ios/App/CapApp-SPM/Sources/CapApp-SPM/` to a standalone local npm package at `ios-plugins/guided-voice/` (with its own `Package.swift`). `npm install file:./ios-plugins/guided-voice` registers it so `npx cap sync ios` auto-detects the plugin (`packageClassList` now includes `GuidedVoicePlugin`). Keeping the plugin inline to the app would have been silently stripped on every sync.
+- **Screen keep-awake adapter.** `src/guided/keep-awake.ts` — thin wrapper over `@capacitor-community/keep-awake` with a browser `navigator.wakeLock` fallback. Not yet wired into the Record tab; ISSUE-135 owns that call site.
+- **BackgroundGeolocation config helper.** `src/guided/background-location.ts` — exports `GUIDED_RUN_LOCATION_CONFIG` (the recommended `@transistorsoft/capacitor-background-geolocation` options for guided runs: `preventSuspend: true`, `locationAuthorizationRequest: 'Always'`, `foregroundService: true`, and the "Guided run in progress" notification). No call site yet — attaches to the tracker bootstrap when that lands.
+
+## 2026-04-16 — Guided runs: music ducking + parser/wake-lock fragilities
+
+- **Music ducking lands natively (ISSUE-136).** `GuidedVoicePlugin.swift` wraps AVSpeechSynthesizer and activates `AVAudioSession(.playback, .voicePrompt, [.duckOthers, .mixWithOthers])` around every utterance, deactivating with `.notifyOthersOnDeactivation` on finish / cancel. Spotify and Apple Music dip while the voice speaks and restore after. JS side already routes through the native bridge when `Capacitor.isNativePlatform()`.
+- **Wake-lock concurrent-acquire guard.** `src/utils/wake-lock.ts` tracks a `pending` promise during a `wakeLock.request('screen')` round-trip; a second `acquireWakeLock` call while the first is in flight awaits the same promise instead of issuing a duplicate request.
+- **Progressive run role tag.** `Step.role: 'progressive-easy' | 'progressive-fast'` set by `buildTimeline` on the two halves of a progressive run (e.g. `"21km: last 5 @ HM"`). `buildSplitScheme` reads the role instead of sniffing step shape (length-2, easy→work). A future 3-step progressive will not silently fall back to generic per-km labels.
+- **SplitScheme cleanups.** Adapter reads `step.repIdx` for recovery rep numbers (no more label-regex extraction) and uses a new `buildTimelineFromDesc(desc, paces)` helper instead of fabricating a `Workout` object. Recovery steps in `timeline.ts` now carry `repIdx` / `repTotal`.
+- **Voice coach comment updated** — the stale "ducking not handled here" note removed; replaced with a brief summary of the native-vs-web split.
+
+## 2026-04-16 — HR drift feeds injury risk + durability chart empty state
+
+- **`src/calculations/daily-coach.ts`** — Added `detectDurabilityFlag(s)` → `DurabilityFlag | null`. Scans last 4 weeks, only counts `plannedType === 'easy'` or `'long'` actuals (strict matching — intervals/tempo excluded because drift there is expected). Fires when easy runs average > 5% drift (≥ 3 samples) or long runs average > 8% drift (≥ 2 samples). Severity = `'high'` when avg drift exceeds expected by > 3 percentage points, else `'elevated'`.
+- **`src/ui/injury-risk-view.ts`** — New "Durability Signal" card between the ACWR coaching block and Acute vs Chronic. Amber for elevated, red for high. Copy distinguishes easy-drift, long-drift, and both-elevated cases with specific remediation (ease off easy pace, slow long-run openers, fuel earlier).
+- **`src/ui/stats-view.ts`** — Aerobic Durability chart empty state rewritten: now shows `N of 4` progress when partial, and explains the restriction (steady-state running only, intervals and cross-training excluded). Helps users with many activities but few easy/long runs understand why the chart is empty.
+- **`docs/SCIENCE_LOG.md`** — Durability flag thresholds and scan window documented in the HR Drift section.
+
+## 2026-04-16 — Rolling load: remove "Last 7 days" activity breakdown
+
+- **`src/ui/rolling-load-view.ts`** — Dropped the per-activity list at the bottom of the rolling load page. The 28-day chart, 7-day zone bars, leg fatigue card, and 4-week zone balance remain. `buildActivityList` helper removed.
+
+## 2026-04-15 — Guided runs: seven follow-ups hardened (ISSUE-133/138/139/140/141/142/143/144)
+
+- **Skip / +30s stay in sync with the tracker (ISSUE-133).** `GpsTracker` now exposes `skipSegment()` and `extendSegment(sec)`. `GuideController.skipStep()` / `extendCurrentStep()` take an optional tracker adapter and advance both representations in lockstep; `gps-events.ts` wires the adapter from the rest overlay via dynamic import. Removes the silent drift between the engine's `Timeline` and the tracker's `SplitScheme` on any skip or extend.
+- **Rest overlay no longer leaks across tabs (ISSUE-138).** The delegated tab-bar click handler unmounts the overlay on any non-Record tab. `record-view.ts` re-mounts it on re-entry if a `GuideController` is still active — the controller's `mountGuidedOverlay` short-circuit renders the overlay immediately when the current step is recovery.
+- **Mid-run settings changes take effect live (ISSUE-139).** Account toggles for "Guided runs" and "Per-km splits" now forward to the active controller via `disableActiveGuide()` and `setActiveGuideSplitAnnouncements()`. Turning guided off mid-run stops the voice and removes the overlay; turning splits off silences per-km callouts without affecting step cues.
+- **+30s capped at 2× original step duration (ISSUE-143).** Engine records `originalDurationSec` on first extend and clips subsequent extensions. `extendCurrentStep` returns the actual seconds applied so the tracker stays consistent when the cap binds. Overlay's +30s button is faded / `cursor:not-allowed` once remaining allowance < 30s.
+- **Adherence tolerance per step kind (ISSUE-140).** `ADHERENCE_TOLERANCE_BY_KIND` — work ±4, warmup/cooldown ±10, other ±5 (recovery is already untimed). `classifyPace` takes a kind argument and `summariseAdherence` passes it through. Post-run retrospective no longer flags a 5 s/km drift on an easy warm-up as "off pace" while letting a 5 s/km miss on a rep slide.
+- **Speech rate is now user-configurable (ISSUE-142).** `guidedVoiceRate` on state (0.8–1.4, default 1.0). Slider lives in Account → Preferences below the two guided toggles; changes are forwarded live to the active `VoiceCoach` via `GuideController.setVoiceRate` and clamped to the valid range.
+- **Cue ring buffer for support diagnostics (ISSUE-144).** `GuideController` pushes every `CueEvent` into a 100-entry buffer annotated with run-elapsed time and step label. `stopTracking` attaches the buffer to the `GpsRecording` as the optional `cueLog` field. No UI surface — purely for reproducing voice-timing reports.
+- **End-to-end integration test added (ISSUE-141).** `src/guided/integration.test.ts` drives a structured workout through both parsers (`buildTimeline` + `buildSplitScheme`) and asserts compatible work-rep counts, monotonic `stepStart` emission, `timelineComplete`, cue-log capture, and adherence classification under the new per-kind bands. Caught a silent `buildSplitScheme` parse miss on "60s recovery" — reinforces ISSUE-137 (single parser).
+- Guided test count: 58 → 64.
+
+## 2026-04-15 — Leg fatigue surfaced as readiness signal: detail page + hard floor + soft taper
+
+- **Leg fatigue now caps readiness directly.** Previously the decayed `legLoadTotal` only produced a text note (`legLoadNote`) shown inside the Home Injury Risk popover; the readiness score itself ignored it. Cross-training that crushed the legs but barely moved TSS (a long hike, heavy ski day) read as Primed because HRV and TSB were untouched. New hard floors in `src/calculations/readiness.ts`: `legLoadTotal >= 60` caps at 34 (Ease Back), `>= 20` caps at 54 (Manage Load). Between 10 and 20 a soft linear taper runs (cap 100 → 54) so crossing the MODERATE threshold isn't a cliff. Same threshold-floor pattern as ACWR/sleep/strain; calibrated against EIMD research (Clarkson & Hubal 2002; Paulsen 2012) — non-linear risk curve, silent below light, step-change above heavy. Rationale and citations in `docs/SCIENCE_LOG.md`.
+- **`legLoadTotal` exposed on `ReadinessResult`** alongside the existing `legLoadNote`. New `hardFloor: 'legLoad'` value when the leg-fatigue floor is the binding constraint. `DrivingSignal` gets a `'legLoad'` member so Home and `daily-coach.ts` surface a leg-fatigue-specific prompt ("Protect the legs") when the floor is active, rather than pinning on a lower but non-binding sub-score.
+- **Floor precedence**: the leg-load branches guard with `score > cap`, so a stricter prior floor (ACWR, sleep, strain) is never overwritten. Only fires when it is the strictest constraint.
+- **New Leg Fatigue detail page** (`src/ui/leg-load-view.ts`). Modelled on the other readiness detail pages with a new `bronze` sky palette in `src/ui/sky-background.ts`. Hero ring uses a piecewise mapping so MODERATE (20) sits at ~30%, HEAVY (60) at ~70%, extreme (120+) fills the ring — prevents "90 looks like 60". Shows: 7-day decay timeline with threshold zones, "floor releases" + "fully fresh" projections, per-session contributors with raw/decayed split and reload penalty, and an explainer of the EIMD model. Uses the new exported `computeLegLoadBreakdown()` helper which returns per-entry decay including `halfLifeH` and `reloads`.
+- **Card home is Rolling Load, not Readiness.** Leg fatigue is load (mechanical channel), so the permanent card lives at the top of `src/ui/rolling-load-view.ts`, always visible. Readiness shows only a compact callout banner under the ring when `hardFloor === 'legLoad'` ("Leg fatigue is capping your readiness. View →") that links to the detail page.
+- **Timestamp bug fixed**: `recordLegLoad` in `src/ui/activity-review.ts` now records the most-recent underlying activity's actual `startTime` instead of `Date.now()`. Previously a backfilled activity from days ago would have its decay clock reset to now, underestimating clearance time.
+- `LEG_LOAD_MODERATE` and `LEG_LOAD_HEAVY` are exported from `readiness.ts` so the detail page and rolling-load card draw threshold lines from the same constants the floor uses.
+
+## 2026-04-16 — Guided runs: single parser for workout descriptions (ISSUE-137)
+
+- **`buildSplitScheme` now derives from `buildTimeline`.** The two parsers ran independently against `workout.d` and silently diverged: an integration test caught `"3×3min @ threshold, 60s recovery"` producing a valid timeline but zero split-scheme segments. The split scheme is now a thin adapter that walks the `Timeline` steps and maps each one to a `SplitSegment`: rep work → single paced segment, recovery → untimed segment with `durationSeconds` (plus an easy-pace jog-distance fallback to preserve the tracker's distance-advance path), warm-up/cool-down → single paced segment at easy pace, single-block distance/time work (`20km @ MP`, `8km`, `20min @ threshold`) → per-km splits at the target pace, progressive 2-step (`21km: last 5 @ HM`) → per-km easy + per-km "Fast km N of M". Adding a new workout format now only requires extending `parseMainSet` in `timeline.ts`.
+- **Timeline widened to close audit gaps** so `buildSplitScheme` can delegate without losing formats: literal paces like `"4:49/km"` in interval-time and distance-at-pace expressions, optional `(~790m)` / `(~3.2km)` parentheticals after zone tokens, and `{N}km <descriptor>` forms like `"5km warmup jog"` / `"8km easy"` now parse. All 15 existing timeline tests still pass unchanged.
+- **Anti-regression test in `src/guided/integration.test.ts`.** Iterates every split-scheme test input and asserts the timeline is non-empty, `isStructured === true` for structured workouts, and that every paced segment's `targetPace` traces back to a timeline step's `targetPaceSec`. Prevents the two views drifting apart again.
+- **All 128 tests in `src/gps/` + `src/guided/` pass.** No `SplitScheme` / `SplitSegment` type changes — downstream consumers (`gps-events.ts`, `record-view.ts`, `tracker.ts`) are untouched.
+
+## 2026-04-16 — Screen Wake Lock during guided runs (ISSUE-135 interim)
+
+- **`src/utils/wake-lock.ts`** — new module wrapping the Screen Wake Lock API. `acquireWakeLock()` requests a `'screen'` sentinel; `releaseWakeLock()` releases and clears it. A single `visibilitychange` listener re-acquires the lock when the document returns to visible (browsers release on tab-hide). `isWakeLockSupported()` reports API availability. All failures swallowed with `console.warn`; never throws to the caller. 11 unit tests in `src/utils/wake-lock.test.ts` cover acquire, release, double-acquire idempotency, re-acquire on visibility, unsupported-browser no-op, request and release error swallowing.
+- **Lifecycle wired in `src/ui/gps-events.ts`.** `startTracking` acquires the lock only when a `GuideController` is created (guided mode active) and `s.guidedKeepScreenOn !== false`. `stopTracking` releases it in both the saved-recording and the discarded-short-recording branches. `disableActiveGuide()` also releases it so turning guided off mid-run drops the lock immediately.
+- **Account → Preferences toggle.** New "Keep screen on" segmented pill below the voice-rate slider, modelled on the existing split-announcements toggle. Sub-label: "Prevents the screen locking mid-run so voice cues stay active. Uses more battery." On unsupported browsers the buttons render disabled with a "Not supported on this browser" sub-label. Toggle handler forwards live to an active guided run: turning on acquires immediately if a controller is running; turning off releases immediately.
+- **State field** `guidedKeepScreenOn?: boolean` added to `src/types/state.ts` next to the other guided-run preferences. Default treated as ON; only `=== false` opts out.
+- **Scope**: web interim. A future Capacitor migration will swap this for `@capacitor-community/keep-awake` in the iOS/Android shells.
+
+## 2026-04-16 — "Why this prediction?" modal + refresh polish
+
+- **New `src/ui/prediction-breakdown.ts` — tappable explanation modal** wired to every race-time prediction surface. Shows the distance + time, a goal delta in race mode (forecast faster / on pace / slower, with minutes), the inputs that fed the blend in plain language (runs counted, PBs, LT pace, VO2, weekly volume), a confidence tier with a "what would raise it" note, a taper note when `ph === 'taper'` (explains the held prediction per Mujika & Padilla), and an "Add a quality session" CTA that mirrors the goal-feasibility lever. No Tanda math, no percentages, no formulas — consultant tone per CLAUDE.md UI Copy rules.
+- **Tap targets wired.** Stats Race Estimates rows (each distance, `src/ui/stats-view.ts`) show a `›` chevron and pass the explicit distance + blended time. Home "Current" and "Forecast" tiles (`src/ui/main-view.ts`, handlers in `src/ui/home-view.ts`) pass `framing: 'today'` vs `framing: 'forecast'` so the sub-headline matches what the user tapped (the inline-onclick tooltip hack on "Current" is gone). Onboarding `plan-preview.ts` adds a "Why this time ›" link under the predicted finish.
+- **Modal polish.** Vertically centered per `docs/UX_PATTERNS.md → Overlays and Modals`, backdrop `rgba(0,0,0,0.45)`, neutral palette, no accent colour on secondary link, close button in `var(--c-faint)`. Gracefully handles missing predictions and stale data (`isStale === true` surfaces as "Limited — recent data is stale").
+- **`refreshBlendedFitness` appends a deduped entry to `s.vdotHistory`** so the sparkline tracks the weekly blended refresh. The earlier attempt to also write `s.currentFitness` was reverted: `renderer.ts` writes `tv(getEffectiveVdot(s), dist)` on every render, and since `s.v` now holds the blended VDOT, that live value already reflects the blend plus any fresh `rpeAdj`/`physioAdj`. Writing in two places only introduced thrash.
+- **Refresh order in `next()` swapped.** `refreshBlendedFitness` now runs *before* `applyAutoLTUpdate` so physioAdj is calibrated against the fresh `s.v` rather than last week's stale baseline. Prevents a one-week residual after each auto-LT update.
+- **Goal-feasibility CTA bumps both `rw` and `epw`.** Previously only `epw` — but `computeRenderedWorkouts` reads `s.rw` for session count, so the plan wouldn't visually update. Now matches the onboarding milestone-accept lever.
+- **Goal-feasibility banner suppressed during taper.** When `currentWeek.ph === 'taper'` the "Add a session" CTA would be useless with 2-3 low-volume weeks left.
+- **Modal goal block suppressed during taper** when direction is 'slower'. The `taperNote` already explains the held forecast; the delta copy ("X min slower than goal") would contradict it directly below. 'match' and 'faster' variants remain accurate and are kept.
+
+## 2026-04-16 — Kill wkGain trajectory; s.v tracks live blended VDOT; goal-feasibility nudge
+
+- **wkGain accumulator removed from all 13 fitness read-sites.** `s.v` was always seeded at onboarding and never changed; the weekly climb was synthesised by summing `wkGain` per week (a linear projection toward `s.expectedFinal`). That climb ignored reality — if the runner was fitter or slower than the straight line predicted, the pre-drawn trajectory won anyway. Replaced by writing the blended race-prediction VDOT back into `s.v` on every weekly refresh (`refreshBlendedFitness` in `src/calculations/blended-fitness.ts`). Effective VDOT for paces, forecasts, and matcher is now `s.v + rpeAdj + physioAdj` via a single helper `getEffectiveVdot(s)` (`src/calculations/effective-vdot.ts`). Sites updated: `stats-view`, `main-view`, `renderer`, `activity-matcher`, `events.ts` (8 sites including `recordVdotHistory`, `applyAutoLTUpdate`, `complete`, physio calibration × 3). `wk.wkGain` remains on week state for cosmetic display only.
+- **Taper/deload freeze.** During any week where `ph === 'taper'` (covers race taper and continuous-mode deload), `s.v` is not rewritten. Volume is deliberately cut in those weeks; recomputing the blend would read the cut as detraining and slow the prediction, contradicting Mujika & Padilla (2000) — fitness is maintained across a 2-to-3 week taper. Reference: science entry in `docs/SCIENCE_LOG.md`.
+- **`s.expectedFinal` now recomputed weekly.** Previously frozen at onboarding. `refreshBlendedFitness` now re-runs `calculateLiveForecast` with the fresh `s.v` and remaining weeks, so the end-of-plan projection tracks actual training response. `s.forecastTime` updated alongside.
+- **Boot-time migration in `src/main.ts`.** On launch after `advanceWeekToToday`, dynamically imports and calls `refreshBlendedFitness(s)` so existing users see current fitness on first load, not the Week-1 baseline left behind by the dropped `wkGain` model.
+- **Goal-feasibility banner on plan view.** When `forecastTime − initialBaseline > 20 min` in race mode, a banner surfaces the gap in plain language ("Forecast finish 3:28 is 16 min slower than your goal of 3:12") and offers an "Add a quality session" CTA that bumps `s.epw` by 1 (capped at 7) and triggers a fresh blended refresh. 20-min threshold is pragmatic: smaller deltas sit inside race-day variance (weather, fuelling, pacing). Implemented as `buildGoalFeasibilityBanner` in `src/ui/plan-view.ts`.
+
+## 2026-04-16 — Readiness score consistency across all surfaces
+
+- **Home and Readiness pages now show the same score.** Home ring used the week-end TSB snapshot from `computeSameSignalTSB`, while Readiness applied intra-week daily decay through today. After a sync that added load to the current week the two diverged (e.g. 57 on Home vs 62 on Readiness).
+- New shared helper `computeLiveSameSignalTSB()` in `src/calculations/fitness-model.ts` seeds from the completed-week snapshot then applies daily ATL/CTL decay using `computeTodaySignalBTSS()` for each elapsed day. Used by `home-view.ts`, `readiness-view.ts`, `freshness-view.ts`, and `daily-coach.ts` — replaces the inline decay loops that were copy-pasted across all four.
+- New `computeReadinessACWR(s)` centralises the canonical ACWR call (tier override, atlSeed derivation, signalBBaseline). Same three views + daily-coach use it — one source of truth for any future arg change.
+- Readiness detail page now uses the live `liveTSB.ctl` (not the stale week-end snapshot) for the To-Baseline CTL reference, keeping recovery-hours math consistent with the readiness score.
+
+## 2026-04-16 — Distinct sky palettes per readiness sub-page
+
+- Readiness, Freshness and Recovery (Physiology) all shared the same `blue` sky background, so tapping between cards felt visually identical. Each sub-page now has its own shade so the reader can tell them apart.
+- Added `mint`, `lavender`, `amber` palettes to `src/ui/sky-background.ts` (kept existing entries for backwards compat). Mapping: Freshness → mint, Recovery → lavender, Injury Risk (Load Ratio) → amber. Readiness keeps blue as the hub.
+- **Ring/dial colours now match the page tint** on pages where the metric has no genuine "good/bad" axis. Rolling Load ring + ratio pill use deep-blue when in the normal range (was green), only flipping to red on overload. Sleep view ring uses purple across the whole non-poor range (was green ≥75 / purple 55–74), only flipping to amber when score <55. Pages where colour carries information (Freshness TSB zones, Strain, Physiology composite) are unchanged.
+
+## 2026-04-16 — Home sleep ring: today-only, refresh prompt when missing
+
+- Home sleep ring no longer falls back to the most-recent sleep entry when today's Garmin sleep score is missing. Previously `src/ui/home-view.ts` used a `latestWithSleep` fallback that surfaced e.g. yesterday's 80 as today's ring value, which misattributed the score to the wrong day.
+- When watch is connected and today's score is absent, the ring now shows `—` with `Sync watch` subtext. Tapping the ring triggers `refreshRecentSleepScores()` + `syncPhysiologySnapshot(7)` (the same 1-week refresh used on launch), then re-renders home. Older entries remain in `physiologyHistory` attached to their own date — they just aren't displayed as today's value.
+- Sleep duration caption on the ring is also today-only (was sourced from the same stale fallback).
+
+## 2026-04-16 — Readiness score consistency
+
+- **Home and Readiness pages now show the same score.** Previously the home ring used the week-end TSB snapshot from `computeSameSignalTSB`, while the Readiness detail page applied intra-week daily decay through today. After a sync that added load to the current week, the two diverged (e.g. 57 on Home vs 62 on Readiness).
+- New shared helper `computeLiveSameSignalTSB()` in `src/calculations/fitness-model.ts` seeds from the completed-week snapshot then applies daily ATL/CTL decay using `computeTodaySignalBTSS()` for each elapsed day. Both `home-view.ts` and `readiness-view.ts` now call it for the TSB input to `computeReadiness()`.
+
+## 2026-04-15 — HR drift: four new surfaces (durability graph, fade risk, easy-pace commentary, pre-long-run nudge)
+
+- **Pre-long-run nudge** (`src/calculations/daily-coach.ts`, rendered in `src/ui/readiness-view.ts`). New `computeLongRunDriftNote()` scans last 6 weeks of `plannedType === 'long'` actuals. Fires when ≥2 of the last 3 have drift >8%. Adds a pre-session line under the coach message suggesting earlier fuelling and pace control. New `sessionNote: string | null` field on `CoachState`.
+- **Easy-pace commentary** (`detectEasyDriftPattern()` in `daily-coach.ts`, rendered in `src/ui/week-debrief.ts`). Scans last 3 weeks for `plannedType === 'easy'` actuals; fires when ≥3 samples and mean drift >5%. Appears as a second paragraph in the week debrief coach narrative card. Signal: easy pace may be sitting too close to aerobic threshold.
+- **Aerobic Durability chart** (`buildDurabilityChart()` in `src/ui/stats-view.ts`). New card in Stats → Progress detail page below the CTL chart. Shows per-session drift points (colour-coded by zone) with a 4-session rolling mean overlay. Last 12 weeks, easy + long runs only (quality sessions excluded — drift there carries no durability signal). Reference bands at 5% and 8%. Header shows current mean and trend direction.
+- **Marathon fade-risk badge** (`computeMarathonFadeRisk()` in `stats-view.ts`). New pill on the Marathon row in the Race Estimates card. Computes mean drift of long runs (≥90 min) in last 4 weeks whose pace falls within ±15 sec/km of the forecast MP. Badge reads `Fade risk: Low/Moderate/High` (>5% = mod, >8% = high). Doesn't modify the predicted time — additive context only.
+
+## 2026-04-15 — Guided runs: pace adherence summary (step 8 of 8 complete)
+
+- New `src/guided/adherence.ts` with pure `summariseAdherence(splits)` — classifies every paced split as on-pace / fast / slow (±5 sec/km tolerance, matching live coaching) and returns aggregate counts, signed mean deviation, and hit-rate fraction.
+- New compact "Pace adherence" card rendered in the post-run completion modal and the recording-detail view (`src/ui/gps-completion-modal.ts`): "N of M splits on pace — X%", plus a sub-line showing fast/slow counts and average deviation in seconds. Neutral styling, no colour, no emoji.
+- 8 adherence tests + 58 guided tests total passing. Typecheck clean.
+- Steps 6 (Android foreground notification) and 7 (iOS Live Activity) parked in OPEN_ISSUES as FUTURE-03. The guided-runs arc (timeline → engine → voice/haptics → overlay → adherence) is complete end-to-end.
+
+## 2026-04-15 — Guided runs: settings toggles + rest overlay (step 5 of 8 complete)
+
+- **Settings** (`src/ui/account-view.ts`, Preferences group): two new rows, each using the same segmented km/mi toggle pattern. "Guided runs" (Off / On, default Off) controls `s.guidedRunsEnabled`. "Per-km splits" (Off / On, default On) controls `s.guidedSplitAnnouncements` — runners turn off when Strava or Garmin already announces splits.
+- **Rest overlay** (`src/ui/guided-overlay.ts`): vertically centred card using the canonical overlay pattern (`fixed inset-0 z-50 flex items-center justify-center`, `rgba(0,0,0,0.45)` backdrop, `max-w-sm`, `p-5`). During recovery steps, shows "Recover" label, big countdown (72px tabular-nums), the step label, a `Next: {label · duration · pace}` preview of the upcoming work rep, and two bordered buttons: `+30s` (calls `extendCurrentStep(30)`) and `Skip rest` (calls `skipStep()`). Neutral styling only, no accent colour.
+- Wired into `startTracking()` / `stopTracking()` in `gps-events.ts`: overlay mounts when the guide is instantiated, updates countdown from `getProgress(data)` on every tracker tick, and unmounts on stop or `timelineComplete`.
+- 114 tests pass (50 guided + 64 others touched); typecheck clean.
+
+---
+
+## 2026-04-15 — Guided runs: controller + tracker wiring (step 5 of 8, partial)
+
+- New `src/guided/controller.ts` — `GuideController` facade composing `GuideEngine` + `VoiceCoach` + `HapticsCoach`. Single constructor takes a `Workout` + `Paces`; exposes `start()` / `update(data)` / `skipStep()` / `extendCurrentStep(sec)` / `destroy()`, and `onCue()` for UI overlay subscriptions.
+- Wired into `startTracking()` in `src/ui/gps-events.ts`: when `s.guidedRunsEnabled` is true and the workout is structured, a `GuideController` is instantiated and gets `update(data)` on every tracker tick. `stopTracking()` calls `destroy()` to cancel speech and detach listeners.
+- New state fields: `s.guidedRunsEnabled` (master toggle, default off) and `s.guidedSplitAnnouncements` (per-km voice, default on; users turn off if Strava/Garmin is already speaking).
+- New `getActiveGuideController()` export for future overlay UI.
+- 3 controller tests + 50 guided tests total passing. Typecheck clean.
+- **Deferred to next slice**: settings toggle UI, rest-overlay with "next up" preview, skip/+30s controls on recovery screen.
+
+---
+
+## 2026-04-15 — Guided runs: voice + haptic coaches (step 4 of 8)
+
+- New `src/guided/voice.ts` with a pure `composePhrase(event, opts)` text function plus a `VoiceCoach` class using the Web Speech API. Phrase rules: `Go. {label}. {duration} at {pace} per kilometre.` on work start, `Recover. {N} seconds easy.` on recovery, `Thirty seconds. Next up: …` at T-30s. Per-km splits: `Kilometre X. Y:ZZ. On pace.` / `… N seconds fast. Ease this one.` / `… N seconds behind target.` (neutral tone for slow). Easy-step splits stay silent unless the runner is too fast. Mid-rep `paceCheck` speaks `Ease back.` / `Pick it up.` on short intervals.
+- `splitAnnouncements` setting toggle lets users mute per-km voice when Strava/Garmin is already announcing.
+- New `src/guided/haptics.ts` with pluggable `HapticAdapter` (navigator.vibrate default; Capacitor haptics adapter to be swapped in on iOS). Patterns: double buzz on work start, triple on step end, single tick per silent countdown second, long final buzz on completion.
+- 14 voice tests + 47 total guided tests pass. Types clean.
+
+---
+
+## 2026-04-15 — Guided runs: GuideEngine (step 3 of 8)
+
+- New `src/guided/engine.ts` drives a `Timeline` forward from tracker updates. Emits cue events (`stepStart`, `stepHalfway`, `stepNextPreview`, `stepCountdown`, `stepEnd`, `timelineComplete`) the voice/haptic/UI layers subscribe to.
+- Naturally follows tracker pause (manual or auto) because `GpsLiveData.elapsed` and `totalDistance` are frozen during pause — no extra wiring needed.
+- Recovery steps emit a `stepNextPreview` at T-30s so the voice coach can announce the upcoming rep. Duration-based steps emit a silent 5-4-3-2-1 countdown for haptic cues.
+- Manual controls: `skipStep()` and `extendCurrentStep(sec)` for UI skip/"+30s rest" buttons.
+- 10 vitest cases: 45 total guided+tracker tests passing.
+
+---
+
+## 2026-04-15 — Guided runs: tracker auto-pause (step 2 of 8)
+
+- `GpsTracker` gains speed-based auto-pause: stop after 5s of mean speed <0.5 m/s, resume after 3s of mean speed >1.5 m/s. Thresholds are named constants at the top of `src/gps/tracker.ts`.
+- New events `onAutoPause` / `onAutoResume` and `isAutoPaused()` query method. `setAutoPauseEnabled(boolean)` toggles at runtime; disabling while auto-paused triggers immediate resume.
+- Manual pause clears the auto flag — a manually paused session requires a manual resume.
+- 6 new vitest cases: 30/30 tracker tests pass.
+
+---
+
+## 2026-04-15 — Guided runs: timeline builder (step 1 of 8)
+
+- New `src/guided/timeline.ts` converts a planned `Workout` into an ordered `Step[]` (warmup, work, recovery, cooldown), drawing pace targets from existing VDOT-derived `Paces` via `getPaceForZone`. No invented constants — every pace comes from the existing pace table.
+- Handles: simple distance, long runs, time intervals (min/s rest), distance intervals in m/mi/km, long km intervals, progressive fast-finish, distance/time at zone, explicit M:SS/km pace, mixed paces, and multi-line warmup/cooldown wrappers.
+- 15 vitest cases covering each format. First step of the guided-runs build (`docs/GUIDED_RUNS_PLAN.md`).
+
+---
+
+## 2026-04-15 — "Running Fitness" → "Running Load" rename
+
+- CTL bar renamed across UI. The old label conflated training load (what CTL measures) with aerobic capability (what VO2/LT measure), which misread low-km weeks for a fit runner as "Foundation fitness". New label matches what the number is: a rolling average of run-equivalent training load.
+- Sites updated: `stats-view.ts` (bar title, drill-down header, info texts, explainer copy, historic chart title), `main-view.ts` (legacy help card), `home-view.ts` (momentum title + subtitle), `coach-insight.ts` (pill label), `week-debrief.ts` (debrief row label).
+- Wizard copy referring to "running fitness" as a general VDOT/aerobic concept was left untouched — only CTL-specific references renamed.
+
+---
+
+## 2026-04-15 — Fitness card sparkline: remove end dot
+
+- Removed the trailing endpoint circle from the Fitness card mini sparklines (`buildMiniVO2Sparkline`, `buildMiniVdotSparkline` in `src/ui/stats-view.ts`). Line + area fill only.
+
+---
+
+## 2026-04-15 — Strain view: Garmin sync hint on empty today
+
+- When viewing today's Strain and no step data exists yet, the steps card now reads "Garmin hasn't pushed today's data yet. Refresh the Garmin Connect app to sync." instead of the generic "No step data for this day". Past days keep the original copy.
+
+---
+
+## 2026-04-15 — Strava history trim + athlete tier recompute (bug fixes)
+
+- **`historicWeeklyRawTSS` not trimmed in backfill path**: `backfillStravaHistory` sliced `historicWeeklyTSS/Km/Zones` to the last 8 weeks but never trimmed `historicWeeklyRawTSS`, leaving it at 15+ entries. Consumers indexing both arrays by week were reading mismatched data. Fixed in `src/data/stravaSync.ts` — all four `historicWeekly*` arrays now sliced from the same `last8` array.
+- **`athleteTier` went stale**: tier was only recomputed inside `fetchStravaHistory`, which is cache-skipped on most launches. Users whose `ctlBaseline` had been corrected (e.g. post-222 Elite bug) kept the old tier indefinitely. Extracted `deriveAthleteTier(ctlBaseline)` helper in `stravaSync.ts`; launch-time migration in `main.ts` now recomputes on every launch from the current `ctlBaseline`.
+
+---
+
+## 2026-04-15 — Readiness drill-down back buttons return to Readiness
+
+- Strain and Recovery (Physiology) detail pages now honour the opener when opened from Readiness. Previously their back buttons always returned Home regardless of entry point, while Freshness/Load Ratio/Rolling Load/Sleep History already routed back to Readiness.
+- `renderStrainView` and `renderRecoveryView` gained an optional `onBack` parameter (stored in a module-local latch so date-pill re-renders preserve it). Readiness card taps pass `() => renderReadinessView()`; Home ring taps pass `() => renderHomeView()`.
+
+---
+
+## 2026-04-15 — Today's Strain TSS unified across Home/Readiness/Strain
+
+- **Root cause**: three different strain-TSS computations. Home passed `todayPhysio` to `computeTodaySignalBTSS` (logged + active-minute passive). Readiness passed nothing (logged only, matched by coincidence). Strain added `passiveExcess` from steps on top. Same day rendered 79 on Home/Readiness and 98 on Strain.
+- **Fix**: added `computeTodayStrainTSS(wk, date, physioEntry, tssPerActiveMinute)` in `src/calculations/fitness-model.ts` as the single source of truth. Wraps `computeTodaySignalBTSS` (logged + minute-based passive) and adds the step-based passive excess when step-derived TSS exceeds minute-derived TSS. All three views now call it.
+- **Sites updated**: `home-view.ts:758`, `readiness-view.ts:153` (now reads `todayPhysio` locally), `strain-view.ts:189–216` (replaced inline math with the helper; kept `passiveExcess` for the "passive TSS from background activity" caption).
+
+---
+
+## 2026-04-15 — Tanda marathon predictor
+
+- **Added Tanda (2011) predictor for marathon**: new `predictFromVolume()` uses the formula `T = 11.03 + 98.46×exp(−0.0053×K) + 0.387×P` where K = 8-week mean weekly running km and P = km-weighted mean training pace. Validated on 46 marathoners (r=0.91, SEE ~3 min) — the only outcome-calibrated predictor in the blend. Marathon only; returns null for other distances or when K ∈ [4,120] and P ∈ [180,480] sec/km guard fails.
+- **Reverted the heuristic volume bumps** on `predictFromLT` (marathon tier multiplier) and `predictFromRecent` (pace penalty) added earlier today. They were theory-motivated but empirically unvalidated; Tanda replaces both with a single research-backed mechanism.
+- **Marathon blend weights**: with recent run: `recent 0.20, pb 0.05, lt 0.35, vo2 0.10, tanda 0.30`. Without recent: `pb 0.10, lt 0.45, vo2 0.15, tanda 0.30`. If Tanda unavailable, its weight redistributes onto LT.
+- **`lowVolumeDiscount` now skips marathon** — Tanda handles volume-sensitivity directly, so applying the LT/VO2 weight discount as well would double-penalise. Still applies to HM/10K/5K where Tanda has no coverage.
+- **Source-agnostic `computePredictionInputs()`** in `src/calculations/prediction-inputs.ts`: single pure function computing K (weekly km), P (mean training pace with race-outlier filter), recent-run, sample-size confidence, and staleness from any list of run activities. Used by both Stats view (garminActuals) and will back onboarding (Strava scraped history) — one code path, no drift.
+- **Confidence gating**: Tanda only applied when `weeksCovered ≥ 4`, `paceConfidence ≥ medium` (≥4 runs across ≥3 weeks), and not stale (>28 days since last run). Below threshold, weight redistributes to LT. Prevents over-penalising a fit runner on a low-volume week and protects against the one-run-after-a-break edge case.
+- **Dedup widened to 5-min buckets** to catch Strava/Garmin dual-logs where GPS-start and watch-start can differ by 1–2 minutes.
+- **Science log**: full rationale, calibration details, limitations, and why Tanda is more externally valid than the heuristics it replaces — `docs/SCIENCE_LOG.md`.
+- **Tests**: 19 new vitest cases across `prediction-inputs.test.ts` (10 — walk/sprint filter, 5-min dedup, race outlier, stale guard, confidence tiers, new-user window shrink) and `predict-from-volume.test.ts` (9 — Tanda paper reference points, input guards, 4 `blendPredictions` gating cases). All 42 prediction tests pass.
+
+## 2026-04-15 — Blended fitness cache (onboarding + weekly refresh)
+
+- **New `src/calculations/blended-fitness.ts`** (`refreshBlendedFitness()`): single entry point that collects `RunActivityInput[]` from `garminActuals` + `onboardingRunHistory`, runs `computePredictionInputs` → `blendPredictions` for `s.rd`, and caches `s.blendedRaceTimeSec` / `s.blendedEffectiveVdot` / `s.blendedLastRefreshedISO`. Consumers read O(1) — no re-blending on render.
+- **Backfill edge function now returns per-run summary.** Added `runs` array to the backfill response (`startTime`, `distKm`, `durSec`, `activityType`, `activityName`) for all RUNNING activities. Client stashes to `s.onboardingRunHistory` and calls `refreshBlendedFitness` so the marathon prediction shown at the end of onboarding already incorporates Tanda — no need to wait a week for standalone sync to fill `garminActuals`.
+- **Weekly rollover refresh.** `next()` in `src/ui/events.ts` now calls `refreshBlendedFitness` after auto-LT update. Blended prediction recomputes once per week advance; not on every render or activity sync.
+- **Onboarding seeds the cache** with the wizard-only blend immediately (`initialization.ts`), then backfill upgrades it with Tanda inputs when per-run history lands.
+- **New state fields** in `src/types/state.ts`: `blendedRaceTimeSec`, `blendedEffectiveVdot`, `blendedLastRefreshedISO`, `onboardingRunHistory`.
+- **Not yet wired**: Step 6 — plan engine consuming `s.blendedEffectiveVdot` for pace derivation when it differs from `s.v`.
+
+## 2026-04-15 — Readiness: "On Track" recoloured light blue
+
+- `readinessColor()` in `src/calculations/readiness.ts` now returns a new `--c-info` token (light blue #7FB4E8) for `On Track` instead of `--c-ok-muted`. A 59 score sitting near the bottom of the 55–74 band was rendering in celebratory green, which overstated the signal. Primed stays green, Manage Load stays amber, Ease Back/Overreaching stays red. New token added to `src/styles.css` rather than reusing `--c-accent` (reserved for form-submission CTAs per CLAUDE.md).
 
 ---
 
@@ -23,18 +278,23 @@ Session-by-session record of significant changes. Most recent first.
 - **VO2 Max chart — dots removed**: per-point `<circle>` markers became thin ellipses under `preserveAspectRatio="none"` and made the line look broken into segments. Dropped them. The chart now mirrors the recovery-view HRV/RHR detail style: smooth area + 2.5px rounded stroke with a linear-gradient fill, no markers.
 - **Recovery tiles (HRV / Resting HR)**: killed the tiny 40px sparklines that conveyed little beyond the existing trend arrow and "+22% vs baseline" text. Replaced with a new `baselineRangeBar` — a slim horizontal pill showing the current value's position inside the 28-day min/max range, with a tick at the baseline average and min/avg/max labels below. More informative per vertical pixel.
 - **Sleep Bank / Sleep Debt trend charts** (`buildSleepBankLineChart`): same unbounded-SVG issue, rendered ~300px tall on wide viewports. Capped at `height="100"` with `preserveAspectRatio="none"` + non-scaling strokes. Dropped the endpoint circle marker since it distorts into an ellipse when the SVG is stretched horizontally; the line naturally terminates at the latest point.
+- **VO2 Max chart draw-on animation gap**: `animateChartDrawOn` sets `stroke-dasharray = path.getTotalLength()` for the draw-on effect, then transitions `stroke-dashoffset` to 0. With `vector-effect="non-scaling-stroke"`, dash-arrays are interpreted in screen pixels rather than user units — so a 320 user-unit dash ended partway across a ~900px wide chart, leaving a visible gap mid-line. Fixed by clearing `strokeDasharray`/`strokeDashoffset` on `transitionend` (with setTimeout fallback), so the final state is a solid line.
 
 ---
 
-## 2026-04-15 — Plan drag-and-drop: no flicker on drop
+## 2026-04-15 — Plan drag-and-drop: localized rerender, no page flash
 
-- `plan-view.ts` drop handlers (workout-card reorder and rest-day drop zone) now defer the full `renderPlanView()` to `requestAnimationFrame` instead of calling it synchronously inside the `drop` event. State save (`mergeTimingMods` + `saveState`) still runs synchronously. The previous flicker came from rebuilding DOM while the dragged card was mid-cleanup (still at `opacity: 0.4` pre-dragend); deferring one frame lets the browser finish the drag transition before the innerHTML swap.
+- Drag-and-drop reorder within a week no longer triggers a full `renderPlanView()` — which rebuilt the whole page including the header bars, weekly totals, and banners above the list, producing a visible flash.
+- New `rerenderWeekListLocal(viewWeek)` replaces innerHTML of only the new `#plan-week-list` container and re-wires card-descendant handlers via `wireCardScopedHandlers(root, viewWeek)`. Same-week day reorders don't change weekly totals (TSS, km, counts), so the header stays correct without rebuilding.
+- Extracted `computeRenderedWorkouts(s, viewWeek)` (mods + moves + illness + holiday + bridge pipeline) from `getPlanHTML` so full and localized renders share one source of truth.
+- Scoped rewire binds to `root.querySelectorAll(...)` so `.plan-act-open` elements in the activity log (outside the list) keep their original listeners and aren't double-bound.
 
 ---
 
 ## 2026-04-15 — Strain ring: green dominant, red anchored at target; warm-red sky
 
-- `strain-view.ts` ring scale changed from `ringMax = max(target.hi × 2, actual × 1.25)` to `max(target.hi × 1.1, actual)`. With this, `target.hi` sits at ~91% of the ring when inside target (green dominates), and once exceeded the ring closes fully at 360° — the red end-cap meets the green start-cap at the top with no visible gap. Conic-gradient wrap stops are skipped when `totalDeg ≥ 360 − 2·CAP_PAD` to preserve stop monotonicity.
+- `strain-view.ts` ring scale changed from `ringMax = max(target.hi × 2, actual × 1.25)` to `max(target.hi × 1.1, actual × 1.08)`. With this, `target.hi` sits at ~91% of the ring when inside target (green dominates), and when exceeded the ring caps out around ~93% fill — a deliberate gap stays at the top.
+- Rounded caps now rendered as explicit SVG `<circle>` overlays at the exact start/end positions, instead of `stroke-linecap="round"`. The round cap on the mask stroke was wrapping CCW past 12 o'clock (~5° angular overshoot), which read as a second green patch sitting to the left of the top gap. Mask now uses `stroke-linecap="butt"` and two small filled circles paint the caps in their correct colours.
 - New `red` palette added to `sky-background.ts` (warm coral/red at the same saturation as the existing `teal` palette). Strain view switched from `teal` to `red` — effort page now reads warm instead of cool. Teal palette retained for backwards compat.
 
 ---
