@@ -37,6 +37,15 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
 
+## Tracking vs Planning — Keep Them Separate
+
+Mosaic is a tracking app *and* a planning app, and the two must not be conflated:
+
+- **Tracking** answers "what did the user do, and what is it telling us about their fitness?" — activity matching, race prediction, adherence scoring, historical analysis. Here we *describe* reality.
+- **Planning** answers "what should the user do next?" — plan engine, replace-and-reduce, workout generation, load targets. Here we *prescribe*.
+
+A fact used in tracking does not automatically apply to planning. Example: the 5–11% bike-to-run pace discount in triathlon is a race-time prediction input (tracking), not a training-load discount on brick runs (planning — the training stimulus is full because the athlete's effort was maximal). When writing a new calculation, state explicitly which side of this line it sits on.
+
 ## No Made-Up Numbers or Logic
 
 **Never invent constants, multipliers, thresholds, or fallback values.** If the right number is not already in the codebase or explicitly provided by Tristan, stop and ask. This applies to:

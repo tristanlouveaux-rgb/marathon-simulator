@@ -1793,3 +1793,129 @@ Wanivenhaus, F., Fox, A. J., Chaudhury, S., & Rodeo, S. A. (2012). Epidemiology 
 Wilson, J. M., et al. (2012). Concurrent training: a meta-analysis examining interference of aerobic and resistance exercises. Journal of Strength and Conditioning Research.
 
 Zouhal, H., et al. (2021). Editorial: Acute:Chronic Workload Ratio: Is There Scientific Evidence? Frontiers in Physiology. (PMC8138569).
+
+---
+
+## 18. Locked Decisions (2026-04-23 spec review)
+
+This section consolidates every decision reached in the spec-review session with Tristan. Where this section contradicts anything earlier in this doc, this section wins. Implementation should treat these as frozen unless revisited explicitly.
+
+### 18.1 Architecture
+
+- **Per-discipline CTL + combined CTL**. Track `ctlSwim`, `ctlBike`, `ctlRun` as independent 42-day EMAs. Combined CTL is a weighted sum derived from the per-discipline tracks.
+- **Separate plan engine**: `plan_engine.triathlon.ts` (new file). Running engine (`plan_engine.ts`) stays untouched. Fork at the top-level generation call site based on `eventType`.
+- **Power-optional**: onboarding asks whether the user has a power meter. If yes, ask for FTP. If no, bike TSS falls back to HR-based calculation (hrTSS). Same pattern as run (NGP-first, HR-fallback).
+- **Brick detection window**: 30 minutes between the end of a bike activity and the start of a run activity.
+
+### 18.2 Training model constants (blessed per CLAUDE.md "no made-up numbers" rule)
+
+| Parameter | Value | Source |
+|---|---|---|
+| Swim TSS exponent | 3 (cubed IF) | Toussaint & Beek 1992; TrainingPeaks |
+| CTL time constant | 42 days | Banister 1975 |
+| ATL time constant | 7 days | Banister 1975 |
+| 70.3 taper | 7 to 10 days | Bosquet 2007 meta-analysis |
+| Ironman taper | 2 to 3 weeks | Bosquet 2007; Mujika 2009 |
+| Volume split (recommended default) | 17.5% swim / 47.5% bike / 35% run | Midpoint of coaching consensus ranges. **User can adjust during onboarding** — split picker with the preset as default |
+| Weekly volume cap per discipline | 10% | Gabbett 2016, upper bound of the 5–10% range |
+| ACWR safe range | 0.8 to 1.3 | Gabbett 2016; matches running mode |
+| 70.3 run fatigue discount (race prediction only) | 5% | Bentley 2007; Landers 2008 |
+| IM run fatigue discount (race prediction only) | 11% | Bentley 2007; Landers 2008 |
+| Cycling LTHR offset vs running LTHR | −7 bpm | Millet & Vleck 2000, midpoint of −5 to −10 |
+| FTP detraining | 5–7% per 4 weeks off | Coyle 1984 |
+| CSS detraining | 3–5% per 4 weeks off | Mujika 2010 — swim decays slower than bike/run due to technique retention |
+| VDOT detraining | unchanged from current running mode | — |
+
+Onboarding also collects a **time-available-per-week** input upstream of the split picker. Total weekly hours = time available. Per-discipline hours = total × split.
+
+### 18.3 Transfer matrix (the multi-sport load model)
+
+**Concept**: every activity contributes to its own discipline's CTL and ATL at 1.0, and to other disciplines' CTL and ATL at reduced weights. Transfers **add only** — they never subtract. The matrix replaces today's `runSpec` discount logic and generalises to all cross-training sports.
+
+Directional contributions to each discipline's CTL/ATL (rows are *source activity*, columns are *destination discipline*):
+
+| From ↓ / To → | Run | Bike | Swim |
+|---|---|---|---|
+| Run | 1.00 | 0.70 | 0.25 |
+| Bike | 0.75 | 1.00 | 0.20 |
+| Swim | 0.30 | 0.20 | 1.00 |
+| Gym / strength | 0.10 | 0.10 | 0.10 |
+| Padel / field sport | 0.35 | 0.20 | 0.00 |
+| Ski touring / hiking | 0.55 | 0.40 | 0.00 |
+
+**Key properties:**
+- A 100 TSS padel session adds 35 TSS to running CTL and running ATL, 20 TSS to bike CTL/ATL, 0 to swim. Full 100 TSS lands on the combined CTL (Signal B).
+- After any activity, readiness for any discipline is **worse** than before the activity (fatigue adds everywhere it transfers). The question is by how much relative to a dedicated session.
+- Transfer values for padel/ski are proposals based on physiological overlap reasoning — validate and adjust after 3–6 months of multi-sport data.
+
+### 18.4 Tracking vs Planning separation (foundational principle)
+
+Promoted to `CLAUDE.md`. Some numbers apply only to one side of the line:
+- **Tracking side**: 5% / 11% run-leg pace discount for race-time prediction. Transfer matrix values when analysing past training.
+- **Planning side**: no training-load discount on brick runs (stimulus is full). Transfer matrix values when deciding whether missed-workout substitution is adequate.
+
+When writing a new calculation, state explicitly which side of the line it sits on.
+
+### 18.5 Replace-and-reduce flow extensions
+
+The existing suggestion-modal pattern (Rules 1–5 in `suggestion-modal.ts` §8) is extended two ways for triathlon:
+- **Per-discipline ACWR spikes**: if `swimACWR`, `bikeACWR`, or `runACWR` individually exceeds 1.3, the modal suggests dropping or downgrading a session in that discipline. User accepts or dismisses. No auto-apply.
+- **Cross-discipline aggregate spikes**: if combined ATL is red AND the load is driven by non-plan activities (padel, gym, ski), the modal can suggest reducing a planned run or bike session to compensate. This closes the loop with the transfer matrix — high external load cascades into plan reduction via the suggestion flow.
+
+### 18.6 Injury engine → discipline shift
+
+When an injury is logged, the plan engine reallocates volume away from the restricted discipline and onto the others, preserving combined aerobic load:
+- Runner's knee → run drops to injury protocol → bike + swim volume increases proportionally.
+- Swimmer's shoulder → swim ↓ → run + bike ↑.
+- Cyclist's knee (IT band) → bike ↓ → run + swim ↑.
+
+The existing injury phase progression (rest → easy → hard) is preserved per-discipline. The new behaviour is the cross-discipline compensation, which prevents a triathlete from losing all aerobic fitness during a single-discipline injury.
+
+### 18.7 Triathlete self-rating (replaces `s.typ` for triathlon users)
+
+Onboarding shows three 1–5 sliders at the equivalent of the runner-type step:
+
+> How strong do you feel in the swim? (1 = weakest, 5 = strongest)
+> How strong do you feel on the bike?
+> How strong do you feel in the run?
+
+Translation into the plan engine:
+- Low-scoring disciplines (1–2) receive proportionally more volume and more technique/fundamentals sessions.
+- High-scoring disciplines (4–5) receive maintenance volume + polish intervals.
+- The total hours envelope is fixed by the time-available input; the sliders only redistribute across disciplines.
+
+### 18.8 UX
+
+- **Discipline colours**: swim muted teal (`#5b8a8a`), bike warm clay (`#c08460`), run existing olive/sage. All sit in the existing nature palette.
+- **Two-a-day display**: stacked discipline cards inside a single day container. No AM/PM header labels.
+- **Race prediction**: headline total time, expandable into per-leg breakdown (swim, T1, bike, T2, run). Confidence band (±range) shown on total. Sprint + Olympic times shown as free side-effects when engine has CSS + FTP + VDOT. Targets (pace/power per leg) **editable** on the stats page — stored as `userTargets.{swim,bike,run}` overriding model output.
+- **Plan adherence display**: headline "Overall X%", expandable to per-discipline breakdown.
+- **Stats fitness chart**: default combined CTL + total TSS, toggle to three-line per-discipline view.
+- **Two-a-day display**: stacked cards (not AM/PM).
+
+### 18.9 Wizard
+
+- **Per-discipline experience sliders** at onboarding (three, 1–5 each).
+- **Bike commute** in scope for v1. Swim commute out of scope.
+- **Unit formatting**: swim metres, bike km/mi + watts (if power meter), run unchanged.
+- **Express onboarding path** in scope for v1: if Strava shows 8+ weeks of multi-sport activity history, offer a "use my history" flow that skips the manual per-discipline fitness step and pre-populates CSS / FTP / running PBs from detected activity data.
+
+### 18.10 Scope
+
+- **Triathlon is always race-mode**. No "general fitness triathlon". Users always target a specific 70.3 or IM event.
+- **Sprint + Olympic distances**: not first-class race targets in v1 (target picker shows 70.3 and IM only). Predicted sprint/Olympic times appear as informational side-effects on the prediction page.
+- **Nutrition tracking**: out of scope.
+- **T1 / T2 practice sessions**: included as description notes on race-week sessions, not as their own workout types.
+- **Open-water vs pool swim**: single workout type, user preference toggle re-labels sessions. Not two separate types.
+- **Sport-specific injury protocols** (swimmer's shoulder progression, etc.): deferred to v2. v1 uses the generic injury progression extended with discipline-shift behaviour (§18.6).
+- **Guided runs / voice cues for bike and swim**: deferred to v2. v1 keeps guided-run support running-only.
+- **Skipped workout logic** (push to next week, drop on second skip): applies **per-discipline**. Missing a swim does not affect running schedule logic.
+
+### 18.11 Deferred for later
+
+- Block periodisation (Ronnestad 2014) — emphasis cycling, post-v1.
+- Brick run fatigue discount on training load (currently no discount — §18.4). Revisit after real brick data exists.
+- Per-discipline ACWR auto-downgrade (currently flag + suggest only — §18.5).
+- CTL weighting for injury risk (bike and swim are non-impact; today's impact load stays run-only).
+- Cross-sport transfer matrix values for padel / ski — treat as first approximations, validate with 3–6 months of data.
+
