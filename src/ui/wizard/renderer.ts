@@ -3,25 +3,15 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
-import { renderBackground } from './steps/background';
-import { renderVolume } from './steps/volume';
-import { renderPerformance } from './steps/performance';
-import { renderFitness } from './steps/fitness';
-import { renderStravaHistory } from './steps/strava-history';
-import { renderPhysiology } from './steps/physiology';
+import { renderConnectStrava } from './steps/connect-strava';
+import { renderManualEntry } from './steps/manual-entry';
+import { renderReview } from './steps/review';
 import { renderInitializing } from './steps/initializing';
-import { renderAssessment } from './steps/assessment';
-
-// Legacy step imports (kept for backwards compat if state references old steps)
-import { renderTrainingGoal } from './steps/training-goal';
-import { renderEventSelection } from './steps/event-selection';
-import { renderCommute } from './steps/commute';
-import { renderFrequency } from './steps/frequency';
-import { renderActivities } from './steps/activities';
-import { renderPBs } from './steps/pbs';
-import { renderFitnessData } from './steps/fitness-data';
+import { renderRaceTarget } from './steps/race-target';
+import { renderSchedule } from './steps/schedule';
+import { renderPlanPreviewV2 } from './steps/plan-preview-v2';
 import { renderRunnerType } from './steps/runner-type';
-import { renderPlanPreview } from './steps/plan-preview';
+import { renderTriathlonSetup } from './steps/triathlon-setup';
 
 /**
  * Get the app root container
@@ -43,9 +33,6 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
   // Clear existing content
   container.innerHTML = '';
 
-  // Render step, then inject persistent banner after (since steps overwrite innerHTML)
-  const shouldShowBanner = step !== 'welcome' && step !== 'main-view' && step !== 'initializing';
-
   switch (step) {
     // --- New consolidated steps ---
     case 'welcome':
@@ -56,93 +43,52 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderGoals(container, state);
       break;
 
-    case 'background':
-      renderBackground(container, state);
+    case 'connect-strava':
+      renderConnectStrava(container, state);
       break;
 
-    case 'volume':
-      renderVolume(container, state);
+    case 'manual-entry':
+      renderManualEntry(container, state);
       break;
 
-    case 'performance':
-      renderPerformance(container, state);
-      break;
-
-    case 'fitness':
-      renderFitness(container, state);
-      break;
-
-    case 'strava-history':
-      renderStravaHistory(container, state);
-      break;
-
-    case 'physiology':
-      renderPhysiology(container, state);
+    case 'review':
+      renderReview(container, state);
       break;
 
     case 'initializing':
       renderInitializing(container, state);
       break;
 
-    case 'assessment':
-      renderAssessment(container, state);
+    case 'race-target':
+      renderRaceTarget(container, state);
       break;
 
-    case 'main-view':
-      transitionToMainView();
+    case 'schedule':
+      renderSchedule(container, state);
       break;
 
-    // --- Legacy steps (fallback) ---
-    case 'training-goal':
-      renderTrainingGoal(container, state);
-      break;
-
-    case 'event-selection':
-      renderEventSelection(container, state);
-      break;
-
-    case 'commute':
-      renderCommute(container, state);
-      break;
-
-    case 'frequency':
-      renderFrequency(container, state);
-      break;
-
-    case 'activities':
-      renderActivities(container, state);
-      break;
-
-    case 'pbs':
-      renderPBs(container, state);
-      break;
-
-    case 'fitness-data':
-      renderFitnessData(container, state);
+    case 'plan-preview-v2':
+      renderPlanPreviewV2(container, state);
       break;
 
     case 'runner-type':
       renderRunnerType(container, state);
       break;
 
-    case 'plan-preview':
-      renderPlanPreview(container, state);
+    case 'triathlon-setup':
+      renderTriathlonSetup(container, state);
+      break;
+
+    case 'main-view':
+      transitionToMainView();
       break;
 
     default:
       console.error(`Unknown step: ${step}`);
   }
 
-  // Inject banner after step renders (steps overwrite innerHTML)
-  const existing = document.getElementById('onboarding-banner');
-  if (existing) existing.remove();
-  if (shouldShowBanner) {
-    const banner = document.createElement('div');
-    banner.id = 'onboarding-banner';
-    banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:50;background:var(--c-surface);border-bottom:1px solid var(--c-border);padding:12px 16px;text-align:center;backdrop-filter:blur(4px)';
-    banner.innerHTML = `<p style="font-size:13px;color:var(--c-muted)">This takes a little longer than most running apps — we're building a <span style="font-weight:600;color:var(--c-black)">holistic picture of you</span> as a runner.</p>`;
-    document.body.appendChild(banner);
-  }
+  // Kill any lingering banner from prior render
+  document.getElementById('onboarding-banner')?.remove();
 
   // Inject "Return to plan →" button for mid-plan edit sessions
   const existingReturn = document.getElementById('wizard-return-btn');
@@ -221,9 +167,10 @@ export function renderBackButton(show: boolean = true): string {
   return `
     <button
       onclick="window.wizardPrev()"
-      style="position:fixed;bottom:32px;left:32px;display:flex;align-items:center;gap:8px;color:var(--c-muted);background:none;border:none;cursor:pointer;font-size:14px;z-index:50"
+      class="m-btn-glass"
+      style="position:fixed;bottom:32px;left:32px;padding:10px 16px;font-size:13px;z-index:50"
     >
-      <svg style="width:18px;height:18px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg style="width:16px;height:16px" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
       </svg>
       Back

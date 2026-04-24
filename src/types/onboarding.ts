@@ -23,6 +23,7 @@ export type OnboardingStep =
   | 'plan-preview-v2'
   | 'initializing'
   | 'runner-type'
+  | 'triathlon-setup'
   | 'main-view';
 
 /** Recurring cross-training activity from onboarding */
