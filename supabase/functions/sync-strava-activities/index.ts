@@ -1077,6 +1077,39 @@ Deno.serve(async (req) => {
       }
       if (bestEffortsHealed > 0) console.log(`[Backfill] Fetched best_efforts for ${bestEffortsHealed} running activities`);
 
+      // 5d. Power backfill — Strava returns power fields (average_watts,
+      // weighted_average_watts, max_watts, device_watts, kilojoules) on
+      // every ride in the activities LIST response itself; no detail
+      // fetch needed. Walks every cycling activity the user has and patches
+      // the new power columns so FTP derivation sees a real power curve
+      // immediately. Uses per-row UPDATE rather than upsert so we don't
+      // touch any other column (iTRIMP / zones / etc).
+      let powerHealed = 0;
+      for (const act of allActivities) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
+        if (actType !== "CYCLING" && actType !== "MOUNTAIN_BIKING") continue;
+        const power = extractPowerFields(act);
+        if (
+          power.average_watts == null &&
+          power.normalized_power == null &&
+          power.max_watts == null &&
+          power.device_watts == null &&
+          power.kilojoules == null
+        ) continue;
+        const { error: powErr } = await supabase.from("garmin_activities")
+          .update(power)
+          .eq("garmin_id", garminId)
+          .eq("user_id", user.id);
+        if (powErr) {
+          console.warn(`[Backfill] Power update failed for ${garminId}:`, powErr.message);
+          continue;
+        }
+        powerHealed++;
+      }
+      if (powerHealed > 0) console.log(`[Backfill] Patched power on ${powerHealed} rides`);
+
       // 6b. Heal hr_drift on cached-with-zones running activities that pre-date the column.
       // Budget: 20 per run to stay well under Strava's rate limits (we already spent up to
       // STREAM_BUDGET=99 on needFullStream). Prioritise most-recent first so the durability
