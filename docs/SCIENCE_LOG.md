@@ -16,6 +16,267 @@ This log documents **formulas and implementation**. The research docs document *
 
 ---
 
+## Triathlon — Multi-sport Transfer Matrix (2026-04-23)
+
+**Context**: Mosaic v1 had a single CTL for running with a `runSpec` discount applied to cross-training activities (cycling 0.55, HIIT 0.30, etc). Triathlon makes swim/bike first-class, so a single-run-centred CTL is no longer sufficient. The transfer matrix generalises this: every activity contributes to every discipline's CTL and ATL at a directional weight. `runSpec` is a special case (the "run" column).
+
+**Formula** (per-discipline contribution from an activity with sport S and raw TSS T):
+```
+contributionToDiscipline[D] = T × TRANSFER_MATRIX[S][D]
+```
+Applied to both CTL (42-day EMA) and ATL (7-day EMA) at the same weight. This is defensible because a session that transfers aerobically to another discipline causes comparable fatigue there — fitness and fatigue are the same physiological currency.
+
+**Values** (source → destination). Run-column values from Millet et al. 2002 (triathlon cross-transfer) and Millet & Vleck 2000 (swim specificity); padel/ski/hiking values are first-approximation proposals flagged for validation.
+
+| From ↓ / To → | Run | Bike | Swim |
+|---|---|---|---|
+| Run | 1.00 | 0.70 | 0.25 |
+| Bike | 0.75 | 1.00 | 0.20 |
+| Swim | 0.30 | 0.20 | 1.00 |
+| Strength | 0.10 | 0.10 | 0.10 |
+| Padel / tennis | 0.35 | 0.20 | 0.00 |
+| Football | 0.45 | 0.20 | 0.00 |
+| Ski touring | 0.55 | 0.40 | 0.00 |
+| Hiking | 0.55 | 0.35 | 0.00 |
+
+**Key property**: transfers only ADD. A padel session cannot reduce run CTL. Readiness for any discipline drops after any activity (fatigue adds everywhere the transfer is non-zero), because the matrix is applied to ATL the same way as CTL.
+
+**Implementation**: `src/constants/transfer-matrix.ts` (matrix + helpers), `src/calculations/fitness-model.triathlon.ts` (EMA application), `src/calculations/fitness-model.triathlon.test.ts`.
+
+**Limitations**:
+- Directional but not interaction-aware (a padel match after a long run is assumed to contribute linearly; in reality combined fatigue is super-linear).
+- Padel / tennis / football / ski / hiking values are physiology-reasoning proposals, not lit-backed. Validate after 3–6 months of real data.
+- Transfer is instantaneous — no time-lag modelling for "delayed" cross-training effects.
+
+---
+
+## Triathlon — Swim TSS (cubed IF) (2026-04-23)
+
+**Context**: Running and cycling TSS use squared IF (Coggan 2003). Swim drag scales with v³ (Toussaint & Beek 1992) because water resistance grows faster with speed than air resistance — so swim intensity dominates the power cost disproportionately.
+
+**Formula**:
+```
+sTSS = durationHours × (cssPace / avgPace)^3 × 100
+```
+IF > 1 when swimming faster than CSS; IF < 1 when slower. 60 min at CSS = 100 TSS.
+
+**Implementation**: `src/calculations/triathlon-tss.ts:computeSwimTss`. Tests: `src/calculations/triathlon-tss.test.ts`.
+
+**Limitations**: assumes steady-state swimming. Sprint intervals are under-counted (anaerobic contribution not captured separately in the IF model). Technique variance between athletes means same IF feels different to different swimmers.
+
+---
+
+## Triathlon — Per-discipline CTL / ATL (2026-04-23)
+
+**Context**: Running mode has a single CTL. Triathlon needs three (swim, bike, run) so the plan engine can detect "swim fitness is plateauing" separately from "bike fitness is advancing". Same Banister 1975 exponential-decay EMAs, applied per-discipline with the transfer matrix determining contributions.
+
+**Formula** (each discipline independently):
+```
+CTL(today) = Σ (contribution_i × e^(-day_i / 42))
+ATL(today) = Σ (contribution_i × e^(-day_i / 7))
+TSB = CTL - ATL
+```
+Normalised to weekly TSS units (divide by τ, multiply by 7). Combined CTL for the headline display uses the `COMBINED_CTL_WEIGHTS` constant (swim 0.175, bike 0.475, run 0.35 — matches the default volume split).
+
+**Implementation**: `src/calculations/fitness-model.triathlon.ts`. Tests cover individual track isolation, transfer-matrix fan-out, decay behaviour, and the CTL-ATL-TSB relationship.
+
+**Limitations**: combined CTL weights are from the default volume split, not tuned to the specific user. Users who train 60/20/20 would technically want a different weighting, but v1 uses the fixed constants.
+
+---
+
+## Triathlon — Run-leg Fatigue Discount for Race Prediction (2026-04-23)
+
+**Context**: Running after the bike leg is measurably slower than a standalone run at the same HR/RPE (Bentley et al. 2007; Landers et al. 2008). This is a **race-time prediction input**, not a training-load discount. The athlete's stimulus during a brick run is the same as a standalone threshold run — but their pace is 4–6% slower in 70.3 and 10–12% slower in IM.
+
+**Formula** (applied only when computing predicted race finish time, never to training load):
+```
+predictedRunPace = basePace × (1 + DISCOUNT_FOR_DISTANCE)
+```
+where DISCOUNT = 0.05 for 70.3, 0.11 for IM.
+
+**Implementation**: `src/calculations/race-prediction.triathlon.ts`. **Important**: this is on the tracking side of the line (§ "Tracking vs Planning" in CLAUDE.md). Do not apply this discount to brick run TSS — the training stimulus is full.
+
+**Limitations**: individual variance is wide (some athletes are 2% slower off the bike, others are 8%). The single-number discount is a population midpoint. Future work: learn individual discount from real race data once we have finishers.
+
+---
+
+## Triathlon — FTP and CSS Detraining Curves (2026-04-23)
+
+**Context**: VDOT decays on missed running weeks (existing running mode). Triathlon needs equivalent decay curves for bike and swim threshold anchors so the plan engine doesn't assume fitness is static during illness, injury, or holiday.
+
+**Values**:
+- FTP: 5–7% loss per 4 weeks off — **6% midpoint used**. Source: Coyle 1984 (cycling detraining; VO2max and muscle capillarisation both drop measurably within 2–4 weeks).
+- CSS: 3–5% loss per 4 weeks off — **4% midpoint used**. Source: Mujika 2010 (swim detraining — slower loss than bike/run because technique retention buffers pace decline).
+- VDOT: unchanged from running mode.
+
+**Implementation**: constants defined in `src/constants/triathlon-constants.ts` (`FTP_DETRAINING_PER_4WK`, `CSS_DETRAINING_PER_4WK`). Consumer wiring is deferred to Phase 7b (per-discipline threshold decay during missed weeks).
+
+**Limitations**: linear-per-4wk is a simplification. Real detraining is bi-exponential (rapid initial drop, then slower tail). Good enough at the granularity of 1-week plan updates.
+
+---
+
+## Just-Track Daily Load Target (2026-04-23)
+
+**Context**: Just-Track mode has no plan, therefore no `plannedDayTSS`. The home-view daily load card needs an alternative anchor that is scientifically defensible, decays gracefully when the athlete has no recent data, and does not feel like prescription (Just-Track users explicitly opted out of prescribed workouts).
+
+**Formula**:
+
+```
+dailyNeutral  = ctlBaseline / 7          // weekly-EMA CTL is stored as weekly internally
+targetTSS     = dailyNeutral × readinessMult
+readinessMult = 1.3 if readinessScore >= 80
+              = 1.0 if 60 <= readinessScore < 80
+              = 0.7 if 40 <= readinessScore < 60
+              = 0.3 if readinessScore < 40
+
+// Colour band of today's actual load vs CTL (Gabbett 2016 ACWR sweet spot):
+ratio = actualTodayTSS / dailyNeutral
+green  if ratio <= 1.3           // sustainable
+amber  if 1.3 < ratio <= 1.5     // overreaching
+red    if ratio > 1.5            // documented injury-risk spike
+```
+
+**Rationale by term**:
+
+- **`ctlBaseline / 7`** — CTL is a 42-day EMA of weekly TSS (Banister impulse-response model). `CTL × 1.0` is, by definition, the weekly load that holds fitness flat — the maintenance dose. Dividing by 7 gives the fitness-flat daily equivalent.
+- **Readiness multiplier (1.3 / 1.0 / 0.7 / 0.3)** — maps the existing 0–100 readiness composite (HRV 50% + last-night sleep 25% + sleep history 25%) to four training zones. Values chosen to keep the readiness-adjusted target inside Gabbett's 0.8–1.3 ACWR band on normal days, with the 1.3 "push" ceiling aligned with the Gabbett upper bound and 0.3 "rest" floor aligned with pedagogical recovery-day doses (10–40% of maintenance, a common coaching heuristic).
+- **Gabbett 2016 bands (0.8–1.3 / 1.3–1.5 / >1.5)** — `Gabbett TJ (2016). "The training-injury prevention paradox: should athletes be training smarter and harder?"` British Journal of Sports Medicine 50(5):273–280. 0.8–1.3 = "sweet spot" with lowest injury incidence across multiple team-sport and endurance populations. >1.5 = 2–4× injury rate vs sweet spot in the same cohorts. Colours surface acute risk, not progression prescription.
+
+**Bootstrap**: when `ctlBaseline < 20` (weekly CTL below ~3 TSS/day equivalent — athlete is brand-new or has no sync history), the daily target is suppressed entirely and replaced with a "sync more history" empty state. Below that threshold the `CTL/7` anchor is noisier than the multiplier can compensate for and would produce misleading single-digit targets.
+
+**Known limitations**:
+
+- CTL-as-weekly convention is Mosaic-internal. Published literature often defines CTL as daily directly (42-day EMA of daily TSS). Our unit is equivalent but divided by 7 for display — noted in `docs/arch-notes.md` → "CTL display scale".
+- Readiness multiplier thresholds (80/60/40) are pragmatic, not literature-cited. They produce sensible behaviour on the readiness score distributions we've seen but are not validated against an external cohort.
+- Gabbett thresholds come from team-sport + Australian-football cohorts. Transfer to recreational runners is reasonable but not direct.
+- The `ratio` colour band compares today's actual load vs CTL-neutral, not vs the readiness-adjusted target. This is deliberate — readiness should not widen what we consider "safe." Overreaching is overreaching whether the athlete felt fresh that morning or not.
+
+**File**: `src/ui/home-view.ts → buildTrackOnlyDailyTarget()`.
+
+---
+
+## Daily Feeling Modifier on Coach Stance (2026-04-17)
+
+**Why added.** The rules engine consumes objective signals (TSB, ACWR, sleep score, HRV, strain) but no subjective input from the athlete. Physiological data alone misses meaningful same-day variance: illness onset before it shows in RHR, cumulative life stress that doesn't yet register in HRV, or genuine freshness that objective numbers understate on a rest-heavy week. A one-tap daily feeling prompt (`struggling | ok | good | great`) reintroduces the athlete's own judgment without demanding a full check-in.
+
+**Formula.** After the base coach stance is computed from blockers + readiness label:
+
+```
+struggling   → drop one level  (push → normal → reduce → rest)
+ok           → no change
+good / great → promote normal → push
+               gated on: blockers.length === 0 AND readiness.score >= 75
+```
+
+The Primed threshold `75` is sourced directly from `readiness.ts` (`if (score >= 75) label = 'Primed'`). The feeling prompt cannot override the readiness composite's own safety rails.
+
+**Defensibility.** Subjective wellness monitoring is well-established in sports science as a cheap and sensitive indicator of training response. Saw, Main & Gastin (2016), *Monitoring the athlete training response: subjective self-reported measures trump commonly used objective measures: a systematic review*, Br J Sports Med 50(5): 281–291, pooled 56 studies and concluded that subjective self-report scales responded to acute and chronic training loads with greater sensitivity and consistency than commonly-used objective measures (HRV, resting HR, salivary cortisol). Halson (2014), *Monitoring training load to understand fatigue in athletes*, Sports Med 44 Suppl 2: 139–147, reaches the same conclusion. A 4-option format is a simplified wellness questionnaire; the literature supports 5-item Likert scales but also notes that shorter scales retain most of the signal at the cost of granularity.
+
+**Why the promotion is gated.** The same literature warns that athletes routinely over-report readiness when motivated (Halson 2014). Allowing a subjective `good`/`great` to override an objective block (injury, illness, acute sleep/HRV suppression, ACWR > 1.5) would undo the safety rails the readiness composite and blockers provide. The gate (`blockers.length === 0 AND readiness.score >= 75`) ensures the feeling can only amplify a stance the objective signals already endorse — it cannot create risk the signals don't already sanction.
+
+**Why illness overrides feeling.** `illnessState.severity === 'light'` caps stance at `reduce` BEFORE the feeling modifier runs. This mirrors the general principle that symptomatic illness is an absolute block on hard training regardless of how the athlete feels — training through viral illness risks myocarditis and prolongs time-to-recovery.
+
+**Limitations.**
+
+- **One-tap is coarse.** Four options lose nuance vs a 1–10 Likert or a 5-item wellness questionnaire (fatigue / stress / soreness / sleep / mood). A single global "how do you feel" blends physical and mental states that may diverge.
+- **End-of-day expiry is arbitrary.** The stored value clears at midnight local time. A feeling logged at 08:00 and still valid at 16:00 is the same "today", but by 22:00 the athlete's state may have shifted. No decay inside a day.
+- **No habituation check.** Athletes who habitually pick `good` will shift their own baseline over time; the modifier doesn't z-score against the athlete's own history. A `great` from someone who picks `great` daily carries less signal than a `great` from someone who usually picks `ok`.
+- **No retrospective calibration.** We don't correlate reported feeling with subsequent session quality or next-day recovery to check the signal is predictive for this specific athlete.
+
+**Implementation.** `src/calculations/daily-coach.ts` — `computeDailyCoach` applies the modifier after base-stance derivation. `getTodayFeeling(s)` enforces end-of-day expiry via ISO date comparison. UI: `src/ui/feeling-prompt.ts` (shared helper), rendered from `src/ui/home-view.ts` and `src/ui/coach-view.ts`. Tests in `src/calculations/daily-coach.test.ts` cover every base-stance × feeling transition, the blocker gate, and illness override.
+
+---
+
+## Cross-Training Sport Coefficients (2026-04-16)
+
+**Why added.** `SPORTS_DB` (src/constants/sports.ts) holds per-sport coefficients used for every cross-training load contribution: `mult` (load multiplier), `runSpec` (running specificity, feeds crossTL), `recoveryMult` (recovery-cost scaling), `impactPerMin` (musculoskeletal impact load per minute), `legLoadPerMin` (leg-fatigue accumulation per minute), `volumeTransfer` (GPS km credit toward running volume). Seven board- and water-sport entries were added to cover activities a growing share of users log: snowboarding, kitesurfing, surfing, sailing, paddleboard, kayaking, wakeboarding. Before this, these all fell through to `generic_sport` (mult 0.90, runSpec 0.40, legLoadPerMin 0) which over-stated aerobic transfer for sailing and under-stated leg fatigue for snowboarding, kitesurfing, and wakeboarding.
+
+**How the coefficients are derived.**
+
+1. **`mult` (load multiplier).** Derived from the Compendium of Physical Activities (Ainsworth et al., 2011, *Med Sci Sports Exerc* 43(8): 1575–81), scaling the MET value against running's reference MET so that a minute of sport X at RPE equivalent yields a fraction of a minute of running's physiological load. Compendium MET ranges used: snowboarding ~5 METs → 0.85; kitesurfing 3–6 METs wind-dependent → 0.75; surfing 3–5 METs → 0.75; sailing 2–3 crewing / 3 dinghy → 0.50; paddleboard touring ~6 METs → 0.70; kayaking touring ~5 METs → 0.70; wakeboarding no clean entry, blended from skating (0.75) and skiing (0.90) → 0.70. These numbers sit between rowing (0.85) and walking (0.35) in the existing DB, which anchors them against well-calibrated reference points.
+
+2. **`runSpec` (running specificity).** Expert judgment based on motor-pattern overlap with running (leg drive, vertical displacement, rhythmic cadence, weight-bearing). Scale 0.10 (no overlap, e.g. sailing) to 1.00 (running itself). The four board sports (snowboarding 0.45, wakeboarding 0.35, surfing 0.20, kitesurfing 0.35) sit between cycling (0.55) and strength (0.35) because they train balance, posterior chain, and trunk but lack running's gait pattern. Kayaking and paddleboard are low (0.20–0.25) because upper-body-dominant paddling sports transfer minimally to running. These are not empirically validated against running-performance transfer studies — the field lacks such data for board sports. Flagged as a known limitation.
+
+3. **`recoveryMult` (recovery-cost scaling).** Reflects metabolic and CNS recovery demand relative to a neutral sport (1.00). Sports with sustained steady-state effort and no impact (paddleboard 0.90, kayaking 0.90) recover faster than the baseline; sports with eccentric board-pressure loads (kitesurfing 0.95, wakeboarding 0.95) slightly faster but not as much as swimming (0.90). Surfing 1.00 (baseline) because paddling + pop-ups is a mixed demand. Sailing 0.95 because hiking-out isometric load is low-grade CNS but not demanding cardiovascularly. Derived by analogue with existing DB entries; no direct literature on recovery demand for board sports.
+
+4. **`impactPerMin` (musculoskeletal impact).** Running zero-water-contact sports zero: kitesurfing 0.02, sailing 0.00, paddleboard 0.00, kayaking 0.00. Snowboarding 0.06 for edge chatter and landing forces. Surfing 0.02 for pop-up and occasional falls. Wakeboarding 0.03 for landings during runs. Derived from existing cycling (0.00), skiing (0.07), skating (0.04) reference points — board + water sports are bracketed inside these.
+
+5. **`legLoadPerMin` (leg-fatigue accumulation).** Derived using the legLoadPerMin tier hierarchy already documented in sports.ts: Vertical eccentric gravity-loaded (skiing, snowboarding, stair_climbing) = 0.45–0.50; sustained flat leg drive (rowing, cycling) = 0.25–0.35; intermittent isometric (kitesurfing, wakeboarding, skating) = 0.15–0.25; minimal (walking) = 0.05; not-leg (swimming) = 0. Snowboarding 0.45 (close to skiing's 0.50 but slightly lower due to board-pressure vs true eccentric quad loading per-leg). Kitesurfing 0.15 (sustained isometric edging analogous to skating). Surfing 0.10 (brief pop-ups between rest). Wakeboarding 0.25 (high eccentric-quad loading per-pull, similar cadence to skating). Sailing/paddleboard/kayaking 0.05–0.10 (legs largely passive).
+
+6. **`volumeTransfer` (GPS km credit toward running volume).** Zero for all 7 new sports. None has the gait pattern to credit toward the running volume ring. This matches the existing DB: only running-adjacent GPS sports (extra_run 1.0, hiking 0.4, walking 0.3, stair_climbing 0.3) receive credit.
+
+**Limitations and risks.**
+
+- **Compendium-derived MET values translate imperfectly to training load.** The Compendium's METs are averaged energy expenditure across session duration. They don't distinguish explosive-then-rest patterns (kitesurfing) from sustained aerobic output (kayaking), nor aerobic from anaerobic. `mult` over-states the aerobic stimulus for intermittent sports and under-states leg fatigue for vertical-loaded sports. For Mosaic's impulse-response CTL/ATL model this is acceptable — `mult` drives first-order load, and leg-fatigue / impact / recoveryMult separately capture sport-specific stress pathways.
+- **`runSpec` is not empirically validated.** Running-performance transfer studies for board sports don't exist in the literature. The values are expert judgment informed by motor-pattern overlap. If these cross-trainings are the bulk of someone's training, running-fitness signals will drift from reality faster than for swimming/cycling/hiking where transfer is better characterised.
+- **`recoveryMult` values are pragmatic analogues.** Recovery-demand studies across extreme sports are sparse. The numbers hold a defensible relative ordering; the absolute calibration is the existing DB's convention.
+- **Wind-dependent and session-variable sports (kitesurfing, surfing, sailing) have inherent load variability a single coefficient can't capture.** A 2-hour flat-water kitesurf cruise is very different from 2 hours of jumps in gusty wind. Mosaic offsets this with iTRIMP-from-HR when available (superseding the duration × mult × rpe fallback). Users without HR data will see systematic under- or over-estimation that HR telemetry would correct.
+
+**User-facing correction path.** Since these coefficients are analogue-derived rather than empirical, the activity detail page lets users reclassify any synced activity to a different sport (src/ui/sport-picker-modal.ts). Reclassify applies a delta to the current week's actualTSS / actualImpactLoad / leg load, and persists a `sportNameMappings[normalized activity name] → SportKey` entry so future syncs of same-named activities auto-apply. This is the safety valve for Compendium-derived coefficients the user judges wrong for their individual case.
+
+**Files touched.**
+- `src/constants/sports.ts` — SPORTS_DB entries, SPORT_LABELS, SPORT_ALIASES
+- `src/types/activities.ts` — SportKey union
+- `src/types/state.ts` — GarminActual.manualSport, sportNameMappings
+- `src/ui/sport-picker-modal.ts` — picker + reclassifyActivity + resolveSportForActivity
+- `src/ui/activity-detail.ts` — "Activity" row + handler
+- `src/ui/activity-review.ts` — wires resolveSportForActivity at the 4 mapAppTypeToSport sites
+
+---
+
+## Tanda Marathon Predictor (2026-04-15)
+
+**Why added.** The previous marathon blend (LT + VO2 + PB + recent) was built entirely on capacity ceilings. All four predictors answer "what is your aerobic potential?" rather than "what can you sustain over 42K given current training?" Marathon failure mode is fractional utilization collapse in the last 10–12 km (Joyner & Coyle 2008), which capacity predictors under-model. Previous attempts (volume-bumped LT multiplier, volume-penalised recent run) were theory-motivated but empirically unvalidated heuristics — directionally right, calibration invented.
+
+**Tanda's model.** Tanda (2011, *J Hum Sport & Exercise* 6(3)) regressed marathon finish time on two training indices from the 8 weeks preceding the race:
+
+```
+T_marathon (min) = 11.03 + 98.46 × exp(−0.0053 × K) + 0.387 × P
+```
+
+- K = mean weekly running km
+- P = mean training pace (sec/km) across all runs in the window
+
+**Calibration.** n = 46 marathoners, recreational to sub-elite, range 2:27–4:41. Correlation r = 0.91, standard error ≈ 3 min. Paper available at https://www.jhse.ua.es/article/view/2011-v6-n3-prediction-marathon-performance-time-training-indices.
+
+**Why this predictor earns weight the others don't.**
+1. **Outcome-calibrated.** Trained against real marathon finishes, not derived from steady-state physiology. The other predictors are physiological-first with no marathon-outcome regression.
+2. **Volume-aware directly.** K handles the "no volume = slower marathon" effect we were trying to hack in via heuristic bumps. No invented bands.
+3. **Pace-aware distinctly.** Quality of running matters, not just quantity. A runner averaging 4:30/km training pace is materially different from 5:30/km at the same volume.
+
+**Integration.** Marathon blend reweighted:
+
+```
+with recent run:    recent 0.20, pb 0.05, lt 0.35, vo2 0.10, tanda 0.30
+without recent run: pb 0.10, lt 0.45, vo2 0.15, tanda 0.30
+```
+
+When Tanda is unavailable (insufficient data, non-marathon distance, K out of [4,120], P out of [180,480] sec/km), its weight redistributes onto LT. `lowVolumeDiscount` is skipped for marathon now that Tanda handles volume sensitivity — avoids double-penalising.
+
+**Guards.**
+- Return null if weeks of data < 4 (insufficient for 8w-model proxy).
+- K soft-floor at 10 km/wk before applying exponential term — Tanda's sample didn't include very low volumes; below 10 km/wk the exponential dominates in a way the paper didn't validate. Soft-clamp prevents runaway predictions at near-zero volume while preserving the slower-at-low-K direction.
+- K upper-bound 120 km/wk (out-of-sample at elite extreme; saturation untested).
+- P range 3:00–8:00 /km (filters obvious data errors).
+
+**Mean pace calculation.** Km-weighted across all running activities ≥2 km in the 8w window, excluding paces faster than 3:00/km (sprints) or slower than 7:30/km (walks). Matches Tanda's methodology of "mean training pace" across all qualifying sessions.
+
+**Known limitations (same as Tanda's own).**
+- 46-runner cohort is small. Wide confidence interval at individual level (SEE 3 min = 95% CI ~±6 min).
+- Cohort was recreational-to-sub-elite; elite-specific saturation at K >100 km/wk unmodeled.
+- Cross-discipline athletes (cyclists, triathletes) with low running volume but high aerobic base will be over-penalised because K only counts running. This is arguably correct for marathon-specific readiness, but worth naming.
+- Does not distinguish long-run presence — 40 km/wk of 5 × 8K is scored the same as 40 km/wk with one 25K long run. Former is less marathon-ready.
+- Static formula — doesn't account for multi-year adaptation, elevation, temperature, shoes, or any of the real-world variance around a 3-min SEE.
+
+**Why this is more honest than what we had.** Previous heuristic bumps were internally consistent but had no external validation. Tanda swaps "theory-motivated tuned bands" for "outcome-regressed formula." The numbers aren't necessarily more *correct* for any individual runner, but the model is grounded in real marathon outcomes rather than reverse-fit to a specific user's intuition.
+
+**References.**
+- Tanda G (2011). *J Human Sport & Exercise* 6(3) — "Prediction of marathon performance time on the basis of training indices."
+- Joyner MJ, Coyle EF (2008). *J Physiol* — Endurance performance physiology.
+- Supporting: Daniels J, *Daniels' Running Formula*; Billat V et al. (2003) on fractional utilization.
+
+---
+
 ## Recovery Run Workout Tier (2026-04-15, provisional)
 
 **Context**: Added `'recovery'` as a new `WorkoutType` to extend the suggester's downgrade ladder. Previous bottom rung was `'easy'`; when the running floor blocked distance reduction on an all-easy week, the suggester had no lever and silently declined to offer Reduce.
@@ -61,53 +322,6 @@ Recovery km count toward `floorKm` at 1.0x (same as easy).
 
 ---
 
-## Volume-Scaled Marathon LT Multiplier (2026-04-15)
-
-**Problem.** Fractional utilization at marathon pace — how high a % of VO2max/LT you can hold for 2.5+ hours — is trained primarily by long runs and sustained weekly running volume. A fit athlete (e.g. 4:12/km LT) who stopped running cannot sustain the same fraction of LT over 42K as a fully trained athlete with the same LT value. The existing marathon LT multiplier in `predictFromLT` varied by tier (derived from LT pace) but was blind to current running volume — so a detrained-but-historically-fast athlete got the aggressive 1.06 multiplier regardless of recent km.
-
-**Physiological basis.**
-
-Joyner & Coyle (2008) decompose marathon performance as:
-
-```
-Marathon pace ≈ VO2max × fractional_utilization × running_economy
-```
-
-Fractional utilization is the most volume-sensitive term. Research across ability levels shows elites sustain ~85-88% VO2max at marathon pace versus ~70-75% for undertrained runners. The differentiator is not VO2max or LT ceiling — those are aerobic capacity markers — but the ability to defend pace in the final 10-12 km, which requires glycogen-sparing fat oxidation, muscular fatigue resistance, and pacing discipline. All volume-dependent.
-
-Coyle (1984) shows rapid decline in these specific adaptations with inactivity (capillary density, mitochondrial enzyme activity, glycogen storage), faster than VO2max itself.
-
-**Implementation.** In `predictFromLT`, after picking the LT-derived tier multiplier, apply a volume bump:
-
-```
-weeklyRunKm ≥ 50 → +0.00   (fully volume-trained, tier multiplier unchanged)
-weeklyRunKm ≥ 30 → +0.02   (moderate training, mild penalty)
-weeklyRunKm ≥ 15 → +0.05   (light training, meaningful fractional-utilization cost)
-weeklyRunKm < 15 → +0.08   (essentially untrained for marathon distance)
-
-m = min(tierMult + volBump, 1.14)  // capped at beginner tier max
-```
-
-Example: a 4:12/km LT athlete (tier "performance", balanced type) is normally multiplier 1.06 → 3:07 marathon. At 10 km/wk running volume they get 1.14 → 3:22 marathon. Same aerobic ceiling, ~15 minutes slower because they cannot hold it.
-
-**Why bands not a formula.** Research gives us the shape (inverse exponential saturation) but not a validated functional form across the low-volume range. Bands are transparent and clamped; a formula would imply spurious precision.
-
-**Scope.** Marathon only (`targetDist === 42195`). 5K/10K/HM fractional utilization is less volume-sensitive — those races are more VO2-limited and less dependent on fat oxidation or glycogen defense. Their LT multipliers remain stable across volumes.
-
-**Interaction with low-volume weight discount.** The existing `lowVolumeDiscount` shifts LT+VO2 weight onto PB at low volume. For marathon, LT and volume adjustment now both move the prediction slower, but in different ways: (a) volume makes the LT prediction itself slower, (b) weight shift reduces LT's influence on the blend. Compounding is modest (~1-2 min) and directionally correct — both expressing "marathon-specific readiness is compromised."
-
-**Known limitations.**
-- Volume bands (50/30/15 km/wk) are pragmatic, not outcome-calibrated.
-- Doesn't distinguish long-run presence specifically — 30 km/wk of 5 × 6K runs is different from 30 km/wk with one 20K run. Former is arguably less marathon-ready.
-- Caps at 1.14 even at truly zero volume; real marathons at zero training could blow up 4:00+. Cap prevents absurd predictions but means the model under-penalises at the extreme low end.
-
-**References.**
-- Joyner MJ, Coyle EF (2008). *J Physiol* — "Endurance exercise performance: the physiology of champions."
-- Coyle EF et al. (1984). *JAP* — Detraining loss of adaptations.
-- Billat V et al. (2003). *MSSE* — Fractional utilization differences between marathon tiers.
-- Daniels J. *Daniels' Running Formula* (3rd ed.) — Marathon pace = 84-88% vVO2max tables, implicitly volume-tiered.
-
----
 
 ## Low-Volume Detraining Discount on Watch LT/VO2 (2026-04-14)
 
@@ -849,6 +1063,21 @@ decayed = originalLoad * exp(-K * hoursAgo)
 
 **Thresholds**: >= 60 = heavy (strong warning), >= 20 = moderate (note).
 
+**Readiness floor (added 2026-04-15)**:
+- decayedSum in [10, 20) → soft linear penalty, cap 100 → 54 (no hardFloor set, no callout)
+- decayedSum >= 20 → readiness capped at 54 (Manage Load), hardFloor = 'legLoad'
+- decayedSum >= 60 → readiness capped at 34 (Ease Back), hardFloor = 'legLoad'
+
+Floor branches guard on `score > cap` so a stricter prior floor (ACWR, sleep, strain) is never overwritten: leg fatigue only wins when it is the binding constraint. When it does bind, `drivingSignal = 'legLoad'` so UI surfaces ("Protect the legs") reflect the actual cap rather than a lower-but-non-binding sub-score.
+
+**Why a hard floor, not a weighted input**: EIMD dose-response is non-linear. Functional force-output recovers in 24-48h after mild damage with no measurable injury risk increase, but heavy eccentric loading produces a 72-96h window of impaired force absorption and altered gait mechanics that measurably elevates impact-injury risk (Clarkson & Hubal 2002; Paulsen et al. 2012, *Exerc Sport Sci Rev*). Risk is silent below threshold and step-changes above it. A weighted input would misrepresent this — most days the signal is zero and would dilute the score; on heavy-load days it should dominate. The floor pattern matches how readiness already handles ACWR, sleep, and strain, all of which have non-linear risk curves.
+
+**Soft taper (10–20)**: A cliff at exactly 20 (score 100 → 54) would be a UX artefact. The soft linear penalty in [10, 20) eases onset: a user at legLoad = 15 sees ~77, not 100 or 54. Crucially this band does not set `hardFloor`, so no callout fires and no "Leg fatigue is capping your readiness" banner appears — it's a nudge, not a message. Only the step at 20 makes leg fatigue the binding constraint.
+
+**Why 48h half-life, given the 72–96h EIMD window**: EIMD research measures *functional deficit duration* (isometric force, CK markers) which peaks 24–48h post-exercise and resolves by 72–96h. A 48h half-life places the decay midpoint at peak deficit, keeps the signal ≥ MODERATE (20) for ~72h after a heavy (≥80-raw) session, and ~96h when reloaded — aligning the floor-release window with the literature's functional-recovery window. Full clearance (< 5) takes longer (5+ days when heavy), which matches tissue-level markers that lag functional recovery. Choosing the half-life rather than a rigid 72h step keeps the curve smooth and composable with subsequent sessions.
+
+**Why on Readiness specifically (not Recovery score)**: HRV/sleep/RHR measure autonomic recovery; they pick up part of EIMD via inflammation but rebound on a 24-48h timescale, before tissue does. The autonomic channel is also non-localised — a stressful work day and a destroyed-quads day read identically. Leg fatigue is the localised mechanical channel that closes this blind spot, particularly for cross-training (hiking, skiing, long rides) where TSS undercounts what the eccentric loading does to the legs.
+
 **Example**: 3h hard hike (90 load) Monday, easy run (20 load) Tuesday, checking Wednesday morning:
 - Hike at 40h: halfLife = 48 * 0.95 * 1.3 = 59h → decayed = 57 (still significant)
 - Run at 16h: halfLife = 48 * 1.0 = 48h → decayed = 16
@@ -1253,6 +1482,32 @@ For each night chronologically:
 DEBT_DECAY = exp(-ln(2) / 7) ~= 0.9057    (7-day half-life)
 ```
 
+Both the headline debt value (`computeSleepDebt`) and the cumulative-debt line chart on the Sleep page are produced from this same recurrence via `computeSleepDebtSeries()`. The chart plots `−debt` per night (so deficit sits below the target line); the headline equals the last point of the series. Recovery sleep does not cancel debt 1-for-1 (Rupp et al. 2009; Arnal et al. 2015) — surpluses contribute 0 to the `max(0, …)` term, so good nights make the line drift upward via decay rather than snap back to target.
+
+### Debt severity tiers (`classifySleepDebt`)
+
+Returns `{ label, color, showNumber }`. The tier colour drives the Sleep page headline text, the cumulative-debt chart line, and the gradient fill — all three graduate together from emerald → slate → amber → orange → red so a small residual reads as reassuring and a real deficit reads as concerning.
+
+| Debt | Label | Colour | Chronic equivalent | showNumber |
+|---|---|---|---|---|
+| < 45m | `on track` | emerald `#10B981` | effectively hitting target (residual within one night's natural variation) | false |
+| 45m – 1h 30m | `caught up` | slate `#64748B` | ≈ one decayed short night; practically recovered | true |
+| 1h 30m – 3h | `mild` | amber `#F59E0B` | ~15–30 min/night chronic shortfall | true |
+| 3h – 6h | `moderate` | orange `#F97316` | ~30–60 min/night chronic shortfall | true |
+| 6h – 9h | `high` | red `#EF4444` | ~60–90 min/night chronic shortfall | true |
+| ≥ 9h | `severe` | red-600 `#DC2626` | approaches Van Dongen 2003 chronic restriction zone (≥ 75 min/night) | true |
+
+**What literature supports**:
+- Belenky et al. 2003 — single-night partial deprivation produces minor cognitive effects; chronic restriction (7+ nights of 3h or 5h) produces progressively larger deficits that don't fully recover after three recovery nights
+- Van Dongen & Dinges 2003 — 14 days at 6h/night ≈ 1–2 nights of total deprivation equivalent (≈ 28h raw / ~20h decayed cumulative debt)
+- Rupp et al. 2009 — recovery from chronic restriction is slow and incomplete; residual deficits persist for weeks
+
+**What the minute-level cutoffs are**: pragmatic, not literature-derived. The *progression* is defensible (mild → moderate → high → severe corresponds to recognisable chronic-shortfall patterns). The specific boundaries are **intentionally conservative** — `severe` fires at 9h, roughly half of Van Dongen's ~20h chronic-restriction steady state, so tiers flag earlier than demonstrated-harmful levels.
+
+**Why `on track` hides the number**: residuals under 45 min are physiological noise (single night's natural variation) and showing a precise "23m debt · on track" reads as punishing for a negligible quantity. Above 45 min the number is shown because it carries meaning.
+
+**Why graduated colour, not binary red/green**: the earlier implementation used red for any non-zero debt, which made the model read as "always failing" even after a recovery week. Graduation through emerald → slate → amber → orange → red means the visual alarm only kicks in once debt is genuinely in the chronic-shortfall range.
+
 ### Sleep bank (rolling 7-night)
 ```
 bankSec = SUM(last 7 nights: actual - target)
@@ -1548,3 +1803,59 @@ CTL = CTL * exp(-1/42) + dayTSS * 7 * (1 - exp(-1/42))
 **Signal B** (raw physiological load): no runSpec discount; counts full metabolic cost. Used for ATL, ACWR, freshness/TSB, total load display.
 
 **Rationale**: A padel session that produces 80 iTRIMP has only ~36 TSS of running-equivalent fitness benefit (runSpec 0.45), but it creates 80 TSS worth of physiological fatigue. Signal A captures the training effect; Signal B captures the recovery cost.
+
+## HR Drift (Cardiovascular Decoupling) (2026-04-15)
+
+**File**: `supabase/functions/sync-strava-activities/index.ts` (`calculateHRDrift`), surfaced in `src/calculations/workout-insight.ts`, `src/calculations/daily-coach.ts` (`detectEasyDriftPattern`, `computeLongRunDriftNote`), `src/ui/stats-view.ts` (`buildDurabilityChart`, `computeMarathonFadeRisk`), `src/ui/week-debrief.ts`.
+
+**Formula**: `drift% = (avgHR_2nd_half − avgHR_1st_half) / avgHR_1st_half × 100`, computed on post-warmup HR samples (first 10% stripped). Requires ≥ 20 min of HR data with ≥ 120 samples; returned as one-decimal percentage.
+
+**Scope**: Only applied to steady-state run types (`DRIFT_TYPES = RUNNING, TREADMILL_RUNNING, TRAIL_RUNNING, VIRTUAL_RUN, TRACK_RUNNING`). Pace-variable efforts (intervals, tempo with rest) produce misleading drift because HR lags pace changes.
+
+**Thresholds** (zone classification):
+
+| Drift | Interpretation | Colour |
+|-------|----------------|--------|
+| ≤ 5%  | Efficient (aerobic system coping with the load) | green |
+| 5–8%  | Moderate drift (normal for long or warm-day efforts) | amber |
+| > 8%  | Cardiovascular decoupling (heat, dehydration, fatigue, or pace too aggressive for current fitness) | red |
+
+**Rationale for 5% / 8% cuts**: Maffetone, Friel, and the TrainingPeaks "Aerobic Decoupling" (Pw:HR) literature converge on ≤ 5% as the marker of a durable aerobic engine, with 5–8% as the transitional band and > 8% as clear decoupling. These are widely-used endurance-coaching heuristics, not hard physiological constants — useful as a practical signal but not a diagnostic.
+
+**Pre-long-run nudge** (`computeLongRunDriftNote`): fires when today's planned session is a long run AND ≥ 2 of the last 3 long runs had drift > 8%. Scans 6 weeks. Copy suggests earlier fuelling cadence and controlled first-half pacing.
+
+**Easy-pace drift pattern** (`detectEasyDriftPattern`): fires when the last 3 weeks of easy runs (≥ 3 samples) average drift > 5%. Suggests easy pace may sit too close to aerobic threshold and should be eased by 10–15 sec/km. 3-week window balances responsiveness with noise rejection; 5% matches the "efficient aerobic engine" threshold above.
+
+**Aerobic Durability chart**: scatter of per-session drift across easy + long runs over the last 12 weeks. Rolling mean (4-point) overlaid; coloured bands at 5% / 8% reference thresholds.
+
+**Marathon fade-risk badge** (`computeMarathonFadeRisk`): on the marathon race-estimate row only. Reads drift from recent long runs (goal pace or slower). If average drift > 8% across ≥ 2 samples, surfaces a "fade risk" warning. Marathon is the only distance where cardiovascular decoupling meaningfully compromises finishing pace — shorter distances finish before drift materialises.
+
+**Commentary gating**: in-session drift commentary (`workout-insight.ts`) fires only on non-quality runs (`!s.quality`). Drift > 8% on a threshold or interval session is expected (high lactate, high ventilation, non-steady pace) and calling it out would be misleading.
+
+**Known limitations**:
+- Elevation profile influences drift on trail runs; we do not normalise for gradient.
+- Wrist-based HR accuracy degrades during the first ~5–10 min (cadence lock). The 10% warmup strip mitigates but does not eliminate this.
+- The 5% / 8% thresholds are coaching heuristics, not validated against a population cohort in this codebase.
+
+**Heat correction (2026-04-16)**: ambient temperature is now fetched from Open-Meteo (free historical API, requires `start_latlng`) during drift computation and stored per-activity on `garmin_activities.ambient_temp_c`. Durability detection uses heat-adjusted drift:
+
+`driftAdjusted = drift − 0.15 × max(0, tempC − 15)`
+
+The 0.15%/°C coefficient is literature-approximate — controlled studies of endurance-trained runners at steady pace show ~0.1–0.2% HR rise per °C above a 15°C neutral zone due to elevated core temperature and skin-blood-flow diversion. Below 15°C no correction is applied (the coefficient is cardiovascular-strain-directional, not bidirectional). When `ambient_temp_c` is null (old rows, no-GPS treadmill, API failure), raw drift is used — the helper is a no-op.
+
+**Personal baseline (2026-04-16)** (`computeDriftBaselines` in `daily-coach.ts`): rolling 16-week window per `plannedType` (easy, long). Baseline is mean + SD of heat-adjusted drift. Requires ≥ 5 samples per category; below that, `detectDurabilityFlag` falls back to the population 5% / 8% thresholds. When the baseline is available, the flag fires when the recent 4-week mean exceeds `baseline.mean + 1·SD`. This normalises against the athlete's own aerobic signature — a runner whose baseline drift sits at 3% triggers at a tighter bound than one whose baseline sits at 6%.
+
+**Workout-insight heat context (2026-04-16)**: in-session drift commentary now mentions ambient temperature and heat-adjusted drift when `ambientTempC ≥ 22°C` and raw drift > 8%. Example: "HR drifted 11% from first to second half. At 28°C, heat-adjusted drift is 9% — the conditions explain most of the rise." This prevents coach copy from flagging hot-day runs as under-recovery.
+
+**Backfill heal**: drift was added after the initial `hr_zones` migration. Backfill mode re-fetches HR streams (capped at 20 activities per run) for cached-with-zones running activities that have NULL `hr_drift`, so the 12-week durability chart populates retrospectively without blowing the Strava rate-limit budget.
+
+**Durability flag (injury risk signal)** (`detectDurabilityFlag` in `daily-coach.ts`, surfaced in `injury-risk-view.ts`):
+
+- Scans last 4 weeks. Strict matching: only `plannedType === 'easy'` or `'long'` actuals. A "matched but mismatched" run (e.g. a tempo logged against a planned easy) is excluded because the drift signal would reflect the effort profile, not under-recovery.
+- Fires when:
+  - Easy runs: ≥ 3 samples AND average drift > 5%
+  - Long runs: ≥ 2 samples AND average drift > 8%
+- Severity: `'high'` when the average exceeds its expected threshold by > 3 percentage points, otherwise `'elevated'`. The threshold gap (not the absolute drift) is what distinguishes mild under-recovery from clear cardiovascular decoupling.
+- Copy differs per trigger (easy-only, long-only, both) with specific remediation (ease easy-run pace, slow long-run opening, fuel earlier).
+
+**Rationale for coupling drift with ACWR**: ACWR flags acute:chronic load spikes but is blind to whether the load is being absorbed. Persistent easy-run drift means aerobic recovery isn't keeping pace with the training load — a quiet signal that precedes overt overreaching. Combining the two surfaces risk that load-ratio alone misses (e.g. ACWR inside the safe zone but drift climbing).

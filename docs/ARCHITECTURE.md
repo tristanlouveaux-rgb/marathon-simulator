@@ -27,16 +27,16 @@
 
 | Module | Purpose | Key Files | Key Exports |
 |--------|---------|-----------|-------------|
-| `state/` | Central store + persistence + plan initialization | `store.ts`, `initialization.ts`, `persistence.ts` | `getState()`, `getMutableState()`, `updateState()`, `loadState()`, `saveState()`, `initializeSimulator()` |
-| `workouts/` | Plan generation, scheduling, gym workouts | `generator.ts`, `plan_engine.ts`, `scheduler.ts`, `gym.ts`, `load.ts` | `generateWeekWorkouts()`, `planWeekSessions()`, `assignDefaultDays()`, `generateGymWorkouts()`, `calculateWorkoutLoad()` |
-| `calculations/` | VDOT, paces, predictions, fatigue, physiology, TSS/ACWR | `vdot.ts`, `paces.ts`, `predictions.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts`, `fitness-model.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()`, `computeWeekTSS()`, `computeFitnessModel()`, `computeACWR()` |
+| `state/` | Central store + persistence + plan initialization | `store.ts`, `initialization.ts`, `initialization.triathlon.ts`, `persistence.ts` | `getState()`, `getMutableState()`, `updateState()`, `loadState()`, `saveState()`, `initializeSimulator()`, `initializeTriathlonSimulator()` |
+| `workouts/` | Plan generation, scheduling, gym workouts. Triathlon mode adds `plan_engine.triathlon.ts`, `scheduler.triathlon.ts`, `swim.ts`, `bike.ts`, `brick.ts`. | `generator.ts`, `plan_engine.ts`, `scheduler.ts`, `gym.ts`, `load.ts`, `plan_engine.triathlon.ts`, `scheduler.triathlon.ts`, `swim.ts`, `bike.ts`, `brick.ts` | `generateWeekWorkouts()`, `planWeekSessions()`, `assignDefaultDays()`, `generateGymWorkouts()`, `calculateWorkoutLoad()`, `generateTriathlonPlan()`, `scheduleTriathlonWeek()`, `generateSwimSession()`, `generateBikeSession()`, `generateBrick()` |
+| `calculations/` | VDOT, paces, predictions, fatigue, physiology, TSS/ACWR. Triathlon adds `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts`. | `vdot.ts`, `paces.ts`, `predictions.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts`, `fitness-model.ts`, `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()`, `computeWeekTSS()`, `computeFitnessModel()`, `computeACWR()`, `computeSwimTss()`, `computeBikeTssFromPower()`, `computeBikeTssFromHr()`, `computePerDisciplineFitness()`, `perDisciplineACWR()`, `rebuildTriFitnessFromActivities()`, `predictTriathlonRace()`, `matchTriathlonWeek()`, `detectBricks()` |
 | `injury/` | Phase-based injury management + workout adaptation | `engine.ts` | `applyInjuryAdaptations()`, `evaluatePhaseTransition()`, `recordPainLevel()`, `analyzeTrend()` |
 | `cross-training/` | Universal load model, workout matching, suggestions | `universalLoad.ts`, `matcher.ts`, `load-matching.ts`, `suggester.ts` | `computeUniversalLoad()`, `applyCrossTrainingToWorkouts()`, `buildCrossTrainingPopup()`, `applyAdjustments()` |
 | `gps/` | GPS tracking, split detection, recording persistence | `tracker.ts`, `geo-math.ts`, `split-scheme.ts`, `persistence.ts` | `GpsTracker` (class), `haversineDistance()`, `filterJitter()`, `buildSplitScheme()` |
 | `recovery/` | Morning check-in, sleep/readiness scoring | `engine.ts` | `computeRecoveryStatus()`, `sleepQualityToScore()`, `RecoveryEntry`, `RecoveryLevel` |
-| `ui/` | Dashboard, renderer, events, wizard, modals | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `activity-review.ts`, `welcome-back.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()` |
-| `constants/` | Static config, protocols, sport DB, training params | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS` |
-| `types/` | All TypeScript interfaces and type unions | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase` |
+| `ui/` | Dashboard, renderer, events, wizard, modals. Triathlon mode renders from `ui/triathlon/`. | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `wizard/steps/triathlon-setup.ts`, `activity-review.ts`, `welcome-back.ts`, `triathlon/{plan-view,home-view,stats-view,tab-bar,workout-card,race-forecast-card,colours}.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()`, `renderTriathlonPlanView()`, `renderTriathlonHomeView()`, `renderTriathlonStatsView()` |
+| `constants/` | Static config, protocols, sport DB, training params. Triathlon adds `triathlon-constants.ts` and `transfer-matrix.ts`. | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts`, `triathlon-constants.ts`, `transfer-matrix.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS`, `TRANSFER_MATRIX`, `COMBINED_CTL_WEIGHTS`, `DEFAULT_VOLUME_SPLIT`, `RACE_LEG_DISTANCES`, `RUN_FATIGUE_DISCOUNT_70_3`, `RUN_FATIGUE_DISCOUNT_IRONMAN` |
+| `types/` | All TypeScript interfaces and type unions. Triathlon adds `triathlon.ts`. | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts`, `triathlon.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase`, `EventType`, `Discipline`, `TriathlonDistance`, `TriConfig`, `TriSkillRating`, `TriVolumeSplit`, `TriRacePrediction` |
 | `data/` | Static data, Supabase client, wearable sync, source routing | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts`, `sources.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncAppleHealthPhysiology()`, `syncPhysiologySnapshot()`, `getActivitySource()`, `getPhysiologySource()` |
 | `utils/` | Formatting, helpers, platform detection | `format.ts`, `helpers.ts`, `platform.ts` | Time/pace formatting, platform checks |
 | `scripts/` | Offline audit/analysis scripts | `sanity_audit.ts`, `comprehensive_audit.ts` | Not imported at runtime |
@@ -52,11 +52,31 @@
 User fills wizard steps (goals, background, volume, PBs, fitness data)
   → OnboardingState populated
   → initializeSimulator(onboarding)
-    → computes VDOT from PBs (cv()), runner type (getRunnerType())
-    → generates paces (gp()), predictions (blendPredictions())
-    → builds initial s.wks[] array with phase assignments
+    → if onboarding.trackOnly:
+        → s.trackOnly=true, s.continuousMode=true, s.w=1, s.tw=1
+        → seed s.wks=[{w:1, ph:'base', ...}] — rolling bucket, no planned workouts
+        → persist PBs/physiology (VDOT if PBs exist, else defaults stay), return early
+        → wizard controller calls completeOnboarding() + goes to main-view
+    → else (full plan path):
+        → computes VDOT from PBs (cv()), runner type (getRunnerType())
+        → generates paces (gp()), predictions (blendPredictions())
+        → builds initial s.wks[] array with phase assignments
   → SimulatorState ready → renderMainView()
 ```
+
+**Just-Track mode** is the same infrastructure as any non-event `continuousMode` user, with one rolling week bucket that extends on calendar advance. Plan generation is suppressed and a handful of view surfaces hide prescription UI — that is the entire difference. The flag lives on both `OnboardingState.trackOnly` and `SimulatorState.trackOnly`.
+
+**What track-only users see:**
+- `getHomeHTML` → `getTrackOnlyHomeHTML`: no today-workout, no race-forecast, no Coach/Check-in. Shows `buildTrackOnlyDailyTarget` (CTL/7 × readiness, Gabbett-band coloured), `buildReadinessRing` (retained — informational), weekly volume card, sync, recent activity, "Create a plan" CTA.
+- `renderPlanView` → `getTrackOnlyPlanHTML`: retrospective log of the current week + rolling history of prior weeks. No forward planning.
+- `buildStatsSummary`: drops Progress (plan-adherence) card; keeps Fitness card (CTL/VDOT — both derived from actuals).
+- `showWeekDebrief` → `showTrackOnlyRetrospective`: compact this-vs-last-week deltas (distance, sessions, TSS, CTL, recovery avg).
+
+**What's unchanged:** Strava / Garmin / Apple sync, activity matching, GPS recording, physiology polling, readiness computation, CTL/ATL/TSB, ACWR. All of these write into the same `wk.garminActuals` / `adhocWorkouts` / `rated` buckets that planned users have — there is no parallel track-only data store.
+
+**Calendar extension**: `advanceWeekToToday` branches on `s.trackOnly` and extends `s.wks` one week at a time with `ph:'base'` (phase is meaningless for trackOnly — views hide it). Planned `continuousMode` users continue to get 4-week base/build/peak/taper blocks.
+
+**Science log**: the CTL/7 × readiness daily target and Gabbett colour bands are documented in `docs/SCIENCE_LOG.md → "Just-Track Daily Load Target"`.
 
 ### 2. Weekly Generation (every render)
 
@@ -101,7 +121,7 @@ user clicks "Complete Week"
 | Group | Fields |
 |-------|--------|
 | Week tracking | `w` (current week), `tw` (total weeks), `wks` (Week array) |
-| VDOT/fitness | `v` (starting VDOT), `iv` (initial), `rpeAdj`, `expectedFinal` |
+| VDOT/fitness | `v` (live blended VDOT — refreshed weekly via `refreshBlendedFitness`; held during taper), `iv` (initial at onboarding), `rpeAdj`, `physioAdj`, `expectedFinal`, `blendedRaceTimeSec`, `blendedEffectiveVdot`, `blendedLastRefreshedISO`. Read via `getEffectiveVdot(s)` which layers `rpeAdj + physioAdj` on top of `s.v`. |
 | Race config | `rd` (race distance), `rw` (runs/week), `gs` (gym sessions), `epw` (exercises/week), `wkm` (weekly km) |
 | PBs & recent | `pbs` (PBs object), `rec` (RecentRun) |
 | Physiology | `lt` (LT pace sec/km), `vo2` (VO2max), `maxHR`, `restingHR` |
@@ -167,6 +187,11 @@ Quick reference for reading code that uses `s = getState()`:
 | `s.wks` | All weeks array | `Week[]` |
 | `s.pbs` | Personal bests | `PBs` {k5, k10, h, m} |
 | `s.rec` | Recent race | `RecentRun \| null` |
+| `s.eventType` | `'running'` or `'triathlon'`. Default running for back-compat. | `EventType \| undefined` |
+| `s.triConfig` | Triathlon config (distance, split, benchmarks, fitness). Present only when `eventType === 'triathlon'`. | `TriConfig \| undefined` |
+| `wk.triWorkouts` | Week's generated triathlon workouts (swim/bike/run/brick/gym). Running weeks leave undefined. | `Workout[] \| undefined` |
+| `w.discipline` | Triathlon discipline for a workout (`'swim' \| 'bike' \| 'run'`). Undefined = running. | `Discipline \| undefined` |
+| `w.brickSegments` | Present on brick workouts: two ordered discipline segments. | `[DisciplineTarget, DisciplineTarget] \| undefined` |
 | `s.timp` | Total time impact (skips) | `number` |
 | `s.tssPerActiveMinute` | Personal TSS/min calibrated from activities | `number \| undefined` |
 | `wk.ph` | Week's training phase | `TrainingPhase` |
@@ -276,8 +301,28 @@ threshold     → steady (halfway between easy and threshold, NOT true marathon 
 
 - Provider abstraction: `native-provider.ts` (Capacitor), `web-provider.ts` (browser), `mock-provider.ts` (dev)
 - Points are jitter-filtered (`filterJitter()`), distances via Haversine
-- Split detection: `buildSplitScheme()` parses workout descriptions (e.g. "8×400m @ 5K pace") into split targets
+- Split detection: `buildSplitScheme()` is a derived view over `buildTimeline` — see "Guided Runs" below
 - Recordings persisted to localStorage with an index
+
+### Guided Runs (`src/guided/`, `src/gps/split-scheme.ts`)
+
+Voice/haptic coaching and on-screen split cues share a single parser so the two views cannot diverge.
+
+- `buildTimeline(workout, paces)` in `src/guided/timeline.ts` is the **single source of truth** for interpreting `workout.d`. It emits a `Timeline` of typed `Step`s (`warmup` | `work` | `recovery` | `cooldown` | `easy` | `long`) with pace targets and rep indices.
+- `buildSplitScheme(workoutDesc, paces)` in `src/gps/split-scheme.ts` is a **thin adapter over `buildTimeline`**. It maps each step to one or more `SplitSegment`s: reps become a single paced segment, recoveries become untimed segments with `durationSeconds`, warm-up/cool-down become a single paced segment at easy pace, and single-block distances (e.g. `20km @ MP`, `8km`) are expanded into per-km splits.
+- Adding a new workout format means extending `parseMainSet` in `timeline.ts`; `split-scheme.ts` picks it up automatically via the adapter. Never add a parallel regex path in split-scheme.
+
+### iOS Native (`ios/`, `ios-plugins/guided-voice/`, adapter swap points in `src/guided/`)
+
+Capacitor 8 + Swift Package Manager. App id `com.mosaic.training`, iOS 15 minimum, bundle name "Mosaic".
+
+- **`ios-plugins/guided-voice/`** — local npm package (installed via `file:` protocol), Swift target `GuidedVoicePlugin`. Wraps `AVSpeechSynthesizer` and activates `AVAudioSession(.playback, .voicePrompt, [.duckOthers, .mixWithOthers])` around each utterance, then deactivates with `.notifyOthersOnDeactivation` on the delegate callback. Registered with Capacitor as `GuidedVoice` (jsName).
+- **`src/guided/voice.ts`** — adapter swap point. `speak()`/`cancel()` detect `Capacitor.isNativePlatform()` and route through the native plugin; Web Speech is the browser fallback. `composePhrase` stays pure so the test suite is unaffected.
+- **`src/guided/haptics.ts`** — adapter swap point. Default adapter picks native `@capacitor/haptics` on native (Taptic Engine via `Haptics.impact`) and `navigator.vibrate` in browsers. Patterns (e.g. `[80, 60, 80]`) are emulated with chained `impact` calls on setTimeout.
+- **`src/guided/keep-awake.ts`** — screen-on adapter. `@capacitor-community/keep-awake` on native, `navigator.wakeLock` fallback on web. Not yet wired into Record-tab UI (ISSUE-135).
+- **`src/guided/background-location.ts`** — `GUIDED_RUN_LOCATION_CONFIG` — recommended options for `@transistorsoft/capacitor-background-geolocation` (`preventSuspend: true`, `locationAuthorizationRequest: 'Always'`, foreground-service notification). Not yet wired.
+- **`ios/App/App/Info.plist`** — location (when-in-use + always), motion, `UIBackgroundModes: [location, audio]`. Audio background mode is what lets voice cues continue while the screen is locked.
+- **`npx cap sync ios`** regenerates `ios/App/App/capacitor.config.json` and `ios/App/CapApp-SPM/Package.swift` from the npm plugin list — manual edits to those files are clobbered. New native code goes via a plugin package. See `docs/IOS_SETUP.md`.
 
 ### Recovery & Deload (`src/recovery/engine.ts`)
 
@@ -304,7 +349,7 @@ Three ability tiers: beginner (bodyweight), novice (light weights), full (barbel
 Fire-and-forget on boot. Two separate concerns are handled independently:
 
 **Activity source** (what workouts were done) — `s.stravaConnected` takes priority:
-- **Strava connected** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. IDs namespaced `"strava-{id}"`. This path is used even for Garmin/Apple Watch users who have Strava.
+- **Strava connected** (`s.stravaConnected`): `syncStravaActivities()` → `sync-strava-activities` Edge Function. Fetches activity list + full HR streams; computes iTRIMP. IDs namespaced `"strava-{id}"`. This path is used even for Garmin/Apple Watch users who have Strava. Backfill mode additionally stores Strava `best_efforts` (jsonb on `garmin_activities`) for RUNNING activities; `src/calculations/pbs-from-history.ts → readPBsFromHistory()` reads these to auto-fill onboarding PBs (5k / 10k / half / marathon) with source activity id + date for UI attribution.
 - **Garmin-only** (`!s.stravaConnected`, physiology source `'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook.
 - **Apple Watch** (activity source `'apple'`): `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` (iOS native only; no-op on web).
 
@@ -312,6 +357,13 @@ Fire-and-forget on boot. Two separate concerns are handled independently:
 - **Garmin**: `syncPhysiologySnapshot(28)` → `sync-physiology-snapshot` Edge Function → merges `daily_metrics`, `sleep_summaries`, `physiology_snapshots` (all written by Garmin webhook).
 - **Apple Watch**: `syncAppleHealthPhysiology(28)` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. On-device, no server. Sleep score computed from stage durations.
 - **Source routing**: `connectedSources.physiology` field on state, with legacy `wearable` fallback. Accessor functions in `src/data/sources.ts` centralise all branching.
+
+**Garmin data pipeline** (webhook push model):
+- **Live delivery**: Garmin pushes dailies / sleeps / HRV / userMetrics to `supabase/functions/garmin-webhook` as events happen. The handler writes to `daily_metrics`, `sleep_summaries`, `physiology_snapshots`.
+- **First-connect history**: `triggerGarminBackfill(8)` fires **exactly once** per OAuth connect. `resetGarminBackfillGuard()` (called from the Connect Garmin buttons) clears the stamp so the next launch fires an 8-week `/backfill/{dailies,sleeps,hrv,userMetrics}` request; subsequent launches no-op. Guard key: `mosaic_garmin_backfill_migration = 'v7-one-shot-backfill'`.
+- **Gap recovery**: `supabase/functions/garmin-reconcile` runs nightly at 04:00 UTC via pg_cron. Finds users with a `garmin_tokens` row but no `daily_metrics` row for yesterday and fires a small 3-day `/backfill/dailies`+`/backfill/sleeps`+`/backfill/userMetrics` window (userMetrics added 2026-04-23 so VO2/LT refreshes survive webhook gaps). Requests within a user are **serialized with 300ms spacing**; users are paced 3s apart. Also callable with a user JWT (single-user reconcile) from the manual Resync button in Account settings. Cron secret stored in Supabase Vault as `reconcile_cron_secret`; same value set on the function as `RECONCILE_CRON_SECRET` env var.
+- **Rate-limit handling** (2026-04-24): Garmin's 100/min cap is app-wide (keyed on our client ID). Both functions detect 429/403/502/503 and bail the run. The client reads `rateLimited` from the response and sets `mosaic_garmin_cooldown_until` (120s, shared between backfill + reconcile) to stop further bursts until the rolling window clears. `triggerGarminBackfill` now only sets the one-shot migration guard on true success; a rate-limited run self-heals on the next launch after the cooldown.
+- **Why no client-side polling**: the previous design polled `triggerGarminBackfill` every 2h on app launch. At scale that tripped Garmin's 100/min rate limit. Moving catch-up to a server-side cron removes the thundering-herd.
 
 All activity paths produce `GarminActivityRow[]` and feed into `matchAndAutoComplete()` — identical pipeline from that point.
 
@@ -477,12 +529,12 @@ Complete navigation graph. Every full-page view, its entry points, and where its
 | Rolling Load | `ui/rolling-load-view.ts` | `renderRollingLoadView()` | Readiness | Readiness |
 | Load/Taper | `ui/load-taper-view.ts` | `renderLoadTaperView(week?, returnTo)` | Home, Plan | Caller-controlled via `returnTo` param |
 | Activity Detail | `ui/activity-detail.ts` | `renderActivityDetail(actual, ..., returnView)` | Home, Plan | Caller-controlled via `returnView` param |
+| Coach | `ui/coach-view.ts` | `renderCoachView(onBack?)` | Home (Coach pill), Plan (Coach pill) | Caller-controlled via `onBack` param |
 
 ### Modals and Overlays (no page swap)
 
 | Modal | File | Render | Opened by |
 |-------|------|--------|-----------|
-| Coach | `ui/coach-modal.ts` | `openCoachModal()` | Home, Plan |
 | Check-in | `ui/checkin-overlay.ts` | `openCheckinOverlay()` | Home, Plan |
 | Illness | `ui/illness-modal.ts` | `openIllnessModal()` | Check-in, Plan |
 | Injury | `ui/injury/modal.ts` | `openInjuryModal()` | Check-in, Plan |
@@ -521,6 +573,7 @@ home-view
   ├── sleep-view (back → home)
   ├── recovery-view (back → home)
   ├── activity-detail (back → home)
+  ├── coach-view (back → home or plan — caller-controlled)
   └── load-taper-view (back → home or plan)
 ```
 

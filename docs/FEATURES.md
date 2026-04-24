@@ -5,6 +5,60 @@ Update the status column after running `npx vitest run`.
 
 ---
 
+## Triathlon Mode (MVP — behind `eventType === 'triathlon'` flag)
+
+Triathlon is a fully-separate mode selected at onboarding. Running users are unaffected. See `docs/TRIATHLON.md` §18 for the canonical decisions backing this implementation.
+
+### T1. Triathlon Onboarding (wizard fork)
+**What it does**: New mode tile on the goals step routes triathlon users through a single consolidated `triathlon-setup` screen that collects distance (70.3 / IM), race date, weekly hours, volume split across swim/bike/run, three self-rating sliders (1–5 per discipline), bike FTP + power-meter toggle, and swim CSS (or 400m test time that derives CSS). On completion, initialises `triConfig` and generates the plan.
+**Key files**: `src/ui/wizard/steps/goals.ts`, `src/ui/wizard/steps/triathlon-setup.ts`, `src/ui/wizard/controller.ts`, `src/state/initialization.triathlon.ts`
+**Tests**: — (UI) ⚠️ Manual test only
+
+### T2. Triathlon Plan Engine
+**What it does**: Generates a full per-phase plan (base → build → peak → taper) with swim, bike, run, brick, and optional gym sessions for each week. Per-discipline hours derived from `triConfig.timeAvailable × phaseMultiplier × volumeSplit`. Sessions chosen by phase + skill.
+**Key files**: `src/workouts/plan_engine.triathlon.ts`, `src/workouts/scheduler.triathlon.ts`, `src/workouts/swim.ts`, `src/workouts/bike.ts`, `src/workouts/brick.ts`
+**Tests**: `src/workouts/plan_engine.triathlon.test.ts` — ✅ Passing (8 tests)
+
+### T3. Multi-sport Transfer Matrix
+**What it does**: Every activity contributes to its own discipline's CTL and ATL at 1.0, and to other disciplines at reduced weights (§18.3). Generalises the old `runSpec` discount to support any sport. Drives per-discipline CTL when a padel / ski / strength session lands on the activity log.
+**Key files**: `src/constants/transfer-matrix.ts`, `src/calculations/fitness-model.triathlon.ts`
+**Tests**: `src/calculations/fitness-model.triathlon.test.ts` — ✅ Passing (10 tests)
+
+### T4. Per-discipline CTL / ATL / TSB
+**What it does**: Independent 42-day CTL + 7-day ATL tracks for swim, bike, run. Combined CTL is a weighted sum (COMBINED_CTL_WEIGHTS). Per-discipline ACWR for discipline-specific overload detection. Same Banister 1975 exponential-decay EMAs as running mode.
+**Key files**: `src/calculations/fitness-model.triathlon.ts`
+**Tests**: covered in T3 tests ✅
+
+### T5. Swim / Bike TSS
+**What it does**: Swim TSS uses cubed IF (water drag ∝ v³; Toussaint & Beek 1992). Bike TSS uses squared IF when power meter present; HR-reserve fallback otherwise.
+**Key files**: `src/calculations/triathlon-tss.ts`
+**Tests**: `src/calculations/triathlon-tss.test.ts` — ✅ Passing (13 tests)
+
+### T6. Triathlon Race Prediction
+**What it does**: Predicts total race time and per-leg splits. Swim uses CSS + 5s/100m race-pace offset (Dekerle 2002). Bike derives speed from FTP × race IF or skill fallback. Run uses VDOT (Daniels) plus a 5% (70.3) or 11% (IM) pace fatigue discount (Bentley 2007, Landers 2008). T1/T2 estimated from skill slider. Confidence band ±8–10%. Sprint and Olympic times shown as side-effects.
+**Key files**: `src/calculations/race-prediction.triathlon.ts`, `src/ui/triathlon/race-forecast-card.ts`
+**Tests**: — ⚠️ Not yet covered
+
+### T7. Discipline-aware Activity Matcher + Brick Detection
+**What it does**: Matches synced swim / bike / run activities to planned `triWorkouts` — discipline first, then same-day, then nearest duration. Brick detector flags bike → run pairs where the run starts within 30 min of bike end (§18.1).
+**Key files**: `src/calculations/activity-matcher.triathlon.ts`, `src/calculations/brick-detector.ts`
+**Tests**: `src/calculations/brick-detector.test.ts` — ✅ Passing (5 tests). Matcher ⚠️ not yet covered.
+
+### T8. Triathlon UI (Plan / Home / Stats)
+**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage). Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats shows per-discipline CTL/ATL/TSB with ACWR, this-week volume, race forecast, and current targets.
+**Key files**: `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/home-view.ts`, `src/ui/triathlon/stats-view.ts`, `src/ui/triathlon/tab-bar.ts`, `src/ui/triathlon/workout-card.ts`, `src/ui/triathlon/race-forecast-card.ts`, `src/ui/triathlon/colours.ts`
+**Tests**: — (UI) ⚠️ Manual test only
+
+### T9. Not yet built (deferred)
+- Discipline-aware sync pipeline (stravaSync/garminSync route swim/bike activities into `state.triConfig.fitness` via `rebuildTriFitnessFromActivities`). The calculation modules are ready; the write-side plumbing is the remaining hook.
+- Suggestion-modal cross-discipline ACWR extensions (§18.5).
+- Injury engine discipline-shift behaviour (§18.6).
+- Express onboarding via Strava (pre-populate CSS/FTP/PBs from history — §18.9).
+- Targets editing from the stats page UI (§18.8).
+- Guided runs for bike/swim (v2).
+
+---
+
 ## Fitness Calculations
 
 ---
@@ -32,7 +86,11 @@ Update the status column after running `npx vitest run`.
 ### 3. Race Time Predictor
 **What it does**: Forecasts your finish time for race day based on current fitness, weeks of training remaining, runner type, and historical data. Shows an "initial baseline" and a "live forecast" that updates as you complete workouts.
 
-**Key files**: `src/calculations/predictions.ts`, `src/testing/forecast-matrix.ts`
+The blended prediction (`refreshBlendedFitness`) combines Tanda (2011) marathon regression, VDOT-from-PBs, LT pace, and VO2max into a single weighted race time. Confidence scales with how many recent runs fed the blend. The blended effective VDOT is written back to `s.v` so plan generation and pace derivation always use the live value (except in taper/deload weeks where `s.v` is held — Mujika & Padilla 2000). `getEffectiveVdot(s)` layers RPE and physio adjustments on top.
+
+Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode only): distance label, predicted finish time, target time, and signed delta vs target (e.g. `+13 min` / `On pace` / `−4 min`). Tap opens the full-page forecast view. (2) **Race forecast full-page** (`src/ui/race-forecast-view.ts`): hero ring coloured by delta-to-goal, Started/Now/Forecast stat row, line chart of race-time progression (`vdotHistory → tv(vdot, rdKm(s.rd))`) with dashed projection to `s.forecastTime` at week `s.tw` and horizontal goal reference line. If the forecast lags the goal by ≥ 20 min and the athlete isn't in taper, an "Add a quality session" CTA bumps `s.rw + s.epw` and re-runs `refreshBlendedFitness` in place. (3) **Plan race-prediction row** shows Initial · Forecast with the signed delta subline. (4) **Stats race-estimate table** repeats the signed delta inline on the row matching `s.rd`.
+
+**Key files**: `src/calculations/predictions.ts`, `src/calculations/blended-fitness.ts`, `src/calculations/effective-vdot.ts`, `src/ui/race-forecast-view.ts`, `src/ui/home-view.ts` (`buildRaceForecastCard`), `src/testing/forecast-matrix.ts`
 **Tests**: `src/calculations/predictions.test.ts`, `src/calculations/debug-prediction.test.ts`, `src/calculations/forecast-profiles.test.ts` — ✅ Passing
 
 ---
@@ -84,6 +142,13 @@ Update the status column after running `npx vitest run`.
 ### 7c. Workout Commentary — Coach's Notes (ISSUE-35 Build 3)
 **What it does**: Every completed activity gets 2-3 sentences of coaching commentary on its detail screen. Rules-based — picks the most relevant insights from pace adherence, HR effort, HR drift, split patterns (negative split, late fade, evenness), and HR zone distribution.
 
+**HR drift surfaces (added 2026-04-15)**:
+- **Activity detail copy** (`workout-insight.ts`): drift >8% on easy/long runs (not quality) triggers a layman's explanation — heat, dehydration, fatigue, or pace too aggressive.
+- **Pre-long-run nudge** (`daily-coach.ts → computeLongRunDriftNote`): when today is a long run and recent long runs have drifted, the coach suggests earlier fuelling and pace control. Surfaced under the coach message in Readiness view.
+- **Easy-pace commentary** (`daily-coach.ts → detectEasyDriftPattern`): when easy runs over the last 3 weeks drift >5% on average, the week debrief adds a note that easy pace may be too close to aerobic threshold.
+- **Aerobic Durability chart** (`stats-view.ts → buildDurabilityChart`): Stats → Progress card showing drift over last 12 weeks (easy/long only) with 4-session rolling mean and threshold bands.
+- **Marathon fade-risk badge** (`stats-view.ts → computeMarathonFadeRisk`): Race Estimates card pill on the Marathon row — Low/Moderate/High based on long-run drift at goal MP.
+
 **Tone**: Direct, coaching voice. Not robotic, not sycophantic. Praises good execution, flags issues with actionable context ("consider starting more conservatively"), explains how the plan adapts.
 
 **Works for all activity types** — runs get pace/split/drift analysis, cross-training gets HR effort + load commentary.
@@ -94,6 +159,33 @@ Update the status column after running `npx vitest run`.
 ---
 
 ## Training Plan
+
+---
+
+### 7d. Just-Track Mode
+**What it does**: Onboarding path for users who want activity tracking only, with no training plan generated. The user picks "Just track" on the fitness focus picker (4th row, after Endurance / Speed / Balanced). Under the hood they get the same infrastructure as any non-event `continuousMode` user — one rolling week that extends on calendar advance — with plan generation suppressed and prescription UI hidden. Sync (Strava / Garmin / Apple), GPS recording, activity matching, physiology polling, readiness, CTL/ACWR all run unchanged.
+
+Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTrackOnly()` clears the flag, preserves accumulated CTL / synced activities / physiology, and relaunches the wizard at the goals step.
+
+**What's hidden in track-only mode**: today-workout card, Coach/Check-in buttons, race-forecast card, week progress display, Stats Progress card (plan adherence), phase labels everywhere.
+
+**What's kept**: readiness ring (informational), weekly volume card, recent activity feed, Stats Fitness card (CTL/VDOT — derived from actuals).
+
+**Daily load target**: `CTL / 7 × readinessMultiplier` (readiness 80+ → ×1.3, 60–79 → ×1.0, 40–59 → ×0.7, <40 → ×0.3). Today's actual TSS rendered with Gabbett-band colour — green ≤1.3× CTL, amber 1.3–1.5, red >1.5 (Gabbett 2016 injury-risk sweet spot). Suppressed below `ctlBaseline < 20` with a "sync more history" empty state. Full rationale in `docs/SCIENCE_LOG.md → "Just-Track Daily Load Target"`.
+
+**Plan tab**: retrospective log only — current week's activity-by-day detail plus a rolling history list of prior weeks (distance / sessions / TSS per row). No forward planning.
+
+**Week debrief**: auto-triggers on Sunday / Monday as usual, but shows `showTrackOnlyRetrospective` — compact this-vs-last-week deltas on distance, sessions, TSS, CTL, recovery average. No plan-adherence language.
+
+**Wizard flow**: welcome → goals (pick Fitness) → connect-strava → review → **race-target** (pick "Just track") → initializing (short-circuits) → main-view. Schedule, physiology, runner-type, plan-preview are all skipped for trackOnly users via `nextStep()` branches in `wizard/controller.ts`.
+
+**Readiness + strain detail views**: opening the readiness ring or strain breakdown on track-only home renders without the plan-comparison section (`generateWeekWorkouts` call is gated on `!s.trackOnly`). The HRV / sleep / RHR composite still computes; `plannedDayTSS` stays 0.
+
+**Account-view safety**: Change-Runner-Type button hidden for trackOnly (applying a runner type rebuilds the plan — irrelevant here). Reset-Plan relabels to "Reset tracking history" with adapted modal copy.
+
+**Key files**: `src/state/initialization.ts` (trackOnly branch), `src/ui/welcome-back.ts` (calendar extension), `src/ui/home-view.ts` (`getTrackOnlyHomeHTML`, `buildTrackOnlyDailyTarget`, "Tracking" pill), `src/ui/plan-view.ts` (`getTrackOnlyPlanHTML`), `src/ui/stats-view.ts` (track-only summary branch), `src/ui/readiness-view.ts` + `src/ui/strain-view.ts` (trackOnly guards on `generateWeekWorkouts`), `src/ui/account-view.ts` (button guards), `src/ui/events.ts` (`showResetModal` copy), `src/ui/week-debrief.ts` (`showTrackOnlyRetrospective`), `src/ui/wizard/controller.ts` (`upgradeFromTrackOnly`, trackOnly branches in `nextStep()`).
+**State**: `s.trackOnly: boolean`, `s.onboarding.trackOnly: boolean`, `TrainingFocus` includes `'track'`.
+**Tests**: Manual — typecheck passes, pre-existing test suite unchanged. End-to-end smoke path documented in `.claude/plans/dazzling-knitting-sun.md` — not yet browser-tested.
 
 ---
 
@@ -431,17 +523,29 @@ distance reduction formula; Load Budget integration tests (per LOAD_BUDGET_SPEC 
 ---
 
 ### 20. GPS Tracker
-**What it does**: Live workout recording. State machine: idle → acquiring signal → tracking → paused → stopped. Computes distance in real time using Haversine math, filters GPS jitter, and stores the full route.
+**What it does**: Live workout recording. State machine: idle → acquiring signal → tracking → paused → stopped. Computes distance in real time using Haversine math, filters GPS jitter, and stores the full route. Speed-based auto-pause stops the clock after 5s below 0.5 m/s and resumes after 3s above 1.5 m/s.
 
 **Key files**: `src/gps/tracker.ts`, `src/gps/geo-math.ts`
 **Tests**: `src/gps/tracker.test.ts`, `src/gps/geo-math.test.ts` — ✅ Passing
 
 ---
 
-### 21. Split Detection
-**What it does**: Reads the workout description to build a split scheme — e.g. "8×400m @ 5K pace" becomes 8 target splits of 400m each. The GPS tracker uses this to tell you when you've completed each rep and whether you're on pace.
+### 20a. Guided Runs (phone coaching)
+**What it does**: Voice and haptic coaching during a tracked structured run. Parses the workout into a step timeline (warm-up, work reps, recovery, cool-down), drives it forward from tracker ticks, and speaks cues: "Go. Threshold rep 1 of 5. 3 minutes at 4:15 per kilometre." Per-km splits are announced on paced work ("Kilometre 3. 4:15. On pace." / "… 7 seconds fast. Ease this one." / "… 7 seconds behind target."). A vertically centred rest overlay shows a big countdown, the next rep preview, and +30s / Skip rest buttons. Off by default; toggled in Account → Preferences.
 
-**Key file**: `src/gps/split-scheme.ts`
+**Key files**: `src/guided/timeline.ts`, `src/guided/engine.ts`, `src/guided/voice.ts`, `src/guided/haptics.ts`, `src/guided/controller.ts`, `src/guided/adherence.ts`, `src/ui/guided-overlay.ts`, `src/utils/wake-lock.ts`
+**Tests**: `src/guided/*.test.ts` (65 tests), `src/utils/wake-lock.test.ts` (11 tests) — ✅ Passing
+
+After a guided run, a "Pace adherence" summary card in the completion modal shows how many splits landed on pace (±5 sec/km), how many were fast or slow, and the average deviation in seconds.
+
+**Keep screen on**: A Screen Wake Lock is acquired while guided mode is active so the browser does not throttle the 1s tick interval when the phone auto-locks. Toggled in Account → Preferences ("Keep screen on", default on; disabled with a "Not supported on this browser" sub-label when the API is missing, e.g. Safari pre-16.4). Web-only interim until the Capacitor shell gains `@capacitor-community/keep-awake`.
+
+---
+
+### 21. Split Detection
+**What it does**: Reads the workout description to build a split scheme — e.g. "8×400m @ 5K pace" becomes 8 target splits of 400m each. The GPS tracker uses this to tell you when you've completed each rep and whether you're on pace. `buildSplitScheme` is a thin adapter over `buildTimeline` so the voice coach and on-screen splits can never disagree about what the workout contains.
+
+**Key file**: `src/gps/split-scheme.ts` (derives from `src/guided/timeline.ts`)
 **Tests**: `src/gps/split-scheme.test.ts` — ✅ Passing
 
 ---
@@ -720,6 +824,8 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - **Strain 50–100%** → floor slides linearly 100→59 (session in progress)
 - **Strain 100–130%** → score ≤ 59 (daily target hit)
 - **Strain > 130%** → score ≤ 39 (well exceeded target)
+- **Leg load >= 20** → score ≤ 54 (Manage Load — moderate eccentric/impact damage)
+- **Leg load >= 60** → score ≤ 34 (Ease Back — heavy EIMD, 72-96h recovery window)
 
 **Today's Strain Score** (ring label renamed from "Strain"):
 - Today's Signal B TSS ÷ day's target TSS × 100.
@@ -746,7 +852,11 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 **Adjust button**: Shown below the sentence when readiness ≤ 59. Text varies by driving signal (Swap to easy run / Reduce session load / Take it lighter today / Keep consistency).
 
-**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
+**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active, including a leg-fatigue callout linking to the detail page when `hardFloor === 'legLoad'`), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
+
+**Leg Fatigue** (card on Rolling Load, detail page): The mechanical/localised load signal, distinct from cardiovascular TSS. Cap and soft taper applied directly in `computeReadiness()`: `>= 60` → cap 34 (Ease Back), `>= 20` → cap 54 (Manage Load), linear soft taper across 10–20 so the threshold isn't a cliff. Always-visible card at the top of Rolling Load shows current decayed total, status (Fresh / Light / Moderate / Heavy), and a one-line interpretation. Tap opens the detail page.
+
+**Leg Fatigue detail page** (`src/ui/leg-load-view.ts`, added 2026-04-15): Opens from the Leg Fatigue card on Rolling Load or from the Readiness callout banner. Bronze sky-gradient palette to distinguish from the other detail pages. Hero ring uses a piecewise mapping (MODERATE = 30%, HEAVY = 70%, extreme 120+ = 100%) so reload beyond HEAVY still reads as worse. Shows a 7-day decay timeline with MODERATE/HEAVY threshold zones and a 4-day forward projection, "floor releases" + "fully fresh" hour projections, a per-session contributors list (raw load, decayed-remaining, half-life, reload penalty), and an explainer of the EIMD-based model with constants and citations. Driven by the `computeLegLoadBreakdown()` helper exported from `readiness.ts`.
 
 **No Jargon Policy**: ATL/CTL/TSB/ACWR never shown in user-facing copy. Info sheets use both: "Running Fitness (CTL)", "Freshness (TSB)", etc.
 
@@ -756,7 +866,9 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - `src/calculations/fitness-model.ts` — `computeTodaySignalBTSS()`, `computePlannedDaySignalBTSS()`, `computeDayTargetTSS()`, `computePassiveTSS()`, `calibrateTssPerActiveMinute()`
 - `src/ui/home-view.ts` — `buildReadinessRing()`, ring tap handlers
 - `src/ui/readiness-view.ts` — Readiness detail page (new)
-- `src/ui/rolling-load-view.ts` — Rolling Load detail page: 28-day angular chart + 7-day activity breakdown
+- `src/ui/leg-load-view.ts` — Leg Fatigue detail page (new 2026-04-15) — decay timeline, contributors, projections
+- `src/ui/rolling-load-view.ts` — hosts the permanent Leg Fatigue card
+- `src/ui/rolling-load-view.ts` — Rolling Load detail page: 28-day angular chart + 7-day zone bars + zone balance
 - `docs/strain.md` — strain design doc + gap register
 
 **Tests**: ✅ 26 tests (`src/calculations/readiness.test.ts`) — all edge cases, safety floor, driving signal, recovery integration, deload/taper scenarios. ⚠️ No tests yet for `computeTodaySignalBTSS` or `computePlannedDaySignalBTSS`.
@@ -788,20 +900,36 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 ---
 
-### Coach Brain (Phase 1)
+### Coach
 
-**What it does**: A "Coach" button in the Home and Plan headers opens a modal that collates every available signal into a single coaching view. Shows a readiness ring (0–100 score), signal rows (freshness, load safety, sleep, HRV, week load), and a 2–3 sentence LLM-generated coaching paragraph personalised to today's training context.
+**What it does** (reframed 2026-04-24, rules-only): A "Coach" pill in the Home and Plan headers opens the Coach sub-page. The page leads with a stance pill (Ready to Push / On Track / Manage Load / Ease Back) and the single-sentence `primaryMessage` from the rules engine, followed by a "Why this call" card that translates blockers and key signals into short evidence bullets. Below that, stacked cards for Recovery (sleep, HRV, sleep bank), Fitness (CTL + trend, week TSS, 4-week trend), This week (effort + load pills), and Status (injury, illness, check-in). Optional session-drift and sleep-pattern narratives appear when relevant. The daily "How do you feel today?" prompt sits at the bottom. Sky-background palette varies by stance (mint / deepBlue / amber / rose) so the page colour signals state at a glance, matching the Sleep / Recovery / Readiness design language.
 
-**Aggregator**: `computeDailyCoach(state)` gathers TSB/ACWR/sleep/HRV/RPE/week-load/injury/illness into a `CoachState` and derives a `stance` (`push | normal | reduce | rest`) and `blockers` array. Priority hierarchy: injury/illness override everything → ACWR overload → sleep deficit → readiness score.
+**Aggregator**: `computeDailyCoach(state)` gathers TSB/ACWR/sleep/HRV/RPE/week-load/injury/illness into a `CoachState` and derives a `stance` (`push | normal | reduce | rest`), `blockers` array, `primaryMessage`, `sessionNote`, `sleepInsight`, and `workoutMod` (`none | downgrade | skip`, derived from stance). Priority hierarchy: injury / resting illness override everything → ACWR overload → sleep deficit → readiness score. Stance uses the readiness-label vocabulary.
 
-**LLM narrative**: `supabase/functions/coach-narrative` calls `claude-haiku-4-5-20251001` with structured signals as a prompt. System prompt includes scientific context for every signal (how readiness is computed, what TSB weekly-to-daily conversion means, tier-dependent ACWR thresholds, z-score HRV interpretation, sleep bank semantics) so the LLM interprets numbers correctly rather than relying on general knowledge. Enforces direct/factual tone. Rate limit: 3 calls/day, 4-hour cache in `localStorage` (`mosaic_coach_narrative_cache`). Falls back to rules-based sentence if call fails.
+**Tiered illness**: `illnessState.severity === 'resting'` forces stance to `rest`; `'light'` caps stance at `reduce` (drops `push`/`normal` down, leaves `reduce`/`rest` alone). Illness cap is applied before the feeling modifier so a `good` feeling on a light illness day still returns `reduce`.
+
+**Daily feeling modifier**: `s.todayFeeling` (one-tap `struggling | ok | good | great`, stored with today's ISO date, expires at end of day) shifts the base stance. `struggling` drops one level (push → normal → reduce → rest); `good`/`great` promote only `normal → push`, gated on `blockers.length === 0` AND `readiness.score >= 75` (Primed threshold sourced from `readiness.ts`). `ok` is a no-op. Science: athlete self-report is a well-validated fatigue indicator (Saw 2016 meta-analysis). See `docs/SCIENCE_LOG.md`.
+
+**LLM narrative: deferred.** `supabase/functions/coach-narrative/index.ts` remains in the repo as dormant scaffolding (JWT auth, rate limiting, spend cap, field allowlisting already hardened) but is not deployed and not called from the client. The rules layer is the product's moat; the LLM narrative added cosmetic prose only. Next LLM scope, when revisited, is "Ask the coach" (a chatbot that explains plans and recovery), not the narrative paragraph. See `docs/BRAIN.md` for the preserved design reference.
 
 **Key files**:
 - `src/calculations/daily-coach.ts` — aggregator + `CoachState` / `CoachSignals` types
-- `src/ui/coach-modal.ts` — modal UI (ring, signal rows, narrative card, rate limit)
-- `supabase/functions/coach-narrative/index.ts` — LLM edge function
+- `src/ui/coach-view.ts` — Coach sub-page (stance hero, "Why this call" explanation, stacked signal cards, feeling prompt)
+- `supabase/functions/coach-narrative/index.ts` — dormant LLM edge function (do not deploy)
 
-**Deployment**: `coach-narrative` edge function must be deployed and `ANTHROPIC_API_KEY` set as a Supabase secret.
+**Tests**: ✅ `src/calculations/daily-coach.test.ts` — 20 cases covering stance → workoutMod mapping, illness tiering (resting/light), daily feeling modifier transitions, and `getTodayFeeling` end-of-day expiry.
+
+---
+
+### Coach workout modifier (today's card)
+
+**What it does**: When today's coach stance is `reduce` or `rest`, a muted bordered note appears alongside today's workout row on both Home and Plan. `reduce` shows "Downgraded." + `coach.primaryMessage`; `rest` shows "Consider rest today." + `coach.primaryMessage`. The workout content is not changed — the athlete sees the advisory and chooses whether to act on it. On `normal` or `push` stance the note is omitted. Only renders on today's row; past and future days are unaffected. Suppressed when the session is already rated, skipped, or replaced.
+
+**Derivation**: `workoutMod` now lives on `CoachState` and is computed inside `computeDailyCoach` from the final stance (`rest → skip`, `reduce → downgrade`, otherwise `none`), matching `docs/BRAIN.md §How it affects the plan`. Both view files read `coach.workoutMod` directly — the duplicated `deriveWorkoutMod` helpers have been removed. Reason text comes from `coach.primaryMessage`, which the rules engine already writes as a user-ready sentence.
+
+**Key files**:
+- `src/ui/home-view.ts` — `buildTodayWorkout(s, coach?)` appends the note below the card
+- `src/ui/plan-view.ts` — `buildWorkoutCards` appends a bordered sub-row inside today's card
 
 **Tests**: ⚠️ No automated tests
 
@@ -809,14 +937,14 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 ## Activity Detail Page
 
-**What it does**: Full-page view for a single synced activity (Garmin or Strava). Shows a stats grid (distance, time, pace, avg HR, max HR, calories), HR zone bars with time breakdown, km splits with pace-coloured bar chart, and an OSM route map (if polyline is available). Accessible from:
+**What it does**: Full-page view for a single synced activity (Garmin or Strava). Shows a stats grid (distance, time, pace, avg HR, max HR, calories), HR zone bars with time breakdown, km splits with pace-coloured bar chart, and an OSM route map (if polyline is available). For cross-training activities, an "Activity" row sits between hero and stats and lets the user reclassify the sport when the auto-classification is wrong (most commonly generic "cardio" activities like kitesurfing, SUP, or sailing). Reclassify triggers a live delta on week load, impact, and leg fatigue, and saves a persistent name mapping so future syncs of same-named activities auto-apply. Accessible from:
 - Plan tab → Activity Log rows (plan-matched activities)
 - Plan tab → inline actMatchRow on workout cards
 - Plan tab → "View full activity →" link in expanded card detail
 - Home tab → Recent activity rows (garmin-backed only)
 
 **Key file**: `src/ui/activity-detail.ts`
-**Related**: `src/ui/strava-detail.ts` (`drawPolylineOnCanvas` now exported)
+**Related**: `src/ui/strava-detail.ts` (`drawPolylineOnCanvas` now exported); `src/ui/sport-picker-modal.ts` (picker + `reclassifyActivity` + `resolveSportForActivity` used by sync)
 **Tests**: ⚠️ No automated tests
 
 ---

@@ -4,6 +4,395 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-24 — Triathlon MVP shipped (overnight build)
+
+Full first-pass triathlon mode end-to-end. Running mode untouched. Opt-in via the new Triathlon tile on the goals step. See `docs/TRIATHLON.md` §18 for the spec and `docs/MORNING_SUMMARY.md` for the hands-on guide.
+
+Committed in 7 phases on `triathlon-mvp` branch:
+
+1. **Phase 1 — Types + state + migration + skeleton** (`feat(triathlon): phase 1`). Adds `eventType`, `triConfig`, `Workout.discipline`, `Workout.brickSegments`, `Week.triWorkouts`. Migration v2→v3 defaults existing users to `eventType='running'`. New files: `src/types/triathlon.ts`, `src/constants/transfer-matrix.ts`, `src/constants/triathlon-constants.ts`, `src/state/initialization.triathlon.ts`, `src/workouts/plan_engine.triathlon.ts`.
+2. **Phase 2 — Wizard fork** (`feat(triathlon): phase 2`). Triathlon tile on goals routes to a new consolidated `triathlon-setup` step (distance, race date, weekly hours, 3-way volume split picker, three self-rating sliders, bike FTP + power-meter toggle, swim CSS or 400m test). Controller routes triathlon: goals → triathlon-setup → initializing → main-view.
+3. **Phase 3 — Plan engine + scheduler + libraries** (`feat(triathlon): phase 3`). Full 20-week 70.3 and 24-week IM generation. New files: `plan_engine.triathlon.ts` (generation), `scheduler.triathlon.ts` (multi-sport day layout + two-a-day + brick placement), `swim.ts`, `bike.ts`, `brick.ts`. Workouts stored on `Week.triWorkouts`.
+4. **Phase 4 — Per-discipline fitness + TSS + race prediction** (`feat(triathlon): phase 4`). `triathlon-tss.ts` (cubed-IF swim, squared-IF bike, HR fallback), `fitness-model.triathlon.ts` (per-discipline CTL/ATL via transfer matrix, combined CTL), `race-prediction.triathlon.ts` (per-leg + total + confidence band + sprint/Olympic side-effects).
+5. **Phase 5 — UI** (`feat(triathlon): phase 5`). `src/ui/triathlon/` with plan view (day-by-day discipline-coloured cards), home view (today + fitness bars + race forecast), stats view (per-discipline CTL/ATL/TSB + volume + ACWR), reusable workout-card and race-forecast-card. Minimal 3-tab nav (Plan / Home / Stats). Main-view forks on `eventType`.
+6. **Phase 6 — Matcher + brick detector** (`feat(triathlon): phase 6`). `activity-matcher.triathlon.ts` (discipline-first matching with same-day + nearest-duration fallback), `brick-detector.ts` (30-min bike→run window). Pure functions; sync-pipeline wiring deferred.
+7. **Phase 7 — Tests + docs** (this entry). 36 new passing tests covering swim/bike TSS, per-discipline fitness + transfer matrix, brick detection, and plan-engine output shape. FEATURES.md gains a Triathlon Mode section (T1–T9). ARCHITECTURE.md module map + state abbreviations updated. SCIENCE_LOG.md entries for the transfer matrix, cubed swim TSS, per-discipline CTL, run-leg pace discount, and FTP/CSS detraining curves.
+
+Running-mode regression: test suite 985/986 (the 1 failure pre-existed on `main` — `forecast-profiles.test.ts Speed → Marathon`, unrelated to triathlon work). Typecheck clean throughout.
+
+What's live but untested on device:
+- Onboarding end-to-end into the triathlon plan view
+- Plan view, home view, stats view, race forecast
+
+What's deferred (punch list at the end of `docs/MORNING_SUMMARY.md`):
+- Sync pipelines writing into `triConfig.fitness` (math is ready; plumbing left)
+- Cross-discipline ACWR suggestion-modal extensions
+- Injury engine discipline-shift
+- Strava express-onboarding path
+- Targets editing from stats page
+
+## 2026-04-24 — Garmin backfill/reconcile rate-limit hardening
+
+- **Root cause confirmed**: what appeared as persistent 502s from `apis.garmin.com/wellness-api/rest/backfill/*` was in fact Garmin's app-wide 100-req/min rate limit, sometimes raw 429 ("Too many request: Limit 100 per 1 minute") and sometimes wrapped by Cloudflare as an HTML 502 page. Cron + manual sync + localStorage-reset reloads were bursting 3–4 parallel requests per invocation and compounding inside the rolling window.
+- **`supabase/functions/garmin-backfill/index.ts`** — requests now serialized (300ms between dailies → sleeps → hrv → userMetrics) instead of `Promise.all`. Response now returns `ok: allOk` and a new `rateLimited` boolean so the client can distinguish throttle from real success and stop locking in the migration guard on failure.
+- **`supabase/functions/garmin-reconcile/index.ts`** — same serialization (300ms between dailies → sleeps → userMetrics). Existing throttle detection (`isThrottle`) already bails the run on 429/403/502/503; now the burst rate is cut 3x.
+- **`src/data/supabaseClient.ts`** — added shared `mosaic_garmin_cooldown_until` localStorage key (120s window). `triggerGarminBackfill`, `triggerGarminReconcile`, and `refreshRecentSleepScores` all check it before firing and set it when the edge function reports `rateLimited`. `refreshRecentSleepScores` was a hidden amplifier: it runs on every launch when today's sleep is missing and hit garmin-backfill with `weeks:1` regardless of state. Migration guard in `triggerGarminBackfill` now only sets on true success (previously set regardless because edge function returned `ok:true`). `resetGarminBackfillGuard` clears the cooldown too.
+- **Net effect**: a stuck-in-rate-limit state now self-heals in 2 minutes instead of requiring manual localStorage clearing. Multiple rapid sync taps no longer spiral the count. Partial failures no longer corrupt the one-shot-backfill guard.
+
+## 2026-04-23 — Triathlon spec locked (no code yet)
+
+- **`docs/TRIATHLON.md` §18 added** — consolidated every open-question decision from the spec-review session into a single "Locked Decisions" section. Where §18 contradicts earlier content, §18 wins. Covers: per-discipline + combined CTL, separate `plan_engine.triathlon.ts`, power-optional bike load (HR fallback), 30-min brick detection window, blessed training constants (swim TSS cubed IF, 10% weekly volume cap, 0.8–1.3 ACWR, 5%/11% run fatigue discounts for race prediction only, FTP/CSS detraining curves from Coyle/Mujika), multi-sport transfer matrix replacing `runSpec` discounts, suggestion-modal extensions for per-discipline and cross-discipline load spikes, injury engine discipline-shift behaviour, triathlete self-rating sliders (1–5 per discipline) replacing `s.typ`, always-race-mode scope, express onboarding path via Strava history for v1.
+- **`CLAUDE.md`** — added "Tracking vs Planning" principle. A number used for race-time prediction (tracking) does not automatically apply to training-load calculation (planning). Motivated by the brick run fatigue discussion: 5–11% bike-to-run pace discount is a prediction input, not a stimulus discount.
+- **Feature-impact audit** — ran a full 60-row audit (Explore agent) mapping every existing subsystem to a triathlon question + proposed answer. 33 features reuse-as-is or minor extension, 19 major refactors, 8 new subsystems (most deferred to v2). Audit informed §18 decisions.
+- **No code changes this session.** Next step: Phase 1 PR (types + state schema + migration + skeleton triathlon plan-engine entry point, running mode untouched).
+
+## 2026-04-24 — Onboarding UX punch list pass
+
+- **`review.ts`** — PB subline now shows only the activity name, drops the date suffix. Removed the now-unused `formatSourceDate` helper.
+- **`manual-entry.ts`** — Focus ring on PB/volume inputs matches the welcome baseline (layered inset + lift shadow). PB inputs get inline validation on blur: invalid strings turn the border red and reveal a "Use format mm:ss / h:mm:ss" hint. Valid or empty re-hides it.
+- **`runner-type.ts`** — Card wrapped in the glass pattern (rgba-white + blur + Apple three-layer shadow) instead of flat `var(--c-surface)`. Added the radial-light background behind the card so the screen matches welcome / goals.
+- **`initializing.ts`** — Added the radial-light background overlay so the loader stops feeling like a bare system screen.
+- **`plan-preview-v2.ts`** — CTA sized to 50px height / 25px radius to match every other wizard CTA (was 52 / 26).
+- **`goals.ts`** — Disabled mode tiles (Hyrox, Triathlon) now dim to 55% opacity so "Coming soon" reads as non-interactive.
+- **`schedule.ts`** — "Add another" button hides once every sport in the catalogue has been added, instead of leaving an empty picker open.
+- **`race-target.ts`** — Race rows now render a monochrome landmark SVG when the race id or city matches a known entry. Ten seed landmarks: London (Tower Bridge), Berlin (Brandenburg Gate), Boston (Zakim Bridge), NYC (Empire State), Chicago (Willis Tower), Tokyo (Tokyo Tower), Paris (Eiffel), Valencia (Hemisfèric), Sydney (Opera House), Amsterdam (canal gables). Two-letter monogram remains the fallback for races without a landmark.
+
+## 2026-04-24 — Brain retired, Coach sub-page rewritten rules-only
+
+- **`src/ui/coach-view.ts` (new)** — Replaces `brain-view.ts`. Same Sleep-style design language (sky-background hero, cream body, stacked white cards with the standard two-layer shadow). Structure: stance pill + primary message hero, "Why this call" explanation card (blocker + signal bullets translating the stance into evidence), Recovery / Fitness / This week / Status cards, optional session-drift and sleep-pattern narratives, feeling prompt. Sky palette varies by stance (mint for push, deepBlue for normal, amber for reduce, rose for rest) so the page colour signals state at a glance.
+- **`src/ui/brain-view.ts` deleted** — the "Brain" as specced was an LLM-narrative layer. The rules-based synthesis the LLM was meant to deliver is already done by `daily-coach.ts`, so the LLM fetch, 6h localStorage cache, daily call counter, skeleton states, and signals accordion are all removed. The `coach-narrative` edge function stays in `supabase/functions/` as dormant scaffolding for future work.
+- **`docs/BRAIN.md`** — prefaced with a status banner stating the Brain is the rules layer (`daily-coach.ts`) and the LLM narrative is deferred until paying users exist. The body of the doc is preserved as design reference. Next LLM scope, when revisited, is "Ask the coach" (chatbot), not the rules-over-narrative paragraph.
+- **Wiring** — `home-view.ts` and `plan-view.ts` now import `renderCoachView` from `./coach-view`. `feeling-prompt.ts` comment + `daily-coach.ts` inline comments updated to reference `coach-view`.
+- **Motivation (from this session)** — the user's read: the original Brain thesis ("unite disparate signals") has been delivered by the rules layer, the LLM narrative adds cosmetic stitching only, and the Coach button was inconsistent with Check-in (full-page takeover vs compact modal, three names for one thing: Coach button, Brain view, daily-coach calc). Resolved by committing to "Coach" across button + view + file, and matching the established sub-page design pattern used by Sleep / Recovery / Readiness.
+
+## 2026-04-24 — Onboarding cleanup: legacy step files deleted
+
+- **Deleted 15 unused wizard step files**: `activities`, `assessment`, `background`, `commute`, `event-selection`, `fitness-data`, `fitness`, `frequency`, `pbs`, `performance`, `physiology`, `plan-preview`, `strava-history`, `training-goal`, `volume`. These were all leftovers from the pre-rewrite flow with no live call sites.
+- **`src/types/onboarding.ts`** — pruned `OnboardingStep` union to the 11 active steps (welcome, goals, connect-strava, manual-entry, review, race-target, schedule, plan-preview-v2, initializing, runner-type, main-view).
+- **`src/ui/wizard/renderer.ts`** — removed 15 dead imports and switch cases. File is now 100 lines shorter.
+- **`src/ui/wizard/controller.ts`** — removed `physiology` from `STEP_ORDER` (physiology editing already lives on the Account page via the Edit Profile button and wearable sync). Added migration guard in `initWizard`: if persisted state points at a deleted step, bump the user to `goals` (or `welcome` if no name yet).
+- **`src/ui/account-view.ts`** — Edit Profile button now jumps to the `review` step (the PBs + volume editor in the new flow) instead of the deleted `pbs` step.
+
+## 2026-04-23 — Onboarding photos: sharper + smaller
+
+- Swapped Page 2 mode-tile photos (Running/Hyrox/Triathlon/Just-track) from 2816×1536 PNGs (~9 MB each) to 1400-wide JPEGs at 92% quality (~350 KB each). 25× smaller, noticeably crisper at the ~440×150 tile size — browser downscaling is much closer to 1:1.
+- Removed the `.mode-grain` overlay and the `contrast(1.05)` filter. Photos are now grayscale-only; the bottom vignette remains for label readability.
+- Added `image-rendering: -webkit-optimize-contrast` to `.mode-img`.
+
+## 2026-04-23 — Fix: Edit Plan Back button broken
+
+- **`src/ui/events.ts`** — `editSettings()` was setting `currentStep = 'assessment'` (legacy step absent from `STEP_ORDER`), so `canGoBack()` returned false and the Back button was non-functional. Changed re-entry step to `'goals'`.
+
+## 2026-04-23 — Onboarding PB auto-fill: 3-year Strava scan, all rows editable
+
+- **`supabase/functions/sync-strava-activities/index.ts`** — backfill weeks cap raised 52 → 156 (3y). `BEST_EFFORTS_BUDGET` 80 → 300 so the detail fetch loop covers ~3 years of weekly running. HR-stream work still capped at the most-recent 99 via `STREAM_BUDGET`, so older runs only cost one best_efforts detail call each.
+- **`src/ui/wizard/steps/review.ts`** — `ACTIVITY_LOOKBACK_DAYS` 182 → 1095 (3y) so the DB read picks up the older best_efforts. All four PB rows (5K / 10K / half / marathon) are now editable; 5K was previously read-only. Subheader now says "Personal bests show the last 3 years. Tap any row to enter an older PB." so users know they can override.
+- **`src/calculations/pbs-from-history.ts`** — normalise Strava's best_effort name before map lookup (`"Half-Marathon"` → `"halfmarathon"`). Previously only exact strings `"Half Marathon"` / `"5k"` matched, so runs with the hyphenated name were silently dropped.
+- **`supabase/migrations/20260418_add_best_efforts.sql`** — applied to prod. The column had existed in the repo for a week but `db push` was never run, so the REST `select=…,best_efforts` query returned 400 and review.ts silently diverted to manual entry.
+
+## 2026-04-23 — Just-Track: wizard wiring, view guards, account safety
+
+Ship-readiness pass on top of the Just-Track redesign earlier today. Covered by plan `dazzling-knitting-sun.md`.
+
+- **`src/ui/wizard/controller.ts`**
+  - `nextStep()` adds a `currentStep==='race-target' && trackOnly` branch that jumps straight to `initializing`, skipping `schedule` + `physiology` + plan-preview. Track-only users no longer walk screens that don't apply to them.
+  - Belt-and-braces `while` loop now also skips `schedule` / `physiology` (in addition to `runner-type` / `assessment` / `plan-preview` / `plan-preview-v2`) for trackOnly.
+  - `upgradeFromTrackOnly()` now clears `s.wks=[]`, `s.w=1`, `s.tw=0` alongside the mode flip. Fixes a bug where `initializing.ts:89`'s mid-plan guard (`wks.length > 0`) short-circuited plan generation post-upgrade, leaving the user with no plan. CTL / athlete tier / historic volume / PBs / physiology all preserved — skeleton week buckets are the only loss, and they resync from `garmin_activities`.
+- **`src/ui/readiness-view.ts:131-135`** — `generateWeekWorkouts(…)` call now skipped when `s.trackOnly`. Previously the readiness detail page was generating a fake "planned" comparison against stale defaults (`rd='half'`, `v=50`, `pac=undefined`), poisoning `plannedDayTSS` maths.
+- **`src/ui/strain-view.ts:222-226, 424-428`** — same guard at both call sites. Track-only users now see strain-view with zero-plan comparison instead of fabricated data.
+- **`src/ui/account-view.ts`**
+  - Change-Runner-Type button hidden for trackOnly (previously calling it re-ran `initializeSimulator()`, which reset the rolling week bucket — destructive and misleading since there's no plan to rebuild). `s.typ` also now renders as `—` instead of the stale `'Balanced'` default when trackOnly.
+  - Reset-Plan row relabels to "Reset tracking history" for trackOnly.
+- **`src/ui/events.ts`** — `showResetModal()` adapts title / body / CTA copy based on `s.trackOnly`: "Reset tracking history" + "clear your tracked weeks and activity history" instead of plan language.
+- **`src/ui/home-view.ts`** — "Tracking" pill added to the track-only home header (left-aligned, next to the account initials button) so the mode is visually unambiguous.
+
+**What's still pending (not blocking ship)**: race-target step is now in `STEP_ORDER` so the front door exists, but the end-to-end wizard path hasn't been manually tested in a browser — typecheck clean only. See plan `dazzling-knitting-sun.md` "Smoke-path verification" for the manual walkthrough needed before calling it done.
+
+---
+
+## 2026-04-23 — Just-Track redesign (rolling bucket, not empty state)
+
+Supersedes the 2026-04-22 entry. First attempt short-circuited `s.wks=[]` and `s.w=0`, which cascaded into view guards everywhere and broke GPS recording / blended-fitness on every launch. Reframed: track-only is the same infrastructure as any non-event `continuousMode` user — one rolling week that extends on the calendar — with plan generation suppressed and prescription UI hidden.
+
+- **`src/state/initialization.ts`** — trackOnly branch rewritten. Seeds `s.wks = [{ w:1, ph:'base', ... }]`, `s.w=1`, `s.tw=1`, `s.continuousMode=true`. PBs optional; VDOT computed if present, else defaults stay. Activity sync, GPS, physiology, CTL, readiness all work unchanged. Strava-detected weekly km seeds `s.wkm`.
+- **`src/ui/welcome-back.ts`** — `advanceWeekToToday` now branches on `s.trackOnly` and extends one week at a time with `ph:'base'` (phase is a plan concept, harmless placeholder for trackOnly). Planned continuous users still get 4-week base/build/peak/taper blocks.
+- **`src/ui/home-view.ts`** — `getTrackOnlyHomeHTML`:
+  - No today-workout, no race-forecast, no Coach/Check-in buttons.
+  - New `buildTrackOnlyDailyTarget(s)` card. Anchor: `CTL / 7 × readinessMultiplier`. Readiness mapping: 80+→×1.3 / 60-79→×1.0 / 40-59→×0.7 / <40→×0.3. Today's actual TSS rendered with Gabbett-band colour (green ≤1.3× CTL, amber 1.3-1.5, red >1.5). Suppressed below `ctlBaseline < 20` with a "sync more history" empty state. Full rationale in `docs/SCIENCE_LOG.md` → "Just-Track Daily Load Target".
+  - `buildReadinessRing(s)` retained — it's informational, not prescriptive.
+  - Weekly volume card from `historicWeeklyKm` (this-week + 8-bar sparkline).
+  - `buildSyncActions(s)` + `buildRecentActivity(s)` unchanged.
+  - "Create a plan" upgrade button.
+- **`src/ui/plan-view.ts`** — track-only plan tab shows the current week's activity-by-day detail, a rolling history list of prior weeks (distance/sessions/TSS per row), and a "Create a plan" card at the bottom. No forward planning.
+- **`src/ui/week-debrief.ts`** — `showWeekDebrief` branches on `s.trackOnly` to `showTrackOnlyRetrospective`, a compact modal showing this-week vs last-week deltas on distance, sessions, TSS, CTL, recovery average. Same auto-trigger paths (Monday / Sunday) apply. No plan-adherence language, no "next week" preview.
+- **`src/ui/stats-view.ts`** — trackOnly suppresses the Progress (plan-adherence) card; keeps Fitness card (CTL/VDOT trend) since those are derived from actuals.
+- **`src/ui/wizard/steps/race-target.ts`** — "Just track" as the 4th focus option (Endurance / Speed / Balanced / Just track). Selecting it sets `trainingFocus='track'`, `trackOnly=true`, clears race date/selection, forces `continuousMode=true`.
+- **`src/ui/wizard/controller.ts`** — `nextStep()` skips runner-type / assessment / plan-preview for trackOnly and lands on main-view via `completeOnboarding()`. `upgradeFromTrackOnly()` clears the flag and relaunches the wizard at goals while preserving synced activities / physiology / CTL.
+- **`docs/SCIENCE_LOG.md`** — new entry documenting the CTL/7 × readiness anchor and Gabbett band colouring.
+
+**ISSUE-147** (prior note that synced activities land nowhere for trackOnly users) — resolved by the rolling-week redesign.
+
+---
+
+## 2026-04-23 — Garmin backfill switched to nightly server-side reconcile
+
+- **Problem** — `triggerGarminBackfill` was running on every app launch with a 2-hour throttle. With thousands of users opening the app in the morning, that burned through Garmin's 100-req/min app-wide rate limit (keyed on our client ID, shared across all users), producing the 429 storms observed during testing. The launch-time call was also load-bearing on the OAuth-return flow, so deleting it outright would break first-connect history catch-up.
+- **`src/data/supabaseClient.ts` `triggerGarminBackfill`** — throttle changed from "every 2h" to "exactly once per OAuth connect". Skip condition is now `migrated && lastRun > 0`. `resetGarminBackfillGuard()` (called from the Garmin connect buttons in `account-view.ts` and `wizard/steps/fitness.ts`) still clears both stamps, so the next launch after OAuth fires a single 8-week backfill. Migration key bumped to `v7-one-shot-backfill` so existing users reset cleanly. `main.ts` launch call sites are untouched — they now no-op on every subsequent launch.
+- **`supabase/functions/garmin-reconcile/index.ts`** (new) — nightly reconcile job. In cron mode (authed by `x-cron-secret` header against `RECONCILE_CRON_SECRET` env), finds users who have a `garmin_tokens` row but no `daily_metrics` row for yesterday (UTC), refreshes OAuth tokens as needed, and fires a small `/backfill/dailies` + `/backfill/sleeps` window (3 days). Paced at 2s between users × 2 parallel requests ≈ 60 req/min, comfortably under the 100/min Garmin cap. On 429 the run stops and the next cycle resumes. In user mode (authed by user JWT) reconciles a single user — used by the manual Resync button in Account settings.
+- **`supabase/migrations/20260423_garmin_reconcile_cron.sql`** (new) — enables `pg_cron` + `pg_net`, unschedules any prior `garmin-reconcile-nightly` entry, reschedules it at `0 4 * * *` (04:00 UTC daily) via `net.http_post`. Reads `supabase_url` and `reconcile_cron_secret` from `vault.decrypted_secrets`. One-time setup documented in the migration header: create both vault secrets and set `RECONCILE_CRON_SECRET` on the edge function before the cron can authenticate.
+- **`supabase/config.toml`** — `[functions.garmin-reconcile] verify_jwt = false` registered. The function does its own auth (cron secret OR Supabase user JWT).
+- **Net effect** — live data still flows in via the webhook (unchanged). Launch-time rate storm gone. Dropped-webhook days silently reconciled overnight. First-connect history catch-up still works via the one-shot launch backfill after OAuth.
+
+## 2026-04-23 — Readiness copy: sleep debt leads, freshness sentence gated on real TSB
+
+- **`src/calculations/daily-coach.ts`** — heavy sleep debt (`|sleepBankHours| > 5`) now leads the readiness sentence unconditionally, not only when `drivingSignal === 'recovery'`. The recoveryFloor in `readiness.ts` caps the score when sleep debt is heavy, so surfacing freshness or load as the driver misdiagnosed the actual constraint. Case: 6.6h sleep debt + TSB −1 was reading "Freshness is below normal. 6.6h sleep debt compounds recovery." while the Freshness drill-down on the same screen said "Session fatigue cleared, normal training can continue."
+- **Fitness-branch gating** — the freshness-driven copy (`"Freshness is below normal"` / `"Fatigue is building"` / `"Fatigue is high"`) now requires `tsb <= -5`. The non-linear fitness sub-score reads ~39 at neutral TSB, so `drivingSignal === 'fitness'` was firing at TSB ≈ 0 and producing copy that contradicted the Freshness card. Below the threshold the selector falls through to other tiers.
+- The `debtSuffix` on the fitness branch is removed (the sleep-debt block above owns that message now; the branch now only fires at genuinely negative TSB).
+- **Sleep-debt copy no longer asserts "Light session today"** — `trainedToday = todayTSS > 0` fires on any logged activity (a walk, 19 TSS of background strain), so the old copy told users they'd trained when they hadn't. The `trained && !sessionHeavy` case now collapses into the generic "Prioritise sleep tonight" branch. Only `sessionHeavy` (actualTSS > 1.2 × daily CTL) keeps the session-specific phrasing.
+
+## 2026-04-23 — Strava backfill: best_efforts prioritised, budget raised
+
+- **`supabase/functions/sync-strava-activities/index.ts`** — best_efforts heal block moved from step 7c (last, after drift / temp / calorie loops had spent the Strava 100-req/15-min budget) to step 5c (first, right after the full-stream processing loop). `BEST_EFFORTS_BUDGET` raised from 20 → 80.
+- **Why** — onboarding review fills 5K / 10K / half / marathon PBs from `best_efforts`. With the 20-cap + tail position, a first-time user with 30+ runs in the lookback would see partial or empty PBs on the review page and get diverted to manual entry with nothing auto-filled. PBs on day one are more valuable than healing drift / temperature / calorie on older rows — those can fill in on subsequent syncs without the user noticing.
+- **Deploy required**: `supabase functions deploy sync-strava-activities --project-ref elnuiudfndsvtbfisaje`.
+- **`src/ui/wizard/steps/review.ts`** — diagnostic `console.log` added inside the post-backfill branch so next test prints `rows=… running=… withBestEfforts=… detectedWeeklyKm=…` + the `cachedPbSources` object. Remove once PB auto-fill is confirmed reliable across test accounts.
+
+## 2026-04-23 — Onboarding follow-ups: deeper Strava backfill, race catalogue + thumbnails, hybrid-athlete restored
+
+- **`src/ui/wizard/steps/goals.ts`** — "Just track" tile moved to the bottom of the mode list, below Hyrox and Triathlon. It's a terminal choice, not a training-mode peer, so it reads better last.
+- **`src/ui/wizard/steps/review.ts`** — review step now calls `backfillStravaHistory(26)` instead of `syncStravaActivities()` (28 days). The 28-day window missed race PBs from earlier in the year; a 26-week backfill populates `best_efforts` for every running activity in the half-year lookback so the review page can surface 10K / half / marathon PBs. `ACTIVITY_LOOKBACK_DAYS` raised from 120 to 182 so the DB read matches.
+- **Review loading screen** — three stage messages so the 20–30s backfill isn't a silent freeze: "Connecting to Strava…" → "Reading your recent runs…" → "Pulling out your personal bests…". Spinner + "This can take 20 to 30 seconds on first connect" subline added.
+- **`src/ui/wizard/steps/manual-entry.ts`** — `hybrid` experience level restored ("Hybrid athlete / Fit from other sports, low miles"), matching the legacy `background.ts` option. `rules_engine.ts` and `welcome-back.ts` already branch on `hybrid`, so the plan has been accepting the signal — the wizard just stopped asking for it.
+- **`src/data/marathons.ts`** — May–August 2026 half gap filled with 10 events (Leeds, Hackney, Edinburgh, Liverpool, Oslo, Helsinki, Sandown, Reykjavík, Bristol, Nottingham). Marathon catalogue extended with Copenhagen, Stockholm, Helsinki, Reykjavík, Frankfurt, Dublin. Dates match each race's real 2026 calendar slot.
+- **`src/ui/wizard/steps/race-target.ts`** — `getMarathonsByDistance` now receives `minWeeksFor(state.raceDistance)` (4wk for half / 5K / 10K, 8wk for marathon) instead of the hard-coded 8-week default. Halfs inside the 4–8 week window are reachable.
+- **Race row thumbnails** — every race card has a 56×56 left-side thumbnail. `renderRaceThumb()` uses `race.imageUrl` when set (greyscale photo + vignette); otherwise a deterministic charcoal gradient keyed off the race id with a 2-letter monogram from the city name. Real photos can be dropped into `src/assets/races/<id>.jpg` and wired via `Marathon.imageUrl` with no rendering-side changes.
+
+## 2026-04-23 — Onboarding data-flow + aesthetics pass
+
+- **`src/main.ts` Strava OAuth sync** — `syncStravaActivities()` is now called unconditionally on OAuth return, not gated behind `onMainView`. Previous gate meant a mid-wizard connect returned to connect-strava without actually pulling any activities, so the review page ran on an empty cache and diverted to manual entry.
+- **`src/ui/wizard/steps/review.ts`** — mount now awaits `syncStravaActivities()` before calling `fetchRecentActivities()`, so the PB auto-fill reads fresh `best_efforts` rather than whatever happened to be cached. Insufficient-data branch now persists any partial PBs already found via `updateOnboarding({ skippedStrava: true, pbs: partialPbs })` (keyed by `.timeSec`), so users who skip to manual entry don't lose the one or two PBs Strava did surface. Continue handler folds `cachedPbSources` into `state.pbs` before advancing.
+- **`src/ui/wizard/steps/physiology.ts`** — auto-pulls from `syncPhysiologySnapshot(1)` on mount when all four values are empty (and not in simulator mode). `setIfEmpty` pattern for `ltPace`, `vo2max`, `restingHR`, `maxHR` so user-entered values are never clobbered.
+- **`src/ui/wizard/steps/runner-type.ts`** — auto-skip added for users with <2 distinct PBs on file: classification is noise below that threshold, the engine already defaults to Balanced and recalibrates from real race entries. Spectrum and type buttons rewritten to monochrome only (charcoal fill + thin border for selected, white with faint border for unselected). Marker-offset bug fixed by collapsing to a single element with `transform:translateX(-50%)` — the previous nested `left:${pct}%` was applying the offset twice.
+- **`src/ui/wizard/steps/schedule.ts`** — active-row restructured into three stacked sections: sport title + remove X, frequency stepper labelled "Sessions per week", duration slider with "N min" readout. The 28px circular X replaces the underlined "Remove" link so sport removal is a deliberate target rather than a body-text affordance.
+- **`src/ui/wizard/controller.ts`** — manual-entry and review back-navigation both land on `goals` (not connect-strava / review), breaking the auto-advance loop where connect-strava re-advances on a live Strava session and review re-diverts when data is thin.
+
+## 2026-04-23 — Onboarding flow fixes: tap-to-advance mode picker, event Y/N on race-target, stepper flash, OAuth gating
+
+- **`src/ui/wizard/steps/goals.ts`** — stripped to a pure 4-tile mode picker (Running / Just track / Hyrox / Triathlon). Tap a tile = commit + advance. No Continue button, no Change pill, no event Y/N, no distance/focus/race selection on this page. "Just track" is now its own mode tile that writes `trainingMode:'fitness' + trainingFocus:'track' + trackOnly:true + continuousMode:true` and rides the Just-Track skip logic already in controller.ts.
+- **`src/ui/wizard/steps/race-target.ts`** — absorbed the event Y/N segmented pair at the top of the running block. Gate: `trainingForEvent===null` shows only Y/N; "Yes" reveals distance + event/custom-date picker; "No" reveals a running-mode focus picker (endurance / speed / balanced, no "track" since that's a mode) plus Ongoing/Set-duration. Auto-skips the whole page when `trackOnly===true`.
+- **`src/ui/wizard/steps/race-target.ts` stepper flash** — weeks minus/plus no longer call `rerender()`. They patch the readout text, minus/plus `disabled + opacity`, and the Continue button's disabled state in place. The previous full rebuild was visibly flashing the whole page on each click.
+- **`src/main.ts` OAuth return** — Strava/Garmin OAuth callbacks now route to account-view only when the user is actually on `main-view` (`state.onboarding.currentStep === 'main-view'`). A user mid-wizard who had previously completed onboarding was being dropped out of the wizard into account-view after connecting Strava; they now stay on the connect-strava step and auto-advance.
+
+## 2026-04-23 — Week debrief defers until activities are assigned
+
+- **`src/ui/week-debrief.ts`** — new `hasUnresolvedActivityAssignments(weekNum)` and `fireDebriefIfReady(pendingDebrief)` exports. The auto-debrief no longer fires when the target week has `garminMatched[id] === '__pending__'` entries or when the matching overlay (`#activity-review-overlay`) is open. The summary card would otherwise display incomplete load (the screenshot case: Week 9 showed 157 TSS / -71% vs plan while three Cardio activities were still sitting in the tray waiting to be placed).
+- **`src/main.ts`** — both launch branches (holiday-back and normal) now call `fireDebriefIfReady(pendingDebrief)` instead of showing the debrief directly. Same semantics when nothing is pending; deferred when matching is in-flight.
+- **`src/data/activitySync.ts`** — after `showActivityReview` / `autoProcessActivities` resolve, `fireDebriefIfReady` is re-run so the debrief pops once the user saves or cancels out of the matching screen. This covers the launch-race where strava sync opens the matching overlay and the launch-path debrief is suppressed.
+- **`src/ui/activity-review.ts`** — `showActivityReview` now removes any mounted `#week-debrief-modal` before creating its overlay. Symmetric with `fireDebriefIfReady`'s `#activity-review-overlay` check — closes the remaining race where the debrief's dynamic import resolves before strava sync queues new `__pending__` items. Matching always wins; debrief re-fires from `onReviewDone`.
+
+## 2026-04-22 — Garmin webhook userMetrics handler hardened
+
+- **`supabase/functions/garmin-webhook/index.ts` `handleUserMetrics`** — root cause of persistent null VO2: Garmin was pushing userMetrics events where the documented field `vo2MaxRunning` was sometimes missing (occasionally present as `vo2Max`), and some events contained only `{userId, calendarDate}` with no actual metrics. Old handler read only `m.vo2MaxRunning` and unconditionally upserted, turning every empty event into an all-null `physiology_snapshots` row that masked the real VO2 behind four days of nulls.
+- Fix: accept `vo2MaxRunning ?? vo2Max` (matches the backfill-side interface), skip the upsert entirely when all three metrics are null (preserves any existing good row), and log the raw payload so future field-name drift is diagnosable from edge function logs.
+- **Flow confirmation from Supabase logs**: `daily_metrics` rows arrive by webhook with correct `resting_hr`/`max_hr` but `vo2max` always null (Garmin dailies only stamp vo2Max on change days). `physiology_snapshots` is the canonical source; once Garmin pushes a userMetrics event with real data the new handler will upsert it and `sync-physiology-snapshot` will pick it up on the next launch.
+
+## 2026-04-22 — Page 2 restructure: Fitness folded into Running
+
+- **`src/ui/wizard/steps/goals.ts`** — Fitness mode tile removed. Tile grid is now Running / Hyrox / Triathlon. Picking Running opens a "Training for an event?" Yes/No selector. Yes → distance → event picker (existing race flow). No → focus picker (Endurance / Speed / Balanced / Just track — order matches `race-target.ts`). Just-track stays reachable on the currently-live flow via this picker; legacy `trainingMode === 'fitness'` state is migrated on read to running-with-no-event so existing users aren't stranded.
+- **Why** — "Fitness" was really "Running without a target race". Two tiles doing overlapping work muddied the grid. Folding the decision inside Running keeps the mode list tied to sports and puts all non-race intent under one focus picker.
+- **`docs/ONBOARDING_PLAN.md`** — Locked decisions extended with the new tile structure.
+- **`src/ui/wizard/steps/goals.ts`** — removed the `0.55` opacity mask on disabled tiles; the "Coming soon" badge carries the signal alone so all tiles read at full brightness.
+- **Hyrox + Triathlon imagery** — editorial B&W photos added (`src/assets/onboarding/hyrox.png`, `triathlon.png`).
+
+## 2026-04-22 — Just-Track mode (activity tracking without a plan)
+
+- **`src/types/onboarding.ts`** — `TrainingFocus` extended to `'speed' | 'endurance' | 'both' | 'track'`. `trackOnly?: boolean` added to `OnboardingState` (default false). Picking "Just track" on the fitness focus picker sets `trainingFocus='track'` and `trackOnly=true`, clears `customRaceDate` / `selectedRace`, and forces `continuousMode=true`.
+- **`src/types/state.ts`** — `trackOnly?: boolean` added to `SimulatorState`, mirroring the onboarding flag so views branch without reading `s.onboarding`.
+- **`src/state/initialization.ts`** — `initializeSimulator()` short-circuits at the top when `state.trackOnly`: sets `s.trackOnly=true`, `s.wks=[]`, `s.w=0`, `s.tw=0`, `s.continuousMode=true`, persists PBs / physiology / recurring activities if present, saves and returns early before plan generation. The normal plan path now also explicitly sets `s.trackOnly=false` so a user who upgrades gets a clean slate.
+- **`src/ui/wizard/steps/race-target.ts`** — fitness focus picker shows four rows in the locked order: Endurance / Speed / Balanced / Just track. Picking "Just track" hides the target-date block.
+- **`src/ui/wizard/controller.ts`** — `nextStep()` branches on `currentStep==='initializing' && trackOnly`: call `completeOnboarding()` then `goToStep('main-view')`, skipping runner-type / assessment / plan-preview. A belt-and-braces `while` loop skips any of those steps if reached via the sequential path. New `upgradeFromTrackOnly()` export clears `trackOnly` + `hasCompletedOnboarding`, preserves name / Strava / physiology, and relaunches the wizard at the goals step.
+- **`src/ui/home-view.ts`** — `getHomeHTML()` routes to `getTrackOnlyHomeHTML(s)` when `s.trackOnly`. Track-only layout: sky-gradient background, initials button, hero "Hi, {Name} / Activity tracking. No plan, no workouts.", a "Create a plan" upgrade card, `buildSyncActions(s)` and `buildRecentActivity(s)` (both safe with empty `s.wks`). Today-workout, Coach, Check-in, readiness ring, race-forecast widgets are suppressed.
+- **`src/ui/plan-view.ts`** — `renderPlanView()` short-circuits to `getTrackOnlyPlanHTML()` when `s.trackOnly`. Empty state: "No plan / You're tracking activities only." + "Create a plan" CTA that calls `upgradeFromTrackOnly()`.
+- **`src/ui/stats-view.ts`** — `buildStatsSummary()` suppresses Progress + Fitness cards in track-only mode (both read plan-derived fields). Only the activity summary block renders (already returns `''` when race-mode forecasts aren't computable).
+- **Known follow-up** — Strava/Garmin activity matching currently writes into `wk.garminActuals`. Track-only users have `s.wks=[]`, so synced activities land server-side (`garmin_activities`) but won't surface in the local activity feed until the sync pipeline is adapted to create a rolling tracking week or use a plan-independent store. Flagged in OPEN_ISSUES.md.
+
+## 2026-04-18 — Onboarding Pages 5/6/7 drafted (overnight)
+
+- **`src/ui/wizard/steps/race-target.ts`** (new, draft) — Page 5 mode-branched. Running: distance pills (5K/10K/Half/Marathon), race picker (half/marathon) with custom-date toggle, plan-duration stepper (5K/10K). Fitness: focus picker (speed/balanced/endurance) + optional target date. Hyrox/Triathlon auto-skip. Clones `goals.ts` aesthetic (`shadow-ap`, `scRise`-style entry animation, monochrome, no accent colour). Not wired into controller.
+- **`src/ui/wizard/steps/schedule.ts`** (new, draft) — Page 6 merges legacy `frequency.ts` + `activities.ts`. Runs-per-week pills (1-7, matches legacy range), gym-sessions pills (0-3), and a multi-select sport picker with per-activity frequency steppers. Writes `runsPerWeek`, `gymSessionsPerWeek`, `recurringActivities`, `activeLifestyle`, keeps legacy `sportsPerWeek` in sync. Not wired into controller.
+- **`src/ui/wizard/steps/plan-preview-v2.ts`** (new, draft) — Page 7 visual-consistency rewrite of legacy `plan-preview.ts`. Preserves `calculateLiveForecast`, `findNearestMilestone`, `completeOnboarding()` contract. Replaces tinted green hero card with white monochrome finish-time card + plan summary rows. Milestone overlay re-centered per UX_PATTERNS. Not wired into controller.
+- See `docs/ONBOARDING_OVERNIGHT_SUMMARY.md` for preview instructions, open TODO(tristan) items, and risk flags.
+
+## 2026-04-18 — Onboarding Page 4 (Review / magic-moment) built
+
+- **`src/ui/wizard/steps/review.ts`** (new) — "Here's what we found" review screen that renders after Connect Strava. Single scrollable column of editable rows: weekly volume, 10K/Half/Marathon/5K PBs (with "Berlin Marathon · Oct 2024" style source captions), read-only VDOT, runner-type picker. Tap any row to inline-edit in place (no modal, no bottom sheet). Activities fetched directly from `garmin_activities` via Supabase REST, PBs derived via `readPBsFromHistory`. Volume writes to `state.detectedWeeklyKm`, PBs write to `onboarding.pbs`, runner type writes to both `onboarding.confirmedRunnerType` and `state.typ`. If fewer than 12 running activities OR no volume OR no PBs are found, the step silently diverts the user to the manual-entry fallback (sets `skippedStrava: true`) — no intermediate "sorry" screen.
+- Controller wiring for the new step deliberately left untouched per task brief — Tristan to wire routing next pass.
+
+## 2026-04-18 — Onboarding glass buttons + Page 2 running photo
+
+- **Page 2 imagery** — dropped the editorial B&W running photo into the Running mode tile (`src/assets/onboarding/running.png`). `goals.ts` sets `imageUrl` on the Running tile; `background-position: 60% 20%` keeps subject head in frame under the tile's grayscale + contrast filter. Hyrox / Triathlon / Fitness still use placeholder gradients.
+- **Glass buttons across shipped onboarding screens** — pages 1 (welcome), 2 (goals), manual-entry fallback, and the shared `renderBackButton` all now use `.m-btn-glass`. Goals' segmented label-pill + arrow-chip CTA collapsed into a single glass pill with an inline arrow icon. On page 2, the four mode tiles now carry the glass three-layer shadow + inner highlight, and every interactive sub-control (distance pills, focus pills, race cards, mode-change "Change", week +/- steppers, selected-mode header) uses `.m-btn-glass--inset`. Strava-orange CTA on page 3 retained as the locked branded exception.
+- **`docs/ONBOARDING_PLAN.md`** — added "Button style" to Locked decisions so future pages default to glass without re-asking.
+
+## 2026-04-18 — Glass button system (`.m-btn-glass`)
+
+- **`src/styles.css`** — new `.m-btn-glass` utility: frosted white (0.55 alpha), `backdrop-filter: blur(20px) saturate(1.4)`, Apple three-layer shadow stack, inner highlight, pill radius. `:active` uses `scale(0.985)` + subtle inset shadow for a tactile dent (120ms transition). Also `.m-btn-glass--inset` variant with a calmer two-layer shadow for buttons nested inside elevated cards.
+- **`docs/UX_PATTERNS.md`** — documented as the default interactive button for taps, with usage rules (onboarding CTAs, home actions, modal confirms) and when not to use it (muted nav links, destructive confirms). Two-level rule: default for hero/background contexts, `--inset` when nested in a card.
+- **Applied to:** Home header Coach / Check-in buttons, Readiness "Adjust plan" CTA (inset), Home Today "Done · View" x2 (inset), Sync Activities, Record view Pause/Resume, Injury modal Cancel buttons x4 (inset), GPS completion modal Keep / Close (inset). Primary black CTAs (Start, Save, Confirm) and destructive red buttons (Stop, Discard) unchanged — glass is for the tactile secondary, black stays as the unambiguous primary.
+
+## 2026-04-18 — Strava `best_efforts` pipeline for PB auto-fill
+
+- **`supabase/migrations/20260418_add_best_efforts.sql`** (new) — adds `best_efforts jsonb` column to `garmin_activities`. Stores Strava's `best_efforts` array verbatim (only RUNNING activities populate it).
+- **`supabase/functions/sync-strava-activities/index.ts`** — backfill mode now captures `best_efforts` for RUNNING activities. The existing full-stream detail fetch (already made per-run for calories + splits) picks up `best_efforts` at no extra cost. A new step 7c (`BEST_EFFORTS_BUDGET = 20` per backfill, most-recent first) heals older runs that were stored before the column existed. Skips activities whose `best_efforts` is already non-null in DB. Select in step 2 widened to `best_efforts` so `cachedWithBestEfforts` can be built. Detail endpoint failures fall back to no best_efforts rather than breaking the backfill.
+- **`src/calculations/pbs-from-history.ts`** (new) — `readPBsFromHistory(activities)` walks each activity's `best_efforts`, returns the fastest time per canonical distance (5k / 10k / half / marathon). New `PBsWithSource` return type carries `{ timeSec, activityId, startDate, activityName }` so onboarding can show attribution ("3:12 · Berlin Marathon, Oct 2024"). Uses `elapsed_time` (matches Strava's displayed PB, consistent with chip-timed race times). Accepts both camelCase and snake_case field names.
+
+## 2026-04-18 — Onboarding Page 3 (Connect Strava) built
+
+- **`src/ui/wizard/steps/connect-strava.ts`** (new) — standalone Strava connect screen matching the Page 2 aesthetic: light cream background, radial highlight, progress dots (3 of 7), photo-ready B&W placeholder slot (170px, grain + vignette + watermark), Apple 3-layer shadow. Primary CTA is Strava orange (`#FC4C02`, 52px pill) — the one permitted non-neutral on the screen, since it is the permission grant for a branded third-party. Secondary action is a muted underlined "Enter manually" text link (no colour, no border, per CLAUDE.md). OAuth flow mirrors `fitness.ts` — calls `strava-auth-start` edge function and redirects. On mount, `isStravaConnected()` is checked; if already linked, the step silently advances via `window.wizardNext()` with no intermediate confirmation screen.
+- **`src/types/onboarding.ts`** — added `skippedStrava?: boolean` to `OnboardingState` (default `false`) so the controller can route users who chose manual entry to the compressed fallback step.
+- Controller wiring for step order deliberately left untouched — will be rewired once Page 4 (Review) and the manual-entry fallback land.
+
+## 2026-04-18 — Onboarding manual-entry fallback screen
+
+- **`src/ui/wizard/steps/manual-entry.ts`** (new) — single compressed screen shown when the user taps "Enter manually" on the Connect Strava step. Collapses three legacy steps (background / volume / PBs) into one: experience pills (6 options from `RunnerExperience`), four optional PB inputs (5K / 10K / Half / Marathon) with `mm:ss` or `h:mm:ss` parsing, and one weekly-volume input that respects `state.unitPref` (label toggles `km / week` / `mi / week`; value stored to `state.detectedWeeklyKm` always in km). All fields optional. Continue commits whatever was entered and calls `window.wizardNext()`. Aesthetic mirrors `goals.ts`: cream background, Apple 3-layer shadow on cards, rounded pills, monochrome black CTA (not accent). Controller wiring deferred to a separate pass.
+
+## 2026-04-17 — Garmin backfill rewritten to use webhook push model
+
+- **`supabase/functions/garmin-backfill/index.ts`** — replaced day-by-day GET pulls of `/wellness-api/rest/{dailies,sleeps,hrv,userMetrics}` with single POSTs to the `/backfill/{type}` endpoints. The pull endpoints require a Consumer Pull Token (CPT); without a valid CPT every pull returned `InvalidPullTokenException` and silently produced 0 rows. Garmin's backfill POST endpoints accept the user bearer alone and deliver data asynchronously via the existing `garmin-webhook` function. Function now returns 202 status per data type rather than upserting synchronously.
+- **`src/data/supabaseClient.ts` `triggerGarminBackfill`** — updated log to show per-type request statuses (`dailies=202 sleeps=202 hrv=202 userMetrics=202`) and surface any error bodies returned by Garmin. Migration key bumped to `v6-webhook-backfill` so all clients re-run once after the deploy.
+- **Flow change**: data no longer lands on the same launch as the backfill call. First launch queues the webhook pushes; a subsequent launch (minutes later) reads the freshly-arrived rows from `daily_metrics` / `sleep_summaries` / `physiology_snapshots` via `syncPhysiologySnapshot`.
+
+## 2026-04-17 — Onboarding Page 2 (Training Goal) rebuilt
+
+- **`src/ui/wizard/steps/goals.ts`** rewritten as a 4-tile mode picker: Running, Hyrox, Triathlon, Fitness. Vertical full-bleed tiles (104px tall), B&W placeholder gradient + subtle grain + vignette, 18px label + 12px sub. Hyrox and Triathlon are non-clickable with a "Coming soon" pill badge (triathlon research lives in `docs/TRIATHLON.md`; Hyrox flow not yet built). Running and Fitness are live. Editorial B&W imagery will land later — swap `ModeTile.bg` to `background-image: url(...)` when nano banana assets are generated.
+- **Selected state**: white ring (2px inner + 2px outer dark) + check chip top-right + staggered rise-in animation (`g-rise` keyframe with 50ms cascade).
+- **Segmented Continue CTA**: glossy black label pill + separate circular arrow chip, 8px gap. Both get a `:active` dent (`translateY(1px)` + reduced shadow) so the button visibly presses in. Disabled state fades + disables pointer events.
+- **Detail picker preserved below tiles** so plan generation keeps working until Page 5 ships: Running → distance grid + week selector (5k/10k) or inline event list (half/marathon); Fitness → focus (Speed / Balanced / Endurance).
+- **`src/types/onboarding.ts`** — added `trainingMode?: 'running' | 'hyrox' | 'triathlon' | 'fitness' | null` to `OnboardingState`. Legacy `trainingForEvent` is auto-patched alongside (`running → true`, `fitness → false`) so downstream steps keep working unchanged.
+- **`src/ui/wizard/renderer.ts`** — killed the injected top banner ("This takes a little longer than most running apps…"). `shouldShowBanner` block and DOM injection removed. Any stale `#onboarding-banner` element is still cleaned up on each render as a safeguard.
+- Onboarding progress dots remain 2 of 7.
+
+## 2026-04-17 — Brain reframed to LLM-first, signal-hash cache
+
+- **`src/ui/brain-view.ts`** — Full page restructure. The three-sentence LLM paragraph is now the hero (17px, line-height 1.55, no card). The stance shows as a small pill above the paragraph instead of a giant label + ring. The daily feeling prompt sits directly below the paragraph. All previous dashboard sections (This week / Recovery / Fitness / Status / session note / sleep insight) collapse into one "Show signals" accordion, closed by default. While the LLM is loading, the hero shows a 3-line pulsing skeleton; on failure it silently renders the rules-based `primaryMessage` in the same slot with identical styling.
+- **`supabase/functions/coach-narrative/index.ts`** — New system prompt enforces Verdict / Why / Action three-sentence structure, uses only the existing readiness vocabulary, explicitly bans motivational filler and em dashes, and states that the rules engine already set `stance` so the LLM only explains and prescribes. `max_tokens` raised from 200 to 400 so the three sentences actually fit.
+- **Enriched payload** — `buildCoachSignalsPayload(coach)` in `daily-coach.ts` produces a flat ~18-field object including today's planned workout (title, description, plannedTss, plannedDurationMin), `todayFeeling`, `hrvPctVsBaseline`, and `primaryMessageFallback`. Previous payload missed today's workout entirely, which is why Actions could never be concrete.
+- **Signal-hash skip (zero-cost cache)** — Edge function now SHA-256-hashes the canonicalised (sorted-key) payload, looks up `coach_narrative_cache(user_id PK, signals_hash, narrative, created_at)`, and returns the stored narrative without an Anthropic call when the hash matches within 24h. Per-user quota is NOT incremented on cache hits.
+- **Client cache TTL** raised 4h to 6h. HTTP round-trip saver only; the server-side cache is the authoritative layer now.
+- **New migration** `supabase/migrations/20260417_coach_narrative_cache.sql` creates the cache table with RLS (users read own row, service_role writes).
+- **`daily-coach.ts`** — `CoachSignals` extended with `todayWorkoutDescription`, `todayPlannedTSS`, `todayPlannedDurationMin`, `todayFeeling`. `StrainContext.todayPlannedWorkout` is now populated by `deriveStrainContext` and surfaces through to `CoachSignals`, replacing the broken `(s as any)._cachedWorkouts` lookup that never populated.
+
+## 2026-04-17 — Readiness post-session copy warmed up
+
+- **`src/calculations/daily-coach.ts`** — `derivePrimaryMessage` Tier 1 lines rewritten to feel less clinical. "Daily load target reached (78 TSS). Training is complete for today." → "Solid session today (78 TSS). Rest up and recover." Overreach tier: "Big session logged … Daily target well exceeded — recovery is the priority …" → "Big session today (344 TSS). Rest up and prioritise recovery for the next 24 hours." Also removed the forbidden em dash from the overreach message.
+- **`src/calculations/daily-coach.ts` + `src/ui/readiness-view.ts` + `src/ui/home-view.ts`** — Readiness ring sublabel now swaps to "Recovery" (≥100% strain) or "Recovering" (≥130% overreach) when low readiness is session-driven. Centralised in `derivePostSessionLabel()` and exposed via `CoachState.ringLabel` so Home and the Readiness detail view stay in sync automatically. Guarded against sleep/HRV/ACWR/legLoad hard floors (those keep the original "Manage Load" / "Ease Back" / "Overreaching" label because the session isn't the cause). Adhoc/rest-day sessions with no planned target also trigger the swap by comparing `actualTSS` to daily CTL, so a big kitesurf on an unplanned day flips the label the same way a completed long run would. When the swap fires, `CoachSignals.readinessLabel` is rewritten too, so the LLM narrative edge function and any downstream stance copy see the warm label rather than the clinical one.
+
+## 2026-04-17 — Leg Fatigue view cleanup + relabel propagation
+
+- **`src/ui/leg-load-view.ts`** — Decay Timeline chart rewritten as a canonical area chart per `docs/UX_PATTERNS.md`: past load (solid fill 0.18 + 1.5px stroke) and 4-day decay projection (fill 0.07 + dashed stroke, opacity 0.5). Removed the session dots, inner SVG `<text>` axis labels (moved to absolute-positioned spans outside the SVG), "Now" vertical bar (replaced with a very muted dashed split marker per forecast-continuation pattern), threshold zone fills, and in-chart threshold dashed lines — the chart now reads clean.
+- **Projection card removed** (Floor releases / Fully fresh / "1.3x per reload" copy). The decay timeline already communicates the same thing visually. Unused `projectClearHours`/`projectFreshHours`/`fmtHours` helpers deleted.
+- **Recent Sessions card simplified** — dropped jargon (`raw 25.7 (rate 0.15/min)`, `7.9 remaining (100%)`, `Half-life Xh`, `clearance delayed by N sessions`). Each row now shows sport label, relative time, clock, and a plain-English status (`still loading legs` / `mostly cleared` / `cleared`) tiered by per-session decay fraction.
+- **Background palette → sage** (new `SKY_PALETTES.sage` in `src/ui/sky-background.ts`): muted green-grey, evokes tissue recovery without the alarm of red or the warmth of bronze/amber. `bronze` retained for backwards compat.
+- **Relabel propagation fixes**:
+  - `src/ui/home-view.ts` Recent list — activity rows now read the user-effective sport label (respects `manualSport` override) instead of the raw `activityType`. A relabelled "Cardio → Kitesurfing" activity now shows as "Kitesurfing" in Recent.
+  - `src/ui/activity-detail.ts` title — when `manualSport` is set, the big header uses the sport label instead of the raw Strava `workoutName`/`displayName` (which often reads "Cardio").
+  - `src/ui/sport-picker-modal.ts` `reclassifyActivity` — no longer early-returns when the activity isn't matched to a week. Week-scoped TSS/impact deltas only apply when a week is found, but the `recentLegLoads` push + `manualSport` + `sportNameMappings` write now always run.
+  - `src/ui/sport-picker-modal.ts` new `reconcileRecentLegLoads()` — idempotent pass over `garminActuals` that backfills missing `recentLegLoads` entries (keyed by `garminId`) for auto-synced cross-training. `recordLegLoad` is only called from the review flow, so silent auto-matches (e.g. a second kitesurf auto-resolved via a prior `sportNameMappings` entry) never pushed a leg-load row. Called on every `renderLegLoadView` open. Root cause of "only one kitesurfing activity shows in leg load".
+- **Readiness detail: Leg Fatigue card positioning.** Moved to the bottom of the sub-score column (after rolling-load), "View →" label dropped so it matches the other cards visually, and the tap handler rebound from the old `rdn-leg-load-callout` id to the new `rdn-card-leg-load` card id — the card was unclickable before this fix.
+
+## 2026-04-17 — Garmin backfill: auto-refresh expired access tokens
+
+- **`supabase/functions/garmin-backfill/index.ts`** now checks `garmin_tokens.expires_at` and refreshes the access token in-place before making any Garmin API call (5-minute buffer). Previously the function read whatever `access_token` was stored — if it had expired, every Garmin call returned 502/empty bodies (observed: 0 daily rows, 0 sleep rows, `/backfill/userMetrics` → 502). This silently failed because we treated the empty response as "Garmin returned nothing" instead of "auth is dead."
+- On successful refresh, the new access + refresh tokens and `expires_at` are written back to `garmin_tokens` before the backfill continues.
+- Client migration key bumped to `v4-token-autorefresh` so every user re-runs backfill on next launch once the new edge function is live.
+
+## 2026-04-17 — VO2 hydration: walk back to most recent non-null + clear stale seed
+
+- **`src/data/physiologySync.ts`** — Garmin's dailies endpoint only stamps `vo2Max` on days when the value changes; the latest row is usually null even when earlier days in the same window have the real current reading. Hydration now walks backwards through `rows` to find the most recent non-null `vo2max` (logged as `latestDailyVo2=N@YYYY-MM-DD`).
+- **Stale seed now cleared when there's no device VO2 anywhere.** If Garmin returns daily rows but none carry `vo2max`, *and* `physiology_snapshots` has no userMetrics row, `s.vo2` is set to `undefined` so the UI falls back to `computeCurrentVDOT()` instead of pinning the wizard-seed value forever. Guarded by `rows.length > 0` so users without Garmin connected keep their wizard seed.
+
+## 2026-04-17 — Daily feeling + tiered illness wired into the coach
+
+- **`src/calculations/daily-coach.ts`** — Promoted `workoutMod` from a local view helper to a real field on `CoachState`. Derived from final stance (`rest → skip`, `reduce → downgrade`, else `none`), matching the mapping in `docs/BRAIN.md`. Removed the duplicated `deriveWorkoutMod` helpers in `home-view.ts` and `plan-view.ts` — both now read `coach.workoutMod` directly. Added `getTodayFeeling(s)` helper that returns the stored value only when its date equals today's ISO, handling end-of-day expiry in one place.
+- **Tiered illness** — `illnessState.severity === 'resting'` forces stance to `rest`; `'light'` caps the stance at `reduce` (drops `push`/`normal` down, leaves `reduce`/`rest` as-is). Illness cap is applied before the feeling modifier, so a `good` feeling on a light illness day still returns `reduce`.
+- **Daily feeling modifier** — After base stance is computed, `s.todayFeeling` can shift it: `struggling` drops one level (push → normal → reduce → rest); `good`/`great` promote only `normal → push`, gated on `blockers.length === 0` AND `readiness.score >= 75` (Primed threshold from `readiness.ts`). `ok` is a no-op. Rationale logged in `docs/SCIENCE_LOG.md`.
+- **`src/ui/feeling-prompt.ts` (new)** — Shared HTML/handler helper used by both `home-view` and `brain-view` so the "How do you feel today?" prompt is rendered consistently. Four pill buttons (Struggling / Ok / Good / Great), border-only styling, no emoji, no accent colour. Home variant uses CSS vars; Brain variant uses the sub-page palette.
+- **Home placement** — Prompt appears under the Coach/Check-in button row. Opt-in only — no forced modal on app open.
+- **Tests** — New `src/calculations/daily-coach.test.ts` (20 cases, all passing). Covers stance → workoutMod mapping, illness tiering (resting/light), feeling modifier (struggling drops at each base level, ok no-ops, good/great promote only under the Primed threshold, blockers prevent promotion, illness overrides feeling boost), and `getTodayFeeling` end-of-day expiry.
+
+## 2026-04-17 — Coach workout modifier on today's card
+
+- **`src/ui/home-view.ts` and `src/ui/plan-view.ts`** — Today's workout now surfaces the coach's stance as an inline advisory. When `CoachState.stance` is `reduce`, the row appends "Downgraded. {primaryMessage}" in a bordered muted row; when `rest`, it appends "Consider rest today. {primaryMessage}". Stance `normal` or `push` renders nothing. The workout content is not silently altered — the athlete sees the suggestion and decides.
+- **Scope** — Only today's row renders the note. Past and future days are untouched. Suppressed when the session is already rated, skipped, or replaced. `computeDailyCoach(s)` is called once per render at the top of `getHomeHTML` / `buildWorkoutCards` (plan view skips the call entirely when the viewed week isn't the current week or today falls outside the range).
+- **Derivation** — `stance → workoutMod` mapping follows `docs/BRAIN.md` (`rest → skip`, `reduce → downgrade`, `normal`/`push → none`). `deriveWorkoutMod` lives in each view; `daily-coach.ts` is untouched.
+
+## 2026-04-17 — Garmin backfill throttle reworked (self-heals after code changes)
+
+- **`src/data/supabaseClient.ts` `triggerGarminBackfill`** — The v1 throttle set a 12-hour lock whenever the edge function returned `days: 0, sleepDays: 0`. If Garmin's API returned transient empties (pre-morning watch sync or brief outage), the app wouldn't retry for half a day — and when client code added new Garmin endpoints (e.g. the userMetrics backfill request), existing users stayed locked out until the timer naturally expired.
+- **Replaced with a "last run" timestamp + migration key.** Throttle now fires at most once per 2 hours regardless of API outcome. A `mosaic_garmin_backfill_migration` key tracks which code version last ran; bumping the constant (currently `v2-userMetrics`) forces every user's next launch to re-run backfill, so future Garmin endpoint additions propagate without manual intervention.
+- **Legacy keys (`mosaic_garmin_backfill_empty`, `mosaic_garmin_backfill_empty_until`) removed on boot.** `resetGarminBackfillGuard()` updated to clear both the new and old keys.
+
+## 2026-04-17 — Race forecast fixes: trajectory, ring palette, stats cleanup
+
+- **`src/ui/race-forecast-view.ts`** — "Started" now anchored from `s.iv` (initial VDOT at plan start), not from the first `vdotHistory` entry. Synthetic week-1 chart point injected from `s.iv` when no early history exists, so the chart always shows the full plan trajectory. Ring palette switched from green-default to amber-default (red when >15 min off-track). Green tier removed.
+- **`src/ui/stats-view.ts`** — Removed `buildRaceProgressDetail` card. It mixed `currentFitness` (potentially different-distance scale) with `initialBaseline` (goal-distance scale), producing nonsensical comparisons like "40:09" next to "3:15:00". The full-page race forecast view is now the canonical surface.
+
+## 2026-04-17 — Stats Fitness card: full chart on opening view
+
+- **`src/ui/stats-view.ts` `buildFitnessCard_Opening`** — Replaced the 40 px mini sparkline with the same full line chart (`buildVO2LineChart` / `buildVdotLineChart`) used on the Fitness detail page, plus the change-note ("↓ N pts since …"). The opening card now shows the VO2 Max / VDOT trend at 90 px with axis date labels, matching the detail view. `buildMiniVO2Sparkline` and `buildMiniVdotSparkline` deleted — no longer referenced.
+
+## 2026-04-17 — Welcome screen: back to open layout, stronger copy
+
+- Dropped the enclosing plane from the earlier three-z-level rebuild — the panel read like a modal and killed the hero's spaciousness. Kept the two things from that pass that were doing real work: the subtle z1 radial light, and the staggered entrance animation.
+- **Copy**: subheadline → **"Running, strength, sport, and recovery. All accounted for."** (concrete, rhythmic, consultant tone). CTA → **"Build my plan"** (was "Are you ready?" — slogan, not an action). Four bullet proof-list → **single centered trust row**: "Science-backed · Recovery-informed · Personalized from your data".
+- Form and CTA still use the frosted input + glossy black pill depth treatment from the earlier pass. MOSAIC stays flat black.
+
+## 2026-04-17 — Onboarding welcome: three z-level rebuild + copy overhaul
+
+- **`src/ui/wizard/steps/welcome.ts`** — Rebuilt around three z-levels:
+  - **z1 (background)**: flat warm off-white with a subtle centered radial light (`radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) → transparent)`) so the page feels lit, not flat.
+  - **z2 (content plane)**: barely visible contained surface around the central stack — `rgba(255,255,255,0.4)` + `backdrop-filter:blur(6px)` + 1px `rgba(0,0,0,0.035)` border + very diffuse shadow. Reads as a faint plane, not a card.
+  - **z3 (interactive)**: frosted name input + glossy black CTA with their own soft elevation. Focus/active states defined via a local `<style>` block for pseudo-classes.
+- **Motion**: local `wRise` keyframe (0.8s cubic-bezier), staggered entrance — brand → tagline → input → CTA → sign-in → bullets.
+- **Copy rewrite**:
+  - "INTELLIGENT TRAINING" → **"Training that adapts"**
+  - "Your personalized path to peak performance" → **"Your plan updates with load, recovery and every sport you play"**
+  - Three dot-bullets ("Science-backed · Adaptive · Personal") replaced with a 4-item list: **Built on proven training principles / Recovery and load-informed / Personalized from your data / Science-backed coaching logic**, below the content plane.
+  - "Powered by VDOT methodology" footer line removed. ⚡ demo-fill stays.
+- **`src/ui/wizard/steps/background.ts`** — Selection pills (running background options, Yes/No commute) replaced 2px hard borders with two surfaces: `PILL_UNSELECTED` (frosted white + blur + soft shadow) and `PILL_SELECTED` (glossy black + inner highlight + deep shadow). Selected pills invert text to `#FDFCF7` and checkmark to light. Continue button matches the glossy-black CTA.
+- **Scope**: welcome + background only. Other wizard steps pending review.
+
+## 2026-04-17 — Sign-in link on onboarding welcome screen
+
+- **`src/ui/wizard/steps/welcome.ts`** — Added "Already have an account? Sign in" link under the CTA. Clicking clears the simulator-mode flag, calls `supabase.auth.signOut()`, then renders the auth view. Lets users whose local state was wiped (e.g. by the persistence validator's broken-data auto-clear) get back to the login form without a manual localStorage reset.
+
+## 2026-04-17 — Brain sub-page replaces Coach modal
+
+- **`src/ui/brain-view.ts` (new)** — Full-page coaching view reached from the Coach pill on Home and Plan. Structure: stance hero (Ready to Push / On Track / Manage Load / Ease Back) with the `primaryMessage`, LLM narrative card, then plain-row sections for This week (Effort + Load pills), Recovery (Readiness, Sleep, HRV, Sleep bank), Fitness (CTL + trend, weekly TSS, 4-week trend), Status (injury/illness/check-in), and a daily "How do you feel today?" prompt.
+- **Daily feeling prompt** — 4-button tap (`Struggling / Ok / Good / Great`) writes `s.todayFeeling = { value, date }` and shows the chosen value with a `change` affordance for the rest of the day. State field added to `SimulatorState`.
+- **Narrative rate-limit + cache** — ported from the old coach-modal: 3 calls/day, 4-hour `localStorage` cache, rules-based `primaryMessage` fallback on error or limit.
+- **Wiring** — `home-view.ts` and `plan-view.ts` now dynamic-import `renderBrainView` from the Coach pill handler. `onBack` returns to the opener.
+- **`src/ui/coach-modal.ts` deleted** — superseded by the sub-page. ARCHITECTURE.md page table + navigation graph updated to list `brain-view.ts` and remove the Coach modal entry.
+
+## 2026-04-17 — Sport reclassification on activity detail page
+
+- **Problem.** "Cardio" activities (kitesurfing, other unknown sports logged under Strava/Garmin's generic cardio bucket) fell through `mapAppTypeToSport → 'generic_sport'`, so load was computed with `runSpec 0.40 / impactPerMin 0.04 / legLoadPerMin 0`. Leg fatigue from a 2-hour kitesurf stayed at zero.
+- **`src/ui/sport-picker-modal.ts` (new)** — Centered modal listing every sport in `SPORT_LABELS` (alphabetised, `extra_run` and `hybrid_test_sport` excluded). Current sport highlighted with a tick. Resolves with the chosen `SportKey` or null on cancel.
+- **`reclassifyActivity(actual, newSport)`** — Computes old vs new `crossTL` / `impactLoad` / `legLoadPerMin × minutes`, applies the delta to the owning week's `actualTSS` and `actualImpactLoad`, removes the old `recentLegLoads` entry (matched by new `garminId` field) and appends a new one. Sets `actual.manualSport` and saves `s.sportNameMappings[normalized(activityName)] = newSport` so future syncs of same-named activities auto-apply.
+- **`getEffectiveSport(actual)`** — Sport resolution for display and calcs. Precedence: `manualSport` override → `s.sportNameMappings` by normalized activity name → `deriveSportFromActivityType` (keyword match on raw Garmin/Strava type) → `generic_sport`.
+- **`src/ui/activity-detail.ts`** — New "Activity" row between hero and stats, rendered only for non-running actuals. Prominent copy "Tap to choose the right activity" when sport is `generic_sport`; muted "Tap to change" when a specific sport is resolved. Tap opens `showSportPicker`, then calls `reclassifyActivity` and re-renders.
+- **`src/ui/activity-review.ts`** — Four `mapAppTypeToSport` sites (unspent load item, remainingCross adjustments, overflow adjustments, `buildCombinedActivity`) now go through `resolveSportForActivity(name, appTypeSport, rawActivityType)` so a saved mapping auto-applies at sync time.
+- **Types.** `GarminActual.manualSport?: SportKey`, `recentLegLoads[].garminId?: string`, `SimulatorState.sportNameMappings?: Record<string, SportKey>`.
+- **SCIENCE_LOG entry added** ("Cross-Training Sport Coefficients") for the seven board/water sports introduced with this feature and the pragmatic derivations behind their coefficients.
+
+## 2026-04-17 — Strain week bars include passive TSS
+
+- **`src/ui/strain-view.ts`** — `getWeekBarDays` now computes `actualTSS` via `computeTodayStrainTSS` (logged + passive excess from steps) instead of `computeTodaySignalBTSS` (logged only). Previously the ring could read "18 TSS" from background activity while the same day's week bar showed "—", since the bar only counted recorded activities. The two surfaces now agree.
+
+## 2026-04-16 — Home STRAIN ring green while building toward target
+
+- **`src/ui/home-view.ts`** — The small home STRAIN ring used `var(--c-caution)` (amber) whenever today's TSS was below `target.lo`, so light days displayed an orange arc and TSS number even though the strain drill-down page rendered the same load as green (strain-view's segment logic paints `0 → target.lo` in `#34C759`). Swapped the below-target branch to `var(--c-ok)` so the home ring matches the drill-down page: green while building, amber only when rest-day overreaching or load exceeded. The "Building" / "Light" labels stay the same.
+
 ## 2026-04-16 — Race forecast surface: Home card + full-page chart, modal removed
 
 - **`src/ui/prediction-breakdown.ts` deleted.** The "Why this prediction?" modal launched from `cv-tile`, `fc-tile`, the Stats race-estimate row, and the wizard plan-preview "Why this time ›" link is gone. It rendered "—" for users without enough run history (most onboarding states) and duplicated the Stats forecast table in a less informative format.
@@ -16,12 +405,23 @@ Session-by-session record of significant changes. Most recent first.
 ## 2026-04-16 — Running VO2 Max alignment with Garmin Connect
 
 - **`supabase/functions/garmin-backfill/index.ts`** now fetches `/wellness-api/rest/userMetrics` in parallel with dailies/sleep/HRV and upserts into `physiology_snapshots` (`vo2_max_running`, `lactate_threshold_pace`, `lt_heart_rate`). Previously the backfill only touched `daily_metrics.vo2max` (the crude dailies field) and relied on live webhook `userMetrics` pushes for the running-specific value; since those events are sporadic, state could stay stale for weeks when Garmin Connect had updated. Response JSON gains `physiologyDays` count.
+- **Webhook backfill request added.** `/userMetrics` requires a partner Consumer Pull Token (CPT); when the CPT in Supabase secrets is missing or invalid, the pull silently returns zero rows. `garmin-backfill` now also fires `POST /wellness-api/rest/backfill/userMetrics?summaryStartTimeInSeconds=…&summaryEndTimeInSeconds=…` (with `Content-Length: 0` — Garmin rejects the POST as 411 without it) at the end of each run. This asks Garmin to deliver historic userMetrics through the normal webhook path, which `handleUserMetrics` in `garmin-webhook/index.ts` already writes to `physiology_snapshots`. Fallback runs even without a CPT, so the Running VO2 Max pipeline is self-healing as long as the webhook subscription in the Garmin Developer Portal is enabled. Response JSON gains `userMetricsBackfillStatus` (HTTP status returned by Garmin).
 - **VO2 priority flipped** in both `supabase/functions/sync-physiology-snapshot/index.ts` (merge step) and `src/data/physiologySync.ts` (client hydration). `physiology_snapshots.vo2_max_running` (running-specific, from `userMetrics`) now wins over `daily_metrics.vo2max` (generic dailies value that can include cycling/cardio estimates and diverges from what Garmin Connect shows under "Running VO2 Max"). Previously the generic value took precedence, so a correct `vo2_max_running` row could be masked by a stale cross-sport dailies value. `s.vo2`, `s.lt`, and `s.ltHR` all hydrate from this fixed chain.
 
 ## 2026-04-16 — Sleep debt chart aligned to headline value
 
 - **Sleep page cumulative debt chart no longer contradicts its own headline.** `src/calculations/sleep-insights.ts` now exports `computeSleepDebtSeries()` — the per-night trajectory of the same exponential-decay recurrence (`debt = debt × 0.9057 + max(0, target − actual)`) used by `computeSleepDebt()`. The latter now delegates to the series (returning the last element), so headline and chart share one source of truth.
 - **`src/ui/sleep-view.ts`** — Replaced the naive "sum of (actual − target) over last 7 nights" chart data with `computeSleepDebtSeries(...).slice(-7)` plotted as `−debt`. The chart's last point now equals the headline value exactly. Surpluses no longer cancel debt 1-for-1 (matches Rupp 2009 / Arnal 2015 evidence that recovery sleep is less efficient than arithmetic implies). Chart will drift up toward the target line with good nights, not snap back to it.
+- **Debt chart Y-axis anchored at 0.** Added optional `anchorZeroAtTop` to `buildSleepBankLineChart` so the target line sits at the top of the chart and the line below reads as magnitude-of-deficit (previously the auto-scaled axis compressed the range and under-sold the depth).
+- **Gradient fill + hour reference guides.** `buildSleepBankLineChart` gained two more options: `fillToTargetGradient` (vertical red gradient from target down to the line, 0.05 → 0.28 alpha — deeper = darker, without becoming garish) and `hourReferenceLines` (faint dashed guides at −1h, −2h, −3h, −4h, then every 2h beyond, each labelled on the right). `parseColorToRgb()` helper handles hex/rgb inputs for the gradient stops.
+- **Severity tier label on the headline.** New `classifySleepDebt()` maps the debt value to `mild` / `moderate` / `high` / `severe` (bands calibrated to steady-state nightly shortfall — see SCIENCE_LOG). Rendered as a small muted grey suffix next to "4h 14m debt" so the user can read the severity at a glance without parsing the number.
+
+## 2026-04-17 — Sleep debt: graduated colour + softer low-end framing
+
+- **`classifySleepDebt()` reworked to return `{ label, color, showNumber }`.** Previously returned `string | null` with the low end just hidden. Now returns a full tier object so the headline, chart line, and gradient fill can all graduate through the same colour.
+- **Revised bands and copy.** Low states are reassuring, not silent: `< 45m` → `On track` (emerald, no number), `45m – 1h 30m` → `caught up` (slate), then `mild` (amber) / `moderate` (orange) / `high` (red) / `severe` (red-600). Removes the "always failing" feel the red-on-any-debt binary produced. See `docs/SCIENCE_LOG.md` for the full table and the literature support for the progression vs the pragmatic cutoffs.
+- **`src/ui/sleep-view.ts`** — Headline now reads `{value} · {tier}` when debt ≥ 45m and just the tier label when below that. Chart line colour + gradient fill both use `debtTier.color`, so a `mild` deficit paints the chart amber, not red.
+- **Sleep score bar chart colours by quality.** `scoreTrendChart` now uses the same `scoreColor(score)` helper as the hero ring — ≥ 75 green, 55–74 purple, < 55 orange — so the 7-night view reads as three tiers at a glance instead of uniform purple.
 
 ## 2026-04-16 — iOS platform bootstrap (ISSUE-134)
 
@@ -39,6 +439,15 @@ Session-by-session record of significant changes. Most recent first.
 - **Progressive run role tag.** `Step.role: 'progressive-easy' | 'progressive-fast'` set by `buildTimeline` on the two halves of a progressive run (e.g. `"21km: last 5 @ HM"`). `buildSplitScheme` reads the role instead of sniffing step shape (length-2, easy→work). A future 3-step progressive will not silently fall back to generic per-km labels.
 - **SplitScheme cleanups.** Adapter reads `step.repIdx` for recovery rep numbers (no more label-regex extraction) and uses a new `buildTimelineFromDesc(desc, paces)` helper instead of fabricating a `Workout` object. Recovery steps in `timeline.ts` now carry `repIdx` / `repTotal`.
 - **Voice coach comment updated** — the stale "ducking not handled here" note removed; replaced with a brief summary of the native-vs-web split.
+
+## 2026-04-16 — HR drift: heat correction + personal baseline
+
+- **`supabase/migrations/20260416_ambient_temp.sql`** — New `garmin_activities.ambient_temp_c` column. Populated during drift computation via Open-Meteo historical weather (free, no API key). NULL when the activity has no `start_latlng` or the fetch fails.
+- **`supabase/functions/sync-strava-activities/index.ts`** — `fetchAmbientTemp` helper hits Open-Meteo archive (≥ 6 days old) or forecast `past_days=7` (recent). Wired into all three drift compute sites; excludes `TREADMILL_RUNNING`. Stored alongside `hr_drift` on every upsert. Backfill heal pass refetches temp for cached running rows missing it (20-activity cap).
+- **`src/types/state.ts`**, **`src/calculations/activity-matcher.ts`**, **`src/data/stravaSync.ts`** — `ambientTempC` propagated through the state pipeline.
+- **`src/calculations/daily-coach.ts`** — Added `heatAdjust(drift, tempC)` using the literature-approximate `drift − 0.15 × max(0, tempC − 15)` correction. Added `computeDriftBaselines(s)` returning per-category (easy, long) 16-week rolling mean + SD of heat-adjusted drift (≥ 5 samples required). `detectDurabilityFlag` now heat-adjusts every sample and, when a personal baseline exists, triggers at `baseline.mean + 1·SD` instead of the population 5% / 8% thresholds. Body copy now states whether the flag is based on the athlete's own rolling baseline or the fallback population thresholds.
+- **`src/calculations/workout-insight.ts`** — `Signals` now carries `ambientTempC` and `hrDriftAdjusted`. Drift commentary at lines 256–263 mentions heat-adjusted drift when `ambientTempC ≥ 22°C` and raw drift > 8% — prevents hot-day runs from reading as aerobic under-recovery in coach copy.
+- **`docs/SCIENCE_LOG.md`** — Heat correction coefficient, cold-weather no-op rule, personal baseline window + sample thresholds documented.
 
 ## 2026-04-16 — HR drift feeds injury risk + durability chart empty state
 
