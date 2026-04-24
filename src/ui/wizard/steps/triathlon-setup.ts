@@ -633,10 +633,12 @@ async function runAutoDerivation(): Promise<void> {
     // integer rather than decimals. Add a short interpretive band.
     const combined = Math.round(derived.fitness.combinedCtl);
     const band =
-      combined < 40  ? 'starting out'
-      : combined < 80  ? 'regular trainer'
-      : combined < 120 ? 'well-conditioned'
-      :                  'high-fitness';
+      combined < 40   ? 'starting out'
+      : combined < 70  ? 'regular trainer'
+      : combined < 100 ? 'well-conditioned'
+      : combined < 140 ? 'high-fitness'
+      : combined < 200 ? 'very high fitness (serious age-grouper)'
+      :                   'elite / pro-level volume';
     lines.push(`Starting fitness <strong>${combined}</strong> — ${band}.`);
 
     foundBody.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
