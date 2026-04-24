@@ -47,10 +47,11 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
 
     const weekdayHours = state.triWeekdayHoursPerWeek ?? Math.round(timeAvailable * 0.4 * 2) / 2;
 
-    // Pull every synced activity off the existing state so we can derive
-    // starting-fitness benchmarks from the user's real training history.
-    // This is a READ of the running-mode state we're about to overwrite — we
-    // must do it before s.wks is replaced.
+    // Derive starting benchmarks from the in-memory activity log (what's
+    // currently in state.wks). For a running-mode user switching to tri,
+    // this has their history. For a fresh install it's empty and the
+    // benchmarks come from main.ts's DB-backed refresh on next load.
+    // We don't await a DB query here because initialization is sync.
     const activityLog = collectActivityLog(s);
     const derived = deriveTriBenchmarksFromHistory(activityLog);
 

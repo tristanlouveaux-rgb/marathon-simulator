@@ -183,24 +183,15 @@ async function launchApp(): Promise<void> {
     try {
       const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
       const { deriveTriBenchmarksFromHistory } = await import('@/calculations/tri-benchmarks-from-history');
+      const { loadActivitiesFromDB } = await import('@/data/tri-activity-loader');
       const mutable = getMutableState();
 
-      // Flatten matched (garminActuals) + unmatched (garminPending) activities
-      // so we see the full picture. Pending items are normalised to the
-      // GarminActual shape for just the fields derivation reads.
-      const activityLog = Object.values(mutable.wks ?? []).flatMap((wk: any) => {
-        const actuals = Object.values((wk?.garminActuals ?? {}) as Record<string, any>);
-        const pending = (wk?.garminPending ?? []).map((p: any) => ({
-          garminId: p.garminId,
-          activityType: p.activityType,
-          startTime: p.startTime,
-          durationSec: p.durationSec,
-          distanceKm: (p.distanceM ?? 0) / 1000,
-          iTrimp: p.iTrimp ?? null,
-        }));
-        return [...actuals, ...pending];
-      });
-      const derived = deriveTriBenchmarksFromHistory(activityLog as any);
+      // Load activities directly from Supabase. The state.wks array is
+      // triathlon-shaped (fresh empty weeks) so in-memory mirrors lose the
+      // pre-onboarding activity history. Database query sees everything
+      // including unmatched rides/swims.
+      const activityLog = await loadActivitiesFromDB(500);
+      const derived = deriveTriBenchmarksFromHistory(activityLog);
 
       // Update per-discipline fitness every boot so CTL reflects what's
       // actually been trained since last load.
