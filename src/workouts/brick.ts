@@ -61,6 +61,7 @@ export function generateBrick(input: BrickInput): Workout {
     aerobic,
     anaerobic,
     brickSegments: [bikeSeg, runSeg],
+    estimatedDurationMin: totalMin,
   };
 }
 

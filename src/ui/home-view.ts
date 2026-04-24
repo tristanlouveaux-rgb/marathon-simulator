@@ -2556,6 +2556,13 @@ function extractTriWorkoutDuration(w: any): string {
     const m = String(w.d || '').match(/(\d[\d,]*)m total/);
     if (m) return `${m[1]}m`;
   }
+  // Prefer the canonical duration set by the plan engine.
+  if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
+    return fmtMinsPretty(w.estimatedDurationMin);
+  }
+  // Fallback: parse "Nh Nmin" → total, else Nmin.
+  const hm = String(w.d || '').match(/(\d+)\s*h\s*(\d+)\s*min/i);
+  if (hm) return fmtMinsPretty(parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10));
   const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
   if (!matches.length) return '';
   const maxMins = matches.reduce((acc: number, m: any) => Math.max(acc, parseInt(m[1], 10)), 0);

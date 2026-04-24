@@ -250,9 +250,14 @@ function fmtHours(mins: number): string {
 }
 
 function estimateMinutes(w: any): number {
+  if (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0) {
+    return w.estimatedDurationMin;
+  }
   if (w.brickSegments) {
     return (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
   }
+  const hm = String(w.d || '').match(/(\d+)\s*h\s*(\d+)\s*min/i);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
   const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g)) as RegExpMatchArray[];
   if (!matches.length) return 60;
   return matches.reduce((acc: number, m: RegExpMatchArray) => Math.max(acc, parseInt(m[1], 10)), 0);

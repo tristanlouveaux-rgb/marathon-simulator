@@ -109,11 +109,17 @@ function computeDurationLabel(w: Workout, discipline: Discipline): string {
 }
 
 function extractPrimaryMinutes(w: Workout): number {
+  // Prefer the canonical field set by the plan engine.
+  if (w.estimatedDurationMin && w.estimatedDurationMin > 0) return w.estimatedDurationMin;
   if (w.brickSegments) return 0;
+  // Fallback: parse "Nh Nmin" then plain "Nmin" from the description.
+  const hm = String(w.d || '').match(/(\d+)\s*h\s*(\d+)\s*min/i);
+  if (hm) return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+  const h = String(w.d || '').match(/(\d+)\s*h\b/);
   const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
-  if (!matches.length) return 0;
-  // Pick the largest — usually the session total or main set
-  return matches.reduce((acc, m) => Math.max(acc, parseInt(m[1], 10)), 0);
+  const mMax = matches.length ? matches.reduce((acc, m) => Math.max(acc, parseInt(m[1], 10)), 0) : 0;
+  if (h) return parseInt(h[1], 10) * 60 + mMax;
+  return mMax;
 }
 
 function extractPrimaryMetres(w: Workout): number {

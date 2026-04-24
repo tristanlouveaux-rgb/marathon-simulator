@@ -95,6 +95,10 @@ export interface Workout extends WorkoutDefinition {
   };
   commute?: boolean;             // This is a commute run
   testType?: string; // For physio capacity tests
+  /** Canonical session duration in minutes. Set by the plan engine at
+   * generation time so downstream code (scheduler capacity, card chips,
+   * detail modal) doesn't have to parse the description string. */
+  estimatedDurationMin?: number;
   /** Strava activity ID if this workout was paired via Strava enrich */
   stravaId?: string | null;
   /** iTRIMP from Strava HR stream (set on Garmin-sourced adhoc workouts after Strava enrich) */

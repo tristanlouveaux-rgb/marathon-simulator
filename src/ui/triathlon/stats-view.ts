@@ -39,9 +39,11 @@ export function renderTriathlonStatsView(): void {
   const minByDisc = { swim: 0, bike: 0, run: 0 };
   for (const w of workouts) {
     const d = w.discipline ?? 'run';
-    const mins = w.brickSegments
-      ? (w.brickSegments[0].durationMin ?? 0) + (w.brickSegments[1].durationMin ?? 0)
-      : parseMinutesFromDesc(w.d);
+    const mins = (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0)
+      ? w.estimatedDurationMin
+      : w.brickSegments
+        ? (w.brickSegments[0].durationMin ?? 0) + (w.brickSegments[1].durationMin ?? 0)
+        : parseMinutesFromDesc(w.d);
     if (d === 'swim' || d === 'bike' || d === 'run') minByDisc[d] += mins;
   }
   const totalMin = minByDisc.swim + minByDisc.bike + minByDisc.run;
@@ -274,6 +276,8 @@ function fmtHours(mins: number): string {
 }
 
 function parseMinutesFromDesc(desc: string): number {
+  const hm = desc.match(/(\d+)\s*h\s*(\d+)\s*min/i);
+  if (hm) return Math.min(400, Math.max(10, parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10)));
   const m = desc.match(/(\d+)\s*min/);
   if (m) return Math.min(300, Math.max(10, parseInt(m[1], 10)));
   return 60;

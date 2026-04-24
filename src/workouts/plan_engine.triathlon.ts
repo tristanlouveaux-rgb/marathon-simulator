@@ -29,7 +29,7 @@ import { scheduleTriathlonWeek } from './scheduler.triathlon';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 4;
+export const TRI_GENERATOR_VERSION = 5;
 
 /**
  * Generate a full triathlon plan for the current state.
@@ -201,6 +201,7 @@ function generateWeekForTriathlon(
       rpe: 6,
       aerobic: 20,
       anaerobic: 10,
+      estimatedDurationMin: 45,
     });
   }
 
@@ -371,5 +372,6 @@ function generateRunSessionForTri(
     rpe,
     aerobic,
     anaerobic,
+    estimatedDurationMin: Math.max(20, roundMin(minutes)),
   };
 }

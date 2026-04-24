@@ -136,34 +136,41 @@ function placeByPreference(
     const disc = w.discipline ?? 'run';
     // 1. Preferred day with capacity + no same-discipline collision
     let dayIdx = preferredDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
-    // 2. Weekend spill (if not already a weekend-preferring discipline)
+    // 2. Weekend spill (no collision + capacity)
     if (dayIdx === undefined) {
       dayIdx = WEEKEND_INDEXES.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
     }
-    // 3. Preferred day with capacity (allow doubles if needed)
+    // 3. Weekend with capacity (collisions allowed — two-a-day)
+    if (dayIdx === undefined) {
+      dayIdx = WEEKEND_INDEXES.find((d) => hasCapacity(d, w));
+    }
+    // 4. Preferred day with capacity (collisions allowed)
     if (dayIdx === undefined) {
       dayIdx = preferredDays.find((d) => hasCapacity(d, w));
     }
-    // 4. Last-resort: preferred day with fewest sessions
+    // 5. Last-resort: pick the day with the least cap pressure. We pick
+    //    across weekend FIRST then weekdays, and break ties by fewest
+    //    sessions. This ensures a user who set 0h weekday never sees
+    //    weekday workouts unless there's literally nowhere else to go.
     if (dayIdx === undefined) {
-      dayIdx = preferredDays.reduce((best, d) =>
+      const allDays = [...WEEKEND_INDEXES, ...preferredDays];
+      dayIdx = allDays.reduce((best, d) =>
         byDay[d].length < byDay[best].length ? d : best,
-      preferredDays[0]);
+      allDays[0]);
     }
     place(dayIdx, w);
   }
 }
 
 function workoutMinutes(w: Workout): number {
+  if (w.estimatedDurationMin && w.estimatedDurationMin > 0) return w.estimatedDurationMin;
   if (w.brickSegments) {
     return (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
   }
-  // Prefer the largest "Nmin" match in the description as session duration.
   const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
   if (matches.length > 0) {
     return matches.reduce((acc, m) => Math.max(acc, parseInt(m[1], 10)), 0);
   }
-  // Fall back to implied 60 min.
   return 60;
 }
 

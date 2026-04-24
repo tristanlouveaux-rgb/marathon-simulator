@@ -74,6 +74,7 @@ export function generateBikeSession(input: BikeSessionInput): Workout {
     rpe,
     aerobic,
     anaerobic,
+    estimatedDurationMin: Math.max(20, Math.round(targetMinutes)),
   };
 }
 

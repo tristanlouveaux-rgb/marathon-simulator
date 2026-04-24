@@ -82,6 +82,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
     rpe,
     aerobic,
     anaerobic,
+    estimatedDurationMin: Math.max(20, Math.round(targetMinutes)),
   };
 }
 
