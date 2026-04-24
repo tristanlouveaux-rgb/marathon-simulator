@@ -560,9 +560,19 @@ async function runAutoDerivation(): Promise<void> {
     foundBody.innerHTML = `<span style="opacity:0.7">Reading your last 16 weeks of activity…</span>`;
 
     let activities = await loadActivitiesFromDB(500);
-    if (activities.length === 0) {
-      // Trigger a backfill — likely first tri load.
-      foundBody.innerHTML = `<span style="opacity:0.7">Pulling history from Strava… this takes 20–30 s on first connect.</span>`;
+    const rides = activities.filter((a) =>
+      /ride|cycl|bike/i.test(a.activityType ?? '')
+    );
+    const ridesWithPower = rides.filter((a) =>
+      (a.averageWatts ?? 0) > 0 || (a.normalizedPowerW ?? 0) > 0,
+    );
+    // Trigger a Strava backfill if the DB is empty OR the user has rides
+    // but none have power data (classic case: rides arrived via the Garmin
+    // webhook which doesn't extract power — a Strava backfill adds the
+    // strava-sourced mirror rows with power).
+    const needsBackfill = activities.length === 0 || (rides.length > 0 && ridesWithPower.length === 0);
+    if (needsBackfill) {
+      foundBody.innerHTML = `<span style="opacity:0.7">${activities.length === 0 ? 'Pulling history from Strava… this takes 20–30 s on first connect.' : 'Refreshing your bike power data from Strava…'}</span>`;
       try {
         await backfillStravaHistory(16);
       } catch { /* ignore — continue with whatever landed */ }

@@ -163,6 +163,24 @@ async function launchApp(): Promise<void> {
   }
   const state = getState();
 
+  // Self-heal stravaConnected flag. Users who connected Strava from the tri
+  // setup page (or via any path that didn't land on ?strava=connected) have
+  // tokens in strava_tokens but the state flag is false — which gates the
+  // auto-backfill and leaves their rides without power data. Fix by
+  // asking the DB directly and flipping the flag on when tokens exist.
+  if (!isSimulatorMode() && hasState && !state.stravaConnected) {
+    try {
+      const tokensExist = await isStravaConnected();
+      if (tokensExist) {
+        console.log('[launch] Self-healing stravaConnected flag (tokens found, state flag was false)');
+        const ms = getMutableState();
+        ms.stravaConnected = true;
+        saveState();
+        state.stravaConnected = true;
+      }
+    } catch { /* swallow — worst case backfill doesn't auto-fire this launch */ }
+  }
+
   // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
   setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
 
