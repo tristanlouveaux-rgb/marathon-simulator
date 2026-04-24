@@ -16,7 +16,7 @@ import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
-import { generateTriathlonPlan } from '@/workouts/plan_engine.triathlon';
+import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
 import {
   DEFAULT_VOLUME_SPLIT,
   PLAN_WEEKS_DEFAULT,
@@ -58,6 +58,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
         run:  { ctl: 0, atl: 0, tsb: 0 },
         combinedCtl: 0,
       },
+      generatorVersion: TRI_GENERATOR_VERSION,
     };
 
     // Plan-level state — keep shape compatible with running state so shared UI

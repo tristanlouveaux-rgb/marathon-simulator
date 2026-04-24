@@ -16,7 +16,7 @@ import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } 
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
-import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier } from '@/data/stravaSync';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
@@ -99,16 +99,37 @@ async function bootstrap(): Promise<void> {
   }
 
   // Check for existing Supabase session
-  const { data: { session } } = await supabase.auth.getSession();
+  let { data: { session } } = await supabase.auth.getSession();
 
-  if (!session) {
-    // No authenticated user — show login page
-    renderAuthView();
-    setupAuthListener();
-    return;
+  // If session exists but is expired, try refresh; if that fails, treat as no session.
+  if (session) {
+    const expiresAt = session.expires_at ?? 0;
+    if (expiresAt <= Math.floor(Date.now() / 1000) + 60) {
+      const { data: refreshed, error } = await supabase.auth.refreshSession();
+      if (error || !refreshed.session) {
+        console.warn('[auth] Stale session could not refresh, clearing and signing in anonymously');
+        await supabase.auth.signOut().catch(() => {});
+        session = null;
+      } else {
+        session = refreshed.session;
+      }
+    }
   }
 
-  // Authenticated — proceed with app
+  if (!session) {
+    // No session — silently create an anonymous user. No auth UI during onboarding.
+    // Users can upgrade to a real account later from Account settings.
+    const { data, error } = await supabase.auth.signInAnonymously();
+    if (error || !data.session) {
+      console.error('[auth] Anonymous sign-in failed, falling back to auth view', error);
+      renderAuthView();
+      setupAuthListener();
+      return;
+    }
+    session = data.session;
+  }
+
+  // Authenticated (anon or real) — proceed with app
   await launchApp();
   setupAuthListener();
 }
@@ -153,10 +174,45 @@ async function launchApp(): Promise<void> {
     saveState();
   }
 
+  // Triathlon: regenerate the plan if the generator version has bumped since
+  // the plan was last built. Keeps existing tri users on the latest
+  // scheduler, duration formatting, and volume calibration without forcing
+  // them to reset onboarding.
+  if (hasState && state.eventType === 'triathlon' && state.triConfig) {
+    try {
+      const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
+      const savedVersion = state.triConfig.generatorVersion ?? 0;
+      if (savedVersion < TRI_GENERATOR_VERSION) {
+        const mutable = getMutableState();
+        const freshWeeks = generateTriathlonPlan(mutable);
+        if (freshWeeks.length > 0) {
+          // Preserve existing per-week fields (rated/skip/actuals/etc) — only
+          // replace the generated workout list and phase.
+          for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
+            mutable.wks[i].triWorkouts = freshWeeks[i].triWorkouts;
+            mutable.wks[i].ph = freshWeeks[i].ph;
+          }
+          if (mutable.triConfig) mutable.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
+          saveState();
+          console.log(`[tri] plan regenerated (generator v${savedVersion} → v${TRI_GENERATOR_VERSION})`);
+        }
+      }
+    } catch (err) {
+      console.warn('[tri] plan auto-regenerate failed', err);
+    }
+  }
+
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
+
+    // Boot-time migration: refresh blended VDOT so existing users (who have
+    // wkGain deprecated) see current fitness, not Week-1 baseline.
+    try {
+      const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
+      refreshBlendedFitness(getMutableState());
+    } catch {}
 
     // If s.w advanced past a week that never had a full debrief (with plan preview),
     // roll back so the debrief fires in 'complete' mode.
@@ -177,6 +233,18 @@ async function launchApp(): Promise<void> {
     }
 
     if (healMissingITrimp()) saveState(); // back-fill iTrimp for actuals synced before profile HR was set
+
+    // Recompute athleteTier from current ctlBaseline — state may be stale from
+    // an earlier CTL value (e.g. pre-fix readings) and the tier only updates
+    // when fetchStravaHistory runs, which is cache-skipped on most launches.
+    {
+      const _ms = getMutableState();
+      const expected = deriveAthleteTier(_ms.ctlBaseline ?? 0);
+      if (_ms.athleteTier !== expected) {
+        _ms.athleteTier = expected;
+        saveState();
+      }
+    }
 
     // One-time cleanup: wk1 contained dummy test data (rawTSS ~1309) that inflates CTL.
     // Clear garminActuals and adhocWorkouts from wk1 so the EMA seed is the only baseline.
@@ -308,12 +376,8 @@ async function launchApp(): Promise<void> {
       showHolidayWelcomeBack(() => {
         renderHomeView();
         const pendingDebrief2 = isWeekPendingDebrief();
-        import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
-          if (pendingDebrief2) {
-            showWeekDebrief((getState() as any).w, 'complete');
-          } else if (shouldAutoDebrief()) {
-            showWeekDebrief();
-          }
+        import('@/ui/week-debrief').then(({ fireDebriefIfReady }) => {
+          fireDebriefIfReady(pendingDebrief2);
         });
       });
     } else {
@@ -321,13 +385,11 @@ async function launchApp(): Promise<void> {
       // Auto-fire week-end debrief if a week just completed (once per week, after home renders)
       // If calendar is ahead of s.w (advance was held pending debrief), show in 'complete' mode
       // so the user gets the full flow: summary → animation → plan preview → advance.
+      // fireDebriefIfReady defers when a matching screen is open or activities are still
+      // unassigned — the retry fires from activitySync.ts after the user saves matching.
       const pendingDebrief = isWeekPendingDebrief();
-      import('@/ui/week-debrief').then(({ shouldAutoDebrief, showWeekDebrief }) => {
-        if (pendingDebrief) {
-          showWeekDebrief((getState() as any).w, 'complete');
-        } else if (shouldAutoDebrief()) {
-          showWeekDebrief();
-        }
+      import('@/ui/week-debrief').then(({ fireDebriefIfReady }) => {
+        fireDebriefIfReady(pendingDebrief);
       });
     }
   } else {
@@ -350,33 +412,40 @@ async function launchApp(): Promise<void> {
     }
   });
 
-  // Handle OAuth redirects
+  // Handle OAuth redirects.
+  // Only route to account-view when the user is actually on main-view. A user
+  // mid-wizard (e.g. editing goals after having completed onboarding once) has
+  // hasCompletedOnboarding=true but a non-main-view currentStep — routing them
+  // to account-view drops them out of the wizard flow.
   const params = new URLSearchParams(window.location.search);
+  const onMainView = hasState && state.hasCompletedOnboarding
+    && (!state.onboarding || state.onboarding.currentStep === 'main-view');
+
   if (params.get('garmin') === 'connected') {
-    // Clean up URL
     window.history.replaceState({}, '', window.location.pathname);
     showGarminConnectedToast();
-    // Only navigate to account if onboarding is complete — otherwise stay in wizard
-    if (hasState && state.hasCompletedOnboarding) {
+    if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
     }
-    // If still in wizard, toast shows and wizard continues — user can connect Garmin then finish setup
+    // Mid-wizard: toast shows and wizard continues.
   }
 
   if (params.get('strava') === 'connected') {
     window.history.replaceState({}, '', window.location.pathname);
-    // Persist stravaConnected flag
     import('@/state').then(({ updateState, saveState }) => {
       updateState({ stravaConnected: true });
       saveState();
     });
     resetStravaCache();
     showStravaConnectedToast();
-    if (hasState && state.hasCompletedOnboarding) {
+    // Always kick off the sync after OAuth — the wizard's review step reads from
+    // the DB and needs activities there before it can decide to show vs divert.
+    setTimeout(() => syncStravaActivities().catch(() => {}), 500);
+    if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
-      // Kick off Strava activity sync after short delay (let account view mount first)
-      setTimeout(() => syncStravaActivities().catch(() => {}), 500);
     }
+    // Mid-wizard: sync fires in the background; connect-strava auto-advances;
+    // review page waits on the DB fetch and then decides.
   }
 
   // Sync wearable data on launch (skip in simulator mode — no auth)
@@ -483,10 +552,16 @@ async function launchApp(): Promise<void> {
 
   // Backfill Strava history: run if never fetched OR if we have fewer than 8 weeks cached.
   // Extended history (16w) is populated by backfillStravaHistory so the stats "16w" tab works.
+  // Also triggers once post-migration to heal the new ambient_temp_c column on historical rows.
   const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
-  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory)) {
-    console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0})`);
-    backfillStravaHistory(16).catch(() => {});
+  const needsTempHeal = !state.ambientTempHealDone;
+  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory || needsTempHeal)) {
+    console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0}, needsTempHeal=${needsTempHeal})`);
+    backfillStravaHistory(16).then(() => {
+      const mut = getMutableState();
+      mut.ambientTempHealDone = true;
+      saveState();
+    }).catch(() => {});
   }
 
   console.log('Mosaic Training Simulator initialized');

@@ -132,6 +132,14 @@ export interface TriConfig {
     runCtl: number;
     combinedCtl: number;
   }>;
+
+  /**
+   * Version of the triathlon plan generator that produced `triWorkouts` on
+   * each Week. Compared against TRI_GENERATOR_VERSION on app load; if lower,
+   * the plan is regenerated automatically so users see updated scheduling,
+   * descriptions, and volume calibration without resetting their onboarding.
+   */
+  generatorVersion?: number;
 }
 
 /** Triathlon-specific workout types. Joined into `Workout.t` (which is a free string). */

@@ -24,6 +24,14 @@ import { generateBrick } from './brick';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
 
 /**
+ * Bump this when the generator output changes in a way that should invalidate
+ * previously generated plans (new scheduler, duration formatting, phase ramp,
+ * new variants, etc). `main.ts` checks this on load and regenerates tri
+ * workouts if the stored version is lower.
+ */
+export const TRI_GENERATOR_VERSION = 3;
+
+/**
  * Generate a full triathlon plan for the current state.
  */
 export function generateTriathlonPlan(state: SimulatorState): Week[] {
