@@ -307,6 +307,16 @@ export interface Week {
     source: string;
     confidence: string;
   };
+
+  /**
+   * Triathlon-only: per-week generated workouts (swim/bike/run/brick/gym).
+   * Running mode regenerates workouts on the fly from VDOT + phase, so running
+   * weeks leave this undefined. Triathlon generation is stateful — the plan
+   * engine runs once at initialisation and we store the results here so views
+   * can read them without re-deriving from triConfig on every render.
+   * Set by `plan_engine.triathlon.ts:generateTriathlonPlan`.
+   */
+  triWorkouts?: Workout[];
 }
 
 /** State schema version for migrations */
