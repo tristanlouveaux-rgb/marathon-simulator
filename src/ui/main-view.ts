@@ -1,4 +1,5 @@
 import { getState, getMutableState } from '@/state/store';
+import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import type { SimulatorState } from '@/types';
 import { saveState } from '@/state/persistence';
 import { render, attachTrackRunHandlers } from './renderer';
@@ -52,7 +53,13 @@ function hasPlanStarted(s: SimulatorState): boolean {
  * Render the main workout view after onboarding is complete
  */
 export function renderMainView(): void {
-  // Delegate to the new Plan view
+  // Triathlon fork — route straight to the triathlon plan view.
+  const s = getState();
+  if (s.eventType === 'triathlon') {
+    import('./triathlon/plan-view').then(({ renderTriathlonPlanView }) => renderTriathlonPlanView());
+    return;
+  }
+  // Delegate to the running Plan view
   import('./plan-view').then(({ renderPlanView }) => renderPlanView());
 }
 
@@ -383,21 +390,30 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
 
               <!-- Predictions -->
               <h3 class="font-medium text-sm mb-4" style="color:var(--c-muted)">Race Prediction</h3>
-              <div id="pred" class="grid grid-cols-3 gap-4 text-center">
+              ${(() => {
+                const goalSec = s.initialBaseline || 0;
+                const forecastSec = s.forecastTime || 0;
+                const dSec = Math.round(forecastSec - goalSec);
+                const dMin = Math.round(Math.abs(dSec) / 60);
+                let deltaText = '';
+                if (forecastSec > 0 && goalSec > 0) {
+                  if (Math.abs(dSec) < 60) deltaText = 'On pace vs target';
+                  else if (dSec > 0) deltaText = `+${dMin} min vs target`;
+                  else deltaText = `\u2212${dMin} min vs target`;
+                }
+                return `
+              <div id="pred" class="grid grid-cols-2 gap-4 text-center">
                 <div>
                   <div class="text-xs mb-1" style="color:var(--c-faint)">Initial</div>
-                  <div class="text-lg font-medium" style="color:var(--c-faint)" id="initial">${ft(s.initialBaseline || 0)}</div>
-                </div>
-                <div>
-                  <div class="text-xs mb-1 cursor-help" style="color:var(--c-faint)" onclick="this.nextElementSibling?.nextElementSibling?.classList.toggle('hidden')" title="Click for details">Current</div>
-                  <div class="text-xl font-bold" style="color:var(--c-black)" id="cv">${ft(s.currentFitness || 0)}</div>
-                  <div class="hidden text-xs mt-1 rounded px-2 py-1" style="color:var(--c-muted);background:rgba(0,0,0,0.05)">Our prediction if you were to run today</div>
+                  <div class="text-lg font-medium" style="color:var(--c-faint)" id="initial">${ft(goalSec)}</div>
                 </div>
                 <div>
                   <div class="text-xs mb-1" style="color:var(--c-faint)">Forecast</div>
-                  <div class="text-2xl font-bold" style="color:var(--c-ok)" id="fc">${ft(s.forecastTime || 0)}</div>
+                  <div class="text-2xl font-bold" style="color:var(--c-black)" id="fc">${ft(forecastSec)}</div>
+                  ${deltaText ? `<div class="text-xs mt-1" style="color:var(--c-muted)">${deltaText}</div>` : ''}
                 </div>
-              </div>
+              </div>`;
+              })()}
             </div>
             `)}
 
@@ -646,10 +662,7 @@ function renderRecoveryProgressPanel(s: any): string {
  * Shows VDOT progress, current easy pace, and block progress bar instead of race times.
  */
 function renderContinuousProgressPanel(s: any): string {
-  // Calculate current VDOT from accumulated gains
-  let wg = 0;
-  for (let i = 0; i < Math.min(s.w - 1, s.wks?.length || 0); i++) wg += (s.wks[i]?.wkGain || 0);
-  const currentVdot = (s.v || 0) + wg + (s.rpeAdj || 0) + (s.physioAdj || 0);
+  const currentVdot = getEffectiveVdot(s);
   const vdotChange = currentVdot - (s.iv || s.v || 0);
   const vdotPct = (s.iv || s.v) ? (vdotChange / (s.iv || s.v)) * 100 : 0;
 
@@ -1555,9 +1568,7 @@ function updateLoadChart(s: SimulatorState): void {
   const easyPace = s.pac?.e;
 
   // --- Generate planned workouts for current week (same pattern as excess-load-card.ts) ---
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  const currentVDOT = getEffectiveVdot(s);
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
   let trailingEffort = 0;
   const lookback = Math.min(3, s.w - 1);
@@ -2166,9 +2177,7 @@ function updateLightenedWeekBanner(s: SimulatorState): void {
 function getWeekWorkoutsForACWR(s: ReturnType<typeof getMutableState>) {
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  const currentVDOT = getEffectiveVdot(s);
   const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
   let trailingEffort = 0;
   const lookback = Math.min(3, s.w - 1);
@@ -2464,12 +2473,12 @@ function showTSSInfoSheet(): void {
         </div>
 
         <div>
-          <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Running Fitness, Load & Freshness</p>
+          <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Running Load, Load & Freshness</p>
           <div class="space-y-3">
             <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
               <div class="flex items-center gap-2 mb-1">
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-ok)"></div>
-                <span class="font-medium text-xs" style="color:var(--c-ok)">Running Fitness (CTL)</span>
+                <span class="font-medium text-xs" style="color:var(--c-ok)">Running Load (CTL)</span>
               </div>
               <p class="text-xs" style="color:var(--c-muted)">Your 6-week rolling average of weekly TSS. This represents how much your body has adapted to training. It rises slowly with consistent work and falls slowly during rest. The ◆ marker on the load bar shows your current fitness baseline.</p>
             </div>
@@ -2478,7 +2487,7 @@ function showTSSInfoSheet(): void {
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div>
                 <span class="font-medium text-xs" style="color:var(--c-warn)">Short-Term Load (ATL)</span>
               </div>
-              <p class="text-xs" style="color:var(--c-muted)">Your 1-week rolling average. Short-term load rises quickly after hard sessions and drops within days of rest. A big gap between Short-Term Load and Running Fitness means your body needs recovery time.</p>
+              <p class="text-xs" style="color:var(--c-muted)">Your 1-week rolling average. Short-term load rises quickly after hard sessions and drops within days of rest. A big gap between Short-Term Load and Running Load means your body needs recovery time.</p>
             </div>
             <div class="rounded-lg p-3" style="background:rgba(0,0,0,0.04)">
               <div class="flex items-center gap-2 mb-1">
