@@ -1169,6 +1169,7 @@ Deno.serve(async (req) => {
       // touch any other column (iTRIMP / zones / etc).
       let powerHealed = 0;
       let powerAttempted = 0;
+      let powerDebugLogged = 0;
       try {
         for (const act of allActivities) {
           const stravaId = act?.id as number | undefined;
@@ -1177,6 +1178,13 @@ Deno.serve(async (req) => {
           const actType = mapStravaType((act?.sport_type as string) || (act?.type as string) || "");
           if (actType !== "CYCLING" && actType !== "MOUNTAIN_BIKING") continue;
           const power = extractPowerFields(act);
+          // Log the raw power fields of the first 3 rides so we can see what
+          // Strava actually returned. Drop this log once FTP derivation is
+          // confirmed working for the user.
+          if (powerDebugLogged < 3) {
+            console.log(`[Power debug] ${garminId}: raw avg=${act?.average_watts} np=${act?.weighted_average_watts} max=${act?.max_watts} dev=${act?.device_watts} kj=${act?.kilojoules} → extracted=${JSON.stringify(power)}`);
+            powerDebugLogged++;
+          }
           if (
             power.average_watts == null &&
             power.normalized_power == null &&
