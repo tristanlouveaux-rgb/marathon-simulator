@@ -41,6 +41,11 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   const raceDate = state.customRaceDate ?? '';
   const gymSessions = state.gymSessionsPerWeek ?? 0;
   const hoursRange = HOURS_RANGE[distance];
+  // Default weekday share: ~40% of total on Mon–Fri, leaving ~60% for the
+  // weekend. Fits a 9-to-5 lifestyle where long sessions land Sat/Sun.
+  const defaultWeekdayHours = Math.round(hoursPerWeek * 0.4 * 2) / 2;  // nearest 0.5h
+  const weekdayHours = state.triWeekdayHoursPerWeek ?? defaultWeekdayHours;
+  const weekendHours = Math.max(0, hoursPerWeek - weekdayHours);
 
   container.innerHTML = `
     <style>
@@ -119,6 +124,15 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             </div>
             <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="tri-slider" id="tri-hours">
             <p class="tri-hint">This is your peak-week target. Early and recovery weeks will be lighter. Range ${hoursRange.min}–${hoursRange.max}h is sized to your distance.</p>
+
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
+              <div class="tri-row" style="margin-bottom:6px">
+                <span style="font-size:13px;color:var(--c-black)">Mon–Fri split</span>
+                <span class="tri-value" id="tri-weekday-value">${weekdayHours}h weekday / ${weekendHours.toFixed(1)}h weekend</span>
+              </div>
+              <input type="range" min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}" class="tri-slider" id="tri-weekday">
+              <p class="tri-hint">How much of the week's training fits into weekdays. Long bike + long run always land Sat/Sun. If you work a 9-to-5, keeping weekdays short and piling the weekend is a good default.</p>
+            </div>
           </div>
 
           <!-- Volume split -->
@@ -257,7 +271,27 @@ function wireEventHandlers(): void {
     const h = Number(hoursInput.value);
     if (hoursValue) hoursValue.textContent = `${h}h`;
     updateOnboarding({ triTimeAvailableHoursPerWeek: h });
+    // Clamp weekday slider max to new total, scale weekday hours proportionally.
+    const weekdaySlider = document.getElementById('tri-weekday') as HTMLInputElement | null;
+    if (weekdaySlider) {
+      const current = Number(weekdaySlider.value);
+      const prevMax = Number(weekdaySlider.max) || h;
+      weekdaySlider.max = String(h);
+      const scaled = prevMax > 0 ? Math.min(h, Math.round((current / prevMax) * h * 2) / 2) : h * 0.4;
+      weekdaySlider.value = String(scaled);
+      updateWeekdayLabel(scaled, h);
+      updateOnboarding({ triWeekdayHoursPerWeek: scaled });
+    }
     refreshSplitCells();
+  });
+
+  // Weekday/weekend split slider
+  const weekdayInput = document.getElementById('tri-weekday') as HTMLInputElement | null;
+  weekdayInput?.addEventListener('input', () => {
+    const wd = Number(weekdayInput.value);
+    const total = Number(hoursInput?.value ?? getCurrentOnboarding().triTimeAvailableHoursPerWeek ?? 10);
+    updateWeekdayLabel(wd, total);
+    updateOnboarding({ triWeekdayHoursPerWeek: wd });
   });
 
   // Split sliders (normalise so they always sum to ~1.0)
@@ -374,6 +408,11 @@ function wireEventHandlers(): void {
         : 3;
       finalPatch.triTimeAvailableHoursPerWeek = DEFAULT_WEEKLY_PEAK_HOURS[d][avg];
     }
+    // Default weekday hours to 40% of total if the user never touched the slider.
+    const totalH = current.triTimeAvailableHoursPerWeek ?? finalPatch.triTimeAvailableHoursPerWeek ?? 10;
+    if (current.triWeekdayHoursPerWeek === undefined) {
+      finalPatch.triWeekdayHoursPerWeek = Math.round(totalH * 0.4 * 2) / 2;
+    }
     if (!current.triDistance) finalPatch.triDistance = '70.3';
     // Set the plan duration from the distance default so initializer receives it.
     finalPatch.planDurationWeeks = PLAN_WEEKS_DEFAULT[current.triDistance ?? finalPatch.triDistance ?? '70.3'];
@@ -415,6 +454,13 @@ function onSplitSliderChange(changed: HTMLInputElement): void {
 
   updateOnboarding({ triVolumeSplit: split });
   refreshSplitCells();
+}
+
+function updateWeekdayLabel(wd: number, total: number): void {
+  const label = document.getElementById('tri-weekday-value');
+  if (!label) return;
+  const we = Math.max(0, total - wd);
+  label.textContent = `${wd}h weekday / ${we.toFixed(1)}h weekend`;
 }
 
 function refreshSplitCells(): void {

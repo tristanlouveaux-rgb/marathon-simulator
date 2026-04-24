@@ -43,9 +43,12 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
 
     const volumeSplit = state.triVolumeSplit ?? { ...DEFAULT_VOLUME_SPLIT };
 
+    const weekdayHours = state.triWeekdayHoursPerWeek ?? Math.round(timeAvailable * 0.4 * 2) / 2;
+
     const triConfig: TriConfig = {
       distance,
       timeAvailableHoursPerWeek: timeAvailable,
+      weekdayHoursPerWeek: weekdayHours,
       volumeSplit,
       skillRating,
       bike: state.triBike ? { ...state.triBike } : {},

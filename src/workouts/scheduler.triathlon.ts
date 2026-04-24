@@ -3,6 +3,8 @@
  *
  * Constraint rules (§18.8):
  *   - Long run → Sunday, long bike or brick → Saturday
+ *   - Respect weekday hour cap: Mon–Fri combined must fit the user's
+ *     available weekday hours (e.g. 9-to-5 users can only spare ~1h/day)
  *   - Quality sessions (threshold / VO2) spread across the week — no two
  *     hard same-discipline sessions on consecutive days
  *   - Swim threshold mid-week (Wed) to separate from bike/run quality
@@ -23,6 +25,9 @@ const SWIM_DAYS = [1, 2, 4, 0, 3];        // Tue, Wed, Fri, Mon, Thu
 const BIKE_DAYS = [1, 3, 4];              // Tue, Thu, Fri (Saturday reserved for long bike / brick)
 const RUN_DAYS  = [2, 3, 1, 4, 0];        // Wed, Thu, Tue, Fri, Mon (Sunday reserved for long run)
 
+export const WEEKDAY_INDEXES = [0, 1, 2, 3, 4];  // Mon–Fri
+export const WEEKEND_INDEXES = [5, 6];           // Sat–Sun
+
 /**
  * Assign workouts to days. Input is a flat list of per-discipline workouts
  * (already generated with type + load). We tag each with dayOfWeek/dayName
@@ -34,9 +39,13 @@ export function scheduleTriathlonWeek(
   run: Workout[],
   brick: Workout | null,
   phase: TrainingPhase,
-  gym: Workout[] = []
+  gym: Workout[] = [],
+  /** Per-day minute cap by day-of-week. When a day's budget is exhausted,
+   * sessions are pushed to the next-best day. Undefined = no cap. */
+  minutesCapByDay?: Record<number, number>
 ): Workout[] {
   const byDay: Record<number, Workout[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
+  const minutesOnDay: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
 
   // Track which disciplines are already on each day so we avoid same-
   // discipline doubles unless we really have to.
@@ -46,7 +55,15 @@ export function scheduleTriathlonWeek(
   };
   const place = (day: number, w: Workout) => {
     byDay[day].push(w);
+    minutesOnDay[day] += workoutMinutes(w);
     occupiedDisciplines[day].add(w.discipline ?? 'run');
+  };
+
+  const hasCapacity = (day: number, w: Workout): boolean => {
+    if (!minutesCapByDay) return true;
+    const cap = minutesCapByDay[day];
+    if (cap === undefined) return true;
+    return minutesOnDay[day] + workoutMinutes(w) <= cap + 15;  // 15 min tolerance
   };
 
   // 1. Long session Saturday — brick replaces the long bike if present.
@@ -78,14 +95,14 @@ export function scheduleTriathlonWeek(
     const q = swimsRemaining.splice(swimQualityIdx, 1)[0];
     place(2, q);
   }
-  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, place);
+  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
 
   // 5. Bike quality → Tuesday (first remaining bike). Others distribute Thu, Fri.
-  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, place);
+  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
 
   // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
   //    Thursday quality is the template — we spread by preference.
-  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, place);
+  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
 
   // Flatten with dayOfWeek/dayName set
   const out: Workout[] = [];
@@ -101,21 +118,33 @@ export function scheduleTriathlonWeek(
 
 /**
  * Place each workout on its preferred day, skipping days that already host
- * the same discipline. Falls back to first non-matching day, then any open
- * day, so we never drop a session.
+ * the same discipline or lack capacity. Falls back through:
+ *   1. Preferred days with capacity AND no same-discipline collision
+ *   2. Weekend days (even if outside the discipline's preferred set) when
+ *      weekday capacity is exhausted
+ *   3. Preferred day with fewest sessions (last resort — exceeds cap)
  */
 function placeByPreference(
   workouts: Workout[],
   preferredDays: number[],
   byDay: Record<number, Workout[]>,
   occupied: Record<number, Set<string>>,
+  hasCapacity: (day: number, w: Workout) => boolean,
   place: (day: number, w: Workout) => void
 ): void {
   for (const w of workouts) {
     const disc = w.discipline ?? 'run';
-    // First pass: pick the first preferred day that doesn't already have this discipline.
-    let dayIdx = preferredDays.find((d) => !occupied[d].has(disc));
-    // Fallback: pick the preferred day with fewest sessions overall.
+    // 1. Preferred day with capacity + no same-discipline collision
+    let dayIdx = preferredDays.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
+    // 2. Weekend spill (if not already a weekend-preferring discipline)
+    if (dayIdx === undefined) {
+      dayIdx = WEEKEND_INDEXES.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
+    }
+    // 3. Preferred day with capacity (allow doubles if needed)
+    if (dayIdx === undefined) {
+      dayIdx = preferredDays.find((d) => hasCapacity(d, w));
+    }
+    // 4. Last-resort: preferred day with fewest sessions
     if (dayIdx === undefined) {
       dayIdx = preferredDays.reduce((best, d) =>
         byDay[d].length < byDay[best].length ? d : best,
@@ -124,3 +153,17 @@ function placeByPreference(
     place(dayIdx, w);
   }
 }
+
+function workoutMinutes(w: Workout): number {
+  if (w.brickSegments) {
+    return (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
+  }
+  // Prefer the largest "Nmin" match in the description as session duration.
+  const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
+  if (matches.length > 0) {
+    return matches.reduce((acc, m) => Math.max(acc, parseInt(m[1], 10)), 0);
+  }
+  // Fall back to implied 60 min.
+  return 60;
+}
+

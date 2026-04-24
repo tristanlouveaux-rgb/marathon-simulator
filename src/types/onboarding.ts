@@ -151,6 +151,9 @@ export interface OnboardingState {
   /** Upstream of the split picker (§18.2). Total weekly training hours the user commits to. */
   triTimeAvailableHoursPerWeek?: number;
 
+  /** Mon–Fri combined training hours. Weekend (Sat+Sun) gets the rest. */
+  triWeekdayHoursPerWeek?: number;
+
   /** Volume split across swim/bike/run. User adjusts from preset in onboarding. Sums to 1.0. */
   triVolumeSplit?: import('./triathlon').TriVolumeSplit;
 

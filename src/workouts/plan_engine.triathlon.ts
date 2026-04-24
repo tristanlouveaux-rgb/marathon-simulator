@@ -29,7 +29,7 @@ import { scheduleTriathlonWeek } from './scheduler.triathlon';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 3;
+export const TRI_GENERATOR_VERSION = 4;
 
 /**
  * Generate a full triathlon plan for the current state.
@@ -204,7 +204,26 @@ function generateWeekForTriathlon(
     });
   }
 
-  return scheduleTriathlonWeek(swim, bike, run, brick, phase, gym);
+  // Build per-day minute caps from the user's weekday/weekend split. The
+  // scheduler will spill overflow toward the weekend when weekday capacity
+  // runs out — matches how a 9-to-5 athlete actually trains.
+  const totalHours = weekHours;
+  const weekdayHours = Math.min(
+    totalHours,
+    tri.weekdayHoursPerWeek ?? Math.round(totalHours * 0.4 * 2) / 2
+  );
+  const weekendHours = Math.max(0, totalHours - weekdayHours);
+  // Distribute weekday minutes across 5 days, weekend across 2 days. Slight
+  // bias: day caps carry 20% headroom so a single long-ish session still
+  // fits on its preferred day.
+  const weekdayCap = Math.round((weekdayHours * 60) / 5 * 1.5);  // mid-bound per-day
+  const weekendCap = Math.round((weekendHours * 60) / 2 * 1.2);
+  const minutesCapByDay: Record<number, number> = {
+    0: weekdayCap, 1: weekdayCap, 2: weekdayCap, 3: weekdayCap, 4: weekdayCap,
+    5: weekendCap, 6: weekendCap,
+  };
+
+  return scheduleTriathlonWeek(swim, bike, run, brick, phase, gym, minutesCapByDay);
 }
 
 // ───────────────────────────────────────────────────────────────────────────

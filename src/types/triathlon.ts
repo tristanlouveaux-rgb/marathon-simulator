@@ -95,7 +95,11 @@ export interface TriConfig {
   distance: TriathlonDistance;
 
   // Onboarding inputs
-  timeAvailableHoursPerWeek?: number;  // Upstream of the split picker (§18.2)
+  timeAvailableHoursPerWeek?: number;  // Total = weekday + weekend
+  /** Hours available Mon–Fri combined. Scheduler uses this to cap weekday
+   * sessions and push overflow + long sessions to Sat/Sun. When absent we
+   * default to ~40% of total on weekdays. */
+  weekdayHoursPerWeek?: number;
   volumeSplit?: TriVolumeSplit;        // Defaults to preset in triathlon-constants.ts
   skillRating?: TriSkillRating;        // Three 1–5 sliders (§18.7)
   bike?: BikeBenchmarks;
