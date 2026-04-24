@@ -157,6 +157,7 @@ export function renderTriathlonStatsView(): void {
           <!-- Targets -->
           <div class="tri-stats-card hf" data-delay="0.26">
             <div class="tri-stats-label">Your targets</div>
+            ${renderBenchmarkSourceHint(s)}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
               ${targetCell('CSS', tri.swim?.cssSecPer100m ? fmtCss(tri.swim.cssSecPer100m) : '—')}
               ${targetCell('FTP', tri.bike?.ftp ? `${tri.bike.ftp}W` : '—')}
@@ -273,6 +274,20 @@ function fmtHours(mins: number): string {
   if (h > 0 && m > 0) return `${h}h ${m}m`;
   if (h > 0) return `${h}h`;
   return `${m}m`;
+}
+
+/**
+ * Small hint line under "Your targets" telling the user how many synced
+ * activities are feeding the derivation. Absent when no history exists.
+ */
+function renderBenchmarkSourceHint(s: ReturnType<typeof getState>): string {
+  let count = 0;
+  for (const wk of s.wks ?? []) {
+    count += Object.keys(wk.garminActuals ?? {}).length;
+    count += (wk.garminPending ?? []).length;
+  }
+  if (count === 0) return '';
+  return `<div style="font-size:11px;color:var(--c-muted);margin:-6px 0 12px;line-height:1.5">Tracking against <strong>${count}</strong> synced activities. Empty CSS / FTP fields auto-fill from your Strava history; fitness CTL updates on each app load.</div>`;
 }
 
 function parseMinutesFromDesc(desc: string): number {

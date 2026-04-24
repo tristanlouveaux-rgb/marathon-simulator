@@ -175,30 +175,73 @@ async function launchApp(): Promise<void> {
   }
 
   // Triathlon: regenerate the plan if the generator version has bumped since
-  // the plan was last built. Keeps existing tri users on the latest
-  // scheduler, duration formatting, and volume calibration without forcing
-  // them to reset onboarding.
+  // the plan was last built, AND refresh benchmarks (CSS / FTP / per-
+  // discipline CTL) from the latest activity history so predictions track
+  // fitness as it evolves. Never overwrites user-entered CSS/FTP — only
+  // fills blanks.
   if (hasState && state.eventType === 'triathlon' && state.triConfig) {
     try {
       const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
+      const { deriveTriBenchmarksFromHistory } = await import('@/calculations/tri-benchmarks-from-history');
+      const mutable = getMutableState();
+
+      // Flatten matched (garminActuals) + unmatched (garminPending) activities
+      // so we see the full picture. Pending items are normalised to the
+      // GarminActual shape for just the fields derivation reads.
+      const activityLog = Object.values(mutable.wks ?? []).flatMap((wk: any) => {
+        const actuals = Object.values((wk?.garminActuals ?? {}) as Record<string, any>);
+        const pending = (wk?.garminPending ?? []).map((p: any) => ({
+          garminId: p.garminId,
+          activityType: p.activityType,
+          startTime: p.startTime,
+          durationSec: p.durationSec,
+          distanceKm: (p.distanceM ?? 0) / 1000,
+          iTrimp: p.iTrimp ?? null,
+        }));
+        return [...actuals, ...pending];
+      });
+      const derived = deriveTriBenchmarksFromHistory(activityLog as any);
+
+      // Update per-discipline fitness every boot so CTL reflects what's
+      // actually been trained since last load.
+      if (mutable.triConfig) {
+        mutable.triConfig.fitness = {
+          swim: derived.fitness.swim,
+          bike: derived.fitness.bike,
+          run:  derived.fitness.run,
+          combinedCtl: derived.fitness.combinedCtl,
+        };
+        // Fill CSS / FTP only if the user never set them.
+        if (!mutable.triConfig.swim?.cssSecPer100m && derived.css.cssSecPer100m) {
+          mutable.triConfig.swim = { ...(mutable.triConfig.swim ?? {}), cssSecPer100m: derived.css.cssSecPer100m };
+        }
+        if (!mutable.triConfig.bike?.ftp && derived.ftp.ftpWatts) {
+          mutable.triConfig.bike = { ...(mutable.triConfig.bike ?? {}), ftp: derived.ftp.ftpWatts, hasPowerMeter: true };
+        }
+      }
+
+      // Plan regeneration when the generator version bumps.
       const savedVersion = state.triConfig.generatorVersion ?? 0;
       if (savedVersion < TRI_GENERATOR_VERSION) {
-        const mutable = getMutableState();
         const freshWeeks = generateTriathlonPlan(mutable);
         if (freshWeeks.length > 0) {
-          // Preserve existing per-week fields (rated/skip/actuals/etc) — only
-          // replace the generated workout list and phase.
           for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
             mutable.wks[i].triWorkouts = freshWeeks[i].triWorkouts;
             mutable.wks[i].ph = freshWeeks[i].ph;
           }
           if (mutable.triConfig) mutable.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
-          saveState();
           console.log(`[tri] plan regenerated (generator v${savedVersion} → v${TRI_GENERATOR_VERSION})`);
         }
       }
+
+      saveState();
+      console.log('[tri] benchmarks refreshed from history:',
+        `CSS ${derived.css.cssSecPer100m ? `${derived.css.cssSecPer100m}s/100m` : '—'}`,
+        `FTP ${derived.ftp.ftpWatts ? `${derived.ftp.ftpWatts}W` : '— (no power data)'}`,
+        `CTL swim/bike/run ${derived.fitness.swim.ctl}/${derived.fitness.bike.ctl}/${derived.fitness.run.ctl} (${derived.fitness.activityCount} activities)`,
+      );
     } catch (err) {
-      console.warn('[tri] plan auto-regenerate failed', err);
+      console.warn('[tri] benchmark/plan refresh failed', err);
     }
   }
 
@@ -423,6 +466,15 @@ async function launchApp(): Promise<void> {
 
   if (params.get('garmin') === 'connected') {
     window.history.replaceState({}, '', window.location.pathname);
+    // Mark Garmin as the physiology source so launch-time sync (hasPhysiologySource
+    // check in the Strava branch below) picks it up on the next reload, and so the
+    // Account view flips out of Strava-standalone mode.
+    if (state.wearable !== 'garmin') {
+      import('@/state').then(({ updateState, saveState }) => {
+        updateState({ wearable: 'garmin' });
+        saveState();
+      });
+    }
     showGarminConnectedToast();
     if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
