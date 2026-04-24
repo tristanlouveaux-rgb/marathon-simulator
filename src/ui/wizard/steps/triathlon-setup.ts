@@ -4,6 +4,13 @@ import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState } from '@/state/store';
 import {
+  getAccessToken,
+  isStravaConnected,
+  SUPABASE_ANON_KEY,
+  SUPABASE_FUNCTIONS_BASE,
+} from '@/data/supabaseClient';
+import { saveState } from '@/state/persistence';
+import {
   DEFAULT_VOLUME_SPLIT,
   DEFAULT_WEEKLY_PEAK_HOURS,
   PLAN_WEEKS_DEFAULT,
@@ -92,6 +99,19 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
         </div>
 
         <div style="width:100%;max-width:480px">
+          <!-- Connect Strava (optional but drives prediction accuracy) -->
+          <div class="tri-card t-rise" style="animation-delay:0.08s">
+            <div class="tri-label">Connect Strava <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
+            <div id="tri-strava-state" style="font-size:13px;color:var(--c-muted);line-height:1.5">Checking…</div>
+            <div id="tri-strava-cta-wrap" style="margin-top:10px">
+              <button id="tri-strava-connect" class="tri-pill" style="width:100%;text-align:center;background:#FC4C02;color:#fff;border-color:#FC4C02;font-weight:500;display:none">
+                Connect Strava
+              </button>
+            </div>
+            <p class="tri-hint">We'll pull your last 16 weeks of rides, swims, and runs to calibrate your starting CTL and auto-detect CSS, FTP (if you ride with power), and VDOT. You can still enter benchmarks manually below.</p>
+            <p class="tri-hint" id="tri-strava-error" style="color:#c06a50;display:none"></p>
+          </div>
+
           <!-- Distance -->
           <div class="tri-card t-rise" style="animation-delay:0.1s">
             <div class="tri-label">Race distance</div>
@@ -247,6 +267,9 @@ function renderRatingRow(discipline: 'swim' | 'bike' | 'run', value: TriSkillSli
 // ──────────────────────────────────────────────────────────────────────────
 
 function wireEventHandlers(): void {
+  // Strava connection state + OAuth kick-off
+  wireStravaConnect();
+
   // Distance pills — toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -503,6 +526,81 @@ function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   if (hours < 14) return `${base}<br>Realistic for a first Ironman, especially with a solid training background.`;
   if (hours < 20) return `${base}<br>Competitive age-grouper range.`;
   return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
+}
+
+/**
+ * Paint Strava card state: already-connected → reassurance line; not
+ * connected → orange Connect button that fires the OAuth start flow.
+ */
+async function wireStravaConnect(): Promise<void> {
+  const stateEl = document.getElementById('tri-strava-state');
+  const btn = document.getElementById('tri-strava-connect') as HTMLButtonElement | null;
+  const errEl = document.getElementById('tri-strava-error');
+
+  try {
+    const connected = await isStravaConnected();
+    if (connected) {
+      if (stateEl) stateEl.innerHTML = `<span style="color:#2e7d32">✓ Strava connected.</span> We'll pull your history after setup.`;
+      if (btn) btn.style.display = 'none';
+    } else {
+      if (stateEl) stateEl.innerHTML = `Not connected.`;
+      if (btn) btn.style.display = 'block';
+    }
+  } catch {
+    if (stateEl) stateEl.innerHTML = 'Not connected.';
+    if (btn) btn.style.display = 'block';
+  }
+
+  btn?.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Opening Strava…';
+    if (errEl) errEl.style.display = 'none';
+
+    // Mark return destination so the OAuth callback lands back on this step.
+    updateOnboarding({ currentStep: 'triathlon-setup' });
+    saveState();
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/strava-auth-start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+          'apikey': SUPABASE_ANON_KEY,
+        },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        if (errEl) {
+          errEl.textContent = `Could not start Strava connection (${res.status}). ${text}`.trim();
+          errEl.style.display = 'block';
+        }
+        btn.disabled = false;
+        btn.textContent = 'Connect Strava';
+        return;
+      }
+      const data = await res.json();
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        if (errEl) {
+          errEl.textContent = 'Strava did not return an authorisation URL.';
+          errEl.style.display = 'block';
+        }
+        btn.disabled = false;
+        btn.textContent = 'Connect Strava';
+      }
+    } catch (err) {
+      if (errEl) {
+        errEl.textContent = `Strava connection error: ${err instanceof Error ? err.message : 'Unknown error'}`;
+        errEl.style.display = 'block';
+      }
+      btn.disabled = false;
+      btn.textContent = 'Connect Strava';
+    }
+  });
 }
 
 function updateWeekdayLabel(wd: number, total: number): void {
