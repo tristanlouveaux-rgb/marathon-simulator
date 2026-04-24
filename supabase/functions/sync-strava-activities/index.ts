@@ -178,6 +178,48 @@ function calculateHRDrift(
 /** Steady-state run types where HR drift is meaningful */
 const DRIFT_TYPES = new Set(["RUNNING", "TREADMILL_RUNNING", "TRAIL_RUNNING", "VIRTUAL_RUN", "TRACK_RUNNING"]);
 
+/**
+ * Fetch ambient temperature at the activity's start time and location from
+ * Open-Meteo (free, no API key). Returns null if lat/lng missing or fetch fails.
+ * Uses the archive endpoint for activities ≥ 6 days old (where archive data is
+ * final); otherwise uses the forecast endpoint with `past_days` for recent runs.
+ * Treadmill runs are intentionally still called — indoor temp is usually fine
+ * at ambient, but the value will be the outdoor reading at the Strava-reported
+ * location, so callers should prefer to skip indoor types.
+ */
+async function fetchAmbientTemp(
+  startDateIso: string,
+  lat: number,
+  lng: number,
+): Promise<number | null> {
+  try {
+    const startMs = new Date(startDateIso).getTime();
+    const ageDays = (Date.now() - startMs) / 86_400_000;
+    const date = startDateIso.slice(0, 10); // YYYY-MM-DD
+    const targetHour = new Date(startDateIso).getUTCHours();
+
+    const base = ageDays >= 6
+      ? `https://archive-api.open-meteo.com/v1/archive?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&start_date=${date}&end_date=${date}&hourly=temperature_2m&timezone=UTC`
+      : `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}&hourly=temperature_2m&past_days=7&timezone=UTC`;
+
+    const res = await fetch(base);
+    if (!res.ok) return null;
+    const json = await res.json() as { hourly?: { time?: string[]; temperature_2m?: (number | null)[] } };
+    const times = json.hourly?.time;
+    const temps = json.hourly?.temperature_2m;
+    if (!times || !temps || times.length === 0) return null;
+
+    // Match by exact ISO hour prefix, e.g. "2026-04-17T09:00"
+    const targetPrefix = `${date}T${String(targetHour).padStart(2, "0")}:00`;
+    const idx = times.findIndex((t) => t.startsWith(targetPrefix));
+    if (idx === -1) return null;
+    const t = temps[idx];
+    return typeof t === "number" ? Math.round(t * 10) / 10 : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
@@ -363,6 +405,43 @@ function getRawFallbackTSS(actType: string, durationMin: number): number {
   if (t.includes("WALKING") || t.includes("HIKING") || t.includes("WALK")) return durationMin * 0.30;
   if (t.includes("YOGA") || t.includes("PILATES")) return durationMin * 0.15;
   return durationMin * 0.50; // generic cardio fallback
+}
+
+/**
+ * Extract power fields from a Strava activity (ride, virtual ride, etc.).
+ * Returns nulls across the board when the activity has no power data, which
+ * is the vast majority of non-ride activities. We write the result
+ * regardless — the columns default to null for activities without power.
+ *
+ * Strava fields (docs):
+ *   - average_watts: avg power across the activity (null if no power data)
+ *   - weighted_average_watts: normalized power (NP), only set on rides
+ *     with sufficient sample density
+ *   - max_watts: peak 1-second power
+ *   - device_watts: true = from a power meter, false = estimated by Strava
+ *     (estimated values should not drive FTP — we still store them but the
+ *     client can choose to ignore)
+ *   - kilojoules: total energy expenditure
+ */
+function extractPowerFields(act: Record<string, unknown>): {
+  average_watts: number | null;
+  normalized_power: number | null;
+  max_watts: number | null;
+  device_watts: boolean | null;
+  kilojoules: number | null;
+} {
+  const avg = (act["average_watts"] as number | null | undefined);
+  const np = (act["weighted_average_watts"] as number | null | undefined);
+  const mx = (act["max_watts"] as number | null | undefined);
+  const dev = (act["device_watts"] as boolean | null | undefined);
+  const kj = (act["kilojoules"] as number | null | undefined);
+  return {
+    average_watts:    avg != null && avg > 0 ? Math.round(avg * 10) / 10 : null,
+    normalized_power: np  != null && np  > 0 ? Math.round(np  * 10) / 10 : null,
+    max_watts:        mx  != null && mx  > 0 ? Math.round(mx) : null,
+    device_watts:     dev != null ? Boolean(dev) : null,
+    kilojoules:       kj  != null && kj  > 0 ? Math.round(kj * 10) / 10 : null,
+  };
 }
 
 /** Normalise activity_type to a clean sport label for the breakdown. */
@@ -650,26 +729,43 @@ Deno.serve(async (req) => {
     // avg_heartrate estimate for the remainder.
     // -----------------------------------------------------------------------
     if (mode === "backfill") {
-      const weeksBack: number = typeof body.weeks === "number" ? Math.min(body.weeks, 52) : 16;
+      // Cap at 156w (3y) so onboarding can scan far enough to pick up older PBs.
+      // STREAM_BUDGET=99 already limits HR-stream fetches to the most-recent 99,
+      // so older runs cost only best_efforts detail fetches (one per ≤ 300).
+      const weeksBack: number = typeof body.weeks === "number" ? Math.min(body.weeks, 156) : 16;
       const afterTs = Math.floor(Date.now() / 1000) - weeksBack * 7 * 86400;
 
-      // 1. Fetch full activity list from Strava (paginated, per_page=200)
+      // 1. Fetch full activity list from Strava (paginated, per_page=200).
+      // 429 mid-pagination is tolerable: we proceed with whatever pages we got
+      // and let the subsequent session fill the gap. Throwing 500 here forces a
+      // full reset on every reload and wastes user time.
       const allActivities: Array<Record<string, unknown>> = [];
       let page = 1;
+      let listTruncatedBy429 = false;
       while (true) {
-        const batch = await stravaGet(
-          `/athlete/activities?per_page=200&after=${afterTs}&page=${page}`,
-          accessToken,
-        ) as Array<Record<string, unknown>>;
-        if (!Array.isArray(batch) || batch.length === 0) break;
-        allActivities.push(...batch);
-        if (batch.length < 200) break;
-        page++;
+        try {
+          const batch = await stravaGet(
+            `/athlete/activities?per_page=200&after=${afterTs}&page=${page}`,
+            accessToken,
+          ) as Array<Record<string, unknown>>;
+          if (!Array.isArray(batch) || batch.length === 0) break;
+          allActivities.push(...batch);
+          if (batch.length < 200) break;
+          page++;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("429")) {
+            console.warn(`[Backfill] list fetch 429 on page ${page}, proceeding with ${allActivities.length} activities`);
+            listTruncatedBy429 = true;
+            break;
+          }
+          throw err;
+        }
       }
 
       if (allActivities.length === 0) {
         return new Response(
-          JSON.stringify({ processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false }),
+          JSON.stringify({ processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, runs: [] }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -678,7 +774,7 @@ Deno.serve(async (req) => {
       const allGarminIds = allActivities.map((a) => `strava-${a.id as number}`);
       const { data: cachedRows } = await supabase
         .from("garmin_activities")
-        .select("garmin_id, hr_zones, itrimp, calories")
+        .select("garmin_id, hr_zones, itrimp, calories, hr_drift, ambient_temp_c, activity_type, best_efforts")
         .eq("user_id", user.id)
         .in("garmin_id", allGarminIds);
 
@@ -686,15 +782,29 @@ Deno.serve(async (req) => {
       const cachedBasic = new Set<string>();
       const cachedWithITrimp = new Set<string>();
       const cachedCalories = new Map<string, number>();
+      const cachedNeedsDriftHeal = new Set<string>(); // cached-with-zones running activities with null hr_drift
+      const cachedNeedsTempOnly = new Set<string>();  // drift already present but ambient_temp_c is null
+      const cachedWithBestEfforts = new Set<string>(); // RUNNING activities already carrying best_efforts — skip detail re-fetch
       for (const r of (cachedRows ?? [])) {
         if (r.calories != null && r.calories > 0) cachedCalories.set(r.garmin_id, r.calories);
+        if (r.best_efforts != null) cachedWithBestEfforts.add(r.garmin_id);
         // Only treat as "fully cached" if hr_zones has actual non-zero zone data.
         // Activities stored with all-zero zones ({z1:0,...}) had no HR data at first sync
         // and should be re-attempted so they can get iTRIMP from avg_heartrate.
         const zones = r.hr_zones as { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
         const hasRealZones = zones && (zones.z1 + zones.z2 + zones.z3 + zones.z4 + zones.z5 > 0);
-        if (hasRealZones) cachedWithZones.add(r.garmin_id);
-        else cachedBasic.add(r.garmin_id);
+        if (hasRealZones) {
+          cachedWithZones.add(r.garmin_id);
+          const isDriftType = DRIFT_TYPES.has(r.activity_type as string);
+          const isNotTreadmill = r.activity_type !== "TREADMILL_RUNNING";
+          if (r.hr_drift == null && isDriftType) {
+            cachedNeedsDriftHeal.add(r.garmin_id);
+          } else if (r.hr_drift != null && r.ambient_temp_c == null && isDriftType && isNotTreadmill) {
+            cachedNeedsTempOnly.add(r.garmin_id);
+          }
+        } else {
+          cachedBasic.add(r.garmin_id);
+        }
         if (r.itrimp) cachedWithITrimp.add(r.garmin_id);
       }
 
@@ -795,6 +905,7 @@ Deno.serve(async (req) => {
         let kmSplits: number[] = [];
         let hrDrift: number | null = null;
         let avgPace: number | null = null;
+        let bestEfforts: unknown = null;
         // Use moving_time for pace (matches Strava's displayed pace which excludes pauses)
         const paceTimeSec = (movingTimeSec && movingTimeSec > 0) ? movingTimeSec : durSec;
         if (distM && distM > 0 && paceTimeSec > 0) avgPace = Math.round((paceTimeSec / distM) * 1000);
@@ -837,6 +948,11 @@ Deno.serve(async (req) => {
                   kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
                 }
               }
+              // Capture best_efforts for running activities only (Strava only emits these on runs).
+              // Stored as-is so the client can pick its own canonical distances later.
+              if (isRun && Array.isArray(detail.best_efforts)) {
+                bestEfforts = detail.best_efforts;
+              }
             } catch { /* ignore */ }
           }
         } catch {
@@ -845,7 +961,18 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Ambient temperature — only fetch when drift was computed (steady-state run)
+        // and Strava returned a start location. Outdoor types only.
+        let ambientTempC: number | null = null;
+        if (hrDrift != null && actType !== "TREADMILL_RUNNING") {
+          const latlng = act["start_latlng"] as [number, number] | null | undefined;
+          if (latlng && latlng.length === 2 && latlng[0] !== 0) {
+            ambientTempC = await fetchAmbientTemp(act.start_date as string, latlng[0], latlng[1]);
+          }
+        }
+
         const bfCalories = (act["calories"] as number | null) ?? cachedCalories.get(garminId) ?? null;
+        const powerFields = extractPowerFields(act);
         const { error: upsertErr } = await supabase.from("garmin_activities").upsert({
           user_id: user.id, garmin_id: garminId, source: "strava",
           activity_type: actType, start_time: act.start_date as string,
@@ -862,8 +989,11 @@ Deno.serve(async (req) => {
           hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
           km_splits: kmSplits.length > 0 ? kmSplits : null,
           hr_drift: hrDrift,
+          ambient_temp_c: ambientTempC,
           activity_name: actName,
           elevation_gain_m: elevGainM,
+          best_efforts: bestEfforts,
+          ...powerFields,
         }, { onConflict: "garmin_id" });
         if (upsertErr) {
           console.error(`[Backfill] HR-stream upsert failed for ${garminId}:`, upsertErr.message);
@@ -872,6 +1002,141 @@ Deno.serve(async (req) => {
           withHRStream++;
         }
       }
+
+      // 5c. Fetch best_efforts for running activities that still lack them.
+      // Onboarding-critical: the review page auto-fills 5K / 10K / half / marathon
+      // PBs from this data. Strava's rate limit is ~100 req / 15 min.
+      //
+      // Strategy: bucket candidates by distance band, then rank within each
+      // band by pace (ascending). A PB for distance D can only live in a run
+      // ≥D long, but in practice the fastest 5K isn't in your 30 km long run
+      // — it's in your standalone 5K race. Pace-sort per band surfaces those.
+      //
+      // Budget per band gives first-pass coverage across all four PB distances
+      // even under rate-limit pressure. Remaining activities roll in on
+      // subsequent launches via the "needs best_efforts" filter.
+      const runningUnfetched = sorted.filter((act) => {
+        const gid = `strava-${act.id as number}`;
+        if (cachedWithBestEfforts.has(gid)) return false;
+        const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
+        return actType === "RUNNING";
+      });
+
+      function paceSecPerKm(act: Record<string, unknown>): number {
+        const dist = (act.distance as number) ?? 0;
+        const mov = (act.moving_time as number) ?? (act.elapsed_time as number) ?? 0;
+        if (dist <= 0 || mov <= 0) return Infinity;
+        return (mov / dist) * 1000;
+      }
+
+      function pickBand(minM: number, maxM: number, take: number): Array<Record<string, unknown>> {
+        return runningUnfetched
+          .filter((a) => {
+            const d = (a.distance as number) ?? 0;
+            return d >= minM && d < maxM;
+          })
+          .sort((a, b) => paceSecPerKm(a) - paceSecPerKm(b))
+          .slice(0, take);
+      }
+
+      // Take fastest-per-band; marathons grab all (rare & always a candidate).
+      const bandSelections = [
+        ...pickBand(4000,  8000,  12), // 5K PB lives in runs ~4–8 km
+        ...pickBand(8000,  15000, 12), // 10K PB
+        ...pickBand(18000, 28000, 12), // Half PB
+        ...pickBand(40000, Infinity, 8), // Marathon PB
+      ];
+      // Dedupe (an activity only falls in one band anyway, but defensive).
+      const seen = new Set<number>();
+      const bestEffortsCandidates = bandSelections.filter((a) => {
+        const id = a.id as number;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      let bestEffortsHealed = 0;
+      for (const act of bestEffortsCandidates) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        try {
+          const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+          const be = Array.isArray(detail.best_efforts) ? detail.best_efforts : null;
+          // Update with the array when present, or an empty array when the run truly has none —
+          // empty `[]` still satisfies `best_efforts IS NOT NULL` so we don't re-fetch next time.
+          const payload = be ?? [];
+          const { error: beErr } = await supabase.from("garmin_activities").update({ best_efforts: payload })
+            .eq("garmin_id", garminId).eq("user_id", user.id);
+          if (beErr) {
+            console.warn(`[Backfill] best_efforts update failed for ${garminId}:`, beErr.message);
+          } else {
+            bestEffortsHealed++;
+          }
+        } catch {
+          break; // stop on rate limit / network error
+        }
+      }
+      if (bestEffortsHealed > 0) console.log(`[Backfill] Fetched best_efforts for ${bestEffortsHealed} running activities`);
+
+      // 6b. Heal hr_drift on cached-with-zones running activities that pre-date the column.
+      // Budget: 20 per run to stay well under Strava's rate limits (we already spent up to
+      // STREAM_BUDGET=99 on needFullStream). Prioritise most-recent first so the durability
+      // chart fills in from the present backwards. Also fetches ambient_temp_c alongside.
+      const DRIFT_HEAL_BUDGET = 20;
+      const driftHealCandidates = sorted
+        .filter((act) => cachedNeedsDriftHeal.has(`strava-${act.id as number}`))
+        .slice(0, DRIFT_HEAL_BUDGET);
+      let driftHealed = 0;
+      for (const act of driftHealCandidates) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        try {
+          const streamData = await stravaGet(
+            `/activities/${stravaId}/streams?keys=heartrate,time&key_by_type=true`,
+            accessToken,
+          ) as Record<string, { data: number[] }>;
+          const hrData = streamData?.heartrate?.data;
+          const timeData = streamData?.time?.data;
+          if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
+            const drift = calculateHRDrift(hrData, timeData);
+            if (drift != null) {
+              const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
+              let ambientTempC: number | null = null;
+              if (actType !== "TREADMILL_RUNNING") {
+                const latlng = act["start_latlng"] as [number, number] | null | undefined;
+                if (latlng && latlng.length === 2 && latlng[0] !== 0) {
+                  ambientTempC = await fetchAmbientTemp(act.start_date as string, latlng[0], latlng[1]);
+                }
+              }
+              await supabase.from("garmin_activities").update({ hr_drift: drift, ambient_temp_c: ambientTempC })
+                .eq("garmin_id", garminId).eq("user_id", user.id);
+              driftHealed++;
+            }
+          }
+        } catch {
+          break; // stop on rate limit
+        }
+      }
+      if (driftHealed > 0) console.log(`[Backfill] Healed hr_drift for ${driftHealed} cached running activities`);
+
+      // 6c. Heal ambient_temp_c for rows that already have drift but pre-date the temp column.
+      // No HR stream fetch needed — only the weather API call, which is free (Open-Meteo).
+      const TEMP_HEAL_BUDGET = 30;
+      const tempHealCandidates = sorted
+        .filter((act) => cachedNeedsTempOnly.has(`strava-${act.id as number}`))
+        .slice(0, TEMP_HEAL_BUDGET);
+      let tempHealed = 0;
+      for (const act of tempHealCandidates) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        const latlng = act["start_latlng"] as [number, number] | null | undefined;
+        if (!latlng || latlng.length !== 2 || latlng[0] === 0) continue;
+        const ambientTempC = await fetchAmbientTemp(act.start_date as string, latlng[0], latlng[1]);
+        if (ambientTempC == null) continue;
+        await supabase.from("garmin_activities").update({ ambient_temp_c: ambientTempC })
+          .eq("garmin_id", garminId).eq("user_id", user.id);
+        tempHealed++;
+      }
+      if (tempHealed > 0) console.log(`[Backfill] Healed ambient_temp_c for ${tempHealed} cached running activities`);
 
       // 7. Batch-upsert activities using avg HR only (no stream needed)
       const avgHRBatch: Record<string, unknown>[] = [];
@@ -907,6 +1172,7 @@ Deno.serve(async (req) => {
           hr_zones: null, km_splits: null,
           activity_name: actName,
           elevation_gain_m: (act["total_elevation_gain"] as number | null) ?? null,
+          ...extractPowerFields(act),
         });
         withAvgHR++;
       }
@@ -953,10 +1219,25 @@ Deno.serve(async (req) => {
       // Include per-week Strava breakdown in response so client can log it (server logs not visible in browser)
       const stravaWeeksObj: Record<string, number> = {};
       for (const [wk, count] of stravaWeekCounts.entries()) stravaWeeksObj[wk] = count;
+
+      // Compact per-activity run summary so the client can seed `computePredictionInputs`
+      // (Tanda 2011) immediately after onboarding, without a second DB round-trip.
+      // Only includes RUNNING-mapped activities; client applies its own 2 km / pace filters.
+      const runs = allActivities
+        .map((act: Record<string, unknown>) => ({
+          startTime: act.start_date as string,
+          distKm: ((act.distance as number | null) ?? 0) / 1000,
+          durSec: ((act.moving_time as number | null) ?? (act.elapsed_time as number | null) ?? 0),
+          activityType: mapStravaType((act.sport_type as string) || (act.type as string) || ""),
+          activityName: (act.name as string | null) ?? undefined,
+        }))
+        .filter((r) => r.activityType === "RUNNING" && r.distKm > 0 && r.durSec > 0);
+
       return new Response(
         JSON.stringify({
           processed: withHRStream + withAvgHR, withHRStream, withAvgHR, hasHRMonitor,
           stravaWeeks: stravaWeeksObj, totalStravaActivities: allActivities.length,
+          runs,
           _debug: {
             cachedWithZones: cachedWithZones.size, cachedBasic: cachedBasic.size, cachedWithITrimp: cachedWithITrimp.size,
             needFullStream: needFullStream.length, needAvgHR: needAvgHR.length,
@@ -1025,17 +1306,19 @@ Deno.serve(async (req) => {
     const garminIds = activities.map((a) => `strava-${a.id as number}`);
     const { data: cachedRows } = await supabase
       .from("garmin_activities")
-      .select("garmin_id, itrimp, hr_zones, km_splits, calories")
+      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c")
       .eq("user_id", user.id)
       .in("garmin_id", garminIds);
 
-    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null }>();
+    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null }>();
     for (const r of (cachedRows ?? [])) {
       cachedMap.set(r.garmin_id, {
         itrimp: r.itrimp ?? null,
         hr_zones: r.hr_zones ?? null,
         km_splits: r.km_splits ?? null,
         calories: r.calories ?? null,
+        hr_drift: r.hr_drift ?? null,
+        ambient_temp_c: r.ambient_temp_c ?? null,
       });
     }
 
@@ -1081,6 +1364,7 @@ Deno.serve(async (req) => {
       let hrZones: HRZones | null = null;
       let kmSplits: number[] = [];
       let hrDrift: number | null = null;
+      let ambientTempC: number | null = null;
       let avgPaceSecKm: number | null = null;
       let needsUpsert = false; // only write to DB when we have new stream data
 
@@ -1102,6 +1386,7 @@ Deno.serve(async (req) => {
         hrZones = cached.hr_zones;
         kmSplits = cached.km_splits ?? [];
         hrDrift = cached.hr_drift ?? null;
+        ambientTempC = cached.ambient_temp_c ?? null;
         // Heal: cached activity still missing calories — fetch detail endpoint once (capped at 10)
         if (calories == null && calHealCount < 10) {
           try {
@@ -1133,6 +1418,12 @@ Deno.serve(async (req) => {
             hrZones = calculateHRZones(hrData, timeData, maxHR);
             if (DRIFT_TYPES.has(activityType)) {
               hrDrift = calculateHRDrift(hrData, timeData);
+              if (hrDrift != null && activityType !== "TREADMILL_RUNNING") {
+                const latlng = act["start_latlng"] as [number, number] | null | undefined;
+                if (latlng && latlng.length === 2 && latlng[0] !== 0) {
+                  ambientTempC = await fetchAmbientTemp(startTime, latlng[0], latlng[1]);
+                }
+              }
             }
           } else if (avgHR && durationSec > 0) {
             iTrimp = calculateITrimpFromSummary(avgHR, durationSec, restingHR, maxHR, biologicalSex);
@@ -1183,6 +1474,7 @@ Deno.serve(async (req) => {
 
       // Heal hr_drift for activities cached before the column existed:
       // hr_zones is set but hr_drift is NULL. Re-fetch the HR stream once and patch DB.
+      // Also fetches ambient_temp_c alongside so heat correction applies to healed rows.
       if (cached?.hr_zones && cached.hr_drift == null && DRIFT_TYPES.has(activityType) && durationSec >= 1200) {
         try {
           const streamData = await stravaGet(
@@ -1194,8 +1486,14 @@ Deno.serve(async (req) => {
           if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
             hrDrift = calculateHRDrift(hrData, timeData);
             if (hrDrift != null) {
+              if (activityType !== "TREADMILL_RUNNING") {
+                const latlng = act["start_latlng"] as [number, number] | null | undefined;
+                if (latlng && latlng.length === 2 && latlng[0] !== 0) {
+                  ambientTempC = await fetchAmbientTemp(startTime, latlng[0], latlng[1]);
+                }
+              }
               void supabase.from("garmin_activities")
-                .update({ hr_drift: hrDrift })
+                .update({ hr_drift: hrDrift, ambient_temp_c: ambientTempC })
                 .eq("garmin_id", garminId).eq("user_id", user.id);
             }
           }
@@ -1223,8 +1521,10 @@ Deno.serve(async (req) => {
             hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
             km_splits: kmSplits.length > 0 ? kmSplits : null,
             hr_drift: hrDrift,
+            ambient_temp_c: ambientTempC,
             activity_name: activityName,
             elevation_gain_m: elevationGainM,
+            ...extractPowerFields(act),
           },
           { onConflict: "garmin_id" },
         );
@@ -1232,6 +1532,7 @@ Deno.serve(async (req) => {
         else console.log(`[Standalone] Upsert OK for ${garminId}`);
       }
 
+      const powerFields = extractPowerFields(act);
       rows.push({
         garmin_id: garminId,
         activity_type: activityType,
@@ -1249,8 +1550,14 @@ Deno.serve(async (req) => {
         hrZones: hrZones,
         kmSplits: kmSplits.length > 0 ? kmSplits : null,
         hrDrift: hrDrift,
+        ambientTempC: ambientTempC,
         polyline,
         elevationGainM,
+        averageWatts: powerFields.average_watts,
+        normalizedPowerW: powerFields.normalized_power,
+        maxWatts: powerFields.max_watts,
+        deviceWatts: powerFields.device_watts,
+        kilojoules: powerFields.kilojoules,
       });
     }
 

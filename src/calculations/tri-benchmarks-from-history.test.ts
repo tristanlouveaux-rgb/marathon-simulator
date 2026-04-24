@@ -157,6 +157,17 @@ describe('estimateFTPFromBikeActivities', () => {
     // Max is 270, × 0.95 = 256.5 → rounds to 257
     expect(est.ftpWatts).toBe(257);
   });
+
+  it('lights up when power flows through GarminActual-shaped rows from sync', () => {
+    // Simulates what stravaSync patches onto `wk.garminActuals[id]` — the
+    // derivation should read the same fields and produce an FTP estimate.
+    const actuals = [
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 235, averageWatts: 210, deviceWatts: true } as PoweredActivity,
+    ];
+    const est = estimateFTPFromBikeActivities(actuals);
+    expect(est.derivedFromPower).toBe(true);
+    expect(est.ftpWatts).toBe(223);  // 235 × 0.95
+  });
 });
 
 // ─── Per-discipline CTL ─────────────────────────────────────────────────────

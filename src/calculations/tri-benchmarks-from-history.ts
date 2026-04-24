@@ -14,12 +14,12 @@
  *   - CSS estimate from swim activity pace
  *   - Per-discipline CTL baseline from historic activity TSS
  *
- * **What's scaffolded but returns undefined**:
- *   - FTP estimate from bike power curve — requires average_watts /
- *     normalized_power in the garmin_activities schema, which the edge
- *     function doesn't persist yet. Feature-flagged via the presence of
- *     power fields on the activity; when the data lands the function
- *     will produce an estimate automatically.
+ * **What works when the user rides with a power meter**:
+ *   - FTP estimate from best normalised power (NP) across all eligible
+ *     rides, via Allen & Coggan's 0.95 × 20-min NP rule. The edge
+ *     function persists `average_watts`, `normalized_power`, `max_watts`
+ *     and the `device_watts` flag onto each Strava ride as of the
+ *     2026-04-24 schema migration.
  */
 
 import type { GarminActual } from '@/types/state';
@@ -128,8 +128,9 @@ export interface PoweredActivity {
  * (Allen & Coggan 2010).
  *
  * Returns `ftpWatts: undefined` and `derivedFromPower: false` when no
- * activities carry power data — the current state of the schema. Once
- * `average_watts` lands on `garmin_activities`, this function lights up.
+ * activities carry power data — typical for beginners or athletes who
+ * don't have a power meter. The edge function persists power data on all
+ * Strava rides as of 2026-04-24.
  */
 export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): FtpEstimate {
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');

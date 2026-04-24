@@ -181,6 +181,12 @@ export interface GarminPendingItem {
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
   polyline?: string | null;
   kmSplits?: number[] | null;
+  /** Ride power fields (null on non-rides / rides without a power meter). */
+  averageWatts?: number | null;
+  normalizedPowerW?: number | null;  // Strava weighted_average_watts ≈ NP
+  maxWatts?: number | null;
+  deviceWatts?: boolean | null;       // true = real power meter, false = Strava estimate
+  kilojoules?: number | null;
 }
 
 /** Actual data from a matched Garmin activity */
@@ -239,6 +245,13 @@ export interface GarminActual {
   /** User-set sport override. When present, supersedes activityType-derived sport for load/impact/leg-load
    *  calculations. Set via the "Change sport" control on the activity detail page. */
   manualSport?: import('./activities').SportKey;
+  /** Ride power fields. Null on non-rides, on rides without a power meter,
+   * and on rows persisted before the power columns landed. */
+  averageWatts?: number | null;
+  normalizedPowerW?: number | null;
+  maxWatts?: number | null;
+  deviceWatts?: boolean | null;
+  kilojoules?: number | null;
 }
 
 /** Per-lap split from Garmin activity details */

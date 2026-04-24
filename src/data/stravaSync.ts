@@ -17,6 +17,19 @@ import { processPendingCrossTraining, resetPendingModalGuard } from './activityS
 import { mergeTimingMods } from '@/cross-training/timing-check';
 
 /**
+ * Derive athlete tier from weekly-scale CTL baseline.
+ * Thresholds map TrainingPeaks daily tiers (20/40/65/90) ×7 for our weekly EMA.
+ */
+export type AthleteTier = 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
+export function deriveAthleteTier(ctlBaseline: number): AthleteTier {
+  return ctlBaseline < 140 ? 'beginner'
+    : ctlBaseline < 280 ? 'recreational'
+    : ctlBaseline < 455 ? 'trained'
+    : ctlBaseline < 630 ? 'performance'
+    :                     'high_volume';
+}
+
+/**
  * Fetch recent Strava activities and match them to the current week's plan.
  * Returns the number of activities processed.
  */
@@ -56,7 +69,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; elevationGainM?: number | null })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
         if (!wk.garminMatched) continue;
@@ -88,9 +101,16 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           if (splitsChanged) { actual.kmSplits = row.kmSplits; extraPatched = true; }
         }
         if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
+        if (row.ambientTempC != null && actual.ambientTempC == null) { actual.ambientTempC = row.ambientTempC; extraPatched = true; }
         if (row.elevationGainM != null && actual.elevationGainM == null) { actual.elevationGainM = row.elevationGainM; extraPatched = true; }
         if (row.calories != null && actual.calories == null) { actual.calories = row.calories; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
+        // Power fields — patch whenever the DB has them and the actual doesn't.
+        if (row.averageWatts != null && actual.averageWatts == null) { actual.averageWatts = row.averageWatts; extraPatched = true; }
+        if (row.normalizedPowerW != null && actual.normalizedPowerW == null) { actual.normalizedPowerW = row.normalizedPowerW; extraPatched = true; }
+        if (row.maxWatts != null && actual.maxWatts == null) { actual.maxWatts = row.maxWatts; extraPatched = true; }
+        if (row.deviceWatts != null && actual.deviceWatts == null) { actual.deviceWatts = row.deviceWatts; extraPatched = true; }
+        if (row.kilojoules != null && actual.kilojoules == null) { actual.kilojoules = row.kilojoules; extraPatched = true; }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
         // Heal avgPaceSecKm: prefer DB moving-time pace over elapsed-time computation
         if (row.avg_pace_sec_km != null && actual.avgPaceSecKm !== row.avg_pace_sec_km) {
@@ -303,16 +323,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       ? Math.round(recentKm.reduce((a, b) => a + b, 0) / recentKm.length * 10) / 10
       : undefined;
 
-    // Derive athlete tier from CTL baseline (spec §2)
-    const ctlForTier = s.ctlBaseline ?? 0;
-    // Weekly-scale thresholds (internal CTL uses weekly EMA → ÷7 = TrainingPeaks daily equivalent).
-    // These weekly values correspond to TP CTL tiers: beginner<20, recreational<40, trained<65,
-    // performance<90, elite≥90 — multiplied by 7 to match our weekly accumulation.
-    s.athleteTier = ctlForTier < 140 ? 'beginner'
-      : ctlForTier < 280 ? 'recreational'
-      : ctlForTier < 455 ? 'trained'
-      : ctlForTier < 630 ? 'performance'
-      :                    'high_volume';
+    s.athleteTier = deriveAthleteTier(s.ctlBaseline ?? 0);
 
     saveState();
     console.log(`[StravaHistory] ${rows.length} weeks loaded — CTL baseline ${s.ctlBaseline} (Signal A), Signal B baseline ${s.signalBBaseline}, avg km ${s.detectedWeeklyKm}`);
@@ -526,6 +537,14 @@ export interface BackfillResult {
   hasHRMonitor: boolean;
   stravaWeeks?: Record<string, number>;
   totalStravaActivities?: number;
+  /** Per-activity run summary — feeds `computePredictionInputs` (Tanda) after onboarding. */
+  runs?: Array<{
+    startTime: string;
+    distKm: number;
+    durSec: number;
+    activityType: string;
+    activityName?: string;
+  }>;
   _debug?: {
     cachedWithZones: number;
     cachedBasic: number;
@@ -590,10 +609,30 @@ export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult>
       s.extendedHistoryTSS = completedHistRows.map((r) => r.totalTSS);
       s.extendedHistoryKm = completedHistRows.map((r) => r.runningKm);
       s.extendedHistoryZones = completedHistRows.map((r) => ({ base: r.zoneBase, threshold: r.zoneThreshold, intensity: r.zoneIntensity }));
-      // historicWeeklyTSS stays as the last 8 completed entries for the default "8w" view
-      s.historicWeeklyTSS = completedHistRows.slice(-8).map((r) => r.totalTSS);
-      s.historicWeeklyKm = completedHistRows.slice(-8).map((r) => r.runningKm);
-      s.historicWeeklyZones = completedHistRows.slice(-8).map((r) => ({ base: r.zoneBase, threshold: r.zoneThreshold, intensity: r.zoneIntensity }));
+      // historicWeekly* stays as the last 8 completed entries for the default "8w" view.
+      // All four arrays must be kept in lockstep — consumers index them by the same week.
+      const last8 = completedHistRows.slice(-8);
+      s.historicWeeklyTSS = last8.map((r) => r.totalTSS);
+      s.historicWeeklyRawTSS = last8.map((r) => r.rawTSS ?? r.totalTSS);
+      s.historicWeeklyKm = last8.map((r) => r.runningKm);
+      s.historicWeeklyZones = last8.map((r) => ({ base: r.zoneBase, threshold: r.zoneThreshold, intensity: r.zoneIntensity }));
+      saveState();
+    }
+
+    // Stash per-run summary so refreshBlendedFitness can seed Tanda immediately.
+    // garminActuals won't be populated until the first standalone sync fills in
+    // matched rows — this gives us a full 16-week pool for K and P on day one.
+    if (result?.runs && result.runs.length > 0) {
+      const s = getMutableState();
+      s.onboardingRunHistory = result.runs;
+      // Refresh the blended prediction now that per-run inputs are available.
+      try {
+        const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
+        const ok = refreshBlendedFitness(s);
+        if (ok) console.log(`[StravaBackfill] Blended fitness refreshed: vdot=${s.blendedEffectiveVdot?.toFixed(1)}, raceSec=${s.blendedRaceTimeSec?.toFixed(0)}`);
+      } catch (e) {
+        console.warn('[StravaBackfill] refreshBlendedFitness failed:', e);
+      }
       saveState();
     }
 

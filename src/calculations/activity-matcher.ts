@@ -12,6 +12,7 @@ import { calculateZones, computeHREffortScore, type HRProfile } from './heart-ra
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem } from '@/types';
 import { log } from '@/ui/renderer';
 import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
+import { getEffectiveVdot } from './effective-vdot';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -31,9 +32,16 @@ export interface GarminActivityRow {
   iTrimp?: number | null;
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
   hrDrift?: number | null;
+  ambientTempC?: number | null;
   polyline?: string | null;
   kmSplits?: number[] | null;
   elevationGainM?: number | null;
+  /** Ride power fields. Present on bike activities synced after 2026-04-24. */
+  averageWatts?: number | null;
+  normalizedPowerW?: number | null;
+  maxWatts?: number | null;
+  deviceWatts?: boolean | null;
+  kilojoules?: number | null;
 }
 
 /** Map Garmin activity type to app activity type */
@@ -272,12 +280,11 @@ export function deriveRPE(
  * @param weekIdx  1-based week index to generate for (may differ from s.w for historic weeks)
  */
 function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week, weekIdx: number): Workout[] {
-  // Compute currentVDOT at the given week (same as renderer)
-  let wg = 0;
-  for (let i = 0; i < weekIdx - 1; i++) {
-    wg += s.wks[i].wkGain;
-  }
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  // Track-only users have no plan — every matched activity falls through to
+  // the adhoc path, and returning an empty list avoids passing stale defaults
+  // into generateWeekWorkouts.
+  if (s.trackOnly) return [];
+  const currentVDOT = getEffectiveVdot(s);
 
   const previousSkips = weekIdx > 1 ? s.wks[weekIdx - 2].skip : [];
   const injuryState = (s as any).injuryState || null;
@@ -597,6 +604,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         actual.hrDrift = row.hrDrift;
         enrichChanged = true;
       }
+      // Backfill ambientTempC from DB row
+      if (actual.ambientTempC == null && row.ambientTempC != null) {
+        actual.ambientTempC = row.ambientTempC;
+        enrichChanged = true;
+      }
       break;
     }
   }
@@ -781,6 +793,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           hrEffortScore: getHREffort(row.avg_hr, match.matchedWorkout?.t, s),
           paceAdherence: getPaceAdherence(row.avg_pace_sec_km, match.matchedWorkout?.t, s),
           hrDrift: row.hrDrift ?? null,
+          ambientTempC: row.ambientTempC ?? null,
           plannedDistanceKm: match.matchedWorkout?.d ? (parseDistanceKm(match.matchedWorkout.d) || null) : null,
           elevationGainM: row.elevationGainM ?? null,
         };
@@ -1001,6 +1014,7 @@ export function mapAppTypeToSport(appType: string): string {
     case 'ride': return 'cycling';
     case 'swim': return 'swimming';
     case 'walk': return 'walking';
+    case 'cardio': return 'generic_sport';
     case 'other': return 'generic_sport';
     default: return appType;
   }
