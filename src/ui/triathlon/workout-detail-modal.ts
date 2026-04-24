@@ -8,8 +8,7 @@
  */
 
 import type { Workout } from '@/types/state';
-import type { Discipline } from '@/types/triathlon';
-import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON } from './colours';
+import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
@@ -18,7 +17,10 @@ export function openTriWorkoutDetail(workout: Workout): void {
   const existing = document.getElementById('tri-workout-detail-overlay');
   if (existing) existing.remove();
 
-  const discipline: Discipline = workout.discipline ?? 'run';
+  const discipline: BadgeKind = workout.discipline
+    ? workout.discipline
+    : (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n)) ? 'strength'
+    : 'run';
   const c = DISCIPLINE_COLOURS[discipline];
   const label = DISCIPLINE_LABEL[discipline];
   const rpe = workout.rpe ?? workout.r ?? 5;
@@ -242,7 +244,7 @@ function renderBlock(b: WorkoutBlock, accent: string): string {
 // Target hints (CSS / FTP / HR — whichever applies)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderTargetHints(w: Workout, discipline: Discipline): string {
+function renderTargetHints(w: Workout, discipline: BadgeKind): string {
   const notes: string[] = [];
   if (discipline === 'swim') {
     notes.push('Rest intervals are between reps. If fatigue spikes, add 10s to rest before dropping reps.');
@@ -250,6 +252,8 @@ function renderTargetHints(w: Workout, discipline: Discipline): string {
     notes.push('Targets are steady-state — ease into them over the first 30 seconds of each effort.');
   } else if (discipline === 'run') {
     notes.push('Form cue: quick cadence (~180), relaxed arms, midfoot landing.');
+  } else if (discipline === 'strength') {
+    notes.push('Keep loads moderate. Controlled eccentrics. Never train to failure in-season.');
   }
   if (notes.length === 0) return '';
   return `

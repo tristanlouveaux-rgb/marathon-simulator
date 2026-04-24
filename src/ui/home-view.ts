@@ -2502,11 +2502,14 @@ function buildTodayWorkoutTriathlon(s: SimulatorState): string {
 }
 
 function buildTriathlonHeroCard(w: any): string {
-  const discipline = w.discipline ?? 'run';
-  const accent = discipline === 'swim' ? '#5b8a8a' : discipline === 'bike' ? '#c08460' : '#7a845c';
-  const badgeBg = discipline === 'swim' ? 'rgba(91,138,138,0.14)' : discipline === 'bike' ? 'rgba(192,132,96,0.14)' : 'rgba(122,132,92,0.14)';
-  const badgeText = discipline === 'swim' ? '#3d6666' : discipline === 'bike' ? '#9c6245' : '#4f5a3b';
-  const label = discipline === 'swim' ? 'Swim' : discipline === 'bike' ? 'Bike' : 'Run';
+  const kind: 'swim' | 'bike' | 'run' | 'strength' =
+    w.discipline ? w.discipline
+    : (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n || '')) ? 'strength'
+    : 'run';
+  const accent = kind === 'swim' ? '#5b8a8a' : kind === 'bike' ? '#c08460' : kind === 'run' ? '#7a845c' : '#6b6b76';
+  const badgeBg = kind === 'swim' ? 'rgba(91,138,138,0.14)' : kind === 'bike' ? 'rgba(192,132,96,0.14)' : kind === 'run' ? 'rgba(122,132,92,0.14)' : 'rgba(100,100,110,0.14)';
+  const badgeText = kind === 'swim' ? '#3d6666' : kind === 'bike' ? '#9c6245' : kind === 'run' ? '#4f5a3b' : '#4a4a55';
+  const label = kind === 'swim' ? 'Swim' : kind === 'bike' ? 'Bike' : kind === 'run' ? 'Run' : 'Strength';
   const rpe = w.rpe ?? w.r ?? 5;
   const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
   const desc = humaniseTriDesc(w.d || '');

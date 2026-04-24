@@ -123,7 +123,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
               <span class="tri-value" id="tri-hours-value">${hoursPerWeek}h</span>
             </div>
             <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="tri-slider" id="tri-hours">
-            <p class="tri-hint">This is your peak-week target. Early and recovery weeks will be lighter. Range ${hoursRange.min}–${hoursRange.max}h is sized to your distance.</p>
+            <p class="tri-hint" id="tri-hours-hint">${hoursCommentary(distance, hoursPerWeek)}</p>
 
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
               <div class="tri-row" style="margin-bottom:6px">
@@ -271,6 +271,8 @@ function wireEventHandlers(): void {
     const h = Number(hoursInput.value);
     if (hoursValue) hoursValue.textContent = `${h}h`;
     updateOnboarding({ triTimeAvailableHoursPerWeek: h });
+    const hint = document.getElementById('tri-hours-hint');
+    if (hint) hint.innerHTML = hoursCommentary(getCurrentOnboarding().triDistance ?? '70.3', h);
     // Clamp weekday slider max to new total, scale weekday hours proportionally.
     const weekdaySlider = document.getElementById('tri-weekday') as HTMLInputElement | null;
     if (weekdaySlider) {
@@ -454,6 +456,28 @@ function onSplitSliderChange(changed: HTMLInputElement): void {
 
   updateOnboarding({ triVolumeSplit: split });
   refreshSplitCells();
+}
+
+/**
+ * Commentary shown under the hours slider. Calibrated against coaching
+ * consensus (Friel, Fitzgerald): 70.3 expects ~8–12h at peak for a
+ * competitive finish, IM ~12–18h. Anything below that is "just finish"
+ * territory; at the bottom edge the user is deliberately under-training
+ * and should know.
+ */
+function hoursCommentary(distance: TriathlonDistance, hours: number): string {
+  const base = `This is your peak-week target. Early and recovery weeks will be lighter.`;
+  if (distance === '70.3') {
+    if (hours < 7) return `${base}<br><span style="color:#c06a50">Aggressive for 70.3 — this is a "just finish" plan. 8–12h/week at peak is the typical competitive range.</span>`;
+    if (hours < 10) return `${base}<br>Realistic for a first 70.3 or a time-constrained athlete.`;
+    if (hours < 14) return `${base}<br>Competitive intermediate range. Good balance of volume and recovery.`;
+    return `${base}<br>Advanced / podium-target volume. Make sure recovery is matched.`;
+  }
+  // Ironman
+  if (hours < 10) return `${base}<br><span style="color:#c06a50">Very aggressive for full Ironman. Most first-timers need 12h+ at peak to avoid late-race trouble.</span>`;
+  if (hours < 14) return `${base}<br>Realistic for a first Ironman, especially with a solid training background.`;
+  if (hours < 20) return `${base}<br>Competitive age-grouper range.`;
+  return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
 }
 
 function updateWeekdayLabel(wd: number, total: number): void {

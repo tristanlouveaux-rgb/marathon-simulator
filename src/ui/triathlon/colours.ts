@@ -7,7 +7,12 @@
 
 import type { Discipline } from '@/types/triathlon';
 
-export const DISCIPLINE_COLOURS: Record<Discipline, {
+/** Keys for all badge types shown on tri workout cards. Strength sits
+ * alongside the three tri disciplines so gym workouts render with their
+ * own badge rather than falling back to 'run'. */
+export type BadgeKind = Discipline | 'strength';
+
+export const DISCIPLINE_COLOURS: Record<BadgeKind, {
   bg: string;         // Faint card tint
   border: string;     // Discipline-coloured border
   badge: string;      // Badge background
@@ -35,16 +40,25 @@ export const DISCIPLINE_COLOURS: Record<Discipline, {
     badgeText: '#4f5a3b',
     accent: '#7a845c',
   },
+  strength: {
+    bg: 'rgba(100, 100, 110, 0.06)',
+    border: 'rgba(100, 100, 110, 0.22)',
+    badge: 'rgba(100, 100, 110, 0.14)',
+    badgeText: '#4a4a55',
+    accent: '#6b6b76',
+  },
 };
 
-export const DISCIPLINE_LABEL: Record<Discipline, string> = {
+export const DISCIPLINE_LABEL: Record<BadgeKind, string> = {
   swim: 'Swim',
   bike: 'Bike',
   run: 'Run',
+  strength: 'Strength',
 };
 
-export const DISCIPLINE_ICON: Record<Discipline, string> = {
+export const DISCIPLINE_ICON: Record<BadgeKind, string> = {
   swim: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M2.5 17c1.5-1 3-1 4.5 0s3 1 4.5 0 3-1 4.5 0 3 1 4.5 0"/><path d="M2.5 13c1.5-1 3-1 4.5 0s3 1 4.5 0 3-1 4.5 0 3 1 4.5 0"/></svg>`,
   bike: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M6 17l4-7h5l3 7M10 10l2-5h3"/></svg>`,
   run: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><circle cx="15" cy="4.5" r="1.6"/><path d="M7 11l3.5-3 3 1.5 2.5 3 2.5 0.5M10.5 8.5l-3 4 3 2 0.5 4.5"/></svg>`,
+  strength: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><rect x="3" y="9" width="2.5" height="6" rx="0.5"/><rect x="18.5" y="9" width="2.5" height="6" rx="0.5"/><rect x="6" y="7" width="2.5" height="10" rx="0.5"/><rect x="15.5" y="7" width="2.5" height="10" rx="0.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg>`,
 };

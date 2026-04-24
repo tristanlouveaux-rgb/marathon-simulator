@@ -17,7 +17,9 @@ export type { CalculationResult } from '@/state/initialization';
  */
 export function renderInitializing(container: HTMLElement, state: OnboardingState): void {
   container.innerHTML = `
-    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
+    <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
+      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
       ${renderProgressIndicator(7, 8)}
 
       <div style="max-width:480px;width:100%;text-align:center">
@@ -66,6 +68,7 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
           </div>
         </div>
       </div>
+      </div>
     </div>
   `;
 
@@ -86,7 +89,24 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
 
 async function runInitialization(state: OnboardingState): Promise<void> {
   // Mid-plan: user arrived via "Edit Settings". Keep existing plan — just advance.
-  if (getState().wks.length > 0) {
+  // Exception: if the user just flipped modes (plan ↔ trackOnly), the runtime
+  // `s.trackOnly` still reflects the old mode but `onboarding.trackOnly` is the
+  // new intent. Run the full init so state is rewritten cleanly.
+  const rt = getState();
+  const modeChanged = !!state.trackOnly !== !!rt.trackOnly;
+  // Triathlon settings changes (hours, weekday split, distance, skill, FTP, CSS,
+  // gym) must trigger a full reinit so the plan actually reflects what the
+  // user just set. Otherwise the wizard's "Edit settings" flow silently keeps
+  // the old plan.
+  const triSettingsChanged = state.trainingMode === 'triathlon' && (
+    (state.triTimeAvailableHoursPerWeek ?? null) !== (rt.triConfig?.timeAvailableHoursPerWeek ?? null) ||
+    (state.triWeekdayHoursPerWeek ?? null) !== (rt.triConfig?.weekdayHoursPerWeek ?? null) ||
+    state.triDistance !== rt.triConfig?.distance ||
+    JSON.stringify(state.triSkillRating ?? null) !== JSON.stringify(rt.triConfig?.skillRating ?? null) ||
+    JSON.stringify(state.triVolumeSplit ?? null) !== JSON.stringify(rt.triConfig?.volumeSplit ?? null) ||
+    (state.gymSessionsPerWeek ?? 0) !== (rt.gs ?? 0)
+  );
+  if (rt.wks.length > 0 && !modeChanged && !triSettingsChanged) {
     nextStep();
     return;
   }

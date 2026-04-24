@@ -6,11 +6,10 @@
  */
 
 import type { Workout } from '@/types/state';
-import type { Discipline } from '@/types/triathlon';
-import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON } from './colours';
+import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 
 export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean } = {}): string {
-  const discipline: Discipline = w.discipline ?? 'run';
+  const discipline: BadgeKind = badgeKindFor(w);
   const c = DISCIPLINE_COLOURS[discipline];
   const label = DISCIPLINE_LABEL[discipline];
   const rpe = w.rpe ?? w.r ?? 5;
@@ -63,6 +62,14 @@ function escapeHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Map a workout to the right badge — gym/strength shows its own, tri
+ * disciplines keep theirs, legacy unlabelled workouts fall back to run. */
+function badgeKindFor(w: Workout): BadgeKind {
+  if (w.discipline) return w.discipline;
+  if (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n)) return 'strength';
+  return 'run';
+}
+
 /**
  * Replace training shorthand with readable text, per user feedback:
  *   WU → Warm up
@@ -82,7 +89,7 @@ function humaniseDesc(desc: string): string {
  * Primary duration label for the card chip. Swim in metres; bike in hours;
  * run in distance + hours; everything else falls back to time.
  */
-function computeDurationLabel(w: Workout, discipline: Discipline): string {
+function computeDurationLabel(w: Workout, discipline: BadgeKind): string {
   const mins = extractPrimaryMinutes(w);
   const distM = extractPrimaryMetres(w);
 

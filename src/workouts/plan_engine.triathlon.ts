@@ -29,7 +29,7 @@ import { scheduleTriathlonWeek } from './scheduler.triathlon';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 5;
+export const TRI_GENERATOR_VERSION = 6;
 
 /**
  * Generate a full triathlon plan for the current state.
