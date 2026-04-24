@@ -10,6 +10,9 @@ import {
   SUPABASE_FUNCTIONS_BASE,
 } from '@/data/supabaseClient';
 import { saveState } from '@/state/persistence';
+import { backfillStravaHistory } from '@/data/stravaSync';
+import { loadActivitiesFromDB } from '@/data/tri-activity-loader';
+import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
 import {
   DEFAULT_VOLUME_SPLIT,
   DEFAULT_WEEKLY_PEAK_HOURS,
@@ -110,6 +113,13 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             </div>
             <p class="tri-hint">We'll pull your last 16 weeks of rides, swims, and runs to calibrate your starting CTL and auto-detect CSS, FTP (if you ride with power), and VDOT. You can still enter benchmarks manually below.</p>
             <p class="tri-hint" id="tri-strava-error" style="color:#c06a50;display:none"></p>
+          </div>
+
+          <!-- Here's what we found — appears when Strava is connected + activities derived -->
+          <div id="tri-found-card" class="tri-card t-rise" style="animation-delay:0.09s;display:none">
+            <div class="tri-label">Here's what we found</div>
+            <div id="tri-found-body" style="font-size:13px;color:var(--c-muted);line-height:1.6"></div>
+            <p class="tri-hint" style="margin-top:10px">Values below have been pre-filled from your history. Edit anything that looks off.</p>
           </div>
 
           <!-- Distance -->
@@ -269,6 +279,8 @@ function renderRatingRow(discipline: 'swim' | 'bike' | 'run', value: TriSkillSli
 function wireEventHandlers(): void {
   // Strava connection state + OAuth kick-off
   wireStravaConnect();
+  // Auto-derive benchmarks if connected
+  void runAutoDerivation();
 
   // Distance pills — toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
@@ -526,6 +538,93 @@ function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   if (hours < 14) return `${base}<br>Realistic for a first Ironman, especially with a solid training background.`;
   if (hours < 20) return `${base}<br>Competitive age-grouper range.`;
   return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
+}
+
+/**
+ * If Strava is connected, pull the 16-week history and derive swim CSS,
+ * bike FTP (if power data), VDOT (run), and activity counts. Pre-fill the
+ * form inputs with what we found; the user can override any value before
+ * hitting Build my plan.
+ */
+async function runAutoDerivation(): Promise<void> {
+  const foundCard = document.getElementById('tri-found-card');
+  const foundBody = document.getElementById('tri-found-body');
+  if (!foundCard || !foundBody) return;
+
+  try {
+    const connected = await isStravaConnected();
+    if (!connected) return;  // Strava card handles the "not connected" path
+
+    // Soft loading state.
+    foundCard.style.display = 'block';
+    foundBody.innerHTML = `<span style="opacity:0.7">Reading your last 16 weeks of activity…</span>`;
+
+    let activities = await loadActivitiesFromDB(500);
+    if (activities.length === 0) {
+      // Trigger a backfill — likely first tri load.
+      foundBody.innerHTML = `<span style="opacity:0.7">Pulling history from Strava… this takes 20–30 s on first connect.</span>`;
+      try {
+        await backfillStravaHistory(16);
+      } catch { /* ignore — continue with whatever landed */ }
+      activities = await loadActivitiesFromDB(500);
+    }
+
+    if (activities.length === 0) {
+      foundBody.innerHTML = `<span style="opacity:0.7">No activities found yet. You can enter benchmarks manually below.</span>`;
+      return;
+    }
+
+    const derived = deriveTriBenchmarksFromHistory(activities);
+
+    // Pre-fill form inputs where user hasn't already entered values.
+    const current = getCurrentOnboarding();
+    if (derived.css.cssSecPer100m && !current.triSwim?.cssSecPer100m) {
+      const cssInput = document.getElementById('tri-css') as HTMLInputElement | null;
+      if (cssInput) cssInput.value = formatCSS(derived.css.cssSecPer100m);
+      updateOnboarding({ triSwim: { ...(current.triSwim ?? {}), cssSecPer100m: derived.css.cssSecPer100m } });
+      // Close the "I'll do the swim test later" toggle so the user sees the derived value.
+      const deferSwim = document.getElementById('tri-defer-swim') as HTMLInputElement | null;
+      const swimInputs = document.getElementById('tri-swim-inputs');
+      const deferHint = document.getElementById('tri-defer-swim-hint');
+      if (deferSwim) deferSwim.checked = false;
+      if (swimInputs) swimInputs.style.display = '';
+      if (deferHint) deferHint.style.display = 'none';
+    }
+    if (derived.ftp.ftpWatts && !current.triBike?.ftp) {
+      const ftpInput = document.getElementById('tri-ftp') as HTMLInputElement | null;
+      if (ftpInput) ftpInput.value = String(derived.ftp.ftpWatts);
+      // Flip the power-meter toggle on.
+      const hasPower = document.getElementById('tri-has-power') as HTMLInputElement | null;
+      const ftpRow = document.getElementById('tri-ftp-row');
+      const hrHint = document.getElementById('tri-hr-fallback-hint');
+      if (hasPower) hasPower.checked = true;
+      if (ftpRow) ftpRow.style.display = '';
+      if (hrHint) hrHint.style.display = 'none';
+      updateOnboarding({ triBike: { ...(current.triBike ?? {}), ftp: derived.ftp.ftpWatts, hasPowerMeter: true } });
+    }
+
+    // Paint the summary card with what we found.
+    const lines: string[] = [];
+    lines.push(`<strong>${activities.length}</strong> activities in the last 16 weeks.`);
+    if (derived.css.cssSecPer100m) {
+      const m = Math.floor(derived.css.cssSecPer100m / 60);
+      const s = Math.round(derived.css.cssSecPer100m % 60);
+      lines.push(`Swim CSS <strong>${m}:${s.toString().padStart(2, '0')}/100m</strong> (from ${derived.css.swimActivityCount} swims).`);
+    } else {
+      lines.push(`Swim — no qualifying swims (need ≥ 800m). Enter manually below.`);
+    }
+    if (derived.ftp.ftpWatts) {
+      lines.push(`Bike FTP <strong>${derived.ftp.ftpWatts} W</strong> (from ${derived.ftp.bikeActivityCount} rides with power data).`);
+    } else if (derived.ftp.bikeActivityCount > 0) {
+      lines.push(`Bike — ${derived.ftp.bikeActivityCount} rides but no power data. Enter FTP manually if you have it.`);
+    }
+    lines.push(`Starting CTL <strong>swim ${derived.fitness.swim.ctl.toFixed(1)} · bike ${derived.fitness.bike.ctl.toFixed(1)} · run ${derived.fitness.run.ctl.toFixed(1)}</strong>.`);
+
+    foundBody.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
+  } catch (err) {
+    console.warn('[tri-setup] auto-derivation failed', err);
+    if (foundBody) foundBody.innerHTML = `<span style="opacity:0.7">Couldn't read your history right now. Enter benchmarks manually below.</span>`;
+  }
 }
 
 /**
