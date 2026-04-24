@@ -105,14 +105,14 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
                 <span class="tri-pill-sub">3.8 km / 180 km / 42.2 km</span>
               </button>
             </div>
-            <p class="tri-hint">Default plan length: ${PLAN_WEEKS_DEFAULT[distance]} weeks</p>
+            <p class="tri-hint" id="tri-plan-length-hint">Default plan length: ${PLAN_WEEKS_DEFAULT[distance]} weeks</p>
           </div>
 
           <!-- Race date -->
           <div class="tri-card t-rise" style="animation-delay:0.14s">
             <div class="tri-label">Race date <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
             <input type="date" id="tri-race-date" class="tri-input" value="${raceDate}">
-            <p class="tri-hint">Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[distance]}-week plan from this week.</p>
+            <p class="tri-hint" id="tri-race-date-hint">Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[distance]}-week plan from this week.</p>
           </div>
 
           <!-- Time available -->
@@ -247,7 +247,7 @@ function renderRatingRow(discipline: 'swim' | 'bike' | 'run', value: TriSkillSli
 // ──────────────────────────────────────────────────────────────────────────
 
 function wireEventHandlers(): void {
-  // Distance pills
+  // Distance pills — toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const value = btn.getAttribute('data-distance') as TriathlonDistance;
@@ -255,6 +255,31 @@ function wireEventHandlers(): void {
       document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((b) => {
         b.classList.toggle('active', b.getAttribute('data-distance') === value);
       });
+
+      // Update default plan length text
+      const planLenHint = document.getElementById('tri-plan-length-hint');
+      if (planLenHint) planLenHint.textContent = `Default plan length: ${PLAN_WEEKS_DEFAULT[value]} weeks`;
+      const raceDateHint = document.getElementById('tri-race-date-hint');
+      if (raceDateHint) raceDateHint.textContent = `Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[value]}-week plan from this week.`;
+
+      // Rescope the hours slider min/max to the new distance
+      const newRange = HOURS_RANGE[value];
+      const hoursEl = document.getElementById('tri-hours') as HTMLInputElement | null;
+      if (hoursEl) {
+        const current = Number(hoursEl.value);
+        hoursEl.min = String(newRange.min);
+        hoursEl.max = String(newRange.max);
+        const clamped = Math.min(newRange.max, Math.max(newRange.min, current));
+        if (clamped !== current) {
+          hoursEl.value = String(clamped);
+          const hv = document.getElementById('tri-hours-value');
+          if (hv) hv.textContent = `${clamped}h`;
+          updateOnboarding({ triTimeAvailableHoursPerWeek: clamped });
+        }
+        // Refresh commentary against new distance + (possibly clamped) hours
+        const hint = document.getElementById('tri-hours-hint');
+        if (hint) hint.innerHTML = hoursCommentary(value, Number(hoursEl.value));
+      }
     });
   });
 
