@@ -30,12 +30,14 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean } = {
     : '';
 
   return `
-    <div style="
+    <div data-tri-workout-id="${escapeHtml(w.id ?? w.n)}" style="
       background:#fff;
       border-radius:14px;
       padding:14px 16px;
       margin-bottom:8px;
       box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05);
+      cursor:pointer;
+      transition:transform 0.15s ease, box-shadow 0.15s ease;
     ">
       ${dayLine}
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">

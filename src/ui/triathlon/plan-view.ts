@@ -10,6 +10,7 @@
 import { getState } from '@/state/store';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
+import { openTriWorkoutDetail } from './workout-detail-modal';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 
 function navigateTab(tab: TabId): void {
@@ -121,7 +122,7 @@ export function renderTriathlonPlanView(): void {
         <div class="hf" data-delay="0.10" style="padding:16px 20px 8px">
           <div style="background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);display:flex;gap:16px;justify-content:space-between">
             <div style="flex:1;text-align:center">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Hours</div>
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Weekly hours</div>
               <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${fmtHours(totalMin)}</div>
             </div>
             <div style="flex:1;text-align:center;border-left:1px solid rgba(0,0,0,0.06);border-right:1px solid rgba(0,0,0,0.06)">
@@ -129,8 +130,8 @@ export function renderTriathlonPlanView(): void {
               <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${workouts.length}</div>
             </div>
             <div style="flex:1;text-align:center">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">TSS</div>
-              <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(totalTss)}</div>
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Week load</div>
+              <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(totalTss)}<span style="font-size:11px;color:var(--c-faint);font-weight:500;margin-left:2px">TSS</span></div>
             </div>
           </div>
           <!-- Discipline mini-bars -->
@@ -139,6 +140,7 @@ export function renderTriathlonPlanView(): void {
             ${renderDisciplineMini('bike', minByDisc.bike, totalMin)}
             ${renderDisciplineMini('run', minByDisc.run, totalMin)}
           </div>
+          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours per discipline this week</div>
         </div>
 
         <!-- Week navigation strip -->
@@ -175,6 +177,18 @@ export function renderTriathlonPlanView(): void {
   });
   document.getElementById('tri-checkin-btn')?.addEventListener('click', () => {
     import('../checkin-overlay').then(({ openCheckinOverlay }) => openCheckinOverlay());
+  });
+
+  // Workout card → full breakdown modal
+  document.querySelectorAll<HTMLElement>('[data-tri-workout-id]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = el.getAttribute('data-tri-workout-id');
+      if (!id) return;
+      const st = getState();
+      const wkRow = st.wks?.[st.w - 1];
+      const found = (wkRow?.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      if (found) openTriWorkoutDetail(found);
+    });
   });
 }
 

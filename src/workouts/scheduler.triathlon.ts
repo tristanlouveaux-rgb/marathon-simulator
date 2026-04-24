@@ -2,14 +2,14 @@
  * Multi-sport scheduler for triathlon weeks.
  *
  * Constraint rules (§18.8):
- *   - Long run on Sunday (traditional), long bike on Saturday
- *   - Brick replaces Saturday bike in build/peak phases
+ *   - Long run → Sunday, long bike or brick → Saturday
  *   - Quality sessions (threshold / VO2) spread across the week — no two
  *     hard same-discipline sessions on consecutive days
- *   - Two-a-days allowed on weekdays when total sessions > 6
+ *   - Swim threshold mid-week (Wed) to separate from bike/run quality
+ *   - Never double up the SAME discipline on the same day unless it's an
+ *     explicit two-a-day (e.g. PM swim after AM run in peak phases)
  *
  * Output: sets `dayOfWeek` (0=Mon..6=Sun) and `dayName` on every workout.
- * The rest of the app reads these fields for positioning.
  */
 
 import type { Workout } from '@/types/state';
@@ -17,11 +17,11 @@ import type { TrainingPhase } from '@/types/training';
 
 export const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-export interface TriDayAssignment {
-  dayOfWeek: number;
-  dayName: string;
-  workouts: Workout[];
-}
+// Preferred day order per discipline (0=Mon..6=Sun).
+// Picks spread across the week with a rest-friendly Monday.
+const SWIM_DAYS = [1, 2, 4, 0, 3];        // Tue, Wed, Fri, Mon, Thu
+const BIKE_DAYS = [1, 3, 4];              // Tue, Thu, Fri (Saturday reserved for long bike / brick)
+const RUN_DAYS  = [2, 3, 1, 4, 0];        // Wed, Thu, Tue, Fri, Mon (Sunday reserved for long run)
 
 /**
  * Assign workouts to days. Input is a flat list of per-discipline workouts
@@ -36,60 +36,56 @@ export function scheduleTriathlonWeek(
   phase: TrainingPhase,
   gym: Workout[] = []
 ): Workout[] {
-  // Day slots — typical triathlon template
-  //   Mon: Rest / easy swim technique
-  //   Tue: Bike quality + Run easy
-  //   Wed: Swim threshold
-  //   Thu: Run quality
-  //   Fri: Rest / easy swim
-  //   Sat: Long bike OR brick
-  //   Sun: Long run
-  //
-  // We allocate sessions into slots based on what the plan engine produced.
   const byDay: Record<number, Workout[]> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
 
-  // 1. Long bike or brick → Saturday (day 5)
-  const longBike = bike.find((w) => w.t === 'bike_endurance' || w.t === 'bike_tempo');
+  // Track which disciplines are already on each day so we avoid same-
+  // discipline doubles unless we really have to.
+  const occupiedDisciplines: Record<number, Set<string>> = {
+    0: new Set(), 1: new Set(), 2: new Set(), 3: new Set(),
+    4: new Set(), 5: new Set(), 6: new Set(),
+  };
+  const place = (day: number, w: Workout) => {
+    byDay[day].push(w);
+    occupiedDisciplines[day].add(w.discipline ?? 'run');
+  };
+
+  // 1. Long session Saturday — brick replaces the long bike if present.
   if (brick) {
-    byDay[5].push(brick);
-  } else if (longBike) {
-    byDay[5].push(longBike);
-    bike.splice(bike.indexOf(longBike), 1);
+    place(5, brick);
+  } else {
+    // Longest bike (last in array by convention) → Saturday
+    if (bike.length > 0) {
+      const longBike = bike.pop()!;
+      place(5, longBike);
+    }
   }
 
-  // 2. Long run → Sunday (day 6)
+  // 2. Long run → Sunday (last run in the array by convention).
   if (run.length > 0) {
-    // Longest-duration run goes last in the list by convention; take the last run session as "long"
-    const longRun = run[run.length - 1];
-    byDay[6].push(longRun);
-    run.splice(run.length - 1, 1);
+    const longRun = run.pop()!;
+    place(6, longRun);
   }
 
-  // 3. Gym sessions → Monday + Friday
-  if (gym.length > 0) byDay[0].push(gym[0]);
-  if (gym.length > 1) byDay[4].push(gym[1]);
+  // 3. Gym → Monday + Friday (off-run days).
+  if (gym.length > 0) place(0, gym[0]);
+  if (gym.length > 1) place(4, gym[1]);
 
-  // 4. Swim sessions → Wed (threshold), Mon (technique), Fri (technique)
-  const swimByType = [...swim];
-  const swimThreshold = swimByType.find((w) => w.t === 'swim_threshold' || w.t === 'swim_speed');
-  if (swimThreshold) {
-    byDay[2].push(swimThreshold);
-    swimByType.splice(swimByType.indexOf(swimThreshold), 1);
+  // 4. Swim threshold/speed → Wednesday (isolated mid-week quality). Other
+  //    swims distribute across Tue, Fri, Mon, Thu.
+  const swimsRemaining = [...swim];
+  const swimQualityIdx = swimsRemaining.findIndex((w) => w.t === 'swim_threshold' || w.t === 'swim_speed');
+  if (swimQualityIdx >= 0) {
+    const q = swimsRemaining.splice(swimQualityIdx, 1)[0];
+    place(2, q);
   }
-  if (swimByType.length > 0) { byDay[0].push(swimByType.shift()!); }  // Monday
-  if (swimByType.length > 0) { byDay[4].push(swimByType.shift()!); }  // Friday
+  placeByPreference(swimsRemaining, SWIM_DAYS, byDay, occupiedDisciplines, place);
 
-  // 5. Remaining bike sessions → Tuesday (quality) + Thursday slot
-  if (bike.length > 0) byDay[1].push(bike.shift()!);
-  if (bike.length > 0) byDay[3].push(bike.shift()!);
+  // 5. Bike quality → Tuesday (first remaining bike). Others distribute Thu, Fri.
+  placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, place);
 
-  // 6. Remaining run sessions → Tuesday easy + Thursday quality
-  if (run.length > 0) byDay[1].push(run.shift()!);
-  if (run.length > 0) byDay[3].push(run.shift()!);
-
-  // 7. Overflow → any remaining items pile onto Friday
-  const overflow = [...swimByType, ...bike, ...run];
-  overflow.forEach((w) => byDay[4].push(w));
+  // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
+  //    Thursday quality is the template — we spread by preference.
+  placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, place);
 
   // Flatten with dayOfWeek/dayName set
   const out: Workout[] = [];
@@ -99,6 +95,32 @@ export function scheduleTriathlonWeek(
     });
   }
 
-  void phase;  // Future: phase could adjust the template (e.g., taper compresses)
+  void phase;
   return out;
+}
+
+/**
+ * Place each workout on its preferred day, skipping days that already host
+ * the same discipline. Falls back to first non-matching day, then any open
+ * day, so we never drop a session.
+ */
+function placeByPreference(
+  workouts: Workout[],
+  preferredDays: number[],
+  byDay: Record<number, Workout[]>,
+  occupied: Record<number, Set<string>>,
+  place: (day: number, w: Workout) => void
+): void {
+  for (const w of workouts) {
+    const disc = w.discipline ?? 'run';
+    // First pass: pick the first preferred day that doesn't already have this discipline.
+    let dayIdx = preferredDays.find((d) => !occupied[d].has(disc));
+    // Fallback: pick the preferred day with fewest sessions overall.
+    if (dayIdx === undefined) {
+      dayIdx = preferredDays.reduce((best, d) =>
+        byDay[d].length < byDay[best].length ? d : best,
+      preferredDays[0]);
+    }
+    place(dayIdx, w);
+  }
 }

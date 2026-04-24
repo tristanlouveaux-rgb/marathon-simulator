@@ -209,16 +209,24 @@ function countSessions(hours: number, avgSessionHours: number, maxSessions: numb
 }
 
 function phaseMultiplier(phase: TrainingPhase, weekIndex: number, totalWeeks: number): number {
-  // Base: 0.7 → 0.95 (linear ramp across the phase)
-  // Build: 0.95 → 1.0
-  // Peak: 1.0 → 1.05 → 1.0 (climbs then holds)
-  // Taper: 0.75 → 0.45 → 0.30 (steep ramp down)
+  // Volume ramp within each phase — linear-ish so early base weeks don't
+  // blast a beginner with full peak volume on day one (§4 feedback).
+  //   Base: 0.55 at week 1 → 0.85 near end of base
+  //   Build: 0.85 → 1.00
+  //   Peak: 1.00 → 1.05 → 1.00
+  //   Taper: 0.75 → 0.55 → 0.30
   switch (phase) {
-    case 'base':  return 0.75;
-    case 'build': return 0.95;
+    case 'base': {
+      // How deep into the base phase are we? Week 1 ≈ 0, last base week ≈ 1.
+      // Use a simple heuristic: base phase runs from weekIndex 1 up to the
+      // last base week. We don't know the exact length here without the
+      // distance config, but base weeks are typically 8 (70.3) or 10 (IM).
+      // Rough ramp: 0.55 + 0.3 × (weekIndex - 1) / 8, capped at 0.85.
+      return Math.min(0.85, 0.55 + 0.3 * ((weekIndex - 1) / 8));
+    }
+    case 'build': return 0.92;
     case 'peak':  return 1.00;
     case 'taper': {
-      // Count weeks remaining from taper start
       const weeksFromEnd = totalWeeks - weekIndex;
       if (weeksFromEnd >= 2) return 0.75;
       if (weeksFromEnd === 1) return 0.55;

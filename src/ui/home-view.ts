@@ -2468,8 +2468,8 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildIllnessBanner(s)}
       ${buildHolidayBannerHome(s)}
       ${buildRaceCompleteBanner(s)}
-      ${buildTodayWorkout(s, coach)}
-      ${buildRaceForecastCard(s)}
+      ${s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
+      ${s.eventType === 'triathlon' ? '' : buildRaceForecastCard(s)}
       ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
@@ -2478,6 +2478,102 @@ function getHomeHTML(s: SimulatorState): string {
     </div>
     ${renderTabBar('home', isSimulatorMode())}
   `;
+}
+
+/**
+ * Triathlon: today's planned workouts rendered in the same card language as
+ * the running today-workout hero. Two-a-days produce two stacked cards
+ * (e.g. AM swim + PM bike). Matches the running workflow: tap to drill in.
+ */
+function buildTodayWorkoutTriathlon(s: SimulatorState): string {
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your triathlon plan.', false);
+
+  const jsDay = new Date().getDay();
+  const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+
+  const todayList = (wk.triWorkouts ?? []).filter((w) => w.dayOfWeek === ourDay);
+  if (todayList.length === 0) {
+    return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+  }
+
+  const cards = todayList.map((w) => buildTriathlonHeroCard(w)).join('');
+  return `<div style="padding:0 20px 16px">${cards}</div>`;
+}
+
+function buildTriathlonHeroCard(w: any): string {
+  const discipline = w.discipline ?? 'run';
+  const accent = discipline === 'swim' ? '#5b8a8a' : discipline === 'bike' ? '#c08460' : '#7a845c';
+  const badgeBg = discipline === 'swim' ? 'rgba(91,138,138,0.14)' : discipline === 'bike' ? 'rgba(192,132,96,0.14)' : 'rgba(122,132,92,0.14)';
+  const badgeText = discipline === 'swim' ? '#3d6666' : discipline === 'bike' ? '#9c6245' : '#4f5a3b';
+  const label = discipline === 'swim' ? 'Swim' : discipline === 'bike' ? 'Bike' : 'Run';
+  const rpe = w.rpe ?? w.r ?? 5;
+  const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+  const desc = humaniseTriDesc(w.d || '');
+  const duration = extractTriWorkoutDuration(w);
+  const isBrick = w.t === 'brick' && w.brickSegments;
+
+  return `
+    <div data-tri-workout-id="${escapeAttr(w.id || w.n)}" style="
+      position:relative;
+      background:#fff;border-radius:16px;
+      padding:20px 22px;margin-bottom:12px;
+      box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);
+      cursor:pointer;
+      transition:transform 0.15s ease,box-shadow 0.15s ease;
+    " class="tri-hero-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="display:inline-flex;align-items:center;background:${badgeBg};color:${badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:4px 10px;border-radius:100px">${label}</span>
+        ${duration ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${duration}</span>` : ''}
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
+        ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
+      </div>
+      <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
+      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${escapeAttr(desc)}</div>
+      ${isBrick ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.06);font-size:11px;color:var(--c-faint)">Brick — bike ${w.brickSegments[0].durationMin ?? 0}m + run ${w.brickSegments[1].durationMin ?? 0}m</div>` : ''}
+      <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
+        <span>Tap for full breakdown</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </div>
+    </div>
+  `;
+}
+
+function humaniseTriDesc(d: string): string {
+  return String(d || '')
+    .replace(/\bWU\b/g, 'Warm up')
+    .replace(/\bCD\b/g, 'Cool down')
+    .replace(/\brec\b/g, 'recovery');
+}
+
+function extractTriWorkoutDuration(w: any): string {
+  if (w.brickSegments) {
+    const total = (w.brickSegments[0]?.durationMin ?? 0) + (w.brickSegments[1]?.durationMin ?? 0);
+    return fmtMinsPretty(total);
+  }
+  if (w.discipline === 'swim') {
+    const m = String(w.d || '').match(/(\d[\d,]*)m total/);
+    if (m) return `${m[1]}m`;
+  }
+  const matches = Array.from(String(w.d || '').matchAll(/(\d+)\s*min/g));
+  if (!matches.length) return '';
+  const maxMins = matches.reduce((acc: number, m: any) => Math.max(acc, parseInt(m[1], 10)), 0);
+  return fmtMinsPretty(maxMins);
+}
+
+function fmtMinsPretty(mins: number): string {
+  if (!Number.isFinite(mins) || mins <= 0) return '';
+  const rounded = mins >= 30 ? Math.round(mins / 5) * 5 : Math.round(mins);
+  const h = Math.floor(rounded / 60);
+  const m = rounded % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function escapeAttr(s: string): string {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function wireHomeHandlers(): void {
@@ -2715,6 +2811,19 @@ function wireHomeHandlers(): void {
     });
   });
 
+  // Triathlon today hero card → open full detail modal
+  document.querySelectorAll<HTMLElement>('.tri-hero-card').forEach((el) => {
+    el.addEventListener('click', () => {
+      const st = getState();
+      const wk = st.wks?.[st.w - 1];
+      if (!wk) return;
+      const id = el.getAttribute('data-tri-workout-id');
+      const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      if (!w) return;
+      import('./triathlon/workout-detail-modal').then(({ openTriWorkoutDetail }) => openTriWorkoutDetail(w));
+    });
+  });
+
   // Adhoc activity click → open activity detail
   document.querySelectorAll<HTMLElement>('.home-adhoc-row').forEach(el => {
     el.addEventListener('click', () => {
@@ -2743,11 +2852,6 @@ export function renderHomeView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
-  // Triathlon fork — running chrome stays, triathlon variant handles its own render.
-  if (s.eventType === 'triathlon') {
-    import('./triathlon/home-view').then(({ renderTriathlonHomeView }) => renderTriathlonHomeView());
-    return;
-  }
   container.innerHTML = getHomeHTML(s);
   wireHomeHandlers();
   setOnWeekAdvance(() => {

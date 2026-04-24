@@ -97,6 +97,21 @@ function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: nu
   return `${Math.round(pct * 100)}% FTP`;
 }
 
+/** Round to nearest 5 min for anything ≥ 30 min — matches the §4 decision. */
+function rnd(mins: number): number {
+  return mins >= 30 ? Math.round(mins / 5) * 5 : Math.round(mins);
+}
+
+/** Pretty "2h 30min" / "45min" format. */
+function pretty(mins: number): string {
+  const r = rnd(mins);
+  const h = Math.floor(r / 60);
+  const m = r % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}min`;
+  if (h > 0) return `${h}h`;
+  return `${m}min`;
+}
+
 /**
  * Variant rotation per kind. Rotated by `weekIndex`. Same energetic system,
  * different interval structures so the plan doesn't feel repetitive.
@@ -114,9 +129,9 @@ function describeBikeSession(
   switch (kind) {
     case 'endurance': {
       const variants = [
-        () => `${minutes}min steady @ ${hasPower && ftp ? pwLabel(ftp, hasPower, 0.65) : `Z2 endurance${hr('2')}`}. Conversational throughout.`,
-        () => `${minutes}min rolling endurance — stay in Z2 on the flats, allow Z3 spikes on climbs. Recover on descents.`,
-        () => `${minutes}min fasted endurance (optional) @ Z1–Z2. Low intensity, long duration — aerobic base.`,
+        () => `${pretty(minutes)} steady @ ${hasPower && ftp ? pwLabel(ftp, hasPower, 0.65) : `Z2 endurance${hr('2')}`}. Conversational throughout.`,
+        () => `${pretty(minutes)} rolling endurance — stay in Z2 on the flats, allow Z3 spikes on climbs. Recover on descents.`,
+        () => `${pretty(minutes)} fasted endurance (optional) @ Z1–Z2. Low intensity, long duration — aerobic base.`,
       ];
       return variants[idx % variants.length]();
     }
@@ -124,11 +139,11 @@ function describeBikeSession(
       const variants = [
         () => {
           const reps = minutes >= 75 ? 2 : 1;
-          const repMin = Math.round((minutes - 20) / reps);
+          const repMin = rnd((minutes - 20) / reps);
           return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 0.82)}, 5min easy between. 5min Cool down.`;
         },
         () => `15min Warm up. Main: 3×10min @ ${pwLabel(ftp, hasPower, 0.85)}, 3min easy. 5min Cool down.`,
-        () => `15min Warm up. Main: ${Math.max(20, minutes - 25)}min continuous tempo @ ${pwLabel(ftp, hasPower, 0.80)}. 10min Cool down.`,
+        () => `15min Warm up. Main: ${rnd(Math.max(20, minutes - 25))}min continuous tempo @ ${pwLabel(ftp, hasPower, 0.80)}. 10min Cool down.`,
       ];
       return variants[idx % variants.length]();
     }
@@ -137,7 +152,7 @@ function describeBikeSession(
         () => {
           const mainMin = minutes - 20;
           const reps = mainMin >= 40 ? 3 : mainMin >= 24 ? 2 : 1;
-          const repMin = Math.round(mainMin / reps) - 2;
+          const repMin = rnd(Math.max(6, Math.round(mainMin / reps) - 2));
           return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 0.90)}, 5min recovery. 5min Cool down.`;
         },
         () => `15min Warm up. Main: 4×8min @ ${pwLabel(ftp, hasPower, 0.92)}, 2min recovery. 10min Cool down.`,
@@ -149,7 +164,7 @@ function describeBikeSession(
       const variants = [
         () => {
           const reps = minutes >= 75 ? 3 : 2;
-          const repMin = Math.round((minutes - 25) / reps) - 3;
+          const repMin = rnd(Math.max(6, Math.round((minutes - 25) / reps) - 3));
           return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 1.00)}, 4min recovery. 10min Cool down.`;
         },
         () => `15min Warm up. Main: 5×6min @ ${pwLabel(ftp, hasPower, 1.02)}, 3min recovery. 10min Cool down.`,
