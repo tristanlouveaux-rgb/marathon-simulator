@@ -83,7 +83,11 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     s.rec = state.recentRace ?? null;
     s.schemaVersion = STATE_SCHEMA_VERSION;
 
-    // Empty plan for Phase 1. Phase 3 replaces this with generateTriathlonPlan.
+    // Clear running-mode race selection so tri views don't show stale
+    // marathon-mode race data (title, countdown caption).
+    s.selectedMarathon = undefined;
+
+    // Plan generation — replaces any previously-stored running weeks.
     s.wks = generateTriathlonPlan(s);
 
     // Seed prediction caches. Phase 4 computes real values.

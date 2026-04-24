@@ -1935,6 +1935,9 @@ function buildSyncActions(s: SimulatorState): string {
 // ─── Main render ────────────────────────────────────────────────────────────
 
 function getHomePlanName(s: SimulatorState): string {
+  if (s.eventType === 'triathlon') {
+    return s.triConfig?.distance === 'ironman' ? 'Ironman' : '70.3';
+  }
   if (s.continuousMode) return 'Fitness Plan';
   const labels: Record<string, string> = {
     '5k': '5K Plan', '10k': '10K Plan',
@@ -2395,9 +2398,11 @@ function getHomeHTML(s: SimulatorState): string {
   const userName = s.onboarding?.name || null;
   const planTitle = userName ? `${userName}'s ${getHomePlanName(s)}` : `Your ${getHomePlanName(s)}`;
 
-  // Race countdown for hero header
-  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate;
-  const raceName = s.selectedMarathon?.name || null;
+  // Race countdown for hero header. Tri users never read selectedMarathon —
+  // that's a marathon-mode artifact. Use the user's entered race date only.
+  const isTri = s.eventType === 'triathlon';
+  const raceDate = isTri ? (s.triConfig?.raceDate || s.onboarding?.customRaceDate) : (s.selectedMarathon?.date || s.onboarding?.customRaceDate);
+  const raceName = isTri ? null : (s.selectedMarathon?.name || null);
   const raceDays = raceDate && !s.continuousMode ? daysUntil(raceDate) : 0;
   const hasRaceCountdown = raceDays > 0;
   const raceCountdownDisplay = raceDays <= 14 ? `${raceDays}` : `${Math.floor(raceDays / 7)}`;
