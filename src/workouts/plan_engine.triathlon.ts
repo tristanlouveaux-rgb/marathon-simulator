@@ -29,7 +29,7 @@ import { scheduleTriathlonWeek } from './scheduler.triathlon';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 6;
+export const TRI_GENERATOR_VERSION = 7;
 
 /**
  * Generate a full triathlon plan for the current state.
@@ -143,6 +143,7 @@ function generateWeekForTriathlon(
       targetMinutes: minutes,
       kind,
       cssSecPer100m: tri.swim?.cssSecPer100m,
+      slotIndex: i,
     }));
   }
 
@@ -162,6 +163,7 @@ function generateWeekForTriathlon(
       kind,
       ftp: tri.bike?.ftp,
       hasPowerMeter: tri.bike?.hasPowerMeter,
+      slotIndex: i,
     }));
   }
 
@@ -321,8 +323,9 @@ function generateRunSessionForTri(
   totalSlots: number,
   minutes: number,
   skill: TriSkillSlider,
-  weekIndex: number
+  weekIndex: number,
 ): Workout {
+  void totalSlots;  // kept for signature clarity; slot position already drives isLong/isQuality
   const isLong = slotIndex === totalSlots - 1;
   const isQuality = slotIndex === 0 && (phase === 'build' || phase === 'peak');
 
@@ -333,11 +336,15 @@ function generateRunSessionForTri(
   let aerobic: number;
   let anaerobic: number;
 
+  // Variant rotation keys off (weekIndex + slotIndex × 2) so two easy runs
+  // in the same week land on different variants rather than cloning.
+  const rotKey = Math.abs((weekIndex - 1) + slotIndex * 2);
+
   if (isLong) {
     const r = roundMin(minutes);
     const pace = easyPaceSecPerKm(skill);
     const km = Math.round(((r * 60) / pace) * 2) / 2;  // nearest 0.5 km
-    const idx = Math.abs(weekIndex - 1) % LONG_RUN_VARIANTS.length;
+    const idx = rotKey % LONG_RUN_VARIANTS.length;
     name = 'Long run';
     desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r));
     t = 'long';
@@ -345,7 +352,7 @@ function generateRunSessionForTri(
     aerobic = Math.round(r * 1.1);
     anaerobic = Math.round(r * 0.15);
   } else if (isQuality) {
-    const idx = Math.abs(weekIndex - 1) % THRESHOLD_RUN_VARIANTS.length;
+    const idx = rotKey % THRESHOLD_RUN_VARIANTS.length;
     name = 'Threshold run';
     desc = THRESHOLD_RUN_VARIANTS[idx]();
     t = 'threshold';
@@ -354,7 +361,7 @@ function generateRunSessionForTri(
     anaerobic = Math.round(minutes * 0.35);
   } else {
     const r = roundMin(minutes);
-    const idx = Math.abs(weekIndex - 1) % EASY_RUN_VARIANTS.length;
+    const idx = rotKey % EASY_RUN_VARIANTS.length;
     name = 'Easy run';
     desc = EASY_RUN_VARIANTS[idx](fmtMin(r));
     t = 'easy';

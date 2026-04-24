@@ -30,6 +30,9 @@ interface BikeSessionInput {
   kind: BikeSessionKind;
   ftp?: number;                // Watts; enables power-based targets when present
   hasPowerMeter?: boolean;
+  /** Slot index within the week (0-based). Rotates variants so same-kind
+   * back-to-backs don't render identical. */
+  slotIndex?: number;
 }
 
 const bikeTypeMap: Record<BikeSessionKind, TriWorkoutType> = {
@@ -58,7 +61,7 @@ export function pickBikeKind(phase: TrainingPhase, slotIndex: number): BikeSessi
 export function generateBikeSession(input: BikeSessionInput): Workout {
   const { phase, kind, targetMinutes, ftp, hasPowerMeter } = input;
 
-  const desc = describeBikeSession(kind, targetMinutes, ftp, hasPowerMeter, input.weekIndex);
+  const desc = describeBikeSession(kind, targetMinutes, ftp, hasPowerMeter, input.weekIndex, input.slotIndex ?? 0);
   const rpe = rpeForBike(kind, phase);
   const { aerobic, anaerobic } = loadForBike(kind, targetMinutes);
 
@@ -122,10 +125,11 @@ function describeBikeSession(
   minutes: number,
   ftp: number | undefined,
   hasPower: boolean | undefined,
-  weekIndex: number
+  weekIndex: number,
+  slotIndex: number = 0
 ): string {
   const hr = (zone: string) => ` (HR Z${zone})`;
-  const idx = Math.abs(weekIndex - 1);
+  const idx = Math.abs((weekIndex - 1) + slotIndex * 2);
 
   switch (kind) {
     case 'endurance': {

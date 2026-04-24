@@ -30,6 +30,9 @@ interface SwimSessionInput {
   targetMinutes: number;       // Target session duration in minutes
   kind: SwimSessionKind;
   cssSecPer100m?: number;      // If known, renders target pace on the card
+  /** Slot index within the week (0-based). Used for variant rotation so
+   * two same-kind sessions in one week don't render identical descriptions. */
+  slotIndex?: number;
 }
 
 const swimTypeMap: Record<SwimSessionKind, TriWorkoutType> = {
@@ -65,7 +68,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
   const { phase, skill, kind, targetMinutes, cssSecPer100m } = input;
 
   const totalM = estimateDistanceMetres(targetMinutes, skill, cssSecPer100m);
-  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill, input.weekIndex);
+  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill, input.weekIndex, input.slotIndex ?? 0);
   const rpe = rpeForSwim(kind, phase);
 
   const { aerobic, anaerobic } = loadForSwim(kind, targetMinutes);
@@ -172,12 +175,16 @@ function describeSwimSession(
   totalM: number,
   css: number | undefined,
   skill: TriSkillSlider,
-  weekIndex: number
+  weekIndex: number,
+  slotIndex: number = 0
 ): string {
   const paceHint = css ? ` @ ${formatPace(css)}/100m (CSS)` : '';
   const drillHint = skill <= 2 ? ' Focus on body position and breathing.' : '';
   const variants = SWIM_VARIANTS[kind];
-  const idx = Math.abs(weekIndex - 1) % variants.length;
+  // Rotate by weekIndex + slotIndex so two same-kind sessions in one week
+  // produce different variants. Shift by slotIndex * 2 to ensure adjacent
+  // slots land on different variants even when the modulo wraps.
+  const idx = Math.abs((weekIndex - 1) + slotIndex * 2) % variants.length;
   return variants[idx](totalM, paceHint) + (kind === 'technique' ? drillHint : '');
 }
 
