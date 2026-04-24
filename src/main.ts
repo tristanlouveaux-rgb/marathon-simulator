@@ -181,6 +181,29 @@ async function launchApp(): Promise<void> {
     } catch { /* swallow — worst case backfill doesn't auto-fire this launch */ }
   }
 
+  // Self-heal physiology source. If Garmin credentials exist in the DB but
+  // state has no physiology source (typical after a localStorage wipe /
+  // corrupt-state recovery), launch-time sync gates fail and the user sees
+  // no sleep / HRV / RHR. Flip the flag so syncPhysiologySnapshot can fire.
+  if (
+    !isSimulatorMode()
+    && hasState
+    && !state.connectedSources?.physiology
+    && state.wearable !== 'garmin'
+    && state.wearable !== 'apple'
+  ) {
+    try {
+      const garminOk = await isGarminConnected();
+      if (garminOk) {
+        console.log('[launch] Self-healing physiology source to garmin (credentials found)');
+        const ms = getMutableState();
+        ms.connectedSources = { ...(ms.connectedSources ?? {}), physiology: 'garmin' };
+        if (!ms.wearable) ms.wearable = 'garmin';
+        saveState();
+      }
+    } catch { /* swallow — sleep reloads next launch */ }
+  }
+
   // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
   setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
 
@@ -298,8 +321,9 @@ async function launchApp(): Promise<void> {
         _ms._debriefGateV3 = true;
         saveState();
       }
+      // Triathlon users are exempt from the debrief gate — no plan-preview debrief exists.
       const lastComplete = _ms.lastCompleteDebriefWeek ?? 0;
-      if (_ms.w > lastComplete + 1) {
+      if (_ms.eventType !== 'triathlon' && _ms.w > lastComplete + 1) {
         _ms.w = lastComplete + 1;
         saveState();
       }
@@ -551,6 +575,11 @@ async function launchApp(): Promise<void> {
       isStravaConnected().then((stravaOk) => {
         if (!stravaOk) return;
         syncStravaActivities().then(() => {
+          // After Strava sync, also run the DB sync so the upgrade loop in matchAndAutoComplete
+          // can replace any Garmin-sourced actuals that now have Strava counterparts in DB.
+          // sync-strava-activities skips cached-with-zones rows in its response, so without
+          // this second pass the upgrade loop never sees them.
+          syncActivities().catch(() => {});
           // Re-render home view if it's still active so TSS reflects post-sync state
           scheduleHomeRefresh();
         }).catch(() => {});
