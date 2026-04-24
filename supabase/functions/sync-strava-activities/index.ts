@@ -423,25 +423,32 @@ function getRawFallbackTSS(actType: string, durationMin: number): number {
  *     client can choose to ignore)
  *   - kilojoules: total energy expenditure
  */
-function extractPowerFields(act: Record<string, unknown>): {
+function extractPowerFields(act: Record<string, unknown> | null | undefined): {
   average_watts: number | null;
   normalized_power: number | null;
   max_watts: number | null;
   device_watts: boolean | null;
   kilojoules: number | null;
 } {
-  const avg = (act["average_watts"] as number | null | undefined);
-  const np = (act["weighted_average_watts"] as number | null | undefined);
-  const mx = (act["max_watts"] as number | null | undefined);
-  const dev = (act["device_watts"] as boolean | null | undefined);
-  const kj = (act["kilojoules"] as number | null | undefined);
-  return {
-    average_watts:    avg != null && avg > 0 ? Math.round(avg * 10) / 10 : null,
-    normalized_power: np  != null && np  > 0 ? Math.round(np  * 10) / 10 : null,
-    max_watts:        mx  != null && mx  > 0 ? Math.round(mx) : null,
-    device_watts:     dev != null ? Boolean(dev) : null,
-    kilojoules:       kj  != null && kj  > 0 ? Math.round(kj * 10) / 10 : null,
-  };
+  const allNull = { average_watts: null, normalized_power: null, max_watts: null, device_watts: null, kilojoules: null };
+  if (!act || typeof act !== 'object') return allNull;
+  try {
+    const avg = (act["average_watts"] as number | null | undefined);
+    const np = (act["weighted_average_watts"] as number | null | undefined);
+    const mx = (act["max_watts"] as number | null | undefined);
+    const dev = (act["device_watts"] as boolean | null | undefined);
+    const kj = (act["kilojoules"] as number | null | undefined);
+    return {
+      average_watts:    typeof avg === 'number' && isFinite(avg) && avg > 0 ? Math.round(avg * 10) / 10 : null,
+      normalized_power: typeof np  === 'number' && isFinite(np)  && np  > 0 ? Math.round(np  * 10) / 10 : null,
+      max_watts:        typeof mx  === 'number' && isFinite(mx)  && mx  > 0 ? Math.round(mx) : null,
+      device_watts:     typeof dev === 'boolean' ? dev : null,
+      kilojoules:       typeof kj  === 'number' && isFinite(kj)  && kj  > 0 ? Math.round(kj * 10) / 10 : null,
+    };
+  } catch (e) {
+    console.warn('[extractPowerFields] failed, returning nulls:', e);
+    return allNull;
+  }
 }
 
 /** Normalise activity_type to a clean sport label for the breakdown. */
@@ -764,8 +771,78 @@ Deno.serve(async (req) => {
       }
 
       if (allActivities.length === 0) {
+        // List fetch returned nothing (likely 429 on page 1, or all already in DB with no new ones).
+        // Still try to heal best_efforts for historical running rows — onboarding PB auto-fill
+        // depends on this and would otherwise be blocked forever once list calls are rate-limited.
+        const { data: dbRuns } = await supabase
+          .from("garmin_activities")
+          .select("garmin_id, activity_type, duration_sec, distance_m, best_efforts")
+          .eq("user_id", user.id);
+        const dbRunningNeedsBE = (dbRuns ?? []).filter((r) =>
+          r.best_efforts == null
+          && (r.activity_type === "RUNNING" || r.activity_type === "TRAIL_RUNNING")
+          && (r.distance_m as number) > 0
+          && (r.duration_sec as number) > 0
+        );
+        function dbPaceSecPerKm(r: Record<string, unknown>): number {
+          const d = (r.distance_m as number) ?? 0;
+          const t = (r.duration_sec as number) ?? 0;
+          if (d <= 0 || t <= 0) return Infinity;
+          return (t / d) * 1000;
+        }
+        function dbPickBand(minM: number, maxM: number, take: number): Array<Record<string, unknown>> {
+          return dbRunningNeedsBE
+            .filter((r) => {
+              const d = (r.distance_m as number) ?? 0;
+              return d >= minM && d < maxM;
+            })
+            .sort((a, b) => dbPaceSecPerKm(a) - dbPaceSecPerKm(b))
+            .slice(0, take);
+        }
+        const dbBandSelections = [
+          ...dbPickBand(4000,  8000,  12),
+          ...dbPickBand(8000,  15000, 12),
+          ...dbPickBand(18000, 28000, 12),
+          ...dbPickBand(40000, Infinity, 8),
+        ];
+        const seenDB = new Set<string>();
+        const dbCandidates = dbBandSelections.filter((r) => {
+          const gid = r.garmin_id as string;
+          if (seenDB.has(gid)) return false;
+          seenDB.add(gid);
+          return true;
+        });
+        let dbHealed = 0;
+        let dbTruncatedBy429 = false;
+        for (const r of dbCandidates) {
+          const garminId = r.garmin_id as string;
+          const stravaId = Number(garminId.replace("strava-", ""));
+          if (!stravaId) continue;
+          try {
+            const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+            const be = Array.isArray(detail.best_efforts) ? detail.best_efforts : null;
+            const payload = be ?? [];
+            const { error: beErr } = await supabase.from("garmin_activities")
+              .update({ best_efforts: payload })
+              .eq("garmin_id", garminId).eq("user_id", user.id);
+            if (!beErr) dbHealed++;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if (msg.includes("429")) dbTruncatedBy429 = true;
+            break;
+          }
+        }
+        console.log(
+          `[Backfill] list empty — DB best_efforts heal: ${dbHealed}/${dbCandidates.length}` +
+          ` (pool: ${dbRunningNeedsBE.length} running rows without best_efforts${dbTruncatedBy429 ? ", truncated by 429" : ""})`,
+        );
         return new Response(
-          JSON.stringify({ processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, runs: [] }),
+          JSON.stringify({
+            processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, runs: [],
+            bestEffortsHealed: dbHealed,
+            bestEffortsCandidates: dbCandidates.length,
+            bestEffortsPool: dbRunningNeedsBE.length,
+          }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -1055,6 +1132,7 @@ Deno.serve(async (req) => {
         return true;
       });
       let bestEffortsHealed = 0;
+      let bestEffortsTruncatedBy429 = false;
       for (const act of bestEffortsCandidates) {
         const stravaId = act.id as number;
         const garminId = `strava-${stravaId}`;
@@ -1071,11 +1149,16 @@ Deno.serve(async (req) => {
           } else {
             bestEffortsHealed++;
           }
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("429")) bestEffortsTruncatedBy429 = true;
           break; // stop on rate limit / network error
         }
       }
-      if (bestEffortsHealed > 0) console.log(`[Backfill] Fetched best_efforts for ${bestEffortsHealed} running activities`);
+      console.log(
+        `[Backfill] best_efforts: fetched ${bestEffortsHealed}/${bestEffortsCandidates.length} candidates` +
+        ` (already cached: ${cachedWithBestEfforts.size}${bestEffortsTruncatedBy429 ? ", truncated by 429" : ""})`,
+      );
 
       // 5d. Power backfill — Strava returns power fields (average_watts,
       // weighted_average_watts, max_watts, device_watts, kilojoules) on
@@ -1085,30 +1168,41 @@ Deno.serve(async (req) => {
       // immediately. Uses per-row UPDATE rather than upsert so we don't
       // touch any other column (iTRIMP / zones / etc).
       let powerHealed = 0;
-      for (const act of allActivities) {
-        const stravaId = act.id as number;
-        const garminId = `strava-${stravaId}`;
-        const actType = mapStravaType((act.sport_type as string) || (act.type as string) || "");
-        if (actType !== "CYCLING" && actType !== "MOUNTAIN_BIKING") continue;
-        const power = extractPowerFields(act);
-        if (
-          power.average_watts == null &&
-          power.normalized_power == null &&
-          power.max_watts == null &&
-          power.device_watts == null &&
-          power.kilojoules == null
-        ) continue;
-        const { error: powErr } = await supabase.from("garmin_activities")
-          .update(power)
-          .eq("garmin_id", garminId)
-          .eq("user_id", user.id);
-        if (powErr) {
-          console.warn(`[Backfill] Power update failed for ${garminId}:`, powErr.message);
-          continue;
+      let powerAttempted = 0;
+      try {
+        for (const act of allActivities) {
+          const stravaId = act?.id as number | undefined;
+          if (stravaId == null) continue;
+          const garminId = `strava-${stravaId}`;
+          const actType = mapStravaType((act?.sport_type as string) || (act?.type as string) || "");
+          if (actType !== "CYCLING" && actType !== "MOUNTAIN_BIKING") continue;
+          const power = extractPowerFields(act);
+          if (
+            power.average_watts == null &&
+            power.normalized_power == null &&
+            power.max_watts == null &&
+            power.device_watts == null &&
+            power.kilojoules == null
+          ) continue;
+          powerAttempted++;
+          try {
+            const { error: powErr } = await supabase.from("garmin_activities")
+              .update(power)
+              .eq("garmin_id", garminId)
+              .eq("user_id", user.id);
+            if (powErr) {
+              console.warn(`[Backfill] Power update failed for ${garminId}:`, powErr.message);
+              continue;
+            }
+            powerHealed++;
+          } catch (inner) {
+            console.warn(`[Backfill] Power update threw for ${garminId}:`, inner);
+          }
         }
-        powerHealed++;
+      } catch (outer) {
+        console.warn('[Backfill] Power heal loop aborted:', outer);
       }
-      if (powerHealed > 0) console.log(`[Backfill] Patched power on ${powerHealed} rides`);
+      console.log(`[Backfill] Power heal: attempted=${powerAttempted} patched=${powerHealed} (out of ${allActivities.length} activities)`);
 
       // 6b. Heal hr_drift on cached-with-zones running activities that pre-date the column.
       // Budget: 20 per run to stay well under Strava's rate limits (we already spent up to

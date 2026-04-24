@@ -11,6 +11,7 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/CHANGELOG.md` | Session-by-session history of significant changes |
 | `docs/UX_PATTERNS.md` | Design reference — zone bars, area charts, drill-down sub-pages, colour rules, **overlay/modal positioning** |
 | `docs/SCIENCE_LOG.md` | Scientific rationale for every model/formula — constants, derivations, limitations, literature references |
+| `docs/WEBHOOKS.md` | Garmin webhook reference — every payload type, DB targets, production verification requirements, debugging checklist |
 
 ## Issue Tracking Workflow
 
@@ -36,6 +37,10 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Test**: `npx vitest run` (single run) / `npx vitest` (watch)
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
+
+## Supabase dashboard has a built-in AI
+
+When asking the user to diagnose edge function / DB issues, remember the Supabase dashboard offers an AI assistant that can read logs, traces and schema directly. It needs an `execution_id` to pull the stack trace for a specific 500 — so guide the user to click the failing invocation row first, grab the execution_id, and paste it into the Supabase AI prompt. Faster than asking the user to transcribe stack traces manually.
 
 ## Tracking vs Planning — Keep Them Separate
 
