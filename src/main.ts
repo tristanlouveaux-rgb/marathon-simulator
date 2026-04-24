@@ -190,7 +190,28 @@ async function launchApp(): Promise<void> {
       // triathlon-shaped (fresh empty weeks) so in-memory mirrors lose the
       // pre-onboarding activity history. Database query sees everything
       // including unmatched rides/swims.
-      const activityLog = await loadActivitiesFromDB(500);
+      let activityLog = await loadActivitiesFromDB(500);
+
+      // Tri onboarding skips the Strava connection step. If the DB is
+      // empty but the user has Strava tokens, pull a 16-week backfill
+      // before deriving — otherwise new tri users would see CTL 0 until
+      // they manually press sync.
+      if (activityLog.length === 0 && !isSimulatorMode()) {
+        const stravaOk = await isStravaConnected();
+        if (stravaOk) {
+          console.log('[tri] DB empty + Strava connected — triggering backfill (16w)');
+          try {
+            await backfillStravaHistory(16);
+            activityLog = await loadActivitiesFromDB(500);
+            console.log(`[tri] Post-backfill: ${activityLog.length} activities loaded`);
+          } catch (err) {
+            console.warn('[tri] Backfill failed', err);
+          }
+        } else {
+          console.log('[tri] DB empty and Strava not connected — benchmarks will stay skill-slider based');
+        }
+      }
+
       const derived = deriveTriBenchmarksFromHistory(activityLog);
 
       // Update per-discipline fitness every boot so CTL reflects what's
