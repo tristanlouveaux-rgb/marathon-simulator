@@ -14,7 +14,6 @@ import { rate, skip, removeGarminActivity, next, setOnWeekAdvance, isBenchmarkWe
 import { openActivityReReview, showActivityReview } from './activity-review';
 import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
-import { openCoachModal } from './coach-modal';
 import { applyIllnessMods, clearIllness, openIllnessModal } from './illness-modal';
 import { applyHolidayMods, buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
 import { openSessionGenerator } from './session-generator';
@@ -23,9 +22,10 @@ import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { computeWeekTSS, computeWeekRawTSS, getWeeklyExcess, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore, computeCrossTrainTSSPerMin, estimateWorkoutDurMin, computeDecayedCarry } from '@/calculations/fitness-model';
+import { computeDailyCoach } from '@/calculations/daily-coach';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
-import { formatKm, fmtDesc, formatPace } from '@/utils/format';
+import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
 import { showRunBreakdownSheet, buildProgressBars } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
@@ -477,14 +477,14 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
         html += `<button class="plan-action-skip" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Skip</button>`;
         html += `</div>`;
       } else if (w.t === 'gym') {
-        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
-        html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+        html += `<button class="plan-action-mark-done m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="0" data-type="gym" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px">Mark Done</button>`;
+        html += `<button class="plan-action-skip m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;opacity:0.6">Skip</button>`;
       } else {
-        html += `<button class="plan-action-mark-done m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;display:block">Mark Done</button>`;
-        html += `<button class="plan-action-skip m-btn-secondary" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.6">Skip</button>`;
+        html += `<button class="plan-action-mark-done m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px">Mark Done</button>`;
+        html += `<button class="plan-action-skip m-btn-glass m-btn-glass--inset" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-type="${w.t}" data-rpe="${rpe}" data-desc="${safeDesc}" data-day="${w.dayOfWeek ?? 0}" data-week-num="${viewWeek}" style="width:100%;opacity:0.6">Skip</button>`;
       }
     } else if (isDone) {
-      html += `<button class="plan-action-unrate m-btn-secondary" data-workout-id="${escapeHtml(id)}" style="width:100%;font-size:12px;padding:8px 0;text-align:center;display:block;opacity:0.7">Unmark as Done</button>`;
+      html += `<button class="plan-action-unrate m-btn-glass m-btn-glass--inset" data-workout-id="${escapeHtml(id)}" style="width:100%;opacity:0.7">Unmark as Done</button>`;
     }
   } // end synced guard
 
@@ -721,6 +721,11 @@ function buildWorkoutCards(
     todayInRange = now >= wkStart && now <= wkEnd;
   }
 
+  // Compute coach once per render so the indicator can attach to today's row only.
+  // Skipped outside the current-week-and-in-range view — the modifier only makes sense for today.
+  const coach = isCurrentWeek && todayInRange ? computeDailyCoach(s) : null;
+  const todayMod = coach ? coach.workoutMod : 'none';
+
   // Pre-compute effective dayOfWeek for each workout based on garminActual startTime
   const effectiveDay = new Map<string, number>();
   if (s.planStartDate && wk?.garminActuals) {
@@ -940,6 +945,15 @@ function buildWorkoutCards(
           </div>`
         : '';
 
+      // Coach workout modifier note — rendered only on today's row, only when the session
+      // isn't done, and only when stance maps to downgrade or skip. Informational only.
+      const showCoachNote = isToday && !isDone && !isSkipped && !isReplaced && todayMod !== 'none' && !!coach;
+      const coachNoteRow = showCoachNote
+        ? (todayMod === 'skip'
+            ? `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
+            : `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Downgraded.</strong> ${coach!.primaryMessage}</div>`)
+        : '';
+
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
       cards.push(`
         <div ${dayAnchorId}class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="border-top:1px solid var(--c-border);${borderLeft}">
@@ -960,6 +974,7 @@ function buildWorkoutCards(
             </div>
           </div>
           ${autoReduceRow}
+          ${coachNoteRow}
           ${expandDetail}
         </div>
       `);
@@ -1006,7 +1021,7 @@ function buildWrapUpWeekBtn(s: SimulatorState, workouts: any[], viewWeek: number
   }
   const show = today === 6 || pastWeekEnd || allWorkoutsDone(workouts, wk);
   if (!show) return '';
-  return `<button id="plan-wrap-up-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Wrap up week</button>`;
+  return `<button id="plan-wrap-up-btn" class="m-btn-glass">Wrap up week</button>`;
 }
 
 // ─── Injury UI ───────────────────────────────────────────────────────────────
@@ -1020,7 +1035,7 @@ function buildInjuryHeaderBtn(injured: boolean, isCurrentWeek: boolean): string 
   if (injured) {
     return `<button id="plan-injury-update" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(234,88,12,0.12);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#92400E;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">In Recovery</button>`;
   }
-  return `<button id="plan-checkin-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Check-in</button>`;
+  return `<button id="plan-checkin-btn" class="m-btn-glass">Check-in</button>`;
 }
 
 /**
@@ -1062,6 +1077,36 @@ function buildIllnessBanner(): string {
           Recovered
         </button>
       </div>
+    </div>
+  `;
+}
+
+/**
+ * Goal-feasibility banner — flags when the end-of-plan forecast is materially
+ * slower than the user's frozen goal (s.initialBaseline). 20-min threshold is a
+ * pragmatic cut-off: smaller deltas fall inside normal race-day variance (weather,
+ * fuelling, pacing) and shouldn't alarm the user. Larger deltas mean the current
+ * plan + fitness trajectory won't get them there — surface the gap and offer to
+ * add a quality session (same lever as the milestone accept flow).
+ */
+function buildGoalFeasibilityBanner(s: SimulatorState): string {
+  if (s.continuousMode || !s.initialBaseline || !s.forecastTime) return '';
+  // Suppress once we hit taper/deload — no time to add stimulus, and the
+  // CTA would be misleading with only 2-3 low-volume weeks left to work with.
+  const currentWeek = s.wks?.[(s.w ?? 1) - 1];
+  if (currentWeek?.ph === 'taper') return '';
+  const goalSec = s.initialBaseline;
+  const forecastSec = s.forecastTime;
+  const gapSec = forecastSec - goalSec;
+  if (gapSec < 20 * 60) return '';
+  const gapMin = Math.round(gapSec / 60);
+  const canAddSession = (s.epw ?? 0) < 7;
+  return `
+    <div style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Goal check</div>
+      <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.5;margin-bottom:4px">Forecast finish ${ft(forecastSec)} is ${gapMin} min slower than your goal of ${ft(goalSec)}.</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:${canAddSession ? '12px' : '0'}">The prediction updates weekly as your running data comes in. Adding a quality session raises the ceiling the plan can hit.</div>
+      ${canAddSession ? `<button id="goal-add-session" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">Add a quality session</button>` : ''}
     </div>
   `;
 }
@@ -1671,7 +1716,7 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
           </div>
         ` : `
           <p style="font-size:13px;color:var(--c-muted);margin:0 0 16px">No run scheduled today — no adjustments needed.</p>
-          <button id="ra-dismiss" class="m-btn-secondary" style="width:100%">Dismiss</button>
+          <button id="ra-dismiss" class="m-btn-glass m-btn-glass--inset" style="width:100%">Dismiss</button>
         `}
       </div>
     </div>
@@ -1902,14 +1947,11 @@ function _renderPills(pills: SignalPill[]): string {
 
 // buildWeekOverview removed — pills now rendered inline in header
 
-// ─── Main render ─────────────────────────────────────────────────────────────
-
-function getPlanHTML(s: SimulatorState, viewWeek: number): string {
+// Computes the resolved workout list for a given week with all mods/moves/illness/holiday/bridge applied.
+// Shared between getPlanHTML (full render) and rerenderWeekListLocal (localized drag-and-drop rerender).
+function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
   const wk = s.wks?.[viewWeek - 1];
-  const rated = wk?.rated ?? {};
   const isCurrentWeek = viewWeek === s.w;
-
-  // Get workouts for this week — must match activity-review.ts call exactly so workout IDs align
   const workouts = wk
     ? generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
@@ -1919,7 +1961,6 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     )
     : [];
 
-  // Merge user-generated sessions (holiday or adhoc) into the workout list so they render as cards
   if (wk?.adhocWorkouts) {
     for (const aw of wk.adhocWorkouts) {
       if ((aw.id || '').startsWith('holiday-') || (aw.id || '').startsWith('adhoc-')) {
@@ -1928,11 +1969,8 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     }
   }
 
-  // Apply mods
   if (wk?.workoutMods) {
     for (const mod of wk.workoutMods) {
-      // Timing mods are created after applying workoutMoves, so their dayOfWeek is
-      // the moved day — but workouts still have default days here. Match by name only.
       const w = isTimingMod(mod.modReason)
         ? workouts.find((wo: any) => wo.n === mod.name)
         : workouts.find((wo: any) => wo.n === mod.name && (mod.dayOfWeek == null || wo.dayOfWeek === mod.dayOfWeek));
@@ -1940,19 +1978,16 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
         (w as any).modReason = mod.modReason;
         if (mod.autoReduceNote != null) (w as any).autoReduceNote = mod.autoReduceNote;
         if (!isTimingMod(mod.modReason)) {
-          // Non-timing mods: apply distance/type/status changes
           if (mod.originalDistance != null) (w as any).originalDistance = mod.originalDistance;
           (w as any).d = mod.newDistance;
           (w as any).status = mod.status;
           if (mod.newType) (w as any).t = mod.newType;
           if (mod.newRpe != null) (w as any).rpe = mod.newRpe;
         }
-        // Timing mods are suggestions only — workout distance/type/status unchanged
       }
     }
   }
 
-  // Apply day moves (drag-and-drop reorder)
   if (wk?.workoutMoves) {
     for (const [workoutId, newDay] of Object.entries(wk.workoutMoves)) {
       const w = workouts.find((wo: any) => (wo.id || wo.n) === workoutId);
@@ -1960,15 +1995,11 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     }
   }
 
-  // Apply illness modifications in memory (render-time only — not persisted to state)
   const _illness = (s as any).illnessState;
   if (_illness?.active && isCurrentWeek) {
     applyIllnessMods(workouts, _illness.severity);
   }
 
-  // Apply holiday modifications in memory (render-time only)
-  // Only for active holidays where today >= startDate (not future scheduled holidays)
-  // Also verify endDate hasn't passed — prevents stale state from applying mods
   const _holiday = s.holidayState;
   const _today = new Date().toISOString().split('T')[0];
   if (_holiday?.active && _today >= _holiday.startDate && _today <= _holiday.endDate
@@ -1977,16 +2008,24 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     applyHolidayMods(workouts, _holiday.canRun, holidayDays);
   }
 
-  // Apply post-holiday bridge scaling (render-time only)
-  if (wk) {
-    applyBridgeMods_renderTime(workouts, wk);
-  }
+  if (wk) applyBridgeMods_renderTime(workouts, wk);
 
-  // Populate workout lookup for Start button click handlers
   _workoutLookup = new Map();
   for (const w of workouts) {
     _workoutLookup.set(w.id || w.n, { n: w.n || '', d: w.d || '' });
   }
+
+  return workouts;
+}
+
+// ─── Main render ─────────────────────────────────────────────────────────────
+
+function getPlanHTML(s: SimulatorState, viewWeek: number): string {
+  const wk = s.wks?.[viewWeek - 1];
+  const rated = wk?.rated ?? {};
+  const isCurrentWeek = viewWeek === s.w;
+
+  const workouts = computeRenderedWorkouts(s, viewWeek);
 
   const dateRange = fmtWeekRange(s.planStartDate, viewWeek);
   const phase = wk?.ph ? phaseLabel(wk.ph) : '';
@@ -2223,11 +2262,11 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
           <!-- Action buttons — part of the hero block -->
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
-            ${isCurrentWeek ? `<button id="plan-coach-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Coach</button>` : ''}
+            ${isCurrentWeek ? `<button id="plan-coach-btn" class="m-btn-glass">Coach</button>` : ''}
             ${buildInjuryHeaderBtn(injured, isCurrentWeek)}
             ${_wrapBtn}
-            ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Review past week</button>` : ''}
-            ${viewWeek === s.w ? `<button id="plan-generate-session" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:${_TM};font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">+ Add session</button>` : ''}
+            ${isCurrentWeek && s.w > 1 ? `<button id="plan-review-week-btn" class="m-btn-glass">Review past week</button>` : ''}
+            ${viewWeek === s.w ? `<button id="plan-generate-session" class="m-btn-glass">+ Add session</button>` : ''}
           </div>
         </div>
 
@@ -2244,12 +2283,13 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           ${buildCarryOverCard(wk)}
           ${buildKmNudgeCard(wk, s, workouts)}
           ${buildAdjustWeekRow(wk, s)}
+          ${buildGoalFeasibilityBanner(s)}
           ${buildInjuryBanner()}
           ${buildIllnessBanner()}
           ${buildHolidayBannerPlan(s)}
           ${buildMorningPainCheck()}
           ${buildBenchmarkPanel(s)}
-          <div class="plan-fade" style="animation-delay:0.18s;margin:10px 16px 0;${PLAN_CARD_STYLE};overflow:hidden">
+          <div id="plan-week-list" class="plan-fade" style="animation-delay:0.18s;margin:10px 16px 0;${PLAN_CARD_STYLE};overflow:hidden">
             ${buildWorkoutCards(s, workouts, viewWeek)}
           </div>
           ${buildActivityLog(wk, viewWeek, s.w)}
@@ -2286,8 +2326,26 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // (Week overview toggle removed — pills now inline)
 
-  // Coach button
-  document.getElementById('plan-coach-btn')?.addEventListener('click', () => openCoachModal());
+  // Goal-feasibility: add a quality session. Mirror the onboarding
+  // milestone-accept lever (plan-preview.ts) — bump both rw (drives plan
+  // regeneration) and epw (drives forecast). Then re-blend so the banner
+  // disappears and expectedFinal/forecastTime reflect the added stimulus.
+  document.getElementById('goal-add-session')?.addEventListener('click', () => {
+    const ms = getMutableState();
+    ms.rw = Math.min((ms.rw ?? 0) + 1, 7);
+    ms.epw = Math.min((ms.epw ?? 0) + 1, 10);
+    saveState();
+    import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
+      refreshBlendedFitness(ms);
+      saveState();
+      renderPlanView();
+    });
+  });
+
+  // Coach button → Coach sub-page
+  document.getElementById('plan-coach-btn')?.addEventListener('click', () => {
+    import('./coach-view').then(({ renderCoachView }) => renderCoachView(() => renderPlanView()));
+  });
 
   // Check-in button
   document.getElementById('plan-checkin-btn')?.addEventListener('click', () => openCheckinOverlay());
@@ -2807,7 +2865,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       mergeTimingMods(ms, wk2);
       saveState();
       _dragId = '';
-      renderPlanView();
+      rerenderWeekListLocal(viewWeek);
     });
   });
 
@@ -2841,7 +2899,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       mergeTimingMods(ms, wk2);
       saveState();
       _dragId = '';
-      renderPlanView();
+      rerenderWeekListLocal(viewWeek);
     });
   });
 
@@ -2864,6 +2922,22 @@ export function renderPlanView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
+
+  // Triathlon fork — route to the tri plan view before any running-specific
+  // setup runs. Running and track-only flows below are unaffected.
+  if (s.eventType === 'triathlon') {
+    import('./triathlon/plan-view').then(({ renderTriathlonPlanView }) => renderTriathlonPlanView());
+    return;
+  }
+
+  // Just-Track users have no plan. Render an empty-state card with an
+  // "Create a plan" CTA that relaunches the wizard at goals.
+  if (s.trackOnly) {
+    container.innerHTML = getTrackOnlyPlanHTML(s);
+    wireTrackOnlyPlanHandlers();
+    return;
+  }
+
   const viewWeek = (_viewWeek !== null && _viewWeek >= 1 && _viewWeek <= s.tw)
     ? _viewWeek
     : s.w;
@@ -2879,4 +2953,474 @@ export function renderPlanView(): void {
   if (viewWeek === s.w && shouldShowSundayDebrief()) {
     setTimeout(() => showWeekDebrief(s.w, 'complete'), 400);
   }
+}
+
+// Localized re-render of just the week-list card after drag-and-drop.
+// Same-week day reorders don't change weekly totals (TSS, km, counts), so the
+// header/banners above the list stay correct — rebuilding them causes a flicker.
+// We replace only the list's innerHTML and re-wire handlers scoped to the new nodes.
+// Non-card handlers (coach btn, banners, nav) are untouched and keep their original listeners.
+function rerenderWeekListLocal(viewWeek: number): void {
+  const listEl = document.getElementById('plan-week-list');
+  if (!listEl) { renderPlanView(); return; }
+  const s = getState();
+  const workouts = computeRenderedWorkouts(s, viewWeek);
+  listEl.innerHTML = buildWorkoutCards(s, workouts, viewWeek);
+  wireCardScopedHandlers(listEl, viewWeek);
+}
+
+// Wires handlers for elements that live inside .plan-workout-card / .plan-drop-zone.
+// Scoped to `root` so a localized rerender only rebinds fresh card nodes and doesn't
+// double-bind handlers on persistent outside elements (e.g. activity-log rows).
+function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
+  // Start buttons (header + expanded detail)
+  const startHandler = (e: Event) => {
+    e.stopPropagation();
+    const btn = e.currentTarget as HTMLElement;
+    const wkId = btn.dataset.workoutId || '';
+    const workout = _workoutLookup.get(wkId);
+    const name = workout?.n || wkId;
+    const desc = workout?.d || '';
+    if (window.trackWorkout) window.trackWorkout(name, desc);
+  };
+  root.querySelectorAll('.plan-start-btn').forEach(el => el.addEventListener('click', startHandler));
+  root.querySelectorAll('.plan-detail-start-btn').forEach(el => el.addEventListener('click', startHandler));
+
+  // Expand chevron (view arrow)
+  root.querySelectorAll('.plan-view-btn').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = (el as HTMLElement).dataset.workoutId || '';
+      const detail = document.getElementById(safeDetailId(id));
+      if (detail) {
+        const isExpanded = detail.style.display !== 'none';
+        detail.style.display = isExpanded ? 'none' : 'block';
+        const card = detail.closest('.plan-workout-card');
+        const chevron = card?.querySelector('.plan-card-chevron') as SVGElement | null;
+        if (chevron) chevron.style.transform = isExpanded ? '' : 'rotate(180deg)';
+      }
+    });
+  });
+
+  // Card header click (expand/collapse)
+  root.querySelectorAll('.plan-card-header').forEach(header => {
+    header.addEventListener('click', (e) => {
+      const target = e.target as Element;
+      if (target.closest('.plan-start-btn') || target.closest('.plan-view-btn') || target.closest('.plan-act-open') || target.closest('.plan-recovery-undo-btn')) return;
+      const card = header.closest('.plan-workout-card') as HTMLElement;
+      const id = card?.getAttribute('data-workout-id');
+      if (!id) return;
+      const detail = document.getElementById(safeDetailId(id));
+      if (!detail) return;
+      const isExpanded = detail.style.display !== 'none';
+      detail.style.display = isExpanded ? 'none' : 'block';
+      const chevron = header.querySelector('.plan-card-chevron') as SVGElement;
+      if (chevron) chevron.style.transform = isExpanded ? '' : 'rotate(180deg)';
+      if (!isExpanded) {
+        detail.querySelectorAll<HTMLCanvasElement>('canvas.plan-detail-map').forEach(canvas => {
+          const encoded = canvas.dataset.polyline;
+          if (!encoded) return;
+          const kmSplitsRaw = canvas.dataset.kmSplits;
+          const kmSplits = kmSplitsRaw ? JSON.parse(kmSplitsRaw) as number[] : undefined;
+          import('./strava-detail').then(({ drawPolylineOnCanvas }) => {
+            requestAnimationFrame(() => void drawPolylineOnCanvas(canvas, encoded, kmSplits));
+          });
+        });
+      }
+    });
+  });
+
+  // Move-to-day buttons
+  root.querySelectorAll<HTMLElement>('.plan-move-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wId = btn.dataset.workoutId || '';
+      const targetDay = parseInt(btn.dataset.targetDay || '-1', 10);
+      const currentDay = parseInt(btn.dataset.currentDay || '-1', 10);
+      if (!wId || targetDay < 0 || targetDay === currentDay) return;
+      const ms = getMutableState();
+      const wk2 = ms.wks?.[viewWeek - 1];
+      if (!wk2) return;
+      const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+      moves[wId] = targetDay;
+      mergeTimingMods(ms, wk2);
+      saveState();
+      renderPlanView();
+    });
+  });
+
+  // Expanded detail actions
+  root.querySelectorAll('.plan-action-mark-done').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const wId = el.dataset.workoutId || '';
+      const name = el.dataset.name || '';
+      const rpe = parseInt(el.dataset.rpe || '5', 10);
+      const type = el.dataset.type || 'easy';
+      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
+      rate(wId, name, rpe, rpe, type, false, undefined, weekNum);
+      renderPlanView();
+    });
+  });
+
+  root.querySelectorAll('.plan-action-skip').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const wId = el.dataset.workoutId || '';
+      const name = el.dataset.name || '';
+      const type = el.dataset.type || 'easy';
+      const rpe = parseInt(el.dataset.rpe || '5', 10);
+      const desc = el.dataset.desc || '';
+      const day = parseInt(el.dataset.day || '0', 10);
+      const weekNum = el.dataset.weekNum ? parseInt(el.dataset.weekNum, 10) : undefined;
+      skip(wId, name, type, false, 0, desc, rpe, day, '', weekNum);
+      renderPlanView();
+    });
+  });
+
+  root.querySelectorAll('.plan-action-unrate').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const el = btn as HTMLElement;
+      const wId = el.dataset.workoutId || '';
+      const ms = getMutableState();
+      const wk = ms.wks?.[ms.w - 1];
+      if (!wk) return;
+      delete wk.rated[wId];
+      if (wk.garminActuals?.[wId]) {
+        const gId = wk.garminActuals[wId].garminId;
+        delete wk.garminActuals[wId];
+        if (gId && wk.garminMatched?.[gId]) wk.garminMatched[gId] = '__pending__';
+      }
+      saveState();
+      renderPlanView();
+    });
+  });
+
+  root.querySelectorAll('.plan-remove-garmin').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const gId = (btn as HTMLElement).dataset.garminId || '';
+      if (gId) removeGarminActivity(gId);
+      renderPlanView();
+    });
+  });
+
+  // Tier-1 auto-reduce undo
+  root.querySelectorAll<HTMLElement>('.plan-auto-undo-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const s2 = getMutableState();
+      const wk2 = s2.wks?.[s2.w - 1];
+      if (!wk2) return;
+      wk2.workoutMods = (wk2.workoutMods ?? []).filter(m => !m.modReason?.startsWith('Auto:'));
+      saveState();
+      import('@/ui/renderer').then(({ render }) => render());
+    });
+  });
+
+  // Timing-suggestion accept
+  root.querySelectorAll<HTMLElement>('.plan-timing-accept').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const workoutName = btn.dataset.workoutName || '';
+      const dayOfWeek = btn.dataset.day !== '' ? parseInt(btn.dataset.day!, 10) : undefined;
+      const newType = btn.dataset.newType || '';
+      const newDistance = btn.dataset.newDistance || '';
+      if (!workoutName || !newType) return;
+      const ms = getMutableState();
+      const wk = ms.wks?.[ms.w - 1];
+      if (!wk) return;
+      wk.workoutMods = (wk.workoutMods ?? []).filter(
+        m => !(isTimingMod(m.modReason) && m.name === workoutName && (dayOfWeek == null || m.dayOfWeek === dayOfWeek))
+      );
+      wk.workoutMods.push({
+        name: workoutName,
+        dayOfWeek,
+        status: 'reduced',
+        modReason: 'Timing accepted: hard session day before',
+        confidence: 'medium',
+        originalDistance: newDistance,
+        newDistance,
+        newType,
+      });
+      saveState();
+      renderPlanView();
+    });
+  });
+
+  // Activity-match click-through (card-side only; log-side handled by initial wire)
+  root.querySelectorAll<HTMLElement>('.plan-act-open').forEach(el => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const workoutKey = el.dataset.workoutKey || '';
+      const weekNum = parseInt(el.dataset.weekNum || '0', 10);
+      if (!workoutKey || !weekNum) return;
+      const s2 = getState();
+      const actual = s2.wks?.[weekNum - 1]?.garminActuals?.[workoutKey];
+      if (!actual) return;
+      const plannedTSSAttr = parseInt(el.dataset.plannedTss || '0', 10) || 0;
+      const { renderActivityDetail } = await import('./activity-detail');
+      renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey, 'plan', plannedTSSAttr || undefined, workoutKey);
+    });
+  });
+
+  // Adhoc delete
+  root.querySelectorAll<HTMLElement>('.plan-adhoc-delete-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const el = e.currentTarget as HTMLElement;
+      const wkId = el.dataset.workoutId || '';
+      const weekNum = parseInt(el.dataset.weekNum || '0', 10);
+      const ms = getMutableState();
+      const wk2 = ms.wks?.[weekNum - 1];
+      if (wk2?.adhocWorkouts) {
+        wk2.adhocWorkouts = wk2.adhocWorkouts.filter((w: any) => (w.id || w.n) !== wkId);
+        saveState();
+        renderPlanView();
+      }
+    });
+  });
+
+  // Drag-and-drop reorder
+  let _dragId = '';
+  let _dragDay = -1;
+  root.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
+    card.addEventListener('dragstart', (e) => {
+      _dragId = card.dataset.workoutId || '';
+      _dragDay = parseInt(card.dataset.dayOfWeek || '-1', 10);
+      (e as DragEvent).dataTransfer?.setData('text/plain', _dragId);
+      card.style.opacity = '0.4';
+    });
+    card.addEventListener('dragend', () => {
+      card.style.opacity = '';
+      card.style.outline = '';
+    });
+    card.addEventListener('dragover', (e) => {
+      if (!_dragId || card.dataset.workoutId === _dragId) return;
+      e.preventDefault();
+      card.style.outline = '2px solid var(--c-accent)';
+      card.style.outlineOffset = '-2px';
+    });
+    card.addEventListener('dragleave', () => {
+      card.style.outline = '';
+    });
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      card.style.outline = '';
+      const srcId = _dragId || (e as DragEvent).dataTransfer?.getData('text/plain') || '';
+      if (!srcId || card.dataset.workoutId === srcId) return;
+      const targetId = card.dataset.workoutId || '';
+      const srcDay = _dragDay;
+      const targetDay = parseInt(card.dataset.dayOfWeek || '-1', 10);
+      if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
+      const ms = getMutableState();
+      const wk2 = ms.wks?.[viewWeek - 1];
+      if (!wk2) return;
+      const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+      moves[srcId] = targetDay;
+      if (targetId) moves[targetId] = srcDay;
+      mergeTimingMods(ms, wk2);
+      saveState();
+      _dragId = '';
+      rerenderWeekListLocal(viewWeek);
+    });
+  });
+
+  root.querySelectorAll<HTMLElement>('.plan-drop-zone').forEach(zone => {
+    zone.addEventListener('dragover', (e) => {
+      if (!_dragId) return;
+      e.preventDefault();
+      zone.style.background = 'rgba(99,102,241,0.08)';
+      const label = zone.querySelector('.plan-drop-label') as HTMLElement | null;
+      if (label) label.textContent = 'Drop here';
+    });
+    zone.addEventListener('dragleave', () => {
+      zone.style.background = '';
+      const label = zone.querySelector('.plan-drop-label') as HTMLElement | null;
+      if (label) label.textContent = 'Rest';
+    });
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.style.background = '';
+      const label = zone.querySelector('.plan-drop-label') as HTMLElement | null;
+      if (label) label.textContent = 'Rest';
+      const srcId = _dragId || (e as DragEvent).dataTransfer?.getData('text/plain') || '';
+      const targetDay = parseInt(zone.dataset.dayOfWeek || '-1', 10);
+      if (!srcId || targetDay < 0 || _dragDay === targetDay) return;
+      const ms = getMutableState();
+      const wk2 = ms.wks?.[viewWeek - 1];
+      if (!wk2) return;
+      const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+      moves[srcId] = targetDay;
+      mergeTimingMods(ms, wk2);
+      saveState();
+      _dragId = '';
+      rerenderWeekListLocal(viewWeek);
+    });
+  });
+}
+
+// ─── Just-Track empty state ─────────────────────────────────────────────────
+
+/**
+ * Just-Track Plan tab. No forward planning — instead, a retrospective log:
+ * current week broken down by day (showing synced + recorded activities),
+ * followed by a rolling history list of prior weeks with totals. Create-a-plan
+ * CTA lives at the bottom.
+ *
+ * Values come from each week's `garminActuals` / `adhocWorkouts` — the same
+ * buckets planned users write to. No special trackOnly data store.
+ */
+function getTrackOnlyPlanHTML(s: SimulatorState): string {
+  const unit = s.unitPref ?? 'km';
+  const wks = s.wks ?? [];
+  const currentWk = wks[s.w - 1];
+  const priorWks = wks.slice(0, Math.max(0, s.w - 1)).reverse();
+
+  const currentWeekBlock = currentWk
+    ? buildTrackOnlyWeekDetail(s, currentWk, 'This week')
+    : '<div style="font-size:13px;color:var(--c-muted);padding:18px">No current week — sync or record an activity to begin.</div>';
+
+  const historyBlock = priorWks.length === 0 ? '' : `
+    <div class="tp-rise" style="margin-top:22px;animation-delay:0.12s">
+      <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.06em;text-transform:uppercase;padding:0 4px 10px">History</div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${priorWks.slice(0, 12).map(wk => buildTrackOnlyWeekRow(s, wk, unit)).join('')}
+      </div>
+    </div>`;
+
+  return `
+    <style>
+      @keyframes floatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+      .tp-rise { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .tp-week-row { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04); padding:14px 16px; display:flex; align-items:center; gap:14px; }
+      .tp-week-num { font-size:10px; font-weight:600; color:#94A3B8; letter-spacing:0.05em; text-transform:uppercase; }
+      .tp-week-total { font-size:18px; font-weight:700; color:#0F172A; letter-spacing:-0.01em; font-variant-numeric:tabular-nums; }
+      .tp-week-sub { font-size:11px; color:#64748B; margin-top:2px; }
+    </style>
+    <div class="mosaic-page" style="background:#FAF9F6;position:relative;min-height:100vh">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%);pointer-events:none"></div>
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding:56px 16px 120px">
+
+        <div class="tp-rise" style="padding:0 4px 18px">
+          <div style="font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#0F172A">Log</div>
+          <div style="font-size:13px;color:#64748B;margin-top:2px">Activities only. No plan.</div>
+        </div>
+
+        ${currentWeekBlock}
+        ${historyBlock}
+
+        <div class="tp-rise" style="margin-top:22px;animation-delay:0.18s">
+          <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
+            <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:8px">Want a plan?</div>
+            <div style="font-size:13px;line-height:1.45;color:#475569;margin-bottom:14px">Turn your synced activities into scheduled workouts, load targets, and weekly volume progressions.</div>
+            <button id="plan-create-btn" class="m-btn-glass">Create a plan</button>
+          </div>
+        </div>
+
+      </div>
+      ${renderTabBar('plan', isSimulatorMode())}
+    </div>
+  `;
+}
+
+/** Per-week row for the Plan-tab history list. */
+function buildTrackOnlyWeekRow(s: SimulatorState, wk: Week, unit: 'km' | 'mi'): string {
+  const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
+  const tss = Math.round(computeWeekRawTSS(wk, ratedMap, s.planStartDate));
+  let km = 0;
+  let sessions = 0;
+  for (const actual of Object.values(wk.garminActuals ?? {})) {
+    km += actual.distanceKm || 0;
+    sessions++;
+  }
+  for (const w of wk.adhocWorkouts ?? []) {
+    const ad = (w as any).garminDistKm ?? (w as any).distanceKm;
+    if (typeof ad === 'number') km += ad;
+    sessions++;
+  }
+  return `
+    <div class="tp-week-row">
+      <div style="flex:1;min-width:0">
+        <div class="tp-week-num">Week ${wk.w}</div>
+        <div class="tp-week-total">${formatKm(km, unit)}</div>
+        <div class="tp-week-sub">${sessions} session${sessions === 1 ? '' : 's'} · ${tss} TSS</div>
+      </div>
+    </div>`;
+}
+
+/** Current-week detail card: day-by-day list of activities. */
+function buildTrackOnlyWeekDetail(s: SimulatorState, wk: Week, title: string): string {
+  const unit = s.unitPref ?? 'km';
+  const ratedMap: Record<string, number | 'skip'> = wk.rated ?? {};
+  const tss = Math.round(computeWeekRawTSS(wk, ratedMap, s.planStartDate));
+
+  type Row = { day: string; name: string; value: string };
+  const rows: Row[] = [];
+  let km = 0;
+
+  for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
+    if (key.startsWith('garmin-')) {
+      // Will also appear in adhoc; skip here to dedupe.
+      const hasAdhoc = (wk.adhocWorkouts ?? []).some((w: any) => w.id === key);
+      if (hasAdhoc) continue;
+    }
+    km += actual.distanceKm || 0;
+    const d = actual.startTime ? new Date(actual.startTime) : null;
+    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
+    const val = actual.distanceKm ? formatKm(actual.distanceKm, unit)
+              : actual.durationSec ? `${Math.round(actual.durationSec / 60)} min` : '';
+    const name = (actual as any).displayName || (actual as any).workoutName || (actual.activityType ? formatActivityType(actual.activityType) : 'Activity');
+    rows.push({ day: dayLabel, name, value: val });
+  }
+  for (const w of (wk.adhocWorkouts ?? [])) {
+    const dist = (w as any).garminDistKm ?? (w as any).distanceKm;
+    if (typeof dist === 'number') km += dist;
+    const ts = (w as any).garminTimestamp;
+    const d = ts ? new Date(ts) : null;
+    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
+    const name = (w as any).activityType ? formatActivityType((w as any).activityType) : (w.n || 'Workout');
+    const val = typeof dist === 'number' ? formatKm(dist, unit)
+              : (w as any).durationMin ? `${Math.round((w as any).durationMin)} min` : '';
+    rows.push({ day: dayLabel, name, value: val });
+  }
+
+  // Sort newest-first within the week.
+  rows.reverse();
+
+  const rowsHtml = rows.length === 0
+    ? '<div style="padding:16px;text-align:center;font-size:13px;color:var(--c-muted)">No activities logged this week.</div>'
+    : rows.map(r => `
+        <div style="display:flex;align-items:center;gap:14px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.04)">
+          <div style="min-width:54px;font-size:11px;color:#64748B">${r.day}</div>
+          <div style="flex:1;min-width:0;font-size:14px;color:#0F172A">${r.name}</div>
+          <div style="font-size:13px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${r.value}</div>
+        </div>`).join('');
+
+  return `
+    <div class="tp-rise" style="animation-delay:0.06s">
+      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
+        <div style="padding:16px 16px 12px;display:flex;align-items:baseline;justify-content:space-between">
+          <div>
+            <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.05em;text-transform:uppercase">${title}</div>
+            <div style="font-size:24px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;margin-top:4px">${formatKm(km, unit)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:#64748B">TSS</div>
+            <div style="font-size:17px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${tss}</div>
+          </div>
+        </div>
+        ${rowsHtml}
+      </div>
+    </div>`;
+}
+
+function wireTrackOnlyPlanHandlers(): void {
+  wireTabBarHandlers(navigateTab);
+  document.getElementById('plan-create-btn')?.addEventListener('click', () => {
+    import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
+  });
 }

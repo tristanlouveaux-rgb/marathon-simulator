@@ -65,7 +65,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
   const { phase, skill, kind, targetMinutes, cssSecPer100m } = input;
 
   const totalM = estimateDistanceMetres(targetMinutes, skill, cssSecPer100m);
-  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill);
+  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill, input.weekIndex);
   const rpe = rpeForSwim(kind, phase);
 
   const { aerobic, anaerobic } = loadForSwim(kind, targetMinutes);
@@ -108,39 +108,76 @@ function nameForSwim(kind: SwimSessionKind): string {
   }
 }
 
+/**
+ * Variant rotation per kind — avoids generating the same workout every week.
+ * Pick by `weekIndex % variants.length`.
+ */
+const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: string) => string>> = {
+  technique: [
+    (m, _) => `${m}m total. 200m Warm up. Drills: 4×50m catch-up. Main: 6×100m easy @ +10s/100m, focus body position. 200m Cool down.`,
+    (m, _) => `${m}m total. 200m Warm up. Drills: 4×50m single-arm + 4×50m fingertip drag. Main: 4×150m easy. 200m Cool down.`,
+    (m, _) => `${m}m total. 200m Warm up. Drills: 6×25m fist swim + 4×50m 6-kick switch. Main: 8×75m easy pull. 200m Cool down.`,
+  ],
+  endurance: [
+    (m, hint) => {
+      const mainM = Math.max(200, m - 400);
+      const reps = Math.max(2, Math.round(mainM / 400));
+      const repM = Math.round(mainM / reps / 100) * 100;
+      return `${m}m total. 200m Warm up. Main: ${reps}×${repM}m steady${hint}, 30s rest. 200m Cool down.`;
+    },
+    (m, hint) => {
+      const mainM = Math.max(300, m - 400);
+      const reps = Math.max(3, Math.round(mainM / 200));
+      return `${m}m total. 200m Warm up. Main: ${reps}×200m pulling with paddles${hint}, 20s rest. 200m Cool down.`;
+    },
+    (m, hint) => `${m}m total. 200m Warm up. Main: ${Math.max(600, m - 400)}m continuous easy-steady${hint}. 200m Cool down.`,
+  ],
+  threshold: [
+    (m, hint) => {
+      const mainM = Math.max(400, m - 400);
+      const reps = Math.min(16, Math.max(6, Math.round(mainM / 100)));
+      return `${m}m total. 200m Warm up. Main: ${reps}×100m${hint}, 15s rest. 200m Cool down.`;
+    },
+    (m, hint) => {
+      const mainM = Math.max(400, m - 400);
+      const reps = Math.max(3, Math.round(mainM / 200));
+      return `${m}m total. 200m Warm up. Main: ${reps}×200m${hint}, 25s rest. 200m Cool down.`;
+    },
+    (m, hint) => {
+      const mainM = Math.max(400, m - 400);
+      const reps = Math.max(2, Math.round(mainM / 400));
+      return `${m}m total. 200m Warm up. Main: ${reps}×400m steady${hint}, 45s rest. 200m Cool down.`;
+    },
+  ],
+  speed: [
+    (m, _) => {
+      const mainM = Math.max(300, m - 400);
+      const reps = Math.min(12, Math.max(6, Math.round(mainM / 50)));
+      void mainM;
+      return `${m}m total. 200m Warm up. Main: ${reps}×50m fast (CSS −5s/100m), 30s rest. 200m Cool down.`;
+    },
+    (m, _) => {
+      const mainM = Math.max(300, m - 400);
+      const reps = Math.min(16, Math.max(8, Math.round(mainM / 25)));
+      void mainM;
+      return `${m}m total. 200m Warm up. Main: ${reps}×25m sprint on 30s. 200m Cool down.`;
+    },
+    (m, _) => `${m}m total. 200m Warm up. Main: 8×75m as 25m fast + 50m easy, 20s rest. 200m Cool down.`,
+  ],
+};
+
 function describeSwimSession(
   kind: SwimSessionKind,
   totalM: number,
   css: number | undefined,
-  skill: TriSkillSlider
+  skill: TriSkillSlider,
+  weekIndex: number
 ): string {
   const paceHint = css ? ` @ ${formatPace(css)}/100m (CSS)` : '';
-  const drillHint = skill <= 2 ? ' — focus on body position + breathing' : '';
-
-  switch (kind) {
-    case 'technique': {
-      // WU 200m + drills + easy reps + CD 200m
-      return `${totalM}m total. 200m WU, drills 4×50m, main 6×100m easy @ +10s/100m, 200m CD${drillHint}`;
-    }
-    case 'endurance': {
-      const mainM = Math.max(200, totalM - 400);
-      const reps = Math.max(2, Math.round(mainM / 400));
-      const repM = Math.round(mainM / reps / 100) * 100;
-      return `${totalM}m total. 200m WU, main ${reps}×${repM}m steady${paceHint}, 200m CD`;
-    }
-    case 'threshold': {
-      // 10–12×100m CSS with 15s rest
-      const mainM = Math.max(400, totalM - 400);
-      const reps = Math.min(16, Math.max(6, Math.round(mainM / 100)));
-      return `${totalM}m total. 200m WU, main ${reps}×100m${paceHint}, 15s rest, 200m CD`;
-    }
-    case 'speed': {
-      // 8–10×50m sharp
-      const mainM = Math.max(300, totalM - 400);
-      const reps = Math.min(12, Math.max(6, Math.round(mainM / 50)));
-      return `${totalM}m total. 200m WU, main ${reps}×50m fast (CSS −5s/100m), 30s rest, 200m CD`;
-    }
-  }
+  const drillHint = skill <= 2 ? ' Focus on body position and breathing.' : '';
+  const variants = SWIM_VARIANTS[kind];
+  const idx = Math.abs(weekIndex - 1) % variants.length;
+  return variants[idx](totalM, paceHint) + (kind === 'technique' ? drillHint : '');
 }
 
 function rpeForSwim(kind: SwimSessionKind, phase: TrainingPhase): number {

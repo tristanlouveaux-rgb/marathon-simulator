@@ -162,7 +162,7 @@ function generateWeekForTriathlon(
   for (let i = 0; i < runSessions; i++) {
     const share = i === runSessions - 1 ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
     const minutes = Math.max(30, Math.round(runHours * 60 * share));
-    run.push(generateRunSessionForTri(phase, i, runSessions, minutes));
+    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex));
   }
 
   // Brick (phase: build or peak, weekly in those phases)
@@ -237,11 +237,55 @@ function isDeloadWeek(weekIndex: number, phase: TrainingPhase): boolean {
 // Run session generator (tri-aware, not a fork of the running engine)
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Rough Z2 easy pace in sec/km by skill slider. Lets us estimate distance
+ * alongside duration for long runs so the user sees "~16 km (1h 45min)"
+ * instead of bare minutes.
+ */
+function easyPaceSecPerKm(skill: TriSkillSlider): number {
+  // Skill 1 → 7:00/km, 5 → 4:30/km (linear interpolation)
+  return 420 - (skill - 1) * 37.5;
+}
+
+function roundMin(mins: number): number {
+  return mins >= 30 ? Math.round(mins / 5) * 5 : Math.round(mins);
+}
+
+function fmtMin(mins: number): string {
+  const r = roundMin(mins);
+  const h = Math.floor(r / 60);
+  const m = r % 60;
+  if (h > 0 && m > 0) return `${h}h ${m}min`;
+  if (h > 0) return `${h}h`;
+  return `${m}min`;
+}
+
+const LONG_RUN_VARIANTS = [
+  (km: number, dur: string) => `~${km}km (${dur}) continuous Z2. Build aerobic endurance.`,
+  (km: number, dur: string) => `~${km}km (${dur}) with last 20min steady. Aerobic + mild fatigue resistance.`,
+  (km: number, dur: string) => `~${km}km (${dur}) progressive — start Z1, move to Z2 after 30min, hold steady.`,
+];
+
+const THRESHOLD_RUN_VARIANTS = [
+  () => `15min Warm up, 3×8min @ threshold, 2min recovery, 10min Cool down.`,
+  () => `15min Warm up, 4×6min @ threshold, 90s recovery, 10min Cool down.`,
+  () => `15min Warm up, 2×12min @ threshold, 3min recovery, 10min Cool down.`,
+  () => `15min Warm up, 6×4min @ 10k pace, 90s jog, 10min Cool down.`,
+];
+
+const EASY_RUN_VARIANTS = [
+  (dur: string) => `${dur} Z1–Z2 easy. Conversational throughout.`,
+  (dur: string) => `${dur} easy with 6×20s strides at the end. Strides are smooth, not sprints.`,
+  (dur: string) => `${dur} easy on soft surface if available. Recovery priority.`,
+];
+
 function generateRunSessionForTri(
   phase: TrainingPhase,
   slotIndex: number,
   totalSlots: number,
-  minutes: number
+  minutes: number,
+  skill: TriSkillSlider,
+  weekIndex: number
 ): Workout {
   const isLong = slotIndex === totalSlots - 1;
   const isQuality = slotIndex === 0 && (phase === 'build' || phase === 'peak');
@@ -254,26 +298,33 @@ function generateRunSessionForTri(
   let anaerobic: number;
 
   if (isLong) {
+    const r = roundMin(minutes);
+    const pace = easyPaceSecPerKm(skill);
+    const km = Math.round(((r * 60) / pace) * 2) / 2;  // nearest 0.5 km
+    const idx = Math.abs(weekIndex - 1) % LONG_RUN_VARIANTS.length;
     name = 'Long run';
-    desc = `${minutes}min continuous Z2. Build aerobic endurance.`;
+    desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r));
     t = 'long';
     rpe = phase === 'peak' ? 6 : 5;
-    aerobic = Math.round(minutes * 1.1);
-    anaerobic = Math.round(minutes * 0.15);
+    aerobic = Math.round(r * 1.1);
+    anaerobic = Math.round(r * 0.15);
   } else if (isQuality) {
+    const idx = Math.abs(weekIndex - 1) % THRESHOLD_RUN_VARIANTS.length;
     name = 'Threshold run';
-    desc = `15min WU, 3×8min @ threshold, 2min rec, 10min CD.`;
+    desc = THRESHOLD_RUN_VARIANTS[idx]();
     t = 'threshold';
     rpe = 8;
     aerobic = Math.round(minutes * 1.2);
     anaerobic = Math.round(minutes * 0.35);
   } else {
+    const r = roundMin(minutes);
+    const idx = Math.abs(weekIndex - 1) % EASY_RUN_VARIANTS.length;
     name = 'Easy run';
-    desc = `${minutes}min Z1-Z2 easy. Conversational throughout.`;
+    desc = EASY_RUN_VARIANTS[idx](fmtMin(r));
     t = 'easy';
     rpe = 4;
-    aerobic = Math.round(minutes * 0.95);
-    anaerobic = Math.round(minutes * 0.05);
+    aerobic = Math.round(r * 0.95);
+    anaerobic = Math.round(r * 0.05);
   }
 
   return {

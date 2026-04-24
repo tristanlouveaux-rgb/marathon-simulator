@@ -27,17 +27,25 @@ describe('Per-discipline fitness — transfer matrix application', () => {
     expect(fit.swim.ctl).toBe(0);              // padel → swim transfer is 0
   });
 
-  it('Combined CTL is weighted sum (not a raw sum)', () => {
+  it('Combined CTL is raw EMA across ALL activities (no transfer weighting)', () => {
+    // §8 feedback: combined CTL is full fatigue — every activity counts at 1.0
+    // regardless of sport, so padel/gym/hiking contribute at full weight too.
     const fit = computePerDisciplineFitness([
-      { sport: 'run',  rawTSS: 400, dayIndex: 0 },
-      { sport: 'bike', rawTSS: 400, dayIndex: 0 },
-      { sport: 'swim', rawTSS: 400, dayIndex: 0 },
+      { sport: 'run',   rawTSS: 100, dayIndex: 0 },
+      { sport: 'padel', rawTSS: 100, dayIndex: 0 },
     ]);
-    // Combined CTL should fall somewhere between min and max of the three
-    const minCtl = Math.min(fit.swim.ctl, fit.bike.ctl, fit.run.ctl);
-    const maxCtl = Math.max(fit.swim.ctl, fit.bike.ctl, fit.run.ctl);
-    expect(fit.combinedCtl).toBeGreaterThanOrEqual(minCtl);
-    expect(fit.combinedCtl).toBeLessThanOrEqual(maxCtl);
+    // Run CTL < 200 (only gets 1.0 from run + 0.35 from padel)
+    // Combined CTL reflects the full 200 raw TSS
+    expect(fit.combinedCtl).toBeGreaterThan(fit.run.ctl);
+  });
+
+  it('Combined CTL includes contributions from non-discipline sports', () => {
+    const justPadel = computePerDisciplineFitness([
+      { sport: 'padel', rawTSS: 100, dayIndex: 0 },
+    ]);
+    // Swim CTL for padel is 0 via transfer matrix, but combined still rises
+    expect(justPadel.swim.ctl).toBe(0);
+    expect(justPadel.combinedCtl).toBeGreaterThan(0);
   });
 
   it('Older activities decay: 21 days ago contributes less than today', () => {

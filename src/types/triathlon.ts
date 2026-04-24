@@ -118,6 +118,20 @@ export interface TriConfig {
 
   // Latest computed race prediction cache
   prediction?: TriRacePrediction;
+
+  /**
+   * Per-week snapshots of per-discipline CTL + combined CTL, appended on each
+   * week advance. Drives the fitness-over-time chart on the stats view (§7).
+   * Running-mode has equivalents (historicWeeklyTSS etc); triathlon needs
+   * per-discipline so we accumulate here. Capped at the last 52 entries.
+   */
+  fitnessHistory?: Array<{
+    weekISO: string;
+    swimCtl: number;
+    bikeCtl: number;
+    runCtl: number;
+    combinedCtl: number;
+  }>;
 }
 
 /** Triathlon-specific workout types. Joined into `Workout.t` (which is a free string). */

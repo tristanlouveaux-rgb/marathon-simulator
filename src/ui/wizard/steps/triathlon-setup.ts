@@ -8,6 +8,7 @@ import {
   DEFAULT_WEEKLY_PEAK_HOURS,
   PLAN_WEEKS_DEFAULT,
   RACE_LEG_DISTANCES,
+  HOURS_RANGE,
 } from '@/constants/triathlon-constants';
 
 /**
@@ -38,6 +39,8 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   const css = state.triSwim?.cssSecPer100m ?? '';
   const css400 = state.triSwim?.pbs?.m400 ?? '';
   const raceDate = state.customRaceDate ?? '';
+  const gymSessions = state.gymSessionsPerWeek ?? 0;
+  const hoursRange = HOURS_RANGE[distance];
 
   container.innerHTML = `
     <style>
@@ -114,8 +117,8 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
               <span>Peak weekly hours</span>
               <span class="tri-value" id="tri-hours-value">${hoursPerWeek}h</span>
             </div>
-            <input type="range" min="4" max="20" step="1" value="${hoursPerWeek}" class="tri-slider" id="tri-hours">
-            <p class="tri-hint">This is your peak-week target. Early and recovery weeks will be lighter.</p>
+            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="tri-slider" id="tri-hours">
+            <p class="tri-hint">This is your peak-week target. Early and recovery weeks will be lighter. Range ${hoursRange.min}–${hoursRange.max}h is sized to your distance.</p>
           </div>
 
           <!-- Volume split -->
@@ -149,20 +152,38 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             <div id="tri-ftp-row" style="${hasPower ? '' : 'display:none'}">
               <div class="tri-row" style="margin-bottom:4px"><span>FTP (Functional Threshold Power)</span></div>
               <input type="number" id="tri-ftp" class="tri-input" min="80" max="450" step="1" placeholder="e.g. 220" value="${ftp}">
-              <p class="tri-hint">In watts. If you've done a 20-min test, your FTP ≈ 20-min avg × 0.95.</p>
+              <p class="tri-hint"><strong>FTP</strong> is the highest power (watts) you can sustain for an hour. To test: after a warm-up, ride 20 minutes all-out and multiply your average power by 0.95. Don't know it? Leave blank — we'll estimate from your slider above and refine once you ride with us.</p>
             </div>
-            <p class="tri-hint" style="${hasPower ? 'display:none' : ''}" id="tri-hr-fallback-hint">No power meter? We'll use heart rate for bike load calculations.</p>
+            <p class="tri-hint" style="${hasPower ? 'display:none' : ''}" id="tri-hr-fallback-hint">No power meter? We'll use heart rate for bike load calculations. You can add a power meter later.</p>
           </div>
 
           <!-- Swim benchmarks -->
           <div class="tri-card t-rise" style="animation-delay:0.34s">
             <div class="tri-label">Swim</div>
-            <div class="tri-row" style="margin-bottom:4px"><span>CSS (Critical Swim Speed)</span></div>
-            <input type="text" id="tri-css" class="tri-input" placeholder="e.g. 1:45" value="${formatCSS(css)}">
-            <p class="tri-hint" style="margin:6px 0 14px">Seconds per 100m at lactate threshold. Leave blank if you don't know.</p>
-            <div class="tri-row" style="margin-bottom:4px"><span>400m test time <span style="color:var(--c-faint);font-weight:400">(optional)</span></span></div>
-            <input type="text" id="tri-css-400" class="tri-input" placeholder="e.g. 7:00" value="${formatMMSS(css400)}">
-            <p class="tri-hint">If provided, we'll derive CSS from this. Run the CSS test: 400m all out, rest fully, 200m all out.</p>
+            <label class="tri-toggle" style="margin-bottom:12px">
+              <input type="checkbox" id="tri-defer-swim" ${!css && !css400 ? 'checked' : ''}>
+              I'll do the swim test later
+            </label>
+            <div id="tri-swim-inputs" style="${!css && !css400 ? 'display:none' : ''}">
+              <div class="tri-row" style="margin-bottom:4px"><span>CSS (Critical Swim Speed)</span></div>
+              <input type="text" id="tri-css" class="tri-input" placeholder="e.g. 1:45" value="${formatCSS(css)}">
+              <p class="tri-hint" style="margin:6px 0 14px"><strong>CSS</strong> is your threshold swim pace — the fastest pace you can hold for ~30 minutes. Enter as minutes:seconds per 100m.</p>
+              <div class="tri-row" style="margin-bottom:4px"><span>400m test time <span style="color:var(--c-faint);font-weight:400">(optional)</span></span></div>
+              <input type="text" id="tri-css-400" class="tri-input" placeholder="e.g. 7:00" value="${formatMMSS(css400)}">
+              <p class="tri-hint">If provided, we'll derive CSS from this. To run the test: 400m all out, rest fully, then 200m all out. Your CSS ≈ (400m time − 200m time) ÷ 2 per 100m.</p>
+            </div>
+            <p class="tri-hint" id="tri-defer-swim-hint" style="${!css && !css400 ? '' : 'display:none'}">We'll estimate CSS from your slider rating above. You can run the test this week and update on the Stats page to refine your plan.</p>
+          </div>
+
+          <!-- Gym -->
+          <div class="tri-card t-rise" style="animation-delay:0.38s">
+            <div class="tri-label">Strength work</div>
+            <div class="tri-row" style="margin-bottom:4px">
+              <span>Strength sessions per week</span>
+              <span class="tri-value" id="tri-gym-value">${gymSessions}</span>
+            </div>
+            <input type="range" min="0" max="3" step="1" value="${gymSessions}" class="tri-slider" id="tri-gym">
+            <p class="tri-hint">Optional. 1–2 sessions/week of full-body strength helps running economy and injury resilience but isn't required. Set to 0 to skip.</p>
           </div>
 
           <!-- CTA -->
@@ -278,6 +299,36 @@ function wireEventHandlers(): void {
     const val = Number(ftpInput.value);
     const current = getCurrentOnboarding();
     updateOnboarding({ triBike: { ...(current.triBike ?? {}), ftp: Number.isFinite(val) && val > 0 ? val : undefined } });
+  });
+
+  // Defer swim test toggle
+  const deferSwimInput = document.getElementById('tri-defer-swim') as HTMLInputElement | null;
+  deferSwimInput?.addEventListener('change', () => {
+    const defer = deferSwimInput.checked;
+    const swimInputs = document.getElementById('tri-swim-inputs');
+    const deferHint = document.getElementById('tri-defer-swim-hint');
+    if (swimInputs) swimInputs.style.display = defer ? 'none' : '';
+    if (deferHint) deferHint.style.display = defer ? '' : 'none';
+    if (defer) {
+      // Clear any CSS values the user may have typed
+      const current = getCurrentOnboarding();
+      updateOnboarding({
+        triSwim: { ...(current.triSwim ?? {}), cssSecPer100m: undefined, pbs: {} },
+      });
+      const cssEl = document.getElementById('tri-css') as HTMLInputElement | null;
+      const css400El = document.getElementById('tri-css-400') as HTMLInputElement | null;
+      if (cssEl) cssEl.value = '';
+      if (css400El) css400El.value = '';
+    }
+  });
+
+  // Gym sessions slider
+  const gymInput = document.getElementById('tri-gym') as HTMLInputElement | null;
+  const gymValue = document.getElementById('tri-gym-value');
+  gymInput?.addEventListener('input', () => {
+    const v = Number(gymInput.value);
+    if (gymValue) gymValue.textContent = String(v);
+    updateOnboarding({ gymSessionsPerWeek: v });
   });
 
   // CSS inputs

@@ -16,11 +16,14 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
 import { blendPredictions } from '@/calculations/predictions';
+import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { computeRecoveryScore, computeReadiness, readinessColor, drivingSignalLabel } from '@/calculations/readiness';
 import { getSleepInsight, sleepScoreColor, buildBarChart, buildSleepBarChart, fmtSleepDuration, getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import { renderSleepView } from '@/ui/sleep-view';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
+import { heatAdjust } from '@/calculations/daily-coach';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -56,6 +59,17 @@ function animateChartDrawOn(): void {
       path.getBoundingClientRect();
       path.style.transition = 'stroke-dashoffset 1.2s ease-out';
       path.style.strokeDashoffset = '0';
+      // Clear dasharray once the draw-on finishes. `vector-effect="non-scaling-stroke"`
+      // makes dash-array render in screen pixels (not user units), so on wide viewports
+      // a stale dasharray creates visible gaps. Use `transitionend` with a timeout
+      // fallback in case the listener misses.
+      const clear = () => {
+        path.style.strokeDasharray = '';
+        path.style.strokeDashoffset = '';
+        path.removeEventListener('transitionend', clear);
+      };
+      path.addEventListener('transitionend', clear, { once: true });
+      setTimeout(clear, 1400);
     });
   });
 }
@@ -81,11 +95,7 @@ function chartGridLines(
 // Data helpers
 
 function computeCurrentVDOT(s: SimulatorState): number {
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) {
-    if (s.wks?.[i]) wg += s.wks[i].wkGain;
-  }
-  return s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  return getEffectiveVdot(s);
 }
 
 /**
@@ -94,51 +104,33 @@ function computeCurrentVDOT(s: SimulatorState): number {
  * input. No HR scaling — the blend engine already handles sub-race efforts via
  * its PB/LT/VO2 weighting and recency decay.
  */
-/** 4-week running-km average from garminActuals (runs only, ≥2 km). */
-function recentRunningVolumePerWeek(s: SimulatorState): number {
-  const currentIdx = Math.min(s.w - 1, (s.wks?.length ?? 0) - 1);
-  const startIdx = Math.max(0, currentIdx - 3);
-  let totalKm = 0;
-  let weeksCounted = 0;
-  for (let wi = startIdx; wi <= currentIdx; wi++) {
-    const wk = s.wks?.[wi];
-    if (!wk) continue;
-    weeksCounted++;
+/**
+ * Extract all running activities from garminActuals across the available plan
+ * weeks, normalised to the shape `computePredictionInputs` expects. Filters
+ * non-running types here so the pure module doesn't need to know about our
+ * internal activityType strings.
+ */
+function collectRunActivities(s: SimulatorState): Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> {
+  const runs: Array<{ startTime: string | Date; distKm: number; durSec: number; activityName?: string; activityType?: string }> = [];
+  const weeks = s.wks ?? [];
+  for (const wk of weeks) {
     const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
     if (!actuals) continue;
     for (const val of Object.values(actuals)) {
       const a = val as any;
       const aType = (a.activityType || '').toUpperCase();
       if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.distanceKm || a.distanceKm < 2) continue;
-      totalKm += a.distanceKm;
+      if (!a.startTime || !a.distanceKm || !a.durationSec) continue;
+      runs.push({
+        startTime: a.startTime,
+        distKm: a.distanceKm,
+        durSec: a.durationSec,
+        activityName: a.activityName,
+        activityType: a.activityType,
+      });
     }
   }
-  return weeksCounted > 0 ? totalKm / weeksCounted : 0;
-}
-
-function deriveRecentRunFromActuals(s: SimulatorState): { d: number; t: number; weeksAgo: number } | null {
-  for (let wi = Math.min(s.w - 1, (s.wks?.length ?? 0) - 1); wi >= 0; wi--) {
-    const wk = s.wks?.[wi];
-    if (!wk) continue;
-    const actuals = (wk as any).garminActuals as Record<string, any> | undefined;
-    if (!actuals) continue;
-
-    const runs: { distKm: number; durSec: number; startTime?: string }[] = [];
-    for (const val of Object.values(actuals)) {
-      const a = val as any;
-      const aType = (a.activityType || '').toUpperCase();
-      if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
-      if (!a.distanceKm || a.distanceKm < 2 || !a.durationSec) continue;
-      runs.push({ distKm: a.distanceKm, durSec: a.durationSec, startTime: a.startTime });
-    }
-    if (runs.length === 0) continue;
-
-    runs.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''));
-    const best = runs[0];
-    return { d: best.distKm, t: best.durSec, weeksAgo: (s.w - 1) - wi };
-  }
-  return null;
+  return runs;
 }
 
 function last7(
@@ -231,6 +223,22 @@ function getChartData(s: SimulatorState, range: ChartRange): {
   const wk = s.wks?.[s.w - 1];
   const currentTSS = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
   const currentKm = wk ? runKmFromWeek(wk) : 0;
+
+  // Track-only: derive history from s.wks only. Strava backfill (historicWeeklyTSS
+  // etc.) reflects pre-trackOnly usage and looks like "fake" data on a fresh
+  // programme. Walking s.wks gives true zero-from-start.
+  if (s.trackOnly) {
+    const wks = s.wks ?? [];
+    const priorWks = wks.slice(0, Math.max(0, wks.length - 1));
+    const histTSS = priorWks.map(pw => Math.round(computeWeekRawTSS(pw, pw.rated ?? {}, s.planStartDate)));
+    const histKm = priorWks.map(pw => runKmFromWeek(pw));
+    const histZones = priorWks.map(() => null as ({ base: number; threshold: number; intensity: number } | null));
+    const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
+    const tss = [...(sliceCount !== undefined ? histTSS.slice(-sliceCount) : histTSS), Math.round(currentTSS)];
+    const km  = [...(sliceCount !== undefined ? histKm.slice(-sliceCount)  : histKm),  currentKm];
+    const zones = [...(sliceCount !== undefined ? histZones.slice(-sliceCount) : histZones), { base: 0, threshold: 0, intensity: 0 }];
+    return { tss, zones, km, histWeekCount: tss.length - 1 };
+  }
 
   const useExtended = (range === '16w' || range === 'all') && (s.extendedHistoryTSS?.length ?? 0) > 0;
   const histTSSraw = useExtended ? (s.extendedHistoryTSS ?? []) : (s.historicWeeklyTSS ?? []);
@@ -476,11 +484,11 @@ function buildOnePositionBar(opts: {
 }
 
 const INFO_TEXTS: Record<string, string> = {
-  ctl: 'Running Fitness (CTL) — a 42-day rolling average of your run-equivalent training load, shown in daily-equivalent units (TrainingPeaks-compatible). Running counts fully; cross-training at a discount (e.g. cycling 55%, padel 45%, gym 35%) — because it doesn\'t fully replace running-specific adaptation.',
-  atl: 'Fatigue (ATL) — a 7-day rolling average of your total physiological load: runs, gym, cross-training, everything, shown in daily-equivalent units. Your body doesn\'t care what sport caused the fatigue — hard is hard. When this rises well above your Running Fitness, injury risk increases even if you haven\'t been running much.',
-  tsb: 'Form (TSB = Running Fitness − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
-  acwr: 'Load Ratio (Fatigue ÷ Running Fitness) — compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
-  momentum: 'Running Fitness Momentum — your 4-week trend in running fitness (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped — try to stay consistent, since skipping sessions compounds quickly.',
+  ctl: 'Running Load (CTL) — a 42-day rolling average of your run-equivalent training load, shown in daily-equivalent units (TrainingPeaks-compatible). Running counts fully; cross-training at a discount (e.g. cycling 55%, padel 45%, gym 35%) — because it doesn\'t fully replace running-specific adaptation.',
+  atl: 'Fatigue (ATL) — a 7-day rolling average of your total physiological load: runs, gym, cross-training, everything, shown in daily-equivalent units. Your body doesn\'t care what sport caused the fatigue — hard is hard. When this rises well above your Running Load, injury risk increases even if you haven\'t been running much.',
+  tsb: 'Form (TSB = Running Load − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
+  acwr: 'Load Ratio (Fatigue ÷ Running Load) — compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
+  momentum: 'Running Load Momentum — your 4-week trend in running load (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped — try to stay consistent, since skipping sessions compounds quickly.',
   vdot: 'VO2 Max reflects your aerobic ceiling, the primary predictor of endurance potential. When a device value is available (Garmin, Strava), that is shown directly. Otherwise it is estimated from training data using the Daniels VDOT model. Zones are sex-calibrated using ACSM standards.',
   aerobic: 'VO2 Max — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. When connected to a device (Garmin, Strava), the reported value is shown. Otherwise it is estimated from training data. Zones are sex-calibrated using ACSM standards.',
   lt: 'Lactate Threshold (LT) pace — the fastest pace you can sustain without accumulating lactic acid. The most trainable of the three metrics. A higher LT pace (further right on the bar) means you can race faster at aerobic effort.',
@@ -575,17 +583,19 @@ function buildProgressCard_Opening(s: SimulatorState): string {
         <div class="m-card" style="padding:18px">
           <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Progress</div>
 
-          <!-- Timeline bar -->
-          <div style="position:relative;margin-bottom:16px">
-            <div style="height:6px;background:rgba(0,0,0,0.08);border-radius:3px;overflow:hidden">
-              <div style="height:100%;width:${pct}%;background:var(--c-accent);border-radius:3px;transition:width 0.3s"></div>
+          <!-- Timeline bar: "Week X of Y" rides above a monochrome progress line.
+               Label position tracks the progress percent and is clamped 6–94%
+               so it never collides with the Start / Race day captions. -->
+          <div style="position:relative;margin-bottom:14px;padding-top:22px">
+            <div style="position:absolute;top:0;left:${Math.max(6, Math.min(94, pct))}%;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--c-black);white-space:nowrap">
+              Week ${currentWk} of ${totalWks}
             </div>
-            <!-- Current week dot -->
-            <div style="position:absolute;top:50%;left:${pct}%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:var(--c-accent);border:2px solid white;box-shadow:0 1px 4px rgba(0,0,0,0.25)"></div>
-            <div style="display:flex;justify-content:space-between;margin-top:8px">
-              <span style="font-size:9px;color:var(--c-faint)">Start</span>
-              <span style="font-size:9px;color:var(--c-accent);font-weight:600">Week ${currentWk} of ${totalWks}</span>
-              <span style="font-size:9px;color:var(--c-faint)">Race day</span>
+            <div style="height:4px;background:rgba(15,23,42,0.08);border-radius:2px;overflow:hidden">
+              <div style="height:100%;width:${pct}%;background:var(--c-black);border-radius:2px;transition:width 0.3s"></div>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-top:6px">
+              <span style="font-size:10px;color:var(--c-faint)">Start</span>
+              <span style="font-size:10px;color:var(--c-faint)">Race day</span>
             </div>
           </div>
 
@@ -639,7 +649,14 @@ function buildProgressCard_Opening(s: SimulatorState): string {
 // 2. Fitness Card
 
 function buildFitnessCard_Opening(s: SimulatorState): string {
-  const vo2display = s.vo2 ?? computeCurrentVDOT(s);
+  // Honest zero-state: if the user has no real fitness signal (no device VO2,
+  // no PBs, no VDOT history), don't surface the `s.v=50` store default. Show
+  // "—" instead. Otherwise fall through to normal VO2 / VDOT display.
+  const hasRealFitness =
+    (s.vo2 ?? 0) > 0 ||
+    (s.vdotHistory?.length ?? 0) > 0 ||
+    Object.keys(s.pbs ?? {}).length > 0;
+  const vo2display = !hasRealFitness ? 0 : (s.vo2 ?? computeCurrentVDOT(s));
   const isEstimated = s.vo2 == null;
   const vo2hist = getVO2History(s);
   const hasDeviceVO2 = vo2hist.length >= 2;
@@ -665,10 +682,13 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
     trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
   }
 
-  // Sparkline: device VO2 history or VDOT history
-  const miniSparkline = hasDeviceVO2
-    ? buildMiniVO2Sparkline(vo2hist)
-    : buildMiniVdotSparkline(vdotHist);
+  // Full line chart (same as detail page): device VO2 history, or VDOT fallback
+  const chart = hasDeviceVO2
+    ? buildVO2LineChart(vo2hist)
+    : (vdotHist.length >= 2 ? buildVdotLineChart(vdotHist, '8w') : '');
+  const changeNote = hasDeviceVO2
+    ? buildVO2ChangeNote(vo2hist)
+    : (vdotHist.length >= 2 ? buildVdotChangeNote(vdotHist) : '');
 
   const vo2Label = isEstimated ? 'VO2 Max (est.)' : 'VO2 Max';
 
@@ -686,7 +706,8 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
           </div>
           <div style="font-size:11px;color:var(--c-faint);padding-top:4px">Tap for detail ›</div>
         </div>
-        ${miniSparkline}
+        ${chart ? `<div style="margin-top:12px">${chart}</div>` : ''}
+        ${changeNote}
       </div>
     </div>`;
 }
@@ -778,13 +799,15 @@ function buildSummarySection(s: SimulatorState): string {
   let forecastRows = '';
   if (isRaceMode && vdot >= 20) {
     const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
-    const liveRec2 = deriveRecentRunFromActuals(s) ?? s.rec ?? null;
-    const liveKmPerWeek2 = recentRunningVolumePerWeek(s);
-    const distances = [
-      { label: 'Marathon', dist: 42195, km: 42.195 },
-      { label: 'Half',     dist: 21097, km: 21.0975 },
-      { label: '10K',      dist: 10000, km: 10 },
-      { label: '5K',       dist: 5000,  km: 5 },
+    const inputs2 = computePredictionInputs(collectRunActivities(s));
+    const liveRec2 = inputs2.recentRun ?? s.rec ?? null;
+    const liveKmPerWeek2 = inputs2.weeklyKm;
+    const liveAvgPace2 = inputs2.avgPaceSecPerKm ?? null;
+    const distances: Array<{ label: string; dist: number; km: number; code: 'marathon'|'half'|'10k'|'5k' }> = [
+      { label: 'Marathon', dist: 42195, km: 42.195,  code: 'marathon' },
+      { label: 'Half',     dist: 21097, km: 21.0975, code: 'half' },
+      { label: '10K',      dist: 10000, km: 10,      code: '10k' },
+      { label: '5K',       dist: 5000,  km: 5,       code: '5k' },
     ];
     forecastRows = distances.map(d => {
       let timeSec: number;
@@ -792,16 +815,31 @@ function buildSummarySection(s: SimulatorState): string {
         const blended = blendPredictions(
           d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
           s.b ?? 1.06, s.typ ?? 'Balanced', liveRec2,
-          s.athleteTier ?? undefined, liveKmPerWeek2,
+          s.athleteTier ?? undefined, liveKmPerWeek2, liveAvgPace2 ?? undefined,
+          { weeksCovered: inputs2.weeksCovered, paceConfidence: inputs2.paceConfidence, isStale: inputs2.isStale },
         );
         timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
       } else {
         timeSec = vt(d.km, vdot);
       }
+      // Signed delta vs target — only on the row matching s.rd, and only when a goal is set.
+      let deltaHtml = '';
+      if (d.code === s.rd && !s.continuousMode && s.initialBaseline && s.initialBaseline > 0) {
+        const dSec = Math.round(timeSec - s.initialBaseline);
+        const dMin = Math.round(Math.abs(dSec) / 60);
+        const text = Math.abs(dSec) < 60
+          ? 'On pace'
+          : dSec > 0 ? `+${dMin} min` : `\u2212${dMin} min`;
+        deltaHtml = `<span style="font-size:11px;color:var(--c-muted);margin-right:4px">${text}</span>`;
+      }
       return `
-        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border)">
+        <div class="race-est-row" data-dist="${d.code}" data-time="${Math.round(timeSec)}" style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--c-border);cursor:pointer;-webkit-tap-highlight-color:transparent">
           <span style="font-size:13px;color:var(--c-muted)">${d.label}</span>
-          <span style="font-size:14px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${deltaHtml}
+            <span style="font-size:14px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span>
+            <span style="font-size:13px;color:var(--c-faint);line-height:1">›</span>
+          </div>
         </div>`;
     }).join('');
   }
@@ -821,9 +859,201 @@ function buildSummarySection(s: SimulatorState): string {
 // ---------------------------------------------------------------------------
 // Opening screen assembly
 
+/**
+ * Shared area-line renderer used by track-only volume + load cards.
+ * Mirrors the VO2 / rolling-TSS chart style: polyline top + gradient fill.
+ */
+function buildTrackOnlyAreaChart(
+  series: number[],
+  options: { risingColor: string; flatColor: string; gradId: string; heightPx: number },
+): string {
+  const { risingColor, flatColor, gradId, heightPx } = options;
+  if (series.length < 2) return '';
+  const W = 320, H = 60;
+  const maxVal = Math.max(...series, 1) * 1.1;
+  const xOf = (i: number) => (i / (series.length - 1)) * W;
+  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
+  const pts: [number, number][] = series.map((v, i) => [xOf(i), yOf(v)]);
+  const topPath = 'M ' + pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ');
+  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
+  const last = series[series.length - 1];
+  const prev = series[series.length - 2];
+  const rising = last > prev + (last * 0.05);
+  const stroke = rising ? risingColor : flatColor;
+
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${heightPx}" preserveAspectRatio="none" style="display:block">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="${stroke}" stop-opacity="0.22"/>
+          <stop offset="100%" stop-color="${stroke}" stop-opacity="0.04"/>
+        </linearGradient>
+      </defs>
+      <path d="${areaPath}" fill="url(#${gradId})"/>
+      <path d="${topPath}" fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+}
+
+/**
+ * Just-Track weekly volume retrospective. Line/area chart (same style as VO2).
+ * Series sourced from `s.wks` only — each week's km summed from garminActuals
+ * + adhocWorkouts. Excludes `historicWeeklyKm` (Strava backfill from prior
+ * plan usage) so a fresh tracking programme starts with a clean chart and
+ * fills in as activities sync into the new weeks.
+ */
+function buildTrackOnlyVolumeCard(s: SimulatorState): string {
+  const unit: 'km' | 'mi' = s.unitPref ?? 'km';
+  const wks = s.wks ?? [];
+
+  function weekKm(w: typeof wks[number]): number {
+    let km = 0;
+    const seen = new Set<string>();
+    for (const actual of Object.values(w.garminActuals ?? {})) {
+      if (actual.garminId && seen.has(actual.garminId)) continue;
+      if (actual.garminId) seen.add(actual.garminId);
+      if (typeof actual.distanceKm === 'number' && actual.distanceKm > 0) km += actual.distanceKm;
+    }
+    for (const adhoc of (w.adhocWorkouts ?? [])) {
+      const d = (adhoc as any).garminDistKm ?? (adhoc as any).distanceKm;
+      if (typeof d === 'number' && d > 0) km += d;
+    }
+    return km;
+  }
+
+  const series = wks.map(weekKm);
+  const currentKm = series[series.length - 1] ?? 0;
+  const prevKm = series.length >= 2 ? series[series.length - 2] : 0;
+  const avg4wSource = series.slice(-4);
+  const avg4wKm = avg4wSource.length ? avg4wSource.reduce((a, b) => a + b, 0) / avg4wSource.length : 0;
+
+  if (series.every(k => !k || k === 0)) {
+    return `
+      <div style="padding:0 18px 12px">
+        <div class="m-card" style="padding:18px;text-align:center">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Weekly volume</div>
+          <div style="font-size:13px;color:var(--c-muted);line-height:1.45">Connect Strava or record a run. Weekly volume builds up from this week forward.</div>
+        </div>
+      </div>`;
+  }
+
+  const chart = buildTrackOnlyAreaChart(series, {
+    risingColor: 'rgba(58,96,144,0.85)',
+    flatColor: 'rgba(71,85,105,0.70)',
+    gradId: 'volFill',
+    heightPx: 90,
+  });
+
+  return `
+    <div style="padding:0 18px 12px">
+      <div class="m-card" style="padding:18px">
+        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Weekly volume</div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">This week</div>
+            <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black);line-height:1">${formatKm(currentKm, unit)}</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Last week</div>
+            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${formatKm(prevKm, unit)}</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:6px">4w avg</div>
+            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${formatKm(avg4wKm, unit)}</div>
+          </div>
+        </div>
+        ${chart}
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--c-faint)">
+          <span>${series.length} wk ago</span>
+          <span style="color:var(--c-black);font-weight:600">This week</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+/**
+ * Just-Track weekly Signal-B TSS retrospective (load over time).
+ *
+ * Current week TSS comes from `computeWeekRawTSS` on the live bucket.
+ * Prior weeks from `historicWeeklyTSS` (Strava backfill). Rendered the
+ * same way as the volume card but with TSS instead of km. Empty state
+ * when no data yet.
+ */
+function buildTrackOnlyLoadCard(s: SimulatorState): string {
+  // Series sourced from s.wks only — each week's Signal-B TSS. Excludes
+  // historicWeeklyTSS (Strava backfill from prior plan usage).
+  const wks = s.wks ?? [];
+  const series = wks.map(w => Math.round(computeWeekRawTSS(w, w.rated ?? {}, s.planStartDate)));
+  const currentTSS = series[series.length - 1] ?? 0;
+  const prevTSS = series.length >= 2 ? series[series.length - 2] : 0;
+  const avg4wSource = series.slice(-4);
+  const avg4wTSS = avg4wSource.length ? Math.round(avg4wSource.reduce((a, b) => a + b, 0) / avg4wSource.length) : 0;
+
+  if (series.every(t => !t || t === 0)) {
+    return `
+      <div style="padding:0 18px 12px">
+        <div class="m-card" style="padding:18px;text-align:center">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Load over time</div>
+          <div style="font-size:13px;color:var(--c-muted);line-height:1.45">Connect Strava or record a run. Weekly TSS builds up from this week forward.</div>
+        </div>
+      </div>`;
+  }
+
+  const chart = buildTrackOnlyAreaChart(series, {
+    risingColor: 'rgba(58,96,144,0.85)',
+    flatColor: 'rgba(71,85,105,0.70)',
+    gradId: 'loadFill',
+    heightPx: 90,
+  });
+
+  return `
+    <div style="padding:0 18px 12px">
+      <div class="m-card" style="padding:18px">
+        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Load over time</div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:12px">
+          <div>
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">This week</div>
+            <div style="font-size:28px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black);line-height:1;font-variant-numeric:tabular-nums">${currentTSS}<span style="font-size:14px;font-weight:500;color:var(--c-muted);margin-left:4px">TSS</span></div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Last week</div>
+            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${prevTSS} TSS</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:6px">4w avg</div>
+            <div style="font-size:14px;font-weight:500;color:var(--c-black)">${avg4wTSS} TSS</div>
+          </div>
+        </div>
+        ${chart}
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--c-faint)">
+          <span>${series.length} wk ago</span>
+          <span style="color:var(--c-black);font-weight:600">This week</span>
+        </div>
+      </div>
+    </div>`;
+}
+
 function buildStatsSummary(s: SimulatorState): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+
+  // Just-Track mode: same card layout as planned — Progress (continuous-fitness
+  // branch of `buildProgressCard_Opening`), Fitness, Volume, Load over time.
+  // Progress card taps through to the Progress detail page which hides Plan
+  // Adherence + Phase Timeline for trackOnly.
+  if (s.trackOnly) {
+    return `
+      <div class="mosaic-page" style="background:var(--c-bg)">
+        <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
+          <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
+        </div>
+        ${buildProgressCard_Opening(s)}
+        <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
+          <div style="height:1px;background:var(--c-border)"></div>
+        </div>
+        ${buildFitnessCard_Opening(s)}
+        ${buildTrackOnlyVolumeCard(s)}
+        ${buildTrackOnlyLoadCard(s)}
+      </div>
+      ${renderTabBar('stats', isSimulatorMode())}`;
+  }
+
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
       <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
@@ -1268,6 +1498,130 @@ function buildCTLLineChart(s: SimulatorState, range: ChartRange): string {
     </div>`;
 }
 
+/**
+ * Aerobic Durability chart — HR drift on easy + long runs over recent training.
+ *
+ * Chart shows individual drift samples (dots) plus a 4-session rolling mean (line)
+ * so the user can see both the noise and the trend. Reference bands at 5% and 8%
+ * mark the efficient / moderate / stressed zones.
+ *
+ * Filters to easy + long runs only — quality sessions deliberately push above
+ * aerobic threshold so drift on them carries no durability signal.
+ */
+function buildDurabilityChart(s: SimulatorState): string {
+  interface DriftSample { drift: number; date: number }
+  const samples: DriftSample[] = [];
+  const weeksToScan = 12;
+  const currentIdx = Math.max(0, (s.w ?? 1) - 1);
+  const startIdx = Math.max(0, currentIdx - weeksToScan + 1);
+  for (let i = startIdx; i <= currentIdx; i++) {
+    const wk = (s.wks ?? [])[i];
+    if (!wk?.garminActuals) continue;
+    for (const actual of Object.values(wk.garminActuals)) {
+      const t = actual.plannedType;
+      if ((t === 'easy' || t === 'long') && typeof actual.hrDrift === 'number' && !isNaN(actual.hrDrift)) {
+        const dateMs = actual.startTime ? new Date(actual.startTime).getTime() : 0;
+        samples.push({ drift: heatAdjust(actual.hrDrift, actual.ambientTempC), date: dateMs });
+      }
+    }
+  }
+  samples.sort((a, b) => a.date - b.date);
+
+  if (samples.length < 4) {
+    const have = samples.length;
+    const headline = have === 0
+      ? 'No easy or long runs with heart-rate data yet.'
+      : `${have} of 4 easy or long runs logged.`;
+    return `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;min-height:90px;font-size:12px;color:var(--c-muted);text-align:center;padding:12px 20px;line-height:1.5">
+      <div style="color:var(--c-black);font-weight:500">${headline}</div>
+      <div style="font-size:11px;color:var(--c-faint);max-width:280px">Durability is measured on steady-state running only. Intervals, tempo, and cross-training are excluded because HR drift on those efforts is expected. History is backfilling in the background.</div>
+    </div>`;
+  }
+
+  const drifts = samples.map(s => s.drift);
+  const n = drifts.length;
+
+  // 4-sample rolling mean
+  const means: number[] = [];
+  const window = 4;
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - window + 1);
+    const slice = drifts.slice(lo, i + 1);
+    means.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+  }
+
+  const W = 320, H = 90, padL = 6, padR = 6, padT = 6, padB = 8;
+  const usableW = W - padL - padR;
+  const usableH = H - padT - padB;
+
+  // Y scale: clamp floor at 0, ceiling at max drift observed (min 12% for context)
+  const rawMax = Math.max(...drifts, 12);
+  const maxY = Math.ceil(rawMax / 2) * 2; // round up to even
+  const minY = Math.min(0, Math.min(...drifts));
+  const yRange = maxY - minY;
+
+  const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
+  const yOf = (v: number) => padT + usableH - ((v - minY) / yRange) * usableH;
+
+  // Threshold bands: 0-5 efficient, 5-8 moderate, 8+ stressed
+  const y5 = yOf(5);
+  const y8 = yOf(8);
+  const y0 = yOf(Math.max(0, minY));
+
+  // Points — coloured by zone
+  const pointColour = (v: number) => v <= 5 ? 'rgba(52,199,89,0.85)' : v <= 8 ? 'rgba(245,158,11,0.85)' : 'rgba(239,68,68,0.85)';
+  const dots = drifts.map((v, i) => {
+    const cx = xOf(i).toFixed(1);
+    const cy = yOf(v).toFixed(1);
+    return `<circle cx="${cx}" cy="${cy}" r="2.2" fill="${pointColour(v)}"/>`;
+  }).join('');
+
+  // Rolling mean line
+  const meanPts: [number, number][] = means.map((v, i) => [xOf(i), yOf(v)]);
+  const meanPath = meanPts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+
+  // Y-axis labels
+  const tickStep = maxY <= 10 ? 2 : maxY <= 20 ? 5 : 10;
+  const yAxisHtml: string[] = [];
+  for (let v = tickStep; v <= maxY * 0.98; v += tickStep) {
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}%</span>`);
+  }
+
+  const currentMean = Math.round(means[means.length - 1] * 10) / 10;
+  const trend = means.length >= 5 ? means[means.length - 1] - means[means.length - 5] : 0;
+  const trendLabel = trend < -1 ? 'improving' : trend > 1 ? 'rising' : 'stable';
+  const trendColor = trend < -1 ? 'var(--c-ok)' : trend > 1 ? 'var(--c-warn)' : 'var(--c-muted)';
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+      <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${currentMean}%</div>
+      <div style="font-size:11px;font-weight:600;color:${trendColor};letter-spacing:0.02em">${trendLabel.toUpperCase()}</div>
+    </div>
+    <div style="position:relative;padding-right:32px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        <!-- threshold bands -->
+        <rect x="${padL}" y="${padT}" width="${usableW}" height="${(y5 - padT).toFixed(1)}" fill="rgba(239,68,68,0.04)"/>
+        <rect x="${padL}" y="${y5.toFixed(1)}" width="${usableW}" height="${(y8 - y5).toFixed(1)}" fill="rgba(245,158,11,0.04)"/>
+        <rect x="${padL}" y="${y8.toFixed(1)}" width="${usableW}" height="${(y0 - y8).toFixed(1)}" fill="rgba(52,199,89,0.04)"/>
+        <!-- grid -->
+        ${chartGridLines(maxY, yOf, W, padL, padR)}
+        <!-- threshold lines -->
+        <line x1="${padL}" y1="${y5.toFixed(1)}" x2="${W - padR}" y2="${y5.toFixed(1)}" stroke="rgba(245,158,11,0.35)" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <line x1="${padL}" y1="${y8.toFixed(1)}" x2="${W - padR}" y2="${y8.toFixed(1)}" stroke="rgba(239,68,68,0.35)" stroke-width="0.5" stroke-dasharray="2,2"/>
+        <!-- 4-session rolling mean -->
+        <path d="${meanPath}" class="chart-draw" fill="none" stroke="rgba(0,0,0,0.55)" stroke-width="1.5" stroke-linejoin="round"/>
+        <!-- points -->
+        ${dots}
+      </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:8px;font-size:10px;color:var(--c-faint);line-height:1.3">
+      <span><span style="display:inline-block;width:6px;height:6px;border-radius:2px;background:rgba(52,199,89,0.85);vertical-align:middle;margin-right:3px"></span>≤5% efficient</span>
+      <span><span style="display:inline-block;width:6px;height:6px;border-radius:2px;background:rgba(245,158,11,0.85);vertical-align:middle;margin-right:3px"></span>5–8% moderate</span>
+      <span><span style="display:inline-block;width:6px;height:6px;border-radius:2px;background:rgba(239,68,68,0.85);vertical-align:middle;margin-right:3px"></span>&gt;8% stressed</span>
+    </div>`;
+}
+
 function buildProgressDetailPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
 
@@ -1362,7 +1716,7 @@ function buildProgressDetailPage(s: SimulatorState): string {
           ${fastest5kSec < Infinity ? statRow('Fastest 5k', fmtElapsed(fastest5kSec)) : ''}
           ${fastest10kSec < Infinity ? statRow('Fastest 10k', fmtElapsed(fastest10kSec)) : ''}
           ${fastestHalfSec < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(fastestHalfSec)) : ''}
-          ${statRow('Plan Adherence', adherence.pct != null ? `${adhesionPct}%` : '—')}
+          ${s.trackOnly ? '' : statRow('Plan Adherence', adherence.pct != null ? `${adhesionPct}%` : '—')}
           ${statRow('Time Active', totalTimeSec > 0 ? timeStr : '—')}
           ${caloriesTracked ? statRow('Calories Burnt', `${Math.round(totalCalories).toLocaleString()} kcal`) : ''}
           <div id="stats-progress-load-row" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
@@ -1373,8 +1727,8 @@ function buildProgressDetailPage(s: SimulatorState): string {
           </div>
         </div>
 
-        <!-- Phase Timeline -->
-        ${buildPhaseTimeline(s)}
+        <!-- Phase Timeline — plan-only, hidden in trackOnly -->
+        ${s.trackOnly ? '' : buildPhaseTimeline(s)}
 
         <!-- Load Chart (Signal B) -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
@@ -1397,16 +1751,28 @@ function buildProgressDetailPage(s: SimulatorState): string {
           <div style="font-size:10px;color:var(--c-faint);margin-top:6px">Running ${unitPref === 'mi' ? 'miles' : 'km'} per week</div>
         </div>
 
-        <!-- Running Fitness (CTL) Over Time -->
+        <!-- Running Load (CTL) Over Time -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-            <div style="font-size:12px;font-weight:600;color:var(--c-black)">Running Fitness Trend (CTL)</div>
+            <div style="font-size:12px;font-weight:600;color:var(--c-black)">Running Load Trend (CTL)</div>
             <button id="ctl-learn-more-btn" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Learn more →</button>
           </div>
           <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px">42-day rolling average of run-equivalent load · daily units</div>
           <div id="progress-ctl-chart">${buildCTLLineChart(s, '8w')}</div>
           <div style="font-size:10px;color:var(--c-muted);margin-top:10px;line-height:1.5">
             A rising line means your aerobic base is expanding. A plateau means load is consistent. A planned drop during taper or a recovery week is normal — fatigue clears while fitness remains. A sustained drop over 3+ weeks without a taper signals undertrained weeks.
+          </div>
+        </div>
+
+        <!-- Aerobic Durability -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <div style="font-size:12px;font-weight:600;color:var(--c-black)">Aerobic Durability</div>
+          </div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px">HR drift on easy and long runs · last 12 weeks · lower is better</div>
+          <div id="progress-durability-chart">${buildDurabilityChart(s)}</div>
+          <div style="font-size:10px;color:var(--c-muted);margin-top:10px;line-height:1.5">
+            HR drift is how much heart rate rises in the second half of a run compared with the first, at the same pace. A falling trend means the aerobic system is holding pace with less strain. A rising trend on steady-effort sessions points to fatigue, heat, dehydration, or pace sitting too close to aerobic threshold.
           </div>
         </div>
 
@@ -1467,7 +1833,7 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
         <button id="ctl-lm-back" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
         </button>
-        <div style="font-size:16px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Running Fitness</div>
+        <div style="font-size:16px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Running Load</div>
       </div>
 
       <!-- Content -->
@@ -1477,9 +1843,9 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
         <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px">
           <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:8px">What it measures</div>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0 0 10px">
-            Running fitness tracks how much training your body has adapted to over the past 6 weeks.
+            Running load tracks how much training your body has adapted to over the past 6 weeks.
             Every session gets a Load score (TSS) based on duration and intensity.
-            Running fitness takes a rolling average of those daily scores, so recent weeks count more than older ones.
+            Running load takes a rolling average of those daily scores, so recent weeks count more than older ones.
           </p>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
             Rising means your aerobic base is growing. Stable means consistent training. Falling means volume has dropped.
@@ -1490,7 +1856,7 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
         <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px">
           <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:8px">Why activities count differently</div>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0 0 12px">
-            Not all exercise translates equally to running fitness. Cycling is great for cardio but doesn't build the leg strength and impact tolerance that running requires.
+            Not all exercise translates equally to running load. Cycling is great for cardio but doesn't build the leg strength and impact tolerance that running requires.
             The percentages below reflect how transferable each activity is to running specifically. Running counts in full; everything else at a reduced rate.
           </p>
           <div style="display:flex;flex-direction:column;gap:4px">
@@ -1519,7 +1885,7 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
         <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px">
           <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:8px">How your fitness grows</div>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0 0 10px">
-            Running fitness rises slowly, typically 2 to 5 points per week.
+            Running load rises slowly, typically 2 to 5 points per week.
             Pushing it up faster raises injury risk before your body has time to adapt.
           </p>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
@@ -1527,11 +1893,11 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
           </p>
         </div>
 
-        <!-- Running fitness during taper -->
+        <!-- Running load during taper -->
         <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px">
-          <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:8px">Running fitness during taper</div>
+          <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:8px">Running load during taper</div>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0 0 10px">
-            Running fitness drops during taper. This is expected. Fitness does not disappear over 2 to 3 weeks. Fatigue clears while adaptation consolidates.
+            Running load drops during taper. This is expected. Fitness does not disappear over 2 to 3 weeks. Fatigue clears while adaptation consolidates.
           </p>
           <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">
             Expect a 5 to 15 point drop during a marathon taper.
@@ -1565,14 +1931,14 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
   const isFemale = s.biologicalSex === 'female';
   const zoneLabels = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'] as const;
 
-  // Bar 1: Running Fitness (CTL daily-equivalent)
+  // Bar 1: Running Load (CTL daily-equivalent)
   const ctlD = Math.round(ctl / 7);
   const ctlBreaks = [20, 40, 58, 75, 95];
   const ctlZoneIdx = ctlBreaks.findIndex(b => ctlD < b);
   const ctlZone = zoneLabels[ctlZoneIdx === -1 ? 5 : ctlZoneIdx];
   const ctlHasHistory = (fitnessMetrics?.length ?? 0) > 3;
   const ctlBar = buildOnePositionBar({
-    title: 'Running Fitness',
+    title: 'Running Load',
     infoId: 'ctl',
     detailId: ctlHasHistory ? 'ctl' : undefined,
     value: ctl > 0 ? ctlD : null,
@@ -1706,28 +2072,26 @@ function buildVO2LineChart(data: Array<{ date: string; value: number }>): string
   const strokeColor = rising ? 'rgba(52,199,89,0.85)' : 'rgba(255,69,58,0.80)';
   const fillColor   = rising ? 'rgba(52,199,89,0.12)' : 'rgba(255,69,58,0.10)';
 
-  const dots = vals.map((v, i) => {
-    const cx = xOf(i).toFixed(1);
-    const cy = yOf(v).toFixed(1);
-    const isLast = i === n - 1;
-    const labelY = Number(cy) > 18 ? Number(cy) - 8 : Number(cy) + 14;
-    return `
-      <circle cx="${cx}" cy="${cy}" r="${isLast ? 3.5 : 2}" fill="${isLast ? strokeColor : 'rgba(0,0,0,0.2)'}" stroke="white" stroke-width="${isLast ? 1.5 : 1}"/>
-      ${isLast ? `<text x="${cx}" y="${labelY.toFixed(1)}" font-size="10" fill="${strokeColor}" text-anchor="middle" font-weight="600">${Math.round(v)}</text>` : ''}`;
-  }).join('');
-
   const firstDate = data[0].date.slice(5);
   const lastDate  = data[n - 1].date.slice(5);
+  const gradId = `vo2Fill_${rising ? 'up' : 'dn'}`;
 
   return `
     <div style="position:relative">
-      <svg viewBox="0 0 ${W} ${H + 16}" width="100%" style="display:block;overflow:visible">
-        <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-        <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="2"/>
-        ${dots}
-        <text x="0" y="${H + 14}" font-size="9" fill="var(--c-faint)">${firstDate}</text>
-        <text x="${W}" y="${H + 14}" font-size="9" fill="var(--c-faint)" text-anchor="end">${lastDate}</text>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="90" preserveAspectRatio="none" style="display:block">
+        <defs>
+          <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${strokeColor}" stop-opacity="0.25"/>
+            <stop offset="100%" stop-color="${strokeColor}" stop-opacity="0.05"/>
+          </linearGradient>
+        </defs>
+        <path d="${areaPath}" fill="url(#${gradId})"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
       </svg>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:var(--c-faint)">
+        <span>${firstDate}</span>
+        <span>${lastDate}</span>
+      </div>
     </div>`;
 }
 
@@ -1825,7 +2189,6 @@ function buildFitnessDetailPage(s: SimulatorState): string {
         </div>` : ''}
 
         <!-- Race forecast -->
-        ${buildRaceProgressDetail(s)}
         ${buildForecastTimesCard(s)}
 
         ${buildCalibrationStatus(s)}
@@ -1873,7 +2236,7 @@ function buildCTLMetricPage(s: SimulatorState): string {
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildMetricSubHeader('Running Fitness')}
+      ${buildMetricSubHeader('Running Load')}
       <div style="padding:18px;overflow-y:auto">
         <div style="margin-bottom:4px;font-size:28px;font-weight:300;color:var(--c-black)">${currentCtl}</div>
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">Daily-equivalent CTL · 42-day running average</div>
@@ -2050,6 +2413,47 @@ function buildRaceProgressDetail(s: SimulatorState): string {
     </div>`;
 }
 
+/**
+ * Marathon fade-risk signal from long-run HR drift.
+ *
+ * Drift on long runs at goal marathon pace is a reliable predictor of last-10k
+ * fade. Persistent >8% drift on these sessions means the aerobic system is
+ * already losing pace control at the duration required by the race.
+ *
+ * Filters to long runs (≥90 min) in the last 4 weeks whose average pace falls
+ * within ±15 sec/km of the goal MP. Returns null if fewer than 2 such sessions
+ * exist — not enough signal to make a claim.
+ */
+function computeMarathonFadeRisk(
+  s: SimulatorState,
+  goalMpSecKm: number,
+): { level: 'low' | 'mod' | 'high'; avgDrift: number } | null {
+  const weeksToScan = 4;
+  const currentIdx = Math.max(0, (s.w ?? 1) - 1);
+  const startIdx = Math.max(0, currentIdx - weeksToScan + 1);
+  const paceBand = 15;
+  const drifts: number[] = [];
+
+  for (let i = startIdx; i <= currentIdx; i++) {
+    const wk = (s.wks ?? [])[i];
+    if (!wk?.garminActuals) continue;
+    for (const actual of Object.values(wk.garminActuals)) {
+      if (actual.plannedType !== 'long') continue;
+      if (typeof actual.hrDrift !== 'number' || isNaN(actual.hrDrift)) continue;
+      if (typeof actual.durationSec !== 'number' || actual.durationSec < 5400) continue;
+      const pace = actual.avgPaceSecKm;
+      if (typeof pace !== 'number' || pace <= 0) continue;
+      if (Math.abs(pace - goalMpSecKm) > paceBand) continue;
+      drifts.push(heatAdjust(actual.hrDrift, actual.ambientTempC));
+    }
+  }
+
+  if (drifts.length < 2) return null;
+  const avg = drifts.reduce((a, b) => a + b, 0) / drifts.length;
+  const level: 'low' | 'mod' | 'high' = avg > 8 ? 'high' : avg > 5 ? 'mod' : 'low';
+  return { level, avgDrift: avg };
+}
+
 /** Forecast times card (standalone). Uses blendPredictions (LT, VO2, PB, recent
  *  run) when available; falls back to pure VDOT-to-time when no watch data. */
 function buildForecastTimesCard(s: SimulatorState): string {
@@ -2066,7 +2470,10 @@ function buildForecastTimesCard(s: SimulatorState): string {
 
   const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
   // Use HR-scaled recent run from garminActuals instead of stale onboarding rec
-  const liveRec = deriveRecentRunFromActuals(s) ?? s.rec ?? null;
+  const inputs = computePredictionInputs(collectRunActivities(s));
+  const liveRec = inputs.recentRun ?? s.rec ?? null;
+  const liveKmPerWeek = inputs.weeklyKm;
+  const liveAvgPace = inputs.avgPaceSecPerKm ?? null;
 
   const distances = [
     { label: 'Marathon', dist: 42195, km: 42.195 },
@@ -2081,17 +2488,35 @@ function buildForecastTimesCard(s: SimulatorState): string {
       const blended = blendPredictions(
         d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
         s.b ?? 1.06, s.typ ?? 'Balanced', liveRec,
-        s.athleteTier ?? undefined,
+        s.athleteTier ?? undefined, liveKmPerWeek, liveAvgPace ?? undefined,
+        { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
       );
       timeSec = (blended && blended > 0) ? blended : vt(d.km, vdot);
     } else {
       timeSec = vt(d.km, vdot);
     }
     const isLast = i === distances.length - 1;
+
+    // Fade-risk badge — marathon only, based on long-run drift at goal MP
+    let fadeBadge = '';
+    if (d.label === 'Marathon' && timeSec > 0) {
+      const goalMpSecKm = timeSec / d.km;
+      const risk = computeMarathonFadeRisk(s, goalMpSecKm);
+      if (risk) {
+        const colorMap = {
+          low: { bg: 'rgba(52,199,89,0.12)', fg: '#15803D', label: 'Low' },
+          mod: { bg: 'rgba(245,158,11,0.12)', fg: '#B45309', label: 'Moderate' },
+          high: { bg: 'rgba(239,68,68,0.12)', fg: '#DC2626', label: 'High' },
+        } as const;
+        const c = colorMap[risk.level];
+        fadeBadge = `<span style="font-size:10px;font-weight:600;color:${c.fg};background:${c.bg};padding:2px 7px;border-radius:10px;margin-right:8px;letter-spacing:0.02em">Fade risk: ${c.label}</span>`;
+      }
+    }
+
     return `
       <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;${isLast ? '' : 'border-bottom:1px solid var(--c-border)'}">
         <span style="font-size:13px;color:var(--c-muted)">${d.label}</span>
-        <span style="font-size:16px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span>
+        <span style="display:flex;align-items:center">${fadeBadge}<span style="font-size:16px;font-weight:600;color:var(--c-black)">${fmtTime(timeSec)}</span></span>
       </div>`;
   }).join('');
 
@@ -2493,61 +2918,6 @@ function buildReadinessDetailPage(s: SimulatorState): string {
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
-}
-
-// ---------------------------------------------------------------------------
-// ══════════════════════════════════════════════════════════════════════════════
-// SPARKLINE HELPERS (reused across opening cards)
-// ══════════════════════════════════════════════════════════════════════════════
-
-function buildMiniVO2Sparkline(data: Array<{ date: string; value: number }>): string {
-  if (data.length < 3) return '';
-  const vals = data.map(d => d.value);
-  const n = vals.length;
-  const lo = Math.min(...vals) - 0.5;
-  const hi = Math.max(...vals) + 0.5;
-  const range = hi - lo || 1;
-  const W = 320, H = 32;
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, ((v - lo) / range) * (H - 4));
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const lastVal = vals[n - 1];
-  const prevVal = vals[n - 2];
-  const color = lastVal >= prevVal - 0.05 ? 'rgba(52,199,89,' : 'rgba(255,69,58,';
-
-  return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;margin:10px 0 4px">
-      <path d="${areaPath}" fill="${color}0.15)" stroke="none"/>
-      <path d="${topPath}" fill="none" stroke="${color}0.80)" stroke-width="1.8"/>
-      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-    </svg>`;
-}
-
-function buildMiniVdotSparkline(history: Array<{ week: number; vdot: number; date?: string }>): string {
-  if (history.length < 3) return '';
-  const vals = history.map(h => h.vdot);
-  const n = vals.length;
-  const lo = Math.min(...vals) - 0.5;
-  const hi = Math.max(...vals) + 0.5;
-  const range = hi - lo || 1;
-  const W = 320, H = 32;
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, ((v - lo) / range) * (H - 4));
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const lastVal = vals[n - 1];
-  const prevVal = vals[n - 2];
-  const color = lastVal >= prevVal - 0.05 ? 'rgba(52,199,89,' : 'rgba(255,69,58,';
-
-  return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible;margin:10px 0 4px">
-      <path d="${areaPath}" fill="${color}0.15)" stroke="none"/>
-      <path d="${topPath}" fill="none" stroke="${color}0.80)" stroke-width="1.8"/>
-      <circle cx="${xOf(n-1).toFixed(1)}" cy="${yOf(lastVal).toFixed(1)}" r="3" fill="${color}0.95)" stroke="white" stroke-width="1.5" stroke-linejoin="round"/>
-    </svg>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2959,7 +3329,7 @@ function buildCTLCard(s: SimulatorState): string {
   return `
     <div id="stats-card-ctl" class="m-card" style="padding:20px;margin-bottom:10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Running Fitness</span>
+        <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Running Load</span>
         <span style="display:flex;align-items:center;font-size:11px;color:var(--c-faint)">8-week${SCROLL_CHEVRON}</span>
       </div>
       <div style="margin-bottom:14px">
@@ -3269,6 +3639,11 @@ export function renderStatsView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
+  // Triathlon fork — full per-discipline stats view handles its own render.
+  if (s.eventType === 'triathlon') {
+    import('./triathlon/stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
+    return;
+  }
   container.innerHTML = buildStatsSummary(s);
   wireTabBarHandlers(navigateTab);
 
@@ -3287,5 +3662,4 @@ export function renderStatsView(): void {
 
   tapHandler('stats-card-progress',  () => renderProgressDetail(s));
   tapHandler('stats-card-fitness',   () => renderFitnessDetail(s));
-
 }

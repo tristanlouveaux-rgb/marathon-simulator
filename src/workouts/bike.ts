@@ -58,7 +58,7 @@ export function pickBikeKind(phase: TrainingPhase, slotIndex: number): BikeSessi
 export function generateBikeSession(input: BikeSessionInput): Workout {
   const { phase, kind, targetMinutes, ftp, hasPowerMeter } = input;
 
-  const desc = describeBikeSession(kind, targetMinutes, ftp, hasPowerMeter);
+  const desc = describeBikeSession(kind, targetMinutes, ftp, hasPowerMeter, input.weekIndex);
   const rpe = rpeForBike(kind, phase);
   const { aerobic, anaerobic } = loadForBike(kind, targetMinutes);
 
@@ -92,52 +92,86 @@ function nameForBike(kind: BikeSessionKind): string {
   }
 }
 
+function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number): string {
+  if (hasPower && ftp) return `${Math.round(ftp * pct)}W`;
+  return `${Math.round(pct * 100)}% FTP`;
+}
+
+/**
+ * Variant rotation per kind. Rotated by `weekIndex`. Same energetic system,
+ * different interval structures so the plan doesn't feel repetitive.
+ */
 function describeBikeSession(
   kind: BikeSessionKind,
   minutes: number,
   ftp: number | undefined,
-  hasPower: boolean | undefined
+  hasPower: boolean | undefined,
+  weekIndex: number
 ): string {
-  const pw = (pct: number) => ftp ? `${Math.round(ftp * pct)}W` : `${Math.round(pct * 100)}% FTP`;
   const hr = (zone: string) => ` (HR Z${zone})`;
-  const usePower = !!hasPower && !!ftp;
+  const idx = Math.abs(weekIndex - 1);
 
   switch (kind) {
     case 'endurance': {
-      // Z2 steady
-      const tgt = usePower ? `${pw(0.65)}` : `Z2 endurance${hr('2')}`;
-      return `${minutes}min steady @ ${tgt}. Conversational effort.`;
+      const variants = [
+        () => `${minutes}min steady @ ${hasPower && ftp ? pwLabel(ftp, hasPower, 0.65) : `Z2 endurance${hr('2')}`}. Conversational throughout.`,
+        () => `${minutes}min rolling endurance — stay in Z2 on the flats, allow Z3 spikes on climbs. Recover on descents.`,
+        () => `${minutes}min fasted endurance (optional) @ Z1–Z2. Low intensity, long duration — aerobic base.`,
+      ];
+      return variants[idx % variants.length]();
     }
     case 'tempo': {
-      // Z3 continuous or long blocks
-      const reps = minutes >= 75 ? 2 : 1;
-      const repMin = Math.round((minutes - 20) / reps);
-      const tgt = usePower ? `${pw(0.82)}` : `tempo${hr('3')}`;
-      return `15min WU, ${reps}×${repMin}min @ ${tgt}, 5min CD.`;
+      const variants = [
+        () => {
+          const reps = minutes >= 75 ? 2 : 1;
+          const repMin = Math.round((minutes - 20) / reps);
+          return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 0.82)}, 5min easy between. 5min Cool down.`;
+        },
+        () => `15min Warm up. Main: 3×10min @ ${pwLabel(ftp, hasPower, 0.85)}, 3min easy. 5min Cool down.`,
+        () => `15min Warm up. Main: ${Math.max(20, minutes - 25)}min continuous tempo @ ${pwLabel(ftp, hasPower, 0.80)}. 10min Cool down.`,
+      ];
+      return variants[idx % variants.length]();
     }
     case 'sweet_spot': {
-      // 88-94% FTP, manageable stimulus
-      const mainMin = minutes - 20;
-      const reps = mainMin >= 40 ? 3 : mainMin >= 24 ? 2 : 1;
-      const repMin = Math.round(mainMin / reps) - 2;  // account for recoveries
-      const tgt = usePower ? `${pw(0.90)}` : `sweet spot (88-94%)`;
-      return `15min WU, ${reps}×${repMin}min @ ${tgt}, 5min rec between, 5min CD.`;
+      const variants = [
+        () => {
+          const mainMin = minutes - 20;
+          const reps = mainMin >= 40 ? 3 : mainMin >= 24 ? 2 : 1;
+          const repMin = Math.round(mainMin / reps) - 2;
+          return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 0.90)}, 5min recovery. 5min Cool down.`;
+        },
+        () => `15min Warm up. Main: 4×8min @ ${pwLabel(ftp, hasPower, 0.92)}, 2min recovery. 10min Cool down.`,
+        () => `15min Warm up. Main: 2×20min @ ${pwLabel(ftp, hasPower, 0.88)}, 5min recovery. 10min Cool down.`,
+      ];
+      return variants[idx % variants.length]();
     }
     case 'threshold': {
-      const reps = minutes >= 75 ? 3 : 2;
-      const repMin = Math.round((minutes - 25) / reps) - 3;
-      const tgt = usePower ? `${pw(1.00)}` : `threshold${hr('4')}`;
-      return `15min WU, ${reps}×${repMin}min @ ${tgt}, 4min rec between, 10min CD.`;
+      const variants = [
+        () => {
+          const reps = minutes >= 75 ? 3 : 2;
+          const repMin = Math.round((minutes - 25) / reps) - 3;
+          return `15min Warm up. Main: ${reps}×${repMin}min @ ${pwLabel(ftp, hasPower, 1.00)}, 4min recovery. 10min Cool down.`;
+        },
+        () => `15min Warm up. Main: 5×6min @ ${pwLabel(ftp, hasPower, 1.02)}, 3min recovery. 10min Cool down.`,
+        () => `15min Warm up. Main: 2×15min @ ${pwLabel(ftp, hasPower, 0.98)}, 5min recovery. 10min Cool down.`,
+      ];
+      return variants[idx % variants.length]();
     }
     case 'vo2': {
-      const reps = minutes >= 60 ? 6 : 5;
-      const repMin = 3;
-      const tgt = usePower ? `${pw(1.15)}` : `VO2 pace${hr('5')}`;
-      return `20min WU, ${reps}×${repMin}min @ ${tgt}, 3min rec between, 10min CD.`;
+      const variants = [
+        () => `20min Warm up. Main: ${minutes >= 60 ? 6 : 5}×3min @ ${pwLabel(ftp, hasPower, 1.15)}, 3min recovery. 10min Cool down.`,
+        () => `20min Warm up. Main: 8×2min @ ${pwLabel(ftp, hasPower, 1.20)}, 2min recovery. 10min Cool down.`,
+        () => `20min Warm up. Main: 4×4min @ ${pwLabel(ftp, hasPower, 1.12)}, 4min recovery. 10min Cool down.`,
+      ];
+      return variants[idx % variants.length]();
     }
     case 'hills': {
-      const reps = minutes >= 60 ? 8 : 6;
-      return `20min WU, ${reps}×2min climbs hard seated + 30s standing, 2min rec, 10min CD.`;
+      const variants = [
+        () => `20min Warm up. Main: ${minutes >= 60 ? 8 : 6}×2min climbs hard seated + 30s standing, 2min recovery. 10min Cool down.`,
+        () => `20min Warm up. Main: 5×4min climbs @ ${pwLabel(ftp, hasPower, 0.95)}, 4min descend. 10min Cool down.`,
+        () => `20min Warm up. Main: 10×30s max efforts on climb, 90s recovery. 10min Cool down.`,
+      ];
+      return variants[idx % variants.length]();
     }
   }
 }

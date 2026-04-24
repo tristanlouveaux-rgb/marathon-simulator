@@ -100,11 +100,22 @@ export const DEFAULT_VOLUME_SPLIT: TriVolumeSplit = {
 /** Typical weekly peak hours by distance × skill level. Used when no user time-available input is provided. */
 export const DEFAULT_WEEKLY_PEAK_HOURS: Record<TriathlonDistance, Record<1 | 2 | 3 | 4 | 5, number>> = {
   '70.3': {
-    1: 6,   2: 8,   3: 10,  4: 12,  5: 14,
+    1: 6,   2: 8,   3: 10,  4: 13,  5: 16,
   },
   'ironman': {
-    1: 10,  2: 12,  3: 14,  4: 16,  5: 20,
+    1: 10,  2: 13,  3: 16,  4: 20,  5: 25,
   },
+};
+
+/**
+ * Weekly hours slider bounds by distance. Min is the lowest a realistic plan
+ * generator should accept; max accommodates elites (IM pros routinely peak
+ * 25–30h/week). Raised from a flat 4–20 range after user review (§1
+ * feedback, 2026-04-24).
+ */
+export const HOURS_RANGE: Record<TriathlonDistance, { min: number; max: number }> = {
+  '70.3':    { min: 5, max: 20 },
+  'ironman': { min: 6, max: 30 },
 };
 
 // ───────────────────────────────────────────────────────────────────────────

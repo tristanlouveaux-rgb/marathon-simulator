@@ -13,7 +13,7 @@
 import type { SimulatorState } from '@/types/state';
 import type { Discipline, PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
-import { COMBINED_CTL_WEIGHTS, sportToTransferSource, transferWeight, type TransferSourceSport } from '@/constants/transfer-matrix';
+import { sportToTransferSource, transferWeight, type TransferSourceSport } from '@/constants/transfer-matrix';
 
 /**
  * Record of an activity contributing to fitness. Generic across all sports —
@@ -52,9 +52,18 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
     run:  { ctlSum: 0, atlSum: 0 },
   };
 
+  // Combined CTL (and ATL) is the raw EMA across ALL activities without
+  // transfer weighting. This is the honest total-fatigue number — every
+  // activity contributes at full weight regardless of sport, so padel, gym,
+  // hiking etc. all count toward combined even though they only contribute
+  // partially to swim/bike/run CTLs. (§8 feedback, 2026-04-24.)
+  let combinedCtlSum = 0;
+
   for (const c of contributions) {
     const ctlDecay = decay(c.dayIndex, CTL_TAU_DAYS);
     const atlDecay = decay(c.dayIndex, ATL_TAU_DAYS);
+
+    // Per-discipline: apply transfer matrix.
     for (const d of disciplines) {
       const w = transferWeight(c.sport, d);
       if (w <= 0) continue;
@@ -62,6 +71,10 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
       acc[d].ctlSum += contribution * ctlDecay;
       acc[d].atlSum += contribution * atlDecay;
     }
+
+    // Combined: raw contribution at full weight (no matrix). Every activity
+    // adds to combined fatigue at 1.0 regardless of sport.
+    combinedCtlSum += c.rawTSS * ctlDecay;
   }
 
   // Normalise: CTL is a weekly-equivalent EMA (TrainingPeaks convention) —
@@ -72,10 +85,7 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
   const bike: PerDisciplineFitness = finaliseFitness(acc.bike, normalise);
   const run:  PerDisciplineFitness = finaliseFitness(acc.run,  normalise);
 
-  const combinedCtl =
-    swim.ctl * COMBINED_CTL_WEIGHTS.swim +
-    bike.ctl * COMBINED_CTL_WEIGHTS.bike +
-    run.ctl  * COMBINED_CTL_WEIGHTS.run;
+  const combinedCtl = normalise(combinedCtlSum, CTL_TAU_DAYS);
 
   return { swim, bike, run, combinedCtl: Math.round(combinedCtl * 10) / 10 };
 }

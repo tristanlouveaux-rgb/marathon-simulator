@@ -9,23 +9,24 @@ import type { Week } from '@/types/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
-import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeFitnessModel, computeSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodaySignalBTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
 import { computeReadiness, readinessColor, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
-import { computeDailyCoach, type StrainContext } from '@/calculations/daily-coach';
+import { computeDailyCoach, type StrainContext, type CoachState } from '@/calculations/daily-coach';
 import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
 import { isInjuryActive } from './injury/modal';
 import { openCheckinOverlay } from './checkin-overlay';
-import { openCoachModal } from './coach-modal';
 import { clearIllness } from './illness-modal';
 import { buildHolidayBannerHome, clearHoliday, cancelScheduledHoliday } from './holiday-modal';
-import { formatKm, fmtDateUK, fmtDesc, formatPace } from '@/utils/format';
+import { formatKm, fmtDateUK, fmtDesc, formatPace, ft } from '@/utils/format';
 import { setOnWeekAdvance, applyRecoveryAdjustment } from './events';
 import { TL_PER_MIN } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType } from '@/calculations/activity-matcher';
+import { getEffectiveSport } from './sport-picker-modal';
+import { SPORT_LABELS } from '@/constants';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
 
@@ -499,6 +500,44 @@ export function showRunBreakdownSheet(s: SimulatorState, weekNum?: number): void
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 }
 
+/**
+ * Post-race banner. Fires when a planned race has passed (1+ days ago) and
+ * the user hasn't dismissed the prompt. Offers the "Switch to tracking"
+ * downgrade as a soft suggestion — the plan keeps running regardless.
+ *
+ * State guards:
+ *   - selectedMarathon.date OR onboarding.customRaceDate is in the past
+ *   - NOT already in trackOnly mode (nothing to offer)
+ *   - user hasn't dismissed (s.racePastPromptDismissed = true stored after X tap)
+ *   - NOT in continuousMode — no meaningful race date
+ */
+function buildRaceCompleteBanner(s: SimulatorState): string {
+  if (s.trackOnly || s.continuousMode) return '';
+  if ((s as any).racePastPromptDismissed) return '';
+  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate;
+  if (!raceDate) return '';
+  const race = new Date(raceDate);
+  const now = new Date();
+  race.setHours(0, 0, 0, 0);
+  now.setHours(0, 0, 0, 0);
+  const daysPast = Math.round((now.getTime() - race.getTime()) / 86400000);
+  if (daysPast < 1) return '';
+  const raceName = s.selectedMarathon?.name || 'Your race';
+  return `
+    <div id="home-race-done-banner" style="padding:12px 16px;margin:4px 16px 10px;background:#fff;border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)" class="hf" data-delay="0.05">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:2px">${raceName} is done</div>
+          <div style="font-size:12px;color:#475569;line-height:1.45">Keep your training data flowing without a new plan. Activity history and Strava connection stay intact.</div>
+        </div>
+        <button id="home-race-done-dismiss" aria-label="Dismiss" style="flex-shrink:0;width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1">×</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="home-switch-to-track" class="m-btn-glass" style="flex:1">Switch to tracking</button>
+      </div>
+    </div>`;
+}
+
 function buildIllnessBanner(s: SimulatorState): string {
   const illness = (s as any).illnessState;
   if (!illness?.active) return '';
@@ -696,20 +735,62 @@ function arcPath(cx: number, cy: number, r: number, startDeg: number, endDeg: nu
   return `M ${s.x.toFixed(2)} ${s.y.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${e.x.toFixed(2)} ${e.y.toFixed(2)}`;
 }
 
+// ─── Race Forecast Card (race mode only) ────────────────────────────────────
+
+const RACE_DIST_LABEL: Record<string, string> = {
+  '5k': '5K',
+  '10k': '10K',
+  'half': 'Half marathon',
+  'marathon': 'Marathon',
+};
+
+function buildRaceForecastCard(s: SimulatorState): string {
+  if (s.continuousMode || !s.rd || !s.initialBaseline) return '';
+
+  const forecastSec = s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
+  if (!forecastSec || forecastSec <= 0) return '';
+
+  const goalSec = s.initialBaseline;
+  const deltaSec = Math.round(forecastSec - goalSec);
+  const deltaMin = Math.round(Math.abs(deltaSec) / 60);
+  let deltaStr: string;
+  if (Math.abs(deltaSec) < 60) deltaStr = 'On pace';
+  else if (deltaSec > 0) deltaStr = `+${deltaMin} min`;
+  else deltaStr = `−${deltaMin} min`;
+
+  const distLabel = RACE_DIST_LABEL[s.rd] ?? 'Race';
+
+  return `
+    <div style="padding:0 16px;margin-bottom:10px" class="hf" data-delay="0.16">
+      <div id="home-race-forecast-card" style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px 18px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:12px;color:#64748B;font-weight:500">${distLabel} forecast</div>
+          <div style="font-size:14px;color:#94A3B8;line-height:1">›</div>
+        </div>
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <div style="font-size:28px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">${ft(forecastSec)}</div>
+          <div style="font-size:12px;color:#64748B;text-align:right;line-height:1.5">
+            <div>Target ${ft(goalSec)}</div>
+            <div style="color:#0F172A;font-weight:600">${deltaStr}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // ─── Training Readiness Ring ────────────────────────────────────────────────
 
 function buildReadinessRing(s: SimulatorState): string {
-  const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
+  const acwr = computeReadinessACWR(s);
 
-  // For readiness: same-signal TSB (Signal B for both CTL and ATL)
-  // so cross-trainers aren't penalised by the A/B discount gap.
-  // Use completed weeks only — a partial current week creates false "Fresh" readings.
+  // For readiness: same-signal TSB (Signal B for both CTL and ATL) with intra-week
+  // decay applied through today, so the score matches the Readiness detail page.
   const completedWeek = Math.max(0, s.w - 1);
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
-  const tsb = sameSignal?.tsb ?? 0;
-  const ctlNow = sameSignal?.ctl ?? 0;
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const tsb = liveTSB.tsb;
+  const ctlNow = liveTSB.ctl;
 
   // Weighted directional momentum: recent week-over-week CTL deltas weighted 4/3/2/1 (newest first)
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
@@ -731,10 +812,9 @@ function buildReadinessRing(s: SimulatorState): string {
   );
   const latestPhysio = s.physiologyHistory?.slice(-1)[0];
   const garminTodaySleep = (s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
-  // Fall back to the most recent entry that has a sleep score (not just the absolute last entry,
-  // which may be today's dailies row before Garmin has pushed the sleep score).
-  const latestWithSleep = (s.physiologyHistory ?? []).slice().reverse().find(p => p.sleepScore != null);
-  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? latestWithSleep?.sleepScore ?? null;
+  // Today-only: older sleep entries stay attached to their own day. If today's score is
+  // missing we surface a refresh prompt rather than displaying stale data as today's.
+  const sleepScore: number | null = garminTodaySleep?.sleepScore ?? manualToday?.sleepScore ?? null;
   const latestWithHrv = (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null);
   const hrvRmssd: number | null = latestWithHrv?.hrvRmssd ?? null;
   const hrvAll = (s.physiologyHistory ?? []).map((p: any) => p.hrvRmssd).filter((v: any) => v != null) as number[];
@@ -755,7 +835,7 @@ function buildReadinessRing(s: SimulatorState): string {
   const todayPhysio = (s.physiologyHistory ?? []).find(e => e.date === today);
   const todaySteps = todayPhysio?.steps ?? null;
   const todayActiveMin = todayPhysio?.activeMinutes ?? null;
-  const todaySignalBTSS = strainWk ? computeTodaySignalBTSS(strainWk, today, todayPhysio) : 0;
+  const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysio, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
   const plannedWorkouts = strainWk ? generateWeekWorkouts(
     strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
@@ -864,6 +944,7 @@ function buildReadinessRing(s: SimulatorState): string {
   const readinessSentence = coach.primaryMessage;
 
   const color = readinessColor(readiness.label);
+  const ringLabel = coach.ringLabel;
 
   // SVG rings: 270° arc, starts bottom-left (135°), fills clockwise. 120×120 for side-by-side layout.
   const CX = 60, CY = 60, R = 44, SW = 8;
@@ -898,7 +979,7 @@ function buildReadinessRing(s: SimulatorState): string {
     strainColor = 'var(--c-ok)';
     strainLabel = todaySignalBTSS > strainTarget.hi ? 'Above target' : 'Target reached';
   } else if (todaySignalBTSS > 0) {
-    strainColor = 'var(--c-caution)';
+    strainColor = 'var(--c-ok)';
     strainLabel = todaySignalBTSS < strainTarget.lo * 0.5 ? 'Light' : 'Building';
   } else {
     strainColor = 'var(--c-faint)';
@@ -916,8 +997,7 @@ function buildReadinessRing(s: SimulatorState): string {
   // Target dashes removed — too noisy at 66px ring size
 
   // Sleep ring
-  const sleepEntry = garminTodaySleep ?? latestWithSleep;
-  const sleepDurationSec = sleepEntry?.sleepDurationSec ?? null;
+  const sleepDurationSec = garminTodaySleep?.sleepDurationSec ?? null;
   const sleepRingColor = sleepScore != null ? sleepScoreColor(sleepScore) : 'var(--c-faint)';
   const sleepFillEnd = START + ((sleepScore ?? 0) / 100) * SWEEP;
   const slTrackPath = arcPath(CX, CY, R, START, START + SWEEP);
@@ -961,7 +1041,8 @@ function buildReadinessRing(s: SimulatorState): string {
   const adjustText = readiness.drivingSignal === 'fitness' ? 'Adjust plan'
     : readiness.drivingSignal === 'safety' ? 'Reduce session load'
       : readiness.drivingSignal === 'recovery' ? 'Take it lighter today'
-        : "Keep consistency — don't skip";
+        : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
+          : "Keep consistency — don't skip";
 
   const recoveryPillHtml = recoveryResult.hasData
     ? `<div class="home-readiness-pill" data-pill="recovery" style="flex:1;min-width:80px;cursor:pointer;${drivingBorderStyle('recovery')}">
@@ -999,7 +1080,7 @@ function buildReadinessRing(s: SimulatorState): string {
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
-                <div style="font-size:10px;font-weight:600;letter-spacing:0.01em;margin-top:4px;color:var(--c-black)">${readiness.label}</div>
+                <div style="font-size:10px;font-weight:600;letter-spacing:0.01em;margin-top:4px;color:var(--c-black)">${ringLabel}</div>
               </div>
             </div>
           </div>
@@ -1024,7 +1105,7 @@ function buildReadinessRing(s: SimulatorState): string {
                     ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
                        <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Log below</div>`
                     : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
-                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No data</div>`
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Sync watch</div>`
                 }
               </div>
             </div>
@@ -1095,10 +1176,11 @@ function buildReadinessRing(s: SimulatorState): string {
 
         <!-- Sentence -->
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
+        ${coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
         ${readiness.score <= 59 ? `
         <div style="padding:0 14px 16px">
-          <button id="readiness-adjust-btn" style="width:100%;padding:9px 14px;border-radius:999px;border:1px solid var(--c-border);cursor:pointer;font-size:13px;font-weight:500;background:transparent;color:var(--c-black);font-family:var(--f);text-align:center">
+          <button id="readiness-adjust-btn" class="m-btn-glass m-btn-glass--inset" style="width:100%">
             ${adjustText}
           </button>
         </div>` : ''}
@@ -1225,7 +1307,7 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
     ${d.legLoadNote ? `<p style="font-size:12px;color:var(--c-muted);margin-top:10px">${d.legLoadNote}</p>` : ''}`;
 
   } else if (signal === 'momentum') {
-    title = 'Running Fitness Momentum'; subtitle = 'Whether your running fitness is trending up or down';
+    title = 'Running Load Momentum'; subtitle = 'Whether your running load is trending up or down';
     const direction = d.momentumScore > d.momentumThreshold ? 'Building'
       : d.momentumScore >= -d.momentumThreshold ? 'Stable' : 'Declining';
     const what = direction === 'Building'
@@ -1500,7 +1582,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
   `).join('');
 
   const viewBtn = act.workoutKey
-    ? `<button id="home-today-view-activity-btn" data-workout-key="${act.workoutKey}" data-week-num="${act.weekNum}" style="cursor:pointer;padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);font-size:12px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Done · View</button>`
+    ? `<button id="home-today-view-activity-btn" data-workout-key="${act.workoutKey}" data-week-num="${act.weekNum}" class="m-btn-glass m-btn-glass--inset" style="padding:6px 14px;font-size:12px">Done · View</button>`
     : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
   return `
@@ -1528,7 +1610,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
   `;
 }
 
-function buildTodayWorkout(s: SimulatorState): string {
+function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   const wk = s.wks?.[s.w - 1];
   if (!wk) {
     return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your training plan.', false);
@@ -1626,8 +1708,17 @@ function buildTodayWorkout(s: SimulatorState): string {
         Start
       </button>`
     : matchedActual
-      ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" style="cursor:pointer;padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);font-size:12px;font-weight:600;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Done · View</button>`
+      ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" class="m-btn-glass m-btn-glass--inset" style="padding:6px 14px;font-size:12px">Done · View</button>`
       : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
+
+  // Coach workout modifier — informational note only, no auto-change to the workout.
+  // Renders only when today's stance is reduce or rest, and only when the session isn't already done.
+  const coachMod = coach && !alreadyRated ? coach.workoutMod : 'none';
+  const coachNote = coachMod === 'downgrade'
+    ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Downgraded.</strong> ${coach!.primaryMessage}</div>`
+    : coachMod === 'skip'
+      ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
+      : '';
 
   return `
     <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
@@ -1666,6 +1757,7 @@ function buildTodayWorkout(s: SimulatorState): string {
         </div>
       </div>
     </div>
+    ${coachNote}
   `;
 }
 
@@ -1739,9 +1831,13 @@ function buildRecentActivity(s: SimulatorState): string {
       const isRun = isRunKey(key, act.activityType);
       const dateStr = act.startTime ? fmtDate(act.startTime) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationSec ? `${Math.round(act.durationSec / 60)} min` : '';
-      // Prefer the actual activity type as the label (e.g. "Run") over the plan slot name.
-      // This ensures a run matched to a General Sport slot shows "Run", not "General Sport 1".
-      const actName = (act.activityType ? formatActivityType(act.activityType) : null)
+      // Prefer the user-effective sport label (respects manualSport override) over
+      // raw activityType. Falls back to formatActivityType if no override/mapping applies.
+      const isRunAct = isRun;
+      const effSport = !isRunAct ? getEffectiveSport(act) : null;
+      const sportLabel = effSport ? (SPORT_LABELS as Record<string, string>)[effSport] : null;
+      const actName = sportLabel
+        || (act.activityType ? formatActivityType(act.activityType) : null)
         || act.displayName || act.workoutName
         || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
@@ -1831,7 +1927,7 @@ function buildSyncActions(s: SimulatorState): string {
 
   return `
     <div style="padding:0 16px;margin-bottom:14px;display:flex;gap:10px">
-      <button id="home-sync-btn" class="m-btn-secondary flex-1">↻ Sync Activities</button>
+      <button id="home-sync-btn" class="m-btn-glass flex-1">↻ Sync Activities</button>
     </div>
   `;
 }
@@ -1847,7 +1943,452 @@ function getHomePlanName(s: SimulatorState): string {
   return labels[s.rd] || 'Training Plan';
 }
 
+/**
+ * Just-Track mode home layout. Activity tracking only, no plan.
+ * Hides: today-workout, readiness/strain rings, race-forecast, week progress ring.
+ * Shows: header + account button, weekly volume from `historicWeeklyKm`,
+ * recent synced activities (from historicWeeklyKm derived rows only — s.wks is empty).
+ *
+ * Data sources used (all independent of s.wks):
+ *  - `s.historicWeeklyKm` : last 8 weeks running km (populated by stravaSync.ts)
+ *  - `s.physiologyHistory`: last-night sleep / HRV / RHR (populated by physiologySync.ts)
+ *  - Account button, tab bar and sync actions reuse the same builders as the full home.
+ */
+/**
+ * Daily "sustainable load" target for Just-Track users.
+ *
+ * Anchor: CTL ÷ 7 — the daily-equivalent of a fitness-flat week, per the
+ * Banister impulse-response model. Modulated by readiness so the target
+ * bends to how recovered the athlete actually is that day. Gabbett bands
+ * colour the actual-vs-target ratio (0.8–1.3 sweet spot, 1.3–1.5 caution,
+ * >1.5 injury-risk spike — Gabbett 2016).
+ *
+ * Returns null when CTL is too low to produce a meaningful target
+ * (athlete has no sync history / is brand new). UI falls back to
+ * "Sync activity to unlock" in that case.
+ */
+function buildTrackOnlyDailyTarget(s: SimulatorState): string {
+  const ctlWeekly = s.ctlBaseline ?? 0;
+  if (ctlWeekly < 20) {
+    // Below ~3 TSS/day CTL: no meaningful anchor. Encourage sync.
+    return `
+      <div style="padding:0 16px;margin-top:18px;margin-bottom:14px" class="hf" data-delay="0.10">
+        <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
+          <div style="font-size:12px;font-weight:600;color:#64748B;margin-bottom:6px">Today's load</div>
+          <div style="font-size:13px;color:#475569;line-height:1.45">Connect Strava or record a run. Your sustainable daily load appears once we have enough training history.</div>
+        </div>
+      </div>`;
+  }
+
+  const ctlDaily = ctlWeekly / 7;
+
+  // Readiness multiplier — four zones anchored on the composite 0–100.
+  // 80+ → push (×1.3), 60–79 → neutral (×1.0), 40–59 → easy (×0.7), <40 → rest (×0.3).
+  const hrvAll = (s.physiologyHistory ?? []).map(p => p.hrvRmssd).filter((v): v is number => v != null);
+  const hrvAvg = hrvAll.length >= 3 ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length) : null;
+  const r = computeReadiness({
+    tsb: computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate).tsb,
+    acwr: computeReadinessACWR(s).ratio,
+    ctlNow: ctlWeekly,
+    sleepScore: (s.physiologyHistory ?? []).slice(-1)[0]?.sleepScore ?? null,
+    sleepHistory: s.physiologyHistory ?? [],
+    hrvRmssd: (s.physiologyHistory ?? []).slice().reverse().find(p => p.hrvRmssd != null)?.hrvRmssd ?? null,
+    hrvPersonalAvg: hrvAvg,
+    sleepBankSec: null,
+    weeksOfHistory: Math.min(s.wks?.length ?? 0, 4),
+  });
+  const readinessScore = r?.score ?? 65;
+  const mult = readinessScore >= 80 ? 1.3
+             : readinessScore >= 60 ? 1.0
+             : readinessScore >= 40 ? 0.7
+             : 0.3;
+  const target = Math.round(ctlDaily * mult);
+
+  // Today's actual load — sum of TSS for today's activities.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const wk = s.wks?.[s.w - 1];
+  let todayTSS = 0;
+  if (wk) {
+    for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
+      const dateStr = (actual.startTime ?? '').slice(0, 10);
+      if (dateStr !== todayIso) continue;
+      if (actual.iTrimp != null && actual.iTrimp > 0) {
+        todayTSS += (actual.iTrimp * 100) / 15000;
+      } else if (actual.durationSec) {
+        todayTSS += (actual.durationSec / 60) * 0.92;
+      }
+    }
+  }
+  todayTSS = Math.round(todayTSS);
+
+  // Gabbett-band colour for actual-vs-CTL ratio.
+  // Note: bands apply to ratio of daily actual vs CTL/7, not vs the readiness-
+  // adjusted target — they're a safety signal, not a prescription signal.
+  const ratio = ctlDaily > 0 ? todayTSS / ctlDaily : 0;
+  const bandColor = ratio > 1.5 ? '#dc2626'     // red — injury-risk spike
+                  : ratio > 1.3 ? '#f59e0b'     // amber — overreaching
+                  : '#10b981';                   // green — sustainable
+  const bandLabel = ratio > 1.5 ? 'High strain'
+                  : ratio > 1.3 ? 'Overreaching'
+                  : todayTSS > 0 ? 'Sustainable'
+                  : 'No load yet';
+
+  return `
+    <div style="padding:0 16px;margin-top:18px;margin-bottom:14px" class="hf" data-delay="0.10">
+      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:#64748B">Today's load</div>
+          <div style="font-size:11px;font-weight:600;color:${bandColor};padding:2px 8px;border-radius:100px;background:${bandColor}1a">${bandLabel}</div>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:8px">
+          <span style="font-size:32px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;line-height:1;font-variant-numeric:tabular-nums">${todayTSS}</span>
+          <span style="font-size:13px;color:#64748B">TSS</span>
+          <span style="margin-left:auto;font-size:13px;color:#94A3B8" title="Your daily-sustainable load based on recent training and how recovered you are today. Not a prescription.">sustainable ${target}</span>
+        </div>
+        <div style="font-size:12px;line-height:1.45;color:#475569">${r?.sentence ?? 'Session sized to how recovered you are.'}</div>
+      </div>
+    </div>`;
+}
+
+/**
+ * Just-Track week detail page. Opened from the home "This Week" card.
+ *
+ * Same visual shape as Load & Taper (hero ring + sport breakdown + activity
+ * list + TSS band reference card), but without plan-target language:
+ *   - Ring shows actual TSS only (no "/ target")
+ *   - No phase badge
+ *   - No "Running planned / Cross-training expected" rows
+ *   - Sport breakdown is actual-only
+ *
+ * Sport breakdown reuses `computeLoadBreakdown` which walks the current
+ * week's `garminActuals` + `adhocWorkouts` and groups by sport label.
+ */
+export function renderTrackOnlyWeekDetail(): void {
+  const container = document.getElementById('app-root');
+  if (!container) return;
+  const s = getState();
+  const wk = s.wks?.[(s.w ?? 1) - 1];
+  const tss = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
+  const segments = wk ? computeLoadBreakdown(wk, wk.rated ?? {}, s.planStartDate) : [];
+  const unit: 'km' | 'mi' = s.unitPref ?? 'km';
+
+  // Activity rows from current week (same dedup as buildRecentActivity).
+  type Row = { day: string; name: string; value: string; color: string; tss: number };
+  const rows: Row[] = [];
+  const actualKeys = new Set<string>();
+  for (const [key, actual] of Object.entries(wk?.garminActuals ?? {})) {
+    actualKeys.add(key);
+    const d = actual.startTime ? new Date(actual.startTime) : null;
+    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
+    const isRun = !(actual as any).displayName || !!(actual as any).workoutName;
+    const name = (actual as any).displayName || (actual as any).workoutName
+      || (actual.activityType ? formatActivityType(actual.activityType) : 'Activity');
+    const val = actual.distanceKm ? formatKm(actual.distanceKm, unit)
+              : actual.durationSec ? `${Math.round(actual.durationSec / 60)} min` : '';
+    const color = isRun ? '#3b82f6' : sportColor(name.toLowerCase());
+    const rowTSS = actual.iTrimp != null && actual.iTrimp > 0
+      ? Math.round((actual.iTrimp * 100) / 15000)
+      : Math.round((actual.durationSec / 60) * 0.92);
+    rows.push({ day: dayLabel, name, value: val, color, tss: rowTSS });
+  }
+  for (const w of (wk?.adhocWorkouts ?? []) as any[]) {
+    if (w.id && actualKeys.has(w.id)) continue;
+    const ts = w.garminTimestamp;
+    const d = ts ? new Date(ts) : null;
+    const dayLabel = d ? d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' }) : '—';
+    const name = w.activityType ? formatActivityType(w.activityType) : (w.n || 'Workout');
+    const dist = w.garminDistKm ?? w.distanceKm;
+    const val = typeof dist === 'number' ? formatKm(dist, unit)
+              : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
+    rows.push({ day: dayLabel, name, value: val, color: sportColor(name.toLowerCase()), tss: 0 });
+  }
+  rows.reverse();
+
+  const segBlock = segments.length === 0
+    ? `<div style="padding:16px;text-align:center;font-size:13px;color:var(--c-muted)">No activities logged yet this week</div>`
+    : segments.map(seg => `
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid rgba(0,0,0,0.05)">
+          <div style="width:10px;height:10px;border-radius:50%;background:${seg.color};flex-shrink:0"></div>
+          <span style="flex:1;font-size:14px;color:#0F172A">${seg.label}</span>
+          <span style="font-size:11px;color:#94A3B8">${Math.round(seg.durationMin)} min</span>
+          <span style="font-size:13px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums;min-width:54px;text-align:right">${Math.round(seg.tss)} TSS</span>
+        </div>`).join('');
+
+  const rowsBlock = rows.length === 0 ? '' : `
+    <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden;margin-top:14px">
+      <div style="padding:12px 16px;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8">Activities</div>
+      ${rows.map(r => `
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid rgba(0,0,0,0.05)">
+          <div style="min-width:54px;font-size:11px;color:#64748B">${r.day}</div>
+          <div style="flex:1;font-size:14px;color:#0F172A">${r.name}</div>
+          <div style="font-size:13px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${r.value}</div>
+        </div>`).join('')}
+    </div>`;
+
+  container.innerHTML = `
+    <div style="min-height:100vh;background:#FAF9F6;position:relative;overflow-x:hidden">
+      <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%);pointer-events:none"></div>
+      <div style="position:relative;z-index:10;max-width:520px;margin:0 auto;padding:56px 16px 120px">
+
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+          <button id="tow-back" style="width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,0.08);display:flex;align-items:center;justify-content:center;color:#334155">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <div style="text-align:center">
+            <div style="font-size:15px;font-weight:600;color:#0F172A">This week</div>
+            <div style="font-size:11px;color:#64748B;margin-top:2px">${wk ? weekRangeFmtLocal(s.planStartDate, s.w ?? 1) : '—'}</div>
+          </div>
+          <div style="width:36px"></div>
+        </div>
+
+        <div style="text-align:center;margin:20px 0 28px">
+          <div style="width:180px;height:180px;border-radius:50%;background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);box-shadow:0 2px 12px rgba(0,0,0,0.08);margin:0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1;font-variant-numeric:tabular-nums">${tss}</div>
+            <div style="font-size:12px;color:#64748B;margin-top:4px;letter-spacing:0.06em">TSS THIS WEEK</div>
+          </div>
+        </div>
+
+        <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
+          <div style="padding:14px 16px;display:flex;align-items:baseline;justify-content:space-between">
+            <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8">By sport</div>
+            <div style="font-size:11px;color:#64748B">${segments.length} ${segments.length === 1 ? 'sport' : 'sports'}</div>
+          </div>
+          ${segBlock}
+        </div>
+
+        ${rowsBlock}
+
+        <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px;margin-top:14px">
+          <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:4px">Training Stress Score</div>
+          <div style="font-size:12px;color:#475569;line-height:1.5;margin-bottom:12px">TSS combines duration and intensity into a single weekly number. A 45-min easy run scores around 40. A 90-min long run at marathon pace is closer to 120.</div>
+          <div style="font-size:12px;color:#475569;line-height:1.9">
+            <div style="display:flex;justify-content:space-between"><span>Under 150</span><span style="color:#94A3B8">Recovery or base maintenance</span></div>
+            <div style="display:flex;justify-content:space-between"><span>150–350</span><span style="color:#94A3B8">Productive training for most runners</span></div>
+            <div style="display:flex;justify-content:space-between"><span>350–500</span><span style="color:#94A3B8">High load. Recovery needs careful management</span></div>
+            <div style="display:flex;justify-content:space-between"><span>500+</span><span style="color:#94A3B8">Elite volume. Injury risk rises if sustained</span></div>
+          </div>
+        </div>
+
+      </div>
+    </div>`;
+
+  document.getElementById('tow-back')?.addEventListener('click', () => renderHomeView());
+}
+
+function weekRangeFmtLocal(planStartIso: string | undefined, weekNum: number): string {
+  if (!planStartIso) return '';
+  const start = new Date(planStartIso);
+  start.setDate(start.getDate() + (weekNum - 1) * 7);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const fmt = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  return `${fmt(start)} – ${fmt(end)}`;
+}
+
+/**
+ * "This Week" summary card for Just-Track home. Actuals only — no targets,
+ * no progress bars. Sessions / Distance / Training Load. Tap → Stats tab
+ * where the Progress detail page can be opened for deeper drill-down.
+ */
+function buildTrackOnlyThisWeek(s: SimulatorState): string {
+  const unit: 'km' | 'mi' = s.unitPref ?? 'km';
+  const wk = s.wks?.[(s.w ?? 1) - 1];
+
+  let sessions = 0, km = 0, tss = 0;
+  if (wk) {
+    const seen = new Set<string>();
+    const actualKeys = new Set<string>();
+    for (const [key, act] of Object.entries(wk.garminActuals ?? {})) {
+      const id = (act as any)?.garminId || key;
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      actualKeys.add(key);
+      sessions++;
+      if (typeof act.distanceKm === 'number' && act.distanceKm > 0) km += act.distanceKm;
+    }
+    for (const w of (wk.adhocWorkouts ?? []) as any[]) {
+      if (w.id && actualKeys.has(w.id)) continue;
+      if (w.id?.startsWith('garmin-') || w.id?.startsWith('strava-')) {
+        if (!seen.has(w.id)) { sessions++; seen.add(w.id); }
+      } else if (wk.rated?.[w.id] && wk.rated[w.id] !== 'skip') {
+        sessions++;
+      }
+      const d = w.garminDistKm ?? w.distanceKm;
+      if (typeof d === 'number' && d > 0) km += d;
+    }
+    tss = Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate));
+  }
+
+  const row = (label: string, value: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.05)">
+      <span style="font-size:13px;color:#64748B">${label}</span>
+      <span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${value}</span>
+    </div>`;
+  const rowLast = (label: string, value: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
+      <span style="font-size:13px;color:#64748B">${label}</span>
+      <span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${value}</span>
+    </div>`;
+
+  return `
+    <div id="home-this-week-card" style="padding:0 16px;margin-top:14px;margin-bottom:14px;cursor:pointer" class="hf" data-delay="0.14">
+      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:16px 18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <span style="font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8">This week</span>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#94A3B8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:0.6"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </div>
+        ${row('Sessions', String(sessions))}
+        ${row('Distance', formatKm(km, unit))}
+        ${rowLast('Training Load', `${tss} TSS`)}
+      </div>
+    </div>`;
+}
+
+/**
+ * Compact weekly-TSS sparkline for the Just-Track home.
+ *
+ * Series is sourced from `s.wks` only (weeks since trackOnly was set up),
+ * NOT `historicWeeklyTSS` (which carries Strava backfill from prior plan
+ * usage and looks like "fake" data on a fresh tracking programme). As the
+ * calendar advances and activities sync into new weeks, the chart fills in
+ * organically. Returns '' when fewer than 2 weeks with non-zero TSS — one
+ * data point can't draw a line.
+ */
+function buildTrackOnlyLoadSpark(s: SimulatorState): string {
+  const wks = s.wks ?? [];
+  const series = wks.map(w => Math.round(computeWeekRawTSS(w, w.rated ?? {}, s.planStartDate)));
+  const currentTSS = series[series.length - 1] ?? 0;
+  if (series.length < 2 || series.every(t => !t || t === 0)) return '';
+
+  // Build smoothed area path — same recipe as stats-view.buildVO2LineChart.
+  const W = 320, H = 60;
+  const maxVal = Math.max(...series, 1) * 1.1;
+  const xOf = (i: number) => (i / (series.length - 1)) * W;
+  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
+  const pts: [number, number][] = series.map((v, i) => [xOf(i), yOf(v)]);
+  const topPath = 'M ' + pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ');
+  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
+
+  // Colour based on week-over-week trend: rising = blue (more training),
+  // flat/falling = muted grey. Neutral since load ↑ isn't inherently good.
+  const prev = series[series.length - 2];
+  const rising = currentTSS > prev + 5;
+  const strokeColor = rising ? 'rgba(58,96,144,0.85)' : 'rgba(71,85,105,0.70)';
+  const gradId = `loadFill_${rising ? 'up' : 'flat'}`;
+
+  return `
+    <div id="home-load-spark" style="padding:0 16px;margin-top:14px;margin-bottom:14px;cursor:pointer" class="hf" data-delay="0.16">
+      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:14px 16px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+          <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.04em;text-transform:uppercase">Load over time</div>
+          <div style="font-size:13px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${currentTSS} <span style="color:#94A3B8;font-weight:500">TSS this week</span></div>
+        </div>
+        <svg viewBox="0 0 ${W} ${H}" width="100%" height="72" preserveAspectRatio="none" style="display:block">
+          <defs>
+            <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${strokeColor}" stop-opacity="0.22"/>
+              <stop offset="100%" stop-color="${strokeColor}" stop-opacity="0.04"/>
+            </linearGradient>
+          </defs>
+          <path d="${areaPath}" fill="url(#${gradId})"/>
+          <path d="${topPath}" fill="none" stroke="${strokeColor}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+        </svg>
+        <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:#94A3B8">
+          <span>${series.length} wk ago</span>
+          <span style="color:#0F172A;font-weight:600">This week</span>
+        </div>
+      </div>
+    </div>`;
+}
+
+function getTrackOnlyHomeHTML(s: SimulatorState): string {
+  const initials = (s.onboarding?.name || 'You')
+    .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+  const userName = s.onboarding?.name || null;
+  const heroTitle = userName ? `${userName}'s activity` : 'Your activity';
+
+  // First-launch orientation: true when the user has no sync history, no watch
+  // data, and no locally-recorded activities. We show a single explanatory
+  // line beneath the hero instead of five empty cards with different wording.
+  const hasCtl = (s.ctlBaseline ?? 0) > 0;
+  const hasWatch = !!getPhysiologySource(s);
+  const hasRecentActivity = (s.wks ?? []).some(w =>
+    Object.keys(w.garminActuals ?? {}).length > 0 || (w.adhocWorkouts ?? []).length > 0,
+  );
+  const isFirstLaunch = !hasCtl && !hasWatch && !hasRecentActivity;
+  const heroSubcopy = isFirstLaunch
+    ? 'Connect Strava or record your first run to start seeing data.'
+    : 'Tracking only.';
+
+  return `
+    <style>
+      @keyframes floatUp {
+        from { opacity:0; transform:translateY(16px) scale(0.97); }
+        to   { opacity:1; transform:translateY(0) scale(1); }
+      }
+      .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+    </style>
+    <div class="mosaic-page" style="background:#FAF9F6;position:relative">
+      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
+        <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%)"></div>
+        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <filter id="tmBlur"><feGaussianBlur stdDeviation="20"/></filter>
+            <filter id="tmSoft"><feGaussianBlur stdDeviation="6"/></filter>
+          </defs>
+          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#tmSoft)" opacity="0.6"/>
+          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#tmBlur)" opacity="0.35"/>
+          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#tmBlur)" opacity="0.25"/>
+          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#tmSoft)"/>
+        </svg>
+      </div>
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
+
+      <!-- Header: Tracking pill + account button (no race countdown in track-only) -->
+      <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between;gap:8px" class="hf" data-delay="0.02">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#64748B;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);border:1px solid rgba(0,0,0,0.06);padding:4px 10px;border-radius:100px">Tracking</span>
+        <button id="home-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
+      </div>
+
+      <!-- Hero -->
+      <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
+        <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${heroTitle}</div>
+        <div style="font-size:14px;font-weight:500;color:#64748B;margin-top:8px">${heroSubcopy}</div>
+      </div>
+
+      ${buildTrackOnlyDailyTarget(s)}
+      ${buildReadinessRing(s)}
+
+      <!-- Sleep logging affordance — readiness ring only reflects watch/manual sleep,
+           so expose the manual picker here for users who want to log subjectively. -->
+      <div style="padding:0 16px;margin:-6px 0 4px;text-align:center" class="hf" data-delay="0.13">
+        <button id="home-log-sleep-link" style="font-size:12px;color:#64748B;background:none;border:none;cursor:pointer;padding:4px 8px;text-decoration:underline">Log sleep</button>
+      </div>
+
+      ${buildTrackOnlyThisWeek(s)}
+      ${buildTrackOnlyLoadSpark(s)}
+
+      ${buildSyncActions(s)}
+      ${buildRecentActivity(s)}
+
+      <!-- Upgrade to plan: muted link, not a heavy CTA (track-only is a
+           first-class mode, not a funnel step). -->
+      <div style="padding:20px 16px 14px;text-align:center" class="hf" data-delay="0.2">
+        <button id="home-create-plan-btn" style="font-size:13px;color:#64748B;background:none;border:none;cursor:pointer;padding:6px 10px;text-decoration:underline">Want a plan? Create one →</button>
+      </div>
+
+      </div>
+    </div>
+    ${renderTabBar('home', isSimulatorMode())}
+  `;
+}
+
 function getHomeHTML(s: SimulatorState): string {
+  // Just-Track mode: activity tracking only, no plan. Short-circuit to a minimal
+  // layout that hides today-workout, readiness/strain rings, race-forecast, and
+  // week progress — all of which assume a generated plan.
+  if (s.trackOnly) return getTrackOnlyHomeHTML(s);
+
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
@@ -1865,6 +2406,9 @@ function getHomeHTML(s: SimulatorState): string {
   // Phase label
   const phase = s.wks?.[s.w - 1]?.ph;
   const phaseLabel = phase ? phase.charAt(0).toUpperCase() + phase.slice(1) : '';
+
+  // Single coach compute per render; passed to card builders that need workoutMod.
+  const coach = computeDailyCoach(s);
 
   return `
     <style>
@@ -1904,7 +2448,7 @@ function getHomeHTML(s: SimulatorState): string {
             <span style="font-size:11px;font-weight:500;color:#64748B">${raceCountdownUnit}</span>
           </div>
         ` : ''}
-        <button id="home-account-btn" style="width:36px;height:36px;border-radius:50%;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;cursor:pointer;color:#0F172A;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.08)">${initials || 'Me'}</button>
+        <button id="home-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
       </div>
 
       <!-- Hero: title + phase + date — centered, matching Plan page -->
@@ -1916,14 +2460,16 @@ function getHomeHTML(s: SimulatorState): string {
 
         <!-- Action buttons -->
         <div style="display:flex;justify-content:center;gap:8px;margin-top:18px">
-          <button id="home-coach-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Coach</button>
-          <button id="home-checkin-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">Check-in</button>
+          <button id="home-coach-btn" class="m-btn-glass">Coach</button>
+          <button id="home-checkin-btn" class="m-btn-glass">Check-in</button>
         </div>
       </div>
 
       ${buildIllnessBanner(s)}
       ${buildHolidayBannerHome(s)}
-      ${buildTodayWorkout(s)}
+      ${buildRaceCompleteBanner(s)}
+      ${buildTodayWorkout(s, coach)}
+      ${buildRaceForecastCard(s)}
       ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
@@ -1948,11 +2494,39 @@ function wireHomeHandlers(): void {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   });
 
-  // Coach button
-  document.getElementById('home-coach-btn')?.addEventListener('click', () => openCoachModal());
+  // Coach button → Coach sub-page
+  document.getElementById('home-coach-btn')?.addEventListener('click', () => {
+    import('./coach-view').then(({ renderCoachView }) => renderCoachView(() => renderHomeView()));
+  });
 
   // Check-in button
   document.getElementById('home-checkin-btn')?.addEventListener('click', () => openCheckinOverlay());
+
+  // Just-Track upgrade CTA → relaunch wizard at goals (trainingMode + trainingForEvent)
+  document.getElementById('home-create-plan-btn')?.addEventListener('click', () => {
+    import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
+  });
+
+  // Post-race banner: "Switch to tracking" button → downgradeToTrackOnly
+  document.getElementById('home-switch-to-track')?.addEventListener('click', () => {
+    import('./wizard/controller').then(({ downgradeToTrackOnly }) => downgradeToTrackOnly());
+  });
+  // Post-race banner: × dismiss button → flag so banner stops firing
+  document.getElementById('home-race-done-dismiss')?.addEventListener('click', async () => {
+    const { getMutableState, saveState } = await import('@/state');
+    (getMutableState() as any).racePastPromptDismissed = true;
+    saveState();
+    document.getElementById('home-race-done-banner')?.remove();
+  });
+
+  // Just-Track load sparkline → Stats tab for the full card
+  document.getElementById('home-load-spark')?.addEventListener('click', () => navigateTab('stats'));
+
+  // Just-Track "This week" card → detail page (per-sport + per-activity breakdown)
+  document.getElementById('home-this-week-card')?.addEventListener('click', () => renderTrackOnlyWeekDetail());
+
+  // Just-Track "Log sleep" link → manual sleep picker overlay
+  document.getElementById('home-log-sleep-link')?.addEventListener('click', () => showManualSleepPicker());
 
   // Illness banner — mark recovered
   document.getElementById('home-illness-recover')?.addEventListener('click', () => clearIllness());
@@ -2004,18 +2578,40 @@ function wireHomeHandlers(): void {
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
 
+  // Race forecast card — opens full-page chart
+  document.getElementById('home-race-forecast-card')?.addEventListener('click', () => {
+    import('./race-forecast-view').then(({ renderRaceForecastView }) => renderRaceForecastView());
+  });
 
   // Strain ring — tap opens strain detail page
   document.getElementById('home-strain-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const label = document.getElementById('home-strain-ring')?.dataset.readinessLabel ?? null;
-    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any));
+    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any, () => renderHomeView()));
   });
 
-  // Sleep ring — tap opens sleep detail page
-  document.getElementById('home-sleep-ring')?.addEventListener('click', (e) => {
+  // Sleep ring — tap opens sleep detail page. When today's sleep score is missing and
+  // the watch is connected, tap triggers a Garmin refresh instead so the user can pull
+  // the score that Garmin's server computes 1–4h post-wake.
+  document.getElementById('home-sleep-ring')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     const s3 = getState();
+    const todayStr = new Date().toISOString().split('T')[0];
+    const hasTodaySleep = (s3.physiologyHistory ?? []).some(p => p.date === todayStr && p.sleepScore != null);
+    const watchConnected = !!getPhysiologySource(s3);
+    if (!hasTodaySleep && watchConnected) {
+      const ring = document.getElementById('home-sleep-ring');
+      const sub = ring?.querySelector('div[style*="font-size:8px"]') as HTMLElement | null;
+      if (sub) sub.textContent = 'Syncing…';
+      const [{ refreshRecentSleepScores }, { syncPhysiologySnapshot }] = await Promise.all([
+        import('@/data/supabaseClient'),
+        import('@/data/physiologySync'),
+      ]);
+      await refreshRecentSleepScores();
+      await syncPhysiologySnapshot(7);
+      renderHomeView();
+      return;
+    }
     import('./sleep-view').then(({ renderSleepView }) => {
       renderSleepView(undefined, s3.physiologyHistory ?? [], s3.wks ?? [], () => renderHomeView());
     });
@@ -2030,7 +2626,7 @@ function wireHomeHandlers(): void {
   // Recovery ring — tap opens recovery detail page
   document.getElementById('home-recovery-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView());
+    import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView(undefined, () => renderHomeView()));
   });
 
   // Manual sleep buttons — no-watch users log sleep quality
@@ -2147,6 +2743,11 @@ export function renderHomeView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
+  // Triathlon fork — running chrome stays, triathlon variant handles its own render.
+  if (s.eventType === 'triathlon') {
+    import('./triathlon/home-view').then(({ renderTriathlonHomeView }) => renderTriathlonHomeView());
+    return;
+  }
   container.innerHTML = getHomeHTML(s);
   wireHomeHandlers();
   setOnWeekAdvance(() => {
