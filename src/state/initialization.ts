@@ -9,6 +9,7 @@ import {
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
 import { initializeWeeks } from '@/workouts';
+import { initializeTriathlonSimulator } from './initialization.triathlon';
 
 export interface CalculationResult {
   success: boolean;
@@ -50,6 +51,79 @@ export function computeEffectiveRunnerType(
 export function initializeSimulator(state: OnboardingState): CalculationResult {
   try {
     const s = getMutableState();
+
+    // Triathlon fork (§18.1): route to the dedicated triathlon initializer so
+    // running-mode setup is untouched.
+    if (state.trainingMode === 'triathlon') {
+      return initializeTriathlonSimulator(state);
+    }
+
+    // Just-Track mode: no plan is generated, but the state scaffolding is the
+    // same as any non-event continuous user — a rolling week bucket so that
+    // activity sync, GPS recordings, readiness, CTL, and ACWR all work
+    // unchanged. The only visible differences are: (1) no prescribed workouts
+    // inside each week, (2) views hide prescription UI (today-workout,
+    // race-forecast, plan-adherence), (3) `advanceWeekToToday` extends weeks
+    // one at a time with no phase cycling.
+    if (state.trackOnly) {
+      s.trackOnly = true;
+      s.continuousMode = true;         // reuse non-event calendar extension path
+      s.w = 1;
+      s.tw = 1;                        // rolling — advanceWeekToToday extends as calendar moves
+      s.wks = [{
+        w: 1,
+        ph: 'base',                    // harmless label; views hide phase for trackOnly
+        rated: {},
+        skip: [],
+        cross: [],
+        wkGain: 0,
+        workoutMods: [],
+        adjustments: [],
+        unspentLoad: 0,
+        extraRunLoad: 0,
+      }];
+      s.skip = [];
+      s.timp = 0;
+      s.rpeAdj = 0;
+      s.schemaVersion = STATE_SCHEMA_VERSION;
+      s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);
+      s.onboarding = state;
+
+      // Persist whatever the user provided. PBs aren't required for trackOnly —
+      // VDOT stays null / unchanged if the user skipped PB entry. Readiness and
+      // CTL are driven by synced data, not the wizard, so they bootstrap
+      // independently on first sync.
+      if (state.pbs && Object.keys(state.pbs).length) {
+        s.pbs = state.pbs;
+        try {
+          const b = calculateFatigueExponent(state.pbs);
+          const { calculatedRunnerType, effectiveRunnerType } = computeEffectiveRunnerType(
+            b, state.confirmedRunnerType
+          );
+          s.b = b;
+          s.calculatedRunnerType = calculatedRunnerType;
+          s.typ = effectiveRunnerType;
+        } catch { /* PBs invalid — leave defaults */ }
+      }
+      if (state.recentRace) s.rec = state.recentRace;
+      if (state.ltPace != null) { s.lt = state.ltPace; s.ltPace = state.ltPace; }
+      if (state.vo2max != null) s.vo2 = state.vo2max;
+      if (state.restingHR) s.restingHR = state.restingHR;
+      if (state.maxHR) s.maxHR = state.maxHR;
+      if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
+      if (state.recurringActivities?.length) s.recurringActivities = [...state.recurringActivities];
+
+      // Seed volume from detected Strava history if available (same rule as
+      // the full plan path). Used by stats / weekly summary, not by
+      // plan-generation (there is none).
+      if (s.stravaHistoryAccepted && s.detectedWeeklyKm != null) {
+        s.wkm = Math.round(s.detectedWeeklyKm);
+      }
+
+      saveState();
+      return { success: true };
+    }
+
     const pbs = state.pbs;
 
     // Validate PBs
@@ -111,6 +185,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const effectiveSessions = runsPerWeek + effectiveCrossSessions;
 
     // Update state
+    s.trackOnly = false;
     s.w = 1;
     s.tw = state.planDurationWeeks;
     s.v = curr;
@@ -131,6 +206,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.b = b;
     s.schemaVersion = STATE_SCHEMA_VERSION;
     s.pac = pac;
+    // Seed blended-fitness cache with wizard-only blend. Backfill will refresh
+    // this with Tanda inputs once per-run history lands.
+    s.blendedRaceTimeSec = blendedTime;
+    s.blendedEffectiveVdot = curr;
+    s.blendedLastRefreshedISO = new Date().toISOString();
     s.wks = initializeWeeks(s.tw);
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
@@ -236,6 +316,8 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     // Store onboarding reference
     s.onboarding = state;
+    // Clear any stale Just-Track flag — this branch builds a real plan.
+    s.trackOnly = false;
 
     // Continuous mode for non-event users (trainingForEvent is the authoritative flag)
     if (state.trainingForEvent === false) {

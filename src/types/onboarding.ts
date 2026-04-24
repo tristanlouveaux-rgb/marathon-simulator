@@ -15,25 +15,15 @@ export type RunnerExperience =
 export type OnboardingStep =
   | 'welcome'
   | 'goals'
-  | 'background'
-  | 'volume'
-  | 'performance'
-  | 'fitness'
-  | 'strava-history'
-  | 'physiology'
+  | 'connect-strava'
+  | 'manual-entry'
+  | 'review'
+  | 'race-target'
+  | 'schedule'
+  | 'plan-preview-v2'
   | 'initializing'
-  | 'assessment'
-  | 'main-view'
-  // Legacy steps (kept for backwards compat)
-  | 'training-goal'
-  | 'event-selection'
-  | 'commute'
-  | 'frequency'
-  | 'activities'
-  | 'pbs'
-  | 'fitness-data'
   | 'runner-type'
-  | 'plan-preview';
+  | 'main-view';
 
 /** Recurring cross-training activity from onboarding */
 export interface RecurringActivity {
@@ -43,8 +33,9 @@ export interface RecurringActivity {
   intensity: 'easy' | 'moderate' | 'hard';
 }
 
-/** Training focus for non-event users */
-export type TrainingFocus = 'speed' | 'endurance' | 'both';
+/** Training focus for non-event users.
+ * 'track' = Just-Track mode: activity tracking only, no plan generated. */
+export type TrainingFocus = 'speed' | 'endurance' | 'both' | 'track';
 
 /** Marathon/race event data */
 export interface Marathon {
@@ -55,6 +46,7 @@ export interface Marathon {
   date: string;                    // ISO date string
   distance: 'half' | 'marathon';
   weeksUntil?: number;             // Computed at runtime
+  imageUrl?: string;               // Optional city/race tile image
 }
 
 /** Milestone target for goal-setting */
@@ -93,6 +85,7 @@ export interface OnboardingState {
 
 
   // Step 2: Training Goal
+  trainingMode?: 'running' | 'hyrox' | 'triathlon' | 'fitness' | null;
   trainingForEvent: boolean | null;
   raceDistance: RaceDistance | null;
   trainingFocus: TrainingFocus | null;
@@ -139,6 +132,38 @@ export interface OnboardingState {
 
   // Continuous training (non-event)
   continuousMode?: boolean;       // True when user is not training for a specific event
+
+  // Step 3: Connect Strava
+  skippedStrava?: boolean;         // True if user chose "Enter manually" on the Connect Strava step
+
+  // Step 5 (fitness path): "Just track" — activity tracking only, no plan generated
+  trackOnly?: boolean;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Triathlon-specific onboarding fields (active when trainingMode === 'triathlon').
+  // All optional — the wizard populates them via the triathlon fork (§18.9).
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** 70.3 or Ironman. Present only for triathlon mode. */
+  triDistance?: import('./triathlon').TriathlonDistance;
+
+  /** Upstream of the split picker (§18.2). Total weekly training hours the user commits to. */
+  triTimeAvailableHoursPerWeek?: number;
+
+  /** Volume split across swim/bike/run. User adjusts from preset in onboarding. Sums to 1.0. */
+  triVolumeSplit?: import('./triathlon').TriVolumeSplit;
+
+  /** Three self-rating sliders (1-5) that replace runner type for tri users (§18.7). */
+  triSkillRating?: import('./triathlon').TriSkillRating;
+
+  /** Bike benchmarks — FTP if known, has-power-meter flag, otherwise HR fallback. */
+  triBike?: import('./triathlon').BikeBenchmarks;
+
+  /** Swim benchmarks — CSS if known or derivable from 400m/200m test. */
+  triSwim?: import('./triathlon').SwimBenchmarks;
+
+  /** True when the wizard used the Strava express path (§18.9) to auto-fill tri fields. */
+  triUsedStravaExpressPath?: boolean;
 }
 
 /** Default onboarding state */
@@ -146,6 +171,7 @@ export const defaultOnboardingState: OnboardingState = {
   currentStep: 'welcome',
   completedSteps: [],
   name: '',
+  trainingMode: null,
   trainingForEvent: null,
   raceDistance: null,
   trainingFocus: null,
@@ -171,6 +197,8 @@ export const defaultOnboardingState: OnboardingState = {
   confirmedRunnerType: null,
   targetMilestone: null,
   acceptedMilestoneChallenge: false,
+  skippedStrava: false,
+  trackOnly: false,
 };
 
 /**

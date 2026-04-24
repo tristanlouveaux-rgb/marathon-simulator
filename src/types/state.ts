@@ -8,6 +8,7 @@ import type {
 } from './training';
 import type { CrossTrainingAdjustment, LoadBudget } from './activities';
 import type { OnboardingState, Marathon, RecurringActivity, TrainingFocus } from './onboarding';
+import type { EventType, TriConfig, Discipline } from './triathlon';
 
 /** Benchmark check-in types (4-tier system) */
 export type BenchmarkType =
@@ -68,6 +69,10 @@ export interface WorkoutDefinition {
 export interface Workout extends WorkoutDefinition {
   id?: string;                  // Stable unique ID (e.g., "W1-easy-0")
   t: string;                    // Workout type
+  /** Triathlon discipline the workout belongs to. Undefined = running (default for back-compat). */
+  discipline?: Discipline;
+  /** Brick workouts carry two ordered segments (bike → run typically). Only set when t === 'brick'. */
+  brickSegments?: import('./triathlon').BrickSegments['segments'];
   rpe?: number;                 // Expected RPE (alternative to r)
   dayOfWeek?: number;           // Day of week (0=Mon, 6=Sun)
   dayName?: string;             // Day name
@@ -214,6 +219,10 @@ export interface GarminActual {
   /** HR drift %: (avgHR_2nd_half - avgHR_1st_half) / avgHR_1st_half × 100.
    *  Only computed for steady-state runs > 20 min. Null otherwise. */
   hrDrift?: number | null;
+  /** Ambient temperature in °C at start of activity (from Open-Meteo).
+   *  Only fetched for outdoor DRIFT_TYPES runs with a start location. Used to
+   *  heat-correct drift: driftAdjusted = drift - 0.15 * max(0, temp - 15). */
+  ambientTempC?: number | null;
   /** Pace adherence: actual pace vs target pace ratio.
    *  1.0 = nailed it, <1.0 = ran faster than target, >1.0 = ran slower.
    *  Only computed for runs with both actual pace and a target pace from the plan. */
@@ -223,6 +232,9 @@ export interface GarminActual {
   plannedDistanceKm?: number | null;
   /** Elevation gain in metres (from Strava total_elevation_gain). Null if unavailable. */
   elevationGainM?: number | null;
+  /** User-set sport override. When present, supersedes activityType-derived sport for load/impact/leg-load
+   *  calculations. Set via the "Change sport" control on the activity detail page. */
+  manualSport?: import('./activities').SportKey;
 }
 
 /** Per-lap split from Garmin activity details */
@@ -298,15 +310,31 @@ export interface Week {
 }
 
 /** State schema version for migrations */
-export const STATE_SCHEMA_VERSION = 2;
+export const STATE_SCHEMA_VERSION = 3;
 
 /** Version where runner type semantics were fixed (Speed↔Endurance swap) */
 export const RUNNER_TYPE_SEMANTICS_FIX_VERSION = 2;
+
+/** Version where triathlon fields (eventType, triConfig, Workout.discipline) were introduced.
+ * State at this version or higher is guaranteed to have `eventType` set
+ * (defaults to 'running' for existing users during migration). */
+export const TRIATHLON_FIELDS_VERSION = 3;
 
 /** Main simulator state */
 export interface SimulatorState {
   // Schema version (for migrations)
   schemaVersion?: number;
+
+  /**
+   * What this user is training for. Undefined/absent = running (back-compat
+   * with all state written before triathlon mode landed). When this is
+   * 'triathlon', `triConfig` is expected to be populated and the plan engine
+   * forks to `plan_engine.triathlon.ts`. See docs/TRIATHLON.md §5, §18.
+   */
+  eventType?: EventType;
+
+  /** Triathlon-specific configuration. Present only when eventType === 'triathlon'. */
+  triConfig?: TriConfig;
 
   // Week tracking
   w: number;              // Current week
@@ -417,8 +445,26 @@ export interface SimulatorState {
   };
 
   // Phase C — Strava history (populated by fetchStravaHistory() / history mode edge fn)
+  // Blended race-time prediction cache — refreshed at onboarding + weekly rollover.
+  // Computed by refreshBlendedFitness() from wizard data + per-run history (Tanda).
+  // Consumers (stats view, plan engine) read this instead of re-blending on every render.
+  blendedRaceTimeSec?: number;              // Predicted time for s.rd at current fitness
+  blendedEffectiveVdot?: number;            // VDOT back-solved from blended prediction, for pace derivation
+  blendedLastRefreshedISO?: string;         // When the cache was last recomputed
+
+  // Per-run summary cached at onboarding so the first blend has Tanda inputs
+  // without waiting a week for standalone sync to fill garminActuals.
+  onboardingRunHistory?: Array<{
+    startTime: string;
+    distKm: number;
+    durSec: number;
+    activityType: string;
+    activityName?: string;
+  }>;
+
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
   stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
+  ambientTempHealDone?: boolean;            // True once the post-column backfill heal has fetched ambient_temp_c for historical runs
   historicWeeklyTSS?: number[];             // Signal A: running-equiv TSS per week, oldest first (8 weeks)
   historicWeeklyRawTSS?: number[];          // Signal B: raw physiological TSS per week, oldest first (no runSpec discount)
   historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
@@ -466,6 +512,12 @@ export interface SimulatorState {
     actualTSSRatio?: number;
   }>;
 
+  // Just-Track mode — activity tracking only, no plan generated.
+  // Mirrors s.onboarding.trackOnly so views can branch without reading onboarding.
+  // When true: s.wks is []; s.w is 0; today-workout / plan widgets are hidden.
+  // Strava/Garmin/Apple sync, physiology sync, activity matching still run normally.
+  trackOnly?: boolean;
+
   // Continuous (non-event) training
   continuousMode?: boolean;       // True for non-event users — plan loops instead of completing
   blockNumber?: number;           // Current 4-week block number (1-based)
@@ -482,7 +534,12 @@ export interface SimulatorState {
   physiologyHistory?: PhysiologyDayEntry[];
 
   // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal
-  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>;
+  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; garminId?: string; rbeProtected?: boolean }>;
+
+  // Persistent mapping from normalized activity name → user-chosen sport. When an activity with
+  // the same name is synced in future, it auto-applies the mapped sport. Populated when user
+  // reclassifies an activity via the sport picker.
+  sportNameMappings?: Record<string, import('./activities').SportKey>;
 
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
@@ -493,8 +550,18 @@ export interface SimulatorState {
   // Display preferences
   unitPref?: 'km' | 'mi';   // Distance unit preference (default 'km')
 
+  // Guided runs — phone-driven coaching during a tracked run
+  guidedRunsEnabled?: boolean;        // Master on/off (default off until user opts in)
+  guidedSplitAnnouncements?: boolean; // Per-km voice splits (default true; off if Strava/Garmin already doing it)
+  guidedVoiceRate?: number;           // Speech rate multiplier, 0.8–1.4, default 1.0
+  guidedKeepScreenOn?: boolean;       // Keep screen on during guided runs (Screen Wake Lock). Default true; web-only interim until Capacitor KeepAwake.
+
   // Sleep target — user-set override in seconds; if absent, derived from 75th percentile of last 30 nights
   sleepTargetSec?: number;
+
+  // Today's subjective feeling — one-tap daily check-in from the Coach sub-page.
+  // Expires at end of day (check `date === todayISO()` before reading).
+  todayFeeling?: { value: 'struggling' | 'ok' | 'good' | 'great'; date: string } | null;
 }
 
 /** Workout parsing result */

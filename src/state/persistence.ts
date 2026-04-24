@@ -1,7 +1,7 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
 import type { GarminPendingItem } from '@/types/state';
 import { savePlanSettings } from '@/data/planSettingsSync';
-import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION } from '@/types/state';
+import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION, TRIATHLON_FIELDS_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
 import { setState, setCrossActivities, getState, getCrossActivities } from './store';
 import { ft } from '@/utils/format';
@@ -101,6 +101,15 @@ function migrateState(loaded: SimulatorState): SimulatorState {
     approx.setDate(approx.getDate() - (loaded.w - 1) * 7);
     loaded.planStartDate = approx.toISOString().slice(0, 10);
     console.log(`  Derived planStartDate: ${loaded.planStartDate} (from week ${loaded.w})`);
+  }
+
+  // Migration to version 3: Default existing users to running mode.
+  // Triathlon mode opt-in only (wizard fork sets eventType = 'triathlon').
+  if (currentVersion < TRIATHLON_FIELDS_VERSION) {
+    if (loaded.eventType === undefined) {
+      loaded.eventType = 'running';
+      console.log('  eventType: (unset) → running (default for existing users)');
+    }
   }
 
   // Update schema version
