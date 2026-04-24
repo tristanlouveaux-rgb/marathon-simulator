@@ -120,6 +120,9 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             <div class="tri-label">Here's what we found</div>
             <div id="tri-found-body" style="font-size:13px;color:var(--c-muted);line-height:1.6"></div>
             <p class="tri-hint" style="margin-top:10px">Values below have been pre-filled from your history. Edit anything that looks off.</p>
+            <button id="tri-refresh-strava" class="tri-pill" style="margin-top:10px;width:100%;text-align:center;background:#fff;border-color:rgba(0,0,0,0.12);font-weight:500">
+              Refresh from Strava
+            </button>
           </div>
 
           <!-- Distance -->
@@ -281,6 +284,23 @@ function wireEventHandlers(): void {
   wireStravaConnect();
   // Auto-derive benchmarks if connected
   void runAutoDerivation();
+
+  // Manual refresh — forces a backfill + re-derivation. Useful after
+  // connecting a power meter or when auto-derivation missed.
+  document.getElementById('tri-refresh-strava')?.addEventListener('click', async () => {
+    const btn = document.getElementById('tri-refresh-strava') as HTMLButtonElement | null;
+    if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    btn.textContent = 'Refreshing…';
+    try {
+      await backfillStravaHistory(16);
+    } catch (err) {
+      console.warn('[tri-setup] manual refresh backfill failed', err);
+    }
+    await runAutoDerivation();
+    btn.disabled = false;
+    btn.textContent = 'Refresh from Strava';
+  });
 
   // Distance pills — toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
