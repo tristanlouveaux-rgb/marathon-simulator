@@ -618,7 +618,16 @@ async function runAutoDerivation(): Promise<void> {
     } else if (derived.ftp.bikeActivityCount > 0) {
       lines.push(`Bike — ${derived.ftp.bikeActivityCount} rides but no power data. Enter FTP manually if you have it.`);
     }
-    lines.push(`Starting CTL <strong>swim ${derived.fitness.swim.ctl.toFixed(1)} · bike ${derived.fitness.bike.ctl.toFixed(1)} · run ${derived.fitness.run.ctl.toFixed(1)}</strong>.`);
+    // Fitness headline — single combined number is easier to read than three.
+    // CTL is weekly-equivalent TSS; shown rounded so the user sees a clean
+    // integer rather than decimals. Add a short interpretive band.
+    const combined = Math.round(derived.fitness.combinedCtl);
+    const band =
+      combined < 40  ? 'starting out'
+      : combined < 80  ? 'regular trainer'
+      : combined < 120 ? 'well-conditioned'
+      :                  'high-fitness';
+    lines.push(`Starting fitness <strong>${combined}</strong> — ${band}.`);
 
     foundBody.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
   } catch (err) {

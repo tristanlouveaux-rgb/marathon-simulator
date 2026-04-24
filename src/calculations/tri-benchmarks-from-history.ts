@@ -253,13 +253,26 @@ export function estimatePerDisciplineCTLFromActivities(
   };
 }
 
+/**
+ * Convert an activity to its Signal-B TSS-equivalent.
+ *
+ * iTRIMP (Banister 1991) is the canonical raw physiological load metric
+ * stored on garmin_activities. To compare it against TSS-space (where
+ * 100 = 1h at threshold), divide by 150 — the same conversion the
+ * running-side activity-matcher uses (`rawITrimp * 100 / 15000`).
+ *
+ * Without this conversion, CTL estimates run ~150× too high (e.g. 2296
+ * instead of ~15 for a base of one 60-min Z2 run per day).
+ */
 function estimateTss(
   a: Pick<GarminActual, 'durationSec' | 'iTrimp'>,
   sport: 'swim' | 'bike' | 'run' | 'other'
 ): number {
-  // Prefer stored iTrimp (Signal B raw) if present.
-  if (a.iTrimp != null && a.iTrimp > 0) return a.iTrimp;
-  // Fallback: coarse estimate per minute, tuned per sport.
+  if (a.iTrimp != null && a.iTrimp > 0) {
+    return a.iTrimp / 150;
+  }
+  // Fallback when iTRIMP is missing: coarse TSS estimate per minute.
+  // Values tuned so a 60-min Z2 ride ≈ 60 TSS, 60-min easy run ≈ 65 TSS.
   const minutes = (a.durationSec ?? 0) / 60;
   if (minutes <= 0) return 0;
   const perMinute: Record<typeof sport, number> = {

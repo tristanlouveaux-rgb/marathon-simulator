@@ -198,7 +198,7 @@ describe('estimatePerDisciplineCTLFromActivities', () => {
 
   it('run activity contributes to all three tracks via transfer matrix', () => {
     const est = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 100 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 300 }),
     ] as GarminActual[], REF);
     // Run → run 1.00, bike 0.70, swim 0.25
     expect(est.run.ctl).toBeGreaterThan(0);
@@ -209,10 +209,13 @@ describe('estimatePerDisciplineCTLFromActivities', () => {
   });
 
   it('bike activity transfers at 0.75 to run CTL', () => {
-    const bikeOnly = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Ride', durSec: 60 * 60, dayAgo: 0, iTrimp: 100 }),
-    ] as GarminActual[], REF);
-    // bike → run 0.75
+    // Use 20 days of consistent iTRIMP so the EMA has enough signal to make
+    // the transfer-matrix ratio observable after rounding to 0.1 precision.
+    const days = Array.from({ length: 20 }, (_, i) => i);
+    const bikeOnly = estimatePerDisciplineCTLFromActivities(
+      days.map((d) => mkActivity({ type: 'Ride', durSec: 60 * 60, dayAgo: d, iTrimp: 300 })) as GarminActual[],
+      REF,
+    );
     expect(bikeOnly.run.ctl).toBeGreaterThan(0);
     expect(bikeOnly.run.ctl).toBeLessThan(bikeOnly.bike.ctl);
   });
@@ -230,10 +233,10 @@ describe('estimatePerDisciplineCTLFromActivities', () => {
 
   it('older activities decay — 21 days ago < today', () => {
     const today = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 100 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 300 }),
     ] as GarminActual[], REF);
     const threeWeeksAgo = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 21, iTrimp: 100 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 21, iTrimp: 300 }),
     ] as GarminActual[], REF);
     expect(today.run.ctl).toBeGreaterThan(threeWeeksAgo.run.ctl);
   });
@@ -247,22 +250,35 @@ describe('estimatePerDisciplineCTLFromActivities', () => {
 
   it('ignores activities beyond 120-day window', () => {
     const est = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 200, iTrimp: 100 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 200, iTrimp: 300 }),
     ] as GarminActual[], REF);
     expect(est.run.ctl).toBe(0);
   });
 
   it('ignores activities without a startTime', () => {
     const est = estimatePerDisciplineCTLFromActivities([
-      { activityType: 'Run', durationSec: 60 * 60, iTrimp: 100, startTime: null } as Partial<GarminActual>,
+      { activityType: 'Run', durationSec: 60 * 60, iTrimp: 300, startTime: null } as Partial<GarminActual>,
     ] as GarminActual[], REF);
     expect(est.run.ctl).toBe(0);
   });
 
+  it('iTRIMP is divided by 150 to produce TSS (matches activity-matcher convention)', () => {
+    // An iTrimp of 150 is one unit of "1 hour at threshold" = 100 TSS in the
+    // running convention. An all-tomorrow one-off of 150 iTRIMP should give a
+    // bounded CTL — not the 2296+ we saw when iTRIMP was used raw.
+    const est = estimatePerDisciplineCTLFromActivities([
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 150 }),
+    ] as GarminActual[], REF);
+    // CTL after 1 activity is small because the 42-day EMA is mostly empty.
+    // The point is: it must not be in the thousands.
+    expect(est.run.ctl).toBeLessThan(50);
+    expect(est.run.ctl).toBeGreaterThan(0);
+  });
+
   it('TSB = CTL - ATL for each discipline', () => {
     const est = estimatePerDisciplineCTLFromActivities([
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 100 }),
-      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 14, iTrimp: 100 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 300 }),
+      mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 14, iTrimp: 300 }),
     ] as GarminActual[], REF);
     expect(est.run.tsb).toBeCloseTo(est.run.ctl - est.run.atl, 1);
   });
