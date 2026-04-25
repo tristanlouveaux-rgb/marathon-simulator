@@ -151,6 +151,11 @@ export interface PoweredActivity {
   averageWatts?: number | null;
   maxWatts?: number | null;
   normalizedPowerW?: number | null;
+  /** Strava's `device_watts` flag — true when power came from a real power
+   * meter, false when Strava estimated it from speed + elevation. Estimated
+   * power on Strava is unreliable (often off by 30–50%) and should never
+   * anchor an FTP estimate when real-meter rides exist. */
+  deviceWatts?: boolean | null;
 }
 
 /**
@@ -178,14 +183,22 @@ export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): Ft
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');
   if (rides.length === 0) return { bikeActivityCount: 0, derivedFromPower: false };
 
-  // Eligible: ≥ 20 min long + at least one of avg/np present and > 80 W.
-  const eligible = rides.filter((r) => {
+  // Eligible: ≥ 20 min long + power data present.
+  const baseEligible = rides.filter((r) => {
     if (r.durationSec < 20 * 60) return false;
     const hasNp = r.normalizedPowerW != null && r.normalizedPowerW > 80;
     const hasAvg = r.averageWatts != null && r.averageWatts > 80;
     return hasNp || hasAvg;
   });
-  if (eligible.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
+  if (baseEligible.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
+
+  // **Prefer real power-meter rides over Strava-estimated ones.** Strava
+  // estimates power from speed + elevation when no meter is present, and the
+  // result is unreliable (often 30–50% off) — never let estimated rides
+  // anchor an FTP. Only fall back to estimated when zero real-meter rides
+  // exist.
+  const realMeterRides = baseEligible.filter((r) => r.deviceWatts === true);
+  const eligible = realMeterRides.length > 0 ? realMeterRides : baseEligible;
 
   // Compute candidate FTP per ride.
   const candidates: number[] = [];
@@ -207,9 +220,10 @@ export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): Ft
 
   candidates.sort((a, b) => b - a);  // descending
 
-  // Drop clear outliers: any candidate that's >2× the second-best is
-  // almost certainly a power-meter glitch (not a real ride).
-  if (candidates.length >= 2 && candidates[0] > candidates[1] * 2) {
+  // Outlier drop: a candidate >2× the second-best AND >120% of the body of
+  // the data is a glitch. Skip when only 1 candidate (no comparison) or 2
+  // candidates (would discard half the signal).
+  if (candidates.length >= 3 && candidates[0] > candidates[1] * 2) {
     candidates.shift();
   }
 

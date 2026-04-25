@@ -186,8 +186,8 @@ describe('estimateFTPFromBikeActivities', () => {
     expect(est.ftpWatts).toBe(228);
   });
 
-  it('drops a single >2× outlier as a power-meter glitch', () => {
-    // 800 NP outlier dropped (> 2 × 250). Remaining 250/240/230. Median 240 × 0.95 = 228.
+  it('drops a single >2× outlier when ≥ 3 candidates exist', () => {
+    // 800 NP outlier dropped. Remaining 250/240/230. Median 240 × 0.95 = 228.
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 800 } as PoweredActivity,
       { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250 } as PoweredActivity,
@@ -195,6 +195,36 @@ describe('estimateFTPFromBikeActivities', () => {
       { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 230 } as PoweredActivity,
     ]);
     expect(est.ftpWatts).toBe(228);
+  });
+
+  it('keeps both candidates when only 2 exist (avoids dropping legit value)', () => {
+    // 438 + 134 — the 438 is a real ride, 134 is a long endurance ride.
+    // Old buggy outlier check would drop 438 because 438 > 134×2; new code
+    // skips the drop when only 2 candidates exist (would lose half the data).
+    // Both kept, median = (438 × 0.95 + 134) / 2 = (416 + 134) / 2 = 275.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 110 * 60, normalizedPowerW: 438 } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 7 * 60 * 60, averageWatts: 94 } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(275);
+  });
+
+  it('prefers real power-meter rides over Strava-estimated when both present', () => {
+    // Real meter (deviceWatts true) NP 280 → FTP candidate 266
+    // Estimated (deviceWatts false) NP 600 — should be IGNORED, not anchor FTP
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600, deviceWatts: false } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, deviceWatts: true } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(266);
+  });
+
+  it('falls back to estimated rides when no real-meter rides exist', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200, deviceWatts: false } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(190);
+    expect(est.derivedFromPower).toBe(true);
   });
 
   it('lights up when power flows through GarminActual-shaped rows from sync', () => {
