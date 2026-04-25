@@ -4,6 +4,7 @@ import {
   estimateCSSFromSwimActivities,
   estimateFTPFromBikeActivities,
   estimatePerDisciplineCTLFromActivities,
+  computeCSSFromPair,
   deriveTriBenchmarksFromHistory,
   type PoweredActivity,
 } from './tri-benchmarks-from-history';
@@ -175,14 +176,25 @@ describe('estimateFTPFromBikeActivities', () => {
     expect(est.ftpWatts).toBeUndefined();
   });
 
-  it('picks highest power across eligible rides', () => {
+  it('takes median of top-3 candidates rather than absolute max', () => {
+    // Three rides NP 270/240/200. Sorted desc: 270, 240, 200. Median 240. × 0.95 = 228.
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200 } as PoweredActivity,
       { activityType: 'Ride', durationSec: 30 * 60, normalizedPowerW: 270 } as PoweredActivity,
       { activityType: 'Ride', durationSec: 90 * 60, normalizedPowerW: 240 } as PoweredActivity,
     ]);
-    // Max is 270, × 0.95 = 256.5 → rounds to 257
-    expect(est.ftpWatts).toBe(257);
+    expect(est.ftpWatts).toBe(228);
+  });
+
+  it('drops a single >2× outlier as a power-meter glitch', () => {
+    // 800 NP outlier dropped (> 2 × 250). Remaining 250/240/230. Median 240 × 0.95 = 228.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 800 } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250 } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 240 } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 230 } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(228);
   });
 
   it('lights up when power flows through GarminActual-shaped rows from sync', () => {
@@ -194,6 +206,53 @@ describe('estimateFTPFromBikeActivities', () => {
     const est = estimateFTPFromBikeActivities(actuals);
     expect(est.derivedFromPower).toBe(true);
     expect(est.ftpWatts).toBe(223);  // 235 × 0.95
+  });
+});
+
+describe('computeCSSFromPair (Smith-Norris)', () => {
+  it('400s + 180s pair → 110 s/100m', () => {
+    expect(computeCSSFromPair(400, 180)).toBe(110);
+  });
+
+  it('elite pair (240s + 110s) → 65 s/100m', () => {
+    expect(computeCSSFromPair(240, 110)).toBe(65);
+  });
+
+  it('returns null when either input missing', () => {
+    expect(computeCSSFromPair(undefined, 180)).toBeNull();
+    expect(computeCSSFromPair(400, undefined)).toBeNull();
+    expect(computeCSSFromPair(null, 180)).toBeNull();
+    expect(computeCSSFromPair(0, 180)).toBeNull();
+  });
+
+  it('returns null when 400m is faster than 200m (data error)', () => {
+    expect(computeCSSFromPair(180, 200)).toBeNull();
+  });
+
+  it('returns null for absurd paces', () => {
+    expect(computeCSSFromPair(1000, 100)).toBeNull();
+  });
+});
+
+describe('deriveTriBenchmarksFromHistory — paired-TT CSS preferred', () => {
+  it('uses Smith-Norris CSS when both 400m and 200m are provided', () => {
+    const activities = [
+      { activityType: 'Swim', distanceKm: 1.5, durationSec: 28 * 60, startTime: '2026-04-20T08:00:00Z' } as Partial<GarminActual>,
+    ] as GarminActual[];
+    const result = deriveTriBenchmarksFromHistory(activities, '2026-04-24T08:00:00Z', {
+      swim400Sec: 400, swim200Sec: 180,
+    });
+    expect(result.css.cssSecPer100m).toBe(110);
+  });
+
+  it('falls back to best-sustained-pace when only 400m is provided', () => {
+    const activities = [
+      { activityType: 'Swim', distanceKm: 1.5, durationSec: 28 * 60, startTime: '2026-04-20T08:00:00Z' } as Partial<GarminActual>,
+    ] as GarminActual[];
+    const result = deriveTriBenchmarksFromHistory(activities, '2026-04-24T08:00:00Z', {
+      swim400Sec: 400,
+    });
+    expect(result.css.cssSecPer100m).toBe(117);
   });
 });
 

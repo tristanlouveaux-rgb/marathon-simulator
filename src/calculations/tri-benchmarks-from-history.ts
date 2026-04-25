@@ -103,6 +103,37 @@ export function estimateCSSFromSwimActivities(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// CSS from paired test (Smith-Norris formula)
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute CSS from a paired 400m + 200m test (Smith & Norris 2019).
+ *
+ * Formula:
+ *   CSS_m_per_sec = (400 − 200) / (t400 − t200)
+ *   CSS_sec_per_100m = 100 / CSS_m_per_sec
+ *
+ * This is the **gold-standard** swim threshold estimate. The user does
+ * the test once (400m all-out, full rest, then 200m all-out) and the
+ * formula gives the steady-state pace at which they'd hold lactate.
+ *
+ * Returns null if either input is missing or the math is degenerate
+ * (negative pace, etc.).
+ */
+export function computeCSSFromPair(t400Sec: number | undefined | null, t200Sec: number | undefined | null): number | null {
+  if (!t400Sec || t400Sec <= 0) return null;
+  if (!t200Sec || t200Sec <= 0) return null;
+  if (t400Sec <= t200Sec) return null;  // 400m must be slower than 200m
+  const speedMps = (400 - 200) / (t400Sec - t200Sec);
+  if (!isFinite(speedMps) || speedMps <= 0) return null;
+  const cssSecPer100m = 100 / speedMps;
+  // Sanity bounds: 50 s/100m (elite) to 240 s/100m (very slow). Outside →
+  // user mis-entered. Return null and let the fallback path handle.
+  if (cssSecPer100m < 50 || cssSecPer100m > 240) return null;
+  return Math.round(cssSecPer100m);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // FTP (bike) from power curve — SCAFFOLDED, returns undefined without power
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -129,25 +160,25 @@ export interface PoweredActivity {
  * average) and `weighted_average_watts` (NP). NP is the gold standard
  * for FTP — best 1-hour NP × 0.95 ≈ FTP (Allen & Coggan 2010). When NP
  * isn't present we fall back to `average_watts` with a duration-aware
- * multiplier:
+ * Intensity Factor (IF) inversion:
  *
- *   - Short rides (≤ 30 min): athlete is likely doing intervals or a test
- *     → avg_watts is close to FTP, use × 0.95
- *   - Threshold/sweet-spot range (30–90 min): treat as ~tempo IF 0.85
- *     → avg_watts ÷ 0.85
- *   - Long endurance (> 90 min): typical IF 0.70
- *     → avg_watts ÷ 0.70
+ *   - Short rides (≤ 30 min): assume IF 0.95 (test/intervals)
+ *   - Threshold/sweet-spot range (30–90 min): assume IF 0.85
+ *   - Long endurance (> 90 min): assume IF 0.70
  *
- * Final FTP is the MAX of all these candidate estimates across rides
- * with power data, which lets a hard 20-min effort or a long endurance
- * ride both anchor a sensible FTP. Caps at 500W as a sanity floor on
- * occasional power-meter spikes.
+ * Robustness improvements over the naïve max():
+ *   - Take the **median of the top-3 candidates** rather than the single
+ *     best ride. Protects against one-off power-meter spikes or
+ *     particularly hot test efforts that aren't representative of the
+ *     athlete's repeatable threshold.
+ *   - Drop candidate values that are >2× the second-best (clear outliers).
+ *   - Final cap at 500W as a sanity floor.
  */
 export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): FtpEstimate {
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');
   if (rides.length === 0) return { bikeActivityCount: 0, derivedFromPower: false };
 
-  // Eligible rides: ≥ 20 min long + at least one of avg/np present and > 80 W.
+  // Eligible: ≥ 20 min long + at least one of avg/np present and > 80 W.
   const eligible = rides.filter((r) => {
     if (r.durationSec < 20 * 60) return false;
     const hasNp = r.normalizedPowerW != null && r.normalizedPowerW > 80;
@@ -156,28 +187,41 @@ export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): Ft
   });
   if (eligible.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
 
-  let bestFtpEstimate = 0;
+  // Compute candidate FTP per ride.
+  const candidates: number[] = [];
   for (const r of eligible) {
-    let candidateFtp = 0;
+    let candidate = 0;
     if (r.normalizedPowerW != null && r.normalizedPowerW > 80) {
-      // NP-based: standard Coggan 20-min × 0.95 for short rides, × 1.0 for hour
-      // efforts. Use 0.95 conservatively as a floor.
-      candidateFtp = r.normalizedPowerW * 0.95;
+      candidate = r.normalizedPowerW * 0.95;
     } else if (r.averageWatts != null && r.averageWatts > 80) {
       const dur = r.durationSec;
-      // Duration-aware Intensity Factor inversion. avg_watts = FTP × IF.
       let assumedIF: number;
-      if (dur <= 30 * 60) assumedIF = 0.95;       // short ≈ test/intervals
-      else if (dur <= 90 * 60) assumedIF = 0.85;  // threshold/sweet spot
-      else assumedIF = 0.70;                       // endurance ride
-      candidateFtp = r.averageWatts / assumedIF;
+      if (dur <= 30 * 60) assumedIF = 0.95;
+      else if (dur <= 90 * 60) assumedIF = 0.85;
+      else assumedIF = 0.70;
+      candidate = r.averageWatts / assumedIF;
     }
-    if (candidateFtp > bestFtpEstimate) bestFtpEstimate = candidateFtp;
+    if (candidate > 80) candidates.push(candidate);
+  }
+  if (candidates.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
+
+  candidates.sort((a, b) => b - a);  // descending
+
+  // Drop clear outliers: any candidate that's >2× the second-best is
+  // almost certainly a power-meter glitch (not a real ride).
+  if (candidates.length >= 2 && candidates[0] > candidates[1] * 2) {
+    candidates.shift();
   }
 
-  // Cap at 500W (only ~5% of riders are above this; protects against
-  // single corrupted datapoint from a faulty power meter).
-  const ftp = Math.min(500, Math.round(bestFtpEstimate));
+  // Take median of top-3 (or top-N if fewer). Robust to single outliers.
+  const top = candidates.slice(0, Math.min(3, candidates.length));
+  const median = top.length === 1
+    ? top[0]
+    : top.length === 2
+      ? (top[0] + top[1]) / 2
+      : top[1];  // sorted desc, idx 1 is the middle
+
+  const ftp = Math.min(500, Math.round(median));
 
   return {
     ftpWatts: ftp,
@@ -336,16 +380,44 @@ export interface TriBenchmarks {
 }
 
 /**
+ * Optional benchmark inputs the user can provide directly. When present,
+ * these take priority over the activity-history fallbacks. Mirrors the
+ * "test workout" results the user enters via the Refine-your-benchmarks
+ * card.
+ */
+export interface DirectBenchmarkInputs {
+  /** 400m time-trial result (seconds). Pairs with t200Sec via Smith-Norris. */
+  swim400Sec?: number;
+  /** 200m time-trial result (seconds). Pairs with t400Sec. */
+  swim200Sec?: number;
+}
+
+/**
  * One-shot derivation used by initialisation. Accepts the activity log
- * (typically flattened from `state.wks[*].garminActuals`) and returns
- * every benchmark the prediction engine cares about.
+ * (typically flattened from `state.wks[*].garminActuals`) plus any
+ * direct benchmark inputs, and returns every benchmark the prediction
+ * engine cares about.
  */
 export function deriveTriBenchmarksFromHistory(
   activities: GarminActual[],
-  referenceDateISO: string = new Date().toISOString()
+  referenceDateISO: string = new Date().toISOString(),
+  direct: DirectBenchmarkInputs = {}
 ): TriBenchmarks {
+  // Prefer paired-TT CSS when both 400m and 200m are provided. Otherwise
+  // fall back to the best-sustained-pace estimate from swim activities.
+  const cssFromPair = computeCSSFromPair(direct.swim400Sec, direct.swim200Sec);
+  const swimEst = estimateCSSFromSwimActivities(activities);
+  const css: CssEstimate = cssFromPair != null
+    ? {
+        cssSecPer100m: cssFromPair,
+        swimActivityCount: swimEst.swimActivityCount,
+        sourceActivityISO: undefined,
+        sourceDistanceM: undefined,
+      }
+    : swimEst;
+
   return {
-    css: estimateCSSFromSwimActivities(activities),
+    css,
     ftp: estimateFTPFromBikeActivities(activities as unknown as PoweredActivity[]),
     fitness: estimatePerDisciplineCTLFromActivities(activities, referenceDateISO),
   };

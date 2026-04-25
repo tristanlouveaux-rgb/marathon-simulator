@@ -267,7 +267,10 @@ async function launchApp(): Promise<void> {
         }
       }
 
-      const derived = deriveTriBenchmarksFromHistory(activityLog);
+      const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {
+        swim400Sec: state.triConfig?.swim?.pbs?.m400,
+        swim200Sec: state.triConfig?.swim?.pbs?.m200,
+      });
 
       // Update per-discipline fitness every boot so CTL reflects what's
       // actually been trained since last load.

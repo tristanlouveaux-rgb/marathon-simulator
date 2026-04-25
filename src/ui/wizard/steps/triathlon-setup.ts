@@ -48,6 +48,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   const hasPower = state.triBike?.hasPowerMeter ?? false;
   const css = state.triSwim?.cssSecPer100m ?? '';
   const css400 = state.triSwim?.pbs?.m400 ?? '';
+  const css200 = state.triSwim?.pbs?.m200 ?? '';
   const raceDate = state.customRaceDate ?? '';
   const gymSessions = state.gymSessionsPerWeek ?? 0;
   const hoursRange = HOURS_RANGE[distance];
@@ -217,7 +218,10 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
               <p class="tri-hint" style="margin:6px 0 14px"><strong>CSS</strong> is your threshold swim pace — the fastest pace you can hold for ~30 minutes. Enter as minutes:seconds per 100m.</p>
               <div class="tri-row" style="margin-bottom:4px"><span>400m test time <span style="color:var(--c-faint);font-weight:400">(optional)</span></span></div>
               <input type="text" id="tri-css-400" class="tri-input" placeholder="e.g. 7:00" value="${formatMMSS(css400)}">
-              <p class="tri-hint">If provided, we'll derive CSS from this. To run the test: 400m all out, rest fully, then 200m all out. Your CSS ≈ (400m time − 200m time) ÷ 2 per 100m.</p>
+              <p class="tri-hint" style="margin:6px 0 14px">From the CSS test: swim 400m all-out, rest 5 min, then 200m all-out. Enter both times for the gold-standard CSS calculation (Smith & Norris 2019).</p>
+              <div class="tri-row" style="margin-bottom:4px"><span>200m test time <span style="color:var(--c-faint);font-weight:400">(optional, pairs with 400m)</span></span></div>
+              <input type="text" id="tri-css-200" class="tri-input" placeholder="e.g. 3:10" value="${formatMMSS(css200)}">
+              <p class="tri-hint">When both times are present, CSS = 200 ÷ (t400 − t200) m/s. More accurate than a single distance.</p>
             </div>
             <p class="tri-hint" id="tri-defer-swim-hint" style="${!css && !css400 ? '' : 'display:none'}">We'll estimate CSS from your slider rating above. You can run the test this week and update on the Stats page to refine your plan.</p>
           </div>
@@ -456,24 +460,41 @@ function wireEventHandlers(): void {
   });
 
   const css400Input = document.getElementById('tri-css-400') as HTMLInputElement | null;
-  css400Input?.addEventListener('input', () => {
-    const parsed = parseMMSS(css400Input.value);
+  const css200Input = document.getElementById('tri-css-200') as HTMLInputElement | null;
+
+  /** Recompute CSS whenever a TT input changes. Smith-Norris when both
+   * times present; lone-400m fallback otherwise. User-typed CSS always wins. */
+  const refreshCssFromInputs = async () => {
+    const t400 = parseMMSS(css400Input?.value ?? '');
+    const t200 = parseMMSS(css200Input?.value ?? '');
     const current = getCurrentOnboarding();
-    const nextPBs = { ...(current.triSwim?.pbs ?? {}), m400: parsed ?? undefined };
-    // If user entered a 400m test time but no CSS, derive a rough CSS.
-    // Dekerle 2002: CSS ≈ pace at 400m + 2-3 sec/100m (drop from max pace to threshold).
-    const cssFromTest = parsed ? Math.round(parsed / 4) : undefined;
-    const existingCSS = current.triSwim?.cssSecPer100m;
+    const nextPBs = {
+      ...(current.triSwim?.pbs ?? {}),
+      m400: t400 ?? undefined,
+      m200: t200 ?? undefined,
+    };
+    const userCss = current.triSwim?.cssSecPer100m;
+    let derivedCss: number | undefined;
+    if (t400 && t200) {
+      // Lazy import to avoid pulling the whole derivation module on first render.
+      const { computeCSSFromPair } = await import('@/calculations/tri-benchmarks-from-history');
+      derivedCss = computeCSSFromPair(t400, t200) ?? undefined;
+    } else if (t400) {
+      // Lone-400m fallback (Dekerle 2002 rough): CSS ≈ pace at 400m + ~2-3s/100m.
+      derivedCss = Math.round(t400 / 4);
+    }
     updateOnboarding({
       triSwim: {
         ...(current.triSwim ?? {}),
         pbs: nextPBs,
-        cssSecPer100m: existingCSS ?? cssFromTest,
+        cssSecPer100m: userCss ?? derivedCss,
       },
     });
-    // Reflect derived CSS in the CSS input if it was blank
-    if (!existingCSS && cssFromTest && cssInput) cssInput.value = formatCSS(cssFromTest);
-  });
+    if (!userCss && derivedCss && cssInput) cssInput.value = formatCSS(derivedCss);
+  };
+
+  css400Input?.addEventListener('input', () => { void refreshCssFromInputs(); });
+  css200Input?.addEventListener('input', () => { void refreshCssFromInputs(); });
 
   // Continue CTA
   document.getElementById('tri-continue')?.addEventListener('click', () => {
@@ -604,7 +625,11 @@ async function runAutoDerivation(): Promise<void> {
       return;
     }
 
-    const derived = deriveTriBenchmarksFromHistory(activities);
+    const onb = getCurrentOnboarding();
+    const derived = deriveTriBenchmarksFromHistory(activities, undefined, {
+      swim400Sec: onb.triSwim?.pbs?.m400,
+      swim200Sec: onb.triSwim?.pbs?.m200,
+    });
 
     // Pre-fill form inputs where user hasn't already entered values.
     const current = getCurrentOnboarding();

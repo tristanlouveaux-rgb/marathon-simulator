@@ -34,10 +34,14 @@ export interface TriVolumeSplit {
   run: number;
 }
 
-/** Swim personal-best times. All in seconds; any/all may be absent. */
+/** Swim personal-best times. All in seconds; any/all may be absent.
+ * The 200m + 400m pair is the canonical CSS test (Smith & Norris 2019):
+ * `CSS = 200 / (t400 - t200)` m/s. Both must be present for the formula
+ * to apply; otherwise we fall back to fastest sustained pace from
+ * activity history. */
 export interface SwimPBs {
   m100?: number;     // 100m time
-  m200?: number;     // 200m time
+  m200?: number;     // 200m time — pairs with m400 for Smith-Norris CSS
   m400?: number;     // 400m time — primary CSS input
   m1500?: number;    // 1500m time
 }

@@ -53,7 +53,10 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // benchmarks come from main.ts's DB-backed refresh on next load.
     // We don't await a DB query here because initialization is sync.
     const activityLog = collectActivityLog(s);
-    const derived = deriveTriBenchmarksFromHistory(activityLog);
+    const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {
+      swim400Sec: state.triSwim?.pbs?.m400,
+      swim200Sec: state.triSwim?.pbs?.m200,
+    });
 
     // Merge user-entered benchmarks with history-derived ones. User input
     // always wins — derivation only fills in fields the user left blank.
