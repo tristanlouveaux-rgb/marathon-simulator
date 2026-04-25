@@ -45,6 +45,12 @@ export interface SwimPBs {
 /** Bike benchmarks. FTP in watts, LTHR in bpm. Both optional. */
 export interface BikeBenchmarks {
   ftp?: number;        // Functional Threshold Power in watts
+  /** Where the FTP value came from. 'user' = entered in onboarding; 'derived'
+   * = auto-filled from Strava history. The launch-time refresh is allowed to
+   * overwrite 'derived' values when fresh data lands; 'user' values are
+   * preserved unconditionally. Undefined = pre-provenance value (treat as
+   * 'user' to avoid accidentally clobbering manual entries). */
+  ftpSource?: 'user' | 'derived';
   lthr?: number;       // Lactate threshold HR (bike) in bpm
   twentyMinW?: number; // Raw 20-min test watts (if user ran the test)
   hasPowerMeter?: boolean; // Collected at onboarding — gates power-based bTSS vs HR fallback (§18.1)
@@ -53,6 +59,8 @@ export interface BikeBenchmarks {
 /** Swim benchmarks. CSS (Critical Swim Speed) is the canonical swim threshold — seconds per 100m. */
 export interface SwimBenchmarks {
   cssSecPer100m?: number;    // Critical Swim Speed — lactate-threshold pace per 100m
+  /** Provenance for cssSecPer100m — same semantics as BikeBenchmarks.ftpSource. */
+  cssSource?: 'user' | 'derived';
   pbs?: SwimPBs;             // Raw test/PB times from which CSS can be derived
   poolLengthM?: 25 | 33 | 50; // For pace conversion; defaults to 25
 }

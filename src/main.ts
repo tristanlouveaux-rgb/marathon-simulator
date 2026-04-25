@@ -227,6 +227,20 @@ async function launchApp(): Promise<void> {
       const { loadActivitiesFromDB } = await import('@/data/tri-activity-loader');
       const mutable = getMutableState();
 
+      // One-time migration: any existing FTP/CSS without a source field is
+      // tagged 'derived'. Reasoning: the auto-fill feature just shipped, so
+      // any existing value is almost certainly auto-derived rather than
+      // user-entered. This unblocks the refresh path from preserving stale
+      // estimates produced by earlier (worse) algorithms. Users who genuinely
+      // typed their own benchmarks at onboarding land back as 'user' next
+      // time they go through the wizard.
+      if (mutable.triConfig?.bike?.ftp && !mutable.triConfig.bike.ftpSource) {
+        mutable.triConfig.bike.ftpSource = 'derived';
+      }
+      if (mutable.triConfig?.swim?.cssSecPer100m && !mutable.triConfig.swim.cssSource) {
+        mutable.triConfig.swim.cssSource = 'derived';
+      }
+
       // Load activities directly from Supabase. The state.wks array is
       // triathlon-shaped (fresh empty weeks) so in-memory mirrors lose the
       // pre-onboarding activity history. Database query sees everything
@@ -264,12 +278,30 @@ async function launchApp(): Promise<void> {
           run:  derived.fitness.run,
           combinedCtl: derived.fitness.combinedCtl,
         };
-        // Fill CSS / FTP only if the user never set them.
-        if (!mutable.triConfig.swim?.cssSecPer100m && derived.css.cssSecPer100m) {
-          mutable.triConfig.swim = { ...(mutable.triConfig.swim ?? {}), cssSecPer100m: derived.css.cssSecPer100m };
+        // Fill or refresh CSS / FTP. User-entered values (cssSource/ftpSource
+        // === 'user') are preserved unconditionally. Auto-derived values are
+        // refreshed every launch so a smarter algorithm or new ride data
+        // updates the estimate without the user having to clear the field.
+        // Pre-provenance values (no source set) are treated as user-entered
+        // to avoid clobbering anything entered before this field existed.
+        const swimSrc = mutable.triConfig.swim?.cssSource;
+        const swimWritable = !mutable.triConfig.swim?.cssSecPer100m || swimSrc === 'derived';
+        if (swimWritable && derived.css.cssSecPer100m) {
+          mutable.triConfig.swim = {
+            ...(mutable.triConfig.swim ?? {}),
+            cssSecPer100m: derived.css.cssSecPer100m,
+            cssSource: 'derived',
+          };
         }
-        if (!mutable.triConfig.bike?.ftp && derived.ftp.ftpWatts) {
-          mutable.triConfig.bike = { ...(mutable.triConfig.bike ?? {}), ftp: derived.ftp.ftpWatts, hasPowerMeter: true };
+        const bikeSrc = mutable.triConfig.bike?.ftpSource;
+        const bikeWritable = !mutable.triConfig.bike?.ftp || bikeSrc === 'derived';
+        if (bikeWritable && derived.ftp.ftpWatts) {
+          mutable.triConfig.bike = {
+            ...(mutable.triConfig.bike ?? {}),
+            ftp: derived.ftp.ftpWatts,
+            ftpSource: 'derived',
+            hasPowerMeter: true,
+          };
         }
       }
 

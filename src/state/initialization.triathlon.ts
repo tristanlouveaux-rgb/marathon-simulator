@@ -57,14 +57,27 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
 
     // Merge user-entered benchmarks with history-derived ones. User input
     // always wins — derivation only fills in fields the user left blank.
+    // Tag derived values with `*Source: 'derived'` so the launch-time refresh
+    // can overwrite them when fresh data is available; user-entered values
+    // (or pre-provenance ones) are preserved unconditionally.
     const bike = { ...(state.triBike ?? {}) };
+    // Set source to 'user' for any user-entered FTP from the wizard. Derived
+    // values get 'derived' below if they overwrite.
+    if (state.triBike?.ftp) {
+      bike.ftpSource = 'user';
+    }
     if (!bike.ftp && derived.ftp.ftpWatts) {
       bike.ftp = derived.ftp.ftpWatts;
+      bike.ftpSource = 'derived';
       bike.hasPowerMeter = bike.hasPowerMeter ?? true;
     }
     const swim = { ...(state.triSwim ?? {}) };
+    if (state.triSwim?.cssSecPer100m) {
+      swim.cssSource = 'user';
+    }
     if (!swim.cssSecPer100m && derived.css.cssSecPer100m) {
       swim.cssSecPer100m = derived.css.cssSecPer100m;
+      swim.cssSource = 'derived';
     }
 
     const triConfig: TriConfig = {
@@ -105,6 +118,18 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     s.continuousMode = false;
     s.w = 1;
     s.tw = weeks;
+    // Anchor the plan to this Monday so weekIndexForDate and advanceWeekToToday
+    // both have a reliable reference point. Without this, persistence migration
+    // derives planStartDate from s.w (which is reset to 1), producing a moving
+    // anchor that shifts every time the wizard is re-entered.
+    const _planMonday = new Date();
+    const _dow = _planMonday.getDay();
+    _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
+    s.planStartDate = _planMonday.toISOString().slice(0, 10);
+    // Triathlon doesn't use the running debrief gate — seed lastCompleteDebriefWeek
+    // so advanceWeekToToday can advance freely without waiting for a plan-preview.
+    (s as any).lastCompleteDebriefWeek = 0;
+    (s as any)._debriefGateV3 = true;
     s.rd = 'marathon';  // Placeholder — triathlon views read triConfig.distance
     s.rw = 3;            // Runs per week — refined by plan engine in Phase 3
     s.epw = 9;           // Placeholder total sessions (3 swim + 3 bike + 3 run)
