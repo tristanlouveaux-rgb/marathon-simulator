@@ -124,29 +124,60 @@ export interface PoweredActivity {
 
 /**
  * Estimate FTP from bike activities carrying power data.
- * Best 20-min average × 0.95 is the classical 20-min test approximation
- * (Allen & Coggan 2010).
  *
- * Returns `ftpWatts: undefined` and `derivedFromPower: false` when no
- * activities carry power data — typical for beginners or athletes who
- * don't have a power meter. The edge function persists power data on all
- * Strava rides as of 2026-04-24.
+ * Strava's activity LIST endpoint returns `average_watts` (whole-activity
+ * average) and `weighted_average_watts` (NP). NP is the gold standard
+ * for FTP — best 1-hour NP × 0.95 ≈ FTP (Allen & Coggan 2010). When NP
+ * isn't present we fall back to `average_watts` with a duration-aware
+ * multiplier:
+ *
+ *   - Short rides (≤ 30 min): athlete is likely doing intervals or a test
+ *     → avg_watts is close to FTP, use × 0.95
+ *   - Threshold/sweet-spot range (30–90 min): treat as ~tempo IF 0.85
+ *     → avg_watts ÷ 0.85
+ *   - Long endurance (> 90 min): typical IF 0.70
+ *     → avg_watts ÷ 0.70
+ *
+ * Final FTP is the MAX of all these candidate estimates across rides
+ * with power data, which lets a hard 20-min effort or a long endurance
+ * ride both anchor a sensible FTP. Caps at 500W as a sanity floor on
+ * occasional power-meter spikes.
  */
 export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): FtpEstimate {
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');
   if (rides.length === 0) return { bikeActivityCount: 0, derivedFromPower: false };
 
-  // Only rides with a full 20-min duration + power data count.
-  const eligible = rides.filter((r) =>
-    r.durationSec >= 20 * 60 &&
-    (r.normalizedPowerW != null && r.normalizedPowerW > 80) ||
-    (r.averageWatts != null && r.averageWatts > 80)
-  );
+  // Eligible rides: ≥ 20 min long + at least one of avg/np present and > 80 W.
+  const eligible = rides.filter((r) => {
+    if (r.durationSec < 20 * 60) return false;
+    const hasNp = r.normalizedPowerW != null && r.normalizedPowerW > 80;
+    const hasAvg = r.averageWatts != null && r.averageWatts > 80;
+    return hasNp || hasAvg;
+  });
   if (eligible.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
 
-  // Take highest NP (or avg_watts fallback) across eligible rides. Coggan 20-min × 0.95.
-  const bestPower = Math.max(...eligible.map((r) => r.normalizedPowerW ?? r.averageWatts ?? 0));
-  const ftp = Math.round(bestPower * 0.95);
+  let bestFtpEstimate = 0;
+  for (const r of eligible) {
+    let candidateFtp = 0;
+    if (r.normalizedPowerW != null && r.normalizedPowerW > 80) {
+      // NP-based: standard Coggan 20-min × 0.95 for short rides, × 1.0 for hour
+      // efforts. Use 0.95 conservatively as a floor.
+      candidateFtp = r.normalizedPowerW * 0.95;
+    } else if (r.averageWatts != null && r.averageWatts > 80) {
+      const dur = r.durationSec;
+      // Duration-aware Intensity Factor inversion. avg_watts = FTP × IF.
+      let assumedIF: number;
+      if (dur <= 30 * 60) assumedIF = 0.95;       // short ≈ test/intervals
+      else if (dur <= 90 * 60) assumedIF = 0.85;  // threshold/sweet spot
+      else assumedIF = 0.70;                       // endurance ride
+      candidateFtp = r.averageWatts / assumedIF;
+    }
+    if (candidateFtp > bestFtpEstimate) bestFtpEstimate = candidateFtp;
+  }
+
+  // Cap at 500W (only ~5% of riders are above this; protects against
+  // single corrupted datapoint from a faulty power meter).
+  const ftp = Math.min(500, Math.round(bestFtpEstimate));
 
   return {
     ftpWatts: ftp,

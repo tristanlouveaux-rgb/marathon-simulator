@@ -133,12 +133,39 @@ describe('estimateFTPFromBikeActivities', () => {
     expect(est.derivedFromPower).toBe(true);
   });
 
-  it('falls back to average_watts when NP not present', () => {
+  it('falls back to average_watts with duration-aware IF when NP not present', () => {
+    // 45 min ride at avg 220W → assume IF 0.85 (threshold range)
+    // FTP = 220 / 0.85 = 258.8 → 259
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 45 * 60, averageWatts: 220 } as PoweredActivity,
     ]);
-    expect(est.ftpWatts).toBe(209);
+    expect(est.ftpWatts).toBe(259);
     expect(est.derivedFromPower).toBe(true);
+  });
+
+  it('uses endurance IF (0.70) for long rides without NP', () => {
+    // 3hr ride at avg 236W → assume IF 0.70 (endurance)
+    // FTP = 236 / 0.70 = 337
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 180 * 60, averageWatts: 236 } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(337);
+  });
+
+  it('uses test IF (0.95) for short rides without NP', () => {
+    // 25 min ride at avg 280W → assume IF 0.95 (test/intervals)
+    // FTP = 280 / 0.95 = 295
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 25 * 60, averageWatts: 280 } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(295);
+  });
+
+  it('caps FTP at 500W', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600 } as PoweredActivity,
+    ]);
+    expect(est.ftpWatts).toBe(500);
   });
 
   it('skips rides under 20 min', () => {
