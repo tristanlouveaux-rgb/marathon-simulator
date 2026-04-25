@@ -11,6 +11,7 @@ import { getState } from '@/state/store';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
 import { openTriWorkoutDetail } from './workout-detail-modal';
+import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 
 function navigateTab(tab: TabId): void {
@@ -156,6 +157,9 @@ export function renderTriathlonPlanView(): void {
           </div>
         </div>
 
+        <!-- Refine your benchmarks (sticks until done or dismissed) -->
+        ${renderBenchmarkTestsCard(s)}
+
         <!-- Day-by-day -->
         <div class="hf" data-delay="0.18" style="padding:12px 20px">
           ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [])).join('')}
@@ -169,6 +173,9 @@ export function renderTriathlonPlanView(): void {
 
   // Tab bar wiring
   wireTabBarHandlers(navigateTab);
+
+  // Benchmark test cards — re-render on save/dismiss to update visibility.
+  wireBenchmarkTestsCard(() => renderTriathlonPlanView());
 
   // Header buttons
   document.getElementById('tri-account-btn')?.addEventListener('click', () => navigateTab('account'));
