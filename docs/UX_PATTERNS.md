@@ -206,6 +206,35 @@ Only add `detailId` (and show the chevron) when > 3 history data points exist. C
                cursor:pointer;letter-spacing:0.02em">Label</button>
 ```
 
+### Glass button — `.m-btn-glass` (default for taps)
+
+The canonical interactive button for anything the user taps to perform an action: onboarding CTAs, home actions (Coach, Check-in, Adjust plan), modal confirms, wizard next steps, settings rows. Uses frosted white, Apple three-layer shadow stack, firm press-in feedback.
+
+```html
+<button class="m-btn-glass">Label</button>
+<button class="m-btn-glass" style="width:100%">Full-width variant</button>
+<button class="m-btn-glass m-btn-glass--inset">Inside a card</button>
+<button class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">AB</button>
+```
+
+**Two shadow levels:**
+- **Default (`.m-btn-glass`)** — full three-layer float. Use on backgrounds: sky gradient home header, modals over a dim, onboarding screens, page-level CTAs.
+- **Inset (`.m-btn-glass m-btn-glass--inset`)** — calmer two-layer shadow. Use when the button lives **inside an already-elevated surface** (a card, a modal body). The card owns the lift; the button should not compete with it.
+
+Rule of thumb: if the button is nested inside anything with its own `box-shadow`, add `--inset`.
+
+**Use it for:**
+- Every onboarding / wizard button
+- Home header actions and in-card CTAs
+- Any button meant to feel tactile
+
+**Do not use it for:**
+- Navigation text links ("Learn more →", "Breakdown →") — those stay muted text, no border
+- Destructive confirms (Delete, Discard) — keep those plain bordered to avoid making danger feel playful
+- Tight data rows where a pill would overpower the surrounding text
+
+**Behaviour**: press state scales to 0.985 with a soft inset shadow. Transition is 120ms so it feels responsive, not laggy. Source of truth is `src/styles.css` — never re-implement inline.
+
 ---
 
 ## Daily Insight Card (Coaching Narrative)

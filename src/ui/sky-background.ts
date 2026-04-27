@@ -38,7 +38,7 @@ export const SKY_PALETTES = {
     glow:  '#E8E0FF',
     cloud: '#F0ECFF',
   },
-  /** Strain — teal/blue-green */
+  /** Strain — teal/blue-green (legacy, retained for backwards compat) */
   teal: {
     sky:   ['#B8E0E0', '#D4EEEE', '#EEF8F8'],
     far:   ['#78BCC0', '#98D0D4'],
@@ -46,6 +46,15 @@ export const SKY_PALETTES = {
     near:  ['#4CA8A0', '#90D0C8'],
     glow:  '#E8FFF8',
     cloud: '#F0FFFC',
+  },
+  /** Strain — warm red/coral, shades of red at same saturation as teal */
+  red: {
+    sky:   ['#F0C4C0', '#F6DDD8', '#FBEFEC'],
+    far:   ['#C88078', '#DCA49C'],
+    mid:   ['#BC6860', '#D09088'],
+    near:  ['#B05C68', '#D498A0'],
+    glow:  '#FFF0E8',
+    cloud: '#FFF4F0',
   },
   /** Rolling Load — deeper blue */
   deepBlue: {
@@ -65,7 +74,61 @@ export const SKY_PALETTES = {
     glow:  '#F0F4F8',
     cloud: '#F4F6F8',
   },
-  /** Injury Risk — cool grey */
+  /** Freshness — mint / cool green */
+  mint: {
+    sky:   ['#BCE4D0', '#D8EFE2', '#EEF8F2'],
+    far:   ['#7CC09A', '#A0D4B8'],
+    mid:   ['#5CAC84', '#88C8A8'],
+    near:  ['#58B098', '#9CD4BC'],
+    glow:  '#F0FFF4',
+    cloud: '#F0FFF6',
+  },
+  /** Recovery / Physiology — soft rose */
+  rose: {
+    sky:   ['#F0CCD4', '#F8DEE3', '#FCEFF2'],
+    far:   ['#D08894', '#E0AAB4'],
+    mid:   ['#C47080', '#D898A4'],
+    near:  ['#C07888', '#E0A8B4'],
+    glow:  '#FFF0F4',
+    cloud: '#FFF4F6',
+  },
+  /** Recovery / Physiology — soft lavender (legacy, retained for backwards compat) */
+  lavender: {
+    sky:   ['#D8C8E8', '#E8DDF2', '#F4ECFA'],
+    far:   ['#A890C0', '#C0ACD4'],
+    mid:   ['#9078B4', '#B498CC'],
+    near:  ['#A088C0', '#C8B0D8'],
+    glow:  '#F8F0FF',
+    cloud: '#F6F0FA',
+  },
+  /** Load Ratio / Injury Risk — warm amber */
+  amber: {
+    sky:   ['#F0D4A8', '#F6E4C8', '#FBF2E2'],
+    far:   ['#C89868', '#DCB48C'],
+    mid:   ['#BC8050', '#D0A47C'],
+    near:  ['#B88858', '#D8B488'],
+    glow:  '#FFF4E0',
+    cloud: '#FFF6E8',
+  },
+  /** Leg Load — earthy bronze, evokes muscular/EIMD fatigue without colliding with strain red or load-ratio amber */
+  bronze: {
+    sky:   ['#D8C0A0', '#E4D2B8', '#F0E2D0'],
+    far:   ['#9C7848', '#B89878'],
+    mid:   ['#846030', '#A48460'],
+    near:  ['#986C48', '#B89070'],
+    glow:  '#FFEED4',
+    cloud: '#FBEFD8',
+  },
+  /** Leg Load — muted sage / green-grey, evokes tissue recovery without the alarm of red or warmth of amber/bronze */
+  sage: {
+    sky:   ['#CCD8C4', '#DDE6D6', '#EEF2E8'],
+    far:   ['#8AA088', '#A8BCA4'],
+    mid:   ['#6E8C6E', '#94AC90'],
+    near:  ['#7A9C80', '#ACC4AC'],
+    glow:  '#F0F4E8',
+    cloud: '#F4F6EE',
+  },
+  /** Injury Risk — cool grey (legacy, retained for backwards compat) */
   grey: {
     sky:   ['#C0C8D4', '#D8DDE4', '#EEF0F2'],
     far:   ['#90A0B0', '#A8B8C4'],

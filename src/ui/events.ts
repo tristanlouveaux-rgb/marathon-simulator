@@ -19,6 +19,8 @@ import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
+import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
 import type { ActivityStream } from '@/calculations/stream-processor';
 import { analyzeStream, computeCardiacEfficiency } from '@/calculations/stream-processor';
@@ -50,9 +52,7 @@ export function setOnWeekAdvance(cb: () => void): void {
  * Capped at the last 20 entries.
  */
 function recordVdotHistory(s: SimulatorState): void {
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += (s.wks[i]?.wkGain || 0);
-  const computedVdot = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  const computedVdot = getEffectiveVdot(s);
   const entry = { week: s.w, vdot: Math.round(computedVdot * 10) / 10, date: new Date().toISOString().slice(0, 10) };
   s.vdotHistory = [...(s.vdotHistory ?? []), entry].slice(-20);
 }
@@ -120,10 +120,8 @@ function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
   s.adaptationRatio = updated.currentAdaptationRatio;
 
   // 3. Calibrate VDOT
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
   const observedVdot = cv(10000, newLT * 10);
-  const rawPhysioAdj = observedVdot - (s.v + wg + s.rpeAdj);
+  const rawPhysioAdj = observedVdot - (s.v + s.rpeAdj);
   // Safety clamp: physioAdj must not drag total VDOT below (s.v - 5.0).
   // A drop of >5 points from the starting VDOT is implausible and indicates stale/wrong data.
   const minPhysioAdj = -5.0;
@@ -135,8 +133,7 @@ function applyAutoLTUpdate(s: SimulatorState, estimate: LTEstimate): void {
   }
 
   // 4. Recalculate paces
-  const adjustedVdot = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
-  s.pac = gp(adjustedVdot, s.lt);
+  s.pac = gp(getEffectiveVdot(s), s.lt);
 
   // 4b. Record VDOT history entry
   recordVdotHistory(s);
@@ -573,9 +570,7 @@ export function rate(
   }
 
   // Update paces and predictions
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-  const currentVDOT = s.v + wg + s.rpeAdj;
+  const currentVDOT = getEffectiveVdot(s);
   s.pac = gp(currentVDOT, s.lt);
 
   // Update Current prediction (what you'd race today)
@@ -989,6 +984,16 @@ export async function next(): Promise<void> {
     }
   }
 
+  // ─── Blended Fitness Refresh ─────────────────────────────────────────
+  // Refresh FIRST so s.v reflects this week's blended reality. Auto-LT
+  // below then calibrates physioAdj against the fresh baseline rather than
+  // the previous week's value (which would leave a one-week stale residual).
+  try {
+    refreshBlendedFitness(s);
+  } catch (e) {
+    console.warn('[Next] refreshBlendedFitness failed:', e);
+  }
+
   // ─── LT Auto-Estimation (Method 2: Cardiac Efficiency Trend) ─────
   if (!isInjured && s.ltEstimation?.efficiencyHistory && s.ltEstimation.efficiencyHistory.length >= 3) {
     const ltEst = estimateFromEfficiencyTrend(s.ltEstimation.efficiencyHistory, s.lt);
@@ -1177,10 +1182,7 @@ export async function next(): Promise<void> {
  */
 function complete(): void {
   const s = getState();
-  let wg = 0;
-  for (let i = 0; i < s.tw; i++) wg += s.wks[i].wkGain;
-
-  const fv = s.v + wg + s.rpeAdj;
+  const fv = getEffectiveVdot(s);
   const dk = rdKm(s.rd);
   let fin = tv(fv, dk);
   if (s.timp > 0) fin += s.timp;
@@ -1215,18 +1217,24 @@ export function reset(): void {
 }
 
 function showResetModal(): Promise<boolean> {
+  const trackOnly = !!(getState() as any).trackOnly;
+  const title = trackOnly ? 'Reset tracking history?' : 'Reset Training Plan?';
+  const body = trackOnly
+    ? 'This will clear your tracked weeks and activity history. Your name, PBs, and synced Strava/Garmin data will be kept.'
+    : 'This will clear your training plan and weekly history. Your name, PBs, and fitness data will be kept.';
+  const ctaLabel = trackOnly ? 'Reset history' : 'Reset Plan';
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4';
     overlay.innerHTML = `
       <div class="border rounded-xl max-w-sm w-full p-6" style="background:var(--c-surface);border-color:var(--c-border)">
-        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">Reset Training Plan?</h3>
+        <h3 class="font-semibold text-lg mb-2" style="color:var(--c-black)">${title}</h3>
         <p class="text-sm mb-5" style="color:var(--c-muted)">
-          This will clear your training plan and weekly history. Your name, PBs, and fitness data will be kept.
+          ${body}
         </p>
         <div class="flex flex-col gap-2">
           <button id="btn-confirm-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-warn);color:#fff">
-            Reset Plan
+            ${ctaLabel}
           </button>
           <button id="btn-cancel-reset" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">
             Cancel
@@ -1426,7 +1434,7 @@ function showDropWorkoutConfirmation(name: string): Promise<boolean> {
 export function editSettings(): void {
   const s = getMutableState();
   if (s.onboarding) {
-    s.onboarding.currentStep = 'assessment';
+    s.onboarding.currentStep = 'goals';
   }
   s.hasCompletedOnboarding = false;
   saveState();
@@ -1525,10 +1533,6 @@ export function updateFitness(): void {
     statusMessages.push(assessment.message);
   }
 
-  // Update paces with new physiology
-  let wg = 0;
-  for (let i = 0; i < s.w - 1; i++) wg += s.wks[i].wkGain;
-
   // NEW: Calibrate VDOT based on manual physio entry
   let observedVdot: number | null = null;
   if (newVO2val) {
@@ -1537,12 +1541,12 @@ export function updateFitness(): void {
     observedVdot = cv(10000, newLT * 10);
   }
   if (observedVdot) {
-    const rawAdj = observedVdot - (s.v + wg + s.rpeAdj);
+    const rawAdj = observedVdot - (s.v + s.rpeAdj);
     s.physioAdj = Math.max(-5.0, rawAdj);
   }
   recordVdotHistory(s);
 
-  s.pac = gp(s.v + wg + s.rpeAdj + (s.physioAdj || 0), newLT);
+  s.pac = gp(getEffectiveVdot(s), newLT);
 
   // Display status with color based on assessment status
   const statusEl = document.getElementById('fitStatus');
@@ -2255,9 +2259,7 @@ export function recordBenchmark(
       observedVdot = cv(10000, estimatedLT * 10);
     }
     if (observedVdot) {
-      let wg = 0;
-      for (let i = 0; i < s.w - 1; i++) wg += (s.wks[i]?.wkGain || 0);
-      s.physioAdj = Math.max(-5.0, observedVdot - (s.v + wg + s.rpeAdj));
+      s.physioAdj = Math.max(-5.0, observedVdot - (s.v + s.rpeAdj));
       recordVdotHistory(s);
     }
   }

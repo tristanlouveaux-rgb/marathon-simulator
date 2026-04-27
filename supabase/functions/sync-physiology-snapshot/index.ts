@@ -126,8 +126,10 @@ Deno.serve(async (req) => {
         // Merge physio
         for (const p of physioRows) {
             const existing = mergedData.get(p.calendar_date) || { calendar_date: p.calendar_date }
-            // Prefer vo2max from daily_metrics, fallback to physiology_snapshots
-            if (!existing.vo2max && p.vo2_max_running) {
+            // Prefer vo2_max_running (running-specific, from userMetrics) over
+            // daily_metrics.vo2max (generic — can include cycling/cardio and diverge from
+            // what Garmin Connect shows under "Running VO2 Max").
+            if (p.vo2_max_running != null && p.vo2_max_running > 0) {
                 existing.vo2max = p.vo2_max_running
             }
             existing.lt_pace_sec_km = p.lactate_threshold_pace

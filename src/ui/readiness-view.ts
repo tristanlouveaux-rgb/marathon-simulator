@@ -8,10 +8,10 @@
 import { getState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import {
-  computeACWR,
-  computeSameSignalTSB,
+  computeReadinessACWR,
+  computeLiveSameSignalTSB,
   computeFitnessModel,
-  computeTodaySignalBTSS,
+  computeTodayStrainTSS,
   computePlannedDaySignalBTSS,
   estimateWorkoutDurMin,
   getTrailingEffortScore,
@@ -22,6 +22,8 @@ import {
   computeReadiness,
   readinessColor,
   computeRecoveryScore,
+  LEG_LOAD_MODERATE,
+  LEG_LOAD_HEAVY,
 } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget, computeSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
@@ -49,8 +51,8 @@ function freshnessExplanation(tsb: number): string {
   // Thresholds on daily-equivalent (tsb already in weekly units, ÷7 for display)
   const d = Math.round(tsb / 7);
   if (d > 5)     return 'Fatigue has cleared faster than fitness has decayed. Good window for a hard session or race.';
-  if (d > 0)     return 'Slightly fresh. Normal training as planned.';
-  if (d >= -3)   return 'Mild fatigue from recent training. Training as planned.';
+  if (d > 0)     return 'Slightly fresh. Normal training today is fine.';
+  if (d >= -3)   return 'Mild fatigue from recent training. Normal training today is fine.';
   if (d >= -8)   return 'Moderate fatigue. Legs may feel heavy. Easy effort recommended today.';
   if (d >= -15)  return 'Heavy recent load. Expect sore legs and reduced performance. Easy sessions or rest until this clears.';
   if (d >= -25)  return 'Significant fatigue accumulation. Rest or very easy movement only. Hard sessions will not produce useful adaptation.';
@@ -75,40 +77,13 @@ function recoveryExplanation(score: number | null, hasData: boolean): string {
 // ── Main HTML ──────────────────────────────────────────────────────────────────
 
 function getReadinessHTML(s: SimulatorState): string {
-  const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
-  // Use completed weeks for TSB seed, then apply intra-week decay to get live value
+  const acwr = computeReadinessACWR(s);
+  // Live TSB with intra-week decay through today (shared with home-view so scores match).
   const completedWeek = Math.max(0, s.w - 1);
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
-  const atlWeekEnd = sameSignal?.atl ?? 0;
-  const ctlWeekEnd = sameSignal?.ctl ?? 0;
-
-  // Intra-week decay: daily ATL/CTL decay from end of completed week to today,
-  // incorporating current-week load. Matches freshness-view logic.
-  const ATL_DAILY_DECAY = Math.exp(-1 / 7);
-  const CTL_DAILY_DECAY = Math.exp(-1 / 42);
-  let atlLive = atlWeekEnd;
-  let ctlLive = ctlWeekEnd;
-  if (s.planStartDate) {
-    const weekStartDate = new Date(s.planStartDate + 'T12:00:00');
-    weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
-    const todayDate = new Date();
-    todayDate.setHours(12, 0, 0, 0);
-    const daysIntoWeek = Math.max(0, Math.round((todayDate.getTime() - weekStartDate.getTime()) / 86400000));
-    const currentWk = (s.wks ?? [])[completedWeek];
-    for (let d = 0; d < daysIntoWeek; d++) {
-      const dayD = new Date(weekStartDate);
-      dayD.setDate(dayD.getDate() + d);
-      const dayDate = dayD.toISOString().split('T')[0];
-      const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
-      const weekEquiv = dayTSS * 7;
-      atlLive = atlLive * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
-      ctlLive = ctlLive * CTL_DAILY_DECAY + weekEquiv * (1 - CTL_DAILY_DECAY);
-    }
-  }
-  const tsb = ctlLive - atlLive;
-  const ctlNow = ctlLive;
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const tsb = liveTSB.tsb;
+  const ctlNow = liveTSB.ctl;
   const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
 
   const today = new Date().toISOString().split('T')[0];
@@ -150,9 +125,13 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // ── Strain % (must match home-view logic so readiness score is consistent) ──
   const strainWk = (s.wks ?? [])[s.w - 1];
-  const todaySignalBTSS = strainWk ? computeTodaySignalBTSS(strainWk, today) : 0;
+  const todayPhysioR = (s.physiologyHistory ?? []).find(e => e.date === today);
+  const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysioR, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
-  const plannedWorkouts = strainWk ? generateWeekWorkouts(
+  // Just-Track users have no plan — skip the planned-workout comparison entirely.
+  // Plan-derived fields (s.rd, s.v, s.pac) are stale defaults in trackOnly and
+  // would produce a bogus "planned" list that poisons plannedDayTSS maths.
+  const plannedWorkouts = (strainWk && !s.trackOnly) ? generateWeekWorkouts(
     strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
     s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus,
@@ -210,12 +189,15 @@ function getReadinessHTML(s: SimulatorState): string {
   });
 
   // Use the central daily-coach for the sentence (auto-derives strain context)
-  const coachMessage = computeDailyCoach(s).primaryMessage;
+  const _coach = computeDailyCoach(s);
+  const coachMessage = _coach.primaryMessage;
+  const sessionNote = _coach.sessionNote;
   const activeStrainPct = todaySignalBTSS > 0 ? strainPct : 0;
 
   const ringColor = readinessColor(readiness.label);
   const score = readiness.score;
   const targetOffset = +(RING_C * (1 - score / 100)).toFixed(2);
+  const ringLabel = _coach.ringLabel;
 
   // ── Freshness sub-signal ───────────────────────────────────────────────────
   const tsbDisp = Math.round(tsb / 7);
@@ -227,7 +209,7 @@ function getReadinessHTML(s: SimulatorState): string {
   // ── To Baseline — stacked session recovery ──────────────────────────────────
   // Same model as freshness page: all recent sessions stacked, sport-adjusted,
   // sleep/HRV-adjusted. See computeToBaseline() in fitness-model.ts.
-  const ctlForBaseline = (sameSignal?.ctl ?? 0) / 7;
+  const ctlForBaseline = liveTSB.ctl / 7;
   const baselineResult = computeToBaseline(s.wks ?? [], completedWeek, ctlForBaseline, s.planStartDate, s.physiologyHistory);
   const fatigueDecayHours = baselineResult?.hours ?? null;
 
@@ -253,6 +235,9 @@ function getReadinessHTML(s: SimulatorState): string {
     ? `${recoveryResult.score}/100` : '—';
 
   // ── Strain sub-signal ──────────────────────────────────────────────────────
+  // Round before bucketing so the displayed "130%" matches the "Exceeded" state.
+  const displayStrainPct = Math.round(activeStrainPct);
+  const displayAdhocPct = Math.round(adhocPct);
   let strainLabel: string;
   let strainColor: string;
   if (isRestDay) {
@@ -260,17 +245,17 @@ function getReadinessHTML(s: SimulatorState): string {
     strainColor = isRestDayOverreaching ? 'var(--c-warn)' : (todaySignalBTSS > 0 ? 'var(--c-ok)' : TEXT_S);
   } else if (matchedActivityToday && !hasPlannedWorkout) {
     // Adhoc activity on a non-planned day — match home-view logic
-    strainLabel = adhocPct >= 150 ? 'High' : adhocPct >= 80 ? 'Optimal' : adhocPct >= 50 ? 'Moderate' : 'Light';
-    strainColor = adhocPct >= 150 ? 'var(--c-warn)' : adhocPct >= 80 ? 'var(--c-ok)' : TEXT_S;
+    strainLabel = displayAdhocPct >= 150 ? 'High' : displayAdhocPct >= 80 ? 'Optimal' : displayAdhocPct >= 50 ? 'Moderate' : 'Light';
+    strainColor = displayAdhocPct >= 150 ? 'var(--c-warn)' : displayAdhocPct >= 80 ? 'var(--c-ok)' : TEXT_S;
   } else {
-    strainLabel = activeStrainPct >= 130 ? 'Exceeded'
-      : activeStrainPct >= 100 ? 'Complete'
-      : activeStrainPct >= 50 ? 'In Progress'
-      : activeStrainPct > 0 ? 'Starting'
-      : 'No Activity';
-    strainColor = activeStrainPct >= 130 ? 'var(--c-warn)'
-      : activeStrainPct >= 100 ? 'var(--c-ok)'
-      : activeStrainPct >= 50 ? 'var(--c-caution)'
+    strainLabel = displayStrainPct >= 130 ? 'Exceeded'
+      : displayStrainPct >= 100 ? 'Complete'
+      : displayStrainPct >= 50 ? 'In Progress'
+      : displayStrainPct > 0 ? 'Starting'
+      : 'Not started';
+    strainColor = displayStrainPct >= 130 ? 'var(--c-warn)'
+      : displayStrainPct >= 100 ? 'var(--c-ok)'
+      : displayStrainPct >= 50 ? 'var(--c-caution)'
       : TEXT_S;
   }
 
@@ -280,26 +265,27 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // Adhoc activity on a non-planned day: show TSS + adhocPct label (no plan to compare %)
   const isAdhoc = matchedActivityToday && !hasPlannedWorkout;
-  const strainCard = todaySignalBTSS > 0 ? card(`
-    <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Today's Strain</div>
-    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
-      ${isRestDay || isAdhoc
-        ? `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${Math.round(todaySignalBTSS)} TSS</div>
-           <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
-        : `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${Math.round(activeStrainPct)}%</div>
-           <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
-      }
-    </div>
-    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${
+  const showTSSValue = isRestDay || isAdhoc;
+  const strainValueHTML = showTSSValue
+    ? `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${Math.round(todaySignalBTSS)} TSS</div>
+       <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`
+    : `<div style="font-size:24px;font-weight:600;color:${strainColor};line-height:1">${displayStrainPct}%</div>
+       <div style="font-size:13px;color:#94A3B8">${strainLabel}</div>`;
+  const strainExplanation =
       isRestDayOverreaching ? 'High load on a rest day. This level of activity impairs recovery rather than aiding it.'
-      : isRestDay ? 'Light activity on a rest day. No significant effect on recovery.'
+      : isRestDay && todaySignalBTSS > 0 ? 'Light activity on a rest day. No significant effect on recovery.'
+      : isRestDay ? 'Scheduled rest day. No activity expected.'
       : isAdhoc ? `${Math.round(todaySignalBTSS)} TSS from unplanned activity. Readiness adjusted accordingly.`
-      : activeStrainPct >= 130 ? 'Daily load well exceeded target. Additional training raises injury risk. Readiness capped.'
-      : activeStrainPct >= 100 ? 'Daily target reached. Session complete. Readiness reduced accordingly.'
-      : activeStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
-      : 'Light activity logged. No significant effect on readiness yet.'
-    }</div>
-  `, 'rdn-card-strain') : '';
+      : displayStrainPct >= 130 ? `Big session logged (${Math.round(todaySignalBTSS)} TSS). Daily target well exceeded. Recovery is the priority for the next 24 hours.`
+      : displayStrainPct >= 100 ? `Daily target reached (${Math.round(todaySignalBTSS)} TSS). Session complete. Readiness reduced accordingly.`
+      : displayStrainPct >= 50 ? 'Session in progress. Readiness adjusts downward as load accumulates.'
+      : displayStrainPct > 0 ? 'Light activity logged. No significant effect on readiness yet.'
+      : 'Planned session not yet logged.';
+  const strainCard = card(`
+    <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Today's Strain</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">${strainValueHTML}</div>
+    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${strainExplanation}</div>
+  `, 'rdn-card-strain');
 
   const fatigueDecayStr = fatigueDecayHours != null
     ? (fatigueDecayHours < 72
@@ -322,6 +308,40 @@ function getReadinessHTML(s: SimulatorState): string {
 
   const isLoadRatioDriving = readiness.hardFloor === 'acwr';
   const loadRatioCardBorder = isLoadRatioDriving ? 'border-left:3px solid var(--c-warn);padding-left:13px;' : '';
+
+  // Leg Fatigue sub-signal — permanent card. Mechanical/tissue load from
+  // cross-training, caps readiness at ≥20 (Manage Load) and ≥60 (Ease Back).
+  // Surface here rather than in Rolling Load so the signal is visible alongside
+  // the other readiness components it competes with.
+  const legTotal = readiness.legLoadTotal;
+  const legLabel = legTotal >= LEG_LOAD_HEAVY ? 'Heavy'
+    : legTotal >= LEG_LOAD_MODERATE ? 'Moderate'
+    : legTotal >= 10 ? 'Light'
+    : legTotal > 0 ? 'Minimal'
+    : 'Fresh';
+  const legColor = legTotal >= LEG_LOAD_HEAVY ? 'var(--c-warn)'
+    : legTotal >= LEG_LOAD_MODERATE ? 'var(--c-caution)'
+    : legTotal >= 10 ? TEXT_M
+    : 'var(--c-ok)';
+  const legCopy = legTotal >= LEG_LOAD_HEAVY
+    ? 'Recent cross-training has left heavy eccentric and impact load. Force absorption is impaired. Skip pounding sessions today.'
+    : legTotal >= LEG_LOAD_MODERATE
+      ? 'Moderate residual leg load from cross-training. Easy effort is fine. Avoid hard intervals or long impact sessions.'
+      : legTotal >= 10
+        ? 'Light residual leg load from recent cross-training. No effect on today\'s session.'
+        : legTotal > 0
+          ? 'Minor residual load. Mechanical recovery is nearly complete.'
+          : 'No residual leg load. Mechanical recovery is complete.';
+  const isLegDriving = readiness.hardFloor === 'legLoad';
+  const legCardBorder = isLegDriving ? 'border-left:3px solid var(--c-warn);padding-left:13px;' : '';
+  const legLoadCard = card(`
+    <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Leg Fatigue</div>
+    <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+      <div style="font-size:24px;font-weight:600;color:${legColor};line-height:1">${legTotal.toFixed(0)}</div>
+      <div style="font-size:13px;color:#94A3B8">${legLabel}</div>
+    </div>
+    <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${legCopy}</div>
+  `, 'rdn-card-leg-load', legCardBorder);
   const injuryCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Load Ratio</div>
     <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
@@ -449,10 +469,11 @@ function getReadinessHTML(s: SimulatorState): string {
             </svg>
             <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1;color:${ringColor}">${score}</div>
-              <div style="font-size:12px;font-weight:600;color:${TEXT_M};margin-top:4px">${readiness.label}</div>
+              <div style="font-size:12px;font-weight:600;color:${TEXT_M};margin-top:4px">${ringLabel}</div>
             </div>
           </div>
           <div style="font-size:13px;color:${TEXT_S};margin-top:16px;text-align:center;padding:0 32px;line-height:1.45">${coachMessage}</div>
+          ${sessionNote ? `<div style="font-size:13px;color:${TEXT_S};margin-top:10px;text-align:center;padding:0 32px;line-height:1.45;border-top:1px solid var(--c-border);padding-top:10px">${sessionNote}</div>` : ''}
           ${readiness.hardFloor === 'acwr' ? `<div style="margin-top:12px;padding:8px 16px;border-radius:12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
             <div style="font-size:12px;color:var(--c-warn);font-weight:600;line-height:1.45">Load ratio (${acwrRatioStr}) is the primary constraint. 7-day load ${acwr.status === 'high' ? 'significantly exceeds' : 'exceeds'} 28-day average.</div>
           </div>` : ''}
@@ -479,6 +500,7 @@ function getReadinessHTML(s: SimulatorState): string {
               <div style="font-size:12px;color:${TEXT_S};margin-top:4px">28-day avg: ${chronicTSS} TSS</div>
             `, 'rdn-card-rolling-load');
           })() : ''}
+          ${legLoadCard}
         </div>
 
       </div>
@@ -517,7 +539,7 @@ function wireReadinessHandlers(): void {
   // Card taps → detail pages
   document.getElementById('rdn-card-recovery')?.addEventListener('click', (e) => {
     if ((e.target as HTMLElement).id === 'rdn-sleep-sync-btn') return;
-    import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView());
+    import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView(undefined, () => renderReadinessView()));
   });
 
   document.getElementById('rdn-card-freshness')?.addEventListener('click', () => {
@@ -530,11 +552,15 @@ function wireReadinessHandlers(): void {
 
   document.getElementById('rdn-card-strain')?.addEventListener('click', () => {
     const label = document.getElementById('rdn-view')?.dataset.readinessLabel ?? null;
-    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any));
+    import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any, () => renderReadinessView()));
   });
 
   document.getElementById('rdn-card-rolling-load')?.addEventListener('click', () => {
     import('./rolling-load-view').then(({ renderRollingLoadView }) => renderRollingLoadView());
+  });
+
+  document.getElementById('rdn-card-leg-load')?.addEventListener('click', () => {
+    import('./leg-load-view').then(({ renderLegLoadView }) => renderLegLoadView(() => renderReadinessView()));
   });
 
   document.getElementById('rdn-card-sleep-history')?.addEventListener('click', () => {

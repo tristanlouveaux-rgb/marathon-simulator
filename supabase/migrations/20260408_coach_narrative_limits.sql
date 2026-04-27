@@ -17,9 +17,13 @@ CREATE TABLE IF NOT EXISTS coach_narrative_usage (
 ALTER TABLE coach_narrative_usage ENABLE ROW LEVEL SECURITY;
 
 -- Users can read their own usage (so the client can show "2 of 3 used")
-CREATE POLICY "users can read own narrative usage"
-  ON coach_narrative_usage FOR SELECT
-  USING (user_id = auth.uid());
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'coach_narrative_usage' AND policyname = 'users can read own narrative usage') THEN
+    CREATE POLICY "users can read own narrative usage"
+      ON coach_narrative_usage FOR SELECT
+      USING (user_id = auth.uid());
+  END IF;
+END $$;
 
 -- NO insert/update/delete policies for users.
 -- Only the edge function (service_role) can write to this table.

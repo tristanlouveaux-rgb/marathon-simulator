@@ -3,6 +3,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
+import type { HRVdotResult } from './effort-calibrated-vdot';
 
 /** Skip adherence summary for penalty calculation */
 export interface SkipSummary {
@@ -183,6 +184,19 @@ export function predictFromLT(
 }
 
 /**
+ * HR-calibrated predictor — turns an effort-calibrated VDOT (from the Swain
+ * regression across the last 8 weeks of HR-tagged runs) into a race-time
+ * prediction at the target distance via Daniels' VDOT → time inversion.
+ *
+ * The confidence tier from `HRVdotResult` is consumed by `blendPredictions`
+ * to set the weight on this signal, so we don't need to re-derive it here.
+ */
+export function predictFromHR(targetDist: number, hr: HRVdotResult | null | undefined): number | null {
+  if (!hr || hr.vdot == null || hr.confidence === 'none') return null;
+  return predictFromVO2(targetDist, hr.vdot);
+}
+
+/**
  * VO2/VDOT predictor using Daniels equations
  * @param targetDist - Target distance in meters
  * @param targetVDOT - Target VDOT
@@ -210,6 +224,44 @@ export function predictFromVO2(targetDist: number, targetVDOT: number | null): n
   }
 
   return (lo + hi) / 2;
+}
+
+/**
+ * Tanda (2011) marathon predictor from training volume and mean pace.
+ *
+ *   T_marathon (min) = 11.03 + 98.46 × exp(−0.0053 × K) + 0.387 × P
+ *
+ * K = mean weekly running km (8-week window preferred, 4-week floor).
+ * P = mean training pace in seconds per km across all runs in that window.
+ *
+ * Validated on 46 recreational-to-sub-elite marathoners, r = 0.91, SEE ~3 min.
+ * Ref: Tanda G (2011) "Prediction of marathon performance time on the basis
+ * of training indices." J Human Sport & Exercise 6(3).
+ *
+ * Marathon only — not applicable to 5K/10K/HM.
+ * Returns null when volume is below 4 km/wk (out-of-sample; formula breaks down
+ * at truly zero running) or above 120 km/wk (saturation region, untested).
+ */
+export function predictFromVolume(
+  targetDist: number,
+  weeklyRunKm: number | undefined,
+  avgPaceSecPerKm: number | undefined,
+): number | null {
+  if (targetDist !== 42195) return null;
+  if (weeklyRunKm == null || avgPaceSecPerKm == null) return null;
+  if (weeklyRunKm < 4 || weeklyRunKm > 120) return null;
+  if (avgPaceSecPerKm < 180 || avgPaceSecPerKm > 480) return null;
+
+  // Clamp K to Tanda's training sample range (roughly 30–100 km/wk). Below 30
+  // the formula extrapolates — still physiologically sensible (more volume =
+  // faster) but less calibrated. We allow down to 4 km/wk but flag the extrapolation
+  // via a small conservatism: soft-clamp K at 10 on the low end so the exponential
+  // term doesn't dominate unrealistically.
+  const K = Math.max(weeklyRunKm, 10);
+  const P = avgPaceSecPerKm;
+
+  const T_min = 11.03 + 98.46 * Math.exp(-0.0053 * K) + 0.387 * P;
+  return T_min * 60; // convert to seconds
 }
 
 export interface ForecastResult {
@@ -339,31 +391,42 @@ export function blendPredictions(
   runnerType: string,
   recentRun: RecentRun | null,
   athleteTier?: string,
-  weeklyRunKm?: number
+  weeklyRunKm?: number,
+  avgPaceSecPerKm?: number,
+  volumeMeta?: { weeksCovered: number; paceConfidence: 'high' | 'medium' | 'low' | 'none'; isStale: boolean },
+  hrVdot?: HRVdotResult | null,
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
 
-  let baseWeights: Record<number, { recent?: number; pb: number; lt: number; vo2: number }>;
+  // HR-calibrated VDOT (Swain regression across 8w of HR-tagged runs).
+  // Treated as a separate predictor alongside LT/VO2 because it uses a
+  // different physiological signal (steady-state effort response) and is
+  // thus a valuable independent input in the weighted mean — not a
+  // replacement for either LT or VO2. See docs/SCIENCE_LOG.md.
+  const hasHR = hrVdot && hrVdot.vdot != null && hrVdot.confidence !== 'none';
+
+  // Marathon-only Tanda predictor (volume + mean pace). Weighted heavily because
+  // it is the only outcome-calibrated predictor in the blend (r=0.91 vs 46
+  // marathoners; Tanda 2011). When unavailable, its weight redistributes to LT.
+  let baseWeights: Record<number, { recent?: number; pb: number; lt: number; vo2: number; tanda?: number; hr?: number }>;
   if (hasRecent) {
-    // 4 predictors: Recent, PB, LT, VO2
     baseWeights = {
-      5000: { recent: 0.30, pb: 0.10, lt: 0.35, vo2: 0.25 },
-      10000: { recent: 0.30, pb: 0.10, lt: 0.40, vo2: 0.20 },
-      21097: { recent: 0.30, pb: 0.10, lt: 0.45, vo2: 0.15 },
-      42195: { recent: 0.25, pb: 0.05, lt: 0.55, vo2: 0.15 }
+      5000:  { recent: 0.25, pb: 0.10, lt: 0.30, vo2: 0.20, hr: 0.15 },
+      10000: { recent: 0.25, pb: 0.10, lt: 0.35, vo2: 0.15, hr: 0.15 },
+      21097: { recent: 0.25, pb: 0.10, lt: 0.40, vo2: 0.10, hr: 0.15 },
+      42195: { recent: 0.15, pb: 0.05, lt: 0.30, vo2: 0.10, tanda: 0.30, hr: 0.10 },
     };
   } else {
-    // 3 predictors: PB, LT, VO2
     baseWeights = {
-      5000: { pb: 0.20, lt: 0.40, vo2: 0.40 },
-      10000: { pb: 0.20, lt: 0.45, vo2: 0.35 },
-      21097: { pb: 0.15, lt: 0.60, vo2: 0.25 },
-      42195: { pb: 0.10, lt: 0.70, vo2: 0.20 }
+      5000:  { pb: 0.20, lt: 0.35, vo2: 0.30, hr: 0.15 },
+      10000: { pb: 0.20, lt: 0.40, vo2: 0.25, hr: 0.15 },
+      21097: { pb: 0.15, lt: 0.50, vo2: 0.20, hr: 0.15 },
+      42195: { pb: 0.10, lt: 0.40, vo2: 0.10, tanda: 0.30, hr: 0.10 },
     };
   }
 
-  const w = { ...(baseWeights[targetDist] || baseWeights[42195]) };
+  const w = { ...(baseWeights[targetDist] || baseWeights[42195]) } as { recent?: number; pb: number; lt: number; vo2: number; tanda?: number; hr?: number };
 
   // Apply gradual recency decay based on how old the recent run is
   if (hasRecent && w.recent) {
@@ -388,23 +451,66 @@ export function blendPredictions(
   const tPB = predictFromPB(targetDist, pbs, b);
   const tLT = predictFromLT(targetDist, ltPace, runnerType, athleteTier);
   const tVO2 = predictFromVO2(targetDist, vo2max);
+  const tHR = hasHR ? predictFromHR(targetDist, hrVdot) : null;
 
-  // Low-volume detraining: watch LT/VO2 stay elevated without running.
-  // Shift weight from LT+VO2 onto PB proportionally to the discount.
-  const watchTrust = lowVolumeDiscount(targetDist, weeklyRunKm);
-  if (watchTrust < 1.0 && tPB != null) {
-    const ltShed = w.lt * (1 - watchTrust);
-    const vo2Shed = w.vo2 * (1 - watchTrust);
-    w.lt = w.lt * watchTrust;
-    w.vo2 = w.vo2 * watchTrust;
-    w.pb = w.pb + ltShed + vo2Shed;
+  // Scale HR weight by confidence tier. Matches Tanda's confidence-gating
+  // pattern: low-confidence signals shouldn't carry full weight, but their
+  // information is still worth ~1/3 of a high-confidence signal.
+  if (w.hr != null) {
+    if (!hasHR || tHR == null) {
+      // Redistribute HR weight to LT (same pattern as Tanda fallback).
+      w.lt = w.lt + w.hr;
+      w.hr = 0;
+    } else {
+      const confidenceFactor = hrVdot!.confidence === 'high' ? 1.0
+        : hrVdot!.confidence === 'medium' ? 0.7
+        : /* low */ 0.4;
+      const shed = w.hr * (1 - confidenceFactor);
+      w.hr = w.hr * confidenceFactor;
+      // Shed weight goes proportionally to LT (the next-best fitness-ceiling predictor).
+      w.lt = w.lt + shed;
+    }
+  }
+  // Gate Tanda on sample-size confidence: needs ≥4 weeks of history AND at
+  // least 'medium' pace confidence (≥4 training runs across ≥3 weeks). Below
+  // that threshold, P and K are too noisy to trust and Tanda can over- or
+  // under-predict by minutes. When gated out, weight redistributes to LT.
+  const tandaTrusted = !volumeMeta
+    || (volumeMeta.weeksCovered >= 4
+        && (volumeMeta.paceConfidence === 'high' || volumeMeta.paceConfidence === 'medium')
+        && !volumeMeta.isStale);
+  const tTanda = tandaTrusted
+    ? predictFromVolume(targetDist, weeklyRunKm, avgPaceSecPerKm)
+    : null;
+
+  // Tanda handles volume-sensitivity at marathon directly; applying the low-
+  // volume LT/VO2 weight discount too would double-penalise. Keep the discount
+  // for shorter distances (no Tanda coverage) only.
+  if (targetDist !== 42195) {
+    const watchTrust = lowVolumeDiscount(targetDist, weeklyRunKm);
+    if (watchTrust < 1.0 && tPB != null) {
+      const ltShed = w.lt * (1 - watchTrust);
+      const vo2Shed = w.vo2 * (1 - watchTrust);
+      w.lt = w.lt * watchTrust;
+      w.vo2 = w.vo2 * watchTrust;
+      w.pb = w.pb + ltShed + vo2Shed;
+    }
   }
 
-  let wRecent = tRecent && hasRecent ? (w.recent || 0) : 0;
-  let wPB = tPB ? w.pb : 0;
-  let wLT = tLT ? w.lt : 0;
-  let wVO2 = tVO2 ? w.vo2 : 0;
-  const totW = wRecent + wPB + wLT + wVO2;
+  // If Tanda unavailable (missing inputs, out-of-range, or non-marathon),
+  // redistribute its weight onto LT — the next-best fitness-ceiling predictor.
+  if (w.tanda != null && tTanda == null) {
+    w.lt = w.lt + w.tanda;
+    w.tanda = 0;
+  }
+
+  const wRecent = tRecent && hasRecent ? (w.recent || 0) : 0;
+  const wPB = tPB ? w.pb : 0;
+  const wLT = tLT ? w.lt : 0;
+  const wVO2 = tVO2 ? w.vo2 : 0;
+  const wTanda = tTanda ? (w.tanda || 0) : 0;
+  const wHR = tHR ? (w.hr || 0) : 0;
+  const totW = wRecent + wPB + wLT + wVO2 + wTanda + wHR;
 
   if (totW === 0) return null;
 
@@ -413,6 +519,8 @@ export function blendPredictions(
   if (tPB) sum += wPB * tPB;
   if (tLT) sum += wLT * tLT;
   if (tVO2) sum += wVO2 * tVO2;
+  if (tTanda) sum += wTanda * tTanda;
+  if (tHR) sum += wHR * tHR;
 
   return sum / totW;
 }

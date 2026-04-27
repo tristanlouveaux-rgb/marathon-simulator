@@ -423,6 +423,67 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   const s = getMutableState();
   if (!s.wks || s.wks.length === 0) return { changed: false, pending: [] };
 
+  // Dedup pass: remove Garmin-sourced adhoc entries when a Strava-sourced entry
+  // already exists for the same activity (same start time ±10 min). This cleans up
+  // the case where the Garmin webhook stored an activity first, syncActivities()
+  // matched it, and then syncStravaActivities() created a second richer entry.
+  let dedupChanged = false;
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const stravaEntries = Object.values(week.garminActuals)
+      .filter(a => a.garminId.startsWith('strava-') && a.startTime);
+    if (stravaEntries.length === 0) continue;
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      if (actual.garminId.startsWith('strava-')) continue;
+      if (!actual.startTime) continue;
+      const startMs = new Date(actual.startTime).getTime();
+      const hasStravaDup = stravaEntries.some(sa => {
+        const timeDiff = Math.abs(startMs - new Date(sa.startTime!).getTime());
+        if (timeDiff > 4 * 60 * 60 * 1000) return false;
+        if (actual.durationSec > 0 && sa.durationSec > 0) {
+          const durRatio = Math.abs(actual.durationSec - sa.durationSec) / Math.max(actual.durationSec, sa.durationSec);
+          return durRatio < 0.15;
+        }
+        return timeDiff < 10 * 60 * 1000;
+      });
+      if (!hasStravaDup) continue;
+      const oldGarminId = actual.garminId;
+      delete week.garminActuals[wid];
+      if (week.garminMatched?.[oldGarminId] === wid) delete week.garminMatched[oldGarminId];
+      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
+      dedupChanged = true;
+      console.log(`[dedup] Removed Garmin adhoc ${wid} (${oldGarminId}) — Strava entry exists`);
+    }
+  }
+
+  // Strava-vs-Strava dedup: if two garminActuals entries share the same strava garminId
+  // (e.g., a plan-slot entry and an adhoc both upgraded to the same 'strava-XXX'),
+  // keep the plan-slot entry (non-garmin- key prefix) and remove the adhoc (garmin- prefix).
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const seenStravaIds = new Map<string, string>(); // stravaId → workoutId
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      if (!actual.garminId.startsWith('strava-')) continue;
+      const existing = seenStravaIds.get(actual.garminId);
+      if (!existing) { seenStravaIds.set(actual.garminId, wid); continue; }
+      // Prefer plan-slot (non-garmin- key) over adhoc (garmin- key)
+      const toDelete = wid.startsWith('garmin-') ? wid : existing;
+      const toKeep = wid.startsWith('garmin-') ? existing : wid;
+      delete week.garminActuals[toDelete];
+      if (week.garminMatched) {
+        for (const [gid, slot] of Object.entries(week.garminMatched)) {
+          if (slot === toDelete) { week.garminMatched[gid] = toKeep; }
+        }
+      }
+      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== toDelete);
+      seenStravaIds.set(actual.garminId, toKeep);
+      dedupChanged = true;
+      console.log(`[dedup] Removed duplicate Strava entry ${toDelete} — keeping ${toKeep} for ${actual.garminId}`);
+    }
+  }
+
+  if (dedupChanged) saveState();
+
   // Build a global set of garmin IDs already processed in ANY week.
   // This prevents activities from a previous week reappearing after the week advances,
   // because only the current week's garminMatched was checked before.
@@ -530,6 +591,120 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       wk.garminMatched[item.garminId] = id;
       enrichChanged = true;
       console.log(`[ActivityMatcher] Resolved stale pending ${item.activityType} (${item.garminId}) → adhoc in past week ${weekIdx}`);
+    }
+  }
+
+  // Strava upgrade: replace existing Garmin-sourced actuals with the richer Strava version.
+  // Fires when a Strava row arrives for an activity that was previously matched via Garmin webhook
+  // (same start time ±10 min). The Strava row carries iTRIMP, HR zones, polyline, etc.
+  for (const row of rows) {
+    if (!row.garmin_id.startsWith('strava-')) continue;
+    if (globalProcessed.has(row.garmin_id)) continue; // already matched as Strava
+    const rowStartMs = new Date(row.start_time).getTime();
+    for (const week of s.wks) {
+      if (!week.garminActuals || !week.garminMatched) continue;
+      for (const [workoutId, actual] of Object.entries(week.garminActuals)) {
+        if (actual.garminId.startsWith('strava-')) continue; // already Strava
+        if (!actual.startTime) continue;
+        const timeDiff = Math.abs(rowStartMs - new Date(actual.startTime).getTime());
+        if (timeDiff > 4 * 60 * 60 * 1000) continue; // > 4h apart — different activity
+        // Within 4h: also require duration within 15% to avoid false matches
+        if (actual.durationSec > 0 && row.duration_sec > 0) {
+          const durRatio = Math.abs(actual.durationSec - row.duration_sec) / Math.max(actual.durationSec, row.duration_sec);
+          if (durRatio > 0.15) continue;
+        }
+        // Same activity — replace with Strava data, keeping plan-slot metadata
+        const oldId = actual.garminId;
+        const stravaDisplayName = row.activity_type ? formatActivityType(row.activity_type) : (actual.displayName ?? undefined);
+        week.garminActuals[workoutId] = {
+          ...actual,
+          garminId: row.garmin_id,
+          startTime: row.start_time,
+          distanceKm: row.distance_m != null ? row.distance_m / 1000 : actual.distanceKm,
+          durationSec: row.duration_sec || actual.durationSec,
+          avgPaceSecKm: row.avg_pace_sec_km ?? actual.avgPaceSecKm,
+          avgHR: row.avg_hr ?? actual.avgHR,
+          maxHR: row.max_hr ?? actual.maxHR,
+          calories: row.calories ?? actual.calories,
+          iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? actual.iTrimp,
+          hrZones: row.hrZones ?? actual.hrZones,
+          polyline: row.polyline ?? actual.polyline,
+          kmSplits: row.kmSplits ?? actual.kmSplits,
+          elevationGainM: row.elevationGainM ?? actual.elevationGainM,
+          hrDrift: row.hrDrift ?? actual.hrDrift,
+          ambientTempC: row.ambientTempC ?? actual.ambientTempC,
+          // Update display fields from Strava so the activity name reflects the Strava sport type
+          activityType: row.activity_type ?? actual.activityType,
+          displayName: stravaDisplayName,
+        };
+        // Also update the corresponding adhocWorkout display data (for consistent fallback display)
+        if (week.adhocWorkouts && row.activity_type) {
+          const adhoc = week.adhocWorkouts.find((w: any) => w.id === workoutId);
+          if (adhoc) {
+            (adhoc as any).n = stravaDisplayName;
+            (adhoc as any).activityType = row.activity_type;
+            if (row.distance_m != null) (adhoc as any).garminDistKm = row.distance_m / 1000;
+          }
+        }
+        // Register Strava garmin_id so it isn't reprocessed as a new activity.
+        // Also add to globalProcessed so the garminPending section and main matching
+        // loop below don't see this row as unprocessed and create a duplicate entry.
+        week.garminMatched[row.garmin_id] = workoutId;
+        globalProcessed.add(row.garmin_id);
+        enrichChanged = true;
+        console.log(`[StravaUpgrade] ${oldId} → ${row.garmin_id} for slot ${workoutId}`);
+        break;
+      }
+    }
+    // Also upgrade garminPending items (activity not yet assigned to a slot).
+    // Guard: skip if the garminActuals upgrade already assigned this strava ID to a real
+    // slot — the pending item's garminId update is cosmetic and must not overwrite the
+    // slot mapping with '__pending__', which would break the re-enrich loop on future syncs.
+    if (globalProcessed.has(row.garmin_id)) {
+      // garminActuals upgrade already handled this row — update pending item's garminId
+      // for display consistency, but do NOT touch garminMatched.
+      for (const week of s.wks) {
+        if (!week.garminPending) continue;
+        for (const item of week.garminPending) {
+          if (item.garminId.startsWith('strava-')) continue;
+          if (!item.startTime) continue;
+          if (Math.abs(rowStartMs - new Date(item.startTime).getTime()) > 10 * 60 * 1000) continue;
+          item.garminId = row.garmin_id;
+          item.startTime = row.start_time;
+          if (row.distance_m != null) item.distanceM = row.distance_m;
+          if (row.duration_sec) item.durationSec = row.duration_sec;
+          item.iTrimp = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+          item.hrZones = row.hrZones ?? item.hrZones;
+          item.polyline = row.polyline ?? item.polyline;
+          item.kmSplits = row.kmSplits ?? item.kmSplits;
+          break;
+        }
+      }
+      continue; // skip the full garminPending section below
+    }
+    for (const week of s.wks) {
+      if (!week.garminPending) continue;
+      for (const item of week.garminPending) {
+        if (item.garminId.startsWith('strava-')) continue;
+        if (!item.startTime) continue;
+        if (Math.abs(rowStartMs - new Date(item.startTime).getTime()) > 10 * 60 * 1000) continue;
+        item.garminId = row.garmin_id;
+        item.startTime = row.start_time;
+        if (row.distance_m != null) item.distanceM = row.distance_m;
+        if (row.duration_sec) item.durationSec = row.duration_sec;
+        item.avgPaceSecKm = row.avg_pace_sec_km ?? item.avgPaceSecKm;
+        item.avgHR = row.avg_hr ?? item.avgHR;
+        item.maxHR = row.max_hr ?? item.maxHR;
+        item.calories = row.calories ?? item.calories;
+        item.iTrimp = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+        item.hrZones = row.hrZones ?? item.hrZones;
+        item.polyline = row.polyline ?? item.polyline;
+        item.kmSplits = row.kmSplits ?? item.kmSplits;
+        if (week.garminMatched) week.garminMatched[row.garmin_id] = '__pending__';
+        enrichChanged = true;
+        console.log(`[StravaUpgrade] pending ${item.garminId} upgraded with Strava data`);
+        break;
+      }
     }
   }
 

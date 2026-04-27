@@ -2,7 +2,7 @@
  * Account page — user email, wearable connection status, sync controls, sign out.
  */
 
-import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard } from '@/data/supabaseClient';
+import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard, triggerGarminReconcile } from '@/data/supabaseClient';
 import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
@@ -15,6 +15,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { getState, getMutableState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { initializeSimulator } from '@/state/initialization';
+import { isWakeLockSupported } from '@/utils/wake-lock';
 
 let garminConnected = false;
 let stravaConnectedStatus = false;
@@ -45,8 +46,10 @@ export async function renderAccountView(): Promise<void> {
 
   const s = getState();
 
-  // Only check Garmin status when Garmin is the physiology source (or no device chosen yet)
-  if (!isSimulatorMode() && (hasPhysiologySource(s, 'garmin') || !s.wearable)) {
+  // Check Garmin status unless Apple is the explicit physiology source — the
+  // Strava-standalone card also surfaces a Connect Garmin row, which needs the
+  // real connection state to decide between Connect vs Sync/Remove.
+  if (!isSimulatorMode() && !hasPhysiologySource(s, 'apple') && s.wearable !== 'apple') {
     await checkGarminStatus();
   }
   checkingGarmin = false;
@@ -200,8 +203,9 @@ function getAccountHTML(): string {
 
         ${sectionLabel('Connected Apps', 4)}
         ${groupCard(
-          (useApple ? renderAppleRow() : useStravaStandalone ? renderStravaStandaloneRow() : renderGarminRow()) +
-          (useGarmin ? rowDivider(60) + renderStravaEnrichRow() : '')
+          useApple ? renderAppleRow()
+            : useStravaStandalone ? renderStravaStandaloneRow() + rowDivider(60) + renderGarminRow()
+            : renderGarminRow() + rowDivider(60) + renderStravaEnrichRow()
         )}
 
         ${sectionLabel('Profile')}
@@ -211,6 +215,8 @@ function getAccountHTML(): string {
         ${renderPreferencesGroup()}
 
         ${(s.stravaConnected || s.stravaHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
+
+        ${renderRecurringActivitiesRow(s)}
 
         ${sectionLabel('Plan')}
         ${groupCard(`
@@ -232,8 +238,18 @@ function getAccountHTML(): string {
           ${rowDivider()}
           ${renderRecoverPlanRow()}
           ${rowDivider()}
+          ${!getState().trackOnly ? `
+            <button id="btn-switch-track-only" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+              <div>
+                <div style="font-size:15px;color:var(--c-black);text-align:left">Switch to tracking only</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Keep logging activities without a plan. History and Strava connection are preserved.</div>
+              </div>
+              ${chevron()}
+            </button>
+            ${rowDivider()}
+          ` : ''}
           <button id="btn-reset-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
-            <span style="font-size:15px;color:#dc2626">Reset Plan</span>
+            <span style="font-size:15px;color:#dc2626">${getState().trackOnly ? 'Reset tracking history' : 'Reset Plan'}</span>
             ${chevron()}
           </button>
         `)}
@@ -404,8 +420,8 @@ function renderProfileGroup(): string {
     <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:15px;color:var(--c-black)">Runner type</span>
       <div style="display:flex;align-items:center;gap:10px">
-        <span style="font-size:15px;color:var(--c-muted)">${s.typ || '—'}</span>
-        <button id="btn-change-runner-type" style="font-size:13px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">Change</button>
+        <span style="font-size:15px;color:var(--c-muted)">${s.trackOnly ? '—' : (s.typ || '—')}</span>
+        ${s.trackOnly ? '' : `<button id="btn-change-runner-type" style="font-size:13px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">Change</button>`}
       </div>
     </div>
     ${pbSection}
@@ -534,6 +550,68 @@ function renderPreferencesGroup(): string {
       </div>
     </div>
     ${rowDivider()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Guided runs</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Voice and haptic coaching during tracked runs</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0">
+        <button id="btn-guided-off"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!s.guidedRunsEnabled ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">Off</button>
+        <button id="btn-guided-on"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.guidedRunsEnabled ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">On</button>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Per-km splits</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Spoken split times on paced work. Turn off if Strava or Garmin already announces.</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0">
+        <button id="btn-splits-off"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.guidedSplitAnnouncements === false ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">Off</button>
+        <button id="btn-splits-on"
+          style="padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${s.guidedSplitAnnouncements !== false ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}">On</button>
+      </div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Voice speed</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Speech rate for coaching cues. Slower is easier to follow; faster keeps the run moving.</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <input id="input-guided-rate" type="range" min="0.8" max="1.4" step="0.05"
+          value="${(s.guidedVoiceRate ?? 1.0).toFixed(2)}"
+          style="width:110px;accent-color:var(--c-black)"/>
+        <span id="label-guided-rate" style="font-size:13px;color:var(--c-muted);min-width:38px;text-align:right;font-variant-numeric:tabular-nums">${(s.guidedVoiceRate ?? 1.0).toFixed(2)}×</span>
+      </div>
+    </div>
+    ${rowDivider()}
+    ${(() => {
+      const supported = isWakeLockSupported();
+      const on = supported && s.guidedKeepScreenOn !== false;
+      const subLabel = supported
+        ? 'Prevents the screen locking mid-run so voice cues stay active. Uses more battery.'
+        : 'Not supported on this browser.';
+      const offStyle = `padding:6px 16px;font-size:13px;font-weight:500;cursor:${supported ? 'pointer' : 'not-allowed'};border:none;${!on && supported ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+      const onStyle = `padding:6px 16px;font-size:13px;font-weight:500;cursor:${supported ? 'pointer' : 'not-allowed'};border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+      return `
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">Keep screen on</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">${subLabel}</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0${supported ? '' : ';opacity:0.55'}">
+        <button id="btn-keepscreen-off"${supported ? '' : ' disabled'}
+          style="${offStyle}">Off</button>
+        <button id="btn-keepscreen-on"${supported ? '' : ' disabled'}
+          style="${onStyle}">On</button>
+      </div>
+    </div>
+    ${rowDivider()}`;
+    })()}
     <div id="sleep-target-display">
       <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between">
         <div>
@@ -617,6 +695,110 @@ function renderPreferencesGroup(): string {
 }
 
 // ─── Recover Plan Row (inside Advanced group) ──────────────────────────────────
+
+/**
+ * Recurring activities section. Only rendered when the user has any recurring
+ * activities on record (typically added via the onboarding Schedule step).
+ * Lets the user remove entries without going through full re-onboarding —
+ * addresses the "soccer is legacy" UX issue where users couldn't clean up
+ * old picks.
+ *
+ * Adding new activities is still onboarding-only for now. That path is
+ * tracked as a follow-up issue (ISSUE-148).
+ */
+function renderRecurringActivitiesRow(s: ReturnType<typeof getState>): string {
+  const activities = s.recurringActivities ?? [];
+  if (activities.length === 0) return '';
+  const labels = activities.map(a => a.sport).join(', ');
+  const group = groupCard(`
+    <button id="btn-recurring-activities" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;color:var(--c-black)">Recurring activities</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-transform:capitalize;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${labels}</div>
+      </div>
+      ${chevron()}
+    </button>
+  `);
+  return `${sectionLabel('Training')}${group}`;
+}
+
+function showRecurringActivitiesModal(): void {
+  const s = getState();
+  const activities = s.recurringActivities ?? [];
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  function render(): void {
+    const s2 = getState();
+    const list = s2.recurringActivities ?? [];
+    overlay.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">Recurring activities</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:16px;line-height:1.4">Sports you do regularly outside of running. Feeds into weekly load.</div>
+        ${list.length === 0 ? `
+          <div style="padding:20px 0;text-align:center;font-size:13px;color:var(--c-muted)">No recurring activities.</div>
+        ` : list.map((a, i) => `
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:${i === 0 ? 'none' : '1px solid var(--c-border)'}">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14px;color:var(--c-black);text-transform:capitalize">${a.sport}</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${a.durationMin} min · ${a.frequency}x/wk · ${a.intensity}</div>
+            </div>
+            <button data-idx="${i}" class="recurring-remove" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border);background:transparent;color:var(--c-muted);cursor:pointer;font-size:16px;line-height:1;display:flex;align-items:center;justify-content:center">×</button>
+          </div>`).join('')}
+        <button id="recurring-done" style="width:100%;margin-top:18px;padding:12px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:12px;text-align:center">To add a new activity, re-onboard from Advanced → Reset.</div>
+      </div>`;
+
+    overlay.querySelectorAll<HTMLElement>('.recurring-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx ?? '-1', 10);
+        if (idx < 0) return;
+        const ms = getMutableState();
+        const next = (ms.recurringActivities ?? []).filter((_, i) => i !== idx);
+        ms.recurringActivities = next;
+        if (ms.onboarding) ms.onboarding.recurringActivities = [...next];
+        saveState();
+        render();
+      });
+    });
+    overlay.querySelector('#recurring-done')?.addEventListener('click', () => {
+      overlay.remove();
+      // Re-render the account page so the row reflects the updated list.
+      const container = document.getElementById('app-root');
+      if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+    });
+  }
+
+  render();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); const container = document.getElementById('app-root'); if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); } } });
+  // Initial activity count — used only to prompt a soft message if the user leaves with an empty list.
+  void activities;
+  document.body.appendChild(overlay);
+}
+
+function showSwitchToTrackOnlyConfirm(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+  overlay.innerHTML = `
+    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+      <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:8px">Switch to tracking only?</div>
+      <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:20px">
+        Your plan will be replaced with a rolling tracking week. Activity history, CTL, PBs, physiology, and Strava / Garmin / Apple connections are preserved. You can create a new plan any time.
+      </div>
+      <button id="switch-track-confirm" style="width:100%;padding:12px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Switch to tracking</button>
+      <button id="switch-track-cancel" style="width:100%;padding:12px;border-radius:12px;border:1px solid var(--c-border);background:transparent;color:var(--c-muted);font-size:14px;cursor:pointer;font-family:var(--f)">Cancel</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('#switch-track-cancel')?.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#switch-track-confirm')?.addEventListener('click', () => {
+    overlay.remove();
+    import('./wizard/controller').then(({ downgradeToTrackOnly }) => downgradeToTrackOnly());
+  });
+}
 
 function renderRecoverPlanRow(): string {
   const s = getState();
@@ -775,8 +957,93 @@ function wireAccountHandlers(): void {
     setUnitButtonActive('mi');
   });
 
+  const setGuidedButtonActive = (on: boolean): void => {
+    const onBtn = document.getElementById('btn-guided-on') as HTMLButtonElement | null;
+    const offBtn = document.getElementById('btn-guided-off') as HTMLButtonElement | null;
+    if (onBtn) onBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+    if (offBtn) offBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  };
+  document.getElementById('btn-guided-on')?.addEventListener('click', () => {
+    getMutableState().guidedRunsEnabled = true;
+    saveState();
+    setGuidedButtonActive(true);
+  });
+  document.getElementById('btn-guided-off')?.addEventListener('click', () => {
+    getMutableState().guidedRunsEnabled = false;
+    saveState();
+    setGuidedButtonActive(false);
+    import('./gps-events').then(({ disableActiveGuide }) => disableActiveGuide());
+  });
+
+  const setSplitsButtonActive = (on: boolean): void => {
+    const onBtn = document.getElementById('btn-splits-on') as HTMLButtonElement | null;
+    const offBtn = document.getElementById('btn-splits-off') as HTMLButtonElement | null;
+    if (onBtn) onBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+    if (offBtn) offBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  };
+  document.getElementById('btn-splits-on')?.addEventListener('click', () => {
+    getMutableState().guidedSplitAnnouncements = true;
+    saveState();
+    setSplitsButtonActive(true);
+    import('./gps-events').then(({ setActiveGuideSplitAnnouncements }) => setActiveGuideSplitAnnouncements(true));
+  });
+  document.getElementById('btn-splits-off')?.addEventListener('click', () => {
+    getMutableState().guidedSplitAnnouncements = false;
+    saveState();
+    setSplitsButtonActive(false);
+    import('./gps-events').then(({ setActiveGuideSplitAnnouncements }) => setActiveGuideSplitAnnouncements(false));
+  });
+
+  const rateInput = document.getElementById('input-guided-rate') as HTMLInputElement | null;
+  const rateLabel = document.getElementById('label-guided-rate');
+  rateInput?.addEventListener('input', () => {
+    const v = parseFloat(rateInput.value);
+    if (!isFinite(v)) return;
+    const clamped = Math.max(0.8, Math.min(1.4, v));
+    getMutableState().guidedVoiceRate = clamped;
+    if (rateLabel) rateLabel.textContent = `${clamped.toFixed(2)}×`;
+    import('./gps-events').then(({ setActiveGuideVoiceRate }) => setActiveGuideVoiceRate(clamped));
+  });
+  rateInput?.addEventListener('change', () => {
+    saveState();
+  });
+
+  const setKeepScreenButtonActive = (on: boolean): void => {
+    const onBtn = document.getElementById('btn-keepscreen-on') as HTMLButtonElement | null;
+    const offBtn = document.getElementById('btn-keepscreen-off') as HTMLButtonElement | null;
+    if (onBtn) onBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+    if (offBtn) offBtn.style.cssText = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${!on ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  };
+  document.getElementById('btn-keepscreen-on')?.addEventListener('click', () => {
+    getMutableState().guidedKeepScreenOn = true;
+    saveState();
+    setKeepScreenButtonActive(true);
+    // If a guided run is active, acquire the lock immediately.
+    import('@/utils/wake-lock').then(({ acquireWakeLock }) => {
+      import('./gps-events').then(({ getActiveGuideController }) => {
+        if (getActiveGuideController()) void acquireWakeLock();
+      });
+    });
+  });
+  document.getElementById('btn-keepscreen-off')?.addEventListener('click', () => {
+    getMutableState().guidedKeepScreenOn = false;
+    saveState();
+    setKeepScreenButtonActive(false);
+    import('@/utils/wake-lock').then(({ releaseWakeLock }) => {
+      void releaseWakeLock();
+    });
+  });
+
   document.getElementById('btn-edit-plan')?.addEventListener('click', () => {
     import('./events').then(({ editSettings }) => editSettings());
+  });
+
+  document.getElementById('btn-recurring-activities')?.addEventListener('click', () => {
+    showRecurringActivitiesModal();
+  });
+
+  document.getElementById('btn-switch-track-only')?.addEventListener('click', () => {
+    showSwitchToTrackOnlyConfirm();
   });
 
   document.getElementById('btn-reset-plan')?.addEventListener('click', () => {
@@ -941,6 +1208,13 @@ function wireAccountHandlers(): void {
 
   // Sync Now — Garmin biometrics only (sleep, HRV, VO2max).
   // When Strava is connected it handles activities separately via btn-sync-strava.
+  //
+  // Flow:
+  //   1. triggerGarminReconcile(3) → asks Garmin to re-push the last 3 days
+  //      via webhook. Returns immediately; data lands minutes later.
+  //   2. syncPhysiologySnapshot(7) → reads whatever is already in Supabase.
+  //   3. If new data arrives after step 2, the sleep poller (started on
+  //      launch) picks it up on its next 3-min tick.
   document.getElementById('btn-sync-now')?.addEventListener('click', async () => {
     if (syncing) return;
     syncing = true;
@@ -949,13 +1223,18 @@ function wireAccountHandlers(): void {
 
     try {
       const sNow = getState();
+      // Queue a Garmin reconcile first so anything missing from the last 3 days
+      // gets re-pushed via webhook. Non-blocking: we don't wait for webhook
+      // delivery, just for Garmin to accept the queue request.
+      await triggerGarminReconcile(3);
+
       if (sNow.stravaConnected) {
         // Strava is the activity source — this button only syncs Garmin biometrics
         await syncPhysiologySnapshot(7);
       } else {
         await Promise.all([syncActivities(), syncPhysiologySnapshot(7)]);
       }
-      syncResultMsg = 'Sync complete — check your plan for updated activities.';
+      syncResultMsg = 'Resync queued with Garmin. New data lands within a few minutes.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;
@@ -1181,11 +1460,11 @@ function wireAccountHandlers(): void {
     }
   });
 
-  // Edit Profile — jump into wizard at the PBs step
+  // Edit Profile — jump into wizard at the Review step (PBs + volume editor)
   document.getElementById('btn-edit-profile')?.addEventListener('click', () => {
     import('@/ui/wizard/controller').then(({ initWizard, goToStep }) => {
       initWizard();
-      goToStep('pbs');
+      goToStep('review');
     });
   });
 

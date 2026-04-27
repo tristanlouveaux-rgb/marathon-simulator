@@ -56,6 +56,17 @@ export interface GpsRecording {
   totalDistance: number;
   totalElapsed: number;
   averagePace: number;
+  /** Optional guided-run cue log (last N events, debugging only). */
+  cueLog?: GuidedCueLogEntry[];
+}
+
+/** One line from the guided-run cue ring buffer. */
+export interface GuidedCueLogEntry {
+  ts: number;              // epoch ms
+  elapsedSec: number;      // run elapsed time
+  type: string;            // CueEvent.type
+  stepIdx: number;
+  stepLabel: string;
 }
 
 /** GPS tracker state machine states */

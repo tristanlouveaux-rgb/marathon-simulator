@@ -8,6 +8,7 @@ export type SportKey =
   | 'cycling'
   | 'strength'
   | 'extra_run'
+  | 'running'
   | 'hiking'
   | 'rowing'
   | 'yoga'
@@ -24,6 +25,13 @@ export type SportKey =
   | 'jump_rope'
   | 'walking'
   | 'padel'
+  | 'snowboarding'
+  | 'kitesurfing'
+  | 'surfing'
+  | 'sailing'
+  | 'paddleboard'
+  | 'kayaking'
+  | 'wakeboarding'
   | 'generic_sport'
   | 'hybrid_test_sport';
 

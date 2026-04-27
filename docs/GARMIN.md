@@ -1,5 +1,7 @@
 # Garmin Integration — How It Works & Known Issues
 
+> **Webhook details** live in [`docs/WEBHOOKS.md`](./WEBHOOKS.md) — payload-by-payload reference, handler table, production verification requirements, debugging checklist. This doc covers the rest of the Garmin integration (OAuth, backfill, incident history).
+
 ## Architecture Overview
 
 ```
@@ -75,6 +77,54 @@ The `garmin-backfill` function uses pull as a best-effort fallback for historic 
 ---
 
 ## Known Issues & History
+
+### ✅ FIXED 2026-04-24 — `activity_details` upsert failing (42P10)
+
+**Root cause:** `activity_details.garmin_id` column was added via `ALTER TABLE` with no unique constraint. Every webhook push with `activityDetails` failed with `code: "42P10"` — "no unique or exclusion constraint matching the ON CONFLICT specification". Migration `20260310000001_activity_details_constraint.sql` existed but was never applied to prod.
+
+**Fix:** Ran `ALTER TABLE activity_details ADD CONSTRAINT activity_details_garmin_id_key UNIQUE (garmin_id);` in Supabase SQL Editor.
+
+**Lesson:** Apply pending migrations before assuming the webhook handler is broken. Check `information_schema.table_constraints` if `42P10` ever reappears.
+
+---
+
+### ⚠️ OPEN 2026-04-24 — LT pace / HR not arriving on dev credentials (cause unconfirmed)
+
+**Observation:** On 2026-04-24 a `userMetrics` push landed with `vo2Max: 55, fitnessAge: 24, enhanced: true`. VO2 Max is now reaching the app on the **development** consumer key (`1057f911-...`), which overturns the prior assumption that dev tier suppressed all VO2/LT fields. `lactateThresholdSpeed` and `lactateThresholdHeartRate` were **not** in that payload even though the user's watch has current LT values in Garmin Connect.
+
+**Root cause is unconfirmed.** Garmin's public docs do not specify field-by-field gating between dev and production credentials. Two plausible explanations remain in play:
+
+1. **Dev tier still gates LT fields** — our previous theory, still possible but unproven in public docs.
+2. **LT simply hadn't refreshed.** Garmin only recomputes LT after specific efforts (guided LT tests, structured threshold sessions). `userMetrics` pushes are one-off per metric change, so the absence of LT in one payload doesn't mean LT will never arrive.
+
+**How to resolve:**
+- Monitor for `lactateThresholdSpeed` / `lactateThresholdHeartRate` in future `userMetrics` pushes over the next 1–2 weeks. If nothing arrives after a threshold-style run, gating is the likely cause.
+- Email `connect-support@garmin.com` asking for a definitive list of fields released to dev vs production. Template in `docs/GARMIN.md → Support contact draft` below.
+- Do NOT block the production-key application on this question; apply anyway once Partner Verification passes.
+
+**Do not claim in UI copy that LT is "awaiting production access"** — we do not know that to be true. If LT is missing, show the field as "unavailable" without attributing cause.
+
+---
+
+### Support contact draft (Garmin Developer)
+
+Email template to send to `connect-support@garmin.com` when we need a field-level answer on gating:
+
+> Subject: Health API userMetrics — which fields are released to development credentials?
+>
+> Hello,
+>
+> Consumer Key: `1057f911-e0b2-45fa-9001-82ae1eac2c41` (development)
+>
+> We are receiving `userMetrics` webhook pushes that include `vo2Max` and `fitnessAge` but never `lactateThresholdSpeed`, `lactateThresholdHeartRate`, or `enhancedVo2MaxRunning`, even though the user's Garmin Connect account shows current LT values. Could you confirm:
+>
+> 1. Which `userMetrics` fields are released to development consumer keys?
+> 2. Which fields require production credentials?
+> 3. Is there a trigger or cadence for LT that differs from VO2 Max (e.g. threshold-detected efforts only)?
+>
+> Thank you.
+
+---
 
 ### ✅ FIXED 2026-03-12 — Webhook returning 401 (all pushes dropped)
 

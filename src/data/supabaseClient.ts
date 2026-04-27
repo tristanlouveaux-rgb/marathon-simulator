@@ -26,10 +26,19 @@ export async function getValidSession() {
 
   // Token missing or about to expire — refresh
   const { data: refreshed, error } = await supabase.auth.refreshSession();
-  if (error || !refreshed.session) {
+  if (!error && refreshed.session) {
+    return refreshed.session;
+  }
+
+  // Refresh failed — last resort, sign in anonymously so the user isn't stranded.
+  console.warn('[auth] Session refresh failed, attempting anonymous sign-in', error);
+  await supabase.auth.signOut().catch(() => {});
+  const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
+  if (anonError || !anon.session) {
+    console.error('[auth] Anonymous sign-in also failed', anonError);
     throw new Error('SESSION_EXPIRED');
   }
-  return refreshed.session;
+  return anon.session;
 }
 
 /**
@@ -112,37 +121,87 @@ export function resetGarminCache(): void {
 }
 
 /**
- * Trigger the garmin-backfill edge function to pull historic dailies + sleep.
- * Guards with a 12-hour TTL so we don't hammer Garmin's API, but retries
- * automatically once the watch has had a chance to sync (vs. the old permanent guard
- * which fired once at launch — often before the morning watch sync — then never again).
+ * Trigger the garmin-backfill edge function.
+ *
+ * Backfill now uses Garmin's webhook push model: the edge function POSTs to
+ * /backfill/{type} endpoints and Garmin delivers data asynchronously via the
+ * garmin-webhook function. That means calling this function doesn't return
+ * data synchronously — it queues requests. New data lands in DB minutes later
+ * and is read by syncPhysiologySnapshot on the next launch.
+ *
+ * Throttling rules:
+ * - Fires EXACTLY ONCE per OAuth connect (resetGarminBackfillGuard clears the
+ *   stamp so the next launch re-runs backfill). Subsequent launches no-op.
+ * - Day-to-day gap recovery is handled server-side by the garmin-reconcile
+ *   cron (runs nightly). Client-side launch calls no longer poll every 2h,
+ *   which previously caused Garmin's 100-req/min app-wide rate limit to trip
+ *   when many users opened the app simultaneously.
+ * - Bumping MIGRATION_KEY forces every user to fire backfill once on next
+ *   launch so code changes (e.g. new endpoint types) reach everyone.
  */
+/** Shared across backfill + reconcile — if set, both back off until this epoch (ms). */
+const GARMIN_COOLDOWN_KEY = 'mosaic_garmin_cooldown_until';
+/** Garmin's rolling 1-min rate-limit window + margin — back off this long on 429/throttle. */
+const GARMIN_COOLDOWN_MS = 120_000;
+
+function inGarminCooldown(): number {
+  const until = Number(localStorage.getItem(GARMIN_COOLDOWN_KEY) ?? '0');
+  return until > Date.now() ? until : 0;
+}
+
+function setGarminCooldown(): void {
+  localStorage.setItem(GARMIN_COOLDOWN_KEY, String(Date.now() + GARMIN_COOLDOWN_MS));
+}
+
 export async function triggerGarminBackfill(weeks = 8): Promise<void> {
-  const GUARD_KEY = 'mosaic_garmin_backfill_empty_until';
-  // Migrate: remove old permanent guard set by previous app version
+  const LAST_RUN_KEY = 'mosaic_garmin_backfill_last_run';
+  const MIGRATION_KEY = 'mosaic_garmin_backfill_migration';
+  const CURRENT_MIGRATION = 'v7-one-shot-backfill';
+
+  // Migrate away from older guard keys
   localStorage.removeItem('mosaic_garmin_backfill_empty');
-  const guardUntil = Number(localStorage.getItem(GUARD_KEY) ?? '0');
-  if (Date.now() < guardUntil) {
-    console.log(`[garmin-backfill] Skipped — throttled until ${new Date(guardUntil).toISOString()}`);
+  localStorage.removeItem('mosaic_garmin_backfill_empty_until');
+
+  const migrated = localStorage.getItem(MIGRATION_KEY) === CURRENT_MIGRATION;
+  const lastRun = Number(localStorage.getItem(LAST_RUN_KEY) ?? '0');
+
+  if (migrated && lastRun > 0) {
+    console.log(`[garmin-backfill] Skipped — already ran once under migration ${CURRENT_MIGRATION} at ${new Date(lastRun).toISOString()}. Nightly reconcile handles gaps.`);
     return;
   }
+
+  const cooldownUntil = inGarminCooldown();
+  if (cooldownUntil) {
+    console.log(`[garmin-backfill] Skipped — Garmin rate-limit cooldown until ${new Date(cooldownUntil).toISOString()}.`);
+    return;
+  }
+
   try {
-    const result = await callEdgeFunction<{ ok: boolean; days: number; sleepDays: number }>(
-      'garmin-backfill',
-      { weeks },
-    );
+    const result = await callEdgeFunction<{
+      ok: boolean;
+      rateLimited?: boolean;
+      refreshStatus?: string;
+      expiresAtBefore?: string | null;
+      requests?: { dailies: number; sleeps: number; hrv: number; userMetrics: number };
+      errorBodies?: { dailies?: string; sleeps?: string; hrv?: string; userMetrics?: string };
+    }>('garmin-backfill', { weeks });
+    const r = result.requests;
+    const reqStr = r
+      ? `dailies=${r.dailies} sleeps=${r.sleeps} hrv=${r.hrv} userMetrics=${r.userMetrics}`
+      : 'no request data';
     if (result.ok) {
-      console.log(`[garmin-backfill] Done — ${result.days} daily rows, ${result.sleepDays} sleep rows`);
-      if (result.days === 0 && result.sleepDays === 0) {
-        // Throttle for 12 hours — watch may not have synced yet; retry later in the day
-        localStorage.setItem(GUARD_KEY, String(Date.now() + 12 * 60 * 60 * 1000));
-        console.log('[garmin-backfill] 0 rows — will retry after 12h');
-      } else {
-        // Got data — clear throttle so next launch always checks for fresh data
-        localStorage.removeItem(GUARD_KEY);
-      }
+      console.log(`[garmin-backfill] Queued webhook backfills — ${reqStr} (refresh=${result.refreshStatus ?? '?'}). Data arrives via webhook over the next few minutes.`);
+      localStorage.setItem(LAST_RUN_KEY, String(Date.now()));
+      localStorage.setItem(MIGRATION_KEY, CURRENT_MIGRATION);
     } else {
-      console.warn('[garmin-backfill] Returned ok:false');
+      // Any request failed — do NOT lock in the migration guard. A later launch
+      // will retry (after cooldown, if rate-limited).
+      console.warn(`[garmin-backfill] Partial failure — ${reqStr}${result.rateLimited ? ' (rate-limited, backing off)' : ''}`);
+      const eb = result.errorBodies ?? {};
+      for (const [k, v] of Object.entries(eb)) {
+        if (v) console.warn(`[garmin-backfill] ${k} error body: ${v}`);
+      }
+      if (result.rateLimited) setGarminCooldown();
     }
   } catch (e) {
     console.warn('[garmin-backfill] Failed (non-fatal):', e);
@@ -151,24 +210,76 @@ export async function triggerGarminBackfill(weeks = 8): Promise<void> {
 
 /** Reset the backfill guard so it runs again on next launch */
 export function resetGarminBackfillGuard(): void {
+  localStorage.removeItem('mosaic_garmin_backfill_last_run');
+  localStorage.removeItem('mosaic_garmin_backfill_migration');
   localStorage.removeItem('mosaic_garmin_backfill_empty_until');
-  // Also clear old permanent guard key in case it was set by a previous app version
   localStorage.removeItem('mosaic_garmin_backfill_empty');
+  localStorage.removeItem(GARMIN_COOLDOWN_KEY);
+}
+
+/**
+ * Manual user-triggered reconcile — asks Garmin to re-push the last N days of
+ * data for THIS user only. Used by the "Sync" button in Account settings so
+ * users can pull missing days on demand without waiting for the nightly cron.
+ *
+ * Queues the request via the garmin-reconcile edge function in user mode (auth
+ * is the user's Supabase JWT, not the cron secret). Garmin delivers the data
+ * via webhook minutes later; subsequent syncPhysiologySnapshot calls will see
+ * the fresh rows.
+ */
+export async function triggerGarminReconcile(lookbackDays = 3): Promise<{ ok: boolean; stale: number; succeeded: number; failed: number; rateLimited?: boolean }> {
+  const cooldownUntil = inGarminCooldown();
+  if (cooldownUntil) {
+    console.log(`[garmin-reconcile] Skipped — Garmin rate-limit cooldown until ${new Date(cooldownUntil).toISOString()}.`);
+    return { ok: false, stale: 0, succeeded: 0, failed: 0, rateLimited: true };
+  }
+  try {
+    const result = await callEdgeFunction<{
+      ok: boolean;
+      succeeded?: number;
+      failed?: number;
+      stale?: number;
+      rateLimited?: number;
+      results?: Array<{ ok: boolean; reason?: string }>;
+    }>('garmin-reconcile', { lookbackDays });
+    const succeeded = result.succeeded ?? 0;
+    const failed = result.failed ?? 0;
+    const stale = result.stale ?? 0;
+    const rateLimited = (result.rateLimited ?? 0) > 0;
+    console.log(`[garmin-reconcile] user-mode queued — stale=${stale} ok=${succeeded} fail=${failed} rate=${result.rateLimited ?? 0}. Data lands via webhook.`);
+    if (rateLimited) setGarminCooldown();
+    return { ok: result.ok, stale, succeeded, failed, rateLimited };
+  } catch (e) {
+    console.warn('[garmin-reconcile] Failed (non-fatal):', e);
+    return { ok: false, stale: 0, succeeded: 0, failed: 0 };
+  }
 }
 
 /**
  * Re-fetch the last 2 days of Garmin sleep/biometric data.
  * Bypasses the backfill guard — safe to call daily to pick up today's sleep
  * score after Garmin's server-side processing completes (usually 1–4h post-wake).
+ *
+ * Respects the shared Garmin cooldown. Called on every launch when today's
+ * sleep is missing, so without this check it becomes a rate-limit amplifier
+ * during throttled windows.
  */
 export async function refreshRecentSleepScores(): Promise<void> {
+  const cooldownUntil = inGarminCooldown();
+  if (cooldownUntil) {
+    console.log(`[garmin-sleep-refresh] Skipped — Garmin rate-limit cooldown until ${new Date(cooldownUntil).toISOString()}.`);
+    return;
+  }
   try {
-    const result = await callEdgeFunction<{ ok: boolean; days: number; sleepDays: number }>(
+    const result = await callEdgeFunction<{ ok: boolean; rateLimited?: boolean; days: number; sleepDays: number }>(
       'garmin-backfill',
       { weeks: 1 },
     );
+    if (result.rateLimited) setGarminCooldown();
     if (result.ok) {
       console.log(`[garmin-sleep-refresh] Done — ${result.sleepDays} sleep rows`);
+    } else {
+      console.warn(`[garmin-sleep-refresh] Partial failure${result.rateLimited ? ' (rate-limited, backing off)' : ''}`);
     }
   } catch (e) {
     console.warn('[garmin-sleep-refresh] Failed (non-fatal):', e);

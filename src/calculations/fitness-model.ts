@@ -340,6 +340,8 @@ export function computeWeekTSS(
   // Adhoc Garmin cross-training workouts
   for (const w of wk.adhocWorkouts ?? []) {
     if (!w.id?.startsWith('garmin-')) continue;
+    // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
+    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     const rawId = w.id.slice('garmin-'.length);
     if (rawId) {
       if (seenGarminIds.has(rawId)) continue;
@@ -439,6 +441,8 @@ export function computeWeekRawTSS(
   // Skip holiday-generated sessions ('holiday-') — these are suggestions, not real activity.
   for (const w of wk.adhocWorkouts ?? []) {
     if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
+    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     // Extract garminId from the adhoc workout id (format: 'garmin-<garminId>')
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {
@@ -523,6 +527,8 @@ export function computeTodaySignalBTSS(
   // Skip holiday-generated sessions ('holiday-') — these are suggestions, not real activity.
   for (const w of wk.adhocWorkouts ?? []) {
     if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    // Skip if garminActuals already covers this entry (Strava-upgraded data wins)
+    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     if (rawId) {
       if (seenGarminIds.has(rawId)) continue;
@@ -570,6 +576,64 @@ export function computeTodaySignalBTSS(
   }
 
   return Math.round(tl);
+}
+
+/**
+ * Single source of truth for Today's Strain TSS across Home, Readiness, and Strain views.
+ *
+ * Combines:
+ *   - Logged workout TSS + passive active-minute TSS (via computeTodaySignalBTSS)
+ *   - Step-based passive excess (when step-derived TSS exceeds minute-derived TSS)
+ *
+ * The excess term covers days where Garmin active-minute epochs undercount low-intensity
+ * walking (e.g. slow commuting). Mirrors the strain-view calculation so every surface
+ * shows the same number.
+ */
+export function computeTodayStrainTSS(
+  wk: Week,
+  date: string,
+  physioEntry: PhysiologyDayEntry | null | undefined,
+  tssPerActiveMinute: number = PASSIVE_TSS_PER_ACTIVE_MIN,
+): number {
+  const loggedTSS = computeTodaySignalBTSS(wk, date, physioEntry);
+
+  // Collect logged activities for this date so step-subtraction in computePassiveTSS
+  // matches exactly what computeTodaySignalBTSS counted.
+  const loggedActivities: Array<{ durationSec: number; activityType?: string | null }> = [];
+  const seen = new Set<string>();
+  for (const a of Object.values(wk.garminActuals ?? {})) {
+    if (!a.startTime?.startsWith(date)) continue;
+    if (a.garminId) {
+      if (seen.has(a.garminId)) continue;
+      seen.add(a.garminId);
+    }
+    loggedActivities.push({ durationSec: a.durationSec, activityType: a.activityType });
+  }
+  for (const w of wk.adhocWorkouts ?? []) {
+    const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
+    if (!rawId) continue;
+    const ts = (w as any).garminTimestamp as string | undefined;
+    if (!ts?.startsWith(date)) continue;
+    if (seen.has(rawId)) continue;
+    seen.add(rawId);
+    loggedActivities.push({
+      durationSec: Math.round(((w as any).garminDurationMin ?? 0) * 60),
+      activityType: (w as any).activityType ?? null,
+    });
+  }
+
+  const passiveTSS = computePassiveTSS(
+    physioEntry?.steps,
+    physioEntry?.activeMinutes,
+    loggedActivities,
+    tssPerActiveMinute,
+  );
+  const loggedMinutes = loggedActivities.reduce((s, a) => s + a.durationSec / 60, 0);
+  const minuteComponent = physioEntry?.activeMinutes != null
+    ? Math.max(0, physioEntry.activeMinutes - loggedMinutes) * tssPerActiveMinute
+    : 0;
+  const passiveExcess = Math.max(0, passiveTSS - minuteComponent);
+  return loggedTSS + Math.round(passiveExcess);
 }
 
 /**
@@ -1327,6 +1391,77 @@ export function computeSameSignalTSB(
 
     ctl = ctl * CTL_DECAY + weekRawTSS * (1 - CTL_DECAY); // Signal B for both
     atl = atl * ATL_DECAY + atlTSS   * (1 - ATL_DECAY);   // Signal B for both
+  }
+
+  return { ctl, atl, tsb: ctl - atl };
+}
+
+/**
+ * Canonical ACWR call for the readiness surfaces. Centralised so home, readiness,
+ * daily-coach, and any future view share one set of arguments and one result.
+ */
+export function computeReadinessACWR(s: {
+  wks?: Week[];
+  w: number;
+  athleteTier?: string | null;
+  athleteTierOverride?: string | null;
+  ctlBaseline?: number | null;
+  signalBBaseline?: number | null;
+  planStartDate?: string;
+  gs?: number | null;
+}) {
+  const tier = s.athleteTierOverride ?? s.athleteTier ?? undefined;
+  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  return computeACWR(
+    s.wks ?? [],
+    s.w,
+    tier ?? undefined,
+    s.ctlBaseline ?? undefined,
+    s.planStartDate,
+    atlSeed,
+    s.signalBBaseline ?? undefined,
+  );
+}
+
+/**
+ * Same-signal TSB with intra-week decay applied from the end of the last completed
+ * week up to today, so the value reflects accumulated load this week (not the stale
+ * week-end snapshot). Used by Home + Readiness views so their scores stay in sync.
+ *
+ * Math: seeds from `computeSameSignalTSB(wks, s.w - 1)`, then for each elapsed day
+ * of the current week applies daily ATL/CTL decay with that day's Signal-B TSS.
+ */
+export function computeLiveSameSignalTSB(
+  wks: Week[],
+  currentWeekIdx: number, // s.w (1-indexed)
+  signalBBaseline: number | undefined,
+  ctlBaseline: number | undefined,
+  planStartDate?: string,
+): { ctl: number; atl: number; tsb: number } {
+  const completedWeek = Math.max(0, currentWeekIdx - 1);
+  const seed = signalBBaseline ?? ctlBaseline ?? 0;
+  const sameSignal = computeSameSignalTSB(wks ?? [], completedWeek, seed, planStartDate);
+  let atl = sameSignal?.atl ?? 0;
+  let ctl = sameSignal?.ctl ?? 0;
+
+  if (planStartDate) {
+    const ATL_DAILY_DECAY = Math.exp(-1 / 7);
+    const CTL_DAILY_DECAY = Math.exp(-1 / 42);
+    const weekStartDate = new Date(planStartDate + 'T12:00:00');
+    weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
+    const todayDate = new Date();
+    todayDate.setHours(12, 0, 0, 0);
+    const daysIntoWeek = Math.max(0, Math.round((todayDate.getTime() - weekStartDate.getTime()) / 86400000));
+    const currentWk = (wks ?? [])[completedWeek];
+    for (let d = 0; d < daysIntoWeek; d++) {
+      const dayD = new Date(weekStartDate);
+      dayD.setDate(dayD.getDate() + d);
+      const dayDate = dayD.toISOString().split('T')[0];
+      const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
+      const weekEquiv = dayTSS * 7;
+      atl = atl * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
+      ctl = ctl * CTL_DAILY_DECAY + weekEquiv * (1 - CTL_DAILY_DECAY);
+    }
   }
 
   return { ctl, atl, tsb: ctl - atl };

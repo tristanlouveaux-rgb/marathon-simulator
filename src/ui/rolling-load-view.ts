@@ -12,6 +12,11 @@ import {
   type DailyLoadEntry,
   type ZoneLoad,
 } from '@/calculations/fitness-model';
+import {
+  computeLegLoadBreakdown,
+  LEG_LOAD_MODERATE,
+  LEG_LOAD_HEAVY,
+} from '@/calculations/readiness';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
@@ -30,8 +35,10 @@ const ZONE_ANAEROBIC    = '#D06B98';
 
 const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
 
-const AMBER_A   = '#E8924C';
-const AMBER_B   = '#D97706';
+// Deep-blue tones to match the page sky palette. Rolling load has no "good/bad"
+// target so the ring sits in page-tint by default and only flips to red on overload.
+const RING_BLUE_A = '#5880B0';
+const RING_BLUE_B = '#3A6090';
 const RING_R    = 46;
 const RING_CIRC = +(2 * Math.PI * RING_R).toFixed(2);
 
@@ -101,40 +108,6 @@ function buildDailyLoadChart(entries: DailyLoadEntry[]): string {
       <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
     </div>
     <div style="position:relative;height:18px;margin-top:4px;padding-right:36px">${dayLabels}</div>`;
-}
-
-// ── Activity list (last 7 days) ─────────────────────────────────────────────
-
-function buildActivityList(entries: DailyLoadEntry[]): string {
-  const recent = entries.slice(-7).reverse().filter(e => e.activities.length > 0);
-  if (recent.length === 0) {
-    return `<div style="font-size:13px;color:${TEXT_S};padding:8px 0">No activities in the last 7 days.</div>`;
-  }
-
-  return recent.map(day => {
-    const d = new Date(day.date + 'T12:00:00');
-    const dayLabel = d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
-    const actRows = day.activities.map(a => {
-      const durLabel = a.durationMin >= 60
-        ? `${Math.floor(a.durationMin / 60)}h ${a.durationMin % 60}m`
-        : `${a.durationMin}m`;
-      return `
-        <div style="display:flex;align-items:center;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.04)">
-          <div style="flex:1;font-size:13px;font-weight:500;color:${TEXT_M}">${a.name}</div>
-          <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:${TEXT_S}">
-            <span>${durLabel}</span>
-            <span style="color:${TEXT_L}">·</span>
-            <span style="font-weight:500;font-variant-numeric:tabular-nums">${a.tss} TSS</span>
-          </div>
-        </div>`;
-    }).join('');
-
-    return `
-      <div style="margin-bottom:4px">
-        <div style="font-size:12px;color:${TEXT_S};font-weight:500;padding:8px 0 2px">${dayLabel}</div>
-        ${actRows}
-      </div>`;
-  }).join('');
 }
 
 // ── Daily exercise load by zone (stacked bars) ──────────────────────────────
@@ -289,9 +262,9 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const heroColor = rollingTSS > chronicTSS * 1.3 ? '#C4553A'
     : rollingTSS > chronicTSS * 0.8 ? TEXT_M : TEXT_S;
   const pillBg = rollingTSS > chronicTSS * 1.3 ? 'rgba(196,85,58,0.10)'
-    : rollingTSS > chronicTSS * 0.8 ? 'rgba(34,197,94,0.10)' : 'rgba(0,0,0,0.05)';
+    : rollingTSS > chronicTSS * 0.8 ? 'rgba(58,96,144,0.10)' : 'rgba(0,0,0,0.05)';
   const pillColor = rollingTSS > chronicTSS * 1.3 ? '#C4553A'
-    : rollingTSS > chronicTSS * 0.8 ? '#15803D' : TEXT_S;
+    : rollingTSS > chronicTSS * 0.8 ? RING_BLUE_B : TEXT_S;
 
   const entries = s.planStartDate
     ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, atlSeed, undefined, s.maxHR)
@@ -301,7 +274,38 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const hasZoneData = entries.some(e => e.zoneLoad.lowAerobic + e.zoneLoad.highAerobic + e.zoneLoad.anaerobic > 0);
   const dailyZoneBars = hasZoneData ? buildDailyZoneBars(entries) : '';
   const zoneBalance = hasZoneData ? buildZoneBalance(entries) : '';
-  const activityList = entries.length > 0 ? buildActivityList(entries) : '';
+
+  // Leg fatigue — permanent card. Mechanical/localised load from cross-training,
+  // independent of cardiovascular TSS. Always visible so the signal is discoverable.
+  const legBreakdown = computeLegLoadBreakdown(s.recentLegLoads ?? [], Date.now());
+  const legTotal = legBreakdown.total;
+  const legLabel = legTotal >= LEG_LOAD_HEAVY ? 'Heavy'
+    : legTotal >= LEG_LOAD_MODERATE ? 'Moderate'
+    : legTotal >= 5 ? 'Light'
+    : 'Fresh';
+  const legColor = legTotal >= LEG_LOAD_HEAVY ? 'var(--c-warn)'
+    : legTotal >= LEG_LOAD_MODERATE ? 'var(--c-caution)'
+    : legTotal >= 5 ? TEXT_M
+    : 'var(--c-ok)';
+  const legCopy = legTotal >= LEG_LOAD_HEAVY
+    ? 'Heavy eccentric and impact load on the legs. Force absorption is impaired. Skip pounding sessions today.'
+    : legTotal >= LEG_LOAD_MODERATE
+      ? 'Moderate residual leg load from cross-training. Easy effort fine, avoid hard intervals.'
+      : legTotal >= 5
+        ? 'Light residual leg load from recent cross-training. No effect on today\'s session.'
+        : 'No residual leg load. Mechanical recovery is complete.';
+  const legFatigueCard = `
+    <div id="rl-card-leg-fatigue" style="${CARD};padding:20px;cursor:pointer">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:8px">
+        <div style="font-size:12px;color:${TEXT_S};font-weight:500">Leg Fatigue</div>
+        <div style="font-size:11px;color:${TEXT_L}">View →</div>
+      </div>
+      <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:6px">
+        <div style="font-size:28px;font-weight:700;color:${legColor};line-height:1;letter-spacing:-0.02em">${legTotal.toFixed(0)}</div>
+        <div style="font-size:13px;color:${TEXT_S}">${legLabel}</div>
+      </div>
+      <div style="font-size:13px;color:${TEXT_S};line-height:1.45">${legCopy}</div>
+    </div>`;
 
   // Date range for header pill
   const dateRange = entries.length > 0
@@ -313,7 +317,7 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const ringPct = Math.min(loadRatio / 1.3 * 100, 100); // 130% of chronic = full ring
   const ringOffset = +(RING_CIRC * (1 - ringPct / 100)).toFixed(2);
   const ringColor = rollingTSS > chronicTSS * 1.3 ? '#FF3B30'
-    : rollingTSS > chronicTSS * 0.8 ? '#34C759'
+    : rollingTSS > chronicTSS * 0.8 ? RING_BLUE_B
     : '#94A3B8';
 
   return `
@@ -365,13 +369,13 @@ function getRollingLoadHTML(s: SimulatorState): string {
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
                 <linearGradient id="rlRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="${AMBER_A}"/>
-                  <stop offset="100%" stop-color="${AMBER_B}"/>
+                  <stop offset="0%" stop-color="${RING_BLUE_A}"/>
+                  <stop offset="100%" stop-color="${RING_BLUE_B}"/>
                 </linearGradient>
               </defs>
               <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
               <circle id="rl-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
-                stroke="${ringColor === '#34C759' ? ringColor : ringColor === '#FF3B30' ? ringColor : 'url(#rlRingGrad)'}"
+                stroke="${ringColor === '#FF3B30' ? ringColor : 'url(#rlRingGrad)'}"
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_CIRC}"
                 stroke-dashoffset="${RING_CIRC}"
@@ -413,6 +417,11 @@ function getRollingLoadHTML(s: SimulatorState): string {
           </div>
         </div>` : ''}
 
+        <!-- Leg fatigue (mechanical/localised load, separate from cardiovascular TSS) -->
+        <div class="rl-fade" style="animation-delay:0.23s;padding:0 16px;margin-bottom:14px">
+          ${legFatigueCard}
+        </div>
+
         ${zoneBalance ? `
         <!-- 4-week zone balance -->
         <div class="rl-fade" style="animation-delay:0.26s;padding:0 16px;margin-bottom:14px">
@@ -421,13 +430,6 @@ function getRollingLoadHTML(s: SimulatorState): string {
           </div>
         </div>` : ''}
 
-        <!-- Activity breakdown -->
-        <div class="rl-fade" style="animation-delay:0.32s;padding:0 16px;margin-bottom:24px">
-          <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:8px;padding-left:4px">Last 7 days</div>
-          <div style="${CARD};padding:16px 20px">
-            ${activityList}
-          </div>
-        </div>
       </div>
     </div>
     ${renderTabBar('home')}
@@ -471,6 +473,10 @@ function wireRollingLoadHandlers(ringOffset: number): void {
 
   document.getElementById('rl-back-btn')?.addEventListener('click', () => {
     import('./readiness-view').then(({ renderReadinessView }) => renderReadinessView());
+  });
+
+  document.getElementById('rl-card-leg-fatigue')?.addEventListener('click', () => {
+    import('./leg-load-view').then(({ renderLegLoadView }) => renderLegLoadView(() => renderRollingLoadView()));
   });
 }
 

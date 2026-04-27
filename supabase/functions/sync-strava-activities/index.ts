@@ -1365,6 +1365,9 @@ Deno.serve(async (req) => {
           durSec: ((act.moving_time as number | null) ?? (act.elapsed_time as number | null) ?? 0),
           activityType: mapStravaType((act.sport_type as string) || (act.type as string) || ""),
           activityName: (act.name as string | null) ?? undefined,
+          // Strava list endpoint returns avg_HR when an HR monitor was used.
+          // Feeds the effort-calibrated VDOT (Swain regression) during onboarding.
+          avgHR: (act.average_heartrate as number | null) ?? null,
         }))
         .filter((r) => r.activityType === "RUNNING" && r.distKm > 0 && r.durSec > 0);
 

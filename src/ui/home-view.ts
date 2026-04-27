@@ -199,6 +199,8 @@ export function computeLoadBreakdown(
   // Skip user-generated sessions (not real activity — just suggestions)
   for (const w of wk.adhocWorkouts ?? []) {
     if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
+    // Skip if garminActuals already covers this entry (garminActuals wins — may have been Strava-upgraded)
+    if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
     // Dedup by garminId — check both id prefix and direct garminId property
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     const garminId = rawId ?? (w as any).garminId ?? null;
@@ -1156,8 +1158,8 @@ function buildReadinessRing(s: SimulatorState): string {
           </div>
         </div>
 
-        ${noWatch && !manualToday ? `
-        <!-- Manual sleep card (no-watch users only) -->
+        ${sleepScore == null && !manualToday && noWatch ? `
+        <!-- Manual sleep card (no watch connected — manual entry is the only option) -->
         <div id="manual-sleep-card" style="margin:4px 14px 10px;padding:12px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface)">
           <div style="font-size:13px;font-weight:500;color:var(--c-black);margin-bottom:8px">How did you sleep last night?</div>
           <div style="display:flex;gap:6px">
@@ -1167,7 +1169,12 @@ function buildReadinessRing(s: SimulatorState): string {
             <button class="manual-sleep-btn" data-quality="terrible" style="flex:1;padding:7px 0;border-radius:999px;border:1px solid var(--c-border);background:transparent;font-size:12px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Terrible</button>
           </div>
         </div>
-        ` : noWatch && manualToday ? `
+        ` : sleepScore == null && !manualToday && !noWatch ? `
+        <!-- Watch connected but not yet synced — prompt sync instead of manual entry -->
+        <div style="margin:4px 14px 10px;padding:10px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface);display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:12px;color:var(--c-muted)">Sync your watch to load today's sleep</span>
+        </div>
+        ` : sleepScore == null && manualToday ? `
         <div style="margin:4px 14px 10px;padding:10px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface);display:flex;align-items:center;justify-content:space-between">
           <div style="font-size:12px;color:var(--c-muted)">Sleep logged: <span style="font-weight:500;color:var(--c-black)">${manualToday.sleepScore >= 80 ? 'Great' : manualToday.sleepScore >= 60 ? 'Good' : manualToday.sleepScore >= 40 ? 'Poor' : 'Terrible'}</span></div>
           <div style="font-size:11px;color:var(--c-faint)">${manualToday.sleepScore}/100</div>
@@ -1176,6 +1183,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
         <!-- Sentence -->
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
+        ${readiness.suppressStreak != null ? `<p style="font-size:12px;color:var(--c-muted);text-align:center;line-height:1.4;margin:-6px 16px 14px;opacity:0.75">Sleep has limited your score for ${readiness.suppressStreak} consecutive days.</p>` : ''}
         ${coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
         ${readiness.score <= 59 ? `
@@ -1822,12 +1830,10 @@ function buildRecentActivity(s: SimulatorState): string {
   function addFromWk(week: typeof wk, weekNum: number) {
     if (!week) return;
     const isCurrentWeek = weekNum === s.w;
-    // Build set of adhoc garmin IDs to avoid duplicates — addAdhocWorkoutFromPending
-    // creates entries in both garminActuals and adhocWorkouts with the same garmin-* key.
-    const adhocIds = new Set((week.adhocWorkouts || []).filter((w: any) => w.id?.startsWith('garmin-')).map((w: any) => w.id));
-    // Garmin synced actuals (skip garmin-* keys that have a matching adhocWorkout)
+    // garminActuals wins over adhocWorkouts when both have the same key.
+    // garminActuals entries may have been Strava-upgraded and carry richer data (HR zones, polyline, correct sport name).
+    const actualKeys = new Set(Object.keys(week.garminActuals || {}));
     Object.entries(week.garminActuals || {}).forEach(([key, act]: [string, any]) => {
-      if (key.startsWith('garmin-') && adhocIds.has(key)) return;
       const isRun = isRunKey(key, act.activityType);
       const dateStr = act.startTime ? fmtDate(act.startTime) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationSec ? `${Math.round(act.durationSec / 60)} min` : '';
@@ -1842,8 +1848,9 @@ function buildRecentActivity(s: SimulatorState): string {
         || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
     });
-    // Adhoc workouts
+    // Adhoc workouts — skip if garminActuals already covers this id (garminActuals has richer/Strava data)
     (week.adhocWorkouts || []).forEach((w: any, idx: number) => {
+      if (w.id && actualKeys.has(w.id)) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
       const val = (w.garminDistKm || w.distanceKm) ? formatKm(w.garminDistKm || w.distanceKm, s.unitPref ?? 'km') : w.garminDurationMin ? `${Math.round(w.garminDurationMin)} min` : w.durationMin ? `${Math.round(w.durationMin)} min` : '';
       const actName = (w.activityType ? formatActivityType(w.activityType) : null) || w.workoutName || w.displayName || w.name || w.n || 'Workout';
@@ -1873,11 +1880,35 @@ function buildRecentActivity(s: SimulatorState): string {
   addPendingFromWk(wk, s.w);
   addPendingFromWk(prevWk, s.w - 1);
 
-  // Sort all activities by date descending so the most recent always appears first
-  rows.sort((a, b) => (b.sortKey > a.sortKey ? 1 : b.sortKey < a.sortKey ? -1 : 0));
-  rows.splice(8); // cap at 8 rows
+  // Final dedup: if two entries share the same underlying garminId (e.g., a plan-slot
+  // and an adhoc both upgraded to the same 'strava-XXX'), keep only the better one.
+  // "Better" = plan-slot (workoutKey not starting with 'garmin-') over adhoc/pending.
+  // This fires at render time so it works even when state wasn't cleaned up yet.
+  const seenGarminIds = new Map<string, number>(); // garminId → index in rows
+  const dedupedRows: ActivityRow[] = [];
+  for (const row of rows) {
+    const weekData = row.weekNum != null ? s.wks?.[row.weekNum - 1] : undefined;
+    const act: any = row.workoutKey ? weekData?.garminActuals?.[row.workoutKey] : undefined;
+    const gid: string | undefined = act?.garminId ?? (row.unmatched ? row.id : undefined);
+    if (gid) {
+      const existingIdx = seenGarminIds.get(gid);
+      if (existingIdx !== undefined) {
+        // Replace existing with current if current is a better source (plan-slot beats adhoc)
+        const existingIsAdhoc = dedupedRows[existingIdx].workoutKey?.startsWith('garmin-') || dedupedRows[existingIdx].adhocIdx !== undefined || dedupedRows[existingIdx].unmatched;
+        const currentIsAdhoc = row.workoutKey?.startsWith('garmin-') || row.adhocIdx !== undefined || row.unmatched;
+        if (!currentIsAdhoc && existingIsAdhoc) dedupedRows[existingIdx] = row;
+        continue; // skip — already represented
+      }
+      seenGarminIds.set(gid, dedupedRows.length);
+    }
+    dedupedRows.push(row);
+  }
 
-  if (rows.length === 0) return '';
+  // Sort all activities by date descending so the most recent always appears first
+  dedupedRows.sort((a, b) => (b.sortKey > a.sortKey ? 1 : b.sortKey < a.sortKey ? -1 : 0));
+  dedupedRows.splice(8); // cap at 8 rows
+
+  if (dedupedRows.length === 0) return '';
 
   function iconSvg(type: ActivityRow['icon']): string {
     if (type === 'run') return `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="var(--c-accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4a1 1 0 100-2 1 1 0 000 2z" fill="var(--c-accent)" stroke="none"/><path d="M6.5 20l3-5.5 2.5 2 3.5-7 2.5 4.5"/></svg>`;
@@ -1886,7 +1917,7 @@ function buildRecentActivity(s: SimulatorState): string {
     return `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="var(--c-accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg>`;
   }
 
-  const rowsHtml = rows.map(r => {
+  const rowsHtml = dedupedRows.map(r => {
     const isClickable = !!(r.workoutKey || r.unmatched || r.adhocIdx !== undefined);
     return `
     <div class="m-list-item${r.workoutKey ? ' home-act-row' : ''}${r.unmatched ? ' home-unmatched-row' : ''}${r.adhocIdx !== undefined ? ' home-adhoc-row' : ''}"
@@ -1938,7 +1969,13 @@ function getHomePlanName(s: SimulatorState): string {
   if (s.eventType === 'triathlon') {
     return s.triConfig?.distance === 'ironman' ? 'Ironman' : '70.3';
   }
-  if (s.continuousMode) return 'Fitness Plan';
+  if (s.continuousMode) {
+    const focus = s.onboarding?.trainingFocus;
+    if (focus === 'speed') return 'Speed Plan';
+    if (focus === 'endurance') return 'Endurance Plan';
+    if (focus === 'both') return 'Balanced Plan';
+    return 'Fitness Plan';
+  }
   const labels: Record<string, string> = {
     '5k': '5K Plan', '10k': '10K Plan',
     half: 'Half Marathon Plan', marathon: 'Marathon Plan',

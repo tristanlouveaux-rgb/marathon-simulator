@@ -224,7 +224,8 @@ describe('pacing story', () => {
   it('detects fade on long run', () => {
     const result = generateWorkoutInsight(longRun({ kmSplits: fadedSplitsKm }));
     expect(result).not.toBeNull();
-    expect(result).toContain('fade');
+    // regression-based narrative says "slipped" or "faded" depending on R² quality
+    expect(result).toMatch(/slipped|faded/);
   });
 
   const evenSplitsKm = [360, 361, 359, 360, 362, 358, 361];
@@ -246,7 +247,7 @@ describe('effort mismatch', () => {
       distanceKm: 10,
     }));
     expect(result).not.toBeNull();
-    expect(result).toContain('fade');
+    expect(result).toMatch(/slipped|faded/);
     expect(result ?? '').not.toContain('easy run');
   });
 

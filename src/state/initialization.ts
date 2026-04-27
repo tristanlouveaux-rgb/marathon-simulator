@@ -1,5 +1,5 @@
 import type { OnboardingState } from '@/types/onboarding';
-import type { RunnerType } from '@/types/training';
+import type { RunnerType, RaceDistance } from '@/types/training';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState, getMondayOf } from '@/state/persistence';
@@ -143,8 +143,17 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // For blendPredictions, we use the effective type (user preference or calculated)
     const runnerType = effectiveRunnerType;
 
-    // Get target race distance
-    const targetDistStr = state.raceDistance || 'half';
+    // Target distance for workout pacing. For event plans this is the user's
+    // picked race. For no-event (continuous) plans the user never picked a
+    // distance, so we derive a pacing reference from focus: endurance → half,
+    // speed → 5K, balanced → 10K. This value drives MP / HMP zones internally;
+    // UI hides it for continuous-mode users (home + plan-preview read
+    // s.continuousMode to swap in a focus label instead of a race title).
+    const targetDistStr: RaceDistance = state.trainingForEvent === false
+      ? (state.trainingFocus === 'speed' ? '5k'
+        : state.trainingFocus === 'both' ? '10k'
+        : 'half')
+      : (state.raceDistance || 'half');
     const targetDistMeters = rd(targetDistStr);
 
     // Recent race for blending
@@ -186,6 +195,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     // Update state
     s.trackOnly = false;
+    // Clear any stale triathlon fields from a prior triathlon init. Otherwise
+    // home/plan-preview pull 'Ironman' titles via s.eventType === 'triathlon'
+    // even though the wizard just generated a running plan.
+    s.eventType = 'running';
+    s.triConfig = undefined;
     s.w = 1;
     s.tw = state.planDurationWeeks;
     s.v = curr;

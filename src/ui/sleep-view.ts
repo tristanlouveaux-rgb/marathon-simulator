@@ -20,6 +20,8 @@ import {
   buildSleepBankLineChart,
   computeLoadAdjustedTarget,
   computeSleepDebt,
+  computeSleepDebtSeries,
+  classifySleepDebt,
   buildDailySignalBTSS,
 } from '@/calculations/sleep-insights';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
@@ -88,6 +90,7 @@ function sparklinePath(values: number[]): string {
 // ── Score helpers ──────────────────────────────────────────────────────────────
 
 function scoreColor(score: number): string {
+  // Green when genuinely good; purple as neutral/page tint; orange when poor.
   if (score >= 75) return '#34C759';
   if (score >= 55) return PURPLE_B;
   return '#FF9500';
@@ -136,7 +139,7 @@ function scoreTrendChart(entries: PhysiologyDayEntry[]): string {
     const day = DAYS[new Date(e.date + 'T12:00:00').getDay()];
     const barPct = score; // 0-100 maps directly to %
     const barHeight = (barPct / 100) * BAR_H;
-    const color = score >= 75 ? '#34C759' : score >= 55 ? PURPLE_B : '#FF9500';
+    const color = scoreColor(score);
 
     return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px">
       <div style="height:${BAR_H}px;display:flex;flex-direction:column;justify-content:flex-end;width:100%;padding:0 4px">
@@ -290,24 +293,18 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     ? buildSleepBankLineChart(bankNights, '#F97316', '#CBD5E1', !!scoreTrendHTML)
     : '';
 
-  // Cumulative debt chart (uses load-adjusted targets per night)
-  const debtNights = physiologyHistory
-    .slice(-7)
-    .filter(d => d.sleepDurationSec != null)
-    .map(d => {
-      const dayTSS = dailyTSSByDate[d.date] ?? 0;
-      const adjustedTarget = computeLoadAdjustedTarget(effectiveSleepTarget, dayTSS, athleteTier);
-      return { date: d.date, delta: d.sleepDurationSec! - adjustedTarget };
-    });
-  // Running cumulative total
-  let cumulative = 0;
-  const cumulativeNights = debtNights.map(n => {
-    cumulative += n.delta;
-    return { date: n.date, delta: cumulative };
-  });
-  const debtColor = cumulative < 0 ? '#EF4444' : '#34C759';
+  // Cumulative debt chart — same recurrence as the headline (computeSleepDebt):
+  // debt_n = debt_{n-1} * DEBT_DECAY + max(0, target_n − actual_n).
+  // Plot −debt so the line sits below the target line when in deficit (matches
+  // the "below = bad" metaphor used by the duration chart above).
+  // Headline + chart line + gradient fill all colour-graduate through the tier,
+  // so a small residual looks reassuring and a real deficit looks concerning.
+  const debtSeriesAll = computeSleepDebtSeries(physiologyHistory, dailyTSSByDate, athleteTier, effectiveSleepTarget);
+  const cumulativeNights = debtSeriesAll.slice(-7).map(n => ({ date: n.date, delta: -n.debt }));
+  const debtTier = debtSec != null ? classifySleepDebt(debtSec) : null;
+  const debtColor = debtTier?.color ?? '#64748B';
   const cumulativeChartHTML = cumulativeNights.length >= 2
-    ? buildSleepBankLineChart(cumulativeNights, debtColor, '#CBD5E1', !!scoreTrendHTML)
+    ? buildSleepBankLineChart(cumulativeNights, debtColor, '#CBD5E1', !!scoreTrendHTML, true, true, true)
     : '';
 
   // Date picker pills
@@ -349,7 +346,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       ${buildSkyBackground('slp', 'indigo')}
 
       <!-- Scrollable content -->
-      <div style="position:relative;z-index:10;padding-bottom:48px;max-width:480px;margin:0 auto">
+      <div style="position:relative;z-index:10;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -408,7 +405,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
               <!-- Fill -->
               ${bigScore != null ? `<circle id="sleep-ring-circle" cx="50" cy="50" r="${RING_R}"
                 fill="none"
-                stroke="${bigScore >= 75 ? '#34C759' : bigScore >= 55 ? 'url(#sleepRingGrad)' : '#FF9500'}"
+                stroke="${bigScore >= 55 ? 'url(#sleepRingGrad)' : '#FF9500'}"
                 stroke-width="8"
                 stroke-linecap="round"
                 stroke-dasharray="${RING_CIRC}"
@@ -526,7 +523,13 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
           <div style="margin-bottom:8px">
             <div style="display:flex;justify-content:space-between;align-items:baseline">
               <div style="font-size:10px;color:#94A3B8">Cumulative sleep debt</div>
-              <div style="font-size:11px;font-weight:600;color:${debtColor}">${debtSec != null && debtSec > 900 ? fmtDebt(debtSec) + ' debt' : debtSec != null && debtSec < -900 ? fmtDebt(Math.abs(debtSec)) + ' surplus' : 'On target'}</div>
+              <div style="font-size:11px;font-weight:600;color:${debtColor}">${
+                debtTier == null
+                  ? 'On target'
+                  : debtTier.showNumber
+                    ? `${fmtDebt(debtSec!)}<span style="font-weight:400;font-size:10px;opacity:0.85"> · ${debtTier.label}</span>`
+                    : debtTier.label[0].toUpperCase() + debtTier.label.slice(1)
+              }</div>
             </div>
             ${cumulativeChartHTML}
           </div>` : ''}

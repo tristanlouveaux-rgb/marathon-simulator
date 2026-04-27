@@ -7,10 +7,9 @@
 import { getState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import {
-  computeSameSignalTSB,
+  computeLiveSameSignalTSB,
   computeFitnessModel,
   computeWeekRawTSS,
-  computeTodaySignalBTSS,
   computeToBaseline,
   CTL_DECAY,
   ATL_DECAY,
@@ -55,7 +54,7 @@ function tsbBarColor(rawTsb: number): string {
 
 // ── SVG watercolour background (shared with recovery) ─────────────────────────
 
-function skyBackground(): string { return buildSkyBackground('frs', 'blue'); }
+function skyBackground(): string { return buildSkyBackground('frs', 'mint'); }
 
 // ── Weekly TSB data ───────────────────────────────────────────────────────────
 
@@ -265,41 +264,13 @@ function howItWorksCard(): string {
 
 function getFreshnessHTML(s: SimulatorState): string {
   const completedWeek = Math.max(0, (s.w ?? 1) - 1);
-  const seed = s.signalBBaseline ?? s.ctlBaseline ?? 0;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
 
-  // TSB from completed weeks
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, seed, s.planStartDate);
-  const tsbWeekEnd = sameSignal?.tsb ?? 0;
-  const ctlWeekEnd = sameSignal?.ctl ?? 0;
-  const atlWeekEnd = sameSignal?.atl ?? 0;
-
-  // Intra-week decay: ATL and CTL at week-end don't reflect rest days in the current week.
-  // Apply continuous decay from the end of the completed week to today, plus any
-  // current-week load on each day (daily EMA step with same time constants).
-  const ATL_DAILY_DECAY = Math.exp(-1 / 7);   // daily step for 7-day time constant
-  const CTL_DAILY_DECAY = Math.exp(-1 / 42);  // daily step for 42-day time constant
-  let atl = atlWeekEnd;
-  let ctl = ctlWeekEnd;
-  if (s.planStartDate) {
-    // Use date arithmetic (not ms) to avoid DST offset errors
-    const weekStartDate = new Date(s.planStartDate + 'T12:00:00'); // noon avoids DST edge
-    weekStartDate.setDate(weekStartDate.getDate() + completedWeek * 7);
-    const today = new Date();
-    today.setHours(12, 0, 0, 0);
-    const daysIntoWeek = Math.max(0, Math.round((today.getTime() - weekStartDate.getTime()) / 86400000));
-    const currentWk = (s.wks ?? [])[completedWeek];
-    for (let d = 0; d < daysIntoWeek; d++) {
-      const dayD = new Date(weekStartDate);
-      dayD.setDate(dayD.getDate() + d);
-      const dayDate = dayD.toISOString().split('T')[0];
-      const dayTSS = currentWk ? computeTodaySignalBTSS(currentWk, dayDate) : 0;
-      const weekEquiv = dayTSS * 7;
-      atl = atl * ATL_DAILY_DECAY + weekEquiv * (1 - ATL_DAILY_DECAY);
-      ctl = ctl * CTL_DAILY_DECAY + weekEquiv * (1 - CTL_DAILY_DECAY);
-    }
-  }
-  const tsb = ctl - atl;
+  // Live TSB with intra-week decay through today (shared helper — matches home + readiness).
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const atl = liveTSB.atl;
+  const ctl = liveTSB.ctl;
+  const tsb = liveTSB.tsb;
 
   // Fitness model for week count
   const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
@@ -578,10 +549,8 @@ function wireFreshnessHandlers(): void {
     if (circle) {
       // Read the target from our computed value
       const s = getState();
-      const completedWeek = Math.max(0, (s.w ?? 1) - 1);
-      const seed = s.signalBBaseline ?? s.ctlBaseline ?? 0;
-      const sameSignal = computeSameSignalTSB(s.wks ?? [], completedWeek, seed, s.planStartDate);
-      const tsb = sameSignal?.tsb ?? 0;
+      const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+      const tsb = liveTSB.tsb;
       const tsbDisp = Math.round(tsb / 7);
       const ringPct = Math.min(100, Math.max(0, ((tsbDisp + 40) / 60) * 100));
       const target = +(RING_C * (1 - ringPct / 100)).toFixed(2);

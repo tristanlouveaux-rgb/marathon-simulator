@@ -20,6 +20,8 @@ export interface InsightOptions {
   /** Most recent previous completed run of the same plannedType. */
   prev?: GarminActual | null;
   unitPref?: 'km' | 'mi';
+  /** All completed activities across all weeks — used for TSS and HR historical comparison. */
+  allActuals?: GarminActual[];
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -27,15 +29,6 @@ export interface InsightOptions {
 function isQualityType(t: string | null | undefined): boolean {
   if (!t) return false;
   return ['threshold', 'vo2', 'intervals', 'marathon_pace', 'race_pace', 'tempo', 'progressive', 'float'].includes(t);
-}
-
-function splitCV(splits: number[]): number | null {
-  const valid = splits.filter(s => s > 60 && s < 1200);
-  if (valid.length < 3) return null;
-  const mean = valid.reduce((a, b) => a + b, 0) / valid.length;
-  if (mean <= 0) return null;
-  const variance = valid.reduce((a, v) => a + (v - mean) ** 2, 0) / valid.length;
-  return Math.sqrt(variance) / mean;
 }
 
 function lowZonePct(zones: { z1: number; z2: number; z3: number; z4: number; z5: number }): number {
@@ -52,13 +45,34 @@ function fmtPace(secPerKm: number, pref: 'km' | 'mi' = 'km'): string {
   return `${m}:${String(s).padStart(2, '0')}${unit}`;
 }
 
-function splitHalfPace(splits: number[]): { first: number; second: number; diff: number } | null {
+/**
+ * Fit a linear regression to km splits.
+ * Returns slope (s/km per km), R², and regression-predicted paces at km 1 and km n.
+ * Positive slope = fading; negative slope = picking up pace.
+ */
+function computeRegressionSlope(splits: number[]): {
+  slope: number; r2: number; paceStart: number; paceEnd: number;
+} | null {
   const valid = splits.filter(s => s > 60 && s < 1200);
   if (valid.length < 4) return null;
-  const mid = Math.floor(valid.length / 2);
-  const first = Math.round(valid.slice(0, mid).reduce((a, b) => a + b, 0) / mid);
-  const second = Math.round(valid.slice(mid).reduce((a, b) => a + b, 0) / (valid.length - mid));
-  return { first, second, diff: second - first };
+  const n = valid.length;
+  const xs = Array.from({ length: n }, (_, i) => i + 1);
+  const sumX = xs.reduce((a, b) => a + b, 0);
+  const sumY = valid.reduce((a, b) => a + b, 0);
+  const sumXY = xs.reduce((acc, x, i) => acc + x * valid[i], 0);
+  const sumX2 = xs.reduce((acc, x) => acc + x * x, 0);
+  const denom = n * sumX2 - sumX * sumX;
+  if (denom === 0) return null;
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  const meanY = sumY / n;
+  const ssTot = valid.reduce((acc, y) => acc + (y - meanY) ** 2, 0);
+  const ssRes = valid.reduce((acc, y, i) => {
+    const yHat = intercept + slope * xs[i];
+    return acc + (y - yHat) ** 2;
+  }, 0);
+  const r2 = ssTot > 0 ? Math.max(0, 1 - ssRes / ssTot) : 0;
+  return { slope, r2, paceStart: intercept + slope, paceEnd: intercept + slope * n };
 }
 
 // ─── signal gathering ───────────────────────────────────────────────────────
@@ -72,15 +86,17 @@ interface Signals {
   isTreadmill: boolean;
   isShort: boolean;
 
-  // Pacing
-  half: { first: number; second: number; diff: number } | null;
-  fade: boolean;
-  negative: boolean;
-  even: boolean;
+  // Pacing — regression-based
+  slope: number | null;        // s/km per km; positive = fading
+  slopeR2: number | null;      // goodness of fit (0–1)
+  slopePaceStart: number | null; // regression-predicted pace at km 1
+  slopePaceEnd: number | null;   // regression-predicted pace at last km
   hasSplits: boolean;
 
   // HR
   hrDrift: number | null;
+  hrDriftAdjusted: number | null;
+  ambientTempC: number | null;
   hrEffort: number | null;
   avgHR: number | null;
 
@@ -105,11 +121,20 @@ interface Signals {
   prevAvgHR: number | null;
   prevHrDrift: number | null;
 
+  // HR relative to max
+  hrPctMax: number | null;
+
+  // TSS historical comparison: weeks since last run with TSS >= current
+  weeksAgoHigherTSS: number | null;
+
+  // HR historical comparison: weeks since last run with avgHR >= current
+  weeksAgoHigherHR: number | null;
+
   // Unit preference
   unitPref: 'km' | 'mi';
 }
 
-function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, unitPref: 'km' | 'mi'): Signals {
+function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, unitPref: 'km' | 'mi', opts?: InsightOptions): Signals {
   const isRun = a.activityType === 'RUNNING' || a.plannedType != null;
   const quality = isQualityType(a.plannedType);
   const isEasyLabel = a.plannedType === 'easy' || a.plannedType === 'recovery' || (!a.plannedType && isRun);
@@ -122,11 +147,13 @@ function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, u
   const effortMismatch = isEasyLabel && (hasHighZones || hasHighHR);
   const isEasy = isEasyLabel && !effortMismatch;
 
-  const half = (a.kmSplits && a.kmSplits.length >= 4) ? splitHalfPace(a.kmSplits) : null;
-  const fade = half ? half.diff > 10 : false;
-  const negative = half ? half.diff < -10 : false;
-  const cv = (a.kmSplits && a.kmSplits.length >= 6) ? splitCV(a.kmSplits) : null;
-  const even = cv != null && cv < 0.03 && !fade && !negative;
+  // Pacing: linear regression over all km splits
+  const reg = a.kmSplits && a.kmSplits.length >= 4 ? computeRegressionSlope(a.kmSplits) : null;
+  const slope = reg?.slope ?? null;
+  const slopeR2 = reg?.r2 ?? null;
+  const slopePaceStart = reg?.paceStart ?? null;
+  const slopePaceEnd = reg?.paceEnd ?? null;
+  const hasSplits = reg != null;
 
   const rawElevPerKm = (a.elevationGainM != null && a.elevationGainM > 0 && a.distanceKm > 0)
     ? Math.round(a.elevationGainM / a.distanceKm) : null;
@@ -154,10 +181,70 @@ function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, u
   const prevAvgHR = prev?.avgHR ?? null;
   const prevHrDrift = prev?.hrDrift ?? null;
 
+  const hrDrift = (a.hrDrift != null && a.durationSec > 1200) ? a.hrDrift : null;
+  const ambientTempC = a.ambientTempC ?? null;
+  const hrDriftAdjusted = (hrDrift != null && ambientTempC != null)
+    ? hrDrift - 0.15 * Math.max(0, ambientTempC - 15)
+    : null;
+
+  // HR as % of max
+  const maxHR = opts?.hrProfile?.maxHR ?? null;
+  const hrPctMax = (a.avgHR != null && maxHR != null && maxHR > 0) ? a.avgHR / maxHR : null;
+
+  const isRunActivity = (act: GarminActual) =>
+    act.activityType === 'RUNNING' || (act.activityType?.includes('RUN') ?? false) || act.plannedType != null;
+
+  const currentMs = a.startTime ? new Date(a.startTime).getTime() : Date.now();
+
+  // TSS historical: weeks since last run with TSS >= tssActual
+  let weeksAgoHigherTSS: number | null = null;
+  if (tssActual != null && tssActual >= 80 && opts?.allActuals && opts.allActuals.length > 0) {
+    const tssFor = (act: GarminActual): number | null => {
+      const durMin = act.durationSec > 0 ? act.durationSec / 60 : 0;
+      return act.iTrimp != null && act.iTrimp > 0
+        ? Math.round((act.iTrimp * 100) / 15000)
+        : durMin > 0 ? Math.round(durMin * 0.92) : null;
+    };
+    const priorHigherTSS = opts.allActuals
+      .filter(act => {
+        if (act.garminId === a.garminId || !act.startTime || !isRunActivity(act)) return false;
+        const ms = new Date(act.startTime).getTime();
+        if (isNaN(ms) || ms >= currentMs) return false;
+        const t = tssFor(act);
+        return t != null && t >= tssActual!;
+      })
+      .sort((x, y) => new Date(y.startTime!).getTime() - new Date(x.startTime!).getTime());
+
+    if (priorHigherTSS.length > 0) {
+      const mostRecentMs = new Date(priorHigherTSS[0].startTime!).getTime();
+      const weeksAgo = Math.round((currentMs - mostRecentMs) / (7 * 24 * 60 * 60 * 1000));
+      if (weeksAgo >= 3) weeksAgoHigherTSS = weeksAgo;
+    }
+  }
+
+  // HR historical: weeks since last run with avgHR >= current
+  let weeksAgoHigherHR: number | null = null;
+  if (a.avgHR != null && a.avgHR > 0 && opts?.allActuals && opts.allActuals.length > 0) {
+    const priorHigherHR = opts.allActuals
+      .filter(act => {
+        if (act.garminId === a.garminId || !act.startTime || !isRunActivity(act)) return false;
+        const ms = new Date(act.startTime).getTime();
+        if (isNaN(ms) || ms >= currentMs) return false;
+        return act.avgHR != null && act.avgHR >= a.avgHR!;
+      })
+      .sort((x, y) => new Date(y.startTime!).getTime() - new Date(x.startTime!).getTime());
+
+    if (priorHigherHR.length > 0) {
+      const mostRecentMs = new Date(priorHigherHR[0].startTime!).getTime();
+      const weeksAgo = Math.round((currentMs - mostRecentMs) / (7 * 24 * 60 * 60 * 1000));
+      if (weeksAgo >= 3) weeksAgoHigherHR = weeksAgo;
+    }
+  }
+
   return {
     isRun, quality, isEasy, isLong, effortMismatch, isTreadmill, isShort,
-    half, fade, negative, even, hasSplits: half != null,
-    hrDrift: (a.hrDrift != null && a.durationSec > 1200) ? a.hrDrift : null,
+    slope, slopeR2, slopePaceStart, slopePaceEnd, hasSplits,
+    hrDrift, hrDriftAdjusted, ambientTempC,
     hrEffort: a.hrEffortScore ?? null,
     avgHR: a.avgHR,
     elevPerKm: (rawElevPerKm != null && rawElevPerKm >= 15) ? rawElevPerKm : null,
@@ -167,6 +254,9 @@ function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, u
     avgPace: a.avgPaceSecKm ?? null,
     lowZonePct: lzp, zonesSurprising,
     prevPace, prevAvgHR, prevHrDrift,
+    hrPctMax,
+    weeksAgoHigherTSS,
+    weeksAgoHigherHR,
     unitPref,
   };
 }
@@ -187,31 +277,60 @@ function composeNarrative(s: Signals): string | null {
   const sentences: string[] = [];
   const p = s.unitPref;
 
-  // ── Lead sentence: the pacing story or pace adherence ─────────────────
-  if (s.half && s.fade) {
-    let lead = `First half averaged ${fmtPace(s.half.first, p)}, second half ${fmtPace(s.half.second, p)}.`;
-    if (s.elevPerKm) {
-      lead += ` ${s.elevPerKm}m/km of climbing likely contributed to the slowdown.`;
-    } else if (s.half.diff >= 20) {
-      lead += ` ${Math.round(s.half.diff)}s/km fade — the opening pace was not sustainable at this distance.`;
+  // ── Lead sentence: pacing story ───────────────────────────────────────
+  const isVeryHighHR = s.hrPctMax != null && s.hrPctMax >= 0.87;
+  // Slope thresholds: > 4 s/km/km with R² > 0.12 = meaningful trend
+  const isFading = s.slope != null && s.slopeR2 != null && s.slope > 4 && s.slopeR2 > 0.12;
+  const isPickingUp = s.slope != null && s.slopeR2 != null && s.slope < -4 && s.slopeR2 > 0.12;
+  // Show regression bookends only when the trend is clean (R² > 0.35)
+  const cleanTrend = isFading && s.slopeR2! > 0.35 && s.slopePaceStart != null && s.slopePaceEnd != null;
+
+  if (s.hasSplits && isFading) {
+    const slopeRnd = Math.round(s.slope!);
+    const hrHistCtx = s.weeksAgoHigherHR != null ? `, the highest average HR in ${s.weeksAgoHigherHR} weeks,` : '';
+    let lead: string;
+
+    if (isVeryHighHR && s.avgHR != null && s.hrPctMax != null && !s.elevPerKm) {
+      const pct = Math.round(s.hrPctMax * 100);
+      if (cleanTrend) {
+        lead = `Pace slipped ${slopeRnd}s every kilometre: ${fmtPace(s.slopePaceStart!, p)} at the start to ${fmtPace(s.slopePaceEnd!, p)} by the end.`
+             + ` Avg HR ${Math.round(s.avgHR)} bpm at ${pct}% of max${hrHistCtx} placed this at near-threshold intensity throughout; glycogen depletion drove the progressive slowdown, making the session harder than the pace reflects.`;
+      } else {
+        lead = `Pace faded at ~${slopeRnd}s every kilometre through the run.`
+             + ` Avg HR ${Math.round(s.avgHR)} bpm at ${pct}% of max${hrHistCtx} confirms this ran at near-threshold intensity; the session was harder than the pace reflects.`;
+      }
     } else {
-      lead += ` ${Math.round(s.half.diff)}s/km fade through the run.`;
+      if (cleanTrend) {
+        lead = `Pace slipped ${slopeRnd}s every kilometre: ${fmtPace(s.slopePaceStart!, p)} at the start to ${fmtPace(s.slopePaceEnd!, p)} by the end.`;
+      } else {
+        lead = `Pace faded at ~${slopeRnd}s every kilometre through the run.`;
+      }
+      if (s.elevPerKm) {
+        lead += ` ${s.elevPerKm}m/km of climbing likely contributed.`;
+      } else if (s.slope! > 8) {
+        lead += ' The opening pace was not sustainable at this distance.';
+      }
     }
     sentences.push(lead);
-  } else if (s.half && s.negative) {
-    let lead = `Negative split: ${fmtPace(s.half.first, p)} first half, ${fmtPace(s.half.second, p)} second half.`;
-    if (s.quality) {
-      lead += ' Controlled start into a strong finish.';
+
+  } else if (s.hasSplits && isPickingUp) {
+    const slopeRnd = Math.abs(Math.round(s.slope!));
+    const cleanNeg = s.slopeR2! > 0.35 && s.slopePaceStart != null && s.slopePaceEnd != null;
+    let lead: string;
+    if (cleanNeg) {
+      lead = `Negative split: ${fmtPace(s.slopePaceStart!, p)} at the start, ${fmtPace(s.slopePaceEnd!, p)} by the end.`;
+      lead += s.quality ? ' Controlled start into a strong finish.' : ` Picking up ${slopeRnd}s every kilometre through the run.`;
     } else {
-      lead += ` ${Math.abs(Math.round(s.half.diff))}s/km faster in the back end.`;
+      lead = `Pace picked up through the run at ~${slopeRnd}s every kilometre.`;
+      if (s.quality) lead += ' Controlled start into a strong finish.';
     }
     sentences.push(lead);
-  } else if (s.half && s.even) {
-    let lead = `Consistent pacing: ${fmtPace(s.half.first, p)} to ${fmtPace(s.half.second, p)} across the run.`;
-    if (s.hrDrift != null && s.hrDrift <= 3) {
-      lead += ' HR stayed flat too. Well-controlled effort.';
-    }
-    sentences.push(lead);
+
+  } else if (s.hasSplits) {
+    // Slope is flat or noisy — note consistent pacing; add HR qualifier when drift data exists
+    const hrNote = (s.hrDrift != null && s.hrDrift <= 3) ? ' HR stayed flat too.' : '';
+    sentences.push(`Consistent pacing throughout.${hrNote} Well-controlled effort.`);
+
   } else if (s.quality && s.paceAdh != null) {
     if (s.paceAdh < 0.92) {
       const pct = Math.round((1 - s.paceAdh) * 100);
@@ -251,12 +370,35 @@ function composeNarrative(s: Signals): string | null {
   }
 
   // ── Second sentence: HR context (if not already woven in) ─────────────
-  const hrMentioned = sentences.some(t => t.includes('HR'));
+  const hrMentioned = sentences.some(t => t.includes('HR') || t.includes('bpm'));
   if (!hrMentioned) {
-    if (s.hrDrift != null && s.hrDrift > 8 && s.fade) {
-      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% across the session, consistent with the pace drop.`);
-    } else if (s.hrDrift != null && s.hrDrift > 8) {
-      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% from first to second half.`);
+    if (s.hrPctMax != null && s.hrPctMax >= 0.87 && s.avgHR != null) {
+      const pct = Math.round(s.hrPctMax * 100);
+      let hrLine = `Avg HR ${Math.round(s.avgHR)} bpm at ${pct}% of max`;
+      if (s.weeksAgoHigherHR != null) {
+        hrLine += `, the highest average HR in ${s.weeksAgoHigherHR} weeks`;
+      }
+      if (s.hrEffort != null && s.hrEffort >= 1.15) {
+        hrLine += ` and ${Math.round((s.hrEffort - 1) * 100)}% above what this session type would normally cost`;
+      }
+      if (s.hrPctMax >= 0.90) {
+        hrLine += '. This session was harder than the pace indicates. A race-grade cardiovascular stimulus.';
+      } else {
+        hrLine += '. High-zone effort throughout; the session was harder than the pace alone suggests.';
+      }
+      sentences.push(hrLine);
+    } else if (!s.quality && s.hrDrift != null && s.hrDrift > 8 && isFading) {
+      const hot = s.ambientTempC != null && s.ambientTempC >= 22;
+      const adj = hot && s.hrDriftAdjusted != null
+        ? ` Accounting for ${Math.round(s.ambientTempC!)}°C ambient heat, the heat-adjusted drift is ${s.hrDriftAdjusted.toFixed(0)}%, suggesting conditions carried most of the load.`
+        : ' On an easy or long effort, rising HR at steady pace usually points to heat, dehydration, fatigue, or a pace that was too aggressive.';
+      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% across the session, consistent with the pace drop.${adj}`);
+    } else if (!s.quality && s.hrDrift != null && s.hrDrift > 8) {
+      const hot = s.ambientTempC != null && s.ambientTempC >= 22;
+      const adj = hot && s.hrDriftAdjusted != null
+        ? ` At ${Math.round(s.ambientTempC!)}°C, heat-adjusted drift is ${s.hrDriftAdjusted.toFixed(0)}% — the conditions explain most of the rise.`
+        : ' On an easy or long effort, rising HR at steady pace usually points to heat, dehydration, fatigue, or a pace that was too aggressive.';
+      sentences.push(`HR drifted ${s.hrDrift.toFixed(0)}% from start to finish.${adj}`);
     } else if (s.quality && s.hrEffort != null && s.hrEffort >= 1.15) {
       sentences.push('HR was elevated relative to target. The session cost more than planned.');
     } else if (s.quality && s.hrEffort != null && s.hrEffort <= 0.85) {
@@ -285,8 +427,8 @@ function composeNarrative(s: Signals): string | null {
 
   // ── Session-to-session comparison ─────────────────────────────────────
   if (sentences.length < 3 && s.avgPace != null && s.prevPace != null && s.avgHR != null && s.prevAvgHR != null) {
-    const paceDiff = Math.round(s.prevPace - s.avgPace); // positive = got faster
-    const hrDiff = Math.round(s.avgHR - s.prevAvgHR);    // positive = higher HR
+    const paceDiff = Math.round(s.prevPace - s.avgPace);
+    const hrDiff = Math.round(s.avgHR - s.prevAvgHR);
     const typeLabel = s.quality ? 'quality' : s.isLong ? 'long' : 'easy';
 
     if (paceDiff > 5 && hrDiff <= -2) {
@@ -303,6 +445,22 @@ function composeNarrative(s: Signals): string | null {
     if (driftDiff < -5 && s.hrDrift < 5) {
       sentences.push(`HR drift improved to ${s.hrDrift.toFixed(0)}% from ${s.prevHrDrift.toFixed(0)}% last session. Better aerobic control.`);
     }
+  }
+
+  // ── TSS historical high ───────────────────────────────────────────────
+  if (sentences.length < 3 && s.weeksAgoHigherTSS != null && s.tssActual != null) {
+    const highHRContext = sentences.some(t => t.includes('bpm') || t.includes('HR'));
+    if (highHRContext) {
+      sentences.push(`At ${s.tssActual} TSS, the heaviest run in ${s.weeksAgoHigherTSS} weeks. The physiological cost sits well above what pace or distance alone would imply.`);
+    } else {
+      sentences.push(`At ${s.tssActual} TSS, the heaviest run in ${s.weeksAgoHigherTSS} weeks.`);
+    }
+  }
+
+  // ── Recovery guidance for genuinely hard sessions ─────────────────────
+  const recoveryMentioned = sentences.some(t => t.includes('easy day') || t.includes('easy running') || t.includes('recover'));
+  if (!recoveryMentioned && isVeryHighHR && s.tssActual != null && s.tssActual >= 80 && sentences.length < 3) {
+    sentences.push('Allow at least one easy day before the next quality session. The recovery demand here is higher than the pace makes it look.');
   }
 
   // ── Zone surprise (only if nothing else said it) ──────────────────────
@@ -322,7 +480,20 @@ function composeNarrative(s: Signals): string | null {
 
   // ── Mismatch fallback ─────────────────────────────────────────────────
   if (s.effortMismatch && sentences.length === 0) {
-    sentences.push('Higher effort than the planned slot. The extra load is accounted for.');
+    if (isVeryHighHR && s.avgHR != null && s.hrPctMax != null) {
+      const pct = Math.round(s.hrPctMax * 100);
+      let line = `HR at ${pct}% of max on a session planned at easy intensity`;
+      if (s.weeksAgoHigherHR != null) {
+        line += `, the highest average HR in ${s.weeksAgoHigherHR} weeks`;
+      }
+      if (s.hrEffort != null && s.hrEffort >= 1.15) {
+        line += ` and ${Math.round((s.hrEffort - 1) * 100)}% above what an easy effort would normally cost`;
+      }
+      line += '. This was harder than the pace reflects. The extra load is accounted for.';
+      sentences.push(line);
+    } else {
+      sentences.push('Higher effort than the planned slot. The extra load is accounted for.');
+    }
   }
 
   if (sentences.length === 0) return null;
@@ -363,7 +534,8 @@ export function generateWorkoutInsight(actual: GarminActual, opts?: HRProfileFor
       if (computed != null) enriched = { ...actual, hrEffortScore: computed };
     }
   }
-  const signals = gatherSignals(enriched, prev, unitPref);
+  const resolvedOpts: InsightOptions | undefined = isLegacy ? undefined : (opts as InsightOptions | undefined);
+  const signals = gatherSignals(enriched, prev, unitPref, resolvedOpts);
   return composeNarrative(signals);
 }
 

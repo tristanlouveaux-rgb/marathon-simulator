@@ -103,6 +103,8 @@ export interface Workout extends WorkoutDefinition {
   stravaId?: string | null;
   /** iTRIMP from Strava HR stream (set on Garmin-sourced adhoc workouts after Strava enrich) */
   iTrimp?: number | null;
+  /** Target pace in sec/km set when a session is generated with an effort selection. */
+  targetPaceSecKm?: number;
 }
 
 /** Skipped workout record */
@@ -386,9 +388,30 @@ export interface SimulatorState {
   rec: RecentRun | null;  // Recent race/time trial
 
   // Physiology
-  lt: number | null;      // Current LT pace (sec/km)
+  lt: number | null;      // Current LT pace (sec/km). Resolved via resolveLT() — override > Garmin (fresh) > derived.
   ltPace?: number | null; // LT pace alias
-  ltHR?: number;          // LT heart rate (bpm) — from Garmin userMetrics
+  ltHR?: number;          // LT heart rate (bpm) — resolved same as lt
+  /** User-entered LT override. When present, wins over Garmin and derived values. */
+  ltOverride?: {
+    ltPaceSecKm: number;
+    ltHR?: number;
+    setAt: string;  // ISO timestamp
+  };
+  /** Pending LT suggestion when Garmin and our derived value disagree by >10s/km.
+   *  UI surfaces this on the LT detail page so the user picks the source they trust. */
+  ltSuggestion?: {
+    garmin: { ltPaceSecKm: number; ltHR?: number | null; asOf: string };
+    derived: { ltPaceSecKm: number; ltHR: number | null; provenance: string };
+    detectedAt: string; // ISO
+  };
+  /** ISO date the active LT value was last recomputed (Garmin reading or derivation run). */
+  ltUpdatedAt?: string;
+  /** Source of the active s.lt value — drives the provenance caption. */
+  ltSource?: 'override' | 'garmin' | 'blended' | 'daniels' | 'critical-speed' | 'empirical';
+  /** Confidence label for the active s.lt value. */
+  ltConfidence?: 'high' | 'medium' | 'low';
+  /** Latest Garmin LT reading recorded by the sync (kept even when not active). */
+  garminLT?: { ltPaceSecKm: number; ltHR?: number | null; asOf: string };
   vo2: number | null;     // Current VO2max
   initialLT: number | null;   // Initial LT at week 0
   initialVO2: number | null;  // Initial VO2 at week 0
@@ -478,6 +501,16 @@ export interface SimulatorState {
   blendedRaceTimeSec?: number;              // Predicted time for s.rd at current fitness
   blendedEffectiveVdot?: number;            // VDOT back-solved from blended prediction, for pace derivation
   blendedLastRefreshedISO?: string;         // When the cache was last recomputed
+  // HR-calibrated VDOT — Swain regression of pace on %VO2R across recent runs.
+  // Cached so the onboarding review screen can describe the method + confidence
+  // without re-running the regression. See effort-calibrated-vdot.ts.
+  hrCalibratedVdot?: {
+    vdot: number | null;
+    confidence: 'high' | 'medium' | 'low' | 'none';
+    n: number;
+    r2: number | null;
+    reason?: 'no-rhr' | 'no-maxhr' | 'no-points' | 'bad-fit' | 'too-few-points';
+  };
 
   // Per-run summary cached at onboarding so the first blend has Tanda inputs
   // without waiting a week for standalone sync to fill garminActuals.
@@ -487,6 +520,7 @@ export interface SimulatorState {
     durSec: number;
     activityType: string;
     activityName?: string;
+    avgHR?: number | null;
   }>;
 
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once

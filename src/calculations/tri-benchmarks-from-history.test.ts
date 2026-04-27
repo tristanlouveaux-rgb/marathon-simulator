@@ -109,133 +109,178 @@ describe('estimateCSSFromSwimActivities', () => {
 // ─── FTP estimate ───────────────────────────────────────────────────────────
 
 describe('estimateFTPFromBikeActivities', () => {
-  it('returns undefined FTP when no bike activities', () => {
+  // Reference date used across these tests so recency math is deterministic.
+  const REF = '2026-04-27T00:00:00Z';
+  /** Build an ISO timestamp `daysAgo` days before REF. */
+  const daysAgo = (n: number): string => {
+    const d = new Date(REF);
+    d.setUTCDate(d.getUTCDate() - n);
+    return d.toISOString();
+  };
+
+  it('returns confidence=none when no bike activities', () => {
     const est = estimateFTPFromBikeActivities([]);
     expect(est.ftpWatts).toBeUndefined();
     expect(est.bikeActivityCount).toBe(0);
     expect(est.derivedFromPower).toBe(false);
+    expect(est.confidence).toBe('none');
   });
 
-  it('returns undefined FTP when bikes have no power data', () => {
+  it('returns confidence=none when bikes have no power data', () => {
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 3600 } as PoweredActivity,
     ]);
     expect(est.ftpWatts).toBeUndefined();
     expect(est.bikeActivityCount).toBe(1);
-    expect(est.derivedFromPower).toBe(false);
+    expect(est.confidence).toBe('none');
   });
 
-  it('estimates FTP from normalised power × 0.95 (Coggan)', () => {
-    // NP 250W → FTP = 238W.
+  it('estimates FTP from a near-max 60-min steady ride (high tier, factor 1.00)', () => {
+    // 60-min ride, NP=250, avg=235 (vi=0.94 → high tier). 60-min near-max ≈ FTP.
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(238);
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250, averageWatts: 235, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(250);
+    expect(est.confidence).toBe('high');
     expect(est.derivedFromPower).toBe(true);
   });
 
-  it('falls back to average_watts with duration-aware IF when NP not present', () => {
-    // 45 min ride at avg 220W → assume IF 0.85 (threshold range)
-    // FTP = 220 / 0.85 = 258.8 → 259
+  it('uses 20-min test factor (× 0.95) for short steady efforts', () => {
+    // 25-min steady ride, NP=280 → 280 × 0.95 = 266
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 45 * 60, averageWatts: 220 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(259);
-    expect(est.derivedFromPower).toBe(true);
+      { activityType: 'Ride', durationSec: 25 * 60, normalizedPowerW: 280, averageWatts: 263, deviceWatts: true, startTime: daysAgo(5) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(266);
   });
 
-  it('uses endurance IF (0.70) for long rides without NP', () => {
-    // 3hr ride at avg 236W → assume IF 0.70 (endurance)
-    // FTP = 236 / 0.70 = 337
+  it('treats long endurance rides as floor (NP × duration multiplier), not as FTP test', () => {
+    // 4-hour steady ride (vi=0.94), NP=250 → floor candidate 250 × 1.10 = 275.
+    // Old behavior would have given 250 × 0.95 = 238 (under-estimate).
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 180 * 60, averageWatts: 236 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(337);
+      { activityType: 'Ride', durationSec: 247 * 60, normalizedPowerW: 250, averageWatts: 236, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(275);
   });
 
-  it('uses test IF (0.95) for short rides without NP', () => {
-    // 25 min ride at avg 280W → assume IF 0.95 (test/intervals)
-    // FTP = 280 / 0.95 = 295
+  it('drops surge-y rides where NP is misleading (vi < 0.80)', () => {
+    // "Pootle then sprint to work" — vi=0.65 → dropped, even though NP looks high.
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 25 * 60, averageWatts: 280 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(295);
+      { activityType: 'Ride', durationSec: 90 * 60, normalizedPowerW: 230, averageWatts: 150, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBeUndefined();
+    expect(est.confidence).toBe('none');
+  });
+
+  it('excludes rides older than the 52-week hard cutoff', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, averageWatts: 265, deviceWatts: true, startTime: daysAgo(400) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBeUndefined();
+  });
+
+  it('weights recent rides more than older ones (12-week half-life)', () => {
+    // Two equally good high-signal rides — fresh one 1w ago, stale one 36w ago.
+    // Fresh weight ≈ 0.92, stale weight ≈ 0.05 → weighted mean ≈ fresh.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 300, averageWatts: 285, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200, averageWatts: 190, deviceWatts: true, startTime: daysAgo(36 * 7) } as PoweredActivity,
+    ], REF);
+    // Heavily biased toward the recent 300W ride.
+    expect(est.ftpWatts).toBeGreaterThan(285);
+  });
+
+  it('confidence=high requires a high-signal ride within 12 weeks', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, averageWatts: 265, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.confidence).toBe('high');
+  });
+
+  it('confidence=medium when the only high-signal ride is 13–26 weeks old', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, averageWatts: 265, deviceWatts: true, startTime: daysAgo(20 * 7) } as PoweredActivity,
+    ], REF);
+    expect(est.confidence).toBe('medium');
+  });
+
+  it('confidence=low when only floor-tier rides contribute (no FTP test data)', () => {
+    // A single long endurance ride 35 weeks ago — below the recent-floors threshold.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 247 * 60, normalizedPowerW: 250, averageWatts: 236, deviceWatts: true, startTime: daysAgo(35 * 7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(275);
+    expect(est.confidence).toBe('low');
   });
 
   it('caps FTP at 500W', () => {
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600 } as PoweredActivity,
-    ]);
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600, averageWatts: 570, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
     expect(est.ftpWatts).toBe(500);
   });
 
   it('skips rides under 20 min', () => {
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 15 * 60, normalizedPowerW: 300 } as PoweredActivity,
-    ]);
+      { activityType: 'Ride', durationSec: 15 * 60, normalizedPowerW: 300, averageWatts: 290, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
     expect(est.ftpWatts).toBeUndefined();
   });
 
-  it('takes median of top-3 candidates rather than absolute max', () => {
-    // Three rides NP 270/240/200. Sorted desc: 270, 240, 200. Median 240. × 0.95 = 228.
+  it('drops a >2× outlier when ≥ 3 candidates exist in the same pool', () => {
+    // 600 NP "spike" dropped; remaining three high-signal NPs averaged.
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 30 * 60, normalizedPowerW: 270 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 90 * 60, normalizedPowerW: 240 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(228);
-  });
-
-  it('drops a single >2× outlier when ≥ 3 candidates exist', () => {
-    // 800 NP outlier dropped. Remaining 250/240/230. Median 240 × 0.95 = 228.
-    const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 800 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 240 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 230 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(228);
-  });
-
-  it('keeps both candidates when only 2 exist (avoids dropping legit value)', () => {
-    // 438 + 134 — the 438 is a real ride, 134 is a long endurance ride.
-    // Old buggy outlier check would drop 438 because 438 > 134×2; new code
-    // skips the drop when only 2 candidates exist (would lose half the data).
-    // Both kept, median = (438 × 0.95 + 134) / 2 = (416 + 134) / 2 = 275.
-    const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 110 * 60, normalizedPowerW: 438 } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 7 * 60 * 60, averageWatts: 94 } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(275);
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600, averageWatts: 570, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 250, averageWatts: 235, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 240, averageWatts: 225, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 230, averageWatts: 215, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    // Mean of (250, 240, 230) at factor 1.00 = 240
+    expect(est.ftpWatts).toBe(240);
   });
 
   it('prefers real power-meter rides over Strava-estimated when both present', () => {
-    // Real meter (deviceWatts true) NP 280 → FTP candidate 266
-    // Estimated (deviceWatts false) NP 600 — should be IGNORED, not anchor FTP
+    // Real meter (deviceWatts true) drives the estimate; estimated NP=600 ignored.
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600, deviceWatts: false } as PoweredActivity,
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, deviceWatts: true } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(266);
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 600, averageWatts: 570, deviceWatts: false, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, averageWatts: 265, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(280);
   });
 
-  it('falls back to estimated rides when no real-meter rides exist', () => {
+  it('falls back to estimated-power rides when no real-meter rides exist', () => {
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200, deviceWatts: false } as PoweredActivity,
-    ]);
-    expect(est.ftpWatts).toBe(190);
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 200, averageWatts: 190, deviceWatts: false, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(200);
     expect(est.derivedFromPower).toBe(true);
   });
 
-  it('lights up when power flows through GarminActual-shaped rows from sync', () => {
-    // Simulates what stravaSync patches onto `wk.garminActuals[id]` — the
-    // derivation should read the same fields and produce an FTP estimate.
-    const actuals = [
-      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 235, averageWatts: 210, deviceWatts: true } as PoweredActivity,
-    ];
-    const est = estimateFTPFromBikeActivities(actuals);
-    expect(est.derivedFromPower).toBe(true);
-    expect(est.ftpWatts).toBe(223);  // 235 × 0.95
+  it('high-signal pool wins over floor pool when both are present', () => {
+    // High: 60-min steady NP=260 → 260. Floor: 4h steady NP=250 → 275.
+    // High pool wins → result = 260, NOT 275.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 260, averageWatts: 245, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 247 * 60, normalizedPowerW: 250, averageWatts: 236, deviceWatts: true, startTime: daysAgo(7) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(260);
+  });
+
+  it("regression test: Tristan's 5-ride DB snapshot", () => {
+    // Real powered rides as of 2026-04-27. Most are stale (>52w cutoff);
+    // only the 35w + 39w endurance rides survive into the floor pool.
+    // Expected: weighted mean of (275 wt 0.054) + (241 wt 0.039) ≈ 261W, low confidence.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'CYCLING', durationSec: 62 * 60,  normalizedPowerW: 288, averageWatts: 277, deviceWatts: true, startTime: '2024-06-04T08:00:00Z' } as PoweredActivity,
+      { activityType: 'CYCLING', durationSec: 247 * 60, normalizedPowerW: 250, averageWatts: 236, deviceWatts: true, startTime: '2025-08-27T08:00:00Z' } as PoweredActivity,
+      { activityType: 'CYCLING', durationSec: 243 * 60, normalizedPowerW: 235, averageWatts: 215, deviceWatts: true, startTime: '2024-08-06T08:00:00Z' } as PoweredActivity,
+      { activityType: 'CYCLING', durationSec: 119 * 60, normalizedPowerW: 230, averageWatts: 194, deviceWatts: true, startTime: '2025-08-01T06:16:00Z' } as PoweredActivity,
+      { activityType: 'CYCLING', durationSec: 150 * 60, normalizedPowerW: 230, averageWatts: 207, deviceWatts: true, startTime: '2024-08-25T08:00:00Z' } as PoweredActivity,
+    ], REF);
+    // Two surviving floor candidates → weighted mean lands in 250–280 band.
+    expect(est.ftpWatts).toBeGreaterThanOrEqual(255);
+    expect(est.ftpWatts).toBeLessThanOrEqual(280);
+    expect(est.confidence).toBe('low');
+    expect(est.contributingRideCount).toBe(2);
   });
 });
 

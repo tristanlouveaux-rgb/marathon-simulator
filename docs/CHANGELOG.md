@@ -4,6 +4,245 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-27 — Triathlon FTP estimator: quality tiers + recency decay
+
+- **Bug** (`src/calculations/tri-benchmarks-from-history.ts → estimateFTPFromBikeActivities`): The previous algorithm applied Coggan's `FTP = NP × 0.95` rule uniformly to every powered ride. For long endurance rides this systematically *underestimated* FTP — Tristan's 247-min steady ride at NP=250W produced an FTP candidate of 238W, which is lower than what he had just sustained for 4 hours.
+- **Fix**: Quality-tier the rides before deriving.
+  - **High-signal** (20–75 min, vi ≥ 0.88, near-max steady): NP × {0.95 ≤30min, 0.97 30–50min, 1.00 >50min}.
+  - **Floor** (>75 min, vi ≥ 0.80, steady long ride): NP × {1.05 75–150min, 1.10 150–300min, 1.20 >300min}.
+  - **Drop** (vi < 0.80, surge-y ride): NP isn't diagnostic of sustained capacity — exclude.
+- **Recency**: weight = `exp(-weeksOld / 12)`, hard cutoff at 52 weeks. Old rides no longer anchor current FTP.
+- **Pool selection**: high-signal beats floor; mix only across the chosen pool.
+- **Confidence tier surfaced**: `high` (≤12w high-signal), `medium` (≤26w high-signal or ≥2 ≤12w floors), `low`, `none`. Logged on every boot in the `[tri] benchmarks refreshed from history` line so it's visible whether FTP rests on recent data.
+- **Tests**: rewrote the FTP test cases for the new tier logic and added a regression test using the real 5-ride DB snapshot that surfaced the bug. Full suite: 1083 passing, 0 failing.
+- **Science**: full rationale + Coggan citations + known limitations in `docs/SCIENCE_LOG.md → FTP from Ride History`.
+
+## 2026-04-27 — LT card: provenance caption + Edit button
+
+- **Stats LT bar** (`src/ui/stats-view.ts`): Added a subtle caption under the LT bar — *"May differ from your watch reading. Edit if you'd rather use a value you trust."* — plus an inline "Edit" button that opens the LT detail page (sliders + reset). Removed the `ltHistory.length > 3` gate so the detail page is always reachable, even before watch history accumulates.
+- **Brand-neutral copy**: replaced "Garmin watch" / "Garmin" labels with "Watch" / "watch" across the LT detail page (provenance caption, methods row, conflict-pick button, sparkline header) — Apple Watch users push physiology too.
+- **Override flow-through**: Save / Reset / conflict-pick handlers now refresh `s.pac = gp(getEffectiveVdot(m), m.lt)` after `recomputeLT`, so threshold/easy/marathon pace zones, workout descriptions, and `blendPredictions` race-time forecasts pick up the new LT immediately. Added an inline note on the override card explaining the flow-through.
+
+## 2026-04-25 — Session generator: effort picker + pace guidance
+
+- **What changed** (`src/ui/session-generator.ts`): Step 2 now includes an effort picker for Easy Run and Long Run sessions (Zone 2 / Steady / Threshold). Each tier shows the actual pace from `s.pac` (easy/marathon/threshold). A one-line load status derived from ACWR pre-selects the appropriate tier and shows copy like "Elevated load. Zone 2 or steady is appropriate." For structured sessions (threshold, VO2, marathon pace, progressive), a fixed "Target pace" row replaces the picker. Time and distance estimates in the secondary info update to reflect the selected effort pace. RPE on the generated workout is overridden to match (3 / 5 / 7).
+
+## 2026-04-25 — Sport name mapping no longer overrides explicit Strava type
+
+- **Bug**: New activities were displayed as kitesurfing despite Strava clearly tagging them as Run/Ride/etc. Reclassifying one of them to rugby then flipped *every* "kitesurfing" activity to rugby.
+- **Root cause** (`src/ui/sport-picker-modal.ts`): `getEffectiveSport` and `resolveSportForActivity` consulted `sportNameMappings[normalizedName]` *before* deriving from the Strava activityType. Every reclassification wrote a name → sport entry, so a single past mistake on a generic name (e.g. Strava catch-all "Workout") silently overrode every same-named activity. Reclassifying one kitesurf overwrote the same key, flipping the lot.
+- **Fix**: Trust Strava when its type is unambiguous. Name mapping is only consulted when `deriveSportFromActivityType` returns `generic_sport`. Symmetrically, `reclassifyActivity` now only persists a name mapping when the original derived type was `generic_sport` — per-activity `manualSport` still scopes the user's correction to that one activity.
+- **Follow-up**: even with the read-side fix, reclassifying a generic-typed activity (Strava "Workout"/CARDIO) still flipped every same-named activity, because Strava reuses generic names across unrelated sessions. Removed the `sportNameMappings` auto-write entirely — reclassification is now strictly per-activity via `manualSport`. Recurring auto-classification, if ever wanted, must be an explicit opt-in.
+- **Cleanup** (`src/main.ts`): one-time boot migration `_sportNameMappingsResetV2` wipes the table on next launch (supersedes v1, which still allowed writes for ambiguous types). Per-activity `manualSport` overrides are preserved.
+
+## 2026-04-25 — Running included in Leg Fatigue (distance × effort)
+
+- **Bug**: Hard 18 km the day before reads "Leg Fatigue 4 (Minimal)" — runs were never written to `recentLegLoads`. The cross-training pipeline was the only writer, and `SPORTS_DB` had no `legLoadPerMin` for running.
+- **Fix** (`src/ui/sport-picker-modal.ts`): `computeLegLoad` now dispatches to a run path when the activity is a run. Run leg load = `distanceKm × effortMultiplier(rpe)`, where the multiplier is sourced from `IMPACT_PER_KM` (easy 1.00 → vo2 1.50). RPE comes from `wk.rated[workoutId]` if logged, else HR-derived Karvonen mapping (handles bonked runs correctly: pace collapses but HR stays elevated).
+- **RBE suppressed for hard runs** (RPE ≥ 7). Maximal-effort EIMD is novel stress; protection from prior easy runs does not transfer (Chen et al. 2007). Cross-training and easy runs continue to receive the standard 0.6× discount.
+- **Backfill wiring**: `reconcileRecentLegLoads()` extended to detect runs and bucket them under `sport: 'running'`. Called from `activitySync.ts` after `matchAndAutoComplete` and from `main.ts` on launch so existing matched-but-unrecorded runs populate without manual intervention.
+- **State**: Added `'running'` to `SportKey` union and corresponding entries in `SPORTS_DB` (`legLoadPerMin` deliberately omitted — runs use the new km-based path) and `SPORT_LABELS`.
+- **Worked example**: 18 km at zone-4 HR (RPE 8), 24 h ago → raw 24.3, decayed 17.2 → readiness ~73 (soft taper). At 12 h ago → 20.4 → readiness capped at 54 (Manage Load), `drivingSignal = 'legLoad'`.
+- **Why TSB/Freshness wasn't changed**: 7-day half-life ATL is canonical Banister; the 163 TSS spike does correctly register as -3 daily-TSB, the math is right. The fatigue gap was the missing leg-load channel, not the freshness curve.
+- **Science**: docs/SCIENCE_LOG.md → "Running Leg Load" entry. Cites Mizrahi 2000 and Clansey 2014 for footstrike mechanics, Chen 2007 + Nosaka & Newton 2002 for RBE intensity-specificity.
+
+## 2026-04-25 — Wire LT derivation into state + Stats override UI
+
+- **New module** (`src/data/ltSync.ts`): `recomputeLT(s)` orchestrates the LT derivation engine against state. Builds `BestEffortInput`s from PBs and `SustainedEffortInput`s from `garminActuals`, calls `resolveLT()`, and applies the result. When the latest Garmin reading and our blended derivation differ by >10s/km, it stores `s.ltSuggestion` instead of overwriting — surfaced as a conflict prompt on the LT detail page.
+- **State** (`src/types/state.ts`): Added `ltSuggestion`, `ltUpdatedAt`, `ltSource`, `ltConfidence`, `garminLT`. `s.lt` now flows through `resolveLT()` (override > fresh Garmin <60d > blended derived).
+- **Sync hooks** (`src/data/physiologySync.ts`, `src/data/activitySync.ts`): Replaced the inline `s.lt = …` with a single call to `recomputeLT()`. Also recomputes after activity sync so new runs unlock empirical LT detection.
+- **Stats LT detail page** (`src/ui/stats-view.ts → buildLTMetricPage`): Provenance caption + confidence chip, methods breakdown card (each method's pace and weight), Garmin-reading sparkline, conflict-resolution card when sources disagree, and override sliders (pace and HR) with reset-to-derived. The override persists as `s.ltOverride` and wins over Garmin/derived.
+- **Tests**: All 29 LT derivation tests still pass after the wiring.
+
+## 2026-04-25 — Surface HR-calibrated VDOT in onboarding
+
+- **Onboarding review screen** (`src/ui/wizard/steps/review.ts`): The VDOT row now reads "Current fitness (VDOT)" and surfaces the HR-calibrated number when available. Sub-caption explains the method explicitly — *"Measured from your heart rate response to pace across N steady runs (long enough with stable HR) in the last 8 weeks. {tier} confidence."* Low-confidence variant marks the figure as a rough estimate. The previous "Add a resting HR in your profile" copy (which asked users to act on a profile they hadn't reached) is replaced with a calibration-pending fallback: *"We'll calibrate this from your heart rate once your physiology data syncs."*
+- **Physiology sync during onboarding** (`src/ui/wizard/steps/review.ts`, `triathlon-setup.ts`): Wizard now fires `syncPhysiologySnapshot(28)` before the Strava backfill so RHR + maxHR are available for the regression on first onboarding. Strava-only users without Garmin still see the calibration-pending fallback.
+- **Triathlon onboarding** (`src/ui/wizard/steps/triathlon-setup.ts`): "What we found" card now surfaces the HR-calibrated run VDOT alongside CSS, FTP, and CTL, with the same method + confidence copy as the running flow.
+- **State cache + reconciliation** (`src/types/state.ts`, `src/calculations/blended-fitness.ts`): Added `s.hrCalibratedVdot` (vdot, confidence, n, r2, reason). Populated by `refreshBlendedFitness` *before* the early-return guards so the review screen sees it when race distance isn't set yet. When confidence is medium+ and `s.rd` is unset, `s.v` is also overwritten to keep the figure consistent across screens until the full blend kicks in mid-plan.
+- **Triathlon handoff** (`docs/TRIATHLON_HANDOFF.md`): Documented the onboarding-surface pattern — one row per sport, calibrated value + confidence + plain-language method, low-confidence variant, calibration-pending fallback. Triathlon agent to mirror for FTP and CSS.
+- **Tests** (`src/calculations/blended-fitness.test.ts`): New 5-test suite covers the pre-guard cache write, s.v reconciliation rules, low-confidence guard, no-RHR path, and stale-entry overwrite.
+- **Order-of-operations fix** (`src/ui/wizard/steps/review.ts`): Wizard now runs `backfillStravaHistory` → `syncPhysiologySnapshot` → explicit `refreshBlendedFitness(getMutableState())` before rendering. Previous order ran physio first (empty activity envelope, maxHR didn't load) then backfill's internal refresh fired without RHR/maxHR, leaving the cache as `{confidence: 'none', reason: 'no-rhr'}` and showing the bland fallback caption.
+- **Plan-preview surface** (`src/ui/wizard/steps/plan-preview-v2.ts`): "Starting VDOT" row now has a method sub-caption mirroring the review screen tiers, and the info popup explains how the user's specific number was measured (HR-calibrated regression with N, R², confidence tier) instead of only quoting Daniels generically.
+
+## 2026-04-24 — Fix: Strava-upgraded activities showing as Garmin in Recent list
+
+- **Root cause A** (`src/calculations/activity-matcher.ts`): The Strava upgrade loop that replaces a Garmin-sourced `garminActuals` entry with richer Strava data was not updating `activityType` or `displayName`. The entry kept its old Garmin sport type (e.g. `WORKOUT`) even after upgrade.
+- **Root cause B** (`src/ui/home-view.ts`): `buildRecentActivity` was skipping the `garminActuals` entry in favor of the `adhocWorkout` entry when both had the same key. Since `adhocWorkouts` still had old Garmin display data (`n = 'Workout'`), the upgraded Strava version was invisible.
+- **Fix 1** (`activity-matcher.ts`): Strava upgrade loop now also copies `activityType` and `displayName` from the Strava row, and updates the corresponding `adhocWorkout.n` to match.
+- **Fix 2** (`home-view.ts` / `buildRecentActivity`): Flipped dedup priority — `garminActuals` wins over `adhocWorkouts` for the same key. Adhoc entries are skipped when `garminActuals` has a richer entry.
+- **Fix 3** (`home-view.ts` / `computeLoadBreakdown`, `fitness-model.ts` / `computeWeekTSS`, `computeWeekRawTSS`, `computeTodaySignalBTSS`): All TSS-computing loops now skip `adhocWorkouts` entries when `garminActuals` already has the same key (prevents double-counting TSS after a Strava upgrade).
+
+---
+
+## 2026-04-25 — Fix: Strava upgrade loop corrupted by garminPending overwrite
+
+- **Root cause**: In `matchAndAutoComplete`, after the garminActuals upgrade fires (replacing a Garmin-webhook actual with richer Strava data), the garminPending section immediately overwrote `garminMatched["strava-X"] = "__pending__"` because matched runs also appear in garminPending. This corrupt mapping caused the re-enrich loop to skip the actual on future syncs, and could cause the main matching loop to re-process the Strava row as a new activity (creating a duplicate adhoc entry in past weeks).
+- **Fix 1 (`src/calculations/activity-matcher.ts`)**: After the garminActuals upgrade, add `globalProcessed.add(row.garmin_id)` so the main matching loop excludes this row from `newRows`. The garminPending section now runs in a separate guard branch that updates the pending item's garminId (cosmetic) but does NOT touch `garminMatched`.
+- **Fix 2 (`src/data/stravaSync.ts`)**: Added a defensive "Strava always wins" pass after `matchAndAutoComplete`. Iterates all Strava rows by start_time ±10 min against all weeks' garminActuals. Any Garmin-sourced actual with a matching Strava row is force-upgraded (garminId, polyline, hrZones, kmSplits, pace etc.) and `garminMatched` is set to the correct slot. This self-heals existing state where a prior sync corrupted the mapping.
+
+---
+
+## 2026-04-25 — Activity detail coach: high-HR and TSS-historical commentary
+
+- **`src/calculations/workout-insight.ts`**: Two new signals added to `gatherSignals`.
+  - `hrPctMax`: avgHR as a fraction of known maxHR. When >= 0.87, the narrative explicitly names the bpm and percentage instead of the generic "HR was elevated" sentence. >= 0.90 gets "near race-effort intensity" language.
+  - `weeksAgoHigherTSS`: scans all prior run actuals (via `allActuals` passed from state) to find the last time a run hit >= current TSS. When found and >= 3 weeks ago, adds "Highest-load run in X weeks at N TSS." sentence.
+- **`InsightOptions`** extended with `allActuals?: GarminActual[]`.
+- **`src/ui/activity-detail.ts`**: extracts `allActuals` from `s.wks` and passes to `generateWorkoutInsight`.
+
+---
+
+## 2026-04-25 — Lactate threshold derivation (decouples us from Garmin)
+
+- **New `src/calculations/lt-derivation.ts`** blends three scientifically-grounded methods into a single LT pace + LTHR estimate:
+  1. **Daniels T-pace from VDOT** — invert Daniels' VO2 cost-of-running equation for vVO2max, scale by 0.88.
+  2. **Critical Speed from race-distance PBs** — 2-parameter hyperbolic fit `d = CS·t + D′`, LT = 0.93 × CS (Nixon et al. 2021 CS↔MLSS offset).
+  3. **Empirical detection from sustained efforts** — runs ≥20 min, HR in 85–92% HRmax band, pace CV <8%, decoupling <5%, with outlier guards for treadmill, heat (>28°C), hills (>15 m/km gain), and unsteady pacing.
+- **Blend weights** depend on which methods fire: empirical 0.5 / CS 0.3 / Daniels 0.2 when all three; 1.0 when single method only.
+- **LTHR** prefers empirical median; falls back to 0.88 × HRmax (literature midpoint of LT2 band).
+- **`resolveLT()` selector** orders sources: `override > fresh Garmin (<60d) > derived > stale Garmin > null`. Lets fresh watch readings override our derivation when available, but our derivation always backstops.
+- **`s.ltOverride` field** added to state — user-entered LT pace + optional LTHR + ISO `setAt`. Wins outright when present.
+- **29 unit tests** cover each method, outlier rejection, blending, and source precedence.
+- **Full science write-up** in `docs/SCIENCE_LOG.md → Lactate Threshold Derivation` — formula derivations, citations (Daniels, Jones & Vanhatalo, Nixon, Friel, Faude, Poole), confidence model, outlier failure-mode table.
+- **Not yet wired into UI** — see "next steps" below. Calculation lives standalone until UX placement is agreed.
+
+---
+
+## 2026-04-24 — Effort-calibrated VDOT from HR
+
+- **New signal in the race-prediction blend.** Historically `blendPredictions` weighed recent run / PB / LT / VO2 / Tanda. Today we add a sixth signal: **effort-calibrated VDOT** computed from the last 8 weeks of HR-tagged runs via the Swain & Leutholtz 1997 %HRR ≈ %VO2R relationship. Each qualifying run contributes a point `(pace, %VO2R, duration)`, weighted linear regression fits `pace = α + β·%VO2R`, and extrapolation to `%VO2R = 1.0` gives the athlete's current vVO2max, converted to VDOT via Daniels' tables.
+- **Qualifying filter** — duration ≥ 20 min (Swain validated on steady submax), HR drift < 8% (excludes fatigue / supra-threshold per Friel), pace 3:00–7:30 /km, %HRR in [40%, 95%]. Physiological sanity guard rejects non-negative β (inverted HR-pace curve → noisy data).
+- **No fabricated constants**: if resting HR or max HR are missing, the HR-calibrated VDOT returns null with `confidence: 'none'` and its weight redistributes to LT — matches the same fallback pattern used for Tanda when volume is insufficient.
+- **Weight scaling** — HR weight is scaled by confidence tier (high 1.0, medium 0.7, low 0.4); shed weight flows to LT. At marathon: base HR weight is 10% (recent-run path) or 15% (standalone path), and 15% for 5K/10K/HM.
+- **Files**: new `src/calculations/effort-calibrated-vdot.ts` (pure function, 15 tests), extended `RunActivityInput` with optional `avgHR`/`hrDrift`, wired into `blendPredictions` + `blended-fitness.ts`. Onboarding path also carries HR — the edge function's `runs` response now includes `avgHR` from Strava's list endpoint.
+- **Science log**: new entry "Effort-Calibrated VDOT from HR" documents the formula, Swain+Daniels+Friel+Tanaka anchors, blending weights, and known limitations.
+- **Triathlon handoff**: `docs/TRIATHLON_HANDOFF.md` updated — the bike/swim prediction engines the triathlon agent builds should mirror the same four-signal blend (HR-cal + hard effort + Tanda analog + PB) with identical confidence+recency weighting.
+
+## 2026-04-24 — Triathlon week advancement un-stuck
+
+- **Root cause**: Triathlon users had `s.w` permanently frozen at week 1. `advanceWeekToToday` applies a `debriefCap = lastCompleteDebriefWeek + 1` to ensure running users complete a plan-preview debrief before advancing. Triathlon has no plan-preview debrief, so `lastCompleteDebriefWeek` was never updated and the cap held `s.w` at 1 forever. Activities from week 2 onwards went into `wks[1]` but `buildRecentActivity` only shows `wks[s.w-1]` and `wks[s.w-2]` — so they were invisible.
+- **`initialization.triathlon.ts`**: now sets `planStartDate` (Monday of current week) explicitly on init, and seeds `lastCompleteDebriefWeek = 0` + `_debriefGateV3 = true` so the migration never clobbers the anchor.
+- **`welcome-back.ts` `advanceWeekToToday`**: triathlon users use `debriefCap = Infinity` — they advance freely with no debrief gate.
+- **`main.ts`**: the debrief gate rollback (`_ms.w = lastComplete + 1`) is also skipped for `eventType === 'triathlon'`.
+
+## 2026-04-24 — Strava always wins over Garmin
+
+- **`sync-activities` edge function**: added `polyline`, `elevation_gain_m`, `km_splits`, `hr_drift`, `ambient_temp_c` to the SELECT (previously omitted, so Strava-enriched fields never reached the app). Added dedup: any Garmin row whose start time is within ±10 min of a Strava row is suppressed before returning — Strava is canonical.
+- **`activity-matcher.ts` — Strava upgrade loop**: when a Strava row arrives for an activity that was previously matched via Garmin webhook (same ±10 min start time), the existing `garminActuals` entry is fully replaced with the richer Strava data (HR zones, iTRIMP, polyline, etc.). Also upgrades `garminPending` items. `garminMatched` is updated to register the Strava ID so re-syncs don't create a duplicate.
+- **`CLAUDE.md`**: added "Strava is the Canonical Activity Source" rule.
+
+## 2026-04-24
+
+- **Garmin webhook — `activity_details` 42P10 fix.** Every `activityDetails` push was failing because `activity_details.garmin_id` had no unique constraint — the `ON CONFLICT` target was invalid. Applied `ALTER TABLE activity_details ADD CONSTRAINT activity_details_garmin_id_key UNIQUE (garmin_id)` directly in Supabase. Migration `20260310000001_activity_details_constraint.sql` existed locally but had never been applied to prod. See `docs/GARMIN.md → 2026-04-24`.
+- **Garmin dev credentials — VO2 Max now flowing.** Confirmed `userMetrics` push landed with `vo2Max: 55` on the development consumer key. Previous assumption that dev tier suppressed all VO2/LT fields was outdated. Whether LT pace / HR are permanently dev-gated or just hadn't refreshed in this payload cycle is **unconfirmed** — Garmin's public docs don't specify field-level gating. `docs/GARMIN.md → 2026-04-24 OPEN` entry reframes this as an open question and includes a support-contact draft.
+- **`src/ui/home-view.ts`** — "How did you sleep last night?" card no longer shown when sleep data is already available from any source. Condition changed from `noWatch && !manualToday` to `sleepScore == null && !manualToday`, so the manual prompt only appears when there is genuinely no sleep signal.
+
+## 2026-04-24 — Post-run RPE modal: matched to monochrome overlay pattern
+
+The RPE prompt that appears after a Strava sync used a flat card with a bright-blue `var(--c-accent)` Save button and 12px-radius buttons — visually adrift from the new onboarding/plan-preview overlays.
+
+- **`src/ui/activity-review.ts`** — card gains Apple 3-layer shadow, 20px radius, white surface, `rgba(0,0,0,0.06)` border. Title pattern mirrors milestone/VDOT overlays: small uppercase "LOG EFFORT" label + 18px title + muted 13px subline. Save becomes black `#0A0A0A` pill with the same inset highlight + drop shadow as the review/plan-preview CTAs. Skip becomes a bordered white pill.
+- **Slider colour** — dropped the green/amber/red traffic-light accent (`rpeColorVar` helper removed). Slider, value, and label all sit in `var(--c-black)` / `var(--c-muted)`. The RPE number is the data; colour was redundant signal, and three non-neutral hues broke the monochrome aesthetic next to the new pill CTAs.
+
+## 2026-04-24 — Running no-event path: distinct title, prediction hidden, focus-driven pacing
+
+The Running tile → No event path silently fell back to a half-marathon target: `initializeSimulator` ran `state.raceDistance || 'half'`, so `s.rd='half'` even though the user picked a focus-based (non-event) plan. Plan-preview then rendered "X weeks to Half Marathon" with a PREDICTED FINISH hero, and home title leaked the generic "Fitness Plan".
+
+- **`src/state/initialization.ts`** — `targetDistStr` for `trainingForEvent === false` now derives from focus: endurance → half, speed → 5K, balanced → 10K. Keeps a valid pacing reference for workout generation (MP/HMP zones) without pretending the user picked a race.
+- **`src/ui/wizard/steps/plan-preview-v2.ts`** — branches on `s.continuousMode`. Subtitle reads "Ongoing · Endurance focus." or "12-week block · Speed focus." depending on `state.continuousMode`. Hero swaps PREDICTED FINISH + time for a focus-summary card (label, one-line blurb, "No race target. Rolling plan…" caption). Milestone popup suppressed. Prediction-updates-weekly note rewritten to "Your plan adapts weekly…".
+- **`src/ui/home-view.ts` + `src/ui/main-view.ts`** — `getHomePlanName` / `getPlanName` now return "Speed Plan" / "Endurance Plan" / "Balanced Plan" for continuous-mode users based on `s.onboarding?.trainingFocus`, falling back to "Fitness Plan" when focus is absent.
+- **`src/ui/wizard/steps/initializing.ts`** — short-circuit gains a `runningSettingsChanged` check alongside the triathlon one. Flipping event Y/N or changing focus (which remaps `targetDistStr`) now forces a full reinit on wizard re-entry; previously the initializing screen skipped reinit whenever `wks.length > 0` and left `s.rd` stale.
+
+Known narrow gap: swapping between two races at the *same* distance (e.g. London Marathon → Berlin Marathon) won't currently trip `runningSettingsChanged` because `expectedRd` stays identical. `s.selectedMarathon` / `s.tw` (from weeksUntil) would then be stale. Low impact because normal Edit-Settings flows change mode or distance, not same-distance race pick.
+
+## 2026-04-24 — Triathlon↔running reinit: clear stale event fields
+
+Selecting a running race (e.g. Edinburgh half) after a prior triathlon test kept surfacing "Ironman" on home and "24 weeks to Marathon" on plan-preview. Two compounding leaks:
+
+- **`src/ui/wizard/steps/initializing.ts`** — mid-plan short-circuit (`wks.length > 0 && !modeChanged && !triSettingsChanged`) skipped `initializeSimulator` entirely when switching training modes, so the running wizard never rewrote state. Added `trainingModeChanged = (state.trainingMode === 'triathlon') !== (rt.eventType === 'triathlon')` to force full reinit on the flip.
+- **`src/state/initialization.ts`** — running init path never cleared `s.eventType` or `s.triConfig`. Now explicitly sets `s.eventType = 'running'` and `s.triConfig = undefined` alongside `s.trackOnly = false`. `s.rd = 'marathon'` from the triathlon placeholder is already overwritten by `targetDistStr`.
+
+## 2026-04-24 — PB detail-fetch: pace-sorted distance bands
+
+Distance-desc sorting captured the marathon + half PBs but missed 5K/10K PBs from older standalone races (a 2024 18:00 5K race is shorter than a routine 2026 tempo run, so it fell outside the "longest 60" window).
+
+- **`supabase/functions/sync-strava-activities/index.ts`** — best_efforts candidates now bucketed by distance band (4–8 / 8–15 / 18–28 / ≥40 km) and ranked by pace ascending within each. Takes fastest 12 per band (8 for marathons). Total ~44 fetches per session, comfortably under Strava's 100/15-min limit. First-pass covers all four PB distances; remaining activities fill in on subsequent launches.
+- **`src/ui/wizard/steps/review.ts`** — PB row order 5K → 10K → Half → Marathon (was 10K → Half → Marathon → 5K). REST query `limit=200` → `1000` so older PB-bearing runs aren't truncated for high-volume users (200 rows only covers ~20 weeks when activity density is 10+/week).
+
+## 2026-04-24 — Strava backfill: 429-tolerant + distance-prioritised PB fetch
+
+- **`supabase/functions/sync-strava-activities/index.ts`** — activity-list paginator now catches 429 mid-loop and proceeds with whatever pages it got. Previously a single 429 on page 3 threw 500, wasting the already-fetched 400 activities.
+- **`BEST_EFFORTS_BUDGET` 300 → 60** — Strava's limit is ~100 req / 15 min, so 300 was fantasy. Budget now sized to leave headroom for list pagination + drift/temp heal loops that share the same window.
+- **Detail-fetch ordering**: candidates sorted by distance descending before slicing. Marathon PB lives in the longest run, half PB in the longest few, so all four onboarding PBs are captured even if the loop truncates. Previous start-time ordering dropped older (often more PB-rich) runs first on rate-limit.
+- **`src/ui/wizard/steps/review.ts`** — volume caption "N runs in 16 weeks" → "N runs in your history" to match the 3-year scan.
+
+## 2026-04-24 — Webhook handlers + `docs/WEBHOOKS.md`
+
+Partner Verification diagnosis: Garmin's portal tests require `deregistration` and `userPermissionsChange` endpoints to be enabled and receive valid 200s. Our webhook had no handlers for either, nor for `stressDetails` (which was arriving silently and confusing the log stream).
+
+- **`supabase/functions/garmin-webhook/index.ts`**
+  - `handleDeregistrations` — deletes the `garmin_tokens` row for the user on consent revoke. Physiology data in other tables is preserved.
+  - `handleUserPermissions` — logs the new permission set. No automatic action since tokens stay valid; Garmin just stops sending revoked categories.
+  - `handleStressDetails` — acknowledges payloads (not stored; app uses `daily_metrics.stress_avg` instead). Prevents silent drops.
+  - Three new top-level key routes wired in `Deno.serve`: `stressDetails`, `deregistrations`, `userPermissions`.
+
+- **New: `docs/WEBHOOKS.md`** — single source of truth for the Garmin webhook. Every payload type mapped to handler + DB target, production verification test table with current pass/fail state, key design rules (idempotency, null-safety, field-name drift), deployment checklist, debugging checklist.
+
+- **`CLAUDE.md`** — Key Docs table gains a `WEBHOOKS.md` row.
+- **`docs/GARMIN.md`** — cross-linked to the new webhook doc at the top.
+
+Diagnosis this session also established that dev-tier credentials (`client_id 1057f911-...`) suppress VO2 Max / Lactate Threshold fields from `userMetrics` payloads. Real data only flows once Garmin issues a production key, which requires passing all four Partner Verification tests. Currently failing three (Endpoint Setup, Endpoint Coverage, Active User) — next step is enabling the two new endpoints in Garmin's Portal and recording a HR-tracked run to populate the activity coverage tests.
+
+---
+
+## 2026-04-24 — Account: Garmin reconnect path when Strava is connected
+
+After a user disconnects Garmin while Strava remains connected, the Account view previously hid the Garmin tile entirely — `useStravaStandalone` evaluated true and the groupCard only rendered the Strava row, leaving no affordance to reconnect. Two fixes:
+
+- **`src/ui/account-view.ts`** — Strava-standalone card now renders the Strava row *plus* a Garmin row (reusing `renderGarminRow()`, which already handles the not-connected state with a Connect button). `checkGarminStatus()` guard widened: runs unless Apple is the explicit physiology source, so the Connect/Sync/Remove labelling stays accurate.
+- **`src/main.ts`** — `?garmin=connected` OAuth callback now writes `wearable: 'garmin'` to state. Previously only the toast and re-render fired, which left `hasPhysiologySource(state, 'garmin')` false after reconnect, skipping the physiology/VO2/LT sync branch on next launch. This is why reconnection wouldn't pull VO2 back even after a clean OAuth round-trip.
+
+Reconnect flow: Account → Connect Garmin → OAuth → return → state flips to Garmin + Strava-enrich card, and the launch branch for `hasPhysiologySource(state, 'garmin')` starts running again.
+
+---
+
+## 2026-04-24 — Just-Track polish pass + plan↔track switching
+
+Holistic pass on Just-Track to make it a first-class mode rather than a bare-bones escape hatch. Five view audits, five small home/stats tweaks, three structural additions (recurring-activities editor, upgrade welcome note, plan↔track transition).
+
+**View audits**
+
+- **`src/ui/record-view.ts`** — idle-state copy branches on `s.trackOnly`: "Record a run" + "Start a run. We'll log distance, pace, and heart rate." replaces "Just Run" + "we'll fit it into your plan automatically."
+- **`src/ui/readiness-view.ts`** — `freshnessExplanation` copy that said "Training as planned" now reads "Normal training today is fine" (mode-neutral).
+- **`src/ui/strain-view.ts`** — status label "High for a rest day" reframes as "High load today" for trackOnly (no plan means no concept of rest-vs-training days). `coachingText` helper gained a `trackOnly` param for future use.
+
+**Home (`src/ui/home-view.ts → getTrackOnlyHomeHTML`)**
+
+- First-launch orientation: when the user has no CTL, no watch data, and no wks-recorded activity, the hero subcopy flips to "Connect Strava or record your first run to start seeing data." instead of "Tracking only. No plan generated."
+- Sleep-log affordance: small "Log sleep" link under the readiness ring → opens `showManualSleepPicker`. Reintroduces manual sleep entry without reintroducing the full Check-in flow.
+- "Create a plan" demoted from a full-width glass button to a muted underlined link at the bottom. Track-only is a first-class mode, not a funnel step.
+- Daily-target card: "target 42" → "sustainable 42" (with tooltip explaining it's CTL-anchored, not a prescription).
+- Unified empty-state copy: "Connect Strava or record a run" is the single CTA across daily-target / volume / load cards.
+
+**End-of-plan → track-only transition (new)**
+
+- **`src/ui/wizard/controller.ts → downgradeToTrackOnly()`** — inverse of `upgradeFromTrackOnly`. Flips `onboarding.trackOnly=true`, sends user through initializing; the mode-change guard (previously added) triggers `initializeSimulator`'s trackOnly branch which rewrites `s.wks` as a rolling one-week bucket. Preserves `s.ctlBaseline`, PBs, physiology, Strava / Garmin / Apple connections.
+- **Account → Advanced → "Switch to tracking only"** — button visible only when `!s.trackOnly`. Opens a confirm modal, then calls `downgradeToTrackOnly()`.
+- **Home race-complete banner** (`buildRaceCompleteBanner`): shows above today-workout when `selectedMarathon.date < today && !s.trackOnly && !s.continuousMode && !s.racePastPromptDismissed`. Offers "Switch to tracking" button + × dismiss. Dismiss flags on state so banner stops firing.
+
+**Upgrade welcome note (`src/ui/wizard/steps/plan-preview-v2.ts`)**
+
+- When `s.ctlBaseline >= 20` (athlete has meaningful baseline fitness from prior tracking or Strava history), the plan-preview screen now shows: "Starting with X TSS/day of baseline fitness from your recent training. Your plan is pitched to continue from there, not restart you."
+
+**Recurring activities editor (`src/ui/account-view.ts`)**
+
+- New "Training" section shown only when `s.recurringActivities.length > 0`. Tap opens a modal listing each entry with a × remove button. Fixes the "soccer is legacy" UX where users couldn't clean up old onboarding picks without devtools. Adding new activities is still onboarding-only for this iteration.
+
+All changes typecheck. ISSUE-148 to be filed for "Recurring activities — add flow in Account" follow-up.
+
+---
+
 ## 2026-04-24 — Triathlon MVP shipped (overnight build)
 
 Full first-pass triathlon mode end-to-end. Running mode untouched. Opt-in via the new Triathlon tile on the goals step. See `docs/TRIATHLON.md` §18 for the spec and `docs/MORNING_SUMMARY.md` for the hands-on guide.

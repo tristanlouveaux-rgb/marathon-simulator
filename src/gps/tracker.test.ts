@@ -272,4 +272,98 @@ describe('GpsTracker', () => {
       expect(tracker.getStatus()).toBe('stopped');
     });
   });
+
+  describe('auto-pause', () => {
+    // ~1m of latitude ≈ 111_000 meters, so 0.00001 lat ≈ 1.11m
+    // To simulate ~3 m/s running, move ~0.000027 lat/sec.
+    const LAT_PER_METER = 1 / 111_000;
+
+    it('triggers auto-pause after 5s of near-zero movement while tracking', async () => {
+      const events: string[] = [];
+      tracker.onAutoPause(() => events.push('pause'));
+
+      await tracker.start();
+      provider.pushPoint(makePoint(0, 0, 0));          // first point → tracking
+      // Running for 2s
+      provider.pushPoint(makePoint(LAT_PER_METER * 6, 0, 2000));
+      // Now go stationary for 6s
+      for (let t = 3000; t <= 8000; t += 1000) {
+        provider.pushPoint(makePoint(LAT_PER_METER * 6, 0, t));
+      }
+      expect(tracker.getStatus()).toBe('paused');
+      expect(tracker.isAutoPaused()).toBe(true);
+      expect(events).toHaveLength(1);
+    });
+
+    it('auto-resumes after 3s of clear movement while auto-paused', async () => {
+      const events: string[] = [];
+      tracker.onAutoPause(() => events.push('pause'));
+      tracker.onAutoResume(() => events.push('resume'));
+
+      await tracker.start();
+      provider.pushPoint(makePoint(0, 0, 0));
+      for (let t = 1000; t <= 7000; t += 1000) {
+        provider.pushPoint(makePoint(0, 0, t));  // stationary → auto-pause
+      }
+      expect(tracker.isAutoPaused()).toBe(true);
+
+      // Move ~2.5m/step over 3 seconds → mean ~2.5 m/s > 1.5 threshold
+      for (let i = 1; i <= 4; i++) {
+        provider.pushPoint(makePoint(LAT_PER_METER * 2.5 * i, 0, 7000 + i * 1000));
+      }
+      expect(tracker.getStatus()).toBe('tracking');
+      expect(events).toEqual(['pause', 'resume']);
+    });
+
+    it('does not trigger when auto-pause disabled at construction', async () => {
+      const p = new MockGpsProvider();
+      const t2 = new GpsTracker(p, undefined, { autoPause: false });
+      const events: string[] = [];
+      t2.onAutoPause(() => events.push('pause'));
+
+      await t2.start();
+      p.pushPoint(makePoint(0, 0, 0));
+      for (let t = 1000; t <= 8000; t += 1000) {
+        p.pushPoint(makePoint(0, 0, t));
+      }
+      expect(t2.getStatus()).toBe('tracking');
+      expect(events).toHaveLength(0);
+    });
+
+    it('manual pause does not set the auto flag', async () => {
+      await tracker.start();
+      provider.pushPoint(makePoint(0, 0, 0));
+      tracker.pause();
+      expect(tracker.getStatus()).toBe('paused');
+      expect(tracker.isAutoPaused()).toBe(false);
+    });
+
+    it('disabling auto-pause while auto-paused triggers resume', async () => {
+      await tracker.start();
+      provider.pushPoint(makePoint(0, 0, 0));
+      for (let t = 1000; t <= 7000; t += 1000) {
+        provider.pushPoint(makePoint(0, 0, t));
+      }
+      expect(tracker.isAutoPaused()).toBe(true);
+      tracker.setAutoPauseEnabled(false);
+      expect(tracker.getStatus()).toBe('tracking');
+    });
+
+    it('brief pause under 5s does not trigger', async () => {
+      const events: string[] = [];
+      tracker.onAutoPause(() => events.push('pause'));
+
+      await tracker.start();
+      provider.pushPoint(makePoint(0, 0, 0));
+      // stationary for only 3 seconds, then move
+      for (let t = 1000; t <= 3000; t += 1000) {
+        provider.pushPoint(makePoint(0, 0, t));
+      }
+      for (let i = 1; i <= 3; i++) {
+        provider.pushPoint(makePoint(LAT_PER_METER * 3 * i, 0, 3000 + i * 1000));
+      }
+      expect(tracker.getStatus()).toBe('tracking');
+      expect(events).toHaveLength(0);
+    });
+  });
 });

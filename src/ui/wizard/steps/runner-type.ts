@@ -18,14 +18,31 @@ const TYPE_DESCRIPTIONS: Record<RunnerType, string> = {
  * Render the runner type confirmation page.
  */
 export function renderRunnerType(container: HTMLElement, state: OnboardingState): void {
+  // Classification needs at least 2 different-distance PBs to detect a
+  // speed/endurance lean from the ratio. With 0 or 1 PB it's noise — skip the
+  // screen entirely. The engine falls back to 'Balanced' until enough data
+  // accrues via real race entries.
+  const pbs = state.pbs ?? {};
+  const pbCount = [pbs.k5, pbs.k10, pbs.h, pbs.m].filter(v => v != null && v > 0).length;
+  if (pbCount < 2) {
+    console.log(`[runner-type] Only ${pbCount} PB(s) on file — skipping classification screen.`);
+    try { window.wizardNext(); } catch { nextStep(); }
+    return;
+  }
+
   const calculatedType = state.calculatedRunnerType || 'Balanced';
   const activeType = state.confirmedRunnerType || calculatedType;
 
   container.innerHTML = `
-    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
+    <style>
+      .rp-card { background:rgba(255,255,255,0.95); backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); border:1px solid rgba(0,0,0,0.06); border-radius:20px; padding:24px; box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08); }
+    </style>
+    <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:64px 24px 96px">
+      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+
+      <div style="position:relative;z-index:1;width:100%;max-width:480px">
       ${renderProgressIndicator(7, 8)}
 
-      <div style="width:100%;max-width:480px">
         <h2 style="font-size:clamp(1.4rem,5vw,1.9rem);font-weight:300;color:var(--c-black);text-align:center;margin-bottom:8px">
           Your Runner Profile
         </h2>
@@ -33,7 +50,7 @@ export function renderRunnerType(container: HTMLElement, state: OnboardingState)
           Here's your running style, based on your race times.
         </p>
 
-        <div style="background:var(--c-surface);border:1px solid var(--c-border);border-radius:12px;padding:24px">
+        <div class="rp-card">
           <!-- Spectrum -->
           ${renderSpectrum(activeType)}
 
@@ -68,26 +85,25 @@ export function renderRunnerType(container: HTMLElement, state: OnboardingState)
 }
 
 function renderSpectrum(activeType: RunnerType): string {
-  const positions: Record<RunnerType, string> = {
-    Speed: '16.67%',
-    Balanced: '50%',
-    Endurance: '83.33%',
+  // Positions are the centre of each segment along the 0–100% track.
+  const positions: Record<RunnerType, number> = {
+    Speed: 16.67,
+    Balanced: 50,
+    Endurance: 83.33,
   };
-
-  const dotColors: Record<RunnerType, string> = {
-    Speed: '#F97316',
-    Balanced: '#22C55E',
-    Endurance: '#3B82F6',
-  };
+  const pct = positions[activeType];
 
   return `
-    <div style="position:relative;padding-top:4px">
-      <div style="height:10px;border-radius:5px;background:linear-gradient(to right, #F97316, #22C55E, #3B82F6);opacity:0.7"></div>
-      <div style="position:absolute;top:0;transition:left 0.4s ease;" id="spectrum-dot"
-           style="left:${positions[activeType]}">
-        <div style="position:absolute;left:${positions[activeType]};transform:translateX(-50%);width:20px;height:20px;border-radius:50%;background:white;box-shadow:0 2px 8px rgba(0,0,0,0.2);border:2.5px solid ${dotColors[activeType]}"></div>
+    <div style="position:relative;padding:6px 0 0">
+      <!-- Track -->
+      <div style="height:6px;border-radius:3px;background:rgba(0,0,0,0.08);position:relative;overflow:hidden">
+        <!-- Filled portion (charcoal) up to the marker position -->
+        <div style="position:absolute;top:0;left:0;height:100%;width:${pct}%;background:var(--c-black);transition:width 0.4s ease"></div>
       </div>
-      <div style="display:flex;justify-content:space-between;margin-top:10px;font-size:12px;color:var(--c-faint)">
+      <!-- Marker: single element, transform:translateX(-50%) centres it on its left position. -->
+      <div id="spectrum-dot"
+           style="position:absolute;top:-1px;left:${pct}%;transform:translateX(-50%);width:16px;height:16px;border-radius:50%;background:#FDFCF7;border:2px solid var(--c-black);box-shadow:0 1px 4px rgba(0,0,0,0.18);transition:left 0.4s ease"></div>
+      <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:12px;color:var(--c-faint)">
         <span>Speed</span>
         <span>Balanced</span>
         <span>Endurance</span>
@@ -98,14 +114,12 @@ function renderSpectrum(activeType: RunnerType): string {
 
 function renderTypeButton(type: RunnerType, activeType: RunnerType): string {
   const isActive = type === activeType;
-  const typeColors: Record<RunnerType, string> = { Speed: '#F97316', Balanced: '#22C55E', Endurance: '#3B82F6' };
-
   return `
     <button data-type="${type}"
       style="${isActive
-        ? `background:${typeColors[type]};color:white;border:2px solid ${typeColors[type]}`
-        : 'background:var(--c-bg);color:var(--c-black);border:1.5px solid var(--c-border-strong)'
-      };border-radius:10px;padding:12px 4px;font-size:13px;font-weight:500;cursor:pointer;transition:all 0.15s;width:100%" class="type-option">
+        ? 'background:#0A0A0A;color:#FDFCF7;border:1px solid rgba(0,0,0,0.9);box-shadow: 0 0 0 1px rgba(0,0,0,0.9), 0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.08)'
+        : 'background:#FFFFFF;color:var(--c-black);border:1px solid rgba(0,0,0,0.08);box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06)'
+      };border-radius:12px;padding:12px 4px;font-size:13px;font-weight:500;cursor:pointer;transition:background 0.15s, color 0.15s, box-shadow 0.2s;width:100%" class="type-option">
       ${type}
     </button>
   `;

@@ -21,6 +21,7 @@ import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedW
 import { formatKm } from '@/utils/format';
 import { next } from '@/ui/events';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
+import { detectEasyDriftPattern } from '@/calculations/daily-coach';
 import { planWeekSessions, effortMultiplier } from '@/workouts/plan_engine';
 import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workout';
 import { generateWeekWorkouts } from '@/workouts/generator';
@@ -73,6 +74,39 @@ export function shouldAutoDebrief(): boolean {
   return true;
 }
 
+/**
+ * True when week `weekNum` still has Garmin/Strava activities awaiting the user's
+ * matching decision (garminMatched[id] === '__pending__'). Auto-debrief must not
+ * fire while these exist — the debrief summary would show incomplete load data
+ * and overlay the matching screen.
+ */
+export function hasUnresolvedActivityAssignments(weekNum: number): boolean {
+  const s = getState() as any;
+  const wk = s.wks?.[weekNum - 1];
+  if (!wk?.garminPending?.length) return false;
+  const matched = wk.garminMatched ?? {};
+  return wk.garminPending.some((p: any) => (matched[p.garminId] ?? '__pending__') === '__pending__');
+}
+
+/**
+ * Fire the auto-debrief if safe: no matching screen is open, no debrief is
+ * already mounted, and the target week has no unassigned activities. Called
+ * from the launch path and from activity-review's onComplete — so the debrief
+ * waits for the user to finish matching before popping.
+ */
+export function fireDebriefIfReady(pendingDebrief: boolean): void {
+  if (document.getElementById('week-debrief-modal')) return;
+  if (document.getElementById('activity-review-overlay')) return;
+  const s = getState() as any;
+  const targetWeek = pendingDebrief ? (s.w ?? 1) : (s.w ?? 1) - 1;
+  if (targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
+  if (pendingDebrief) {
+    showWeekDebrief(s.w, 'complete');
+  } else if (shouldAutoDebrief()) {
+    showWeekDebrief();
+  }
+}
+
 export function shouldShowSundayDebrief(): boolean {
   const s = getState() as any;
   if (!s.wks || !s.w || !s.hasCompletedOnboarding) return false;
@@ -97,6 +131,13 @@ export function showWeekDebrief(
   const s = getState() as any;
   const weekNum = forWeek ?? (s.w ?? 1) - 1;
   if (weekNum < 1 || !s.wks?.[weekNum - 1]) {
+    return;
+  }
+
+  // Just-Track mode: show a retrospective-only variant. No plan-adherence,
+  // no "next week" preview. Just this-week-vs-last-week deltas.
+  if (s.trackOnly) {
+    showTrackOnlyRetrospective(weekNum);
     return;
   }
 
@@ -204,10 +245,12 @@ export function showWeekDebrief(
   const _signals = computeWeekSignals(rpeScore, avgHrEffort, tssPct, ctlDelta, _avgHrDrift);
   const _pills = getSignalPills(_signals);
   const _coachCopy = getCoachCopy(_signals, wk.ph);
+  const _easyDriftNote = detectEasyDriftPattern(s);
 
-  const coachNarrative = _coachCopy ? `
+  const coachNarrative = (_coachCopy || _easyDriftNote) ? `
     <div style="margin-top:16px;padding:14px;background:rgba(0,0,0,0.03);border-radius:10px">
-      <p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${_coachCopy}</p>
+      ${_coachCopy ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:0">${_coachCopy}</p>` : ''}
+      ${_easyDriftNote ? `<p style="font-size:13px;color:var(--c-muted);line-height:1.6;margin:${_coachCopy ? '10px 0 0 0' : '0'}">${_easyDriftNote}</p>` : ''}
     </div>
   ` : '';
 
@@ -287,7 +330,7 @@ export function showWeekDebrief(
             <span style="${VALUE_STYLE}">${weekRawTSS}${tssPct != null ? `<span style="font-size:12px;font-weight:500;margin-left:4px"><span style="color:${tssArrowColor}">${tssPct > 0 ? '↑' : tssPct < 0 ? '↓' : '→'}</span> <span style="color:var(--c-muted)">${tssPct > 0 ? '+' : ''}${tssPct}% vs plan</span></span>` : ''}</span>
           </div>
           <div style="${ROW}${_pills.length === 0 ? ';border-bottom:none' : ''}">
-            <span style="${LABEL_STYLE}">Running fitness</span>
+            <span style="${LABEL_STYLE}">Running load</span>
             <span style="${VALUE_STYLE}">${fitnessValue}${fitnessDelta}</span>
           </div>
           ${signalRowsHtml}
@@ -782,6 +825,104 @@ function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   } else {
     import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
   }
+}
+
+// ─── Just-Track retrospective ─────────────────────────────────────────────────
+
+/**
+ * Minimal week-end summary for Just-Track users.
+ *
+ * No plan-adherence language, no "next week" preview. Just this-week-vs-
+ * last-week deltas on the things a tracker cares about: volume, sessions,
+ * load (TSS), CTL drift, recovery average.
+ *
+ * Dismiss closes the modal and records the debrief so it doesn't fire
+ * again this week.
+ */
+function showTrackOnlyRetrospective(weekNum: number): void {
+  const s = getState() as any;
+  const wk = s.wks?.[weekNum - 1];
+  const prev = weekNum > 1 ? s.wks?.[weekNum - 2] : null;
+  if (!wk) return;
+
+  const unit: 'km' | 'mi' = s.unitPref ?? 'km';
+
+  function weekStats(w: any): { km: number; sessions: number; tss: number } {
+    if (!w) return { km: 0, sessions: 0, tss: 0 };
+    let km = 0, sessions = 0;
+    for (const actual of Object.values(w.garminActuals ?? {}) as any[]) {
+      km += actual.distanceKm || 0;
+      sessions++;
+    }
+    for (const wo of (w.adhocWorkouts ?? []) as any[]) {
+      const d = wo.garminDistKm ?? wo.distanceKm;
+      if (typeof d === 'number') km += d;
+      sessions++;
+    }
+    const tss = Math.round(computeWeekRawTSS(w, w.rated ?? {}, s.planStartDate));
+    return { km, sessions, tss };
+  }
+
+  const cur = weekStats(wk);
+  const lst = weekStats(prev);
+
+  const ctlNow = s.ctlBaseline ?? 0;
+  // CTL delta via fitness model — last full entry minus 7 days back
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, ctlNow, s.planStartDate, ctlNow);
+  const ctlEnd = metrics[metrics.length - 1]?.ctl ?? ctlNow;
+  const ctlStart = metrics[Math.max(0, metrics.length - 8)]?.ctl ?? ctlEnd;
+  const ctlDelta = Math.round((ctlEnd - ctlStart) * 10) / 10;
+
+  // Recovery average — mean sleep score across the last 7 days of physiologyHistory.
+  const recent = (s.physiologyHistory ?? []).slice(-7);
+  const scores = recent.map((p: any) => p.sleepScore).filter((v: any) => typeof v === 'number');
+  const recoveryAvg = scores.length ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null;
+
+  function deltaChip(cur: number, prev: number, unit?: string): string {
+    if (prev === 0 && cur === 0) return '';
+    const d = cur - prev;
+    if (Math.abs(d) < 0.01) return '<span style="font-size:11px;color:#94A3B8">flat</span>';
+    const sign = d > 0 ? '+' : '−';
+    const color = d > 0 ? '#10b981' : '#dc2626';
+    const abs = unit === 'km' ? formatKm(Math.abs(d), unit as 'km' | 'mi')
+              : Math.abs(d).toFixed(0) + (unit ? ` ${unit}` : '');
+    return `<span style="font-size:11px;font-weight:600;color:${color}">${sign}${abs}</span>`;
+  }
+
+  const row = (label: string, value: string, delta: string) => `
+    <div style="display:flex;align-items:baseline;justify-content:space-between;padding:12px 0;border-bottom:1px solid rgba(0,0,0,0.05)">
+      <span style="font-size:13px;color:#475569">${label}</span>
+      <span style="display:flex;align-items:baseline;gap:10px">
+        <span style="font-size:17px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${value}</span>
+        ${delta}
+      </span>
+    </div>`;
+
+  const modal = document.createElement('div');
+  modal.id = 'week-debrief-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:20px;max-width:440px;width:100%;padding:26px 22px;box-shadow:0 16px 48px rgba(0,0,0,0.25)">
+      <div style="font-size:11px;font-weight:600;color:#64748B;letter-spacing:0.05em;text-transform:uppercase;margin-bottom:4px">Week ${wk.w}</div>
+      <div style="font-size:22px;font-weight:700;letter-spacing:-0.02em;color:#0F172A;margin-bottom:18px">Week summary</div>
+      ${row('Distance', formatKm(cur.km, unit), deltaChip(cur.km, lst.km, unit))}
+      ${row('Sessions', String(cur.sessions), deltaChip(cur.sessions, lst.sessions))}
+      ${row('Load (TSS)', String(cur.tss), deltaChip(cur.tss, lst.tss))}
+      ${row('Fitness (CTL)', ctlEnd.toFixed(1), ctlDelta === 0 ? '<span style="font-size:11px;color:#94A3B8">flat</span>' : `<span style="font-size:11px;font-weight:600;color:${ctlDelta > 0 ? '#10b981' : '#dc2626'}">${ctlDelta > 0 ? '+' : ''}${ctlDelta}</span>`)}
+      ${recoveryAvg != null ? row('Recovery average', String(recoveryAvg), '') : ''}
+      <button id="tdebrief-close" class="m-btn-glass" style="width:100%;margin-top:20px">Done</button>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const close = () => {
+    const ms = getMutableState() as any;
+    ms.lastDebriefWeek = Math.max(ms.lastDebriefWeek ?? 0, weekNum);
+    ms.lastDebriefShownDate = new Date().toISOString().split('T')[0];
+    saveState();
+    modal.remove();
+  };
+  modal.querySelector('#tdebrief-close')?.addEventListener('click', close);
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
 }
 
 // ─── Dev helper ──────────────────────────────────────────────────────────────

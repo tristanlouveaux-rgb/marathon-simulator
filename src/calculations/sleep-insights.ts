@@ -81,10 +81,10 @@ export function fmtSleepDuration(sec: number): string {
   return `${h}h ${m}m`;
 }
 
-/** Colour token for a sleep score. */
+/** Colour token for a sleep score. Purple matches the sleep page palette;
+ *  only break to amber/red when the score is genuinely poor. */
 export function sleepScoreColor(score: number): string {
-  if (score >= 80) return 'var(--c-ok)';
-  if (score >= 65) return 'var(--c-ok-muted)';
+  if (score >= 65) return '#8B5CF6';   // violet-500 (sleep page tint)
   if (score >= 50) return 'var(--c-caution)';
   return 'var(--c-warn)';
 }
@@ -162,8 +162,7 @@ export function getSleepContext(
 // ─── Muted sleep score colors (for bar chart — not text) ─────────────────────
 
 export function sleepScoreColorMuted(score: number): string {
-  if (score >= 80) return 'rgba(52,199,89,0.55)';
-  if (score >= 65) return 'rgba(110,200,103,0.55)';
+  if (score >= 65) return 'rgba(139,92,246,0.55)';   // violet-500 muted
   if (score >= 50) return 'rgba(255,159,10,0.60)';
   return 'rgba(220,80,70,0.55)';
 }
@@ -380,6 +379,82 @@ export function buildDailySignalBTSS(wks: any[]): Record<string, number> {
 }
 
 /**
+ * Per-night debt trajectory. Same recurrence as `computeSleepDebt`:
+ *   debt = debt * DEBT_DECAY + max(0, target − actual)
+ * Only nights with sleep data appear in the series; decay still applies
+ * across gaps so the first recorded night after a gap reflects carry-over.
+ * The last element's `debt` equals `computeSleepDebt(...)`.
+ */
+export function computeSleepDebtSeries(
+  history: PhysiologyDayEntry[],
+  dailyTSSByDate: Record<string, number>,
+  athleteTier: string,
+  baseSleepNeedSec?: number,
+): Array<{ date: string; debt: number }> {
+  const base = baseSleepNeedSec ?? DEFAULT_SLEEP_NEED_SEC;
+  // Ensure oldest-first — decay weights depend on correct chronological order.
+  const sorted = [...history].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
+  const series: Array<{ date: string; debt: number }> = [];
+  let debt = 0;
+  for (const entry of sorted) {
+    debt *= DEBT_DECAY;
+    if (entry.sleepDurationSec == null) continue;
+    const tss = dailyTSSByDate[entry.date] ?? 0;
+    const target = computeLoadAdjustedTarget(base, tss, athleteTier);
+    // Debt is duration-based only — quality is used separately to adjust tonight's target.
+    // Applying quality as a multiplier here causes compounding that produces unrealistic totals.
+    const shortfall = Math.max(0, target - entry.sleepDurationSec);
+    debt += shortfall;
+    series.push({ date: entry.date, debt: Math.round(debt) });
+  }
+  return series;
+}
+
+export interface SleepDebtTier {
+  /** Qualitative label for the current debt level. */
+  label: string;
+  /** Hex colour that drives the headline text, chart line, and gradient fill. */
+  color: string;
+  /** Whether to display the numeric debt value next to the label.
+   *  False for the "on track" tier where a number would feel punishing
+   *  for a physiologically negligible residual. */
+  showNumber: boolean;
+}
+
+/**
+ * Classify cumulative sleep debt into a qualitative tier with a colour.
+ *
+ * Band progression (mild → moderate → high → severe) reflects:
+ *   - Belenky et al. 2003: single-night partial deprivation produces minor
+ *     cognitive effects; chronic restriction produces progressively larger deficits
+ *   - Van Dongen & Dinges 2003: 6h/night × 14 days ≈ 28h raw / ~20h decayed debt
+ *     is equivalent to 1–2 full nights of total deprivation
+ *   - Rupp et al. 2009: recovery is slow; residual debt persists for weeks
+ *
+ * Exact minute-level cutoffs are pragmatic (literature does not define them)
+ * but are intentionally **conservative** — the `severe` threshold of 9h sits
+ * at roughly half of Van Dongen's demonstrated chronic-restriction zone, so
+ * tiers flag earlier than proven-harmful levels.
+ *
+ * Each cutoff also maps to a sustainable chronic shortfall via the decay math
+ * (steady-state debt = shortfall / (1 − DEBT_DECAY) ≈ shortfall / 0.094):
+ *   <  45m : on track       (effectively hitting target)
+ *   45m–1h30m : caught up   (≈ one short night, since decayed)
+ *   1h30m–3h  : mild        (~15–30 min/night chronic)
+ *   3h–6h     : moderate    (~30–60 min/night chronic)
+ *   6h–9h     : high        (~60–90 min/night chronic)
+ *   ≥ 9h      : severe      (approaches Van Dongen chronic restriction effects)
+ */
+export function classifySleepDebt(debtSec: number): SleepDebtTier {
+  if (debtSec < 2700)  return { label: 'on track',  color: '#10B981', showNumber: false }; // emerald-500
+  if (debtSec < 5400)  return { label: 'caught up', color: '#64748B', showNumber: true  }; // slate-500
+  if (debtSec < 10800) return { label: 'mild',      color: '#F59E0B', showNumber: true  }; // amber-500
+  if (debtSec < 21600) return { label: 'moderate',  color: '#F97316', showNumber: true  }; // orange-500
+  if (debtSec < 32400) return { label: 'high',      color: '#EF4444', showNumber: true  }; // red-500
+  return                      { label: 'severe',    color: '#DC2626', showNumber: true  }; // red-600
+}
+
+/**
  * Compute accumulated sleep debt via exponential decay (7-day half-life).
  * Debt builds when actual sleep < load-adjusted target; decays each day.
  * Forward-only: starts at 0 and builds from available physiologyHistory.
@@ -391,21 +466,8 @@ export function computeSleepDebt(
   athleteTier: string,
   baseSleepNeedSec?: number,
 ): number {
-  const base = baseSleepNeedSec ?? DEFAULT_SLEEP_NEED_SEC;
-  // Ensure oldest-first — decay weights depend on correct chronological order.
-  const sorted = [...history].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
-  let debt = 0;
-  for (const entry of sorted) {
-    debt *= DEBT_DECAY;
-    if (entry.sleepDurationSec == null) continue;
-    const tss = dailyTSSByDate[entry.date] ?? 0;
-    const target = computeLoadAdjustedTarget(base, tss, athleteTier);
-    // Debt is duration-based only — quality is used separately to adjust tonight's target.
-    // Applying quality as a multiplier here causes compounding that produces unrealistic totals.
-    const shortfall = Math.max(0, target - entry.sleepDurationSec);
-    debt += shortfall;
-  }
-  return Math.round(debt);
+  const series = computeSleepDebtSeries(history, dailyTSSByDate, athleteTier, baseSleepNeedSec);
+  return series.length > 0 ? series[series.length - 1].debt : 0;
 }
 
 /**
@@ -453,6 +515,29 @@ export function fmtNightlyShortfall(avgShortfallSec: number): string {
 // ─── Sleep bank line chart ────────────────────────────────────────────────────
 
 /**
+ * Parse a CSS colour string (`#rgb`, `#rrggbb`, or `rgb(r,g,b)`) into an
+ * `"r,g,b"` tuple suitable for inlining into `rgb(…)` / `rgba(…)` output.
+ * Falls back to the colour token unchanged if the format isn't recognised —
+ * callers should stick to hex or rgb() inputs.
+ */
+function parseColorToRgb(color: string): string {
+  const hex3 = color.match(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i);
+  if (hex3) {
+    const r = parseInt(hex3[1] + hex3[1], 16);
+    const g = parseInt(hex3[2] + hex3[2], 16);
+    const b = parseInt(hex3[3] + hex3[3], 16);
+    return `${r},${g},${b}`;
+  }
+  const hex6 = color.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (hex6) {
+    return `${parseInt(hex6[1], 16)},${parseInt(hex6[2], 16)},${parseInt(hex6[3], 16)}`;
+  }
+  const rgb = color.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (rgb) return `${rgb[1]},${rgb[2]},${rgb[3]}`;
+  return '239,68,68'; // red-500 fallback
+}
+
+/**
  * Render a line chart for the 14-night sleep bank.
  * Each point is one night's delta (actual − target) in seconds.
  * A dashed zero baseline separates surplus nights from deficit nights.
@@ -467,6 +552,19 @@ export function buildSleepBankLineChart(
   lineColor: string,
   dimColor: string,
   hideDayLabels?: boolean,
+  /** Anchor the upper bound of the Y-axis at 0 (the target line). Use for
+   *  charts where every value is ≤ 0 (e.g. cumulative sleep debt) so the
+   *  vertical distance from the line to the target reads as the magnitude
+   *  of the deficit rather than being compressed into the data range. */
+  anchorZeroAtTop?: boolean,
+  /** Render a vertical gradient fill between the line and the target (zero)
+   *  line. Transparent at the target, saturated at the line's deepest point.
+   *  Intended for debt charts where the filled area visualises deficit depth. */
+  fillToTargetGradient?: boolean,
+  /** Draw horizontal dashed reference lines at each whole hour of deficit
+   *  within the visible range (−1h, −2h, …) with small "Nh" labels on the right.
+   *  Ignored if the visible range is narrower than one hour. */
+  hourReferenceLines?: boolean,
 ): string {
   if (nights.length < 2) return '';
 
@@ -476,7 +574,11 @@ export function buildSleepBankLineChart(
   const dataMax = Math.max(...deltas);
   const dataPad = Math.max((dataMax - dataMin) * 0.25, 900);
   const minD = dataMin - dataPad;
-  const maxD = dataMax + dataPad;
+  // With anchorZeroAtTop, force the upper bound to 0 and give the target line
+  // a small breathing pad (5% of the span below) so it doesn't sit flush with the top edge.
+  const maxD = anchorZeroAtTop
+    ? Math.max(0, dataMax) + Math.max((0 - dataMin) * 0.05, 600)
+    : dataMax + dataPad;
   const range = maxD - minD || 1;
 
   const yOf = (v: number) => PV + ((maxD - v) / range) * (H - PV * 2);
@@ -489,9 +591,24 @@ export function buildSleepBankLineChart(
 
   // Area fill from line to zero baseline — split into surplus (above) and deficit (below)
   const areaD = `${lineD} L${last.x.toFixed(1)},${zeroY.toFixed(1)} L${pts[0].x.toFixed(1)},${zeroY.toFixed(1)} Z`;
-  // Unique clip IDs based on chart instance (use first date to avoid collisions)
-  const clipId = `slb-${nights[0].date.replace(/-/g, '')}`;
+  // Unique IDs per chart instance (use first date) for gradient + clip refs
+  const idSuffix = nights[0].date.replace(/-/g, '');
+  const clipId = `slb-${idSuffix}`;
+  const gradId = `slbg-${idSuffix}`;
   const strokeColor = lineColor;
+
+  // Parse lineColor into an rgb() tuple so we can apply varied alpha in the gradient.
+  const rgbTuple = parseColorToRgb(lineColor);
+  const gradientHTML = fillToTargetGradient ? `
+    <defs>
+      <linearGradient id="${gradId}" x1="0" y1="${zeroY.toFixed(1)}" x2="0" y2="${H}" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="rgb(${rgbTuple})" stop-opacity="0.05"/>
+        <stop offset="100%" stop-color="rgb(${rgbTuple})" stop-opacity="0.28"/>
+      </linearGradient>
+    </defs>` : '';
+  const fillPathHTML = fillToTargetGradient
+    ? `<path d="${areaD}" fill="url(#${gradId})" stroke="none"/>`
+    : '';
 
   const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   const step = nights.length > 10 ? 2 : 1;
@@ -502,20 +619,45 @@ export function buildSleepBankLineChart(
     return `<span style="position:absolute;left:${pct}%;transform:translateX(-50%);font-size:9px;color:${dimColor};top:0">${day}</span>`;
   }).join('');
 
+  // Hour reference lines (−1h, −2h, …) drawn within the visible range.
+  // Every 1h up to 4h of deficit; every 2h beyond that to avoid clutter.
+  let hourLinesSVG = '';
+  let hourLabelsHTML = '';
+  if (hourReferenceLines) {
+    const maxHour = Math.ceil(Math.abs(Math.min(0, minD)) / 3600);
+    for (let h = 1; h <= maxHour; h++) {
+      const stepOK = h <= 4 ? true : h % 2 === 0;
+      if (!stepOK) continue;
+      const v = -h * 3600;
+      if (v < minD || v > maxD) continue;
+      const y = yOf(v);
+      // Skip if collides with the target line (zero) or runs off the chart
+      if (Math.abs(y - zeroY) < 8 || y < PV / 2 || y > H - PV / 2) continue;
+      hourLinesSVG += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}"
+        stroke="rgba(0,0,0,0.06)" stroke-width="1" stroke-dasharray="2 3"
+        vector-effect="non-scaling-stroke"/>`;
+      const pct = (y / H * 100).toFixed(1);
+      hourLabelsHTML += `<span style="position:absolute;right:0;top:${pct}%;transform:translateY(-50%);font-size:8px;color:#9CA3AF;white-space:nowrap">${h}h</span>`;
+    }
+  }
+
   // Y-axis label: just "target" on the dashed baseline
   const zeroLabelPct = Math.max(5, Math.min(95, zeroY / H * 100)).toFixed(1);
-  const yAxisHTML = `<span style="position:absolute;right:0;top:${zeroLabelPct}%;transform:translateY(-50%);font-size:8px;color:#9CA3AF;font-weight:500;white-space:nowrap">target</span>`;
+  const yAxisHTML = `<span style="position:absolute;right:0;top:${zeroLabelPct}%;transform:translateY(-50%);font-size:8px;color:#9CA3AF;font-weight:500;white-space:nowrap">target</span>${hourLabelsHTML}`;
 
   return `
     <div style="position:relative;margin-top:12px">
       <div style="position:relative;padding-right:36px">
-        <svg width="100%" viewBox="0 0 ${W} ${H}" style="display:block;overflow:visible">
+        <svg width="100%" height="100" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="display:block">
+          ${gradientHTML}
+          ${fillPathHTML}
+          ${hourLinesSVG}
           <line x1="0" y1="${zeroY.toFixed(1)}" x2="${W}" y2="${zeroY.toFixed(1)}"
-            stroke="rgba(0,0,0,0.10)" stroke-width="1" stroke-dasharray="4 3"/>
+            stroke="rgba(0,0,0,0.10)" stroke-width="1" stroke-dasharray="4 3"
+            vector-effect="non-scaling-stroke"/>
           <path d="${lineD}" fill="none" stroke="${strokeColor}"
-            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="4"
-            fill="${strokeColor}" stroke="white" stroke-width="2"/>
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            vector-effect="non-scaling-stroke"/>
         </svg>
         <div style="position:absolute;top:0;right:0;width:36px;height:100%">${yAxisHTML}</div>
       </div>

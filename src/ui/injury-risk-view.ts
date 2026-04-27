@@ -14,6 +14,7 @@ import {
   CTL_DECAY,
   ATL_DECAY,
 } from '@/calculations/fitness-model';
+import { detectDurabilityFlag } from '@/calculations/daily-coach';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 
@@ -40,7 +41,7 @@ function acwrZone(ratio: number, safeUpper: number): AcwrZone {
 
 // ── Coaching text ─────────────────────────────────────────────────────────────
 
-function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic: number, latestWeekRatio?: number): { headline: string; body: string } {
+function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic: number, latestWeekRatio?: number, durabilityElevated?: boolean): { headline: string; body: string } {
   if (ratio <= 0) {
     return { headline: 'Insufficient data', body: 'At least 14 days of activity data needed to compute load ratio. Keep logging activities.' };
   }
@@ -56,16 +57,22 @@ function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic
       : ` The most recent completed week was ${latestWeekRatio.toFixed(1)}x, lower than the rolling average as prior weeks were heavier.`
     : '';
 
+  // Reconciliation: ACWR looks fine but drift says the load isn't being absorbed.
+  // Only surfaced on Low/Optimal because High/Very High already agrees with the flag.
+  const durabilityContext = (durabilityElevated && (zone.label === 'Low' || zone.label === 'Optimal'))
+    ? ' Load ratio is within range, but recent HR drift suggests the current load is not being fully absorbed. See Durability Signal below.'
+    : '';
+
   if (zone.label === 'Low') {
     return {
       headline: 'Training below baseline',
-      body: `This week's load (${acuteDisp} TSS) is well below the 4-week average (${chronicDisp} TSS). Normal during a deload or recovery week.${weeklyContext}`,
+      body: `This week's load (${acuteDisp} TSS) is well below the 4-week average (${chronicDisp} TSS). Normal during a deload or recovery week.${weeklyContext}${durabilityContext}`,
     };
   }
   if (zone.label === 'Optimal') {
     return {
       headline: 'Load increase is within range',
-      body: `This week's load (${acuteDisp} TSS) is close to the 4-week average (${chronicDisp} TSS). The body is adapted to the current training level.${weeklyContext}`,
+      body: `This week's load (${acuteDisp} TSS) is close to the 4-week average (${chronicDisp} TSS). The body is adapted to the current training level.${weeklyContext}${durabilityContext}`,
     };
   }
   if (zone.label === 'High') {
@@ -82,7 +89,7 @@ function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic
 
 // ── SVG watercolour background ────────────────────────────────────────────────
 
-function skyBackground(): string { return buildSkyBackground('ir', 'grey'); }
+function skyBackground(): string { return buildSkyBackground('ir', 'amber'); }
 
 // ── Weekly ACWR trend ─────────────────────────────────────────────────────────
 
@@ -296,7 +303,18 @@ function getInjuryRiskHTML(s: SimulatorState): string {
   const ringGradB = zone.label === 'Very High' ? '#DC2626' : zone.label === 'High' ? '#D97706' : zone.label === 'Optimal' ? '#16A34A' : '#64748B';
 
   const latestWeekRatio = weeklyAcwr.length > 0 ? weeklyAcwr[weeklyAcwr.length - 1].ratio : undefined;
-  const { headline, body } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic, latestWeekRatio);
+
+  const durability = detectDurabilityFlag(s);
+  const { headline, body } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic, latestWeekRatio, durability != null);
+  const durabilityColor = durability?.level === 'high' ? '#EF4444' : '#F59E0B';
+  const durabilityCard = durability ? `
+    <div class="ir-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
+      <div style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);border-left:3px solid ${durabilityColor}">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${durabilityColor};margin-bottom:8px">Durability Signal</div>
+        <div style="font-size:15px;font-weight:700;color:${TEXT_M};margin-bottom:6px">${durability.headline}</div>
+        <div style="font-size:13px;color:${TEXT_S};line-height:1.55">${durability.body}</div>
+      </div>
+    </div>` : '';
 
   const card = (title: string, content: string, delay: string) =>
     `<div class="ir-fade" style="animation-delay:${delay};background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
@@ -380,6 +398,8 @@ function getInjuryRiskHTML(s: SimulatorState): string {
             <div style="font-size:13px;color:${TEXT_S};line-height:1.55">${body}</div>
           </div>
         </div>
+
+        ${durabilityCard}
 
         <!-- Cards -->
         <div style="padding:0 16px">

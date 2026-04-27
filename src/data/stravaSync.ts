@@ -128,6 +128,50 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         }
       }
     }
+    // Third pass: "Strava always wins" — upgrade any Garmin-sourced actuals that have a
+    // matching Strava row in this batch, identified by start_time ±10 min. This is the
+    // defensive fallback for cases where the upgrade loop in matchAndAutoComplete was
+    // blocked by a stale garminMatched mapping (e.g. "strava-X" → "__pending__" from a
+    // previous sync with the garminPending-overwrite bug). Idempotent — already-upgraded
+    // actuals (garminId starts with 'strava-') are skipped.
+    const stravaRowByTime = new Map<number, GarminActivityRow>();
+    for (const row of activityRows as GarminActivityRow[]) {
+      if (row.garmin_id.startsWith('strava-') && row.start_time) {
+        stravaRowByTime.set(new Date(row.start_time).getTime(), row);
+      }
+    }
+    if (stravaRowByTime.size > 0) {
+      for (const wk of s.wks || []) {
+        if (!wk.garminActuals || !wk.garminMatched) continue;
+        for (const [wid, actual] of Object.entries(wk.garminActuals)) {
+          if (actual.garminId.startsWith('strava-')) continue;
+          if (!actual.startTime) continue;
+          const actualMs = new Date(actual.startTime).getTime();
+          let matchRow: GarminActivityRow | undefined;
+          for (const [rowMs, r] of stravaRowByTime) {
+            if (Math.abs(actualMs - rowMs) < 10 * 60 * 1000) { matchRow = r; break; }
+          }
+          if (!matchRow) continue;
+          const oldGarminId = actual.garminId;
+          actual.garminId = matchRow.garmin_id;
+          actual.avgPaceSecKm = matchRow.avg_pace_sec_km ?? actual.avgPaceSecKm;
+          actual.avgHR = matchRow.avg_hr ?? actual.avgHR;
+          actual.maxHR = matchRow.max_hr ?? actual.maxHR;
+          actual.calories = matchRow.calories ?? actual.calories;
+          if (matchRow.hrZones) actual.hrZones = matchRow.hrZones as { z1: number; z2: number; z3: number; z4: number; z5: number };
+          if (matchRow.polyline) actual.polyline = matchRow.polyline;
+          if (matchRow.kmSplits?.length) actual.kmSplits = matchRow.kmSplits;
+          if (matchRow.elevationGainM != null) actual.elevationGainM = matchRow.elevationGainM;
+          if (matchRow.hrDrift != null) actual.hrDrift = matchRow.hrDrift;
+          // Update garminMatched so the re-enrich loop can find it on future syncs.
+          // This also overwrites any stale '__pending__' left by a prior corrupted sync.
+          wk.garminMatched[matchRow.garmin_id] = wid;
+          extraPatched = true;
+          console.log(`[StravaWins] Upgraded ${oldGarminId} → ${matchRow.garmin_id} for slot ${wid}`);
+        }
+      }
+    }
+
     // Second pass: patch calories by start_time for Garmin-webhook-matched activities.
     // The garmin_id loop above only matches strava-{id} rows, but activities matched via
     // Garmin webhook have a numeric garmin_id. Match by start_time to bridge the gap.
@@ -537,13 +581,18 @@ export interface BackfillResult {
   hasHRMonitor: boolean;
   stravaWeeks?: Record<string, number>;
   totalStravaActivities?: number;
-  /** Per-activity run summary — feeds `computePredictionInputs` (Tanda) after onboarding. */
+  bestEffortsHealed?: number;
+  bestEffortsCandidates?: number;
+  bestEffortsPool?: number;
+  /** Per-activity run summary — feeds `computePredictionInputs` (Tanda) and
+   *  `computeHRCalibratedVdot` (Swain HR regression) after onboarding. */
   runs?: Array<{
     startTime: string;
     distKm: number;
     durSec: number;
     activityType: string;
     activityName?: string;
+    avgHR?: number | null;
   }>;
   _debug?: {
     cachedWithZones: number;
@@ -572,6 +621,9 @@ export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult>
       { mode: 'backfill', weeks, biological_sex: s.biologicalSex, max_hr_override: s.maxHR ?? undefined },
     );
     console.log(`[StravaBackfill] Done — ${result?.processed ?? 0} new activities (${result?.withHRStream ?? 0} HR stream + ${result?.withAvgHR ?? 0} avg HR), hasHRMonitor=${result?.hasHRMonitor}, totalStrava=${result?.totalStravaActivities ?? '?'}`);
+    if (result?.bestEffortsPool != null || result?.bestEffortsHealed != null) {
+      console.log(`[StravaBackfill] best_efforts: healed ${result?.bestEffortsHealed ?? 0}/${result?.bestEffortsCandidates ?? 0} (pool of ${result?.bestEffortsPool ?? '?'} runs missing best_efforts)`);
+    }
     if (result?._debug) {
       const d = result._debug;
       console.log(`[StravaBackfill] Cache: cachedWithZones=${d.cachedWithZones}, cachedBasic=${d.cachedBasic}, cachedWithITrimp=${d.cachedWithITrimp} | Queued: needFullStream=${d.needFullStream}, needAvgHR=${d.needAvgHR}`);

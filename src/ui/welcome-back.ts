@@ -74,16 +74,17 @@ export function advanceWeekToToday(): void {
   const targetWeek = computeCurrentCalendarWeek(s);
   const maxWeek = (s.tw && s.tw > 0) ? s.tw : (s.wks?.length ?? s.w);
 
-  // In continuous mode, extend wks array if calendar is ahead of planned weeks
+  // In continuous mode, extend wks array if calendar is ahead of planned weeks.
+  // Track-only users extend one week at a time with no phase cycling (phase is
+  // a plan concept and track-only has no plan). Continuous planned users get
+  // the standard 4-week base/build/peak/taper block.
   if (s.continuousMode && targetWeek > maxWeek && s.wks) {
-    const BLOCK_SIZE = 4;
-    const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
-    while ((s.tw ?? s.wks.length) < targetWeek) {
-      s.blockNumber = (s.blockNumber || 1) + 1;
-      for (let i = 0; i < BLOCK_SIZE; i++) {
+    if (s.trackOnly) {
+      while ((s.tw ?? s.wks.length) < targetWeek) {
+        const nextW = (s.tw ?? s.wks.length) + 1;
         s.wks.push({
-          w: (s.tw ?? s.wks.length) + i + 1,
-          ph: blockPhases[i],
+          w: nextW,
+          ph: 'base',
           rated: {},
           skip: [],
           cross: [],
@@ -93,16 +94,39 @@ export function advanceWeekToToday(): void {
           unspentLoad: 0,
           extraRunLoad: 0,
         });
+        s.tw = nextW;
       }
-      s.tw = (s.tw ?? 0) + BLOCK_SIZE;
+    } else {
+      const BLOCK_SIZE = 4;
+      const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
+      while ((s.tw ?? s.wks.length) < targetWeek) {
+        s.blockNumber = (s.blockNumber || 1) + 1;
+        for (let i = 0; i < BLOCK_SIZE; i++) {
+          s.wks.push({
+            w: (s.tw ?? s.wks.length) + i + 1,
+            ph: blockPhases[i],
+            rated: {},
+            skip: [],
+            cross: [],
+            wkGain: 0,
+            workoutMods: [],
+            adjustments: [],
+            unspentLoad: 0,
+            extraRunLoad: 0,
+          });
+        }
+        s.tw = (s.tw ?? 0) + BLOCK_SIZE;
+      }
     }
   }
 
   // Don't advance past a week that hasn't had a full debrief (with plan preview).
   // lastCompleteDebriefWeek is only set after the complete flow (animation + plan preview),
   // not after review-only debriefs. This ensures users always see the full wrap-up.
+  // Triathlon users are exempt: there is no plan-preview debrief, so gating on it
+  // would permanently freeze s.w at week 1.
   const lastComplete = (s as any).lastCompleteDebriefWeek ?? 0;
-  const debriefCap = lastComplete + 1;
+  const debriefCap = (s as any).eventType === 'triathlon' ? Infinity : lastComplete + 1;
 
   // Clamp to the smaller of target, available weeks, and debrief cap
   const effectiveMax = Math.min(s.tw ?? s.wks?.length ?? s.w, s.wks?.length ?? s.w);

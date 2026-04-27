@@ -13,6 +13,8 @@ import { generateWorkoutInsight, findPreviousSession } from '@/calculations/work
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
+import { SPORT_LABELS } from '@/constants';
+import { showSportPicker, reclassifyActivity, getEffectiveSport } from './sport-picker-modal';
 
 export type ActivityDetailSource = 'plan' | 'home' | 'strain';
 
@@ -71,7 +73,11 @@ function secLabel(text: string): string {
 function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedTSS?: number, unitPref: 'km' | 'mi' = 'km', workoutId?: string): string {
   const s = getState();
   const source = actual.garminId?.startsWith('strava-') ? 'Strava' : 'Garmin';
-  const actName = actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
+  // Title: when the user has relabelled (manualSport set), prefer the sport label
+  // over the raw Strava/Garmin workout name (which often reads "Cardio" for
+  // non-running activities and no longer reflects the chosen sport).
+  const titleSport = actual.manualSport ? (SPORT_LABELS as Record<string, string>)[actual.manualSport] : null;
+  const actName = titleSport || actual.workoutName || actual.displayName || planWorkoutName || 'Activity';
   const dateStr = actual.startTime
     ? new Date(actual.startTime).toLocaleDateString('en-GB', {
       weekday: 'short', day: 'numeric', month: 'short', year: 'numeric',
@@ -90,6 +96,29 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
       </div>
     </div>
   ` : '';
+
+  // ─── Sport row (cross-training only — lets user correct a mis-classified activity) ─
+  const isRunActual = !actual.activityType || actual.activityType.toUpperCase().includes('RUN');
+  let sportRowHtml = '';
+  if (!isRunActual) {
+    const effSport = getEffectiveSport(actual);
+    const sportLabel = (SPORT_LABELS as Record<string, string>)[effSport] ?? effSport;
+    sportRowHtml = `
+      <div class="ad-fade" style="animation-delay:0.08s;margin-bottom:16px">
+        <button id="ad-sport-row" style="
+          width:100%;${CARD};padding:14px 18px;border:none;cursor:pointer;
+          display:flex;align-items:center;justify-content:space-between;gap:12px;
+          font-family:var(--f);text-align:left;transition:transform 0.15s ease;
+        " onmousedown="this.style.transform='scale(0.995)'" onmouseup="this.style.transform='scale(1)'" onmouseleave="this.style.transform='scale(1)'">
+          <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+            <span style="font-size:11px;font-weight:500;color:${TEXT_L};letter-spacing:0.01em">Activity</span>
+            <span style="font-size:16px;font-weight:500;color:${TEXT_M};letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(sportLabel)}</span>
+          </div>
+          <span style="font-size:12px;font-weight:500;color:${TEXT_L};white-space:nowrap;flex-shrink:0">Tap to change →</span>
+        </button>
+      </div>
+    `;
+  }
 
   // ─── Stats grid (3x3) ────────────────────────────────────────────────────────
   const elapsedPace = actual.distanceKm > 0.1 && actual.durationSec > 0
@@ -311,7 +340,8 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
 
   // ─── Coach insight ───────────────────────────────────────────────────────────
   const prev = findPreviousSession(actual.plannedType, actual.garminId, s.wks || []);
-  const insight = generateWorkoutInsight(actual, { hrProfile: s, prev, unitPref });
+  const allActuals = (s.wks || []).flatMap(wk => Object.values(wk.garminActuals || {}));
+  const insight = generateWorkoutInsight(actual, { hrProfile: s, prev, unitPref, allActuals });
   const insightHtml = insight ? `
     <div class="ad-fade" style="animation-delay:0.38s;margin-bottom:16px">
       ${secLabel('Coach')}
@@ -352,6 +382,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
         <!-- Content -->
         <div style="padding:0 16px">
           ${heroHtml}
+          ${sportRowHtml}
           ${statsHtml}
           ${loadCompareHtml}
           ${teHtml}
@@ -411,6 +442,15 @@ export function renderActivityDetail(
     if (!wid) return;
     const exp = card?.dataset.expected ? parseInt(card.dataset.expected, 10) : null;
     _showRpeOverlay(wid, actual, planWorkoutName, returnView, plannedTSS, exp || null);
+  });
+
+  // Sport row → picker → reclassify + re-render
+  document.getElementById('ad-sport-row')?.addEventListener('click', async () => {
+    const current = getEffectiveSport(actual);
+    const chosen = await showSportPicker(current);
+    if (!chosen || chosen === current) return;
+    reclassifyActivity(actual, chosen);
+    renderActivityDetail(actual, planWorkoutName, returnView, plannedTSS, workoutId);
   });
 
   // Back button

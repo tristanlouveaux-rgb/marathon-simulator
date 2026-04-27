@@ -624,12 +624,12 @@ export function buildHolidayBannerPlan(s: SimulatorState): string {
             <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${fmtStart} to ${fmtEnd} (${daysTotal} days). Holiday weeks treated as deload.</div>
           </div>
           <div style="display:flex;gap:8px">
-            <button id="holiday-change-btn" class="m-btn-secondary"
-              style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center">
+            <button id="holiday-change-btn" class="m-btn-glass m-btn-glass--inset"
+              style="flex:1">
               Change
             </button>
-            <button id="holiday-cancel-btn" class="m-btn-secondary"
-              style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center">
+            <button id="holiday-cancel-btn" class="m-btn-glass m-btn-glass--inset"
+              style="flex:1">
               Cancel holiday
             </button>
           </div>
@@ -653,8 +653,8 @@ export function buildHolidayBannerPlan(s: SimulatorState): string {
     : 'Quality sessions paused. Easy runs available.';
 
   const generateBtn = `
-    <button id="holiday-generate-btn" class="m-btn-secondary"
-      style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center">
+    <button id="holiday-generate-btn" class="m-btn-glass m-btn-glass--inset"
+      style="flex:1">
       Generate session
     </button>`;
 
@@ -674,8 +674,8 @@ export function buildHolidayBannerPlan(s: SimulatorState): string {
         </div>
         <div style="display:flex;gap:8px">
           ${generateBtn}
-          <button id="holiday-end-btn" class="m-btn-secondary"
-            style="flex:1;font-size:13px;padding:9px 0;text-align:center;justify-content:center">
+          <button id="holiday-end-btn" class="m-btn-glass m-btn-glass--inset"
+            style="flex:1">
             End holiday
           </button>
         </div>

@@ -25,6 +25,7 @@ import { findMatchingWorkout, type ExternalActivity } from '@/calculations/match
 import { showMatchProposal } from './sync-modal';
 import { showRPEHelp, showMPHelp } from './explanations';
 import { storeWorkoutStream } from './events';
+import { getEffectiveVdot } from '@/calculations/effective-vdot';
 
 // Expose explanation modals globally for onclick handlers
 declare global {
@@ -176,16 +177,12 @@ export function render(): void {
   // For predictions/forecast, always use the real training week, not the viewed week
   const realW = (s as any)._viewOnly ? (s as any)._realW : s.w;
 
-  // VDOT tracking
-  let wg = 0;
-  for (let i = 0; i < realW - 1; i++) {
-    wg += s.wks[i].wkGain;
-  }
-  const currentVDOT = s.v + wg + s.rpeAdj + (s.physioAdj || 0);
+  // VDOT tracking — s.v is the blended current-fitness VDOT (refreshed weekly).
+  const currentVDOT = getEffectiveVdot(s);
 
   // Current fitness
   let currentFitness: number;
-  if (realW === 1 && wg === 0 && s.rpeAdj === 0) {
+  if (realW === 1 && s.rpeAdj === 0) {
     currentFitness = s.initialBaseline || 0;
   } else {
     currentFitness = tv(currentVDOT, raceDistKm);
@@ -195,7 +192,7 @@ export function render(): void {
   // Forecast: at week 1 with no training, use stored forecast so dashboard
   // matches the assessment page exactly. Once training starts, recalculate live.
   let forecast: number;
-  if (realW === 1 && wg === 0 && s.rpeAdj === 0 && s.forecastTime) {
+  if (realW === 1 && s.rpeAdj === 0 && s.forecastTime) {
     forecast = s.forecastTime;
   } else {
     const wr = s.tw - realW + 1;

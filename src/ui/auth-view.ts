@@ -29,92 +29,139 @@ function renderInPlace(): void {
   wireAuthHandlers();
 }
 
-function getCheckEmailHTML(): string {
+function authShell(inner: string): string {
   return `
-    <div class="flex items-center justify-center px-4" style="min-height:100vh;background:var(--c-bg)">
-      <div class="w-full max-w-sm space-y-6">
-        <div class="text-center">
-          <h1 class="text-2xl font-bold" style="color:var(--c-black)">Mosaic</h1>
-          <p class="text-sm mt-1" style="color:var(--c-muted)">Adaptive marathon training</p>
-        </div>
+    <style>
+      @keyframes aRise { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
+      .a-rise { opacity:0; animation: aRise 0.7s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      .a-input {
+        width:100%; padding:14px 18px; text-align:left; font-size:14px;
+        background:rgba(255,255,255,0.92);
+        backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px);
+        border:1px solid rgba(0,0,0,0.08);
+        border-radius:50px;
+        color:var(--c-black); outline:none; box-sizing:border-box;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 2px rgba(0,0,0,0.03), 0 8px 20px -4px rgba(0,0,0,0.05);
+        transition: border-color 0.2s ease, box-shadow 0.2s ease;
+        font-family: var(--f);
+      }
+      .a-input::placeholder { color:var(--c-faint); }
+      .a-input:focus { border-color: rgba(0,0,0,0.18); box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 1px 2px rgba(0,0,0,0.04), 0 10px 24px -4px rgba(0,0,0,0.08); }
+      .a-label { display:block; font-size:11px; color:var(--c-faint); margin:0 0 8px 18px; letter-spacing:0.08em; text-transform:uppercase; }
+      .a-err {
+        font-size:13px; color:var(--c-black);
+        background: rgba(239,68,68,0.08);
+        border: 1px solid rgba(239,68,68,0.25);
+        padding: 10px 14px; border-radius: 14px;
+        text-align: center;
+      }
+    </style>
+    <div class="flex flex-col" style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden">
+      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
 
-        <div class="rounded-xl p-6 space-y-4 text-center" style="background:var(--c-surface);border:1px solid var(--c-border)">
-          <div class="w-12 h-12 mx-auto rounded-full flex items-center justify-center" style="background:rgba(78,159,229,0.1)">
-            <svg class="w-6 h-6" style="color:var(--c-accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-            </svg>
+      <div class="flex-1 flex flex-col items-center justify-center px-6 py-16" style="position:relative;z-index:1">
+        <div class="a-rise" style="text-align:center;animation-delay:0.05s">
+          <h1 class="font-semibold uppercase" style="font-size:clamp(1.8rem,7vw,2.8rem);color:var(--c-black);letter-spacing:0.22em;text-align:center;margin:0;line-height:1">
+            MOSAIC
+          </h1>
+          <div style="display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px">
+            <div style="height:1px;width:24px;background:var(--c-black);opacity:0.2"></div>
+            <p style="font-size:11px;font-weight:500;letter-spacing:0.26em;text-transform:uppercase;color:var(--c-faint);margin:0">Training that adapts</p>
+            <div style="height:1px;width:24px;background:var(--c-black);opacity:0.2"></div>
           </div>
-          <h2 class="text-lg font-semibold" style="color:var(--c-black)">Check your email</h2>
-          <p class="text-sm" style="color:var(--c-muted)">
-            We sent a confirmation link to <span class="font-medium" style="color:var(--c-black)">${confirmationEmail}</span>.
-            Click the link in your email to activate your account.
-          </p>
-          <p class="text-xs" style="color:var(--c-faint)">Didn't get it? Check your spam folder.</p>
-          <button id="auth-back-to-login" class="text-sm underline mt-2" style="color:var(--c-accent);background:none;border:none;cursor:pointer">
-            Back to sign in
-          </button>
         </div>
+        ${inner}
       </div>
     </div>
   `;
 }
 
+function getCheckEmailHTML(): string {
+  const inner = `
+    <div class="a-rise" style="width:100%;max-width:340px;margin-top:40px;display:flex;flex-direction:column;align-items:center;gap:18px;animation-delay:0.2s">
+      <div style="width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.7);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border:1px solid rgba(255,255,255,0.6);box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9)">
+        <svg style="width:22px;height:22px;color:var(--c-black)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+      </div>
+      <div style="text-align:center">
+        <h2 style="font-size:18px;font-weight:500;color:var(--c-black);margin:0 0 8px">Check your email</h2>
+        <p style="font-size:13px;color:var(--c-muted);margin:0;line-height:1.5">
+          We sent a confirmation link to<br>
+          <span style="color:var(--c-black);font-weight:500">${confirmationEmail}</span>
+        </p>
+        <p style="font-size:11px;color:var(--c-faint);margin:14px 0 0">Didn't get it? Check your spam folder.</p>
+      </div>
+      <button id="auth-back-to-login" class="m-btn-glass" style="padding:12px 22px;font-size:13px;margin-top:6px">
+        Back to sign in
+      </button>
+    </div>
+  `;
+  return authShell(inner);
+}
+
 function getAuthHTML(): string {
   if (confirmationEmail) return getCheckEmailHTML();
 
-  const title = isSignUp ? 'Create Account' : 'Sign In';
+  const title = isSignUp ? 'Create your account' : 'Welcome back';
+  const sub = isSignUp
+    ? 'A few details and we\'ll build your plan.'
+    : 'Sign in to pick up where you left off.';
   const toggleText = isSignUp
-    ? `Already have an account? <button id="auth-toggle" class="underline" style="color:var(--c-accent);background:none;border:none;cursor:pointer">Sign in</button>`
-    : `Don't have an account? <button id="auth-toggle" class="underline" style="color:var(--c-accent);background:none;border:none;cursor:pointer">Sign up</button>`;
+    ? `Already have an account? <button id="auth-toggle" style="color:var(--c-black);background:none;border:none;cursor:pointer;font-size:12px;text-decoration:underline;padding:0;margin-left:4px">Sign in</button>`
+    : `Don't have an account? <button id="auth-toggle" style="color:var(--c-black);background:none;border:none;cursor:pointer;font-size:12px;text-decoration:underline;padding:0;margin-left:4px">Sign up</button>`;
   const submitLabel = loading
-    ? (isSignUp ? 'Creating account...' : 'Signing in...')
-    : (isSignUp ? 'Create Account' : 'Sign In');
+    ? (isSignUp ? 'Creating account…' : 'Signing in…')
+    : (isSignUp ? 'Create account' : 'Sign in');
 
-  return `
-    <div class="flex items-center justify-center px-4" style="min-height:100vh;background:var(--c-bg)">
-      <div class="w-full max-w-sm space-y-6">
-        <div class="text-center">
-          <h1 class="text-2xl font-bold" style="color:var(--c-black)">Mosaic</h1>
-          <p class="text-sm mt-1" style="color:var(--c-muted)">Adaptive marathon training</p>
-        </div>
+  const inner = `
+    <p class="a-rise" style="font-size:14px;font-weight:300;text-align:center;line-height:1.55;color:var(--c-muted);margin:28px auto 36px;max-width:320px;animation-delay:0.15s">
+      ${sub}
+    </p>
 
-        <div class="rounded-xl p-6 space-y-4" style="background:var(--c-surface);border:1px solid var(--c-border)">
-          <h2 class="text-lg font-semibold" style="color:var(--c-black)">${title}</h2>
-
-          ${errorMsg ? `<div class="text-sm rounded-lg px-3 py-2" style="color:var(--c-warn);background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25)">${errorMsg}</div>` : ''}
-
-          <form id="auth-form" class="space-y-3">
-            <div>
-              <label class="block text-xs mb-1" style="color:var(--c-muted)" for="auth-email">Email</label>
-              <input id="auth-email" type="email" required autocomplete="email"
-                class="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-                style="background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black)"
-                placeholder="you@example.com" />
-            </div>
-            <div>
-              <label class="block text-xs mb-1" style="color:var(--c-muted)" for="auth-password">Password</label>
-              <input id="auth-password" type="password" required autocomplete="${isSignUp ? 'new-password' : 'current-password'}" minlength="6"
-                class="w-full px-3 py-2 rounded-lg text-sm focus:outline-none"
-                style="background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black)"
-                placeholder="${isSignUp ? 'At least 6 characters' : 'Your password'}" />
-            </div>
-            <button type="submit" id="auth-submit"
-              class="w-full m-btn-primary py-2.5 rounded-lg text-sm font-medium ${loading ? 'opacity-50 pointer-events-none' : ''}">
-              ${submitLabel}
-            </button>
-          </form>
-
-          <p class="text-xs text-center" style="color:var(--c-faint)">${toggleText}</p>
-        </div>
-
-        <div class="text-center">
-          <button id="auth-simulator-mode" class="text-xs" style="color:var(--c-faint);background:none;border:none;cursor:pointer">
-            Use simulator mode (no account)
-          </button>
-        </div>
+    <form id="auth-form" class="a-rise" style="width:100%;max-width:340px;display:flex;flex-direction:column;gap:14px;animation-delay:0.25s" autocomplete="on">
+      <div style="text-align:center;margin-bottom:-4px">
+        <h2 style="font-size:15px;font-weight:500;color:var(--c-black);margin:0 0 4px;letter-spacing:-0.005em">${title}</h2>
       </div>
+
+      ${errorMsg ? `<div class="a-err">${errorMsg}</div>` : ''}
+
+      <div>
+        <label class="a-label" for="auth-email">Email</label>
+        <input id="auth-email" type="email" required autocomplete="email"
+          class="a-input" placeholder="you@example.com" />
+      </div>
+      <div>
+        <label class="a-label" for="auth-password">Password</label>
+        <input id="auth-password" type="password" required autocomplete="${isSignUp ? 'new-password' : 'current-password'}" minlength="6"
+          class="a-input" placeholder="${isSignUp ? 'At least 6 characters' : 'Your password'}" />
+      </div>
+
+      <button type="submit" id="auth-submit"
+        class="m-btn-glass"
+        style="width:100%;padding:15px 20px;font-size:15px;margin-top:6px;${loading ? 'opacity:0.55;pointer-events:none' : ''}">
+        ${submitLabel}
+      </button>
+    </form>
+
+    <p class="a-rise" style="margin:18px 0 0;font-size:12px;color:var(--c-faint);text-align:center;animation-delay:0.35s">
+      ${toggleText}
+    </p>
+
+    <div class="a-rise" style="margin-top:32px;animation-delay:0.45s">
+      <button id="auth-simulator-mode" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer;letter-spacing:0.02em">
+        Use simulator mode (no account)
+      </button>
+    </div>
+
+    <div class="a-rise" style="margin-top:28px;display:flex;align-items:center;justify-content:center;gap:10px;white-space:nowrap;animation-delay:0.55s">
+      ${['Proven principles', 'Recovery-informed', 'Built from your existing training'].map((label, i, arr) => `
+        <span style="font-size:10px;color:var(--c-faint)">${label}</span>
+        ${i < arr.length - 1 ? '<span style="width:3px;height:3px;border-radius:50%;background:var(--c-black);opacity:0.28;flex-shrink:0"></span>' : ''}
+      `).join('')}
     </div>
   `;
+  return authShell(inner);
 }
 
 function wireAuthHandlers(): void {

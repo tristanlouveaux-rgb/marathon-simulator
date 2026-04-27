@@ -43,7 +43,9 @@ import type { SportKey } from '@/types/activities';
 import { showMatchingScreen, type ProposedPairing } from '@/ui/matching-screen';
 import { showAssignmentToast } from '@/ui/toast';
 import { TL_PER_MIN, SPORTS_DB, SPORT_LABELS } from '@/constants';
+import { resolveSportForActivity } from '@/ui/sport-picker-modal';
 import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCarry, computeRunningFloorKm } from '@/calculations/fitness-model';
+import { applyRbeDiscount } from '@/calculations/readiness';
 import { formatKm } from '@/utils/format';
 
 // Intro screen removed — flow goes directly to matching screen
@@ -55,12 +57,14 @@ function recordLegLoad(sport: SportKey, durationMin: number, timestampMs: number
   const cfg = SPORTS_DB[sport];
   const rate = cfg?.legLoadPerMin ?? 0;
   if (rate <= 0) return;
-  const load = durationMin * rate;
+  const rawLoad = durationMin * rate;
   const sportLabel = (SPORT_LABELS as Record<string, string>)[sport] ?? sport;
   const s = getMutableState();
   const sevenDaysMs = 7 * 24 * 3_600_000;
   const existing = (s.recentLegLoads ?? []).filter(e => timestampMs - e.timestampMs < sevenDaysMs);
-  s.recentLegLoads = [...existing, { load, sport, sportLabel, timestampMs }];
+  // Apply Repeated Bout Effect: a prior same-sport bout within 14d discounts this bout.
+  const { load, protected: rbeProtected } = applyRbeDiscount(sport, timestampMs, rawLoad, existing);
+  s.recentLegLoads = [...existing, { load, sport, sportLabel, timestampMs, rbeProtected }];
 }
 
 // ---------------------------------------------------------------------------
@@ -142,6 +146,12 @@ export function showActivityReview(
   savedChoices?: Record<string, 'integrate' | 'log'>,
   onCancel?: () => void,
 ): void {
+  // Symmetric with fireDebriefIfReady's overlay check: if the launch-path debrief
+  // won the race and mounted before pending items arrived via sync, dismiss it
+  // so matching takes priority. The debrief will re-fire from onReviewDone once
+  // the user saves (or via isWeekPendingDebrief on next launch).
+  document.getElementById('week-debrief-modal')?.remove();
+
   const overlay = document.createElement('div');
   overlay.id = 'activity-review-overlay';
   overlay.style.cssText = 'position:fixed;inset:0;z-index:50;background:var(--c-bg);display:flex;flex-direction:column';
@@ -717,7 +727,11 @@ function populateUnspentLoadItems(items: GarminPendingItem[]): void {
     if (wk.unspentLoadItems.some(u => u.garminId === item.garminId)) continue;
     const aerobic   = item.aerobicEffect   ?? 1.5;
     const anaerobic = item.anaerobicEffect ?? 0.5;
-    const sport     = mapAppTypeToSport(item.appType);
+    const sport     = resolveSportForActivity(
+      item.activityType,
+      mapAppTypeToSport(item.appType),
+      item.activityType,
+    );
     wk.unspentLoadItems.push({
       garminId:    item.garminId,
       displayName: formatActivityType(item.activityType),
@@ -795,9 +809,6 @@ function showRpePrompt(
     5: 'Moderate', 6: 'Hard', 7: 'Hard', 8: 'Very hard',
     9: 'Max effort', 10: 'Max effort',
   };
-  const rpeColorVar = (v: number): string =>
-    v <= 3 ? 'var(--c-ok)' : v <= 6 ? 'var(--c-caution)' : 'var(--c-warn)';
-
   const overlay = document.createElement('div');
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
   overlay.style.background = 'rgba(0,0,0,0.45)';
@@ -806,7 +817,6 @@ function showRpePrompt(
     const unitPref = getState().unitPref ?? 'km';
     const dist = formatKm(run.distanceKm, unitPref);
     const mins = Math.round(run.durationMin);
-    const colour = rpeColorVar(run.autoRpe);
     return `
       <div style="padding:12px 0;${i > 0 ? 'border-top:1px solid var(--c-border)' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
@@ -816,25 +826,26 @@ function showRpePrompt(
         <div style="display:flex;align-items:center;gap:10px">
           <input type="range" min="1" max="10" step="1" value="${run.autoRpe}"
                  data-wid="${run.workoutId}" class="rpe-slider"
-                 style="flex:1;accent-color:${colour};height:4px">
+                 style="flex:1;accent-color:var(--c-black);height:4px">
           <span class="rpe-val" data-wid="${run.workoutId}"
-                style="font-size:15px;font-weight:700;color:${colour};min-width:20px;text-align:center">${run.autoRpe}</span>
+                style="font-size:15px;font-weight:700;color:var(--c-black);min-width:20px;text-align:center">${run.autoRpe}</span>
         </div>
         <div class="rpe-label" data-wid="${run.workoutId}"
-             style="font-size:10px;color:${colour};margin-top:2px">${RPE_LABELS[run.autoRpe] ?? ''}</div>
+             style="font-size:10px;color:var(--c-muted);margin-top:2px">${RPE_LABELS[run.autoRpe] ?? ''}</div>
       </div>`;
   }).join('');
 
   overlay.innerHTML = `
-    <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
-      <div style="font-size:15px;font-weight:600;color:var(--c-black);margin-bottom:4px">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</div>
-      <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px">Rate perceived effort (1 = very easy, 10 = maximum)</div>
+    <div class="w-full max-w-sm" style="background:#FFFFFF;border:1px solid rgba(0,0,0,0.06);border-radius:20px;padding:22px;box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08)">
+      <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 8px">LOG EFFORT</p>
+      <h3 style="font-size:18px;font-weight:500;color:var(--c-black);margin:0 0 6px;letter-spacing:-0.005em;line-height:1.25">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</h3>
+      <p style="font-size:13px;color:var(--c-muted);margin:0 0 14px;line-height:1.45">Rate perceived effort. 1 is very easy, 10 is maximum.</p>
       ${rows}
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button id="rpe-skip" style="flex:1;height:40px;border-radius:12px;border:1px solid var(--c-border);
-                background:transparent;font-size:13px;font-weight:600;color:var(--c-muted);cursor:pointer">Skip</button>
-        <button id="rpe-save" style="flex:1;height:40px;border-radius:12px;border:none;
-                background:var(--c-accent);font-size:13px;font-weight:600;color:#fff;cursor:pointer">Save</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px">
+        <button id="rpe-skip" style="height:46px;border-radius:23px;border:1px solid var(--c-border);
+                background:#FFFFFF;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer">Skip</button>
+        <button id="rpe-save" style="height:46px;border-radius:23px;border:none;
+                background:#0A0A0A;font-size:14px;font-weight:500;color:#FDFCF7;cursor:pointer;box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.1), 0 8px 22px -8px rgba(0,0,0,0.35)">Save</button>
       </div>
     </div>`;
 
@@ -845,12 +856,10 @@ function showRpePrompt(
     slider.addEventListener('input', () => {
       const wid = slider.dataset.wid!;
       const val = parseInt(slider.value, 10);
-      const colour = rpeColorVar(val);
       const valSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-val[data-wid="${wid}"]`);
       const labelSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-label[data-wid="${wid}"]`);
-      if (valSpan) { valSpan.textContent = String(val); valSpan.style.color = colour; }
-      if (labelSpan) { labelSpan.textContent = RPE_LABELS[val] ?? ''; labelSpan.style.color = colour; }
-      slider.style.accentColor = colour;
+      if (valSpan) valSpan.textContent = String(val);
+      if (labelSpan) labelSpan.textContent = RPE_LABELS[val] ?? '';
     });
   });
 
@@ -1250,8 +1259,11 @@ function applyReview(
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
       const freshW   = getWeekWorkoutsForReview();
-      const sport    = mapAppTypeToSport(
-        remainingCross.find(i => i.appType !== 'other')?.appType ?? 'other',
+      const primary  = remainingCross.find(i => i.appType !== 'other') ?? remainingCross[0];
+      const sport    = resolveSportForActivity(
+        primary?.activityType,
+        mapAppTypeToSport(primary?.appType ?? 'other'),
+        primary?.activityType,
       );
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
 
@@ -1295,7 +1307,8 @@ function applyReview(
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
-      recordLegLoad(sport, combinedActivity.duration_min, Date.now());
+      const mostRecentStart = remainingCross.reduce((a, b) => (a.startTime > b.startTime ? a : b)).startTime;
+      recordLegLoad(sport, combinedActivity.duration_min, new Date(mostRecentStart).getTime());
     }
 
     const affectedStr = affectedNames.length > 0 ? ` — adjusted: ${affectedNames.join(', ')}` : '';
@@ -1863,7 +1876,12 @@ export function autoProcessActivities(
 
     if (decision.choice !== 'keep' && decision.adjustments.length > 0) {
       const freshW   = getWeekWorkoutsForReview();
-      const sport    = mapAppTypeToSport(overflow.find(i => i.appType !== 'other')?.appType ?? 'other');
+      const primary  = overflow.find(i => i.appType !== 'other') ?? overflow[0];
+      const sport    = resolveSportForActivity(
+        primary?.activityType,
+        mapAppTypeToSport(primary?.appType ?? 'other'),
+        primary?.activityType,
+      );
       const modified = applyAdjustments(freshW, decision.adjustments, normalizeSport(sport), s3.pac);
       if (!wk3.workoutMods) wk3.workoutMods = [];
       for (const adj of decision.adjustments) {
@@ -1903,7 +1921,8 @@ export function autoProcessActivities(
         : combinedActivity.duration_min * (TL_PER_MIN[combinedActivity.rpe] ?? 1.15) * runSpec;
       wk3.actualTSS = (wk3.actualTSS ?? 0) + Math.round(crossTL);
       wk3.actualImpactLoad = (wk3.actualImpactLoad ?? 0) + Math.round(combinedActivity.duration_min * impactPerMin);
-      recordLegLoad(sport, combinedActivity.duration_min, Date.now());
+      const mostRecentStart = overflow.reduce((a, b) => (a.startTime > b.startTime ? a : b)).startTime;
+      recordLegLoad(sport, combinedActivity.duration_min, new Date(mostRecentStart).getTime());
     }
 
     showAssignmentToast(autoAssignLines);
@@ -1926,7 +1945,15 @@ function buildCombinedActivity(
   }
   const dominantAppType = Object.entries(durationByType)
     .sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'other';
-  const sport = mapAppTypeToSport(dominantAppType);
+  // Pick the dominant item for its activityType (used as name-mapping key).
+  const dominantItem = items
+    .slice()
+    .sort((a, b) => b.durationSec - a.durationSec)[0];
+  const sport = resolveSportForActivity(
+    dominantItem?.activityType,
+    mapAppTypeToSport(dominantAppType),
+    dominantItem?.activityType,
+  );
 
   const totalDurationMin = items.reduce((sum, i) => sum + i.durationSec / 60, 0);
   let weightedRpe = 0;

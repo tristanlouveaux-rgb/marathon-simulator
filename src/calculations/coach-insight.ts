@@ -113,16 +113,16 @@ export function getSignalPills(signals: WeekSignals): SignalPill[] {
     pills.push({ label: 'Training volume', value: '—', color: 'neutral' });
   }
 
-  // Running fitness — CTL delta week-over-week
+  // Running load — CTL delta week-over-week
   if (signals.fitness != null) {
     const map = {
       up: { value: 'Improving', color: 'green' },
       flat: { value: 'Steady', color: 'neutral' },
       down: { value: 'Declining', color: 'red' },
     } as const;
-    pills.push({ label: 'Running fitness', ...map[signals.fitness] });
+    pills.push({ label: 'Running load', ...map[signals.fitness] });
   } else {
-    pills.push({ label: 'Running fitness', value: '—', color: 'neutral' });
+    pills.push({ label: 'Running load', value: '—', color: 'neutral' });
   }
 
   // HR during sessions — average HR drift across runs

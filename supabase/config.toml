@@ -33,3 +33,6 @@ verify_jwt = false
 
 [functions.sync-today-steps]
 verify_jwt = false
+
+[functions.garmin-reconcile]
+verify_jwt = false

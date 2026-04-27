@@ -223,7 +223,7 @@ function getModalHTML(injuryState: InjuryState): string {
 
         <!-- Buttons -->
         <div class="flex gap-3 pt-2">
-          <button type="button" id="injury-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">
+          <button type="button" id="injury-cancel" class="m-btn-glass m-btn-glass--inset">
             Cancel
           </button>
           ${injuryState.active ? `
@@ -530,7 +530,7 @@ export function openReturnToRunGateModal(): void {
 
       <!-- Buttons -->
       <div class="flex gap-3">
-        <button id="gate-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancel</button>
+        <button id="gate-cancel" class="m-btn-glass m-btn-glass--inset">Cancel</button>
         <button id="gate-confirm" class="flex-1 m-btn-primary px-4 py-2 rounded-lg text-sm font-medium">Confirm & Advance Week</button>
       </div>
     </div>
@@ -639,7 +639,7 @@ function showInjuryConfirm(title: string, message: string, confirmLabel: string,
         <p class="text-sm mb-5" style="color:var(--c-muted)">${message}</p>
         <div class="flex flex-col gap-2">
           <button id="btn-injury-yes" class="w-full m-btn-primary py-2.5 font-medium rounded-lg text-sm">${confirmLabel}</button>
-          <button id="btn-injury-no" class="w-full m-btn-secondary py-2.5 font-medium rounded-lg text-sm">${cancelLabel}</button>
+          <button id="btn-injury-no" class="w-full m-btn-glass m-btn-glass--inset">${cancelLabel}</button>
         </div>
       </div>
     `;
@@ -665,7 +665,7 @@ function showThreeOptionChoice(
         ? `class="w-full m-btn-primary py-2.5 font-medium rounded-lg text-sm"`
         : i === 1
           ? `class="w-full py-2.5 font-medium rounded-lg text-sm" style="background:var(--c-accent);color:white"`
-          : `class="w-full m-btn-secondary py-2.5 font-medium rounded-lg text-sm"`;
+          : `class="w-full m-btn-glass m-btn-glass--inset"`;
       return `
         <button data-choice="${opt.id}" ${btnStyle}>
           ${opt.label}
@@ -751,7 +751,7 @@ export function openGraduatedReturnCheckIn(): void {
 
       <!-- Buttons -->
       <div class="flex gap-3">
-        <button id="grad-cancel" class="m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">Cancel</button>
+        <button id="grad-cancel" class="m-btn-glass m-btn-glass--inset">Cancel</button>
         <button id="grad-confirm" class="flex-1 m-btn-primary px-4 py-2 rounded-lg text-sm font-medium">Confirm & Advance Week</button>
       </div>
     </div>

@@ -24,6 +24,7 @@ import { renderSleepView } from '@/ui/sleep-view';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
+import { deriveLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -2014,11 +2015,10 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     const pct = s.maxHR ? Math.round((s.ltHR / s.maxHR) * 100) : null;
     ltSubtitle = pct ? `${s.ltHR} bpm · ${pct}% max HR` : `${s.ltHR} bpm`;
   }
-  const ltHistory = (s.physiologyHistory ?? []).filter(e => (e.ltPace ?? 0) > 0);
   const ltBar = buildOnePositionBar({
     title: 'Lactate Threshold',
     infoId: 'lt',
-    detailId: ltHistory.length > 3 ? 'lt' : undefined,
+    detailId: 'lt',
     value: ltScore,
     valueLabel: ltLabel,
     zoneName: ltZoneName,
@@ -2035,12 +2035,19 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     subtitle: ltSubtitle,
   });
 
+  const ltNote = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:6px;padding:0 2px">
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.4">May differ from your watch reading. Edit if you'd rather use a value you trust.</div>
+      <button data-metric-detail="lt" style="flex-shrink:0;padding:6px 12px;border:1px solid var(--c-border);background:transparent;border-radius:6px;cursor:pointer;font-family:var(--f);font-size:12px;color:var(--c-black)">Edit</button>
+    </div>`;
+
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:14px">Your Numbers</div>
       ${ctlBar}
       ${aerBar}
       ${ltBar}
+      ${ltNote}
     </div>`;
 }
 
@@ -2310,32 +2317,27 @@ function buildVDOTMetricPage(s: SimulatorState): string {
 
 function buildLTMetricPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
-  const hist = (s.physiologyHistory ?? []).filter(e => (e.ltPace ?? 0) > 0);
   const currentLT = s.lt ?? 0;
+  const currentHR = s.ltHR ?? null;
   const ltLabel = currentLT > 0 ? fp(currentLT, unitPref) : '—';
 
-  const vals = hist.map(e => e.ltPace!);
-  const n = vals.length;
-  // LT pace: lower = faster = better, so invert for display
-  const lo = Math.min(...vals) - 5;
-  const hi = Math.max(...vals) + 5;
-  const range2 = hi - lo || 1;
-  const W = 320, H = 60;
-  const xOf = (i: number) => (i / (n - 1)) * W;
-  const yOf = (v: number) => H - Math.max(2, ((hi - v) / range2) * (H - 8)); // inverted: lower pace = higher on chart
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
-  const trend = n >= 2 ? vals[n-1] - vals[n-2] : 0;
-  // improving = pace decreasing (faster)
-  const improving = trend < 0;
-  const strokeColor = improving ? 'rgba(52,199,89,0.85)' : 'rgba(255,69,58,0.80)';
-  const fillColor   = improving ? 'rgba(52,199,89,0.12)' : 'rgba(255,69,58,0.10)';
-  const trendArrow = trend < -1 ? '↑' : trend > 1 ? '↓' : '→';
-  const trendColor = trend < -1 ? 'var(--c-ok)' : trend > 1 ? 'var(--c-warn)' : 'var(--c-faint)';
+  // Provenance + methods (computed lazily so we can show the breakdown card).
+  const derived = deriveLTForState(s);
+  const sourceLabel = sourceToLabel(s.ltSource);
+  const confidence = s.ltConfidence ?? derived.confidence;
+  const provenance = s.ltOverride
+    ? 'Manually set by you'
+    : (s.ltSource === 'garmin'
+      ? 'Watch reading'
+      : derived.provenance);
 
-  const firstDate = hist[0].date.slice(5);
-  const lastDate  = hist[n-1].date.slice(5);
+  // Sparkline (Garmin history) — only shown when there's enough history.
+  const hist = (s.physiologyHistory ?? []).filter(e => (e.ltPace ?? 0) > 0);
+  const sparkline = hist.length >= 2 ? buildLTSparkline(hist) : '';
+
+  const conflictCard = s.ltSuggestion ? buildLTConflictCard(s.ltSuggestion, unitPref) : '';
+  const methodsCard = derived.methods.length > 0 ? buildLTMethodsCard(derived, unitPref) : '';
+  const overrideCard = buildLTOverrideCard(s, currentLT, currentHR, unitPref);
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
@@ -2343,22 +2345,183 @@ function buildLTMetricPage(s: SimulatorState): string {
       <div style="padding:18px;overflow-y:auto">
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
           <span style="font-size:28px;font-weight:300;color:var(--c-black)">${ltLabel}</span>
-          <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
+          ${currentHR ? `<span style="font-size:14px;color:var(--c-muted)">· ${currentHR} bpm</span>` : ''}
+          ${buildConfidenceChip(confidence)}
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">Lactate threshold pace · from Garmin</div>
-        <div class="m-card" style="padding:16px">
-          <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
-            <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
-            <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round"/>
-          </svg>
-          <div style="display:flex;justify-content:space-between;padding:3px 0 0">
-            <span style="font-size:9px;color:var(--c-faint)">${firstDate}</span>
-            <span style="font-size:9px;color:var(--c-faint)">${lastDate}</span>
-          </div>
+        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${escapeHtml(provenance)}${sourceLabel ? ` · ${sourceLabel}` : ''}</div>
+        ${conflictCard}
+        ${sparkline}
+        ${methodsCard}
+        ${overrideCard}
+        <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:14px">
+          LT pace anchors threshold workouts and feeds race-time predictions. We blend Daniels VDOT, critical-speed fits, and recent steady-state runs. Override below if you trust a lab test or race time more.
         </div>
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
+}
+
+function sourceToLabel(src: SimulatorState['ltSource']): string {
+  switch (src) {
+    case 'override': return 'manual override';
+    case 'garmin': return 'watch';
+    case 'blended': return 'blended';
+    case 'daniels': return 'VDOT';
+    case 'critical-speed': return 'critical speed';
+    case 'empirical': return 'recent runs';
+    default: return '';
+  }
+}
+
+function buildConfidenceChip(c: 'high' | 'medium' | 'low'): string {
+  const colorMap = {
+    high: { bg: 'rgba(52,199,89,0.12)', fg: '#15803D' },
+    medium: { bg: 'rgba(245,158,11,0.12)', fg: '#B45309' },
+    low: { bg: 'rgba(148,163,184,0.18)', fg: '#475569' },
+  } as const;
+  const m = colorMap[c];
+  return `<span style="font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:${m.bg};color:${m.fg};margin-left:4px">${c} confidence</span>`;
+}
+
+function buildLTSparkline(hist: PhysiologyDayEntry[]): string {
+  const vals = hist.map(e => e.ltPace!);
+  const n = vals.length;
+  const lo = Math.min(...vals) - 5;
+  const hi = Math.max(...vals) + 5;
+  const range2 = hi - lo || 1;
+  const W = 320, H = 60;
+  const xOf = (i: number) => (i / (n - 1)) * W;
+  const yOf = (v: number) => H - Math.max(2, ((hi - v) / range2) * (H - 8));
+  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
+  const topPath = smoothAreaPath(pts);
+  const areaPath = `${topPath} L ${W} ${H} L 0 ${H} Z`;
+  const trend = n >= 2 ? vals[n-1] - vals[n-2] : 0;
+  const improving = trend < 0;
+  const strokeColor = improving ? 'rgba(52,199,89,0.85)' : 'rgba(255,69,58,0.80)';
+  const fillColor   = improving ? 'rgba(52,199,89,0.12)' : 'rgba(255,69,58,0.10)';
+  const firstDate = hist[0].date.slice(5);
+  const lastDate  = hist[n-1].date.slice(5);
+  return `
+    <div class="m-card" style="padding:16px;margin-bottom:12px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Watch history</div>
+      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+        <path d="${areaPath}" fill="${fillColor}" stroke="none"/>
+        <path d="${topPath}" class="chart-draw" fill="none" stroke="${strokeColor}" stroke-width="1.5" stroke-linejoin="round"/>
+      </svg>
+      <div style="display:flex;justify-content:space-between;padding:3px 0 0">
+        <span style="font-size:9px;color:var(--c-faint)">${firstDate}</span>
+        <span style="font-size:9px;color:var(--c-faint)">${lastDate}</span>
+      </div>
+    </div>`;
+}
+
+function buildLTMethodsCard(derived: import('@/calculations/lt-derivation').LTDerivationResult, unitPref: UnitPref): string {
+  const methodLabel: Record<string, string> = {
+    daniels: 'Daniels VDOT',
+    'critical-speed': 'Critical speed',
+    empirical: 'Steady-state runs',
+    override: 'Manual override',
+    garmin: 'Watch',
+  };
+  const rows = derived.methods.map(m => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--c-border)">
+      <div style="min-width:0">
+        <div style="font-size:13px;color:var(--c-black);font-weight:500">${methodLabel[m.method] ?? m.method}</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">${escapeHtml(m.detail)}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;margin-left:12px">
+        <div style="font-size:13px;color:var(--c-black);font-weight:600">${fp(m.ltPaceSecKm, unitPref)}</div>
+        ${derived.methods.length > 1 ? `<div style="font-size:10px;color:var(--c-faint)">${Math.round(m.weight * 100)}% weight</div>` : ''}
+      </div>
+    </div>`).join('');
+  return `
+    <div class="m-card" style="padding:14px 16px;margin-bottom:12px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:4px">How we calculated this</div>
+      ${rows}
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:10px">${escapeHtml(derived.provenance)}</div>
+    </div>`;
+}
+
+function buildLTConflictCard(
+  sug: NonNullable<SimulatorState['ltSuggestion']>,
+  unitPref: UnitPref,
+): string {
+  const garminPace = fp(sug.garmin.ltPaceSecKm, unitPref);
+  const derivedPace = fp(sug.derived.ltPaceSecKm, unitPref);
+  const gap = Math.round(Math.abs(sug.garmin.ltPaceSecKm - sug.derived.ltPaceSecKm));
+  return `
+    <div class="m-card" style="padding:14px 16px;margin-bottom:12px;border:1px solid rgba(245,158,11,0.35);background:rgba(245,158,11,0.06)">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#B45309;margin-bottom:6px">Sources disagree</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Garmin and our blended estimate differ by ${gap}s/km. Pick the one you trust.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <button data-lt-pick="garmin" style="padding:10px;border:1px solid var(--c-border);background:transparent;border-radius:6px;cursor:pointer;text-align:left;font-family:var(--f)">
+          <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:3px">Your watch</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-black)">${garminPace}</div>
+          ${sug.garmin.ltHR ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${sug.garmin.ltHR} bpm</div>` : ''}
+        </button>
+        <button data-lt-pick="derived" style="padding:10px;border:1px solid var(--c-border);background:transparent;border-radius:6px;cursor:pointer;text-align:left;font-family:var(--f)">
+          <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:3px">Our estimate</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-black)">${derivedPace}</div>
+          ${sug.derived.ltHR ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${sug.derived.ltHR} bpm</div>` : ''}
+        </button>
+      </div>
+    </div>`;
+}
+
+function buildLTOverrideCard(
+  s: SimulatorState,
+  currentLT: number,
+  currentHR: number | null,
+  unitPref: UnitPref,
+): string {
+  // Slider range: ±60 sec/km around current value, clamped to a sensible band.
+  const seedPace = currentLT > 0 ? currentLT : 270;
+  const minPace = Math.max(150, seedPace - 60);
+  const maxPace = Math.min(420, seedPace + 60);
+  const seedHR = currentHR ?? (s.maxHR ? Math.round(s.maxHR * 0.88) : 165);
+  const minHR = Math.max(120, seedHR - 20);
+  const maxHR = Math.min(200, seedHR + 20);
+
+  const hasOverride = !!s.ltOverride;
+  return `
+    <div class="m-card" style="padding:16px;margin-bottom:8px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">Override</div>
+      <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Saved overrides flow through to threshold/easy/marathon paces and race-time predictions immediately.</div>
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--c-muted)">LT pace</span>
+          <span id="lt-override-pace-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${fp(seedPace, unitPref)}</span>
+        </div>
+        <input type="range" id="lt-override-pace" min="${minPace}" max="${maxPace}" step="1" value="${seedPace}" style="width:100%;accent-color:var(--c-black)">
+        <div style="display:flex;justify-content:space-between;margin-top:2px">
+          <span style="font-size:10px;color:var(--c-faint)">${fp(minPace, unitPref)}</span>
+          <span style="font-size:10px;color:var(--c-faint)">${fp(maxPace, unitPref)}</span>
+        </div>
+      </div>
+      <div style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <span style="font-size:11px;color:var(--c-muted)">LT heart rate</span>
+          <span id="lt-override-hr-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${seedHR} bpm</span>
+        </div>
+        <input type="range" id="lt-override-hr" min="${minHR}" max="${maxHR}" step="1" value="${seedHR}" style="width:100%;accent-color:var(--c-black)">
+        <div style="display:flex;justify-content:space-between;margin-top:2px">
+          <span style="font-size:10px;color:var(--c-faint)">${minHR} bpm</span>
+          <span style="font-size:10px;color:var(--c-faint)">${maxHR} bpm</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="lt-override-save" style="flex:1;padding:10px;border:1px solid var(--c-border);background:transparent;border-radius:6px;cursor:pointer;font-family:var(--f);font-size:13px;color:var(--c-black)">Save override</button>
+        ${hasOverride ? `<button id="lt-override-reset" style="flex:1;padding:10px;border:1px solid var(--c-border);background:transparent;border-radius:6px;cursor:pointer;font-family:var(--f);font-size:13px;color:var(--c-muted)">Reset to derived</button>` : ''}
+      </div>
+    </div>`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Race progress detail card. */
@@ -3615,6 +3778,7 @@ function wireMetricDetailButtons(s: SimulatorState): void {
         animateChartDrawOn();
         wireTabBarHandlers(navigateTab);
         wireMetricBack(s);
+        wireLTOverrideHandlers(s);
       }
     };
     el.addEventListener('click', handler);
@@ -3628,6 +3792,109 @@ function wireMetricBack(s: SimulatorState): void {
   const go = () => renderFitnessDetail(s);
   btn.addEventListener('click', go);
   btn.addEventListener('touchend', (e) => { e.preventDefault(); go(); }, { passive: false });
+}
+
+/** Wire override sliders + conflict-resolution buttons on the LT metric page. */
+function wireLTOverrideHandlers(s: SimulatorState): void {
+  const unitPref = s.unitPref ?? 'km';
+  const paceSlider = document.getElementById('lt-override-pace') as HTMLInputElement | null;
+  const paceLabel  = document.getElementById('lt-override-pace-label');
+  const hrSlider   = document.getElementById('lt-override-hr') as HTMLInputElement | null;
+  const hrLabel    = document.getElementById('lt-override-hr-label');
+  const saveBtn    = document.getElementById('lt-override-save');
+  const resetBtn   = document.getElementById('lt-override-reset');
+
+  if (paceSlider && paceLabel) {
+    paceSlider.addEventListener('input', () => {
+      paceLabel.textContent = fp(parseInt(paceSlider.value, 10), unitPref);
+    });
+  }
+  if (hrSlider && hrLabel) {
+    hrSlider.addEventListener('input', () => {
+      hrLabel.textContent = `${parseInt(hrSlider.value, 10)} bpm`;
+    });
+  }
+  saveBtn?.addEventListener('click', async () => {
+    if (!paceSlider || !hrSlider) return;
+    const pace = parseInt(paceSlider.value, 10);
+    const hr = parseInt(hrSlider.value, 10);
+    const { getMutableState, saveState } = await import('@/state');
+    const { gp } = await import('@/calculations/paces');
+    const m = getMutableState();
+    m.ltOverride = { ltPaceSecKm: pace, ltHR: hr, setAt: new Date().toISOString() };
+    if (m.ltSuggestion) delete m.ltSuggestion;
+    recomputeLT(m);
+    // Refresh cached pace zones so threshold/easy/marathon paces and any view
+    // reading s.pac immediately use the new LT.
+    m.pac = gp(getEffectiveVdot(m), m.lt);
+    saveState();
+    // Re-render in place.
+    const container = document.getElementById('app-root');
+    if (container) {
+      container.innerHTML = buildLTMetricPage(m);
+      animateChartDrawOn();
+      wireTabBarHandlers(navigateTab);
+      wireMetricBack(m);
+      wireLTOverrideHandlers(m);
+    }
+  });
+  resetBtn?.addEventListener('click', async () => {
+    const { getMutableState, saveState } = await import('@/state');
+    const { gp } = await import('@/calculations/paces');
+    const m = getMutableState();
+    delete m.ltOverride;
+    recomputeLT(m);
+    m.pac = gp(getEffectiveVdot(m), m.lt);
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) {
+      container.innerHTML = buildLTMetricPage(m);
+      animateChartDrawOn();
+      wireTabBarHandlers(navigateTab);
+      wireMetricBack(m);
+      wireLTOverrideHandlers(m);
+    }
+  });
+
+  // Conflict resolution buttons.
+  document.querySelectorAll<HTMLElement>('[data-lt-pick]').forEach(el => {
+    el.addEventListener('click', async () => {
+      const choice = el.dataset.ltPick;
+      const { getMutableState, saveState } = await import('@/state');
+      const { gp } = await import('@/calculations/paces');
+      const m = getMutableState();
+      const sug = m.ltSuggestion;
+      if (!sug) return;
+      if (choice === 'garmin') {
+        // Accept the watch reading: persist as override so future syncs don't reopen
+        // the conflict until the watch gives us a new value.
+        m.ltOverride = {
+          ltPaceSecKm: sug.garmin.ltPaceSecKm,
+          ltHR: sug.garmin.ltHR ?? undefined,
+          setAt: new Date().toISOString(),
+        };
+      } else if (choice === 'derived') {
+        // Trust our blended derivation for now — also lock as override.
+        m.ltOverride = {
+          ltPaceSecKm: Math.round(sug.derived.ltPaceSecKm),
+          ltHR: sug.derived.ltHR ?? undefined,
+          setAt: new Date().toISOString(),
+        };
+      }
+      clearLTSuggestion(m);
+      recomputeLT(m);
+      m.pac = gp(getEffectiveVdot(m), m.lt);
+      saveState();
+      const container = document.getElementById('app-root');
+      if (container) {
+        container.innerHTML = buildLTMetricPage(m);
+        animateChartDrawOn();
+        wireTabBarHandlers(navigateTab);
+        wireMetricBack(m);
+        wireLTOverrideHandlers(m);
+      }
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------

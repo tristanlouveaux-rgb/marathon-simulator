@@ -19,6 +19,7 @@
   --c-ok:           #22C55E;
   --c-ok-muted:     #6EC867;
   --c-ok-strong:    #15803D;
+  --c-info:         #7FB4E8;
   --c-caution:      #F59E0B;
   --c-warn:         #EF4444;
   --c-ok-bg:        #DCFCE7;
@@ -156,6 +157,64 @@ body {
   font-family: var(--f);
   cursor: pointer;
   letter-spacing: 0.02em;
+}
+
+.m-btn-glass {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 20px;
+  font-family: var(--f);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--c-black);
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(20px) saturate(1.4);
+  -webkit-backdrop-filter: blur(20px) saturate(1.4);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 9999px;
+  cursor: pointer;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 12px rgba(0, 0, 0, 0.06),
+    0 8px 24px rgba(0, 0, 0, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Icon variant: square/circular button, caller sets width + height inline */
+.m-btn-glass--icon {
+  padding: 0;
+  font-size: 12px;
+}
+
+/* In-card variant: calmer shadow when nested inside an elevated surface */
+.m-btn-glass--inset {
+  background: rgba(255, 255, 255, 0.7);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.05),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+}
+.m-btn-glass--inset:active {
+  transform: translateY(0.5px) scale(0.99);
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.06),
+    0 1px 1px rgba(0, 0, 0, 0.03);
+}
+
+.m-btn-glass:active {
+  transform: translateY(0.5px) scale(0.985);
+  background: rgba(255, 255, 255, 0.5);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.07),
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.05);
 }
 
 .m-btn-link {

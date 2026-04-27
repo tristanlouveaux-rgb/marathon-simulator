@@ -1294,7 +1294,13 @@ function markRecoveryPrompted(): void {
 }
 
 function getPlanName(s: any): string {
-  if (s.continuousMode) return 'Fitness Plan';
+  if (s.continuousMode) {
+    const focus = s.onboarding?.trainingFocus;
+    if (focus === 'speed') return 'Speed Plan';
+    if (focus === 'endurance') return 'Endurance Plan';
+    if (focus === 'both') return 'Balanced Plan';
+    return 'Fitness Plan';
+  }
   const labels: Record<string, string> = {
     '5k': '5K Plan',
     '10k': '10K Plan',

@@ -16,6 +16,186 @@ This log documents **formulas and implementation**. The research docs document *
 
 ---
 
+## Lactate Threshold Derivation (2026-04-24)
+
+**Purpose.** Derive LT pace and LTHR from available inputs when Garmin's watch-side reading is missing, stale, or gated by development credentials. Covers the case where the Garmin webhook sends VO2 Max but no `lactateThresholdSpeed` / `lactateThresholdHeartRate`. User override wins wholesale when present.
+
+**Threshold target.** LT2 (MLSS / maximal metabolic steady state). This is the "lactate threshold" in common usage — the highest pace sustainable for ~60 min — not LT1 / AeT. Garmin's own `lactateThresholdSpeed` maps to LT2.
+
+### Three estimators, blended
+
+**Method 1 — Daniels T-pace from VDOT.** Invert Daniels' VO2 cost-of-running equation to find vVO2max velocity, then scale to T-intensity.
+
+```
+VO2(v) = −4.60 + 0.182258·v + 0.000104·v²   (v = velocity, m/min; VO2 = ml/min/kg)
+```
+
+Solve for v at VO2 = VDOT (positive root of the quadratic). T-pace = vVO2max / 0.88 (sec/km, slower pace has higher sec/km).
+
+- Source: Daniels' Running Formula (3rd ed.), Daniels & Gilbert 1979.
+- The 0.88 fraction is Daniels' empirical T-intensity = 88% of vVO2max.
+- Falls back to null when VDOT < 25 (pre-aerobic-base athletes — formula diverges).
+- Known limit: Daniels' published table T-paces land ~10s/km faster than this derivation because the table maps closer to a ~40-min effort than a true 60-min LT. Our derivation is anchored to MLSS, so it lands closer to half-marathon pace for trained runners — which aligns with the literature definition of LT2.
+
+**Method 2 — Critical Speed from race-distance PBs.** Two-parameter hyperbolic model:
+
+```
+d = CS · t + D′
+```
+
+Where `d` = distance (m), `t` = time (s), `CS` = critical speed (m/s), `D′` = anaerobic distance capacity (m). Ordinary least-squares fit across the athlete's best efforts at different distances.
+
+Nixon et al. 2021 (PMC8505327) demonstrated that CS sits ~8% above MLSS in well-trained runners (CS 16.4 ± 1.3 km/h vs MLSS 15.2 ± 0.9 km/h). We therefore set:
+
+```
+LT_pace = 0.93 × CS        (LT pace as a fraction of CS pace, converted to sec/km)
+```
+
+- Source: Jones & Vanhatalo 2017 (critical power framework); Nixon et al. 2021 (CS↔MLSS offset).
+- Fit constraints: ≥2 efforts, duration span ≥600s, each effort 2–60 min (excludes sprints dominated by anaerobic capacity and long races affected by fuelling), efforts ≤365 days old, D′ must fall in 50–500 m (physiological plausibility, Jones & Vanhatalo 2017).
+- Known limit: 2-parameter model assumes infinite speed as t→0 and that D′ is fully depleted at exhaustion — both simplifications. More accurate 3-parameter models exist but require additional efforts we rarely have.
+
+**Method 3 — Empirical detection from sustained efforts.** Scan runs in the last 120 days for ones exhibiting LT steady-state behaviour:
+
+```
+duration ≥ 20 min
+avgHR ∈ [0.85·HRmax, 0.92·HRmax]
+pace CV across splits < 0.08
+pace decoupling (2nd half vs 1st half) < 5%
+NOT treadmill / virtual
+NOT hot (>28°C)
+NOT hilly (elevation gain > 15 m/km)
+```
+
+Take the time-decayed weighted mean of qualifying `{pace, HR}` pairs with decay constant τ = 21 days.
+
+- Source: Friel 2012 (aerobic decoupling < 5% as steady-state proxy); Uphill Athlete heart-rate drift test; Poole et al. (LT2 HR band 85–92% HRmax for trained runners); Faude et al. (LT testing conventions).
+- τ = 21 days gives ~50% weight to 3-week-old efforts. Matches the ~3-week adaptation time-constant of aerobic fitness.
+- Outlier rejection is deliberately strict. A false positive here (e.g. tempo in heat with inflated HR) gets weighted into the final blend; a false negative just downgrades confidence without corrupting the answer.
+
+### Blend
+
+Weights depend on which methods fired:
+
+| Available | Empirical | CS | Daniels |
+|---|---|---|---|
+| all three | 0.50 | 0.30 | 0.20 |
+| empirical + CS | 0.60 | 0.40 | — |
+| empirical + Daniels | 0.65 | — | 0.35 |
+| CS + Daniels | — | 0.60 | 0.40 |
+| single method | 1.00 | 1.00 | 1.00 |
+
+Empirical gets the highest weight because it's the only direct observation. CS next because it's still observation-derived (from PBs) but fits a model. Daniels is algorithmic — no new information beyond VDOT.
+
+### LTHR derivation
+
+- **Primary:** median HR of qualifying empirical efforts.
+- **Fallback:** `0.88 × HRmax` (midpoint of the 85–92% LT2 band for trained runners).
+- **Not used:** Karvonen HRR — it would require a reliable `restingHR` and a well-calibrated `maxHR`, and the `0.88 × HRmax` shortcut lands within ±3 bpm for most athletes.
+
+### Source priority (resolveLT)
+
+```
+override   >  fresh Garmin (<60d)  >  blended derivation  >  stale Garmin  >  null
+```
+
+User override always wins. Fresh Garmin beats derived because the watch has continuous HR access and proprietary FirstBeat calibration — higher fidelity than any field-data estimator when available. Stale Garmin (>60 days) is dropped in favour of derived, because LT drifts with fitness.
+
+### Confidence
+
+- **High** — empirical present AND (CS or Daniels) available. Triangulated.
+- **Medium** — empirical alone, or CS + Daniels (no empirical).
+- **Low** — Daniels only (no field observations).
+
+Low-confidence LT feeds the app but is flagged so UI can warn users not to prescribe training paces off an untriangulated number.
+
+### Outliers and known failure modes
+
+| Scenario | Guard | Effect |
+|---|---|---|
+| Treadmill | sportType filter | Empirical skips the run |
+| Trail / hills (>15 m/km) | elevation filter | Empirical skips |
+| Hot weather (>28°C) | ambient temp filter | Empirical skips |
+| Sub-20min efforts | duration gate | Empirical skips |
+| Unsteady pacing (CV>8%) | splits CV gate | Empirical skips |
+| Pace decoupling >5% | split-halves drift | Empirical skips |
+| HR strap absent / optical | no explicit guard | Accept but confidence only "medium" |
+| Illness / heat-acclimation shift | not detectable | Time-decay τ=21d mitigates |
+| Altitude | not detectable | User can override |
+| HRmax miscalibrated | no guard | LTHR fallback propagates error |
+| Ultra-elite (VDOT > 70) | no guard | Daniels formula less accurate at extremes |
+| Women LT1 slightly higher fraction | not modelled | LT2 less affected; literature shows ~1–2% shift |
+
+### Integration
+
+- Pure functions in `src/calculations/lt-derivation.ts`.
+- 29 unit tests in `src/calculations/lt-derivation.test.ts` cover each method, outlier cases, blending, and source precedence.
+- State: `s.ltOverride?: { ltPaceSecKm, ltHR?, setAt }` holds user override.
+- Garmin reading still populates `s.ltPace` / `s.ltHR` via physiology snapshot — `resolveLT()` reads both and picks.
+
+---
+
+## Effort-Calibrated VDOT from HR (2026-04-24)
+
+**Purpose.** Current-fitness estimate from the last 8 weeks of running, using heart-rate response to pace as the physiological anchor. Complements Tanda (volume + avg pace) and the PB ceiling in a blended race-prediction engine.
+
+**Formula.** For each qualifying run `i` in the 8w window:
+```
+%VO2R_i = (avgHR_i − RHR) / (maxHR − RHR)       // Swain & Leutholtz 1997
+point_i = (avgPace_i, %VO2R_i, duration_i)
+```
+
+Weighted linear regression of `avgPace` on `%VO2R` (weights = `duration_i`):
+```
+avgPace = α + β × %VO2R
+paceAtVO2max = α + β × 1.0
+VDOT_HR = vdotFromPace(paceAtVO2max)            // Daniels' VDOT table lookup
+```
+
+Qualifying filter for inclusion in the regression:
+- `duration ≥ 20 min` (short intervals break HR–pace linearity)
+- `HR drift < 8%` (excludes fatigue/over-intensity; aerobic decoupling >8% means HR no longer tracks intensity linearly)
+- Valid `avgHR`, `maxHR`, `RHR` — if RHR absent, confidence = `none` and HR-calibrated estimate is skipped entirely (no fabricated default).
+
+**Confidence tiers:**
+- `high`: N ≥ 8 points AND R² ≥ 0.7
+- `medium`: N ≥ 4 points AND R² ≥ 0.5
+- `low`: N ≥ 3 points
+- `none`: otherwise (fall back to Tanda / hard-effort / PB)
+
+**Blending with other signals.** Final VDOT is a weighted mean across:
+1. **HR regression VDOT** — weight `w₁ = R² × min(N/8, 1) × recencyDecay`
+2. **Hard-effort VDOT** — single recent race/time-trial (pace ≥15% faster than median, ≤12 weeks old), weight `w₂ = 0.8 × recencyDecay`
+3. **Tanda VDOT** — volume × pace, weight `w₃ = paceConfidenceFactor` (high=0.9, medium=0.6, low=0.3)
+4. **PB VDOT** — ceiling signal, weight `w₄ = 0.5 × pbAgeDecay`
+
+`recencyDecay = exp(-weeksOld / 12)` for hard efforts.
+`pbAgeDecay = exp(-yearsOld × ln(2) / 3)` — half-life 3 years.
+
+**Why HR drift < 8% matters.** Aerobic decoupling (HR rising while pace holds) indicates the athlete has moved above their sustainable aerobic ceiling; the %HRR → %VO2R mapping assumes steady-state submaximal exercise. Friel's threshold is 5%; we use 8% to retain more data, accepting a small error on tempo efforts.
+
+**Why 75th-percentile weighting was rejected.** Percentile-based aggregation discards signal — a run that sits "below" the percentile is still informative about the pace-effort curve. Regression through all points uses every datapoint's information content (pace + effort + duration), weighted by duration as a reliability proxy.
+
+**Runner-type bias.** The VDOT → distance-specific time mapping is shaped by the athlete's 5K/marathon PB ratio, which gives an empirical Riegel exponent. Speed-biased runners (5K stronger than marathon ratio predicts) get a +1–2% shift on marathon prediction; endurance-biased runners (marathon stronger) get −1–2%. See existing "Fatigue Exponent & Runner Type Classification" entry.
+
+**Scientific anchors:**
+- **Swain & Leutholtz 1997** — %HRR ≈ %VO2R validated against gas exchange (ACSM 2013 position stand adopts this).
+- **Daniels' Running Formula** — VDOT tables; pace at 100% VO2max defines VDOT.
+- **Friel 2012 / Maffetone** — aerobic decoupling <5% = well-paced aerobic effort; >8% = fatigued or supra-threshold.
+- **Tanaka & Seals 2008** — VO2max declines ~1%/year past age 35 in masters athletes. Used to justify PB half-life ≈ 3 years.
+- **Fitzgerald et al. 1997** — longitudinal masters data supports exponential rather than linear VO2max decay.
+- **Monod–Scherrer critical-power model** — conceptual analog: multiple submaximal points fit a curve whose asymptote defines threshold. We apply the same principle to pace-HR rather than power-duration.
+
+**Limitations.**
+- HR is affected by heat, caffeine, hydration, sleep — noise in %HRR per session is ±3–5 bpm. Regression averages this out across N points.
+- Assumes linear %HRR → %VO2R (true within ~40–90% of max; breaks down at extremes).
+- VO2max is not the only fitness determinant — economy and lactate threshold fraction matter. VDOT conflates these; a 10% economy improvement will show up as a VDOT rise even without VO2max change (acceptable: both mean the athlete runs faster).
+- Athletes without a chest strap / accurate wrist HR get noisy avgHR — confidence tier should reflect this, but we can't detect it reliably; we mark high-variance HR distributions per session and downweight.
+
+**Implementation plan.** New file `src/calculations/effort-calibrated-vdot.ts`. Pure function taking `{ runs, RHR, maxHR, now }` → `{ vdotHR, confidence, R², N, regression }`. Composed in `predictions.ts` via a new `blendFitnessSignals()` function that produces `AthleteFitnessState.run`.
+
+---
+
 ## Triathlon — Multi-sport Transfer Matrix (2026-04-23)
 
 **Context**: Mosaic v1 had a single CTL for running with a `runSpec` discount applied to cross-training activities (cycling 0.55, HIIT 0.30, etc). Triathlon makes swim/bike first-class, so a single-run-centred CTL is no longer sufficient. The transfer matrix generalises this: every activity contributes to every discipline's CTL and ATL at a directional weight. `runSpec` is a special case (the "run" column).
@@ -1090,6 +1270,55 @@ Floor branches guard on `score > cap` so a stricter prior floor (ACWR, sleep, st
 
 ---
 
+## Running Leg Load (added 2026-04-25)
+
+**File**: `src/ui/sport-picker-modal.ts` — `computeRunLegLoad`, `effortMultiplierForRpe`, `reconcileRecentLegLoads`.
+
+**Why added.** Cross-training activities wrote `recentLegLoads` entries via duration × `legLoadPerMin`, but running was excluded from the leg-load pipeline entirely (no `legLoadPerMin` in `SPORTS_DB`). The assumption was that running fatigue would be captured by Freshness/TSB. In practice this leaves a visible gap: a hard 18 km the day before reads "Leg Fatigue: 4 (Minimal)" because no entry was ever written, while ATL barely registers the spike against an inflated CTL baseline. Running EIMD is mechanically distinct from cardiovascular fatigue and needs its own channel.
+
+**Formula**:
+```
+runLegLoad = distanceKm × effortMultiplier(rpe)
+
+effortMultiplier:
+  RPE ≤ 4  → 1.00 (easy/long)
+  RPE = 5  → 1.15 (marathon_pace)
+  RPE = 6  → 1.25 (float)
+  RPE = 7  → 1.30 (threshold)
+  RPE = 8  → 1.35 (race_pace)
+  RPE ≥ 9  → 1.50 (vo2 / intervals)
+```
+Multipliers are reused from `IMPACT_PER_KM` (already calibrated for matched workout types) so the run-leg-load channel and the existing impact-load channel share the same effort tiers.
+
+**Why distance × effort, not duration × rate.** Running EIMD is dominated by ground-reaction force at footstrike, which scales with stride count (≈ a function of distance) and per-stride force (≈ a function of effort/pace). Eccentric loading at the quadriceps and gastrocnemius peaks during the braking phase of each footstrike (Mizrahi et al. 2000, *Hum Mov Sci*; Clansey et al. 2014, *Med Sci Sports Exerc*). Duration is a poor proxy: a slow-paced bonked 18 km has more total mechanical stress than a brisk 60-minute easy run. Distance × effort captures both axes correctly.
+
+**RPE source priority**:
+1. `wk.rated[workoutId]` if a numeric RPE was logged for the matched workout.
+2. HR-derived Karvonen tier (same mapping as `deriveRPE` in `activity-matcher.ts`): zone 1 → 3, zone 2 → 4, zone 2-3 → 5, zone 3 → 6, zone 4 → 8, zone 5 → 9. This handles bonked runs correctly: pace collapses but HR stays elevated, and HR-derived RPE remains high.
+3. Default 5 if neither is available.
+
+**RBE suppression for hard runs (RPE ≥ 7).** The existing `applyRbeDiscount` reduces a same-sport bout's load by 40% when a prior bout occurred within 14 days (Nosaka & Clarkson 1995, McHugh 2003). For runs we suppress this when RPE ≥ 7, because the protective adaptation is stimulus-specific: a prior easy run does not protect against a threshold or race-pace effort. Chen et al. (2007, *Med Sci Sports Exerc*) and Nosaka & Newton (2002) showed RBE attenuates when a subsequent bout exceeds the protective bout's intensity — protection scales with stimulus similarity, not session count.
+
+**Worked example**. 18 km at zone-4 HR (RPE 8), bonked pace, 24 hours ago:
+- raw = 18 × 1.35 = 24.3
+- RBE skipped (RPE 8 ≥ 7)
+- decay over 24 h at 48 h half-life: 24.3 × exp(-ln 2 / 48 × 24) = 24.3 × 0.707 = 17.2
+- Falls in the 10-20 soft-taper band → readiness ≈ 73 (down from 100), no hard floor.
+
+Same run 12 hours ago: 24.3 × 0.841 = 20.4 → just over the moderate threshold → readiness capped at 54 ("Manage Load"), `hardFloor = 'legLoad'`. This matches the lived experience of next-morning leg heaviness after a hard long run.
+
+**Backfill path**. `reconcileRecentLegLoads()` walks every `wk.garminActuals` from the last 7 days, identifies runs by `activityType` substring "RUN", computes the load, and writes entries with `sport: 'running'`. Idempotent (skipped if `garminId` already present). Called from `activitySync.ts` after `matchAndAutoComplete` and from `main.ts` on launch so existing data is rebuilt.
+
+**Tracking vs planning**. This is a tracking signal — it informs Readiness ("how recovered are you for today's session"). It does not feed CTL/ATL/TSB or change planned-workout TSS. Mechanical recovery is a separate axis from cardiovascular fitness/fatigue.
+
+**Known limitations**:
+- Distance is the proxy; we ignore terrain (downhill running massively increases EIMD via greater eccentric load — could over-weight by 1.5-2x but we lack altitude data on the matched-actual record).
+- Effort multiplier saturates at 1.50 (RPE 9-10). Race efforts at marathon distance likely exceed this in practice (a marathon at race pace is closer to 2x normal EIMD).
+- Bonked / glycogen-depleted runs cause more EIMD per km than fueled runs at the same pace (form degradation, increased cortisol-driven catabolism). Not modelled — captured indirectly via the HR-driven RPE staying high when pace collapses.
+- Treadmill runs with no GPS distance return 0. Acceptable: leg load on a treadmill is real but less common than cross-training drift, and the alternative would require a duration fallback that re-introduces the duration-rate problem we are trying to avoid.
+
+---
+
 ## Workout Load Profiles (Aerobic/Anaerobic Split)
 
 **File**: `src/workouts/load.ts`
@@ -1859,3 +2088,44 @@ The 0.15%/°C coefficient is literature-approximate — controlled studies of en
 - Copy differs per trigger (easy-only, long-only, both) with specific remediation (ease easy-run pace, slow long-run opening, fuel earlier).
 
 **Rationale for coupling drift with ACWR**: ACWR flags acute:chronic load spikes but is blind to whether the load is being absorbed. Persistent easy-run drift means aerobic recovery isn't keeping pace with the training load — a quiet signal that precedes overt overreaching. Combining the two surfaces risk that load-ratio alone misses (e.g. ACWR inside the safe zone but drift climbing).
+
+---
+
+## FTP from Ride History — Quality-Tiered Estimator (2026-04-27)
+
+**Context**: The previous estimator (`tri-benchmarks-from-history.ts → estimateFTPFromBikeActivities`) treated every ride's whole-activity normalised power (NP) as if it were a 20-min FTP test, applying the Coggan rule `FTP = NP × 0.95` uniformly. This systematically *underestimated* FTP for athletes whose powered rides were long endurance sessions rather than threshold tests. Concrete example (Tristan, 2026-04-27): a 247-min steady ride at NP=250W produced an FTP candidate of 238W — lower than the NP the rider had just sustained for 4 hours, which is physiologically impossible.
+
+**Decision**: classify each ride by quality before deriving FTP, apply duration-aware factors, and decay candidates by recency.
+
+**Tier definitions**:
+
+| Tier | Eligibility | Candidate FTP | Rationale |
+|---|---|---|---|
+| **High-signal** | 20–75 min AND `avg/NP ≥ 0.88` (steady near-max) | NP × {0.95 (≤30min), 0.97 (30–50min), 1.00 (>50min)} | Allen & Coggan 2010: 20-min max ≈ 1.05 × FTP, 60-min max ≈ FTP by definition. |
+| **Floor** | >75 min AND `avg/NP ≥ 0.80` (steady long ride) | NP × {1.05 (75–150min), 1.10 (150–300min), 1.20 (>300min)} | Long steady NP is a physiological lower bound for FTP. Multiplier inverts an assumed IF (≈0.95 / 0.91 / 0.83) — within Coggan's documented IF zones for tempo/sweet-spot/endurance pacing. |
+| **Drop** | `avg/NP < 0.80` (variability index > 1.25) — burst-y/crit-style ride | — | NP is an aggregated metric; on a surge-y ride it inflates above sustainable threshold and isn't diagnostic of FTP. |
+
+**Recency**: `weight = exp(-weeksOld / 12)`. 12-week half-life mirrors the run-VDOT methodology in `TRIATHLON_HANDOFF.md` lines 80–86. Hard cutoff at 52 weeks — anything older is excluded (FTP can shift 30–50W in a year of training/detraining).
+
+**Pool selection**: prefer high-signal candidates. Only fall back to floor candidates when no high-signal rides exist within the 52-week window. Mixing pools would let a tempo-pace floor estimate dilute a real FTP-test result.
+
+**Final value**: weighted mean of the chosen pool (weight = recency). Outlier guard: when ≥3 candidates exist, drop the top value if it is more than 2× the second-best (catches one-off power-meter spikes that survive everything else).
+
+**Confidence tiers** (surfaced to user via `derived.ftp.confidence`):
+- `high` — at least one high-signal ride within the last 12 weeks
+- `medium` — at least one high-signal ride within the last 26 weeks, OR at least two floor rides within 12 weeks
+- `low` — only stale data (>26w) or only floor-tier rides
+- `none` — no usable powered rides in the last 52 weeks
+
+**Why this is defensible**:
+- Allen, Coggan & McGregor 2019 (*Training and Racing with a Power Meter*, 3rd ed., ch. 4–6) document the 0.95 multiplier as specific to short max-effort tests; long endurance NP is documented as IF-band-dependent in chapter 6.
+- The 12-week recency half-life matches the run-VDOT blending decay and the typical training-block timescale over which FTP changes are observable.
+- Variability index (VI = NP / avg) is the standard Coggan metric for ride steadiness; VI > 1.25 (avg/NP < 0.80) is the documented threshold above which NP is "less reflective of average sustained power".
+
+**Known limitations**:
+- Without per-second power streams we cannot compute the *mean maximal power curve* (best 20-min/60-min average across all rides) which is the gold-standard FTP estimator. Whole-ride NP is an approximation.
+- Floor-tier multipliers assume the rider was riding at typical tempo/sweet-spot/endurance IFs. A rider doing a deliberately easy long ride at IF=0.65 will have FTP underestimated; a rider doing a hard 4h race at IF=0.92 will have FTP overestimated. This tension is unresolvable without HR or RPE data.
+- The 0.80 VI threshold is approximate. Rides with rolling terrain naturally have lower VI than flat rides at the same effort; we treat that as acceptable signal noise rather than terrain-correcting.
+- Single high-signal ride within the recency window will fully anchor FTP — there's no "we need ≥2 corroborating data points" minimum. This is intentional (a real FTP test is worth more than five floor estimates) but means a one-off hot test can move the number significantly.
+
+**Recommended user action when confidence is `low`**: run a 20-min FTP test (the recommendation surface lives in the "Refine your benchmarks" card on the plan view). A single recent high-signal ride converts confidence from `low` to `high` in one boot cycle.

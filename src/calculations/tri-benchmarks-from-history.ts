@@ -142,12 +142,27 @@ export interface FtpEstimate {
   bikeActivityCount: number;
   /** True when FTP was derived from a best-20-min average power. */
   derivedFromPower: boolean;
+  /**
+   * Confidence in the estimate:
+   *   high   — recent (≤12w) FTP-test-like ride
+   *   medium — recent high-signal ≤26w, OR ≥2 recent floor rides ≤12w
+   *   low    — only stale data (>26w) or only floor-tier rides
+   *   none   — no usable powered rides in the last 52w
+   */
+  confidence: 'high' | 'medium' | 'low' | 'none';
+  /** Number of rides that contributed (passed quality + recency filters). */
+  contributingRideCount?: number;
+  /** Age of the most recent ride that contributed (weeks). */
+  newestContributingRideWeeksOld?: number;
 }
 
 /** Optional fields the activity MAY carry once the edge function is extended. */
 export interface PoweredActivity {
   activityType: string | null | undefined;
   durationSec: number;
+  /** ISO timestamp — required for recency weighting. Rides without it skip the
+   * decay (treated as current) but lose the staleness signal. */
+  startTime?: string | null;
   averageWatts?: number | null;
   maxWatts?: number | null;
   normalizedPowerW?: number | null;
@@ -158,30 +173,52 @@ export interface PoweredActivity {
   deviceWatts?: boolean | null;
 }
 
+// ── Tunables (documented in docs/SCIENCE_LOG.md → FTP from Ride History) ─
+const RECENCY_HALFLIFE_WEEKS = 12;     // weight = exp(-weeksOld / 12)
+const HARD_CUTOFF_WEEKS = 52;          // > 1 year old → exclude entirely
+const HIGH_TIER_RECENT_WEEKS = 12;     // for confidence='high'
+const MEDIUM_TIER_RECENT_WEEKS = 26;   // for confidence='medium'
+
 /**
  * Estimate FTP from bike activities carrying power data.
  *
- * Strava's activity LIST endpoint returns `average_watts` (whole-activity
- * average) and `weighted_average_watts` (NP). NP is the gold standard
- * for FTP — best 1-hour NP × 0.95 ≈ FTP (Allen & Coggan 2010). When NP
- * isn't present we fall back to `average_watts` with a duration-aware
- * Intensity Factor (IF) inversion:
+ * **Why the previous "NP × 0.95" was wrong**: Allen & Coggan's 0.95 multiplier
+ * assumes the input NP came from a 20-min FTP test or near-max sustained
+ * effort. Apply it to a 4-hour endurance ride with NP=250W and you get
+ * "FTP=238" — which would be lower than what the rider just held for 4
+ * hours. Whole-ride NP from a long endurance ride is a *floor* on FTP, not
+ * the FTP itself.
  *
- *   - Short rides (≤ 30 min): assume IF 0.95 (test/intervals)
- *   - Threshold/sweet-spot range (30–90 min): assume IF 0.85
- *   - Long endurance (> 90 min): assume IF 0.70
+ * **New approach: classify rides by quality, then estimate accordingly.**
  *
- * Robustness improvements over the naïve max():
- *   - Take the **median of the top-3 candidates** rather than the single
- *     best ride. Protects against one-off power-meter spikes or
- *     particularly hot test efforts that aren't representative of the
- *     athlete's repeatable threshold.
- *   - Drop candidate values that are >2× the second-best (clear outliers).
- *   - Final cap at 500W as a sanity floor.
+ * Tier definitions:
+ *   - **High-signal** (FTP-test-like): 20–75 min AND very steady (avg/NP ≥
+ *     0.88). The athlete was holding near-max sustained effort. NP × small
+ *     duration factor approximates FTP directly (Coggan 2010).
+ *   - **Floor** (long steady ride): >75 min AND steady (avg/NP ≥ 0.80). The
+ *     athlete sustained an endurance/sweet-spot effort. NP × duration factor
+ *     gives a conservative *lower bound* for FTP (a rider doing 4h at NP=250
+ *     can't have FTP < 250).
+ *   - **Drop**: avg/NP < 0.80 (burst-y/crit-style ride where NP doesn't
+ *     reflect sustained capacity).
+ *
+ * Recency decay: weight = exp(-weeksOld / 12). 12-week half-life mirrors the
+ * VDOT methodology in TRIATHLON_HANDOFF.md. Hard cutoff at 52 weeks.
+ *
+ * Pool selection: prefer high-signal candidates. Fall back to floor candidates
+ * only if no high-signal rides exist.
+ *
+ * Final value: weighted mean of the pool. Outlier guard: drop top value if
+ * >2× the second-best and ≥3 candidates exist.
  */
-export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): FtpEstimate {
+export function estimateFTPFromBikeActivities(
+  activities: PoweredActivity[],
+  referenceDateISO: string = new Date().toISOString(),
+): FtpEstimate {
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');
-  if (rides.length === 0) return { bikeActivityCount: 0, derivedFromPower: false };
+  if (rides.length === 0) {
+    return { bikeActivityCount: 0, derivedFromPower: false, confidence: 'none' };
+  }
 
   // Eligible: ≥ 20 min long + power data present.
   const baseEligible = rides.filter((r) => {
@@ -190,57 +227,132 @@ export function estimateFTPFromBikeActivities(activities: PoweredActivity[]): Ft
     const hasAvg = r.averageWatts != null && r.averageWatts > 80;
     return hasNp || hasAvg;
   });
-  if (baseEligible.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
+  if (baseEligible.length === 0) {
+    return { bikeActivityCount: rides.length, derivedFromPower: false, confidence: 'none' };
+  }
 
-  // **Prefer real power-meter rides over Strava-estimated ones.** Strava
-  // estimates power from speed + elevation when no meter is present, and the
-  // result is unreliable (often 30–50% off) — never let estimated rides
-  // anchor an FTP. Only fall back to estimated when zero real-meter rides
-  // exist.
+  // Prefer real power-meter rides over Strava-estimated ones. Strava estimates
+  // power from speed + elevation when no meter is present, and the result is
+  // unreliable (often 30–50% off).
   const realMeterRides = baseEligible.filter((r) => r.deviceWatts === true);
   const eligible = realMeterRides.length > 0 ? realMeterRides : baseEligible;
 
-  // Compute candidate FTP per ride.
-  const candidates: number[] = [];
+  const refTs = Date.parse(referenceDateISO);
+
+  type Tier = 'high' | 'floor';
+  type Candidate = { value: number; tier: Tier; weight: number; weeksOld: number };
+  const candidates: Candidate[] = [];
+
   for (const r of eligible) {
-    let candidate = 0;
-    if (r.normalizedPowerW != null && r.normalizedPowerW > 80) {
-      candidate = r.normalizedPowerW * 0.95;
-    } else if (r.averageWatts != null && r.averageWatts > 80) {
-      const dur = r.durationSec;
-      let assumedIF: number;
-      if (dur <= 30 * 60) assumedIF = 0.95;
-      else if (dur <= 90 * 60) assumedIF = 0.85;
-      else assumedIF = 0.70;
-      candidate = r.averageWatts / assumedIF;
+    const dur = r.durationSec;
+    const durMin = dur / 60;
+    const np = r.normalizedPowerW;
+    const avg = r.averageWatts;
+    // Variability index proxy. Higher = steadier. Null when only one of
+    // (avg, NP) is present.
+    const vi = (avg != null && np != null && np > 0) ? avg / np : null;
+
+    // Recency. Rides without startTime skip decay (treated as current).
+    let weeksOld = 0;
+    let recency = 1;
+    if (r.startTime && Number.isFinite(refTs)) {
+      const aTs = Date.parse(r.startTime);
+      if (Number.isFinite(aTs)) {
+        weeksOld = Math.max(0, (refTs - aTs) / (7 * 86400 * 1000));
+        if (weeksOld > HARD_CUTOFF_WEEKS) continue;
+        recency = Math.exp(-weeksOld / RECENCY_HALFLIFE_WEEKS);
+      }
     }
-    if (candidate > 80) candidates.push(candidate);
+
+    // Tier classification.
+    let tier: Tier | 'drop' = 'drop';
+    if (vi != null) {
+      if (vi < 0.80) {
+        tier = 'drop';
+      } else if (durMin >= 20 && durMin <= 75 && vi >= 0.88) {
+        tier = 'high';
+      } else if (durMin > 75) {
+        tier = 'floor';
+      }
+    } else {
+      // No vi available (only one of avg/NP present). Fall back to duration.
+      if (durMin >= 20 && durMin <= 75) tier = 'high';
+      else if (durMin > 75) tier = 'floor';
+    }
+    if (tier === 'drop') continue;
+
+    // Candidate value. Source = NP when present (more reliable than avg for
+    // FTP), else avg.
+    const sourcePower = np ?? avg ?? 0;
+    if (sourcePower <= 80) continue;
+
+    let factor: number;
+    if (tier === 'high') {
+      // FTP-test-like ride. NP × duration factor:
+      //   ≤30 min: × 0.95 (Coggan 20-min test classic)
+      //   30–50 min: × 0.97
+      //   >50 min: × 1.00 (60-min near-max ≈ FTP by definition)
+      if (durMin <= 30) factor = 0.95;
+      else if (durMin <= 50) factor = 0.97;
+      else factor = 1.00;
+    } else {
+      // Floor — long steady ride. Multiplier reflects assumed IF for the
+      // duration band (lower IF for longer rides → higher multiplier):
+      //   75–150 min: × 1.05 (assume IF≈0.95, near-threshold tempo)
+      //   150–300 min: × 1.10 (assume IF≈0.91, sweet-spot)
+      //   >300 min: × 1.20 (assume IF≈0.83, tempo)
+      if (durMin <= 150) factor = 1.05;
+      else if (durMin <= 300) factor = 1.10;
+      else factor = 1.20;
+    }
+
+    const candidate = sourcePower * factor;
+    if (!Number.isFinite(candidate) || candidate <= 80) continue;
+    candidates.push({ value: candidate, tier, weight: recency, weeksOld });
   }
-  if (candidates.length === 0) return { bikeActivityCount: rides.length, derivedFromPower: false };
 
-  candidates.sort((a, b) => b - a);  // descending
-
-  // Outlier drop: a candidate >2× the second-best AND >120% of the body of
-  // the data is a glitch. Skip when only 1 candidate (no comparison) or 2
-  // candidates (would discard half the signal).
-  if (candidates.length >= 3 && candidates[0] > candidates[1] * 2) {
-    candidates.shift();
+  if (candidates.length === 0) {
+    return { bikeActivityCount: rides.length, derivedFromPower: false, confidence: 'none' };
   }
 
-  // Take median of top-3 (or top-N if fewer). Robust to single outliers.
-  const top = candidates.slice(0, Math.min(3, candidates.length));
-  const median = top.length === 1
-    ? top[0]
-    : top.length === 2
-      ? (top[0] + top[1]) / 2
-      : top[1];  // sorted desc, idx 1 is the middle
+  // Pool selection — prefer high-signal over floor.
+  const highs = candidates.filter((c) => c.tier === 'high');
+  const floors = candidates.filter((c) => c.tier === 'floor');
+  const pool = highs.length > 0 ? highs : floors;
 
-  const ftp = Math.min(500, Math.round(median));
+  // Outlier guard: when ≥3 candidates exist, drop the top value if it is
+  // more than 2× the second-best (clearly bogus power-meter spike).
+  const sorted = [...pool].sort((a, b) => b.value - a.value);
+  let usable = sorted;
+  if (sorted.length >= 3 && sorted[0].value > sorted[1].value * 2) {
+    usable = sorted.slice(1);
+  }
+
+  const totalWeight = usable.reduce((s, c) => s + c.weight, 0);
+  if (totalWeight <= 0) {
+    return { bikeActivityCount: rides.length, derivedFromPower: false, confidence: 'none' };
+  }
+  const weightedMean = usable.reduce((s, c) => s + c.value * c.weight, 0) / totalWeight;
+  const ftp = Math.min(500, Math.round(weightedMean));
+
+  // Confidence.
+  const recentHigh = highs.some((c) => c.weeksOld <= HIGH_TIER_RECENT_WEEKS);
+  const mediumRecentHigh = highs.some((c) => c.weeksOld <= MEDIUM_TIER_RECENT_WEEKS);
+  const recentFloors = floors.filter((c) => c.weeksOld <= HIGH_TIER_RECENT_WEEKS).length;
+  let confidence: 'high' | 'medium' | 'low';
+  if (recentHigh) confidence = 'high';
+  else if (mediumRecentHigh || recentFloors >= 2) confidence = 'medium';
+  else confidence = 'low';
+
+  const newestWeeksOld = Math.min(...usable.map((c) => c.weeksOld));
 
   return {
     ftpWatts: ftp,
     bikeActivityCount: rides.length,
     derivedFromPower: true,
+    confidence,
+    contributingRideCount: usable.length,
+    newestContributingRideWeeksOld: Math.round(newestWeeksOld * 10) / 10,
   };
 }
 
@@ -432,7 +544,7 @@ export function deriveTriBenchmarksFromHistory(
 
   return {
     css,
-    ftp: estimateFTPFromBikeActivities(activities as unknown as PoweredActivity[]),
+    ftp: estimateFTPFromBikeActivities(activities as unknown as PoweredActivity[], referenceDateISO),
     fitness: estimatePerDisciplineCTLFromActivities(activities, referenceDateISO),
   };
 }

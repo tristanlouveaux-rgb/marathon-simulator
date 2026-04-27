@@ -1,8 +1,8 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.marathon.simulator',
-  appName: 'Marathon Simulator',
+  appId: 'com.mosaic.training',
+  appName: 'Mosaic',
   webDir: 'dist',
   ios: {
     contentInset: 'automatic',

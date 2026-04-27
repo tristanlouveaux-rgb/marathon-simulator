@@ -11,8 +11,11 @@ import { intentToWorkout } from '@/workouts/intent_to_workout';
 import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 import { formatKm, formatPace } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
+import { computeReadinessACWR } from '@/calculations/fitness-model';
 
 const MODAL_ID = 'session-generator-modal';
+
+type EffortKey = 'easy' | 'steady' | 'hard';
 
 interface SessionTypeOption {
   slot: SlotType;
@@ -116,6 +119,21 @@ export function openSessionGenerator(): void {
   const up: UnitPref = s.unitPref ?? 'km';
   const easyPace = s.pac?.e || 330;
 
+  // Recovery signal for effort recommendation
+  const acwr = computeReadinessACWR(s);
+  let recoveryLine: string;
+  let recommendedEffort: EffortKey;
+  if (acwr.status === 'high') {
+    recoveryLine = 'High training load. Zone 2 is appropriate today.';
+    recommendedEffort = 'easy';
+  } else if (acwr.status === 'caution') {
+    recoveryLine = 'Elevated load. Zone 2 or steady is appropriate.';
+    recommendedEffort = 'easy';
+  } else {
+    recoveryLine = 'Load is balanced. Any effort is appropriate.';
+    recommendedEffort = 'steady';
+  }
+
   let step = 1;
   let selectedType: SessionTypeOption | null = null;
 
@@ -167,15 +185,13 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Step 2: Set distance or time ───────────────────────────────────────────
+  // ── Step 2: Set effort + distance/time ────────────────────────────────────
 
   function renderStep2() {
     if (!selectedType) return;
 
     const defaultMin = selectedType.defaultMinutes;
     const defaultKm = Math.round(defaultMin * 60 / easyPace);
-
-    // Distance range based on session type
     const minKm = selectedType.slot === 'long' ? 8 : 3;
     const maxKm = selectedType.slot === 'long' ? 35 : selectedType.slot === 'easy' ? 18 : 15;
 
@@ -183,20 +199,87 @@ export function openSessionGenerator(): void {
     let distanceKm = Math.min(maxKm, Math.max(minKm, defaultKm));
     let timeMin = defaultMin;
 
+    // Effort picker applies to open-ended sessions. Structured sessions have a fixed target pace.
+    const hasEffortPicker = selectedType.slot === 'easy' || selectedType.slot === 'long';
+
+    // Long runs cap at Steady — threshold pace for 20+ km is race simulation, not training.
+    const EFFORT_OPTIONS: Array<{ key: EffortKey; label: string; pace: number; desc: string }> = selectedType.slot === 'long'
+      ? [
+          { key: 'easy',   label: 'Zone 2', pace: s.pac.e, desc: 'Aerobic base' },
+          { key: 'steady', label: 'Steady', pace: s.pac.m, desc: 'Marathon effort' },
+        ]
+      : [
+          { key: 'easy',   label: 'Zone 2',    pace: s.pac.e, desc: 'Aerobic base' },
+          { key: 'steady', label: 'Steady',    pace: s.pac.m, desc: 'Marathon effort' },
+          { key: 'hard',   label: 'Threshold', pace: s.pac.t, desc: 'Half marathon effort' },
+        ];
+
+    let selectedEffort: EffortKey = recommendedEffort;
+    let effortPace = hasEffortPicker
+      ? (EFFORT_OPTIONS.find(o => o.key === selectedEffort)?.pace ?? easyPace)
+      : easyPace;
+
+    // Fixed pace label for structured sessions
+    function structuredPaceLabel(): string {
+      switch (selectedType!.slot) {
+        case 'threshold':     return formatPace(s.pac.t, up);
+        case 'vo2':           return formatPace(s.pac.i, up);
+        case 'marathon_pace': return formatPace(s.pac.m, up);
+        case 'progressive':   return `${formatPace(s.pac.e, up)} to ${formatPace(s.pac.m, up)}`;
+        default:              return formatPace(easyPace, up);
+      }
+    }
+
     function renderContent() {
       const isDistance = mode === 'distance';
+      const paceForEst = hasEffortPicker ? effortPace : easyPace;
       const distLabel = formatKm(distanceKm, up);
-      const estMinutes = isDistance ? Math.round(distanceKm * easyPace / 60) : timeMin;
-      const estKm = isDistance ? distanceKm : Math.round(timeMin * 60 / easyPace);
+      const estMinutes = isDistance ? Math.round(distanceKm * paceForEst / 60) : timeMin;
+      const estKm = isDistance ? distanceKm : Math.round(timeMin * 60 / paceForEst);
 
-      const secondaryInfo = isDistance
-        ? `~${estMinutes} min at ${formatPace(easyPace, up)}`
-        : `~${formatKm(estKm, up)} at ${formatPace(easyPace, up)}`;
+      // Structured sessions already show target pace above the slider — don't repeat it here.
+      const secondaryInfo = hasEffortPicker
+        ? (isDistance ? `~${estMinutes} min at ${formatPace(effortPace, up)}` : `~${formatKm(estKm, up)} at ${formatPace(effortPace, up)}`)
+        : (isDistance ? `~${estMinutes} min` : `~${formatKm(estKm, up)}`);
 
       const inner = modal.querySelector('#sg-step2-inner');
       if (!inner) return;
 
       inner.innerHTML = `
+        ${hasEffortPicker ? `
+          <div style="margin-bottom:16px">
+            <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px">${recoveryLine}</div>
+            <div style="display:flex;gap:6px">
+              ${EFFORT_OPTIONS.map(opt => {
+                const sel = opt.key === selectedEffort;
+                const isRec = opt.key === recommendedEffort;
+                return `
+                  <button class="sg-effort-btn" data-effort="${opt.key}"
+                    style="flex:1;display:flex;flex-direction:column;align-items:center;padding:10px 6px;border-radius:10px;cursor:pointer;font-family:var(--f);
+                           border:1px solid ${sel ? 'var(--c-black)' : 'var(--c-border)'};
+                           background:${sel ? 'var(--c-black)' : 'transparent'}">
+                    <div style="font-size:12px;font-weight:600;color:${sel ? '#fff' : 'var(--c-black)'};margin-bottom:1px">${opt.label}</div>
+                    <div style="font-size:11px;color:${sel ? 'rgba(255,255,255,0.65)' : 'var(--c-muted)'}">${formatPace(opt.pace, up)}</div>
+                    <div style="font-size:9px;font-weight:500;margin-top:3px;color:${sel ? 'rgba(255,255,255,0.5)' : 'var(--c-faint)'}">
+                      ${isRec ? 'Suggested' : ' '}
+                    </div>
+                  </button>
+                `;
+              }).join('')}
+            </div>
+            ${selectedEffort === 'hard' && selectedType!.slot === 'easy' ? `
+              <div style="font-size:11px;color:var(--c-muted);margin-top:8px;padding:8px 10px;border:1px solid var(--c-border);border-radius:8px;line-height:1.5">
+                Threshold effort carries significant load. Only use this if you are replacing a planned quality session or are very fresh.
+              </div>
+            ` : ''}
+          </div>
+        ` : `
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
+            <div style="font-size:13px;color:var(--c-muted)">Target pace</div>
+            <div style="font-size:14px;font-weight:600;color:var(--c-black)">${structuredPaceLabel()}</div>
+          </div>
+        `}
+
         <div style="display:flex;gap:6px;margin-bottom:18px">
           <button id="sg-mode-dist"
             style="flex:1;padding:8px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f);
@@ -233,17 +316,29 @@ export function openSessionGenerator(): void {
         <div id="sg-secondary-info" style="font-size:12px;color:var(--c-muted);margin-bottom:18px">${secondaryInfo}</div>
       `;
 
+      // Wire effort buttons
+      if (hasEffortPicker) {
+        inner.querySelectorAll('.sg-effort-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const key = (btn as HTMLElement).dataset.effort as EffortKey;
+            selectedEffort = key;
+            effortPace = EFFORT_OPTIONS.find(o => o.key === key)?.pace ?? easyPace;
+            renderContent();
+          });
+        });
+      }
+
       // Wire mode toggle
       inner.querySelector('#sg-mode-dist')?.addEventListener('click', () => {
         if (mode === 'distance') return;
         mode = 'distance';
-        distanceKm = Math.min(maxKm, Math.max(minKm, Math.round(timeMin * 60 / easyPace)));
+        distanceKm = Math.min(maxKm, Math.max(minKm, Math.round(timeMin * 60 / (hasEffortPicker ? effortPace : easyPace))));
         renderContent();
       });
       inner.querySelector('#sg-mode-time')?.addEventListener('click', () => {
         if (mode === 'time') return;
         mode = 'time';
-        timeMin = Math.round(distanceKm * easyPace / 60 / 5) * 5; // round to 5min
+        timeMin = Math.round(distanceKm * (hasEffortPicker ? effortPace : easyPace) / 60 / 5) * 5;
         renderContent();
       });
 
@@ -251,20 +346,17 @@ export function openSessionGenerator(): void {
       const slider = inner.querySelector('#sg-slider') as HTMLInputElement;
       slider?.addEventListener('input', () => {
         const val = parseInt(slider.value, 10);
-        if (isDistance) {
-          distanceKm = val;
-        } else {
-          timeMin = val;
-        }
+        if (isDistance) { distanceKm = val; } else { timeMin = val; }
+        const pace = hasEffortPicker ? effortPace : easyPace;
         const lbl = inner.querySelector('#sg-value-label');
         if (lbl) lbl.textContent = isDistance ? formatKm(distanceKm, up) : `${timeMin} min`;
         const info = inner.querySelector('#sg-secondary-info');
         if (info) {
-          const estM = isDistance ? Math.round(distanceKm * easyPace / 60) : timeMin;
-          const estK = isDistance ? distanceKm : Math.round(timeMin * 60 / easyPace);
-          info.textContent = isDistance
-            ? `~${estM} min at ${formatPace(easyPace, up)}`
-            : `~${formatKm(estK, up)} at ${formatPace(easyPace, up)}`;
+          const estM = isDistance ? Math.round(distanceKm * pace / 60) : timeMin;
+          const estK = isDistance ? distanceKm : Math.round(timeMin * 60 / pace);
+          info.textContent = hasEffortPicker
+            ? (isDistance ? `~${estM} min at ${formatPace(pace, up)}` : `~${formatKm(estK, up)} at ${formatPace(pace, up)}`)
+            : (isDistance ? `~${estM} min` : `~${formatKm(estK, up)}`);
         }
       });
     }
@@ -296,14 +388,25 @@ export function openSessionGenerator(): void {
       if (!selectedType) return;
       modal.remove();
 
-      const totalMinutes = mode === 'time' ? timeMin : Math.round(distanceKm * easyPace / 60);
+      const pace = hasEffortPicker ? effortPace : easyPace;
+      const totalMinutes = mode === 'time' ? timeMin : Math.round(distanceKm * pace / 60);
       const workMinutes = Math.round(totalMinutes * selectedType.workRatio);
 
-      // Pick a variant matching the plan engine's rotation by current week
       const weekIdx = s.w || 1;
       const intent = buildSessionIntent(selectedType.slot, totalMinutes, workMinutes, weekIdx);
 
       const workout = intentToWorkout(intent, s.rd, s.typ, easyPace);
+
+      // intentToWorkout derives km from totalMinutes at easy pace, which is wrong when the user
+      // chose a different effort. Override d to match what the slider actually showed.
+      const correctedKm = hasEffortPicker
+        ? (mode === 'distance' ? distanceKm : Math.round(timeMin * 60 / effortPace))
+        : null;
+
+      // For effort-selected sessions, override RPE to match chosen intensity
+      const rpeOverride = hasEffortPicker
+        ? (selectedEffort === 'easy' ? 3 : selectedEffort === 'steady' ? 5 : 7)
+        : undefined;
 
       const jsDay = new Date().getDay();
       const ourDay = jsDay === 0 ? 6 : jsDay - 1;
@@ -312,10 +415,11 @@ export function openSessionGenerator(): void {
         id: `adhoc-${Date.now()}`,
         t: workout.t,
         n: workout.n,
-        d: workout.d,
+        d: correctedKm !== null ? `${correctedKm}km` : workout.d,
         r: workout.r,
-        rpe: workout.rpe ?? workout.r,
+        rpe: rpeOverride ?? workout.rpe ?? workout.r,
         dayOfWeek: ourDay,
+        ...(hasEffortPicker ? { targetPaceSecKm: effortPace } : {}),
       };
 
       const ms = getMutableState();

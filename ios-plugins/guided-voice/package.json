@@ -1,0 +1,26 @@
+{
+  "name": "@mosaic/guided-voice",
+  "version": "1.0.0",
+  "description": "Native AVSpeechSynthesizer + AVAudioSession plugin for Mosaic guided runs.",
+  "private": true,
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "ios/Sources",
+    "Package.swift",
+    "dist/"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "ios"
+  ],
+  "license": "UNLICENSED"
+}

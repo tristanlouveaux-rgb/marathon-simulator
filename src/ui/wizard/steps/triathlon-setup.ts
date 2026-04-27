@@ -2,7 +2,9 @@ import type { OnboardingState } from '@/types/onboarding';
 import type { TriathlonDistance, TriVolumeSplit, TriSkillRating, TriSkillSlider } from '@/types/triathlon';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { getState } from '@/state/store';
+import { getState, getMutableState } from '@/state/store';
+import { syncPhysiologySnapshot } from '@/data/physiologySync';
+import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import {
   getAccessToken,
   isStravaConnected,
@@ -672,6 +674,31 @@ async function runAutoDerivation(): Promise<void> {
       lines.push(`Bike FTP <strong>${derived.ftp.ftpWatts} W</strong> (from ${derived.ftp.bikeActivityCount} rides with power data).`);
     } else if (derived.ftp.bikeActivityCount > 0) {
       lines.push(`Bike — ${derived.ftp.bikeActivityCount} rides but no power data. Enter FTP manually if you have it.`);
+    }
+
+    // Run VDOT — HR-calibrated from the same regression we use on the
+    // marathon path. Fire physio sync + refresh blend so s.hrCalibratedVdot
+    // is current before we read it. Strava-only users without RHR will see
+    // the calibration-pending fallback line.
+    try {
+      await syncPhysiologySnapshot(28);
+    } catch { /* non-fatal */ }
+    try {
+      refreshBlendedFitness(getMutableState());
+    } catch { /* non-fatal */ }
+    const hr = getState().hrCalibratedVdot;
+    if (hr && hr.vdot != null && hr.confidence !== 'none') {
+      const runWord = hr.n === 1 ? 'run' : 'runs';
+      if (hr.confidence === 'low') {
+        lines.push(`Run VDOT <strong>${hr.vdot.toFixed(1)}</strong> — rough estimate from ${hr.n} steady ${runWord}. We'll refine as more training comes in.`);
+      } else {
+        const tier = hr.confidence === 'high' ? 'high confidence' : 'medium confidence';
+        lines.push(`Run VDOT <strong>${hr.vdot.toFixed(1)}</strong> — measured from your heart rate response to pace across ${hr.n} steady ${runWord} (${tier}).`);
+      }
+    } else if (hr && hr.reason === 'no-rhr') {
+      lines.push(`Run VDOT — we'll calibrate this from heart rate once your physiology data syncs.`);
+    } else if (hr && hr.reason === 'no-maxhr') {
+      lines.push(`Run VDOT — we'll calibrate this from heart rate once more activities sync.`);
     }
     // Fitness headline — single combined number is easier to read than three.
     // CTL is weekly-equivalent TSS; shown rounded so the user sees a clean

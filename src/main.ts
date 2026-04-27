@@ -323,9 +323,12 @@ async function launchApp(): Promise<void> {
       }
 
       saveState();
+      const ftpDetail = derived.ftp.ftpWatts
+        ? `${derived.ftp.ftpWatts}W (${derived.ftp.confidence} conf, ${derived.ftp.contributingRideCount ?? 0} rides, newest ${derived.ftp.newestContributingRideWeeksOld ?? '?'}w old)`
+        : `— (${derived.ftp.confidence})`;
       console.log('[tri] benchmarks refreshed from history:',
         `CSS ${derived.css.cssSecPer100m ? `${derived.css.cssSecPer100m}s/100m` : '—'}`,
-        `FTP ${derived.ftp.ftpWatts ? `${derived.ftp.ftpWatts}W` : '— (no power data)'}`,
+        `FTP ${ftpDetail}`,
         `CTL swim/bike/run ${derived.fitness.swim.ctl}/${derived.fitness.bike.ctl}/${derived.fitness.run.ctl} (${derived.fitness.activityCount} activities)`,
       );
     } catch (err) {
@@ -344,6 +347,21 @@ async function launchApp(): Promise<void> {
       const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
       refreshBlendedFitness(getMutableState());
     } catch {}
+
+    // One-time migration (v2): wipe sportNameMappings entirely. Name-keyed
+    // propagation of user reclassifications is unsafe because Strava reuses
+    // generic names ("Workout", "Morning Activity") across unrelated sessions —
+    // one correction would flip every same-named activity. Reclassification now
+    // writes only per-activity manualSport (preserved across this migration).
+    // v2 supersedes v1 (which still allowed mapping writes for ambiguous types).
+    {
+      const _ms = getMutableState() as any;
+      if (!_ms._sportNameMappingsResetV2) {
+        _ms.sportNameMappings = {};
+        _ms._sportNameMappingsResetV2 = true;
+        saveState();
+      }
+    }
 
     // If s.w advanced past a week that never had a full debrief (with plan preview),
     // roll back so the debrief fires in 'complete' mode.
@@ -365,6 +383,14 @@ async function launchApp(): Promise<void> {
     }
 
     if (healMissingITrimp()) saveState(); // back-fill iTrimp for actuals synced before profile HR was set
+
+    // Back-fill recentLegLoads for runs and cross-training synced before this pass.
+    // Required for Leg Fatigue to reflect runs that landed via auto-match without
+    // passing through the activity-review write path. Idempotent.
+    {
+      const { reconcileRecentLegLoads } = await import('@/ui/sport-picker-modal');
+      if (reconcileRecentLegLoads()) saveState();
+    }
 
     // Recompute athleteTier from current ctlBaseline — state may be stale from
     // an earlier CTL value (e.g. pre-fix readings) and the tier only updates

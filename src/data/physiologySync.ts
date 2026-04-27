@@ -11,7 +11,7 @@ import { callEdgeFunction } from './supabaseClient';
 import type { PhysiologyDayEntry } from '@/types';
 import { rmssdToHrvStatus } from '@/recovery/engine';
 import type { RecoveryEntry } from '@/recovery/engine';
-import { cv } from '@/calculations';
+import { recomputeLT } from './ltSync';
 
 /** Shape of a single day row from sync-physiology-snapshot */
 interface PhysiologyRow {
@@ -104,14 +104,41 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     const result: PhysiologySnapshot = { vo2: null, restingHR: null, maxHR: null, ltPace: null, ltHR: null };
 
-    // VO2max: prefer daily_metrics, fall back to latestPhysio (all-time)
-    const vo2Value = (latest.vo2max != null && latest.vo2max > 0)
-      ? latest.vo2max
-      : (data.latestPhysio?.vo2_max_running ?? null);
+    // VO2max: prefer latestPhysio.vo2_max_running (running-specific, from Garmin's
+    // userMetrics endpoint — matches what Garmin Connect shows). Fall back to
+    // daily_metrics.vo2max, which is the generic dailies value and can include
+    // cycling/cardio estimates that diverge from Running VO2 Max.
+    //
+    // Walk backwards through the daily rows to find the most recent *non-null*
+    // vo2max — Garmin only stamps vo2Max on days when the value changes, so the
+    // latest row is usually null and the real value lives a few days back.
+    let latestDailyVo2: number | null = null;
+    let latestDailyVo2Date: string | undefined;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const v = rows[i].vo2max;
+      if (v != null && v > 0) {
+        latestDailyVo2 = v;
+        latestDailyVo2Date = rows[i].calendar_date;
+        break;
+      }
+    }
+    const vo2Value = (data.latestPhysio?.vo2_max_running != null && data.latestPhysio.vo2_max_running > 0)
+      ? data.latestPhysio.vo2_max_running
+      : latestDailyVo2;
 
     if (vo2Value != null && vo2Value > 0) {
       result.vo2 = vo2Value;
       s.vo2 = vo2Value;
+      changed = true;
+    } else if (s.vo2 != null && rows.length > 0) {
+      // Garmin IS returning daily rows but none of them carry a vo2Max value and
+      // physiology_snapshots has no userMetrics row either. s.vo2 is almost
+      // certainly a stale wizard seed (or a value from an older Garmin connection).
+      // Clear it so the UI falls back to computeCurrentVDOT() rather than pinning
+      // a number that never updates. We only clear when rows.length > 0 to avoid
+      // wiping the seed for users who haven't connected Garmin at all.
+      console.log(`[PhysiologySync] Clearing stale s.vo2=${s.vo2} — ${rows.length} daily rows returned, none carried vo2max`);
+      s.vo2 = undefined as unknown as number;
       changed = true;
     }
 
@@ -133,30 +160,30 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       ? latest.lt_pace_sec_km
       : (data.latestPhysio?.lactate_threshold_pace ?? null);
 
-    if (ltPaceValue != null && ltPaceValue > 0) {
-      // Sanity check: derived VDOT from this LT pace must be within ±8 of s.v.
-      // If it's further off, the Garmin LT measurement is stale or from a different
-      // fitness level and should not overwrite s.lt (which would misguide physioAdj).
-      const ltDerivedVdot = cv(10000, ltPaceValue * 10);
-      const vdotDeviation = Math.abs(ltDerivedVdot - (s.v || 40));
-      if (vdotDeviation <= 8) {
-        result.ltPace = ltPaceValue;
-        s.lt = ltPaceValue;
-        changed = true;
-      } else {
-        console.warn(`[PhysiologySync] LT pace ${ltPaceValue}s/km (VDOT≈${ltDerivedVdot.toFixed(1)}) skipped — ${vdotDeviation.toFixed(1)} pts from s.v=${s.v}. Likely stale Garmin data.`);
-      }
-    }
-
     // LT heart rate: prefer the date-windowed latest, fall back to latestPhysio (all-time)
     const ltHRValue = (latest.lt_heart_rate != null && latest.lt_heart_rate > 0)
       ? latest.lt_heart_rate
       : (data.latestPhysio?.lt_heart_rate ?? null);
 
-    if (ltHRValue != null && ltHRValue > 0) {
-      result.ltHR = ltHRValue;
-      s.ltHR = ltHRValue;
+    // Garmin LT "as of" date: latestPhysio.calendar_date if it carried LT, else
+    // the latest dailies row's date. Used by recomputeLT to gate Garmin freshness.
+    const garminLT = (ltPaceValue != null && ltPaceValue > 0) ? {
+      ltPaceSecKm: ltPaceValue,
+      ltHR: ltHRValue ?? null,
+      asOf: (data.latestPhysio?.calendar_date ?? latest.calendar_date ?? new Date().toISOString().slice(0, 10)),
+    } : null;
+
+    // Hand off to ltSync — it builds derive inputs from PBs + activities,
+    // applies the override > Garmin > derived priority, and surfaces a
+    // suggestion if Garmin and derived disagree by >10s/km.
+    const action = recomputeLT(s, { garmin: garminLT });
+    if (action !== 'none') {
+      result.ltPace = s.lt ?? null;
+      result.ltHR = s.ltHR ?? null;
       changed = true;
+    }
+    if (action === 'pending') {
+      console.warn(`[PhysiologySync] LT conflict (>10s/km) — surfacing suggestion: garmin=${garminLT?.ltPaceSecKm}s/km derived=${s.ltSuggestion?.derived.ltPaceSecKm.toFixed(0)}s/km`);
     }
 
     // Store up to 28 days of history for recovery score baseline and physiology dashboard.
@@ -192,8 +219,9 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     if (changed) {
       saveState();
-      console.log('[PhysiologySync] State updated:', result);
+      console.log(`[PhysiologySync] State updated: vo2=${result.vo2} rhr=${result.restingHR} maxHR=${result.maxHR} ltPace=${result.ltPace} ltHR=${result.ltHR}`);
     }
+    console.log(`[PhysiologySync] sources: latestPhysio.vo2_max_running=${data.latestPhysio?.vo2_max_running ?? 'null'} dailyRows=${rows.length} latest.vo2max=${latest.vo2max ?? 'null'} latestDailyVo2=${latestDailyVo2 ?? 'null'}@${latestDailyVo2Date ?? 'n/a'} — s.vo2=${s.vo2}`);
 
     return result;
   } catch (err) {

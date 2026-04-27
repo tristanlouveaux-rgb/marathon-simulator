@@ -322,7 +322,38 @@ function renderScreen(
   // ─── Event handlers ──────────────────────────────────────────────────────────
 
   overlay.querySelector('#ms-back')?.addEventListener('click', onBack);
-  overlay.querySelector('#ms-confirm')?.addEventListener('click', () => onConfirm(state));
+  overlay.querySelector('#ms-confirm')?.addEventListener('click', () => {
+    // Detect any slot-assigned activity that ran >10 min more than planned
+    const overItems: { label: string; overMin: number }[] = [];
+    for (const item of integrateItems) {
+      const assignedWid = state.assignments.get(item.garminId);
+      if (!assignedWid || assignedWid === 'reduction' || assignedWid === 'logonly') continue;
+      const w = allWorkouts.find(w => (w.id || w.n) === assignedWid);
+      const plannedMin = w?.estimatedDurationMin ?? 0;
+      const actualMin = item.durationSec / 60;
+      if (plannedMin > 0 && actualMin - plannedMin > 10) {
+        overItems.push({ label: formatActivityType(item.activityType), overMin: Math.round(actualMin - plannedMin) });
+      }
+    }
+    if (overItems.length === 0) { onConfirm(state); return; }
+
+    const popup = document.createElement('div');
+    popup.className = 'fixed inset-0 z-[300] flex items-center justify-center p-4';
+    popup.style.background = 'rgba(0,0,0,0.45)';
+    const bodyLines = overItems.map(o =>
+      `<p style="font-size:13px;color:var(--c-muted);line-height:1.5;margin:0">${o.label} was ${o.overMin} min longer than planned. Full session load is recorded. Excess decays across future load targets.</p>`
+    ).join('');
+    popup.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <h3 style="font-size:17px;font-weight:500;color:var(--c-black);margin:0 0 8px;letter-spacing:-0.005em">Extra load counted</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">${bodyLines}</div>
+        <button id="excess-popup-continue" class="m-btn-glass m-btn-glass--inset" style="width:100%">Continue</button>
+      </div>`;
+    document.body.appendChild(popup);
+    const proceed = () => { popup.remove(); onConfirm(state); };
+    popup.querySelector('#excess-popup-continue')?.addEventListener('click', proceed);
+    popup.addEventListener('click', (e) => { if (e.target === popup) proceed(); });
+  });
 
   // Activity card: select / deselect
   overlay.querySelectorAll<HTMLElement>('.activity-card').forEach(card => {

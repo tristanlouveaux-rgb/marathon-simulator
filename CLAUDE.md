@@ -38,9 +38,22 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
 
+## Test Failure Policy
+
+Never declare a test failure "pre-existing" without explaining in one sentence exactly why it is safe to ignore. If you cannot explain it in one sentence, investigate it — pre-existing failures are often real model regressions, stale test expectations from an undocumented code change, or tests you broke yourself without realising. "It was already failing" is not an explanation.
+
 ## Supabase dashboard has a built-in AI
 
 When asking the user to diagnose edge function / DB issues, remember the Supabase dashboard offers an AI assistant that can read logs, traces and schema directly. It needs an `execution_id` to pull the stack trace for a specific 500 — so guide the user to click the failing invocation row first, grab the execution_id, and paste it into the Supabase AI prompt. Faster than asking the user to transcribe stack traces manually.
+
+## Strava is the Canonical Activity Source
+
+**Garmin webhook data is a fallback only.** If a Strava row exists for the same activity, the Strava row must always win — it carries HR zones, iTRIMP, polyline, elevation, and km splits that the Garmin webhook summary never provides.
+
+- `sync-activities` suppresses any Garmin row whose start time is within ±10 min of a Strava row.
+- `matchAndAutoComplete` upgrades already-matched Garmin actuals to Strava when the Strava row arrives later (same ±10 min window).
+- The UI shows the source badge as "Strava" vs "Garmin" via `garminId.startsWith('strava-')`. If a user reports seeing "Garmin" for a recent run that was tracked on Strava, check whether the Strava backfill ran and whether the upgrade loop fired.
+- **Never intentionally store or display Garmin-sourced data when Strava data exists for the same activity.**
 
 ## Tracking vs Planning — Keep Them Separate
 

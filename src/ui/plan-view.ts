@@ -964,6 +964,7 @@ function buildWorkoutCards(
             </div>
             <div style="flex:1;min-width:0">
               <div style="font-size:15px;font-weight:400;letter-spacing:-0.01em;opacity:${nameOpacity};text-decoration:${nameDecoration};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
+              ${!isDone && !isSkipped && (w as any).targetPaceSecKm ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fmtPacePlan((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>` : ''}
               ${actMatchRow}
               ${isTimingMod((w as any).modReason) && !isDone ? `<div style="margin-top:3px"><span style="font-size:10px;font-weight:500;color:var(--c-muted);letter-spacing:0.01em">Suggestion — hard session yesterday</span></div>` : ''}
               ${reducedBadge}

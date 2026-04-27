@@ -130,7 +130,7 @@ function controlButtons(): string {
   const paused = isTrackingPaused();
   return `
     <div class="flex gap-3 px-4">
-      <button onclick="gpsPause()" class="flex-1 py-3 m-btn-secondary rounded-xl font-medium">${paused ? 'Resume' : 'Pause'}</button>
+      <button onclick="gpsPause()" class="flex-1 m-btn-glass">${paused ? 'Resume' : 'Pause'}</button>
       <button onclick="gpsStop()" class="flex-1 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
     </div>
   `;
@@ -193,7 +193,7 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
         </div>
       </div>
       <div class="flex gap-3">
-        <button onclick="gpsPause()" class="px-6 py-3 m-btn-secondary rounded-xl font-medium">${isTrackingPaused() ? 'Resume' : 'Pause'}</button>
+        <button onclick="gpsPause()" class="m-btn-glass">${isTrackingPaused() ? 'Resume' : 'Pause'}</button>
         <button onclick="gpsStop()" class="px-6 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
       </div>
     </div>
@@ -571,6 +571,10 @@ export function renderRecordView(): void {
     setOnTrackingTick(updateRecordStats);
   } else {
     setOnTrackingTick(null);
+    const { trackOnly } = getState() as { trackOnly?: boolean };
+    const subcopy = trackOnly
+      ? 'Start a run. We\'ll log distance, pace, and heart rate.'
+      : 'Unstructured run — we\'ll fit it into your plan automatically.';
     content = `
       <div class="flex-1 flex flex-col items-center justify-center px-6">
         <div class="flex items-center justify-center mb-4" style="width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,0.06)">
@@ -579,9 +583,9 @@ export function renderRecordView(): void {
             <circle cx="12" cy="12" r="4" fill="currentColor"/>
           </svg>
         </div>
-        <h2 class="text-lg font-semibold mb-2" style="color:var(--c-black)">Just Run</h2>
+        <h2 class="text-lg font-semibold mb-2" style="color:var(--c-black)">${trackOnly ? 'Record a run' : 'Just Run'}</h2>
         <p class="text-sm text-center max-w-xs mb-6" style="color:var(--c-muted)">
-          Unstructured run — we'll fit it into your plan automatically.
+          ${subcopy}
         </p>
         <button onclick="justRun()" class="m-btn-primary px-8 py-3 rounded-xl font-semibold">
           Start Run
@@ -603,6 +607,14 @@ export function renderRecordView(): void {
   `;
 
   wireTabBarHandlers(navigateTab);
+
+  // Re-mount guided rest overlay if a guide is mid-recovery (user returning to Record tab).
+  if (tracking) {
+    import('./gps-events').then(({ getActiveGuideController }) => {
+      const g = getActiveGuideController();
+      if (g) import('./guided-overlay').then(({ mountGuidedOverlay }) => mountGuidedOverlay(g));
+    });
+  }
 
   // Scroll interval list to current row after initial render
   if (tracking && liveData) {

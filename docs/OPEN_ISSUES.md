@@ -10,6 +10,56 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ## 🔴 TOP PRIORITY — Next session
 
+### ISSUE-149: iOS build — remaining wiring + on-device verification *(P1, 2026-04-27)*
+
+**Context**: iOS platform scaffold landed 2026-04-16 (ISSUE-134/136). Voice plugin, haptics adapter, Info.plist, bundle rename to Mosaic are all in code. But the build has never run on a physical device.
+**Remaining items**:
+1. **On-device test.** Open Xcode (`npx cap open ios`), sign with a Team, build to iPhone. Verify: voice over silent switch, voice while screen locked, music ducking (Spotify/Apple Music), haptic ticks on step transitions.
+2. **Wire `keep-awake` into Record tab.** `src/guided/keep-awake.ts` has `enableScreenAwake()`/`disableScreenAwake()` but they are not called anywhere. Hook into `startTracking`/`stopTracking` in `src/ui/gps-events.ts` when a guided run is active.
+3. **Wire `BackgroundGeolocation.ready(GUIDED_RUN_LOCATION_CONFIG)`.** Config object is in `src/guided/background-location.ts`. Needs a call site in the tracker bootstrap that uses Transistorsoft on native and falls back to `navigator.geolocation` on web.
+4. **Xcode signing.** `com.mosaic.training` bundle ID is set but no Team / provisioning profile selected yet.
+5. **App icon + launch screen.** Still Capacitor placeholder assets.
+**See also**: `docs/IOS_SETUP.md` "Remaining work" section for the full checklist.
+**Files**: `src/ui/gps-events.ts`, `src/guided/keep-awake.ts`, `src/guided/background-location.ts`, `ios/App/App/Assets.xcassets/`.
+
+---
+
+### ISSUE-150: Gym programme overhaul — Whoop-level UX from onboarding to tracking *(P2, 2026-04-27)*
+
+**Problem**: The gym module is the weakest part of the app. A single `gs` field set at onboarding, hardcoded templates that repeat weekly with no progression, synced WEIGHT_TRAINING activities that don't tick off planned sessions, no exercise customisation, no strength tracking, and second-class UI treatment in both Home and Plan views.
+**Full spec**: `docs/GYM_PROGRAMME_SPEC.md` — contains the complete question set (39 items across 11 categories) that must be answered before implementation starts.
+**Scope categories**:
+1. Positioning (support-for-running vs second pillar)
+2. Scope/ambition (progressive overload vs enhanced templates)
+3. Onboarding inputs (equipment, 1RMs, goals, preferences)
+4. Programme design (progression model, periodisation, mobility blocks)
+5. In-session UX (live logging vs mark-done, rest timer, live screen)
+6. Run plan integration (scheduling constraints, mid-plan changes)
+7. Activity matching (auto-complete planned slots from synced data)
+8. Load/fatigue model (Signal A/B treatment, recovery impact)
+9. UI surfaces (drill-down view, home card, plan row, strength history)
+10. Edge cases (non-WEIGHT_TRAINING gym, detraining, injury downgrade)
+11. Direction (greenfield spec vs incremental evolution)
+**Current state**: `src/workouts/gym.ts` (templates), `src/types/state.ts:324` (`gs` field), `src/ui/wizard/steps/volume.ts:45-56` (onboarding), `src/ui/home-view.ts:1674-1758` (home card), `src/ui/plan-view.ts:471-473` (plan row), `src/calculations/activity-matcher.ts:473-492` (matching).
+**Next step**: Tristan answers the spec questions in `docs/GYM_PROGRAMME_SPEC.md`, then we build a phased implementation plan.
+
+---
+
+### ISSUE-148: Recurring activities — add flow in Account *(P3, 2026-04-25)*
+
+**Problem**: Account → Training → Recurring activities only supports remove (× per row). Users can't add a new recurring sport without re-onboarding via Reset.
+**Why deferred**: Add flow needs the same sport-picker / duration / intensity picker that lives in `wizard/steps/schedule.ts`. Lifting that into a reusable modal is non-trivial — separate task.
+**Files**: `src/ui/account-view.ts` (`showRecurringActivitiesModal`), `src/ui/wizard/steps/schedule.ts` (sport picker logic to extract).
+**Workaround**: Reset (Account → Advanced → Reset) and re-onboard. Existing PBs / physiology / Strava connection are preserved by `softResetState`.
+
+---
+
+### ✅ ISSUE-147: Just-Track mode — synced activities don't surface in local feed *(resolved 2026-04-23)*
+
+**Resolved by the Just-Track redesign** (CHANGELOG 2026-04-23). Option (a) chosen: `initializeSimulator` now seeds a rolling 1-week bucket and `advanceWeekToToday` extends it one week per calendar week. Sync pipeline writes into `wk.garminActuals` unchanged. Activity feed, recent activity, and weekly summaries now populate identically to planned users.
+
+---
+
 ### ✅ ISSUE-129: plan-view.ts uncommitted work wiped by `git checkout --` *(reconstructed 2026-03-22)*
 **What happened**: Claude ran `git checkout -- src/ui/plan-view.ts` to undo cosmetic changes, destroying all uncommitted work.
 **Fix**: All code reconstructed. Illness banner (`buildIllnessBanner`), running km bar (`weekKmBar`), week overview / coach insight pills (`buildWeekOverview`), and check-in button all confirmed present in `plan-view.ts`. CLAUDE.md updated with hard rule against `git checkout --`.
@@ -61,32 +111,23 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
-### ISSUE-130: Coach Brain — deploy edge function + Phase 2 signals *(P2, in-progress)*
+### ISSUE-130: Coach — LLM narrative deferred, Phase 2 signals still to wire *(deferred 2026-04-24)*
 
-**Context**: Phase 1 built and type-checks clean (2026-03-22). See `docs/BRAIN.md` for full spec.
+**Status**: The LLM narrative half of this issue is **deferred until paying users exist**. The rules-layer half (the actual Coach surface) is built and live via `src/ui/coach-view.ts`.
 
-**Before it works — must do first:**
-1. Deploy the edge function: `supabase functions deploy coach-narrative`
-2. Set the API key: `supabase secrets set ANTHROPIC_API_KEY=sk-ant-...`
+**What shipped**:
+- `src/calculations/daily-coach.ts` — `computeDailyCoach(state)` aggregates all signals into `CoachState` (stance, blockers, primaryMessage, sessionNote, workoutMod). This IS the "Brain".
+- `src/ui/coach-view.ts` — Sleep-style sub-page (sky hero, stacked cards, "Why this call" evidence bullets, Recovery / Fitness / This week / Status). No LLM fetch.
+- Coach button in Home header + Plan header.
 
-**What's built:**
-- `src/calculations/daily-coach.ts` — `computeDailyCoach(state)` aggregates all signals into `CoachState`
-- `supabase/functions/coach-narrative/index.ts` — Haiku LLM call with rate limit (3/day, 4h cache)
-- `src/ui/coach-modal.ts` — modal with readiness ring, signal rows, LLM narrative
-- Coach button in Home header + Plan header (current week only)
+**What's deferred (do not deploy)**:
+- `supabase/functions/coach-narrative/index.ts` stays in the repo as dormant scaffolding but is not deployed and not called from the client. The infra cost (GDPR consent modal, subscription plumbing, server-side rate limiting, Anthropic TOS review, Apple privacy nutrition label update) is not justified pre-revenue. The rules layer already delivers the synthesis the LLM was meant to provide. See `docs/BRAIN.md` for the preserved design reference.
+- Next LLM scope when revisited (threshold: ~100 paying users): **"Ask the coach" chatbot**, not the narrative paragraph. Explaining plans and recovery is a different and more valuable product than restating the rules layer in prose.
 
-**Phase 2 signals still to wire:**
-- VDOT history sparkline (no history stored yet — needs `vdotHistory` array)
-- Weekly aerobic efficiency trend across last 4 weeks
-- Subjective daily feeling ("How do you feel today?" — 4-option tap → `s.todayFeeling`)
-- Previous-week carry-forward: if last week's stance was `reduce`/`rest`, this week starts discounted
-
-**Other open questions:**
-- Stance vocabulary: keep readiness labels or simplify to Push / Normal / Back Off / Rest?
-- Subjective check-in: on app open or only from Coach modal?
-
-**Paywall gate (not yet implemented):**
-LLM narrative card is premium-only. Free users see the `readiness.sentence` in place of the narrative card. The rest of the modal (ring + signal rows + stance) is free. Wire `coach-modal.ts` to check a subscription field before calling `fetchNarrative()`.
+**Phase 2 signals still worth wiring (rules-layer work, no LLM)**:
+- VDOT history sparkline (no history stored yet — needs `vdotHistory` array populated on week advance)
+- Weekly aerobic efficiency trend across last 4 weeks (aggregate `hrDrift` from `garminActuals`)
+- Previous-week carry-forward: if last week's stance was `reduce`/`rest`, this week starts discounted to prevent whiplash
 
 ---
 
@@ -165,6 +206,15 @@ e. When both VO2 and Tanda are null and `targetDist === 42195`, bump `w.pb` and 
 **Files implicated**: `src/calculations/predictions.ts` (lines 147-180 marathon multipliers, 48-63 `predictFromPB`, 384-470 `blendPredictions` weights). Test: `src/calculations/forecast-profiles.test.ts:195-204`. Science log entry to update: `docs/SCIENCE_LOG.md` (the "tier-aware LT multiplier / audit #8" section).
 
 **Related**: ISSUE-135 (marathon optimism from stale VO2) — different root cause (physiology not updated) but same user-facing symptom (race prediction too fast).
+
+---
+
+### ISSUE-146: Activity matcher should suggest best-fit workout when no exact match *(P3, 2026-04-17)*
+
+**Problem**: When a completed run doesn't neatly match a planned workout, it falls through to "unmatched". The user gets no credit and no feedback on what the run most closely resembled.
+**Desired behaviour**: When the primary matcher fails, run a fallback scoring pass across all remaining planned sessions for the week. Score by distance delta, avg pace vs target zone, and avg HR vs expected zone. Present the best-fit suggestion as "Looks like this was your [Tempo]?" with a one-tap confirm. Include a "None of these" default action so a poor match doesn't get auto-assigned.
+**Gate**: Require a minimum match score threshold before surfacing a suggestion. A sloppy mixed-pace run should stay unmatched rather than being mislabelled (protects adherence tracking and VDOT).
+**Files**: `src/calculations/activity-matcher.ts` (scoring function), `src/ui/activity-review.ts` (suggestion UI in the review flow).
 
 ---
 
@@ -602,19 +652,10 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 
 ---
 
-### ISSUE-133: Freshness and Injury Risk detail pages — parity with Recovery *(P2)*
-
-**What exists**: The Recovery signal has a full drill-down sheet (sub-score bars for Sleep, HRV, RHR + sparklines, advice rows). Freshness (Signal B TSB / ATL-CTL gap) and Injury Risk (Signal C impact load + back-to-back hard days) are surfaced only as summary rings or bars on Home — no detail page, no explanation of what drives the score.
-
-**Design options**:
-1. **Separate detail pages** — mirror the Recovery sheet pattern (`buildRecoveryCard`) with sub-score rows, a sparkline or trend bar, and plain-language explanation of what's driving the score today.
-   - Freshness: ATL/CTL values, TSB trend over last 7 days, plain label (Fresh / Neutral / Fatigued / Very Fatigued), what it means for today's session.
-   - Injury Risk: back-to-back hard days, monotony index, today's Signal C impact load, any active modifiers (illness, high ACWR).
-2. **Unified Readiness sheet** — collapse Freshness + Injury Risk into the existing Readiness detail view as additional signal rows alongside Recovery. Single "Readiness breakdown" sheet opened from the Home ring, with one row per signal (Recovery, Freshness, Load Trend, Injury Risk), each with a sub-score and a tap-to-expand explanation.
-
-**Preferred approach**: Discuss with Tristan before implementing — option 2 is architecturally cleaner but requires rethinking the Readiness modal layout.
-
-**Files**: `src/ui/home-view.ts`, `src/ui/strain-view.ts`, `src/calculations/readiness.ts`, `src/calculations/fitness-model.ts`.
+### ✅ ISSUE-133b: Freshness and Injury Risk detail pages — parity with Recovery *(confirmed 2026-04-23)*
+**Fix**: Both detail pages already built — `freshness-view.ts` and `injury-risk-view.ts` — with Recovery-parity design language (sub-score rows, sparklines, plain-language advice). Confirmed on device.
+**Files**: `src/ui/freshness-view.ts`, `src/ui/injury-risk-view.ts`.
+**Note**: This issue was numbered 133 alongside the HR-drift ISSUE-133. Suffixed as 133b during 2026-04-18 triage to disambiguate.
 
 ---
 
@@ -1411,11 +1452,43 @@ Both views now read from the same computation path.
 
 ---
 
+### FUTURE-04: Plan Swap — Change Goal Without Losing Progress
+
+**What**: Allow users to switch plans (e.g. marathon to half, race mode to general fitness, or change race date) without losing accumulated physiology state (CTL, VDOT, historicWeeklyTSS, readiness history, Strava cache).
+
+**Why it matters**: Users' goals change. Injury, schedule shift, or a new race means they need a different plan. Currently the only option is a full reset. The physiology state is already decoupled from the plan object (`s.wks`), so preserving progress is mostly about regenerating `s.wks` for the new goal while carrying forward fitness data.
+
+**Open design questions**:
+- Three swap types with different UX: (1) change race distance (marathon to half), (2) change race date (recompute phases), (3) switch modes (general fitness to race mode or vice versa). Which to support first?
+- Should the current week's completed workouts carry into the new plan, or does the swap start fresh from "this week"?
+- UI: settings page toggle, or a dedicated "Change Plan" flow?
+
+**Status**: Needs design decisions before build.
+
+---
+
+### FUTURE-05: Block Summary — Training Phase Completion Report
+
+**What**: When a user finishes a training block (phase), surface a summary of what they did, how fitness changed, and what's next.
+
+**Why it matters**: Users complete base/build/peak/taper phases with no acknowledgement or reflection. A phase-end summary closes the loop, builds trust in the system, and primes the user for what's ahead.
+
+**Open design questions**:
+- Trigger: phase-end (base to build, build to peak, etc.) is the most defensible since phases already exist in the plan engine. Full plan completion (race day) is a second trigger.
+- Content: volume/intensity summary, CTL delta, VDOT delta, adherence %, key workouts, coach narrative?
+- Format: modal overlay, dedicated page, or push notification?
+
+**Status**: Needs design decisions before build.
+
+---
+
 | Track | Doc | Effort | Status | Dependencies |
 |---|---|---|---|---|
 | FUTURE-01: Workout to Watch | [`WorkoutWatch.md`](WorkoutWatch.md) | 7-10 days (Garmin), 9-12 days (Apple) | Design complete, ready to build | Garmin: Workout Import permission. Apple: HealthKit entitlements |
 | FUTURE-02: Triathlon Mode | [`TRIATHLON.md`](TRIATHLON.md) | Large (multi-week) | Architecture doc written, planning | User demand signal |
 | FUTURE-03: The Brain | [`BRAIN.md`](BRAIN.md) | Phase 0-1: 1 week. Phase 2+: ongoing | Phase 1 built, needs deployment + hardening | Anthropic API key, paywall infra |
+| FUTURE-04: Plan Swap | — | Medium | Needs design | — |
+| FUTURE-05: Block Summary | — | Small–Medium | Needs design | — |
 
 ---
 

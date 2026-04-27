@@ -1,5 +1,30 @@
 # The Brain — Coaching Intelligence Design
 
+> **Status (2026-04-24): the Brain is the rules layer.** The original thesis
+> for this doc — that signals were scattered across files and needed a central
+> coordinator — has been delivered by `src/calculations/daily-coach.ts`. It
+> aggregates every signal into a single `CoachState` (stance, blockers,
+> primaryMessage, sessionNote, workoutMod) and is the authoritative read on
+> today's coaching stance. The UI surface is `src/ui/coach-view.ts` (opens from
+> the Coach button on Home and Plan).
+>
+> **LLM work is deferred.** The "Option C hybrid" (rules layer + LLM narrative
+> paragraph) and the full roadmap below remain as design reference. Nothing
+> ships to production until there are paying users — the infra cost (GDPR
+> consent, subscription plumbing, server-side rate limiting, spend cap,
+> Anthropic TOS review) is not justified pre-revenue, and the rules layer
+> already delivers the synthesis the LLM was meant to provide.
+>
+> **What comes next on the LLM side is "Ask the coach" (chatbot)**, not the
+> narrative paragraph. A chatbot that explains plans, recovery, and the
+> coaching rationale is a different product from restating the rules layer in
+> prose. Revisit when the app has ~100 paying users and real questions to
+> answer, per the Phase 6 guidance at the bottom of this doc.
+>
+> Everything below is preserved as design reference — not active scope.
+
+---
+
 ## The Problem
 
 The app collects a lot of signal. Right now that signal fires in isolation:

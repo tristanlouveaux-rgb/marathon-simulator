@@ -119,6 +119,21 @@ Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode
 
 ---
 
+### 6b. Lactate Threshold Derivation (own engine, decoupled from Garmin)
+**What it does**: When Garmin's watch-side LT reading is missing, stale, or gated, the app derives its own LT pace + LTHR from three blended methods: Daniels T-pace from VDOT (88% vVO2max), Critical Speed from race-distance PBs (LT = 0.93 × CS), and empirical detection from sustained tempo efforts (20+ min runs, 85–92% HRmax band, decoupling <5%). Outlier guards exclude treadmill, hot weather, hilly runs, and unsteady pacing.
+
+**State integration**: `recomputeLT(s)` runs after every physio + activity sync. Priority chain: `s.ltOverride` > fresh Garmin reading (<60d) > blended derived. When Garmin and our derived value differ by >10s/km, a `s.ltSuggestion` is set so the LT detail page can prompt the user to choose; `s.lt` is not silently overwritten in that case.
+
+**Stats UI**: The LT metric detail page (Stats → LT card) shows the active value with provenance + confidence chip, a per-method breakdown (pace and weight contribution), the Garmin sparkline when present, the conflict-resolution prompt, and slider overrides for pace + LTHR with reset-to-derived.
+
+**Workout pacing**: `s.lt` flows into `paces.gp(vdot, ltPace)` so threshold workouts and pace zones use the resolved value automatically.
+
+**Key files**: `src/calculations/lt-derivation.ts`, `src/data/ltSync.ts`, `src/ui/stats-view.ts → buildLTMetricPage`
+**Tests**: `src/calculations/lt-derivation.test.ts` — ✅ Passing (29 tests)
+**Science**: `docs/SCIENCE_LOG.md → Lactate Threshold Derivation` (Daniels, Jones & Vanhatalo, Nixon et al. 2021, Friel)
+
+---
+
 ### 7. HR & Efficiency Scoring
 **What it does**: When you log a workout with heart rate data, the app cross-checks your RPE (how hard it felt) against your HR to detect whether you're getting fitter, fatigued, or under cardiovascular stress. This nudges your future paces slightly up or down.
 
@@ -177,11 +192,15 @@ Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTra
 
 **Week debrief**: auto-triggers on Sunday / Monday as usual, but shows `showTrackOnlyRetrospective` — compact this-vs-last-week deltas on distance, sessions, TSS, CTL, recovery average. No plan-adherence language.
 
-**Wizard flow**: welcome → goals (pick Fitness) → connect-strava → review → **race-target** (pick "Just track") → initializing (short-circuits) → main-view. Schedule, physiology, runner-type, plan-preview are all skipped for trackOnly users via `nextStep()` branches in `wizard/controller.ts`.
+**Wizard flow**: welcome → goals (pick "Just track" tile directly) → connect-strava → review → initializing (short-circuits, skips race-target / schedule / physiology / runner-type / plan-preview) → main-view. The "Just track" tile sets `onboarding.trackOnly=true` and `initializeSimulator` takes the trackOnly branch.
 
-**Readiness + strain detail views**: opening the readiness ring or strain breakdown on track-only home renders without the plan-comparison section (`generateWeekWorkouts` call is gated on `!s.trackOnly`). The HRV / sleep / RHR composite still computes; `plannedDayTSS` stays 0.
+**Readiness + strain detail views**: opening the readiness ring or strain breakdown on track-only home renders without the plan-comparison section (`generateWeekWorkouts` gated on `!s.trackOnly`, and `coachingText` / status labels in strain-view adapt for trackOnly). The HRV / sleep / RHR composite still computes; `plannedDayTSS` stays 0.
 
-**Account-view safety**: Change-Runner-Type button hidden for trackOnly (applying a runner type rebuilds the plan — irrelevant here). Reset-Plan relabels to "Reset tracking history" with adapted modal copy.
+**Account-view safety**: Change-Runner-Type button hidden for trackOnly. Reset-Plan relabels to "Reset tracking history". "Switch to tracking only" button in Advanced lets plan-mode users opt into track mode without losing CTL/history. "Recurring activities" row in Training section lets users remove sports post-onboarding.
+
+**Plan → track transition**: race-complete banner on home when `selectedMarathon.date < today` offers a one-tap switch. `downgradeToTrackOnly()` in `wizard/controller.ts` is the underlying function (inverse of `upgradeFromTrackOnly`). Both mode flips go through the `initializing` step with a mode-change guard so `initializeSimulator` re-runs cleanly.
+
+**Polish (2026-04-24)**: First-launch orientation line under hero when no data. Sleep-log affordance under readiness ring. "Create a plan" demoted from full-width button to muted link. Daily-target card: "target" → "sustainable" to de-prescribe. Unified empty-state copy: "Connect Strava or record a run" across all cards. Record tab copy branches: "Record a run" instead of "Just Run — we'll fit it into your plan".
 
 **Key files**: `src/state/initialization.ts` (trackOnly branch), `src/ui/welcome-back.ts` (calendar extension), `src/ui/home-view.ts` (`getTrackOnlyHomeHTML`, `buildTrackOnlyDailyTarget`, "Tracking" pill), `src/ui/plan-view.ts` (`getTrackOnlyPlanHTML`), `src/ui/stats-view.ts` (track-only summary branch), `src/ui/readiness-view.ts` + `src/ui/strain-view.ts` (trackOnly guards on `generateWeekWorkouts`), `src/ui/account-view.ts` (button guards), `src/ui/events.ts` (`showResetModal` copy), `src/ui/week-debrief.ts` (`showTrackOnlyRetrospective`), `src/ui/wizard/controller.ts` (`upgradeFromTrackOnly`, trackOnly branches in `nextStep()`).
 **State**: `s.trackOnly: boolean`, `s.onboarding.trackOnly: boolean`, `TrainingFocus` includes `'track'`.
@@ -855,6 +874,8 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 **Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active, including a leg-fatigue callout linking to the detail page when `hardFloor === 'legLoad'`), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
 
 **Leg Fatigue** (card on Rolling Load, detail page): The mechanical/localised load signal, distinct from cardiovascular TSS. Cap and soft taper applied directly in `computeReadiness()`: `>= 60` → cap 34 (Ease Back), `>= 20` → cap 54 (Manage Load), linear soft taper across 10–20 so the threshold isn't a cliff. Always-visible card at the top of Rolling Load shows current decayed total, status (Fresh / Light / Moderate / Heavy), and a one-line interpretation. Tap opens the detail page.
+
+**Running included in Leg Fatigue (added 2026-04-25)**: Runs now contribute to leg load via `distanceKm × effortMultiplier(rpe)` (RPE-tier multiplier reused from `IMPACT_PER_KM`). RPE comes from the logged `wk.rated[id]` if available, else HR-derived Karvonen mapping — handles bonked runs correctly. RBE discount is suppressed for hard runs (RPE ≥ 7) since maximal-effort EIMD is novel stress. Backfill runs through `reconcileRecentLegLoads()` on launch and after activity sync. See `docs/SCIENCE_LOG.md → Running Leg Load` for derivation.
 
 **Leg Fatigue detail page** (`src/ui/leg-load-view.ts`, added 2026-04-15): Opens from the Leg Fatigue card on Rolling Load or from the Readiness callout banner. Bronze sky-gradient palette to distinguish from the other detail pages. Hero ring uses a piecewise mapping (MODERATE = 30%, HEAVY = 70%, extreme 120+ = 100%) so reload beyond HEAVY still reads as worse. Shows a 7-day decay timeline with MODERATE/HEAVY threshold zones and a 4-day forward projection, "floor releases" + "fully fresh" hour projections, a per-session contributors list (raw load, decayed-remaining, half-life, reload penalty), and an explainer of the EIMD-based model with constants and citations. Driven by the `computeLegLoadBreakdown()` helper exported from `readiness.ts`.
 

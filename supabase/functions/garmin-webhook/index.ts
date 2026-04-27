@@ -65,6 +65,15 @@ Deno.serve(async (req) => {
     if (body.hrvSummaries) {
       await handleHrv(supabase, body.hrvSummaries);
     }
+    if (body.stressDetails) {
+      await handleStressDetails(body.stressDetails);
+    }
+    if (body.deregistrations) {
+      await handleDeregistrations(supabase, body.deregistrations);
+    }
+    if (body.userPermissions) {
+      await handleUserPermissions(supabase, body.userPermissions);
+    }
 
     return new Response("ok", { status: 200 });
   } catch (e) {
@@ -189,11 +198,16 @@ async function handleDailies(
 
     if (!dayDate) continue;
 
-    // Diagnostic: log all top-level keys in the dailies payload so we can
-    // identify which field carries step count (Garmin docs say totalSteps
-    // but the actual webhook payload may use a different name).
-    console.log(`[garmin-webhook] Dailies payload keys for ${dayDate}: ${Object.keys(d).join(', ')}`);
-    console.log(`[garmin-webhook] Dailies step-ish fields: totalSteps=${d.totalSteps}, steps=${d.steps}, stepsCount=${d.stepsCount}`);
+    // Webhook payload uses `steps`; REST/backfill uses `totalSteps`. Accept either.
+    const stepsVal = d.steps ?? d.totalSteps ?? d.stepsCount ?? null;
+    const activeCalVal = d.activeKilocalories ?? null;
+    const activeDurVal = d.activeDurationInSeconds ?? null;
+    const moderateSec = d.moderateIntensityDurationInSeconds ?? 0;
+    const vigorousSec = d.vigorousIntensityDurationInSeconds ?? 0;
+    const activeMinVal = (moderateSec + vigorousSec) > 0
+      ? Math.round((moderateSec + vigorousSec) / 60)
+      : (activeDurVal != null ? Math.round(activeDurVal / 60) : null);
+    const vigorousMinVal = vigorousSec > 0 ? Math.round(vigorousSec / 60) : null;
 
     // Only include hrv_rmssd if the dailies payload actually has HRV data.
     // Otherwise we'd overwrite a value previously stored by handleHrv().
@@ -205,7 +219,10 @@ async function handleDailies(
       max_hr: d.maxHeartRateInBeatsPerMinute ?? null,
       stress_avg: d.averageStressLevel ?? null,
       vo2max: d.vo2Max ?? null,
-      steps: d.totalSteps ?? null,
+      steps: stepsVal,
+      active_calories: activeCalVal != null ? Math.round(activeCalVal) : null,
+      active_minutes: activeMinVal,
+      highly_active_minutes: vigorousMinVal,
     };
     if (hrvFromDaily != null) {
       row.hrv_rmssd = hrvFromDaily;
@@ -298,6 +315,11 @@ async function handleUserMetrics(
   metrics: any[],
 ) {
   for (const m of metrics) {
+    // Log raw payload so we can diagnose when fields land as null — Garmin's
+    // webhook occasionally uses `vo2Max` instead of `vo2MaxRunning` and other
+    // field-name drift shows up here.
+    console.log(`[garmin-webhook] userMetrics raw:`, JSON.stringify(m));
+
     const userId = await resolveUserId(supabase, m.userId ?? m.userAccessToken);
     if (!userId) {
       console.warn("[garmin-webhook] Unknown userAccessToken for userMetrics, skipping");
@@ -307,19 +329,32 @@ async function handleUserMetrics(
     const calendarDate = m.calendarDate ?? null;
     if (!calendarDate) continue;
 
+    // Accept both `vo2MaxRunning` (documented webhook field) and `vo2Max`
+    // (seen on the REST endpoint and occasionally in webhook pushes).
+    const vo2Value: number | null = m.vo2MaxRunning ?? m.vo2Max ?? null;
+
     // Convert LT speed from m/s → sec/km (what the app uses for pace)
     const ltSpeedMps: number | null = m.lactateThresholdSpeed ?? null;
     const ltPaceSecKm = ltSpeedMps && ltSpeedMps > 0
       ? Math.round(1000 / ltSpeedMps)
       : null;
+    const ltHR: number | null = m.lactateThresholdHeartRateInBeatsPerMinute ?? null;
+
+    // Skip rows with no actual data — Garmin sometimes emits userMetrics events
+    // with only calendarDate+userId and no metrics, which would otherwise
+    // overwrite good data with nulls.
+    if (vo2Value == null && ltSpeedMps == null && ltHR == null) {
+      console.log(`[garmin-webhook] userMetrics for ${calendarDate} has no metrics — skipping upsert`);
+      continue;
+    }
 
     const { error } = await supabase.from("physiology_snapshots").upsert(
       {
         user_id: userId,
         calendar_date: calendarDate,
-        vo2_max_running: m.vo2MaxRunning ?? null,
+        vo2_max_running: vo2Value,
         lactate_threshold_pace: ltPaceSecKm,
-        lt_heart_rate: m.lactateThresholdHeartRateInBeatsPerMinute ?? null,
+        lt_heart_rate: ltHR,
       },
       { onConflict: "user_id,calendar_date" },
     );
@@ -327,7 +362,7 @@ async function handleUserMetrics(
     if (error) {
       console.error("[garmin-webhook] Failed to upsert physiology snapshot:", error);
     } else {
-      console.log(`[garmin-webhook] Physiology snapshot saved for ${calendarDate}: VO2max=${m.vo2MaxRunning}, LT=${ltPaceSecKm}s/km`);
+      console.log(`[garmin-webhook] Physiology snapshot saved for ${calendarDate}: VO2max=${vo2Value}, LT=${ltPaceSecKm}s/km, ltHR=${ltHR}`);
     }
   }
 }
@@ -397,5 +432,82 @@ async function handleActivityDetails(
     if (error) {
       console.error("[garmin-webhook] Failed to upsert activity detail:", error);
     }
+  }
+}
+
+/**
+ * Handle stress detail pushes (per-minute stress samples).
+ * We don't store these — the app reads `daily_metrics.stress_avg` instead. This
+ * handler exists so the endpoint can be enabled in the Garmin Portal without
+ * the receiver dropping payloads silently, which confuses Active User tests.
+ */
+async function handleStressDetails(details: any[]) {
+  console.log(`[garmin-webhook] stressDetails acknowledged (${details.length} items, not stored)`);
+}
+
+/**
+ * Handle deregistration pushes — user revoked consent from Garmin Connect.
+ * Required by Garmin Partner Verification: Garmin insists we have a functioning
+ * endpoint for this so users can actually disconnect.
+ *
+ * Action: delete the `garmin_tokens` row for the affected user. Physiology
+ * data in other tables is preserved — if the user reconnects later, it's
+ * still there. Future webhooks for this user will fail `resolveUserId` and
+ * be dropped cleanly.
+ *
+ * Garmin schema: https://developer.garmin.com/gc-developer-program/user-registration-api/
+ */
+async function handleDeregistrations(
+  supabase: ReturnType<typeof createClient>,
+  deregistrations: any[],
+) {
+  for (const dr of deregistrations) {
+    const identifier = dr.userId ?? dr.userAccessToken;
+    if (!identifier) {
+      console.warn("[garmin-webhook] Deregistration with no identifier, skipping");
+      continue;
+    }
+
+    const userId = await resolveUserId(supabase, identifier);
+    if (!userId) {
+      console.warn(`[garmin-webhook] Deregistration for unknown user ${identifier}, already cleared`);
+      continue;
+    }
+
+    // Delete by user_id (covers both rows keyed by garmin_user_id and access_token)
+    const { error } = await supabase
+      .from("garmin_tokens")
+      .delete()
+      .eq("user_id", userId);
+
+    if (error) {
+      console.error(`[garmin-webhook] Failed to delete garmin_tokens for ${userId}:`, error);
+    } else {
+      console.log(`[garmin-webhook] Deregistered user ${userId} — tokens cleared`);
+    }
+  }
+}
+
+/**
+ * Handle user permission change pushes.
+ * Required by Garmin Partner Verification. Fires when a user toggles what data
+ * categories they share (e.g. keeps Dailies but revokes Activities).
+ *
+ * Action: log the new permission set. No automatic action — Garmin will simply
+ * stop sending webhooks for revoked categories, and the tokens remain valid.
+ * If we later want to surface "missing permissions" in the UI, this is where
+ * we'd persist the latest permission list per user.
+ *
+ * Garmin schema: https://developer.garmin.com/gc-developer-program/user-permissions-api/
+ */
+async function handleUserPermissions(
+  supabase: ReturnType<typeof createClient>,
+  changes: any[],
+) {
+  for (const c of changes) {
+    const identifier = c.userId ?? c.userAccessToken;
+    const userId = identifier ? await resolveUserId(supabase, identifier) : null;
+    const perms = Array.isArray(c.permissions) ? c.permissions.join(",") : String(c.permissions ?? "");
+    console.log(`[garmin-webhook] userPermissions change for user=${userId ?? identifier ?? 'unknown'}: [${perms}]`);
   }
 }

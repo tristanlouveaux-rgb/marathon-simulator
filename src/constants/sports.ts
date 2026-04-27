@@ -52,6 +52,9 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   cycling:       { mult: 0.75, noReplace: [], runSpec: 0.55, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.25, volumeTransfer: 0 },
   strength:      { mult: 1.10, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.08, volumeTransfer: 0 },
   extra_run:     { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 }, // km-based for runs
+  // Running: leg load is km-based via IMPACT_PER_KM × effort multiplier (see recordRunLegLoad).
+  // legLoadPerMin omitted — runs do not use the duration-based pipeline.
+  running:       { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 },
   hiking:        { mult: 0.80, noReplace: [], runSpec: 0.45, recoveryMult: 0.95, impactPerMin: 0.06, legLoadPerMin: 0.50, volumeTransfer: 0.4 },
   rowing:        { mult: 0.85, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.35, volumeTransfer: 0 },
   yoga:          { mult: 0.40, noReplace: [], runSpec: 0.10, recoveryMult: 0.85, impactPerMin: 0.02, volumeTransfer: 0 },
@@ -68,6 +71,28 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   jump_rope:     { mult: 1.10, noReplace: [], runSpec: 0.50, recoveryMult: 1.05, impactPerMin: 0.08, legLoadPerMin: 0.10, volumeTransfer: 0.2 },
   walking:       { mult: 0.35, noReplace: [], runSpec: 0.30, recoveryMult: 0.80, impactPerMin: 0.03, legLoadPerMin: 0.05, volumeTransfer: 0.3 },
   padel:         { mult: 1.15, noReplace: [], runSpec: 0.45, recoveryMult: 1.05, impactPerMin: 0.05, legLoadPerMin: 0.10, volumeTransfer: 0 },
+  // Snowboarding: Compendium ~5-6 METs. Close to skiing but slightly lower — more static board
+  // pressure and lift-riding time. Similar eccentric quad loading pattern.
+  snowboarding:  { mult: 0.85, noReplace: [], runSpec: 0.45, recoveryMult: 1.00, impactPerMin: 0.06, legLoadPerMin: 0.45, volumeTransfer: 0 },
+  // Kitesurfing: Compendium ~3-6 METs (wind-dependent). Sustained isometric leg work edging
+  // against kite pull; on water so no impact. Analogous to skating pattern minus ground contact.
+  kitesurfing:   { mult: 0.75, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.02, legLoadPerMin: 0.15, volumeTransfer: 0 },
+  // Surfing: Compendium ~3-5 METs. Paddling = upper-body cardio; pop-ups = brief explosive legs;
+  // lots of sitting between waves. Low aggregate load for time spent.
+  surfing:       { mult: 0.75, noReplace: [], runSpec: 0.20, recoveryMult: 1.00, impactPerMin: 0.02, legLoadPerMin: 0.10, volumeTransfer: 0 },
+  // Sailing: Compendium ~2-3 METs crewing, ~3 dinghy. Isometric hiking-out loads legs but
+  // baseline cardio is low. Dinghy sailors will under-record.
+  sailing:       { mult: 0.50, noReplace: [], runSpec: 0.10, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.10, volumeTransfer: 0 },
+  // SUP: Compendium ~6 METs touring. Balance + core + shoulders dominant; legs stabilise but
+  // don't drive. Closer to rowing cardiovascularly with far less leg load.
+  paddleboard:   { mult: 0.70, noReplace: [], runSpec: 0.25, recoveryMult: 0.90, impactPerMin: 0.00, legLoadPerMin: 0.10, volumeTransfer: 0 },
+  // Kayaking: Compendium ~5 METs touring. Upper-body rotational work; legs largely passive
+  // on foot pegs. No impact.
+  kayaking:      { mult: 0.70, noReplace: [], runSpec: 0.20, recoveryMult: 0.90, impactPerMin: 0.00, legLoadPerMin: 0.05, volumeTransfer: 0 },
+  // Wakeboarding: no clean Compendium entry; blend of skating (0.75) and skiing (0.90). Short
+  // pulls with high eccentric quad/core load; lots of rest between runs. Low overall mult but
+  // high legLoadPerMin for the minutes active.
+  wakeboarding:  { mult: 0.70, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.03, legLoadPerMin: 0.25, volumeTransfer: 0 },
   generic_sport: { mult: 0.90, noReplace: [], runSpec: 0.40, recoveryMult: 1.00, impactPerMin: 0.04, volumeTransfer: 0.2 },
   hybrid_test_sport: {
     mult: 1.0,
@@ -94,6 +119,7 @@ export const SPORT_LABELS: Record<SportKey, string> = {
   cycling: 'Cycling',
   strength: 'Strength',
   extra_run: 'Extra Run',
+  running: 'Running',
   hiking: 'Hiking',
   rowing: 'Rowing',
   yoga: 'Yoga',
@@ -110,6 +136,13 @@ export const SPORT_LABELS: Record<SportKey, string> = {
   jump_rope: 'Jump Rope',
   walking: 'Walking',
   padel: 'Padel',
+  snowboarding: 'Snowboarding',
+  kitesurfing: 'Kitesurfing',
+  surfing: 'Surfing',
+  sailing: 'Sailing',
+  paddleboard: 'Paddleboard',
+  kayaking: 'Kayaking',
+  wakeboarding: 'Wakeboarding',
   generic_sport: 'General Sport',
   hybrid_test_sport: 'Hybrid Test Sport',
 };
@@ -139,6 +172,27 @@ export const SPORT_ALIASES: Record<string, SportKey> = {
   'skipping': 'jump_rope',
   'cross_country_skiing': 'skiing',
   'stairmaster': 'stair_climbing',
+  'snowboard': 'snowboarding',
+  'kitesurf': 'kitesurfing',
+  'kite_surfing': 'kitesurfing',
+  'kite_foil': 'kitesurfing',
+  'kitefoil': 'kitesurfing',
+  'wingfoil': 'kitesurfing',
+  'wing_foil': 'kitesurfing',
+  'wing_surfing': 'kitesurfing',
+  'surf': 'surfing',
+  'surfboard': 'surfing',
+  'sail': 'sailing',
+  'sup': 'paddleboard',
+  'stand_up_paddle': 'paddleboard',
+  'stand_up_paddleboard': 'paddleboard',
+  'sup_boarding': 'paddleboard',
+  'kayak': 'kayaking',
+  'canoe': 'kayaking',
+  'canoeing': 'kayaking',
+  'wakeboard': 'wakeboarding',
+  'wake_surfing': 'wakeboarding',
+  'waterskiing': 'wakeboarding',
   'general_sport': 'generic_sport',
 };
 

@@ -35,7 +35,10 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
   let workoutId = '';
   let weekWorkouts: Workout[] = [];
 
-  if (s.w >= 1 && s.w <= s.wks.length) {
+  // Track-only users have no planned workouts to match against — go straight
+  // to the adhoc-save path. Skipping the generateWeekWorkouts call also avoids
+  // passing stale defaults (s.rd='half', s.v=50) into the generator.
+  if (!s.trackOnly && s.w >= 1 && s.w <= s.wks.length) {
     const wk = s.wks[s.w - 1];
     const previousSkips = s.w > 1 ? s.wks[s.w - 2].skip : [];
     const injuryState = (s as any).injuryState || null;

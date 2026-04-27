@@ -66,7 +66,12 @@ if (typeof document !== 'undefined') {
     const btn = (e.target as Element).closest?.('.tab-bar-btn');
     if (btn && _tabHandler) {
       const tab = btn.getAttribute('data-tab') as TabId;
-      if (tab) _tabHandler(tab);
+      if (tab) {
+        if (tab !== 'record') {
+          import('./guided-overlay').then(({ unmountGuidedOverlay }) => unmountGuidedOverlay());
+        }
+        _tabHandler(tab);
+      }
     }
   });
 }

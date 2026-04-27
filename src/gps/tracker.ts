@@ -6,6 +6,23 @@ import { haversineDistance, calculatePace, rollingPace, filterJitter } from './g
 
 export type TrackerUpdateCallback = (data: GpsLiveData) => void;
 export type SplitCompleteCallback = (split: GpsSplit, allDone: boolean) => void;
+export type AutoPauseCallback = () => void;
+
+/** Speed below which the runner is considered stopped, m/s. */
+const AUTO_PAUSE_STOP_SPEED_MPS = 0.5;
+/** Continuous seconds below stop speed required to trigger auto-pause. */
+const AUTO_PAUSE_STOP_DURATION_S = 5;
+/** Speed above which the runner is considered moving again, m/s. */
+const AUTO_PAUSE_RESUME_SPEED_MPS = 1.5;
+/** Continuous seconds above resume speed required to auto-resume. */
+const AUTO_PAUSE_RESUME_DURATION_S = 3;
+/** Seconds of recent GPS samples kept for motion detection. */
+const MOTION_WINDOW_SEC = 10;
+
+export interface GpsTrackerOptions {
+  /** Enable speed-based auto-pause/auto-resume. Default true. */
+  autoPause?: boolean;
+}
 
 /**
  * Central GPS tracker: processes GPS points, accumulates distance,
@@ -29,11 +46,39 @@ export class GpsTracker {
   private completedSplits: GpsSplit[] = [];
   private listeners: TrackerUpdateCallback[] = [];
   private splitListeners: SplitCompleteCallback[] = [];
+  private autoPauseListeners: AutoPauseCallback[] = [];
+  private autoResumeListeners: AutoPauseCallback[] = [];
   private lastAccuracy: number | null = null; // track accuracy during acquisition
+  private autoPauseEnabled = true;
+  private autoPausedFlag = false;            // true if current pause was triggered by auto-pause
+  private motionBuffer: GpsPoint[] = [];     // recent points for speed estimation
 
-  constructor(provider: GpsProvider, splitScheme?: SplitScheme) {
+  constructor(provider: GpsProvider, splitScheme?: SplitScheme, options?: GpsTrackerOptions) {
     this.provider = provider;
     this.splitScheme = splitScheme ?? null;
+    this.autoPauseEnabled = options?.autoPause ?? true;
+  }
+
+  /** Enable or disable auto-pause at runtime. */
+  setAutoPauseEnabled(enabled: boolean): void {
+    this.autoPauseEnabled = enabled;
+    if (!enabled) {
+      // If currently auto-paused, resume immediately so user isn't stuck.
+      if (this.status === 'paused' && this.autoPausedFlag) {
+        this.autoPausedFlag = false;
+        this.resume();
+      }
+    }
+  }
+
+  /** Register a listener for auto-pause events. */
+  onAutoPause(cb: AutoPauseCallback): void {
+    this.autoPauseListeners.push(cb);
+  }
+
+  /** Register a listener for auto-resume events. */
+  onAutoResume(cb: AutoPauseCallback): void {
+    this.autoResumeListeners.push(cb);
   }
 
   /** Register a listener for live data updates */
@@ -103,6 +148,8 @@ export class GpsTracker {
     if (this.status !== 'tracking' && this.status !== 'acquiring') return;
     this.status = 'paused';
     this.pauseStart = Date.now();
+    // Manual pause clears the auto flag so manual resume is required.
+    this.autoPausedFlag = false;
     this.notify();
   }
 
@@ -114,7 +161,13 @@ export class GpsTracker {
     this.segmentPauseMs += pauseDuration;
     this.pauseStart = 0;
     this.status = 'tracking';
+    this.autoPausedFlag = false;
     this.notify();
+  }
+
+  /** Returns true if the tracker is currently in an auto-paused state. */
+  isAutoPaused(): boolean {
+    return this.status === 'paused' && this.autoPausedFlag;
   }
 
   /** Stop tracking completely */
@@ -129,6 +182,57 @@ export class GpsTracker {
     this.provider.stopWatching();
     this.status = 'stopped';
     this.notify();
+  }
+
+  /**
+   * Close the current segment and advance to the next one, using whatever
+   * distance/time has been accumulated so far. Mirrors the body of
+   * `checkSplitBoundary` so the tracker's split state stays authoritative.
+   * Called by the guided runs controller when the user taps "Skip rest"
+   * (or any step-skip UI) so the tracker doesn't keep counting the
+   * abandoned segment.
+   */
+  skipSegment(): void {
+    if (!this.splitScheme) return;
+    const segments = this.splitScheme.segments;
+    if (this.currentSegmentIdx >= segments.length) return;
+
+    const segment = segments[this.currentSegmentIdx];
+    const lastPoint = this.points.length > 0 ? this.points[this.points.length - 1] : null;
+    const now = lastPoint ? lastPoint.timestamp : Date.now();
+    const segmentElapsed = Math.max(0, (now - this.segmentStartMs - this.segmentPauseMs) / 1000);
+
+    const split: GpsSplit = {
+      index: this.completedSplits.length,
+      label: segment.label,
+      distance: this.segmentDistance,
+      elapsed: segmentElapsed,
+      pace: calculatePace(this.segmentDistance, segmentElapsed),
+      targetPace: segment.targetPace,
+    };
+    this.completedSplits.push(split);
+    this.segmentDistance = 0;
+    this.currentSegmentIdx++;
+    this.segmentStartMs = lastPoint ? lastPoint.timestamp : Date.now();
+    this.segmentPauseMs = 0;
+
+    const allDone = this.currentSegmentIdx >= segments.length;
+    for (const cb of this.splitListeners) cb(split, allDone);
+    this.notify();
+  }
+
+  /**
+   * Extend the current segment's target by `sec` seconds (time-based segments only).
+   * Returns the new total duration, or null if the current segment is distance-based
+   * or there is no active scheme. Mutates the scheme in place — the scheme is a
+   * per-run copy passed to the constructor, so this does not leak to the plan.
+   */
+  extendSegment(sec: number): number | null {
+    if (!this.splitScheme) return null;
+    const segment = this.splitScheme.segments[this.currentSegmentIdx];
+    if (!segment || segment.durationSeconds == null) return null;
+    segment.durationSeconds += sec;
+    return segment.durationSeconds;
   }
 
   /** Elapsed tracking time in seconds (excludes pause time) */
@@ -161,6 +265,16 @@ export class GpsTracker {
       return;
     }
 
+    // Track motion for auto-pause detection in both tracking and auto-paused states
+    // (so we can also detect resume while auto-paused).
+    if (this.autoPauseEnabled &&
+        (this.status === 'tracking' || (this.status === 'paused' && this.autoPausedFlag))) {
+      this.motionBuffer.push(point);
+      const cutoff = point.timestamp - MOTION_WINDOW_SEC * 1000;
+      this.motionBuffer = this.motionBuffer.filter((p) => p.timestamp >= cutoff);
+      this.evaluateAutoPause(point.timestamp);
+    }
+
     if (this.status !== 'tracking') return;
 
     const prev = this.points.length > 0 ? this.points[this.points.length - 1] : null;
@@ -188,9 +302,81 @@ export class GpsTracker {
    * auto-advance even without incoming GPS points.
    */
   public tick(): void {
+    // Tick fires every second. Evaluate auto-pause even when no GPS point has
+    // arrived recently (e.g. indoors with a weak signal — a stationary user
+    // still needs to be detected as stopped).
+    if (this.autoPauseEnabled &&
+        (this.status === 'tracking' || (this.status === 'paused' && this.autoPausedFlag))) {
+      this.evaluateAutoPause(Date.now());
+    }
     if (this.status !== 'tracking') return;
     this.checkSplitBoundary();
     this.notify();
+  }
+
+  /**
+   * Speed-based auto-pause detector.
+   * - In tracking: if mean speed over last STOP_DURATION seconds stays below
+   *   STOP_SPEED, auto-pause and mark the pause as auto.
+   * - In auto-paused: if mean speed over last RESUME_DURATION seconds stays
+   *   above RESUME_SPEED, auto-resume.
+   * Uses distance over the sample window as the speed signal.
+   */
+  private evaluateAutoPause(nowMs: number): void {
+    const distOver = (windowSec: number): number => {
+      const cutoff = nowMs - windowSec * 1000;
+      const window = this.motionBuffer.filter((p) => p.timestamp >= cutoff);
+      if (window.length < 2) return 0;
+      let dist = 0;
+      for (let i = 1; i < window.length; i++) {
+        dist += haversineDistance(
+          window[i - 1].lat, window[i - 1].lng,
+          window[i].lat, window[i].lng,
+        );
+      }
+      return dist;
+    };
+
+    // Require the motion buffer to actually span the evaluation window,
+    // otherwise we don't have enough data to judge.
+    const bufferSpan = (): number => {
+      if (this.motionBuffer.length < 2) return 0;
+      return (nowMs - this.motionBuffer[0].timestamp) / 1000;
+    };
+
+    if (this.status === 'tracking') {
+      if (bufferSpan() < AUTO_PAUSE_STOP_DURATION_S) return;
+      const dist = distOver(AUTO_PAUSE_STOP_DURATION_S);
+      const meanSpeed = dist / AUTO_PAUSE_STOP_DURATION_S;
+      if (meanSpeed < AUTO_PAUSE_STOP_SPEED_MPS) this.triggerAutoPause();
+      return;
+    }
+
+    if (this.status === 'paused' && this.autoPausedFlag) {
+      if (bufferSpan() < AUTO_PAUSE_RESUME_DURATION_S) return;
+      const dist = distOver(AUTO_PAUSE_RESUME_DURATION_S);
+      const meanSpeed = dist / AUTO_PAUSE_RESUME_DURATION_S;
+      if (meanSpeed > AUTO_PAUSE_RESUME_SPEED_MPS) this.triggerAutoResume();
+    }
+  }
+
+  private triggerAutoPause(): void {
+    this.status = 'paused';
+    this.pauseStart = Date.now();
+    this.autoPausedFlag = true;
+    this.notify();
+    for (const cb of this.autoPauseListeners) cb();
+  }
+
+  private triggerAutoResume(): void {
+    const pauseDuration = Date.now() - this.pauseStart;
+    this.totalPauseMs += pauseDuration;
+    this.segmentPauseMs += pauseDuration;
+    this.pauseStart = 0;
+    this.status = 'tracking';
+    this.autoPausedFlag = false;
+    this.notify();
+    for (const cb of this.autoResumeListeners) cb();
   }
 
   /** Check if we've crossed a segment boundary */

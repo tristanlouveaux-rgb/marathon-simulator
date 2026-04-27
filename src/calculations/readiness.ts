@@ -22,6 +22,8 @@
  *   Strain 50–100%       → floor slides linearly 100→59 (session in progress)
  *   Strain 100–130%      → score ≤ 59 (Manage Load — daily target hit)
  *   Strain > 130%        → score ≤ 39 (Ease Back — well exceeded target)
+ *   Leg load >= 20       → score ≤ 54 (Manage Load — moderate eccentric/impact damage)
+ *   Leg load >= 60       → score ≤ 34 (Ease Back — heavy EIMD, 72-96h recovery window)
  *
  * Internal names (ATL/CTL/TSB/ACWR) must NEVER appear in user-facing copy.
  * User-facing names: Freshness, Load Safety, Momentum, Recovery.
@@ -43,58 +45,111 @@ function stddev(values: number[]): number {
 /**
  * Base half-life for leg fatigue decay: 48 hours.
  *
- * Up from 36h based on EIMD research (Clarkson & Hubal 2002): functional recovery
- * from eccentric loading takes 72-96h. 48h is conservative but more realistic than
- * 36h for high-eccentric activities (hiking, skiing, strength).
- *
- * Sport-specific: scaled by recoveryMult from SPORTS_DB (hiking 0.95x = 46h, rugby 1.30x = 62h).
- * Re-loading penalty: exercising on fatigued legs slows clearance by 1.3x per subsequent session.
+ * Basis: Clarkson & Hubal 2002 — functional force-absorption recovery from
+ * eccentric loading takes 72-168h. 48h half-life → ~95% clearance in 4 half-lives
+ * (~8 days), which envelopes that range. Sport-specific: scaled by recoveryMult
+ * from SPORTS_DB (hiking 0.95x ≈ 46h, rugby 1.30x ≈ 62h).
  */
 const LEG_LOAD_BASE_HALFLIFE_H = 48;
 
-/** Thresholds for leg load note generation (decayed sum). */
-const LEG_LOAD_MODERATE = 20;
-const LEG_LOAD_HEAVY = 60;
+/**
+ * Thresholds for leg load callout + readiness floor (decayed sum).
+ *
+ * NOTE: these are PRAGMATIC PRODUCT BANDS, not calibrated against tissue metrics
+ * (CK, MVC decrement, soreness VAS). Expressed in units of sport-weighted minutes
+ * (see SPORTS_DB.legLoadPerMin × duration). Defensible as reasonable cut-offs for
+ * "mild deficit" / "functional deficit", not as derived constants.
+ */
+export const LEG_LOAD_MODERATE = 20;
+export const LEG_LOAD_HEAVY = 60;
 
-/** Re-loading penalty: each subsequent session within 72h slows decay by this factor. */
-const LEG_RELOAD_PENALTY = 1.3;
-const LEG_RELOAD_WINDOW_H = 72;
+/**
+ * Repeated Bout Effect (RBE) — McHugh 2003; Nosaka & Clarkson 1995; Nosaka & Aoki 2011.
+ *
+ * A prior bout of the same (or biomechanically similar) eccentric stimulus within
+ * ~2 weeks confers protection: the second bout produces 40-60% less damage (CK
+ * rise, MVC decrement, DOMS) than the first. Protection fades over 2-6 weeks.
+ *
+ * We apply this as an entry-time DISCOUNT on the raw load contribution, not a
+ * clearance penalty. Same sport within RBE_WINDOW_H gets RBE_DISCOUNT applied
+ * (conservative end of the 0.4-0.6 attenuation range). First-in-window bout is
+ * unprotected (full load). Protection is stimulus-specific, so we key on sport
+ * identity — hiking does not protect against skiing.
+ *
+ * Replaces the previous 1.3× reload-clearance penalty (2026-04-17), which was
+ * scientifically backwards: that treated repeated same-sport bouts as slowing
+ * recovery, when RBE says the opposite.
+ */
+const RBE_DISCOUNT = 0.6;
+const RBE_WINDOW_H = 14 * 24;
 
-function computeDecayedLegLoad(
+export interface LegLoadEntryDecayed {
+  sport: string;
+  sportLabel: string;
+  timestampMs: number;
+  rawLoad: number;
+  decayedLoad: number;
+  halfLifeH: number;
+  /** True if the raw load was discounted at entry-time by RBE (same-sport prior bout within 14d). */
+  rbeProtected: boolean;
+}
+
+/**
+ * Apply the Repeated Bout Effect discount to a new leg-load entry. Returns the
+ * effective raw load that should be stored. If a prior entry of the same sport
+ * exists within RBE_WINDOW_H of the given timestamp, the load is multiplied by
+ * RBE_DISCOUNT. First bout in the window is unprotected.
+ *
+ * Call this at the write site (recordLegLoad, reclassify, reconcile) so the
+ * discount is baked into the stored value and persists even after the protective
+ * prior bout ages out of the 7-day cache.
+ */
+export function applyRbeDiscount(
+  sport: string,
+  timestampMs: number,
+  rawLoad: number,
+  priorEntries: Array<{ sport: string; timestampMs: number }>,
+): { load: number; protected: boolean } {
+  for (const p of priorEntries) {
+    if (p.sport !== sport) continue;
+    const gapH = (timestampMs - p.timestampMs) / 3_600_000;
+    if (gapH > 0 && gapH <= RBE_WINDOW_H) {
+      return { load: rawLoad * RBE_DISCOUNT, protected: true };
+    }
+  }
+  return { load: rawLoad, protected: false };
+}
+
+export interface LegLoadBreakdown {
+  total: number;
+  topEntry: { sportLabel: string; timestampMs: number } | null;
+  entries: LegLoadEntryDecayed[];
+}
+
+export function computeLegLoadBreakdown(
   entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>,
   nowMs: number,
-): { total: number; topEntry: { sportLabel: string; timestampMs: number } | null } {
+): LegLoadBreakdown {
   const sevenDaysMs = 7 * 24 * 3_600_000;
   const recent = entries
     .filter(e => nowMs - e.timestampMs < sevenDaysMs)
-    .sort((a, b) => a.timestampMs - b.timestampMs); // oldest first for reload counting
-  if (recent.length === 0) return { total: 0, topEntry: null };
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+  if (recent.length === 0) return { total: 0, topEntry: null, entries: [] };
 
-  // Count how many sessions loaded the legs within 72h of each entry (for reload penalty).
-  // More subsequent sessions = slower decay for earlier entries.
   let total = 0;
   let topDecayed = 0;
   let topEntry: { sportLabel: string; timestampMs: number } | null = null;
+  const out: LegLoadEntryDecayed[] = [];
 
   for (let i = 0; i < recent.length; i++) {
     const e = recent[i];
     const hoursAgo = (nowMs - e.timestampMs) / 3_600_000;
-
-    // Sport-specific half-life via recoveryMult (higher = slower recovery = longer half-life)
     const sportConfig = SPORTS_DB[e.sport as keyof typeof SPORTS_DB];
     const recovMult = sportConfig?.recoveryMult ?? 1.0;
-    let halfLife = LEG_LOAD_BASE_HALFLIFE_H * recovMult;
+    const halfLife = LEG_LOAD_BASE_HALFLIFE_H * recovMult;
 
-    // Re-loading penalty: count sessions that came AFTER this one within 72h.
-    // Exercising on sore legs delays recovery (each subsequent session extends half-life by 1.3x).
-    let reloads = 0;
-    for (let j = i + 1; j < recent.length; j++) {
-      const gap = (recent[j].timestampMs - e.timestampMs) / 3_600_000;
-      if (gap > LEG_RELOAD_WINDOW_H) break;
-      reloads++;
-    }
-    if (reloads > 0) halfLife *= Math.pow(LEG_RELOAD_PENALTY, Math.min(reloads, 3)); // cap at 3 reloads
-
+    // RBE-protected entries are discounted at write-time; `e.load` is already the
+    // effective load. `rbeProtected` lives on the stored entry (see SimulatorState).
     const k = Math.LN2 / halfLife;
     const decayed = e.load * Math.exp(-k * hoursAgo);
     total += decayed;
@@ -102,9 +157,26 @@ function computeDecayedLegLoad(
       topDecayed = decayed;
       topEntry = { sportLabel: e.sportLabel, timestampMs: e.timestampMs };
     }
+    out.push({
+      sport: e.sport,
+      sportLabel: e.sportLabel,
+      timestampMs: e.timestampMs,
+      rawLoad: e.load,
+      decayedLoad: decayed,
+      halfLifeH: halfLife,
+      rbeProtected: (e as { rbeProtected?: boolean }).rbeProtected === true,
+    });
   }
 
-  return { total, topEntry };
+  return { total, topEntry, entries: out };
+}
+
+function computeDecayedLegLoad(
+  entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>,
+  nowMs: number,
+): { total: number; topEntry: { sportLabel: string; timestampMs: number } | null } {
+  const b = computeLegLoadBreakdown(entries, nowMs);
+  return { total: b.total, topEntry: b.topEntry };
 }
 
 function legLoadTimeframe(timestampMs: number, nowMs: number): string {
@@ -118,7 +190,7 @@ function legLoadTimeframe(timestampMs: number, nowMs: number): string {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type ReadinessLabel = 'Primed' | 'On Track' | 'Manage Load' | 'Ease Back' | 'Overreaching';
-export type DrivingSignal = 'fitness' | 'safety' | 'recovery';
+export type DrivingSignal = 'fitness' | 'safety' | 'recovery' | 'legLoad';
 
 export interface ReadinessInput {
   /** TSB = CTL − ATL. Negative = fatigued, positive = fresh. */
@@ -196,8 +268,15 @@ export interface ReadinessResult {
   hasRecovery: boolean;
   /** Explanatory note for the Load Ratio pill when leg fatigue is elevated. Null when load is negligible. */
   legLoadNote: string | null;
+  /** Decayed leg load sum (0+). 0 = fresh. >= LEG_LOAD_MODERATE caps readiness; >= LEG_LOAD_HEAVY hard caps. */
+  legLoadTotal: number;
   /** Which hard floor (if any) is actively capping the readiness score. Null when no floor is binding. */
-  hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | null;
+  hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | null;
+  /**
+   * How many consecutive days the active sleep-related floor has been suppressing the score.
+   * Only set for sleep/sleepBank floors with ≥ 2 days. Null otherwise.
+   */
+  suppressStreak: number | null;
 }
 
 // ─── Decision matrix sentences ────────────────────────────────────────────────
@@ -266,7 +345,9 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
       recoveryScore: null,
       hasRecovery: false,
       legLoadNote,
+      legLoadTotal,
       hardFloor: null,
+      suppressStreak: null,
     };
   }
 
@@ -349,11 +430,50 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     score = fitnessScore * 0.55 + safetyScore * 0.45;
   }
 
+  // ── Sleep cap — decays with bad nights, recovers symmetrically ────────────
+  // Walk up to 14 nights of history (oldest → newest), then apply today.
+  // Bad night (score < threshold): cap -= STEP, floored at MIN.
+  // Good night (score >= threshold): cap += STEP, ceilinged at MAX.
+  // Today is applied separately (sleepScore input covers both Garmin + manual).
+  // History is excluded for today's date to avoid double-counting.
+  const SLEEP_CAP_THRESHOLD = 65;   // below this = bad night
+  const SLEEP_CAP_MAX = 54;         // starting cap (no recent bad sleep)
+  const SLEEP_CAP_MIN = 34;         // floor — Ease Back boundary after ~11 bad nights
+  const SLEEP_CAP_STEP = 2;         // pts per night, same rate both directions (symmetric)
+
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const historyExclToday = [...(sleepHistory ?? [])]
+    .filter(e => e.date != null && e.date !== todayIso && e.sleepScore != null)
+    .sort((a, b) => (a.date ?? '').localeCompare(b.date ?? ''))
+    .slice(-14);
+
+  let effectiveSleepCap = SLEEP_CAP_MAX;
+  for (const entry of historyExclToday) {
+    effectiveSleepCap = (entry.sleepScore ?? 100) < SLEEP_CAP_THRESHOLD
+      ? Math.max(SLEEP_CAP_MIN, effectiveSleepCap - SLEEP_CAP_STEP)
+      : Math.min(SLEEP_CAP_MAX, effectiveSleepCap + SLEEP_CAP_STEP);
+  }
+  if (sleepScore != null) {
+    effectiveSleepCap = sleepScore < SLEEP_CAP_THRESHOLD
+      ? Math.max(SLEEP_CAP_MIN, effectiveSleepCap - SLEEP_CAP_STEP)
+      : Math.min(SLEEP_CAP_MAX, effectiveSleepCap + SLEEP_CAP_STEP);
+  }
+
+  // Streak for annotation — consecutive bad nights ending today (desc walk).
+  let sleepStreak = (sleepScore != null && sleepScore < SLEEP_CAP_THRESHOLD) ? 1 : 0;
+  if (sleepStreak > 0) {
+    const sortedDesc = [...historyExclToday].reverse();
+    for (const entry of sortedDesc) {
+      if ((entry.sleepScore ?? 100) < SLEEP_CAP_THRESHOLD) sleepStreak++;
+      else break;
+    }
+  }
+
   // ── Safety floor ───────────────────────────────────────────────────────────
   // A good sleep doesn't make a load spike safe. ACWR is a hard constraint.
   // Track which hard floor is the most restrictive (lowest cap wins).
   // Thresholds are tier-aware: safeUpper from TIER_ACWR_CONFIG, caution = safeUpper + 0.2.
-  let hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | null = null;
+  let hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | null = null;
 
   // ── Hard floors — recalibrated for non-linear sub-scores ─────────────────
   // Label boundaries: Primed >= 75, On Track >= 55, Manage Load >= 35, Ease Back < 35.
@@ -368,10 +488,11 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     hardFloor = 'acwr';
   }
 
-  // Sleep floor — acute bad night caps readiness regardless of other signals.
+  // Sleep floor — severe bad night (< 45) caps at effectiveSleepCap (decays/recovers over time).
+  // Moderate bad night (45–60) keeps fixed 74 cap — decay only applies to the severe tier.
   if (sleepScore != null) {
-    if (sleepScore < 45 && score > 54)      { score = Math.min(score, 54); hardFloor = 'sleep'; }
-    else if (sleepScore < 60 && score > 74) { score = Math.min(score, 74); hardFloor = 'sleep'; }
+    if (sleepScore < 45 && score > effectiveSleepCap) { score = Math.min(score, effectiveSleepCap); hardFloor = 'sleep'; }
+    else if (sleepScore < 60 && score > 74)           { score = Math.min(score, 74); hardFloor = 'sleep'; }
   }
 
   // HRV floor — a large acute drop signals autonomic stress that overrides other signals.
@@ -381,10 +502,11 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     else if (hrvDropFraction > 0.20 && score > 74) { score = Math.min(score, 74); hardFloor = 'hrv'; }
   }
 
-  // Sleep bank floor — 7-night rolling deficit caps readiness.
+  // Sleep bank floor — fixed 54 cap (independent of consecutive-night decay).
+  // sleepBank is accumulated debt, not a streak signal — keep them separate.
   if (sleepBankSec != null && sleepBankSec < 0) {
-    if (sleepBankSec < -9000 && score > 54)      { score = Math.min(score, 54); hardFloor = 'sleepBank'; }
-    else if (sleepBankSec < -5400 && score > 74) { score = Math.min(score, 74); hardFloor = 'sleepBank'; }
+    if (sleepBankSec < -9000 && score > SLEEP_CAP_MAX) { score = Math.min(score, SLEEP_CAP_MAX); hardFloor = 'sleepBank'; }
+    else if (sleepBankSec < -5400 && score > 74)        { score = Math.min(score, 74); hardFloor = 'sleepBank'; }
   }
 
   // Recovery floor — sliding scale so low recovery caps readiness even when fitness/safety are maxed.
@@ -411,6 +533,25 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     }
   }
 
+  // Leg load floor — localised muscle/impact damage from cross-training caps readiness.
+  // Heavy (>=60): 72-96h functional deficit window (Clarkson & Hubal 2002; Paulsen 2012).
+  // Force absorption is impaired, gait alters, impact tissues take more load. Cap at Ease Back.
+  // Moderate (>=20): mild deficit, training through is fine but not at full intensity. Cap at Manage Load.
+  // Soft taper (10-20): linear onset so crossing 20 isn't a cliff. No hardFloor (no callout).
+  // Precedence: each branch checks `score > cap` so a stricter prior floor (ACWR, sleep) is
+  // never overwritten — legLoad only wins when it is the strictest constraint.
+  if (legLoadTotal >= LEG_LOAD_HEAVY && score > 34) {
+    score = 34;
+    hardFloor = 'legLoad';
+  } else if (legLoadTotal >= LEG_LOAD_MODERATE && score > 54) {
+    score = 54;
+    hardFloor = 'legLoad';
+  } else if (legLoadTotal >= 10 && legLoadTotal < LEG_LOAD_MODERATE) {
+    // Soft penalty: 10 → cap 100, 20 → cap 54. Linear interpolation.
+    const softCap = Math.round(100 - (legLoadTotal - 10) * 4.6);
+    if (softCap < score) score = softCap;
+  }
+
   score = Math.round(score);
 
   // ── Label ──────────────────────────────────────────────────────────────────
@@ -433,7 +574,9 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     signals.push({ key: 'recovery', score: recoveryScore });
   }
   signals.sort((a, b) => a.score - b.score);
-  const drivingSignal = signals[0].key;
+  // When leg fatigue is the active hard floor, it is the driving signal — the cap
+  // the user needs to address, even if another sub-score happens to be lower.
+  const drivingSignal: DrivingSignal = hardFloor === 'legLoad' ? 'legLoad' : signals[0].key;
 
   // ── Decision matrix sentence ───────────────────────────────────────────────
 
@@ -450,7 +593,11 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
 
   const sentence = SENTENCES[tsbZone][acwrZone];
 
-  return { score, label, sentence, drivingSignal, fitnessScore, safetyScore, recoveryScore, hasRecovery, legLoadNote, hardFloor };
+  const suppressStreak = (hardFloor === 'sleep' || hardFloor === 'sleepBank') && sleepStreak >= 2
+    ? sleepStreak
+    : null;
+
+  return { score, label, sentence, drivingSignal, fitnessScore, safetyScore, recoveryScore, hasRecovery, legLoadNote, legLoadTotal, hardFloor, suppressStreak };
 }
 
 // ─── Presentation helpers ─────────────────────────────────────────────────────
@@ -458,7 +605,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
 /** CSS colour variable for a readiness label. */
 export function readinessColor(label: ReadinessLabel): string {
   if (label === 'Primed')        return 'var(--c-ok)';
-  if (label === 'On Track')      return 'var(--c-ok-muted)';
+  if (label === 'On Track')      return 'var(--c-info)';
   if (label === 'Manage Load')   return 'var(--c-caution)';
   return 'var(--c-warn)';
 }
@@ -467,6 +614,7 @@ export function readinessColor(label: ReadinessLabel): string {
 export function drivingSignalLabel(signal: DrivingSignal): string {
   if (signal === 'fitness')  return 'Freshness is low';
   if (signal === 'safety')   return 'Load spike';
+  if (signal === 'legLoad')  return 'Leg fatigue';
   return 'Poor recovery';
 }
 

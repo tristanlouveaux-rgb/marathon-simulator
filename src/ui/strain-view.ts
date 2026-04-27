@@ -8,6 +8,7 @@ import { getState } from '@/state';
 import type { SimulatorState, GarminActual, Week } from '@/types/state';
 import {
   computeTodaySignalBTSS,
+  computeTodayStrainTSS,
   computePlannedDaySignalBTSS,
   getTrailingEffortScore,
   estimateWorkoutDurMin,
@@ -15,6 +16,7 @@ import {
   computePassiveTSS,
   PASSIVE_TSS_PER_ACTIVE_MIN,
   REST_DAY_OVERREACH_RATIO,
+  getNormalizerFromState,
   type TargetTSSRange,
 } from '@/calculations/fitness-model';
 import type { ReadinessLabel } from '@/calculations/readiness';
@@ -148,7 +150,7 @@ function getDayData(date: string, s: SimulatorState): DayData {
     const wk = wks[weekIdxForDate(date, s.planStartDate)];
     if (wk) signalBTSS = computeTodaySignalBTSS(wk, date);
   } else {
-    signalBTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / 15000 : sum, 0);
+    signalBTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / getNormalizerFromState(s) : sum, 0);
   }
 
   return { date, durationMin, calories, signalBTSS, activities: acts };
@@ -184,18 +186,19 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
   const wkIdx = resolveWkIdx(date, s);
   const wkForPlan = wks[wkIdx];
 
-  // ── Actual Signal B TSS (logged activities) ────────────────────────────
-  let loggedTSS = 0;
+  // ── Actual Signal B TSS (logged activities + passive excess) ──────────
+  // Uses computeTodayStrainTSS — single source of truth shared with Home + Readiness.
   const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
+  let actualTSS = 0;
   if (s.planStartDate) {
     const wk = wks[wkIdx];
-    if (wk) loggedTSS = computeTodaySignalBTSS(wk, date, physioEntry);
+    if (wk) actualTSS = computeTodayStrainTSS(wk, date, physioEntry, s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN);
   } else {
     const acts = activitiesForDate(date, wks);
-    loggedTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / 15000 : sum, 0);
+    actualTSS = acts.reduce((sum, a) => a.iTrimp != null ? sum + (a.iTrimp * 100) / getNormalizerFromState(s) : sum, 0);
   }
 
-  // ── Passive TSS (steps + unlogged active minutes) ──────────────────────
+  // Passive excess for the "X passive TSS from background activity" caption.
   const loggedActivities = activitiesForDate(date, wks).map(a => ({
     durationSec: a.durationSec,
     activityType: a.activityType,
@@ -206,19 +209,16 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
     loggedActivities,
     s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN,
   );
-  // COUPLING: computeTodaySignalBTSS includes passive via activeMinutes internally.
-  // computePassiveTSS may add step-based TSS on top. Only add the excess.
-  // If computeTodaySignalBTSS ever changes to include passive TSS directly, update this.
-  const passiveExcess = Math.max(0, passiveTSS - (physioEntry?.activeMinutes != null
-    ? Math.max(0, (physioEntry.activeMinutes - loggedActivities.reduce((s2, a) => s2 + a.durationSec / 60, 0))) * (s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN)
-    : 0));
-  const actualTSS = loggedTSS + Math.round(passiveExcess);
+  const minuteComponent = physioEntry?.activeMinutes != null
+    ? Math.max(0, physioEntry.activeMinutes - loggedActivities.reduce((s2, a) => s2 + a.durationSec / 60, 0)) * (s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN)
+    : 0;
+  const passiveExcess = Math.max(0, passiveTSS - minuteComponent);
 
   // ── Planned day TSS ────────────────────────────────────────────────────
   const dayOfWeek = (new Date(date + 'T12:00:00').getDay() + 6) % 7;
   let plannedDayTSS = 0;
   let plannedWorkouts: any[] = [];
-  if (wkForPlan) {
+  if (wkForPlan && !s.trackOnly) {
     const viewWeek = wkIdx + 1;
     plannedWorkouts = generateWeekWorkouts(
       wkForPlan.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
@@ -340,10 +340,20 @@ function coachingText(
   weekKm: number,
   isRestDay: boolean,
   isOverreaching: boolean,
+  trackOnly = false,
 ): string {
   const actual = Math.round(actualTSS);
   const target = Math.round(targetTSS);
   const kmNote = weekKm > 0.5 ? ` ${weekKm.toFixed(1)} km logged this week.` : '';
+
+  // Track-only mode: no plan-target language. Describe actuals only.
+  if (trackOnly) {
+    if (actual === 0) {
+      return isToday ? 'No activity logged yet today.' : 'No activity logged on this day.';
+    }
+    if (isOverreaching) return `${actual} TSS logged. A high load — consider keeping tomorrow easier.${kmNote}`;
+    return `${actual} TSS logged.${kmNote}`;
+  }
 
   // Rest day — two states only: good or overreaching
   if (isRestDay) {
@@ -422,7 +432,8 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
       })();
 
   const viewWeek = wkIdx + 1;
-  const plannedWorkouts = generateWeekWorkouts(
+  // Skip planned-workout generation for Just-Track users — no plan exists.
+  const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
     viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wk.scheduledAcwrStatus,
@@ -451,13 +462,15 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
   // Exclude cross-training from planned bars (consistent with strain target logic)
   const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
   const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const tssPerActiveMin = s.tssPerActiveMinute ?? PASSIVE_TSS_PER_ACTIVE_MIN;
   return dayLabels.map((label, i) => {
     const d = new Date(weekStartDate);
     d.setDate(weekStartDate.getDate() + i);
     const date = d.toISOString().split('T')[0];
     const isFuture = date > today;
     const plannedTSS = computePlannedDaySignalBTSS(runWorkouts, i, s.pac?.e ? s.pac.e / 60 : 5.5);
-    const actualTSS = !isFuture ? computeTodaySignalBTSS(wk, date) : 0;
+    const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
+    const actualTSS = !isFuture ? computeTodayStrainTSS(wk, date, physioEntry, tssPerActiveMin) : 0;
     return { date, label, plannedTSS, actualTSS, isToday: date === today, isFuture };
   });
 }
@@ -519,14 +532,18 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
   const weekBarDays = getWeekBarDays(displayDate, s, today);
 
   // ── Ring: multi-colour segments — green → orange → red ─────────────
-  // ringMax = max(2 × target.hi, actual × 1.25) — ring never overflows
-  const ringMax = Math.max(target.hi * 2, actualTSS * 1.25, 1);
+  // ringMax anchors target.hi at ~91% of the ring so green dominates when
+  // inside target. The ×1.08 factor on actual keeps a consistent gap at
+  // the top (~7–8%) so the ring never fully closes — the start/end caps
+  // stay cleanly separated near 12 o'clock.
+  const ringMax = Math.max(target.hi * 1.1, actualTSS * 1.08, 1);
 
   // Status label
   let statusLabel = '';
   let statusColor = 'rgba(255,255,255,0.6)';
   if (isRestDay && isOverreaching) {
-    statusLabel = 'High for a rest day';
+    // Track-only never had a concept of "rest day" (no plan) — relabel accordingly.
+    statusLabel = s.trackOnly ? 'High load today' : 'High for a rest day';
     statusColor = '#FF6B6B';
   } else if (target.mid > 0 && actualTSS > target.hi) {
     statusLabel = 'Load exceeded';
@@ -553,45 +570,111 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
   const orangeArc = RING_CIRC * (orangePct / 100);
   const redArc = RING_CIRC * (redPct / 100);
 
-  // Conic-gradient stops (smooth blend between segments).
-  // Each stop is multiplied by --strain-arc (0→1) so the whole arc sweeps in on reveal.
-  // BLEND = half-width of each color-to-color transition, in degrees (wide for a long blend).
-  // FADE  = length of the soft transparent→colour fade at each end of the arc.
-  const BLEND = 18;
-  const FADE = 4;
   const toDeg = (arc: number) => (arc / RING_CIRC) * 360;
   const gEnd = toDeg(greenArc);
   const oEnd = toDeg(greenArc + orangeArc);
   const totalDeg = toDeg(greenArc + orangeArc + redArc);
-  const stop = (deg: number) => `calc(${deg.toFixed(3)} * var(--strain-arc) * 1deg)`;
-  const ringGradient = (() => {
-    const s: string[] = [];
-    if (totalDeg <= 0) return '';
-    // Soft fade-in from transparent at 0 → first colour at FADE deg.
-    s.push(`transparent 0deg`);
-    s.push(`#34C759 ${stop(FADE)}`);
-    if (orangeArc > 0) {
-      s.push(`#34C759 ${stop(Math.max(FADE, gEnd - BLEND))}`);
-      s.push(`#FF9500 ${stop(gEnd + BLEND)}`);
-      if (redArc > 0) {
-        s.push(`#FF9500 ${stop(Math.max(gEnd + BLEND, oEnd - BLEND))}`);
-        s.push(`#FF3B30 ${stop(oEnd + BLEND)}`);
-        s.push(`#FF3B30 ${stop(Math.max(oEnd + BLEND, totalDeg - FADE))}`);
-      } else {
-        s.push(`#FF9500 ${stop(Math.max(gEnd + BLEND, totalDeg - FADE))}`);
-      }
-    } else if (redArc > 0) {
-      s.push(`#34C759 ${stop(Math.max(FADE, gEnd - BLEND))}`);
-      s.push(`#FF3B30 ${stop(gEnd + BLEND)}`);
-      s.push(`#FF3B30 ${stop(Math.max(gEnd + BLEND, totalDeg - FADE))}`);
-    } else {
-      s.push(`#34C759 ${stop(Math.max(FADE, totalDeg - FADE))}`);
+  const endColor = redArc > 0 ? '#FF3B30' : orangeArc > 0 ? '#FF9500' : '#34C759';
+
+  // Build an SVG stroked-arc path from angle a0 to a1 (both CW degrees from 12 o'clock).
+  // Deterministic CW arc (sweep=1). Returns empty string for zero-length spans.
+  const arcPath = (a0: number, a1: number): string => {
+    if (a1 - a0 <= 0.01) return '';
+    const rad0 = (a0 * Math.PI) / 180;
+    const rad1 = (a1 * Math.PI) / 180;
+    const x0 = 50 + RING_R * Math.sin(rad0);
+    const y0 = 50 - RING_R * Math.cos(rad0);
+    const x1 = 50 + RING_R * Math.sin(rad1);
+    const y1 = 50 - RING_R * Math.cos(rad1);
+    const large = a1 - a0 > 180 ? 1 : 0;
+    return `M ${x0.toFixed(3)} ${y0.toFixed(3)} A ${RING_R} ${RING_R} 0 ${large} 1 ${x1.toFixed(3)} ${y1.toFixed(3)}`;
+  };
+
+  const pointOn = (angle: number, r: number): [number, number] => {
+    const rad = (angle * Math.PI) / 180;
+    return [50 + r * Math.sin(rad), 50 - r * Math.cos(rad)];
+  };
+
+  // Build segmented colour paths with blend zones at boundaries.
+  // BLEND = half-width of each colour-to-colour transition, in degrees.
+  const BLEND = 15;
+  const hasOrange = orangeArc > 0;
+  const hasRed = redArc > 0;
+  type RingSeg = { d: string; stroke: string };
+  const ringSegs: RingSeg[] = [];
+  const blendGrads: Array<{ id: string; x1: number; y1: number; x2: number; y2: number; c0: string; c1: string }> = [];
+
+  const gSolidEnd = hasOrange ? Math.max(0, gEnd - BLEND) : gEnd;
+  if (gSolidEnd > 0.1) ringSegs.push({ d: arcPath(0, gSolidEnd), stroke: '#34C759' });
+
+  if (hasOrange) {
+    const b0 = Math.max(0, gEnd - BLEND);
+    const b1 = Math.min(oEnd, gEnd + BLEND);
+    if (b1 - b0 > 0.1) {
+      const [x1, y1] = pointOn(b0, RING_R);
+      const [x2, y2] = pointOn(b1, RING_R);
+      blendGrads.push({ id: 'strBlendGO', x1, y1, x2, y2, c0: '#34C759', c1: '#FF9500' });
+      ringSegs.push({ d: arcPath(b0, b1), stroke: 'url(#strBlendGO)' });
     }
-    // Soft fade-out to transparent at totalDeg.
-    s.push(`transparent ${stop(totalDeg)}`);
-    s.push(`transparent 360deg`);
-    return `conic-gradient(from -90deg, ${s.join(', ')})`;
-  })();
+
+    const oStart = Math.min(oEnd, gEnd + BLEND);
+    const oSolidEnd = hasRed ? Math.max(oStart, oEnd - BLEND) : oEnd;
+    if (oSolidEnd - oStart > 0.1) ringSegs.push({ d: arcPath(oStart, oSolidEnd), stroke: '#FF9500' });
+  }
+
+  if (hasRed) {
+    const b0 = Math.max(hasOrange ? gEnd + BLEND : 0, oEnd - BLEND);
+    const b1 = Math.min(totalDeg, oEnd + BLEND);
+    if (b1 - b0 > 0.1) {
+      const [x1, y1] = pointOn(b0, RING_R);
+      const [x2, y2] = pointOn(b1, RING_R);
+      blendGrads.push({ id: 'strBlendOR', x1, y1, x2, y2, c0: '#FF9500', c1: '#FF3B30' });
+      ringSegs.push({ d: arcPath(b0, b1), stroke: 'url(#strBlendOR)' });
+    }
+
+    const rStart = Math.min(totalDeg, oEnd + BLEND);
+    if (totalDeg - rStart > 0.1) ringSegs.push({ d: arcPath(rStart, totalDeg), stroke: '#FF3B30' });
+  }
+
+  // Single reveal mask — one smooth CW draw for the whole ring.
+  const revealPathD = arcPath(0, totalDeg);
+  const revealLen = (totalDeg / 360) * RING_CIRC;
+
+  // Target zone tick marks (outside the ring) at target.lo and target.hi boundaries.
+  // Only shown when the boundary falls within the drawn arc.
+  const tickAngles: number[] = [];
+  if (hasTarget && ringMax > 0) {
+    const loDeg = (target.lo / ringMax) * 360;
+    const hiDeg = (target.hi / ringMax) * 360;
+    if (loDeg > 0.5 && loDeg < totalDeg - 0.5) tickAngles.push(loDeg);
+    if (hiDeg > 0.5 && hiDeg < totalDeg - 0.5) tickAngles.push(hiDeg);
+  }
+  const tickMarks = tickAngles.map(a => {
+    const [x1, y1] = pointOn(a, RING_R + 5);
+    const [x2, y2] = pointOn(a, RING_R + 9);
+    return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="rgba(0,0,0,0.35)" stroke-width="0.6" stroke-linecap="round"/>`;
+  }).join('');
+  // "Target" label positioned at midpoint of orange zone, just outside the ring.
+  let targetLabelSvg = '';
+  if (hasTarget && hasOrange && ringMax > 0) {
+    const midDeg = ((target.lo + target.hi) / 2 / ringMax) * 360;
+    const [lx, ly] = pointOn(midDeg, RING_R + 13);
+    targetLabelSvg = `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" font-size="5.2" font-weight="600" fill="rgba(0,0,0,0.55)" text-anchor="middle" dominant-baseline="middle" style="font-family:var(--f)">Target</text>`;
+  }
+
+  // Rounded caps as half-disks (flat side flush with stroke butt, curved side
+  // bulges INTO the arc only, never into the gap).
+  const CAP_R = 4;
+  const startCapPath = `M 50 8 A ${CAP_R} ${CAP_R} 0 0 1 50 0 Z`;
+  const thetaEnd = (totalDeg * Math.PI) / 180;
+  const sinE = Math.sin(thetaEnd);
+  const cosE = Math.cos(thetaEnd);
+  const endOuterX = 50 + (RING_R + CAP_R) * sinE;
+  const endOuterY = 50 - (RING_R + CAP_R) * cosE;
+  const endInnerX = 50 + (RING_R - CAP_R) * sinE;
+  const endInnerY = 50 - (RING_R - CAP_R) * cosE;
+  const endCapPath = `M ${endInnerX.toFixed(3)} ${endInnerY.toFixed(3)} A ${CAP_R} ${CAP_R} 0 0 0 ${endOuterX.toFixed(3)} ${endOuterY.toFixed(3)} Z`;
+  const startCapColor = '#34C759';
 
 
   // Target label: show range
@@ -640,7 +723,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
         const timeStr = a.startTime ? fmtTime(a.startTime) : '';
         const durStr  = fmtDurMin(a.durationSec);
         const calStr  = a.calories != null && a.calories > 0 ? `${a.calories} kcal` : '';
-        const tss     = a.iTrimp != null ? Math.round((a.iTrimp * 100) / 15000) : null;
+        const tss     = a.iTrimp != null ? Math.round((a.iTrimp * 100) / getNormalizerFromState(s)) : null;
         return `
           <div class="strain-act-row" data-garmin-id="${a.garminId}" style="
             display:flex;align-items:center;gap:12px;
@@ -678,21 +761,6 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
         from { opacity:0; transform:translateY(16px) scale(0.97); }
         to   { opacity:1; transform:translateY(0) scale(1); }
       }
-      /* Registered custom property — animating it drives the conic-gradient sweep
-         AND the end-cap rotation (inherits:true so descendants read the animated value). */
-      @property --strain-arc {
-        syntax: '<number>';
-        inherits: true;
-        initial-value: 0;
-      }
-      @keyframes strainArcSweep {
-        from { --strain-arc: 0; }
-        to   { --strain-arc: 1; }
-      }
-      @keyframes strainCapFade {
-        from { opacity: 0; }
-        to   { opacity: 1; }
-      }
       .s-fade { opacity:0; animation:strainFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .strain-act-row:active { transform:scale(0.98); }
       .strain-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
@@ -704,7 +772,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      ${buildSkyBackground('str', 'teal')}
+      ${buildSkyBackground('str', 'red')}
 
       <!-- ── Scrollable content ──────────────────────────────────────── -->
       <div style="position:relative;z-index:10;padding-bottom:48px">
@@ -756,41 +824,44 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
 
         <!-- Ring -->
         <div class="s-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;${ringGradient ? `animation:strainArcSweep 1.4s cubic-bezier(0.2,0.8,0.2,1) 0.15s both;` : ''}">
-            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
-              <!-- Track (inner fill + grey track stroke) -->
+          <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+            <!-- Grey track -->
+            <svg style="position:absolute;width:100%;height:100%" viewBox="0 0 100 100">
               <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
             </svg>
-            ${ringGradient ? `
-            <!-- Smoothly-blended colour ring via conic-gradient, masked to ring shape.
-                 Inherits --strain-arc from .strain-ring-wrap so its stops animate 0→1. -->
-            <div id="strain-ring-gradient" style="
-              position:absolute;inset:0;border-radius:50%;
-              background:${ringGradient};
-              -webkit-mask:radial-gradient(circle closest-side at 50% 50%,
-                transparent 0 80%, rgba(0,0,0,0.35) 82%, #000 85% 98.5%, rgba(0,0,0,0.35) 99.6%, transparent 100%);
-              mask:radial-gradient(circle closest-side at 50% 50%,
-                transparent 0 80%, rgba(0,0,0,0.35) 82%, #000 85% 98.5%, rgba(0,0,0,0.35) 99.6%, transparent 100%);
-            "></div>
-            <!-- Round cap at start (12 o'clock, always green since arc begins green) -->
-            <div class="strain-cap" style="
-              position:absolute;top:0;left:46%;width:8%;aspect-ratio:1;
-              border-radius:50%;background:#34C759;
-              box-shadow:0 1px 3px rgba(0,0,0,0.08);
-              animation:strainCapFade 0.4s ease-out 0.15s both;
-            "></div>
-            <!-- Round cap at arc end. Outer wrapper rotates with --strain-arc; cap at 12 o'clock inside. -->
-            <div class="strain-cap-rotator" style="
-              position:absolute;inset:0;pointer-events:none;
-              transform:rotate(calc(var(--strain-arc) * ${totalDeg.toFixed(2)}deg));
-            ">
-              <div class="strain-cap" style="
-                position:absolute;top:0;left:46%;width:8%;aspect-ratio:1;
-                border-radius:50%;background:${redArc > 0 ? '#FF3B30' : orangeArc > 0 ? '#FF9500' : '#34C759'};
-                box-shadow:0 1px 3px rgba(0,0,0,0.08);
-                animation:strainCapFade 0.4s ease-out 0.15s both;
-              "></div>
-            </div>` : ''}
+            ${totalDeg > 0 ? `
+            <!-- Colour ring: segmented CW stroked paths with linearGradient blend zones
+                 at colour boundaries. All segments revealed together by a single mask
+                 whose stroke-dashoffset animates from full→0 for a smooth CW fill. -->
+            <svg style="position:absolute;width:100%;height:100%;overflow:visible" viewBox="0 0 100 100">
+              <defs>
+                <mask id="strainReveal" maskUnits="userSpaceOnUse">
+                  <rect width="100" height="100" fill="black"/>
+                  <path d="${revealPathD}" fill="none" stroke="white" stroke-width="9" stroke-linecap="butt"
+                    stroke-dasharray="${revealLen.toFixed(3)} ${RING_CIRC.toFixed(3)}"
+                    stroke-dashoffset="${revealLen.toFixed(3)}"
+                    style="animation:strainArcDraw 0.7s cubic-bezier(0.2,0.8,0.2,1) 0.1s forwards"/>
+                </mask>
+                ${blendGrads.map(g => `<linearGradient id="${g.id}" gradientUnits="userSpaceOnUse" x1="${g.x1.toFixed(3)}" y1="${g.y1.toFixed(3)}" x2="${g.x2.toFixed(3)}" y2="${g.y2.toFixed(3)}"><stop offset="0%" stop-color="${g.c0}"/><stop offset="100%" stop-color="${g.c1}"/></linearGradient>`).join('')}
+              </defs>
+              <g mask="url(#strainReveal)">
+                ${ringSegs.map(s => `<path d="${s.d}" fill="none" stroke="${s.stroke}" stroke-width="8" stroke-linecap="butt"/>`).join('')}
+              </g>
+              <!-- Half-disk caps: flat side flush with stroke butt; curved side into arc. -->
+              <path d="${startCapPath}" fill="${startCapColor}"
+                style="opacity:0;animation:strainCapIn 0.35s ease-out 0.1s forwards"/>
+              <path d="${endCapPath}" fill="${endColor}"
+                style="opacity:0;animation:strainCapIn 0.35s ease-out 0.55s forwards"/>
+              <!-- Target zone markers -->
+              <g style="opacity:0;animation:strainCapIn 0.5s ease-out 0.4s forwards">
+                ${tickMarks}
+                ${targetLabelSvg}
+              </g>
+            </svg>
+            <style>
+              @keyframes strainArcDraw { to { stroke-dashoffset:0; } }
+              @keyframes strainCapIn { to { opacity:1; } }
+            </style>` : ''}
             <div style="
               position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
               background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
@@ -823,9 +894,12 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
                   <div style="font-size:28px;font-weight:300;color:${TEXT_M};line-height:1">${steps.toLocaleString()}</div>
                   ${passiveTSS > 0 ? `<div style="font-size:11px;color:${TEXT_L};margin-top:6px">${passiveTSS} passive TSS from background activity</div>` : ''}`;
               }
+              const emptyNote = isToday
+                ? "Garmin hasn't pushed today's data yet. Refresh the Garmin Connect app to sync."
+                : 'No step data for this day';
               return `
                 <div style="font-size:28px;font-weight:300;color:${TEXT_L};line-height:1">\u2014</div>
-                <div style="font-size:11px;color:${TEXT_L};margin-top:6px">No step data for this day</div>`;
+                <div style="font-size:11px;color:${TEXT_L};margin-top:6px">${emptyNote}</div>`;
             })()}
           </div>
         </div>
@@ -890,14 +964,17 @@ function showStrainInfoOverlay(): void {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+let strainOnBack: (() => void) | null = null;
+
 function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadinessLabel?: ReadinessLabel | null): void {
   // Ring reveal is handled by CSS (#strain-ring-gradient opacity animation).
 
   // Tab bar
   wireTabBarHandlers(navigateTab);
 
-  // Back → home
+  // Back → caller (defaults to home)
   document.getElementById('strain-back-btn')?.addEventListener('click', () => {
+    if (strainOnBack) { strainOnBack(); return; }
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   });
 
@@ -938,12 +1015,13 @@ function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadi
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-export function renderStrainView(date?: string, readinessLabel?: ReadinessLabel | null): void {
+export function renderStrainView(date?: string, readinessLabel?: ReadinessLabel | null, onBack?: () => void): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
   const today = new Date().toISOString().split('T')[0];
   const displayDate = date ?? today;
+  strainOnBack = onBack ?? strainOnBack;
   container.innerHTML = getStrainHTML(s, displayDate, readinessLabel);
   wireStrainHandlers(s, displayDate, readinessLabel);
 }

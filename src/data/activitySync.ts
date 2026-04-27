@@ -14,6 +14,7 @@ import {
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { showActivityReview, autoProcessActivities } from '@/ui/activity-review';
+import { reconcileRecentLegLoads } from '@/ui/sport-picker-modal';
 import type { GarminLap } from '@/types';
 import { mergeTimingMods } from '@/cross-training/timing-check';
 
@@ -46,6 +47,11 @@ export async function syncActivities(): Promise<void> {
 
     const result = matchAndAutoComplete(rows);
 
+    // Backfill leg-load entries for newly synced runs + cross-training. Idempotent
+    // (skips garminIds already in recentLegLoads). Required so freshly auto-matched
+    // runs contribute to Leg Fatigue without waiting for the leg-load view to open.
+    if (reconcileRecentLegLoads()) saveState();
+
     // Recompute timing downgrade mods after each sync
     const s2 = getMutableState();
     const wk2 = s2.wks?.[s2.w - 1];
@@ -54,6 +60,12 @@ export async function syncActivities(): Promise<void> {
     }
 
     if (result.changed) {
+      // New runs may unlock empirical LT detection — refresh derivation.
+      try {
+        const { recomputeLT } = await import('./ltSync');
+        recomputeLT(s2);
+        saveState();
+      } catch { /* non-fatal */ }
       render();
     }
 
@@ -153,18 +165,23 @@ export function processPendingCrossTraining(): void {
     return;
   }
 
+  const onReviewDone = () => {
+    _pendingModalActive = false;
+    render();
+    // Retry any auto-debrief that was deferred because activities were unassigned
+    // (see main.ts launch path + fireDebriefIfReady).
+    import('@/ui/welcome-back').then(({ isWeekPendingDebrief }) => {
+      import('@/ui/week-debrief').then(({ fireDebriefIfReady }) => {
+        fireDebriefIfReady(isWeekPendingDebrief());
+      });
+    });
+  };
   if (isBatchSync(unprocessed)) {
     // Backlog: show Activity Review so user can review each activity
-    showActivityReview(unprocessed, () => {
-      _pendingModalActive = false;
-      render();
-    });
+    showActivityReview(unprocessed, onReviewDone);
   } else {
     // Flowing week: auto-match to slots, show load modal only for overflow
-    autoProcessActivities(unprocessed, () => {
-      _pendingModalActive = false;
-      render();
-    });
+    autoProcessActivities(unprocessed, onReviewDone);
   }
 }
 

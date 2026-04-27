@@ -94,6 +94,12 @@ async function runInitialization(state: OnboardingState): Promise<void> {
   // new intent. Run the full init so state is rewritten cleanly.
   const rt = getState();
   const modeChanged = !!state.trackOnly !== !!rt.trackOnly;
+  // Triathlon ↔ running switch: if the user previously initialised as a triathlete
+  // and has now come back through the wizard as a runner (or vice versa), the old
+  // `wks` / `eventType` / `triConfig` are stale and must be rebuilt. Skipping
+  // reinit here caused half-marathon onboarding to surface "Ironman" on home and
+  // "Marathon" on plan-preview because `s.rd` held the triathlon placeholder.
+  const trainingModeChanged = (state.trainingMode === 'triathlon') !== (rt.eventType === 'triathlon');
   // Triathlon settings changes (hours, weekday split, distance, skill, FTP, CSS,
   // gym) must trigger a full reinit so the plan actually reflects what the
   // user just set. Otherwise the wizard's "Edit settings" flow silently keeps
@@ -106,7 +112,22 @@ async function runInitialization(state: OnboardingState): Promise<void> {
     JSON.stringify(state.triVolumeSplit ?? null) !== JSON.stringify(rt.triConfig?.volumeSplit ?? null) ||
     (state.gymSessionsPerWeek ?? 0) !== (rt.gs ?? 0)
   );
-  if (rt.wks.length > 0 && !modeChanged && !triSettingsChanged) {
+  // Running settings changes: flipping Yes/No event, swapping race distance, or
+  // changing focus (for no-event plans) must force a full reinit. Without this,
+  // a user going Endurance → Speed in Edit Settings keeps s.rd='half' despite
+  // having asked for 5K-focused training.
+  const expectedRd = state.trainingMode === 'running' && state.trainingForEvent === false
+    ? (state.trainingFocus === 'speed' ? '5k'
+      : state.trainingFocus === 'both' ? '10k'
+      : 'half')
+    : state.raceDistance;
+  const runningSettingsChanged = state.trainingMode === 'running' && (
+    // Event Y/N flipped — s.continuousMode is the runtime echo of trainingForEvent===false.
+    (state.trainingForEvent === false) !== !!rt.continuousMode ||
+    // Target distance drifted (running event → different distance, or focus flip in no-event).
+    (expectedRd ?? null) !== (rt.rd ?? null)
+  );
+  if (rt.wks.length > 0 && !modeChanged && !triSettingsChanged && !trainingModeChanged && !runningSettingsChanged) {
     nextStep();
     return;
   }

@@ -8,6 +8,7 @@ import type { GpsRecording, GpsSplit, Workout } from '@/types';
 import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
 import { parseDistanceKm } from '@/calculations/matching';
 import { getState } from '@/state';
+import { summariseAdherence, type AdherenceSummary } from '@/guided/adherence';
 
 const MODAL_ID = 'gps-completion-modal';
 
@@ -82,6 +83,9 @@ export function openGpsCompletionModal(
         </div>
       ` : ''}
 
+      <!-- Pace adherence -->
+      ${recording.splits.length > 0 ? renderAdherenceSection(summariseAdherence(recording.splits)) : ''}
+
       <!-- Splits table -->
       ${recording.splits.length > 0 ? renderSplitsSection(recording.splits, unitPref) : ''}
 
@@ -150,7 +154,7 @@ export function openGpsCompletionModal(
     btnRow.className = 'flex gap-3';
 
     const keepBtn = document.createElement('button');
-    keepBtn.className = 'flex-1 m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium';
+    keepBtn.className = 'flex-1 m-btn-glass m-btn-glass--inset';
     keepBtn.textContent = 'Keep';
     keepBtn.addEventListener('click', showMainButtons);
 
@@ -193,6 +197,34 @@ export function openGpsCompletionModal(
 
 export function closeGpsCompletionModal(): void {
   document.getElementById(MODAL_ID)?.remove();
+}
+
+function renderAdherenceSection(summary: AdherenceSummary): string {
+  if (summary.paced.length === 0) return '';
+  const hitPct = summary.hitRate != null ? Math.round(summary.hitRate * 100) : 0;
+  const avg = summary.avgDeviationSec;
+  const avgLabel = avg == null
+    ? ''
+    : Math.abs(avg) < 1
+      ? 'on target'
+      : avg > 0
+        ? `${Math.round(avg)}s behind target on average`
+        : `${Math.abs(Math.round(avg))}s faster than target on average`;
+  const bits: string[] = [];
+  if (summary.fastCount > 0) bits.push(`${summary.fastCount} fast`);
+  if (summary.slowCount > 0) bits.push(`${summary.slowCount} slow`);
+  const breakdown = bits.length > 0 ? bits.join(' · ') : 'all within ±5s/km';
+
+  return `
+    <div class="rounded-lg p-3 mb-4" style="background:var(--c-bg);border:1px solid var(--c-border)">
+      <div class="text-xs font-semibold mb-2" style="color:var(--c-faint)">Pace adherence</div>
+      <div class="flex items-baseline justify-between mb-1">
+        <span class="text-sm" style="color:var(--c-black)">${summary.onPaceCount} of ${summary.paced.length} splits on pace</span>
+        <span class="text-lg font-bold" style="color:var(--c-black)">${hitPct}%</span>
+      </div>
+      <div class="text-xs" style="color:var(--c-muted)">${breakdown}${avgLabel ? ` · ${avgLabel}` : ''}</div>
+    </div>
+  `;
 }
 
 function renderSplitsSection(splits: GpsSplit[], unitPref: 'km' | 'mi' = 'km'): string {
@@ -280,9 +312,10 @@ export function openGpsRecordingDetail(recording: GpsRecording): void {
         </div>
       </div>
 
+      ${recording.splits.length > 0 ? renderAdherenceSection(summariseAdherence(recording.splits)) : ''}
       ${recording.splits.length > 0 ? renderSplitsSection(recording.splits, unitPref2) : ''}
 
-      <button id="gps-detail-close" class="w-full m-btn-secondary px-4 py-2 rounded-lg text-sm font-medium">
+      <button id="gps-detail-close" class="w-full m-btn-glass m-btn-glass--inset">
         Close
       </button>
     </div>

@@ -23,10 +23,13 @@
     "vitest": "^4.0.17"
   },
   "dependencies": {
+    "@capacitor-community/keep-awake": "^8.0.0",
     "@capacitor/cli": "^8.0.1",
     "@capacitor/core": "^8.0.1",
+    "@capacitor/haptics": "^8.0.2",
     "@capacitor/ios": "^8.0.1",
     "@capgo/capacitor-health": "^8.2.16",
+    "@mosaic/guided-voice": "file:ios-plugins/guided-voice",
     "@supabase/supabase-js": "^2.96.0",
     "@transistorsoft/capacitor-background-geolocation": "^8.0.1"
   }

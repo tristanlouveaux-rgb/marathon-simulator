@@ -91,6 +91,43 @@ function chartPaths(values: number[]): { line: string; area: string } {
   return sparklinePaths(values, 300, 60);
 }
 
+/**
+ * Horizontal baseline-range indicator. Shows where `current` sits within the
+ * 28-day min/max range, with a faint marker at the baseline average.
+ * Returns '' when there isn't enough data to draw a meaningful range.
+ */
+function baselineRangeBar(
+  current: number | null,
+  baseline: number[],
+  unitSuffix: string,
+  color: string,
+): string {
+  if (current == null || baseline.length < 5) return '';
+  const lo = Math.min(...baseline);
+  const hi = Math.max(...baseline);
+  if (hi - lo < 0.5) return '';
+  const avg = baseline.reduce((a, b) => a + b, 0) / baseline.length;
+  const pad = (hi - lo) * 0.08;
+  const axisLo = lo - pad;
+  const axisHi = hi + pad;
+  const range = axisHi - axisLo;
+  const pctCurrent = Math.min(100, Math.max(0, ((current - axisLo) / range) * 100));
+  const pctAvg     = Math.min(100, Math.max(0, ((avg     - axisLo) / range) * 100));
+  const fmt = (v: number) => Number.isInteger(v) || Math.abs(v) >= 100 ? Math.round(v).toString() : v.toFixed(1);
+  return `
+    <div style="margin-top:10px">
+      <div style="position:relative;height:8px;background:#F1F5F9;border-radius:100px;overflow:visible">
+        <div style="position:absolute;left:${pctAvg.toFixed(1)}%;top:-2px;bottom:-2px;width:1px;background:${TEXT_L};opacity:0.5"></div>
+        <div style="position:absolute;left:${pctCurrent.toFixed(1)}%;top:50%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:${color};box-shadow:0 0 0 2px white"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:10px;color:${TEXT_L}">
+        <span>${fmt(lo)}${unitSuffix}</span>
+        <span>Avg ${fmt(avg)}${unitSuffix}</span>
+        <span>${fmt(hi)}${unitSuffix}</span>
+      </div>
+    </div>`;
+}
+
 // ── Trend helpers ─────────────────────────────────────────────────────────────
 
 interface TrendInfo { label: string; direction: 'up' | 'down' | 'flat'; statusLabel: string; statusColor: string; good: boolean }
@@ -218,7 +255,7 @@ function coachingText(
   };
 }
 
-function skyBackground(): string { return buildSkyBackground('rec', 'blue'); }
+function skyBackground(): string { return buildSkyBackground('rec', 'rose'); }
 
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
@@ -262,10 +299,6 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const { hrvDataSufficient, hrvScore: hrvSubScore, sleepScore: sleepSubScore, rhrScore: rhrSubScore, sleepHistoryAvg: sleepHistAvg } = recoveryResult;
   const hrvT = hrvTrend(hrv7, todayHrv);
   const rhrT = rhrTrend(rhr7, todayRhr);
-
-  // Sparklines for tiles
-  const { line: hrvLine, area: hrvArea } = sparklinePaths(hrv7);
-  const { line: rhrLine, area: rhrArea } = sparklinePaths(rhr7);
 
   // Large chart paths
   const { line: hrvChartLine, area: hrvChartArea } = chartPaths(hrv7);
@@ -451,13 +484,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
             </div>
             ${hrvChronicBadge ? statusBadge(hrvChronicBadge.label, hrvChronicBadge.color) : ''}
             ${hrvAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${hrvAcuteStr}</div>` : ''}
-            <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
-              ${hrvLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:40px;display:block;overflow:visible">
-                <defs><linearGradient id="hrvFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
-                <path d="${hrvArea}" fill="url(#hrvFillMini)"/>
-                <path d="${hrvLine}" fill="none" stroke="${GREEN_A}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>` : `<div style="color:${TEXT_L};font-size:11px;padding-top:12px">No data</div>`}
-            </div>
+            ${baselineRangeBar(todayHrv, baselineHrvs, ' ms', GREEN_B)}
             ${todayHrv != null && !hrvDataSufficient ? `<div style="font-size:11px;color:${TEXT_L};margin-top:6px;line-height:1.4">Score improves after 10 nights of data.</div>` : ''}
           </div>
 
@@ -474,13 +501,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
             </div>
             ${rhrChronicBadge ? statusBadge(rhrChronicBadge.label, rhrChronicBadge.color) : ''}
             ${rhrAcuteStr ? `<div style="font-size:11px;color:${TEXT_L};margin-top:4px">${rhrAcuteStr}</div>` : ''}
-            <div style="height:40px;margin-top:10px;margin-left:-4px;margin-right:-4px">
-              ${rhrLine ? `<svg viewBox="0 0 120 40" style="width:100%;height:40px;display:block;overflow:visible">
-                <defs><linearGradient id="rhrFillMini" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0"/></linearGradient></defs>
-                <path d="${rhrArea}" fill="url(#rhrFillMini)"/>
-                <path d="${rhrLine}" fill="none" stroke="${GREEN_A}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>` : `<div style="color:${TEXT_L};font-size:11px;padding-top:12px">No data</div>`}
-            </div>
+            ${baselineRangeBar(todayRhr, baselineRhrs, ' bpm', '#EF4444')}
           </div>
         </div>
 
@@ -550,7 +571,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
               </div>` : ''}
             </div>
             <div style="position:relative">
-              <svg width="100%" viewBox="0 0 300 60" style="display:block">
+              <svg width="100%" height="80" viewBox="0 0 300 60" preserveAspectRatio="none" style="display:block">
                 <defs>
                   <linearGradient id="hrvChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0.05"/></linearGradient>
                   <linearGradient id="hrvChartLine" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#86EFAC"/><stop offset="100%" stop-color="${GREEN_B}"/></linearGradient>
@@ -581,7 +602,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
               </div>` : ''}
             </div>
             <div style="position:relative">
-              <svg width="100%" viewBox="0 0 300 60" style="display:block">
+              <svg width="100%" height="80" viewBox="0 0 300 60" preserveAspectRatio="none" style="display:block">
                 <defs><linearGradient id="rhrChartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${GREEN_A}" stop-opacity="0.25"/><stop offset="100%" stop-color="${GREEN_A}" stop-opacity="0.05"/></linearGradient></defs>
                 <g stroke="#F1F5F9" stroke-width="1" stroke-dasharray="4 4"><line x1="0" y1="15" x2="300" y2="15"/><line x1="0" y1="30" x2="300" y2="30"/><line x1="0" y1="45" x2="300" y2="45"/></g>
                 <path d="${rhrChartArea}" fill="url(#rhrChartFill)"/>
@@ -643,6 +664,8 @@ function showRecoveryInfoOverlay(): void {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+let recoveryOnBack: (() => void) | null = null;
+
 function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
   const effTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sb = getSleepBank(s.physiologyHistory ?? [], effTarget);
@@ -660,8 +683,9 @@ function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
   // Tab bar
   wireTabBarHandlers(navigateTab);
 
-  // Back → home
+  // Back → caller (defaults to home)
   document.getElementById('rec-back-btn')?.addEventListener('click', () => {
+    if (recoveryOnBack) { recoveryOnBack(); return; }
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   });
 
@@ -694,12 +718,13 @@ function wireRecoveryHandlers(s: SimulatorState, displayDate: string): void {
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
-export function renderRecoveryView(date?: string): void {
+export function renderRecoveryView(date?: string, onBack?: () => void): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
   const today = new Date().toISOString().split('T')[0];
   const displayDate = date ?? today;
+  recoveryOnBack = onBack ?? recoveryOnBack;
   container.innerHTML = getRecoveryHTML(s, displayDate);
   wireRecoveryHandlers(s, displayDate);
 }

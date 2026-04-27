@@ -1,4 +1,4 @@
-import type { Paces, GpsRecording, GpsLiveData, SplitScheme } from '@/types';
+import type { Paces, GpsRecording, GpsLiveData, SplitScheme, Workout } from '@/types';
 import { GpsTracker } from '@/gps/tracker';
 import { buildSplitScheme } from '@/gps/split-scheme';
 import { createGpsProvider } from '@/gps/providers';
@@ -7,8 +7,12 @@ import { handleCompletedRecording } from '@/gps/recording-handler';
 import { splitAlert, workoutCompleteAlert } from '@/gps/haptics';
 import { updateInlineGps } from './gps-panel';
 import { getState } from '@/state';
+import { GuideController } from '@/guided/controller';
+import { mountGuidedOverlay, unmountGuidedOverlay, updateGuidedOverlay } from './guided-overlay';
+import { acquireWakeLock, releaseWakeLock } from '@/utils/wake-lock';
 
 let activeTracker: GpsTracker | null = null;
+let activeGuide: GuideController | null = null;
 let activeWorkoutName: string | null = null;
 let activeWorkoutDesc: string | null = null;
 let activeScheme: SplitScheme | null = null;
@@ -38,6 +42,46 @@ export function setOnTrackingTick(cb: ((data: GpsLiveData) => void) | null): voi
 /** Return the active split scheme (structured workouts), or null for simple runs. */
 export function getActiveSplitScheme(): SplitScheme | null {
   return activeScheme;
+}
+
+/** Return the active GuideController if guided mode is running, else null. */
+export function getActiveGuideController(): GuideController | null {
+  return activeGuide;
+}
+
+/** Skip the current guided step, advancing both engine and tracker splits in lockstep. */
+export function guidedSkipStep(): void {
+  if (!activeGuide) return;
+  const tracker = activeTracker;
+  const adapter = tracker ? { skipSegment: () => tracker.skipSegment() } : undefined;
+  activeGuide.skipStep(adapter);
+}
+
+/** Disable guided coaching on the active run — stops voice and removes overlay. */
+export function disableActiveGuide(): void {
+  if (!activeGuide) return;
+  activeGuide.destroy();
+  activeGuide = null;
+  unmountGuidedOverlay();
+  void releaseWakeLock();
+}
+
+/** Forward a split-announcements toggle to the active guide, if any. */
+export function setActiveGuideSplitAnnouncements(enabled: boolean): void {
+  activeGuide?.setSplitAnnouncementsEnabled(enabled);
+}
+
+/** Forward a voice-rate change to the active guide, if any. */
+export function setActiveGuideVoiceRate(rate: number): void {
+  activeGuide?.setVoiceRate(rate);
+}
+
+/** Extend the current guided step by `sec` seconds, mutating both engine and tracker. */
+export function guidedExtendCurrentStep(sec: number): void {
+  if (!activeGuide) return;
+  const tracker = activeTracker;
+  const adapter = tracker ? { extendSegment: (s: number) => tracker.extendSegment(s) } : undefined;
+  activeGuide.extendCurrentStep(sec, adapter);
 }
 
 // --- State getters for renderer ---
@@ -86,7 +130,30 @@ export async function startTracking(
   activeWorkoutDesc = workoutDesc;
   lastSplitCount = 0;
 
-  activeTracker.onUpdate(updateInlineGps);
+  // Guided mode: wire voice + haptics to step-by-step cues.
+  const s = getState();
+  if (s.guidedRunsEnabled && activeScheme) {
+    const workout: Workout = { n: workoutName, d: workoutDesc, r: 0, t: 'guided' };
+    activeGuide = new GuideController(workout, paces, {
+      splitAnnouncements: s.guidedSplitAnnouncements ?? true,
+      voiceRate: s.guidedVoiceRate ?? 1.0,
+    });
+    activeGuide.start();
+    mountGuidedOverlay(activeGuide);
+    // Keep the screen awake so the 1s tick interval stays unthrottled and voice
+    // cues fire on time. Default ON; user can disable in Account → Preferences.
+    if (s.guidedKeepScreenOn !== false) {
+      void acquireWakeLock();
+    }
+  }
+
+  activeTracker.onUpdate((data) => {
+    updateInlineGps(data);
+    if (activeGuide) {
+      activeGuide.update(data);
+      updateGuidedOverlay(activeGuide, data);
+    }
+  });
 
   // Wire split completion alerts
   activeTracker.onSplitComplete((_split, allDone) => {
@@ -104,7 +171,13 @@ export async function startTracking(
     const { MockGpsProvider } = await import('@/gps/providers/mock-provider');
     const timerProvider = new MockGpsProvider();
     activeTracker = new GpsTracker(timerProvider, activeScheme ?? undefined);
-    activeTracker.onUpdate(updateInlineGps);
+    activeTracker.onUpdate((data) => {
+      updateInlineGps(data);
+      if (activeGuide) {
+        activeGuide.update(data);
+        updateGuidedOverlay(activeGuide, data);
+      }
+    });
     activeTracker.onSplitComplete((_split, allDone) => {
       if (allDone) workoutCompleteAlert(); else splitAlert();
     });
@@ -167,10 +240,13 @@ export function stopTracking(): void {
       totalDistance: data.totalDistance,
       totalElapsed: data.elapsed,
       averagePace: data.totalDistance > 0 ? (data.elapsed / data.totalDistance) * 1000 : 0,
+      ...(activeGuide ? { cueLog: activeGuide.getCueLog() } : {}),
     };
     saveGpsRecording(recording);
 
     // Clean up tracker state before showing modal
+    if (activeGuide) { activeGuide.destroy(); activeGuide = null; unmountGuidedOverlay(); }
+    void releaseWakeLock();
     activeTracker = null;
     activeWorkoutName = null;
     activeWorkoutDesc = null;
@@ -185,6 +261,7 @@ export function stopTracking(): void {
   }
 
   // Distance too short — discard silently
+  void releaseWakeLock();
   activeTracker = null;
   activeWorkoutName = null;
   activeWorkoutDesc = null;

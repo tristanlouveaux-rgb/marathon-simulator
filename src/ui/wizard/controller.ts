@@ -330,6 +330,39 @@ export function upgradeFromTrackOnly(): void {
 }
 
 /**
+ * Downgrade from a generated plan to Just-Track mode. Preserves activity
+ * history, CTL, PBs, physiology, and Strava connection — just flips the plan
+ * off. Users typically reach this after race day, end of a continuous block,
+ * or deliberately via Account → Advanced.
+ *
+ * The initializing step detects the mode change (`!!onboarding.trackOnly !==
+ * !!s.trackOnly`) and re-runs `initializeSimulator`, which takes the trackOnly
+ * branch and rewrites `s.wks` as the rolling one-week bucket. Accumulated
+ * garminActuals for the current week survive; prior planned weeks are dropped
+ * from local state but remain in server-side `garmin_activities`.
+ */
+export function downgradeToTrackOnly(): void {
+  const s = getState();
+  if (!s.onboarding) return;
+  updateState({
+    hasCompletedOnboarding: false,
+    onboarding: {
+      ...s.onboarding,
+      trackOnly: true,
+      trainingFocus: 'track',
+      continuousMode: true,
+      trainingForEvent: null,
+      raceDistance: null,
+      selectedRace: null,
+      customRaceDate: null,
+      currentStep: 'initializing',
+    },
+  });
+  saveState();
+  renderCurrentStep();
+}
+
+/**
  * Reset onboarding to start fresh
  */
 export function resetOnboarding(): void {
