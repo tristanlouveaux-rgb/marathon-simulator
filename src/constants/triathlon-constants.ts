@@ -114,7 +114,7 @@ export const DEFAULT_WEEKLY_PEAK_HOURS: Record<TriathlonDistance, Record<1 | 2 |
  * feedback, 2026-04-24).
  */
 export const HOURS_RANGE: Record<TriathlonDistance, { min: number; max: number }> = {
-  '70.3':    { min: 5, max: 20 },
+  '70.3':    { min: 4, max: 20 },
   'ironman': { min: 6, max: 30 },
 };
 
@@ -137,6 +137,48 @@ export const BIKE_LTHR_OFFSET_VS_RUN = -7;  // Midpoint of −5 to −10
 
 /** Brick detection window in seconds. Two sequential activities within this gap are treated as a brick. */
 export const BRICK_DETECTION_WINDOW_SEC = 30 * 60;  // 30 min — §18.1
+
+// ───────────────────────────────────────────────────────────────────────────
+// Adaptation engine — auto-progression
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Trailing window for per-discipline effort score. Mirrors running's
+ * `getTrailingEffortScore` (`src/calculations/fitness-model.ts:234`).
+ */
+export const TRI_EFFORT_LOOKBACK_WEEKS = 2;
+
+/**
+ * Bounds for the per-discipline effort multiplier applied to upcoming session
+ * durations. Mirrors running's `effortMultiplier` (`src/workouts/plan_engine.ts:113`):
+ * formula `1 - score * 0.05`, clamped [0.85, 1.15].
+ *   - Score < 0 (rated easier than planned) → multiplier > 1.0 → longer next week
+ *   - Score > 0 (rated harder than planned) → multiplier < 1.0 → shorter next week
+ */
+export const TRI_EFFORT_MULT_BOUNDS: readonly [number, number] = [0.85, 1.15] as const;
+
+/**
+ * Race-outcome retrospective threshold. Show the "you beat your prediction"
+ * card on stats only when the athlete came in at least this many seconds
+ * faster than predicted. Below this we still log but don't surface — the user
+ * shouldn't see a noisy "you came in 30s under!" celebration.
+ */
+export const TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC = 60;
+
+// ───────────────────────────────────────────────────────────────────────────
+// Adaptation transparency — marker auto-bump notification thresholds
+// ───────────────────────────────────────────────────────────────────────────
+// These drive the small "your FTP just improved" toast (CLAUDE.md →
+// Adaptation transparency rule). Confirmed values 2026-04-30.
+
+/** Minimum FTP delta (W) before we surface a "your FTP improved" toast. */
+export const MARKER_BUMP_THRESHOLD_FTP_W = 5;
+
+/** Minimum CSS delta (sec/100m) before we surface a "your CSS improved" toast. */
+export const MARKER_BUMP_THRESHOLD_CSS_SEC = 5;
+
+/** Minimum VDOT delta (points) before we surface a "your VDOT improved" toast. */
+export const MARKER_BUMP_THRESHOLD_VDOT = 1;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Distance constants

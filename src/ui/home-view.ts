@@ -503,6 +503,44 @@ export function showRunBreakdownSheet(s: SimulatorState, weekNum?: number): void
 }
 
 /**
+ * Guest-account banner. Fires once for users still on the auto-created
+ * anonymous Supabase session who have already accumulated training data.
+ * Anonymous sessions live in localStorage only — uninstalling, switching
+ * phone, or clearing app data wipes everything. The banner is the
+ * one-time wake-up; the Account view keeps a persistent affordance.
+ *
+ * Guards:
+ *   - s.isGuestAccount === true (refreshed at launch from session.user.is_anonymous)
+ *   - Has real data: any completed workout in the live plan
+ *   - User hasn't dismissed (s.guestBannerDismissed = true after × tap)
+ */
+function buildGuestAccountBanner(s: SimulatorState): string {
+  if (!s.isGuestAccount) return '';
+  if (s.guestBannerDismissed) return '';
+
+  // Only fire if the user has real data worth losing — a single completed workout
+  // is enough signal that they've engaged with the app.
+  const hasData = (s.wks ?? []).some(w =>
+    Object.values(w.garminActuals ?? {}).some(a => a && (a.distanceKm ?? 0) > 0)
+  );
+  if (!hasData) return '';
+
+  return `
+    <div id="home-guest-banner" style="padding:12px 16px;margin:4px 16px 10px;background:#fff;border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)" class="hf" data-delay="0.05">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:2px">Sign in to back up your training history</div>
+          <div style="font-size:12px;color:#475569;line-height:1.45">Guest data only lives on this device. Sign in to keep it safe if you change phones or reinstall the app.</div>
+        </div>
+        <button id="home-guest-dismiss" aria-label="Dismiss" style="flex-shrink:0;width:28px;height:28px;border-radius:50%;border:none;background:transparent;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1">×</button>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="home-guest-signin" class="m-btn-glass" style="flex:1">Sign in</button>
+      </div>
+    </div>`;
+}
+
+/**
  * Post-race banner. Fires when a planned race has passed (1+ days ago) and
  * the user hasn't dismissed the prompt. Offers the "Switch to tracking"
  * downgrade as a soft suggestion — the plan keeps running regardless.
@@ -790,12 +828,13 @@ function buildReadinessRing(s: SimulatorState): string {
   // For readiness: same-signal TSB (Signal B for both CTL and ATL) with intra-week
   // decay applied through today, so the score matches the Readiness detail page.
   const completedWeek = Math.max(0, s.w - 1);
-  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const tsb = liveTSB.tsb;
   const ctlNow = liveTSB.ctl;
 
   // Weighted directional momentum: recent week-over-week CTL deltas weighted 4/3/2/1 (newest first)
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
   const ctlHistory = [ctlNow, ...([4,3,2,1].map(i => metrics[metrics.length - 1 - i]?.ctl ?? ctlNow))];
   // ctlHistory[0]=now, [1]=1wk ago, [2]=2wk, [3]=3wk, [4]=4wk
@@ -1046,6 +1085,36 @@ function buildReadinessRing(s: SimulatorState): string {
         : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
           : "Keep consistency — don't skip";
 
+  // Hide the adjust button when its handler has nothing to do — otherwise the
+  // user taps and lands silently on the plan view. Mirror the click-handler's
+  // branches: ACWR elevated → reduction modal, unspent cross-training →
+  // reduction modal, unrated run remaining this week → recovery advice sheet
+  // (covers today AND future days, since plan-engine moves can slide a hard
+  // session into today).
+  //
+  // Leg-load is special: "Protect the legs" only makes sense when there's a
+  // hard impact session ahead that could be deferred or downgraded. A week of
+  // RPE-5 generic activities (e.g. triathlon "Activity 2" placeholders) gives
+  // the button nothing to act on, so we require an unrated *hard* workout in
+  // the remaining week for the legLoad branch only.
+  const acwrElevatedForBtn = acwr.status === 'caution' || acwr.status === 'high';
+  const hasUnspentForBtn = (strainWk?.unspentLoadItems?.length ?? 0) > 0;
+  const ratedForBtn = strainWk?.rated ?? {};
+  const remainingUnratedWorkouts = plannedWorkouts.filter((w: any) => {
+    const day = w.dayOfWeek ?? -1;
+    if (day < todayDayOfWeek) return false;
+    if (w.t === 'cross' || w.t === 'strength' || w.t === 'rest' || w.t === 'gym') return false;
+    if (w.status === 'skip' || w.status === 'replaced') return false;
+    return !ratedForBtn[w.id || w.n];
+  });
+  const hasRemainingRun = remainingUnratedWorkouts.length > 0;
+  const hasRemainingHardRun = remainingUnratedWorkouts.some((w: any) => isHardWorkout(w.t));
+  const showAdjustButton = readiness.score <= 59 && (
+    readiness.drivingSignal === 'legLoad'
+      ? (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingHardRun)
+      : (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingRun)
+  );
+
   const recoveryPillHtml = recoveryResult.hasData
     ? `<div class="home-readiness-pill" data-pill="recovery" style="flex:1;min-width:80px;cursor:pointer;${drivingBorderStyle('recovery')}">
         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Physiology</div>
@@ -1107,7 +1176,7 @@ function buildReadinessRing(s: SimulatorState): string {
                     ? `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
                        <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Log below</div>`
                     : `<div style="font-size:16px;font-weight:300;line-height:1;color:var(--c-faint)">—</div>
-                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">Sync watch</div>`
+                       <div style="font-size:8px;color:var(--c-faint);margin-top:3px">No data</div>`
                 }
               </div>
             </div>
@@ -1172,7 +1241,7 @@ function buildReadinessRing(s: SimulatorState): string {
         ` : sleepScore == null && !manualToday && !noWatch ? `
         <!-- Watch connected but not yet synced — prompt sync instead of manual entry -->
         <div style="margin:4px 14px 10px;padding:10px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface);display:flex;align-items:center;justify-content:space-between">
-          <span style="font-size:12px;color:var(--c-muted)">Sync your watch to load today's sleep</span>
+          <span style="font-size:12px;color:var(--c-muted)">Today's sleep hasn't arrived yet. Open your watch app and resync.</span>
         </div>
         ` : sleepScore == null && manualToday ? `
         <div style="margin:4px 14px 10px;padding:10px 14px;border-radius:12px;border:1px solid var(--c-border);background:var(--c-surface);display:flex;align-items:center;justify-content:space-between">
@@ -1186,7 +1255,7 @@ function buildReadinessRing(s: SimulatorState): string {
         ${readiness.suppressStreak != null ? `<p style="font-size:12px;color:var(--c-muted);text-align:center;line-height:1.4;margin:-6px 16px 14px;opacity:0.75">Sleep has limited your score for ${readiness.suppressStreak} consecutive days.</p>` : ''}
         ${coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
-        ${readiness.score <= 59 ? `
+        ${showAdjustButton ? `
         <div style="padding:0 14px 16px">
           <button id="readiness-adjust-btn" class="m-btn-glass m-btn-glass--inset" style="width:100%">
             ${adjustText}
@@ -1719,13 +1788,15 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
       ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" class="m-btn-glass m-btn-glass--inset" style="padding:6px 14px;font-size:12px">Done · View</button>`
       : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
-  // Coach workout modifier — informational note only, no auto-change to the workout.
-  // Renders only when today's stance is reduce or rest, and only when the session isn't already done.
+  // Coach workout modifier — render only the lead clause on home; the body
+  // (coach.primaryMessage) is already shown by the readiness-ring card directly
+  // below, so repeating it here is double messaging. Plan view keeps the full
+  // sentence because it doesn't show the readiness sentence on the same page.
   const coachMod = coach && !alreadyRated ? coach.workoutMod : 'none';
   const coachNote = coachMod === 'downgrade'
-    ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Downgraded.</strong> ${coach!.primaryMessage}</div>`
+    ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Go easier today.</div>`
     : coachMod === 'skip'
-      ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
+      ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Consider rest today.</div>`
       : '';
 
   return `
@@ -1784,7 +1855,9 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
           if (wo) (wo as any).dayOfWeek = newDay;
         }
       }
-      const upcoming = workouts.filter((w: any) => w.dayOfWeek > ourDay && w.t !== 'rest');
+      const upcoming = workouts
+        .filter((w: any) => w.dayOfWeek != null && w.dayOfWeek > ourDay && w.t !== 'rest')
+        .sort((a: any, b: any) => a.dayOfWeek - b.dayOfWeek);
       if (upcoming.length > 0) {
         const next = upcoming[0] as any;
         nextLabel = `Next: ${DAY_LABELS[next.dayOfWeek]} — ${next.n}${next.km ? ` ${formatKm(next.km, s.unitPref ?? 'km')}` : ''}`;
@@ -1839,12 +1912,22 @@ function buildRecentActivity(s: SimulatorState): string {
       const val = act.distanceKm ? formatKm(act.distanceKm, s.unitPref ?? 'km') : act.durationSec ? `${Math.round(act.durationSec / 60)} min` : '';
       // Prefer the user-effective sport label (respects manualSport override) over
       // raw activityType. Falls back to formatActivityType if no override/mapping applies.
+      // When the resolved sport is the generic catch-all, prefer the activity's
+      // own workout/display name so the row reads as the real sport (e.g. "Padel"
+      // instead of "General Sport"). Drop a stale displayName === 'General Sport'.
       const isRunAct = isRun;
       const effSport = !isRunAct ? getEffectiveSport(act) : null;
-      const sportLabel = effSport ? (SPORT_LABELS as Record<string, string>)[effSport] : null;
+      const sportLabel = effSport && effSport !== 'generic_sport'
+        ? (SPORT_LABELS as Record<string, string>)[effSport]
+        : null;
+      const cleanDisplayName = act.displayName && act.displayName !== 'General Sport' ? act.displayName : null;
+      const genericFallback = effSport === 'generic_sport'
+        ? (act.workoutName || cleanDisplayName || (act.activityType ? formatActivityType(act.activityType) : null))
+        : null;
       const actName = sportLabel
+        || genericFallback
         || (act.activityType ? formatActivityType(act.activityType) : null)
-        || act.displayName || act.workoutName
+        || cleanDisplayName || act.workoutName
         || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
     });
@@ -1973,7 +2056,7 @@ function getHomePlanName(s: SimulatorState): string {
     const focus = s.onboarding?.trainingFocus;
     if (focus === 'speed') return 'Speed Plan';
     if (focus === 'endurance') return 'Endurance Plan';
-    if (focus === 'both') return 'Balanced Plan';
+    if (focus === 'both') return 'Training Plan';
     return 'Fitness Plan';
   }
   const labels: Record<string, string> = {
@@ -2027,7 +2110,7 @@ function buildTrackOnlyDailyTarget(s: SimulatorState): string {
   const hrvAll = (s.physiologyHistory ?? []).map(p => p.hrvRmssd).filter((v): v is number => v != null);
   const hrvAvg = hrvAll.length >= 3 ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length) : null;
   const r = computeReadiness({
-    tsb: computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate).tsb,
+    tsb: computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, (s as any).previousPlanWks).tsb,
     acwr: computeReadinessACWR(s).ratio,
     ctlNow: ctlWeekly,
     sleepScore: (s.physiologyHistory ?? []).slice(-1)[0]?.sleepScore ?? null,
@@ -2510,6 +2593,7 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildIllnessBanner(s)}
       ${buildHolidayBannerHome(s)}
       ${buildRaceCompleteBanner(s)}
+      ${buildGuestAccountBanner(s)}
       ${s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
       ${s.eventType === 'triathlon' ? '' : buildRaceForecastCard(s)}
       ${buildReadinessRing(s)}
@@ -2667,6 +2751,19 @@ function wireHomeHandlers(): void {
     document.getElementById('home-race-done-banner')?.remove();
   });
 
+  // Guest banner: dismiss → flag persists, Account section still surfaces it
+  document.getElementById('home-guest-dismiss')?.addEventListener('click', async () => {
+    const { getMutableState, saveState } = await import('@/state');
+    getMutableState().guestBannerDismissed = true;
+    saveState();
+    document.getElementById('home-guest-banner')?.remove();
+  });
+
+  // Guest banner: Sign in → opens the auth view in upgrade mode
+  document.getElementById('home-guest-signin')?.addEventListener('click', () => {
+    import('@/ui/auth-view').then(({ renderAuthView }) => renderAuthView({ upgradeGuest: true }));
+  });
+
   // Just-Track load sparkline → Stats tab for the full card
   document.getElementById('home-load-spark')?.addEventListener('click', () => navigateTab('stats'));
 
@@ -2738,28 +2835,10 @@ function wireHomeHandlers(): void {
     import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any, () => renderHomeView()));
   });
 
-  // Sleep ring — tap opens sleep detail page. When today's sleep score is missing and
-  // the watch is connected, tap triggers a Garmin refresh instead so the user can pull
-  // the score that Garmin's server computes 1–4h post-wake.
-  document.getElementById('home-sleep-ring')?.addEventListener('click', async (e) => {
+  // Sleep ring — tap opens sleep detail page.
+  document.getElementById('home-sleep-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const s3 = getState();
-    const todayStr = new Date().toISOString().split('T')[0];
-    const hasTodaySleep = (s3.physiologyHistory ?? []).some(p => p.date === todayStr && p.sleepScore != null);
-    const watchConnected = !!getPhysiologySource(s3);
-    if (!hasTodaySleep && watchConnected) {
-      const ring = document.getElementById('home-sleep-ring');
-      const sub = ring?.querySelector('div[style*="font-size:8px"]') as HTMLElement | null;
-      if (sub) sub.textContent = 'Syncing…';
-      const [{ refreshRecentSleepScores }, { syncPhysiologySnapshot }] = await Promise.all([
-        import('@/data/supabaseClient'),
-        import('@/data/physiologySync'),
-      ]);
-      await refreshRecentSleepScores();
-      await syncPhysiologySnapshot(7);
-      renderHomeView();
-      return;
-    }
     import('./sleep-view').then(({ renderSleepView }) => {
       renderSleepView(undefined, s3.physiologyHistory ?? [], s3.wks ?? [], () => renderHomeView());
     });
@@ -2804,7 +2883,7 @@ function wireHomeHandlers(): void {
     const wk2 = s2.wks?.[s2.w - 1];
     const tier2 = s2.athleteTierOverride ?? s2.athleteTier;
     const atlSeed2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-    const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2, s2.signalBBaseline ?? undefined);
+    const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
     const acwrElevated = acwr2.status === 'caution' || acwr2.status === 'high';
     const hasUnspent = (wk2?.unspentLoadItems?.length ?? 0) > 0;
     if (acwrElevated || hasUnspent) {

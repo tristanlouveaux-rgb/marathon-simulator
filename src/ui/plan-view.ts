@@ -39,6 +39,10 @@ import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
 // ─── Module state ────────────────────────────────────────────────────────────
 
 let _viewWeek: number | null = null; // null = current week
+// When non-null, the plan view renders an archived plan (`previousPlanWks[idx]`)
+// in the same UI as the live plan, instead of `s.wks`. Lets the user step back
+// past week 1 and browse a finished plan week-by-week. null = live plan.
+let _viewArchiveIdx: number | null = null;
 let _workoutLookup: Map<string, { n: string; d: string }> = new Map();
 
 // ─── Recovery undo — module-level delegated handler (set once, survives re-renders) ──
@@ -89,6 +93,10 @@ document.addEventListener('click', (e) => {
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
 function navigateTab(tab: TabId): void {
+  // Leaving the plan tab clears archive view so the next return to the plan
+  // tab lands on the live current plan, not whichever past plan was last open.
+  _viewArchiveIdx = null;
+  _viewWeek = null;
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'record') {
@@ -111,9 +119,15 @@ function ourDay(): number {
 
 /** "Mon 17 Feb" from planStartDate + week offset + day offset */
 function weekStartDate(planStartDate: string, weekNum: number): Date {
-  const d = new Date(planStartDate);
-  d.setDate(d.getDate() + (weekNum - 1) * 7);
-  return d;
+  // Parse YYYY-MM-DD as local midnight. `new Date("YYYY-MM-DD")` parses as UTC
+  // midnight, which is 01:00–02:00 local in positive-UTC zones — comparing
+  // against local-midnight `now` then puts today *before* week 1 start and
+  // marks every day Missed. Component construction gives local midnight
+  // directly, matching the comparison side of every same-day check.
+  const [y, m, d] = planStartDate.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + (weekNum - 1) * 7);
+  return date;
 }
 
 function fmtWeekRange(planStartDate: string | undefined, weekNum: number): string {
@@ -951,7 +965,7 @@ function buildWorkoutCards(
       const coachNoteRow = showCoachNote
         ? (todayMod === 'skip'
             ? `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
-            : `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Downgraded.</strong> ${coach!.primaryMessage}</div>`)
+            : `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Go easier today.</strong> ${coach!.primaryMessage}</div>`)
         : '';
 
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
@@ -2170,8 +2184,18 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     : getSignalPills(_signals);
   // Coach copy and future week copy removed with Week Overview section
 
-  const canGoBack = viewWeek > 1;
-  const canGoForward = viewWeek < s.tw;
+  // Enable prev at week 1 when there's an archived prior plan to step into.
+  // Crosses plan boundaries: prev keeps walking backwards through archives,
+  // next exits the archive at its last week back to the live plan.
+  const _liveArchives = (((getState() as any).previousPlanWks ?? []) as any[]);
+  const _inArchive = _viewArchiveIdx !== null;
+  const _hasOlderArchive = _inArchive && _viewArchiveIdx! > 0;
+  const canGoBack = _inArchive
+    ? (viewWeek > 1 || _hasOlderArchive)
+    : (viewWeek > 1 || _liveArchives.length > 0);
+  const canGoForward = _inArchive
+    ? true   // always can go forward — last archive week exits to live plan
+    : viewWeek < s.tw;
   const injured = isInjuryActive();
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -2193,13 +2217,18 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   const _wrapBtn = buildWrapUpWeekBtn(s, workouts, viewWeek);
 
   // ── Light background tints per phase (like physiology sky) ──
+  // Archive view (past plan) gets a neutral cool-grey instead of the live phase
+  // colour so the user has an unmissable visual cue that this isn't today's plan.
   const _phaseBg: Record<string, { top: string; mid: string }> = {
     base:  { top: '#C5DFF8', mid: '#E3F0FA' },   // cool blue sky
     build: { top: '#F0D9C4', mid: '#F5E8DC' },   // warm amber
     peak:  { top: '#F0C4C4', mid: '#F5DCDC' },   // warm rose
     taper: { top: '#C5DFF8', mid: '#E3F0FA' },   // cool blue (same as physiology)
   };
-  const _pb = _phaseBg[wk?.ph ?? 'base'] ?? _phaseBg.base;
+  const _archiveBg = { top: '#D6DBE2', mid: '#E8EBEF' };
+  const _pb = _viewArchiveIdx !== null
+    ? _archiveBg
+    : (_phaseBg[wk?.ph ?? 'base'] ?? _phaseBg.base);
 
   // Design tokens — same as physiology page
   const _TM = '#0F172A';
@@ -2254,12 +2283,13 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
 
         <!-- Hero: Week + phase + date + actions — all one block -->
         <div class="plan-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 0">
+          ${_viewArchiveIdx !== null ? `<div style="font-size:11px;font-weight:600;color:${_TS};letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">Past plan</div>` : ''}
           <div style="font-size:48px;font-weight:700;color:${_TM};letter-spacing:-0.03em;line-height:1">
             Week ${viewWeek}<span style="font-weight:300;color:${_TS}"> / ${s.tw}</span>
           </div>
           ${wk?.ph ? `<div style="font-size:17px;font-weight:700;color:${_TM};margin-top:10px;letter-spacing:-0.01em">${phaseLabel(wk.ph)}</div>` : ''}
           ${dateRange ? `<div style="font-size:14px;font-weight:500;color:${_TS};margin-top:4px">${dateRange}</div>` : ''}
-          ${viewWeek < s.w ? `<div style="margin-top:8px"><button id="plan-jump-current" style="background:none;border:none;padding:0;font-size:13px;font-weight:600;color:${_TS};cursor:pointer;font-family:var(--f)">Go to current week \u2192</button></div>` : ''}
+          ${viewWeek < s.w ? `<div style="margin-top:8px"><button id="plan-jump-current" style="background:none;border:none;padding:0;font-size:13px;font-weight:600;color:${_TS};cursor:pointer;font-family:var(--f)">${_viewArchiveIdx !== null ? 'Back to current plan' : 'Go to current week'} \u2192</button></div>` : ''}
 
           <!-- Action buttons — part of the hero block -->
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
@@ -2312,7 +2342,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // Load bar → Load & Taper page (compact bars on past/future weeks)
   document.getElementById('plan-load-bar-row')?.addEventListener('click', () => {
-    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan'));
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
   });
 
   // Km bar → run breakdown sheet (compact bars on past/future weeks)
@@ -2322,7 +2352,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 
   // This Week card (from buildProgressBars on current week) — whole card → Load & Taper
   document.getElementById('this-week-card')?.addEventListener('click', () => {
-    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan'));
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
   });
 
   // (Week overview toggle removed — pills now inline)
@@ -2384,23 +2414,52 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   // Generate session button (current week only)
   document.getElementById('plan-generate-session')?.addEventListener('click', () => openSessionGenerator());
 
-  // Week navigation
+  // Week navigation. Crosses plan boundaries:
+  //   prev at live wk1 → enter most recent archive at its last week
+  //   prev at archive wk1 → step to the next-older archive (if any)
+  //   next at archive last week → step to next archive forward, or exit to live wk1
   document.getElementById('plan-week-prev')?.addEventListener('click', () => {
-    if (viewWeek > 1) {
-      _viewWeek = viewWeek - 1;
+    const liveArchives = ((getState() as any).previousPlanWks ?? []) as any[];
+    if (_viewArchiveIdx === null) {
+      if (viewWeek > 1) { _viewWeek = viewWeek - 1; renderPlanView(); return; }
+      if (liveArchives.length > 0) {
+        _viewArchiveIdx = liveArchives.length - 1;
+        _viewWeek = liveArchives[_viewArchiveIdx].weeks.length;
+        renderPlanView();
+      }
+      return;
+    }
+    if (viewWeek > 1) { _viewWeek = viewWeek - 1; renderPlanView(); return; }
+    if (_viewArchiveIdx > 0) {
+      _viewArchiveIdx -= 1;
+      _viewWeek = liveArchives[_viewArchiveIdx].weeks.length;
       renderPlanView();
     }
   });
   document.getElementById('plan-week-next')?.addEventListener('click', () => {
-    if (viewWeek < s.tw) {
-      _viewWeek = viewWeek + 1;
+    const liveArchives = ((getState() as any).previousPlanWks ?? []) as any[];
+    if (_viewArchiveIdx !== null) {
+      if (viewWeek < s.tw) { _viewWeek = viewWeek + 1; renderPlanView(); return; }
+      if (_viewArchiveIdx < liveArchives.length - 1) {
+        _viewArchiveIdx += 1;
+        _viewWeek = 1;
+        renderPlanView();
+        return;
+      }
+      // Exit archive view → land on the live plan's week 1.
+      _viewArchiveIdx = null;
+      _viewWeek = 1;
       renderPlanView();
+      return;
     }
+    if (viewWeek < s.tw) { _viewWeek = viewWeek + 1; renderPlanView(); }
   });
 
-  // Jump to current week (shown only when viewing a past week)
+  // Jump to current week (shown only when viewing a past week). Also clears
+  // archive mode so the user comes back to the live plan, not an archived one.
   document.getElementById('plan-jump-current')?.addEventListener('click', () => {
     _viewWeek = null;
+    _viewArchiveIdx = null;
     renderPlanView();
   });
 
@@ -2447,17 +2506,13 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // Keyboard arrow keys for week navigation on web
+  // Keyboard arrow keys for week navigation on web. Mirrors the prev/next
+  // click handlers so arrows also cross plan boundaries into archives.
   const keyHandler = (e: KeyboardEvent) => {
-    if (e.key === 'ArrowLeft' && viewWeek > 1) {
-      _viewWeek = viewWeek - 1;
-      document.removeEventListener('keydown', keyHandler);
-      renderPlanView();
-    } else if (e.key === 'ArrowRight' && viewWeek < s.tw) {
-      _viewWeek = viewWeek + 1;
-      document.removeEventListener('keydown', keyHandler);
-      renderPlanView();
-    }
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    document.removeEventListener('keydown', keyHandler);
+    const trigger = e.key === 'ArrowLeft' ? 'plan-week-prev' : 'plan-week-next';
+    document.getElementById(trigger)?.click();
   };
   document.addEventListener('keydown', keyHandler);
 
@@ -2784,8 +2839,12 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const workoutKey = el.dataset.workoutKey || '';
       const weekNum = parseInt(el.dataset.weekNum || '0', 10);
       if (!workoutKey || !weekNum) return;
-      const s2 = getState();
-      const actual = s2.wks?.[weekNum - 1]?.garminActuals?.[workoutKey];
+      // In archive mode `s` (closure) holds the synthetic archive state;
+      // `getState().wks` is the live plan's array which doesn't contain
+      // the archived week the user just clicked. Without this branch the
+      // popup silently no-ops on every past-plan activity tap.
+      const wksToUse = _viewArchiveIdx !== null ? (s as any).wks : getState().wks;
+      const actual = wksToUse?.[weekNum - 1]?.garminActuals?.[workoutKey];
       if (!actual) return;
       const plannedTSSAttr = parseInt(el.dataset.plannedTss || '0', 10) || 0;
       const { renderActivityDetail } = await import('./activity-detail');
@@ -2800,8 +2859,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const adhocId = el.dataset.adhocId || '';
       const weekNum = parseInt(el.dataset.weekNum || '0', 10);
       if (!adhocId || !weekNum) return;
-      const s2 = getState();
-      const wk2 = s2.wks?.[weekNum - 1];
+      const wksToUse = _viewArchiveIdx !== null ? (s as any).wks : getState().wks;
+      const wk2 = wksToUse?.[weekNum - 1];
       const w = (wk2?.adhocWorkouts || []).find((aw: any) => aw.id === adhocId) as any;
       if (!w) return;
       const fakeActual = {
@@ -2912,8 +2971,10 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     page.addEventListener('touchend', (e) => {
       const dx = e.changedTouches[0].clientX - touchStartX;
       if (Math.abs(dx) > 60) {
-        if (dx < 0 && viewWeek < s.tw) { _viewWeek = viewWeek + 1; renderPlanView(); }
-        if (dx > 0 && viewWeek > 1) { _viewWeek = viewWeek - 1; renderPlanView(); }
+        // Delegate to the same prev/next click handlers so swipes can also
+        // cross plan boundaries into the archive.
+        const trigger = dx < 0 ? 'plan-week-next' : 'plan-week-prev';
+        document.getElementById(trigger)?.click();
       }
     }, { passive: true });
   }
@@ -2922,7 +2983,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
 export function renderPlanView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
-  const s = getState();
+  let s = getState();
 
   // Triathlon fork — route to the tri plan view before any running-specific
   // setup runs. Running and track-only flows below are unaffected.
@@ -2939,14 +3000,76 @@ export function renderPlanView(): void {
     return;
   }
 
+  // Archive mode: swap `s.wks`, `s.planStartDate`, `s.tw` to point at the
+  // archived plan's data so all the existing plan-view rendering logic just
+  // works. We set `s.w` to `archive.weeks.length + 1` so every archived week
+  // is treated as "past" (no Mark-Done / Skip buttons, no "today" indicator).
+  // The original `getState()` is preserved as `_liveState` for handlers that
+  // need the real current week (e.g. archive count, jump-to-current).
+  const archives = ((s as any).previousPlanWks ?? []) as Array<{ planStartDate: string; weeks: any[] }>;
+  const archiveActive = _viewArchiveIdx !== null
+    && _viewArchiveIdx >= 0
+    && _viewArchiveIdx < archives.length;
+  if (archiveActive) {
+    const arc = archives[_viewArchiveIdx!];
+    if (!arc?.weeks?.length) {
+      // Defensive: archive is empty/corrupt — drop back to live plan.
+      _viewArchiveIdx = null;
+      _viewWeek = null;
+    } else {
+      // Truncate archive weeks at the live plan's start at render time too —
+      // the boot migration writes the truncated archive to disk, but a soft
+      // reload (HMR) might not have run that migration yet. This view-time
+      // filter makes the past-plan UI immediately self-correct: a 10-week
+      // plan that got a continuousMode tail-extension week shows as 10 weeks,
+      // not 11.
+      let visibleWeeks = arc.weeks;
+      const liveStartIso = (s as any).planStartDate as string | undefined;
+      if (liveStartIso && arc.planStartDate) {
+        const liveStartMs = new Date(liveStartIso + 'T00:00:00').getTime();
+        const archStartMs = new Date(arc.planStartDate + 'T00:00:00').getTime();
+        let firstOverlapIdx = arc.weeks.length;
+        for (let i = 0; i < arc.weeks.length; i++) {
+          if (archStartMs + i * 7 * 86400 * 1000 >= liveStartMs) {
+            firstOverlapIdx = i;
+            break;
+          }
+        }
+        if (firstOverlapIdx < arc.weeks.length) {
+          visibleWeeks = arc.weeks.slice(0, firstOverlapIdx);
+        }
+      }
+      // If truncation emptied the archive entirely, fall back to live plan
+      // rather than rendering an empty 0/0 view.
+      if (visibleWeeks.length === 0) {
+        _viewArchiveIdx = null;
+        _viewWeek = null;
+      } else {
+        s = {
+          ...(s as any),
+          wks: visibleWeeks,
+          planStartDate: arc.planStartDate,
+          tw: visibleWeeks.length,
+          w: visibleWeeks.length + 1,
+        } as any;
+        // If the user was sitting on a now-truncated week index, snap to the
+        // last surviving week.
+        if (_viewWeek !== null && _viewWeek > visibleWeeks.length) {
+          _viewWeek = visibleWeeks.length;
+        }
+      }
+    }
+  }
+
   const viewWeek = (_viewWeek !== null && _viewWeek >= 1 && _viewWeek <= s.tw)
     ? _viewWeek
     : s.w;
-  if (viewWeek === s.w) maybeInitKmNudge();
+  if (viewWeek === s.w && !archiveActive) maybeInitKmNudge();
   container.innerHTML = getPlanHTML(s, viewWeek);
   wirePlanHandlers(s, viewWeek);
   setOnWeekAdvance(() => {
     _viewWeek = null;
+    _viewArchiveIdx = null;
     renderPlanView();
   });
 
@@ -3311,16 +3434,16 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
           <div style="font-size:13px;color:#64748B;margin-top:2px">Activities only. No plan.</div>
         </div>
 
-        ${currentWeekBlock}
-        ${historyBlock}
-
-        <div class="tp-rise" style="margin-top:22px;animation-delay:0.18s">
+        <div class="tp-rise" style="margin-bottom:18px;animation-delay:0.06s">
           <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px">
-            <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:8px">Want a plan?</div>
-            <div style="font-size:13px;line-height:1.45;color:#475569;margin-bottom:14px">Turn your synced activities into scheduled workouts, load targets, and weekly volume progressions.</div>
+            <div style="font-size:14px;font-weight:600;color:#0F172A;margin-bottom:4px">Start a training plan</div>
+            <div style="font-size:13px;line-height:1.45;color:#475569;margin-bottom:14px">Scheduled workouts, load targets, and weekly progressions built from your activity history.</div>
             <button id="plan-create-btn" class="m-btn-glass">Create a plan</button>
           </div>
         </div>
+
+        ${currentWeekBlock}
+        ${historyBlock}
 
       </div>
       ${renderTabBar('plan', isSimulatorMode())}

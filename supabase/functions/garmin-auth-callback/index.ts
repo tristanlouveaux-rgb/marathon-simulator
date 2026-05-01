@@ -3,6 +3,32 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // Garmin OAuth 2.0 token endpoint (from OAuth2PKCE spec)
 const GARMIN_TOKEN_URL = "https://diauth.garmin.com/di-oauth2-service/oauth/token";
 
+/**
+ * Decide where to redirect the user after a successful OAuth handshake.
+ *
+ * If the client passed an origin via the auth-start request body (used for
+ * multi-port dev — e.g. running localhost:5173 alongside localhost:5175 for
+ * onboarding tests) and that origin passes the allowlist, redirect there.
+ * Otherwise fall back to the env-default `APP_REDIRECT_URL`.
+ *
+ * Allowlist policy (open-redirect protection):
+ *   - Any localhost / 127.0.0.1 origin (dev — any port allowed).
+ *   - The configured production URL exactly.
+ *   - Anything else → reject and use the env-default.
+ */
+function pickRedirectTarget(clientOrigin: string | null | undefined, envDefault: string): string {
+  if (!clientOrigin) return envDefault;
+  try {
+    const u = new URL(clientOrigin);
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return clientOrigin;
+    if (clientOrigin === envDefault) return clientOrigin;
+    // Allow same-host as env default (e.g. preview deploys on the prod domain).
+    const envUrl = new URL(envDefault);
+    if (u.hostname === envUrl.hostname) return clientOrigin;
+  } catch { /* fall through */ }
+  return envDefault;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
@@ -44,7 +70,7 @@ Deno.serve(async (req) => {
     // --- 1. Look up the pending auth request ---
     const { data: row, error: selErr } = await supabase
       .from("garmin_auth_requests")
-      .select("user_id, code_verifier")
+      .select("user_id, code_verifier, app_origin")
       .eq("state", state)
       .maybeSingle();
 
@@ -55,7 +81,11 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { user_id: userId, code_verifier: codeVerifier } = row;
+    const { user_id: userId, code_verifier: codeVerifier, app_origin: clientOrigin } = row;
+
+    // Pick the redirect target. If the client passed its origin (multi-port
+    // dev) and it's allowed, use that — otherwise fall back to the env-default.
+    const redirectTarget = pickRedirectTarget(clientOrigin, appRedirectUrl);
 
     // --- 2. Exchange authorization code for tokens ---
     const tokenBody = new URLSearchParams({
@@ -160,8 +190,8 @@ Deno.serve(async (req) => {
       console.error("[garmin-auth-callback] Post-auth error:", regErr);
     }
 
-    // --- 6. Redirect back to the app ---
-    return Response.redirect(`${appRedirectUrl}?garmin=connected`, 302);
+    // --- 6. Redirect back to the app (origin-aware — see pickRedirectTarget) ---
+    return Response.redirect(`${redirectTarget}?garmin=connected`, 302);
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,

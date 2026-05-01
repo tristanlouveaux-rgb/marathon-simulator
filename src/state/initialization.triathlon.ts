@@ -12,6 +12,7 @@
 
 import type { OnboardingState } from '@/types/onboarding';
 import type { CalculationResult } from './initialization';
+import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from './initialization';
 import type { TriConfig } from '@/types/triathlon';
 import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
@@ -23,6 +24,7 @@ import {
   DEFAULT_WEEKLY_PEAK_HOURS,
 } from '@/constants/triathlon-constants';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
+import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import type { GarminActual } from '@/types/state';
 
 /**
@@ -68,19 +70,37 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // values get 'derived' below if they overwrite.
     if (state.triBike?.ftp) {
       bike.ftpSource = 'user';
+      // Wizard-entered FTP without a 20-min test on file is medium-confidence
+      // (it's an estimate the user typed). With the test, treat as 'high'.
+      bike.ftpConfidence = bike.twentyMinW ? 'high' : 'medium';
     }
     if (!bike.ftp && derived.ftp.ftpWatts) {
       bike.ftp = derived.ftp.ftpWatts;
       bike.ftpSource = 'derived';
+      bike.ftpConfidence = derived.ftp.confidence;
       bike.hasPowerMeter = bike.hasPowerMeter ?? true;
     }
     const swim = { ...(state.triSwim ?? {}) };
     if (state.triSwim?.cssSecPer100m) {
       swim.cssSource = 'user';
+      // Wizard-entered CSS with paired m400+m200 PBs = paired-TT result = high.
+      // Without the pair = medium (a single-source estimate the user typed).
+      const hasPair = !!(swim.pbs?.m400 && swim.pbs?.m200);
+      swim.cssConfidence = hasPair ? 'high' : 'medium';
     }
     if (!swim.cssSecPer100m && derived.css.cssSecPer100m) {
       swim.cssSecPer100m = derived.css.cssSecPer100m;
       swim.cssSource = 'derived';
+      swim.cssConfidence = derived.css.confidence;
+    }
+
+    // Seed history with whatever value we ended up with — gives the trend
+    // charts on the Progress detail page a starting point for new users.
+    if (bike.ftp) {
+      appendFtpSample(bike, bike.ftp, bike.ftpSource ?? 'user', bike.ftpConfidence);
+    }
+    if (swim.cssSecPer100m) {
+      appendCssSample(swim, swim.cssSecPer100m, swim.cssSource ?? 'user', swim.cssConfidence);
     }
 
     const triConfig: TriConfig = {
@@ -99,6 +119,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
         run:  derived.fitness.run,
         combinedCtl: derived.fitness.combinedCtl,
       },
+      fitnessHistory: derived.fitnessHistory.slice(-52),
       generatorVersion: TRI_GENERATOR_VERSION,
     };
 
@@ -142,10 +163,18 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     s.rec = state.recentRace ?? null;
     s.schemaVersion = STATE_SCHEMA_VERSION;
 
+    // Personal physiology for iTRIMP, max-HR estimates, FTP/kg tier derivation.
+    if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
+    if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
+    s.onboarding = state;
+
     // Clear running-mode race selection so tri views don't show stale
     // marathon-mode race data (title, countdown caption).
     s.selectedMarathon = undefined;
 
+    // Archive existing wks (running plan, track-only buckets, or a previous
+    // triathlon plan) so daily history survives mode switches.
+    archiveCurrentWksIfPopulated();
     // Plan generation — replaces any previously-stored running weeks.
     s.wks = generateTriathlonPlan(s);
 
@@ -154,6 +183,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     s.currentFitness = null;
     s.forecastTime = null;
 
+    redistributeArchivedActivitiesToNewPlan();
     saveState();
     return { success: true };
   } catch (err) {

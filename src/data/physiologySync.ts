@@ -104,47 +104,48 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     const result: PhysiologySnapshot = { vo2: null, restingHR: null, maxHR: null, ltPace: null, ltHR: null };
 
-    // VO2max: prefer latestPhysio.vo2_max_running (running-specific, from Garmin's
-    // userMetrics endpoint — matches what Garmin Connect shows). Fall back to
-    // daily_metrics.vo2max, which is the generic dailies value and can include
-    // cycling/cardio estimates that diverge from Running VO2 Max.
+    // VO2max: ONLY accept `physiology_snapshots.vo2_max_running` from Garmin's
+    // userMetrics endpoint (matches the watch's "Running VO2 Max" screen).
     //
-    // Walk backwards through the daily rows to find the most recent *non-null*
-    // vo2max — Garmin only stamps vo2Max on days when the value changes, so the
-    // latest row is usually null and the real value lives a few days back.
-    let latestDailyVo2: number | null = null;
-    let latestDailyVo2Date: string | undefined;
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const v = rows[i].vo2max;
-      if (v != null && v > 0) {
-        latestDailyVo2 = v;
-        latestDailyVo2Date = rows[i].calendar_date;
-        break;
-      }
-    }
+    // We deliberately do NOT fall back to `daily_metrics.vo2max`. The dailies
+    // value is Garmin's generic cardio estimate and can carry cycling/cardio
+    // values that diverge from the running-specific number on the watch face.
+    // Historical bug: a stale dailies value (e.g. 53 from a cycling reading) was
+    // sticking on `s.vo2` even when physiology_snapshots had a fresher running
+    // value (56). If userMetrics has never pushed for this account, `s.vo2`
+    // stays null and the UI falls through to computed VDOT, labelled "(est.)".
     const vo2Value = (data.latestPhysio?.vo2_max_running != null && data.latestPhysio.vo2_max_running > 0)
       ? data.latestPhysio.vo2_max_running
-      : latestDailyVo2;
+      : null;
 
-    if (vo2Value != null && vo2Value > 0) {
+    if (vo2Value != null) {
       result.vo2 = vo2Value;
       s.vo2 = vo2Value;
       changed = true;
-    } else if (s.vo2 != null && rows.length > 0) {
-      // Garmin IS returning daily rows but none of them carry a vo2Max value and
-      // physiology_snapshots has no userMetrics row either. s.vo2 is almost
-      // certainly a stale wizard seed (or a value from an older Garmin connection).
-      // Clear it so the UI falls back to computeCurrentVDOT() rather than pinning
-      // a number that never updates. We only clear when rows.length > 0 to avoid
-      // wiping the seed for users who haven't connected Garmin at all.
-      console.log(`[PhysiologySync] Clearing stale s.vo2=${s.vo2} — ${rows.length} daily rows returned, none carried vo2max`);
+    } else if (s.vo2 != null && (rows.length > 0 || hasLatestPhysio)) {
+      // Sync ran successfully (we got rows or a latestPhysio row back) but
+      // userMetrics has not delivered a running-VO2 value. Clear any stale
+      // s.vo2 so the UI shows our own VDOT estimate rather than pinning a
+      // possibly-wrong device number. Only clear when the sync actually
+      // returned data — we don't want to wipe state on a transient empty
+      // response (rate limit, network blip).
+      console.log(`[PhysiologySync] Clearing stale s.vo2=${s.vo2} — physiology_snapshots has no vo2_max_running for this account`);
       s.vo2 = undefined as unknown as number;
       changed = true;
     }
 
-    if (latest.resting_hr != null && latest.resting_hr > 0) {
-      result.restingHR = latest.resting_hr;
-      s.restingHR = latest.resting_hr;
+    // Walk backwards through daily rows to find the most recent non-null RHR.
+    // Garmin populates resting_hr overnight after a sleep cycle, so today's row
+    // is null until tomorrow's sync — without the walk-back, fresh Garmin
+    // connections leave s.restingHR undefined and gate off HR-calibrated VDOT.
+    let latestRHR: number | null = null;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const v = rows[i].resting_hr;
+      if (v != null && v > 0) { latestRHR = v; break; }
+    }
+    if (latestRHR != null) {
+      result.restingHR = latestRHR;
+      s.restingHR = latestRHR;
       changed = true;
     }
 
@@ -221,7 +222,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       saveState();
       console.log(`[PhysiologySync] State updated: vo2=${result.vo2} rhr=${result.restingHR} maxHR=${result.maxHR} ltPace=${result.ltPace} ltHR=${result.ltHR}`);
     }
-    console.log(`[PhysiologySync] sources: latestPhysio.vo2_max_running=${data.latestPhysio?.vo2_max_running ?? 'null'} dailyRows=${rows.length} latest.vo2max=${latest.vo2max ?? 'null'} latestDailyVo2=${latestDailyVo2 ?? 'null'}@${latestDailyVo2Date ?? 'n/a'} — s.vo2=${s.vo2}`);
+    console.log(`[PhysiologySync] sources: latestPhysio.vo2_max_running=${data.latestPhysio?.vo2_max_running ?? 'null'}@${data.latestPhysio?.calendar_date ?? 'n/a'} dailyRows=${rows.length} — s.vo2=${s.vo2}`);
 
     return result;
   } catch (err) {

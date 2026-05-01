@@ -1,6 +1,6 @@
 import type { OnboardingState, RunnerExperience } from '@/types/onboarding';
 import type { PBs } from '@/types/training';
-import { updateOnboarding } from '../controller';
+import { updateOnboarding, nextStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
@@ -288,7 +288,7 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
   document.getElementById('manual-continue')?.addEventListener('click', () => {
     commitPbs();
     commitVolume();
-    if (typeof window.wizardNext === 'function') window.wizardNext();
+    nextStep();
   });
 }
 

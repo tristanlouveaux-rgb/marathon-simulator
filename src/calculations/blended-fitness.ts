@@ -17,6 +17,7 @@ import { blendPredictions, calculateLiveForecast } from './predictions';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv } from './vdot';
+import { recomputeLT } from '@/data/ltSync';
 
 const DIST_M: Record<RaceDistance, number> = {
   '5k': 5000,
@@ -83,6 +84,9 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     n: hrVdot.n,
     r2: hrVdot.r2,
     reason: hrVdot.reason,
+    alpha: hrVdot.alpha,
+    beta: hrVdot.beta,
+    points: hrVdot.points,
   };
 
   // Pre-blend reconciliation: when no race distance has been picked yet
@@ -94,6 +98,17 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // branch because s.rd is set.
   if (!s.rd && hrVdot.vdot != null && (hrVdot.confidence === 'high' || hrVdot.confidence === 'medium')) {
     s.v = hrVdot.vdot;
+  }
+
+  // Recompute LT pace from PBs + maxHR + sustained Strava efforts, even if no
+  // race distance is set yet. Daniels (from VDOT) and critical-speed (from PBs)
+  // both fire without HR data, so a Strava-only user gets a usable s.lt
+  // immediately on backfill. When Garmin LT later pushes via syncPhysiologySnapshot,
+  // the priority chain in resolveLT() upgrades to it automatically.
+  try {
+    recomputeLT(s);
+  } catch (e) {
+    console.warn('[refreshBlendedFitness] recomputeLT failed:', e);
   }
 
   if (!s.rd || !s.pbs || !s.b) return false;

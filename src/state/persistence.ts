@@ -1,9 +1,9 @@
 import type { SimulatorState, CrossActivity, RunnerType } from '@/types';
 import type { GarminPendingItem } from '@/types/state';
 import { savePlanSettings } from '@/data/planSettingsSync';
-import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION, TRIATHLON_FIELDS_VERSION } from '@/types/state';
+import { STATE_SCHEMA_VERSION, RUNNER_TYPE_SEMANTICS_FIX_VERSION, TRIATHLON_FIELDS_VERSION, VO2_DEVICE_ONLY_VERSION } from '@/types/state';
 import { defaultOnboardingState } from '@/types/onboarding';
-import { setState, setCrossActivities, getState, getCrossActivities } from './store';
+import { setState, setCrossActivities, getState, getCrossActivities, getDefaultState } from './store';
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
 import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
@@ -112,6 +112,32 @@ function migrateState(loaded: SimulatorState): SimulatorState {
     }
   }
 
+  // Migration to version 4: Drop possibly-non-running VO2 values.
+  // Pre-v4, `s.vo2` and `physiologyHistory[].vo2max` could be sourced from
+  // `daily_metrics.vo2max`, which is Garmin's generic cardio estimate and can
+  // include cycling-derived values that diverge from the watch's "Running VO2
+  // Max" screen. Clear them — physiology sync will repopulate strictly from
+  // `physiology_snapshots.vo2_max_running` on next launch, or leave null and
+  // fall through to estimated VDOT in the UI.
+  if (currentVersion < VO2_DEVICE_ONLY_VERSION) {
+    if (loaded.vo2 != null) {
+      console.log(`  Clearing pre-v4 s.vo2=${loaded.vo2} (may have been sourced from daily_metrics.vo2max). Physiology sync will repopulate from physiology_snapshots.vo2_max_running.`);
+      (loaded as { vo2?: number | null }).vo2 = null;
+    }
+    if (loaded.physiologyHistory && loaded.physiologyHistory.length > 0) {
+      let clearedHistory = 0;
+      for (const entry of loaded.physiologyHistory) {
+        if (entry.vo2max != null) {
+          entry.vo2max = undefined;
+          clearedHistory++;
+        }
+      }
+      if (clearedHistory > 0) {
+        console.log(`  Cleared vo2max from ${clearedHistory} physiologyHistory entries (will repopulate on next sync from running-specific source).`);
+      }
+    }
+  }
+
   // Update schema version
   loaded.schemaVersion = STATE_SCHEMA_VERSION;
 
@@ -133,7 +159,9 @@ function validateState(loaded: SimulatorState): boolean {
     (loaded.v && (loaded.v < 10 || loaded.v > 90)) || // VDOT out of human range
     (loaded.b && (isNaN(loaded.b) || loaded.b < 0.8 || loaded.b > 1.5)) || // Fatigue exponent out of range
     (loaded.w && loaded.tw && loaded.w > loaded.tw + 1) || // Week beyond plan length
-    (loaded.wks && loaded.tw && loaded.wks.length !== loaded.tw); // Week array length mismatch
+    // Week array length mismatch — only flag once a plan has been generated.
+    // An empty `wks` simply means onboarding hasn't built the plan yet, not corruption.
+    (loaded.wks && loaded.wks.length > 0 && loaded.tw && loaded.wks.length !== loaded.tw);
 
   if (isBroken) {
     console.log('BROKEN DATA DETECTED - Auto-clearing localStorage');
@@ -238,12 +266,17 @@ export function loadState(): boolean {
     const saved = localStorage.getItem(STATE_KEY);
     if (!saved) return false;
 
-    const loaded = JSON.parse(saved) as SimulatorState;
+    const parsed = JSON.parse(saved) as Partial<SimulatorState>;
+    // Defensive merge: an older soft-reset wrote a partial blob (just
+    // `onboarding` + `hasCompletedOnboarding`), which used to wipe defaults
+    // like `wks`, `v`, `pbs`, `lt`. Merging with defaults here recovers
+    // any user still carrying that broken localStorage payload.
+    const loaded = { ...getDefaultState(), ...parsed } as SimulatorState;
 
     if (!validateState(loaded)) {
       localStorage.removeItem(STATE_KEY);
       localStorage.removeItem(CROSS_KEY);
-      alert('Detected corrupted data. Please re-initialize your plan.');
+      console.warn('[persistence] Stored state failed validation — cleared localStorage and starting fresh.');
       return false;
     }
 
@@ -510,8 +543,12 @@ export function softResetState(): void {
     currentStep: ob?.name ? 'goals' as const : 'welcome' as const,
   };
 
-  // Atomic write: build fresh state with preserved onboarding, write in one go
-  const freshState: Partial<SimulatorState> = {
+  // Atomic write: build a COMPLETE fresh state (defaults + preserved onboarding).
+  // Writing a partial blob here used to wipe `wks`, `v`, `pbs`, `lt`, etc. on
+  // the next launch — loadState() does setState(migrated), which replaces the
+  // in-memory state outright. The wizard then crashed at `rt.wks.length`.
+  const freshState: SimulatorState = {
+    ...getDefaultState(),
     onboarding: preserved,
     hasCompletedOnboarding: false,
   };

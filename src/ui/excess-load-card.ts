@@ -258,6 +258,15 @@ export function triggerExcessLoadAdjustment(): void {
   const wk = s.wks?.[s.w - 1];
   if (!wk) return;
 
+  // Mode safety: this card and trigger are running-mode only. The tri plan-view
+  // (`src/ui/triathlon/plan-view.ts`) does not render the carry-over card or
+  // any "Adjust Plan" button that calls this function. If a future refactor
+  // wires this into the tri plan-view by mistake, the running-modal popup it
+  // builds (with running-plan adjustments) will be wrong for tri mode. Tri
+  // surfaces equivalent overload via `detectCrossTrainingOverload` and the
+  // tri suggestion modal. See ISSUE-151.
+  if (s.eventType === 'triathlon') return;
+
   // Compute total week excess (Signal B vs plannedSignalB)
   const excess = computeTotalWeekExcess(wk, s);
   const hasCarriedItems = (wk.unspentLoadItems?.length ?? 0) > 0;
@@ -348,7 +357,7 @@ export function triggerExcessLoadAdjustment(): void {
   const weekRuns = workoutsToPlannedRuns(remainingWorkouts, s.pac);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined);
+  const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const ctx = {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
@@ -449,7 +458,7 @@ function _triggerCarryoverToNextWeek(
   const weekRuns = workoutsToPlannedRuns(nextWeekWorkouts, s.pac);
   const _tier2 = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined);
+  const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const ctx = {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,

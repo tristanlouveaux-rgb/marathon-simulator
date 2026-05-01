@@ -143,10 +143,43 @@ describe('deriveLTFromSustainedEfforts', () => {
     expect(deriveLTFromSustainedEfforts([surgy], maxHR, NOW)).toBeNull();
   });
 
-  it('rejects efforts with >5% pace decoupling', () => {
-    // Second half 8% slower than first.
-    const decoupled = { ...goodEffort, kmSplits: [230, 232, 228, 252, 254, 256] };
-    expect(deriveLTFromSustainedEfforts([decoupled], maxHR, NOW)).toBeNull();
+  it('accepts short tempos with high decoupling when pace is steady', () => {
+    // Real-world case: 41-min tempo at threshold pace where the runner held
+    // steady 4:05/km but HR drifted because they were near the limit. Pace
+    // CV is low (steady), pace decoupling is high (HR/effort drift). Under
+    // the joint gate rule, steady pace alone is sufficient evidence for a
+    // short tempo — that's the LT signal, not the drift.
+    const tempoWithDrift = {
+      ...goodEffort,
+      // Pace splits steady to ~3% CV but with a slight build (proxy for HR drift fallback).
+      kmSplits: [243, 245, 244, 246, 244, 248],
+      hrDrift: 8.5, // direct HR-stream drift, would fail the strict test alone
+    };
+    const result = deriveLTFromSustainedEfforts([tempoWithDrift], maxHR, NOW);
+    expect(result).not.toBeNull();
+    expect(result?.nQualifying).toBe(1);
+  });
+
+  it('rejects short efforts when both signals fail', () => {
+    // Both pace CV and HR drift exceed thresholds → no steady-state evidence.
+    const noisy = {
+      ...goodEffort,
+      kmSplits: [200, 280, 210, 290, 205, 285], // CV ~17%
+      hrDrift: 12, // and HR drifted hard
+    };
+    expect(deriveLTFromSustainedEfforts([noisy], maxHR, NOW)).toBeNull();
+  });
+
+  it('rejects long runs (>60min) unless both pace and HR are steady', () => {
+    // 90-min run with low HR drift but unsteady pace — one signal isn't
+    // enough at this duration. Drift confounds grow with time on feet.
+    const longUnsteady = {
+      ...goodEffort,
+      durationSec: 90 * 60,
+      kmSplits: Array(15).fill(0).map((_, i) => 240 + (i % 2 === 0 ? -25 : 25)), // CV ~10%
+      hrDrift: 1.0,
+    };
+    expect(deriveLTFromSustainedEfforts([longUnsteady], maxHR, NOW)).toBeNull();
   });
 
   it('weights recent efforts more than old ones', () => {

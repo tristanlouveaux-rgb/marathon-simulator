@@ -81,7 +81,7 @@ export interface Workout extends WorkoutDefinition {
   skipped?: boolean;            // Was this skipped from previous week
   skipCount?: number;           // Number of times skipped
   originalName?: string;        // Original name if renamed
-  status?: 'planned' | 'reduced' | 'replaced' | 'skipped';
+  status?: 'planned' | 'reduced' | 'replaced' | 'skipped' | 'completed';
   modReason?: string;           // Modification reason
   confidence?: 'high' | 'medium' | 'low';
   originalDistance?: string;    // Original distance before modification
@@ -254,6 +254,13 @@ export interface GarminActual {
   maxWatts?: number | null;
   deviceWatts?: boolean | null;
   kilojoules?: number | null;
+  /** Best mean-max watts for fixed time windows, computed from the watts
+   * stream during sync. Drives the FTP estimator (top-1 candidate ride
+   * within 12 weeks). Null on non-rides, on rides without a real power
+   * meter, and on rows that never received a stream fetch (older than 26
+   * weeks or below the budget cutoff). Fields may be individually null
+   * when the ride was shorter than that window. */
+  powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null;
 }
 
 /** Per-lap split from Garmin activity details */
@@ -339,7 +346,7 @@ export interface Week {
 }
 
 /** State schema version for migrations */
-export const STATE_SCHEMA_VERSION = 3;
+export const STATE_SCHEMA_VERSION = 4;
 
 /** Version where runner type semantics were fixed (Speed↔Endurance swap) */
 export const RUNNER_TYPE_SEMANTICS_FIX_VERSION = 2;
@@ -348,6 +355,14 @@ export const RUNNER_TYPE_SEMANTICS_FIX_VERSION = 2;
  * State at this version or higher is guaranteed to have `eventType` set
  * (defaults to 'running' for existing users during migration). */
 export const TRIATHLON_FIELDS_VERSION = 3;
+
+/** Version where `s.vo2` and `physiologyHistory[].vo2max` became running-specific only.
+ * Pre-v4 these fields could carry `daily_metrics.vo2max` values, which include
+ * Garmin's generic cardio estimate and can be cycling-derived. Migration clears
+ * any persisted `s.vo2` so the next physiology sync repopulates it strictly from
+ * `physiology_snapshots.vo2_max_running` (or leaves it null, falling back to
+ * estimated VDOT). */
+export const VO2_DEVICE_ONLY_VERSION = 4;
 
 /** Main simulator state */
 export interface SimulatorState {
@@ -465,6 +480,15 @@ export interface SimulatorState {
   isAdmin?: boolean;
   trialExpiry?: string;  // ISO date string
 
+  // Auth
+  // True when the Supabase session is anonymous (auto-created on first launch).
+  // Refreshed on every launch from session.user.is_anonymous — never persisted
+  // beyond the current run. Drives the guest-account banner and the Account
+  // view's "Save your account" affordance.
+  isGuestAccount?: boolean;
+  // User dismissed the one-time Home banner. The Account view section stays.
+  guestBannerDismissed?: boolean;
+
   // Integrations
   stravaConnected?: boolean;
   wearable?: 'garmin' | 'apple' | 'strava';  // Legacy — use accessors in src/data/sources.ts
@@ -475,6 +499,7 @@ export interface SimulatorState {
 
   // Physiology / accuracy
   biologicalSex?: 'male' | 'female' | 'prefer_not_to_say';  // Used for iTRIMP β coefficient (unset → male default)
+  bodyWeightKg?: number;  // Bodyweight in kg. FTP→W/kg, load refinements. Falls back to 75kg M / 62kg F when unset.
 
   // Plan start date (ISO YYYY-MM-DD) — anchor for all week date ranges
   planStartDate?: string;
@@ -510,10 +535,19 @@ export interface SimulatorState {
     n: number;
     r2: number | null;
     reason?: 'no-rhr' | 'no-maxhr' | 'no-points' | 'bad-fit' | 'too-few-points';
+    alpha?: number | null;
+    beta?: number | null;
+    points?: Array<{ vo2r: number; paceSecKm: number; durationSec: number }>;
   };
 
   // Per-run summary cached at onboarding so the first blend has Tanda inputs
   // without waiting a week for standalone sync to fill garminActuals.
+  // The rich quality fields (avgPaceSecKm, kmSplits, hrDrift, elevation, temp)
+  // are optional — populated when we can seed from the DB (post-backfill, via
+  // `loadActivitiesFromDB`), absent when seeded only from the edge function's
+  // lightweight `result.runs` summary. The empirical LT path treats absent
+  // fields as "filter does not apply", so coarsely-seeded entries still feed
+  // duration + HR-band gates while richer seeds also gate on decoupling/CV.
   onboardingRunHistory?: Array<{
     startTime: string;
     distKm: number;
@@ -521,11 +555,29 @@ export interface SimulatorState {
     activityType: string;
     activityName?: string;
     avgHR?: number | null;
+    avgPaceSecKm?: number | null;
+    hrDrift?: number | null;
+    kmSplits?: number[] | null;
+    elevationGainM?: number | null;
+    ambientTempC?: number | null;
   }>;
 
+  /** ISO timestamp of the user's earliest Strava activity, fetched once on first
+   * triathlon prediction. Drives years-of-training → experience-level mapping in
+   * the horizon adjuster (Joyner & Coyle 2008 — durability scales with years
+   * beyond what CTL captures). Null if Strava is not connected or fetch failed. */
+  firstStravaActivityISO?: string | null;
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
   stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
   ambientTempHealDone?: boolean;            // True once the post-column backfill heal has fetched ambient_temp_c for historical runs
+  /** ISO timestamp of the most recent successful backfillStravaHistory completion.
+   * Drives the weekly refresh of historicWeeklyTSS / signalBBaseline / ctlBaseline:
+   * if older than 7 days, startup re-runs backfill so the baselines track recent
+   * training instead of freezing at first-sync values. */
+  historicLastRefreshedAt?: string;
+  /** ISO timestamp of the most recent successful DB-duplicate cleanup pass. Triggers
+   * a re-scan after ~30 days. Cleared when a re-scan should fire on next launch. */
+  dbDedupCompletedAt?: string;
   historicWeeklyTSS?: number[];             // Signal A: running-equiv TSS per week, oldest first (8 weeks)
   historicWeeklyRawTSS?: number[];          // Signal B: raw physiological TSS per week, oldest first (no runSpec discount)
   historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
@@ -602,6 +654,11 @@ export interface SimulatorState {
   // reclassifies an activity via the sport picker.
   sportNameMappings?: Record<string, import('./activities').SportKey>;
 
+  // Activities the user has explicitly discarded. Future syncs (Strava + Garmin) skip these IDs
+  // so a backfill duplicate that was deleted does not re-import. Stores the raw garminId
+  // (numeric for Garmin, "strava-{id}" for Strava).
+  ignoredGarminIds?: string[];
+
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
 
@@ -623,6 +680,54 @@ export interface SimulatorState {
   // Today's subjective feeling — one-tap daily check-in from the Coach sub-page.
   // Expires at end of day (check `date === todayISO()` before reading).
   todayFeeling?: { value: 'struggling' | 'ok' | 'good' | 'great'; date: string } | null;
+
+  // Completed plan history — appended when the user finishes the plan-complete debrief.
+  completedPlans?: CompletedPlanSummary[];
+
+  // Archived weeks from prior plans. Captured by `initializeSimulator` whenever
+  // `s.wks` is replaced with a fresh plan, so daily activity history (garminActuals,
+  // adhocWorkouts, ratings) survives plan resets. Read by rolling-load, coach,
+  // freshness, and stats views as an historic data source independent of the
+  // current plan's date range. Capped to keep state size bounded.
+  previousPlanWks?: Array<{
+    planStartDate: string;       // ISO date for week 1 of that plan
+    weeks: any[];                // Week[] — typed loosely to avoid forward-ref churn
+    archivedAt: string;          // ISO date when archived
+  }>;
+
+  /**
+   * Timestamp of the last successful auto-restore from `garmin_activities`.
+   * `main.ts` boot sequence checks this and re-runs the restore if older than
+   * 24h, so a long-term user who clears localStorage (or whose state ever gets
+   * partially wiped) self-heals on the next launch — Strava's table is the
+   * source of truth, local `previousPlanWks` is a hot cache.
+   */
+  lastHistoryAutoRestoreISO?: string;
+}
+
+/** Summary of a completed training plan, stored permanently for plan-history view in Stats. */
+export interface CompletedPlanSummary {
+  completionDate: string;       // ISO date (YYYY-MM-DD)
+  planStartDate: string;
+  totalWeeks: number;
+  raceDistance: string;
+  raceName?: string;
+  totalActualKm: number;
+  peakWeekKm: number;
+  adherencePct: number | null;
+  vdotStart: number;
+  vdotEnd: number;
+  predictedTimeSec?: number;
+  weeklyKm: number[];
+  weeklyPhases: string[];
+  // Granular stats — preserved so "Total" tab can show all-time aggregates
+  totalRuns?: number;
+  longestRunKm?: number;
+  totalTimeSec?: number;
+  totalCalories?: number;
+  fastest5kSec?: number;
+  fastest10kSec?: number;
+  fastestHalfSec?: number;
 }
 
 /** Workout parsing result */

@@ -10,6 +10,91 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ## 🔴 TOP PRIORITY — Next session
 
+### ISSUE-151: Triathlon mode shows the running suggestion modal for cross-training overload *(P2, 2026-04-30)* — **🟡 awaiting in-app confirmation**
+
+**Status**: Code changes shipped 2026-04-30 (see CHANGELOG). Per CLAUDE.md issue-tracking workflow, do not mark `✅ FIXED` until Tristan has confirmed the fix in-app on a real Ironman setup. To verify: in tri mode, sync (or manually log) a cross-training session of ~80–90 min that pushes the week ~20% over plan — expect the **tri** suggestion modal (per-discipline mod, no "easy running equivalent" copy), not the running modal.
+
+**What changed**:
+1. New detector `src/calculations/tri-cross-training-overload.ts` — fires when cross-training TSS > 15% of planned weekly tri TSS.
+2. Wired into `tri-suggestion-aggregator.ts` as a fourth detector (source: `'cross_training_overload'`).
+3. Mode-aware modal routing — running modal suppressed in tri mode at: `activity-review.ts` (both `showSuggestionModal` callsites + new `redirectToTriSuggestionFlow` helper), `events.ts:logActivity`, `main-view.ts:triggerACWRReduction`, `excess-load-card.ts:triggerExcessLoadAdjustment` (defensive). `gps/recording-handler.ts:196` deliberately untouched (run-only, see CHANGELOG entry for rationale).
+4. 11 unit tests + 1 aggregator integration test pinning thresholds and the running/tri routing.
+
+**Once Tristan confirms in-app**: change status to `✅ FIXED` and move to the resolved section.
+
+---
+
+### ISSUE-152: Triathlon — real-world dogfooding before next feature push *(P1, 2026-04-30)*
+
+**Context**: Across the last few sessions we've shipped a substantial body of triathlon work — race prediction (Phases 1, 2A, 2B), course-aware scoring, durability cap, suggestion modal, sync-time activity matching, per-session HR effort scoring (bike + swim), `triEffortMultiplier` auto-progression, race-outcome logging, marker-bump toasts, and the end-of-week debrief modal. 1234 tests pass. **None of it has been validated against real-world activity data over multiple weeks.**
+
+**Why this is a P1**: Tristan is doing an actual 24-week IM build. The next high-leverage move isn't another feature — it's noticing what's wrong, missing, or annoying when the system runs against real activity, real RPE ratings, real marker bumps. We've built faster than we've validated.
+
+**What "doing this" looks like**:
+1. Use the app daily for 1–2 weeks of actual training.
+2. Each time something feels off (prediction stale, multiplier didn't apply, marker bump didn't surface, debrief modal said something weird, a session's RPE didn't propagate), dump it in `.claude/TL thoughts`.
+3. Next session: triage TL thoughts into discrete issues, fix the top 5.
+
+**Concrete things to watch for**:
+- Marker-bump toast actually fires on a real CSS / FTP / VDOT improvement
+- Effort multiplier visibly changes session durations after 2 consecutive easy-rated weeks
+- End-of-week debrief fires on Monday morning with sensible content
+- Suggestion modal fires when expected (volume-ramp, RPE-blown, readiness)
+- Race-day handling once the user actually races
+
+**No code change required.** This is a process item — once we have field data, we'll know what's worth building.
+
+---
+
+### ISSUE-153: Triathlon — completed-efforts tracking page (mirror running's pattern) *(P2, 2026-04-30)*
+
+**Context**: Running mode has a tracking surface that shows completed sessions vs planned (effort scores, pace adherence, HR drift per session). Triathlon has none of that — a completed `triWorkout` shows `status='completed'` in state but the user has no surface to review their week of completed sessions per discipline.
+
+**Why this matters**: It's the largest user-facing gap remaining in tri mode. The Stats page shows the forecast and adaptation; the Load page shows training load; but neither shows "here are the sessions I actually did, how I rated them, and how my HR / pace tracked vs planned".
+
+**What it looks like**:
+- New tri view (likely `src/ui/triathlon/tri-tracking-view.ts`) accessible from Stats or Plan
+- Per-week list of completed sessions grouped by discipline
+- Each row: workout name, planned vs actual duration, RPE rated, `hrEffortScore` (if available), `paceAdherence` (if available)
+- Sparkline of effort trend per discipline (RPE deviation week-over-week)
+
+**Mirror reference**: Running's progress views (`src/ui/triathlon/progress-detail-view.ts` for visual style, plus running's activity history surfaces). Per CLAUDE.md mirror rule, structure should match.
+
+**Estimated**: ~3–4 hours.
+
+---
+
+### ISSUE-154: Triathlon — manual brick tagging *(P3, 2026-04-30)*
+
+**Context**: Brick auto-detection (`detectBricks` in `src/calculations/brick-detector.ts`) pairs a bike followed by a run within 30 minutes. Some users record bike + run as a *single* Strava activity (sport: brick or multi-sport) — auto-detection misses these.
+
+**Fix**: Let the user manually tag two activities as a brick pair from the activity-detail modal. Store linkage on `garminActuals.brickPairId` (UUID generated on tag); `runTriActivityMatching` checks `brickPairId` first, falls through to auto-detection.
+
+**Files involved**:
+- `src/types/state.ts`: add `GarminActual.brickPairId?: string` (optional per iOS-ship rule)
+- `src/ui/activity-detail.ts`: add "Tag as brick" action + picker for partner activity
+- `src/main.ts → runTriActivityMatching`: read `brickPairId` before falling through to `detectBricks`
+
+**Estimated**: ~1–2 hours.
+
+---
+
+### ISSUE-155: Triathlon — per-discipline rawTSS routing for non-power-meter cyclists *(P3, 2026-04-30)*
+
+**Context**: `computeBikeTssFromHr` (HR-based bike TSS) and `computeSwimTss` (pace-based swim TSS) exist in `src/calculations/triathlon-tss.ts:71–86` and `:30–40` but are never called. Currently in tri mode, bike and swim activities don't reach per-discipline CTL because `rawTSS` computation is gated to running activities (`activity-matcher.ts:605`).
+
+**Effect**: Users without a power meter get less accurate per-discipline CTL/ATL/Form readings. The display falls back to whatever the matrix-based estimator produces, which is conservative.
+
+**Fix**: extend `activity-matcher.ts` so in tri mode:
+- Bike with power → `computeBikeTssFromPower` (squared IF) — already exists
+- Bike with HR only → `computeBikeTssFromHr`
+- Swim with pace → `computeSwimTss` (cubic IF, Toussaint 1992)
+- Result writes to `garminActuals.rawTSS` for tri mode (parallel to running)
+
+**Estimated**: ~2 hours. Tests should verify HR-only bike TSS values match the published Coggan zones.
+
+---
+
 ### ISSUE-149: iOS build — remaining wiring + on-device verification *(P1, 2026-04-27)*
 
 **Context**: iOS platform scaffold landed 2026-04-16 (ISSUE-134/136). Voice plugin, haptics adapter, Info.plist, bundle rename to Mosaic are all in code. But the build has never run on a physical device.

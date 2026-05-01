@@ -4,20 +4,25 @@ import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderStep } from './renderer';
 
-/** Consolidated wizard: welcome → goals → connect-strava → review → race-target →
- *  schedule → initializing → runner-type → plan-preview-v2 → main-view.
- *  `manual-entry` is a branch off connect-strava/review, not in the linear order.
- *  `triathlon-setup` is a branch off goals (see nextStep), replacing race-target,
- *  schedule, and runner-type for triathlon users. */
+/** Consolidated wizard (re-ordered 2026-04-27): welcome → connect-strava → goals →
+ *  race-target → schedule → review → initializing → plan-preview-v2 → main-view.
+ *
+ *  Connect first so backfill + physio sync can run in the background while the
+ *  user picks goal/volume; the merged "Athlete Profile" review then displays
+ *  what we know once the data has settled (with a wait spinner if not).
+ *
+ *  `manual-entry` is a branch off connect-strava when the user skips Strava.
+ *  `triathlon-setup` is a branch off goals, replacing race-target + schedule
+ *  for triathlon users.
+ *  `runner-type` was merged into `review` — no longer a separate step. */
 const STEP_ORDER: OnboardingStep[] = [
   'welcome',
   'goals',
   'connect-strava',
-  'review',
   'race-target',
   'schedule',
+  'review',
   'initializing',
-  'runner-type',
   'plan-preview-v2',
   'main-view',
 ];
@@ -36,7 +41,10 @@ export function initWizard(): void {
     saveState();
   }
 
-  // After soft reset: skip welcome if name already exists
+  // After soft reset: skip welcome if name already exists. The returning user
+  // lands on goals (the post-restructure entry point — connect-strava now sits
+  // after goals so triathletes see Strava+watch connect once they've picked
+  // their mode).
   if (s.onboarding?.name && s.onboarding.currentStep === 'welcome') {
     updateState({
       onboarding: { ...s.onboarding, currentStep: 'goals' },
@@ -45,9 +53,10 @@ export function initWizard(): void {
   }
 
   // Migration: if persisted currentStep is no longer in the wizard (legacy step
-  // removed during cleanup), bump the user to 'goals'. Preserves name/PBs.
+  // removed during cleanup, e.g. 'runner-type' after the merge into review),
+  // bump the user to a sensible re-entry point. Preserves name/PBs.
   const current = getState().onboarding;
-  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry') {
+  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup') {
     updateState({
       onboarding: { ...current, currentStep: current.name ? 'goals' : 'welcome' },
     });
@@ -104,16 +113,21 @@ export function nextStep(): void {
   const s = getState();
   if (!s.onboarding) return;
 
-  // Branch: triathlon users route from goals → triathlon-setup → initializing →
-  // main-view. The consolidated triathlon-setup step replaces race-target,
-  // schedule, and runner-type for this flow (§18.9).
+  // Branch: triathlon users route from goals → triathlon-setup → review →
+  // initializing → main-view. The consolidated triathlon-setup step replaces
+  // race-target + schedule for this flow (§18.9). Review is shared so tri
+  // athletes still see the unified Athlete Profile reveal.
   if (s.onboarding.trainingMode === 'triathlon') {
     if (s.onboarding.currentStep === 'goals') {
+      goToStep('connect-strava');
+      return;
+    }
+    if (s.onboarding.currentStep === 'connect-strava') {
       goToStep('triathlon-setup');
       return;
     }
     if (s.onboarding.currentStep === 'triathlon-setup') {
-      goToStep('initializing');
+      goToStep('review');
       return;
     }
     if (s.onboarding.currentStep === 'initializing') {
@@ -124,43 +138,44 @@ export function nextStep(): void {
   }
 
   // Branch: if leaving connect-strava with skippedStrava, route to manual-entry
+  // (where the user enters PBs by hand). Otherwise the linear order takes us to
+  // 'goals' next.
   if (s.onboarding.currentStep === 'connect-strava' && s.onboarding.skippedStrava) {
     goToStep('manual-entry');
     return;
   }
 
-  // Branch: review diverts to manual-entry when Strava data is insufficient.
-  if (s.onboarding.currentStep === 'review' && s.onboarding.skippedStrava) {
-    goToStep('manual-entry');
-    return;
-  }
-
-  // Branch: manual-entry replaces background/volume/performance/fitness/strava-history.
-  // Track-only users skip race-target (they already declared their goal on the Goals
-  // tile); others advance to race-target.
+  // Branch: manual-entry rejoins the linear order after connect-strava. Since
+  // connect-strava now sits after goals, the user has already picked a mode by
+  // the time they take the manual detour — route them to the mode-appropriate
+  // next step (triathlon-setup for tri, race-target for running).
   if (s.onboarding.currentStep === 'manual-entry') {
-    goToStep(s.onboarding.trackOnly ? 'initializing' : 'race-target');
+    if (s.onboarding.trainingMode === 'triathlon') {
+      goToStep('triathlon-setup');
+    } else {
+      goToStep('race-target');
+    }
     return;
   }
 
-  // Branch: review (on success) advances to race-target — skips legacy detail screens.
-  // Track-only users skip race-target entirely for the same reason.
-  if (s.onboarding.currentStep === 'review') {
-    goToStep(s.onboarding.trackOnly ? 'initializing' : 'race-target');
-    return;
-  }
-
-  // Branch: after race-target with Just-Track selected, jump straight to the
-  // initializing screen. Schedule + physiology + plan-preview-v2 are all plan-
-  // relevant and the initializing short-circuit in initializeSimulator() handles
-  // state setup. Avoids five unnecessary screens for a pure tracker.
+  // Branch: race-target → schedule for everyone except track-only. Track-only
+  // users skip schedule (no plan to size) but still see the review/profile
+  // reveal so they get the same "this is who you are" moment.
   if (s.onboarding.currentStep === 'race-target' && s.onboarding.trackOnly) {
+    goToStep('review');
+    return;
+  }
+
+  // Branch: review → initializing. Initialising runs plan generation; track-only
+  // short-circuits inside initializeSimulator(). Linear order would also send us
+  // to 'initializing' next, but making it explicit keeps intent visible.
+  if (s.onboarding.currentStep === 'review') {
     goToStep('initializing');
     return;
   }
 
-  // Branch: after initialization completes in Just-Track mode, skip runner-type +
-  // plan-preview-v2 (both depend on a generated plan) and go straight to main-view.
+  // Branch: after initialization in Just-Track mode, skip plan-preview-v2 and
+  // land on main-view. Plan-preview only makes sense when a plan was generated.
   if (s.onboarding.currentStep === 'initializing' && s.onboarding.trackOnly) {
     completeOnboarding();
     goToStep('main-view');
@@ -170,14 +185,10 @@ export function nextStep(): void {
   const currentIdx = STEP_ORDER.indexOf(s.onboarding.currentStep);
   let nextIdx = currentIdx + 1;
 
-  // Just-Track users: skip any remaining plan-dependent screens and land on main-view.
-  // Belt-and-braces on top of the 'race-target' and 'initializing' branches above.
+  // Just-Track users: skip any remaining plan-dependent screens (plan-preview-v2).
+  // Belt-and-braces on top of the explicit branches above.
   if (s.onboarding.trackOnly) {
-    while (nextIdx < STEP_ORDER.length && (
-      STEP_ORDER[nextIdx] === 'schedule' ||
-      STEP_ORDER[nextIdx] === 'runner-type' ||
-      STEP_ORDER[nextIdx] === 'plan-preview-v2'
-    )) {
+    while (nextIdx < STEP_ORDER.length && STEP_ORDER[nextIdx] === 'plan-preview-v2') {
       nextIdx++;
     }
   }
@@ -212,36 +223,42 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: manual-entry back → goals.
-  // We can't go back to connect-strava: if Strava is connected it auto-advances,
-  // and review auto-diverts back to manual-entry when the data is thin. Clearing
-  // skippedStrava doesn't help because review re-sets it. Goals is the last
-  // screen the user actually interacted with before the Strava flow swallowed
-  // them, so it's the right back target.
+  // Branch: manual-entry back → connect-strava. The user landed here by tapping
+  // "Enter manually" on the connect step; clear skippedStrava so they can try
+  // OAuth again if they changed their mind.
   if (s.onboarding.currentStep === 'manual-entry') {
     updateState({
-      onboarding: { ...s.onboarding, skippedStrava: false, currentStep: 'goals' },
+      onboarding: { ...s.onboarding, skippedStrava: false, currentStep: 'connect-strava' },
     });
     saveState();
     renderCurrentStep();
     return;
   }
 
-  // Branch: review back → goals. Same reasoning: connect-strava auto-advances
-  // when connected, so there's no stable screen to land on between review and
-  // goals.
+  // Branch: review back depends on mode. Triathlon: → triathlon-setup. Track-only:
+  // → race-target (no schedule step in their path). Everyone else: → schedule.
   if (s.onboarding.currentStep === 'review') {
-    updateState({
-      onboarding: { ...s.onboarding, skippedStrava: false, currentStep: 'goals' },
-    });
-    saveState();
-    renderCurrentStep();
+    if (s.onboarding.trainingMode === 'triathlon') {
+      goToStep('triathlon-setup');
+    } else if (s.onboarding.trackOnly) {
+      goToStep('race-target');
+    } else {
+      goToStep('schedule');
+    }
     return;
   }
 
-  // Branch: race-target back → whichever of review/manual-entry the user came from.
+  // Branch: race-target back → goals (the immediately-preceding step in the new
+  // linear order).
   if (s.onboarding.currentStep === 'race-target') {
-    goToStep(s.onboarding.skippedStrava ? 'manual-entry' : 'review');
+    goToStep('goals');
+    return;
+  }
+
+  // Branch: goals back → welcome (immediately-preceding step in the new
+  // post-restructure order — connect-strava now sits after goals).
+  if (s.onboarding.currentStep === 'goals') {
+    goToStep('welcome');
     return;
   }
 
@@ -250,11 +267,8 @@ export function previousStep(): void {
 
   let prevIdx = currentIdx - 1;
 
-  // Skip 'initializing' and 'runner-type' when going back — silent auto-advance steps.
-  while (prevIdx > 0 && (
-    STEP_ORDER[prevIdx] === 'initializing' ||
-    STEP_ORDER[prevIdx] === 'runner-type'
-  )) {
+  // Skip 'initializing' when going back — silent auto-advance step.
+  while (prevIdx > 0 && STEP_ORDER[prevIdx] === 'initializing') {
     prevIdx--;
   }
 
@@ -309,15 +323,12 @@ export function upgradeFromTrackOnly(): void {
   const s = getState();
   if (!s.onboarding) return;
 
-  // Flip onboarding mode and blank the rolling tracking weeks so plan init
-  // runs fresh. fitness baselines (CTL, athlete tier, historic km) live on
-  // other state fields and are preserved.
+  // Flip onboarding mode. Do NOT wipe wks/w/tw here — initializeSimulator
+  // replaces them when the wizard completes, and wiping early destroys all
+  // historical stats (activity matches, CTL history, VDOT chart data).
   updateState({
     hasCompletedOnboarding: false,
     trackOnly: false,
-    wks: [],
-    w: 1,
-    tw: 0,
     onboarding: {
       ...s.onboarding,
       trackOnly: false,

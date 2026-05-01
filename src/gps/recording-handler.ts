@@ -172,7 +172,7 @@ function handleImpromptuRun(
     const plannedRuns = workoutsToPlannedRuns(weekWorkouts, ms.pac);
     const _tier = ms.athleteTierOverride ?? ms.athleteTier;
     const _atlSeed = (ms.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (ms.gs ?? 0), 0.3));
-    const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined);
+    const _acwr = computeACWR(ms.wks, ms.w, _tier, ms.ctlBaseline ?? undefined, ms.planStartDate, _atlSeed, ms.signalBBaseline ?? undefined, undefined, (ms as any).previousPlanWks);
     const _floorKm = computeRunningFloorKm(ms.pac?.m, ms.w, ms.tw ?? 16, week?.ph);
     const popup = buildCrossTrainingPopup(
       {

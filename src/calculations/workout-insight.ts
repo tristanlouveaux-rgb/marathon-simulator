@@ -22,6 +22,10 @@ export interface InsightOptions {
   unitPref?: 'km' | 'mi';
   /** All completed activities across all weeks — used for TSS and HR historical comparison. */
   allActuals?: GarminActual[];
+  /** Cycling FTP in watts, if known. Enables IF / TSS-based commentary on rides. */
+  ftpWatts?: number;
+  /** Swim Critical Swim Speed (sec / 100m), if known. Enables CSS-relative pace commentary. */
+  cssSecPer100m?: number;
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -507,6 +511,134 @@ function composeCrossTraining(s: Signals): string | null {
   return null;
 }
 
+// ─── cycling insight ────────────────────────────────────────────────────────
+// References: Coggan & Allen, "Training and Racing with a Power Meter" — IF and VI
+// thresholds. IF = NP/FTP describes ride intensity; VI = NP/avgWatts describes how
+// punchy or steady the effort was.
+
+function isCyclingActivity(a: GarminActual): boolean {
+  const t = (a.activityType ?? '').toUpperCase();
+  return t.includes('CYCL') || t.includes('BIK') || t.includes('RIDE');
+}
+
+function isSwimActivity(a: GarminActual): boolean {
+  const t = (a.activityType ?? '').toUpperCase();
+  return t.includes('SWIM');
+}
+
+function capitalize(s: string): string {
+  return s.length > 0 ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function ifLabel(intensityFactor: number): string {
+  if (intensityFactor < 0.65) return 'recovery / easy spin';
+  if (intensityFactor < 0.80) return 'endurance';
+  if (intensityFactor < 0.94) return 'tempo';
+  if (intensityFactor < 1.05) return 'threshold';
+  return 'anaerobic / VO2';
+}
+
+function viDescription(vi: number): string | null {
+  if (!isFinite(vi) || vi <= 0) return null;
+  if (vi < 1.05) return 'very steady output';
+  if (vi < 1.10) return 'rolling effort';
+  if (vi < 1.20) return 'punchy, variable effort';
+  return 'highly variable effort with frequent surges';
+}
+
+function composeCyclingInsight(a: GarminActual, opts?: InsightOptions): string | null {
+  const sentences: string[] = [];
+  const np = a.normalizedPowerW ?? null;
+  const avg = a.averageWatts ?? null;
+  const ftp = opts?.ftpWatts ?? null;
+  const hrEffort = a.hrEffortScore ?? null;
+
+  // Power-based lead when NP and FTP are available
+  if (np != null && ftp != null && ftp > 0) {
+    const intensity = np / ftp;
+    const intensityPct = Math.round(intensity * 100);
+    const tss = (a.durationSec * np * intensity) / (ftp * 3600) * 100;
+    const tssRnd = Math.round(tss);
+    const lead = `Normalised power ${Math.round(np)}W at ${intensityPct}% of FTP. ${capitalize(ifLabel(intensity))} intensity, estimated bTSS ${tssRnd}.`;
+    sentences.push(lead);
+
+    if (avg != null && avg > 0) {
+      const vi = np / avg;
+      const viDesc = viDescription(vi);
+      if (viDesc) sentences.push(`Variability index ${vi.toFixed(2)}. ${capitalize(viDesc)}.`);
+    }
+  } else if (avg != null && avg > 0) {
+    sentences.push(`Average power ${Math.round(avg)}W. Set FTP to unlock intensity factor and bTSS.`);
+  }
+
+  // HR drift on long steady rides is a useful aerobic durability signal
+  if (a.hrDrift != null && a.durationSec >= 1800) {
+    const drift = Math.round(a.hrDrift);
+    if (drift >= 8) {
+      sentences.push(`HR drift ${drift}% across the ride. Aerobic system under stress in the second half.`);
+    } else if (drift <= 3) {
+      sentences.push(`HR drift held at ${drift}%. Strong aerobic durability for the duration.`);
+    }
+  }
+
+  // Without power, fall back to HR effort framing
+  if (sentences.length === 0 && hrEffort != null) {
+    if (hrEffort >= 1.15) {
+      sentences.push(`Heart rate ran high relative to target. The body absorbed more load than the plan called for.`);
+    } else if (hrEffort <= 0.85) {
+      sentences.push(`Heart rate stayed low. Comfortable aerobic ride.`);
+    }
+  }
+
+  return sentences.length > 0 ? sentences.join(' ') : null;
+}
+
+// ─── swim insight ───────────────────────────────────────────────────────────
+// Pace per 100m is the canonical swim metric. CSS (Critical Swim Speed) is the
+// swim equivalent of running threshold pace — sub-CSS is hard, +5 to +10s/100m
+// over CSS is endurance, +15s+ is recovery.
+
+function fmtSwimPace(secPer100m: number): string {
+  const m = Math.floor(secPer100m / 60);
+  const s = Math.round(secPer100m % 60);
+  return `${m}:${String(s).padStart(2, '0')}/100m`;
+}
+
+function composeSwimInsight(a: GarminActual, opts?: InsightOptions): string | null {
+  const sentences: string[] = [];
+  const distM = a.distanceKm * 1000;
+  if (distM < 100 || a.durationSec < 60) return null;
+
+  const pacePer100m = (a.durationSec / distM) * 100;
+  const css = opts?.cssSecPer100m ?? null;
+
+  if (css != null && css > 0) {
+    const delta = pacePer100m - css;
+    const deltaRnd = Math.round(Math.abs(delta));
+    let bucket: string;
+    if (delta < -3) bucket = `${deltaRnd}s/100m faster than CSS. Sub-threshold swimming.`;
+    else if (delta < 5) bucket = `Holding CSS pace, threshold swimming.`;
+    else if (delta < 12) bucket = `${deltaRnd}s/100m slower than CSS. Aerobic endurance pace.`;
+    else bucket = `${deltaRnd}s/100m slower than CSS. Easy / recovery pace.`;
+    sentences.push(`Avg ${fmtSwimPace(pacePer100m)} across ${(distM / 1000).toFixed(2)} km. ${bucket}`);
+  } else {
+    sentences.push(`Avg ${fmtSwimPace(pacePer100m)} across ${(distM / 1000).toFixed(2)} km. Set CSS to unlock pace-relative commentary.`);
+  }
+
+  // HR context: only meaningful when an HR-capable strap was worn (most pool swims aren't)
+  if (a.avgHR != null && a.avgHR > 0 && a.hrZones) {
+    const total = a.hrZones.z1 + a.hrZones.z2 + a.hrZones.z3 + a.hrZones.z4 + a.hrZones.z5;
+    if (total > 0) {
+      const highIntensityPct = Math.round(((a.hrZones.z4 + a.hrZones.z5) / total) * 100);
+      if (highIntensityPct >= 25) {
+        sentences.push(`${highIntensityPct}% of time in Z4 to Z5. Quality intervals or hard sustained effort.`);
+      }
+    }
+  }
+
+  return sentences.length > 0 ? sentences.join(' ') : null;
+}
+
 // ─── public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -524,6 +656,7 @@ export function generateWorkoutInsight(actual: GarminActual, opts?: HRProfileFor
   const hrProfile: HRProfileForInsight | undefined = isLegacy ? opts as HRProfileForInsight : (opts as InsightOptions)?.hrProfile;
   const prev = isLegacy ? undefined : (opts as InsightOptions)?.prev;
   const unitPref = isLegacy ? 'km' : ((opts as InsightOptions)?.unitPref ?? 'km');
+  const resolvedOpts: InsightOptions | undefined = isLegacy ? undefined : (opts as InsightOptions | undefined);
 
   let enriched = actual;
   if (hrProfile && actual.hrEffortScore == null && actual.avgHR) {
@@ -534,7 +667,11 @@ export function generateWorkoutInsight(actual: GarminActual, opts?: HRProfileFor
       if (computed != null) enriched = { ...actual, hrEffortScore: computed };
     }
   }
-  const resolvedOpts: InsightOptions | undefined = isLegacy ? undefined : (opts as InsightOptions | undefined);
+
+  // Sport-specific composers handle cycling and swimming with their own metric vocabulary.
+  if (isCyclingActivity(enriched)) return composeCyclingInsight(enriched, resolvedOpts);
+  if (isSwimActivity(enriched)) return composeSwimInsight(enriched, resolvedOpts);
+
   const signals = gatherSignals(enriched, prev, unitPref, resolvedOpts);
   return composeNarrative(signals);
 }

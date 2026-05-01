@@ -1,20 +1,8 @@
 import type { OnboardingState } from '@/types/onboarding';
-import type { TriathlonDistance, TriVolumeSplit, TriSkillRating, TriSkillSlider } from '@/types/triathlon';
+import type { TriathlonDistance, TriVolumeSplit } from '@/types/triathlon';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
-import { getState, getMutableState } from '@/state/store';
-import { syncPhysiologySnapshot } from '@/data/physiologySync';
-import { refreshBlendedFitness } from '@/calculations/blended-fitness';
-import {
-  getAccessToken,
-  isStravaConnected,
-  SUPABASE_ANON_KEY,
-  SUPABASE_FUNCTIONS_BASE,
-} from '@/data/supabaseClient';
-import { saveState } from '@/state/persistence';
-import { backfillStravaHistory } from '@/data/stravaSync';
-import { loadActivitiesFromDB } from '@/data/tri-activity-loader';
-import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
+import { getState } from '@/state/store';
 import {
   DEFAULT_VOLUME_SPLIT,
   DEFAULT_WEEKLY_PEAK_HOURS,
@@ -22,6 +10,9 @@ import {
   RACE_LEG_DISTANCES,
   HOURS_RANGE,
 } from '@/constants/triathlon-constants';
+import { getTriathlonsByDistance, getTriathlonById } from '@/data/triathlons';
+import { formatRaceDate } from '@/data/marathons';
+import type { Triathlon } from '@/types/onboarding';
 
 /**
  * Triathlon setup — the single consolidated step that replaces
@@ -32,7 +23,9 @@ import {
  *   - race date (optional)
  *   - weekly time available
  *   - volume split across swim/bike/run
- *   - self-rating slider per discipline (1–5) — §18.7
+ *   - (legacy) self-rating slider per discipline — removed in favour of
+ *     benchmark-derived tier (CSS / FTP+W/kg / VDOT). The state field
+ *     `triSkillRating` remains as a fallback only.
  *   - bike FTP + has-power-meter flag
  *   - swim CSS (direct) OR 400m test time (derived)
  *
@@ -45,12 +38,6 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   const defaultHours = DEFAULT_WEEKLY_PEAK_HOURS[distance][3];
   const hoursPerWeek = state.triTimeAvailableHoursPerWeek ?? defaultHours;
   const split: TriVolumeSplit = state.triVolumeSplit ?? { ...DEFAULT_VOLUME_SPLIT };
-  const rating: TriSkillRating = state.triSkillRating ?? { swim: 3, bike: 3, run: 3 };
-  const ftp = state.triBike?.ftp ?? '';
-  const hasPower = state.triBike?.hasPowerMeter ?? false;
-  const css = state.triSwim?.cssSecPer100m ?? '';
-  const css400 = state.triSwim?.pbs?.m400 ?? '';
-  const css200 = state.triSwim?.pbs?.m200 ?? '';
   const raceDate = state.customRaceDate ?? '';
   const gymSessions = state.gymSessionsPerWeek ?? 0;
   const hoursRange = HOURS_RANGE[distance];
@@ -87,15 +74,21 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
       .tri-split-cell .tri-split-pct { font-size:18px; font-weight:500; }
       .tri-split-cell .tri-split-lbl { font-size:11px; color:var(--c-muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.05em; }
       .tri-split-cell .tri-split-hrs { font-size:11px; color:var(--c-faint); margin-top:3px; }
-      .tri-rating-label { font-size:14px; color:var(--c-black); font-weight:500; text-transform:capitalize; }
-      .tri-rating-value { font-size:13px; color:var(--c-muted); }
+      .tri-race-list { display:flex; flex-direction:column; gap:8px; max-height:340px; overflow-y:auto; padding-right:4px; }
+      .tri-race-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 13px; border-radius:10px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); text-align:left; cursor:pointer; transition:all 0.15s ease; width:100%; }
+      .tri-race-row.selected { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
+      .tri-race-row .tri-race-name { font-size:14px; font-weight:500; line-height:1.25; }
+      .tri-race-row .tri-race-sub { font-size:12px; opacity:0.7; margin-top:2px; }
+      .tri-race-row .tri-race-weeks { font-size:12px; font-weight:600; flex-shrink:0; opacity:0.85; font-variant-numeric: tabular-nums; }
+      .tri-toggle-link { background:transparent; border:none; color:var(--c-muted); font-size:13px; cursor:pointer; padding:6px 4px; }
+      .tri-toggle-link:hover { color:var(--c-black); }
     </style>
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;display:flex;flex-direction:column">
       <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 20%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
 
       <div style="position:relative;z-index:1;padding:36px 20px 140px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(3, 7)}
+        ${renderProgressIndicator(4, 7)}
 
         <div class="t-rise" style="width:100%;max-width:480px;text-align:center;margin-bottom:20px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
@@ -105,29 +98,6 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
         </div>
 
         <div style="width:100%;max-width:480px">
-          <!-- Connect Strava (optional but drives prediction accuracy) -->
-          <div class="tri-card t-rise" style="animation-delay:0.08s">
-            <div class="tri-label">Connect Strava <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
-            <div id="tri-strava-state" style="font-size:13px;color:var(--c-muted);line-height:1.5">Checking…</div>
-            <div id="tri-strava-cta-wrap" style="margin-top:10px">
-              <button id="tri-strava-connect" class="tri-pill" style="width:100%;text-align:center;background:#FC4C02;color:#fff;border-color:#FC4C02;font-weight:500;display:none">
-                Connect Strava
-              </button>
-            </div>
-            <p class="tri-hint">We'll pull your last 16 weeks of rides, swims, and runs to calibrate your starting CTL and auto-detect CSS, FTP (if you ride with power), and VDOT. You can still enter benchmarks manually below.</p>
-            <p class="tri-hint" id="tri-strava-error" style="color:#c06a50;display:none"></p>
-          </div>
-
-          <!-- Here's what we found — appears when Strava is connected + activities derived -->
-          <div id="tri-found-card" class="tri-card t-rise" style="animation-delay:0.09s;display:none">
-            <div class="tri-label">Here's what we found</div>
-            <div id="tri-found-body" style="font-size:13px;color:var(--c-muted);line-height:1.6"></div>
-            <p class="tri-hint" style="margin-top:10px">Values below have been pre-filled from your history. Edit anything that looks off.</p>
-            <button id="tri-refresh-strava" class="tri-pill" style="margin-top:10px;width:100%;text-align:center;background:#fff;border-color:rgba(0,0,0,0.12);font-weight:500">
-              Refresh from Strava
-            </button>
-          </div>
-
           <!-- Distance -->
           <div class="tri-card t-rise" style="animation-delay:0.1s">
             <div class="tri-label">Race distance</div>
@@ -144,11 +114,9 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             <p class="tri-hint" id="tri-plan-length-hint">Default plan length: ${PLAN_WEEKS_DEFAULT[distance]} weeks</p>
           </div>
 
-          <!-- Race date -->
-          <div class="tri-card t-rise" style="animation-delay:0.14s">
-            <div class="tri-label">Race date <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
-            <input type="date" id="tri-race-date" class="tri-input" value="${raceDate}">
-            <p class="tri-hint" id="tri-race-date-hint">Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[distance]}-week plan from this week.</p>
+          <!-- Race picker -->
+          <div class="tri-card t-rise" id="tri-race-card" style="animation-delay:0.14s">
+            ${renderRacePicker(state, distance)}
           </div>
 
           <!-- Time available -->
@@ -185,49 +153,6 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
             </div>
           </div>
 
-          <!-- Self-rating -->
-          <div class="tri-card t-rise" style="animation-delay:0.26s">
-            <div class="tri-label">How strong do you feel in each discipline?</div>
-            <p class="tri-hint" style="margin:-4px 0 14px">1 = weakest, 5 = strongest. Lower scores get extra volume and technique work.</p>
-            ${(['swim', 'bike', 'run'] as const).map((d) => renderRatingRow(d, rating[d])).join('')}
-          </div>
-
-          <!-- Bike benchmarks -->
-          <div class="tri-card t-rise" style="animation-delay:0.30s">
-            <div class="tri-label">Bike</div>
-            <label class="tri-toggle" style="margin-bottom:12px">
-              <input type="checkbox" id="tri-has-power" ${hasPower ? 'checked' : ''}>
-              I have a power meter
-            </label>
-            <div id="tri-ftp-row" style="${hasPower ? '' : 'display:none'}">
-              <div class="tri-row" style="margin-bottom:4px"><span>FTP (Functional Threshold Power)</span></div>
-              <input type="number" id="tri-ftp" class="tri-input" min="80" max="450" step="1" placeholder="e.g. 220" value="${ftp}">
-              <p class="tri-hint"><strong>FTP</strong> is the highest power (watts) you can sustain for an hour. To test: after a warm-up, ride 20 minutes all-out and multiply your average power by 0.95. Don't know it? Leave blank — we'll estimate from your slider above and refine once you ride with us.</p>
-            </div>
-            <p class="tri-hint" style="${hasPower ? 'display:none' : ''}" id="tri-hr-fallback-hint">No power meter? We'll use heart rate for bike load calculations. You can add a power meter later.</p>
-          </div>
-
-          <!-- Swim benchmarks -->
-          <div class="tri-card t-rise" style="animation-delay:0.34s">
-            <div class="tri-label">Swim</div>
-            <label class="tri-toggle" style="margin-bottom:12px">
-              <input type="checkbox" id="tri-defer-swim" ${!css && !css400 ? 'checked' : ''}>
-              I'll do the swim test later
-            </label>
-            <div id="tri-swim-inputs" style="${!css && !css400 ? 'display:none' : ''}">
-              <div class="tri-row" style="margin-bottom:4px"><span>CSS (Critical Swim Speed)</span></div>
-              <input type="text" id="tri-css" class="tri-input" placeholder="e.g. 1:45" value="${formatCSS(css)}">
-              <p class="tri-hint" style="margin:6px 0 14px"><strong>CSS</strong> is your threshold swim pace — the fastest pace you can hold for ~30 minutes. Enter as minutes:seconds per 100m.</p>
-              <div class="tri-row" style="margin-bottom:4px"><span>400m test time <span style="color:var(--c-faint);font-weight:400">(optional)</span></span></div>
-              <input type="text" id="tri-css-400" class="tri-input" placeholder="e.g. 7:00" value="${formatMMSS(css400)}">
-              <p class="tri-hint" style="margin:6px 0 14px">From the CSS test: swim 400m all-out, rest 5 min, then 200m all-out. Enter both times for the gold-standard CSS calculation (Smith & Norris 2019).</p>
-              <div class="tri-row" style="margin-bottom:4px"><span>200m test time <span style="color:var(--c-faint);font-weight:400">(optional, pairs with 400m)</span></span></div>
-              <input type="text" id="tri-css-200" class="tri-input" placeholder="e.g. 3:10" value="${formatMMSS(css200)}">
-              <p class="tri-hint">When both times are present, CSS = 200 ÷ (t400 − t200) m/s. More accurate than a single distance.</p>
-            </div>
-            <p class="tri-hint" id="tri-defer-swim-hint" style="${!css && !css400 ? '' : 'display:none'}">We'll estimate CSS from your slider rating above. You can run the test this week and update on the Stats page to refine your plan.</p>
-          </div>
-
           <!-- Gym -->
           <div class="tri-card t-rise" style="animation-delay:0.38s">
             <div class="tri-label">Strength work</div>
@@ -241,7 +166,8 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
 
           <!-- CTA -->
           <div style="margin-top:6px">
-            <button id="tri-continue" class="tri-cta">Build my plan</button>
+            <p id="tri-continue-hint" class="tri-hint" style="text-align:center;margin:0 0 8px;display:none">Pick a race or enter a date to continue.</p>
+            <button id="tri-continue" class="tri-cta">Continue</button>
           </div>
         </div>
       </div>
@@ -251,7 +177,77 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
   `;
 
   wireEventHandlers();
+  refreshContinueGate();
   void state;
+}
+
+/**
+ * Triathlon plan generation requires a target date — without it the engine has
+ * nothing to schedule against. Disable the CTA until the user has either
+ * picked a race or entered a custom date. Re-runs after every state change
+ * that could affect either field.
+ */
+function refreshContinueGate(): void {
+  const cta = document.getElementById('tri-continue') as HTMLButtonElement | null;
+  const hint = document.getElementById('tri-continue-hint') as HTMLElement | null;
+  if (!cta) return;
+  const current = getCurrentOnboarding();
+  const hasDate = !!current.selectedTriathlonId || !!current.customRaceDate;
+  cta.disabled = !hasDate;
+  if (hint) hint.style.display = hasDate ? 'none' : 'block';
+}
+
+function renderRacePicker(state: OnboardingState, distance: TriathlonDistance): string {
+  const races = getTriathlonsByDistance(distance, 0);
+  const selectedId = state.selectedTriathlonId ?? null;
+  const usingCustomDate = !selectedId && !!state.customRaceDate;
+  const showCustom = usingCustomDate || races.length === 0;
+
+  const headingLabel = distance === 'ironman' ? 'Pick your Ironman' : 'Pick your 70.3';
+
+  if (showCustom) {
+    return `
+      <div class="tri-label">Race date <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
+      <input type="date" id="tri-race-date" class="tri-input" value="${state.customRaceDate ?? ''}">
+      <p class="tri-hint">Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[distance]}-week plan from this week.</p>
+      ${races.length === 0 ? '' : `
+        <div style="text-align:center;margin-top:10px">
+          <button id="tri-toggle-picker" class="tri-toggle-link">Browse races instead</button>
+        </div>
+      `}
+    `;
+  }
+
+  return `
+    <div class="tri-label">${headingLabel}</div>
+    <div class="tri-race-list">
+      ${races.map((race) => {
+        const selected = selectedId === race.id;
+        return `
+          <button class="tri-race-row ${selected ? 'selected' : ''}" data-race-id="${race.id}">
+            <div style="min-width:0">
+              <div class="tri-race-name">${race.name}</div>
+              <div class="tri-race-sub">${formatRaceDate(race.date)} · ${race.city}, ${race.country}</div>
+              ${race.profile?.notes ? `<div class="tri-race-sub" style="margin-top:4px">${race.profile.notes}</div>` : ''}
+            </div>
+            <span class="tri-race-weeks">${race.weeksUntil ?? '--'}wk</span>
+          </button>
+        `;
+      }).join('')}
+    </div>
+    <div style="text-align:center;margin-top:10px">
+      <button id="tri-toggle-picker" class="tri-toggle-link">Enter a custom date instead</button>
+    </div>
+  `;
+}
+
+function rerenderRaceCard(): void {
+  const card = document.getElementById('tri-race-card');
+  if (!card) return;
+  const current = getCurrentOnboarding();
+  card.innerHTML = renderRacePicker(current, current.triDistance ?? '70.3');
+  wireRaceCardHandlers();
+  refreshContinueGate();
 }
 
 function renderSplitCells(split: TriVolumeSplit, totalHours: number): string {
@@ -269,45 +265,11 @@ function renderSplitCells(split: TriVolumeSplit, totalHours: number): string {
   `).join('');
 }
 
-function renderRatingRow(discipline: 'swim' | 'bike' | 'run', value: TriSkillSlider): string {
-  return `
-    <div style="margin-bottom:14px">
-      <div class="tri-row">
-        <span class="tri-rating-label">${discipline}</span>
-        <span class="tri-rating-value" data-rating-value="${discipline}">${value} / 5</span>
-      </div>
-      <input type="range" min="1" max="5" step="1" value="${value}" class="tri-slider" data-rating-key="${discipline}">
-    </div>
-  `;
-}
-
 // ──────────────────────────────────────────────────────────────────────────
 // Wiring
 // ──────────────────────────────────────────────────────────────────────────
 
 function wireEventHandlers(): void {
-  // Strava connection state + OAuth kick-off
-  wireStravaConnect();
-  // Auto-derive benchmarks if connected
-  void runAutoDerivation();
-
-  // Manual refresh — forces a backfill + re-derivation. Useful after
-  // connecting a power meter or when auto-derivation missed.
-  document.getElementById('tri-refresh-strava')?.addEventListener('click', async () => {
-    const btn = document.getElementById('tri-refresh-strava') as HTMLButtonElement | null;
-    if (!btn || btn.disabled) return;
-    btn.disabled = true;
-    btn.textContent = 'Refreshing…';
-    try {
-      await backfillStravaHistory(16);
-    } catch (err) {
-      console.warn('[tri-setup] manual refresh backfill failed', err);
-    }
-    await runAutoDerivation();
-    btn.disabled = false;
-    btn.textContent = 'Refresh from Strava';
-  });
-
   // Distance pills — toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -320,8 +282,16 @@ function wireEventHandlers(): void {
       // Update default plan length text
       const planLenHint = document.getElementById('tri-plan-length-hint');
       if (planLenHint) planLenHint.textContent = `Default plan length: ${PLAN_WEEKS_DEFAULT[value]} weeks`;
-      const raceDateHint = document.getElementById('tri-race-date-hint');
-      if (raceDateHint) raceDateHint.textContent = `Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[value]}-week plan from this week.`;
+
+      // Distance changed — clear any selected race that's now in the wrong category and re-render the picker.
+      const current = getCurrentOnboarding();
+      if (current.selectedTriathlonId) {
+        const sel = getTriathlonById(current.selectedTriathlonId);
+        if (!sel || sel.distance !== value) {
+          updateOnboarding({ selectedTriathlonId: null, customRaceDate: null });
+        }
+      }
+      rerenderRaceCard();
 
       // Rescope the hours slider min/max to the new distance
       const newRange = HOURS_RANGE[value];
@@ -344,11 +314,8 @@ function wireEventHandlers(): void {
     });
   });
 
-  // Race date
-  const dateInput = document.getElementById('tri-race-date') as HTMLInputElement | null;
-  dateInput?.addEventListener('change', () => {
-    updateOnboarding({ customRaceDate: dateInput.value || null });
-  });
+  // Race picker (race-list rows + custom date toggle + custom date input)
+  wireRaceCardHandlers();
 
   // Hours slider
   const hoursInput = document.getElementById('tri-hours') as HTMLInputElement | null;
@@ -387,63 +354,6 @@ function wireEventHandlers(): void {
     slider.addEventListener('input', () => onSplitSliderChange(slider));
   });
 
-  // Rating sliders
-  document.querySelectorAll<HTMLInputElement>('[data-rating-key]').forEach((slider) => {
-    slider.addEventListener('input', () => {
-      const key = slider.getAttribute('data-rating-key') as 'swim' | 'bike' | 'run';
-      const val = Number(slider.value) as TriSkillSlider;
-      const label = document.querySelector(`[data-rating-value="${key}"]`);
-      if (label) label.textContent = `${val} / 5`;
-      const current = getCurrentOnboarding();
-      const rating: TriSkillRating = current.triSkillRating ?? { swim: 3, bike: 3, run: 3 };
-      rating[key] = val;
-      updateOnboarding({ triSkillRating: { ...rating } });
-    });
-  });
-
-  // Power toggle
-  const hasPowerInput = document.getElementById('tri-has-power') as HTMLInputElement | null;
-  hasPowerInput?.addEventListener('change', () => {
-    const hasPower = hasPowerInput.checked;
-    const current = getCurrentOnboarding();
-    updateOnboarding({
-      triBike: { ...(current.triBike ?? {}), hasPowerMeter: hasPower, ftp: hasPower ? current.triBike?.ftp : undefined },
-    });
-    const ftpRow = document.getElementById('tri-ftp-row');
-    const hrHint = document.getElementById('tri-hr-fallback-hint');
-    if (ftpRow) ftpRow.style.display = hasPower ? '' : 'none';
-    if (hrHint) hrHint.style.display = hasPower ? 'none' : '';
-  });
-
-  // FTP input
-  const ftpInput = document.getElementById('tri-ftp') as HTMLInputElement | null;
-  ftpInput?.addEventListener('input', () => {
-    const val = Number(ftpInput.value);
-    const current = getCurrentOnboarding();
-    updateOnboarding({ triBike: { ...(current.triBike ?? {}), ftp: Number.isFinite(val) && val > 0 ? val : undefined } });
-  });
-
-  // Defer swim test toggle
-  const deferSwimInput = document.getElementById('tri-defer-swim') as HTMLInputElement | null;
-  deferSwimInput?.addEventListener('change', () => {
-    const defer = deferSwimInput.checked;
-    const swimInputs = document.getElementById('tri-swim-inputs');
-    const deferHint = document.getElementById('tri-defer-swim-hint');
-    if (swimInputs) swimInputs.style.display = defer ? 'none' : '';
-    if (deferHint) deferHint.style.display = defer ? '' : 'none';
-    if (defer) {
-      // Clear any CSS values the user may have typed
-      const current = getCurrentOnboarding();
-      updateOnboarding({
-        triSwim: { ...(current.triSwim ?? {}), cssSecPer100m: undefined, pbs: {} },
-      });
-      const cssEl = document.getElementById('tri-css') as HTMLInputElement | null;
-      const css400El = document.getElementById('tri-css-400') as HTMLInputElement | null;
-      if (cssEl) cssEl.value = '';
-      if (css400El) css400El.value = '';
-    }
-  });
-
   // Gym sessions slider
   const gymInput = document.getElementById('tri-gym') as HTMLInputElement | null;
   const gymValue = document.getElementById('tri-gym-value');
@@ -453,53 +363,13 @@ function wireEventHandlers(): void {
     updateOnboarding({ gymSessionsPerWeek: v });
   });
 
-  // CSS inputs
-  const cssInput = document.getElementById('tri-css') as HTMLInputElement | null;
-  cssInput?.addEventListener('input', () => {
-    const parsed = parseMMSS(cssInput.value);
-    const current = getCurrentOnboarding();
-    updateOnboarding({ triSwim: { ...(current.triSwim ?? {}), cssSecPer100m: parsed ?? undefined } });
-  });
-
-  const css400Input = document.getElementById('tri-css-400') as HTMLInputElement | null;
-  const css200Input = document.getElementById('tri-css-200') as HTMLInputElement | null;
-
-  /** Recompute CSS whenever a TT input changes. Smith-Norris when both
-   * times present; lone-400m fallback otherwise. User-typed CSS always wins. */
-  const refreshCssFromInputs = async () => {
-    const t400 = parseMMSS(css400Input?.value ?? '');
-    const t200 = parseMMSS(css200Input?.value ?? '');
-    const current = getCurrentOnboarding();
-    const nextPBs = {
-      ...(current.triSwim?.pbs ?? {}),
-      m400: t400 ?? undefined,
-      m200: t200 ?? undefined,
-    };
-    const userCss = current.triSwim?.cssSecPer100m;
-    let derivedCss: number | undefined;
-    if (t400 && t200) {
-      // Lazy import to avoid pulling the whole derivation module on first render.
-      const { computeCSSFromPair } = await import('@/calculations/tri-benchmarks-from-history');
-      derivedCss = computeCSSFromPair(t400, t200) ?? undefined;
-    } else if (t400) {
-      // Lone-400m fallback (Dekerle 2002 rough): CSS ≈ pace at 400m + ~2-3s/100m.
-      derivedCss = Math.round(t400 / 4);
-    }
-    updateOnboarding({
-      triSwim: {
-        ...(current.triSwim ?? {}),
-        pbs: nextPBs,
-        cssSecPer100m: userCss ?? derivedCss,
-      },
-    });
-    if (!userCss && derivedCss && cssInput) cssInput.value = formatCSS(derivedCss);
-  };
-
-  css400Input?.addEventListener('input', () => { void refreshCssFromInputs(); });
-  css200Input?.addEventListener('input', () => { void refreshCssFromInputs(); });
-
   // Continue CTA
   document.getElementById('tri-continue')?.addEventListener('click', () => {
+    const guard = getCurrentOnboarding();
+    if (!guard.selectedTriathlonId && !guard.customRaceDate) {
+      refreshContinueGate();
+      return;
+    }
     // Ensure all defaults are saved before leaving (volumeSplit is already saved
     // on slider change, but if the user never touched them, persist defaults).
     const current = getCurrentOnboarding();
@@ -536,6 +406,85 @@ function getCurrentOnboarding(): OnboardingState {
   return getState().onboarding as OnboardingState;
 }
 
+function wireRaceCardHandlers(): void {
+  // Race row → select race + auto-fill customRaceDate. Selection updates the
+  // .selected class in place (rather than re-rendering the card) so the list
+  // doesn't flicker or jump scroll position when the user picks a race.
+  document.querySelectorAll<HTMLButtonElement>('[data-race-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-race-id') ?? '';
+      const race: Triathlon | undefined = getTriathlonById(id);
+      if (!race) return;
+      const current = getCurrentOnboarding();
+      const sameRace = current.selectedTriathlonId === race.id;
+      if (sameRace) {
+        updateOnboarding({ selectedTriathlonId: null, customRaceDate: null });
+        btn.classList.remove('selected');
+      } else {
+        updateOnboarding({ selectedTriathlonId: race.id, customRaceDate: race.date });
+        document.querySelectorAll<HTMLButtonElement>('[data-race-id]').forEach((b) => {
+          b.classList.toggle('selected', b === btn);
+        });
+      }
+      refreshContinueGate();
+    });
+  });
+
+  // Toggle between race list and custom date input
+  document.getElementById('tri-toggle-picker')?.addEventListener('click', () => {
+    const current = getCurrentOnboarding();
+    const usingCustom = !current.selectedTriathlonId && !!current.customRaceDate;
+    if (usingCustom) {
+      // Was on custom → switch back to list
+      updateOnboarding({ customRaceDate: null });
+    } else {
+      // Was on list → switch to custom (clear selection, keep any picked date as starting value)
+      const keptDate = current.selectedTriathlonId ? current.customRaceDate : null;
+      updateOnboarding({ selectedTriathlonId: null, customRaceDate: keptDate });
+      // Force custom mode by setting a non-null sentinel only if user has nothing — handled by render.
+    }
+    // If switching to custom and nothing prior, show empty input. The render checks for selection
+    // first; without selection and without a date, it shows the list. Force custom view explicitly:
+    rerenderRaceCardForceMode(usingCustom ? 'list' : 'custom');
+  });
+
+  // Custom date input
+  const dateInput = document.getElementById('tri-race-date') as HTMLInputElement | null;
+  dateInput?.addEventListener('change', () => {
+    updateOnboarding({ customRaceDate: dateInput.value || null, selectedTriathlonId: null });
+    refreshContinueGate();
+  });
+}
+
+/**
+ * Like rerenderRaceCard but lets the caller force "custom date input" mode even when
+ * customRaceDate is null (i.e. the user just clicked "Enter a custom date instead" with
+ * no date set yet). Stays in custom mode until the user clicks the toggle back.
+ */
+let _forceMode: 'list' | 'custom' | null = null;
+function rerenderRaceCardForceMode(mode: 'list' | 'custom'): void {
+  _forceMode = mode;
+  const card = document.getElementById('tri-race-card');
+  if (!card) return;
+  const current = getCurrentOnboarding();
+  const distance = current.triDistance ?? '70.3';
+  if (mode === 'custom') {
+    card.innerHTML = `
+      <div class="tri-label">Race date <span style="text-transform:none;font-weight:400;color:var(--c-faint)">(optional)</span></div>
+      <input type="date" id="tri-race-date" class="tri-input" value="${current.customRaceDate ?? ''}">
+      <p class="tri-hint">Leave blank to start the standard ${PLAN_WEEKS_DEFAULT[distance]}-week plan from this week.</p>
+      <div style="text-align:center;margin-top:10px">
+        <button id="tri-toggle-picker" class="tri-toggle-link">Browse races instead</button>
+      </div>
+    `;
+  } else {
+    card.innerHTML = renderRacePicker(current, distance);
+  }
+  wireRaceCardHandlers();
+  refreshContinueGate();
+}
+void _forceMode;
+
 function onSplitSliderChange(changed: HTMLInputElement): void {
   const changedKey = changed.getAttribute('data-split-key') as keyof TriVolumeSplit;
   const rawChanged = Number(changed.value) / 100;
@@ -571,6 +520,7 @@ function onSplitSliderChange(changed: HTMLInputElement): void {
 function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   const base = `This is your peak-week target. Early and recovery weeks will be lighter.`;
   if (distance === '70.3') {
+    if (hours < 5) return `${base}<br><span style="color:#c06a50">Minimum viable. At 4h/week the plan is completion-only with no margin for missed sessions. 8–12h/week at peak is the typical competitive range.</span>`;
     if (hours < 7) return `${base}<br><span style="color:#c06a50">Aggressive for 70.3 — this is a "just finish" plan. 8–12h/week at peak is the typical competitive range.</span>`;
     if (hours < 10) return `${base}<br>Realistic for a first 70.3 or a time-constrained athlete.`;
     if (hours < 14) return `${base}<br>Competitive intermediate range. Good balance of volume and recovery.`;
@@ -583,217 +533,6 @@ function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   return `${base}<br>Elite / KQ-target volume. Recovery and life balance matter more than volume past this point.`;
 }
 
-/**
- * If Strava is connected, pull the 16-week history and derive swim CSS,
- * bike FTP (if power data), VDOT (run), and activity counts. Pre-fill the
- * form inputs with what we found; the user can override any value before
- * hitting Build my plan.
- */
-async function runAutoDerivation(): Promise<void> {
-  const foundCard = document.getElementById('tri-found-card');
-  const foundBody = document.getElementById('tri-found-body');
-  if (!foundCard || !foundBody) return;
-
-  try {
-    const connected = await isStravaConnected();
-    if (!connected) return;  // Strava card handles the "not connected" path
-
-    // Soft loading state.
-    foundCard.style.display = 'block';
-    foundBody.innerHTML = `<span style="opacity:0.7">Reading your last 16 weeks of activity…</span>`;
-
-    let activities = await loadActivitiesFromDB(500);
-    const rides = activities.filter((a) =>
-      /ride|cycl|bike/i.test(a.activityType ?? '')
-    );
-    const ridesWithPower = rides.filter((a) =>
-      (a.averageWatts ?? 0) > 0 || (a.normalizedPowerW ?? 0) > 0,
-    );
-    // Trigger a Strava backfill if the DB is empty OR the user has rides
-    // but none have power data (classic case: rides arrived via the Garmin
-    // webhook which doesn't extract power — a Strava backfill adds the
-    // strava-sourced mirror rows with power).
-    const needsBackfill = activities.length === 0 || (rides.length > 0 && ridesWithPower.length === 0);
-    if (needsBackfill) {
-      foundBody.innerHTML = `<span style="opacity:0.7">${activities.length === 0 ? 'Pulling history from Strava… this takes 20–30 s on first connect.' : 'Refreshing your bike power data from Strava…'}</span>`;
-      try {
-        await backfillStravaHistory(16);
-      } catch { /* ignore — continue with whatever landed */ }
-      activities = await loadActivitiesFromDB(500);
-    }
-
-    if (activities.length === 0) {
-      foundBody.innerHTML = `<span style="opacity:0.7">No activities found yet. You can enter benchmarks manually below.</span>`;
-      return;
-    }
-
-    const onb = getCurrentOnboarding();
-    const derived = deriveTriBenchmarksFromHistory(activities, undefined, {
-      swim400Sec: onb.triSwim?.pbs?.m400,
-      swim200Sec: onb.triSwim?.pbs?.m200,
-    });
-
-    // Pre-fill form inputs where user hasn't already entered values.
-    const current = getCurrentOnboarding();
-    if (derived.css.cssSecPer100m && !current.triSwim?.cssSecPer100m) {
-      const cssInput = document.getElementById('tri-css') as HTMLInputElement | null;
-      if (cssInput) cssInput.value = formatCSS(derived.css.cssSecPer100m);
-      updateOnboarding({ triSwim: { ...(current.triSwim ?? {}), cssSecPer100m: derived.css.cssSecPer100m } });
-      // Close the "I'll do the swim test later" toggle so the user sees the derived value.
-      const deferSwim = document.getElementById('tri-defer-swim') as HTMLInputElement | null;
-      const swimInputs = document.getElementById('tri-swim-inputs');
-      const deferHint = document.getElementById('tri-defer-swim-hint');
-      if (deferSwim) deferSwim.checked = false;
-      if (swimInputs) swimInputs.style.display = '';
-      if (deferHint) deferHint.style.display = 'none';
-    }
-    if (derived.ftp.ftpWatts && !current.triBike?.ftp) {
-      const ftpInput = document.getElementById('tri-ftp') as HTMLInputElement | null;
-      if (ftpInput) ftpInput.value = String(derived.ftp.ftpWatts);
-      // Flip the power-meter toggle on.
-      const hasPower = document.getElementById('tri-has-power') as HTMLInputElement | null;
-      const ftpRow = document.getElementById('tri-ftp-row');
-      const hrHint = document.getElementById('tri-hr-fallback-hint');
-      if (hasPower) hasPower.checked = true;
-      if (ftpRow) ftpRow.style.display = '';
-      if (hrHint) hrHint.style.display = 'none';
-      updateOnboarding({ triBike: { ...(current.triBike ?? {}), ftp: derived.ftp.ftpWatts, hasPowerMeter: true } });
-    }
-
-    // Paint the summary card with what we found.
-    const lines: string[] = [];
-    lines.push(`<strong>${activities.length}</strong> activities in the last 16 weeks.`);
-    if (derived.css.cssSecPer100m) {
-      const m = Math.floor(derived.css.cssSecPer100m / 60);
-      const s = Math.round(derived.css.cssSecPer100m % 60);
-      lines.push(`Swim CSS <strong>${m}:${s.toString().padStart(2, '0')}/100m</strong> (from ${derived.css.swimActivityCount} swims).`);
-    } else {
-      lines.push(`Swim — no qualifying swims (need ≥ 800m). Enter manually below.`);
-    }
-    if (derived.ftp.ftpWatts) {
-      lines.push(`Bike FTP <strong>${derived.ftp.ftpWatts} W</strong> (from ${derived.ftp.bikeActivityCount} rides with power data).`);
-    } else if (derived.ftp.bikeActivityCount > 0) {
-      lines.push(`Bike — ${derived.ftp.bikeActivityCount} rides but no power data. Enter FTP manually if you have it.`);
-    }
-
-    // Run VDOT — HR-calibrated from the same regression we use on the
-    // marathon path. Fire physio sync + refresh blend so s.hrCalibratedVdot
-    // is current before we read it. Strava-only users without RHR will see
-    // the calibration-pending fallback line.
-    try {
-      await syncPhysiologySnapshot(28);
-    } catch { /* non-fatal */ }
-    try {
-      refreshBlendedFitness(getMutableState());
-    } catch { /* non-fatal */ }
-    const hr = getState().hrCalibratedVdot;
-    if (hr && hr.vdot != null && hr.confidence !== 'none') {
-      const runWord = hr.n === 1 ? 'run' : 'runs';
-      if (hr.confidence === 'low') {
-        lines.push(`Run VDOT <strong>${hr.vdot.toFixed(1)}</strong> — rough estimate from ${hr.n} steady ${runWord}. We'll refine as more training comes in.`);
-      } else {
-        const tier = hr.confidence === 'high' ? 'high confidence' : 'medium confidence';
-        lines.push(`Run VDOT <strong>${hr.vdot.toFixed(1)}</strong> — measured from your heart rate response to pace across ${hr.n} steady ${runWord} (${tier}).`);
-      }
-    } else if (hr && hr.reason === 'no-rhr') {
-      lines.push(`Run VDOT — we'll calibrate this from heart rate once your physiology data syncs.`);
-    } else if (hr && hr.reason === 'no-maxhr') {
-      lines.push(`Run VDOT — we'll calibrate this from heart rate once more activities sync.`);
-    }
-    // Fitness headline — single combined number is easier to read than three.
-    // CTL is weekly-equivalent TSS; shown rounded so the user sees a clean
-    // integer rather than decimals. Add a short interpretive band.
-    const combined = Math.round(derived.fitness.combinedCtl);
-    const band =
-      combined < 40   ? 'starting out'
-      : combined < 70  ? 'regular trainer'
-      : combined < 100 ? 'well-conditioned'
-      : combined < 140 ? 'high-fitness'
-      : combined < 200 ? 'very high fitness (serious age-grouper)'
-      :                   'elite / pro-level volume';
-    lines.push(`Starting fitness <strong>${combined}</strong> — ${band}.`);
-
-    foundBody.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
-  } catch (err) {
-    console.warn('[tri-setup] auto-derivation failed', err);
-    if (foundBody) foundBody.innerHTML = `<span style="opacity:0.7">Couldn't read your history right now. Enter benchmarks manually below.</span>`;
-  }
-}
-
-/**
- * Paint Strava card state: already-connected → reassurance line; not
- * connected → orange Connect button that fires the OAuth start flow.
- */
-async function wireStravaConnect(): Promise<void> {
-  const stateEl = document.getElementById('tri-strava-state');
-  const btn = document.getElementById('tri-strava-connect') as HTMLButtonElement | null;
-  const errEl = document.getElementById('tri-strava-error');
-
-  try {
-    const connected = await isStravaConnected();
-    if (connected) {
-      if (stateEl) stateEl.innerHTML = `<span style="color:#2e7d32">✓ Strava connected.</span> We'll pull your history after setup.`;
-      if (btn) btn.style.display = 'none';
-    } else {
-      if (stateEl) stateEl.innerHTML = `Not connected.`;
-      if (btn) btn.style.display = 'block';
-    }
-  } catch {
-    if (stateEl) stateEl.innerHTML = 'Not connected.';
-    if (btn) btn.style.display = 'block';
-  }
-
-  btn?.addEventListener('click', async () => {
-    if (btn.disabled) return;
-    btn.disabled = true;
-    btn.textContent = 'Opening Strava…';
-    if (errEl) errEl.style.display = 'none';
-
-    // Mark return destination so the OAuth callback lands back on this step.
-    updateOnboarding({ currentStep: 'triathlon-setup' });
-    saveState();
-
-    try {
-      const token = await getAccessToken();
-      const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/strava-auth-start`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'apikey': SUPABASE_ANON_KEY,
-        },
-      });
-      if (!res.ok) {
-        const text = await res.text().catch(() => '');
-        if (errEl) {
-          errEl.textContent = `Could not start Strava connection (${res.status}). ${text}`.trim();
-          errEl.style.display = 'block';
-        }
-        btn.disabled = false;
-        btn.textContent = 'Connect Strava';
-        return;
-      }
-      const data = await res.json();
-      if (data?.url) {
-        window.location.href = data.url;
-      } else {
-        if (errEl) {
-          errEl.textContent = 'Strava did not return an authorisation URL.';
-          errEl.style.display = 'block';
-        }
-        btn.disabled = false;
-        btn.textContent = 'Connect Strava';
-      }
-    } catch (err) {
-      if (errEl) {
-        errEl.textContent = `Strava connection error: ${err instanceof Error ? err.message : 'Unknown error'}`;
-        errEl.style.display = 'block';
-      }
-      btn.disabled = false;
-      btn.textContent = 'Connect Strava';
-    }
-  });
-}
 
 function updateWeekdayLabel(wd: number, total: number): void {
   const label = document.getElementById('tri-weekday-value');
@@ -812,37 +551,6 @@ function refreshSplitCells(): void {
     if (pct) pct.textContent = `${Math.round(split[k] * 100)}%`;
     if (hrs) hrs.textContent = `${(split[k] * hours).toFixed(1)}h`;
   });
-}
-
-function parseMMSS(s: string): number | null {
-  if (!s || !s.trim()) return null;
-  const parts = s.trim().split(':');
-  if (parts.length === 1) {
-    const n = Number(parts[0]);
-    return Number.isFinite(n) && n > 0 ? Math.round(n) : null;
-  }
-  if (parts.length === 2) {
-    const [m, sec] = parts.map((p) => Number(p));
-    if (!Number.isFinite(m) || !Number.isFinite(sec) || sec < 0 || sec >= 60) return null;
-    return m * 60 + sec;
-  }
-  if (parts.length === 3) {
-    const [h, m, sec] = parts.map((p) => Number(p));
-    if (!Number.isFinite(h) || !Number.isFinite(m) || !Number.isFinite(sec) || m >= 60 || sec >= 60) return null;
-    return h * 3600 + m * 60 + sec;
-  }
-  return null;
-}
-
-function formatMMSS(sec: number | string): string {
-  if (typeof sec !== 'number' || !Number.isFinite(sec) || sec <= 0) return '';
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function formatCSS(secPer100m: number | string): string {
-  return formatMMSS(secPer100m);
 }
 
 // Keep unused distance helper around for reference until scheduling uses it (§3).

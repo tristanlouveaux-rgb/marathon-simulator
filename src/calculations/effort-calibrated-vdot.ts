@@ -56,6 +56,9 @@ export interface HRVdotResult {
   paceAtVO2max: number | null;
   /** Reason for skipping, when vdot is null. */
   reason?: 'no-rhr' | 'no-maxhr' | 'no-points' | 'bad-fit' | 'too-few-points';
+  /** Qualifying points used in the regression — exposed so the onboarding
+   *  review screen can render an HR-vs-pace scatter without re-running the fit. */
+  points?: Array<{ vo2r: number; paceSecKm: number; durationSec: number }>;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -120,8 +123,10 @@ export function computeHRCalibratedVdot(
     });
   }
 
+  const exposedPoints = points.map(p => ({ vo2r: p.vo2r, paceSecKm: p.pace, durationSec: p.duration }));
+
   if (points.length < 3) {
-    return { ...empty, n: points.length, reason: points.length === 0 ? 'no-points' : 'too-few-points' };
+    return { ...empty, n: points.length, reason: points.length === 0 ? 'no-points' : 'too-few-points', points: exposedPoints };
   }
 
   // Weighted linear regression: y (pace) on x (%VO2R), weights = duration.
@@ -143,7 +148,7 @@ export function computeHRCalibratedVdot(
     denomX   += p.duration * dx * dx;
   }
 
-  if (denomX <= 0) return { ...empty, n: points.length, reason: 'bad-fit' };
+  if (denomX <= 0) return { ...empty, n: points.length, reason: 'bad-fit', points: exposedPoints };
 
   const beta = numerator / denomX;
   const alpha = meanY - beta * meanX;
@@ -151,7 +156,7 @@ export function computeHRCalibratedVdot(
   // Physiological sanity: effort rises → pace gets faster → pace decreases → β must be negative.
   // A non-negative β means the HR-pace relationship is inverted (noisy data, poor HR monitor,
   // or too-narrow effort range). Reject rather than emit a nonsense VDOT.
-  if (beta >= 0) return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2: null, paceAtVO2max: null, reason: 'bad-fit' };
+  if (beta >= 0) return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2: null, paceAtVO2max: null, reason: 'bad-fit', points: exposedPoints };
 
   // R² (weighted): 1 - SS_res / SS_tot
   let ssRes = 0, ssTot = 0;
@@ -165,7 +170,7 @@ export function computeHRCalibratedVdot(
   const paceAtVO2max = alpha + beta * 1.0;
   if (paceAtVO2max < MIN_PACE_SEC_PER_KM * 0.8 || paceAtVO2max > MAX_PACE_SEC_PER_KM) {
     // Extrapolation produced nonsense (e.g. 1:30/km or 10:00/km). Safer to return null.
-    return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2, paceAtVO2max, reason: 'bad-fit' };
+    return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2, paceAtVO2max, reason: 'bad-fit', points: exposedPoints };
   }
 
   // Convert pace at vVO2max → VDOT via Daniels:
@@ -177,5 +182,5 @@ export function computeHRCalibratedVdot(
   if (points.length >= 8 && r2 >= 0.7) confidence = 'high';
   else if (points.length >= 4 && r2 >= 0.5) confidence = 'medium';
 
-  return { vdot, confidence, n: points.length, r2, alpha, beta, paceAtVO2max };
+  return { vdot, confidence, n: points.length, r2, alpha, beta, paceAtVO2max, points: exposedPoints };
 }

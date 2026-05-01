@@ -179,6 +179,25 @@ function calculateHRDrift(
 const DRIFT_TYPES = new Set(["RUNNING", "TREADMILL_RUNNING", "TRAIL_RUNNING", "VIRTUAL_RUN", "TRACK_RUNNING"]);
 
 /**
+ * Best mean watts over a sliding window of `windowSec` seconds, given a
+ * 1-Hz watts stream. Returns null when the stream is shorter than the
+ * window. Treats missing samples as 0 (Strava fills coasting that way).
+ *
+ * O(n) via running sum — used for the FTP power curve.
+ */
+function computeMeanMax(watts: number[], windowSec: number): number | null {
+  if (!watts || watts.length < windowSec || windowSec <= 0) return null;
+  let sum = 0;
+  for (let i = 0; i < windowSec; i++) sum += watts[i] ?? 0;
+  let best = sum;
+  for (let i = windowSec; i < watts.length; i++) {
+    sum += (watts[i] ?? 0) - (watts[i - windowSec] ?? 0);
+    if (sum > best) best = sum;
+  }
+  return Math.round((best / windowSec) * 10) / 10;
+}
+
+/**
  * Fetch ambient temperature at the activity's start time and location from
  * Open-Meteo (free, no API key). Returns null if lat/lng missing or fetch fails.
  * Uses the archive endpoint for activities ≥ 6 days old (where archive data is
@@ -1050,6 +1069,8 @@ Deno.serve(async (req) => {
 
         const bfCalories = (act["calories"] as number | null) ?? cachedCalories.get(garminId) ?? null;
         const powerFields = extractPowerFields(act);
+        const bfMapObj = act.map as Record<string, unknown> | null;
+        const bfPolyline = (bfMapObj?.summary_polyline as string | null) ?? null;
         const { error: upsertErr } = await supabase.from("garmin_activities").upsert({
           user_id: user.id, garmin_id: garminId, source: "strava",
           activity_type: actType, start_time: act.start_date as string,
@@ -1070,6 +1091,7 @@ Deno.serve(async (req) => {
           activity_name: actName,
           elevation_gain_m: elevGainM,
           best_efforts: bestEfforts,
+          polyline: bfPolyline,
           ...powerFields,
         }, { onConflict: "garmin_id" });
         if (upsertErr) {
@@ -1212,6 +1234,76 @@ Deno.serve(async (req) => {
       }
       console.log(`[Backfill] Power heal: attempted=${powerAttempted} patched=${powerHealed} (out of ${allActivities.length} activities)`);
 
+      // 5e. Power curve mean-max backfill — for cycling rides with a real
+      // power meter, fetch the watts stream and compute best-mean-max for
+      // [600, 1200, 1800, 3600] seconds. The FTP estimator reads p1200
+      // directly (Coggan ×0.95) so a 110-min ride with two 20-min all-out
+      // efforts at 310 W gives FTP ≈ 295 W — what whole-ride NP can never
+      // surface. Budget = 15 streams per sync, biased to highest whole-ride
+      // NP within the last 26 weeks (cheapest proxy for "ride contains a
+      // hard interval").
+      const POWER_CURVE_BUDGET = 15;
+      const POWER_CURVE_LOOKBACK_DAYS = 26 * 7;
+      const powerCurveCutoffMs = Date.now() - POWER_CURVE_LOOKBACK_DAYS * 86400000;
+      const powerCurveCandidates = allActivities
+        .filter((a) => {
+          const t = mapStravaType((a?.sport_type as string) || (a?.type as string) || "");
+          if (t !== "CYCLING" && t !== "MOUNTAIN_BIKING") return false;
+          if (a?.device_watts !== true) return false;
+          const dur = (a?.elapsed_time as number | undefined) ?? (a?.moving_time as number | undefined) ?? 0;
+          if (dur < 25 * 60) return false;
+          const startMs = Date.parse((a?.start_date as string) || "");
+          if (!Number.isFinite(startMs) || startMs < powerCurveCutoffMs) return false;
+          const np = (a?.weighted_average_watts as number | null | undefined)
+            ?? (a?.average_watts as number | null | undefined);
+          return typeof np === "number" && np > 80;
+        })
+        .sort((a, b) => {
+          const aNp = (a?.weighted_average_watts as number) ?? (a?.average_watts as number) ?? 0;
+          const bNp = (b?.weighted_average_watts as number) ?? (b?.average_watts as number) ?? 0;
+          return bNp - aNp;
+        })
+        .slice(0, POWER_CURVE_BUDGET);
+
+      let powerCurveFetched = 0;
+      let powerCurveStored = 0;
+      let powerCurveTruncatedBy429 = false;
+      for (const act of powerCurveCandidates) {
+        const stravaId = act.id as number;
+        const garminId = `strava-${stravaId}`;
+        try {
+          const streamData = await stravaGet(
+            `/activities/${stravaId}/streams?keys=watts,time&key_by_type=true`,
+            accessToken,
+          ) as Record<string, { data: number[] }> | undefined;
+          powerCurveFetched++;
+          const wattsData = streamData?.watts?.data;
+          if (!wattsData || wattsData.length < 600) continue;
+          const curve = {
+            p600:  computeMeanMax(wattsData, 600),
+            p1200: computeMeanMax(wattsData, 1200),
+            p1800: computeMeanMax(wattsData, 1800),
+            p3600: computeMeanMax(wattsData, 3600),
+          };
+          if (curve.p600 == null && curve.p1200 == null && curve.p1800 == null && curve.p3600 == null) continue;
+          const { error: pcErr } = await supabase.from("garmin_activities")
+            .update({ power_curve: curve })
+            .eq("garmin_id", garminId)
+            .eq("user_id", user.id);
+          if (pcErr) {
+            console.warn(`[Power curve] update failed for ${garminId}:`, pcErr.message);
+            continue;
+          }
+          powerCurveStored++;
+          console.log(`[Power curve] ${garminId}: p600=${curve.p600} p1200=${curve.p1200} p1800=${curve.p1800} p3600=${curve.p3600}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(`[Power curve] stream fetch failed for ${garminId}: ${msg}`);
+          if (msg.includes("429")) { powerCurveTruncatedBy429 = true; break; }
+        }
+      }
+      console.log(`[Power curve] fetched=${powerCurveFetched}/${powerCurveCandidates.length} stored=${powerCurveStored}${powerCurveTruncatedBy429 ? " (truncated by 429)" : ""}`);
+
       // 6b. Heal hr_drift on cached-with-zones running activities that pre-date the column.
       // Budget: 20 per run to stay well under Strava's rate limits (we already spent up to
       // STREAM_BUDGET=99 on needFullStream). Prioritise most-recent first so the durability
@@ -1350,6 +1442,70 @@ Deno.serve(async (req) => {
       }
       console.log(`[Backfill] Updated activity_type for ${typeFixBatch.length} activities`);
 
+      // Server-side dedup: Strava is canonical (per CLAUDE.md). After upserting all
+      // strava-{id} rows, drop any non-Strava counterpart in the same backfill window
+      // whose start_time is within ±10 min AND either matches activity_type or has a
+      // duration ratio < 15%. Mirrors the in-state dedup window in
+      // `src/calculations/activity-matcher.ts:454-461` and the client-side
+      // cleanupDbDuplicates() in `src/data/stravaSync.ts`. Running this here means
+      // duplicates can't survive a backfill — historicWeeklyTSS / signalBBaseline
+      // / ctlBaseline never see them.
+      try {
+        const dedupSince = new Date(Date.now() - weeks * 7 * 86400000).toISOString();
+        const { data: dedupRows, error: dedupErr } = await supabase
+          .from("garmin_activities")
+          .select("garmin_id, activity_type, start_time, duration_sec")
+          .eq("user_id", user.id)
+          .gte("start_time", dedupSince);
+        if (dedupErr) {
+          console.warn("[Backfill:dedup] Query failed:", dedupErr.message);
+        } else if (dedupRows && dedupRows.length > 1) {
+          const stravaRows = dedupRows.filter((r: any) => typeof r.garmin_id === "string" && r.garmin_id.startsWith("strava-"));
+          const garminRows = dedupRows.filter((r: any) => typeof r.garmin_id === "string" && !r.garmin_id.startsWith("strava-"));
+          const TEN_MIN_MS = 10 * 60 * 1000;
+          const toDelete: string[] = [];
+          for (const g of garminRows) {
+            const gMs = new Date(g.start_time as string).getTime();
+            const gDur = (g.duration_sec as number | null) ?? 0;
+            const matched = stravaRows.some((sr: any) => {
+              const dt = Math.abs(gMs - new Date(sr.start_time as string).getTime());
+              if (dt > TEN_MIN_MS) return false;
+              const sameType = !!g.activity_type && g.activity_type === sr.activity_type;
+              if (sameType) return true;
+              const sDur = (sr.duration_sec as number | null) ?? 0;
+              if (gDur > 0 && sDur > 0) {
+                const ratio = Math.abs(gDur - sDur) / Math.max(gDur, sDur);
+                return ratio < 0.15;
+              }
+              return false;
+            });
+            if (matched) toDelete.push(g.garmin_id as string);
+          }
+          if (toDelete.length > 0) {
+            const CHUNK = 100;
+            let deleted = 0;
+            for (let i = 0; i < toDelete.length; i += CHUNK) {
+              const chunk = toDelete.slice(i, i + CHUNK);
+              const { error: delErr } = await supabase
+                .from("garmin_activities")
+                .delete()
+                .eq("user_id", user.id)
+                .in("garmin_id", chunk);
+              if (delErr) {
+                console.warn(`[Backfill:dedup] Delete chunk ${i / CHUNK + 1} failed:`, delErr.message);
+                break;
+              }
+              deleted += chunk.length;
+            }
+            console.log(`[Backfill:dedup] Removed ${deleted} non-Strava row(s) shadowed by a Strava counterpart.`);
+          } else {
+            console.log("[Backfill:dedup] No shadowed non-Strava rows found.");
+          }
+        }
+      } catch (dedupCatch) {
+        console.warn("[Backfill:dedup] Unexpected error:", (dedupCatch as Error)?.message ?? dedupCatch);
+      }
+
       console.log(`[Backfill] ${withHRStream} HR stream + ${withAvgHR} avg HR — ${allActivities.length} total activities, hasHRMonitor=${hasHRMonitor}`);
       // Include per-week Strava breakdown in response so client can log it (server logs not visible in browser)
       const stravaWeeksObj: Record<string, number> = {};
@@ -1444,11 +1600,11 @@ Deno.serve(async (req) => {
     const garminIds = activities.map((a) => `strava-${a.id as number}`);
     const { data: cachedRows } = await supabase
       .from("garmin_activities")
-      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c")
+      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c, polyline")
       .eq("user_id", user.id)
       .in("garmin_id", garminIds);
 
-    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null }>();
+    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null; polyline: string | null }>();
     for (const r of (cachedRows ?? [])) {
       cachedMap.set(r.garmin_id, {
         itrimp: r.itrimp ?? null,
@@ -1457,6 +1613,7 @@ Deno.serve(async (req) => {
         calories: r.calories ?? null,
         hr_drift: r.hr_drift ?? null,
         ambient_temp_c: r.ambient_temp_c ?? null,
+        polyline: r.polyline ?? null,
       });
     }
 
@@ -1479,6 +1636,12 @@ Deno.serve(async (req) => {
     // Process each activity: use cached stream data when available; fetch fresh otherwise.
     const rows: Record<string, unknown>[] = [];
     let calHealCount = 0; // cap detail fetches for cached activities missing calories
+    // Strava's list endpoint can return stale or incomplete power data for cycling
+    // activities that were edited/re-uploaded on Strava (the detail endpoint reflects
+    // the current state but list lags). Refetch detail when list looks suspicious so
+    // FTP derivation and on-screen power match what the user sees on Strava.
+    const POWER_DETAIL_BUDGET = 5;
+    let powerDetailRefetched = 0;
 
     for (const act of activities) {
       const stravaId = act.id as number;
@@ -1496,7 +1659,7 @@ Deno.serve(async (req) => {
       const elevationGainM = (act["total_elevation_gain"] as number | null) ?? null;
       const isRun = activityType === "RUNNING";
       const mapObj = act.map as Record<string, unknown> | null;
-      const polyline = (mapObj?.summary_polyline as string | null) ?? null;
+      let polyline = (mapObj?.summary_polyline as string | null) ?? null;
 
       let iTrimp: number | null = null;
       let hrZones: HRZones | null = null;
@@ -1517,6 +1680,8 @@ Deno.serve(async (req) => {
       const cached = cachedMap.get(garminId);
       // Strava list endpoint often returns null calories; fall back to DB (strava row), then Garmin webhook row, then detail endpoint
       let calories = (act["calories"] as number | null) ?? cached?.calories ?? garminCalByTime.get(startTime) ?? null;
+      // Polyline can be missing from the list endpoint on older syncs — heal from DB cache.
+      if (!polyline && cached?.polyline) polyline = cached.polyline;
 
       if (cached?.hr_zones) {
         // Already processed — return cached zones without touching the Strava API
@@ -1638,6 +1803,40 @@ Deno.serve(async (req) => {
         } catch { /* ignore — drift will be absent this sync */ }
       }
 
+      // For cycling activities, decide whether the list-endpoint power data needs
+      // a detail-endpoint refresh. Triggers when list reports avg_watts but is
+      // missing weighted_average_watts (NP), or when device_watts is not true —
+      // both are signals Strava hasn't fully processed the power stream yet on
+      // its summary cache.
+      let powerFields = extractPowerFields(act);
+      if (
+        (activityType === "CYCLING" || activityType === "MOUNTAIN_BIKING") &&
+        powerDetailRefetched < POWER_DETAIL_BUDGET &&
+        powerFields.average_watts != null &&
+        (powerFields.normalized_power == null || powerFields.device_watts !== true)
+      ) {
+        try {
+          const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
+          const detailPower = extractPowerFields(detail);
+          console.log(
+            `[Standalone power-detail] ${garminId}: list avg=${powerFields.average_watts} np=${powerFields.normalized_power} dev=${powerFields.device_watts} → detail avg=${detailPower.average_watts} np=${detailPower.normalized_power} dev=${detailPower.device_watts}`,
+          );
+          // Merge: prefer detail when it has a value, fall back to list otherwise
+          powerFields = {
+            average_watts: detailPower.average_watts ?? powerFields.average_watts,
+            normalized_power: detailPower.normalized_power ?? powerFields.normalized_power,
+            max_watts: detailPower.max_watts ?? powerFields.max_watts,
+            device_watts: detailPower.device_watts ?? powerFields.device_watts,
+            kilojoules: detailPower.kilojoules ?? powerFields.kilojoules,
+          };
+          powerDetailRefetched++;
+          // Force a DB write so the row reflects the detail-endpoint values
+          needsUpsert = true;
+        } catch (err) {
+          console.warn(`[Standalone power-detail] fetch failed for ${garminId}:`, err);
+        }
+      }
+
       // Upsert into garmin_activities — only write when we fetched fresh stream data
       if (needsUpsert) {
         const { error: standaloneErr } = await supabase.from("garmin_activities").upsert(
@@ -1662,7 +1861,8 @@ Deno.serve(async (req) => {
             ambient_temp_c: ambientTempC,
             activity_name: activityName,
             elevation_gain_m: elevationGainM,
-            ...extractPowerFields(act),
+            polyline,
+            ...powerFields,
           },
           { onConflict: "garmin_id" },
         );
@@ -1670,7 +1870,6 @@ Deno.serve(async (req) => {
         else console.log(`[Standalone] Upsert OK for ${garminId}`);
       }
 
-      const powerFields = extractPowerFields(act);
       rows.push({
         garmin_id: garminId,
         activity_type: activityType,

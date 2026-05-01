@@ -2,6 +2,23 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token";
 
+/**
+ * Decide where to redirect the user after a successful OAuth handshake.
+ * See identical implementation in `garmin-auth-callback/index.ts` for the
+ * full rationale (multi-port dev support + open-redirect protection).
+ */
+function pickRedirectTarget(clientOrigin: string | null | undefined, envDefault: string): string {
+  if (!clientOrigin) return envDefault;
+  try {
+    const u = new URL(clientOrigin);
+    if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return clientOrigin;
+    if (clientOrigin === envDefault) return clientOrigin;
+    const envUrl = new URL(envDefault);
+    if (u.hostname === envUrl.hostname) return clientOrigin;
+  } catch { /* fall through */ }
+  return envDefault;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", {
@@ -41,7 +58,7 @@ Deno.serve(async (req) => {
     // 1. Look up the pending auth request
     const { data: row, error: selErr } = await supabase
       .from("strava_auth_requests")
-      .select("user_id, code_verifier")
+      .select("user_id, code_verifier, app_origin")
       .eq("state", state)
       .maybeSingle();
 
@@ -52,7 +69,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { user_id: userId } = row;
+    const { user_id: userId, app_origin: clientOrigin } = row;
+    const redirectTarget = pickRedirectTarget(clientOrigin, appRedirectUrl);
 
     // 2. Exchange authorization code for tokens
     const tokenBody = new URLSearchParams({
@@ -120,8 +138,8 @@ Deno.serve(async (req) => {
 
     console.log("[strava-auth-callback] Strava connected for user", userId, "athlete_id", athleteId);
 
-    // 5. Redirect back to the app
-    return Response.redirect(`${appRedirectUrl}?strava=connected`, 302);
+    // 5. Redirect back to the app (origin-aware — see pickRedirectTarget)
+    return Response.redirect(`${redirectTarget}?strava=connected`, 302);
   } catch (e) {
     return new Response(JSON.stringify({ error: String(e) }), {
       status: 500,

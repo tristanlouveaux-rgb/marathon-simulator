@@ -29,12 +29,12 @@
 |--------|---------|-----------|-------------|
 | `state/` | Central store + persistence + plan initialization | `store.ts`, `initialization.ts`, `initialization.triathlon.ts`, `persistence.ts` | `getState()`, `getMutableState()`, `updateState()`, `loadState()`, `saveState()`, `initializeSimulator()`, `initializeTriathlonSimulator()` |
 | `workouts/` | Plan generation, scheduling, gym workouts. Triathlon mode adds `plan_engine.triathlon.ts`, `scheduler.triathlon.ts`, `swim.ts`, `bike.ts`, `brick.ts`. | `generator.ts`, `plan_engine.ts`, `scheduler.ts`, `gym.ts`, `load.ts`, `plan_engine.triathlon.ts`, `scheduler.triathlon.ts`, `swim.ts`, `bike.ts`, `brick.ts` | `generateWeekWorkouts()`, `planWeekSessions()`, `assignDefaultDays()`, `generateGymWorkouts()`, `calculateWorkoutLoad()`, `generateTriathlonPlan()`, `scheduleTriathlonWeek()`, `generateSwimSession()`, `generateBikeSession()`, `generateBrick()` |
-| `calculations/` | VDOT, paces, predictions, fatigue, physiology, TSS/ACWR. Prediction blend composes `prediction-inputs.ts` (Tanda volume+pace) + `effort-calibrated-vdot.ts` (HR-calibrated VDOT via Swain regression) into `blendPredictions`. Triathlon adds `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts`. | `vdot.ts`, `paces.ts`, `predictions.ts`, `prediction-inputs.ts`, `effort-calibrated-vdot.ts`, `blended-fitness.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts`, `fitness-model.ts`, `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `computePredictionInputs()`, `computeHRCalibratedVdot()`, `refreshBlendedFitness()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()`, `computeWeekTSS()`, `computeFitnessModel()`, `computeACWR()`, `computeSwimTss()`, `computeBikeTssFromPower()`, `computeBikeTssFromHr()`, `computePerDisciplineFitness()`, `perDisciplineACWR()`, `rebuildTriFitnessFromActivities()`, `predictTriathlonRace()`, `matchTriathlonWeek()`, `detectBricks()` |
+| `calculations/` | VDOT, paces, predictions, fatigue, physiology, TSS/ACWR. Prediction blend composes `prediction-inputs.ts` (Tanda volume+pace) + `effort-calibrated-vdot.ts` (HR-calibrated VDOT via Swain regression) into `blendPredictions`. Triathlon adds `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts`, `tri-benchmark-history.ts` (FTP/CSS sample append helpers). | `vdot.ts`, `paces.ts`, `predictions.ts`, `prediction-inputs.ts`, `effort-calibrated-vdot.ts`, `blended-fitness.ts`, `fatigue.ts`, `training-horizon.ts`, `physiology-tracker.ts`, `heart-rate.ts`, `fitness-model.ts`, `triathlon-tss.ts`, `fitness-model.triathlon.ts`, `race-prediction.triathlon.ts`, `activity-matcher.triathlon.ts`, `brick-detector.ts`, `tri-benchmark-history.ts` | `cv()`, `vt()`, `gp()`, `blendPredictions()`, `computePredictionInputs()`, `computeHRCalibratedVdot()`, `refreshBlendedFitness()`, `calculateLiveForecast()`, `getRunnerType()`, `applyTrainingHorizonAdjustment()`, `computeWeekTSS()`, `computeFitnessModel()`, `computeACWR()`, `computeSwimTss()`, `computeBikeTssFromPower()`, `computeBikeTssFromHr()`, `computePerDisciplineFitness()`, `perDisciplineACWR()`, `rebuildTriFitnessFromActivities()`, `predictTriathlonRace()`, `matchTriathlonWeek()`, `detectBricks()`, `appendFtpSample()`, `appendCssSample()` |
 | `injury/` | Phase-based injury management + workout adaptation | `engine.ts` | `applyInjuryAdaptations()`, `evaluatePhaseTransition()`, `recordPainLevel()`, `analyzeTrend()` |
 | `cross-training/` | Universal load model, workout matching, suggestions | `universalLoad.ts`, `matcher.ts`, `load-matching.ts`, `suggester.ts` | `computeUniversalLoad()`, `applyCrossTrainingToWorkouts()`, `buildCrossTrainingPopup()`, `applyAdjustments()` |
 | `gps/` | GPS tracking, split detection, recording persistence | `tracker.ts`, `geo-math.ts`, `split-scheme.ts`, `persistence.ts` | `GpsTracker` (class), `haversineDistance()`, `filterJitter()`, `buildSplitScheme()` |
 | `recovery/` | Morning check-in, sleep/readiness scoring | `engine.ts` | `computeRecoveryStatus()`, `sleepQualityToScore()`, `RecoveryEntry`, `RecoveryLevel` |
-| `ui/` | Dashboard, renderer, events, wizard, modals. Triathlon mode renders from `ui/triathlon/`. | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `wizard/steps/triathlon-setup.ts`, `activity-review.ts`, `welcome-back.ts`, `triathlon/{plan-view,home-view,stats-view,tab-bar,workout-card,race-forecast-card,colours}.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()`, `renderTriathlonPlanView()`, `renderTriathlonHomeView()`, `renderTriathlonStatsView()` |
+| `ui/` | Dashboard, renderer, events, wizard, modals. Triathlon mode renders from `ui/triathlon/`. | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `wizard/steps/triathlon-setup.ts`, `activity-review.ts`, `welcome-back.ts`, `triathlon/{plan-view,home-view,stats-view,progress-detail-view,tab-bar,workout-card,race-forecast-card,colours}.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()`, `renderTriathlonPlanView()`, `renderTriathlonHomeView()`, `renderTriathlonStatsView()`, `renderTriProgressDetailView()` |
 | `constants/` | Static config, protocols, sport DB, training params. Triathlon adds `triathlon-constants.ts` and `transfer-matrix.ts`. | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts`, `triathlon-constants.ts`, `transfer-matrix.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS`, `TRANSFER_MATRIX`, `COMBINED_CTL_WEIGHTS`, `DEFAULT_VOLUME_SPLIT`, `RACE_LEG_DISTANCES`, `RUN_FATIGUE_DISCOUNT_70_3`, `RUN_FATIGUE_DISCOUNT_IRONMAN` |
 | `types/` | All TypeScript interfaces and type unions. Triathlon adds `triathlon.ts`. | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts`, `triathlon.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase`, `EventType`, `Discipline`, `TriathlonDistance`, `TriConfig`, `TriSkillRating`, `TriVolumeSplit`, `TriRacePrediction` |
 | `data/` | Static data, Supabase client, wearable sync, source routing | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts`, `sources.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncAppleHealthPhysiology()`, `syncPhysiologySnapshot()`, `getActivitySource()`, `getPhysiologySource()` |
@@ -258,7 +258,9 @@ Six-phase clinical progression: **acute → rehab → test_capacity → return_t
 
 Universal load currency converts any activity to aerobic/anaerobic load + fatigue cost + run replacement credit (RRC).
 
-**Three data tiers**: Garmin (Tier A), HR-only (Tier B), RPE-only (Tier C, with uncertainty penalty).
+**Three data tiers**: iTRIMP / HR stream (Tier A+), Garmin (Tier A), HR-only (Tier B), RPE-only (Tier C, with uncertainty penalty).
+
+**Load currency invariant**: Tier A+ takes raw iTRIMP from `src/calculations/trimp.ts`, which is seconds-weighted Banister TRIMP (~150 per TSS). It MUST be normalised to TSS-equivalent (`iTrimp × 100 / 15000`) before applying sport multiplier — same convention as every TSS-display call site in the app and as `tri-benchmarks-from-history.ts:638`. See SCIENCE_LOG.md → "Load currency invariant" for the full rationale and prior-incident history. Regression test: `Universal Load: iTRIMP scale invariant` in `universalLoad.test.ts`.
 
 **Runner-type aware reduction** (`AthleteContext.runnerType`): Speed runners get volume-first candidate ordering in `buildReduceAdjustments` (easy runs cut before quality downgrades). Endurance/Balanced runners keep the default intensity-first ordering.
 
@@ -280,6 +282,13 @@ threshold     → steady (halfway between easy and threshold, NOT true marathon 
 ```
 
 **Key invariant**: Adjustment `workoutId` and `dayIndex` come from the generator's `w.n` and `w.dayOfWeek`. Mods must store/match original generator names (before renderer deduplication renames them).
+
+**Mode-aware modal routing**: in triathlon mode (`s.eventType === 'triathlon'`), the running suggestion modal (`showSuggestionModal`) is suppressed and cross-training overload is surfaced via `tri-suggestion-modal.ts`. Routing happens at four sites:
+- `activity-review.ts` — `redirectToTriSuggestionFlow` helper persists items as adhocs and shows the tri modal.
+- `events.ts:logActivity` — tri-mode branch persists the manual log + shows the tri modal.
+- `main-view.ts:triggerACWRReduction` — tri-mode early-return (tri uses per-discipline volume ramps, not run ACWR).
+- `excess-load-card.ts:triggerExcessLoadAdjustment` — defensive early-return.
+The tri detector is `src/calculations/tri-cross-training-overload.ts`; it sums non-tri-discipline TSS and fires when the cross-training contribution exceeds 15% of planned weekly tri TSS. See ISSUE-151 in OPEN_ISSUES.md (✅ FIXED 2026-04-30) for the full audit and SCIENCE_LOG.md for the threshold rationale.
 
 ### Cross-Training Log → Plan Apply Pipeline (`events.ts` ~L1080–1418)
 
@@ -333,6 +342,24 @@ Morning check-in: sleep score + Garmin readiness + HRV status → `computeRecove
 - Trend escalation: 2 of 3 days low → escalate level
 - Non-green triggers adjustment modal: downgrade hard workout / reduce distance / flag as easy
 - Plan engine has built-in deload weeks via `isDeloadWeek()` (every 3rd–4th week by ability band)
+
+### Load Model & Plan Continuity (`src/calculations/fitness-model.ts`)
+
+> See also: `docs/SCIENCE_LOG.md → "Plan-reset continuity (2026-04-29)"` for why the chronological walker exists, and `docs/CHANGELOG.md` 2026-04-29 entries for the `previousPlanWks` threading fix plus the baseline-refresh / DB-dedup follow-ups.
+
+CTL/ATL/TSB and ACWR are computed from three signals (Signal A, B, C — see CLAUDE.md and `docs/PRINCIPLES.md`). Two parallel walkers exist:
+
+- **Rolling 7d/28d** (`computeRollingLoadRatio`) — primary path for ACWR. Walks the last 28 days day-by-day, resolving each date to a Week via `_resolveWeekForDate`, which checks current `wks` *and* archived plans.
+- **Weekly EMA** (`computeSameSignalTSB`, `computeFitnessModel`) — used by the freshness ring, weekly TSB chart, week debrief, and as the ACWR fallback when planStartDate is missing or rolling data is insufficient.
+
+**Plan continuity via `previousPlanWks`**: when a user generates a new plan, the old `wks` is archived into `s.previousPlanWks` (`archiveCurrentWksIfPopulated()` in `state/initialization.ts`) and any activities falling in the new plan window are redistributed via `redistributeArchivedActivitiesToNewPlan()`. Archive weeks whose start date is on or after the new plan's start are truncated by `_truncateArchivesAtPlanBoundary` so chronological concatenation cannot double-count.
+
+Every readiness/load consumer threads `s.previousPlanWks` through to the walker so CTL doesn't collapse to `signalBBaseline` the moment a new plan starts:
+
+- Helper `_walkChronologicalWeeks` yields archives (sorted by `planStartDate`) + current `wks` chronologically, each tagged with the right `planStartDate` so `computeWeekRawTSS`'s `unspentLoadItems` filter keys off the archive's own start, not the current plan's.
+- Used by `computeSameSignalTSB`, `computeFitnessModel`, `computeLiveSameSignalTSB`, and `computeACWR`'s weekly-EMA fallback. Sleep debt's `buildDailySignalBTSS` walks archives independently.
+
+**Call-site rule**: any new code reading these functions must pass `s.previousPlanWks` as the trailing `archivedPlans` argument. Skipping it makes the freshness ring and ACWR re-collapse on the next plan reset. Live writers: `freshness-view`, `home-view`, `readiness-view`, `daily-coach`, `stats-view`, `week-debrief`, `excess-load-card`, `activity-review`, `events`, `main-view`, `renderer`, `rolling-load-view`, `gps/recording-handler`.
 
 ### Gym Integration (`src/workouts/gym.ts`)
 

@@ -93,8 +93,16 @@ function getSportConfig(sportKey: SportKey | string) {
 
 /**
  * Convert iTRIMP value to aerobic/anaerobic split using sport profile.
- * iTRIMP is an absolute load in arbitrary units — we normalise via the
- * sport multiplier and RPE aerobic split to produce FCL-compatible values.
+ *
+ * iTRIMP from `src/calculations/trimp.ts` is seconds-weighted Banister TRIMP
+ * (Σ Δt_sec × HRR × e^(β·HRR)) so a 1-hour session lands at iTRIMP ≈ 5000–10000.
+ * Every other consumer in the codebase converts this to TSS-equivalent units
+ * via `iTrimp × 100 / 15000` (1 hour at threshold ≈ 15000 iTRIMP ≈ 100 TSS).
+ * We do the same here BEFORE applying sport multiplier — without it, baseLoad
+ * is ~150× too large, blowing up FCL/RRC, slamming `equivalentEasyKm` into its
+ * 25 km cap, and falsely flagging any HR-tracked cross-training session as
+ * "Very heavy training load". See `tri-benchmarks-from-history.ts` for the
+ * same normalisation rule (and a prior incident comment).
  */
 function computeTierAPlus(
   iTrimp: number,
@@ -102,8 +110,8 @@ function computeTierAPlus(
   runSpec: number,
   explanations: string[]
 ): { aerobic: number; anaerobic: number; confidence: number } {
-  // iTRIMP → base load via sport multiplier (normalise to FCL currency)
-  const baseLoad = iTrimp * sportMult;
+  const tssEquivalent = (iTrimp * 100) / 15000;
+  const baseLoad = tssEquivalent * sportMult;
 
   // Split aerobic/anaerobic: use a fixed 85/15 split as iTRIMP doesn't
   // distinguish zones — it is purely a cardiovascular load signal.

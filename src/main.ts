@@ -16,7 +16,7 @@ import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } 
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
-import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
@@ -27,6 +27,48 @@ import '@/ui/strava-detail';
 /** True when running in local simulator mode (no auth required) */
 export function isSimulatorMode(): boolean {
   return localStorage.getItem('mosaic_simulator_mode') === '1';
+}
+
+/**
+ * Startup-sync coordination. `launchApp` fires several fire-and-forget
+ * background tasks (Strava backfill, history restore, DB cleanup, etc.) that
+ * write to the activity DB. Some surfaces — most importantly the onboarding
+ * review screen's `loadActivitiesFromDB` query — read that DB and need to
+ * see settled data, otherwise their derived values (FTP, CSS, weekly volume)
+ * come and go between reloads as the syncs race the read.
+ *
+ * Pattern:
+ *   1. `launchApp` calls `trackStartupTask(asyncFn())` for each fire-and-forget.
+ *   2. After `launchApp` completes, callers can `await awaitStartupSyncs()` to
+ *      block until those tasks have all settled (or a timeout fires).
+ *   3. The review pipeline awaits this before its own `loadActivitiesFromDB`.
+ *
+ * Bootstrap completion is signalled separately so a caller awaiting before
+ * launchApp finishes doesn't snapshot an empty task array.
+ */
+const _startupSyncTasks: Promise<unknown>[] = [];
+let _launchAppResolve: (() => void) | null = null;
+const _launchAppPromise = new Promise<void>((resolve) => { _launchAppResolve = resolve; });
+
+function trackStartupTask<T>(p: Promise<T>): Promise<T> {
+  _startupSyncTasks.push(p);
+  return p;
+}
+
+/**
+ * Wait until all background startup tasks (registered via `trackStartupTask`
+ * in `launchApp`) have settled, or until `timeoutMs` elapses — whichever
+ * comes first. Resolves regardless; never rejects.
+ *
+ * Defaults to 20 s — plenty of time for a typical first-run Strava backfill,
+ * but capped so a stuck task can't lock the wizard indefinitely.
+ */
+export async function awaitStartupSyncs(timeoutMs: number = 20000): Promise<void> {
+  await _launchAppPromise;
+  await Promise.race([
+    Promise.allSettled(_startupSyncTasks).then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
 }
 
 /**
@@ -163,6 +205,23 @@ async function launchApp(): Promise<void> {
   }
   const state = getState();
 
+  // Refresh isGuestAccount from the live session. is_anonymous is true for users
+  // auto-created via signInAnonymously above. Long-term anonymous users are at
+  // risk of data loss on app reinstall / device change — the home banner and
+  // Account view surface a "Save your account" prompt off this flag.
+  if (!isSimulatorMode()) {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const ms = getMutableState();
+      const wasGuest = ms.isGuestAccount === true;
+      ms.isGuestAccount = !!user?.is_anonymous;
+      // If the user just upgraded, clear the dismiss flag so the Account view
+      // section reflects the new state cleanly.
+      if (wasGuest && !ms.isGuestAccount) ms.guestBannerDismissed = false;
+      if (hasState) saveState();
+    } catch { /* swallow — banner just won't fire if we can't read auth */ }
+  }
+
   // Self-heal stravaConnected flag. Users who connected Strava from the tri
   // setup page (or via any path that didn't land on ?strava=connected) have
   // tokens in strava_tokens but the state flag is false — which gates the
@@ -225,6 +284,7 @@ async function launchApp(): Promise<void> {
       const { TRI_GENERATOR_VERSION, generateTriathlonPlan } = await import('@/workouts/plan_engine.triathlon');
       const { deriveTriBenchmarksFromHistory } = await import('@/calculations/tri-benchmarks-from-history');
       const { loadActivitiesFromDB } = await import('@/data/tri-activity-loader');
+      const { appendFtpSample, appendCssSample } = await import('@/calculations/tri-benchmark-history');
       const mutable = getMutableState();
 
       // One-time migration: any existing FTP/CSS without a source field is
@@ -271,39 +331,124 @@ async function launchApp(): Promise<void> {
         swim400Sec: state.triConfig?.swim?.pbs?.m400,
         swim200Sec: state.triConfig?.swim?.pbs?.m200,
       });
+      // ALSO compute the DIRECT (no transfer matrix) per-discipline fitness
+      // for the user-facing display. The matrix-adjusted version (above) goes
+      // to race prediction internals because cross-training transfer is real
+      // physiology; the direct version is what the user sees because they
+      // expect "swim load" to mean what they did in the pool.
+      const { estimateDirectPerDisciplineCTLFromActivities } = await import('@/calculations/tri-benchmarks-from-history');
+      const directFitness = estimateDirectPerDisciplineCTLFromActivities(activityLog);
+
+      // Diagnostic — once-per-launch so we can see why Training Load might be
+      // zero. Activity count, derived fitness per discipline, and how many
+      // historical weeks have non-zero CTL.
+      console.log('[tri:fitness-diag]', {
+        activityCount: activityLog.length,
+        swimCtl: derived.fitness.swim.ctl,
+        bikeCtl: derived.fitness.bike.ctl,
+        runCtl:  derived.fitness.run.ctl,
+        combinedCtl: derived.fitness.combinedCtl,
+        historyLen: derived.fitnessHistory.length,
+        historyNonZero: {
+          swim: derived.fitnessHistory.filter(h => h.swimCtl > 0).length,
+          bike: derived.fitnessHistory.filter(h => h.bikeCtl > 0).length,
+          run:  derived.fitnessHistory.filter(h => h.runCtl  > 0).length,
+        },
+      });
 
       // Update per-discipline fitness every boot so CTL reflects what's
-      // actually been trained since last load.
+      // actually been trained since last load. Display values use DIRECT
+      // (no transfer matrix) so a user with 0 swims sees swim CTL = 0, not
+      // the 8.4 cross-training spillover. The matrix-adjusted version stays
+      // available via combinedCtl (which is a meaningful aggregate).
       if (mutable.triConfig) {
         mutable.triConfig.fitness = {
-          swim: derived.fitness.swim,
-          bike: derived.fitness.bike,
-          run:  derived.fitness.run,
-          combinedCtl: derived.fitness.combinedCtl,
+          swim: directFitness.swim,
+          bike: directFitness.bike,
+          run:  directFitness.run,
+          combinedCtl: derived.fitness.combinedCtl,  // matrix-aggregate stays
         };
-        // Fill or refresh CSS / FTP. User-entered values (cssSource/ftpSource
-        // === 'user') are preserved unconditionally. Auto-derived values are
-        // refreshed every launch so a smarter algorithm or new ride data
-        // updates the estimate without the user having to clear the field.
-        // Pre-provenance values (no source set) are treated as user-entered
-        // to avoid clobbering anything entered before this field existed.
-        const swimSrc = mutable.triConfig.swim?.cssSource;
-        const swimWritable = !mutable.triConfig.swim?.cssSecPer100m || swimSrc === 'derived';
-        if (swimWritable && derived.css.cssSecPer100m) {
+        mutable.triConfig.fitnessHistory = derived.fitnessHistory.slice(-52);
+        // Fill or refresh CSS / FTP. Per CLAUDE.md "Manually-set Benchmarks
+        // Yield to Improvements": user-entered values are preserved UNLESS the
+        // derived estimate clearly improves on them with sufficient
+        // confidence. Auto-derived values are refreshed every launch so a
+        // smarter algorithm or new training data updates the estimate.
+        // Pre-provenance values (no source set) are treated as user-entered.
+        const swim = mutable.triConfig.swim;
+        const swimSrc = swim?.cssSource;
+        const currentCss = swim?.cssSecPer100m;
+        const derivedCss = derived.css.cssSecPer100m;
+        const cssBlank = !currentCss;
+        const cssDerivedRefresh = swimSrc === 'derived';
+        // CSS lower = better. Derived estimate already includes a +5s/100m
+        // buffer (see estimateCSSFromSwimActivities), so any improvement over
+        // a user value is a real signal. Require ≥2 sustained swims for the
+        // override path so a single hot session can't clobber a test result.
+        const cssUserBeaten =
+          swimSrc === 'user' &&
+          currentCss != null &&
+          derivedCss != null &&
+          derivedCss < currentCss &&
+          (derived.css.swimActivityCount ?? 0) >= 2;
+        if ((cssBlank || cssDerivedRefresh || cssUserBeaten) && derivedCss) {
+          if (cssUserBeaten) {
+            console.log(`[tri] CSS auto-improved: user ${currentCss}s/100m → derived ${derivedCss}s/100m`);
+          }
           mutable.triConfig.swim = {
-            ...(mutable.triConfig.swim ?? {}),
-            cssSecPer100m: derived.css.cssSecPer100m,
+            ...(swim ?? {}),
+            cssSecPer100m: derivedCss,
             cssSource: 'derived',
+            cssConfidence: derived.css.confidence,
+          };
+          appendCssSample(mutable.triConfig.swim, derivedCss, 'derived', derived.css.confidence);
+        } else if (swimSrc === 'user' && swim?.cssSecPer100m) {
+          // User-set CSS — confidence is 'high' if they did the paired-TT test
+          // (both m400 and m200 PBs present), 'medium' if they typed a single
+          // value without backing test data. Refresh on every launch so users
+          // who later complete the paired test see their tier upgrade.
+          const hasPair = !!(swim.pbs?.m400 && swim.pbs?.m200);
+          mutable.triConfig.swim = {
+            ...swim,
+            cssConfidence: hasPair ? 'high' : 'medium',
           };
         }
-        const bikeSrc = mutable.triConfig.bike?.ftpSource;
-        const bikeWritable = !mutable.triConfig.bike?.ftp || bikeSrc === 'derived';
-        if (bikeWritable && derived.ftp.ftpWatts) {
+
+        const bike = mutable.triConfig.bike;
+        const bikeSrc = bike?.ftpSource;
+        const currentFtp = bike?.ftp;
+        const derivedFtp = derived.ftp.ftpWatts;
+        const ftpConf = derived.ftp.confidence;
+        const ftpBlank = !currentFtp;
+        const ftpDerivedRefresh = bikeSrc === 'derived';
+        // FTP higher = better. Require medium/high confidence so a low-signal
+        // estimate cannot overwrite a deliberate test value. Require ≥3W
+        // improvement to ignore noise from rounding/normalisation.
+        const ftpUserBeaten =
+          bikeSrc === 'user' &&
+          currentFtp != null &&
+          derivedFtp != null &&
+          derivedFtp >= currentFtp + 3 &&
+          (ftpConf === 'high' || ftpConf === 'medium');
+        if ((ftpBlank || ftpDerivedRefresh || ftpUserBeaten) && derivedFtp) {
+          if (ftpUserBeaten) {
+            console.log(`[tri] FTP auto-improved: user ${currentFtp}W → derived ${derivedFtp}W (${ftpConf} conf)`);
+          }
           mutable.triConfig.bike = {
-            ...(mutable.triConfig.bike ?? {}),
-            ftp: derived.ftp.ftpWatts,
+            ...(bike ?? {}),
+            ftp: derivedFtp,
             ftpSource: 'derived',
+            ftpConfidence: ftpConf,
             hasPowerMeter: true,
+          };
+          appendFtpSample(mutable.triConfig.bike, derivedFtp, 'derived', ftpConf);
+        } else if (bikeSrc === 'user' && bike?.ftp) {
+          // User-set FTP — 'high' if they actually ran the 20-min test,
+          // 'medium' otherwise. Refresh every launch so completing the test
+          // later upgrades the tier.
+          mutable.triConfig.bike = {
+            ...bike,
+            ftpConfidence: bike.twentyMinW ? 'high' : 'medium',
           };
         }
       }
@@ -323,6 +468,17 @@ async function launchApp(): Promise<void> {
       }
 
       saveState();
+
+      // Re-render the current view so fitness/CTL values surface immediately
+      // after the async backfill. Without this, the stats view that rendered
+      // pre-backfill keeps showing zeros until a manual reload.
+      if (document.getElementById('tri-bike-setup-btn')) {
+        const { renderTriathlonStatsView } = await import('@/ui/triathlon/stats-view');
+        renderTriathlonStatsView();
+      } else if (document.getElementById('home-tss-row')) {
+        scheduleHomeRefresh();
+      }
+
       const ftpDetail = derived.ftp.ftpWatts
         ? `${derived.ftp.ftpWatts}W (${derived.ftp.confidence} conf, ${derived.ftp.contributingRideCount ?? 0} rides, newest ${derived.ftp.newestContributingRideWeeksOld ?? '?'}w old)`
         : `— (${derived.ftp.confidence})`;
@@ -397,7 +553,10 @@ async function launchApp(): Promise<void> {
     // when fetchStravaHistory runs, which is cache-skipped on most launches.
     {
       const _ms = getMutableState();
-      const expected = deriveAthleteTier(_ms.ctlBaseline ?? 0);
+      const expected = deriveAthleteTier(_ms.ctlBaseline ?? 0, {
+        vdot: _ms.v,
+        ftpWatts: _ms.onboarding?.triBike?.ftp,
+      });
       if (_ms.athleteTier !== expected) {
         _ms.athleteTier = expected;
         saveState();
@@ -643,10 +802,15 @@ async function launchApp(): Promise<void> {
           syncActivities().catch(() => {});
           // Re-render home view if it's still active so TSS reflects post-sync state
           scheduleHomeRefresh();
+          // Triathlon prediction refresh — runs only when in triathlon mode.
+          // One-time earliest-activity fetch drives years-of-training in the
+          // confidence range. Recomputing the live prediction picks up any new
+          // volume/long-session data from this sync.
+          refreshTriPredictionAfterSync().catch(() => {});
         }).catch(() => {});
         if (hasPhysiologySource(state, 'apple')) {
           // Apple Watch physiology: sleep, HRV, resting HR, steps from HealthKit
-          syncAppleHealthPhysiology(28).then((updated) => {
+          syncAppleHealthPhysiology(90).then((updated) => {
             if (updated) {
               const ps = getState();
               setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
@@ -663,7 +827,7 @@ async function launchApp(): Promise<void> {
                   scheduleHomeRefresh();
                 }).catch(() => {});
 
-                syncPhysiologySnapshot(28).then(() => {
+                syncPhysiologySnapshot(90).then(() => {
                   // Re-set normalizer in case physiology sync updated HR profile
                   const ps = getState();
                   setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
@@ -703,7 +867,7 @@ async function launchApp(): Promise<void> {
             scheduleHomeRefresh();
           }).catch(() => {});
 
-          syncPhysiologySnapshot(28).then(() => {
+          syncPhysiologySnapshot(90).then(() => {
             const ps2 = getState();
             setAthleteNormalizer(ps2.ltHR, ps2.restingHR, ps2.maxHR);
             scheduleHomeRefresh();
@@ -722,26 +886,330 @@ async function launchApp(): Promise<void> {
     }
   }
 
-  // Backfill Strava history: run if never fetched OR if we have fewer than 8 weeks cached.
+  // Backfill Strava history: run if never fetched, fewer than 8 weeks cached,
+  // or last refresh > 7 days old (so historicWeeklyTSS / signalBBaseline /
+  // ctlBaseline track recent training instead of freezing at first-sync values).
   // Extended history (16w) is populated by backfillStravaHistory so the stats "16w" tab works.
   // Also triggers once post-migration to heal the new ambient_temp_c column on historical rows.
   const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
   const needsTempHeal = !state.ambientTempHealDone;
-  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory || needsTempHeal)) {
-    console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0}, needsTempHeal=${needsTempHeal})`);
-    backfillStravaHistory(16).then(() => {
+  const lastRefreshMs = state.historicLastRefreshedAt
+    ? new Date(state.historicLastRefreshedAt).getTime()
+    : 0;
+  const ageDays = lastRefreshMs > 0 ? (Date.now() - lastRefreshMs) / 86400000 : Infinity;
+  const baselineStale = ageDays > 7;
+  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory || needsTempHeal || baselineStale)) {
+    console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0}, needsTempHeal=${needsTempHeal}, baselineAgeDays=${ageDays === Infinity ? 'never' : ageDays.toFixed(1)})`);
+    // Tracked so `awaitStartupSyncs()` (e.g. the onboarding review pipeline)
+    // can wait for this DB write to land before reading.
+    trackStartupTask(backfillStravaHistory(16).then(() => {
       const mut = getMutableState();
       mut.ambientTempHealDone = true;
       saveState();
-    }).catch(() => {});
+    }).catch(() => {}));
+  }
+
+  // DB duplicate cleanup: scan `garmin_activities` for rows that share the same
+  // ±10-min start time + matching type/duration, keep the richest one (Strava >
+  // Garmin, then iTRIMP > polyline > duration), delete the rest. Runs on first
+  // launch and re-runs every 30 days so duplicates that slipped past the
+  // matcher's in-state dedup don't keep poisoning baselines.
+  //
+  // Not gated on Strava: the dedup logic groups any rows within ±10 min and ranks
+  // them — it works equally well for Garmin-only users whose webhook fired twice
+  // for the same activity. Strava-vs-Garmin shadowing is just one of the cases
+  // it cleans up.
+  if (!isSimulatorMode()) {
+    const dedupAt = state.dbDedupCompletedAt
+      ? new Date(state.dbDedupCompletedAt).getTime()
+      : 0;
+    const dedupAgeDays = dedupAt > 0 ? (Date.now() - dedupAt) / 86400000 : Infinity;
+    if (dedupAgeDays > 30) {
+      // Tracked so the review pipeline waits for the dedup to land before
+      // reading — otherwise `loadActivitiesFromDB` could see duplicates
+      // mid-deletion.
+      trackStartupTask(cleanupDbDuplicates(90).catch(() => {}));
+    }
+  }
+
+  // Auto-restore the day-level activity archive from `garmin_activities` so
+  // long-term users self-heal whenever localStorage is cleared, browsers swap,
+  // or state validation wipes the local cache. Strava is the source of truth;
+  // `s.previousPlanWks` is a derived hot cache. 24h idempotency guard so this
+  // doesn't fire on every tab refocus, only once per day.
+  if (!isSimulatorMode() && (state as any).stravaConnected) {
+    // Boot-time migration: if any archive has weeks that overlap the live plan
+    // window, truncate them. Catches users whose previous-plan continuousMode
+    // tail was archived before today's truncate-on-redistribute fix shipped —
+    // without this they keep seeing "Past plan · Week N · same dates as the
+    // new plan's week 1" with every workout marked Missed.
+    if ((state as any).planStartDate && state.wks?.length) {
+      const liveStartMs = new Date((state as any).planStartDate + 'T00:00:00').getTime();
+      const liveArchives = ((state as any).previousPlanWks ?? []) as any[];
+      let truncatedAny = false;
+      for (const archive of liveArchives) {
+        if (!archive?.weeks?.length || !archive.planStartDate) continue;
+        const archStartMs = new Date(archive.planStartDate + 'T00:00:00').getTime();
+        let firstOverlapIdx = -1;
+        for (let i = 0; i < archive.weeks.length; i++) {
+          if (archStartMs + i * 7 * 86400 * 1000 >= liveStartMs) {
+            firstOverlapIdx = i;
+            break;
+          }
+        }
+        if (firstOverlapIdx >= 0 && firstOverlapIdx < archive.weeks.length) {
+          const dropped = archive.weeks.length - firstOverlapIdx;
+          archive.weeks.length = firstOverlapIdx;
+          console.log(`[Startup] Truncated ${dropped} overlapping week(s) from archive ${archive.planStartDate} to match live plan boundary`);
+          truncatedAny = true;
+        }
+      }
+      if (truncatedAny) {
+        const { saveState: persist } = await import('@/state');
+        persist();
+      }
+    }
+
+    const lastIso = (state as any).lastHistoryAutoRestoreISO;
+    const ageMs = lastIso ? (Date.now() - new Date(lastIso).getTime()) : Infinity;
+    const archives = ((state as any).previousPlanWks ?? []) as any[];
+    const archiveEmpty = archives.length === 0
+      || archives.every(a => !a.weeks || a.weeks.length === 0);
+    const stale = ageMs > 24 * 3600 * 1000;
+    // Schema sniff: archive entries built before today's fix stripped kmSplits
+    // and hrZones to save space. The activity-detail popup needs both, so
+    // detecting an archived activity that has iTrimp data but no zone/split
+    // info means we're holding a legacy archive — force a re-fetch.
+    const hasLegacyStrippedSchema = archives.some(arc =>
+      (arc.weeks ?? []).some((wk: any) =>
+        Object.values(wk?.garminActuals ?? {}).some((a: any) =>
+          a && a.iTrimp != null && a.iTrimp > 0
+          && a.hrZones === undefined
+          && a.kmSplits === undefined
+        ),
+      ),
+    );
+    if (archiveEmpty || stale || hasLegacyStrippedSchema) {
+      console.log(`[Startup] Auto-restoring activity history from server (archives=${archives.length}, stale=${stale}, empty=${archiveEmpty}, legacy=${hasLegacyStrippedSchema})`);
+      // 180 days covers ~2 plans of typical history. Bigger windows risk
+      // localStorage quota — quota fail surfaces as a saveState exception.
+      // Tracked so `awaitStartupSyncs()` waits for this archive write.
+      trackStartupTask(restoreHistoryFromServer(180).catch((err) => {
+        console.warn('[Startup] Auto-restore failed:', err);
+      }));
+    }
   }
 
   console.log('Mosaic Training Simulator initialized');
+  // Signal that launchApp's task-collection phase is complete. Any caller
+  // awaiting `awaitStartupSyncs()` was blocked on this — now they can
+  // proceed to wait for the tracked tasks themselves to settle.
+  _launchAppResolve?.();
 }
 
 /**
  * Wire up admin panel event handlers
  */
+/**
+ * Recompute the live triathlon race prediction after activity sync. Runs only
+ * when the user is in triathlon mode and has a triConfig. Fetches the earliest
+ * Strava activity date once (drives years-of-training → experience-level in
+ * the horizon adjuster). Persists the prediction to `triConfig.prediction`.
+ *
+ * No-op when in running mode or when the prediction returns null.
+ */
+async function refreshTriPredictionAfterSync(): Promise<void> {
+  const { getMutableState, saveState } = await import('@/state');
+  const s = getMutableState();
+  if (s.eventType !== 'triathlon' || !s.triConfig) return;
+
+  // One-time earliest-activity fetch.
+  if (s.firstStravaActivityISO == null) {
+    const iso = await fetchEarliestActivityDate();
+    s.firstStravaActivityISO = iso;
+    saveState();
+  }
+
+  // Wire the discipline-aware activity matcher so synced swim/bike/run
+  // sessions land against planned `triWorkouts` with `status='completed'`
+  // and per-discipline effort scores. The matcher itself is pure; this is
+  // the call site that mutates state.
+  await runTriActivityMatching();
+
+  const { predictTriathlonRace } = await import('@/calculations/race-prediction.triathlon');
+  const prediction = predictTriathlonRace(s);
+  if (prediction) {
+    s.triConfig.prediction = prediction;
+    saveState();
+    scheduleHomeRefresh();
+  }
+
+  // Race-outcome logging — runs once per race when the race date passes and
+  // race-day activities have synced. Idempotent.
+  try {
+    const { detectAndLogRaceOutcome } = await import('@/calculations/tri-race-outcome');
+    const outcome = detectAndLogRaceOutcome(s);
+    if (outcome) {
+      saveState();
+      console.log('[tri:race-outcome] logged', {
+        date: outcome.dateISO,
+        predicted: outcome.predictedTotalSec,
+        actual: outcome.actualTotalSec,
+        gap: outcome.predictedTotalSec - outcome.actualTotalSec,
+      });
+    }
+  } catch (e) {
+    console.warn('[tri:race-outcome] detection failed', e);
+  }
+
+  // Marker bumps — surface a small toast when CSS / FTP / VDOT crossed the
+  // meaningful-improvement threshold since the last notification. CLAUDE.md
+  // → Adaptation transparency rule.
+  await maybeShowMarkerBumpToast();
+
+  // Surface plan-modification suggestions (volume-ramp, RPE-blown, readiness
+  // gate) as a single accept/dismiss modal. Skipped silently if no triggers
+  // fired or the user is mid-onboarding.
+  await maybeShowTriSuggestionModal();
+}
+
+/**
+ * Compare current markers against last-notified snapshot. Surface a small
+ * toast for any that crossed the improvement threshold; always update the
+ * snapshot so we don't re-pop on every launch.
+ */
+async function maybeShowMarkerBumpToast(): Promise<void> {
+  const { getMutableState, saveState } = await import('@/state');
+  const s = getMutableState();
+  if (s.eventType !== 'triathlon' || !s.triConfig) return;
+
+  const { detectMarkerBumps, snapshotNotifiedMarkers } = await import('@/calculations/tri-marker-bumps');
+  const bumps = detectMarkerBumps(s);
+
+  if (bumps.length > 0) {
+    const { showMarkerBumpToast } = await import('@/ui/toast');
+    showMarkerBumpToast(bumps.map(b => b.toastText));
+  }
+
+  // Always snapshot — even when no bumps fired — so first-launch baseline
+  // gets seeded silently and subsequent comparisons are against fresh values.
+  snapshotNotifiedMarkers(s);
+  saveState();
+}
+
+/**
+ * For each completed activity in this week's `garminActuals`, find a
+ * matching planned `triWorkout` and mark it as completed. Pure side-effect
+ * mutation: sets `Workout.status='completed'` and stores per-discipline
+ * effort scores on the actual.
+ */
+async function runTriActivityMatching(): Promise<void> {
+  const { getMutableState, saveState } = await import('@/state');
+  const s = getMutableState();
+  const wk = s.wks?.[s.w ?? 0];
+  if (!wk?.triWorkouts || !wk.garminActuals) return;
+
+  const { matchTriathlonWeek } = await import('@/calculations/activity-matcher.triathlon');
+  const { detectBricks } = await import('@/calculations/brick-detector');
+  const { scoreTriEffort, hrProfileFromState } = await import('@/calculations/tri-effort-scoring');
+  const { classifyActivity } = await import('@/calculations/tri-benchmarks-from-history');
+  const hrProfile = hrProfileFromState(s);
+
+  const activities = Object.entries(wk.garminActuals).map(([id, a]) => ({
+    id,
+    sport: a.activityType ?? '',
+    startTs: a.startTime ? Math.floor(Date.parse(a.startTime) / 1000) : Math.floor(Date.now() / 1000),
+    durationSec: a.durationSec,
+    distanceM: a.distanceKm * 1000,
+  }));
+
+  const matches = matchTriathlonWeek(activities, wk.triWorkouts);
+  let changed = false;
+  for (const m of matches) {
+    if (!m.matched || !m.workoutId) continue;
+    const workout = wk.triWorkouts.find(x => x.id === m.workoutId);
+    const actual = wk.garminActuals[m.activityId];
+    if (!workout || !actual) continue;
+    if (workout.status !== 'completed') {
+      workout.status = 'completed';
+      changed = true;
+    }
+    const discipline = classifyActivity(actual.activityType);
+    if (discipline === 'swim' || discipline === 'bike' || discipline === 'run') {
+      const scores = scoreTriEffort(
+        discipline,
+        actual,
+        workout,
+        {
+          ftp: s.triConfig?.bike?.ftp,
+          cssSecPer100m: s.triConfig?.swim?.cssSecPer100m,
+        },
+        hrProfile,
+      );
+      if (scores.paceAdherence != null) actual.paceAdherence = scores.paceAdherence;
+      // HR effort score for bike (cross-check or no-power fallback). Run leg
+      // already populates this via the running-side matcher; swim doesn't yet
+      // (most users don't wear HR straps in water).
+      if (discipline === 'bike' && scores.hrEffortScore != null && actual.hrEffortScore == null) {
+        actual.hrEffortScore = scores.hrEffortScore;
+      }
+    }
+  }
+
+  // Brick detection — pair bike→run within 30 min so the run leg of a brick
+  // workout gets `status='completed'` even when matched alone. Activity-side.
+  const actualsForBrick = Object.values(wk.garminActuals)
+    .filter(a => a.startTime)
+    .map(a => ({
+      id: a.garminId,
+      sport: a.activityType ?? '',
+      startTs: Math.floor(Date.parse(a.startTime!) / 1000),
+      durationSec: a.durationSec,
+    }));
+  const bricks = detectBricks(actualsForBrick);
+  if (bricks.length > 0) {
+    // Mark the brick-workout as completed if BOTH segments matched.
+    for (const brick of bricks) {
+      const bikeMatch = matches.find(m => m.activityId === brick.bikeId && m.matched);
+      const runMatch  = matches.find(m => m.activityId === brick.runId  && m.matched);
+      if (!bikeMatch || !runMatch) continue;
+      // Find any brick triWorkout this week and mark it completed.
+      const brickWorkout = wk.triWorkouts.find(w => w.t === 'brick');
+      if (brickWorkout && brickWorkout.status !== 'completed') {
+        brickWorkout.status = 'completed';
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) saveState();
+}
+
+async function maybeShowTriSuggestionModal(): Promise<void> {
+  const { getState } = await import('@/state');
+  const s = getState();
+  if (s.eventType !== 'triathlon' || !s.triConfig) return;
+  // Don't show if anything else is open (activity review, etc.).
+  if (document.getElementById('activity-review-overlay')) return;
+  if (document.getElementById('tri-suggestion-overlay')) return;
+
+  const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
+  const bundle = collectTriSuggestions(s);
+  if (bundle.mods.length === 0) return;
+
+  const { showTriSuggestionModal } = await import('@/ui/triathlon/tri-suggestion-modal');
+  const applied = await showTriSuggestionModal(bundle);
+  if (applied > 0) {
+    // Re-render the current view so accepted mods reflect immediately.
+    if (document.getElementById('tri-bike-setup-btn')) {
+      const { renderTriathlonStatsView } = await import('@/ui/triathlon/stats-view');
+      renderTriathlonStatsView();
+    } else {
+      scheduleHomeRefresh();
+    }
+  }
+}
+
 function wireAdminHandlers(): void {
   document.getElementById('admin-simulate-week')?.addEventListener('click', () => {
     import('@/ui/events').then(({ next }) => {

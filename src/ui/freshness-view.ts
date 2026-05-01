@@ -50,6 +50,18 @@ function tsbBarColor(rawTsb: number): string {
   return tsbZone(rawTsb).color;
 }
 
+/** One-line action sentence per zone — single source of truth for ring caption.
+ *  Mirrors the descriptions previously shown in the Zone Reference card. */
+function tsbZoneDescription(rawTsb: number): string {
+  const d = Math.round(rawTsb / 7);
+  if (d > 0)    return 'Fatigue has cleared. Good window for a hard session or race.';
+  if (d >= -3)  return 'Mild residual fatigue. Normal during consistent training.';
+  if (d >= -8)  return 'Recent load above adaptation. Legs may feel heavy. Expected in build phases.';
+  if (d >= -15) return 'Sustained hard training. Easy sessions or rest recommended.';
+  if (d >= -25) return 'Significant fatigue. Rest or very easy movement only.';
+  return            'Sustained overload. Full rest days needed.';
+}
+
 // ── Coaching text ─────────────────────────────────────────────────────────────
 
 // ── SVG watercolour background (shared with recovery) ─────────────────────────
@@ -74,6 +86,21 @@ function getWeeklyTsbHistory(s: SimulatorState): WeekTsbEntry[] {
 
   let ctl = seed;
   let atl = seed;
+
+  // Include archived plans so the trend chart still has data immediately after
+  // a plan reset (current `wks` only has the new plan's completed weeks).
+  const archivedPlans = ((s as any).previousPlanWks ?? []) as Array<{ planStartDate: string; weeks: any[] }>;
+  const sortedArchives = [...archivedPlans].sort((a, b) =>
+    (a.planStartDate ?? '').localeCompare(b.planStartDate ?? ''),
+  );
+  for (const archive of sortedArchives) {
+    for (const aw of (archive.weeks ?? [])) {
+      const weekRawTSS = computeWeekRawTSS(aw as any, (aw as any).rated ?? {}, archive.planStartDate);
+      ctl = ctl * CTL_DECAY + weekRawTSS * (1 - CTL_DECAY);
+      atl = atl * ATL_DECAY + weekRawTSS * (1 - ATL_DECAY);
+      results.push({ week: (aw as any).w, tss: weekRawTSS, ctl, atl, tsb: ctl - atl });
+    }
+  }
 
   const limit = Math.min(completedWeek, wks.length);
   for (let i = 0; i < limit; i++) {
@@ -158,7 +185,7 @@ function tsbBarChart(entries: WeekTsbEntry[], liveTsbDaily?: number): string {
 
 // ── CTL vs ATL gauge card ─────────────────────────────────────────────────────
 
-function fitnessVsFatigueCard(ctl: number, atl: number): string {
+function fitnessVsFatigueCard(ctl: number, atl: number, tsbDisp: number): string {
   const ctlDisp = Math.round(ctl / 7);
   const atlDisp = Math.round(atl / 7);
   const maxVal = Math.max(ctlDisp, atlDisp, 1);
@@ -166,7 +193,9 @@ function fitnessVsFatigueCard(ctl: number, atl: number): string {
   const ctlPct = Math.round((ctlDisp / maxVal) * 100);
   const atlPct = Math.round((atlDisp / maxVal) * 100);
 
-  const balance = ctlDisp - atlDisp;
+  // Derive balance from the canonical TSB so this matches the ring exactly.
+  // Computing it as ctlDisp - atlDisp drifts by 1 from independent rounding.
+  const balance = tsbDisp;
   let balanceText: string;
   if (balance > 5) balanceText = `Fitness exceeds fatigue by ${balance}. Body is adapted above current load.`;
   else if (balance < -5) balanceText = `Fatigue exceeds fitness by ${Math.abs(balance)}. Recent training load is above what the body has adapted to.`;
@@ -193,32 +222,6 @@ function fitnessVsFatigueCard(ctl: number, atl: number): string {
     </div>
     <div style="font-size:12px;color:${TEXT_S};line-height:1.5">${balanceText}</div>
   `;
-}
-
-// ── Zone reference card ───────────────────────────────────────────────────────
-
-function zoneExplainerCard(): string {
-  const zones = [
-    { label: 'Fresh',        range: 'above 0',     color: '#22C55E', desc: 'Fatigue has cleared. Good window for a hard session or race.' },
-    { label: 'Recovering',   range: '0 to -3',     color: BLUE_B,    desc: 'Mild residual fatigue. Normal during consistent training.' },
-    { label: 'Fatigued',     range: '-3 to -8',    color: '#F59E0B', desc: 'Recent load above adaptation. Legs may feel heavy. Expected in build phases.' },
-    { label: 'Heavy',        range: '-8 to -15',   color: '#F59E0B', desc: 'Sustained hard training. Easy sessions or rest recommended.' },
-    { label: 'Overloaded',   range: '-15 to -25',  color: '#EF4444', desc: 'Significant fatigue. Rest or very easy movement only.' },
-    { label: 'Overreaching', range: 'below -25',   color: '#EF4444', desc: 'Sustained overload. Full rest days needed.' },
-  ];
-
-  return zones.map(z => `
-    <div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;${z.label !== 'Fresh' ? 'border-top:1px solid #F1F5F9;' : ''}">
-      <div style="width:8px;height:8px;border-radius:50%;background:${z.color};margin-top:5px;flex-shrink:0"></div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:baseline;gap:8px">
-          <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${z.label}</span>
-          <span style="font-size:11px;color:${TEXT_L}">${z.range}</span>
-        </div>
-        <div style="font-size:12px;color:${TEXT_S};margin-top:2px;line-height:1.4">${z.desc}</div>
-      </div>
-    </div>
-  `).join('');
 }
 
 // ── How it works + science card ───────────────────────────────────────────────
@@ -267,13 +270,14 @@ function getFreshnessHTML(s: SimulatorState): string {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
 
   // Live TSB with intra-week decay through today (shared helper — matches home + readiness).
-  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const atl = liveTSB.atl;
   const ctl = liveTSB.ctl;
   const tsb = liveTSB.tsb;
 
   // Fitness model for week count
-  const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const weeksOfData = metrics.length;
 
   // Weekly TSB history for bar chart
@@ -389,7 +393,7 @@ function getFreshnessHTML(s: SimulatorState): string {
         </div>
 
         <!-- Ring -->
-        <div class="f-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:8px 0 28px">
+        <div class="f-fade" style="animation-delay:0.08s;display:flex;flex-direction:column;align-items:center;margin:8px 0 28px">
           <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
@@ -397,10 +401,6 @@ function getFreshnessHTML(s: SimulatorState): string {
                   <stop offset="0%" stop-color="${zone.color === '#22C55E' ? '#4ADE80' : zone.color === '#EF4444' ? '#F87171' : zone.color === '#F59E0B' ? '#FBBF24' : BLUE_A}"/>
                   <stop offset="100%" stop-color="${zone.color === '#22C55E' ? '#16A34A' : zone.color === '#EF4444' ? '#DC2626' : zone.color === '#F59E0B' ? '#D97706' : BLUE_D}"/>
                 </linearGradient>
-                <filter id="freshGlow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="4" result="blur"/>
-                  <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-                </filter>
               </defs>
               <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
               <circle id="fresh-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
@@ -408,7 +408,6 @@ function getFreshnessHTML(s: SimulatorState): string {
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
                 style="transition:stroke-dashoffset 1.5s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
-                filter="url(#freshGlow)"
               />
             </svg>
             <div style="
@@ -423,6 +422,7 @@ function getFreshnessHTML(s: SimulatorState): string {
               <span style="font-size:14px;font-weight:500;color:${TEXT_S};margin-top:2px">${zone.label}</span>
             </div>
           </div>
+          <div style="font-size:13px;color:${TEXT_S};line-height:1.5;text-align:center;max-width:320px;margin:14px 16px 0">${tsbZoneDescription(tsb)}</div>
         </div>
 
         <!-- Recovery countdown -->
@@ -517,9 +517,7 @@ function getFreshnessHTML(s: SimulatorState): string {
 
           ${card('Weekly Trend', tsbBarChart(weeklyTsb, tsbDisp), '0.22s')}
 
-          ${card('Fitness vs Fatigue', fitnessVsFatigueCard(ctl, atl), '0.30s')}
-
-          ${card('Zone Reference', zoneExplainerCard(), '0.38s')}
+          ${card('Fitness vs Fatigue', fitnessVsFatigueCard(ctl, atl, tsbDisp), '0.30s')}
 
           ${card('How It Works', howItWorksCard(), '0.46s')}
 
@@ -549,7 +547,7 @@ function wireFreshnessHandlers(): void {
     if (circle) {
       // Read the target from our computed value
       const s = getState();
-      const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+      const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, (s as any).previousPlanWks);
       const tsb = liveTSB.tsb;
       const tsbDisp = Math.round(tsb / 7);
       const ringPct = Math.min(100, Math.max(0, ((tsbDisp + 40) / 60) * 100));
@@ -575,4 +573,87 @@ export function renderFreshnessView(): void {
   const s = getState();
   container.innerHTML = getFreshnessHTML(s);
   wireFreshnessHandlers();
+  // Tri mode: additively inject per-discipline Form so an athlete can see
+  // whether their swim, bike, or run Form differs from the combined number.
+  // Does NOT modify any of the running-mode rendering — pure DOM append.
+  if (s.eventType === 'triathlon' && s.triConfig?.fitness) {
+    injectTriPerDisciplineForm(s);
+  }
+}
+
+function injectTriPerDisciplineForm(s: SimulatorState): void {
+  const fit = s.triConfig?.fitness;
+  if (!fit) return;
+  // Anchor: insert AFTER the existing "Fitness vs Fatigue" card on the
+  // freshness page so per-discipline Form sits next to per-discipline
+  // CTL/ATL context. The freshness page uses `.f-fade` on each card.
+  const cards = Array.from(document.querySelectorAll('.f-fade'));
+  let anchor: Element | null = null;
+  for (const el of cards) {
+    if (el.textContent?.includes('Fitness vs Fatigue')) { anchor = el; break; }
+  }
+  // Fallback: insert after the last card if we can't find the named one.
+  if (!anchor && cards.length > 0) anchor = cards[cards.length - 1];
+
+  const TEXT_M = '#0F172A';
+  const TEXT_L = '#94A3B8';
+
+  // Common scale across all three disciplines so the tiny bars are comparable
+  // (a Run with high CTL should clearly outweigh a Swim with low CTL visually).
+  const maxScale = Math.max(
+    1,
+    fit.swim.ctl / 7, fit.swim.atl / 7,
+    fit.bike.ctl / 7, fit.bike.atl / 7,
+    fit.run.ctl  / 7, fit.run.atl  / 7,
+  );
+
+  const row = (sport: 'swim' | 'bike' | 'run', label: string) => {
+    const f = fit[sport];
+    const formD = f.tsb / 7;
+    const ctlD = f.ctl / 7;
+    const atlD = f.atl / 7;
+    if (ctlD === 0 && atlD === 0) {
+      return `
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-top:1px solid #F1F5F9">
+          <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${label}</span>
+          <span style="font-size:12px;color:${TEXT_L}">No direct activity</span>
+        </div>
+      `;
+    }
+    const colour = formD < -10 ? '#EF4444' : formD < 0 ? '#F59E0B' : '#22C55E';
+    const ctlPct = Math.round((ctlD / maxScale) * 100);
+    const atlPct = Math.round((atlD / maxScale) * 100);
+    return `
+      <div style="padding:12px 0;border-top:1px solid #F1F5F9">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${label}</span>
+          <span style="font-size:18px;font-weight:600;color:${colour};font-variant-numeric:tabular-nums">${formD >= 0 ? '+' : ''}${formD.toFixed(1)}</span>
+        </div>
+        <!-- tiny fitness bar (blue, matches the running Fitness vs Fatigue card colour) -->
+        <div style="height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden;margin-bottom:3px">
+          <div style="height:100%;width:${ctlPct}%;background:#3B82F6;border-radius:2px"></div>
+        </div>
+        <!-- tiny fatigue bar (orange/amber) -->
+        <div style="height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden">
+          <div style="height:100%;width:${atlPct}%;background:#F59E0B;border-radius:2px"></div>
+        </div>
+      </div>
+    `;
+  };
+
+  const insertedHTML = `
+    <div class="f-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin:0 16px 14px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:8px">Form by Discipline</div>
+      <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:6px">Each discipline's Fitness − Fatigue, separately. A single discipline can be carrying significant fatigue while another is fresh — useful when planning today's session.</div>
+      ${row('swim', 'Swim')}
+      ${row('bike', 'Bike')}
+      ${row('run',  'Run')}
+    </div>
+  `;
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = insertedHTML;
+  const node = wrapper.firstElementChild;
+  if (node && anchor?.parentNode) {
+    anchor.parentNode.insertBefore(node, anchor.nextSibling);
+  }
 }

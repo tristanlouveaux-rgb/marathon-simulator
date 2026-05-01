@@ -34,13 +34,16 @@ Deno.serve(async (req) => {
         const garminIds = (data ?? []).map((r: any) => r.garmin_id)
         let extraData: Record<string, any> = {}
         if (garminIds.length > 0) {
-            const { data: extra } = await supabaseClient
-                .from('garmin_activities')
-                .select('garmin_id, km_splits, elevation_gain_m, hr_drift, ambient_temp_c')
-                .in('garmin_id', garminIds)
-                .catch(() => ({ data: null }))
-            for (const r of (extra ?? [])) {
-                extraData[r.garmin_id] = r
+            try {
+                const { data: extra } = await supabaseClient
+                    .from('garmin_activities')
+                    .select('garmin_id, km_splits, elevation_gain_m, hr_drift, ambient_temp_c')
+                    .in('garmin_id', garminIds)
+                for (const r of (extra ?? [])) {
+                    extraData[r.garmin_id] = r
+                }
+            } catch {
+                // Optional columns may not exist yet — ignore and proceed without them.
             }
         }
 

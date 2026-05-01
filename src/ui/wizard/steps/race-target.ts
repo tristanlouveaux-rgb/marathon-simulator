@@ -64,14 +64,14 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
   // Just-Track mode: nothing to configure. Skip silently.
   if (state.trackOnly === true) {
     console.log('[race-target] trackOnly; skipping screen.');
-    try { window.wizardNext(); } catch { nextStep(); }
+    nextStep();
     return;
   }
 
   // Auto-skip for modes we don't handle yet.
   if (mode !== 'running' && mode !== 'fitness') {
     console.log(`[race-target] Mode=${mode ?? 'null'}; skipping screen.`);
-    try { window.wizardNext(); } catch { nextStep(); }
+    nextStep();
     return;
   }
 
@@ -147,7 +147,7 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 32%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(5, 7)}
+        ${renderProgressIndicator(4, 7)}
 
         <div class="rt-rise" style="width:100%;max-width:460px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -692,7 +692,7 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
     import('../controller').then(({ getOnboardingState }) => {
       const cur = getOnboardingState() || state;
       if (!canContinue(mode, cur)) return;
-      try { window.wizardNext(); } catch { nextStep(); }
+      nextStep();
     });
   });
 }

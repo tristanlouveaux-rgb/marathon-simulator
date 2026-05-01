@@ -81,6 +81,15 @@ export function fmtSleepDuration(sec: number): string {
   return `${h}h ${m}m`;
 }
 
+/**
+ * Format an absolute sleep-debt magnitude in seconds as "Xh Ym".
+ * Same shape as `fmtSleepDuration` but keyed to the cumulative-debt convention
+ * (always non-negative — sign is communicated by the surrounding label).
+ */
+export function fmtSleepDebt(sec: number): string {
+  return fmtSleepDuration(Math.max(0, Math.round(sec)));
+}
+
 /** Colour token for a sleep score. Purple matches the sleep page palette;
  *  only break to amber/red when the score is genuinely poor. */
 export function sleepScoreColor(score: number): string {
@@ -274,15 +283,23 @@ export interface SleepBankResult {
 }
 
 /** Science-backed floor and ceiling for the base sleep target. */
-const SLEEP_TARGET_FLOOR_SEC = 7 * 3600;   // 7h — below this, measurable cognitive impairment (Van Dongen)
-const SLEEP_TARGET_CEIL_SEC  = 8 * 3600;   // 8h — above this, diminishing returns for most adults (Walker/NIH)
+const SLEEP_TARGET_FLOOR_SEC = 7 * 3600;   // 7h — Van Dongen 2003: below this, chronic cognitive deficits emerge
+const SLEEP_TARGET_CEIL_SEC  = 9 * 3600;   // 9h — NSF/Hirshkowitz 2015 upper bound of recommended adult range
 
 /** Fallback target when not enough history to derive a personal target. */
 const DEFAULT_SLEEP_NEED_SEC = SLEEP_TARGET_FLOOR_SEC;
 
 /**
- * Derive a personalised base sleep target from the 65th percentile of the last 30 nights,
- * clamped to [7h, 8h]. Requires at least 5 nights of data; falls back to 7h otherwise.
+ * Derive a personalised base sleep target from the median of the last 30 nights,
+ * clamped to [7h, 9h]. Requires at least 5 nights of data; falls back to 7h otherwise.
+ *
+ * Median (not 65th percentile, prior to 2026-04-29) — the percentile method
+ * effectively treated "longest 35% of nights" as the target, which guarantees
+ * structural debt by construction (most nights miss target by definition).
+ * Median tracks habitual sleep, which is the closest passive proxy for
+ * sleep need (Roenneberg's free-day-sleep concept). Floor at 7h still flags
+ * chronic undersleepers. See SCIENCE_LOG → Sleep Debt Model.
+ *
  * Filters out entries shorter than 1h (likely bad data or naps).
  */
 export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
@@ -292,9 +309,10 @@ export function deriveSleepTarget(history: PhysiologyDayEntry[]): number {
     .map(d => d.sleepDurationSec!);
   if (durs.length < 5) return DEFAULT_SLEEP_NEED_SEC;
   const sorted = [...durs].sort((a, b) => a - b);
-  const idx = Math.floor(sorted.length * 0.65);
-  const pct65 = sorted[idx];
-  return Math.max(SLEEP_TARGET_FLOOR_SEC, Math.min(SLEEP_TARGET_CEIL_SEC, pct65));
+  const median = sorted.length % 2 === 1
+    ? sorted[(sorted.length - 1) / 2]
+    : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2;
+  return Math.max(SLEEP_TARGET_FLOOR_SEC, Math.min(SLEEP_TARGET_CEIL_SEC, median));
 }
 
 // ─── Load-adjusted nightly target ────────────────────────────────────────────
@@ -340,15 +358,48 @@ export function computeLoadAdjustedTarget(
  */
 const DEBT_DECAY = Math.exp(-Math.LN2 / 7);
 
+/**
+ * Partial credit applied to sleep surplus (actual − target) against accumulated debt.
+ *
+ * Recovery sleep does help — Banks & Dinges (2007) showed a single 10h recovery night
+ * after 5 nights of 4h sleep restored ~50–70% of cognitive performance, not 0% and not
+ * 100%. Rupp et al. (2009) confirmed dose-dependent recovery with diminishing returns.
+ *
+ * Setting credit ratio to 0.5 picks the conservative end of the literature range and
+ * keeps the asymmetry the science requires: a deficit costs more debt than an
+ * equivalent surplus pays back. The system can never go negative (Math.max(0, …)),
+ * so users cannot "bank" sleep — they can only accelerate clearance of existing debt.
+ */
+const SURPLUS_CREDIT_RATIO = 0.5;
+
+/**
+ * Maximum surplus credit per night (60 min). Mirrors the per-tier load-bonus cap.
+ *
+ * Banks & Dinges (2007) and Pejovic et al. (2013) both showed extended single-night
+ * sleep does not fully erase a multi-day deficit — recovery is incremental. Capping
+ * the per-night credit prevents a single 11–12h sleep from wiping out a week of
+ * accumulated debt, which would contradict the literature.
+ */
+const SURPLUS_CREDIT_CAP_SEC = 60 * 60;
+
 
 /**
  * Build a Record<YYYY-MM-DD, Signal B TSS> from plan weeks.
  * Signal B = raw physiological load (no runSpec discount).
  * Two sources: garminActuals (matched runs) and adhocWorkouts (cross-training).
  */
-export function buildDailySignalBTSS(wks: any[]): Record<string, number> {
+export function buildDailySignalBTSS(
+  wks: any[],
+  archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
+): Record<string, number> {
   const byDate: Record<string, number> = {};
-  for (const wk of wks) {
+  // Walk current weeks plus any archived plan weeks, so daily history surfaces
+  // even right after a plan reset (when current `wks` has just been replaced).
+  const allWeeks: any[] = [
+    ...wks,
+    ...(archivedPlans ?? []).flatMap(p => p.weeks ?? []),
+  ];
+  for (const wk of allWeeks) {
     for (const actual of Object.values(wk.garminActuals ?? {})) {
       const a = actual as any;
       if (!a.startTime) continue;
@@ -380,21 +431,27 @@ export function buildDailySignalBTSS(wks: any[]): Record<string, number> {
 
 /**
  * Per-night debt trajectory. Same recurrence as `computeSleepDebt`:
- *   debt = debt * DEBT_DECAY + max(0, target − actual)
+ *   shortfall = max(0, target − actual)
+ *   credit    = min(SURPLUS_CREDIT_CAP_SEC, max(0, actual − target) × SURPLUS_CREDIT_RATIO)
+ *   debt      = max(0, debt × DEBT_DECAY + shortfall − credit)
  * Only nights with sleep data appear in the series; decay still applies
  * across gaps so the first recorded night after a gap reflects carry-over.
  * The last element's `debt` equals `computeSleepDebt(...)`.
+ *
+ * Each entry also carries `shortfall` and `target` for that night, so consumers
+ * can identify spike nights (large single-night shortfalls) and back out the
+ * load-adjusted target without reproducing the recurrence.
  */
 export function computeSleepDebtSeries(
   history: PhysiologyDayEntry[],
   dailyTSSByDate: Record<string, number>,
   athleteTier: string,
   baseSleepNeedSec?: number,
-): Array<{ date: string; debt: number }> {
+): Array<{ date: string; debt: number; shortfall: number; target: number; actual: number }> {
   const base = baseSleepNeedSec ?? DEFAULT_SLEEP_NEED_SEC;
   // Ensure oldest-first — decay weights depend on correct chronological order.
   const sorted = [...history].sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : 0);
-  const series: Array<{ date: string; debt: number }> = [];
+  const series: Array<{ date: string; debt: number; shortfall: number; target: number; actual: number }> = [];
   let debt = 0;
   for (const entry of sorted) {
     debt *= DEBT_DECAY;
@@ -404,8 +461,16 @@ export function computeSleepDebtSeries(
     // Debt is duration-based only — quality is used separately to adjust tonight's target.
     // Applying quality as a multiplier here causes compounding that produces unrealistic totals.
     const shortfall = Math.max(0, target - entry.sleepDurationSec);
-    debt += shortfall;
-    series.push({ date: entry.date, debt: Math.round(debt) });
+    const surplus = Math.max(0, entry.sleepDurationSec - target);
+    const credit = Math.min(SURPLUS_CREDIT_CAP_SEC, surplus * SURPLUS_CREDIT_RATIO);
+    debt = Math.max(0, debt + shortfall - credit);
+    series.push({
+      date: entry.date,
+      debt: Math.round(debt),
+      shortfall: Math.round(shortfall),
+      target,
+      actual: entry.sleepDurationSec,
+    });
   }
   return series;
 }
@@ -452,6 +517,177 @@ export function classifySleepDebt(debtSec: number): SleepDebtTier {
   if (debtSec < 21600) return { label: 'moderate',  color: '#F97316', showNumber: true  }; // orange-500
   if (debtSec < 32400) return { label: 'high',      color: '#EF4444', showNumber: true  }; // red-500
   return                      { label: 'severe',    color: '#DC2626', showNumber: true  }; // red-600
+}
+
+/**
+ * Single-night threshold (seconds) above which a shortfall counts as a "spike".
+ * Pragmatic, not literature-derived: 2h is roughly twice the typical chronic-restriction
+ * shortfall (~30–60 min/night) and corresponds to nights of <6h sleep against an 8h target.
+ * Spikes are reported separately from chronic gap so users see *what* drove their debt.
+ */
+const SPIKE_SHORTFALL_THRESHOLD_SEC = 2 * 3600;
+
+/** "On track" upper bound from `classifySleepDebt` — debts below this are physiological noise. */
+const ON_TRACK_DEBT_THRESHOLD_SEC = 2700;
+
+/**
+ * Sleep debt outlook bundles the supporting numbers that turn a static debt
+ * value into a trajectory: trend over the past week, projected days to clear,
+ * a per-night spike attribution, and a personal-norm comparison.
+ *
+ * All four derive from the same `computeSleepDebtSeries` recurrence — no new
+ * constants beyond the spike threshold above.
+ */
+export interface SleepDebtOutlook {
+  /** Current cumulative debt (seconds). Equal to series[last].debt. */
+  debtSec: number;
+  /** Debt 7 series-entries ago. Subtract from debtSec to get the trend. */
+  debtPrevSec: number | null;
+  /** debtSec − debtPrevSec. Negative = clearing, positive = growing. */
+  trendDeltaSec: number | null;
+  /**
+   * Projected days until debt drops below the "on track" tier (45 min),
+   * assuming future nights match the recent average actual sleep.
+   * `null` when current avg shortfall is non-zero (debt is not clearing).
+   * Capped at 60 days.
+   */
+  daysToOnTrack: number | null;
+  /**
+   * Sum of single-night shortfalls > SPIKE_SHORTFALL_THRESHOLD_SEC.
+   * The "loud" portion of the debt stack. The remainder is chronic gap.
+   */
+  spikeContributionSec: number;
+  /** Number of spike nights in the visible series. */
+  spikeNightCount: number;
+  /** Most recent spike night's date (for surfacing in copy). null if none. */
+  lastSpikeDate: string | null;
+  /**
+   * 30-day rolling mean of the cumulative-debt series, in seconds.
+   * Represents the user's *typical* debt level given their habitual sleep
+   * patterns and recent training load. Null when fewer than 14 series entries
+   * (insufficient history for a stable baseline).
+   */
+  typicalDebtSec: number | null;
+  /**
+   * Today's debt vs personal typical: 'below' = better than usual,
+   * 'above' = worse than usual, 'on_par' = within tolerance, null = no baseline.
+   * Tolerance band: max(30 min, 15% of typical) — handles both small and large baselines.
+   */
+  vsTypical: 'above' | 'below' | 'on_par' | null;
+}
+
+/**
+ * Build a debt outlook from history.
+ *
+ * Trend: compares current debt to debt at series index `length − 8` (≈ 7 nights ago).
+ * Falls back to `null` when the series is shorter than 8 entries.
+ *
+ * Days-to-clear: forward-simulates the debt recurrence using the last 7 nights'
+ * average actual sleep and the latest load-adjusted target. Stops when debt drops
+ * below `ON_TRACK_DEBT_THRESHOLD_SEC` or after 60 iterations. Returns `null`
+ * when the average shortfall is positive (the user is still net under-sleeping —
+ * debt won't clear).
+ *
+ * Spike attribution: counts nights whose individual shortfall exceeded the
+ * spike threshold and sums those shortfalls. This is approximate (it doesn't
+ * model the decayed contribution of an old spike) but it tells the user
+ * which nights moved the needle most.
+ */
+export function computeSleepDebtOutlook(
+  history: PhysiologyDayEntry[],
+  dailyTSSByDate: Record<string, number>,
+  athleteTier: string,
+  baseSleepNeedSec?: number,
+): SleepDebtOutlook {
+  const series = computeSleepDebtSeries(history, dailyTSSByDate, athleteTier, baseSleepNeedSec);
+  if (series.length === 0) {
+    return {
+      debtSec: 0, debtPrevSec: null, trendDeltaSec: null,
+      daysToOnTrack: null, spikeContributionSec: 0, spikeNightCount: 0, lastSpikeDate: null,
+      typicalDebtSec: null, vsTypical: null,
+    };
+  }
+
+  const debtSec = series[series.length - 1].debt;
+  const prevIdx = series.length - 8;
+  const debtPrevSec = prevIdx >= 0 ? series[prevIdx].debt : null;
+  const trendDeltaSec = debtPrevSec != null ? debtSec - debtPrevSec : null;
+
+  // Spike attribution from the visible window (last 14 entries — matches chart range).
+  // We attribute the *decayed* contribution of each spike night to current debt,
+  // not the raw shortfall. A Sunday 4h shortfall is only worth 4h × 0.9057^N at day N
+  // because the recurrence has been chipping at it. Reporting raw shortfalls
+  // would overstate how much of the current stack is "from that night" once
+  // decay has had a few days to work.
+  // Approximation: ignore surplus-credit interactions that occurred between the
+  // spike and now. Strict accounting would attribute credits proportionally;
+  // the qualitative "this came from one short night" message is robust to this.
+  const window = series.slice(-14);
+  const lastIdx = series.length - 1;
+  let spikeContributionSec = 0;
+  let spikeNightCount = 0;
+  let lastSpikeDate: string | null = null;
+  for (let i = 0; i < window.length; i++) {
+    const e = window[i];
+    if (e.shortfall > SPIKE_SHORTFALL_THRESHOLD_SEC) {
+      // Days since this spike, in series-entry steps (≈ nights with data).
+      const seriesIdx = lastIdx - (window.length - 1 - i);
+      const daysSince = lastIdx - seriesIdx;
+      const decayed = e.shortfall * Math.pow(DEBT_DECAY, daysSince);
+      spikeContributionSec += decayed;
+      spikeNightCount += 1;
+      lastSpikeDate = e.date;
+    }
+  }
+  // Cap at the total debt — the decayed contribution can mathematically exceed
+  // the actual debt when surplus credits ate into the spike along the way.
+  spikeContributionSec = Math.min(spikeContributionSec, debtSec);
+
+  // Projected clearance using last 7 nights' average actual sleep + the latest load-adjusted target.
+  // If the user is still net under-sleeping (avg actual < latest target), debt won't clear.
+  const recent = series.slice(-7);
+  const avgActual = recent.reduce((a, e) => a + e.actual, 0) / recent.length;
+  const latestTarget = series[series.length - 1].target;
+  let daysToOnTrack: number | null = null;
+  if (avgActual >= latestTarget) {
+    let simDebt = debtSec;
+    const surplusPerNight = Math.max(0, avgActual - latestTarget);
+    const credit = Math.min(SURPLUS_CREDIT_CAP_SEC, surplusPerNight * SURPLUS_CREDIT_RATIO);
+    for (let d = 1; d <= 60; d++) {
+      simDebt = Math.max(0, simDebt * DEBT_DECAY - credit);
+      if (simDebt < ON_TRACK_DEBT_THRESHOLD_SEC) { daysToOnTrack = d; break; }
+    }
+  }
+
+  // Personal-norm baseline — average cumulative debt over the last 30 series entries.
+  // Requires ≥14 nights for stability (single-week noise wouldn't establish a personal norm).
+  // Today's debt enters the average too — that's intentional, the baseline is "what your
+  // debt typically looks like including today" not "what it looked like before today",
+  // which makes the signal symmetric (you can be above OR below your norm).
+  let typicalDebtSec: number | null = null;
+  let vsTypical: 'above' | 'below' | 'on_par' | null = null;
+  const baselineWindow = series.slice(-30);
+  if (baselineWindow.length >= 14) {
+    typicalDebtSec = Math.round(
+      baselineWindow.reduce((sum, e) => sum + e.debt, 0) / baselineWindow.length,
+    );
+    // Tolerance band: max(30min, 15% of typical). Absolute floor handles small baselines
+    // (where 15% would be tiny noise); the percentage handles large baselines (where a
+    // fixed 30min would be lost in chronic-debt territory).
+    const tolerance = Math.max(1800, typicalDebtSec * 0.15);
+    if (debtSec > typicalDebtSec + tolerance) vsTypical = 'above';
+    else if (debtSec < typicalDebtSec - tolerance) vsTypical = 'below';
+    else vsTypical = 'on_par';
+  }
+
+  return {
+    debtSec, debtPrevSec, trendDeltaSec, daysToOnTrack,
+    spikeContributionSec: Math.round(spikeContributionSec),
+    spikeNightCount,
+    lastSpikeDate,
+    typicalDebtSec,
+    vsTypical,
+  };
 }
 
 /**

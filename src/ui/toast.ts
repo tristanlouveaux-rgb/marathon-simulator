@@ -60,3 +60,48 @@ export function showAssignmentToast(lines: string[]): void {
 function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
+
+// ─── Marker-bump toast ──────────────────────────────────────────────────────
+
+const MARKER_TOAST_ID = 'mosaic-marker-bump-toast';
+
+/**
+ * Surface a small "your FTP / CSS / VDOT improved" toast. CLAUDE.md →
+ * Adaptation transparency: meaningful marker improvements that crossed a
+ * threshold get a small note, not a modal. Auto-dismiss after 6s; tap to
+ * dismiss early.
+ *
+ * Pass one or more lines (one per marker that bumped). Multiple bumps stack
+ * vertically inside the same toast.
+ */
+export function showMarkerBumpToast(lines: string[]): void {
+  if (lines.length === 0) return;
+  document.getElementById(MARKER_TOAST_ID)?.remove();
+
+  const toast = document.createElement('div');
+  toast.id = MARKER_TOAST_ID;
+  toast.className = [
+    'fixed left-4 right-4 z-[200]',
+    'rounded-xl shadow-xl',
+    'px-4 py-3',
+    'flex flex-col gap-1',
+    'animate-fade-in',
+  ].join(' ');
+  toast.style.background = 'var(--c-surface)';
+  toast.style.border = '1px solid var(--c-border-strong)';
+  toast.style.bottom = 'calc(56px + env(safe-area-inset-bottom, 0px) + 8px)';
+
+  toast.innerHTML = `
+    <div class="text-xs font-medium" style="color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em">Fitness updated</div>
+    ${lines.map(line => `
+      <div class="text-sm" style="color:var(--c-black)">${escHtml(line)}</div>
+    `).join('')}
+  `;
+
+  document.body.appendChild(toast);
+  let timer = window.setTimeout(() => toast.remove(), 6000);
+  toast.addEventListener('click', () => {
+    clearTimeout(timer);
+    toast.remove();
+  });
+}

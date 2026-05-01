@@ -264,7 +264,7 @@ export function render(): void {
   const injuryState = (s as any).injuryState || null;  // Get injury state for plan adaptation
   const trailingEffort = getTrailingEffortScore(s.wks, s.w);
   const acwrAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed, s.signalBBaseline ?? undefined);
+  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   let wos = generateWeekWorkouts(
     wk.ph,
     s.rw,

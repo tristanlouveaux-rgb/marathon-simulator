@@ -61,6 +61,17 @@ Deno.serve(async (req) => {
       return jsonError(401, { error: "invalid_auth", details: userErr });
     }
 
+    // --- 1a. Optional appOrigin from request body — lets the callback redirect
+    //         back to the origin that started the flow (multi-port dev). The
+    //         callback validates it against an allowlist before using.
+    let appOrigin: string | null = null;
+    try {
+      const body = await req.json().catch(() => null);
+      if (body && typeof body.appOrigin === "string" && body.appOrigin.length < 256) {
+        appOrigin = body.appOrigin;
+      }
+    } catch { /* body optional */ }
+
     // --- 2. Generate PKCE code_verifier + code_challenge ---
     const codeVerifier = randomUrlSafe(64);
     const hash = await sha256(codeVerifier);
@@ -69,12 +80,13 @@ Deno.serve(async (req) => {
     // --- 3. Generate state for CSRF protection ---
     const state = randomUrlSafe(32);
 
-    // --- 4. Persist { user_id, state, code_verifier } for the callback ---
+    // --- 4. Persist { user_id, state, code_verifier, app_origin } for the callback ---
     const supabase = createClient(supabaseUrl, serviceKey);
     const { error: insertErr } = await supabase.from("garmin_auth_requests").insert({
       user_id: user.id,
       state,
       code_verifier: codeVerifier,
+      app_origin: appOrigin,
     });
 
     if (insertErr) {

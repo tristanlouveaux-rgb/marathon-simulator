@@ -1,5 +1,15 @@
 /**
  * Auth page — email/password sign in and sign up.
+ *
+ * Supports a "guest upgrade" mode (renderAuthView({ upgradeGuest: true }))
+ * for users currently on an anonymous Supabase session. In that mode:
+ *   - Sign up uses supabase.auth.updateUser({ email, password }) which
+ *     converts the anonymous user in place, preserving the user_id and
+ *     all data already linked to it. signUp() would have created a
+ *     fresh user and orphaned the guest data.
+ *   - Sign in still uses signInWithPassword, but a warning is shown
+ *     because logging into a different account abandons guest data.
+ *   - A Cancel link returns to Home without changing auth state.
  */
 
 import { supabase } from '@/data/supabaseClient';
@@ -8,8 +18,9 @@ let isSignUp = false;
 let loading = false;
 let errorMsg = '';
 let confirmationEmail = ''; // set after successful sign-up to show "check your email"
+let upgradeGuest = false;
 
-export function renderAuthView(): void {
+export function renderAuthView(opts: { upgradeGuest?: boolean } = {}): void {
   const container = document.getElementById('app-root');
   if (!container) return;
 
@@ -17,6 +28,8 @@ export function renderAuthView(): void {
   loading = false;
   errorMsg = '';
   confirmationEmail = '';
+  upgradeGuest = !!opts.upgradeGuest;
+  if (upgradeGuest) isSignUp = true; // default to sign-up; user can toggle
 
   container.innerHTML = getAuthHTML();
   wireAuthHandlers();
@@ -103,16 +116,32 @@ function getCheckEmailHTML(): string {
 function getAuthHTML(): string {
   if (confirmationEmail) return getCheckEmailHTML();
 
-  const title = isSignUp ? 'Create your account' : 'Welcome back';
-  const sub = isSignUp
-    ? 'A few details and we\'ll build your plan.'
-    : 'Sign in to pick up where you left off.';
+  const title = upgradeGuest && isSignUp
+    ? 'Save your account'
+    : isSignUp ? 'Create your account' : 'Welcome back';
+  const sub = upgradeGuest && isSignUp
+    ? 'Keep your training history. Same data, now backed up.'
+    : isSignUp
+      ? 'A few details and we\'ll build your plan.'
+      : 'Sign in to pick up where you left off.';
   const toggleText = isSignUp
     ? `Already have an account? <button id="auth-toggle" style="color:var(--c-black);background:none;border:none;cursor:pointer;font-size:12px;text-decoration:underline;padding:0;margin-left:4px">Sign in</button>`
     : `Don't have an account? <button id="auth-toggle" style="color:var(--c-black);background:none;border:none;cursor:pointer;font-size:12px;text-decoration:underline;padding:0;margin-left:4px">Sign up</button>`;
   const submitLabel = loading
-    ? (isSignUp ? 'Creating account…' : 'Signing in…')
-    : (isSignUp ? 'Create account' : 'Sign in');
+    ? (isSignUp ? 'Saving…' : 'Signing in…')
+    : (upgradeGuest && isSignUp ? 'Save my account' : isSignUp ? 'Create account' : 'Sign in');
+
+  // When upgrading from guest and switching to "Sign in", warn that signing
+  // into a different account abandons guest data (no way to merge after the fact).
+  const guestSignInWarn = upgradeGuest && !isSignUp
+    ? `<div style="font-size:12px;color:#92400E;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);padding:10px 14px;border-radius:14px;line-height:1.45">Signing into an existing account will leave your current guest training data behind. To keep it, choose <strong>Sign up</strong> instead.</div>`
+    : '';
+
+  const cancelButton = upgradeGuest
+    ? `<div class="a-rise" style="margin-top:14px;text-align:center;animation-delay:0.4s">
+         <button id="auth-cancel-upgrade" style="font-size:12px;color:var(--c-faint);background:none;border:none;cursor:pointer;letter-spacing:0.02em">Not now</button>
+       </div>`
+    : '';
 
   const inner = `
     <p class="a-rise" style="font-size:14px;font-weight:300;text-align:center;line-height:1.55;color:var(--c-muted);margin:28px auto 36px;max-width:320px;animation-delay:0.15s">
@@ -125,6 +154,7 @@ function getAuthHTML(): string {
       </div>
 
       ${errorMsg ? `<div class="a-err">${errorMsg}</div>` : ''}
+      ${guestSignInWarn}
 
       <div>
         <label class="a-label" for="auth-email">Email</label>
@@ -148,11 +178,13 @@ function getAuthHTML(): string {
       ${toggleText}
     </p>
 
-    <div class="a-rise" style="margin-top:32px;animation-delay:0.45s">
+    ${cancelButton}
+
+    ${upgradeGuest ? '' : `<div class="a-rise" style="margin-top:32px;animation-delay:0.45s">
       <button id="auth-simulator-mode" style="font-size:11px;color:var(--c-faint);background:none;border:none;cursor:pointer;letter-spacing:0.02em">
         Use simulator mode (no account)
       </button>
-    </div>
+    </div>`}
 
     <div class="a-rise" style="margin-top:28px;display:flex;align-items:center;justify-content:center;gap:10px;white-space:nowrap;animation-delay:0.55s">
       ${['Proven principles', 'Recovery-informed', 'Built from your existing training'].map((label, i, arr) => `
@@ -182,6 +214,13 @@ function wireAuthHandlers(): void {
     renderInPlace();
   });
 
+  // Guest-upgrade: "Not now" returns the user to Home without changing auth.
+  // The anonymous session stays intact; the banner is dismissable from there.
+  document.getElementById('auth-cancel-upgrade')?.addEventListener('click', () => {
+    upgradeGuest = false;
+    import('@/ui/home-view').then(({ renderHomeView }) => renderHomeView());
+  });
+
   document.getElementById('auth-form')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (loading) return;
@@ -200,6 +239,19 @@ function wireAuthHandlers(): void {
     renderInPlace();
 
     try {
+      if (isSignUp && upgradeGuest) {
+        // Convert anonymous user in place — same user_id, now linked to email/password.
+        // This is the only path that preserves guest data; signUp() would create
+        // a fresh user and orphan everything attached to the anonymous one.
+        const { error } = await supabase.auth.updateUser({ email, password });
+        if (error) throw error;
+        loading = false;
+        upgradeGuest = false;
+        confirmationEmail = email;
+        renderInPlace();
+        return;
+      }
+
       if (isSignUp) {
         const { data, error } = await supabase.auth.signUp({
           email,

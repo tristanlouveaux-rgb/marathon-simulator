@@ -55,6 +55,17 @@ Deno.serve(async (req) => {
       return jsonError(401, { error: "invalid_auth", details: userErr });
     }
 
+    // Optional appOrigin from request body — lets the callback redirect back
+    // to the origin that started the flow (multi-port dev). Validated via
+    // pickRedirectTarget() in the callback before being used.
+    let appOrigin: string | null = null;
+    try {
+      const body = await req.json().catch(() => null);
+      if (body && typeof body.appOrigin === "string" && body.appOrigin.length < 256) {
+        appOrigin = body.appOrigin;
+      }
+    } catch { /* body optional */ }
+
     // Generate PKCE code_verifier + code_challenge
     const codeVerifier = randomUrlSafe(64);
     const hash = await sha256(codeVerifier);
@@ -69,6 +80,7 @@ Deno.serve(async (req) => {
       user_id: user.id,
       state,
       code_verifier: codeVerifier,
+      app_origin: appOrigin,
     });
 
     if (insertErr) {

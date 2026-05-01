@@ -23,7 +23,7 @@ import {
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
-import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
+import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
 
@@ -58,7 +58,8 @@ export interface CoachSignals {
   sleepAvg7d: number | null;
   hrv: number | null;              // RMSSD ms
   hrvBaseline: number | null;
-  sleepBankHours: number | null;   // negative = deficit
+  sleepBankHours: number | null;   // negative = deficit (rounded to 0.1h, kept for LLM payload)
+  sleepDebtSec: number | null;     // canonical cumulative debt in seconds (use for display)
 
   // Week signals
   weekTSS: number | null;
@@ -66,6 +67,7 @@ export interface CoachSignals {
   weekRPE: 'hard' | 'on-target' | 'easy' | null;
   hrDrift: 'efficient' | 'moderate' | 'stressed' | null;
   fitnessTrend: 'up' | 'flat' | 'down' | null;
+  trackOnlyEmptyWeek: boolean;  // true when no activities logged yet in current track-only week
 
   // Status
   injuryActive: boolean;
@@ -259,6 +261,13 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const wks = s.wks ?? [];
   const currentWeekIdx = s.w - 1;
   const wk = wks[currentWeekIdx];
+  // In track-only mode, week buckets beyond the original plan are empty scaffolding
+  // added by advanceWeekToToday. Flag them so per-week signals default to null
+  // rather than showing "0 TSS / 0% of plan," which looks like missing data.
+  const isEmptyTrackOnlyWeek = !!(s as any).trackOnly
+    && !!wk
+    && Object.keys(wk.garminActuals ?? {}).length === 0
+    && (wk.adhocWorkouts ?? []).filter((w: any) => !w.id?.startsWith('holiday-')).length === 0;
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const physio = s.physiologyHistory ?? [];
 
@@ -266,11 +275,12 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeReadinessACWR(s);
   // Live TSB with intra-week decay through today (shared helper — matches all readiness surfaces).
-  const liveTSB = computeLiveSameSignalTSB(wks, s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const liveTSB = computeLiveSameSignalTSB(wks, s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const tsb = liveTSB.tsb;
   const ctlNow = liveTSB.ctl;
 
-  const metrics = computeFitnessModel(wks, s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(wks, s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
   const ctlDelta = ctlNow - ctlFourWeeksAgo;
   const ctlTrend: 'up' | 'flat' | 'down' = ctlDelta > 0.5 ? 'up' : ctlDelta < -0.5 ? 'down' : 'flat';
@@ -300,7 +310,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   const sleepTarget = s.sleepTargetSec ?? deriveSleepTarget(physio);
   const sleepBank = getSleepBank(physio, sleepTarget);
-  const dailyTSSByDate = buildDailySignalBTSS(wks);
+  const dailyTSSByDate = buildDailySignalBTSS(wks, (s as any).previousPlanWks);
   const sleepDebtSec = sleepBank.nightsWithData >= 3
     ? computeSleepDebt(physio, dailyTSSByDate, tier ?? 'recreational', sleepTarget)
     : null;
@@ -328,7 +338,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   });
 
   // ── Week signals ──────────────────────────────────────────────────────────
-  const weekTSS = wk
+  const weekTSS = (wk && !isEmptyTrackOnlyWeek)
     ? computeWeekTSS(wk, wk.rated ?? {}, s.planStartDate)
     : null;
   const plannedTSS = computePlannedWeekTSS(
@@ -342,7 +352,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     ? Math.round((weekTSS / plannedTSS) * 100)
     : null;
 
-  const actuals = Object.values(wk?.garminActuals ?? {});
+  const actuals = isEmptyTrackOnlyWeek ? [] : Object.values(wk?.garminActuals ?? {});
   const hrDriftVals = actuals
     .map(a => typeof a.hrDrift === 'number' && !isNaN(a.hrDrift) ? heatAdjust(a.hrDrift, a.ambientTempC) : null)
     .filter((v): v is number => v != null);
@@ -475,12 +485,14 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     hrv: hrvAvg7d != null ? Math.round(hrvAvg7d) : hrvRmssd,
     hrvBaseline: hrvPersonalAvg,
     sleepBankHours,
+    sleepDebtSec,
 
     weekTSS: weekTSS != null ? Math.round(weekTSS) : null,
     plannedTSS: Math.round(plannedTSS),
     weekRPE: weekSignals.rpe,
     hrDrift: weekSignals.hrDrift,
     fitnessTrend: weekSignals.fitness,
+    trackOnlyEmptyWeek: isEmptyTrackOnlyWeek,
 
     injuryActive,
     injuryLocation,
@@ -801,6 +813,13 @@ function derivePrimaryMessage(
     return `Solid session today (${Math.round(actualTSS)} TSS). Rest up and recover.`;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────
+  // Hard-floor signals first — the message must explain whatever is capping
+  // the readiness score, otherwise the badge ("Manage Load"), CTA, and copy
+  // disagree across surfaces.
+  if (readiness.hardFloor === 'legLoad' && readiness.legLoadNote) {
+    return readiness.legLoadNote;
+  }
+
   if (sig.acwrStatus === 'high') {
     if (trained)
       return sessionHeavy
@@ -845,11 +864,12 @@ function derivePrimaryMessage(
   // or other drivers here would misdiagnose the actual constraint.
   const heavySleepDebt = sig.sleepBankHours != null && sig.sleepBankHours < -5;
   if (heavySleepDebt) {
+    const debtStr = fmtSleepDebt(sig.sleepDebtSec ?? 0);
     if (trained && sessionHeavy)
-      return `${Math.abs(sig.sleepBankHours!)}h sleep debt. Hard session won't produce full adaptation until sleep recovers.`;
+      return `${debtStr} sleep debt. Hard session won't produce full adaptation until sleep recovers.`;
     return hard
-      ? `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
-      : `${Math.abs(sig.sleepBankHours!)}h sleep debt this week. Prioritise sleep tonight.`;
+      ? `${debtStr} sleep debt this week. ${wn} won't produce full adaptation until sleep recovers.`
+      : `${debtStr} sleep debt this week. Prioritise sleep tonight.`;
   }
 
   // Freshness-driven message when fitness is the biggest drag on readiness.
@@ -912,13 +932,14 @@ function derivePrimaryMessage(
 
   // Moderate sleep debt
   if (sig.sleepBankHours != null && sig.sleepBankHours < -3) {
+    const debtStr = fmtSleepDebt(sig.sleepDebtSec ?? 0);
     if (trained)
       return sessionHeavy
-        ? `Sleep debt accumulating (${Math.abs(sig.sleepBankHours)}h). Heavy session adds load. Prioritise sleep.`
-        : `Sleep debt accumulating (${Math.abs(sig.sleepBankHours)}h). Light session today. Prioritise sleep.`;
+        ? `Sleep debt accumulating (${debtStr}). Heavy session adds load. Prioritise sleep.`
+        : `Sleep debt accumulating (${debtStr}). Light session today. Prioritise sleep.`;
     return hard
-      ? `${Math.abs(sig.sleepBankHours)}h sleep debt this week. Complete ${wn} but don't add extras.`
-      : `Sleep debt accumulating (${Math.abs(sig.sleepBankHours)}h). Prioritise earlier bedtime.`;
+      ? `${debtStr} sleep debt this week. Complete ${wn} but don't add extras.`
+      : `Sleep debt accumulating (${debtStr}). Prioritise earlier bedtime.`;
   }
 
   // Recovery driving (below baseline, 65 = baseline) but no specific sleep/HRV flag

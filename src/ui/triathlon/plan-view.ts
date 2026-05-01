@@ -7,12 +7,14 @@
  * the full `renderPlanView()`.
  */
 
-import { getState } from '@/state/store';
+import { getState, getMutableState } from '@/state/store';
+import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
+import type { Workout } from '@/types/state';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') {
@@ -189,6 +191,7 @@ export function renderTriathlonPlanView(): void {
   // Workout card → full breakdown modal
   document.querySelectorAll<HTMLElement>('[data-tri-workout-id]').forEach((el) => {
     el.addEventListener('click', () => {
+      if (_dragSuppressClick) { _dragSuppressClick = false; return; }
       const id = el.getAttribute('data-tri-workout-id');
       if (!id) return;
       const st = getState();
@@ -197,6 +200,154 @@ export function renderTriathlonPlanView(): void {
       if (found) openTriWorkoutDetail(found);
     });
   });
+
+  wireTriWorkoutDnd();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Drag-and-drop reorder within week (mirrors marathon plan-view DnD)
+// ─────────────────────────────────────────────────────────────────────────────
+
+let _dragId = '';
+let _dragDay = -1;
+let _dragSuppressClick = false;
+
+function wireTriWorkoutDnd(): void {
+  document.querySelectorAll<HTMLElement>('.tri-workout-card').forEach((card) => {
+    card.addEventListener('dragstart', (e) => {
+      _dragId = card.getAttribute('data-tri-workout-id') || '';
+      _dragDay = parseInt(card.getAttribute('data-tri-day-of-week') || '-1', 10);
+      (e as DragEvent).dataTransfer?.setData('text/plain', _dragId);
+      card.style.opacity = '0.4';
+    });
+    card.addEventListener('dragend', () => {
+      card.style.opacity = '';
+      card.style.outline = '';
+      _dragSuppressClick = true;
+      // Reset on next tick so a real subsequent click still works
+      setTimeout(() => { _dragSuppressClick = false; }, 0);
+    });
+    card.addEventListener('dragover', (e) => {
+      if (!_dragId || card.getAttribute('data-tri-workout-id') === _dragId) return;
+      e.preventDefault();
+      card.style.outline = '2px solid #0F172A';
+      card.style.outlineOffset = '-2px';
+    });
+    card.addEventListener('dragleave', () => {
+      card.style.outline = '';
+    });
+    card.addEventListener('drop', (e) => {
+      e.preventDefault();
+      card.style.outline = '';
+      const srcId = _dragId || (e as DragEvent).dataTransfer?.getData('text/plain') || '';
+      const targetId = card.getAttribute('data-tri-workout-id') || '';
+      if (!srcId || !targetId || targetId === srcId) return;
+      const targetDay = parseInt(card.getAttribute('data-tri-day-of-week') || '-1', 10);
+      const srcDay = _dragDay;
+      if (srcDay < 0 || targetDay < 0 || srcDay === targetDay) return;
+      swapWorkoutDays(srcId, targetId, srcDay, targetDay);
+      _dragId = '';
+      _dragDay = -1;
+      renderTriathlonPlanView();
+    });
+  });
+
+  // Empty-day rest rows: drop anywhere on the row moves the workout there.
+  // For non-empty rows the day-header inside takes over (so drops on the
+  // header stack onto that day, and drops on cards still swap).
+  document.querySelectorAll<HTMLElement>('.tri-day-row').forEach((row) => {
+    row.addEventListener('dragover', (e) => {
+      if (!_dragId) return;
+      const targetDay = parseInt(row.getAttribute('data-tri-day-drop') || '-1', 10);
+      if (targetDay < 0 || targetDay === _dragDay) return;
+      e.preventDefault();
+      row.style.background = 'rgba(15,23,42,0.04)';
+      const restLabel = row.querySelector('.tri-day-rest-label') as HTMLElement | null;
+      if (restLabel) restLabel.textContent = 'Drop here';
+    });
+    row.addEventListener('dragleave', () => {
+      row.style.background = '';
+      const restLabel = row.querySelector('.tri-day-rest-label') as HTMLElement | null;
+      if (restLabel) restLabel.textContent = 'Rest';
+    });
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.style.background = '';
+      const restLabel = row.querySelector('.tri-day-rest-label') as HTMLElement | null;
+      if (restLabel) restLabel.textContent = 'Rest';
+      const srcId = _dragId || (e as DragEvent).dataTransfer?.getData('text/plain') || '';
+      const targetDay = parseInt(row.getAttribute('data-tri-day-drop') || '-1', 10);
+      if (!srcId || targetDay < 0 || targetDay === _dragDay) return;
+      // Drops on cards (swap) or headers (stack) have their own handlers.
+      const dropTarget = e.target as HTMLElement | null;
+      if (dropTarget?.closest('.tri-workout-card') || dropTarget?.closest('.tri-day-header')) return;
+      moveWorkoutToDay(srcId, targetDay);
+      _dragId = '';
+      _dragDay = -1;
+      renderTriathlonPlanView();
+    });
+  });
+
+  // Day-header strip: drop here to stack onto that day (without swapping).
+  document.querySelectorAll<HTMLElement>('.tri-day-header').forEach((header) => {
+    header.addEventListener('dragover', (e) => {
+      if (!_dragId) return;
+      const targetDay = parseInt(header.getAttribute('data-tri-day-stack') || '-1', 10);
+      if (targetDay < 0 || targetDay === _dragDay) return;
+      e.preventDefault();
+      header.style.background = 'rgba(15,23,42,0.06)';
+      const stackLabel = header.querySelector('.tri-day-stack-label') as HTMLElement | null;
+      const restLabel = header.querySelector('.tri-day-rest-label') as HTMLElement | null;
+      if (stackLabel) stackLabel.textContent = 'Add here';
+      if (restLabel) restLabel.textContent = 'Drop here';
+    });
+    header.addEventListener('dragleave', () => {
+      header.style.background = '';
+      const targetDay = parseInt(header.getAttribute('data-tri-day-stack') || '-1', 10);
+      const stackLabel = header.querySelector('.tri-day-stack-label') as HTMLElement | null;
+      const restLabel = header.querySelector('.tri-day-rest-label') as HTMLElement | null;
+      if (stackLabel) {
+        const ms = getState();
+        const wk = ms.wks?.[ms.w - 1];
+        const count = (wk?.triWorkouts ?? []).filter((w: any) => (w.dayOfWeek ?? -1) === targetDay).length;
+        stackLabel.textContent = count > 1 ? `${count} sessions` : '';
+      }
+      if (restLabel) restLabel.textContent = 'Rest';
+    });
+    header.addEventListener('drop', (e) => {
+      e.preventDefault();
+      header.style.background = '';
+      const srcId = _dragId || (e as DragEvent).dataTransfer?.getData('text/plain') || '';
+      const targetDay = parseInt(header.getAttribute('data-tri-day-stack') || '-1', 10);
+      if (!srcId || targetDay < 0 || targetDay === _dragDay) return;
+      moveWorkoutToDay(srcId, targetDay);
+      _dragId = '';
+      _dragDay = -1;
+      renderTriathlonPlanView();
+    });
+  });
+}
+
+function swapWorkoutDays(srcId: string, targetId: string, srcDay: number, targetDay: number): void {
+  const ms = getMutableState();
+  const wk = ms.wks?.[ms.w - 1];
+  if (!wk?.triWorkouts) return;
+  const srcIdx = wk.triWorkouts.findIndex((w: Workout) => (w.id ?? w.n) === srcId);
+  const targetIdx = wk.triWorkouts.findIndex((w: Workout) => (w.id ?? w.n) === targetId);
+  if (srcIdx < 0 || targetIdx < 0) return;
+  wk.triWorkouts[srcIdx] = { ...wk.triWorkouts[srcIdx], dayOfWeek: targetDay, dayName: DAY_NAMES[targetDay] };
+  wk.triWorkouts[targetIdx] = { ...wk.triWorkouts[targetIdx], dayOfWeek: srcDay, dayName: DAY_NAMES[srcDay] };
+  saveState();
+}
+
+function moveWorkoutToDay(srcId: string, targetDay: number): void {
+  const ms = getMutableState();
+  const wk = ms.wks?.[ms.w - 1];
+  if (!wk?.triWorkouts) return;
+  const idx = wk.triWorkouts.findIndex((w: Workout) => (w.id ?? w.n) === srcId);
+  if (idx < 0) return;
+  wk.triWorkouts[idx] = { ...wk.triWorkouts[idx], dayOfWeek: targetDay, dayName: DAY_NAMES[targetDay] };
+  saveState();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,21 +358,21 @@ function renderDay(d: number, list: Array<any>): string {
   const dayLabel = DAY_NAMES[d];
   if (list.length === 0) {
     return `
-      <div style="margin-bottom:14px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px">
+      <div class="tri-day-row" data-tri-day-drop="${d}" style="margin-bottom:14px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
+        <div class="tri-day-header" data-tri-day-stack="${d}" style="display:flex;align-items:center;gap:12px;border-radius:6px;transition:background 0.15s">
           <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:40px">${dayLabel.slice(0, 3)}</span>
           <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
-          <span style="font-size:11px;color:var(--c-faint);font-weight:500">Rest</span>
+          <span class="tri-day-rest-label" style="font-size:11px;color:var(--c-faint);font-weight:500">Rest</span>
         </div>
       </div>
     `;
   }
   return `
-    <div style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+    <div class="tri-day-row" data-tri-day-drop="${d}" style="margin-bottom:16px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
+      <div class="tri-day-header" data-tri-day-stack="${d}" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;border-radius:6px;transition:background 0.15s">
         <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:#0F172A;min-width:40px">${dayLabel.slice(0, 3)}</span>
         <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
-        ${list.length > 1 ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length} sessions</span>` : ''}
+        <span class="tri-day-stack-label" style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length > 1 ? `${list.length} sessions` : ''}</span>
       </div>
       ${list.map((w) => renderTriWorkoutCard(w)).join('')}
     </div>

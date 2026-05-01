@@ -59,10 +59,18 @@ export interface PredictionInputs {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOW_WEEKS = 8;
 const STALE_DAYS = 28;
-const MIN_DIST_KM = 2;
+const MIN_DIST_KM = 3;
 const MIN_PACE = 180;   // 3:00 /km — faster = sprint interval, treat as suspect
-const MAX_PACE = 450;   // 7:30 /km — slower = walk / hike
+const MAX_PACE = 480;   // 8:00 /km — slower = walk / hike / treadmill drift
 const RACE_FILTER_RATIO = 0.85; // faster than 85% of median = race effort
+/** Activity-name patterns that signal non-training data even if the pace passes
+ *  the band check. Treadmill GPS drift can produce plausible paces; walks
+ *  often log as "Walk" while still hitting the run-pace floor. Drop on name. */
+const NON_TRAINING_NAME_RE = /treadmill|walk/i;
+/** After all the hard filters above, drop the slowest 10% of the remaining
+ *  set. Pure noise filter — the slowest tail tends to be aborted runs, mid-run
+ *  walk breaks logged as separate activities, or warm-down jogs without GPS. */
+const SLOW_TAIL_DROP_FRACTION = 0.10;
 
 /** Dedup key buckets startTime to the nearest 5 minutes and distance to 0.1 km.
  *  5-min window catches Strava/Garmin dual-logs where GPS-start vs watch-start
@@ -116,6 +124,11 @@ export function computePredictionInputs(
     if (!r.distKm || r.distKm < MIN_DIST_KM || !r.durSec || r.durSec <= 0) continue;
     const pace = r.durSec / r.distKm;
     if (pace < MIN_PACE || pace > MAX_PACE) continue;
+    // Name-based reject for treadmill / walk activities. Treadmills produce
+    // GPS-less paces from accelerometer estimates that drift; walks frequently
+    // sit just inside the slow pace band. Both pollute Tanda's P regardless.
+    const nm = (r.activityName ?? '').trim();
+    if (nm && NON_TRAINING_NAME_RE.test(nm)) continue;
     const key = dedupKey(r);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -127,6 +140,20 @@ export function computePredictionInputs(
     });
   }
   if (qualifying.length === 0) return empty;
+
+  // ── Drop the slowest 10% by pace (noise tail) ────────────────────────────
+  // After the hard pace/distance/name filters, the slowest tail in any sample
+  // tends to be aborted runs, mid-run walk breaks logged as separate activities,
+  // or untracked warm-downs. They distort P (Tanda's training pace) far more
+  // than they inform K. Drop floor: keep at least 3 runs so a sparse log isn't
+  // wiped out by trimming.
+  if (qualifying.length >= 5) {
+    const dropCount = Math.floor(qualifying.length * SLOW_TAIL_DROP_FRACTION);
+    if (dropCount > 0) {
+      qualifying.sort((a, b) => a.paceSecPerKm - b.paceSecPerKm); // fastest → slowest
+      qualifying.splice(qualifying.length - dropCount, dropCount);
+    }
+  }
 
   // ── Window: 8 weeks back from the most recent qualifying run ─────────────
   // Anchoring on the most recent run (not `now`) means a user who just logged

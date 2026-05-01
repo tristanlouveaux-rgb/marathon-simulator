@@ -56,6 +56,12 @@ export interface SustainedEffortInput {
   kmSplits?: number[] | null;
   /** Per-km HR (bpm) if available. Not currently populated — reserved. */
   kmHR?: number[] | null;
+  /** Cardiovascular drift, percentage HR rise second-half vs first-half (warmup-stripped).
+   *  Computed at sync time from the full HR stream (`calculateHRDrift` in
+   *  `sync-strava-activities`). Preferred decoupling signal when present —
+   *  measures the same Friel/Coyle steady-state test directly from HR rather
+   *  than via pace as a proxy. */
+  hrDrift?: number | null;
   /** Activity subtype. 'treadmill', 'VirtualRun' etc. are excluded. */
   sportType?: string | null;
   /** Ambient temp °C. Activities >28°C are excluded (HR inflation). */
@@ -105,6 +111,26 @@ const LTHR_FALLBACK_FRAC = 0.88;
 
 /** Minimum effort duration for empirical detection (below this, no steady state possible). */
 const MIN_EMPIRICAL_DURATION_SEC = 20 * 60;
+
+/** Standard maximum empirical effort duration. Beyond ~60 min, cardiovascular
+ *  drift can push HR into the LT band on sustained Z3 runs even though pace
+ *  is well below threshold (Coyle 1984; Hagberg & Coyle 1983; Friel
+ *  "decoupling test"). Faude et al. 2009 define LT2 as the fastest pace
+ *  sustainable for ~30–60 min, so ≤60 min is the standard upper bound. */
+const MAX_EMPIRICAL_DURATION_SEC = 60 * 60;
+
+/** Extended maximum allowed when `hrDrift` directly demonstrates true
+ *  steady-state (|drift| < 5%). The 60-min standard bound is a heuristic for
+ *  when drift can't be measured; with stream-derived `hrDrift` we have direct
+ *  evidence. Beyond 120 min even stable HR can't rule out fueling / glycogen /
+ *  hydration effects on pace, so we cap there regardless. Allows triathletes
+ *  who do most LT work inside long runs to feed those efforts into the empirical
+ *  path when, and only when, the run was provably steady. */
+const MAX_EMPIRICAL_DURATION_WITH_DRIFT_SEC = 120 * 60;
+
+/** Decoupling threshold for HR-based drift. Same 5% bound as the pace-based
+ *  proxy (Friel) — applied to `hrDrift` when present. */
+const MAX_HR_DRIFT_PCT = 5;
 
 /** Maximum ambient temp for empirical HR trust (heat inflates HR 5–20 bpm). */
 const MAX_AMBIENT_TEMP_C = 28;
@@ -158,6 +184,27 @@ export function deriveLTFromVdot(vdot: number | null): number | null {
 
   const vVO2maxSecPerKm = (1000 / v) * 60;
   return vVO2maxSecPerKm / DANIELS_T_FRACTION;
+}
+
+/**
+ * Inverse of deriveLTFromVdot — back out VDOT from a measured LT pace.
+ *
+ * vVO2max sec/km = LT sec/km × DANIELS_T_FRACTION
+ * v (m/min)      = 60000 / vVO2max sec/km
+ * VDOT           = −4.60 + 0.182258·v + 0.000104·v²   (Daniels VO2 cost equation)
+ *
+ * Use as a fallback estimate of VDOT when the HR-calibrated path has not yet
+ * landed (e.g. resting HR / max HR still pending post-OAuth) but we already
+ * have a defensible LT pace from Strava-derived threshold work.
+ */
+export function deriveVdotFromLT(ltSecPerKm: number | null): number | null {
+  if (!ltSecPerKm || ltSecPerKm <= 0) return null;
+  const vVO2maxSecPerKm = ltSecPerKm * DANIELS_T_FRACTION;
+  if (vVO2maxSecPerKm <= 0) return null;
+  const v = 60000 / vVO2maxSecPerKm; // m/min
+  const vdot = -4.6 + 0.182258 * v + 0.000104 * v * v;
+  if (vdot < MIN_VDOT) return null;
+  return vdot;
 }
 
 // ─── Method 2: Critical Speed from best efforts ───────────────────────────
@@ -264,6 +311,10 @@ export function deriveLTFromSustainedEfforts(
 
   for (const e of efforts) {
     if (e.durationSec < MIN_EMPIRICAL_DURATION_SEC) continue;
+    // Duration upper bound: 120 min absolute. Beyond that, fueling /
+    // glycogen / hydration confounds dominate and a "steady" signal can no
+    // longer be trusted as threshold pace.
+    if (e.durationSec > MAX_EMPIRICAL_DURATION_WITH_DRIFT_SEC) continue;
     if (!e.avgHR) continue;
     if (e.avgHR < hrLo || e.avgHR > hrHi) continue;
 
@@ -280,24 +331,46 @@ export function deriveLTFromSustainedEfforts(
       if (e.elevationGainM / km > MAX_ELEV_GAIN_PER_KM) continue;
     }
 
-    // Steady-state: pace CV check.
+    // Steady-state — joint gate on pace and HR. Two signals say the same
+    // thing in different ways: pace CV (variability across kmSplits) and
+    // hrDrift (HR rise from first half to second half). For LT detection we
+    // accept a run when AT LEAST ONE proves the effort was steady — a tempo
+    // with rising HR but constant pace is still a tempo, and a long run with
+    // stable HR but variable pace (hills, traffic) is also a usable LT signal.
+    // For runs >60 min, both are required because the cardiac-drift confound
+    // grows with duration and either signal alone is no longer enough.
+    let paceCV: number | null = null;
     if (e.kmSplits && e.kmSplits.length >= 3) {
       const mean = e.kmSplits.reduce((a, b) => a + b, 0) / e.kmSplits.length;
       const variance = e.kmSplits.reduce((a, b) => a + (b - mean) * (b - mean), 0) / e.kmSplits.length;
-      const cv = Math.sqrt(variance) / mean;
-      if (cv > MAX_PACE_CV) continue;
+      paceCV = Math.sqrt(variance) / mean;
     }
-
-    // Decoupling approximation: compare pace in second half vs first half (pace slowing at constant HR = aerobic decoupling).
-    // Without per-km HR we use pace drift as a proxy — acceptable because steady HR in the band is already required.
-    let decoupling = 0;
-    if (e.kmSplits && e.kmSplits.length >= 4) {
+    // Decoupling source: prefer `hrDrift` (direct from HR stream), fall back
+    // to a pace-drift proxy from kmSplits (steady HR in the band is already a
+    // precondition, so pace slowing implies decoupling).
+    let decoupling: number | null = null;
+    if (e.hrDrift != null) {
+      decoupling = e.hrDrift / 100;
+    } else if (e.kmSplits && e.kmSplits.length >= 4) {
       const half = Math.floor(e.kmSplits.length / 2);
       const firstAvg = e.kmSplits.slice(0, half).reduce((a, b) => a + b, 0) / half;
       const secondAvg = e.kmSplits.slice(half).reduce((a, b) => a + b, 0) / (e.kmSplits.length - half);
       if (firstAvg > 0) decoupling = (secondAvg - firstAvg) / firstAvg;
     }
-    if (decoupling > MAX_DECOUPLING_PCT) continue;
+    const paceSteady = paceCV != null && paceCV <= MAX_PACE_CV;
+    const hrSteady = decoupling != null && Math.abs(decoupling) <= MAX_DECOUPLING_PCT;
+    const isLong = e.durationSec > MAX_EMPIRICAL_DURATION_SEC;
+    if (isLong) {
+      // Long run: both signals required, and both must be measurable.
+      if (!paceSteady || !hrSteady) continue;
+    } else {
+      // Short tempo: at least one steady-state signal must fire. If neither
+      // is measurable (no kmSplits, no hrDrift), trust the HR-band gate
+      // alone — without any quality signal we can't reject, but we also
+      // can't lift past the standard duration cap.
+      const haveAnySignal = paceCV != null || decoupling != null;
+      if (haveAnySignal && !paceSteady && !hrSteady) continue;
+    }
 
     const ageDays = (now.getTime() - new Date(e.startTime).getTime()) / (1000 * 86400);
     if (ageDays < 0 || ageDays > EMPIRICAL_MAX_AGE_DAYS) continue;
@@ -306,7 +379,7 @@ export function deriveLTFromSustainedEfforts(
       ltPaceSecKm: e.avgPaceSecKm,
       hr: e.avgHR,
       ageDays,
-      decouplingPct: decoupling,
+      decouplingPct: decoupling ?? 0,
     });
   }
 
@@ -329,6 +402,140 @@ export function deriveLTFromSustainedEfforts(
     ltHR: sumWHR / sumW,
     nQualifying: qualifying.length,
   };
+}
+
+// ─── Diagnostic — explain inclusion / rejection of every candidate ─────────
+
+/**
+ * One-shot diagnostic: walks the same filter pipeline as
+ * `deriveLTFromSustainedEfforts` but instead of just collecting qualifiers,
+ * returns a record per candidate run with a human-readable reason for
+ * exclusion (or "qualified" if it cleared every gate).
+ *
+ * Pure — used by the LT detail page's diagnostic console output. The reasons
+ * are intentionally short so they fit cleanly in `console.table`.
+ *
+ * Order matters: gates fire top-to-bottom, first failure wins. Mirrors
+ * `deriveLTFromSustainedEfforts` exactly so what a user sees here is what
+ * the derivation actually used.
+ */
+export interface SustainedEffortDiagnostic {
+  startTime: string;
+  durationMin: number;
+  paceSecKm: number | null;
+  avgHR: number | null;
+  hrPctMax: number | null;
+  hrDriftPct: number | null;
+  decouplingPct: number | null;
+  paceCV: number | null;
+  qualified: boolean;
+  reason: string;
+}
+
+export function diagnoseSustainedEfforts(
+  efforts: SustainedEffortInput[] | null | undefined,
+  maxHR: number | null,
+  now: Date,
+): SustainedEffortDiagnostic[] {
+  if (!efforts || efforts.length === 0) return [];
+
+  const hrLo = maxHR ? maxHR * EMPIRICAL_HR_MIN_FRAC : null;
+  const hrHi = maxHR ? maxHR * EMPIRICAL_HR_MAX_FRAC : null;
+
+  const out: SustainedEffortDiagnostic[] = [];
+
+  for (const e of efforts) {
+    const durationMin = Math.round((e.durationSec / 60) * 10) / 10;
+    const hrPctMax = e.avgHR && maxHR ? Math.round((e.avgHR / maxHR) * 1000) / 10 : null;
+
+    let paceCV: number | null = null;
+    if (e.kmSplits && e.kmSplits.length >= 3) {
+      const mean = e.kmSplits.reduce((a, b) => a + b, 0) / e.kmSplits.length;
+      const variance = e.kmSplits.reduce((a, b) => a + (b - mean) * (b - mean), 0) / e.kmSplits.length;
+      paceCV = Math.round((Math.sqrt(variance) / mean) * 1000) / 10;
+    }
+
+    let decoupling: number | null = null;
+    if (e.kmSplits && e.kmSplits.length >= 4) {
+      const half = Math.floor(e.kmSplits.length / 2);
+      const firstAvg = e.kmSplits.slice(0, half).reduce((a, b) => a + b, 0) / half;
+      const secondAvg = e.kmSplits.slice(half).reduce((a, b) => a + b, 0) / (e.kmSplits.length - half);
+      if (firstAvg > 0) decoupling = Math.round(((secondAvg - firstAvg) / firstAvg) * 1000) / 10;
+    }
+
+    let reason = '';
+    let qualified = false;
+
+    // Effective decoupling for reporting: prefer hrDrift when present (matches
+    // the gate the live derivation applies), fall back to the pace-drift proxy.
+    const hrDriftPct = e.hrDrift ?? null;
+    const decouplingForGate = hrDriftPct != null ? hrDriftPct : decoupling;
+
+    if (!maxHR || maxHR <= 0) {
+      reason = 'maxHR not set';
+    } else if (e.durationSec < MIN_EMPIRICAL_DURATION_SEC) {
+      reason = `duration ${durationMin}min < 20min`;
+    } else if (e.durationSec > MAX_EMPIRICAL_DURATION_WITH_DRIFT_SEC) {
+      reason = `duration ${durationMin}min > 120min (fueling effects dominate)`;
+    } else if (!e.avgHR) {
+      reason = 'no avgHR';
+    } else if (hrLo != null && e.avgHR < hrLo) {
+      reason = `HR ${hrPctMax}% < 85% (too easy)`;
+    } else if (hrHi != null && e.avgHR > hrHi) {
+      reason = `HR ${hrPctMax}% > 92% (too hard)`;
+    } else if ((e.sportType || '').toLowerCase().includes('treadmill')) {
+      reason = 'treadmill';
+    } else if ((e.sportType || '').toLowerCase().includes('virtual')) {
+      reason = 'virtual run';
+    } else if (e.ambientTempC != null && e.ambientTempC > MAX_AMBIENT_TEMP_C) {
+      reason = `ambient ${e.ambientTempC.toFixed(0)}°C > 28°C`;
+    } else {
+      const km = e.durationSec / (e.avgPaceSecKm || 1);
+      const paceSteady = paceCV != null && paceCV <= MAX_PACE_CV * 100;
+      const hrSteady = decouplingForGate != null && Math.abs(decouplingForGate) <= MAX_HR_DRIFT_PCT;
+      const isLong = e.durationSec > MAX_EMPIRICAL_DURATION_SEC;
+
+      if (e.elevationGainM != null && km > 0 && e.elevationGainM / km > MAX_ELEV_GAIN_PER_KM) {
+        reason = `elev ${(e.elevationGainM / km).toFixed(1)} m/km > 15`;
+      } else if (isLong && (!paceSteady || paceCV == null)) {
+        reason = paceCV == null
+          ? `duration ${durationMin}min > 60min and no pace CV signal (need both)`
+          : `duration ${durationMin}min > 60min, pace CV ${paceCV}% > 8% (not steady)`;
+      } else if (isLong && (!hrSteady || decouplingForGate == null)) {
+        const driftStr = decouplingForGate == null ? 'no drift signal' : `drift ${decouplingForGate.toFixed(1)}% > 5%`;
+        reason = `duration ${durationMin}min > 60min and ${driftStr} (long runs need both signals steady)`;
+      } else if (!isLong && paceCV != null && decouplingForGate != null && !paceSteady && !hrSteady) {
+        reason = `pace CV ${paceCV}% AND drift ${decouplingForGate.toFixed(1)}% — neither signal steady`;
+      } else {
+        const ageDays = (now.getTime() - new Date(e.startTime).getTime()) / (1000 * 86400);
+        if (ageDays < 0) {
+          reason = 'future-dated';
+        } else if (ageDays > EMPIRICAL_MAX_AGE_DAYS) {
+          reason = `${Math.round(ageDays)}d old > 120d`;
+        } else {
+          qualified = true;
+          reason = 'qualified';
+        }
+      }
+    }
+
+    out.push({
+      startTime: e.startTime,
+      durationMin,
+      paceSecKm: e.avgPaceSecKm ?? null,
+      avgHR: e.avgHR ?? null,
+      hrPctMax,
+      hrDriftPct,
+      decouplingPct: decoupling,
+      paceCV,
+      qualified,
+      reason,
+    });
+  }
+
+  // Newest first — the most relevant runs sit at the top.
+  out.sort((a, b) => (a.startTime > b.startTime ? -1 : 1));
+  return out;
 }
 
 // ─── LTHR fallback ─────────────────────────────────────────────────────────

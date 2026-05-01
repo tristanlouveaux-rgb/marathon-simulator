@@ -230,7 +230,44 @@ export function reconcileRecentLegLoads(): boolean {
   const s = getMutableState();
   const nowMs = Date.now();
   const sevenDaysMs = 7 * 24 * 3_600_000;
-  const existing = s.recentLegLoads ?? [];
+  let existing = s.recentLegLoads ?? [];
+  let mutated = false;
+
+  // Step 1: drop stale entries whose garminId no longer matches any current
+  // garminActual (the activity was deleted, re-matched, or upgraded to a
+  // different source). Entries without a garminId are legacy and pass through.
+  const liveGarminIds = new Set<string>();
+  for (const wk of s.wks ?? []) {
+    for (const a of Object.values(wk.garminActuals ?? {})) {
+      if (a.garminId) liveGarminIds.add(a.garminId);
+    }
+  }
+  if (liveGarminIds.size > 0) {
+    const before = existing.length;
+    existing = existing.filter(e => !e.garminId || liveGarminIds.has(e.garminId));
+    if (existing.length !== before) mutated = true;
+  }
+
+  // Step 2: collapse near-duplicate entries that represent the same physical
+  // bout. Same sport, within 10 minutes is treated as the same activity. We
+  // keep one — preferring the entry linked to a Strava-sourced garminId
+  // (richer data) and breaking ties by higher load.
+  {
+    const sorted = [...existing].sort((a, b) => a.timestampMs - b.timestampMs);
+    const kept: typeof existing = [];
+    const TEN_MIN = 10 * 60_000;
+    for (const e of sorted) {
+      const dupIdx = kept.findIndex(k => k.sport === e.sport && Math.abs(k.timestampMs - e.timestampMs) <= TEN_MIN);
+      if (dupIdx === -1) { kept.push(e); continue; }
+      const winner = preferLegLoadEntry(kept[dupIdx], e);
+      if (winner !== kept[dupIdx]) kept[dupIdx] = winner;
+    }
+    if (kept.length !== existing.length) {
+      existing = kept;
+      mutated = true;
+    }
+  }
+
   const byGarminId = new Map<string, true>();
   for (const e of existing) {
     if (e.garminId) byGarminId.set(e.garminId, true);
@@ -262,7 +299,30 @@ export function reconcileRecentLegLoads(): boolean {
   candidates.sort((a, b) => a.ts - b.ts);
 
   let added = false;
+  const TEN_MIN = 10 * 60_000;
   for (const c of candidates) {
+    // Skip if a near-duplicate already exists (same sport, ±10 min). This blocks
+    // the case where garminActuals carries two sibling rows for the same physical
+    // bout (Strava and Garmin webhook with slightly different start times, or two
+    // Strava backfills).
+    const dupIdx = existing.findIndex(e => e.sport === c.sport && Math.abs(e.timestampMs - c.ts) <= TEN_MIN);
+    if (dupIdx !== -1) {
+      const candidateEntry = { load: c.rawLoad, timestampMs: c.ts, garminId: c.actual.garminId };
+      const winner = preferLegLoadEntry(existing[dupIdx], candidateEntry);
+      if (winner === candidateEntry) {
+        // Replace the existing entry with the candidate's data.
+        const sportLabel = (SPORT_LABELS as Record<string, string>)[c.sport] ?? c.sport;
+        const skipRbe = c.isRun && c.rpe >= HARD_RUN_RPE;
+        const otherExisting = existing.filter((_, i) => i !== dupIdx);
+        const { load, protected: rbeProtected } = skipRbe
+          ? { load: c.rawLoad, protected: false }
+          : applyRbeDiscount(c.sport, c.ts, c.rawLoad, otherExisting);
+        existing[dupIdx] = { load, sport: c.sport, sportLabel, timestampMs: c.ts, garminId: c.actual.garminId, rbeProtected };
+        if (c.actual.garminId) byGarminId.set(c.actual.garminId, true);
+        added = true;
+      }
+      continue;
+    }
     const sportLabel = (SPORT_LABELS as Record<string, string>)[c.sport] ?? c.sport;
     // Hard runs (RPE >= 7) skip RBE: maximal-effort EIMD is novel stress and
     // adaptation from prior easy bouts does not transfer.
@@ -275,8 +335,22 @@ export function reconcileRecentLegLoads(): boolean {
     added = true;
   }
 
-  if (added) s.recentLegLoads = existing;
-  return added;
+  if (added || mutated) s.recentLegLoads = existing;
+  return added || mutated;
+}
+
+/**
+ * Pick the better of two near-duplicate leg-load entries. Strava-sourced wins
+ * over Garmin-webhook-sourced (richer data, canonical per project rules).
+ * Ties break on higher raw load, then earlier timestamp.
+ */
+interface LegLoadShape { garminId?: string; load: number; timestampMs: number }
+function preferLegLoadEntry<A extends LegLoadShape, B extends LegLoadShape>(a: A, b: B): A | B {
+  const aStrava = a.garminId?.startsWith('strava-') ?? false;
+  const bStrava = b.garminId?.startsWith('strava-') ?? false;
+  if (aStrava !== bStrava) return aStrava ? a : b;
+  if (a.load !== b.load) return a.load > b.load ? a : b;
+  return a.timestampMs <= b.timestampMs ? a : b;
 }
 
 // ── Reclassify ───────────────────────────────────────────────────────────────

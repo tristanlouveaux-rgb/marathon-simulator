@@ -1,6 +1,7 @@
-import type { Workout, Week, TrainingPhase, RaceDistance, RunnerType, CommuteConfig, InjuryState } from '@/types';
+import type { Workout, Week, TrainingPhase, RaceDistance, RunnerType, CommuteConfig, InjuryState, SportKey } from '@/types';
 import type { RecurringActivity } from '@/types/onboarding';
 import { WO, LONG_RUN_DISTANCES } from '@/constants';
+import { SPORT_LABELS } from '@/constants/sports';
 import { calculateWorkoutLoad } from './load';
 import { assignDefaultDays } from './scheduler';
 import { capitalize } from '@/utils';
@@ -179,14 +180,18 @@ export function generateWeekWorkouts(
       const INTENSITY_RPE: Record<string, number> = { easy: 3, moderate: 5, hard: 7 };
       const rpe = INTENSITY_RPE[act.intensity] || 5;
 
+      const sportLabel = act.sport === 'generic_sport'
+        ? 'Activity'
+        : (SPORT_LABELS[act.sport as SportKey] || capitalize(act.sport));
+
       for (let f = 0; f < act.frequency; f++) {
         const day = crossDaySlots[slotIdx % crossDaySlots.length];
         slotIdx++;
 
         workouts.push({
           t: 'cross',
-          n: `${act.sport}${act.frequency > 1 ? ` ${f + 1}` : ''}`,
-          d: `${act.durationMin}min ${act.sport.toLowerCase()}`,
+          n: `${sportLabel}${act.frequency > 1 ? ` ${f + 1}` : ''}`,
+          d: `${act.durationMin}min ${sportLabel.toLowerCase()}`,
           r: rpe,
           rpe,
           dayOfWeek: day,

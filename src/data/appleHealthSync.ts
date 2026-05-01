@@ -37,8 +37,35 @@ import { type WorkoutType, type Workout, type HealthSample, type SleepState } fr
 // ---------------------------------------------------------------------------
 
 /** Returns true when running as a native iOS Capacitor app */
-function isNativeiOS(): boolean {
+export function isNativeiOS(): boolean {
   return (window as any)?.Capacitor?.platform === 'ios';
+}
+
+/**
+ * Onboarding-time "Connect Apple Health" action. Prompts HealthKit permissions
+ * (iOS only), runs an initial physiology sync to verify the user actually
+ * granted access, and marks Apple as the physiology source on success.
+ *
+ * Returns `{ ok: true }` when permissions were granted and at least one
+ * physiology sample landed; `{ ok: false, reason }` otherwise. Reasons:
+ *   - 'not-ios'           — running on web / Android (caller should hide the button)
+ *   - 'permission-denied' — user dismissed the permission dialog or denied all reads
+ *   - 'sync-error'        — HealthKit threw or returned no usable data
+ */
+export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not-ios' | 'permission-denied' | 'sync-error' }> {
+  if (!isNativeiOS()) return { ok: false, reason: 'not-ios' };
+  try {
+    const ok = await syncAppleHealthPhysiology(28);
+    if (!ok) return { ok: false, reason: 'permission-denied' };
+    const s = getMutableState();
+    s.connectedSources = { ...(s.connectedSources ?? {}), physiology: 'apple' };
+    if (!s.wearable) s.wearable = 'apple';
+    saveState();
+    return { ok: true };
+  } catch (err) {
+    console.warn('[AppleHealthSync] connect failed', err);
+    return { ok: false, reason: 'sync-error' };
+  }
 }
 
 /** All HealthKit data types we read. Single combined authorization request. */

@@ -21,8 +21,10 @@ import {
   computeLoadAdjustedTarget,
   computeSleepDebt,
   computeSleepDebtSeries,
+  computeSleepDebtOutlook,
   classifySleepDebt,
   buildDailySignalBTSS,
+  fmtSleepDebt,
 } from '@/calculations/sleep-insights';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
@@ -225,7 +227,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const primaryInsight = stageInsight ?? generalInsight;
 
   const state = getState();
-  const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? []);
+  const dailyTSSByDate = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks);
 
   // Sleep bank
   const effectiveSleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physiologyHistory);
@@ -306,6 +308,74 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const cumulativeChartHTML = cumulativeNights.length >= 2
     ? buildSleepBankLineChart(cumulativeNights, debtColor, '#CBD5E1', !!scoreTrendHTML, true, true, true)
     : '';
+
+  // Outlook — two-line story. Status line carries the personal-norm comparison
+  // (relative-coloured). Context line combines driver (spike vs chronic), trend,
+  // and ETA with · separators. This avoids three stacked sentences that read as
+  // a checklist; the status answers "should I worry?" and the context answers
+  // "what's driving it and where is it headed?" in one breath.
+  const debtOutlook = hasEnoughHistory
+    ? computeSleepDebtOutlook(physiologyHistory, dailyTSSByDate, athleteTier, effectiveSleepTarget)
+    : null;
+
+  // Status line — vs personal norm. Drops out when there's no meaningful debt
+  // (< 45 min "on track") or when there's no baseline yet.
+  const debtStatusCopy = (() => {
+    if (!debtOutlook || debtSec == null || debtSec < 2700) return null;
+    if (debtOutlook.typicalDebtSec == null || debtOutlook.vsTypical == null) return null;
+    const typicalStr = fmtSleepDebt(debtOutlook.typicalDebtSec);
+    if (debtOutlook.vsTypical === 'above') return `Above your typical ${typicalStr} — sleep is worse than usual.`;
+    if (debtOutlook.vsTypical === 'below') return `Below your typical ${typicalStr} — better than usual.`;
+    return `In line with your typical ${typicalStr}.`;
+  })();
+  // Status colour — independent of the absolute tier colour. Above = warn,
+  // below = ok, on par = muted slate. Lets the user see at a glance whether
+  // they're trending into worse territory regardless of where the absolute
+  // number sits in the population-anchored tiers.
+  const debtStatusColor = debtOutlook?.vsTypical === 'above'  ? '#F59E0B'   // amber-500
+                        : debtOutlook?.vsTypical === 'below' ? '#10B981'   // emerald-500
+                        : '#64748B';                                       // slate-500
+
+  // Context line — driver · trend · ETA. Each segment drops out when not material.
+  const debtContextCopy = (() => {
+    if (!debtOutlook || debtSec == null || debtSec < 2700) return null;
+    const parts: string[] = [];
+
+    // Driver — only mention spikes when they actually drove the stack.
+    // ratio > 0.7 → spike-dominated (e.g. one bad weekend night)
+    // ratio 0.3–0.7 → mixed; quantify the spike contribution
+    // ratio < 0.3 → chronic gap is the story; don't muddy it with a small spike line
+    const spikeRatio = debtOutlook.spikeContributionSec / Math.max(1, debtSec);
+    if (debtOutlook.spikeNightCount > 0) {
+      if (spikeRatio > 0.7) {
+        if (debtOutlook.spikeNightCount === 1 && debtOutlook.lastSpikeDate) {
+          const day = new Date(debtOutlook.lastSpikeDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' });
+          parts.push(`mostly from ${day}'s short night`);
+        } else {
+          parts.push(`mostly from ${debtOutlook.spikeNightCount} short nights`);
+        }
+      } else if (spikeRatio > 0.3) {
+        const spikeStr = fmtSleepDebt(debtOutlook.spikeContributionSec);
+        parts.push(`${spikeStr} from ${debtOutlook.spikeNightCount} short night${debtOutlook.spikeNightCount === 1 ? '' : 's'}`);
+      }
+    }
+
+    // Trend — direction over the last 7 series entries.
+    if (debtOutlook.trendDeltaSec != null && Math.abs(debtOutlook.trendDeltaSec) >= 600) {
+      const dir = debtOutlook.trendDeltaSec < 0 ? 'down' : 'up';
+      parts.push(`${dir} ${fmtSleepDebt(Math.abs(debtOutlook.trendDeltaSec))} this week`);
+    }
+
+    // ETA — only when simulation says it actually clears.
+    if (debtOutlook.daysToOnTrack != null) {
+      const d = debtOutlook.daysToOnTrack;
+      parts.push(`clears in ${d} day${d === 1 ? '' : 's'} at this pace`);
+    } else if (debtOutlook.trendDeltaSec != null && debtOutlook.trendDeltaSec >= 0) {
+      parts.push('not clearing yet');
+    }
+
+    return parts.length > 0 ? parts.join(' · ') : null;
+  })();
 
   // Date picker pills
   const datePills = days7.map(d => {
@@ -531,6 +601,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
                     : debtTier.label[0].toUpperCase() + debtTier.label.slice(1)
               }</div>
             </div>
+            ${debtStatusCopy ? `<div style="font-size:10px;color:${debtStatusColor};margin-top:2px;font-weight:500">${debtStatusCopy}</div>` : ''}
+            ${debtContextCopy ? `<div style="font-size:10px;color:${TEXT_S};margin-top:2px;line-height:1.4">${debtContextCopy}</div>` : ''}
             ${cumulativeChartHTML}
           </div>` : ''}
           ${scoreTrendHTML ? `

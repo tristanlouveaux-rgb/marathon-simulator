@@ -11,7 +11,9 @@ import {
   initializePhysiologyTracking, recordMeasurement, assessAdaptation
 } from '@/calculations';
 import { IMP, TIM, EXPECTED_GAINS } from '@/constants';
+import { TL_PER_MIN } from '@/constants/sports';
 import { initializeWeeks } from '@/workouts';
+import { archiveCurrentWksIfPopulated } from '@/state/initialization';
 import { createActivity, getWeeklyLoad, normalizeSport, buildCrossTrainingPopup, workoutsToPlannedRuns, applyAdjustments } from '@/cross-training';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { computeACWR, computeWeekTSS, getTrailingEffortScore, getWeeklyExcess, computePlannedSignalB, computeRunningFloorKm } from '@/calculations/fitness-model';
@@ -319,6 +321,7 @@ export function init(): void {
   s.typ = typ.charAt(0).toUpperCase() + typ.slice(1) as any;
   s.b = b;
   s.pac = pac;
+  archiveCurrentWksIfPopulated();
   s.wks = initializeWeeks(s.tw);
   s.skip = [];
   s.timp = 0;
@@ -1096,7 +1099,7 @@ export async function next(): Promise<void> {
   // reason on the next week so the banner appears when it's rendered.
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
 
   s.w++;
 
@@ -1625,6 +1628,49 @@ export function logActivity(): void {
     return;
   }
 
+  // Triathlon mode: skip the running-plan slot-matching path entirely. Persist
+  // the manual cross-training session as an adhoc workout (so the tri detector
+  // sees it) and surface any overload via the tri suggestion modal. The
+  // running-modal flow below operates on `wk.workouts` which doesn't exist in
+  // tri mode. See ISSUE-151.
+  if (s.eventType === 'triathlon') {
+    const wk = s.wks[s.w - 1];
+    if (wk) {
+      const sportNorm = normalizeSport(sport);
+      const adhocId = `manual-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      // TL_PER_MIN-based TSS estimate keeps the same convention used elsewhere
+      // for RPE-only manual entries (no iTRIMP available from a typed form).
+      const estimatedTSS = dur * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+      const adhoc: Workout = {
+        id: adhocId,
+        t: 'cross',
+        n: sportNorm.replace(/_/g, ' '),
+        d: `${dur}min ${sportNorm.replace(/_/g, ' ')}`,
+        r: rpe,
+        rpe,
+        aerobic: estimatedTSS * 0.85,
+        anaerobic: estimatedTSS * 0.15,
+      };
+      if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+      wk.adhocWorkouts.push(adhoc);
+      wk.actualTSS = (wk.actualTSS ?? 0) + estimatedTSS;
+    }
+    durInput.value = '';
+    rpeInput.value = '';
+    saveState();
+    log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe} (logged — tri mode)`);
+    void (async () => {
+      const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
+      const bundle = collectTriSuggestions(getState());
+      if (bundle.mods.length > 0) {
+        const { showTriSuggestionModal } = await import('@/ui/triathlon/tri-suggestion-modal');
+        await showTriSuggestionModal(bundle);
+      }
+      render();
+    })();
+    return;
+  }
+
   // Determine target week
   const currentWeek = s.wks[s.w - 1];
   const totalWorkouts = s.rw || 3;
@@ -1652,7 +1698,7 @@ export function logActivity(): void {
   // Compute ACWR + floor for floor-aware reductions
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined);
+  const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, s.tw ?? 16, wk.ph);
 
   // -----------------------------------------------------------------------
@@ -2432,10 +2478,20 @@ export function dismissLTUpdate(): void {
  * Remove a Garmin-synced activity from the current week.
  * Works for both ad-hoc activities and those that filled a cross-training slot.
  * @param garminId - The raw Garmin activity ID (key in wk.garminMatched)
+ * @param opts.permanent - When true, also adds the garminId to s.ignoredGarminIds so
+ *   future syncs (Strava backfill, Garmin webhook) skip it. Use this for duplicates
+ *   the user wants gone for good.
+ * @param opts.skipConfirm - When true, suppresses the native confirm dialog. The caller
+ *   must have already confirmed with the user.
  */
-export function removeGarminActivity(garminId: string): void {
-  if (!confirm('Remove this activity?')) return;
+export function removeGarminActivity(garminId: string, opts?: { permanent?: boolean; skipConfirm?: boolean }): void {
+  if (!opts?.skipConfirm && !confirm('Remove this activity?')) return;
   const s = getMutableState();
+
+  if (opts?.permanent) {
+    if (!s.ignoredGarminIds) s.ignoredGarminIds = [];
+    if (!s.ignoredGarminIds.includes(garminId)) s.ignoredGarminIds.push(garminId);
+  }
 
   // Search across ALL weeks — the × button may be on any week's card
   let found = false;
@@ -2463,14 +2519,14 @@ export function removeGarminActivity(garminId: string): void {
     // Un-rate the plan slot
     if (wk.rated) delete wk.rated[workoutId];
 
-    if (wasSlotMatched) {
+    if (wasSlotMatched && !opts?.permanent) {
       // Slot-matched activity: unassign from the plan slot but keep the activity visible.
       // Set garminMatched back to __pending__ so it appears in review / pending banner
       // and can be re-assigned or logged as adhoc.
       wk.garminMatched[garminId] = '__pending__';
       if (wk.garminActuals) delete wk.garminActuals[workoutId];
     } else {
-      // Adhoc activity (garmin-* workoutId): fully remove — user wants it gone.
+      // Adhoc activity, or permanent discard from a slot match: fully remove.
       delete wk.garminMatched[garminId];
       if (wk.garminPending) {
         wk.garminPending = wk.garminPending.filter(p => p.garminId !== garminId);
@@ -2479,6 +2535,22 @@ export function removeGarminActivity(garminId: string): void {
     }
 
     break; // garminId can only exist in one week's garminMatched
+  }
+
+  // Permanent discard: still scrub the activity from pending/adhoc lists across weeks
+  // even if it wasn't matched, so the ignore list is the only source of truth going forward.
+  if (opts?.permanent) {
+    for (const wk of s.wks || []) {
+      if (wk.garminPending) {
+        wk.garminPending = wk.garminPending.filter(p => p.garminId !== garminId);
+      }
+      if (wk.adhocWorkouts) {
+        wk.adhocWorkouts = wk.adhocWorkouts.filter(w => w.id !== `garmin-${garminId}`);
+      }
+    }
+    saveState();
+    render();
+    return;
   }
 
   if (!found) return;
@@ -2520,7 +2592,7 @@ export function maybeInitKmNudge(): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   if (acwr.status !== 'safe') return;
 
   const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph);

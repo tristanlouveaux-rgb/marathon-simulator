@@ -166,7 +166,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
           <div class="pp-rows">
             <div class="pp-row"><span class="pp-row-k">Runs per week</span><span class="pp-row-v">${s.rw}</span></div>
             <div class="pp-row"><span class="pp-row-k">Weekly volume</span><span class="pp-row-v">~${s.wkm} km</span></div>
-            <div class="pp-row"><span class="pp-row-k">Runner type</span><span class="pp-row-v">${s.typ}</span></div>
+            <div class="pp-row"><span class="pp-row-k">Race preference</span><span class="pp-row-v">${s.typ}</span></div>
             <div class="pp-row">
               <span class="pp-row-k">Starting VDOT</span>
               <span class="pp-row-v">

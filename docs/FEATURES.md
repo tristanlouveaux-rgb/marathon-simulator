@@ -45,11 +45,21 @@ Triathlon is a fully-separate mode selected at onboarding. Running users are una
 **Tests**: `src/calculations/brick-detector.test.ts` — ✅ Passing (5 tests). Matcher ⚠️ not yet covered.
 
 ### T8. Triathlon UI (Plan / Home / Stats)
-**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage). Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats shows per-discipline CTL/ATL/TSB with ACWR, this-week volume, race forecast, and current targets.
+**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage), and supports drag-and-drop reorder within the week — drop a card on another card to swap days, drop on the day-header strip to stack onto that day, or drop on an empty rest row to move there. Bricks are atomic single workouts so they always move as one. Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats holds three things only — race forecast (with bike & aero setup grouped under Course Factors), Adaptation (per-discipline response ratio; hidden when no signal yet), and Progress (per-discipline CTL trend chart, tap for detail; hidden until 2+ weeks of history). Earlier readiness/benchmarks/training-load cards moved to Home, Account, and the Load page respectively.
 **Key files**: `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/home-view.ts`, `src/ui/triathlon/stats-view.ts`, `src/ui/triathlon/tab-bar.ts`, `src/ui/triathlon/workout-card.ts`, `src/ui/triathlon/race-forecast-card.ts`, `src/ui/triathlon/colours.ts`
 **Tests**: — (UI) ⚠️ Manual test only
 
-### T9. Not yet built (deferred)
+### T9. Benchmark test prompts + confidence-tiered estimators
+**What it does**: "Refine your benchmarks" cards pinned to the top of the triathlon plan view surface a CSS test (paired 400m + 200m, Smith-Norris) and an FTP test (20-min Coggan) when the auto-derived value is low-confidence. Cards self-suppress when the user's swim or ride history already supports a `'medium'`-or-better estimate, so users with rich power/swim data aren't nagged. Each card opens a compact result modal that writes the entered times directly into `triConfig.{swim,bike}` with `cssSource/ftpSource = 'user'` and confidence `'high'` so the launch refresh never overwrites a real test result. Stats and account benchmark cells show an inline "estimate · do the test" hint when the persisted CSS/FTP confidence is low/none. Wizard review CSS row hedges its caption based on the same tier.
+**Key files**: `src/ui/triathlon/benchmark-tests-card.ts` (test prompts), `src/calculations/tri-benchmarks-from-history.ts` (`CssEstimate.confidence`, `FtpEstimate.confidence`), `src/main.ts` (launch-time refresh writes confidence), `src/state/initialization.triathlon.ts` (wizard write-path), `src/ui/account-view.ts` (benchmarks grid + estimate-confidence hints — the prior `benchmarkCell`/`cssCellHint`/`ftpCellHint` helpers in `src/ui/triathlon/stats-view.ts` were removed on 2026-04-30 when the Stats benchmarks card was retired in favour of Account → Benchmarks), `src/ui/wizard/steps/review.ts` (CSS / FTP captions)
+**Tests**: `src/calculations/tri-benchmarks-from-history.test.ts` — ✅ Passing (52 tests including 12 new confidence-tier scenarios)
+
+### T10. Triathlon Progress detail page
+**What it does**: Mirrors the running stats Progress detail in tri mode. Opens from a "Progress" card on the tri stats page. Range toggle (4w / 12w / All / Forecast). Charts: per-discipline CTL lines (daily-equivalent ÷7), three separate weekly km charts (swim / bike / run), one weekly TSS chart with three lines (swim/bike/run colours from `colours.ts`), FTP trend, CSS trend. All-time tile shows lifetime swim/bike/run km plus session counts. Forecast tab extends km + TSS using `triWorkouts` from the next 8 weeks (dashed continuation). FTP/CSS history is captured via `appendFtpSample` / `appendCssSample` whenever main.ts auto-derives a new value or a user enters one in onboarding — one entry per day, latest wins, 256-entry cap. Tracking-only data; no calculation reads from these arrays.
+**Key files**: `src/ui/triathlon/progress-detail-view.ts`, `src/ui/triathlon/stats-view.ts` (Progress card + wiring), `src/calculations/tri-benchmark-history.ts` (history append helpers), `src/types/triathlon.ts` (`BikeBenchmarks.ftpHistory`, `SwimBenchmarks.cssHistory`), `src/main.ts` and `src/state/initialization.triathlon.ts` (history capture sites)
+**Tests**: — (UI) ⚠️ Manual test only
+
+### T11. Not yet built (deferred)
 - Discipline-aware sync pipeline (stravaSync/garminSync route swim/bike activities into `state.triConfig.fitness` via `rebuildTriFitnessFromActivities`). The calculation modules are ready; the write-side plumbing is the remaining hook.
 - Suggestion-modal cross-discipline ACWR extensions (§18.5).
 - Injury engine discipline-shift behaviour (§18.6).
@@ -595,6 +605,26 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 ---
 
+### Account & Authentication
+
+**What it does**: Mosaic uses Supabase Auth. New users are silently signed in via `supabase.auth.signInAnonymously()` on first launch — no auth wall during onboarding. Users can upgrade to a real email/password account later from a Home banner or the Account view.
+
+**Anonymous-user data risk**: An anonymous Supabase session is tied to the device's `localStorage`. Uninstalling, switching phones, or clearing app data wipes the user — and with them all linked rows in `garmin_tokens`, `daily_metrics`, `sleep_summaries`, `garmin_activities`. There's no email to recover from.
+
+**Guest-account upgrade prompt**: `s.isGuestAccount` is refreshed on every `launchApp()` from `supabase.auth.getUser().is_anonymous`.
+- **Home banner** (`buildGuestAccountBanner` in `home-view.ts`): one-time, dismissible. Fires only when the user is a guest AND has at least one completed activity in the live plan. Dismiss flag (`s.guestBannerDismissed`) persists.
+- **Account view section** (`renderGuestAccountSection` in `account-view.ts`): persistent. Visible whenever the user is a guest, regardless of dismiss state.
+- Both CTAs route to `renderAuthView({ upgradeGuest: true })`.
+
+**Auth view (`auth-view.ts`)** in upgrade mode:
+- Defaults to sign-up; submits via `supabase.auth.updateUser({ email, password })` which converts the anonymous user **in place** — same `auth.users.id`, all data preserved. (`signUp()` would create a new user_id and orphan the guest data.)
+- Sign-in tab shows a yellow warning that signing into an existing account leaves guest data behind.
+- "Not now" cancel returns to Home without changing auth state.
+
+**Test status**: ✅ — typecheck + 1146 tests pass; in-app behaviour pending manual verification on device.
+
+---
+
 ### 23. Wearable Activity Sync & Review (Garmin + Apple Watch + Strava)
 **What it does**: On startup, syncs recent workouts and matches them to the current week's planned workouts. Matched activities are auto-completed with a derived RPE, then the user is prompted with an RPE slider (1-10) to rate how hard each matched run felt. The slider defaults to the auto-derived RPE; dismissing keeps the auto value. Overflow activities surface for manual plan adjustment.
 
@@ -863,13 +893,15 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - Info (`?`) button opens a strain explainer overlay (Signal B, thresholds table).
 - Back button returns to Home. No tab bar on this page (iPhone sub-page pattern).
 
-**Sentence logic**: A single `primaryMessage` from `computeDailyCoach()` replaces the old separate readiness sentence + HRV banner. Priority chain: injury/illness blockers → strain complete/exceeded → ACWR spike → combined sleep + HRV → poor sleep → deep HRV drop → sleep debt → ACWR caution → moderate sleep/HRV → recovery driving signal → recent cross-training → session in progress → taper phase → HRV elevated → positive conditions (fresh/safe/good recovery with workout-aware copy) → CTL trend → week RPE → TSB/ACWR matrix fallback. Every tier produces workout-aware copy (references today's planned session name, hard vs easy).
+**Sentence logic**: A single `primaryMessage` from `computeDailyCoach()` replaces the old separate readiness sentence + HRV banner. Priority chain: injury/illness blockers → strain complete/exceeded → **leg-load hard floor (surfaces `readiness.legLoadNote`)** → ACWR spike → combined sleep + HRV → poor sleep → deep HRV drop → sleep debt → ACWR caution → moderate sleep/HRV → recovery driving signal → recent cross-training → session in progress → taper phase → HRV elevated → positive conditions (fresh/safe/good recovery with workout-aware copy) → CTL trend → week RPE → TSB/ACWR matrix fallback. Every tier produces workout-aware copy (references today's planned session name, hard vs easy). Hard-floor signals (leg-load, ACWR) are routed by `readiness.hardFloor` *before* sleep-debt copy, so the message always explains whatever is actually capping the score.
 
 **Score → label**: 80–100 Ready to Push (green) · 60–79 On Track (blue) · 40–59 Manage Load (amber) · 0–39 Ease Back (red). When ACWR > 1.5 hard floor is active, label overrides to **Overreaching** (red).
 
 **Home layout (triangle)**: Readiness ring top-centre (120px, larger), Sleep + Strain rings side by side below (100px each). Tapping Readiness ring opens `readiness-view.ts`. Tapping Sleep opens `sleep-view.ts`. Tapping Strain opens `strain-view.ts`. The Freshness/Load Ratio/Recovery pill row has been moved off the home page into `readiness-view.ts`.
 
-**Adjust button**: Shown below the sentence when readiness ≤ 59. Text varies by driving signal (Swap to easy run / Reduce session load / Take it lighter today / Keep consistency).
+**Adjust button**: Shown below the sentence when readiness ≤ 59 **and** the click handler has something to do. For most driving signals: ACWR caution/high, unspent cross-training load, or at least one unrated run anywhere in the remaining week (the future-week check is needed because plan-engine moves can slide a hard session into today). For `legLoad` specifically: the remaining-run check tightens to an unrated *hard* session (`isHardWorkout(w.t)`) so the button only shows when there's a real impact target to defer or downgrade — otherwise "Protect the legs" has nothing to act on. Hidden when no target. Text varies by driving signal (Adjust plan / Reduce session load / Take it lighter today / Protect the legs / Keep consistency).
+
+**Coach advisory note**: rendered when `coach.workoutMod === 'downgrade'` or `'skip'`. Strict advisory copy — no claim that a change has been made to the plan, since the workout description is unchanged. `'downgrade'` → *"Go easier today."*; `'skip'` → *"Consider rest today."*. On the Plan today-row the lead clause is followed by `coach.primaryMessage`. On the Home today card only the lead clause renders, because the readiness-ring card directly below already carries the full `primaryMessage` as its sentence — repeating it would be double messaging.
 
 **Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active, including a leg-fatigue callout linking to the detail page when `hardFloor === 'legLoad'`), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
 
@@ -908,12 +940,25 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 **Stage vs 7-day insight** (`getStageInsight()`): Compares today's REM and Deep percentages to the 7-day rolling average from `physiologyHistory`. Falls back to population norms if < 3 prior nights with stage data. Example output: "REM 11% — below your 18% 7-day average. Central fatigue risk is elevated on quality sessions today."
 
-**Sleep Bank** (`getSleepBank()`): 14-night rolling sum of `(actual_sleep − sleep_target)`. Sleep target = user-configured `sleepTargetSec` if set, otherwise the 75th-percentile of the last 30 nights (`deriveSleepTarget()`), with a 7h floor. Shown as "3h 20m deficit" or "1h 10m surplus" with a 14-night line chart.
+**Sleep target** (`deriveSleepTarget()`): user-configured `sleepTargetSec` if set, otherwise the median of the last 30 nights, clamped to [7h, 9h]. Floor anchored to Van Dongen 2003; ceiling to NSF/Hirshkowitz 2015. Returns 7h fallback below 5 nights of history. Per-night target adds a load bonus (`+0.25 min/TSS`, tier-capped) on top of the base.
+
+**Sleep Bank** (`getSleepBank()`): 7-night rolling sum of `(actual_sleep − sleep_target)`. Used internally as input to recovery and readiness scoring. Display surfaces use the cumulative debt instead.
+
+**Cumulative sleep debt** (`computeSleepDebt()` / `computeSleepDebtSeries()`): exponential-decay debt with capped surplus credit. 7-day half-life, 0.5 surplus-credit ratio, 60-min/night surplus cap. Headline number on the Sleep page; tier classification (`classifySleepDebt()`) drives the colour gradient through emerald → slate → amber → orange → red.
+
+**Sleep debt outlook** (`computeSleepDebtOutlook()`): turns the static debt number into a trajectory.
+- Trend — debt vs 7 series-entries ago (clearing or growing)
+- Days-to-clear — forward simulation using last-7-night avg actual sleep, returns days until debt drops into "on track" tier (< 45m), or null if not clearing
+- Spike attribution — single nights with shortfall > 2h, contribution decayed via `shortfall × DEBT_DECAY^(days_since)` and capped at total debt
+- Personal-norm comparison — 30-day rolling mean of debt series (≥14 entries required); today's debt classified `above`/`below`/`on_par` against this baseline using `max(30 min, 15% of typical)` tolerance. Independent relative colour (amber/emerald/slate) — lets chronic short-sleepers see whether *this* week is worse than *their* week, without conflating with the population-anchored absolute tier.
+Surfaces in the cumulative-debt card as two lines under the headline:
+1. **Status** (relative-coloured): personal-norm comparison — *"Above your typical 2h 23m — sleep is worse than usual."*
+2. **Context** (slate): driver · trend · ETA combined with `·` separators. Driver phrasing adapts to the spike ratio: `> 0.7` reads "mostly from Sun's short night"; `0.3–0.7` quantifies as "1h 30m from 2 short nights"; `< 0.3` drops the driver segment so chronic gap is the story.
 
 **Sleep bank floor on readiness**: Feeds into `computeReadiness()` as `sleepBankSec`. A 3h deficit caps readiness at 74; a 5h deficit caps at 59. Only applied when ≥ 3 nights of data available.
 
 **Key files**:
-- `src/calculations/sleep-insights.ts` — `stageQuality()`, `getSleepBank()`, `fmtSleepBank()`, `deriveSleepTarget()`, `getStageInsight()`, `buildSleepBankLineChart()`
+- `src/calculations/sleep-insights.ts` — `stageQuality()`, `getSleepBank()`, `fmtSleepBank()`, `fmtSleepDebt()`, `deriveSleepTarget()`, `computeSleepDebt()`, `computeSleepDebtSeries()`, `computeSleepDebtOutlook()`, `classifySleepDebt()`, `getStageInsight()`, `buildSleepBankLineChart()`
 - `src/ui/home-view.ts` — `showSleepSheet()` (full dark UI)
 - `src/calculations/readiness.ts` — `sleepBankSec` floor in `computeReadiness()`
 
@@ -923,7 +968,7 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 ### Coach
 
-**What it does** (reframed 2026-04-24, rules-only): A "Coach" pill in the Home and Plan headers opens the Coach sub-page. The page leads with a stance pill (Ready to Push / On Track / Manage Load / Ease Back) and the single-sentence `primaryMessage` from the rules engine, followed by a "Why this call" card that translates blockers and key signals into short evidence bullets. Below that, stacked cards for Recovery (sleep, HRV, sleep bank), Fitness (CTL + trend, week TSS, 4-week trend), This week (effort + load pills), and Status (injury, illness, check-in). Optional session-drift and sleep-pattern narratives appear when relevant. The daily "How do you feel today?" prompt sits at the bottom. Sky-background palette varies by stance (mint / deepBlue / amber / rose) so the page colour signals state at a glance, matching the Sleep / Recovery / Readiness design language.
+**What it does** (reframed 2026-04-24, rules-only): A "Coach" pill in the Home and Plan headers opens the Coach sub-page. The page leads with a stance pill (Ready to Push / On Track / Manage Load / Ease Back) and the single-sentence `primaryMessage` from the rules engine, followed by a "Why this call" card that translates blockers and key signals into short evidence bullets. Below that, stacked cards for Recovery (sleep, HRV, sleep debt), Fitness (CTL + trend, week TSS, 4-week trend), This week (effort + load pills), and Status (injury, illness, check-in). Optional session-drift and sleep-pattern narratives appear when relevant. The daily "How do you feel today?" prompt sits at the bottom. Sky-background palette varies by stance (mint / deepBlue / amber / rose) so the page colour signals state at a glance, matching the Sleep / Recovery / Readiness design language.
 
 **Aggregator**: `computeDailyCoach(state)` gathers TSB/ACWR/sleep/HRV/RPE/week-load/injury/illness into a `CoachState` and derives a `stance` (`push | normal | reduce | rest`), `blockers` array, `primaryMessage`, `sessionNote`, `sleepInsight`, and `workoutMod` (`none | downgrade | skip`, derived from stance). Priority hierarchy: injury / resting illness override everything → ACWR overload → sleep deficit → readiness score. Stance uses the readiness-label vocabulary.
 

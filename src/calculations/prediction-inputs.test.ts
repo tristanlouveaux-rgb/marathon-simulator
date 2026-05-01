@@ -119,6 +119,50 @@ describe('computePredictionInputs', () => {
     expect(r.weeksCovered).toBeLessThanOrEqual(3);
   });
 
+  it('rejects activities named "Treadmill" or "Walk" even if pace is in band', () => {
+    const runs: RunActivityInput[] = [
+      { ...run(1, 5, 320), activityName: 'Treadmill 5K' },        // filtered by name
+      { ...run(2, 5, 320), activityName: 'Lunchtime walk' },       // filtered by name
+      { ...run(3, 5, 320), activityName: 'Easy Run' },
+      { ...run(4, 5, 320), activityName: 'Tempo' },
+      { ...run(5, 5, 320), activityName: 'Long Run' },
+    ];
+    const r = computePredictionInputs(runs, NOW);
+    expect(r.runsCounted).toBe(3);
+  });
+
+  it('drops the slowest 10% of remaining runs after hard filters', () => {
+    // 10 runs: 9 at 4:30/km, 1 at 7:30/km (in-band but slowest). 10% drop = 1.
+    const runs: RunActivityInput[] = [
+      ...Array.from({ length: 9 }, (_, i) => run(i + 1, 8, 270)),
+      run(11, 8, 450), // slowest tail — in band but should be dropped
+    ];
+    const r = computePredictionInputs(runs, NOW);
+    expect(r.runsCounted).toBe(9);
+    // Average pace should reflect only the fast runs, not be pulled by 450
+    expect(r.avgPaceSecPerKm).toBeCloseTo(270, 0);
+  });
+
+  it('skips slow-tail drop when fewer than 5 runs remain', () => {
+    // 4 runs — sample too small to safely trim.
+    const runs: RunActivityInput[] = [
+      run(1, 8, 270), run(3, 8, 270), run(5, 8, 270), run(7, 8, 450),
+    ];
+    const r = computePredictionInputs(runs, NOW);
+    expect(r.runsCounted).toBe(4);
+  });
+
+  it('rejects runs shorter than 3 km', () => {
+    const runs = [
+      run(1, 2.5, 300),     // too short under new threshold
+      run(2, 3.0, 300),     // exact threshold — kept
+      run(3, 5, 300),
+      run(4, 5, 300),
+    ];
+    const r = computePredictionInputs(runs, NOW);
+    expect(r.runsCounted).toBe(3);
+  });
+
   it('populates recentRun with newest qualifying activity', () => {
     const runs = [run(5, 10, 300), run(10, 8, 320), run(15, 8, 320)];
     const r = computePredictionInputs(runs, NOW);

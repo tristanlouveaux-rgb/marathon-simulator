@@ -5,8 +5,9 @@
 import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard, triggerGarminReconcile } from '@/data/supabaseClient';
 import { deriveSleepTarget, fmtSleepDuration } from '@/calculations/sleep-insights';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
-import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory } from '@/data/stravaSync';
+import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, restoreHistoryFromServer } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
+import { vt } from '@/calculations/vdot';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { isSimulatorMode } from '@/main';
@@ -16,6 +17,7 @@ import { getState, getMutableState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { initializeSimulator } from '@/state/initialization';
 import { isWakeLockSupported } from '@/utils/wake-lock';
+import type { SimulatorState } from '@/types/state';
 
 let garminConnected = false;
 let stravaConnectedStatus = false;
@@ -144,7 +146,7 @@ function sectionLabel(text: string, mt = 28): string {
 }
 
 function groupCard(rows: string): string {
-  return `<div style="border-radius:13px;overflow:hidden;background:var(--c-surface);border:1px solid var(--c-border)">${rows}</div>`;
+  return `<div style="border-radius:var(--r-card);overflow:hidden;background:var(--c-surface);border:1px solid var(--c-border)">${rows}</div>`;
 }
 
 function rowDivider(ml = 16): string {
@@ -188,6 +190,7 @@ function getAccountHTML(): string {
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
+      <div style="max-width:600px;margin:0 auto">
 
       <!-- Profile header -->
       <div style="padding:32px 20px 24px;display:flex;flex-direction:column;align-items:center;gap:6px">
@@ -200,6 +203,7 @@ function getAccountHTML(): string {
       <div style="padding:0 16px 90px">
 
         ${renderPendingAlert()}
+        ${renderGuestAccountSection(s)}
 
         ${sectionLabel('Connected Apps', 4)}
         ${groupCard(
@@ -210,6 +214,8 @@ function getAccountHTML(): string {
 
         ${sectionLabel('Profile')}
         ${renderProfileGroup()}
+
+        ${s.eventType === 'triathlon' && s.triConfig ? sectionLabel('Benchmarks') + renderTriBenchmarksGroup(s) : ''}
 
         ${sectionLabel('Preferences')}
         ${renderPreferencesGroup()}
@@ -238,7 +244,16 @@ function getAccountHTML(): string {
           ${rowDivider()}
           ${renderRecoverPlanRow()}
           ${rowDivider()}
-          ${!getState().trackOnly ? `
+          ${getState().trackOnly ? `
+            <button id="btn-create-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+              <div>
+                <div style="font-size:15px;color:var(--c-black);text-align:left">Create a training plan</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Build a plan from your activity history. All stats and connections are preserved.</div>
+              </div>
+              ${chevron()}
+            </button>
+            ${rowDivider()}
+          ` : `
             <button id="btn-switch-track-only" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
               <div>
                 <div style="font-size:15px;color:var(--c-black);text-align:left">Switch to tracking only</div>
@@ -247,7 +262,7 @@ function getAccountHTML(): string {
               ${chevron()}
             </button>
             ${rowDivider()}
-          ` : ''}
+          `}
           <button id="btn-reset-plan" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
             <span style="font-size:15px;color:#dc2626">${getState().trackOnly ? 'Reset tracking history' : 'Reset Plan'}</span>
             ${chevron()}
@@ -259,16 +274,17 @@ function getAccountHTML(): string {
         <!-- Sign Out -->
         <div style="margin-top:28px">
           ${sim ? `
-            <button id="btn-exit-simulator" style="width:100%;padding:15px;border-radius:13px;border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;color:var(--c-muted);cursor:pointer">
+            <button id="btn-exit-simulator" style="width:100%;padding:15px;border-radius:var(--r-card);border:1px solid var(--c-border);background:transparent;font-size:15px;font-weight:500;color:var(--c-muted);cursor:pointer">
               Exit Simulator Mode
             </button>
           ` : `
-            <button id="btn-sign-out" style="width:100%;padding:15px;border-radius:13px;border:none;background:none;font-size:15px;font-weight:500;color:#dc2626;cursor:pointer">
+            <button id="btn-sign-out" style="width:100%;padding:15px;border-radius:var(--r-card);border:none;background:none;font-size:15px;font-weight:500;color:#dc2626;cursor:pointer">
               Sign Out
             </button>
           `}
         </div>
 
+      </div>
       </div>
       ${renderTabBar('account', sim)}
     </div>
@@ -373,6 +389,51 @@ function renderStravaEnrichRow(): string {
 
 // ─── Profile Group ─────────────────────────────────────────────────────────────
 
+/**
+ * Triathlon benchmarks section — moved here from the Stats page so the four
+ * cells (CSS, FTP, Hours/week, Split) live with the rest of the user's
+ * settings rather than alongside live training stats. Includes the "Bike &
+ * aero setup →" entry that previously hung off the Stats targets card.
+ */
+function renderTriBenchmarksGroup(s: ReturnType<typeof getState>): string {
+  const tri = s.triConfig;
+  if (!tri) return '';
+
+  const fmtCss = (secPer100m: number): string => {
+    const m = Math.floor(secPer100m / 60);
+    const sec = Math.round(secPer100m % 60);
+    return `${m}:${String(sec).padStart(2, '0')}/100m`;
+  };
+  const pct = (v?: number) => v == null ? '—' : `${Math.round(v * 100)}%`;
+
+  const cssVal = tri.swim?.cssSecPer100m ? fmtCss(tri.swim.cssSecPer100m) : '—';
+  const ftpVal = tri.bike?.ftp ? `${tri.bike.ftp}W` : '—';
+  const hoursVal = tri.timeAvailableHoursPerWeek ? `${tri.timeAvailableHoursPerWeek}h` : '—';
+  const splitVal = `S ${pct(tri.volumeSplit?.swim)} · B ${pct(tri.volumeSplit?.bike)} · R ${pct(tri.volumeSplit?.run)}`;
+
+  const row = (label: string, value: string) => `
+    <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:14px;color:var(--c-black)">${label}</span>
+      <span style="font-size:14px;color:var(--c-muted);font-variant-numeric:tabular-nums">${value}</span>
+    </div>
+  `;
+
+  return groupCard(`
+    ${row('Swim CSS', cssVal)}
+    ${rowDivider(16)}
+    ${row('Bike FTP', ftpVal)}
+    ${rowDivider(16)}
+    ${row('Hours / week', hoursVal)}
+    ${rowDivider(16)}
+    ${row('Volume split', splitVal)}
+    ${rowDivider(16)}
+    <button id="account-bike-setup-btn" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
+      <span style="font-size:15px;color:var(--c-black)">Bike &amp; aero setup</span>
+      ${chevron()}
+    </button>
+  `);
+}
+
 function renderProfileGroup(): string {
   const s = getState();
   const pbs = s.pbs || {};
@@ -390,26 +451,87 @@ function renderProfileGroup(): string {
     : s.biologicalSex === 'female' ? 'Female'
     : 'Not set';
 
-  const pbItems = [
-    { label: '5K', val: pbs.k5 },
-    { label: '10K', val: pbs.k10 },
-    { label: 'HM', val: pbs.h },
-    { label: 'Marathon', val: pbs.m },
-  ].filter(pb => pb.val);
+  const isTriathlon = s.eventType === 'triathlon';
 
-  const pbSection = pbItems.length > 0 ? `
-    ${rowDivider()}
-    <div style="padding:14px 16px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Personal Bests</div>
-      <div style="display:grid;grid-template-columns:repeat(${Math.min(pbItems.length, 4)},1fr);gap:8px">
-        ${pbItems.map(pb => `
-          <div style="border:1px solid var(--c-border);border-radius:10px;padding:10px 6px;text-align:center">
-            <div style="font-size:11px;color:var(--c-muted);margin-bottom:3px">${pb.label}</div>
-            <div style="font-size:15px;font-weight:700;color:var(--c-black)">${fmtTime(pb.val)}</div>
-          </div>
-        `).join('')}
-      </div>
-    </div>` : '';
+  let benchmarkSection = '';
+  if (isTriathlon) {
+    const tri = s.triConfig;
+    const ftp = tri?.bike?.ftp;
+    const css = tri?.swim?.cssSecPer100m;
+    const vdot = s.v;
+    const isIM = tri?.distance === 'ironman';
+    const raceKm = isIM ? 42.2 : 21.0975;
+    const raceLabel = isIM ? 'marathon' : 'half marathon';
+    const vdotEquivSec = vdot ? vt(raceKm, vdot) : null;
+
+    const fmtCss = (sec: number) => {
+      const m = Math.floor(sec / 60);
+      const s2 = Math.round(sec % 60);
+      return `${m}:${String(s2).padStart(2, '0')}`;
+    };
+    const fmtEquiv = (secs: number) => {
+      const h = Math.floor(secs / 3600);
+      const m = Math.round((secs % 3600) / 60);
+      return h > 0 ? `${h}:${String(m).padStart(2, '0')}` : `${m}m`;
+    };
+
+    const card = (label: string, value: string, sub?: string) => `
+      <div style="border:1px solid var(--c-border);border-radius:10px;padding:10px 6px;text-align:center">
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:3px">${label}</div>
+        <div style="font-size:15px;font-weight:700;color:var(--c-black)">${value}</div>
+        ${sub ? `<div style="font-size:10px;color:var(--c-faint);margin-top:3px">${sub}</div>` : ''}
+      </div>`;
+
+    // Confidence captions — show "estimate" when the persisted value is
+    // derived from history at low/none confidence, so the user knows the
+    // number is a rough guess until they run the proper test.
+    const ftpHint = (() => {
+      if (ftp == null) return undefined;
+      if (tri?.bike?.ftpSource !== 'derived') return undefined;
+      const c = tri.bike.ftpConfidence;
+      if (c === 'low' || c === 'none') return 'estimate · do 20-min test';
+      return undefined;
+    })();
+    const cssHint = (() => {
+      if (css == null) return undefined;
+      if (tri?.swim?.cssSource !== 'derived') return undefined;
+      const c = tri.swim.cssConfidence;
+      if (c === 'low' || c === 'none') return 'estimate · do 400 + 200 test';
+      return undefined;
+    })();
+
+    benchmarkSection = `
+      ${rowDivider()}
+      <div style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+          ${card('Bike FTP', ftp ? `${ftp} W` : '—', ftpHint)}
+          ${card('Swim CSS', css ? `${fmtCss(css)} /100m` : '—', cssHint)}
+          ${card('Run VDOT', vdot ? String(Math.round(vdot)) : '—', vdotEquivSec ? `≈ ${fmtEquiv(vdotEquivSec)} ${raceLabel}` : undefined)}
+        </div>
+      </div>`;
+  } else {
+    const pbItems = [
+      { label: '5K', val: pbs.k5 },
+      { label: '10K', val: pbs.k10 },
+      { label: 'HM', val: pbs.h },
+      { label: 'Marathon', val: pbs.m },
+    ].filter(pb => pb.val);
+
+    benchmarkSection = pbItems.length > 0 ? `
+      ${rowDivider()}
+      <div style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Personal Bests</div>
+        <div style="display:grid;grid-template-columns:repeat(${Math.min(pbItems.length, 4)},1fr);gap:8px">
+          ${pbItems.map(pb => `
+            <div style="border:1px solid var(--c-border);border-radius:10px;padding:10px 6px;text-align:center">
+              <div style="font-size:11px;color:var(--c-muted);margin-bottom:3px">${pb.label}</div>
+              <div style="font-size:15px;font-weight:700;color:var(--c-black)">${fmtTime(pb.val)}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>` : '';
+  }
 
   return groupCard(`
     <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
@@ -418,16 +540,16 @@ function renderProfileGroup(): string {
     </div>
     ${rowDivider()}
     <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
-      <span style="font-size:15px;color:var(--c-black)">Runner type</span>
+      <span style="font-size:15px;color:var(--c-black)">Race preference</span>
       <div style="display:flex;align-items:center;gap:10px">
         <span style="font-size:15px;color:var(--c-muted)">${s.trackOnly ? '—' : (s.typ || '—')}</span>
-        ${s.trackOnly ? '' : `<button id="btn-change-runner-type" style="font-size:13px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">Change</button>`}
+        ${s.trackOnly ? '' : `<button id="btn-change-runner-type" style="font-size:13px;font-weight:500;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Change</button>`}
       </div>
     </div>
-    ${pbSection}
+    ${benchmarkSection}
     ${rowDivider()}
     <button id="btn-edit-profile" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:none;border:none;cursor:pointer">
-      <span style="font-size:15px;color:var(--c-accent)">Edit Profile</span>
+      <span style="font-size:15px;color:var(--c-black)">Edit Profile</span>
       ${chevron()}
     </button>
   `);
@@ -447,22 +569,38 @@ function renderPendingAlert(): string {
   if (unprocessed.length === 0) return '';
 
   return `
-    <div style="margin-bottom:4px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:13px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div style="margin-bottom:4px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-card);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px">
       <div>
         <div style="font-size:14px;font-weight:600;color:var(--c-black)">${unprocessed.length} activit${unprocessed.length === 1 ? 'y' : 'ies'} to review</div>
         <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Week ${s.w} · not yet matched to your plan</div>
       </div>
-      <button id="btn-review-pending" style="padding:9px 16px;border-radius:9px;background:var(--c-black);color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">Review</button>
+      <button id="btn-review-pending" style="padding:9px 16px;border-radius:var(--r-pill);background:var(--c-black);color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer;flex-shrink:0">Review</button>
+    </div>
+  `;
+}
+
+/**
+ * Persistent affordance for guest (anonymous Supabase) users to upgrade their
+ * account. The Home banner is one-time/dismissable; this section stays until
+ * the user actually saves their account, so they can act on their own pace.
+ */
+function renderGuestAccountSection(s: SimulatorState): string {
+  if (!s.isGuestAccount) return '';
+  return `
+    <div style="margin:4px 0 8px;background:var(--c-surface);border:1px solid var(--c-border);border-radius:var(--r-card);padding:14px 16px">
+      <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">Save your account</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.45;margin-bottom:12px">You're signed in as a guest. Your training data only lives on this device. Sign in to back it up across devices.</div>
+      <button id="btn-save-account" style="width:100%;padding:11px 16px;border-radius:var(--r-pill);background:var(--c-black);color:#fff;border:none;font-size:13px;font-weight:600;cursor:pointer">Sign in to save</button>
     </div>
   `;
 }
 
 const TIER_LABELS_ACCOUNT: Record<string, string> = {
-  beginner:     'New to structured training',
-  recreational: 'Recreational runner',
-  trained:      'Trained runner',
-  performance:  'Performance athlete',
-  high_volume:  'High-volume athlete',
+  beginner:     'Building a base',
+  recreational: 'Consistent training base',
+  trained:      'Well-trained',
+  performance:  'High-performance',
+  high_volume:  'Elite training load',
 };
 
 // ─── Training History Group ────────────────────────────────────────────────────
@@ -523,7 +661,10 @@ function renderTrainingHistoryGroup(): string {
       <button id="btn-refresh-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
         Sync History (last 16 weeks)
       </button>
-      <div style="font-size:11px;color:var(--c-faint);line-height:1.5">Your logged activities and ratings are preserved when rebuilding.</div>
+      <button id="btn-restore-history" style="width:100%;padding:9px;border-radius:10px;background:transparent;border:1px solid var(--c-border);font-size:13px;color:var(--c-muted);cursor:pointer">
+        Restore Activity History
+      </button>
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.5">Restore reads the last 90 days of activities from the server and rebuilds the daily history shown on rolling load, freshness, and coach views. Use after a plan reset that wiped your timeline.</div>
     </div>
   `);
 }
@@ -888,6 +1029,12 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
+  // Guest-account upgrade — opens auth view in upgrade mode (signUp uses
+  // updateUser to preserve the user_id and all data attached to the guest).
+  document.getElementById('btn-save-account')?.addEventListener('click', () => {
+    renderAuthView({ upgradeGuest: true });
+  });
+
   document.getElementById('btn-sleep-target-edit')?.addEventListener('click', () => {
     (document.getElementById('sleep-target-display') as HTMLElement).style.display = 'none';
     (document.getElementById('sleep-target-edit') as HTMLElement).style.display = '';
@@ -1038,8 +1185,16 @@ function wireAccountHandlers(): void {
     import('./events').then(({ editSettings }) => editSettings());
   });
 
+  document.getElementById('account-bike-setup-btn')?.addEventListener('click', () => {
+    import('./triathlon/bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
+  });
+
   document.getElementById('btn-recurring-activities')?.addEventListener('click', () => {
     showRecurringActivitiesModal();
+  });
+
+  document.getElementById('btn-create-plan')?.addEventListener('click', () => {
+    import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
   });
 
   document.getElementById('btn-switch-track-only')?.addEventListener('click', () => {
@@ -1084,6 +1239,20 @@ function wireAccountHandlers(): void {
         : 'Up to date ✓';
     }
     renderAccountView();
+  });
+
+  document.getElementById('btn-restore-history')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-restore-history') as HTMLButtonElement | null;
+    if (btn) { btn.disabled = true; btn.textContent = 'Reading server activities…'; }
+    // Make sure server-side garmin_activities is current before reading from it.
+    await backfillStravaHistory(16).catch(() => {});
+    const r = await restoreHistoryFromServer(90);
+    if (btn) {
+      btn.textContent = r.activitiesRecovered > 0
+        ? `Restored ${r.activitiesRecovered} activities across ${r.weeksReconstructed} weeks ✓`
+        : 'No server activities found in last 90 days';
+    }
+    setTimeout(() => renderAccountView(), 1500);
   });
 
   // Phase C3: Rebuild plan using Strava history data
@@ -1157,6 +1326,7 @@ function wireAccountHandlers(): void {
           'Authorization': `Bearer ${token}`,
           'apikey': SUPABASE_ANON_KEY,
         },
+        body: JSON.stringify({ appOrigin: window.location.origin }),
       });
       if (!res.ok) {
         const text = await res.text().catch(() => '');
@@ -1382,6 +1552,7 @@ function wireAccountHandlers(): void {
           'Authorization': `Bearer ${token}`,
           'apikey': SUPABASE_ANON_KEY,
         },
+        body: JSON.stringify({ appOrigin: window.location.origin }),
       });
       if (!res.ok) {
         console.error('Strava auth start failed', res.status);
@@ -1493,13 +1664,13 @@ function showRunnerTypeModal(): void {
         <div style="width:36px;height:4px;border-radius:2px;background:#e2e8f0"></div>
       </div>
       <div style="padding:16px 20px 28px">
-        <div style="font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:4px">Change Runner Type</div>
+        <div style="font-size:17px;font-weight:700;color:#1a1a1a;margin-bottom:4px">Change Race Preference</div>
         <div style="font-size:13px;color:#6b7280;margin-bottom:${planStarted ? '12px' : '16px'}">
           Updates how your training plan is structured.
         </div>
         ${planStarted ? `
           <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:12px;color:#92400e;line-height:1.4">
-            ⚠️ Changing your runner type will rebuild your plan from scratch. Training history is preserved.
+            ⚠️ Changing your race preference will rebuild your plan from scratch. Training history is preserved.
           </div>
         ` : ''}
         <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">

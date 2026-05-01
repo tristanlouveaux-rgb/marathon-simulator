@@ -23,12 +23,14 @@ import { SPORT_LABELS } from '@/constants/sports';
  */
 
 /**
- * Runs-per-week range (2-7). Locked 2026-04-22: below 2 isn't really a running
- * plan. 1 run/week is effectively cross-training; those users belong on the
- * fitness/just-track path. A conditional caption below 3 explains that cross-
- * training fills the adaptation gap for users running less frequently.
+ * Runs-per-week range. Event-training users start at 2 (1 run/week isn't a
+ * running plan, it's cross-training). Non-event users (continuous fitness /
+ * just-track / no specific race) may select 1 — they're maintaining, not
+ * building toward a distance. A conditional caption below 3 explains that
+ * cross-training fills the adaptation gap for users running less frequently.
  */
-const RUNS_PER_WEEK_OPTIONS = [2, 3, 4, 5, 6, 7];
+const RUNS_PER_WEEK_EVENT_OPTIONS = [2, 3, 4, 5, 6, 7];
+const RUNS_PER_WEEK_NON_EVENT_OPTIONS = [1, 2, 3, 4, 5, 6, 7];
 /** Gym sessions range. 0-to-3 is the onboarding-state comment range (`gymSessionsPerWeek`). */
 const GYM_OPTIONS = [0, 1, 2, 3];
 /** Activity frequency range (times per week). Matches `activities.ts` 1 to 7. */
@@ -60,6 +62,8 @@ function inferIntensity(sportKey: string): 'easy' | 'moderate' | 'hard' {
 }
 
 export function renderSchedule(container: HTMLElement, state: OnboardingState): void {
+  const isNonEvent = state.trainingForEvent === false || state.continuousMode === true || state.trainingMode === 'fitness';
+  const runsOptions = isNonEvent ? RUNS_PER_WEEK_NON_EVENT_OPTIONS : RUNS_PER_WEEK_EVENT_OPTIONS;
   container.innerHTML = `
     <style>
       @keyframes scRise { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
@@ -144,7 +148,7 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
       <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 30%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(6, 7)}
+        ${renderProgressIndicator(5, 7)}
 
         <div class="sc-rise" style="width:100%;max-width:480px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -159,12 +163,16 @@ export function renderSchedule(container: HTMLElement, state: OnboardingState): 
 
           <div>
             <label class="sc-micro">RUNS PER WEEK</label>
-            <div class="sc-num-grid" style="grid-template-columns:repeat(${RUNS_PER_WEEK_OPTIONS.length},1fr)">
-              ${RUNS_PER_WEEK_OPTIONS.map(n => `
+            <div class="sc-num-grid" style="grid-template-columns:repeat(${runsOptions.length},1fr)">
+              ${runsOptions.map(n => `
                 <button data-runs="${n}" class="sc-num ${state.runsPerWeek === n ? 'selected' : ''}">${n}</button>
               `).join('')}
             </div>
-            ${state.runsPerWeek < 3 ? `
+            ${state.runsPerWeek === 1 ? `
+              <p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">
+                One run per week maintains a baseline. Cross-training carries the aerobic load.
+              </p>
+            ` : state.runsPerWeek < 3 ? `
               <p style="font-size:11.5px;color:var(--c-faint);margin:8px 0 0;line-height:1.4">
                 Two runs per week works if you're cross-training regularly. The aerobic stimulus from swimming, cycling or team sport helps bridge the gap.
               </p>
@@ -394,7 +402,7 @@ function wireHandlers(state: OnboardingState): void {
   // Continue.
   document.getElementById('sc-continue')?.addEventListener('click', () => {
     showSportPicker = false;
-    try { window.wizardNext(); } catch { nextStep(); }
+    nextStep();
   });
 }
 

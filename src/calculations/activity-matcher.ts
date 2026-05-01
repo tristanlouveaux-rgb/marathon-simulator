@@ -42,6 +42,10 @@ export interface GarminActivityRow {
   maxWatts?: number | null;
   deviceWatts?: boolean | null;
   kilojoules?: number | null;
+  /** Mean-max watts curve from the watts stream. Present only on cycling
+   * rides with a power meter that fell within the per-sync stream-fetch
+   * budget. */
+  powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null;
 }
 
 /** Map Garmin activity type to app activity type */
@@ -423,6 +427,16 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   const s = getMutableState();
   if (!s.wks || s.wks.length === 0) return { changed: false, pending: [] };
 
+  // Drop activities the user has explicitly discarded so a backfill cannot re-import them.
+  const ignoredIds = s.ignoredGarminIds;
+  if (ignoredIds && ignoredIds.length > 0) {
+    const before = rows.length;
+    rows = rows.filter(r => !ignoredIds.includes(r.garmin_id));
+    if (rows.length !== before) {
+      console.log(`[matchAndAutoComplete] Skipped ${before - rows.length} ignored activities`);
+    }
+  }
+
   // Dedup pass: remove Garmin-sourced adhoc entries when a Strava-sourced entry
   // already exists for the same activity (same start time ±10 min). This cleans up
   // the case where the Garmin webhook stored an activity first, syncActivities()
@@ -578,6 +592,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           activityType: item.activityType,
           polyline: item.polyline ?? null,
           kmSplits: item.kmSplits ?? null,
+          averageWatts: item.averageWatts ?? null,
+          normalizedPowerW: item.normalizedPowerW ?? null,
+          maxWatts: item.maxWatts ?? null,
+          deviceWatts: item.deviceWatts ?? null,
+          kilojoules: item.kilojoules ?? null,
         };
       }
 
@@ -894,6 +913,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               polyline: row.polyline ?? null,
               kmSplits: row.kmSplits ?? null,
               elevationGainM: row.elevationGainM ?? null,
+              averageWatts: row.averageWatts ?? null,
+              normalizedPowerW: row.normalizedPowerW ?? null,
+              maxWatts: row.maxWatts ?? null,
+              deviceWatts: row.deviceWatts ?? null,
+              kilojoules: row.kilojoules ?? null,
             };
           }
           changed = true;
@@ -918,6 +942,11 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             hrZones: row.hrZones ?? null,
             polyline: row.polyline ?? null,
             kmSplits: row.kmSplits ?? null,
+            averageWatts: row.averageWatts ?? null,
+            normalizedPowerW: row.normalizedPowerW ?? null,
+            maxWatts: row.maxWatts ?? null,
+            deviceWatts: row.deviceWatts ?? null,
+            kilojoules: row.kilojoules ?? null,
           };
           if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
             wk.garminPending!.push(item);
@@ -1341,6 +1370,11 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
       activityType: item.activityType,
       polyline: item.polyline ?? null,
       kmSplits: item.kmSplits ?? null,
+      averageWatts: item.averageWatts ?? null,
+      normalizedPowerW: item.normalizedPowerW ?? null,
+      maxWatts: item.maxWatts ?? null,
+      deviceWatts: item.deviceWatts ?? null,
+      kilojoules: item.kilojoules ?? null,
     };
   }
 

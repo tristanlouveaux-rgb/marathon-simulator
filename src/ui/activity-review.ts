@@ -74,6 +74,14 @@ function getWeekWorkoutsForReview() {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
+  // Triathlon mode: the running plan-engine isn't the source of truth — the
+  // tri plan engine populates `wk.triWorkouts[]` directly. The running modal
+  // path won't fire in tri mode (see redirectToTriSuggestionFlow) but other
+  // running-mode auto-match flows still call this helper, so return the tri
+  // workouts so any UI that consumes the result reads the right plan.
+  if (s.eventType === 'triathlon') {
+    return wk.triWorkouts ?? [];
+  }
   // CRITICAL: must use IDENTICAL parameters to getPlanHTML's generateWeekWorkouts call
   // so that workout IDs (w.id || w.n) match exactly — matching breaks if they differ.
   return generateWeekWorkouts(
@@ -82,6 +90,64 @@ function getWeekWorkoutsForReview() {
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
     getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
+}
+
+/**
+ * Triathlon-mode redirect for cross-training overflow.
+ *
+ * In running mode, activity-review's two `showSuggestionModal` callsites build
+ * a running-only popup ("≈ X km easy running equivalent", proposed reduce/
+ * replace on running workouts). That copy is meaningless in Ironman mode and
+ * the proposed mods reference workouts that don't exist (`wk.workouts`, not
+ * `wk.triWorkouts`).
+ *
+ * In tri mode we instead:
+ *   1. Persist each cross-training item as an adhoc workout — this also
+ *      writes to `wk.garminActuals` and increments `wk.actualTSS` (see
+ *      `addAdhocWorkoutFromPending`).
+ *   2. Run the tri suggestion aggregator. The `detectCrossTrainingOverload`
+ *      detector reads `wk.adhocWorkouts` + `wk.garminActuals` and proposes
+ *      per-discipline mods if the week is meaningfully over plan.
+ *   3. Show the tri suggestion modal (`tri-suggestion-modal.ts`) — same modal
+ *      used for volume-ramp / RPE-blown / readiness triggers.
+ *   4. Call `onComplete()` so the review flow can resolve.
+ *
+ * Returns true if the tri redirect fired (caller should early-return). False
+ * means we're not in tri mode and the running modal path should run.
+ */
+function redirectToTriSuggestionFlow(
+  items: GarminPendingItem[],
+  onComplete: () => void,
+): boolean {
+  const s = getState();
+  if (s.eventType !== 'triathlon') return false;
+
+  const sM = getMutableState();
+  const wkM = sM.wks?.[sM.w - 1];
+  if (!wkM) {
+    onComplete();
+    return true;
+  }
+
+  for (const item of items) {
+    const adhocId = `garmin-${item.garminId}`;
+    addAdhocWorkoutFromPending(wkM, item, adhocId, deriveItemRPE(item, sM));
+    if (!wkM.garminMatched) wkM.garminMatched = {};
+    wkM.garminMatched[item.garminId] = adhocId;
+  }
+  saveState();
+
+  void (async () => {
+    const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
+    const sFinal = getState();
+    const bundle = collectTriSuggestions(sFinal);
+    if (bundle.mods.length > 0) {
+      const { showTriSuggestionModal } = await import('@/ui/triathlon/tri-suggestion-modal');
+      await showTriSuggestionModal(bundle);
+    }
+    onComplete();
+  })();
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -332,7 +398,7 @@ function showMatchingEntryScreen(
   let weekStartDate: Date | undefined;
   let weekLabel: string | undefined;
   if (s.planStartDate) {
-    weekStartDate = new Date(s.planStartDate);
+    weekStartDate = new Date(s.planStartDate + 'T12:00:00');
     weekStartDate.setDate(weekStartDate.getDate() + (s.w - 1) * 7);
     const weekEndDate = new Date(weekStartDate);
     weekEndDate.setDate(weekEndDate.getDate() + 6);
@@ -491,7 +557,7 @@ function showReviewScreen(
   // Build week label for header
   let weekHeaderStr = `Week ${s.w}${s.tw ? ` of ${s.tw}` : ''}`;
   if (s.planStartDate) {
-    const ws = new Date(s.planStartDate);
+    const ws = new Date(s.planStartDate + 'T12:00:00');
     ws.setDate(ws.getDate() + (s.w - 1) * 7);
     const we = new Date(ws);
     we.setDate(we.getDate() + 6);
@@ -559,7 +625,7 @@ function showReviewScreen(
       let weekStartDate: Date | undefined;
       let weekLabel: string | undefined;
       if (sWS.planStartDate) {
-        weekStartDate = new Date(sWS.planStartDate);
+        weekStartDate = new Date(sWS.planStartDate + 'T12:00:00');
         weekStartDate.setDate(weekStartDate.getDate() + (sWS.w - 1) * 7);
         const weekEndDate = new Date(weekStartDate);
         weekEndDate.setDate(weekEndDate.getDate() + 6);
@@ -1219,7 +1285,7 @@ function applyReview(
 
   const _arTier = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-  const _arAcwr = computeACWR(s2.wks, s2.w, _arTier, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl, s2.signalBBaseline ?? undefined);
+  const _arAcwr = computeACWR(s2.wks, s2.w, _arTier, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
   const ctx = {
     raceGoal: s2.rd,
     plannedRunsPerWeek: s2.rw,
@@ -1234,6 +1300,11 @@ function applyReview(
   const sportLabel = remainingCross.length === 1
     ? formatActivityType(remainingCross[0].activityType)
     : `${remainingCross.length} cross-training activities`;
+
+  // Tri-mode redirect: skip the running modal (running-only copy + running-only
+  // adjustments don't fit Ironman setup). Routes through the tri suggestion
+  // pipeline instead. See ISSUE-151.
+  if (redirectToTriSuggestionFlow(remainingCross, onComplete)) return;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {
@@ -1835,7 +1906,7 @@ export function autoProcessActivities(
     const _s = getMutableState();
     const _tier = _s.athleteTierOverride ?? _s.athleteTier;
     const _atlSeed = (_s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (_s.gs ?? 0), 0.3));
-    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined);
+    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined, undefined, (_s as any).previousPlanWks);
     if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
       showAssignmentToast(autoAssignLines);
       render();
@@ -1853,13 +1924,16 @@ export function autoProcessActivities(
   const weekRuns         = workoutsToPlannedRuns(freshWorkouts, s2.pac);
   const _arTier2 = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-  const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined);
+  const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
   const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph), acwrStatus: _arAcwr2.status };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 
   const sportLabel = overflow.length === 1
     ? formatActivityType(overflow[0].activityType)
     : `${overflow.length} cross-training activities`;
+
+  // Tri-mode redirect — see ISSUE-151 / redirectToTriSuggestionFlow comment.
+  if (redirectToTriSuggestionFlow(overflow, onComplete)) return;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {

@@ -22,6 +22,7 @@ import { generateSwimSession, pickSwimKind } from './swim';
 import { generateBikeSession, pickBikeKind } from './bike';
 import { generateBrick } from './brick';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
+import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -60,7 +61,29 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
     } as Week);
   }
 
+  // Apply per-discipline effort multiplier to upcoming weeks (week ≥ current).
+  // Mirrors running's plan_engine `effortMultiplier` step. Past weeks are
+  // intentionally left alone — we don't rewrite history.
+  applyTriEffortMultipliersToFutureWeeks(state, weeks);
+
   return weeks;
+}
+
+/**
+ * Apply per-discipline effort multipliers to ALL future weeks of the plan.
+ * Pure mutation — caller passes the freshly-generated `weeks` array.
+ *
+ * Skips weeks before `state.w` (those are completed/in-progress and
+ * shouldn't have their planned durations re-scaled retroactively).
+ */
+function applyTriEffortMultipliersToFutureWeeks(state: SimulatorState, weeks: Week[]): void {
+  const currentWeek = state.w ?? 1;
+  for (const wk of weeks) {
+    if ((wk.w ?? 0) < currentWeek) continue;
+    if (wk.triWorkouts && wk.triWorkouts.length > 0) {
+      applyTriEffortMultipliers(state, wk.triWorkouts);
+    }
+  }
 }
 
 /**
@@ -73,6 +96,12 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   const totalWeeks = state.tw;
   const phase = phaseForWeek(weekIndex, totalWeeks, tri.distance);
   const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
+
+  // Apply per-discipline effort multiplier when regenerating a future week.
+  // For a same-week or past-week regen, skip — preserves historical duration.
+  if (weekIndex >= (state.w ?? 1)) {
+    applyTriEffortMultipliers(state, weekWorkouts);
+  }
 
   const existing = state.wks[weekIndex - 1];
   return {

@@ -139,6 +139,19 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   if (actual.avgHR) gridStats.push({ val: `${actual.avgHR} bpm`, lbl: 'Avg HR' });
   if (actual.maxHR) gridStats.push({ val: `${actual.maxHR} bpm`, lbl: 'Max HR' });
   if (actual.elevationGainM != null && actual.elevationGainM > 0) gridStats.push({ val: `${Math.round(actual.elevationGainM)}m`, lbl: 'Elevation' });
+  // Power (cycling). Strava's `device_watts` flag is unreliable for activities
+  // transferred via Garmin Connect → Strava (often returns false even on real
+  // power-meter data), so we don't surface "estimated" tags from it.
+  if (actual.averageWatts != null && actual.averageWatts > 0) {
+    gridStats.push({ val: `${Math.round(actual.averageWatts)} W`, lbl: 'Avg Power' });
+  }
+  if (actual.normalizedPowerW != null && actual.normalizedPowerW > 0
+      && (actual.averageWatts == null || Math.abs(actual.normalizedPowerW - actual.averageWatts) >= 5)) {
+    gridStats.push({ val: `${Math.round(actual.normalizedPowerW)} W`, lbl: 'Normalised Power' });
+  }
+  if (actual.maxWatts != null && actual.maxWatts > 0) {
+    gridStats.push({ val: `${Math.round(actual.maxWatts)} W`, lbl: 'Max Power' });
+  }
   if (actualTSS != null) gridStats.push({ val: `${actualTSS}`, lbl: actual.iTrimp != null ? 'TSS (HR)' : 'TSS (est)' });
   if (actual.calories != null && actual.calories > 0) gridStats.push({ val: `${actual.calories}`, lbl: 'Calories' });
 
@@ -341,7 +354,10 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
   // ─── Coach insight ───────────────────────────────────────────────────────────
   const prev = findPreviousSession(actual.plannedType, actual.garminId, s.wks || []);
   const allActuals = (s.wks || []).flatMap(wk => Object.values(wk.garminActuals || {}));
-  const insight = generateWorkoutInsight(actual, { hrProfile: s, prev, unitPref, allActuals });
+  const onb = (s as any).onboarding;
+  const ftpWatts = onb?.triBike?.ftp ?? undefined;
+  const cssSecPer100m = onb?.triSwim?.cssSecPer100m ?? undefined;
+  const insight = generateWorkoutInsight(actual, { hrProfile: s, prev, unitPref, allActuals, ftpWatts, cssSecPer100m });
   const insightHtml = insight ? `
     <div class="ad-fade" style="animation-delay:0.38s;margin-bottom:16px">
       ${secLabel('Coach')}
@@ -376,7 +392,13 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
             <div style="font-size:20px;font-weight:600;letter-spacing:-0.02em;color:${TEXT_M};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(actName)}</div>
             <div style="font-size:12px;color:${TEXT_S};margin-top:3px">${dateStr ? dateStr + ' · ' : ''}${source}</div>
           </div>
-          <div style="width:36px"></div>
+          <button id="act-detail-discard" title="Discard activity" style="
+            width:36px;height:36px;border-radius:50%;border:1px solid rgba(0,0,0,0.09);
+            background:transparent;display:flex;align-items:center;justify-content:center;
+            cursor:pointer;flex-shrink:0;
+          ">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="${TEXT_S}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M6 6l1 14a2 2 0 002 2h6a2 2 0 002-2l1-14"/></svg>
+          </button>
         </div>
 
         <!-- Content -->
@@ -442,6 +464,11 @@ export function renderActivityDetail(
     if (!wid) return;
     const exp = card?.dataset.expected ? parseInt(card.dataset.expected, 10) : null;
     _showRpeOverlay(wid, actual, planWorkoutName, returnView, plannedTSS, exp || null);
+  });
+
+  // Discard → permanent ignore + remove from week, then return
+  document.getElementById('act-detail-discard')?.addEventListener('click', () => {
+    showDiscardOverlay(actual, returnView);
   });
 
   // Sport row → picker → reclassify + re-render
@@ -567,4 +594,49 @@ function _showRpeOverlay(
   document.getElementById('rpe-detail-save')!.addEventListener('click', () => close(true));
   document.getElementById('rpe-detail-skip')!.addEventListener('click', () => close(false));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+}
+
+// ── Discard activity overlay ─────────────────────────────────────────────────
+
+function showDiscardOverlay(actual: GarminActual, returnView: ActivityDetailSource): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  overlay.innerHTML = `
+    <div class="w-full max-w-sm rounded-2xl p-5" style="background:${PAGE_BG}">
+      <div style="font-size:16px;font-weight:600;color:${TEXT_M};margin-bottom:6px">Discard this activity?</div>
+      <div style="font-size:13px;line-height:1.55;color:${TEXT_S};margin-bottom:18px">
+        Removes it from your week and prevents future syncs from re-importing it. Use this for backfill duplicates you do not want.
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="discard-cancel" style="flex:1;height:40px;border-radius:12px;border:1px solid rgba(0,0,0,0.09);
+                background:transparent;font-size:13px;font-weight:600;color:${TEXT_S};cursor:pointer">Cancel</button>
+        <button id="discard-confirm" style="flex:1;height:40px;border-radius:12px;border:none;
+                background:#EF4444;font-size:13px;font-weight:600;color:#fff;cursor:pointer">Discard</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+
+  document.getElementById('discard-cancel')!.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+  document.getElementById('discard-confirm')!.addEventListener('click', async () => {
+    overlay.remove();
+    const { removeGarminActivity } = await import('./events');
+    removeGarminActivity(actual.garminId, { permanent: true, skipConfirm: true });
+    if (returnView === 'home') {
+      const { renderHomeView } = await import('./home-view');
+      renderHomeView();
+    } else if (returnView === 'strain') {
+      const { renderStrainView } = await import('./strain-view');
+      renderStrainView();
+    } else {
+      const { renderPlanView } = await import('./plan-view');
+      renderPlanView();
+    }
+  });
 }

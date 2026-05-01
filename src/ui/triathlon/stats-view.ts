@@ -1,16 +1,17 @@
 /**
- * Triathlon stats view — mirrors the running stats visual language.
+ * Triathlon stats view — race forecast + adaptation + per-discipline CTL trend.
  *
- * Hosts the race forecast card (moved here from home — §6), a per-
- * discipline fitness SVG chart (§7 — swim/bike/run CTL over the last
- * N weeks), and the per-discipline CTL/ATL/TSB + volume breakdown.
+ * Earlier iterations layered readiness, recovery, benchmarks and a Training
+ * Load shortcut card here. Those were nav-only or duplicated content from
+ * Home / Load / Account, so the page now keeps just the three things that
+ * belong on Stats: race forecast, adaptation response, and progress trend.
  */
 
 import { getState } from '@/state/store';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderRaceForecastCard } from './race-forecast-card';
-import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL } from './colours';
-import { readTriFitness, perDisciplineACWR } from '@/calculations/fitness-model.triathlon';
+import { renderTriAdaptationCard } from './adaptation-card';
+import { DISCIPLINE_COLOURS } from './colours';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') {
@@ -31,22 +32,7 @@ export function renderTriathlonStatsView(): void {
   const tri = s.triConfig;
   if (!tri) return;
 
-  const fitness = readTriFitness(s);
   const history = tri.fitnessHistory ?? [];
-
-  const wk = s.wks?.[s.w - 1];
-  const workouts = wk?.triWorkouts ?? [];
-  const minByDisc = { swim: 0, bike: 0, run: 0 };
-  for (const w of workouts) {
-    const d = w.discipline ?? 'run';
-    const mins = (typeof w.estimatedDurationMin === 'number' && w.estimatedDurationMin > 0)
-      ? w.estimatedDurationMin
-      : w.brickSegments
-        ? (w.brickSegments[0].durationMin ?? 0) + (w.brickSegments[1].durationMin ?? 0)
-        : parseMinutesFromDesc(w.d);
-    if (d === 'swim' || d === 'bike' || d === 'run') minByDisc[d] += mins;
-  }
-  const totalMin = minByDisc.swim + minByDisc.bike + minByDisc.run;
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -89,82 +75,32 @@ export function renderTriathlonStatsView(): void {
 
         <div style="padding:0 20px">
 
-          <!-- Race forecast (moved here from home — §6) -->
+          ${renderRaceOutcomeRetroCard(s)}
+
+          <!-- Race forecast -->
           <div class="hf" data-delay="0.10">
             ${renderRaceForecastCard(s)}
           </div>
 
-          <!-- Per-discipline fitness chart -->
-          <div class="tri-stats-card hf" data-delay="0.14">
-            <div class="tri-stats-label">Fitness history</div>
-            ${renderFitnessChart(history)}
-            <div style="margin-top:10px;display:flex;justify-content:center;gap:18px;font-size:11px">
-              ${(['swim', 'bike', 'run'] as const).map((d) => {
-                const c = DISCIPLINE_COLOURS[d];
-                return `<span style="display:inline-flex;align-items:center;gap:5px"><span style="display:inline-block;width:10px;height:2px;background:${c.accent}"></span>${DISCIPLINE_LABEL[d]}</span>`;
-              }).join('')}
-            </div>
-          </div>
+          <!-- Adaptation: how the athlete is responding to training -->
+          ${renderTriAdaptationCard(s)}
 
-          <!-- Per-discipline CTL/ATL/TSB snapshot -->
-          <div class="tri-stats-card hf" data-delay="0.18">
-            <div class="tri-stats-label">Current fitness</div>
-            ${(['swim', 'bike', 'run'] as const).map((d) => {
-              const f = fitness[d];
-              const c = DISCIPLINE_COLOURS[d];
-              const acwr = perDisciplineACWR(f);
-              const acwrLabel = acwr !== undefined ? `ACWR ${acwr.toFixed(2)}` : 'ACWR —';
-              const acwrColour = acwr === undefined ? 'var(--c-faint)'
-                : acwr > 1.3 ? '#c06a50'
-                : acwr < 0.8 ? '#a89060'
-                : '#7a845c';
-              return `
-                <div style="margin-bottom:14px;padding:12px;border-radius:10px;background:${c.bg};border:1px solid ${c.border}">
-                  <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
-                    <span style="font-size:13px;font-weight:600;color:#0F172A">${DISCIPLINE_LABEL[d]}</span>
-                    <span style="font-size:11px;color:${acwrColour};font-variant-numeric:tabular-nums">${acwrLabel}</span>
-                  </div>
-                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-                    ${statCell('CTL', f.ctl.toFixed(1))}
-                    ${statCell('ATL', f.atl.toFixed(1))}
-                    ${statCell('TSB', `${f.tsb >= 0 ? '+' : ''}${f.tsb.toFixed(1)}`, f.tsb < 0 ? '#c06a50' : '#0F172A')}
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-
-          <!-- This week volume -->
-          <div class="tri-stats-card hf" data-delay="0.22">
-            <div class="tri-stats-label">This week's volume</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
-              ${(['swim', 'bike', 'run'] as const).map((d) => {
-                const c = DISCIPLINE_COLOURS[d];
-                const mins = minByDisc[d];
-                const pct = totalMin > 0 ? Math.round((mins / totalMin) * 100) : 0;
-                return `
-                  <div style="text-align:center;padding:10px 8px;background:${c.bg};border:1px solid ${c.border};border-radius:10px">
-                    <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em">${DISCIPLINE_LABEL[d]}</div>
-                    <div style="font-size:18px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${fmtHours(mins)}</div>
-                    <div style="font-size:11px;color:var(--c-muted)">${pct}%</div>
-                  </div>
-                `;
-              }).join('')}
+          <!-- Progress: per-discipline CTL trend; tap to drill down. Hidden until
+               2+ weeks of history exist (UX_PATTERNS empty-state rule). -->
+          ${history.length >= 2 ? `
+            <div id="tri-progress-card" class="tri-stats-card hf" data-delay="0.13" style="cursor:pointer">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+                <div class="tri-stats-label" style="margin-bottom:0">Progress</div>
+                <span style="font-size:11px;color:var(--c-muted)">Detail →</span>
+              </div>
+              ${renderFitnessChart(history)}
+              <div style="display:flex;gap:14px;margin-top:8px;font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">
+                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.swim.accent};vertical-align:middle;margin-right:4px"></span>Swim</span>
+                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.bike.accent};vertical-align:middle;margin-right:4px"></span>Bike</span>
+                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.run.accent};vertical-align:middle;margin-right:4px"></span>Run</span>
+              </div>
             </div>
-            <div style="text-align:center;font-size:12px;color:var(--c-muted)">Total ${fmtHours(totalMin)}</div>
-          </div>
-
-          <!-- Targets -->
-          <div class="tri-stats-card hf" data-delay="0.26">
-            <div class="tri-stats-label">Your targets</div>
-            ${renderBenchmarkSourceHint(s)}
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
-              ${targetCell('CSS', tri.swim?.cssSecPer100m ? fmtCss(tri.swim.cssSecPer100m) : '—')}
-              ${targetCell('FTP', tri.bike?.ftp ? `${tri.bike.ftp}W` : '—')}
-              ${targetCell('Hours/week', tri.timeAvailableHoursPerWeek ? `${tri.timeAvailableHoursPerWeek}h` : '—')}
-              ${targetCell('Split', `S ${pct(tri.volumeSplit?.swim)} · B ${pct(tri.volumeSplit?.bike)} · R ${pct(tri.volumeSplit?.run)}`)}
-            </div>
-          </div>
+          ` : ''}
 
         </div>
       </div>
@@ -175,35 +111,36 @@ export function renderTriathlonStatsView(): void {
 
   wireTabBarHandlers(navigateTab);
   document.getElementById('tri-account-btn')?.addEventListener('click', () => navigateTab('account'));
+  document.getElementById('tri-progress-card')?.addEventListener('click', () => {
+    import('./progress-detail-view').then(({ renderTriProgressDetailView }) => renderTriProgressDetailView());
+  });
+  document.getElementById('tri-bike-setup-btn')?.addEventListener('click', () => {
+    import('./bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
+  });
 }
 
 // ─── Chart ──────────────────────────────────────────────────────────────────
 
 function renderFitnessChart(history: Array<{ weekISO: string; swimCtl: number; bikeCtl: number; runCtl: number; combinedCtl: number }>): string {
-  if (history.length < 2) {
-    return `
-      <div style="height:140px;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--c-muted);font-size:12px;background:rgba(0,0,0,0.02);border-radius:8px;padding:0 20px">
-        Fills in once you have 2+ weeks of activity data.<br>Sync your Strava / Garmin to start building history.
-      </div>
-    `;
-  }
-
   const W = 560;
   const H = 140;
   const pad = { top: 10, right: 8, bottom: 20, left: 32 };
   const plotW = W - pad.left - pad.right;
   const plotH = H - pad.top - pad.bottom;
   const n = history.length;
+  // Internal CTL is a weekly EMA of TSS. Display as TrainingPeaks-style
+  // daily-equivalent (÷7) so the y-axis matches the "Current fitness" card.
+  const norm = (v: number) => v / 7;
   const maxY = Math.max(
     10,
-    ...history.map((h) => Math.max(h.swimCtl, h.bikeCtl, h.runCtl))
+    ...history.map((h) => Math.max(norm(h.swimCtl), norm(h.bikeCtl), norm(h.runCtl)))
   );
 
   const x = (i: number) => pad.left + (plotW * i) / Math.max(1, n - 1);
   const y = (v: number) => pad.top + plotH - (v / maxY) * plotH;
 
   const lineFor = (key: 'swimCtl' | 'bikeCtl' | 'runCtl') =>
-    history.map((h, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(h[key]).toFixed(1)}`).join(' ');
+    history.map((h, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(norm(h[key])).toFixed(1)}`).join(' ');
 
   const gridLines = [0.25, 0.5, 0.75].map((f) => {
     const gy = pad.top + plotH * (1 - f);
@@ -235,65 +172,29 @@ function renderFitnessChart(history: Array<{ weekISO: string; swimCtl: number; b
   `;
 }
 
-// ─── Cell helpers ───────────────────────────────────────────────────────────
+// ─── Race-outcome retrospective ───────────────────────────────────────────
 
-function statCell(label: string, value: string, colour: string = '#0F172A'): string {
+function renderRaceOutcomeRetroCard(state: ReturnType<typeof getState>): string {
+  const log = state.triConfig?.raceLog;
+  if (!log || log.length === 0) return '';
+  const latest = log[log.length - 1];
+  const gap = latest.predictedTotalSec - latest.actualTotalSec;
+  if (gap < 60) return '';  // Below 1-minute threshold
+
+  const fmt = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const ss = Math.round(sec % 60);
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`;
+  };
+  const gapMin = Math.floor(gap / 60);
+  const gapTxt = gapMin === 1 ? '1 min' : `${gapMin} min`;
+
   return `
-    <div>
-      <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em">${label}</div>
-      <div style="font-size:16px;font-weight:500;color:${colour};font-variant-numeric:tabular-nums">${value}</div>
+    <div class="hf" data-delay="0.08" style="margin-bottom:14px;background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#5a8050;margin-bottom:6px">Last race</div>
+      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your prediction by ${gapTxt}</div>
+      <div style="font-size:12px;color:#64748B;line-height:1.5">Predicted ${fmt(latest.predictedTotalSec)}, actual ${fmt(latest.actualTotalSec)}.</div>
     </div>
   `;
-}
-
-function targetCell(label: string, value: string): string {
-  return `
-    <div>
-      <div style="color:var(--c-faint);font-size:11px;text-transform:uppercase;letter-spacing:0.08em">${label}</div>
-      <div style="color:#0F172A;font-variant-numeric:tabular-nums">${value}</div>
-    </div>
-  `;
-}
-
-function pct(n: number | undefined): string {
-  if (n === undefined) return '—';
-  return `${Math.round(n * 100)}%`;
-}
-
-function fmtCss(sec: number): string {
-  const m = Math.floor(sec / 60);
-  const s = Math.round(sec % 60);
-  return `${m}:${s.toString().padStart(2, '0')}/100m`;
-}
-
-function fmtHours(mins: number): string {
-  if (mins <= 0) return '—';
-  const rounded = mins >= 30 ? Math.round(mins / 5) * 5 : Math.round(mins);
-  const h = Math.floor(rounded / 60);
-  const m = rounded % 60;
-  if (h > 0 && m > 0) return `${h}h ${m}m`;
-  if (h > 0) return `${h}h`;
-  return `${m}m`;
-}
-
-/**
- * Small hint line under "Your targets" telling the user how many synced
- * activities are feeding the derivation. Absent when no history exists.
- */
-function renderBenchmarkSourceHint(s: ReturnType<typeof getState>): string {
-  let count = 0;
-  for (const wk of s.wks ?? []) {
-    count += Object.keys(wk.garminActuals ?? {}).length;
-    count += (wk.garminPending ?? []).length;
-  }
-  if (count === 0) return '';
-  return `<div style="font-size:11px;color:var(--c-muted);margin:-6px 0 12px;line-height:1.5">Tracking against <strong>${count}</strong> synced activities. Empty CSS / FTP fields auto-fill from your Strava history; fitness CTL updates on each app load.</div>`;
-}
-
-function parseMinutesFromDesc(desc: string): number {
-  const hm = desc.match(/(\d+)\s*h\s*(\d+)\s*min/i);
-  if (hm) return Math.min(400, Math.max(10, parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10)));
-  const m = desc.match(/(\d+)\s*min/);
-  if (m) return Math.min(300, Math.max(10, parseInt(m[1], 10)));
-  return 60;
 }

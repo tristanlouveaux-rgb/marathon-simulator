@@ -4,6 +4,629 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-04-30 — Triathlon Stats page: kill nav-only cards, inline Progress sparkline, regroup Bike & aero with Course Factors
+
+Cleanup of the bottom of the triathlon Stats page (`src/ui/triathlon/stats-view.ts`, `adaptation-card.ts`, `race-forecast-card.ts`). The page had three near-empty cards each containing a single "Open X →" bordered button: Adaptation (with a "no data yet" placeholder), Progress, and Training Load. Per `docs/UX_PATTERNS.md` (empty-state rule, drill-down chevron rule, navigation-button colour rule):
+
+- **Training Load card removed.** The Load tab is its own page; a card whose only job was to link there was duplication.
+- **Adaptation empty state now renders nothing.** Previously showed "No adaptation data yet" as a card body. UX_PATTERNS empty-state rule: "When fewer than the required data points exist, render nothing — do not show an 'empty state' card."
+- **Progress now inlines the per-discipline CTL trend chart** (using the existing `renderFitnessChart` helper) instead of pointing at it via a button. Whole card is tappable for the full Progress detail view; section header carries a muted "Detail →" link in line with the navigation-button rule. Hidden until 2+ weeks of fitness history exist.
+- **Bike & aero setup moved into the Course Factors block** of the race forecast card. It's a race-day input (same conceptual group as climate/elevation/wind), not a stats output. Replaced the full-width bordered button with a muted "Bike & aero →" link in the Course Factors header. When no course factors are set yet, the panel still renders with a one-line nudge so the link is reachable.
+- **Stats view dead-code sweep**: dropped 13 unused helpers and 6 unused imports/state computations left over from earlier readiness/benchmarks iterations of this page. ~270 lines removed.
+
+---
+
+## 2026-04-30 — Bike & aero setup: weight-on-save fix, calib panel persists, plausibility flag, CdA/Crr explainers
+
+Four follow-ups in `src/ui/triathlon/bike-setup-view.ts` (and a small type addition in `src/types/triathlon.ts`):
+
+- **Weight inputs lost on Save.** Switching the number-input listeners to `'change'` fixed the typing-reversal bug but introduced a new one: clicking Save without first tabbing out of the field meant `'change'` never fired and `form.riderKg`/`bikeKg` held the stale value. Save handler now reads `#rider-kg` / `#bike-kg` directly before calling `persistForm` so freshly-typed weights aren't dropped.
+- **Calibration result panel survives reopen.** Added `BikeAeroProfile.calibratedRide` (name, dateISO, distanceKm, avgPowerW, gradientPct, confidence). `persistForm` writes it whenever `cdaSource === 'calibrated'` and we have an `autoCalib` success record; `initialFormState` reads it back and rehydrates `form.autoCalib` so the "Estimated CdA from a recent flat ride · {ride}" panel renders immediately on reopen instead of vanishing.
+- **Plausibility flag in the calib result panel.** When the calibrated CdA is more than ±25% off the active position's preset, the panel shows an amber line: "Looks high vs the {position} preset ({preset} m²). Was that ride in a different position?" Doesn't block the value (some users genuinely have unusual CdA), just makes the road-bike-CdA-applied-to-TT-position case visible.
+- **(i) explainers for CdA and Crr.** Small clickable info glyphs next to "CdA preset: 0.32 m²" and "Crr: 0.0040" reveal a one-paragraph plain-English explanation of what the term means, why lower is faster, and where the preset values come from. Toggleable per-section so the modal stays compact.
+
+---
+
+## 2026-04-30 — Bike & aero setup: input reversal fix + course readout + on-open CdA estimate
+
+Three follow-ups to the auto-fill work in `src/ui/triathlon/bike-setup-view.ts`:
+
+- **Number-input typing reversal**: typing "57" into the rider-weight field produced "75" because every keystroke fired `'input'` → `rerender()` → `innerHTML` rebuild. `<input type="number">` doesn't expose `selectionStart/End`, so the focus restore landed the cursor at position 0 in Chrome and the next digit got prepended. Switched the rider-kg, bike-kg, and calib trio listeners from `'input'` to `'change'` (fires on blur/Enter). Live recompute happens once the user finishes typing — no more rerender-during-typing race.
+- **Course profile renders as a passive readout when auto-detected from the race.** When the active value matches `COURSE_PROFILES[raceId].bikeProfile`, the section shows "{Headword} · {Race name}" with a subdued "Detected from your race · Mean gradient X%" caption and a small "Change" link. Click "Change" to reveal the dropdown. If the user has previously saved a different course, or no race is selected, the dropdown is shown directly. Removes one decision the user shouldn't have to make.
+- **CdA is auto-estimated on overlay open**, not just on button click. Pulled out the picker + solver into `computeAutoCalibration()` and ran it from `initialFormState` whenever `cdaSource === 'preset'`. The result populates `form.cda`, flips source to `'calibrated'`, and surfaces the existing "Estimated CdA from a recent flat ride" panel so the user sees what we used. Calibrated/user-set values are never overwritten. Re-runs on position change too, since CdA is position-specific.
+
+---
+
+## 2026-04-30 — Triathlon workout detail modal: drop "Move to", skip empty Session block, kill generic discipline hints
+
+Three cleanups to the popup that opens when a tri workout card is tapped (`src/ui/triathlon/workout-detail-modal.ts`).
+
+- **Removed the "Move to" day dropdown.** Day reordering is handled by drag-and-drop on the plan view; the dropdown duplicated that affordance and made the footer feel like a form. Done button now just closes.
+- **Suppressed the block scaffolding for unstructured single-session workouts.** When the parser yields a single `Session` block (e.g. an endurance ride: "1h 25min steady @ 192W. Conversational throughout."), the modal now renders the description as plain prose instead of placing it under a `SESS` rail. The block layout still applies whenever there is a real warm-up / main / cool-down split worth scanning.
+- **Removed `renderTargetHints` entirely.** The four discipline-level disclaimers ("ease into them over the first 30 seconds of each effort", "rest intervals are between reps", "quick cadence (~180), relaxed arms, midfoot landing", etc.) were static boilerplate that didn't read the workout — they often contradicted the actual session (the bike hint implied intervals on a steady endurance ride). Workout-specific cues belong in the description string, not in a generic discipline disclaimer.
+
+---
+
+## 2026-04-30 — Freshness + Load Ratio drill-downs: ring captions, scale consistency, removed Zone Reference cards
+
+UX/quality pass on both readiness drill-downs.
+
+**Freshness page** (`src/ui/freshness-view.ts`):
+
+- **Ring caption added**: under the "Fresh / Recovering / Fatigued / …" label, the ring now carries a one-line action sentence ("Fatigue has cleared. Good window for a hard session or race.", etc.). New `tsbZoneDescription()` helper is the single source of truth — same wording previously lived inside the Zone Reference card.
+- **Headline number consistency**: the "Fitness exceeds fatigue by N" line in the Fitness vs Fatigue card now derives `balance` from the canonical `tsbDisp` instead of `ctlDisp − atlDisp`. Independent rounding of the three values caused a 1-point drift (e.g. ring "+35" vs body "by 36") — exactly the "two numbers that mean the same thing must come from the same source" rule. Visual bars retain their independent rounding (cosmetic only).
+- **Zone Reference card hidden**: the 6-band table was model exposition, not user direction. The ring caption already gives the actionable interpretation, so the card was removed (function deleted, not just hidden).
+
+**Load Ratio page** (`src/ui/injury-risk-view.ts`):
+
+- **By-Discipline card redesigned** to lead with the *ratio* — the page is about ratios, so the unitless ratio is the headline (zone-coloured, large). Tiny acute/chronic bars below provide visual proportion; a single muted caption ("85 vs 22 TSS · this week vs 4-week avg") gives absolute context. Fixes the prior scale mismatch where per-discipline showed daily-equivalent TSS (12.1 / 3.2) while the combined card above showed weekly TSS (245).
+- **Zone Reference card hidden**: same logic as Freshness — the page's narrative copy already interprets the ratio in plain language, so the 4-band table was redundant model exposition.
+
+---
+
+## 2026-04-30 — Triathlon adaptation transparency: marker-bump toasts + end-of-week debrief
+
+Closes the user-facing transparency gap. When the system makes a non-trivial change to the plan or prediction, the athlete now hears about it. CLAUDE.md → Adaptation transparency rule codifies the pattern: small toasts for marker bumps, full modal for week-rollover summary. Mirrors running's `week-debrief.ts` shape per the mirror rule.
+
+- **`CLAUDE.md`**: new "Adaptation transparency" section. Thresholds: FTP +5W, CSS −5 sec/100m, VDOT +1 point. Notify-once architecture via `triConfig.notifiedMarkers`.
+- **`src/constants/triathlon-constants.ts`**: new `MARKER_BUMP_THRESHOLD_FTP_W`, `MARKER_BUMP_THRESHOLD_CSS_SEC`, `MARKER_BUMP_THRESHOLD_VDOT`.
+- **`src/types/triathlon.ts`**: new `notifiedMarkers?: { ftp?, cssSecPer100m?, vdot? }` field on `TriConfig` (optional per iOS-ship rule).
+- **`src/calculations/tri-marker-bumps.ts`** (new): `detectMarkerBumps(state)` returns improvements that crossed threshold; `snapshotNotifiedMarkers(state)` writes the current values to state so we don't re-pop on every launch. Pure functions; positive direction only (regressions silent — they show up in prediction/stats anyway).
+- **`src/ui/toast.ts`**: new `showMarkerBumpToast(lines)` helper following the existing toast pattern (auto-dismiss 6s, tap to clear).
+- **`src/main.ts → maybeShowMarkerBumpToast`**: runs after each post-sync prediction refresh. Surfaces toast for any bumped markers, then snapshots — guaranteeing a single notification per improvement crossing.
+- **`src/ui/triathlon/tri-week-debrief.ts`** (new): centered overlay (UX_PATTERNS.md compliant) showing per-discipline summary (sessions completed, hours, RPE-vs-expected), plan adjustments for next week (effort multiplier per discipline if ≥3% change), adaptation ratio shifts (≥5% from neutral), race outcome retro (positive only). Single "Continue" action; backdrop click also dismisses.
+- **`src/ui/week-debrief.ts → fireDebriefIfReady`**: dispatches to `fireTriDebriefIfReady` when `eventType === 'triathlon'`. Shares the `lastDebriefWeek` guard so we never double-fire across modes.
+
+**Tests**: 12 new (9 in `tri-marker-bumps.test.ts`, 3 in `tri-week-debrief.test.ts`). Full suite: 1234 / 1234 pass.
+
+**Deferred**: course-factor first-applied popup at race-pick time (per Tristan, "maybe not course factors" — race-pick screen already shows the factors panel passively); and intensity-tier promotion (threshold→VO2) which stays as a suggestion-modal entry, not silent escalation.
+
+---
+
+## 2026-04-30 — Triathlon mode: cross-training overload now routes through the tri suggestion pipeline (ISSUE-151)
+
+Follow-up to the Tier A+ scale fix earlier today. The math was right after that fix, but the *modal trigger path* still ran the running suggestion modal in Ironman setup — running-only copy ("≈ X km easy running equivalent"), running-only proposed adjustments. Three places fired it: `activity-review.ts` (after Strava sync routes pending cross-training there), `events.ts` (manual cross-training log form), and `main-view.ts` (ACWR alert). All three are now mode-aware.
+
+**New detector** — `src/calculations/tri-cross-training-overload.ts`. Pure function: sums planned tri-discipline TSS for the week (from `wk.triWorkouts.aerobic + anaerobic`), sums cross-training contribution (`iTrimp / 150` from `wk.adhocWorkouts` + `wk.garminActuals` entries that aren't matched to a tri-discipline workout), fires when the cross-training fraction is > 15% of plan. > 25% bumps severity to "warning". Picks the next remaining quality session as target (downgrade) or longest endurance (trim).
+
+**Wired into `tri-suggestion-aggregator.ts`** as a fourth detector alongside `volume_ramp`, `rpe_blown`, `readiness`. New source string `'cross_training_overload'`. New diagnostics flag `crossTrainingOverload`.
+
+**Mode-gating at every cross-training modal callsite**:
+- `activity-review.ts:1238/1864` — new `redirectToTriSuggestionFlow` helper persists items as adhoc + shows the tri suggestion modal in tri mode; otherwise falls through to the running modal.
+- `activity-review.ts:73` — `getWeekWorkoutsForReview` returns `wk.triWorkouts` in tri mode (the running plan-engine isn't the source of truth).
+- `events.ts:logActivity` — tri-mode early branch persists the manual cross-training as an adhoc workout and surfaces overload via the tri modal.
+- `main-view.ts:triggerACWRReduction` — tri-mode early-return; ACWR is run-specific (tri uses per-discipline volume ramps via `tri-volume-ramp.ts`).
+- `excess-load-card.ts:triggerExcessLoadAdjustment` — defensive early-return so a future plan-view refactor can't accidentally wire the running carry-over card into tri mode.
+
+**Untouched on purpose**: `gps/recording-handler.ts:196` is run-only by hardcoding `sport='run'`. In tri mode a recorded run *is* the run discipline of the tri plan, and the running modal's adjustments are at least directionally correct. Making it route through the tri pipeline is logged as a follow-up.
+
+**Tests** — 11 unit tests in `tri-cross-training-overload.test.ts` (threshold below/at/above, quality vs endurance target, status filtering, double-counting prevention, garminActuals vs adhocWorkouts attribution). One additional integration assertion in `tri-suggestion-aggregator.test.ts` confirming the new mod surfaces in the bundle. All 93 tests across the touched area pass.
+
+---
+
+## 2026-04-30 — Triathlon Progress detail page
+
+Mirrors the running stats Progress detail in tri mode. Additive — nothing was removed from the existing tri stats page.
+
+- **`src/ui/triathlon/progress-detail-view.ts`** (new): full detail page with range toggle (4w / 12w / All / Forecast). Charts: per-discipline CTL lines (from `tri.fitnessHistory`, daily-equivalent ÷7), three separate weekly km charts (swim / bike / run), one weekly TSS chart with three lines, FTP trend, CSS trend. All-time tile shows lifetime swim/bike/run km + session counts. Forecast tab extends km + TSS using `triWorkouts` from the next 8 weeks (dashed continuation). `// TODO(triathlon-mvp)`: forecast wiring depends on the still-evolving plan generator — re-verify once `plan_engine.triathlon.ts` stabilises.
+- **`src/ui/triathlon/stats-view.ts`**: new "Progress" card opens the detail page. The existing race forecast, adaptation, and Training Load shortcut cards are unchanged.
+- **`src/types/triathlon.ts`**: added optional `BikeBenchmarks.ftpHistory` and `SwimBenchmarks.cssHistory` (date + value + source + confidence). Tracking-only — no calculation reads these.
+- **`src/calculations/tri-benchmark-history.ts`** (new): `appendFtpSample` / `appendCssSample` helpers. One entry per day (latest wins), skip when value+source unchanged from the previous entry, hard-capped at 256 entries to bound state size.
+- **`src/main.ts`** and **`src/state/initialization.triathlon.ts`**: append a sample whenever FTP or CSS gets a new value (auto-derive on launch refresh + initial set during onboarding). User-set values from onboarding seed the history so the trend chart has a starting point.
+
+## 2026-04-30 — Triathlon plan view: drag-and-drop reorder (with stacking)
+
+Mirrors the running plan-view DnD in tri mode, with an extra gesture for stacking two workouts on the same day.
+
+- **`src/ui/triathlon/workout-card.ts`**: cards are `draggable="true"` with `class="tri-workout-card"` and `data-tri-day-of-week`. No behaviour change for the click-to-open detail modal.
+- **`src/ui/triathlon/plan-view.ts`**: three drop targets per day. Dropping on another card **swaps** the two workouts' `dayOfWeek`/`dayName`. Dropping on the day-header strip ("Mon — N sessions") **stacks** onto that day without swapping, allowing two or more workouts on the same day. Dropping on an empty rest row moves the workout there. State mutation matches the existing `applyDayMove` pattern (`workout-detail-modal.ts:applyDayMove` — in-place mutation of `wk.triWorkouts[idx]` + `saveState()`). Click-to-open is suppressed during drag so a drag never opens the modal.
+- **Brick atomicity**: a brick is a single `Workout` entry with `t === 'brick'` and `brickSegments: [bike, run]`, so it always moves as one card. No special handling needed.
+
+---
+
+## 2026-04-30 — Triathlon adaptation engine: effort scoring + auto-progression + race-outcome logging
+
+Closes the adaptation loop in tri mode. Mirrors the structure running already has, with per-discipline splits where appropriate.
+
+- **`CLAUDE.md`** (new sections): single-user → broader iOS ship context; **mirror rule** between running and triathlon mode logic. Both must stay in parity for adaptation, prediction, and workout-progression behaviour.
+- **`src/constants/triathlon-constants.ts`**: new `TRI_EFFORT_LOOKBACK_WEEKS = 2`, `TRI_EFFORT_MULT_BOUNDS = [0.85, 1.15]`, `TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC = 60`.
+- **`src/calculations/tri-effort-scoring.ts`** (extended): bike scoring now adds HR-effort cross-check (via `BIKE_LTHR_OFFSET_VS_RUN = -7` bpm, Millet & Vleck 2000) — primary when power meter absent, secondary when present. New `hrProfileFromState` helper. Karvonen-style HR reserve scaled to target IF for the bike.
+- **`src/calculations/effort-multiplier.triathlon.ts`** (new): `triEffortMultiplier(state, discipline)` mirrors running's `effortMultiplier`. Per-discipline trailing 2-week effort score → duration multiplier `[0.85, 1.15]`. Applied per discipline at plan generation/regeneration via `applyTriEffortMultipliers`.
+- **`src/workouts/plan_engine.triathlon.ts`**: applies effort multipliers to all future weeks during `generateTriathlonPlan`; same for `regenerateTriathlonWeek` when index ≥ current week.
+- **`src/workouts/bike.ts`**: when no power meter, `pwLabel` renders HR-zone label (`Z3 tempo (≈82% FTP)`) instead of bare `% FTP`. Anchored to Coggan & Allen Ch. 4 zone table.
+- **`src/calculations/tri-race-outcome.ts`** (new): `detectAndLogRaceOutcome(state)` — once-per-race detection. Sums race-day activities, pulls predicted from `triConfig.prediction`, appends to `triConfig.raceLog`. Idempotent. `getRaceOutcomeRetro(state)` returns display copy only when athlete beat their prediction by ≥ 60s.
+- **`src/main.ts → refreshTriPredictionAfterSync`**: now calls `detectAndLogRaceOutcome` after prediction refresh.
+- **`src/types/triathlon.ts`**: new `TriRaceLogEntry` shape; `TriConfig.raceLog?: TriRaceLogEntry[]` (optional per the iOS-ship rule).
+- **`src/ui/triathlon/stats-view.ts`**: new top-of-page green retro card "You beat your prediction by N min" — only renders when latest log entry has positive gap ≥ threshold.
+
+**Tests**: 26 new across `effort-multiplier.triathlon.test.ts` (12), `tri-race-outcome.test.ts` (10), plus existing aggregator/apply tests still pass. Full suite 1210 / 1210.
+
+**Deferred per "don't jump threshold" principle**: auto-promotion of intensity tiers (threshold → VO2). When duration-scaling hits its cap, that's a suggestion-modal entry for the user to accept, not silent escalation. Speed-based bike fallback also deferred — too dependent on terrain/wind. Manual brick tagging is next-session work.
+
+Full rationale + citations in `docs/SCIENCE_LOG.md → Triathlon — Adaptation engine`.
+
+---
+
+## 2026-04-30 — Sleep debt: personal-norm context with relative colour
+
+Follow-up to yesterday's debt rework. Chronic short-sleepers whose habitual sleep is below 7h sit permanently in "moderate" tier — the absolute number tunes out as a check-engine light that's always on. Discussed and rejected: relaxing the 7h floor (science-shaky, false greens for adapted-low HRV); suppressing the readiness penalty (still endorses ignoring duration). Built instead: a personal-norm line that only flags when this week is materially different from the user's typical level.
+
+**Changes** (`src/calculations/sleep-insights.ts`):
+
+- `computeSleepDebtOutlook` extended with `typicalDebtSec` (30-day rolling mean of debt series, ≥14 entries required) and `vsTypical` (`above`/`below`/`on_par`/null). Tolerance band `max(30 min, 15% of typical)`.
+- `SleepDebtOutlook` interface extended; no breaking changes.
+
+**Sleep view** (`src/ui/sleep-view.ts`):
+
+- New caption directly under the absolute headline: *"Above your typical 5h — sleep is worse than usual."* / *"Below your typical 5h — better than usual."* / *"In line with your typical 5h."*
+- Relative colour, independent of the absolute tier: amber above, emerald below, slate on-par. Lets the user see *change* at a glance without conflating with the population-anchored tier colour.
+
+**Why no science change**: the absolute number, tier label, and chart colour gradient all remain anchored to Van Dongen / Rupp / Belenky chronic-restriction evidence. The personal-norm line is purely a change signal layered on top — debt is still debt, the user is still told they're chronically short by population standards, but they also see whether *this week* moved the needle.
+
+**SCIENCE_LOG**: extended the debt-outlook section with the personal-norm rationale and honest-framing note.
+
+**Verification**: `npx tsc --noEmit` clean; all 1146 tests pass.
+
+---
+
+## 2026-04-30 — Tier A+ iTRIMP scale fix: cross-training was 150× too heavy
+
+**Bug**: any HR-tracked cross-training session (tennis, padel, soccer, cycling…) was being classified as "Very heavy training load · ≈ 25 km easy running equivalent" — the `equivalentEasyKm` always slammed the cap. Surfaced from a 39-TSS, 89-min tennis session in Ironman setup.
+
+**Root cause**: `computeTierAPlus` (`src/cross-training/universalLoad.ts:99`) took the `iTrimp` field straight from `src/calculations/trimp.ts` (which is seconds-weighted Banister TRIMP, ~150 per TSS) and multiplied it by `sportMult` to produce `baseLoad` — without the `iTrimp × 100 / 15000` normalisation that every other consumer applies. Net: `baseLoad`, `fatigueCostLoad`, `runReplacementCredit`, `equivalentEasyKm` all came out ~150× too large whenever HR data was present, but only when the iTRIMP path fired (Tier C / RPE was correct).
+
+This also broke severity classification (everything read as "extreme"), so the modal fired the "Very heavy training load" headline for routine cross-training. The TSS *display* on activity cards was always correct because that path uses the `/15000` formula directly — the bug lived only inside the suggester pipeline, which is why nothing felt obviously wrong on the surface.
+
+**Fix**: one line in `computeTierAPlus` — convert iTRIMP to TSS-equivalent before applying sport multiplier. Same convention as `tri-benchmarks-from-history.ts:638` (which had a regression test naming this exact bug from a prior incident — the lesson never made it back to `universalLoad.ts`).
+
+**Regression guard**: added `Universal Load: iTRIMP scale invariant` describe block (4 tests) in `universalLoad.test.ts` — pins baseLoad scale, equivalentEasyKm cap, Tier A+ vs Tier C order-of-magnitude agreement, and synthetic excess-load round-trip.
+
+**Triathlon mode follow-up**: the running modal still fires for cross-training overload in Ironman mode because there's no equivalent detector in `tri-suggestion-aggregator.ts`. Logged as ISSUE-151.
+
+---
+
+## 2026-04-30 — CSS test card now triggers on low confidence
+
+Previously the "Swim CSS test" row in the *Refine your benchmarks* card was suppressed whenever both `m400` and `m200` PBs existed, regardless of `cssConfidence`. PBs can be wizard-typed or stale, so this hid the prompt for users whose persisted CSS was actually low/none confidence. Confidence is the canonical signal — a real paired test (wizard or card) already promotes it to `'high'`, so the PB short-circuit was redundant and lossy. CSS now mirrors FTP: surface the test whenever confidence is below `'medium'` or the value is missing. (`src/ui/triathlon/benchmark-tests-card.ts`)
+
+---
+
+## 2026-04-30 — Bike & aero setup: focus fix, race-named course profile, looser auto-calibrate
+
+Three fixes to the Triathlon Settings → Bike & aero overlay (`src/ui/triathlon/bike-setup-view.ts`):
+
+- **Focus preserved across rerender.** Number/select inputs no longer kick the user out after each keystroke. `rerender()` now captures `document.activeElement.id` (and selection range for non-number inputs) before rebuilding `innerHTML`, then re-focuses the same field.
+- **Course profile dropdown shows the user's race name.** When `s.onboarding.selectedTriathlonId` resolves to a course bucket, that bucket's option label becomes e.g. "Flat — Emilia-Romagna" instead of "Flat (Kona, Roth, Texas)". Generic example labels remain on non-matching buckets. Removed the now-redundant "Pre-filled from …" caption and the dead `coursePrefillRace` form field.
+- **Auto-calibrate filter loosened.** `pickCalibrationRide()`: window 28 → 60 days; `deviceWatts === false` is the only rejection (null/undefined now accepted, since Strava often omits the flag for power-meter rides); gradient ceiling 0.5% → 1.0%. The auto-calibrate handler downgrades confidence to `'low'` when the ride has estimated power or gradient > 0.5%, so users see a calibrated CdA but with appropriate caveat.
+
+---
+
+## 2026-04-30 — Onboarding loading screen: step-by-step checklist
+
+Replaced the single-line spinner ("Reading your recent training…") with a 5-step checklist that ticks off as the pipeline progresses. Tells the user what's actually happening during the 20–30s wait instead of leaving them staring at a generic message.
+
+Steps: Connecting to Strava → Reading your training history → Analysing heart rate → Finding personal bests → Building your profile. Each step renders as a circle (pending), inline spinner (active), or filled tick (done). The 35s timeout swaps the footer note to an apology while preserving the active step, so the user can see how far the pipeline got.
+
+- **`src/ui/wizard/steps/review.ts`**: `renderLoading(container, message, timedOut)` → `renderLoading(container, activeStep, timedOut)`. New `LOADING_STEPS` array, new `setStep()` closure inside `renderReview` that tracks `currentStep` so the timeout can re-render with the same step. Existing pipeline renderLoading call sites updated to call `setStep(0..4)`.
+
+---
+
+## 2026-04-30 — Review screen waits for `main.ts` background syncs before reading the activity DB
+
+User observed FTP coming through on some review-screen reloads and not on others. Root cause was a race condition between two parallel data flows:
+
+```
+main.ts launchApp:                       review.ts pipeline:
+  backfillStravaHistory(16) ─┐
+  cleanupDbDuplicates(90)   ─┼─ writes      loadActivitiesFromDB() ← read
+  restoreHistoryFromServer ─┘
+```
+
+Both ran in parallel. If review's read happened *before* main's writes settled, the activity table was missing rows — including the one with `power_curve` that drives FTP estimation. Different reloads caught the race in different states, so FTP came and went non-deterministically.
+
+Made it deterministic by introducing a startup-task tracking layer in `main.ts` and having the review pipeline wait for it to settle before its own work begins.
+
+- **`src/main.ts`**: new `_startupSyncTasks: Promise<unknown>[]` array, `_launchAppPromise` deferred, `trackStartupTask<T>(p)` wrapper, and exported `awaitStartupSyncs(timeoutMs = 20_000)` helper. The three fire-and-forget DB-affecting tasks at the end of `launchApp` — `backfillStravaHistory(16)`, `cleanupDbDuplicates(90)`, and `restoreHistoryFromServer(180)` — are now wrapped in `trackStartupTask(...)` so they're observable. `_launchAppResolve` fires at the end of launchApp so callers awaiting can't snapshot an empty task array. Bounded 20-s timeout via `Promise.race` against a `setTimeout` so a stuck task can't lock the wizard indefinitely. The helper resolves regardless; never rejects.
+- **`src/ui/wizard/steps/review.ts`**: pipeline now begins with `await awaitStartupSyncs()` before any DB read. Logged as `[Pipeline] awaitStartupSyncs ✓ Xs — main.ts background tasks settled`. Loading-step labels rewritten to be specific to the work happening: "Connecting to Strava" → "Loading your training history" → "Reading your physiology" → "Finding personal bests" → "Calculating FTP, CSS and threshold pace". The FTP/CSS step now sets *before* the triathlon block runs (so the user sees that label *during* the heavy calculation, not just briefly at the end).
+
+Cost: 0–3 s on first-run reloads (most of `main.ts`'s tasks finish in 1–2 s). Subsequent reloads with cached state are ~unaffected. Worst case is bounded by the 20-s ceiling.
+
+Trade-off accepted: a slightly slower first review render in exchange for FTP / CSS / weekly volumes that are correct *every* time, not just when the race goes our way.
+
+---
+
+## 2026-04-30 — Confidence chips on FTP/CSS rows + final-blend pass to remove the review-screen flash
+
+Two small UX fixes that close out a long debugging arc.
+
+**1. Confidence chip next to FTP and CSS values (`renderFtpRow` / `renderCssRow` in `src/ui/wizard/steps/review.ts`).** The CSS caption already said "Estimate only — run a 400 m + 200 m test to lock in your real CSS" when the derived confidence was `'none'` (e.g. anchor swim from 16 months ago), but the caveat lived only in fine print. New `renderConfidenceChip` helper mirrors the stats-view pattern (small inline pill, colour-coded by tier) — empty for `'high'`, "Medium confidence" for `'medium'`, "Low confidence" for `'low'`, "Rough estimate" for `'none'`. Visible at a glance next to the value, so users can tell when a 2:56/100m number shouldn't be trusted at face value. Same chip on FTP for consistency, even though most FTP estimates currently land at `'high'` confidence.
+
+**2. Final `refreshBlendedFitness` pass at the end of the review pipeline.** The user observed the screen flashing — first render showed VDOT 47.4 / LT 4:21, then ~500ms later it jumped to VDOT 48.9 / LT 4:08. Root cause: `refreshBlendedFitness` ran at step 4 of the pipeline, before steps 5–7 seeded `s.pbs` (from `cachedPbSources`), `s.maxHR` (from the highest activity peak HR), and `s.onboardingRunHistory` (from `loadActivitiesFromDB`). So the first render got a `s.v` computed against an incomplete state. An unrelated background trigger (ActivitySync etc.) ran `refreshBlendedFitness` again 500ms later — that second pass had the seeded data and produced the right number, causing the visible flash.
+
+Added one more `refreshBlendedFitness(getMutableState())` call right before the final `renderContent`. Cost is ~10ms (refresh is cheap and the user's log already showed it as `0.0s`); benefit is that the first render is the only render. Background triggers downstream find nothing to update because the math has already settled.
+
+- **`src/ui/wizard/steps/review.ts`**: new `tickStep('finalBlend', ...)` log line emitted just before the final summary block. New `renderConfidenceChip` helper. CSS row + FTP row pass `derived.confidence` to it.
+
+---
+
+## 2026-04-29 — Volume rows: 1 decimal place + CSS provenance log
+
+Two small UX improvements that close out a debugging round.
+
+**Volume rows now show 1 decimal place** (`14.5 km / week` instead of `15 km / week`). At triathlon-typical low cycling volumes (one ride per month giving ~14 km/wk) and triathlon-typical low running volumes (10–30 km/wk during a bike-heavy block), zero-decimal rounding flips known numbers visibly — `Math.round(14.5)` becomes 15 in JS, contradicting what the user knows they did. At higher volumes the decimal is noise but harmless. Bike, run, and swim follow the same rule (swim is shown in metres so this only changes bike/run output).
+
+**CSS provenance log on every review render.** The user reported "Swim CSS = 2:56/100m from somewhere idk where" — derived from "4 swims in your history" with no way to verify which sessions. Now logs to console:
+
+```
+[review] CSS swim source: 2026-04-15 (1850m, 2.0w old) — buffered to 176s/100m
+[review] all qualifying swims: [
+  { date: '2026-04-15', distance: '1850 m', duration: '52 min', pace: '2:48/100m', paceSec: 168 },
+  { date: '2026-03-22', distance: '1200 m', duration: '36 min', pace: '3:00/100m', paceSec: 180 },
+  …
+]
+```
+
+The first line names the anchor swim (the fastest in the recency window — what `cssSecPer100m` was buffered from). The second line lists every swim the estimator could see, newest first. Lets the user reconcile the displayed CSS against reality without leaving the page.
+
+- **`src/ui/wizard/steps/review.ts → renderDisciplineVolumeRow`**: bike value now uses `formatKm(weeklyKm, unitPref, 1)`. Same for `renderVolumeRow` (running).
+- **`src/ui/wizard/steps/review.ts`**: CSS-source diagnostic added right after `deriveTriBenchmarks` runs, alongside the existing per-week breakdown log.
+
+---
+
+## 2026-04-29 — Activity loader dedup: power data dominates the score
+
+After the merge fix landed, FTP still wasn't surfacing for the user. Diagnostic log showed `kept 63 bike rides post-dedup — power_curve:1 averageWatts:62 device_watts(true):2`: only 1 ride out of 63 had a usable `power_curve`, and only 2 had a real power meter (`device_watts: true`). For triathletes the ratio of power-bearing rows is tiny — most "average watts" values are Strava's estimates from speed/grade/wind, not from a power meter, and the FTP estimator correctly rejects them.
+
+The dedup score had Strava-source at +1000 and no explicit weight for power data. So a Strava-sourced ride that lacks power could outscore a Garmin ride that has it, even with the merge fix. The merge then *should* pull the loser's power across, but the user's point was right: we should rank power presence above source preference so the kept row is structurally the right one and we never depend on the merge as the only safety.
+
+New score order:
+
+- `power_curve` (with at least one entry) → +5000
+- `device_watts === true` → +2000
+- `averageWatts > 0` → +500
+- Strava-source (`garminId.startsWith('strava-')`) → +1000 (now a tiebreaker, not the dominant axis)
+- HR zones → +100
+- kmSplits → +50
+- polyline → +25
+- + raw distanceKm
+
+A power-meter-bearing Garmin ride now beats a Strava-sourced ride without power outright. Field-merge below still backfills HR zones / splits / polyline / best_efforts from the loser, so Strava's richness isn't lost.
+
+- **`src/data/tri-activity-loader.ts → score`**: rewritten with power fields at the top of the priority order.
+
+---
+
+## 2026-04-29 — Activity loader dedup: merge fields instead of dropping the loser
+
+After the initial dedup landed, the user reported FTP "disappeared again" — the previously-derived 295 W estimate from a 310 W ride became `--` with caption "No recent FTP test." Root cause: the dedup picked Strava-sourced (+1000 score) over Garmin-sourced rows, but if Strava's stream processing didn't capture the `device_watts`/`power_curve` fields and Garmin had them, dropping the Garmin row stripped the power data. Same risk for any field where one source captures it and the other doesn't (HR zones, splits, drift).
+
+Replaced "drop the loser" with "merge nullish fields from the loser onto the winner". The winner row keeps its identity (id, name, polyline preference) but any null or zero field gets backfilled from the dropped duplicate. So power data from Garmin survives onto the Strava row that wins, HR zones from the source that recorded them survive, etc. Triples merge correctly because each successive duplicate merges into the running winner.
+
+- **`src/data/tri-activity-loader.ts → dedupeActivities`**: new `mergeKeepingFields(winner, loser)` helper called in place of the previous "replace if better, else drop" branch. Walks every field on the loser and copies it onto the winner where the winner had `null`/`0`. Log line updated to reflect the merge semantics.
+
+---
+
+## 2026-04-29 — Activity loader dedup: same-sport activities within ±10 min are collapsed
+
+When the user reported a 173 km cycling week alongside three zero weeks, they suspected a duplicate — and were probably right. The server-side dedup in `sync-activities` (CLAUDE.md "Strava is the canonical activity source") suppresses Garmin rows within ±10 min of a Strava row at *sync time*, but historical activities that landed in the DB before that suppression existed, or under different windows, can sit there as a duplicate pair forever. Volume calcs, best-effort pickers, and FTP/CSS derivation all double-count them.
+
+Added defensive client-side dedup in `loadActivitiesFromDB` so every downstream consumer (review screen volumes, long-ride/swim pickers, `deriveTriBenchmarksFromHistory`, the LT engine via `onboardingRunHistory`) gets a clean list.
+
+- Two activities are duplicates when they share a sport class (run / bike / swim) and start within ±10 minutes.
+- Of each pair, the **higher-quality** row wins: Strava-sourced first (`garminId` starts with `'strava-'` → +1000), then has-HR-zones (rich stream signal → +100), then has kmSplits (+50), polyline (+25), then longer distance, then earlier startTime as a stable tiebreaker.
+- Different sports at the same time aren't duplicates — a brick run starting right after a ride is two distinct activities.
+- O(n) scan with ~30-entry look-back; duplicates cluster within minutes so the partner is always found quickly.
+- Logged when any duplicates fire (`[tri-activity-loader] Deduped N same-sport activities…`) so the source of any "double-count" report is visible in the same console session.
+
+- **`src/data/tri-activity-loader.ts`**: new `dedupeActivities` helper called once before returning. Sport classification helper inlined; doesn't change the existing single-discipline filters elsewhere in the codebase.
+
+---
+
+## 2026-04-29 — Review screen: bike/swim weekly volumes + best-effort long ride/swim picker
+
+Three connected changes to the triathlon review screen.
+
+**1. Long ride / long swim now picks the *fastest* sustained effort, not the closest distance to race length.** The previous `pickClosest` selected by `Math.abs(activity.distanceKm - raceKm)` so a 90.9 km ride at 12.7 km/h beat a 92 km ride at 30 km/h, even though the latter is the stronger fitness signal. Renamed to `pickFastest` — sorts by descending avg speed (km/sec) among activities ≥ minimum-distance threshold, ties broken by longer distance. The minimum-distance threshold (80 % of the race or half-IM, whichever is smaller) is unchanged so 70.3-distance work still surfaces for IM athletes.
+
+**2. Weekly bike + swim volume rows on the review screen (triathlon mode only).** Volume row was running-only; "Weekly volume" label was ambiguous for triathletes whose 31 km/wk run figure tells you nothing about the 8 hours of cycling and 6 km of swimming they're putting in. Now three read-only rows under "Recent training" when in tri mode: run, bike, swim. Bike and swim are derived from `loadActivitiesFromDB` (the working REST query) so they're consistent with the FTP/CSS derivation source. Swim volume displays in metres (1,200 m / week reads better than 1.2 km / week at typical training volumes); bike follows the user's km/mi preference. Stored in module-local caches (`cachedWeeklyBikeKm`, `cachedWeeklySwimKm`) and cleared on Continue alongside the existing caches.
+
+**3. Per-week volume diagnostic.** Per-discipline weekly breakdown logged at pipeline-end so we can verify the "31 km/wk" type numbers are right vs an aggregation bug. Format: `[review] last-4-week volume breakdown (km/week): 2026-04-22: run=12.4 bike=145.2 swim=2.10 | 2026-04-15: run=8.0 bike=120.5 swim=1.80 | …`. Shows whether a low average is dragged down by zero-discipline weeks (common for tri athletes who block-train) or a calc bug.
+
+Also flips `s.detectedWeeklyKm` to the `triActs`-derived running km when triathlon-mode runs the DB read — same activities the previous fallback was computing from `cachedActivities`, but now the source matches the bike/swim numbers in the rows above so all three are derived from the same dataset.
+
+- **`src/ui/wizard/steps/review.ts`**: `pickClosest` → `pickFastest`. New `cachedWeeklyBikeKm` / `cachedWeeklySwimKm` module-locals. New `renderDisciplineVolumeRow` for read-only bike/swim rows. Per-week breakdown log emitted from the triathlon block. Cleanup added to the Continue handler.
+
+---
+
+## 2026-04-29 — Fix: weekly volume "--" on review screen when edge-function history bailed
+
+After FTP/CSS started populating, the Weekly Volume row still rendered as `--` despite the user having 161 runs visible via the REST path (caption correctly read "last 4 weeks · 161 runs in your history"). Root cause: `s.detectedWeeklyKm` is only ever set by `fetchStravaHistory` (mode='history' on the edge function) writing `s.historicWeeklyKm` → 4-week average. That path returns an empty array early when the edge-function aggregation comes back empty, leaving `detectedWeeklyKm` as `null`. Same kind of "edge-function aggregation finds zero" issue that bit `loadActivitiesFromDB` earlier in this session.
+
+Added a client-side fallback in `review.ts`: after `fetchRecentActivities` populates `cachedActivities` (REST path, known working), if `s.detectedWeeklyKm` is still null we compute a 4-week average directly from the running activities we already have. Doesn't replace the canonical path — when the edge-function aggregation produces a value, we leave it alone.
+
+- **`src/ui/wizard/steps/review.ts`**: added the fallback right after `cachedActivities = rows`. Filters to running activity types (`RUNNING` or any string containing `RUN`), bounds to last 28 days, sums `distance_m`, divides by 4. Logs `[review] detectedWeeklyKm fallback: N km/wk` so the source is visible.
+
+The right longer-term fix is to investigate why the edge function's `mode: 'history'` aggregation returns 0 rows for users who clearly have data in `garmin_activities`. That's likely the same auth/filter pattern that affected `loadActivitiesFromDB` and is worth a dedicated edge-function pass. Tracked as a follow-up.
+
+---
+
+## 2026-04-29 — Fix: review screen rendered stale onboarding state on first run
+
+After the previous DB-loader fix, FTP/CSS derivation was working (the row caption correctly read "Derived from your 20-min effort on Apr 27 (310 W)" — proving `cachedTriBenchmarks` was populated) but the value rendered as `--`. The auto-derived FTP and CSS values weren't appearing in their rows on a fresh onboarding pass.
+
+Root cause: `updateOnboarding({ triBike, triSwim, ... })` in `controller.ts:79–89` creates a *new* onboarding object via spread, then writes it via `updateState`. The `state` argument captured by `render(container, state)` at wizard-step entry is a reference to the *pre-patch* object. After the pipeline patched onboarding with the derived values, `renderContent(container, state)` was called with the stale reference — so `state.triBike?.ftp` was still undefined even though the store had the new value.
+
+The caption worked because it reads from the module-level `cachedTriBenchmarks` (live), not from `state`. The value was reading from `state` directly. Two sources of truth in the same row, one fresh, one stale.
+
+Fix: re-read `getState().onboarding` immediately before `renderContent` is called, so the renderer sees the patched values. Both the success path and the catch path now do this.
+
+- **`src/ui/wizard/steps/review.ts`** — `renderContent(container, state)` replaced with `renderContent(container, getState().onboarding ?? state)` at the two call sites that follow the await chain.
+
+The first time a user reloaded after the DB-loader fix, this happened to work because the patched values were already persisted in the store from a previous pass. Restarting onboarding wiped them, the patch ran again, but the local `state` reference didn't see it — surfacing this latent bug.
+
+---
+
+## 2026-04-29 — Fix: `loadActivitiesFromDB` returned 0 rows when DB had hundreds
+
+The triathlon-mode review pipeline silently fell over for users with synced Strava history. `fetchRecentActivities` in `review.ts` (REST + JWT bearer token, RLS-filtered) saw 606 rows; `loadActivitiesFromDB` in `tri-activity-loader.ts` (Supabase JS client + `.eq('user_id', userId)` filter) saw 0 against the same DB.
+
+Same auth state, different query mechanism — the JS client's `supabase.auth.getSession()` was either out-of-sync with `getAccessToken()` or the `user_id` column doesn't match `auth.users.id` in this app's schema. Either way, the entire benchmark-derivation pipeline was being fed an empty array: no rides → FTP `confidence: 'none'`, no swims → CSS `confidence: 'none'`, no runs in `onboardingRunHistory` (which I had previously seeded from this loader) → empirical LT path silent, falls through to Daniels-only.
+
+Switched `loadActivitiesFromDB` to the same REST + JWT pattern `fetchRecentActivities` already proves works. RLS handles the user-row filter server-side via `auth.uid()`; we don't need to filter client-side. Same return shape, same field mapping; just a query mechanism swap.
+
+For the user's data: bike FTP now derives the expected 295 W from the 310 W ride, swim CSS surfaces, and the empirical LT path can fire on the seeded run history.
+
+- **`src/data/tri-activity-loader.ts`**: rewritten using REST API + JWT bearer token. Drops the JS-client session lookup and `.eq('user_id', userId)` filter.
+
+---
+
+## 2026-04-29 — CSS confidence-tiered estimator + smarter test-card prompts
+
+The CSS estimator was the laggard of the three benchmark estimators (LT and FTP both got recent rebuilds; CSS still picked the fastest swim ≥800m and added a flat 5 s/100m buffer with no recency, no test-grade detection, no confidence). Two consequences: the wizard "Refine your benchmarks" CSS test card always fired regardless of how good the auto-derived value was, and there was no UI signal to tell a user "this is a rough guess from limited data — run the test".
+
+Added a `confidence: 'high' | 'medium' | 'low' | 'none'` field to `CssEstimate`, mirroring the FTP estimator. Tiers are driven by recency (4w / 8w / 12w cutoffs), sustained distance (≥1500m = test-grade per Dekerle 2002), and a hard-effort signal (best swim ≥3 s/100m faster than the recent median). The estimator still returns a value at every tier — race-time prediction can't gate on confidence — but the tier drives whether the in-app test prompt fires and how strongly the UI hedges. A paired m400+m200 PB on file always shorts the cascade and is tagged `'high'`.
+
+Persisted `cssConfidence` on `triConfig.swim` (and `ftpConfidence` on `triConfig.bike`) at every write-point: launch-time refresh in `main.ts`, wizard initialisation in `initialization.triathlon.ts`, and the benchmark test card's apply handler. The persisted tier is what `pendingBenchmarkTests` reads — the card now fires only when confidence is `low`/`none`, not on every absence of a gold-standard test. Fresh test in the can shorts the prompt; stale data still nags.
+
+Caption work across three surfaces. Wizard review CSS row hedges: "Estimate only — run a 400 m + 200 m test to lock in your real CSS" at low confidence, "Run a 400 m + 200 m test to sharpen this number" at medium. Triathlon stats card has a new `benchmarkCell` that shows a per-cell hint underneath the value when the underlying estimate is low-confidence and derived. Account view benchmarks grid surfaces a terse "estimate · do 400 + 200 test" sub line for the same case. FTP gets the same treatment for its low-confidence path (the wizard FTP row already had `formatFtpDerivationCaption` doing this; the stats and account surfaces inherit the new hint helpers).
+
+12 new tests cover the tier rules, including the all-easy-swims case (medium not high — no spread), test-grade-but-stale (medium at 6w), short-but-recent (medium not high — distance gate), and the hard-cutoff case (low at 8–12w, none beyond 12w). Full suite 1173/1173.
+
+`docs/SCIENCE_LOG.md` has the full rationale: tier table, justification for every constant (Dekerle 2002, Mujika 2010 detraining, the +5 s/100m buffer choice), why source and confidence are persisted separately, and known limitations of the median-based hard-effort signal.
+
+## 2026-04-29 — Onboarding pipeline observability + LT row VDOT caption fix
+
+Two related changes that close out the LT/VDOT debug loop.
+
+**1. LT row caption now shows the VDOT actually used by Daniels (`renderLtRow` in `src/ui/wizard/steps/review.ts`).** Previously the Daniels-source caption said "Estimated from your VDOT (X.X)" using raw `s.v`. After the unified `getPhysiologicalVdot` priority chain landed, the engine consumes a different VDOT (e.g. PB-median 51.6) than `s.v` (Tanda-blended 47.4). Caption now reads the same value the engine read, so the LT row no longer contradicts the VDOT row.
+
+**2. Pipeline observability for the review-screen data flow (`renderContent` in `src/ui/wizard/steps/review.ts`).** The review pipeline silently swallowed every step's errors with `.catch(() => {})`. When a step produced no data, you'd see "--" in the UI with no way to know whether the step ran and returned null or never fired at all. Now logs:
+
+- Per-step `[Pipeline] ${name} ✓ ${dt}s — ${summary}` after each await: `backfillStravaHistory`, `garminBackfill`, `syncPhysiologySnapshot`, `refreshBlendedFitness`, `fetchRecentActivities`, `loadActivitiesFromDB`, `deriveTriBenchmarks`. Each summary names the fields the step produced so you can see which one is null.
+- `[Pipeline] ALL STEPS COMPLETE in ${dt}s — about to render` banner with a multi-line state snapshot covering physiology / vdot / lt / pbs / runs / tri benchmarks. Single block answers "what's in state when the page renders?"
+- `[Pipeline] FAILED` line on the error path so a thrown step doesn't disappear silently.
+
+Closes the loop on this session's debugging — next time a value is missing on the review screen, the console tells you within one reload which step couldn't produce it.
+
+---
+
+## 2026-04-29 — Unified physiological VDOT resolution (one function, three surfaces)
+
+The VO2 stats card, the LT engine, and the onboarding fitness row each had their own ad-hoc logic for picking a "best available VDOT" with different priorities and confidence semantics. Same athlete, same data — different numbers across surfaces by several VDOT points. Worse, the LT-engine fallback chain landed on `s.v` (Tanda-blended, volume-discounted) when device VO2 was missing, producing 4:13/km LT for an athlete whose Garmin watch said VO2 = 56 and whose race PBs implied VDOT ≈ 53 (LT ≈ 4:06–4:09/km). Different tabs of the same dev session produced different LT values because one had physio sync landed and the other didn't.
+
+Consolidated into a single resolver in a new module: **`src/calculations/physiological-vdot.ts → getPhysiologicalVdot(s)`**. Returns `{ vdot, source, confidence, detail, isDeviceFresh, deviceAgeDays }`. Five-tier priority chain:
+
+1. **Device** — `s.vo2` when within a 90-day freshness window (computed from `s.physiologyHistory`). Watch is ground truth when fresh; user's "trust the watch" rule baked in.
+2. **HR-calibrated** — `s.hrCalibratedVdot.vdot` at medium+ confidence. Pace-vs-%HRR regression across recent runs.
+3. **LT-back-derived** — `deriveVdotFromLT(s.lt)` only when `s.ltSource ∈ {empirical, critical-speed, garmin, override}`. Skipped for `daniels`/`blended` to avoid circularity.
+4. **PB-median** — median of `cv()` across race-distance PBs. Median (not max) because imbalanced PB profiles shouldn't be dominated by a 5K specialist's outlier or a marathoner's slow short-distance time.
+5. **Tanda fallback** — `s.v` as last resort, with `confidence: 'low'`. Honest about when nothing better is available.
+
+Critically, the function returns the **physiological** VDOT — no `rpeAdj`, no `physioAdj`. Those adjustments belong in `getEffectiveVdot(s)` for race-time prediction and pace-zone prescription, where they're already used correctly. Physiology doesn't shift when the user clicks an RPE dial.
+
+**Files changed:**
+
+- **`src/calculations/physiological-vdot.ts`** (new) — `getPhysiologicalVdot`, types, relocated `pbDerivedVdot`. Pure functions, no I/O, no state mutation.
+- **`src/calculations/physiological-vdot.test.ts`** (new) — 20 tests covering the priority chain, staleness window, LT-source gating, PB-median math, no-adjustments-leak invariant.
+- **`src/data/ltSync.ts`** — `buildLTInputs` and `recomputeLT` now both use `getPhysiologicalVdot(s).vdot` for the Daniels component instead of duplicating the priority chain inline. Local `pbDerivedVdot` deleted (lives in the new module).
+- **`src/ui/stats-view.ts`** — `resolveVO2Display` now anchors on the unified resolver. The estimated-mode caption is now precise ("Calibrated from N steady runs", "Median of your race-distance PBs", etc.) instead of generic "Estimated from training data". Stale device VO2 (>90 days) now correctly falls through rather than being pinned. The fitness card bar value also routes through the unified function.
+- **`src/ui/wizard/steps/review.ts`** — `renderVdotRow` now reads from `getPhysiologicalVdot(s)` and routes captions on `result.source`. Adds the missing device-tier branch (the row was never showing "From your watch" before, even when `s.vo2` was set). Diagnostic `[review] recomputeLT` log simplified to print the unified result.
+- **`docs/SCIENCE_LOG.md → Lactate Threshold Derivation`** — VDOT input priority subsection rewritten to reference the unified function and document the 90-day staleness rule, the LT-derivation circularity guard, and the deliberate no-adjustments policy.
+
+For the user's data: triathlon-onboarding tab and running-mode tab now show the same VDOT and LT pace given the same data. When `s.vo2` is fresh (Garmin synced) all three surfaces show 56 and LT lands at ~4:02/km. When `s.vo2` is missing, all three show the median PB-derived VDOT (~52) and LT lands at ~4:08/km. Tabs disagree only when their underlying physiology data genuinely differs, which is the intended behaviour.
+
+Out of scope (deliberate, follow-up): full audit of `s.v` consumer sites (~40+) to verify each is reading the right VDOT for its purpose; `s.restingHR` fallback (mirrors the `s.maxHR` fallback added earlier this session); critical-speed-failure surfacing in the LT detail page; "why did this method not fire" UI in the LT methods card; physiology-pipeline observability (`[Physiology] usable sources: …` summary log).
+
+---
+
+## 2026-04-29 — Plan-reset resilience: long-term `previousPlanWks` architecture
+
+Hardened the plan-reset history flow so a long-term user can change plans, switch browsers, or have localStorage cleared without losing day-level activity history. Strava (`garmin_activities` table on Supabase) is now treated as the source of truth and `s.previousPlanWks` is a hot cache that rebuilds itself.
+
+- **Archive cap 2 → 12 plans** (`src/state/initialization.ts`): exposed as `MAX_ARCHIVED_PLANS`. Both `archiveCurrentWksIfPopulated` and `restoreHistoryFromServer` reference the same constant via the same module path so they stay in sync.
+- **Heavy-field stripping**: only `polyline` (multi-KB encoded GPS string) is dropped from archive entries; `kmSplits`, `hrZones`, `iTrimp`, calories, avgHR, hrDrift all stay so the activity-detail popup, weekly TSS, and charts still work for archived activities. Map view loses the route trace; everything else survives.
+- **Auto-restore on every launch** (`src/main.ts`): boot sequence calls `restoreHistoryFromServer(180)` if `previousPlanWks` is empty, the last successful restore is older than 24h, OR a legacy "stripped-too-aggressively" archive is detected (iTrimp present but kmSplits/hrZones missing — schema-sniff). New `lastHistoryAutoRestoreISO` field on state acts as the idempotency guard.
+- **Boot-time + view-time + redistribute-time archive truncation** (`src/state/initialization.ts`, `src/main.ts`, `src/ui/plan-view.ts`): three-layer cleanup of archive weeks that overlap the live plan's date range (typical pre-fix scenario: a 10-week plan + 1 continuousMode tail-week archived just before generating a new plan whose week 1 starts on the same Monday). Render-time slice in `renderPlanView`'s archive-mode setup means the past-plan UI immediately self-corrects to the right week count without waiting for a state save.
+- **Redistribute now removes from archive after copying** (`src/state/initialization.ts`): `redistributeArchivedActivitiesToNewPlan` deletes activities from the archive after `matchAndAutoComplete` puts them in the new plan, so a `garmin_id` only ever lives in one place.
+- **Activity-detail popup works in archive mode** (`src/ui/plan-view.ts`): `.plan-act-open` and `.plan-adhoc-open` handlers now read from the synthetic archive `s` when `_viewArchiveIdx !== null`, instead of falling through to the live `getState().wks` and silently no-op'ing.
+- **`restoreHistoryFromServer` queries `garmin_activities` directly** (`src/data/stravaSync.ts`): the standalone `sync-strava-activities` endpoint filters by sync-state and returns 0 historical rows. The recovery now goes straight through the supabase client — `select * from garmin_activities where user_id = ? and start_time >= ?` — so it actually returns the user's historical activities. Densifies the weeks array (fills empty rest weeks) so `_resolveWeekForDate`'s array-index lookup stays aligned. Replaces archive entries with the same `planStartDate` instead of appending.
+- **Past-plan detail page** (`src/ui/stats-view.ts`): drilled into from "Plan history" cards on the Total tab. Stats table + weekly distance chart + weekly TSS chart + activity list + Sleep & Physiology card (avg sleep / HRV / RHR + nightly score sparkline) for the plan window. Per-activity TSS now uses `getNormalizerFromState(s)` so individual rows sum to the weekly chart.
+- **Archive view in plan-view** (`src/ui/plan-view.ts`): `<` arrow at week 1 of live plan steps into the most recent archive at its last week; back-and-forward navigation crosses plan boundaries, with the same plan-view UI rendering off the archive's `wks`. Synthetic state sets `s.w = arc.weeks.length + 1` so every archived week reads as "past" — no Mark-Done / Skip / +Add Session buttons. Hero shows a "Past plan" badge and grey neutral background instead of the phase-tinted sky. Load & Taper page accepts an `archiveIdx` and uses the matching grey palette.
+- **Total Progress tab cleanup** (`src/ui/stats-view.ts`): excluded `WALKING / GENERIC / OTHER` from Time Active and Calories totals (phone step-counter walks were inflating them ~3×). Added a date-range subtitle to make the stats window explicit. Activity dedup uses `garminId` set across current + archived plans.
+- **Physiology window 28d → 90d** (`src/main.ts`): `syncPhysiologySnapshot` and `syncAppleHealthPhysiology` both pull 90 days at every call site. After a state wipe + reconnect users get 3 months of HRV / RHR / sleep history back instead of just 4 weeks.
+
+---
+
+## 2026-04-29 — Wizard review: race-distance PBs in triathlon mode
+
+- **`src/ui/wizard/steps/review.ts`**: the "Personal bests" block on the wizard review step listed all four run distances (5K/10K/HM/Marathon) regardless of training mode, which was redundant for a triathlete who already saw FTP and CSS rows above and only races one run distance. In triathlon mode the section now collapses the run side to the race-distance PB only (Half marathon for 70.3, Marathon for ironman) and adds two new informational rows: a "Long ride" and a "Long swim", each picking the *closest-to-race-distance* activity from the user's synced history (not the longest — a 200 km outing isn't representative of a 90 km race-day effort). Candidates must clear `min(80% of own race distance, half-Ironman distance)` so a long-course athlete who has only done 70.3-distance volume still sees credit. Each row shows time + distance + the activity name; if nothing qualifies, the row is omitted (and the section disappears entirely if all three are empty).
+- **`src/data/tri-activity-loader.ts`**: the loader was already fetching `activity_name` from `garmin_activities` but discarding it in the row mapper. Mapping it to `displayName` so the wizard can label the longest-effort rows instead of falling back to a generic caption.
+
+---
+
+## 2026-04-29 — Triathlon stats fixes: projection uses planned cadence, fitness scale corrected, plain-language labels
+
+User review of the live triathlon stats page surfaced several issues:
+
+- **Bug — "plan delivers slower" in race forecast.** `predictTriathlonRace → buildProjection` was reading `sessionsPerWeekByDiscipline` which scans **historical** `garminActuals`. For week 1 of a fresh plan with no synced sessions yet, this read 0 sessions/week → undertraining penalty hit hard → projected fitness was *worse* than current → the forecast card showed "plan delivers slower by 1:32". Fixed by adding `plannedSessionsPerWeekByDiscipline` (`tri-volume-by-discipline.ts`) which reads upcoming `triWorkouts` cadence over the next 4 weeks. The projection now answers "if you stick with the plan" — using the plan's prescribed cadence, not the athlete's pre-plan history.
+- **Bug — CTL/ATL/TSB displayed at weekly-EMA scale.** Per CLAUDE.md memory, all CTL/ATL/TSB display values must be the TrainingPeaks-style daily-equivalent (÷7). The triathlon stats card was showing raw values (Run CTL 158 vs the correct 22.5). Fixed both the "Current fitness" card and the fitness-history chart's y-axis.
+- **UX — CTL/ATL/TSB acronyms.** Replaced with plain-language labels: "Fitness", "Fatigue", "Form". Added a one-liner explanation under the section header. ACWR is now "Workload ratio".
+- **UX — "Your targets" mislabel.** Renamed to "Your benchmarks" since the four cells are current capacity markers (CSS, FTP) and plan settings (hours/wk, split), not race-day targets.
+- **UX — Fitness history chart context.** Added an introductory line explaining what rising/falling lines mean. Legend now shows the current value next to each discipline label.
+- **Forecast-card copy.** When the projection is faster than current, the headline still reads "plan delivers X faster by race day". When it's slower (durability cap or adherence penalty outweighs horizon gain — a model artefact, not actual plan behaviour), we now just show "If you raced today: X" without the misleading "delivers slower" framing.
+- **Tests.** Updated the end-to-end "projected faster than current" test to populate planned `triWorkouts` for upcoming weeks. Full suite: 1146/1146.
+
+---
+
+## 2026-04-29 — LT: PB-derived VDOT becomes a fallback before Tanda-blended `s.v`
+
+The Daniels component of LT was reading `s.vo2 ?? s.v ?? null`. When the device-direct VO2max wasn't available (e.g. fresh session with no Garmin/Apple physio sync, or a separate dev tab where physio sync hadn't fired), it fell straight to `s.v` — the Tanda-blended VDOT, which discounts for current run volume. For triathletes who cut back on running while still aerobically fit, that pulls Daniels' T-pace 25–30 sec/km slower than physiology actually supports, and the same athlete saw the LT shift from 4:03/km on a tab where physio sync had landed (s.vo2 = 56) to 4:13/km on a tab where it hadn't (s.vo2 = null).
+
+PBs are physiological — they reflect peak race-time capability and don't drift with weekly volume. They're already in state via the Strava `best_efforts` extraction. Use them as the middle fallback.
+
+- **`src/data/ltSync.ts`**: new `pbDerivedVdot` helper computes the median VDOT across the user's race-distance PBs (5K / 10K / HM / marathon) via Daniels' `cv()`. Median (not max) because PB profiles are often imbalanced — a fast 5K specialist with weak endurance shouldn't have their 5K alone drive LT, and a marathoner with a slow 5K shouldn't lose theirs to it.
+- **`src/data/ltSync.ts → buildLTInputs` / `recomputeLT`**: VDOT priority is now `s.vo2 ?? pbDerivedVdot(s) ?? s.v ?? null`. The empirical LT path (sustained efforts) is unchanged and remains the right anchor when present; this fallback is only for the Daniels component.
+- **`src/ui/wizard/steps/review.ts`**: `[review] recomputeLT` log now prints `s.vo2`, the PB-derived median VDOT, and the individual per-distance VDOTs so it's transparent which value won and how the per-distance candidates clustered.
+
+For the user's data this lifts the triathlon-onboarding LT from 4:13/km to ~4:06/km, matching the running-mode value (which had Garmin VO2 56 available) and lining up with Garmin's 4:12/km within ~6 sec/km.
+
+---
+
+## 2026-04-29 — Readiness coach: hardFloor-driven message, advisory note, gated CTA
+
+Three coupled fixes to the readiness card so the score, label, CTA, and message all describe the same constraint.
+
+**1. `derivePrimaryMessage` now routes by `readiness.hardFloor` first (`src/calculations/daily-coach.ts`).**
+
+Before: `heavySleepDebt` (sleepBank < -5h) fired before any leg-load check, and there was no leg-load branch at all. A user with moderate leg fatigue capping readiness at 54 would see the leg-load badge ("Manage Load"), the leg-load CTA ("Protect the legs"), but a sleep-debt message. After: when `hardFloor === 'legLoad'`, the existing `readiness.legLoadNote` is surfaced verbatim (e.g. *"Moderate leg load from cross-training. Impact risk slightly elevated if running."*). Other floors continue to use their existing copy. The new branch sits between Tier 1 (session-complete) and Tier 2 (red flags), so a big finished session today still gets the recovery message even if leg load is the underlying cap.
+
+**2. Plan and home advisory note softened (`src/ui/plan-view.ts`, `src/ui/home-view.ts`).**
+
+The note rendered when `coach.workoutMod === 'downgrade'` previously read `"Downgraded."` — past-tense, claiming an action had occurred. Nothing is actually downgraded; the workout description is unchanged. Changed to `"Go easier today."` — directive but accurate. The `'skip'` branch keeps `"Consider rest today."` which was already advisory.
+
+**3. Readiness-adjust CTA hidden when its handler has nothing to do (`src/ui/home-view.ts`).**
+
+Previously shown whenever `readiness.score <= 59`. On a rest day with normal ACWR and no unspent cross-training load, the click handler fell through to `renderPlanView()` — silent navigation, no manage-load action. Now gated on the same conditions the handler branches on: ACWR caution/high, unspent cross-training items, or an unrated run anywhere from today through end-of-week. The remaining-week check covers plan-engine moves that can slide a hard session into today.
+
+**Follow-ups (same day):**
+
+- **Double-messaging fix** (`src/ui/home-view.ts`): when `coach.workoutMod === 'downgrade'/'skip'`, the home today card showed the lead clause **plus** `coach.primaryMessage`, and the readiness-ring card directly below repeated the same `primaryMessage` as its sentence. The today-card note now renders only the lead clause ("Go easier today." / "Consider rest today.") so the body lives once on the readiness ring. Plan-view note is unchanged because the plan page has no readiness sentence on the same view.
+- **Tighter button gate for `legLoad`** (`src/ui/home-view.ts`): the original gate accepted any unrated non-cross workout in the remaining week. In triathlon mode the typical fallback is "Activity N — RPE 5" generic placeholders, which let the gate through but gave the click handler nothing meaningful to act on. The `legLoad` branch now requires an unrated **hard** session (`isHardWorkout(w.t)`) in the remaining week — only then does "Protect the legs" have a target to defer or downgrade. Other driving signals keep the original any-run gate.
+
+---
+
+## 2026-04-29 — Freshness ring no longer renders blurry
+
+Removed the `feGaussianBlur` glow filter on the freshness detail-page ring (`src/ui/freshness-view.ts`). With the SVG drawn into a 100×100 viewBox but rendered at 220×220, `stdDeviation="4"` translated to ~9 px of blur on screen, making the ring read as soft/double-vision rather than as a glow halo. Stroke now renders sharp.
+
+---
+
+## 2026-04-29 — Weekly baseline refresh + DB duplicate cleanup (post-readiness fix follow-ups)
+
+Two follow-ups to the same root incident as the `previousPlanWks` threading fix below.
+
+### 1. `historicWeeklyTSS` / `signalBBaseline` / `ctlBaseline` no longer freeze after first sync
+
+**Symptom**: once `historicWeeklyTSS.length >= 8`, `backfillStravaHistory` was gated off and never re-ran. The Strava-derived weekly array (and the median + EMA baselines computed from it) stayed at first-sync values forever — so users whose recent training had drifted away from their early-fitness baseline saw a stale chronic-load seed underpinning every readiness surface.
+
+**Fix**:
+- New `s.historicLastRefreshedAt` ISO timestamp written by `fetchStravaHistory` on every successful run (`src/data/stravaSync.ts:354`).
+- `main.ts` startup gate extended with a `baselineStale = ageDays > 7` clause so the backfill re-runs weekly. Existing conditions (never-fetched, thin-history, temp-heal) still apply.
+
+Cost: one Strava-history edge-function call per week per active user. Cheap relative to the staleness it cures.
+
+### 2. Server-side `garmin_activities` duplicate cleanup
+
+**Symptom**: local-state activity deletion (`delete wk.garminActuals[id]` in `events.ts` etc.) doesn't touch the `garmin_activities` Supabase table. Triple-counted activities the user "deleted" remained in the DB and re-poisoned `signalBBaseline` / `ctlBaseline` on every backfill via `historicWeeklyTSS`.
+
+**Fix**: new `cleanupDbDuplicates(daysBack=90)` in `src/data/stravaSync.ts`:
+- Queries `garmin_activities` for the current user over the last 90 days.
+- Groups rows where `start_time` is within 10 min AND (same `activity_type` OR duration ratio < 15%). Mirrors `matchAndAutoComplete`'s in-state dedup window in `activity-matcher.ts:454-461`.
+- Per group, ranks: Strava (`garmin_id` starts with `strava-`) > Garmin, then has-iTRIMP > no-iTRIMP, then has-polyline > no-polyline, then longest duration. Keeps rank #1, deletes the rest in chunks of 100.
+- Logs a one-line summary per group plus a final `[DbDedup] Removed N duplicate row(s) across M group(s)`.
+- Idempotent: `s.dbDedupCompletedAt` ISO timestamp gates re-runs to once per 30 days.
+
+Wired into `main.ts` startup right after the backfill block — fires only when Strava is connected and either has never run or the last run is > 30 days old.
+
+**Long-term fix — server-side dedup at ingest** (`supabase/functions/sync-strava-activities/index.ts`): the BACKFILL mode now finishes with a dedup pass that queries every row in the user's backfill window, finds non-Strava rows that overlap a Strava row by ±10 min start_time AND (same `activity_type` OR duration ratio < 15%), and deletes the non-Strava ones in chunks of 100. Mirrors the same window logic as the in-state matcher and the client-side cleanup. Because this runs every backfill (i.e. weekly given the staleness gate above), any new duplicate entered via the Garmin webhook gets cleaned within ≤ 7 days — the client-side `cleanupDbDuplicates` becomes a safety net rather than a primary defence. Logs `[Backfill:dedup] Removed N non-Strava row(s) shadowed by a Strava counterpart.`
+
+**Deployment required**: `supabase functions deploy sync-strava-activities`. Until deployed, only the client-side cleanup runs.
+
+**Verification**: `npx tsc --noEmit` clean; all 1166 tests pass.
+
+---
+
+## 2026-04-29 — Carry CTL/ATL across plan resets (`previousPlanWks` threaded through every readiness factor)
+
+**Symptom**: user reported freshness ring showing "-20 Overloaded" with CTL=5 and 10/12-day recovery countdowns immediately after generating a new plan, despite continuous training during the previous plan.
+
+**Root cause**: `computeSameSignalTSB` and `computeFitnessModel` only walked `wks[0..currentWeek-1]` of the *current* plan. They never consumed `s.previousPlanWks`. With `s.w = 1` on a fresh plan, the same-signal walker returned `null` and `computeLiveSameSignalTSB` fell back to seeding from `signalBBaseline` alone — collapsing CTL to whatever the historic Strava median happened to be (~35 weekly, ≈5 daily). All training carried over from the previous plan was invisible to the freshness/TSB ring, and to every surface downstream.
+
+`computeRollingLoadRatio` (ACWR primary path) and `buildDailySignalBTSS` (sleep debt) already supported archives via `_resolveWeekForDate`, so those readiness factors were unaffected. The bug was confined to the weekly-EMA walkers.
+
+**Fix** (`src/calculations/fitness-model.ts`):
+
+- New `_walkChronologicalWeeks` generator yields archived plans (sorted by `planStartDate`) + current `wks` in chronological order, each tagged with the right `planStartDate` so `computeWeekRawTSS`'s `unspentLoadItems` date filter keys off the archive's own start (not the current plan's).
+- `computeSameSignalTSB`, `computeFitnessModel`, `computeLiveSameSignalTSB` extended with optional `archivedPlans` param threaded through the helper.
+- `computeACWR`'s weekly-EMA fallback now forwards archives to `computeSameSignalTSB`/`computeFitnessModel` (the rolling path already had archive support).
+
+**Call-site wiring** — every reader of these functions now passes `s.previousPlanWks`: `freshness-view`, `home-view`, `readiness-view`, `daily-coach`, `stats-view` (readiness card, freshness card, CTL/TSB/ACWR charts, fitness/CTL detail pages, injury-risk card), `week-debrief`, `excess-load-card`, `activity-review`, `events`, `main-view`, `renderer`, `rolling-load-view`, `gps/recording-handler`. `getWeeklyTsbHistory` in freshness-view also extended to walk archives so the trend chart has data immediately after a plan reset.
+
+**Why double-counting is impossible**: `_truncateArchivesAtPlanBoundary` already drops archive weeks whose start date is on or after the new plan's start (called from `redistributeArchivedActivitiesToNewPlan`), so chronological concatenation cannot produce duplicate weeks.
+
+**Verification**: `npx tsc --noEmit` clean; all 1146 tests pass.
+
+---
+
+## 2026-04-29 — Sleep debt: median target, debt outlook (trend/ETA/spike), unified formatting
+
+Three changes addressing a user complaint that sleep debt sat permanently at 8h+ despite consistent good sleeps.
+
+**Root cause**: `deriveSleepTarget` used the 65th percentile of last 30 nights, clamped [7h, 8h]. By construction, 65% of nights sat at or below target — guaranteed structural debt for any user whose habitual sleep was below the upper-tail of their distribution. For Tristan's 7h 22m 30-day average, target landed at 7h 52m, generating ~5h of steady-state debt before any chronic shortfall or load bonus.
+
+**Changes** (`src/calculations/sleep-insights.ts`):
+
+- `deriveSleepTarget` switched to median of last 30 nights, clamped [7h, 9h]. Median is a robust central-tendency estimator for habitual sleep — Roenneberg's free-day-sleep concept, Klerman & Dijk 2008. 7h floor still anchored to Van Dongen 2003; 9h ceiling to NSF/Hirshkowitz 2015.
+- New `computeSleepDebtOutlook` returns trend (debt vs 7 days ago), days-to-clear (forward-simulates the existing recurrence), and spike attribution (single nights with shortfall > 2h). All three derive from the same `computeSleepDebtSeries` recurrence — no new constants beyond the spike threshold.
+- New `fmtSleepDebt(sec)` — `Xh Ym` formatter. Daily-coach narrative templates and coach-view bank card now use this instead of the old `-8.7h`-style rounded display, so every "sleep debt" surface reads identically.
+- `computeSleepDebtSeries` extended to expose per-night `shortfall`, `target`, and `actual` fields. Existing `.debt` field unchanged.
+- `CoachSignals` gained `sleepDebtSec: number | null`; `sleepBankHours` retained for the LLM payload (`buildCoachSignalsPayload`).
+
+**SCIENCE_LOG**: superseded the 65th-percentile derivation with full literature trail and flow-through note for `readiness.ts:507-509` floors (which fire less often now, in the intended direction). Documented the outlook helper.
+
+**Sleep view headline** (`src/ui/sleep-view.ts`): cumulative-debt card now shows trend ("down 1h 12m this week"), clearance ETA ("clears in 9 days at this pace") or honest non-clearing copy, plus a one-line spike attribution under the chart when a single short night drove a large chunk of debt.
+
+**No migration needed** — `deriveSleepTarget` is called fresh on each render. Manual overrides (`s.sleepTargetSec`) are preserved.
+
+**Verification**: `npx tsc --noEmit` clean; all 1146 tests pass.
+
+---
+
+## 2026-04-29 — Guest-account upgrade prompt (banner + Account section)
+
+Long-term anonymous users — silently auto-signed-in via `signInAnonymously` on first launch — were at risk of losing all training data on app reinstall, device change, or browser cache wipe. Anonymous sessions live in `localStorage` only; no email is tied to the user, no way to recover.
+
+Two surfaces now prompt them to save their account:
+
+- **Home banner** (`buildGuestAccountBanner` in `home-view.ts`): one-time, dismissible card. Fires when `s.isGuestAccount === true` AND the user has at least one completed activity in the live plan. Models on the post-race banner — neutral white card, dismiss ×, single CTA. Dismiss flag (`s.guestBannerDismissed`) persists.
+- **Account view section** (`renderGuestAccountSection` in `account-view.ts`): persistent affordance at the top of the Account page. Visible whenever the user is a guest, regardless of dismiss state.
+
+Both CTAs route to `renderAuthView({ upgradeGuest: true })`. The auth view, in upgrade mode:
+
+- Defaults to the sign-up tab with the title "Save your account"
+- **Submits via `supabase.auth.updateUser({ email, password })`** instead of `signUp()` — this preserves the anonymous user's `auth.users.id`, so all data already attached to it (Garmin tokens, daily_metrics, sleep_summaries, garmin_activities, plan settings) stays linked. `signUp()` would have created a new user_id and orphaned everything.
+- Shows a yellow warning if the user toggles to "Sign in" — explicit notice that signing into an existing account leaves guest data behind, with a nudge back to sign-up.
+- Replaces the "Use simulator mode" link with a "Not now" cancel that returns to Home without changing auth state.
+
+State plumbing in `main.ts:launchApp`: every launch reads `supabase.auth.getUser()` and writes `s.isGuestAccount = !!user?.is_anonymous`. If the flag flipped from `true → false` (i.e. user just upgraded), `s.guestBannerDismissed` is reset so the Account section reflects the new state cleanly. Skipped in simulator mode.
+
+State type additions (`src/types/state.ts`): `isGuestAccount?: boolean`, `guestBannerDismissed?: boolean`.
+
+## 2026-04-29 — Recurring cross-training workouts: friendly display name
+
+- **Bug** (`src/workouts/generator.ts`): Recurring cross-training slots used the raw `act.sport` key for both `n` and `d`, so a `generic_sport` entry rendered as "generic_sport 2" in the today hero with description "60min generic_sport".
+- **Fix**: Map `act.sport` through `SPORT_LABELS` before composing the strings, with `generic_sport → "Activity"`. `n` now reads e.g. "Activity 2" / "Padel" and `d` reads "60min activity" / "60min padel". Completed-activity rendering (e.g. "HIIT" in the Recent list) is unaffected — that path uses the actual `activityType` / `displayName` from the matched Strava/Garmin row, not the plan slot name.
+
 ## 2026-04-27 — Triathlon FTP estimator: quality tiers + recency decay
 
 - **Bug** (`src/calculations/tri-benchmarks-from-history.ts → estimateFTPFromBikeActivities`): The previous algorithm applied Coggan's `FTP = NP × 0.95` rule uniformly to every powered ride. For long endurance rides this systematically *underestimated* FTP — Tristan's 247-min steady ride at NP=250W produced an FTP candidate of 238W, which is lower than what he had just sustained for 4 hours.

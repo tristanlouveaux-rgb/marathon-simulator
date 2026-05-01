@@ -180,7 +180,7 @@ function _computeTotalKm(s: any): number {
  */
 function getWeekDateLabel(s: any, weekNum: number): string | null {
   if (!s.planStartDate) return null;
-  const weekStart = new Date(s.planStartDate);
+  const weekStart = new Date(s.planStartDate + 'T12:00:00');
   weekStart.setDate(weekStart.getDate() + (weekNum - 1) * 7);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 6);
@@ -256,7 +256,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
     <div class="min-h-screen pb-16" style="background:var(--c-bg)">
       <!-- Header - Changes color when injured -->
       <div class="${headerBg}" style="background:${injured ? 'rgba(245,158,11,0.08)' : 'var(--c-surface)'}">
-        <div class="max-w-7xl mx-auto px-4 py-4">
+        <div style="max-width:600px;margin:0 auto;padding:16px 20px">
           <div class="flex items-center justify-between">
             <div>
               <h1 class="text-xl font-semibold" style="${titleStyle}">${injured ? 'Recovery Mode' : `${s.onboarding?.name ? s.onboarding.name + "'s" : 'Your'} ${getPlanName(s)}`}</h1>
@@ -284,7 +284,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
         </div>
       </div>
 
-      <div class="max-w-7xl mx-auto px-4 py-6">
+      <div style="max-width:600px;margin:0 auto;padding:24px 20px">
 
         <!-- Injury Alert Banner -->
         ${renderInjuryBanner()}
@@ -1298,7 +1298,7 @@ function getPlanName(s: any): string {
     const focus = s.onboarding?.trainingFocus;
     if (focus === 'speed') return 'Speed Plan';
     if (focus === 'endurance') return 'Endurance Plan';
-    if (focus === 'both') return 'Balanced Plan';
+    if (focus === 'both') return 'Training Plan';
     return 'Fitness Plan';
   }
   const labels: Record<string, string> = {
@@ -1478,10 +1478,10 @@ function showRunnerTypeModal(currentType: string, planStarted: boolean = false):
   overlay.className = 'fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4';
   overlay.innerHTML = `
     <div class="rounded-xl max-w-sm w-full p-5" style="background:var(--c-surface);border:1px solid var(--c-border)">
-      <h3 class="font-semibold text-lg mb-1" style="color:var(--c-black)">Change Runner Type</h3>
+      <h3 class="font-semibold text-lg mb-1" style="color:var(--c-black)">Change Race Preference</h3>
       <p class="text-xs mb-4" style="color:var(--c-muted)">This will recalculate your entire training plan.</p>
       ${planStarted ? `<div class="p-3 mb-4 rounded-lg text-xs leading-relaxed" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25);color:var(--c-caution)">
-        Changing your runner type will reset your current plan. Your training data will be preserved but your plan will be rebuilt from scratch.
+        Changing your race preference will reset your current plan. Your training data will be preserved but your plan will be rebuilt from scratch.
       </div>` : ''}
       <div class="space-y-2">
         ${types.map(t => `
@@ -1743,7 +1743,7 @@ function updateLoadChart(s: SimulatorState): void {
   // Gray = 0→CTL (your chronic baseline); Green = CTL→plan (the target zone);
   // Amber = plan→plan×1.2 (acceptable overrun); Red = beyond that (fills rest).
   const acwrAtlSeed1 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1, s.signalBBaseline ?? undefined);
+  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const ctlWeeklyEquiv = acwrData.ctl;
   const ctlPctOfBar = barMax > 0 ? Math.min(100, (ctlWeeklyEquiv / barMax) * 100) : 0;
   const planPctOfBar = barMax > 0 ? Math.min(100, (plannedTotal / barMax) * 100) : 71;
@@ -1967,7 +1967,7 @@ function updateACWRBar(s: SimulatorState): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2, s.signalBBaseline ?? undefined);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
 
   if (acwr.status === 'unknown' && acwr.ratio === 0) {
     const histLen = (s.historicWeeklyTSS ?? []).length;
@@ -2210,9 +2210,15 @@ export function triggerACWRReduction(): void {
   const wk = s.wks?.[s.w - 1];
   if (!wk) return;
 
+  // Triathlon mode: ACWR is run-specific (running CTL/ATL via fitness-model.ts).
+  // Tri uses per-discipline volume ramps (Gabbett 5–10% in `tri-volume-ramp.ts`)
+  // surfaced via the tri suggestion modal. Skip the running-modal path here so
+  // we don't propose running-only adjustments in Ironman setup. See ISSUE-151.
+  if (s.eventType === 'triathlon') return;
+
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed3 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3, s.signalBBaseline ?? undefined);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
 
   // Build popup source: use unspent items if present, else synthesise from planned load
   let durationMin: number;
@@ -2315,7 +2321,7 @@ export function triggerACWRReduction(): void {
 
   const _mvTier = s.athleteTierOverride ?? s.athleteTier;
   const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined);
+  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
   // When ACWR is barely above the ceiling (≤5%) OR below it, a single small
   // adjustment is enough. Matches the "A small adjustment is enough" copy in

@@ -82,6 +82,15 @@ export function resetState(): void {
 }
 
 /**
+ * Get a fresh deep clone of the default state. Useful for callers that need
+ * to build a complete state object (e.g. soft reset persisting to localStorage)
+ * without leaking shared references to the in-memory defaults.
+ */
+export function getDefaultState(): SimulatorState {
+  return JSON.parse(JSON.stringify(defaultState)) as SimulatorState;
+}
+
+/**
  * Get cross-training activities
  */
 export function getCrossActivities(): CrossActivity[] {

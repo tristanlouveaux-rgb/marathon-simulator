@@ -6,12 +6,12 @@
  */
 
 import { getState } from '@/state';
-import type { SimulatorState, PhysiologyDayEntry } from '@/types';
+import type { SimulatorState, PhysiologyDayEntry, CompletedPlanSummary } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
 import { fp, ft, formatKm, fmtDateUK, type UnitPref } from '@/utils/format';
-import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, type FitnessMetrics } from '@/calculations/fitness-model';
+import { computeWeekTSS, computeWeekRawTSS, computeFitnessModel, computeACWR, TIER_ACWR_CONFIG, computePlannedWeekTSS, computeSameSignalTSB, getNormalizerFromState, type FitnessMetrics } from '@/calculations/fitness-model';
 import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { fetchExtendedHistory } from '@/data/stravaSync';
 import { vt } from '@/calculations/vdot';
@@ -24,7 +24,8 @@ import { renderSleepView } from '@/ui/sleep-view';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
-import { deriveLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
+import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
+import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -494,6 +495,17 @@ const INFO_TEXTS: Record<string, string> = {
   aerobic: 'VO2 Max — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. When connected to a device (Garmin, Strava), the reported value is shown. Otherwise it is estimated from training data. Zones are sex-calibrated using ACSM standards.',
   lt: 'Lactate Threshold (LT) pace — the fastest pace you can sustain without accumulating lactic acid. The most trainable of the three metrics. A higher LT pace (further right on the bar) means you can race faster at aerobic effort.',
   freshness: 'Freshness (TSB) — your training stress balance. Positive = rested and ready to perform. Negative = carrying fatigue. Target race day TSB between +5 and +15 for peak performance.',
+  'lt-empirical': `<p style="margin:0 0 8px"><strong style="color:var(--c-black)">A steady-state run is one that meets the textbook criteria for a lactate-threshold effort.</strong> Each candidate has to clear every gate:</p>
+<ul style="margin:0 0 10px;padding-left:18px;line-height:1.6">
+<li>20 to 60 minutes of continuous running</li>
+<li>Average HR between 85% and 92% of your max</li>
+<li>Steady pace (split-to-split variation under 8%)</li>
+<li>Cardiac drift under 5%</li>
+<li>Outdoors, not hilly, not hot</li>
+</ul>
+<p style="margin:0 0 8px">The 60-minute upper bound is deliberate. Beyond an hour, HR drifts upward as glycogen drops and you dehydrate, even though pace stays the same. Without that cap, long aerobic runs would score as threshold work and inflate the estimate.</p>
+<p style="margin:0 0 8px">We do not extract a best 20 minutes from longer runs. The fastest stretch of a long run usually measures peak capacity, not threshold. A "steadiest 20 minutes" approach would need per-second HR and pace streams, which we do not store.</p>
+<p style="margin:0"><strong style="color:var(--c-black)">Where the HR comes from.</strong> Average HR is what your watch recorded during the run, pulled from Strava. Max HR is the value Garmin or Apple Health publishes in your physiology snapshot, refined by the highest reading observed across your synced activities. The 85 to 92% threshold band is from Faude et al. 2009 and Poole et al.</p>`,
 };
 
 // ---------------------------------------------------------------------------
@@ -657,11 +669,9 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
     (s.vo2 ?? 0) > 0 ||
     (s.vdotHistory?.length ?? 0) > 0 ||
     Object.keys(s.pbs ?? {}).length > 0;
-  const vo2display = !hasRealFitness ? 0 : (s.vo2 ?? computeCurrentVDOT(s));
-  const isEstimated = s.vo2 == null;
-  const vo2hist = getVO2History(s);
-  const hasDeviceVO2 = vo2hist.length >= 2;
-  const vdotHist = s.vdotHistory ?? [];
+  const display = resolveVO2Display(s);
+  const vo2display = !hasRealFitness ? 0 : display.value;
+  const isEstimated = display.mode === 'estimated';
 
   // VO2 Max tier label
   const isFemale = s.biologicalSex === 'female';
@@ -670,26 +680,32 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
   const aerZoneIdx = aerBreaks.findIndex(b => vo2display < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
 
-  // Trend: prefer device VO2 history, fall back to VDOT
+  // Trend arrow only when its source matches the headline value's source.
+  // device-no-trend: headline is from the watch but we have no second reading,
+  // so a VDOT-derived arrow would describe a different number.
   let trendArrow = '→';
   let trendColor = 'var(--c-faint)';
-  if (hasDeviceVO2) {
-    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+  if (display.mode === 'device-with-trend') {
+    const d = display.vo2hist[display.vo2hist.length - 1].value - display.vo2hist[display.vo2hist.length - 2].value;
     trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
     trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
-  } else if (vdotHist.length >= 2) {
-    const d = vdotHist[vdotHist.length - 1].vdot - vdotHist[vdotHist.length - 2].vdot;
+  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
+    const d = display.vdotHist[display.vdotHist.length - 1].vdot - display.vdotHist[display.vdotHist.length - 2].vdot;
     trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
     trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
   }
 
-  // Full line chart (same as detail page): device VO2 history, or VDOT fallback
-  const chart = hasDeviceVO2
-    ? buildVO2LineChart(vo2hist)
-    : (vdotHist.length >= 2 ? buildVdotLineChart(vdotHist, '8w') : '');
-  const changeNote = hasDeviceVO2
-    ? buildVO2ChangeNote(vo2hist)
-    : (vdotHist.length >= 2 ? buildVdotChangeNote(vdotHist) : '');
+  let chart = '';
+  let changeNote = '';
+  if (display.mode === 'device-with-trend') {
+    chart = buildVO2LineChart(display.vo2hist);
+    changeNote = buildVO2ChangeNote(display.vo2hist);
+  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
+    chart = buildVdotLineChart(display.vdotHist, '8w');
+    changeNote = buildVdotChangeNote(display.vdotHist);
+  } else if (display.mode === 'device-no-trend') {
+    changeNote = buildVO2NoTrendNote();
+  }
 
   const vo2Label = isEstimated ? 'VO2 Max (est.)' : 'VO2 Max';
 
@@ -718,14 +734,15 @@ function buildFitnessCard_Opening(s: SimulatorState): string {
 
 function buildReadinessCard_Opening(s: SimulatorState): string {
   // Mirror exactly what the home page computes so both show the same score
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate, undefined, archivedPlans);
   const tsb = sameSignal?.tsb ?? 0;
   const ctlNow = sameSignal?.ctl ?? 0;
 
   const tier = s.athleteTier ?? 'recreational';
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, archivedPlans);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
 
   const latestPhysio = s.physiologyHistory?.slice(-1)[0];
@@ -1029,6 +1046,75 @@ function buildTrackOnlyLoadCard(s: SimulatorState): string {
     </div>`;
 }
 
+// ─── Plan History ─────────────────────────────────────────────────────────────
+
+function _raceDistanceLabelShort(rd: string): string {
+  if (rd === 'half') return 'Half';
+  if (rd === 'marathon') return 'Marathon';
+  if (rd === '5k') return '5K';
+  if (rd === '10k') return '10K';
+  return rd;
+}
+
+function _buildMiniPlanChart(weeklyKm: number[]): string {
+  const n = weeklyKm.length;
+  if (n < 2) return '';
+  const W = 280; const H = 36; const padL = 2; const padR = 2;
+  const usableW = W - padL - padR;
+  const maxVal = Math.max(...weeklyKm, 1) * 1.15;
+  const xOf = (i: number) => padL + i * usableW / Math.max(n - 1, 1);
+  const yOf = (v: number) => H - Math.max(1, (v / maxVal) * (H - 2));
+  const pts = weeklyKm.map((km, i) => [xOf(i), yOf(km)] as [number, number]);
+  const linePath = `M ${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L ')}`;
+  const areaPath = `${linePath} L ${xOf(n - 1).toFixed(1)},${H} L ${xOf(0).toFixed(1)},${H} Z`;
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block">
+    <path d="${areaPath}" fill="rgba(100,116,139,0.12)" stroke="none" vector-effect="non-scaling-stroke"/>
+    <path d="${linePath}" fill="none" stroke="#64748B" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  </svg>`;
+}
+
+function buildCompletedPlansCard(s: SimulatorState): string {
+  // Deduplicate by completionDate — earlier entries with same date are stale duplicates.
+  const rawPlans = ((s as any).completedPlans ?? []) as CompletedPlanSummary[];
+  const seenDates = new Set<string>();
+  const plans = rawPlans.slice().reverse().filter(p => {
+    if (seenDates.has(p.completionDate)) return false;
+    seenDates.add(p.completionDate);
+    return true;
+  }).reverse();
+  if (plans.length === 0) return '';
+  const unitPref = (s.unitPref ?? 'km') as 'km' | 'mi';
+  const planCards = plans.slice().reverse().map((p, i) => {
+    const year = p.completionDate ? new Date(p.completionDate).getFullYear() : '';
+    const distLabel = _raceDistanceLabelShort(p.raceDistance);
+    const adherence = p.adherencePct != null ? `${Math.round(p.adherencePct)}%` : '--';
+    const vdotDelta = p.vdotEnd - p.vdotStart;
+    const vdotLabel = Math.abs(vdotDelta) >= 0.1 ? `${vdotDelta >= 0 ? '+' : ''}${vdotDelta.toFixed(1)} VDOT` : '';
+    const isFirst = i === 0;
+    // Tappable card — opens a past-plan detail page that hydrates from the
+    // matching `previousPlanWks` archive entry (when present) so the user can
+    // browse old activities, week-by-week load, and totals.
+    return `<button data-past-plan="${p.completionDate}" style="display:block;width:100%;text-align:left;background:transparent;border:none;cursor:pointer;font-family:var(--f);padding:${isFirst ? '0' : '14px 0 0'};${!isFirst ? 'border-top:1px solid var(--c-border);' : ''}">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <div style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black)">${p.raceName ?? distLabel}${year ? ` · ${year}` : ''}</div>
+        <div style="font-size:12px;color:var(--c-muted);display:flex;align-items:center;gap:6px">${p.totalWeeks}w<span style="color:var(--c-faint);font-weight:400">›</span></div>
+      </div>
+      ${p.weeklyKm?.length ? `<div style="margin-bottom:8px">${_buildMiniPlanChart(p.weeklyKm)}</div>` : ''}
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div><span style="font-size:13px;font-weight:600;color:var(--c-black)">${formatKm(p.totalActualKm, unitPref, 0)}</span><span style="font-size:11px;color:var(--c-muted);margin-left:3px">total</span></div>
+        <div><span style="font-size:13px;font-weight:600;color:var(--c-black)">${formatKm(p.peakWeekKm, unitPref, 0)}</span><span style="font-size:11px;color:var(--c-muted);margin-left:3px">peak week</span></div>
+        <div><span style="font-size:13px;font-weight:600;color:var(--c-black)">${adherence}</span><span style="font-size:11px;color:var(--c-muted);margin-left:3px">adherence</span></div>
+        ${vdotLabel ? `<div><span style="font-size:13px;font-weight:600;color:var(--c-black)">${vdotLabel}</span></div>` : ''}
+      </div>
+      ${p.predictedTimeSec ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">Predicted ${ft(p.predictedTimeSec)}</div>` : ''}
+    </button>`;
+  }).join('');
+  return `<div style="padding:0 18px 16px">
+    <div style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.01em;margin-bottom:12px">Plan history</div>
+    ${planCards}
+  </div>`;
+}
+
 function buildStatsSummary(s: SimulatorState): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
@@ -1036,7 +1122,8 @@ function buildStatsSummary(s: SimulatorState): string {
   // Just-Track mode: same card layout as planned — Progress (continuous-fitness
   // branch of `buildProgressCard_Opening`), Fitness, Volume, Load over time.
   // Progress card taps through to the Progress detail page which hides Plan
-  // Adherence + Phase Timeline for trackOnly.
+  // Adherence + Phase Timeline for trackOnly. The Current/Total toggle lives
+  // on the Progress detail page now (not on this main view).
   if (s.trackOnly) {
     return `
       <div class="mosaic-page" style="background:var(--c-bg)">
@@ -1450,7 +1537,7 @@ function buildRunDistanceLineChart(s: SimulatorState, range: ChartRange): string
 
 /** CTL line chart (Signal A, daily-equivalent). */
 function buildCTLLineChart(s: SimulatorState, range: ChartRange): string {
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, undefined, undefined, (s as any).previousPlanWks);
   if (metrics.length < 3) return chartEmptyState(55);
 
   const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
@@ -1623,6 +1710,139 @@ function buildDurabilityChart(s: SimulatorState): string {
     </div>`;
 }
 
+/**
+ * Aggregate stats across the entire activity history available locally:
+ *   • current `s.wks` (the in-progress / just-finished plan)
+ *   • `s.previousPlanWks` archive (prior plans + recovery imports)
+ *
+ * Iterates raw `garminActuals` rows and dedupes by `garminId` so an activity
+ * recovered into the archive AND already living in current wks isn't double
+ * counted. Falls back to `s.completedPlans` summaries only for the "plans
+ * completed" count and the VDOT first→current delta.
+ *
+ * Why not aggregate `completedPlans` directly: those summaries miss calories
+ * and time-active for users whose plans completed before saveSummary started
+ * recording granular fields, and they double-count when the archive also
+ * holds the same period's raw rows.
+ */
+function aggregateAllTimeStats(s: SimulatorState): {
+  totalDistanceKm: number;
+  totalRuns: number;
+  longestRunKm: number;
+  totalTimeSec: number;
+  totalCalories: number;
+  caloriesTracked: boolean;
+  totalLoad: number;
+  fastest5kSec: number;
+  fastest10kSec: number;
+  fastestHalfSec: number;
+  plansCompleted: number;
+  vdotStart: number | null;
+  vdotCurrent: number | null;
+  /** ISO date of the oldest activity included in these aggregates (null if none). */
+  oldestActivityDate: string | null;
+  /** ISO date of the newest activity included in these aggregates (null if none). */
+  newestActivityDate: string | null;
+} {
+  const RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  // WALKING (and the deprecated GENERIC bucket) auto-syncs from phone step
+  // counters and Apple Health daily walk segments — that's not "training time"
+  // in any useful sense and was inflating Time Active / Calories massively
+  // (e.g. 8 runs but 116h Time Active). Excluded from time + calories totals
+  // but kept in TSS (computeWeekRawTSS already weighs by iTrimp, so an
+  // amble contributes ≈0 anyway).
+  const PASSIVE_TYPES = new Set(['WALKING', 'GENERIC', 'OTHER']);
+  const seenGarminIds = new Set<string>();
+
+  let totalDistanceKm = 0;
+  let totalRuns = 0;
+  let longestRunKm = 0;
+  let totalTimeSec = 0;
+  let totalCalories = 0;
+  let caloriesTracked = false;
+  let totalLoad = 0;
+  let fastest5kSec = Infinity;
+  let fastest10kSec = Infinity;
+  let fastestHalfSec = Infinity;
+  let oldestActivityDate: string | null = null;
+  let newestActivityDate: string | null = null;
+
+  const walkWeeks = (weeks: any[], planStartDate?: string) => {
+    for (const wk of weeks ?? []) {
+      for (const actual of Object.values(wk.garminActuals ?? {}) as any[]) {
+        if (actual.garminId) {
+          if (seenGarminIds.has(actual.garminId)) continue;
+          seenGarminIds.add(actual.garminId);
+        }
+        const isRun = RUN_TYPES.has(actual.activityType ?? '')
+          || (!actual.displayName && !!actual.workoutName);
+        const isPassive = PASSIVE_TYPES.has(actual.activityType ?? '');
+        if (isRun && actual.distanceKm > 0) {
+          totalDistanceKm += actual.distanceKm;
+          totalRuns++;
+          longestRunKm = Math.max(longestRunKm, actual.distanceKm);
+          if (actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0) {
+            if (actual.distanceKm >= 5) fastest5kSec = Math.min(fastest5kSec, 5 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 10) fastest10kSec = Math.min(fastest10kSec, 10 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 21.0975) fastestHalfSec = Math.min(fastestHalfSec, 21.0975 * actual.avgPaceSecKm);
+          }
+        }
+        if (!isPassive) {
+          if (actual.durationSec > 0) totalTimeSec += actual.durationSec;
+          if (actual.calories != null && actual.calories > 0) {
+            totalCalories += actual.calories;
+            caloriesTracked = true;
+          }
+        }
+        // Track the activity-window range (irrespective of passive filter — it's
+        // a "what dates are these stats from" hint, so any logged activity counts).
+        const dateOnly = (actual.startTime ?? '').split('T')[0];
+        if (dateOnly) {
+          if (oldestActivityDate == null || dateOnly < oldestActivityDate) oldestActivityDate = dateOnly;
+          if (newestActivityDate == null || dateOnly > newestActivityDate) newestActivityDate = dateOnly;
+        }
+      }
+      // Per-week TSS is the right unit for "Total Load" — already de-duped vs
+      // adhoc inside `computeWeekRawTSS` and counts cross-training without runSpec.
+      totalLoad += computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate);
+    }
+  };
+
+  walkWeeks(s.wks ?? [], s.planStartDate);
+  for (const archive of ((s as any).previousPlanWks ?? [])) {
+    walkWeeks(archive.weeks ?? [], archive.planStartDate);
+  }
+
+  // Plans-completed and VDOT delta come from the high-level summary list —
+  // there's no way to derive these from raw activity rows alone.
+  const completedPlans = ((s as any).completedPlans ?? []) as CompletedPlanSummary[];
+  const seenDates = new Set<string>();
+  const dedupedPlans = completedPlans.filter(p => {
+    if (seenDates.has(p.completionDate)) return false;
+    seenDates.add(p.completionDate);
+    return true;
+  });
+  const vdotStart = dedupedPlans.length > 0 ? dedupedPlans[0].vdotStart : null;
+
+  return {
+    totalDistanceKm,
+    totalRuns,
+    longestRunKm,
+    totalTimeSec,
+    totalCalories,
+    caloriesTracked,
+    totalLoad,
+    fastest5kSec,
+    fastest10kSec,
+    fastestHalfSec,
+    plansCompleted: dedupedPlans.length,
+    vdotStart,
+    vdotCurrent: s.v ?? null,
+    oldestActivityDate,
+    newestActivityDate,
+  };
+}
+
 function buildProgressDetailPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
 
@@ -1702,34 +1922,95 @@ function buildProgressDetailPage(s: SimulatorState): string {
       <span style="font-size:13px;font-weight:600;color:var(--c-black)">${value}</span>
     </div>`;
 
+  // ── All-time aggregate (for the Total tab) ────────────────────────────────
+  const allTime = aggregateAllTimeStats(s);
+  const allHours = Math.floor(allTime.totalTimeSec / 3600);
+  const allMins = Math.round((allTime.totalTimeSec % 3600) / 60);
+  const allTimeStr = allHours > 0 ? `${allHours}h ${allMins}m` : `${allMins}m`;
+  const vdotDelta = allTime.vdotStart != null && allTime.vdotCurrent != null
+    ? allTime.vdotCurrent - allTime.vdotStart : null;
+  const hasAllTimeData = allTime.totalDistanceKm > 0 || allTime.totalRuns > 0 || allTime.plansCompleted > 0;
+  const showToggle = hasAllTimeData;
+
+  // The Current/Total toggle controls the stats table + phase timeline + plan
+  // history. Charts (load/km/CTL/durability) stay outside since they have
+  // their own range selectors and read across the full available history anyway.
+  const toggleHTML = showToggle ? `
+    <div style="display:flex;background:rgba(0,0,0,0.05);border-radius:7px;padding:2px;gap:1px;margin-bottom:10px;width:fit-content">
+      <button id="progress-tab-current" style="padding:5px 14px;font-size:12px;font-weight:600;border:none;cursor:pointer;border-radius:5px;font-family:var(--f);background:var(--c-surface);color:var(--c-black);box-shadow:0 1px 2px rgba(0,0,0,0.08)">Current</button>
+      <button id="progress-tab-total" style="padding:5px 14px;font-size:12px;font-weight:500;border:none;cursor:pointer;border-radius:5px;font-family:var(--f);background:transparent;color:var(--c-muted)">Total</button>
+    </div>` : '';
+
+  // ── Total view date-range subtitle ────────────────────────────────────────
+  // Local activity history isn't unbounded — the recovery feature fetches the
+  // last 90 days, and prior plans contribute their own windows. Surface the
+  // actual range so the user can see "since 28 Jan" instead of guessing
+  // whether these are all-time or recent-only numbers.
+  const _fmtRangeDate = (iso: string): string =>
+    new Date(iso + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const dateRangeNote = (allTime.oldestActivityDate && allTime.newestActivityDate)
+    ? `<div style="font-size:11px;color:var(--c-faint);margin-bottom:10px;line-height:1.4">From local history · ${_fmtRangeDate(allTime.oldestActivityDate)} to ${_fmtRangeDate(allTime.newestActivityDate)}. Time and calories exclude passive walks.</div>`
+    : '';
+
+  // ── Total view stat rows ──────────────────────────────────────────────────
+  const totalStatsCard = `
+    ${dateRangeNote}
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      ${statRow('Total Distance', allTime.totalDistanceKm > 0 ? formatKm(allTime.totalDistanceKm, unitPref) : '—')}
+      ${statRow('Total Runs', String(allTime.totalRuns))}
+      ${statRow('Longest Run', allTime.longestRunKm > 0 ? formatKm(allTime.longestRunKm, unitPref) : '—')}
+      ${allTime.fastest5kSec < Infinity ? statRow('Fastest 5k', fmtElapsed(allTime.fastest5kSec)) : ''}
+      ${allTime.fastest10kSec < Infinity ? statRow('Fastest 10k', fmtElapsed(allTime.fastest10kSec)) : ''}
+      ${allTime.fastestHalfSec < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(allTime.fastestHalfSec)) : ''}
+      ${allTime.plansCompleted > 0 ? statRow('Plans Completed', String(allTime.plansCompleted)) : ''}
+      ${allTime.totalTimeSec > 0 ? statRow('Time Active', allTimeStr) : ''}
+      ${allTime.caloriesTracked ? statRow('Calories Burnt', `${Math.round(allTime.totalCalories).toLocaleString()} kcal`) : ''}
+      ${vdotDelta != null && Math.abs(vdotDelta) >= 0.1 ? statRow('VDOT Change', `${vdotDelta >= 0 ? '+' : ''}${vdotDelta.toFixed(1)} (${allTime.vdotStart!.toFixed(1)} → ${allTime.vdotCurrent!.toFixed(1)})`) : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
+        <span style="font-size:13px;color:var(--c-muted)">Total Load</span>
+        <span style="font-size:13px;font-weight:600;color:var(--c-black)">${Math.round(allTime.totalLoad).toLocaleString()} TSS</span>
+      </div>
+    </div>`;
+
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildDetailHeader('Progress')}
 
       <div style="padding:12px 18px 14px;overflow-y:auto">
 
-        <!-- Stats table -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
-          ${statRow('Total Distance', totalRunKm > 0 ? formatKm(totalRunKm, unitPref) : '—')}
-          ${statRow('Total Runs', String(totalRuns))}
-          ${statRow('Avg / week', formatKm(avgKmWeek, unitPref))}
-          ${statRow('Longest Run', longestRunKm > 0 ? formatKm(longestRunKm, unitPref) : '—')}
-          ${fastest5kSec < Infinity ? statRow('Fastest 5k', fmtElapsed(fastest5kSec)) : ''}
-          ${fastest10kSec < Infinity ? statRow('Fastest 10k', fmtElapsed(fastest10kSec)) : ''}
-          ${fastestHalfSec < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(fastestHalfSec)) : ''}
-          ${s.trackOnly ? '' : statRow('Plan Adherence', adherence.pct != null ? `${adhesionPct}%` : '—')}
-          ${statRow('Time Active', totalTimeSec > 0 ? timeStr : '—')}
-          ${caloriesTracked ? statRow('Calories Burnt', `${Math.round(totalCalories).toLocaleString()} kcal`) : ''}
-          <div id="stats-progress-load-row" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
-            <span style="font-size:13px;color:var(--c-muted)">Total Load</span>
-            <span style="font-size:13px;font-weight:600;color:var(--c-black);display:flex;align-items:center;gap:4px">
-              ${Math.round(totalLoad).toLocaleString()} TSS <span style="font-size:11px;color:var(--c-faint);font-weight:400">›</span>
-            </span>
+        ${toggleHTML}
+
+        <!-- Current view -->
+        <div id="progress-current-view">
+          <!-- Stats table -->
+          <div class="m-card" style="padding:16px;margin-bottom:10px">
+            ${statRow('Total Distance', totalRunKm > 0 ? formatKm(totalRunKm, unitPref) : '—')}
+            ${statRow('Total Runs', String(totalRuns))}
+            ${statRow('Avg / week', formatKm(avgKmWeek, unitPref))}
+            ${statRow('Longest Run', longestRunKm > 0 ? formatKm(longestRunKm, unitPref) : '—')}
+            ${fastest5kSec < Infinity ? statRow('Fastest 5k', fmtElapsed(fastest5kSec)) : ''}
+            ${fastest10kSec < Infinity ? statRow('Fastest 10k', fmtElapsed(fastest10kSec)) : ''}
+            ${fastestHalfSec < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(fastestHalfSec)) : ''}
+            ${s.trackOnly ? '' : statRow('Plan Adherence', adherence.pct != null ? `${adhesionPct}%` : '—')}
+            ${statRow('Time Active', totalTimeSec > 0 ? timeStr : '—')}
+            ${caloriesTracked ? statRow('Calories Burnt', `${Math.round(totalCalories).toLocaleString()} kcal`) : ''}
+            <div id="stats-progress-load-row" style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
+              <span style="font-size:13px;color:var(--c-muted)">Total Load</span>
+              <span style="font-size:13px;font-weight:600;color:var(--c-black);display:flex;align-items:center;gap:4px">
+                ${Math.round(totalLoad).toLocaleString()} TSS <span style="font-size:11px;color:var(--c-faint);font-weight:400">›</span>
+              </span>
+            </div>
           </div>
+
+          <!-- Phase Timeline — plan-only, hidden in trackOnly -->
+          ${s.trackOnly ? '' : buildPhaseTimeline(s)}
         </div>
 
-        <!-- Phase Timeline — plan-only, hidden in trackOnly -->
-        ${s.trackOnly ? '' : buildPhaseTimeline(s)}
+        <!-- Total view -->
+        <div id="progress-total-view" style="display:none">
+          ${totalStatsCard}
+          ${buildCompletedPlansCard(s)}
+        </div>
 
         <!-- Load Chart (Signal B) -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
@@ -1780,6 +2061,428 @@ function buildProgressDetailPage(s: SimulatorState): string {
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
+}
+
+// ---------------------------------------------------------------------------
+// ══════════════════════════════════════════════════════════════════════════════
+// PAST PLAN DETAIL PAGE
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Drilled into from each "Plan history" card on the Progress detail page's
+// Total tab. Hydrates from `s.previousPlanWks` when an archive entry matches
+// the summary's planStartDate; falls back to summary numbers only when no
+// archive is available (older plans whose wks weren't preserved).
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface PastPlanArchive {
+  planStartDate: string;
+  weeks: any[];
+  archivedAt?: string;
+}
+
+function _findArchiveForPlan(
+  s: SimulatorState,
+  summary: CompletedPlanSummary,
+): PastPlanArchive | null {
+  const archives = ((s as any).previousPlanWks ?? []) as PastPlanArchive[];
+  if (!archives.length || !summary.planStartDate) return null;
+  // Match by planStartDate. saveSummary stores the same string the archive
+  // captures from `s.planStartDate`, so equality is reliable.
+  return archives.find(a => a.planStartDate === summary.planStartDate) ?? null;
+}
+
+function _aggregateArchiveStats(archive: PastPlanArchive, excludeGarminIds?: Set<string>): {
+  totalDistanceKm: number;
+  totalRuns: number;
+  longestRunKm: number;
+  totalTimeSec: number;
+  totalCalories: number;
+  caloriesTracked: boolean;
+  totalLoad: number;
+  fastest5kSec: number;
+  fastest10kSec: number;
+  fastestHalfSec: number;
+  weeklyKm: number[];
+  weeklyTSS: number[];
+  activities: Array<{
+    garminId: string;
+    startTime: string;
+    activityType: string;
+    displayName: string;
+    distanceKm: number;
+    durationSec: number;
+    avgPaceSecKm: number | null;
+    avgHR: number | null;
+    iTrimp: number | null;
+    calories: number | null;
+  }>;
+} {
+  const RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  const seenIds = new Set<string>();
+  let totalDistanceKm = 0;
+  let totalRuns = 0;
+  let longestRunKm = 0;
+  let totalTimeSec = 0;
+  let totalCalories = 0;
+  let caloriesTracked = false;
+  let totalLoad = 0;
+  let fastest5kSec = Infinity;
+  let fastest10kSec = Infinity;
+  let fastestHalfSec = Infinity;
+  const weeklyKm: number[] = [];
+  const weeklyTSS: number[] = [];
+  const activities: any[] = [];
+
+  for (const wk of archive.weeks ?? []) {
+    let wkKm = 0;
+    for (const actual of Object.values(wk.garminActuals ?? {}) as any[]) {
+      if (actual.garminId) {
+        if (seenIds.has(actual.garminId)) continue;
+        seenIds.add(actual.garminId);
+        // Skip activities that the live plan also tracks — without this filter
+        // the past-plan view would double-show any activity that overlaps the
+        // current plan's date range (e.g. a continuousMode tail-week activity
+        // that's already in s.wks for the new plan's week 1).
+        if (excludeGarminIds?.has(actual.garminId)) continue;
+      }
+      const isRun = RUN_TYPES.has(actual.activityType ?? '');
+      if (actual.distanceKm > 0) {
+        if (isRun) {
+          totalDistanceKm += actual.distanceKm;
+          totalRuns++;
+          longestRunKm = Math.max(longestRunKm, actual.distanceKm);
+          wkKm += actual.distanceKm;
+          if (actual.avgPaceSecKm != null && actual.avgPaceSecKm > 0) {
+            if (actual.distanceKm >= 5) fastest5kSec = Math.min(fastest5kSec, 5 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 10) fastest10kSec = Math.min(fastest10kSec, 10 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 21.0975) fastestHalfSec = Math.min(fastestHalfSec, 21.0975 * actual.avgPaceSecKm);
+          }
+        }
+      }
+      if (actual.durationSec > 0) totalTimeSec += actual.durationSec;
+      if (actual.calories != null && actual.calories > 0) {
+        totalCalories += actual.calories;
+        caloriesTracked = true;
+      }
+      activities.push({
+        garminId: actual.garminId ?? '',
+        startTime: actual.startTime ?? '',
+        activityType: actual.activityType ?? 'RUNNING',
+        displayName: actual.displayName ?? actual.workoutName ?? actual.activityType ?? 'Activity',
+        distanceKm: actual.distanceKm ?? 0,
+        durationSec: actual.durationSec ?? 0,
+        avgPaceSecKm: actual.avgPaceSecKm ?? null,
+        avgHR: actual.avgHR ?? null,
+        iTrimp: actual.iTrimp ?? null,
+        calories: actual.calories ?? null,
+      });
+    }
+    weeklyKm.push(wkKm);
+    const wkTSS = computeWeekRawTSS(wk, wk.rated ?? {}, archive.planStartDate);
+    weeklyTSS.push(wkTSS);
+    totalLoad += wkTSS;
+  }
+
+  // Sort activities chronologically newest-first for the list.
+  activities.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''));
+
+  return {
+    totalDistanceKm,
+    totalRuns,
+    longestRunKm,
+    totalTimeSec,
+    totalCalories,
+    caloriesTracked,
+    totalLoad,
+    fastest5kSec,
+    fastest10kSec,
+    fastestHalfSec,
+    weeklyKm,
+    weeklyTSS,
+    activities,
+  };
+}
+
+function _buildPlanLineChart(
+  values: number[],
+  unitSuffix: string,
+  height = 100,
+): string {
+  const n = values.length;
+  if (n < 2) return '<div style="font-size:11px;color:var(--c-faint);padding:8px 0">Not enough weeks for a chart.</div>';
+  const W = 320;
+  const padL = 28; const padR = 8;
+  const usableW = W - padL - padR;
+  const maxVal = Math.max(...values, 1) * 1.1;
+  const xOf = (i: number) => padL + i * usableW / Math.max(n - 1, 1);
+  const yOf = (v: number) => height - 8 - (v / maxVal) * (height - 16);
+  const pts = values.map((v, i) => [xOf(i), yOf(v)] as [number, number]);
+  const linePath = `M ${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L ')}`;
+  const areaPath = `${linePath} L ${xOf(n - 1).toFixed(1)},${height - 8} L ${xOf(0).toFixed(1)},${height - 8} Z`;
+  // Y-axis labels at maxVal and maxVal/2.
+  const yLabels = `
+    <text x="${padL - 4}" y="${yOf(maxVal).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--c-faint)" dominant-baseline="middle">${Math.round(maxVal)}</text>
+    <text x="${padL - 4}" y="${yOf(maxVal / 2).toFixed(1)}" text-anchor="end" font-size="9" fill="var(--c-faint)" dominant-baseline="middle">${Math.round(maxVal / 2)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${height}" width="100%" height="${height}" preserveAspectRatio="none" style="display:block">
+    <line x1="${padL}" y1="${yOf(maxVal).toFixed(1)}" x2="${W - padR}" y2="${yOf(maxVal).toFixed(1)}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>
+    <line x1="${padL}" y1="${yOf(maxVal / 2).toFixed(1)}" x2="${W - padR}" y2="${yOf(maxVal / 2).toFixed(1)}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>
+    <path d="${areaPath}" fill="rgba(100,116,139,0.12)" stroke="none" vector-effect="non-scaling-stroke"/>
+    <path d="${linePath}" fill="none" stroke="#64748B" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    ${yLabels}
+    <text x="${padL}" y="${height - 1}" font-size="9" fill="var(--c-faint)">Week 1</text>
+    <text x="${W - padR}" y="${height - 1}" text-anchor="end" font-size="9" fill="var(--c-faint)">Week ${n}${unitSuffix ? ' · ' + unitSuffix : ''}</text>
+  </svg>`;
+}
+
+function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummary): string {
+  const unitPref = s.unitPref ?? 'km';
+  const archive = _findArchiveForPlan(s, summary);
+
+  // Title + dates
+  const distLabel = _raceDistanceLabelShort(summary.raceDistance);
+  const title = summary.raceName ?? distLabel;
+  const startD = summary.planStartDate ? new Date(summary.planStartDate + 'T12:00:00') : null;
+  const endD = summary.completionDate ? new Date(summary.completionDate + 'T12:00:00') : null;
+  const fmtMonthDay = (d: Date) => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const dateLabel = startD && endD
+    ? `${fmtMonthDay(startD)} – ${fmtMonthDay(endD)}, ${endD.getFullYear()}`
+    : (summary.completionDate ?? '');
+
+  // Pull stats — prefer archive (raw rows, full fidelity); fall back to summary.
+  // Build a set of garminIds that the live plan currently owns, so the past-
+  // plan view can skip duplicates introduced by an old continuousMode tail
+  // overlapping the new plan's week 1 (or by a buggy redistribution from an
+  // earlier app version).
+  const liveGarminIds = new Set<string>();
+  for (const wk of (s.wks ?? [])) {
+    for (const a of Object.values(wk.garminActuals ?? {}) as any[]) {
+      if (a?.garminId) liveGarminIds.add(a.garminId);
+    }
+  }
+  const stats = archive ? _aggregateArchiveStats(archive, liveGarminIds) : null;
+
+  const totalDistance = stats?.totalDistanceKm ?? summary.totalActualKm ?? 0;
+  const totalRuns = stats?.totalRuns ?? summary.totalRuns ?? 0;
+  const longestRun = stats?.longestRunKm ?? summary.longestRunKm ?? 0;
+  const totalTimeSec = stats?.totalTimeSec ?? summary.totalTimeSec ?? 0;
+  const totalCalories = stats?.totalCalories ?? summary.totalCalories ?? 0;
+  const caloriesTracked = stats?.caloriesTracked ?? (summary.totalCalories != null && summary.totalCalories > 0);
+  const totalLoad = stats?.totalLoad ?? 0;
+  const fastest5k = stats?.fastest5kSec ?? summary.fastest5kSec ?? Infinity;
+  const fastest10k = stats?.fastest10kSec ?? summary.fastest10kSec ?? Infinity;
+  const fastestHalf = stats?.fastestHalfSec ?? summary.fastestHalfSec ?? Infinity;
+  const weeklyKm = stats?.weeklyKm ?? summary.weeklyKm ?? [];
+  const weeklyTSS = stats?.weeklyTSS ?? [];
+  const activities = stats?.activities ?? [];
+
+  const totalHours = Math.floor(totalTimeSec / 3600);
+  const totalMins = Math.round((totalTimeSec % 3600) / 60);
+  const timeStr = totalTimeSec > 0
+    ? (totalHours > 0 ? `${totalHours}h ${totalMins}m` : `${totalMins}m`)
+    : '—';
+  const fmtElapsed = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s2 = Math.round(sec % 60);
+    return h > 0
+      ? `${h}:${String(m).padStart(2, '0')}:${String(s2).padStart(2, '0')}`
+      : `${m}:${String(s2).padStart(2, '0')}`;
+  };
+  const statRow = (label: string, value: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--c-border)">
+      <span style="font-size:13px;color:var(--c-muted)">${label}</span>
+      <span style="font-size:13px;font-weight:600;color:var(--c-black)">${value}</span>
+    </div>`;
+
+  const vdotDelta = summary.vdotEnd - summary.vdotStart;
+
+  // Activity list (newest-first). Cap at 50 to keep the page lightweight.
+  // Use the same iTrimp→TSS normaliser as `computeWeekRawTSS` so per-activity
+  // TSS sums to the weekly chart number — without this they diverge whenever
+  // the user has an LT-derived norm ≠ 15000.
+  const _norm = getNormalizerFromState(s);
+  const RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+  const activityRows = activities.slice(0, 50).map(a => {
+    const date = a.startTime ? new Date(a.startTime).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '';
+    const isRun = RUN_TYPES.has(a.activityType);
+    const distLabel = isRun && a.distanceKm > 0
+      ? formatKm(a.distanceKm, unitPref)
+      : (a.durationSec > 0 ? `${Math.round(a.durationSec / 60)}m` : '');
+    const tssVal = a.iTrimp != null && a.iTrimp > 0 ? Math.round((a.iTrimp * 100) / _norm) : null;
+    const tssLabel = tssVal != null ? `${tssVal} TSS` : '';
+    const paceLabel = isRun && a.avgPaceSecKm ? fp(a.avgPaceSecKm, unitPref) : '';
+    return `<div style="display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--c-border)">
+      <div>
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);line-height:1.3">${a.displayName}</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${date}${paceLabel ? ' · ' + paceLabel : ''}</div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;margin-left:12px">
+        <div style="font-size:13px;font-weight:600;color:var(--c-black)">${distLabel}</div>
+        ${tssLabel ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">${tssLabel}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+
+  const noArchiveNotice = !archive ? `
+    <div style="padding:12px;margin-bottom:10px;background:rgba(0,0,0,0.03);border-radius:10px;font-size:12px;color:var(--c-muted);line-height:1.5">
+      Activity-level history wasn't archived for this plan. Showing the summary captured at completion. Use Account → Restore Activity History to pull recent rows from the server.
+    </div>` : '';
+
+  // ── Sleep & physiology summary for the plan window ──────────────────────────
+  // physiologyHistory is global (not partitioned by plan), so derive the plan-
+  // window slice by date filter. Avg + a small score sparkline give a quick
+  // read on how recovery tracked across the plan; HRV/RHR averages add bedrock
+  // markers users can compare across plans.
+  const physio = ((s.physiologyHistory ?? []) as Array<{ date: string; sleepScore?: number; sleepDurationSec?: number; hrvRmssd?: number; restingHR?: number }>);
+  const planStartISO = summary.planStartDate;
+  const planEndISO = summary.completionDate;
+  const inPlanPhysio = (planStartISO && planEndISO)
+    ? physio.filter(p => p.date >= planStartISO && p.date <= planEndISO)
+    : [];
+  const sleepNights = inPlanPhysio.filter(p => typeof p.sleepScore === 'number');
+  const sleepDurationNights = inPlanPhysio.filter(p => typeof p.sleepDurationSec === 'number' && p.sleepDurationSec! > 0);
+  const hrvNights = inPlanPhysio.filter(p => typeof p.hrvRmssd === 'number' && p.hrvRmssd! > 0);
+  const rhrNights = inPlanPhysio.filter(p => typeof p.restingHR === 'number' && p.restingHR! > 0);
+  const avgSleep = sleepNights.length > 0
+    ? Math.round(sleepNights.reduce((a, p) => a + (p.sleepScore as number), 0) / sleepNights.length)
+    : null;
+  const avgSleepDurSec = sleepDurationNights.length > 0
+    ? Math.round(sleepDurationNights.reduce((a, p) => a + (p.sleepDurationSec as number), 0) / sleepDurationNights.length)
+    : null;
+  const fmtDur = (sec: number) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.round((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`;
+  };
+  const avgHRV = hrvNights.length > 0
+    ? Math.round(hrvNights.reduce((a, p) => a + (p.hrvRmssd as number), 0) / hrvNights.length)
+    : null;
+  const avgRHR = rhrNights.length > 0
+    ? Math.round(rhrNights.reduce((a, p) => a + (p.restingHR as number), 0) / rhrNights.length)
+    : null;
+
+  // Compact sleep-score sparkline. One thin bar per night in the plan window;
+  // colour-coded green/violet/orange so the worst nights stand out without
+  // needing labels. Newest on the right.
+  const _scoreColor = (v: number): string =>
+    v >= 75 ? '#34C759' : v >= 55 ? '#8B5CF6' : '#FF9500';
+  const sleepSpark = sleepNights.length >= 2 ? (() => {
+    const BAR_H = 48;
+    const sorted = [...sleepNights].sort((a, b) => a.date.localeCompare(b.date));
+    const bars = sorted.map(p => {
+      const h = ((p.sleepScore as number) / 100) * BAR_H;
+      return `<div style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;min-width:2px;padding:0 1px"><div style="height:${h.toFixed(1)}px;background:${_scoreColor(p.sleepScore as number)};border-radius:2px;opacity:0.85;min-height:1px"></div></div>`;
+    }).join('');
+    return `<div style="display:flex;align-items:flex-end;height:${BAR_H}px;gap:1px;margin-top:10px">${bars}</div>`;
+  })() : '';
+
+  const physioCard = sleepNights.length > 0 || hrvNights.length > 0 || rhrNights.length > 0 ? `
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Sleep & Physiology</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px">${sleepNights.length} night${sleepNights.length === 1 ? '' : 's'} tracked across the plan</div>
+      ${avgSleep != null ? statRow('Avg sleep score', `${avgSleep}/100`) : ''}
+      ${avgSleepDurSec != null ? statRow('Avg sleep duration', fmtDur(avgSleepDurSec)) : ''}
+      ${avgHRV != null ? statRow('Avg HRV', `${avgHRV} ms`) : ''}
+      ${avgRHR != null ? statRow('Avg resting HR', `${avgRHR} bpm`) : ''}
+      ${sleepSpark}
+    </div>` : '';
+
+  return `
+    <div class="mosaic-page" style="background:var(--c-bg)">
+      ${buildDetailHeader(title)}
+
+      <div style="padding:8px 18px 14px;overflow-y:auto">
+
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px">
+          ${dateLabel} · ${summary.totalWeeks}w
+        </div>
+
+        ${noArchiveNotice}
+
+        <!-- Stats table -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          ${statRow('Total Distance', totalDistance > 0 ? formatKm(totalDistance, unitPref) : '—')}
+          ${statRow('Total Runs', String(totalRuns))}
+          ${longestRun > 0 ? statRow('Longest Run', formatKm(longestRun, unitPref)) : ''}
+          ${fastest5k < Infinity ? statRow('Fastest 5k', fmtElapsed(fastest5k)) : ''}
+          ${fastest10k < Infinity ? statRow('Fastest 10k', fmtElapsed(fastest10k)) : ''}
+          ${fastestHalf < Infinity ? statRow('Fastest Half Marathon', fmtElapsed(fastestHalf)) : ''}
+          ${summary.adherencePct != null ? statRow('Plan Adherence', `${Math.round(summary.adherencePct)}%`) : ''}
+          ${totalTimeSec > 0 ? statRow('Time Active', timeStr) : ''}
+          ${caloriesTracked && totalCalories > 0 ? statRow('Calories Burnt', `${Math.round(totalCalories).toLocaleString()} kcal`) : ''}
+          ${Math.abs(vdotDelta) >= 0.1 ? statRow('VDOT Change', `${vdotDelta >= 0 ? '+' : ''}${vdotDelta.toFixed(1)} (${summary.vdotStart.toFixed(1)} → ${summary.vdotEnd.toFixed(1)})`) : ''}
+          ${summary.predictedTimeSec ? statRow('Predicted Race Time', ft(summary.predictedTimeSec)) : ''}
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
+            <span style="font-size:13px;color:var(--c-muted)">Total Load</span>
+            <span style="font-size:13px;font-weight:600;color:var(--c-black)">${totalLoad > 0 ? `${Math.round(totalLoad).toLocaleString()} TSS` : '—'}</span>
+          </div>
+        </div>
+
+        ${weeklyKm.length >= 2 ? `
+        <!-- Weekly distance chart -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Weekly Distance</div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px">Running ${unitPref === 'mi' ? 'miles' : 'km'} per week</div>
+          ${_buildPlanLineChart(weeklyKm, unitPref === 'mi' ? 'mi' : 'km')}
+        </div>` : ''}
+
+        ${weeklyTSS.length >= 2 ? `
+        <!-- Weekly TSS chart -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:4px">Weekly Load</div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:12px">Total TSS per week</div>
+          ${_buildPlanLineChart(weeklyTSS, 'TSS')}
+        </div>` : ''}
+
+        ${physioCard}
+
+        ${activities.length > 0 ? `
+        <!-- Activity list -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:8px">Activities (${activities.length})</div>
+          ${activityRows}
+          ${activities.length > 50 ? `<div style="font-size:11px;color:var(--c-faint);padding-top:10px;text-align:center">Showing 50 most recent of ${activities.length}</div>` : ''}
+        </div>` : ''}
+
+      </div>
+    </div>
+    ${renderTabBar('stats', isSimulatorMode())}`;
+}
+
+function renderPastPlanDetail(s: SimulatorState, completionDate: string): void {
+  const container = document.getElementById('app-root');
+  if (!container) return;
+  const rawPlans = ((s as any).completedPlans ?? []) as CompletedPlanSummary[];
+  // Search newest-first to handle accidental duplicates from before the dedup
+  // guard landed — the latest entry for a given completionDate is the one that
+  // saveSummary intended to keep.
+  const summary = [...rawPlans].reverse().find(p => p.completionDate === completionDate);
+  if (!summary) {
+    // Fall back to the progress detail rather than a blank screen.
+    renderProgressDetail(s);
+    return;
+  }
+  container.innerHTML = buildPastPlanDetailPage(s, summary);
+  animateChartDrawOn();
+  wireTabBarHandlers(navigateTab);
+  // Back button → return to Progress detail (where the card was tapped from).
+  // buildDetailHeader uses the id `stats-detail-back`; can't reuse `wireDetailBack`
+  // because it routes to the Stats main view, and we want the Progress detail.
+  const backBtn = document.getElementById('stats-detail-back');
+  if (backBtn) {
+    const back = () => renderProgressDetail(s);
+    backBtn.addEventListener('click', back);
+    backBtn.addEventListener('touchend', (e) => { e.preventDefault(); back(); }, { passive: false });
+  }
+}
+
+/**
+ * External entry point — used by `plan-view.ts`'s prev-week button at week 1
+ * to step into the most recent archived plan. Reads state itself so callers
+ * outside this module don't need to thread it through.
+ */
+export function renderPastPlanDetailFromCompletionDate(completionDate: string): void {
+  renderPastPlanDetail(getState(), completionDate);
 }
 
 // ---------------------------------------------------------------------------
@@ -1957,8 +2660,11 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     ],
   });
 
-  // Bar 2: VO2 Max (device value preferred, computed VDOT fallback)
-  const vo2bar = s.vo2 ?? computeCurrentVDOT(s);
+  // Bar 2: VO2 Max — single source of truth via getPhysiologicalVdot.
+  // Watch (s.vo2) wins when fresh; otherwise priority chain falls through to
+  // HR-calibrated → LT-back-derived → PB-median → Tanda-blended `s.v`.
+  const vo2physio = getPhysiologicalVdot(s);
+  const vo2bar = vo2physio.vdot ?? computeCurrentVDOT(s);
   const aerBreaks = isFemale ? [28, 35, 45, 55, 65] : [35, 42, 52, 60, 70];
   const aerZoneIdx = aerBreaks.findIndex(b => vo2bar < b);
   const aerZone = zoneLabels[aerZoneIdx === -1 ? 5 : aerZoneIdx];
@@ -1979,7 +2685,10 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
         { label: 'Performance',  fraction: 10/60, color: 'rgba(147,51,234,0.28)'  },
         { label: 'Elite',        fraction: 10/60, color: 'rgba(109,40,217,0.35)'  },
       ];
-  const aerSubtitle = s.vo2 == null ? 'Estimated from training data' : undefined;
+  // Subtitle reflects the actual source the unified function picked. When
+  // device VO2 is fresh, no subtitle (the value speaks for itself). When we
+  // fell through to a derived source (or device is stale), name it.
+  const aerSubtitle = vo2physio.source === 'device' ? undefined : vo2physio.detail;
   const vdotHasHistory = (s.vdotHistory?.length ?? 0) > 3;
   const aerBar = buildOnePositionBar({
     title: 'VO2 Max',
@@ -2056,6 +2765,58 @@ function getVO2History(s: SimulatorState): Array<{ date: string; value: number }
   return (s.physiologyHistory ?? [])
     .filter(d => d.vo2max != null && d.vo2max > 0)
     .map(d => ({ date: d.date, value: d.vo2max! }));
+}
+
+// Why: every fitness surface used `s.vo2 ?? computeCurrentVDOT(s)` for the headline
+// but `vo2hist.length >= 2` for the chart/trend, so a watch-derived headline was
+// paired with a VDOT-derived trend caption — silently mixing two sources under one
+// "VO2 Max" label. This resolves the mode once so all surfaces stay coherent.
+//
+// Now anchored on `getPhysiologicalVdot` so the same priority chain runs here
+// and on the LT engine and the onboarding fitness row. When the unified
+// resolver places `source === 'device'` we use device modes; otherwise we
+// fall through to 'estimated' regardless of whether `s.vo2` happens to be
+// non-null (it might be stale, in which case the resolver correctly skips it).
+type VO2DisplayMode = 'device-with-trend' | 'device-no-trend' | 'estimated';
+function resolveVO2Display(s: SimulatorState): {
+  mode: VO2DisplayMode;
+  value: number;
+  vo2hist: Array<{ date: string; value: number }>;
+  vdotHist: Array<{ week: number; vdot: number; date?: string }>;
+  /** Caption for the "estimated" mode. Empty string when device mode. */
+  estimatedDetail: string;
+} {
+  const vo2hist = getVO2History(s);
+  const vdotHist = s.vdotHistory ?? [];
+  const physio = getPhysiologicalVdot(s);
+  const hasDeviceTrend = vo2hist.length >= 2;
+
+  if (physio.source === 'device') {
+    if (hasDeviceTrend) {
+      return {
+        mode: 'device-with-trend',
+        value: physio.vdot ?? vo2hist[vo2hist.length - 1].value,
+        vo2hist, vdotHist, estimatedDetail: '',
+      };
+    }
+    return { mode: 'device-no-trend', value: physio.vdot as number, vo2hist, vdotHist, estimatedDetail: '' };
+  }
+
+  // Source resolved to a non-device tier (HR-calibrated / LT-derived / PB-median /
+  // Tanda fallback) OR device value was stale and fell through. Use the unified
+  // value if present, else fall back to legacy computeCurrentVDOT for the rare
+  // "no signal at all" case so we still render something rather than zero.
+  return {
+    mode: 'estimated',
+    value: physio.vdot ?? computeCurrentVDOT(s),
+    vo2hist, vdotHist,
+    estimatedDetail: physio.detail || 'Estimated from training data',
+  };
+}
+
+/** Caption when we have a device value but cannot draw a trend chart. */
+function buildVO2NoTrendNote(): string {
+  return `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">Watch reports VO2 Max only on days the value changes. Trend appears once more readings are recorded.</div>`;
 }
 
 /** Generic line chart for a dated value series (VO2 Max or VDOT). */
@@ -2144,30 +2905,44 @@ function buildVdotChangeNote(history: Array<{ week: number; vdot: number; date?:
 
 function buildFitnessDetailPage(s: SimulatorState): string {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, (s as any).previousPlanWks);
   const latest  = metrics[metrics.length - 1];
   const ctl = latest?.ctl ?? 0;
-  const vo2hist = getVO2History(s);
-  const vdotHist = s.vdotHistory ?? [];
-  const hasDeviceVO2 = vo2hist.length >= 2;
-  const vo2detail = s.vo2 ?? computeCurrentVDOT(s);
-  const isEstimated = s.vo2 == null;
+  const display = resolveVO2Display(s);
+  const vo2detail = display.value;
+  const isEstimated = display.mode === 'estimated';
 
-  // Trend arrow: use device VO2 history if available, else VDOT history
   let trendArrow = '→';
   let trendColor = 'var(--c-faint)';
-  if (hasDeviceVO2) {
-    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+  if (display.mode === 'device-with-trend') {
+    const d = display.vo2hist[display.vo2hist.length - 1].value - display.vo2hist[display.vo2hist.length - 2].value;
     trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
     trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
-  } else if (vdotHist.length >= 2) {
-    const d = vdotHist[vdotHist.length - 1].vdot - vdotHist[vdotHist.length - 2].vdot;
+  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
+    const d = display.vdotHist[display.vdotHist.length - 1].vdot - display.vdotHist[display.vdotHist.length - 2].vdot;
     trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
     trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
   }
 
-  const hasChart = hasDeviceVO2 || vdotHist.length >= 2;
+  // Card visible whenever we have any value to show. In device-no-trend mode the
+  // chart is suppressed but the headline + freshness caption still render.
+  const hasCardContent =
+    display.mode === 'device-with-trend' ||
+    display.mode === 'device-no-trend' ||
+    (display.mode === 'estimated' && display.vdotHist.length >= 2);
   const unitPref: UnitPref = s.unitPref ?? 'km';
+
+  let chartInner = '';
+  let noteInner = '';
+  if (display.mode === 'device-with-trend') {
+    chartInner = buildVO2LineChart(display.vo2hist);
+    noteInner = buildVO2ChangeNote(display.vo2hist);
+  } else if (display.mode === 'estimated') {
+    chartInner = buildVdotLineChart(display.vdotHist, '8w');
+    noteInner = buildVdotChangeNote(display.vdotHist);
+  } else {
+    noteInner = buildVO2NoTrendNote();
+  }
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
@@ -2179,7 +2954,7 @@ function buildFitnessDetailPage(s: SimulatorState): string {
         ${buildProgressScaleBars(s, ctl, metrics)}
 
         <!-- VO2 Max Trend Chart -->
-        ${hasChart ? `
+        ${hasCardContent ? `
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
             <div>
@@ -2189,10 +2964,10 @@ function buildFitnessDetailPage(s: SimulatorState): string {
                 <span style="font-size:16px;color:${trendColor}">${trendArrow}</span>
               </div>
             </div>
-            ${!hasDeviceVO2 ? buildRangeToggle('8w', 'fitness-range-btn') : ''}
+            ${display.mode === 'estimated' ? buildRangeToggle('8w', 'fitness-range-btn') : ''}
           </div>
-          <div id="fitness-vdot-chart">${hasDeviceVO2 ? buildVO2LineChart(vo2hist) : buildVdotLineChart(vdotHist, '8w')}</div>
-          ${hasDeviceVO2 ? buildVO2ChangeNote(vo2hist) : buildVdotChangeNote(vdotHist)}
+          ${chartInner ? `<div id="fitness-vdot-chart">${chartInner}</div>` : ''}
+          ${noteInner}
         </div>` : ''}
 
         <!-- Race forecast -->
@@ -2218,7 +2993,7 @@ function buildMetricSubHeader(title: string): string {
 }
 
 function buildCTLMetricPage(s: SimulatorState): string {
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, undefined, undefined, (s as any).previousPlanWks);
   const vals = metrics.map(m => Math.round(m.ctl / 7));
   const n = vals.length;
   const currentCtl = vals[n - 1] ?? 0;
@@ -2264,38 +3039,40 @@ function buildCTLMetricPage(s: SimulatorState): string {
 }
 
 function buildVDOTMetricPage(s: SimulatorState): string {
-  const vo2hist = getVO2History(s);
-  const hasDeviceVO2 = vo2hist.length >= 2;
-  const vo2metric = s.vo2 ?? computeCurrentVDOT(s);
-  const isEstimated = s.vo2 == null;
+  const display = resolveVO2Display(s);
+  const vo2metric = display.value;
+  const isEstimated = display.mode === 'estimated';
 
-  // Trend from device VO2 history or VDOT history
   let trendArrow = '→';
   let trendColor = 'var(--c-faint)';
-  if (hasDeviceVO2) {
-    const d = vo2hist[vo2hist.length - 1].value - vo2hist[vo2hist.length - 2].value;
+  if (display.mode === 'device-with-trend') {
+    const d = display.vo2hist[display.vo2hist.length - 1].value - display.vo2hist[display.vo2hist.length - 2].value;
     trendArrow = d > 0.5 ? '↑' : d < -0.5 ? '↓' : '→';
     trendColor = d > 0.5 ? 'var(--c-ok)' : d < -0.5 ? 'var(--c-warn)' : 'var(--c-faint)';
-  } else {
-    const hist = s.vdotHistory ?? [];
-    if (hist.length >= 2) {
-      const d = hist[hist.length - 1].vdot - hist[hist.length - 2].vdot;
-      trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
-      trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
-    }
+  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
+    const d = display.vdotHist[display.vdotHist.length - 1].vdot - display.vdotHist[display.vdotHist.length - 2].vdot;
+    trendArrow = d > 0.1 ? '↑' : d < -0.1 ? '↓' : '→';
+    trendColor = d > 0.1 ? 'var(--c-ok)' : d < -0.1 ? 'var(--c-warn)' : 'var(--c-faint)';
   }
 
-  // Build chart from device data or VDOT fallback
-  const chartHtml = hasDeviceVO2
-    ? buildVO2LineChart(vo2hist)
-    : (() => {
-        const hist = s.vdotHistory ?? [];
-        return buildVO2LineChart(hist.map(h => ({ date: h.date ?? `Wk ${h.week}`, value: h.vdot })));
-      })();
+  let chartHtml = '';
+  let changeNote = '';
+  if (display.mode === 'device-with-trend') {
+    chartHtml = buildVO2LineChart(display.vo2hist);
+    changeNote = buildVO2ChangeNote(display.vo2hist);
+  } else if (display.mode === 'estimated' && display.vdotHist.length >= 2) {
+    chartHtml = buildVO2LineChart(display.vdotHist.map(h => ({ date: h.date ?? `Wk ${h.week}`, value: h.vdot })));
+    changeNote = buildVdotChangeNote(display.vdotHist);
+  } else if (display.mode === 'device-no-trend') {
+    changeNote = buildVO2NoTrendNote();
+  }
 
-  const changeNote = hasDeviceVO2
-    ? buildVO2ChangeNote(vo2hist)
-    : buildVdotChangeNote(s.vdotHistory ?? []);
+  // For 'estimated' mode the unified resolver already supplies a precise
+  // caption naming which source won (HR-calibrated, LT-derived, PB-median,
+  // or Tanda fallback). For device modes, the value came from the watch.
+  const sourceLabel = display.mode === 'estimated'
+    ? display.estimatedDetail
+    : 'From device';
 
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
@@ -2305,10 +3082,8 @@ function buildVDOTMetricPage(s: SimulatorState): string {
           <span style="font-size:28px;font-weight:300;color:var(--c-black)">${vo2metric > 0 ? Math.round(vo2metric) : '—'}</span>
           <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${isEstimated ? 'Estimated from training data (VDOT)' : 'From device'}</div>
-        <div class="m-card" style="padding:16px">
-          ${chartHtml}
-        </div>
+        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${sourceLabel}</div>
+        ${chartHtml ? `<div class="m-card" style="padding:16px">${chartHtml}</div>` : ''}
         ${changeNote}
       </div>
     </div>
@@ -2320,6 +3095,38 @@ function buildLTMetricPage(s: SimulatorState): string {
   const currentLT = s.lt ?? 0;
   const currentHR = s.ltHR ?? null;
   const ltLabel = currentLT > 0 ? fp(currentLT, unitPref) : '—';
+
+  // Diagnostic dump — explains which recent runs qualified for the empirical
+  // LT path and why others didn't. Read-only, fires once per page render.
+  // Sub-20-min runs are excluded upstream by `collectSustainedEfforts` (any
+  // LT effort below that floor is physiologically impossible) so they don't
+  // clutter the table.
+  try {
+    const diag = diagnoseLTForState(s);
+    const qualifiedCount = diag.filter(d => d.qualified).length;
+    const fmtPace = (p: number | null) => (p && p > 0 ? `${Math.floor(p / 60)}:${String(Math.round(p % 60)).padStart(2, '0')}/km` : '—');
+    const rows = diag.map(d => ({
+      date: d.startTime.slice(0, 10),
+      duration: `${d.durationMin}min`,
+      pace: fmtPace(d.paceSecKm),
+      hr: d.avgHR != null ? `${Math.round(d.avgHR)} (${d.hrPctMax}%)` : '—',
+      hrDrift: d.hrDriftPct != null ? `${d.hrDriftPct}%` : '—',
+      paceCV: d.paceCV != null ? `${d.paceCV}%` : '—',
+      paceDrift: d.decouplingPct != null ? `${d.decouplingPct}%` : '—',
+      qualified: d.qualified ? 'YES' : 'no',
+      reason: d.reason,
+    }));
+    console.log('%c[LT diagnostic]', 'background:#0A0A0A;color:#FDFCF7;padding:2px 8px;border-radius:4px;font-weight:600',
+      `${qualifiedCount} of ${diag.length} runs qualified for empirical LT (last 120d, ≥20min)`);
+    console.log(`maxHR ${s.maxHR ?? '—'} bpm · LT band 85–92% = ${s.maxHR ? Math.round(s.maxHR * 0.85) : '—'}–${s.maxHR ? Math.round(s.maxHR * 0.92) : '—'} bpm · candidates considered: ${diag.length}`);
+    if (rows.length === 0) {
+      console.warn('[LT diagnostic] No candidate runs at all. collectSustainedEfforts() returned empty — check s.wks[].garminActuals and s.onboardingRunHistory.');
+    } else {
+      console.table(rows);
+    }
+  } catch (e) {
+    console.warn('[LT diagnostic] failed:', e);
+  }
 
   // Provenance + methods (computed lazily so we can show the breakdown card).
   const derived = deriveLTForState(s);
@@ -2423,17 +3230,31 @@ function buildLTMethodsCard(derived: import('@/calculations/lt-derivation').LTDe
     override: 'Manual override',
     garmin: 'Watch',
   };
-  const rows = derived.methods.map(m => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--c-border)">
-      <div style="min-width:0">
-        <div style="font-size:13px;color:var(--c-black);font-weight:500">${methodLabel[m.method] ?? m.method}</div>
-        <div style="font-size:11px;color:var(--c-faint);margin-top:2px">${escapeHtml(m.detail)}</div>
+  const rows = derived.methods.map(m => {
+    const infoId = m.method === 'empirical' ? 'lt-empirical' : null;
+    const infoBtn = infoId
+      ? `<button class="stats-info-btn" data-info-id="${infoId}" style="display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;width:16px;height:16px;border-radius:50%;border:1px solid var(--c-border-strong);background:none;cursor:pointer;font-size:9px;color:var(--c-muted);font-family:var(--f);flex-shrink:0;vertical-align:middle;margin-left:6px;touch-action:manipulation">ⓘ</button>`
+      : '';
+    const infoBox = infoId && INFO_TEXTS[infoId]
+      ? `<div id="stats-info-${infoId}" style="display:none;margin-top:8px;font-size:12px;color:var(--c-muted);line-height:1.55;background:rgba(0,0,0,0.04);border-radius:8px;padding:12px 14px">${INFO_TEXTS[infoId]}</div>`
+      : '';
+    return `
+    <div style="padding:8px 0;border-bottom:1px solid var(--c-border)">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="min-width:0;display:flex;align-items:center">
+          <div>
+            <div style="font-size:13px;color:var(--c-black);font-weight:500;display:flex;align-items:center">${methodLabel[m.method] ?? m.method}${infoBtn}</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:2px">${escapeHtml(m.detail)}</div>
+          </div>
+        </div>
+        <div style="text-align:right;flex-shrink:0;margin-left:12px">
+          <div style="font-size:13px;color:var(--c-black);font-weight:600">${fp(m.ltPaceSecKm, unitPref)}</div>
+          ${derived.methods.length > 1 ? `<div style="font-size:10px;color:var(--c-faint)">${Math.round(m.weight * 100)}% weight</div>` : ''}
+        </div>
       </div>
-      <div style="text-align:right;flex-shrink:0;margin-left:12px">
-        <div style="font-size:13px;color:var(--c-black);font-weight:600">${fp(m.ltPaceSecKm, unitPref)}</div>
-        ${derived.methods.length > 1 ? `<div style="font-size:10px;color:var(--c-faint)">${Math.round(m.weight * 100)}% weight</div>` : ''}
-      </div>
-    </div>`).join('');
+      ${infoBox}
+    </div>`;
+  }).join('');
   return `
     <div class="m-card" style="padding:14px 16px;margin-bottom:12px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:4px">How we calculated this</div>
@@ -2723,7 +3544,7 @@ function buildPacesCard(s: SimulatorState, unitPref: UnitPref): string {
 
 /** TSB trend line chart. */
 function buildTSBLineChart(s: SimulatorState, range: ChartRange): string {
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, undefined, undefined, (s as any).previousPlanWks);
   if (metrics.length < 3) return chartEmptyState(65);
 
   const sliceCount = range === '8w' ? 8 : range === '16w' ? 16 : undefined;
@@ -2866,7 +3687,7 @@ function buildPhysioChartWithBaseline(
 /** ACWR trend line chart: 8 weeks, reference lines at 1.0 / 1.3 / 1.5. */
 function buildACWRTrendChart(s: SimulatorState): string {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, (s as any).previousPlanWks);
   if (metrics.length < 3) return chartEmptyState(55);
   const sliced = metrics.slice(-8);
   const n = sliced.length;
@@ -3208,7 +4029,7 @@ function buildDailyLineChartGap(
 // Individual metric cards
 
 function buildFreshnessCard(s: SimulatorState): string {
-  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate);
+  const sameSignal = computeSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? s.ctlBaseline ?? 0, s.planStartDate, undefined, (s as any).previousPlanWks);
   const tsb = sameSignal?.tsb ?? 0;
   const ctl = sameSignal?.ctl ?? 0;
   const tsbD = Math.round(tsb / 7);
@@ -3257,7 +4078,7 @@ function buildFreshnessCard(s: SimulatorState): string {
 function buildInjuryRiskCard(s: SimulatorState): string {
   const tier = (s as any).athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
   const ratio = acwr.ratio;
   const safeUpper = acwr.safeUpper;
   const cautionUpper = safeUpper + 0.2;
@@ -3459,7 +4280,7 @@ function buildSleepCard(s: SimulatorState): string {
 }
 
 function buildCTLCard(s: SimulatorState): string {
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, undefined, undefined, (s as any).previousPlanWks);
   const latestCTL = metrics[metrics.length - 1]?.ctl ?? 0;
   const ctlD = Math.round(latestCTL / 7);
   const ctlBreaks = [20, 40, 58, 75, 95];
@@ -3572,11 +4393,11 @@ function buildStatsScroll(s: SimulatorState): string {
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
-      <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
+      <div style="max-width:600px;margin:0 auto;padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
         <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
         <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
       </div>
-      <div style="padding:4px 18px 80px">
+      <div style="max-width:600px;margin:0 auto;padding:4px 18px 80px">
         ${buildProgressCardCompact(s)}
         ${buildFreshnessCard(s)}
         ${buildInjuryRiskCard(s)}
@@ -3728,6 +4549,34 @@ function renderProgressDetail(s: SimulatorState): void {
   wireDetailBack(s);
   wireProgressRangeButtons(s);
 
+  // Current/Total toggle on the Progress detail page.
+  const setProgressTab = (active: 'current' | 'total') => {
+    const cur = document.getElementById('progress-current-view');
+    const tot = document.getElementById('progress-total-view');
+    if (cur) cur.style.display = active === 'current' ? '' : 'none';
+    if (tot) tot.style.display = active === 'total' ? '' : 'none';
+    (['current', 'total'] as const).forEach(id => {
+      const btn = document.getElementById(`progress-tab-${id}`) as HTMLButtonElement | null;
+      if (!btn) return;
+      const on = id === active;
+      btn.style.fontWeight = on ? '600' : '500';
+      btn.style.background = on ? 'var(--c-surface)' : 'transparent';
+      btn.style.color = on ? 'var(--c-black)' : 'var(--c-muted)';
+      btn.style.boxShadow = on ? '0 1px 2px rgba(0,0,0,0.08)' : 'none';
+    });
+  };
+  document.getElementById('progress-tab-current')?.addEventListener('click', () => setProgressTab('current'));
+  document.getElementById('progress-tab-total')?.addEventListener('click', () => setProgressTab('total'));
+
+  // Plan-history cards on the Total tab → past-plan detail.
+  document.querySelectorAll<HTMLElement>('[data-past-plan]').forEach(el => {
+    const completionDate = el.dataset.pastPlan;
+    if (!completionDate) return;
+    const open = () => renderPastPlanDetail(s, completionDate);
+    el.addEventListener('click', open);
+    el.addEventListener('touchend', (e) => { e.preventDefault(); open(); }, { passive: false });
+  });
+
   // Total Load row → plan load breakdown sheet
   const loadRow = document.getElementById('stats-progress-load-row');
   if (loadRow) {
@@ -3779,6 +4628,7 @@ function wireMetricDetailButtons(s: SimulatorState): void {
         wireTabBarHandlers(navigateTab);
         wireMetricBack(s);
         wireLTOverrideHandlers(s);
+        wireInfoButtons();
       }
     };
     el.addEventListener('click', handler);
@@ -3836,6 +4686,7 @@ function wireLTOverrideHandlers(s: SimulatorState): void {
       wireTabBarHandlers(navigateTab);
       wireMetricBack(m);
       wireLTOverrideHandlers(m);
+      wireInfoButtons();
     }
   });
   resetBtn?.addEventListener('click', async () => {
@@ -3853,6 +4704,7 @@ function wireLTOverrideHandlers(s: SimulatorState): void {
       wireTabBarHandlers(navigateTab);
       wireMetricBack(m);
       wireLTOverrideHandlers(m);
+      wireInfoButtons();
     }
   });
 
@@ -3892,6 +4744,7 @@ function wireLTOverrideHandlers(s: SimulatorState): void {
         wireTabBarHandlers(navigateTab);
         wireMetricBack(m);
         wireLTOverrideHandlers(m);
+        wireInfoButtons();
       }
     });
   });

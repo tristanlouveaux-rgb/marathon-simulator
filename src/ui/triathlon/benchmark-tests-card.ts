@@ -30,8 +30,15 @@ interface PendingTest {
 
 /**
  * Decide which tests to show. A test is pending when:
- *   - The benchmark it produces is missing OR was auto-derived (not user)
+ *   - The benchmark it produces is missing, OR
+ *   - The benchmark exists but the persisted `*Confidence` is below 'medium'
+ *     (meaning the activity-history estimator only had short / stale /
+ *     low-spread swim or ride data to work from)
  *   - AND the test isn't in the dismissed set
+ *
+ * The gold-standard test always wins: a paired m400+m200 (CSS) or a logged
+ * twentyMinW (FTP) shorts the prompt regardless of derived confidence — the
+ * user already did the test.
  */
 export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
   const tri = s.triConfig;
@@ -39,11 +46,19 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
   const dismissed = new Set((tri as any).dismissedTests as string[] ?? []);
   const out: PendingTest[] = [];
 
-  // Swim CSS test — pending if no paired-TT pair on file (regardless of
-  // whether we've estimated CSS another way; the pair is the gold standard).
-  const has400 = !!tri.swim?.pbs?.m400;
-  const has200 = !!tri.swim?.pbs?.m200;
-  if (!(has400 && has200) && !dismissed.has('css-pair')) {
+  // Swim CSS test — pending when CSS is missing OR confidence is < 'medium'
+  // (i.e. the persisted value is unreliable). Confidence is the canonical
+  // signal: a paired m400+m200 entry — wizard or test card — already promotes
+  // confidence to 'high', so we don't need a separate PB short-circuit.
+  // Conversely, m400/m200 PBs can be stale or wizard-typed without a real
+  // test, so they aren't a reliable gold-standard exemption on their own.
+  // Undefined confidence = pre-confidence persisted value; the launch-refresh
+  // in main.ts writes a real tier on every boot. Treat undefined as 'medium'
+  // (don't nag) to avoid surprising existing users.
+  const cssConf = tri.swim?.cssConfidence;
+  const cssLowConf = cssConf === 'low' || cssConf === 'none';
+  const cssNeedsTest = cssLowConf || tri.swim?.cssSecPer100m == null;
+  if (cssNeedsTest && !dismissed.has('css-pair')) {
     out.push({
       id: 'css-pair',
       label: 'Swim CSS test',
@@ -65,6 +80,7 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
           ...(triCfg.swim ?? {}),
           cssSecPer100m: css,
           cssSource: 'user',
+          cssConfidence: 'high',
           pbs: { ...(triCfg.swim?.pbs ?? {}), m400: t400, m200: t200 },
         };
         return null;
@@ -72,10 +88,17 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
     });
   }
 
-  // FTP 20-min test — pending unless the user has a user-sourced FTP.
-  const ftpSrc = tri.bike?.ftpSource;
-  const hasUserFtp = !!tri.bike?.ftp && ftpSrc === 'user';
-  if (!hasUserFtp && !dismissed.has('ftp-20min')) {
+  // FTP 20-min test — pending unless either:
+  //   (a) the user has logged a real 20-min test (twentyMinW), or
+  //   (b) the activity-history estimator has medium-or-better confidence in the
+  //       current FTP value (i.e. a recent power-curve top-1 candidate).
+  // (b) prevents nagging users who have a fresh FTP from clean rides while
+  // still surfacing the test for users on stale or whole-ride-NP fallback.
+  const hasTwentyMinTest = !!tri.bike?.twentyMinW;
+  const ftpConf = tri.bike?.ftpConfidence;
+  const ftpLowConf = ftpConf === 'low' || ftpConf === 'none';
+  const ftpNeedsTest = !hasTwentyMinTest && (ftpLowConf || tri.bike?.ftp == null);
+  if (ftpNeedsTest && !dismissed.has('ftp-20min')) {
     out.push({
       id: 'ftp-20min',
       label: 'FTP 20-min test',
@@ -94,6 +117,8 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
           ...(triCfg.bike ?? {}),
           ftp,
           ftpSource: 'user',
+          ftpConfidence: 'high',
+          twentyMinW: avg20,
           hasPowerMeter: true,
         };
         return null;
@@ -111,11 +136,14 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
 export function renderBenchmarkTestsCard(s: SimulatorState): string {
   const tests = pendingBenchmarkTests(s);
   if (tests.length === 0) return '';
+  const intro = tests.length === 1
+    ? 'One short test that locks in your real threshold value. Sticks at the top until done or dismissed.'
+    : 'Two short tests that lock in your real threshold values. Sticks at the top until done or dismissed.';
   return `
     <div class="hf" style="padding:12px 20px 4px;animation-delay:0.08s">
       <div style="background:#fff;border-radius:14px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05)">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Refine your benchmarks</div>
-        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:10px">Two short tests that lock in your real threshold values. Sticks at the top until done or dismissed.</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:10px">${intro}</div>
         ${tests.map((t) => renderTestRow(t)).join('')}
       </div>
     </div>

@@ -997,6 +997,7 @@ export function computeRollingLoadRatio(
   planStartDate: string,
   signalBSeed?: number,
   norm?: number,
+  archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
 ): { acute: number; chronic: number } | null {
   const now = new Date();
   now.setHours(12, 0, 0, 0);
@@ -1004,24 +1005,24 @@ export function computeRollingLoadRatio(
   const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
 
   // Need at least 14 days since plan start for a meaningful chronic window
+  // (or archived data extending the effective history back further).
   const daysSincePlanStart = Math.floor((now.getTime() - planStart.getTime()) / 86400000);
-  if (daysSincePlanStart < 14 && seedDaily === 0) return null;
+  if (daysSincePlanStart < 14 && seedDaily === 0 && !archivedPlans?.length) return null;
 
-  // Collect daily Signal B TSS for the last 28 days (index 0 = 27 days ago)
+  // Collect daily Signal B TSS for the last 28 days (index 0 = 27 days ago).
+  // _resolveWeekForDate also checks archived plans, so activities from a prior
+  // plan keep contributing to ACWR after the user generates a new plan.
   const daily: number[] = [];
   for (let daysAgo = 27; daysAgo >= 0; daysAgo--) {
     const d = new Date(now);
     d.setDate(d.getDate() - daysAgo);
     const dateStr = d.toISOString().split('T')[0];
 
-    const elapsed = Math.floor((d.getTime() - planStart.getTime()) / 86400000);
-    const weekIdx = Math.floor(elapsed / 7);
-
-    if (weekIdx < 0 || weekIdx >= wks.length) {
-      // Before plan or beyond plan — use historical daily average
+    const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
+    if (!wk) {
       daily.push(seedDaily);
     } else {
-      daily.push(computeTodaySignalBTSS(wks[weekIdx], dateStr, null, norm));
+      daily.push(computeTodaySignalBTSS(wk, dateStr, null, norm));
     }
   }
 
@@ -1055,16 +1056,41 @@ export interface DailyLoadEntry {
  * Build 28-day daily load history with per-day activity breakdown.
  * Used by the rolling-load detail view.
  */
+/**
+ * Resolve which Week (from current `wks` or any archived plan) covers a given
+ * date, by mapping the date against each plan's start. Returns null when the
+ * date falls outside every plan's range (truly pre-plan history).
+ */
+function _resolveWeekForDate(
+  dateMs: number,
+  wks: Week[],
+  planStartDate: string,
+  archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
+): Week | null {
+  const planStartMs = new Date(planStartDate + 'T12:00:00').getTime();
+  const idx = Math.floor((dateMs - planStartMs) / (7 * 86400000));
+  if (idx >= 0 && idx < wks.length) return wks[idx];
+  // Fall back to archived plans (e.g. previous plan that ended before this one started)
+  if (archivedPlans?.length) {
+    for (const archive of archivedPlans) {
+      const archStartMs = new Date(archive.planStartDate + 'T12:00:00').getTime();
+      const aIdx = Math.floor((dateMs - archStartMs) / (7 * 86400000));
+      if (aIdx >= 0 && aIdx < archive.weeks.length) return archive.weeks[aIdx] as Week;
+    }
+  }
+  return null;
+}
+
 export function getDailyLoadHistory(
   wks: Week[],
   planStartDate: string,
   signalBSeed?: number,
   norm?: number,
   maxHR?: number,
+  archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
 ): DailyLoadEntry[] {
   const now = new Date();
   now.setHours(12, 0, 0, 0);
-  const planStart = new Date(planStartDate + 'T12:00:00');
   const seedDaily = signalBSeed != null ? signalBSeed / 7 : 0;
 
   const entries: DailyLoadEntry[] = [];
@@ -1073,15 +1099,11 @@ export function getDailyLoadHistory(
     d.setDate(d.getDate() - daysAgo);
     const dateStr = d.toISOString().split('T')[0];
 
-    const elapsed = Math.floor((d.getTime() - planStart.getTime()) / 86400000);
-    const weekIdx = Math.floor(elapsed / 7);
-
-    if (weekIdx < 0 || weekIdx >= wks.length) {
+    const wk = _resolveWeekForDate(d.getTime(), wks, planStartDate, archivedPlans);
+    if (!wk) {
       entries.push({ date: dateStr, tss: Math.round(seedDaily), activities: [], zoneLoad: { lowAerobic: 0, highAerobic: 0, anaerobic: 0 } });
       continue;
     }
-
-    const wk = wks[weekIdx];
     const tss = computeTodaySignalBTSS(wk, dateStr, null, norm);
     const activities: DailyLoadEntry['activities'] = [];
     const seenIds = new Set<string>();
@@ -1201,6 +1223,7 @@ export function computeACWR(
   atlSeed?: number,
   signalBSeed?: number,
   norm?: number,
+  archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
 ): AthleteACWR {
   const tier = athleteTier ?? 'recreational';
   const tierCfg = TIER_ACWR_CONFIG[tier] ?? TIER_ACWR_CONFIG.recreational;
@@ -1213,8 +1236,8 @@ export function computeACWR(
   // Uses actual daily TSS from activities. No weekly-bucket artifacts: a hard
   // session on Saturday is immediately reflected on Sunday, and a partial week
   // doesn't cliff-drop the ratio.
-  if (planStartDate && wks.length > 0) {
-    const rolling = computeRollingLoadRatio(wks, planStartDate, signalBSeed, norm);
+  if (planStartDate && (wks.length > 0 || archivedPlans?.length)) {
+    const rolling = computeRollingLoadRatio(wks, planStartDate, signalBSeed, norm, archivedPlans);
     if (rolling) {
       ctl = rolling.chronic;
       atl = rolling.acute;
@@ -1242,12 +1265,12 @@ export function computeACWR(
   }
 
   if (signalBSeed != null) {
-    const result = computeSameSignalTSB(wks, Math.max(0, currentWeek - 1), signalBSeed, planStartDate);
+    const result = computeSameSignalTSB(wks, Math.max(0, currentWeek - 1), signalBSeed, planStartDate, undefined, archivedPlans);
     if (!result) return { ratio: 0, safeUpper, status: 'unknown', atl: 0, ctl: 0 };
     ctl = result.ctl;
     atl = result.atl;
   } else {
-    const metrics = computeFitnessModel(wks, completedLimit, ctlSeed, planStartDate, atlSeed);
+    const metrics = computeFitnessModel(wks, completedLimit, ctlSeed, planStartDate, atlSeed, undefined, archivedPlans);
     if (metrics.length < 3) {
       const latest = metrics[metrics.length - 1];
       return { ratio: 0, safeUpper, status: 'unknown', atl: latest?.atl ?? 0, ctl: latest?.ctl ?? 0 };
@@ -1310,6 +1333,46 @@ export function computeRunningFloorKm(
  *   Callers who know the user's cross-training history should pass a higher value (e.g. ctlSeed × 1.2
  *   for gym-heavy athletes) so ACWR reflects real fatigue from day one.
  */
+/**
+ * Walk archived plans + current `wks` chronologically. Yields every completed
+ * week tagged with the planStartDate it belongs to (matters for
+ * computeWeekRawTSS's unspentLoadItems date filter, which keys off the plan's
+ * own start date — passing the current plan's date when iterating an archived
+ * week would silently drop that week's unspent load).
+ *
+ * Why this exists: when the user generates a new plan, every chronic-load
+ * walker (computeSameSignalTSB, computeFitnessModel) needs to keep seeing the
+ * training that came before, otherwise CTL collapses to whatever signalBBaseline
+ * happens to be and the freshness ring reports a phantom "Overloaded" state.
+ *
+ * Archive truncation in `_truncateArchivesAtPlanBoundary` already prevents
+ * archive weeks overlapping with current `wks`, so chronological concatenation
+ * cannot double-count.
+ */
+export type ArchivedPlan = { planStartDate: string; weeks: any[] };
+
+function* _walkChronologicalWeeks(
+  wks: Week[],
+  currentWeek: number,
+  planStartDate: string | undefined,
+  archivedPlans: ArchivedPlan[] | undefined,
+): Generator<{ wk: Week; planStartDate: string | undefined }> {
+  if (archivedPlans?.length) {
+    const sorted = [...archivedPlans].sort((a, b) =>
+      (a.planStartDate ?? '').localeCompare(b.planStartDate ?? ''),
+    );
+    for (const archive of sorted) {
+      for (const wk of (archive.weeks ?? [])) {
+        yield { wk: wk as Week, planStartDate: archive.planStartDate };
+      }
+    }
+  }
+  const limit = Math.min(currentWeek, wks.length);
+  for (let i = 0; i < limit; i++) {
+    yield { wk: wks[i], planStartDate };
+  }
+}
+
 export function computeFitnessModel(
   wks: Week[],
   currentWeek: number,
@@ -1317,18 +1380,17 @@ export function computeFitnessModel(
   planStartDate?: string,
   atlSeed?: number,
   norm?: number,
+  archivedPlans?: ArchivedPlan[],
 ): FitnessMetrics[] {
   const results: FitnessMetrics[] = [];
   let ctl = ctlSeed ?? 0;
   let atl = atlSeed ?? ctlSeed ?? 0; // Signal B seed — higher than CTL for cross-training athletes
 
-  const limit = Math.min(currentWeek, wks.length);
-  for (let i = 0; i < limit; i++) {
-    const wk = wks[i];
+  for (const { wk, planStartDate: wkPlanStart } of _walkChronologicalWeeks(wks, currentWeek, planStartDate, archivedPlans)) {
     const rated = wk.rated ?? {};
-    const weekTSS = computeWeekTSS(wk, rated, planStartDate, norm);
+    const weekTSS = computeWeekTSS(wk, rated, wkPlanStart, norm);
     // Signal B: raw physiological TSS (no runSpec discount) — used for ATL/fatigue
-    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate, norm);
+    const weekRawTSS = computeWeekRawTSS(wk, rated, wkPlanStart, norm);
 
     // When user overrode a reduction recommendation, add 15% synthetic ATL debt.
     // Recovery debt from check-in adds further ATL inflation (orange +10%, red +20%).
@@ -1367,20 +1429,21 @@ export function computeSameSignalTSB(
   ctlSeed?: number,
   planStartDate?: string,
   norm?: number,
+  archivedPlans?: ArchivedPlan[],
 ): { ctl: number; atl: number; tsb: number } | null {
   // s.w is 1-indexed: wks[s.w-1] is the current week. limit = currentWeek (not +1)
   // so the loop covers wks[0..s.w-1], including today's completed activities without
   // inadvertently processing wks[s.w] (next week, 0 actuals) which would collapse ATL.
   const limit = Math.min(currentWeek, wks.length);
-  if (limit === 0) return null;
+  const archivedWeekCount = archivedPlans?.reduce((n, a) => n + (a.weeks?.length ?? 0), 0) ?? 0;
+  if (limit === 0 && archivedWeekCount === 0) return null;
 
   let ctl = ctlSeed ?? 0;
   let atl = ctlSeed ?? 0; // same seed — no gym-inflation offset
 
-  for (let i = 0; i < limit; i++) {
-    const wk = wks[i];
+  for (const { wk, planStartDate: wkPlanStart } of _walkChronologicalWeeks(wks, currentWeek, planStartDate, archivedPlans)) {
     const rated = wk.rated ?? {};
-    const weekRawTSS = computeWeekRawTSS(wk, rated, planStartDate, norm);
+    const weekRawTSS = computeWeekRawTSS(wk, rated, wkPlanStart, norm);
 
     // ATL inflation from overrides/recovery debt still applies (reflects suppressed fatigue)
     let atlMultiplier = 1.0;
@@ -1409,6 +1472,7 @@ export function computeReadinessACWR(s: {
   signalBBaseline?: number | null;
   planStartDate?: string;
   gs?: number | null;
+  previousPlanWks?: Array<{ planStartDate: string; weeks: any[] }>;
 }) {
   const tier = s.athleteTierOverride ?? s.athleteTier ?? undefined;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
@@ -1420,6 +1484,8 @@ export function computeReadinessACWR(s: {
     s.planStartDate,
     atlSeed,
     s.signalBBaseline ?? undefined,
+    undefined,
+    s.previousPlanWks,
   );
 }
 
@@ -1437,10 +1503,11 @@ export function computeLiveSameSignalTSB(
   signalBBaseline: number | undefined,
   ctlBaseline: number | undefined,
   planStartDate?: string,
+  archivedPlans?: ArchivedPlan[],
 ): { ctl: number; atl: number; tsb: number } {
   const completedWeek = Math.max(0, currentWeekIdx - 1);
   const seed = signalBBaseline ?? ctlBaseline ?? 0;
-  const sameSignal = computeSameSignalTSB(wks ?? [], completedWeek, seed, planStartDate);
+  const sameSignal = computeSameSignalTSB(wks ?? [], completedWeek, seed, planStartDate, undefined, archivedPlans);
   let atl = sameSignal?.atl ?? 0;
   let ctl = sameSignal?.ctl ?? 0;
 

@@ -93,7 +93,7 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
   // Inject "Return to plan →" button for mid-plan edit sessions
   const existingReturn = document.getElementById('wizard-return-btn');
   if (existingReturn) existingReturn.remove();
-  const isMidPlan = getState().wks.length > 0;
+  const isMidPlan = (getState().wks?.length ?? 0) > 0;
   const showReturn = isMidPlan && step !== 'welcome' && step !== 'main-view' && step !== 'initializing';
   if (showReturn) {
     const btn = document.createElement('button');

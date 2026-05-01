@@ -25,7 +25,7 @@ import {
   LEG_LOAD_MODERATE,
   LEG_LOAD_HEAVY,
 } from '@/calculations/readiness';
-import { getSleepBank, deriveSleepTarget, computeSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
+import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { TL_PER_MIN } from '@/constants';
 import { computeDailyCoach } from '@/calculations/daily-coach';
@@ -81,10 +81,11 @@ function getReadinessHTML(s: SimulatorState): string {
   const acwr = computeReadinessACWR(s);
   // Live TSB with intra-week decay through today (shared with home-view so scores match).
   const completedWeek = Math.max(0, s.w - 1);
-  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate);
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const tsb = liveTSB.tsb;
   const ctlNow = liveTSB.ctl;
-  const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed);
+  const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
 
   const today = new Date().toISOString().split('T')[0];
   const manualToday = (s.recoveryHistory ?? []).slice().reverse().find(
@@ -380,16 +381,15 @@ function getReadinessHTML(s: SimulatorState): string {
   // same debt number the user sees when they tap through.
   const cumulativeDebtSec = computeSleepDebt(
     s.physiologyHistory ?? [],
-    buildDailySignalBTSS(s.wks ?? []),
+    buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks),
     s.athleteTier ?? 'recreational',
     effectiveSleepTarget,
   );
-  const debtHours = cumulativeDebtSec > 0 ? Math.round(cumulativeDebtSec / 3600 * 10) / 10 : 0;
   const sleepHistLabel = sleepHistScore != null
     ? (sleepHistScore >= 80 ? 'Strong' : sleepHistScore >= 65 ? 'Steady' : sleepHistScore >= 50 ? 'Low' : 'Poor')
     : '';
   const sleepHistMeta = sleepHistAvg != null
-    ? `14d avg ${sleepHistAvg}${debtHours > 0 ? ` · ${debtHours}h debt` : ''}`
+    ? `14d avg ${sleepHistAvg}${cumulativeDebtSec > 2700 ? ` · ${fmtSleepDebt(cumulativeDebtSec)} debt` : ''}`
     : '';
   const sleepHistCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">Sleep History</div>
@@ -401,10 +401,10 @@ function getReadinessHTML(s: SimulatorState): string {
     <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${
       sleepHistScore == null
         ? 'Not enough sleep data yet. Needs at least 3 nights in the last 14 days.'
-        : debtHours >= 2 && sleepHistScore < 65
-          ? `Cumulative sleep debt of ${debtHours}h is impairing recovery. Duration deficit compounds even when individual night scores appear adequate.`
-          : debtHours >= 2
-            ? `Sleep quality scores are reasonable but ${debtHours}h of cumulative duration debt is accumulating. Prioritise sleep duration.`
+        : cumulativeDebtSec >= 7200 && sleepHistScore < 65
+          ? `Cumulative sleep debt of ${fmtSleepDebt(cumulativeDebtSec)} is impairing recovery. Duration deficit compounds even when individual night scores appear adequate.`
+          : cumulativeDebtSec >= 7200
+            ? `Sleep quality scores are reasonable but ${fmtSleepDebt(cumulativeDebtSec)} of cumulative duration debt is accumulating. Prioritise sleep duration.`
             : sleepHistScore >= 75
               ? 'Sleep trend is consistent. No recovery concern from chronic sleep.'
               : sleepHistScore >= 55

@@ -1,6 +1,7 @@
 import type { OnboardingState } from '@/types/onboarding';
 import type { RunnerType, RaceDistance } from '@/types/training';
-import { STATE_SCHEMA_VERSION } from '@/types/state';
+import { STATE_SCHEMA_VERSION, type GarminActual } from '@/types/state';
+import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { getMutableState } from '@/state/store';
 import { saveState, getMondayOf } from '@/state/persistence';
 import {
@@ -16,6 +17,202 @@ export interface CalculationResult {
   error?: string;
   runnerType?: RunnerType;
   calculatedRunnerType?: RunnerType;
+}
+
+/**
+ * Maximum number of archived prior plans kept in `s.previousPlanWks`. Covers
+ * ~3 years of plan history at 4 plans/year. Each archive entry has heavy
+ * fields (polyline / kmSplits / hrZones) stripped before storage so the cap
+ * doesn't blow localStorage quota.
+ */
+export const MAX_ARCHIVED_PLANS = 12;
+
+/**
+ * Strip storage-heavy display-only fields from a wks array before archival,
+ * so a long-term user with 10+ plans doesn't run into localStorage quota
+ * limits. Only `polyline` (multi-KB encoded GPS string) is dropped — that's
+ * 90%+ of the per-activity payload. kmSplits (one int per km) and hrZones
+ * (5 ints) stay so the activity-detail popup still renders pace/zone charts
+ * for archived activities. Map view loses the route trace; everything else
+ * survives.
+ */
+function _stripHeavyFieldsForArchive(weeks: any[]): any[] {
+  return weeks.map(wk => ({
+    ...wk,
+    garminActuals: Object.fromEntries(
+      Object.entries(wk.garminActuals ?? {}).map(([id, a]: [string, any]) => [id, {
+        ...a,
+        polyline: undefined,
+      }]),
+    ),
+    adhocWorkouts: (wk.adhocWorkouts ?? []).map((w: any) => ({
+      ...w,
+      polyline: undefined,
+    })),
+  }));
+}
+
+/**
+ * Archive the current `s.wks` array into `s.previousPlanWks` before any code
+ * path replaces it with fresh plan scaffolding. Without this, every plan reset
+ * (running plan generation, triathlon plan generation, downgrade-to-track-only,
+ * legacy recalc paths) destroys 10+ weeks of garminActuals / adhocWorkouts /
+ * RPE ratings — the data that drives the rolling-load chart, ACWR, freshness
+ * TSB history, sleep debt, and coach signals.
+ *
+ * Idempotent: skips when there's nothing worth archiving (no planStartDate, no
+ * activities). Capped at MAX_ARCHIVED_PLANS to bound state size; heavy
+ * display-only fields are stripped per `_stripHeavyFieldsForArchive`.
+ *
+ * MUST be called from every site that assigns to `s.wks` with a fresh array,
+ * paired with `redistributeArchivedActivitiesToNewPlan()` AFTER `s.wks` and
+ * `s.planStartDate` are set so activities dated within the new plan window
+ * land in the new wks instead of getting stranded in the archive.
+ */
+export function archiveCurrentWksIfPopulated(): void {
+  const s = getMutableState() as any;
+  if (!s.wks?.length || !s.planStartDate) return;
+  const hasData = s.wks.some((w: any) =>
+    Object.keys(w?.garminActuals ?? {}).length > 0
+    || (w?.adhocWorkouts ?? []).length > 0
+  );
+  if (!hasData) return;
+  // Replace any pre-existing archive entry with the same planStartDate so a
+  // re-run of plan generation overwrites instead of duplicating.
+  const existing = ((s.previousPlanWks ?? []) as any[]).filter(
+    a => a.planStartDate !== s.planStartDate,
+  );
+  existing.push({
+    planStartDate: s.planStartDate,
+    weeks: _stripHeavyFieldsForArchive(s.wks),
+    archivedAt: new Date().toISOString(),
+  });
+  s.previousPlanWks = existing.slice(-MAX_ARCHIVED_PLANS);
+}
+
+/**
+ * After a fresh `s.wks` has been set up (and `s.planStartDate` written), pull
+ * any activities from `s.previousPlanWks` whose start_time falls inside the new
+ * plan window and re-feed them through `matchAndAutoComplete` so they land in
+ * the correct new wk. Without this, regenerating a plan mid-week strands the
+ * current week's activities in the archive — they never re-attach to the new
+ * plan unless the user manually triggers a Strava sync that re-fetches them.
+ *
+ * - Runs are matched to planned workouts (auto-complete on high-confidence).
+ * - Cross-training is queued into `wk.garminPending` (current week) or logged
+ *   as adhoc (past week) — exactly the same path as a live sync.
+ * - Dedup: garminId set tracks across all archives so an activity that exists
+ *   in two archive entries is only re-fed once.
+ *
+ * MUST be called AFTER `s.wks = ...` and `s.planStartDate = ...`.
+ */
+export function redistributeArchivedActivitiesToNewPlan(): void {
+  const s = getMutableState() as any;
+  if (!s.wks?.length || !s.planStartDate) return;
+  const archives = s.previousPlanWks ?? [];
+  if (archives.length === 0) return;
+
+  const planStartMs = new Date(s.planStartDate + 'T00:00:00').getTime();
+  const planEndMs = planStartMs + s.wks.length * 7 * 86400 * 1000;
+
+  const seen = new Set<string>();
+  const rows: GarminActivityRow[] = [];
+  for (const archive of archives) {
+    for (const wk of archive.weeks ?? []) {
+      const actuals = Object.values(wk.garminActuals ?? {}) as GarminActual[];
+      for (const a of actuals) {
+        if (!a.startTime || !a.garminId) continue;
+        if (seen.has(a.garminId)) continue;
+        const t = new Date(a.startTime).getTime();
+        if (t < planStartMs || t >= planEndMs) continue;
+        seen.add(a.garminId);
+        rows.push({
+          garmin_id: a.garminId,
+          activity_type: a.activityType ?? 'RUNNING',
+          start_time: a.startTime,
+          duration_sec: a.durationSec ?? 0,
+          distance_m: a.distanceKm != null ? Math.round(a.distanceKm * 1000) : null,
+          avg_pace_sec_km: a.avgPaceSecKm ?? null,
+          avg_hr: a.avgHR ?? null,
+          max_hr: a.maxHR ?? null,
+          calories: a.calories ?? null,
+          aerobic_effect: a.aerobicEffect ?? null,
+          anaerobic_effect: a.anaerobicEffect ?? null,
+          iTrimp: a.iTrimp ?? null,
+          hrZones: a.hrZones ?? null,
+          hrDrift: a.hrDrift ?? null,
+          ambientTempC: a.ambientTempC ?? null,
+          polyline: a.polyline ?? null,
+          kmSplits: a.kmSplits ?? null,
+          elevationGainM: a.elevationGainM ?? null,
+          averageWatts: a.averageWatts ?? null,
+          normalizedPowerW: a.normalizedPowerW ?? null,
+          maxWatts: a.maxWatts ?? null,
+          deviceWatts: a.deviceWatts ?? null,
+          kilojoules: a.kilojoules ?? null,
+        });
+      }
+    }
+  }
+
+  if (rows.length === 0) {
+    // Even if no rows to redistribute, still truncate archives at the new plan
+    // boundary so a previous continuousMode tail doesn't keep showing up as
+    // "Missed" weeks in the past-plan view (the planned-workout templates
+    // would survive without their matched actuals otherwise).
+    _truncateArchivesAtPlanBoundary(archives, planStartMs);
+    return;
+  }
+  matchAndAutoComplete(rows);
+
+  // Remove the redistributed activities from the archive so they don't appear
+  // twice — once in the live plan (where matchAndAutoComplete just put them)
+  // and again in the past-plan view rendered off `previousPlanWks`.
+  const redistributedIds = new Set(rows.map(r => r.garmin_id));
+  for (const archive of archives) {
+    for (const wk of archive.weeks ?? []) {
+      if (!wk.garminActuals) continue;
+      for (const id of Object.keys(wk.garminActuals)) {
+        const a = wk.garminActuals[id];
+        if (a?.garminId && redistributedIds.has(a.garminId)) {
+          delete wk.garminActuals[id];
+        }
+      }
+    }
+  }
+
+  // Truncate every archive's weeks at the new plan's start date. Without this,
+  // a past plan whose continuousMode tail extended into today's week shows up
+  // as "Past plan · Week 14 · 27 Apr – 3 May" with all-missed planned workouts
+  // sitting on top of the new plan's same-week actuals.
+  _truncateArchivesAtPlanBoundary(archives, planStartMs);
+
+  console.log(`[plan-reset] Redistributed ${rows.length} archived activities into new plan window (removed from archive + truncated overlapping weeks to dedupe)`);
+}
+
+/**
+ * Drop any archive weeks whose start date is on or after the new plan's start.
+ * Keeps the archive a clean retrospective of the period before the new plan.
+ * Idempotent: archives whose weeks array is already shorter are left alone.
+ */
+function _truncateArchivesAtPlanBoundary(archives: any[], newPlanStartMs: number): void {
+  for (const archive of archives) {
+    if (!archive?.weeks?.length || !archive.planStartDate) continue;
+    const archStartMs = new Date(archive.planStartDate + 'T00:00:00').getTime();
+    let firstOverlapIdx = -1;
+    for (let i = 0; i < archive.weeks.length; i++) {
+      const wkStartMs = archStartMs + i * 7 * 86400 * 1000;
+      if (wkStartMs >= newPlanStartMs) {
+        firstOverlapIdx = i;
+        break;
+      }
+    }
+    if (firstOverlapIdx >= 0) {
+      const dropped = archive.weeks.length - firstOverlapIdx;
+      archive.weeks.length = firstOverlapIdx;
+      console.log(`[plan-reset] Truncated ${dropped} overlapping week(s) from archive starting ${archive.planStartDate}`);
+    }
+  }
 }
 
 /**
@@ -66,6 +263,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // race-forecast, plan-adherence), (3) `advanceWeekToToday` extends weeks
     // one at a time with no phase cycling.
     if (state.trackOnly) {
+      archiveCurrentWksIfPopulated();
       s.trackOnly = true;
       s.continuousMode = true;         // reuse non-event calendar extension path
       s.w = 1;
@@ -111,6 +309,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       if (state.restingHR) s.restingHR = state.restingHR;
       if (state.maxHR) s.maxHR = state.maxHR;
       if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
+      if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
       if (state.recurringActivities?.length) s.recurringActivities = [...state.recurringActivities];
 
       // Seed volume from detected Strava history if available (same rule as
@@ -120,6 +319,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
         s.wkm = Math.round(s.detectedWeeklyKm);
       }
 
+      redistributeArchivedActivitiesToNewPlan();
       saveState();
       return { success: true };
     }
@@ -225,6 +425,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.blendedRaceTimeSec = blendedTime;
     s.blendedEffectiveVdot = curr;
     s.blendedLastRefreshedISO = new Date().toISOString();
+    archiveCurrentWksIfPopulated();
     s.wks = initializeWeeks(s.tw);
     // Continuous mode: override phases to repeating 4-week blocks
     // Base → Build → Intensify → Deload (evidence-backed mesocycle)
@@ -310,8 +511,9 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     if (state.restingHR) s.restingHR = state.restingHR;
     if (state.maxHR) s.maxHR = state.maxHR;
 
-    // Store biological sex for iTRIMP β coefficient
+    // Store biological sex for iTRIMP β coefficient + bodyweight for FTP/kg
     if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
+    if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
 
     // Calculate expected final via shared forecast function
     const forecast = calculateForecast(
@@ -342,6 +544,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.continuousMode = false;
     }
 
+    redistributeArchivedActivitiesToNewPlan();
     saveState();
 
     return { success: true, runnerType: effectiveRunnerType, calculatedRunnerType };

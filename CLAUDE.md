@@ -38,9 +38,31 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
 
+## Multiple dev tabs do not share state
+
+When `npx vite` is running on more than one port (e.g. localhost:5173 and localhost:5175), each tab is a separate browser origin with its own `localStorage`, its own Garmin/Apple physiology sync state, and its own `s.vo2` / `s.maxHR` / `s.pbs`. The same code can produce different LT / VDOT / pace numbers across two tabs simply because one has physio synced and the other hasn't. Don't chase this as a code bug. When debugging cross-tab divergence, first confirm which physiology fields are populated in each tab — the diagnostic logs in `review.ts` and `stats-view.ts` print these.
+
 ## Test Failure Policy
 
 Never declare a test failure "pre-existing" without explaining in one sentence exactly why it is safe to ignore. If you cannot explain it in one sentence, investigate it — pre-existing failures are often real model regressions, stale test expectations from an undocumented code change, or tests you broke yourself without realising. "It was already failing" is not an explanation.
+
+## Console snippets: grep before you guess, chain `?.` after parse
+
+When suggesting a one-liner for the browser console (to inspect state, localStorage, IndexedDB, etc.), two failure modes cost a round-trip every time:
+
+1. **Wrong key name.** Don't guess. The localStorage key is `marathonSimulatorState` (defined as `STATE_KEY` in `src/state/persistence.ts`). If a future snippet needs a different key/constant, grep for the literal in the codebase first — `localStorage.setItem` / `localStorage.getItem` / DB names — rather than picking something that "sounds right". Saves a "Cannot read properties of null" round-trip every time.
+
+2. **`JSON.parse(null)` returns `null`, not throws.** `localStorage.getItem` on a missing key returns `null`; piping that through `JSON.parse` returns `null`; then `.onboarding` on null throws and looks like a real bug. Always parenthesise the parse and chain `?.` afterwards so a wrong key prints `undefined` instead of crashing:
+
+   ```js
+   // Bad — throws if the key is missing or wrong
+   JSON.parse(localStorage.getItem('foo')).onboarding?.x
+
+   // Good — prints undefined and tells you the key/path was wrong
+   JSON.parse(localStorage.getItem('foo') ?? 'null')?.onboarding?.x
+   ```
+
+The same applies to `sessionStorage`, `IDBDatabase` lookups, and any chain that starts from a possibly-null source.
 
 ## Supabase dashboard has a built-in AI
 
@@ -63,6 +85,58 @@ Mosaic is a tracking app *and* a planning app, and the two must not be conflated
 - **Planning** answers "what should the user do next?" — plan engine, replace-and-reduce, workout generation, load targets. Here we *prescribe*.
 
 A fact used in tracking does not automatically apply to planning. Example: the 5–11% bike-to-run pace discount in triathlon is a race-time prediction input (tracking), not a training-load discount on brick runs (planning — the training stimulus is full because the athlete's effort was maximal). When writing a new calculation, state explicitly which side of this line it sits on.
+
+## Manually-set Benchmarks Yield to Improvements
+
+**Any user-entered benchmark (FTP, CSS, LT, PBs, etc.) is overridden when an auto-derived value clearly improves on it.** A user's manually-entered number is a snapshot, not a permanent ceiling — if their actual training shows a better value with sufficient confidence, the system updates it.
+
+Rules for every benchmark with a `*Source: 'user' | 'derived'` provenance field:
+
+- **Direction of improvement** must be explicit per metric (FTP higher = better, CSS sec/100m lower = better, VDOT higher = better, race PB time lower = better).
+- **Confidence floor**: only override `'user'` values when the derived estimate has at least `'medium'` confidence (or the equivalent per-estimator quality gate). Never let a `'low'` or `'none'` estimate clobber a user value.
+- **Flip provenance to `'derived'`** when the override fires, so the next run keeps refreshing it. Log a one-line `console.log` so the change is visible.
+- **Surface the change in UI**: the caption changes from "Set manually." to "Updated from your rides/swims/runs — beat your last test." Don't silently swap the number.
+
+`main.ts` is the canonical place for this refresh on launch. Add the same pattern wherever a new auto-derived benchmark gets wired up.
+
+## Build target — single-user dev → broader iOS ship
+
+Mosaic is currently single-user (Tristan) but the goal is to ship as an iOS app to broader users. State migrations are not required yet because the user base resets cleanly, but **new state fields should always be optional (`?:`)** so fresh installs work without migration scaffolding. Schema-version bumps in `state.ts` (`STATE_SCHEMA_VERSION`) are reserved for genuine breaking changes.
+
+## Mirror rule — running and triathlon mode parity
+
+Running and triathlon mode logic should mirror each other where applicable. When changing one mode's adaptation, prediction, or workout-progression behaviour, **explicitly evaluate the other** before committing.
+
+**Things that ARE mirrored:**
+- Per-session effort scoring (HR effort, pace adherence, RPE-vs-expected)
+- Weekly duration progression via `effortMultiplier` (running uses it; tri now mirrors via `triEffortMultiplier`)
+- Marker auto-refresh from history (VDOT for run; CSS / FTP for tri)
+- Race-outcome logging (predicted vs actual after a target race)
+- Skip-handler push/drop rule
+- Suggestion-modal acceptance contract (user accepts before plan mutates)
+
+**Things that ARE intentionally different** (don't try to merge):
+- Tri has per-discipline CTL/ATL/Form (running has a single combined number — single discipline)
+- Tri has course factors and durability cap (running's predictor doesn't model these — single-discipline race, simpler course shape)
+- Tri prediction uses `blendPredictions` per leg at the leg's actual distance; running uses it once at race distance
+
+When in doubt, search both `*.ts` and `*.triathlon.ts` for the same concept and bring them into parity.
+
+## Adaptation transparency — surface meaningful changes, don't spam
+
+When the system makes a non-trivial change to the plan or the prediction, **the user should know about it**. Bundle changes into the end-of-week summary where possible. Mid-cycle changes that can't wait (a marker auto-bump from a fresh test, a race outcome) get their own targeted note.
+
+**Rules of thumb:**
+- **Big changes** (week-rollover effects, end-of-week recap, race outcome) → modal or full summary
+- **Small but meaningful changes** (marker auto-bump, adaptation-ratio crossing ±5%) → small toast/note
+- **Don't pop** for things the user can passively read on their next visit (course factors at race-pick, individual activity matched, plan re-rendered after version bump)
+
+**Meaningful-change thresholds** (Tristan, 2026-04-30):
+- FTP: ≥ 5 W delta (`MARKER_BUMP_THRESHOLD_FTP_W`)
+- CSS: ≥ 5 sec/100m delta (`MARKER_BUMP_THRESHOLD_CSS_SEC`)
+- VDOT: ≥ 1 point delta (`MARKER_BUMP_THRESHOLD_VDOT`)
+
+**Notify-once architecture**: store last-notified marker values on state (`triConfig.notifiedMarkers`); compare current vs last-notified at every trigger; surface only if delta crosses threshold; update the last-notified field after surfacing so we don't spam every launch.
 
 ## No Made-Up Numbers or Logic
 
@@ -114,12 +188,47 @@ Before building any new chart, bar, or data visualisation: **read `docs/UX_PATTE
 
 **NEVER run `git checkout -- <file>` to undo your own changes.** This destroys ALL uncommitted work on that file — not just what you added. The user's in-progress work is unrecoverable.
 
+**NEVER run `git stash` for diagnostic or testing purposes** ("let me stash to see if these errors are pre-existing"). `git stash` removes work from the working tree and a subsequent `git stash pop` can fail with merge conflicts that block recovery. **Real incident, 2026-04-30**: an agent stashed ~17,000 lines of WIP to test an unrelated typecheck question; pop failed because parallel agents kept editing tracked files; recovery took 30 minutes and required dumping the stash to a /tmp patch file as a safety net.
+
+**To answer "is this error pre-existing?" without stashing**:
+- `git diff <file>` — see your own changes
+- `git show HEAD:<file>` — see the committed version of a single file
+- `git diff HEAD -- <file>` — full diff of one file vs HEAD
+- Create a temp branch: `git switch -c temp/diagnostic` (preserves working tree, can switch back)
+
 **The correct way to undo your own edits:**
 1. Use the Edit tool to manually reverse your specific changes.
 2. If unsure what you changed: `git diff <file>` first.
 3. `git checkout -- <file>` is only safe if `git diff <file>` shows ONLY your own changes and nothing else.
 
+**Before any destructive git operation** (stash, reset, clean, checkout-discard): dump the current working tree to a /tmp patch file first. `git diff > /tmp/recovery.patch` is a 1-second insurance policy that has saved at least one session.
+
 **When in doubt: use Edit to undo, not git.**
+
+## Working posture — things Tristan has explicitly endorsed
+
+These are agent-behaviour preferences that have produced good outcomes on this project. They're not absolute rules but defaults — deviate consciously, not by reflex.
+
+**Push back when you disagree, accept when you're corrected.** Tristan reads agreement-by-default as sycophancy and corrects against it. If you think the user is wrong about something technical (a number, a model, an architectural call), say so once with reasoning and propose an alternative. Equally, when corrected, accept the correction without contortion — don't half-defend your previous position. Real session example (2026-04-30): user said "PBs are a ceiling", agent agreed, user pushed back ("PBs aren't a ceiling either"), agent dropped the framing entirely and rebuilt around the better model. That round-trip is fine; pretending the earlier framing was right is not.
+
+**Probe before any bundle larger than ~1 hour.** Use `AskUserQuestion` at architectural fork points — scope, format, primary signal, where output lives. The cost of a 30-second clarifying question is far below the cost of building the wrong thing for two hours. Good fork-point questions: "modal vs toast vs inline?", "auto-apply vs surface-as-suggestion?", "running pattern or new shape?". Bad ones: micro-decisions the user won't care about (variable names, exact button text, file structure).
+
+**Validate what's shipped before building more.** When asked "what's next", the honest answer is sometimes "use what we built before adding". After several feature-heavy sessions, propose dogfooding as a real next step. Resist the build-more reflex when the existing surface hasn't been exercised against real data. Captured as ISSUE-152 (2026-04-30) — the "process item" pattern.
+
+**Cite file:line whenever pointing at code.** Every reference to a function, type, or constant carries `path/to/file.ts:linenumber`. The user can navigate directly. Saves both of you from re-finding things across sessions.
+
+**For UI work: read UX_PATTERNS, name the existing pattern, ship.** The UI Pre-flight section above is load-bearing — the four-item check (UX_PATTERNS read / Copy rules read / existing pattern named / visual constraints checked) catches most one-off design drift before it ships. Don't skip it under time pressure.
+
+## Multi-agent awareness — your edits may collide
+
+If multiple Claude agents are running concurrently against the same repo, your edits to **shared / canonical files** can be overwritten by another agent's parallel work. Affected files include `CLAUDE.md`, `src/types/state.ts`, `src/types/triathlon.ts`, `src/constants/triathlon-constants.ts`, top-level docs, and any high-level integration file. **Real incident, 2026-04-30**: edits to `CLAUDE.md` and `triathlon.ts` were rolled back three times in a row by parallel agent activity before the issue was identified.
+
+**Signals you should respect:**
+- An edit you just made appears reverted on the next read → STOP, run `git diff <file>` to see current state, do not blindly re-apply.
+- A `system-reminder` says the file was "modified externally" → another agent or a linter/formatter has touched it, treat your previous knowledge of the file as stale.
+- Two `Edit` retries fail in a row with file-changed errors → don't try a third time. Read the current file, understand why it differs, then decide.
+
+**When you must edit a shared file**: dump it to a /tmp patch first (`git diff <file> > /tmp/<file>.before.patch`). If your edit gets reverted, the patch is your re-apply path. Don't hammer Edit retries.
 
 ## Navigation Rules
 
@@ -173,6 +282,17 @@ All user-facing copy should read like a knowledgeable consultant, not a wellness
 - Emoji are only permitted in workout type badges or status icons where they are the primary visual element with no alternative
 - All header action buttons must use SVG icons or plain text labels
 - The check-in system uses plain text labels only — no icons in the button
+
+## Quality: Two numbers that mean the same thing must come from the same source
+
+If a card and its drill-down (or any two surfaces) display the same metric, they must read from a single canonical computation. Never recompute "the same thing" with a different argument list — archived plans, seeds, or fallback paths almost always diverge between sites and produce numbers that disagree.
+
+**The rule**: when a value appears in more than one place, find or create a canonical helper (e.g. `computeReadinessACWR`) and call it from every surface. The drill-down's headline number, its sub-bars, and the parent card must all come from the *same call*.
+
+Audit checklist when adding or modifying any metric display:
+- Grep for every place the metric is shown.
+- Confirm they all read from the same function with the same arguments.
+- If a drill-down recomputes the metric "for more detail", that detail must be derived from the canonical result, not a parallel computation.
 
 ## Quality: Cross-cutting changes
 

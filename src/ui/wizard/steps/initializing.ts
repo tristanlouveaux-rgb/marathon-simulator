@@ -20,7 +20,7 @@ export function renderInitializing(container: HTMLElement, state: OnboardingStat
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
       <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
       <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
-      ${renderProgressIndicator(7, 8)}
+      ${renderProgressIndicator(7, 7)}
 
       <div style="max-width:480px;width:100%;text-align:center">
         <div id="init-animation" style="margin-bottom:32px">

@@ -809,6 +809,88 @@ describe('Universal Load: extendedModel backward compatibility', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Regression: iTRIMP scale invariant (Tier A+ must not silently drift)
+// ---------------------------------------------------------------------------
+// Original incident: `computeTierAPlus` skipped the `iTrimp × 100 / 15000`
+// normalisation that every other consumer applies, treating raw seconds-weighted
+// iTRIMP (~150 per TSS) as if it were already TSS-equivalent load. Result for
+// an 89 min tennis session at ~39 TSS:
+//   - baseLoad ≈ 7000 (should be ~47)
+//   - equivalentEasyKm slammed into the 25 km cap
+//   - severity always classified as "extreme"
+// These tests pin the scale so that drift gets caught at unit-test time rather
+// than weeks later in the suggestion modal.
+
+describe('Universal Load: iTRIMP scale invariant', () => {
+  // Plausible 1-hour HR-tracked tennis session.
+  // iTRIMP = 6000 corresponds to TSS = 6000 × 100 / 15000 = 40 (matches the
+  // user-reported 39 TSS in the incident screenshot).
+  const REALISTIC_HOUR_TENNIS_ITRIMP = 6000;
+  const tennisITrimpInput: ActivityInput = {
+    sport: 'tennis',
+    durationMin: 60,
+    iTrimp: REALISTIC_HOUR_TENNIS_ITRIMP,
+    rpe: 6,
+    fromGarmin: false,
+  };
+
+  it('Tier A+ baseLoad is on the same scale as the displayed TSS', () => {
+    const r = computeUniversalLoad(tennisITrimpInput, 'half');
+    expect(r.tier).toBe('itrimp');
+
+    // Expected: tssEquivalent (40) × tennis sportMult (1.20) = 48.
+    // If the /15000 normalisation is missing, baseLoad would be ~7200.
+    expect(r.baseLoad).toBeGreaterThan(30);
+    expect(r.baseLoad).toBeLessThan(80);
+  });
+
+  it('Tier A+ equivalentEasyKm does not slam into the 25 km cap', () => {
+    const r = computeUniversalLoad(tennisITrimpInput, 'half');
+    // Sane band: 1 hour of tennis should replace at most a short easy run,
+    // not a full long run.
+    expect(r.equivalentEasyKm).toBeLessThan(10);
+    expect(r.equivalentEasyKm).toBeGreaterThan(0);
+  });
+
+  it('Tier A+ and Tier C agree to within a factor of 2 for the same session', () => {
+    // Same 1-hour tennis session, evaluated with iTrimp vs without (RPE only).
+    const withITrimp = computeUniversalLoad(tennisITrimpInput, 'half');
+    const withoutITrimp = computeUniversalLoad(
+      { ...tennisITrimpInput, iTrimp: undefined },
+      'half'
+    );
+
+    expect(withITrimp.tier).toBe('itrimp');
+    expect(withoutITrimp.tier).toBe('rpe');
+
+    // Different methodologies WILL differ (RPE applies active-fraction +
+    // uncertainty penalty; iTRIMP doesn't). The test exists to catch the
+    // ORDER-OF-MAGNITUDE failure: pre-fix the ratio was ~70× because Tier A+
+    // skipped the iTRIMP→TSS normalisation. Anything inside 0.3–3× is fine.
+    const ratio = withITrimp.baseLoad / withoutITrimp.baseLoad;
+    expect(ratio).toBeGreaterThan(0.3);
+    expect(ratio).toBeLessThan(3.0);
+  });
+
+  it('synthetic excess-load round-trip stays consistent', () => {
+    // excess-load-card.ts builds a synthetic activity with iTrimp = excessTSS × 150.
+    // After Tier A+ normalisation that should yield baseLoad ≈ excessTSS × sportMult.
+    const excessTSS = 30;
+    const synthetic: ActivityInput = {
+      sport: 'cross_training',
+      durationMin: 60,
+      iTrimp: excessTSS * 150,
+      rpe: 5,
+      fromGarmin: false,
+    };
+    const r = computeUniversalLoad(synthetic, 'half');
+    // cross_training has mult ≈ 1.0; baseLoad should be in the ballpark of excessTSS.
+    expect(r.baseLoad).toBeGreaterThan(excessTSS * 0.5);
+    expect(r.baseLoad).toBeLessThan(excessTSS * 2.0);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Phase B v3 — Workout Type Classifier
 // ---------------------------------------------------------------------------
 

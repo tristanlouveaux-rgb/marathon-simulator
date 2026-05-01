@@ -34,8 +34,10 @@ export function detectMissedWeeks(): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // End of the current training week (exclusive upper bound)
-  const weekStart = new Date(s.planStartDate);
+  // End of the current training week (exclusive upper bound).
+  // Parse as local midnight — see weekStartDate() in plan-view.ts for the rationale.
+  const [_y, _m, _d] = s.planStartDate.split('-').map(Number);
+  const weekStart = new Date(_y, _m - 1, _d);
   weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
   const weekEnd = new Date(weekStart);
   weekEnd.setDate(weekEnd.getDate() + 7);
@@ -177,7 +179,7 @@ function computeCurrentCalendarWeek(s: ReturnType<typeof getMutableState>): numb
   if (!s.planStartDate) return s.w;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const start = new Date(s.planStartDate);
+  const start = new Date(s.planStartDate + 'T12:00:00');
   start.setHours(0, 0, 0, 0);
   const days = Math.floor((today.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
   return Math.max(1, Math.floor(days / 7) + 1);

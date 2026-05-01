@@ -50,6 +50,45 @@ export interface Marathon {
   imageUrl?: string;               // Optional city/race tile image
 }
 
+/**
+ * Per-leg published facts about an IRONMAN course. The prediction engine
+ * (separate agent) consumes these to produce time deltas vs an IM-typical
+ * course. We do NOT store derived multipliers here — only sourced facts.
+ */
+export interface CourseProfile {
+  /** Total bike elevation gain in metres (published in athlete guide). */
+  bikeElevationM?: number;
+  /** Total run elevation gain in metres (published in athlete guide). */
+  runElevationM?: number;
+  /** Categorical bike profile, derived consistently from elevation/route. */
+  bikeProfile?: 'flat' | 'rolling' | 'hilly' | 'mountainous';
+  /** Categorical run profile. */
+  runProfile?: 'flat' | 'rolling' | 'hilly';
+  /** Water and current character. */
+  swimType?: 'wetsuit-lake' | 'non-wetsuit-lake' | 'ocean' | 'ocean-current-assisted' | 'river';
+  /** Typical race-day climate. */
+  climate?: 'cool' | 'temperate' | 'warm' | 'hot' | 'hot-humid';
+  /** Venue altitude in metres above sea level. */
+  altitudeM?: number;
+  /** Wind exposure on the bike + run course. */
+  windExposure?: 'sheltered' | 'mixed' | 'exposed';
+  /** Free-form course notes (e.g. "2× Madonna climb", "current-assisted point-to-point swim"). */
+  notes?: string;
+}
+
+/** Triathlon event data — IRONMAN-branded full and 70.3 races. */
+export interface Triathlon {
+  id: string;
+  name: string;
+  city: string;
+  country: string;
+  date: string;                    // ISO date string
+  distance: '70.3' | 'ironman';
+  weeksUntil?: number;             // Computed at runtime
+  /** Per-leg course facts. Optional — populated from triathlon-course-profiles.ts. */
+  profile?: CourseProfile;
+}
+
 /** Milestone target for goal-setting */
 export interface MilestoneTarget {
   time: number;           // Target time in seconds
@@ -83,6 +122,9 @@ export interface OnboardingState {
   // Name
   name: string;
   age?: number;                   // Runner age
+  bodyWeightKg?: number;          // Bodyweight in kg. Used for FTP→W/kg cycling tier
+                                  // and load refinements. Optional; falls back to
+                                  // sex-based default (75kg male / 62kg female).
 
 
   // Step 2: Training Goal
@@ -168,6 +210,9 @@ export interface OnboardingState {
 
   /** True when the wizard used the Strava express path (§18.9) to auto-fill tri fields. */
   triUsedStravaExpressPath?: boolean;
+
+  /** Selected IRONMAN-branded race (sets customRaceDate from race.date). */
+  selectedTriathlonId?: string | null;
 }
 
 /** Default onboarding state */

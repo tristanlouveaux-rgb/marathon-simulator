@@ -97,13 +97,18 @@ Deno.serve(async (req) => {
         const mergedData = new Map<string, any>()
 
         for (const m of metricsRows) {
+            // NOTE: deliberately not seeding `vo2max` from `daily_metrics.vo2max`.
+            // The dailies value is Garmin's generic cardio estimate and can carry
+            // cycling/cardio-derived values that diverge from the watch's "Running
+            // VO2 Max" screen. We only consider `physiology_snapshots.vo2_max_running`
+            // (populated by Garmin's userMetrics push) the source of truth, applied
+            // in the physio merge loop below.
             mergedData.set(m.day_date, {
                 calendar_date: m.day_date,
                 resting_hr: m.resting_hr,
                 max_hr: m.max_hr,
                 hrv_rmssd: m.hrv_rmssd,
                 avg_stress_level: m.stress_avg,
-                vo2max: m.vo2max,
                 steps: m.steps ?? null,
                 active_calories: m.active_calories ?? null,
                 active_minutes: m.active_minutes ?? null,

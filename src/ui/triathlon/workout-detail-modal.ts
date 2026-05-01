@@ -9,9 +9,6 @@
 
 import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
-import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
-import { getMutableState } from '@/state/store';
-import { saveState } from '@/state/persistence';
 
 export function openTriWorkoutDetail(workout: Workout): void {
   const existing = document.getElementById('tri-workout-detail-overlay');
@@ -73,33 +70,18 @@ export function openTriWorkoutDetail(workout: Workout): void {
 
       <!-- Structured breakdown -->
       <div style="padding:18px 24px 8px">
-        ${blocks.length > 0
+        ${isStructured(blocks)
           ? blocks.map((b) => renderBlock(b, c.accent)).join('')
-          : `<div style="padding:16px 0;font-size:14px;color:var(--c-muted);line-height:1.55">${escapeHtml(workout.d)}</div>`}
+          : `<div style="padding:4px 0 12px;font-size:14px;color:#0F172A;line-height:1.6">${escapeHtml(blocks[0]?.body || workout.d)}</div>`}
       </div>
 
-      ${renderTargetHints(workout, discipline)}
-
-      <!-- Actions: move day + done -->
-      <div style="padding:16px 24px 24px;display:flex;gap:10px;align-items:center">
-        <div style="flex:1">
-          <label style="display:block;font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--c-faint);margin-bottom:4px">Move to</label>
-          <select id="tri-detail-day-select" style="
-            width:100%;padding:10px 12px;
-            border:1px solid rgba(0,0,0,0.12);border-radius:10px;
-            background:#fff;font-size:13px;color:#0F172A;
-            cursor:pointer;
-          ">
-            ${DAY_NAMES.map((d, i) => `<option value="${i}" ${i === (workout.dayOfWeek ?? 0) ? 'selected' : ''}>${d}</option>`).join('')}
-          </select>
-        </div>
+      <div style="padding:8px 24px 24px;display:flex;justify-content:flex-end">
         <button id="tri-detail-done" style="
           padding:13px 22px;
           background:#0F172A;color:#FAF9F6;
           border:none;border-radius:10px;
           font-size:14px;font-weight:600;
           cursor:pointer;
-          align-self:flex-end;
         ">Done</button>
       </div>
     </div>
@@ -110,33 +92,17 @@ export function openTriWorkoutDetail(workout: Workout): void {
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#tri-detail-close')?.addEventListener('click', close);
-  overlay.querySelector('#tri-detail-done')?.addEventListener('click', () => {
-    applyDayMove(workout);
-    close();
-    // Re-render current view so the move takes effect.
-    const currentHash = document.getElementById('app-root')?.querySelector('.mosaic-page');
-    if (currentHash) {
-      // Simple reload of current view by re-calling the home view — both plan
-      // and home re-render from state.
-      import('@/ui/home-view').then(({ renderHomeView }) => renderHomeView());
-    }
-  });
+  overlay.querySelector('#tri-detail-done')?.addEventListener('click', close);
 }
 
-/** Apply the day-select value to state. Moves the workout's dayOfWeek in place. */
-function applyDayMove(workout: Workout): void {
-  const select = document.getElementById('tri-detail-day-select') as HTMLSelectElement | null;
-  if (!select) return;
-  const newDay = parseInt(select.value, 10);
-  if (Number.isNaN(newDay) || newDay === workout.dayOfWeek) return;
-
-  const s = getMutableState();
-  const wk = s.wks?.[s.w - 1];
-  if (!wk || !wk.triWorkouts) return;
-  const idx = wk.triWorkouts.findIndex((w: Workout) => (w.id ?? w.n) === (workout.id ?? workout.n));
-  if (idx < 0) return;
-  wk.triWorkouts[idx] = { ...wk.triWorkouts[idx], dayOfWeek: newDay, dayName: DAY_NAMES[newDay] };
-  saveState();
+/**
+ * A single "Session" block with no warm-up / main / cool-down split is just
+ * the workout description repeated under a label — render it plainly instead.
+ */
+function isStructured(blocks: WorkoutBlock[]): boolean {
+  if (blocks.length === 0) return false;
+  if (blocks.length === 1 && blocks[0].label === 'Session') return false;
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -235,31 +201,6 @@ function renderBlock(b: WorkoutBlock, accent: string): string {
       <div style="flex:1;border-left:2px solid ${isEndpoint ? 'rgba(0,0,0,0.08)' : accent};padding:4px 0 4px 14px">
         <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${isEndpoint ? 'var(--c-muted)' : '#0F172A'};margin-bottom:4px">${b.label}</div>
         <div style="font-size:14px;color:#0F172A;line-height:1.55">${escapeHtml(b.body)}</div>
-      </div>
-    </div>
-  `;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Target hints (CSS / FTP / HR — whichever applies)
-// ─────────────────────────────────────────────────────────────────────────────
-
-function renderTargetHints(w: Workout, discipline: BadgeKind): string {
-  const notes: string[] = [];
-  if (discipline === 'swim') {
-    notes.push('Rest intervals are between reps. If fatigue spikes, add 10s to rest before dropping reps.');
-  } else if (discipline === 'bike') {
-    notes.push('Targets are steady-state — ease into them over the first 30 seconds of each effort.');
-  } else if (discipline === 'run') {
-    notes.push('Form cue: quick cadence (~180), relaxed arms, midfoot landing.');
-  } else if (discipline === 'strength') {
-    notes.push('Keep loads moderate. Controlled eccentrics. Never train to failure in-season.');
-  }
-  if (notes.length === 0) return '';
-  return `
-    <div style="padding:0 24px 16px">
-      <div style="background:rgba(0,0,0,0.03);border-radius:10px;padding:12px 14px;font-size:12px;color:var(--c-muted);line-height:1.55">
-        ${notes.map((n) => `<div>${escapeHtml(n)}</div>`).join('')}
       </div>
     </div>
   `;

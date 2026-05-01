@@ -9,7 +9,7 @@
  * (VO2max, LT, HRV, sleep) via syncPhysiologySnapshot().
  */
 
-import { callEdgeFunction } from './supabaseClient';
+import { callEdgeFunction, supabase } from './supabaseClient';
 import { matchAndAutoComplete, formatActivityType, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
@@ -17,16 +17,44 @@ import { processPendingCrossTraining, resetPendingModalGuard } from './activityS
 import { mergeTimingMods } from '@/cross-training/timing-check';
 
 /**
- * Derive athlete tier from weekly-scale CTL baseline.
- * Thresholds map TrainingPeaks daily tiers (20/40/65/90) ×7 for our weekly EMA.
+ * Derive athlete tier from weekly-scale CTL baseline plus a performance floor.
+ *
+ * CTL alone misclassifies athletes whose chronic running load is modest but
+ * whose race performance (VDOT, FTP) puts them well above their CTL bucket —
+ * e.g. a 3:12 marathoner with 261 W FTP would otherwise read "recreational"
+ * because their *running* CTL is moderate. The floor lifts the tier to match
+ * demonstrable engine size, never below the CTL-derived tier.
+ *
+ * Thresholds (CTL): TrainingPeaks daily tiers (20/40/65/90) ×7 for our weekly EMA.
+ *
+ * Performance floors (rough, not weight-normalised — we don't store body
+ * weight; FTP/kg would be cleaner but we use absolute watts as a proxy):
+ *  - VDOT ≥ 60 OR FTP ≥ 320 W → at least 'performance'
+ *  - VDOT ≥ 50 OR FTP ≥ 250 W → at least 'trained'
  */
 export type AthleteTier = 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
-export function deriveAthleteTier(ctlBaseline: number): AthleteTier {
-  return ctlBaseline < 140 ? 'beginner'
+
+const TIER_RANK: AthleteTier[] = ['beginner', 'recreational', 'trained', 'performance', 'high_volume'];
+
+export interface AthleteTierInputs {
+  vdot?: number | null;
+  ftpWatts?: number | null;
+}
+
+export function deriveAthleteTier(ctlBaseline: number, perf: AthleteTierInputs = {}): AthleteTier {
+  const fromCtl: AthleteTier = ctlBaseline < 140 ? 'beginner'
     : ctlBaseline < 280 ? 'recreational'
     : ctlBaseline < 455 ? 'trained'
     : ctlBaseline < 630 ? 'performance'
     :                     'high_volume';
+
+  let floor: AthleteTier = 'beginner';
+  const vdot = perf.vdot ?? 0;
+  const ftp = perf.ftpWatts ?? 0;
+  if (vdot >= 60 || ftp >= 320) floor = 'performance';
+  else if (vdot >= 50 || ftp >= 250) floor = 'trained';
+
+  return TIER_RANK[Math.max(TIER_RANK.indexOf(fromCtl), TIER_RANK.indexOf(floor))];
 }
 
 /**
@@ -69,14 +97,18 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null; powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
         if (!wk.garminMatched) continue;
         const workoutId = wk.garminMatched[row.garmin_id];
         if (!workoutId || workoutId === '__pending__' || workoutId === 'log-only') continue;
 
-        // Patch adhoc workouts (unmatched activities accepted by user)
+        // Patch adhoc workouts (unmatched activities accepted by user). Adhoc
+        // workouts also have a garminActuals entry keyed by adhocId, so fall
+        // through to the actual-patching block below after updating the adhoc
+        // record itself — otherwise power fields fetched on a later sync never
+        // reach the detail view, which reads from garminActuals.
         if (workoutId.startsWith('garmin-')) {
           const adhoc = (wk.adhocWorkouts ?? []).find(w => w.id === workoutId) as any;
           if (adhoc) {
@@ -84,7 +116,6 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
             if (row.kmSplits?.length && !adhoc.kmSplits?.length) { adhoc.kmSplits = row.kmSplits; extraPatched = true; }
             if (row.hrZones && !adhoc.hrZones) { adhoc.hrZones = row.hrZones; extraPatched = true; }
           }
-          continue;
         }
 
         if (!wk.garminActuals) continue;
@@ -105,12 +136,20 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         if (row.elevationGainM != null && actual.elevationGainM == null) { actual.elevationGainM = row.elevationGainM; extraPatched = true; }
         if (row.calories != null && actual.calories == null) { actual.calories = row.calories; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
-        // Power fields — patch whenever the DB has them and the actual doesn't.
-        if (row.averageWatts != null && actual.averageWatts == null) { actual.averageWatts = row.averageWatts; extraPatched = true; }
-        if (row.normalizedPowerW != null && actual.normalizedPowerW == null) { actual.normalizedPowerW = row.normalizedPowerW; extraPatched = true; }
-        if (row.maxWatts != null && actual.maxWatts == null) { actual.maxWatts = row.maxWatts; extraPatched = true; }
-        if (row.deviceWatts != null && actual.deviceWatts == null) { actual.deviceWatts = row.deviceWatts; extraPatched = true; }
-        if (row.kilojoules != null && actual.kilojoules == null) { actual.kilojoules = row.kilojoules; extraPatched = true; }
+        // Power fields — DB is canonical (refreshed by every Strava sync), so overwrite
+        // whenever it has a non-null value that differs. Filling-nulls-only would leave
+        // stale numbers stuck (e.g. averageWatts captured before the power-detail backfill).
+        if (row.averageWatts != null && actual.averageWatts !== row.averageWatts) { actual.averageWatts = row.averageWatts; extraPatched = true; }
+        if (row.normalizedPowerW != null && actual.normalizedPowerW !== row.normalizedPowerW) { actual.normalizedPowerW = row.normalizedPowerW; extraPatched = true; }
+        if (row.maxWatts != null && actual.maxWatts !== row.maxWatts) { actual.maxWatts = row.maxWatts; extraPatched = true; }
+        if (row.deviceWatts != null && actual.deviceWatts !== row.deviceWatts) { actual.deviceWatts = row.deviceWatts; extraPatched = true; }
+        if (row.kilojoules != null && actual.kilojoules !== row.kilojoules) { actual.kilojoules = row.kilojoules; extraPatched = true; }
+        if (row.powerCurve != null) {
+          const cur = actual.powerCurve;
+          const same = cur && cur.p600 === row.powerCurve.p600 && cur.p1200 === row.powerCurve.p1200
+            && cur.p1800 === row.powerCurve.p1800 && cur.p3600 === row.powerCurve.p3600;
+          if (!same) { actual.powerCurve = row.powerCurve; extraPatched = true; }
+        }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
         // Heal avgPaceSecKm: prefer DB moving-time pace over elapsed-time computation
         if (row.avg_pace_sec_km != null && actual.avgPaceSecKm !== row.avg_pace_sec_km) {
@@ -163,6 +202,13 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           if (matchRow.kmSplits?.length) actual.kmSplits = matchRow.kmSplits;
           if (matchRow.elevationGainM != null) actual.elevationGainM = matchRow.elevationGainM;
           if (matchRow.hrDrift != null) actual.hrDrift = matchRow.hrDrift;
+          // Strava is canonical for power — overwrite even if Garmin row had numbers
+          if (matchRow.averageWatts != null) actual.averageWatts = matchRow.averageWatts;
+          if (matchRow.normalizedPowerW != null) actual.normalizedPowerW = matchRow.normalizedPowerW;
+          if (matchRow.maxWatts != null) actual.maxWatts = matchRow.maxWatts;
+          if (matchRow.deviceWatts != null) actual.deviceWatts = matchRow.deviceWatts;
+          if (matchRow.kilojoules != null) actual.kilojoules = matchRow.kilojoules;
+          if (matchRow.powerCurve != null) actual.powerCurve = matchRow.powerCurve;
           // Update garminMatched so the re-enrich loop can find it on future syncs.
           // This also overwrites any stale '__pending__' left by a prior corrupted sync.
           wk.garminMatched[matchRow.garmin_id] = wid;
@@ -305,6 +351,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
     // The current week is always handled live by computeWeekRawTSS.
     const s = getMutableState();
     s.stravaHistoryFetched = true;
+    s.historicLastRefreshedAt = new Date().toISOString();
     const thisMondayISO = (() => {
       const d = new Date();
       const dayOfWeek = d.getUTCDay();
@@ -367,7 +414,10 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       ? Math.round(recentKm.reduce((a, b) => a + b, 0) / recentKm.length * 10) / 10
       : undefined;
 
-    s.athleteTier = deriveAthleteTier(s.ctlBaseline ?? 0);
+    s.athleteTier = deriveAthleteTier(s.ctlBaseline ?? 0, {
+      vdot: s.v,
+      ftpWatts: s.onboarding?.triBike?.ftp,
+    });
 
     saveState();
     console.log(`[StravaHistory] ${rows.length} weeks loaded — CTL baseline ${s.ctlBaseline} (Signal A), Signal B baseline ${s.signalBBaseline}, avg km ${s.detectedWeeklyKm}`);
@@ -696,6 +746,208 @@ export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult>
 }
 
 // ---------------------------------------------------------------------------
+// Recovery: rebuild `previousPlanWks` from raw activity rows on the server
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch the user's earliest Strava activity timestamp. Stored on
+ * `state.firstStravaActivityISO` to derive years-of-training for the
+ * triathlon prediction's experience-level bucket. Idempotent — caller
+ * should skip if `state.firstStravaActivityISO` is already set.
+ *
+ * Returns ISO timestamp or null if no activity / no auth / DB error.
+ */
+export async function fetchEarliestActivityDate(): Promise<string | null> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData.session?.user?.id;
+    if (!userId) return null;
+    const { data, error } = await supabase
+      .from('garmin_activities')
+      .select('start_time')
+      .eq('user_id', userId)
+      .order('start_time', { ascending: true })
+      .limit(1);
+    if (error) {
+      console.warn('[FetchEarliest] DB query failed:', error.message);
+      return null;
+    }
+    const row = (data ?? [])[0] as { start_time?: string | null } | undefined;
+    return row?.start_time ?? null;
+  } catch (e: any) {
+    console.warn('[FetchEarliest] Unexpected error:', e?.message ?? e);
+    return null;
+  }
+}
+
+/**
+ * Recover daily activity history that was lost when a previous plan reset
+ * wiped `s.wks` without archiving. Pulls raw activity rows from the standalone
+ * `sync-strava-activities` endpoint over a wide window (default 90 days),
+ * groups them into 7-day buckets keyed off the oldest activity's Monday, and
+ * synthesises a `previousPlanWks` archive entry the same way `_resolveWeekForDate`
+ * expects. After this runs, the rolling-load 28-day chart, ACWR, sleep debt,
+ * and coach signals all pick up the historical activities.
+ *
+ * Idempotent: appends a new archive entry; existing archive entries (if any)
+ * are preserved up to the 2-entry cap.
+ *
+ * Returns number of activity rows ingested into the synthetic archive.
+ */
+export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activitiesRecovered: number; weeksReconstructed: number }> {
+  try {
+    const s = getMutableState();
+    // Query `garmin_activities` directly — the standalone `sync-strava-activities`
+    // endpoint only returns activities not yet processed (sync-state filter), so
+    // historical rows that the user already synced before a plan reset are
+    // invisible to it. We need raw DB rows.
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData.session?.user?.id;
+    if (!userId) {
+      console.warn('[RestoreHistory] No authenticated user.');
+      return { activitiesRecovered: 0, weeksReconstructed: 0 };
+    }
+
+    const since = new Date();
+    since.setDate(since.getDate() - daysBack);
+    const sinceISO = since.toISOString();
+
+    const { data, error } = await supabase
+      .from('garmin_activities')
+      .select(
+        'garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, itrimp, hr_zones, km_splits, polyline, activity_name, elevation_gain_m, hr_drift, ambient_temp_c, average_watts, normalized_power, max_watts, device_watts, kilojoules',
+      )
+      .eq('user_id', userId)
+      .gte('start_time', sinceISO)
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.warn('[RestoreHistory] DB query failed:', error.message);
+      return { activitiesRecovered: 0, weeksReconstructed: 0 };
+    }
+    const activityRows = (data ?? []) as any[];
+    if (activityRows.length === 0) {
+      console.log(`[RestoreHistory] DB returned 0 rows since ${sinceISO} — nothing to recover.`);
+      return { activitiesRecovered: 0, weeksReconstructed: 0 };
+    }
+
+    const firstStart: string = activityRows[0].start_time;
+    if (!firstStart) {
+      console.warn('[RestoreHistory] First row missing start_time, aborting.');
+      return { activitiesRecovered: 0, weeksReconstructed: 0 };
+    }
+
+    // Anchor week 1 to the Monday on or before the first activity.
+    const firstDate = new Date(firstStart.split('T')[0] + 'T12:00:00');
+    const dayOfWeek = (firstDate.getDay() + 6) % 7; // 0 = Mon
+    firstDate.setDate(firstDate.getDate() - dayOfWeek);
+    const archivePlanStartISO = firstDate.toISOString().split('T')[0];
+    const archiveStartMs = firstDate.getTime();
+
+    // Build week buckets by date offset. DB columns are snake_case + distance in
+    // metres; map to the camelCase / km shape the views expect.
+    const weekMap = new Map<number, any>();
+    for (const r of activityRows) {
+      if (!r.start_time) continue;
+      const rowMs = new Date(r.start_time).getTime();
+      const weekIdx = Math.floor((rowMs - archiveStartMs) / (7 * 86400000));
+      if (weekIdx < 0) continue;
+      let wk = weekMap.get(weekIdx);
+      if (!wk) {
+        wk = {
+          w: weekIdx + 1,
+          ph: 'base',
+          rated: {},
+          skip: [],
+          cross: [],
+          wkGain: 0,
+          workoutMods: [],
+          adjustments: [],
+          unspentLoad: 0,
+          extraRunLoad: 0,
+          garminActuals: {} as Record<string, any>,
+          adhocWorkouts: [] as any[],
+          garminMatched: {} as Record<string, string>,
+        };
+        weekMap.set(weekIdx, wk);
+      }
+      // Archive entries omit only `polyline` (multi-KB GPS string) — 90% of
+      // the per-row payload, dropping it lets the cap go from 2 to 12 plans
+      // without busting localStorage. kmSplits and hrZones stay so the
+      // activity-detail popup still renders pace/zone breakdowns from the
+      // archive.
+      wk.garminActuals[r.garmin_id] = {
+        garminId: r.garmin_id,
+        startTime: r.start_time,
+        durationSec: r.duration_sec ?? 0,
+        distanceKm: r.distance_m != null ? r.distance_m / 1000 : 0,
+        avgPaceSecKm: r.avg_pace_sec_km ?? null,
+        avgHR: r.avg_hr ?? null,
+        maxHR: r.max_hr ?? null,
+        calories: r.calories ?? null,
+        iTrimp: r.itrimp ?? null,
+        hrZones: r.hr_zones ?? null,
+        hrDrift: r.hr_drift ?? null,
+        ambientTempC: r.ambient_temp_c ?? null,
+        elevationGainM: r.elevation_gain_m ?? null,
+        kmSplits: r.km_splits ?? null,
+        activityType: r.activity_type,
+        displayName: r.activity_name ?? formatActivityType(r.activity_type),
+        workoutName: r.activity_name ?? undefined,
+      };
+    }
+
+    // Densify: emit a Week for every index from 0 to maxIdx, even if empty.
+    // _resolveWeekForDate uses array-index lookup keyed on date offset, so a
+    // sparse array (missing rest weeks) misaligns every week after the first
+    // gap — every chart bar then misses or falls through to seedDaily.
+    const maxIdx = Math.max(...Array.from(weekMap.keys()), -1);
+    const reconstructedWeeks: any[] = [];
+    for (let i = 0; i <= maxIdx; i++) {
+      reconstructedWeeks.push(weekMap.get(i) ?? {
+        w: i + 1,
+        ph: 'base',
+        rated: {},
+        skip: [],
+        cross: [],
+        wkGain: 0,
+        workoutMods: [],
+        adjustments: [],
+        unspentLoad: 0,
+        extraRunLoad: 0,
+        garminActuals: {},
+        adhocWorkouts: [],
+        garminMatched: {},
+      });
+    }
+
+    // Replace any prior archive with the same planStartDate (e.g. an earlier
+    // run of this same recovery that emitted a sparse, mis-indexed weeks array
+    // — _resolveWeekForDate iterates archives in order and the broken entry
+    // would otherwise keep winning). Cap matches the initialization helper
+    // (MAX_ARCHIVED_PLANS = 12) so the two paths stay in sync.
+    const { MAX_ARCHIVED_PLANS } = await import('@/state/initialization');
+    const existing = ((s as any).previousPlanWks ?? []).filter(
+      (a: any) => a.planStartDate !== archivePlanStartISO,
+    );
+    existing.push({
+      planStartDate: archivePlanStartISO,
+      weeks: reconstructedWeeks,
+      archivedAt: new Date().toISOString(),
+    });
+    (s as any).previousPlanWks = existing.slice(-MAX_ARCHIVED_PLANS);
+    (s as any).lastHistoryAutoRestoreISO = new Date().toISOString();
+    saveState();
+
+    console.log(`[RestoreHistory] Reconstructed ${reconstructedWeeks.length} weeks (${weekMap.size} non-empty) from ${activityRows.length} activities, anchored at ${archivePlanStartISO}.`);
+    return { activitiesRecovered: activityRows.length, weeksReconstructed: reconstructedWeeks.length };
+  } catch (err) {
+    console.error('[RestoreHistory] Failed:', err);
+    return { activitiesRecovered: 0, weeksReconstructed: 0 };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Phase D — Extended history fetch (16w / all-time)
 // ---------------------------------------------------------------------------
 
@@ -719,5 +971,149 @@ export async function fetchExtendedHistory(weeks: 16 | 52): Promise<void> {
     console.log(`[StravaHistory] Extended ${weeks}w loaded — ${rows.length} weeks`);
   } catch (err) {
     console.warn('[StravaHistory] Extended fetch failed:', err);
+  }
+}
+
+/**
+ * Find and delete duplicate rows in `garmin_activities` for the current user.
+ *
+ * Two rows are duplicates when their `start_time` is within 10 minutes AND either
+ * shares the same `activity_type` OR has duration ratios within 15%. Mirrors the
+ * in-state dedup window used by `matchAndAutoComplete` so any duplicate group the
+ * matcher would have collapsed in `wk.garminActuals` is collapsed at the source too.
+ *
+ * Keeper selection per group:
+ *   1. Strava rows beat Garmin rows (`garmin_id` starts with 'strava-').
+ *   2. Among same-source rows, prefer the one with iTRIMP populated, then
+ *      polyline, then longest duration. This keeps the richest signal.
+ * All other rows in the group are deleted.
+ *
+ * Idempotent: gated by `s.dbDedupCompletedAt` (re-runs after 30 days). Safe to
+ * call from startup — a 90-day window is sufficient since duplicates only enter
+ * via active sync and old ones would have been cleaned by prior runs.
+ *
+ * Returns counts so the caller can log a summary; does NOT touch local state
+ * beyond the timestamp.
+ */
+export async function cleanupDbDuplicates(daysBack = 90): Promise<{ groups: number; deleted: number }> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const userId = sessionData.session?.user?.id;
+    if (!userId) return { groups: 0, deleted: 0 };
+
+    const since = new Date();
+    since.setDate(since.getDate() - daysBack);
+    const sinceISO = since.toISOString();
+
+    const { data, error } = await supabase
+      .from('garmin_activities')
+      .select('garmin_id, activity_type, start_time, duration_sec, itrimp, polyline')
+      .eq('user_id', userId)
+      .gte('start_time', sinceISO)
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.warn('[DbDedup] Query failed:', error.message);
+      return { groups: 0, deleted: 0 };
+    }
+    const rows = (data ?? []) as Array<{
+      garmin_id: string;
+      activity_type: string | null;
+      start_time: string;
+      duration_sec: number | null;
+      itrimp: number | null;
+      polyline: string | null;
+    }>;
+    if (rows.length < 2) {
+      const s = getMutableState();
+      s.dbDedupCompletedAt = new Date().toISOString();
+      saveState();
+      return { groups: 0, deleted: 0 };
+    }
+
+    // Group rows where start_time is within 10 min AND (same type OR duration ratio < 15%).
+    // Single pass: each row joins the most recent group whose anchor matches.
+    const TEN_MIN_MS = 10 * 60 * 1000;
+    type Row = (typeof rows)[number];
+    const groups: Row[][] = [];
+    for (const row of rows) {
+      const ms = new Date(row.start_time).getTime();
+      let placed = false;
+      for (const g of groups) {
+        const anchor = g[0];
+        const anchorMs = new Date(anchor.start_time).getTime();
+        if (Math.abs(ms - anchorMs) > TEN_MIN_MS) continue;
+        const sameType = !!row.activity_type && row.activity_type === anchor.activity_type;
+        let durSimilar = false;
+        if (row.duration_sec && anchor.duration_sec && row.duration_sec > 0 && anchor.duration_sec > 0) {
+          const ratio = Math.abs(row.duration_sec - anchor.duration_sec) / Math.max(row.duration_sec, anchor.duration_sec);
+          durSimilar = ratio < 0.15;
+        }
+        if (sameType || durSimilar) { g.push(row); placed = true; break; }
+      }
+      if (!placed) groups.push([row]);
+    }
+
+    const dupGroups = groups.filter(g => g.length > 1);
+    if (dupGroups.length === 0) {
+      const s = getMutableState();
+      s.dbDedupCompletedAt = new Date().toISOString();
+      saveState();
+      console.log('[DbDedup] No duplicates found.');
+      return { groups: 0, deleted: 0 };
+    }
+
+    // Pick keeper per group. Strava > Garmin; richer (iTRIMP, polyline, longest) wins.
+    const toDelete: string[] = [];
+    for (const g of dupGroups) {
+      const ranked = [...g].sort((a, b) => {
+        const aStrava = a.garmin_id.startsWith('strava-') ? 1 : 0;
+        const bStrava = b.garmin_id.startsWith('strava-') ? 1 : 0;
+        if (aStrava !== bStrava) return bStrava - aStrava;
+        const aTrimp = a.itrimp != null && a.itrimp > 0 ? 1 : 0;
+        const bTrimp = b.itrimp != null && b.itrimp > 0 ? 1 : 0;
+        if (aTrimp !== bTrimp) return bTrimp - aTrimp;
+        const aPoly = a.polyline ? 1 : 0;
+        const bPoly = b.polyline ? 1 : 0;
+        if (aPoly !== bPoly) return bPoly - aPoly;
+        return (b.duration_sec ?? 0) - (a.duration_sec ?? 0);
+      });
+      const [keep, ...drop] = ranked;
+      console.log(`[DbDedup] Group of ${g.length} (${keep.activity_type ?? '?'} @ ${keep.start_time}) — keeping ${keep.garmin_id}, dropping ${drop.map(d => d.garmin_id).join(', ')}`);
+      for (const d of drop) toDelete.push(d.garmin_id);
+    }
+
+    if (toDelete.length === 0) {
+      const s = getMutableState();
+      s.dbDedupCompletedAt = new Date().toISOString();
+      saveState();
+      return { groups: dupGroups.length, deleted: 0 };
+    }
+
+    // Delete in chunks of 100 to keep the IN-list reasonable.
+    const CHUNK = 100;
+    let deleted = 0;
+    for (let i = 0; i < toDelete.length; i += CHUNK) {
+      const chunk = toDelete.slice(i, i + CHUNK);
+      const { error: delError } = await supabase
+        .from('garmin_activities')
+        .delete()
+        .eq('user_id', userId)
+        .in('garmin_id', chunk);
+      if (delError) {
+        console.warn(`[DbDedup] Delete chunk ${i / CHUNK + 1} failed:`, delError.message);
+        break;
+      }
+      deleted += chunk.length;
+    }
+
+    console.log(`[DbDedup] Removed ${deleted} duplicate row(s) across ${dupGroups.length} group(s).`);
+    const s = getMutableState();
+    s.dbDedupCompletedAt = new Date().toISOString();
+    saveState();
+    return { groups: dupGroups.length, deleted };
+  } catch (e: any) {
+    console.warn('[DbDedup] Unexpected error:', e?.message ?? e);
+    return { groups: 0, deleted: 0 };
   }
 }

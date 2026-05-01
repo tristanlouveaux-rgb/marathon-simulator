@@ -98,7 +98,27 @@ function nameForBike(kind: BikeSessionKind): string {
 
 function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: number): string {
   if (hasPower && ftp) return `${Math.round(ftp * pct)}W`;
-  return `${Math.round(pct * 100)}% FTP`;
+  // No power meter: render HR-zone label rather than "% FTP" (which is
+  // meaningless when the user can't read watts on their head unit). Maps
+  // %FTP intensity bands to bike HR zones — anchored to Coggan & Allen Ch.4
+  // training-zone table.
+  return `${pctFtpToHrZoneLabel(pct)} (≈${Math.round(pct * 100)}% FTP)`;
+}
+
+/**
+ * Map %FTP target intensity → bike HR-zone label. Used by `pwLabel` when no
+ * power meter present so workout descriptions show "Z3 tempo" instead of an
+ * unreadable "82% FTP". Bike zones are 7 bpm lower than running per
+ * `BIKE_LTHR_OFFSET_VS_RUN` (Millet & Vleck 2000) — the user reads them on
+ * their HR strap, the math accounts for the offset.
+ */
+function pctFtpToHrZoneLabel(pct: number): string {
+  if (pct < 0.55) return 'Z1 recovery';
+  if (pct < 0.75) return 'Z2 endurance';
+  if (pct < 0.85) return 'Z3 tempo';
+  if (pct < 0.95) return 'Z4 threshold';
+  if (pct < 1.05) return 'Z4 / sub-threshold';
+  return 'Z5 VO2';
 }
 
 /** Round to nearest 5 min for anything ≥ 30 min — matches the §4 decision. */

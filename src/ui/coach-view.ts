@@ -26,6 +26,7 @@ import {
   type CoachSignals,
   type CoachBlocker,
 } from '@/calculations/daily-coach';
+import { fmtSleepDebt } from '@/calculations/sleep-insights';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { openCheckinOverlay } from './checkin-overlay';
 import { renderFeelingPromptHTML, wireFeelingPromptHandlers } from './feeling-prompt';
@@ -149,8 +150,8 @@ function buildWhyBullets(coach: CoachState): string[] {
   if (b.has('sleep')) {
     if (sig.sleepLastNight != null && sig.sleepLastNight < 55) {
       bullets.push(`Sleep last night ${sig.sleepLastNight}/100. Hard sessions on poor sleep blunt adaptation.`);
-    } else if (sig.sleepBankHours != null && sig.sleepBankHours < -5) {
-      bullets.push(`Sleep debt ${sig.sleepBankHours}h this week. Accumulated deficit suppresses training response.`);
+    } else if (sig.sleepDebtSec != null && sig.sleepDebtSec > 5 * 3600) {
+      bullets.push(`Sleep debt ${fmtSleepDebt(sig.sleepDebtSec)} this week. Accumulated deficit suppresses training response.`);
     } else {
       bullets.push('Sleep signals suggest incomplete recovery.');
     }
@@ -254,15 +255,13 @@ function recoverySection(coach: CoachState): string {
   let bankValue: string;
   let bankSub: string | null = null;
   let bankColor = TEXT_M;
-  if (sig.sleepBankHours != null) {
-    if (sig.sleepBankHours < 0) {
-      bankValue = `${sig.sleepBankHours}h`;
-      bankSub = 'sleep debt this week';
-      bankColor = sig.sleepBankHours < -5 ? WARN : sig.sleepBankHours < -3 ? CAUTION : TEXT_M;
-    } else {
-      bankValue = `+${sig.sleepBankHours}h`;
-      bankSub = 'sleep surplus';
-    }
+  if (sig.sleepDebtSec != null && sig.sleepDebtSec > 0) {
+    bankValue = `−${fmtSleepDebt(sig.sleepDebtSec)}`;
+    bankSub = 'sleep debt';
+    bankColor = sig.sleepDebtSec > 5 * 3600 ? WARN : sig.sleepDebtSec > 3 * 3600 ? CAUTION : TEXT_M;
+  } else if (sig.sleepDebtSec != null) {
+    bankValue = 'On track';
+    bankSub = null;
   } else {
     bankValue = '—';
     bankColor = TEXT_L;
@@ -272,7 +271,7 @@ function recoverySection(coach: CoachState): string {
     ${cardTitle("Recovery")}
     ${row('Sleep last night', sleepValue, sleepSub, sleepColor)}
     ${row('HRV', hrvValue, hrvSub, hrvColor)}
-    ${row('Sleep bank', bankValue, bankSub, bankColor, true)}
+    ${row('Sleep debt', bankValue, bankSub, bankColor, true)}
   `, '0.18s');
 }
 
@@ -304,6 +303,14 @@ function fitnessSection(sig: CoachSignals): string {
 }
 
 function thisWeekSection(sig: CoachSignals): string {
+  // Track-only mode with no activities yet: show a prompt instead of "0% of plan."
+  if (sig.trackOnlyEmptyWeek) {
+    return card(`
+      ${cardTitle("This week")}
+      <div style="font-size:13px;color:${TEXT_S};line-height:1.5">No activities logged yet. Record or sync a workout to see this week's load analysis.</div>
+    `, '0.26s');
+  }
+
   let effortText: string;
   let effortTone: 'neutral' | 'caution' | 'warn' | 'good';
   if (sig.weekRPE === 'hard') { effortText = 'Effort: Harder than expected'; effortTone = 'warn'; }

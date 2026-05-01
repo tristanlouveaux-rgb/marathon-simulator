@@ -7,8 +7,7 @@
 import { getState } from '@/state';
 import type { SimulatorState } from '@/types/state';
 import {
-  computeACWR,
-  computeRollingLoadRatio,
+  computeReadinessACWR,
   computeWeekRawTSS,
   TIER_ACWR_CONFIG,
   CTL_DECAY,
@@ -212,30 +211,6 @@ function acuteVsChronicCard(acute: number, chronic: number, ratio: number, safeU
   `;
 }
 
-// ── Zone reference card ───────────────────────────────────────────────────────
-
-function zoneReferenceCard(safeUpper: number): string {
-  const zones = [
-    { label: 'Low',      range: `below 0.8`,             color: TEXT_S,    desc: 'Training well below baseline. Normal during deload or recovery weeks.' },
-    { label: 'Optimal',  range: `0.8 to ${safeUpper.toFixed(1)}`, color: '#22C55E', desc: 'Load increase is within the range the body can adapt to. Optimal training zone.' },
-    { label: 'High',     range: `${safeUpper.toFixed(1)} to ${(safeUpper + 0.2).toFixed(1)}`, color: '#F59E0B', desc: 'Load is rising faster than adaptation. Monitor for soreness and sleep quality.' },
-    { label: 'Very High', range: `above ${(safeUpper + 0.2).toFixed(1)}`,   color: '#EF4444', desc: 'Significant load spike. Reduce volume or intensity.' },
-  ];
-
-  return zones.map(z => `
-    <div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;${z.label !== 'Low Load' ? 'border-top:1px solid #F1F5F9;' : ''}">
-      <div style="width:8px;height:8px;border-radius:50%;background:${z.color};margin-top:5px;flex-shrink:0"></div>
-      <div style="flex:1;min-width:0">
-        <div style="display:flex;align-items:baseline;gap:8px">
-          <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${z.label}</span>
-          <span style="font-size:11px;color:${TEXT_L}">${z.range}</span>
-        </div>
-        <div style="font-size:12px;color:${TEXT_S};margin-top:2px;line-height:1.4">${z.desc}</div>
-      </div>
-    </div>
-  `).join('');
-}
-
 // ── How it works + science card ───────────────────────────────────────────────
 
 function howItWorksCard(): string {
@@ -278,14 +253,12 @@ function howItWorksCard(): string {
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
 function getInjuryRiskHTML(s: SimulatorState): string {
-  const tier = s.athleteTierOverride ?? s.athleteTier;
-  const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined);
-
-  // Rolling 7d/28d for the acute vs chronic display
-  const rolling = s.planStartDate ? computeRollingLoadRatio(s.wks ?? [], s.planStartDate, s.signalBBaseline ?? undefined) : null;
-  const acute = rolling?.acute ?? acwr.atl;
-  const chronic = rolling?.chronic ?? acwr.ctl;
+  // Single source of truth — must match the Load Ratio card on Readiness.
+  // computeReadinessACWR already feeds rolling 7d/28d into atl/ctl when planStartDate exists,
+  // so the bars below display the same numbers as the ratio.
+  const acwr = computeReadinessACWR(s);
+  const acute = acwr.atl;
+  const chronic = acwr.ctl;
 
   // Weekly history
   const weeklyAcwr = getWeeklyAcwrHistory(s);
@@ -408,8 +381,6 @@ function getInjuryRiskHTML(s: SimulatorState): string {
 
           ${card('Weekly Trend', acwrBarChart(weeklyAcwr, acwr.safeUpper), '0.30s')}
 
-          ${card('Zone Reference', zoneReferenceCard(acwr.safeUpper), '0.38s')}
-
           ${card('How It Works', howItWorksCard(), '0.46s')}
 
         </div>
@@ -453,6 +424,93 @@ export function renderInjuryRiskView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
+  // Render the running-side page exactly as it always was. In tri mode we ALSO
+  // want per-discipline acute-vs-chronic context, but that's added inline by
+  // injecting an extra card into the existing layout via DOM manipulation
+  // after first render — keeps the existing page structure intact and avoids
+  // any chance of breaking running. See `injectTriPerDisciplineLoad` below.
   container.innerHTML = getInjuryRiskHTML(s);
   wireInjuryRiskHandlers();
+  if (s.eventType === 'triathlon' && s.triConfig) {
+    injectTriPerDisciplineLoad(s);
+  }
+}
+
+/**
+ * In tri mode, append per-discipline acute-vs-chronic cards AFTER the
+ * existing combined "Acute vs Chronic Load" card. Additive — does not modify
+ * any of the running-mode rendering. Form is intentionally NOT shown here:
+ * it lives on the Freshness page where it belongs.
+ */
+function injectTriPerDisciplineLoad(s: SimulatorState): void {
+  const tri = s.triConfig;
+  if (!tri?.fitness) return;
+  // Find the existing acute-vs-chronic card by its title text.
+  const cards = document.querySelectorAll('.ir-fade');
+  let anchor: Element | null = null;
+  for (const el of Array.from(cards)) {
+    if (el.textContent?.includes('Acute vs Chronic Load')) { anchor = el; break; }
+  }
+  if (!anchor) return;
+
+  const fit = tri.fitness;
+  const div = (sport: 'swim' | 'bike' | 'run', label: string) => {
+    const f = fit[sport];
+    // Display in weekly TSS (matches the combined Acute vs Chronic card above —
+    // f.ctl / f.atl are weekly EMA in TSS units).
+    const acuteW = Math.round(f.atl);
+    const chronicW = Math.round(f.ctl);
+    const ratio = f.ctl > 0 ? f.atl / f.ctl : 0;
+    if (acuteW === 0 && chronicW === 0) {
+      return `
+        <div style="padding:14px 0;border-top:1px solid #F1F5F9">
+          <div style="display:flex;justify-content:space-between;align-items:baseline">
+            <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${label}</span>
+            <span style="font-size:12px;color:${TEXT_L}">No direct activity</span>
+          </div>
+        </div>
+      `;
+    }
+    const maxVal = Math.max(acuteW, chronicW, 1);
+    const acutePct = Math.round((acuteW / maxVal) * 100);
+    const chronicPct = Math.round((chronicW / maxVal) * 100);
+    const ratioColor = ratio > 1.5 ? '#EF4444' : ratio > 1.3 ? '#F59E0B' : ratio >= 0.8 ? '#22C55E' : '#94A3B8';
+    return `
+      <div style="padding:14px 0;border-top:1px solid #F1F5F9">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+          <span style="font-size:13px;font-weight:600;color:${TEXT_M}">${label}</span>
+          <span style="font-size:22px;font-weight:700;color:${ratioColor};font-variant-numeric:tabular-nums;letter-spacing:-0.02em">${ratio > 0 ? ratio.toFixed(2) : '—'}</span>
+        </div>
+        <!-- Tiny acute bar (zone-coloured) -->
+        <div style="height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden;margin-bottom:3px">
+          <div style="height:100%;width:${acutePct}%;background:${ratioColor};border-radius:2px"></div>
+        </div>
+        <!-- Tiny chronic bar (neutral) -->
+        <div style="height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden;margin-bottom:6px">
+          <div style="height:100%;width:${chronicPct}%;background:#94A3B8;border-radius:2px"></div>
+        </div>
+        <div style="font-size:11px;color:${TEXT_L};font-variant-numeric:tabular-nums">${acuteW} vs ${chronicW} TSS · this week vs 4-week avg</div>
+      </div>
+    `;
+  };
+
+  const insertedHTML = `
+    <div class="ir-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:14px">By Discipline</div>
+      ${div('swim', 'Swim')}
+      ${div('bike', 'Bike')}
+      ${div('run', 'Run')}
+      <div style="font-size:11px;color:${TEXT_L};line-height:1.5;margin-top:8px;border-top:1px solid #F1F5F9;padding-top:10px">
+        Direct per-discipline activity (own sport only). Cross-training transfer is included in the combined ratio at the top — your bike work boosts overall load even on a rest swim day.
+      </div>
+    </div>
+  `;
+
+  // Insert after the anchor card.
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = insertedHTML;
+  const node = wrapper.firstElementChild;
+  if (node && anchor.parentNode) {
+    anchor.parentNode.insertBefore(node, anchor.nextSibling);
+  }
 }

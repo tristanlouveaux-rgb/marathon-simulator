@@ -60,13 +60,17 @@ const PHASE_INFO: Record<string, PhaseInfo> = {
 
 // ── Hero background (slate watercolour) ─────────────────────────────────────
 
-function heroBackground(): string { return buildSkyBackground('ltp', 'slate'); }
+function heroBackground(isArchive: boolean = false): string {
+  // Archive (past plan) view shifts the hero to the neutral grey palette so the
+  // page reads as historic, matching the plan-view's archive treatment.
+  return buildSkyBackground('ltp', isArchive ? 'grey' : 'slate');
+}
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
 function weekRangeFmt(planStartDate: string | undefined, weekNum: number): string {
   if (!planStartDate) return '';
-  const start = new Date(planStartDate);
+  const start = new Date(planStartDate + 'T12:00:00');
   start.setDate(start.getDate() + (weekNum - 1) * 7);
   const end = new Date(start);
   end.setDate(end.getDate() + 6);
@@ -305,14 +309,46 @@ function buildTaperCard(): string {
 
 // ── Main render ─────────────────────────────────────────────────────────────
 
-export function renderLoadTaperView(viewWeek?: number, returnTo: 'plan' | 'home' = 'plan'): void {
+export function renderLoadTaperView(
+  viewWeek?: number,
+  returnTo: 'plan' | 'home' = 'plan',
+  archiveIdx?: number | null,
+): void {
   const container = document.getElementById('app-root');
   if (!container) return;
 
-  const s = getState();
+  let s = getState();
+
+  // Triathlon mode: redirect to the Load Ratio & Injury Risk page, which has
+  // a tri fork rendering per-discipline data using the same UX patterns. One
+  // Load page across both modes — this view's running TSS/taper machinery
+  // doesn't apply to tri.
+  if (s.eventType === 'triathlon' && s.triConfig && archiveIdx == null) {
+    import('./injury-risk-view').then(({ renderInjuryRiskView }) => renderInjuryRiskView());
+    return;
+  }
+  // Archive view: when called from a past-plan view in plan-view.ts, swap
+  // `s.wks` / `planStartDate` / `tw` to the archived plan so all the existing
+  // load + carry maths read the archived weeks. Without this the page reads
+  // the live current plan with the archive's viewWeek number, producing
+  // "0 TSS / Week 6 of 10" for an out-of-bounds index.
+  if (archiveIdx != null && archiveIdx >= 0) {
+    const archives = ((s as any).previousPlanWks ?? []) as Array<{ planStartDate: string; weeks: any[] }>;
+    const arc = archives[archiveIdx];
+    if (arc?.weeks?.length) {
+      s = {
+        ...(s as any),
+        wks: arc.weeks,
+        planStartDate: arc.planStartDate,
+        tw: arc.weeks.length,
+        w: arc.weeks.length + 1, // every archived week reads as past
+      } as any;
+    }
+  }
   const weekNum = viewWeek ?? s.w;
   const wk = s.wks?.[weekNum - 1];
   const ph = wk?.ph ?? 'base';
+  const _isArchive = archiveIdx != null && archiveIdx >= 0;
 
   const tssRaw = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   const tssPlan = Math.round(computePlannedSignalB(
@@ -366,7 +402,7 @@ export function renderLoadTaperView(viewWeek?: number, returnTo: 'plan' | 'home'
       position:relative;min-height:100vh;background:${PAGE_BG};
       font-family:var(--f);overflow-x:hidden;
     ">
-      ${heroBackground()}
+      ${heroBackground(_isArchive)}
 
       <div style="position:relative;z-index:10;padding-bottom:48px;max-width:480px;margin:0 auto">
 

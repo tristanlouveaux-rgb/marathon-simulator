@@ -250,9 +250,18 @@ function buildZoneBalance(entries: DailyLoadEntry[]): string {
 
 function getRollingLoadHTML(s: SimulatorState): string {
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
+  // Use 0 as the seed (instead of ctlBaseline-derived) when track-only mode OR
+  // we have explicit `previousPlanWks` to read from. In both cases, days
+  // outside any plan window are genuine no-training days, not gaps to fill
+  // with a phantom baseline that would inflate ACWR/ATL. The ring + 28d-avg
+  // numbers must use the same seed as the daily chart, or they disagree.
+  const _archivedPlansForACWR = (s as any).previousPlanWks ?? undefined;
+  const _hasExplicitHistory = !!(_archivedPlansForACWR && _archivedPlansForACWR.length > 0);
+  const acwrSeed = ((s as any).trackOnly || _hasExplicitHistory) ? 0 : atlSeed;
   const acwr = computeACWR(
     s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined,
-    s.planStartDate, atlSeed, atlSeed,
+    s.planStartDate, acwrSeed, acwrSeed, undefined,
+    _archivedPlansForACWR,
   );
 
   const rollingTSS = Math.round(acwr.atl);
@@ -266,8 +275,20 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const pillColor = rollingTSS > chronicTSS * 1.3 ? '#C4553A'
     : rollingTSS > chronicTSS * 0.8 ? RING_BLUE_B : TEXT_S;
 
+  // Surface activities from prior plans (archived by `initializeSimulator` when
+  // a new plan is generated) so the 28-day chart still shows recent training
+  // history immediately after a plan reset.
+  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  // Use 0 (not atlSeed/7) for days outside any plan window when:
+  //   • track-only mode (post-plan, no plan to compare against), or
+  //   • we have explicit `previousPlanWks` history covering recent training —
+  //     gaps after the archive's last activity are real "no-training" days, not
+  //     a phantom baseline. seedDaily ≈ 30 was painting a flat line that masked
+  //     the actual training pattern.
+  const hasExplicitHistory = !!(archivedPlans && archivedPlans.length > 0);
+  const chartSeed = ((s as any).trackOnly || hasExplicitHistory) ? 0 : atlSeed;
   const entries = s.planStartDate
-    ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, atlSeed, undefined, s.maxHR)
+    ? getDailyLoadHistory(s.wks ?? [], s.planStartDate, chartSeed, undefined, s.maxHR, archivedPlans)
     : [];
 
   const chart = entries.length >= 2 ? buildDailyLoadChart(entries) : '';
@@ -490,7 +511,7 @@ export function renderRollingLoadView(): void {
   container.innerHTML = html;
   // Extract ringOffset from the rendered state
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed);
+  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed, undefined, (s as any).previousPlanWks);
   const rollingTSS = Math.round(acwr.atl);
   const chronicTSS = Math.round(acwr.ctl);
   const loadRatio = chronicTSS > 0 ? rollingTSS / chronicTSS : 0;

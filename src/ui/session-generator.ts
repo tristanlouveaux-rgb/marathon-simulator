@@ -12,13 +12,29 @@ import type { SessionIntent, SlotType } from '@/workouts/intent_to_workout';
 import { formatKm, formatPace } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
+import { blendPredictions } from '@/calculations/predictions';
 
 const MODAL_ID = 'session-generator-modal';
 
 type EffortKey = 'easy' | 'steady' | 'hard';
 
+const TIME_TRIAL_DISTANCES = [
+  { label: '5K',       dist: 5000,  km: 5 },
+  { label: '10K',      dist: 10000, km: 10 },
+  { label: 'Half',     dist: 21097, km: 21.097 },
+  { label: 'Marathon', dist: 42195, km: 42.195 },
+];
+
+function fmtTimeSec(totalSec: number): string {
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = Math.round(totalSec % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 interface SessionTypeOption {
-  slot: SlotType;
+  slot: SlotType | 'time_trial';
   label: string;
   subtitle: string;
   rpe: number;
@@ -56,6 +72,11 @@ const SESSION_TYPES: SessionTypeOption[] = [
     slot: 'progressive', label: 'Progressive Run',
     subtitle: 'Start easy, finish at marathon pace or faster',
     rpe: 5, defaultMinutes: 45, workRatio: 0.4,
+  },
+  {
+    slot: 'time_trial', label: 'Time Trial',
+    subtitle: 'Race-effort test at a target distance',
+    rpe: 9, defaultMinutes: 25, workRatio: 1.0,
   },
 ];
 
@@ -189,6 +210,8 @@ export function openSessionGenerator(): void {
 
   function renderStep2() {
     if (!selectedType) return;
+
+    if (selectedType.slot === 'time_trial') { renderTimeTrial(); return; }
 
     const defaultMin = selectedType.defaultMinutes;
     const defaultKm = Math.round(defaultMin * 60 / easyPace);
@@ -393,7 +416,7 @@ export function openSessionGenerator(): void {
       const workMinutes = Math.round(totalMinutes * selectedType.workRatio);
 
       const weekIdx = s.w || 1;
-      const intent = buildSessionIntent(selectedType.slot, totalMinutes, workMinutes, weekIdx);
+      const intent = buildSessionIntent(selectedType.slot as SlotType, totalMinutes, workMinutes, weekIdx);
 
       const workout = intentToWorkout(intent, s.rd, s.typ, easyPace);
 
@@ -431,6 +454,104 @@ export function openSessionGenerator(): void {
 
       import('./plan-view').then(({ renderPlanView }) => renderPlanView());
     });
+  }
+
+  // ── Time Trial step ────────────────────────────────────────────────────────
+
+  function renderTimeTrial() {
+    const vdot = s.v ?? 50;
+    const hasBlendInputs = !!(s.lt || s.vo2 || s.pbs?.k5 || s.pbs?.k10 || s.pbs?.h || s.pbs?.m);
+
+    const predictions = TIME_TRIAL_DISTANCES.map(d => {
+      const sec = hasBlendInputs
+        ? blendPredictions(d.dist, s.pbs ?? {}, s.lt ?? null, s.vo2 ?? vdot,
+            s.b ?? 1.06, s.typ ?? 'Balanced', s.rec ?? null,
+            s.athleteTier ?? undefined)
+        : null;
+      return { ...d, predictedSec: sec };
+    });
+
+    let selectedDist = predictions[0];
+
+    function renderContent() {
+      modal.innerHTML = `
+        <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+          <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Time Trial</div>
+          <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px">Based on your current fitness. Pick a distance.</div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+            ${predictions.map(d => {
+              const sel = d.label === selectedDist.label;
+              const timeStr = d.predictedSec ? fmtTimeSec(d.predictedSec) : '—';
+              return `
+                <button class="sg-tt-btn" data-label="${d.label}"
+                  style="display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;cursor:pointer;font-family:var(--f);
+                         border:1px solid ${sel ? 'var(--c-black)' : 'var(--c-border)'};
+                         background:${sel ? 'var(--c-black)' : 'transparent'}">
+                  <div style="font-size:13px;font-weight:600;color:${sel ? '#fff' : 'var(--c-black)'};margin-bottom:3px">${d.label}</div>
+                  <div style="font-size:12px;color:${sel ? 'rgba(255,255,255,0.65)' : 'var(--c-muted)'}">${timeStr}</div>
+                </button>
+              `;
+            }).join('')}
+          </div>
+
+          <div style="font-size:11px;color:var(--c-muted);padding:10px 12px;border:1px solid var(--c-border);border-radius:8px;line-height:1.55;margin-bottom:16px">
+            A time trial creates significant fatigue. Allow 2 to 3 days of easy running afterwards. Not appropriate if a race or key session falls within the next 5 days.
+          </div>
+
+          <button id="sg-tt-confirm"
+            style="width:100%;padding:12px;border-radius:12px;border:none;
+                   background:var(--c-accent);color:#fff;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">
+            Add to plan
+          </button>
+          <button id="sg-tt-back"
+            style="width:100%;padding:11px;border-radius:12px;border:1px solid var(--c-border);
+                   background:transparent;font-size:13px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f)">
+            Back
+          </button>
+        </div>
+      `;
+
+      modal.querySelectorAll('.sg-tt-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          selectedDist = predictions.find(d => d.label === (btn as HTMLElement).dataset.label)!;
+          renderContent();
+        });
+      });
+
+      document.getElementById('sg-tt-back')?.addEventListener('click', () => { step = 1; render(); });
+      document.getElementById('sg-tt-confirm')?.addEventListener('click', () => {
+        modal.remove();
+
+        const jsDay = new Date().getDay();
+        const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+        const paceSecKm = selectedDist.predictedSec
+          ? Math.round(selectedDist.predictedSec / selectedDist.km)
+          : undefined;
+
+        const session: Workout = {
+          id: `adhoc-${Date.now()}`,
+          t: 'threshold',
+          n: `${selectedDist.label} Time Trial`,
+          d: `${selectedDist.km}km race effort${selectedDist.predictedSec ? `. Target: ${fmtTimeSec(selectedDist.predictedSec)}` : ''}`,
+          r: 9,
+          rpe: 9,
+          dayOfWeek: ourDay,
+          ...(paceSecKm ? { targetPaceSecKm: paceSecKm } : {}),
+        };
+
+        const ms = getMutableState();
+        const wk = ms.wks?.[ms.w - 1];
+        if (!wk) return;
+        if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
+        wk.adhocWorkouts.push(session);
+        saveState();
+
+        import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      });
+    }
+
+    renderContent();
   }
 
   render();

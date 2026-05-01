@@ -18,8 +18,9 @@
 
 import { getState, getMutableState, saveState } from '@/state';
 import { computeFitnessModel, computeWeekTSS, computeWeekRawTSS, computePlannedWeekTSS, computePlannedSignalB, getTrailingEffortScore } from '@/calculations/fitness-model';
-import { formatKm } from '@/utils/format';
+import { formatKm, ft } from '@/utils/format';
 import { next } from '@/ui/events';
+import { computePlanAdherence } from '@/calculations/plan-adherence';
 import { computeWeekSignals, getSignalPills, getCoachCopy, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { detectEasyDriftPattern } from '@/calculations/daily-coach';
 import { planWeekSessions, effortMultiplier } from '@/workouts/plan_engine';
@@ -98,8 +99,31 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
   if (document.getElementById('week-debrief-modal')) return;
   if (document.getElementById('activity-review-overlay')) return;
   const s = getState() as any;
+  // Triathlon mode dispatches to its own debrief — same lastDebriefWeek
+  // guard, mirror-rule structure. Running's debrief uses run-specific TSS /
+  // ACWR machinery that doesn't apply to tri.
+  if (s.eventType === 'triathlon') {
+    import('@/ui/triathlon/tri-week-debrief').then(({ fireTriDebriefIfReady }) => {
+      fireTriDebriefIfReady();
+    });
+    return;
+  }
   const targetWeek = pendingDebrief ? (s.w ?? 1) : (s.w ?? 1) - 1;
-  if (targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
+  // Don't block on unresolved activity assignments when the calendar has advanced past s.w
+  // (pendingDebrief=true): the debrief must fire to allow week advancement.
+  if (!pendingDebrief && targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
+
+  // End-of-plan: if the user is on the last planned week and the final complete debrief
+  // hasn't fired yet, trigger it unconditionally — no calendar maths required.
+  // This catches the case where planStartDate is absent (isWeekPendingDebrief returns false)
+  // and lastDebriefWeek already covers week tw-1 (shouldAutoDebrief returns false too).
+  const tw = s.tw as number | undefined;
+  const lastComplete = (s.lastCompleteDebriefWeek ?? 0) as number;
+  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && !s.trackOnly) {
+    showWeekDebrief(s.w, 'complete');
+    return;
+  }
+
   if (pendingDebrief) {
     showWeekDebrief(s.w, 'complete');
   } else if (shouldAutoDebrief()) {
@@ -150,6 +174,7 @@ export function showWeekDebrief(
   const atlSeed = (s.ctlBaseline ?? 0) * atlSeedMultiplier;
   const metrics = computeFitnessModel(
     s.wks ?? [], s.w ?? 1, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed,
+    undefined, (s as any).previousPlanWks,
   );
   const ctlNow  = metrics[weekNum - 1]?.ctl  ?? null;
   const ctlPrev = metrics[weekNum - 2]?.ctl  ?? null;
@@ -297,8 +322,11 @@ export function showWeekDebrief(
     </div>`;
   }).join('');
 
-  // CTA label depends on mode
-  const ctaLabel = mode === 'complete' ? 'Generate next week' : 'Continue →';
+  // CTA label depends on mode and whether this is the final plan week
+  const isLastWeek = weekNum >= ((s as any).tw ?? Infinity);
+  const ctaLabel = mode === 'complete'
+    ? (isLastWeek ? 'View plan summary' : 'Generate next week')
+    : 'Continue →';
 
   const html = `
     <div id="week-debrief-modal"
@@ -311,7 +339,7 @@ export function showWeekDebrief(
 
         <!-- Header -->
         <div style="position:relative;text-align:center;margin-bottom:18px">
-          <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} — Week ${weekNum}</span>
+          <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} — Week ${weekNum}${isLastWeek ? ' · Final week' : ''}</span>
           <button id="debrief-cancel"
             style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
                    background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
@@ -505,6 +533,13 @@ function _showPlanPreview(
 ): void {
   const card = document.getElementById('debrief-card');
   if (!card) return;
+  const s = getState() as any;
+
+  // Last week of the plan → show plan completion screen instead of next-week preview
+  if (weekNum >= (s.tw ?? Infinity)) {
+    _renderPlanComplete(card, weekNum, mode);
+    return;
+  }
 
   try {
     _renderPlanPreview(card, weekNum, effortScore, mode, debugOverride);
@@ -520,6 +555,220 @@ function _showPlanPreview(
       document.getElementById('week-debrief-modal')?.remove();
     });
   }
+}
+
+// ─── Plan Completion Screen ───────────────────────────────────────────────────
+
+function _raceDistanceLabel(rd: string): string {
+  if (rd === 'half') return 'Half marathon';
+  if (rd === 'marathon') return 'Marathon';
+  if (rd === '5k') return '5K';
+  if (rd === '10k') return '10K';
+  return rd;
+}
+
+function _statPill(value: string, label: string): string {
+  return `<div style="text-align:center;padding:10px 6px;border-radius:10px;border:1px solid var(--c-border)">
+    <div style="font-size:16px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${value}</div>
+    <div style="font-size:10px;color:var(--c-muted);margin-top:2px">${label}</div>
+  </div>`;
+}
+
+function _buildPlanAreaChart(weeklyKm: number[], phases: string[]): string {
+  const n = weeklyKm.length;
+  if (n < 2) return '';
+  const W = 320; const H = 56; const padL = 4; const padR = 4;
+  const usableW = W - padL - padR;
+  const maxVal = Math.max(...weeklyKm, 1) * 1.15;
+  const xOf = (i: number) => padL + i * usableW / Math.max(n - 1, 1);
+  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 4));
+  const pts = weeklyKm.map((km, i) => [xOf(i), yOf(km)] as [number, number]);
+  const linePath = `M ${pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' L ')}`;
+  const areaPath = `${linePath} L ${xOf(n - 1).toFixed(1)},${H} L ${xOf(0).toFixed(1)},${H} Z`;
+  const PHASE_SHORT: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' };
+  const labelSpans: string[] = [];
+  let lastPh = '';
+  for (let i = 0; i < n; i++) {
+    const ph = phases[i] || 'base';
+    if (ph !== lastPh) {
+      const leftPct = ((xOf(i) - padL) / usableW * 100).toFixed(1);
+      labelSpans.push(
+        `<span style="position:absolute;left:${leftPct}%;font-size:8px;color:rgba(0,0,0,0.3);` +
+        `transform:translateX(${i === 0 ? '0' : '-50%'})">${PHASE_SHORT[ph] ?? ph}</span>`,
+      );
+      lastPh = ph;
+    }
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block">
+    <path d="${areaPath}" fill="rgba(100,116,139,0.12)" stroke="none" vector-effect="non-scaling-stroke"/>
+    <path d="${linePath}" fill="none" stroke="#64748B" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+  </svg>
+  <div style="position:relative;height:18px">${labelSpans.join('')}</div>`;
+}
+
+function _renderPlanComplete(card: HTMLElement, weekNum: number, mode: 'complete' | 'review'): void {
+  const s = getState() as any;
+  const wks: any[] = s.wks ?? [];
+  const unitPref = s.unitPref ?? 'km';
+  const weeklyKm = wks.map((wk: any) => wk.completedKm ?? 0);
+  const totalKm = weeklyKm.reduce((a: number, b: number) => a + b, 0);
+  const peakKm = Math.max(...weeklyKm, 0);
+  const weeklyPhases = wks.map((wk: any) => wk.ph ?? 'base');
+  const adherenceResult = computePlanAdherence(s);
+  const vdotStart = s.iv ?? s.v ?? 45;
+  const vdotEnd = s.v ?? vdotStart;
+  const vdotDelta = vdotEnd - vdotStart;
+  const lastWk = wks[weekNum - 1];
+  let raceActual: any = null;
+  if (lastWk?.garminActuals) {
+    for (const actual of Object.values(lastWk.garminActuals) as any[]) {
+      const km = (actual as any)?.distanceKm ?? 0;
+      if ((s.rd === 'marathon') && km >= 38) { raceActual = actual; break; }
+      if (s.rd === 'half' && km >= 18) { raceActual = actual; break; }
+    }
+  }
+  const raceName = s.selectedMarathon?.name as string | undefined;
+  const predictedTimeSec = s.blendedRaceTimeSec as number | undefined;
+  const raceTimeSec = (raceActual as any)?.durationSec as number | undefined;
+  let raceHtml = '';
+  if (raceActual && raceTimeSec) {
+    const timeStr = ft(raceTimeSec);
+    const predStr = predictedTimeSec ? ft(predictedTimeSec) : null;
+    const diffMin = (predictedTimeSec && raceTimeSec) ? Math.round((predictedTimeSec - raceTimeSec) / 60) : null;
+    const compHtml = diffMin !== null
+      ? `<div style="font-size:12px;color:${diffMin >= 0 ? 'var(--c-ok)' : 'var(--c-caution)'};margin-top:3px">${Math.abs(diffMin)} min ${diffMin >= 0 ? 'ahead of' : 'behind'} target</div>`
+      : '';
+    raceHtml = `<div style="margin-bottom:16px;padding:12px 14px;border-radius:12px;border:1px solid var(--c-border)">
+      <div style="font-size:12px;color:var(--c-muted);margin-bottom:4px">${raceName ?? _raceDistanceLabel(s.rd)}</div>
+      <div style="font-size:26px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">${timeStr}</div>
+      ${predStr ? `<div style="font-size:12px;color:var(--c-muted)">Target ${predStr}</div>` : ''}
+      ${compHtml}
+    </div>`;
+  }
+  const adherenceLabel = (adherenceResult.pct != null) ? `${Math.round(adherenceResult.pct)}%` : '--';
+  const vdotLabel = Math.abs(vdotDelta) >= 0.1 ? `${vdotDelta >= 0 ? '+' : ''}${vdotDelta.toFixed(1)}` : '--';
+  card.innerHTML = `
+    <div style="position:relative;margin-bottom:18px">
+      <div style="font-size:19px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">Plan complete.</div>
+      <div style="font-size:13px;color:var(--c-muted);margin-top:3px">${s.tw ?? weekNum} weeks · ${_raceDistanceLabel(s.rd ?? 'marathon')}</div>
+      <button id="debrief-cancel"
+        style="position:absolute;right:0;top:0;width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
+               background:none;cursor:pointer;font-size:14px;color:var(--c-muted);display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
+    ${raceHtml}
+    <div style="margin-bottom:16px">
+      <div style="font-size:11px;font-weight:600;color:var(--c-muted);letter-spacing:0.01em;margin-bottom:8px">Weekly distance</div>
+      ${_buildPlanAreaChart(weeklyKm, weeklyPhases)}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:20px">
+      ${_statPill(formatKm(totalKm, unitPref, 0), 'Total')}
+      ${_statPill(formatKm(peakKm, unitPref, 0), 'Peak week')}
+      ${_statPill(adherenceLabel, 'Adherence')}
+      ${_statPill(vdotLabel, 'VDOT')}
+    </div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <button id="plan-complete-new"
+        style="width:100%;padding:14px;border-radius:12px;border:none;background:var(--c-black);color:#fff;
+               font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f);letter-spacing:-0.01em">Start a new plan</button>
+      <button id="plan-complete-continue"
+        style="width:100%;padding:11px;border-radius:12px;border:1px solid var(--c-border);background:transparent;
+               color:var(--c-black);font-size:14px;font-weight:500;cursor:pointer;font-family:var(--f)">Continue tracking</button>
+    </div>`;
+  _wirePlanCompleteHandlers(weekNum, weeklyKm, weeklyPhases, adherenceResult.pct,
+    vdotStart, vdotEnd, predictedTimeSec, raceTimeSec, raceName, mode);
+}
+
+function _wirePlanCompleteHandlers(
+  weekNum: number,
+  weeklyKm: number[],
+  weeklyPhases: string[],
+  adherencePct: number | null,
+  vdotStart: number,
+  vdotEnd: number,
+  predictedTimeSec: number | undefined,
+  raceTimeSec: number | undefined,
+  raceName: string | undefined,
+  _mode: 'complete' | 'review',
+): void {
+  const s = getState() as any;
+  const saveSummary = () => {
+    const ms = getMutableState() as any;
+    const today = new Date().toISOString().split('T')[0];
+    // Guard: don't add a duplicate entry for the same completion date.
+    if ((ms.completedPlans ?? []).some((p: any) => p.completionDate === today)) {
+      return;
+    }
+    // Compute granular stats from wks now, before they're potentially replaced by a new plan.
+    let totalRuns = 0;
+    let longestRunKm = 0;
+    let totalTimeSec = 0;
+    let totalCalories = 0;
+    let fastest5kSec = Infinity;
+    let fastest10kSec = Infinity;
+    let fastestHalfSec = Infinity;
+    const _RUN_TYPES_SAVE = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
+    for (const wk of (s.wks ?? []) as any[]) {
+      for (const actual of Object.values(wk.garminActuals ?? {}) as any[]) {
+        const isRun = _RUN_TYPES_SAVE.has(actual.activityType) || (!actual.displayName && !!actual.workoutName);
+        if (isRun && actual.distanceKm > 0) {
+          totalRuns++;
+          longestRunKm = Math.max(longestRunKm, actual.distanceKm);
+          if (actual.avgPaceSecKm > 0) {
+            if (actual.distanceKm >= 5) fastest5kSec = Math.min(fastest5kSec, 5 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 10) fastest10kSec = Math.min(fastest10kSec, 10 * actual.avgPaceSecKm);
+            if (actual.distanceKm >= 21.0975) fastestHalfSec = Math.min(fastestHalfSec, 21.0975 * actual.avgPaceSecKm);
+          }
+        }
+        totalTimeSec += actual.durationSec ?? 0;
+        if (actual.calories > 0) totalCalories += actual.calories;
+      }
+    }
+    ms.completedPlans = [...(ms.completedPlans ?? []), {
+      completionDate: today,
+      planStartDate: s.planStartDate ?? '',
+      totalWeeks: s.tw ?? weekNum,
+      raceDistance: s.rd ?? 'marathon',
+      raceName,
+      totalActualKm: Math.round(weeklyKm.reduce((a: number, b: number) => a + b, 0) * 10) / 10,
+      peakWeekKm: Math.round(Math.max(...weeklyKm, 0) * 10) / 10,
+      adherencePct,
+      vdotStart,
+      vdotEnd,
+      predictedTimeSec,
+      weeklyKm,
+      weeklyPhases,
+      totalRuns,
+      longestRunKm: longestRunKm > 0 ? Math.round(longestRunKm * 10) / 10 : undefined,
+      totalTimeSec: totalTimeSec > 0 ? totalTimeSec : undefined,
+      totalCalories: totalCalories > 0 ? Math.round(totalCalories) : undefined,
+      fastest5kSec: fastest5kSec < Infinity ? fastest5kSec : undefined,
+      fastest10kSec: fastest10kSec < Infinity ? fastest10kSec : undefined,
+      fastestHalfSec: fastestHalfSec < Infinity ? fastestHalfSec : undefined,
+    }];
+    ms.lastDebriefWeek = weekNum;
+    ms.lastCompleteDebriefWeek = weekNum;
+    ms.lastDebriefShownDate = new Date().toISOString().split('T')[0];
+    saveState();
+  };
+  document.getElementById('debrief-cancel')?.addEventListener('click', () => {
+    document.getElementById('week-debrief-modal')?.remove();
+  });
+  document.getElementById('plan-complete-continue')?.addEventListener('click', () => {
+    // Switch to track-only mode: no active plan, just activity tracking + stats
+    const ms2 = getMutableState() as any;
+    ms2.trackOnly = true;
+    ms2.continuousMode = true;
+    saveSummary(); // saveSummary already calls saveState()
+    document.getElementById('week-debrief-modal')?.remove();
+    // Direct dynamic import of plan-view avoids the double-async hop through main-view,
+    // ensuring renderPlanView() reads the already-mutated trackOnly=true state.
+    import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
+  });
+  document.getElementById('plan-complete-new')?.addEventListener('click', () => {
+    saveSummary();
+    document.getElementById('week-debrief-modal')?.remove();
+    import('@/ui/wizard/controller').then(({ resetOnboarding }) => resetOnboarding());
+  });
 }
 
 function _renderPlanPreview(
@@ -868,7 +1117,7 @@ function showTrackOnlyRetrospective(weekNum: number): void {
 
   const ctlNow = s.ctlBaseline ?? 0;
   // CTL delta via fitness model — last full entry minus 7 days back
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, ctlNow, s.planStartDate, ctlNow);
+  const metrics = computeFitnessModel(s.wks ?? [], s.w, ctlNow, s.planStartDate, ctlNow, undefined, (s as any).previousPlanWks);
   const ctlEnd = metrics[metrics.length - 1]?.ctl ?? ctlNow;
   const ctlStart = metrics[Math.max(0, metrics.length - 8)]?.ctl ?? ctlEnd;
   const ctlDelta = Math.round((ctlEnd - ctlStart) * 10) / 10;
