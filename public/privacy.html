@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mosaic — Privacy Policy</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f9f9f7;
+      color: #1a1a1a;
+      padding: 2rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 3rem;
+      max-width: 680px;
+      margin: 0 auto;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .meta { color: #999; font-size: 0.85rem; margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    p { font-size: 0.95rem; line-height: 1.7; color: #333; margin-bottom: 0.75rem; }
+    ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+    ul li { font-size: 0.95rem; line-height: 1.7; color: #333; }
+    a { color: #1a1a1a; }
+    .divider { border: none; border-top: 1px solid #eee; margin: 2rem 0; }
+    .back { display: block; margin-top: 2rem; font-size: 0.9rem; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Privacy Policy</h1>
+    <p class="meta">Mosaic — Last updated May 2026</p>
+
+    <p>Mosaic ("we", "us") is a personal training plan application for iOS. This policy explains what data we collect, how we use it, and your rights over it. Mosaic is operated by Tristan Louveaux.</p>
+
+    <h2>Data we collect</h2>
+    <p>Mosaic collects data from the following sources, only with your explicit authorisation:</p>
+    <ul>
+      <li><strong>Strava</strong> — activity history (type, distance, duration, heart rate, pace, power, GPS route, elevation), race best efforts, and athlete profile (name, gender, measurement preference). Access is granted via Strava OAuth and can be revoked at any time.</li>
+      <li><strong>Garmin Connect</strong> — activity summaries, daily resting heart rate, HRV status, and sleep data, delivered via Garmin webhook integrations where enabled.</li>
+      <li><strong>Apple Health</strong> — resting heart rate, heart rate variability, and sleep analysis, read on-device where you grant permission in iOS Settings.</li>
+      <li><strong>Account data</strong> — your email address, used to create and authenticate your Mosaic account via Supabase.</li>
+    </ul>
+
+    <h2>How we use your data</h2>
+    <p>All data is used exclusively to provide Mosaic's training plan and fitness tracking features to you. Specifically:</p>
+    <ul>
+      <li>Activity history is used to calibrate fitness benchmarks (VDOT, FTP, CSS) and compute training load.</li>
+      <li>Heart rate and HRV data inform readiness and recovery scores.</li>
+      <li>Sleep data contributes to daily readiness calculations.</li>
+      <li>No data is used to train AI or machine learning models.</li>
+      <li>No data is shared with other users or sold to third parties.</li>
+      <li>No data is used for advertising or profiling.</li>
+    </ul>
+
+    <h2>Data storage</h2>
+    <p>Your activity data is stored in a secured Supabase database hosted on AWS infrastructure in the EU. Data is encrypted in transit (HTTPS) and at rest. Apple Health data is processed on-device and is not transmitted to our servers.</p>
+
+    <h2>Data retention</h2>
+    <p>We retain your data for as long as your account is active. If you revoke Strava access, all Strava-sourced data is deleted within 48 hours. If you request full account deletion, all data is deleted within 30 days.</p>
+
+    <h2>Your rights</h2>
+    <p>Under GDPR and applicable data protection law, you have the right to:</p>
+    <ul>
+      <li>Access the data we hold about you</li>
+      <li>Request correction of inaccurate data</li>
+      <li>Request deletion of your data</li>
+      <li>Withdraw consent and disconnect any data source at any time</li>
+      <li>Lodge a complaint with your national data protection authority</li>
+    </ul>
+    <p>To exercise any of these rights, email <a href="mailto:tristan.louveaux@gmail.com">tristan.louveaux@gmail.com</a>.</p>
+
+    <h2>Revoking access</h2>
+    <p>To disconnect Strava, go to your <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener">Strava app settings</a> and revoke Mosaic's access. To disconnect Apple Health, go to iOS Settings, Health, Apps, and remove Mosaic's permissions.</p>
+
+    <h2>Third-party services</h2>
+    <p>Mosaic uses the following third-party services, each governed by their own privacy policies:</p>
+    <ul>
+      <li><a href="https://www.strava.com/legal/privacy" target="_blank" rel="noopener">Strava Privacy Policy</a></li>
+      <li><a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase Privacy Policy</a></li>
+      <li><a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Apple Privacy Policy</a></li>
+    </ul>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy: <a href="mailto:tristan.louveaux@gmail.com">tristan.louveaux@gmail.com</a></p>
+
+    <hr class="divider" />
+
+    <a class="back" href="/support.html">← Back to Support</a>
+  </div>
+</body>
+</html>
