@@ -37,8 +37,10 @@ function nextStepSummary(step: Step, pref: UnitPref): string {
     const amount = dur || dist;
     return [step.label, amount, pace].filter(Boolean).join(' · ');
   }
-  if (step.type === 'warmup') return `Warm-up · ${Math.round((step.distanceM ?? 0) / 100) / 10} km easy`;
-  if (step.type === 'cooldown') return `Cool-down · ${Math.round((step.distanceM ?? 0) / 100) / 10} km easy`;
+  const distKm = Math.round((step.distanceM ?? 0) / 100) / 10;
+  const distStr = pref === 'mi' ? `${(distKm * 0.621371).toFixed(1)} mi` : `${distKm} km`;
+  if (step.type === 'warmup') return `Warm-up · ${distStr} easy`;
+  if (step.type === 'cooldown') return `Cool-down · ${distStr} easy`;
   return step.label;
 }
 

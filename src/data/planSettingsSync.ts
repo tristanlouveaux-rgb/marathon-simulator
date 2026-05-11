@@ -11,6 +11,18 @@ import { getState } from '@/state/store';
 import type { SimulatorState } from '@/types';
 
 const STATE_KEY = 'marathonSimulatorState';
+const STATE_OWNER_KEY = 'mosaic_state_owner_user_id';
+
+/** Read the user_id that the current localStorage state was saved under. */
+export function getLocalStateOwner(): string | null {
+  return localStorage.getItem(STATE_OWNER_KEY);
+}
+
+/** Stamp the localStorage state with the user_id who owns it. */
+export function setLocalStateOwner(userId: string | null): void {
+  if (userId) localStorage.setItem(STATE_OWNER_KEY, userId);
+  else localStorage.removeItem(STATE_OWNER_KEY);
+}
 
 /**
  * Keys excluded from the snapshot — these are large arrays that are
@@ -53,6 +65,7 @@ export async function savePlanSettings(): Promise<void> {
       });
 
     if (error) console.warn('[PlanSettingsSync] save error:', error.message);
+    else setLocalStateOwner(user.id);
   } catch (e) {
     console.warn('[PlanSettingsSync] save failed:', e);
   }
@@ -77,6 +90,7 @@ export async function restorePlanFromSupabase(): Promise<boolean> {
     if (error || !data?.state_snapshot) return false;
 
     localStorage.setItem(STATE_KEY, JSON.stringify(data.state_snapshot));
+    setLocalStateOwner(user.id);
     console.log('[PlanSettingsSync] Restored plan from Supabase backup (saved', data.updated_at, ')');
     return true;
   } catch (e) {

@@ -149,6 +149,13 @@ export function advanceWeekToToday(): void {
     s.wks[s.w - 1].ph = 'base';
   }
 
+  // HYROX: reset weekly accumulators when the week pointer actually moves.
+  // weeklyActualMTL is per-week (sums completed station/brick load); without
+  // a reset it would accumulate forever across week rollover.
+  if (actualAdvance > 0 && s.eventType === 'hyrox' && s.hyroxConfig) {
+    s.hyroxConfig.weeklyActualMTL = 0;
+  }
+
   saveState();
 }
 
@@ -242,7 +249,7 @@ export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): 
   if (weeksGap === 1) {
     titleText = isDataFirst ? `Back after ${weeksLabel}` : 'Welcome back!';
     bodyText = isDataFirst
-      ? 'One week off means minimal detraining — aerobic base is intact.'
+      ? 'One week off means minimal detraining. Aerobic base is intact.'
       : "You've missed one week. Your aerobic base is still solid — let's pick right back up.";
     bullets.push('Light detraining — your fitness is largely preserved.');
     bullets.push('Your plan continues from today, no changes needed.');

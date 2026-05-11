@@ -1,4 +1,11 @@
 import type { Marathon } from '@/types/onboarding';
+import { MARATHON_COURSE_PROFILES } from './marathon-course-profiles';
+
+/** Attach the static course profile (if any) to a marathon entry. */
+function attachProfile(m: Marathon): Marathon {
+  const profile = MARATHON_COURSE_PROFILES[m.id];
+  return profile ? { ...m, profile } : m;
+}
 
 /**
  * World marathon and half marathon database
@@ -362,6 +369,34 @@ export function calculateWeeksUntil(dateString: string): number {
   return diffWeeks;
 }
 
+/** Calendar days from today to a race date. Negative = past, 0 = today, 1 = tomorrow. */
+export function calculateDaysUntil(dateString: string): number {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const raceDate = new Date(dateString);
+  raceDate.setHours(0, 0, 0, 0);
+  return Math.round((raceDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+/**
+ * Human-friendly proximity label for a race date.
+ * Shows days when within a week (so "Tomorrow" / "3d" doesn't read as "1wk"),
+ * weeks otherwise. Returns null for races already in the past.
+ */
+export function formatTimeUntil(dateString: string): string | null {
+  const days = calculateDaysUntil(dateString);
+  if (days < 0) return null;
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days < 7) return `${days}d`;
+  return `${Math.round(days / 7)}wk`;
+}
+
+/** True if the race date is today or in the future (uses local-date comparison). */
+export function isUpcoming(dateString: string): boolean {
+  return calculateDaysUntil(dateString) >= 0;
+}
+
 /**
  * Get marathons or half marathons filtered by distance and sorted by date
  * Only returns events at least minWeeks away (default 8 weeks)
@@ -371,8 +406,8 @@ export function getMarathonsByDistance(
   minWeeks: number = 8
 ): Marathon[] {
   return WORLD_MARATHONS
-    .filter(m => m.distance === distance)
-    .map(m => ({
+    .filter(m => m.distance === distance && isUpcoming(m.date))
+    .map(m => attachProfile({
       ...m,
       weeksUntil: calculateWeeksUntil(m.date),
     }))
@@ -385,7 +420,8 @@ export function getMarathonsByDistance(
  */
 export function getAllUpcomingRaces(minWeeks: number = 8): Marathon[] {
   return WORLD_MARATHONS
-    .map(m => ({
+    .filter(m => isUpcoming(m.date))
+    .map(m => attachProfile({
       ...m,
       weeksUntil: calculateWeeksUntil(m.date),
     }))
@@ -399,10 +435,10 @@ export function getAllUpcomingRaces(minWeeks: number = 8): Marathon[] {
 export function getMarathonById(id: string): Marathon | undefined {
   const marathon = WORLD_MARATHONS.find(m => m.id === id);
   if (marathon) {
-    return {
+    return attachProfile({
       ...marathon,
       weeksUntil: calculateWeeksUntil(marathon.date),
-    };
+    });
   }
   return undefined;
 }

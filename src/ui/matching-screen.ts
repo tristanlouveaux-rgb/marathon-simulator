@@ -15,6 +15,7 @@ import type { Workout } from '@/types/state';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { getState } from '@/state';
 import { formatKm, fmtDesc } from '@/utils/format';
+import { buildAtmosphereBase, buildSunGlint } from '@/ui/page-flair';
 
 // ─── Day labels ───────────────────────────────────────────────────────────────
 
@@ -64,11 +65,15 @@ function workoutTypeShort(t: string): string {
 function isCompatible(item: GarminPendingItem, workout: Workout): boolean {
   const type = item.appType;
   const wt   = workout.t;
-  // Runs match run-type slots and general sport (cross) slots
-  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross';
-  // Gym/strength can replace gym slots or run slots (a hard session can cover either)
+  // Runs match run-type slots, general sport (cross) slots, and the run leg of a brick
+  if (type === 'run') return wt === 'run' || wt === 'easy' || wt === 'long' || wt === 'threshold' || wt === 'steady' || wt === 'vo2' || wt === 'marathon_pace' || wt === 'race_pace' || wt === 'intervals' || wt === 'float' || wt === 'cross' || wt === 'brick';
+  // Gym/strength matches gym slots
   if (type === 'gym') return wt === 'gym';
-  // Cross-training (rides, swims, walks, sports) only match cross slots
+  // Cycling matches any tri bike slot, brick (bike+run combo), or generic cross slot
+  if (type === 'ride') return wt === 'cross' || wt === 'brick' || wt.startsWith('bike_');
+  // Swimming matches any tri swim slot or generic cross slot
+  if (type === 'swim') return wt === 'cross' || wt.startsWith('swim_');
+  // Other cross-training (walks, sports, etc.) only match cross slots
   return wt === 'cross';
 }
 
@@ -131,29 +136,30 @@ function renderScreen(
     const canSwap      = selectedItem && !!assignedItem && isCompatible(selectedItem, w);
     const cannotAssign = selectedItem && !assignedItem && !isCompatible(selectedItem, w);
 
-    let border: string;
+    const baseShadow = '0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05)';
+    let boxShadow = baseShadow;
     let opacity = '1';
-    if (canAssign || canSwap) border = '2px solid var(--c-accent)';
-    else if (cannotAssign) { border = '1px solid var(--c-border)'; opacity = '0.35'; }
-    else if (assignedItem) border = '1px solid rgba(34,197,94,0.4)';
-    else border = '1px solid var(--c-border)';
+    if (canAssign || canSwap) boxShadow = `0 0 0 1.5px var(--c-accent), ${baseShadow}`;
+    else if (cannotAssign) { opacity = '0.4'; }
+    else if (assignedItem) boxShadow = `0 0 0 1px rgba(34,197,94,0.45), ${baseShadow}`;
 
     const assignedBadge = assignedItem ? `
-      <div style="margin-top:6px;display:flex;align-items:center;gap:4px;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:4px;padding:4px 7px">
-        <span style="font-size:10px;font-weight:600;color:var(--c-ok)">${escHtml(formatActivityType(assignedItem.activityType))}</span>
-        <span style="font-size:10px;color:var(--c-muted)">${Math.round(assignedItem.durationSec / 60)}min</span>
+      <div style="margin-top:6px;display:inline-flex;align-items:center;gap:5px;padding:3px 8px 3px 7px;border-radius:100px;background:rgba(0,0,0,0.04)">
+        <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--c-ok)"></span>
+        <span style="font-size:10px;font-weight:600;color:var(--c-black)">${escHtml(formatActivityType(assignedItem.activityType))}</span>
+        <span style="font-size:10px;color:var(--c-muted)">${Math.round(assignedItem.durationSec / 60)} min</span>
       </div>` : '';
 
-    const hint = canAssign ? `<div style="font-size:10px;color:var(--c-accent);margin-top:5px">Tap to assign</div>`
-      : canSwap ? `<div style="font-size:10px;color:var(--c-accent);margin-top:5px">Tap to swap</div>`
-      : (!state.selectedGarminId && assignedItem) ? `<div style="font-size:10px;color:var(--c-faint);margin-top:5px">Tap to unassign</div>`
+    const hint = canAssign ? `<div style="font-size:10px;color:var(--c-accent);margin-top:6px;font-weight:500">Tap to assign</div>`
+      : canSwap ? `<div style="font-size:10px;color:var(--c-accent);margin-top:6px;font-weight:500">Tap to swap</div>`
+      : (!state.selectedGarminId && assignedItem) ? `<div style="font-size:10px;color:var(--c-faint);margin-top:6px">Tap to unassign</div>`
       : '';
 
     const descSnippet = fmtDesc(w.d || '', unitPref).slice(0, 32);
     return `
       <div class="slot-card" data-workout-id="${escHtml(wid)}"
-           style="background:var(--c-surface);border:${border};border-radius:var(--r-card);padding:10px 12px;flex-shrink:0;width:160px;cursor:pointer;transition:all 0.15s;opacity:${opacity}">
-        <div style="font-size:12px;font-weight:500;color:var(--c-black);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(w.n)}</div>
+           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;flex-shrink:0;width:164px;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;opacity:${opacity};box-shadow:${boxShadow}">
+        <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:-0.01em">${escHtml(w.n)}</div>
         <div style="font-size:10px;color:var(--c-muted)">${dayLabel ? dayLabel + ' · ' : ''}${workoutTypeShort(w.t)}</div>
         ${descSnippet ? `<div style="font-size:10px;color:var(--c-faint);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(descSnippet)}${w.d.length > 32 ? '…' : ''}</div>` : ''}
         ${assignedBadge}
@@ -173,13 +179,16 @@ function renderScreen(
     const dist       = item.distanceM ? `${formatKm(item.distanceM / 1000, unitPref)} · ` : '';
     const actDateStr = new Date(item.startTime).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 
+    const baseShadow = '0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05)';
+    const boxShadow = isSelected ? `0 0 0 1.5px var(--c-accent), ${baseShadow}` : baseShadow;
+
     return `
       <div class="activity-card" data-garmin-id="${escHtml(item.garminId)}"
-           style="background:var(--c-surface);border:${isSelected ? '2px solid var(--c-accent)' : '1px solid var(--c-border)'};border-radius:var(--r-card);padding:10px 12px;flex-shrink:0;width:160px;cursor:pointer;transition:all 0.15s">
-        <div style="font-size:12px;font-weight:500;color:var(--c-black);margin-bottom:2px">${escHtml(formatActivityType(item.activityType))}</div>
+           style="background:var(--c-surface);border-radius:14px;padding:11px 13px;flex-shrink:0;width:164px;cursor:pointer;transition:box-shadow 0.18s, transform 0.18s;box-shadow:${boxShadow}">
+        <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px;letter-spacing:-0.01em">${escHtml(formatActivityType(item.activityType))}</div>
         <div style="font-size:10px;color:var(--c-muted)">${actDateStr}</div>
         <div style="font-size:10px;color:var(--c-muted);margin-top:1px">${dist}${dur} min</div>
-        <div style="font-size:10px;margin-top:5px;font-weight:${isSelected ? '600' : '400'};color:${isSelected ? 'var(--c-accent)' : 'var(--c-faint)'}">
+        <div style="font-size:10px;margin-top:6px;font-weight:${isSelected ? '600' : '500'};color:${isSelected ? 'var(--c-accent)' : 'var(--c-faint)'}">
           ${isSelected ? '↑ Now tap a slot' : 'Tap to select'}
         </div>
       </div>`;
@@ -241,81 +250,104 @@ function renderScreen(
     return a === null || a === undefined;
   }).length;
 
-  const reductionBorder = hasSelected ? '1px solid rgba(245,158,11,0.5)' : '1px solid var(--c-border)';
-  const logonlyBorder   = hasSelected ? '1px solid rgba(0,0,0,0.2)' : '1px solid var(--c-border)';
+  const bucketBaseShadow = '0 1px 2px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.05)';
+  const reductionShadow = hasSelected
+    ? `0 0 0 1.5px rgba(245,158,11,0.55), ${bucketBaseShadow}`
+    : bucketBaseShadow;
+  const logonlyShadow = hasSelected
+    ? `0 0 0 1.5px rgba(0,0,0,0.18), ${bucketBaseShadow}`
+    : bucketBaseShadow;
 
   // ── Full render ─────────────────────────────────────────────────────────────
   overlay.innerHTML = `
-    <div style="background:var(--c-surface);border-bottom:1px solid var(--c-border);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px">
-      <button id="ms-back" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0;flex-shrink:0">← Cancel</button>
-      <div style="text-align:center;min-width:0">
-        <div style="font-size:15px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Match Activities</div>
-        <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Auto-matched below — tap to reassign</div>
-      </div>
-      <button id="ms-confirm" style="font-size:12px;font-weight:600;padding:7px 16px;background:var(--c-ok);color:white;border:none;border-radius:var(--r-card);cursor:pointer;flex-shrink:0">Save</button>
-    </div>
+    ${buildAtmosphereBase('blue')}
+    ${buildSunGlint('low')}
 
-    <div style="flex:1;overflow-y:auto">
+    <div style="position:relative;z-index:10;display:flex;flex-direction:column;flex:1;min-height:0;width:100%">
 
-      <!-- Plan Slots -->
-      <div style="padding:14px 18px 10px">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">
-          Plan Slots
-          ${assignedToSlotCount > 0 ? `<span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--c-ok);margin-left:8px">${assignedToSlotCount} matched ✓</span>` : ''}
+      <!-- Header -->
+      <div style="background:rgba(255,255,255,0.72);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom:1px solid rgba(0,0,0,0.05);padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-shrink:0">
+        <button id="ms-back" style="font-size:13px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0;flex-shrink:0">← Cancel</button>
+        <div style="text-align:center;min-width:0">
+          <div style="font-size:15px;font-weight:600;letter-spacing:-0.02em;color:var(--c-black)">Match Activities</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Auto-matched below. Tap to reassign.</div>
         </div>
-        ${sortedWorkouts.length === 0
-          ? `<p style="font-size:12px;color:var(--c-muted)">No unrated sessions this week.</p>`
-          : `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${slotCards}</div>`}
+        <button id="ms-confirm" class="m-btn-glass m-btn-glass--inset" style="font-size:12px;font-weight:600;padding:6px 18px;flex-shrink:0;height:32px">Save</button>
       </div>
 
-      <!-- Activities (tray) -->
-      <div style="padding:10px 18px 14px;border-top:1px solid var(--c-border)">
-        <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">
-          Your Activities
-          ${hasSelected ? `<span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--c-accent);margin-left:8px">Now tap a slot above ↑</span>` : ''}
-        </div>
-        ${trayItems.length === 0
-          ? `<p style="font-size:12px;color:var(--c-ok)">${sortedIntegrate.length > 0 ? 'All placed ✓' : 'Nothing to assign.'}</p>`
-          : `<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${trayCards}</div>`}
-      </div>
+      <!-- Scroll body -->
+      <div style="flex:1;overflow-y:auto">
+        <div style="max-width:560px;margin:0 auto">
 
-      <!-- Excess Load bucket -->
-      <div style="padding:0 18px 10px;border-top:1px solid var(--c-border)">
-        <div id="bucket-reduction" style="margin-top:12px;background:rgba(245,158,11,0.04);border:${reductionBorder};border-radius:var(--r-card);padding:10px 14px;cursor:pointer;transition:border 0.15s">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div>
-              <div style="font-size:13px;font-weight:500;color:var(--c-caution)">Excess Load</div>
-              <div style="font-size:11px;color:var(--c-muted);margin-top:1px">Saved for later plan adjustment</div>
+          <!-- Plan Slots -->
+          <div style="padding:18px 18px 12px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Plan Slots</div>
+              ${assignedToSlotCount > 0 ? `<div style="font-size:11px;color:var(--c-muted)">${assignedToSlotCount} matched</div>` : ''}
             </div>
-            ${reductionCount > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--c-caution);background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:2px 8px">${reductionCount}</span>` : ''}
+            ${sortedWorkouts.length === 0
+              ? `<p style="font-size:12px;color:var(--c-muted)">No unrated sessions this week.</p>`
+              : `<div style="display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${slotCards}</div>`}
           </div>
-          ${hasSelected ? `<div style="font-size:10px;color:var(--c-caution);margin-top:4px">Tap to send here</div>` : ''}
-          ${reductionChipsHtml}
-        </div>
-      </div>
 
-      <!-- Log Only bucket -->
-      <div style="padding:0 18px 20px">
-        <div id="bucket-logonly" style="background:rgba(0,0,0,0.02);border:${logonlyBorder};border-radius:var(--r-card);padding:10px 14px;cursor:pointer;transition:border 0.15s">
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div>
-              <div style="font-size:13px;font-weight:500;color:var(--c-black)">Log Only</div>
-              <div style="font-size:11px;color:var(--c-muted);margin-top:1px">Recorded, no plan impact</div>
+          <!-- Activities (tray) -->
+          <div style="padding:8px 18px 14px">
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Your Activities</div>
+              ${hasSelected
+                ? `<div style="font-size:11px;color:var(--c-accent);font-weight:500">Now tap a slot ↑</div>`
+                : unassignedCount > 0
+                  ? `<div style="font-size:11px;color:var(--c-muted)">${unassignedCount} unplaced</div>`
+                  : ''}
             </div>
-            ${logonlyCount > 0 ? `<span style="font-size:10px;font-weight:700;color:var(--c-muted);background:rgba(0,0,0,0.06);border:1px solid var(--c-border);border-radius:10px;padding:2px 8px">${logonlyCount}</span>` : ''}
+            ${trayItems.length === 0
+              ? `<p style="font-size:12px;color:var(--c-muted)">${sortedIntegrate.length > 0 ? 'All placed.' : 'Nothing to assign.'}</p>`
+              : `<div style="display:flex;gap:10px;overflow-x:auto;padding:2px 0 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none">${trayCards}</div>`}
           </div>
-          ${hasSelected ? `<div style="font-size:10px;color:var(--c-muted);margin-top:4px">Tap to send here</div>` : ''}
-          ${logonlyChipsHtml}
+
+          <!-- Excess Load bucket -->
+          <div style="padding:6px 18px 10px">
+            <div id="bucket-reduction" style="background:var(--c-surface);border-radius:14px;padding:13px 16px;cursor:pointer;transition:box-shadow 0.18s;box-shadow:${reductionShadow}">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <div style="min-width:0">
+                  <div style="font-size:13px;font-weight:600;color:var(--c-caution);letter-spacing:-0.005em">Excess Load</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Saved for later plan adjustment</div>
+                </div>
+                ${reductionCount > 0
+                  ? `<span style="font-size:11px;font-weight:600;color:var(--c-caution);background:transparent;border:1px solid rgba(245,158,11,0.45);border-radius:100px;padding:2px 10px;flex-shrink:0">${reductionCount}</span>`
+                  : ''}
+              </div>
+              ${hasSelected ? `<div style="font-size:11px;color:var(--c-caution);margin-top:6px;font-weight:500">Tap to send here</div>` : ''}
+              ${reductionChipsHtml}
+            </div>
+          </div>
+
+          <!-- Log Only bucket -->
+          <div style="padding:0 18px 14px">
+            <div id="bucket-logonly" style="background:var(--c-surface);border-radius:14px;padding:13px 16px;cursor:pointer;transition:box-shadow 0.18s;box-shadow:${logonlyShadow}">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <div style="min-width:0">
+                  <div style="font-size:13px;font-weight:600;color:var(--c-black);letter-spacing:-0.005em">Log Only</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Recorded, no plan impact</div>
+                </div>
+                ${logonlyCount > 0
+                  ? `<span style="font-size:11px;font-weight:600;color:var(--c-muted);background:transparent;border:1px solid var(--c-border-strong, rgba(0,0,0,0.18));border-radius:100px;padding:2px 10px;flex-shrink:0">${logonlyCount}</span>`
+                  : ''}
+              </div>
+              ${hasSelected ? `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;font-weight:500">Tap to send here</div>` : ''}
+              ${logonlyChipsHtml}
+            </div>
+          </div>
+
+          ${unassignedCount > 0 ? `
+          <div style="padding:0 20px 24px">
+            <div style="font-size:11px;color:var(--c-faint);line-height:1.5">
+              Unplaced activities go to Excess Load when you save.
+            </div>
+          </div>` : '<div style="height:24px"></div>'}
+
         </div>
       </div>
-
-      ${unassignedCount > 0 ? `
-      <div style="padding:0 18px 16px">
-        <div style="background:rgba(99,102,241,0.05);border:1px solid rgba(99,102,241,0.2);border-radius:var(--r-card);padding:8px 12px;font-size:11px;color:var(--c-muted)">
-          ${unassignedCount} activit${unassignedCount === 1 ? 'y' : 'ies'} unassigned — tap to place in a slot, or they go to Excess Load on Save.
-        </div>
-      </div>` : ''}
-
     </div>
   `;
 

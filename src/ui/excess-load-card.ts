@@ -47,7 +47,8 @@ function getWeekWorkouts(offset: 0 | 1 = 0) {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w + offset, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w + offset), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w + offset), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Apply stored workoutMods so the modal reflects the actual plan state (matching plan-view.ts).
@@ -158,7 +159,7 @@ export function renderExcessLoadCard(wk: Week | undefined): string {
         </button>
       </div>
       <p id="excess-dismiss-warning" style="display:none;font-size:12px;color:var(--c-warn);margin-top:8px">
-        Tap Dismiss again to confirm — this won't adjust your plan.
+        Tap Dismiss again to confirm. This won't adjust your plan.
       </p>
     </div>`;
 }
@@ -357,7 +358,7 @@ export function triggerExcessLoadAdjustment(): void {
   const weekRuns = workoutsToPlannedRuns(remainingWorkouts, s.pac);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const _acwr = computeACWR(s.wks, s.w, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const ctx = {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,
@@ -458,7 +459,7 @@ function _triggerCarryoverToNextWeek(
   const weekRuns = workoutsToPlannedRuns(nextWeekWorkouts, s.pac);
   const _tier2 = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const _acwr2 = computeACWR(s.wks, s.w, _tier2, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const ctx = {
     raceGoal: s.rd, plannedRunsPerWeek: s.rw,
     injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e,

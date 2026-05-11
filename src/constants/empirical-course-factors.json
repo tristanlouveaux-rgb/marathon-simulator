@@ -1,0 +1,2130 @@
+{
+  "70.3": {
+    "distance": "70.3",
+    "referenceSwimSec": 2340.2503978811415,
+    "referenceBikeSec": 10675.310285391186,
+    "referenceRunSec": 7606.965184060947,
+    "factors": {
+      "IRONMAN 70.3 South American Championship Buenos Aires": {
+        "swimFactor": 1.0044875483704396,
+        "bikeFactor": 0.9469607272076233,
+        "runFactor": 0.9585862897599744,
+        "n": 2664,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Bariloche": {
+        "swimFactor": 0.9885865853439094,
+        "bikeFactor": 1.0654572443849493,
+        "runFactor": 0.9332418918217884,
+        "n": 1548,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 World Championship": {
+        "swimFactor": 0.9153392098775661,
+        "bikeFactor": 0.9964239639205584,
+        "runFactor": 0.8543717096057496,
+        "n": 16496,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Victoria": {
+        "swimFactor": 0.9398963544119117,
+        "bikeFactor": 1.0399559277127968,
+        "runFactor": 0.9937115771421648,
+        "n": 6365,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Marrakech": {
+        "swimFactor": 0.9419558024899385,
+        "bikeFactor": 1.0004353502084842,
+        "runFactor": 0.9730103957588019,
+        "n": 1241,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Santa Cruz": {
+        "swimFactor": 0.9238262768719139,
+        "bikeFactor": 0.9627130398049214,
+        "runFactor": 0.9247947968820914,
+        "n": 3210,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Dublin": {
+        "swimFactor": 1.0609465753877856,
+        "bikeFactor": 0.9743782499623928,
+        "runFactor": 0.927261738328854,
+        "n": 3701,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Taiwan": {
+        "swimFactor": 1.0623809008637046,
+        "bikeFactor": 0.9124490479669203,
+        "runFactor": 1.0206160254268937,
+        "n": 2230,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Texas": {
+        "swimFactor": 1.0767200110009514,
+        "bikeFactor": 0.9995130116187163,
+        "runFactor": 1.0513698071562676,
+        "n": 8180,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Mallorca": {
+        "swimFactor": 0.897365533733654,
+        "bikeFactor": 1.03761149989586,
+        "runFactor": 0.9275204210084604,
+        "n": 10432,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Barcelona": {
+        "swimFactor": 0.9625222387096503,
+        "bikeFactor": 1.10180015094575,
+        "runFactor": 0.9147598491153326,
+        "n": 7372,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Vichy": {
+        "swimFactor": 1.0604927994671298,
+        "bikeFactor": 0.98553732664133,
+        "runFactor": 0.9112069788324575,
+        "n": 6987,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Budapest": {
+        "swimFactor": 0.9655879023575306,
+        "bikeFactor": 0.9350401807652721,
+        "runFactor": 0.9220154587956202,
+        "n": 2363,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Punta del Este": {
+        "swimFactor": 1.0285079023917283,
+        "bikeFactor": 0.960963601396301,
+        "runFactor": 0.9202242142242552,
+        "n": 2533,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Puerto Rico": {
+        "swimFactor": 1.0200240473645825,
+        "bikeFactor": 0.962723533104953,
+        "runFactor": 1.057481517148602,
+        "n": 2016,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Liuzhou": {
+        "swimFactor": 0.8649462678826938,
+        "bikeFactor": 0.9024854420341919,
+        "runFactor": 0.8642637299139786,
+        "n": 850,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 UK": {
+        "swimFactor": 0.9243696692103754,
+        "bikeFactor": 1.203310858361745,
+        "runFactor": 0.9495196642660348,
+        "n": 2031,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Coeur d'Alene": {
+        "swimFactor": 1.0077809736481118,
+        "bikeFactor": 1.042898094321069,
+        "runFactor": 1.0021281324133107,
+        "n": 5721,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Wisconsin": {
+        "swimFactor": 1.0247276018582507,
+        "bikeFactor": 1.0544234573299829,
+        "runFactor": 1.0237653157175846,
+        "n": 4029,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Cartagena": {
+        "swimFactor": 1.1207885451626125,
+        "bikeFactor": 1.0016490012099448,
+        "runFactor": 1.0669996862653015,
+        "n": 5919,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Marbella": {
+        "swimFactor": 0.8221187987317247,
+        "bikeFactor": 1.1142349956668298,
+        "runFactor": 0.8911777566739655,
+        "n": 2745,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 European Championship Elsinore": {
+        "swimFactor": 0.9169462345565664,
+        "bikeFactor": 0.8742334680168644,
+        "runFactor": 0.8626459571779748,
+        "n": 3813,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Hawaii": {
+        "swimFactor": 1.0323086178110552,
+        "bikeFactor": 1.0331203658280763,
+        "runFactor": 1.0865898715824278,
+        "n": 5143,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Boulder": {
+        "swimFactor": 1.02107483685206,
+        "bikeFactor": 0.948925803605262,
+        "runFactor": 1.1160358588885517,
+        "n": 7568,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Cascais Portugal": {
+        "swimFactor": 0.9134831126500922,
+        "bikeFactor": 0.9612313010208229,
+        "runFactor": 0.9088561897926205,
+        "n": 3163,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Dubai": {
+        "swimFactor": 0.9818333043141433,
+        "bikeFactor": 0.9015493852980969,
+        "runFactor": 0.9541272460115424,
+        "n": 4586,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Nice": {
+        "swimFactor": 1.041663736767872,
+        "bikeFactor": 1.1108009524739815,
+        "runFactor": 0.9266641734401043,
+        "n": 1752,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Lanzarote": {
+        "swimFactor": 0.9359538920274256,
+        "bikeFactor": 1.103512972026937,
+        "runFactor": 0.9578681122479296,
+        "n": 1607,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Pays D'Aix": {
+        "swimFactor": 0.9390508431650391,
+        "bikeFactor": 1.0146931832710735,
+        "runFactor": 0.8802869835920463,
+        "n": 4352,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 San Juan": {
+        "swimFactor": 1.0212725837918568,
+        "bikeFactor": 0.9635493522726027,
+        "runFactor": 1.0563598575016329,
+        "n": 1030,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Switzerland": {
+        "swimFactor": 0.9594531300944205,
+        "bikeFactor": 0.9713247599141216,
+        "runFactor": 0.9223118868835419,
+        "n": 8756,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 European Championship": {
+        "swimFactor": 0.9080974849226758,
+        "bikeFactor": 1.1038361854930268,
+        "runFactor": 0.8858786220427194,
+        "n": 6005,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Salzburg / Zell am See": {
+        "swimFactor": 0.9470963895263883,
+        "bikeFactor": 1.019693779377081,
+        "runFactor": 0.9450994891765299,
+        "n": 1524,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Muncie": {
+        "swimFactor": 1.1102101293981685,
+        "bikeFactor": 0.9623537780318797,
+        "runFactor": 1.059836670030915,
+        "n": 6989,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Asia-Pacific / Auckland": {
+        "swimFactor": 1.041711936443266,
+        "bikeFactor": 0.9760807394101556,
+        "runFactor": 0.9372895624392434,
+        "n": 641,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Philippines": {
+        "swimFactor": 1.3586810639069165,
+        "bikeFactor": 1.0291470574290054,
+        "runFactor": 1.2006187455155592,
+        "n": 3180,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Middle East Championship Bahrain": {
+        "swimFactor": 0.9788321690695163,
+        "bikeFactor": 0.9072069739432895,
+        "runFactor": 0.9807540461323327,
+        "n": 1914,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Gdynia": {
+        "swimFactor": 1.0166736388634499,
+        "bikeFactor": 0.9756351019366589,
+        "runFactor": 0.9066168491221795,
+        "n": 9257,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Davao Philippines": {
+        "swimFactor": 1.1978540328764258,
+        "bikeFactor": 1.0201942493840293,
+        "runFactor": 1.2229571916283088,
+        "n": 2044,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Les Sables d'Olonne": {
+        "swimFactor": 0.8866830452775533,
+        "bikeFactor": 0.9653424792708231,
+        "runFactor": 0.929832711209724,
+        "n": 3001,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Oman": {
+        "swimFactor": 0.9658959810300943,
+        "bikeFactor": 0.9648278014166374,
+        "runFactor": 0.9969143567729268,
+        "n": 1193,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Subic Bay": {
+        "swimFactor": 1.0831274945018254,
+        "bikeFactor": 1.0977508391307575,
+        "runFactor": 1.257725786648081,
+        "n": 416,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Muskoka": {
+        "swimFactor": 1.026465349571151,
+        "bikeFactor": 1.0577460139638684,
+        "runFactor": 0.9993842068140888,
+        "n": 5330,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Turkey": {
+        "swimFactor": 0.9683431018661841,
+        "bikeFactor": 0.9209497191926757,
+        "runFactor": 0.9206339642531747,
+        "n": 4439,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Durban": {
+        "swimFactor": 0.9763686331098786,
+        "bikeFactor": 0.9614148622130428,
+        "runFactor": 0.9683987576171253,
+        "n": 4080,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Vietnam": {
+        "swimFactor": 1.042096150124732,
+        "bikeFactor": 0.981420041144896,
+        "runFactor": 1.1360127780003109,
+        "n": 3505,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Asia-Pacific Championship Philippines": {
+        "swimFactor": 1.1210996720750686,
+        "bikeFactor": 1.0326369749029367,
+        "runFactor": 1.2049633253792507,
+        "n": 1354,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 European Championship Wiesbaden": {
+        "swimFactor": 0.9796143384749916,
+        "bikeFactor": 1.0986388691790414,
+        "runFactor": 0.8964657840832819,
+        "n": 2354,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Calgary": {
+        "swimFactor": 1.01158668292709,
+        "bikeFactor": 0.9260018829763726,
+        "runFactor": 1.0086739451359696,
+        "n": 3305,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Thailand": {
+        "swimFactor": 0.9913601203703,
+        "bikeFactor": 1.0209640602819188,
+        "runFactor": 1.0421507713651652,
+        "n": 1680,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Bintan": {
+        "swimFactor": 1.0574654823658913,
+        "bikeFactor": 1.0534888469682668,
+        "runFactor": 1.1335101361666644,
+        "n": 3091,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Hefei": {
+        "swimFactor": 1.0632151004363684,
+        "bikeFactor": 0.9416800186438538,
+        "runFactor": 0.9366496898818173,
+        "n": 943,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Chungju": {
+        "swimFactor": 1.0670674817903534,
+        "bikeFactor": 1.0775376994918748,
+        "runFactor": 1.1358713969191008,
+        "n": 186,
+        "confidence": "low",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Costa Rica": {
+        "swimFactor": 1.051776473474257,
+        "bikeFactor": 0.9955239177931066,
+        "runFactor": 1.0635862441192927,
+        "n": 2955,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Haugesund / Norway": {
+        "swimFactor": 0.9720506650482508,
+        "bikeFactor": 0.9750519814449862,
+        "runFactor": 0.9083304467636241,
+        "n": 3485,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Steelhead": {
+        "swimFactor": 1.1199663192309939,
+        "bikeFactor": 0.9469475455485981,
+        "runFactor": 1.0309787372412518,
+        "n": 7348,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Edinburgh": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.1723988354392247,
+        "runFactor": 0.9692850862554183,
+        "n": 615,
+        "confidence": "medium",
+        "era": "recent",
+        "clamped": true
+      },
+      "IRONMAN 70.3 Colombo": {
+        "swimFactor": 1.089336452551858,
+        "bikeFactor": 1.001459245939964,
+        "runFactor": 1.1303473498021142,
+        "n": 883,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Xiamen": {
+        "swimFactor": 0.9655281904492643,
+        "bikeFactor": 0.9220024668985541,
+        "runFactor": 0.934640131498325,
+        "n": 2092,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Staffordshire": {
+        "swimFactor": 1.0053900868177705,
+        "bikeFactor": 1.030435613653958,
+        "runFactor": 0.964109359087862,
+        "n": 6052,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Astana": {
+        "swimFactor": 1.0949173030465948,
+        "bikeFactor": 0.9919351411463254,
+        "runFactor": 0.9834839320161302,
+        "n": 1640,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Italy": {
+        "swimFactor": 0.8677913889685758,
+        "bikeFactor": 1.0257411559816811,
+        "runFactor": 0.9695284587357226,
+        "n": 2346,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Cozumel": {
+        "swimFactor": 0.9738275867724284,
+        "bikeFactor": 0.9927821072087943,
+        "runFactor": 1.1201261569886127,
+        "n": 6248,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Edinburg": {
+        "swimFactor": 1.0851793440136361,
+        "bikeFactor": 1.0912563630961516,
+        "runFactor": 0.9967069402579464,
+        "n": 616,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Slovenian Istria": {
+        "swimFactor": 0.9981504565513745,
+        "bikeFactor": 1.0651931799261736,
+        "runFactor": 0.9240975426414396,
+        "n": 2153,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Shanghai": {
+        "swimFactor": 1.0459500496494512,
+        "bikeFactor": 0.9213175830316322,
+        "runFactor": 0.9435978624947509,
+        "n": 1228,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Bahrain": {
+        "swimFactor": 0.980297703841064,
+        "bikeFactor": 0.9167186975672477,
+        "runFactor": 0.9790558014280746,
+        "n": 741,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Finland": {
+        "swimFactor": 1.037003328019557,
+        "bikeFactor": 0.9737069644351987,
+        "runFactor": 0.9375557399303608,
+        "n": 2382,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Rhode Island": {
+        "swimFactor": 1.0360804717766852,
+        "bikeFactor": 1.0316466375113462,
+        "runFactor": 1.0019179999652872,
+        "n": 5592,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Asia-Pacific": {
+        "swimFactor": 1.0079718063020542,
+        "bikeFactor": 1.0306270170773526,
+        "runFactor": 0.9779045467665756,
+        "n": 1252,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Florida": {
+        "swimFactor": 1.0746161912007894,
+        "bikeFactor": 0.9734230766827336,
+        "runFactor": 1.0451787777546686,
+        "n": 6552,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Port Macquarie": {
+        "swimFactor": 0.9174437988032109,
+        "bikeFactor": 1.0136497376065496,
+        "runFactor": 0.9962524585869146,
+        "n": 4194,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Sri Lanka": {
+        "swimFactor": 1.1018845647428874,
+        "bikeFactor": 0.9314293533548982,
+        "runFactor": 1.0605897140460907,
+        "n": 78,
+        "confidence": "low",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Japan": {
+        "swimFactor": 0.9863639182940345,
+        "bikeFactor": 0.9925790736856666,
+        "runFactor": 0.9423891067258756,
+        "n": 2956,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Mont-Tremblant": {
+        "swimFactor": 0.9632563454170625,
+        "bikeFactor": 0.9938383806395844,
+        "runFactor": 0.9819189140486727,
+        "n": 10610,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Boise": {
+        "swimFactor": 1.0918118825863072,
+        "bikeFactor": 1.0552027322609954,
+        "runFactor": 1.0390111116632088,
+        "n": 796,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Busselton": {
+        "swimFactor": 0.9188292720584974,
+        "bikeFactor": 0.9231432126257175,
+        "runFactor": 0.9546894674044792,
+        "n": 5168,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Eagleman": {
+        "swimFactor": 1.0498759524986554,
+        "bikeFactor": 0.9718453670163288,
+        "runFactor": 1.1112286720822664,
+        "n": 5534,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Luxembourg": {
+        "swimFactor": 0.8441153675519943,
+        "bikeFactor": 0.9604465692264309,
+        "runFactor": 0.9166428224735687,
+        "n": 5722,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Miami": {
+        "swimFactor": 1.1621917778046984,
+        "bikeFactor": 0.9946921447202248,
+        "runFactor": 1.0788682835644057,
+        "n": 5575,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 New Orleans": {
+        "swimFactor": 1.0119068705362582,
+        "bikeFactor": 1.007430156988381,
+        "runFactor": 1.074918287687216,
+        "n": 2254,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Syracuse": {
+        "swimFactor": 1.0109602591863773,
+        "bikeFactor": 1.0881893856637277,
+        "runFactor": 1.0916990140535037,
+        "n": 4078,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Silverman": {
+        "swimFactor": 1.1815591007720485,
+        "bikeFactor": 1.135580772065438,
+        "runFactor": 1.0720929045323038,
+        "n": 846,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Mandurah": {
+        "swimFactor": 0.9324428300436698,
+        "bikeFactor": 0.9248387743049686,
+        "runFactor": 0.9657852400693736,
+        "n": 759,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Timberman": {
+        "swimFactor": 1.0107800526053377,
+        "bikeFactor": 1.0199395933197946,
+        "runFactor": 1.038351790967323,
+        "n": 3520,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Laguna Phuket": {
+        "swimFactor": 1.0378178552348456,
+        "bikeFactor": 1.062547495107966,
+        "runFactor": 1.0444346444475083,
+        "n": 639,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Sunshine Coast": {
+        "swimFactor": 0.9001570609130678,
+        "bikeFactor": 0.9483803557530481,
+        "runFactor": 0.9304620077620528,
+        "n": 5902,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Atlantic City": {
+        "swimFactor": 0.9744525794551064,
+        "bikeFactor": 0.9698652935979236,
+        "runFactor": 1.0560845949131619,
+        "n": 4817,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Ohio": {
+        "swimFactor": 1.1628826249188926,
+        "bikeFactor": 0.9778963535376066,
+        "runFactor": 1.103611147858365,
+        "n": 6480,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Virginia": {
+        "swimFactor": 0.9284454544558679,
+        "bikeFactor": 0.9519794977912005,
+        "runFactor": 1.0118432025010826,
+        "n": 1141,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Superfrog": {
+        "swimFactor": 0.9918241832106476,
+        "bikeFactor": 0.9674350520471351,
+        "runFactor": 1.0842827766730743,
+        "n": 2596,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Taupo": {
+        "swimFactor": 0.9351374425995436,
+        "bikeFactor": 0.9619272483487565,
+        "runFactor": 0.9320538604098493,
+        "n": 2803,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 South Africa": {
+        "swimFactor": 0.9233118583867015,
+        "bikeFactor": 1.1137607180840423,
+        "runFactor": 1.0112039111353353,
+        "n": 6585,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Oceanside California": {
+        "swimFactor": 0.9759651836485146,
+        "bikeFactor": 1.0189503435853564,
+        "runFactor": 0.9476724366253422,
+        "n": 3100,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Raleigh": {
+        "swimFactor": 1.1571276811993298,
+        "bikeFactor": 0.9933240190739872,
+        "runFactor": 1.0783121939809206,
+        "n": 5510,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Austria / St. Polten": {
+        "swimFactor": 1.0111306119506593,
+        "bikeFactor": 0.9874568114016198,
+        "runFactor": 0.8797853442665444,
+        "n": 7059,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Oceanside": {
+        "swimFactor": 0.9550367949697129,
+        "bikeFactor": 1.0181475969459353,
+        "runFactor": 0.9522034178035516,
+        "n": 1637,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 St. George": {
+        "swimFactor": 0.9983274361800009,
+        "bikeFactor": 1.028571474713848,
+        "runFactor": 1.031318948775105,
+        "n": 5117,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Canberra": {
+        "swimFactor": 0.9906273380393961,
+        "bikeFactor": 0.9712548620186815,
+        "runFactor": 0.9601406863860986,
+        "n": 2976,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Augusta": {
+        "swimFactor": 0.8333131503252299,
+        "bikeFactor": 1.0153190287594247,
+        "runFactor": 1.1105111729225252,
+        "n": 9970,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Lake Placid": {
+        "swimFactor": 0.969838276579941,
+        "bikeFactor": 1.0545359038305244,
+        "runFactor": 0.9375270339545387,
+        "n": 1849,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Kraichgau": {
+        "swimFactor": 0.9402222409267893,
+        "bikeFactor": 1.01080917525007,
+        "runFactor": 0.9220010286058248,
+        "n": 9059,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Arizona": {
+        "swimFactor": 1.093728646574367,
+        "bikeFactor": 1.0042448608786756,
+        "runFactor": 1.128234186880613,
+        "n": 5145,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Canada": {
+        "swimFactor": 1.012408450134964,
+        "bikeFactor": 1.0683076431966685,
+        "runFactor": 1.0402005071194949,
+        "n": 3328,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Santa Rosa": {
+        "swimFactor": 0.9233903467600564,
+        "bikeFactor": 0.9290443206548041,
+        "runFactor": 0.8890005502719825,
+        "n": 1150,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Pan American Pro Championship Panama": {
+        "swimFactor": 0.869609705771567,
+        "bikeFactor": 0.9164284346175716,
+        "runFactor": 1.0507585627712208,
+        "n": 765,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Subic Bay Philippines": {
+        "swimFactor": 1.066579169175079,
+        "bikeFactor": 1.052010193690266,
+        "runFactor": 1.1465791748977137,
+        "n": 1557,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Maine": {
+        "swimFactor": 0.9864980650157864,
+        "bikeFactor": 0.9515609929548912,
+        "runFactor": 0.9600389838327196,
+        "n": 3928,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Emilia Romagna": {
+        "swimFactor": 0.9318180459046562,
+        "bikeFactor": 0.9325241714873053,
+        "runFactor": 0.8625925327934478,
+        "n": 1304,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 San Juan / Puerto Rico": {
+        "swimFactor": 1.0357200129399178,
+        "bikeFactor": 0.9744652203942987,
+        "runFactor": 1.104536600959816,
+        "n": 743,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Buenos Aires": {
+        "swimFactor": 1.0181356543087363,
+        "bikeFactor": 0.9715913901873089,
+        "runFactor": 0.945551419885391,
+        "n": 3214,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Rio de Janeiro": {
+        "swimFactor": 1.0435284622361174,
+        "bikeFactor": 1.014039926393742,
+        "runFactor": 0.9765294710305991,
+        "n": 4030,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Gulf Coast": {
+        "swimFactor": 1.1066598474477027,
+        "bikeFactor": 0.9748452049943667,
+        "runFactor": 1.1301333929290018,
+        "n": 2416,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Panama": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.0448831917154844,
+        "runFactor": 1.0023744338153207,
+        "n": 1526,
+        "confidence": "high",
+        "era": "allTime",
+        "clamped": true
+      },
+      "IRONMAN 70.3 Brazil": {
+        "swimFactor": 0.9855735531962649,
+        "bikeFactor": 0.8955855489215468,
+        "runFactor": 0.9650220835150064,
+        "n": 778,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 California": {
+        "swimFactor": 1.0102862569007798,
+        "bikeFactor": 1.0118072208278763,
+        "runFactor": 0.9656570897706416,
+        "n": 3227,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Kansas": {
+        "swimFactor": 1.0747168711791393,
+        "bikeFactor": 1.0223274564298335,
+        "runFactor": 0.9836041134355624,
+        "n": 8142,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Racine": {
+        "swimFactor": 0.9724231027692986,
+        "bikeFactor": 0.9959788978380713,
+        "runFactor": 1.0340970707321686,
+        "n": 1503,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Bangsaen": {
+        "swimFactor": 1.1660453729475593,
+        "bikeFactor": 1.0199764129116744,
+        "runFactor": 1.1276921185103002,
+        "n": 2305,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Indian Wells La Quinta": {
+        "swimFactor": 1.018453985444697,
+        "bikeFactor": 0.9247428404757398,
+        "runFactor": 0.9487310089983193,
+        "n": 2458,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Waco": {
+        "swimFactor": 1.0244220117441907,
+        "bikeFactor": 0.9944464237556997,
+        "runFactor": 1.0222221070020003,
+        "n": 849,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 North Carolina": {
+        "swimFactor": 0.7863295133763115,
+        "bikeFactor": 0.9547992188050335,
+        "runFactor": 0.9798301669282115,
+        "n": 2406,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Pucon": {
+        "swimFactor": 1.083615493043075,
+        "bikeFactor": 0.9948666861489844,
+        "runFactor": 1.017559158708214,
+        "n": 5368,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Yeppoon": {
+        "swimFactor": 0.8856820622735679,
+        "bikeFactor": 0.9670631838803405,
+        "runFactor": 0.947680626204585,
+        "n": 1451,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Austin": {
+        "swimFactor": 1.0613177423073359,
+        "bikeFactor": 1.0637695583682225,
+        "runFactor": 0.991709846186368,
+        "n": 2408,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Zell am See Kaprun": {
+        "swimFactor": 0.9848393543409691,
+        "bikeFactor": 1.0022643578758403,
+        "runFactor": 0.9720739481912347,
+        "n": 1690,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Western Australia": {
+        "swimFactor": 0.8974685422054433,
+        "bikeFactor": 0.9345252310756171,
+        "runFactor": 0.9592374671910783,
+        "n": 1748,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Los Cabos": {
+        "swimFactor": 1.0651009491307277,
+        "bikeFactor": 1.0562981946703731,
+        "runFactor": 1.0725215373071944,
+        "n": 2501,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Sao Paulo": {
+        "swimFactor": 1.0118500478060761,
+        "bikeFactor": 0.9037684468977946,
+        "runFactor": 0.9374734496636052,
+        "n": 928,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Campeche": {
+        "swimFactor": 1.0617011626629602,
+        "bikeFactor": 1.0533476414238758,
+        "runFactor": 1.0185026105293198,
+        "n": 2551,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Western Sydney": {
+        "swimFactor": 1.0128815172216799,
+        "bikeFactor": 0.942048225405643,
+        "runFactor": 0.9609967601754509,
+        "n": 4050,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 New Zealand": {
+        "swimFactor": 0.9256904475468871,
+        "bikeFactor": 0.967916778328449,
+        "runFactor": 0.9267109843954294,
+        "n": 1312,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Alagoas": {
+        "swimFactor": 1.0236631582952134,
+        "bikeFactor": 0.9406549718667017,
+        "runFactor": 0.9970165353158963,
+        "n": 1715,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Fortaleza": {
+        "swimFactor": 1.0807870396042427,
+        "bikeFactor": 0.9944432757335676,
+        "runFactor": 1.0131189185002685,
+        "n": 1717,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Geelong": {
+        "swimFactor": 0.8934270401365076,
+        "bikeFactor": 0.9567569678398743,
+        "runFactor": 0.9358654980914495,
+        "n": 4680,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Ecuador": {
+        "swimFactor": 1.122800930799419,
+        "bikeFactor": 1.0297286713068945,
+        "runFactor": 1.032143163132607,
+        "n": 4669,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Connecticut": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.2437005339814622,
+        "runFactor": 1.208401823051582,
+        "n": 100,
+        "confidence": "low",
+        "era": "allTime",
+        "clamped": true
+      },
+      "IRONMAN 70.3 Coquimbo": {
+        "swimFactor": 1.0130075572809447,
+        "bikeFactor": 1.0825902845525406,
+        "runFactor": 0.9478538999847785,
+        "n": 1139,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Foz do IguaÃ§u": {
+        "swimFactor": 1.0057601949132058,
+        "bikeFactor": 1.017000737948127,
+        "runFactor": 1.0715713044621225,
+        "n": 478,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Chattanooga": {
+        "swimFactor": 0.7964374235121447,
+        "bikeFactor": 0.9811880191526605,
+        "runFactor": 1.0646315027337871,
+        "n": 6510,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Brazil Paraguay": {
+        "swimFactor": 0.9837693839361743,
+        "bikeFactor": 1.0416482512149963,
+        "runFactor": 0.9933531186027882,
+        "n": 1037,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 North American Pro Championship St. George": {
+        "swimFactor": 1.01508147657966,
+        "bikeFactor": 1.0596117368331626,
+        "runFactor": 1.0432595559174793,
+        "n": 3170,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 St. Croix": {
+        "swimFactor": 1.074145344754131,
+        "bikeFactor": 1.1702485226155357,
+        "runFactor": 1.0910481412563136,
+        "n": 446,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Zell am See-Kaprun": {
+        "swimFactor": 0.9565334901309933,
+        "bikeFactor": 1.0075746750558443,
+        "runFactor": 0.9570586324231842,
+        "n": 2940,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 South American Championship Palmas": {
+        "swimFactor": 1.0878732535057218,
+        "bikeFactor": 0.934064676901654,
+        "runFactor": 0.9993002218696804,
+        "n": 585,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Pula": {
+        "swimFactor": 1.1679101222386308,
+        "bikeFactor": 0.9898482793412681,
+        "runFactor": 0.8693554042033524,
+        "n": 1014,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Monterrey": {
+        "swimFactor": 1.0424386111878674,
+        "bikeFactor": 0.9489532905290329,
+        "runFactor": 1.0245513875719878,
+        "n": 6591,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Cairns": {
+        "swimFactor": 0.9468814981147262,
+        "bikeFactor": 0.9913274751661495,
+        "runFactor": 0.9915350959037994,
+        "n": 3636,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Ruegen": {
+        "swimFactor": 1.0727231347666553,
+        "bikeFactor": 0.9240514379302626,
+        "runFactor": 0.940366812937721,
+        "n": 3016,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Weymouth": {
+        "swimFactor": 0.8858614453958393,
+        "bikeFactor": 1.0541697440146225,
+        "runFactor": 0.9229283337358658,
+        "n": 2485,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Peru": {
+        "swimFactor": 0.9767488326627831,
+        "bikeFactor": 0.9567183022881052,
+        "runFactor": 0.9635001903177173,
+        "n": 2988,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Palmas": {
+        "swimFactor": 1.0065806184926045,
+        "bikeFactor": 0.9138960875014916,
+        "runFactor": 0.9654837242809297,
+        "n": 397,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Asia-Pacific Championship Western Sydney": {
+        "swimFactor": 1.0353017073654565,
+        "bikeFactor": 0.9422849037900322,
+        "runFactor": 0.9841071776062554,
+        "n": 758,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Buffalo Springs Lake": {
+        "swimFactor": 0.9596052920649818,
+        "bikeFactor": 1.0574986025332787,
+        "runFactor": 1.0542191305376305,
+        "n": 2291,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Jonkoping": {
+        "swimFactor": 0.9895400928884543,
+        "bikeFactor": 0.9476718491483034,
+        "runFactor": 0.911008438255879,
+        "n": 4306,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Dun Laoghaire": {
+        "swimFactor": 1.073781015720164,
+        "bikeFactor": 1.2090672727829572,
+        "runFactor": 0.9815388850347366,
+        "n": 1375,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Florianopolis": {
+        "swimFactor": 0.9473041841430866,
+        "bikeFactor": 0.9628260567998891,
+        "runFactor": 0.9082339972678506,
+        "n": 1942,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Maceio": {
+        "swimFactor": 0.9599467339990991,
+        "bikeFactor": 0.8812707922808899,
+        "runFactor": 0.9676463996756064,
+        "n": 1060,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Langkawi": {
+        "swimFactor": 1.108578417493556,
+        "bikeFactor": 1.0516924700248815,
+        "runFactor": 1.1556330692302286,
+        "n": 1722,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Greece Costa Navarino": {
+        "swimFactor": 0.7735541998532576,
+        "bikeFactor": 0.9528684755285163,
+        "runFactor": 0.8170166889923205,
+        "n": 262,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN Oceanside": {
+        "swimFactor": 0.9345663546143742,
+        "bikeFactor": 1.055823333726103,
+        "runFactor": 0.9302898728569613,
+        "n": 1327,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Lake Stevens": {
+        "swimFactor": 1.0060697596295707,
+        "bikeFactor": 1.1143787269540235,
+        "runFactor": 1.010932972113524,
+        "n": 866,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Vineman": {
+        "swimFactor": 0.9663187801758082,
+        "bikeFactor": 0.9992738067091672,
+        "runFactor": 1.0342871027847058,
+        "n": 3163,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Cancun": {
+        "swimFactor": 1.0156490873750799,
+        "bikeFactor": 1.0027065448720935,
+        "runFactor": 1.0880706118313195,
+        "n": 2420,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Singapore": {
+        "swimFactor": 1.208584301976772,
+        "bikeFactor": 0.9620888995202369,
+        "runFactor": 1.0988232617828353,
+        "n": 2989,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Zell am See": {
+        "swimFactor": 0.9120169959107296,
+        "bikeFactor": 0.8733622222745769,
+        "runFactor": 0.8735761851990823,
+        "n": 1189,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Galway": {
+        "swimFactor": 1.128398850753952,
+        "bikeFactor": 0.9689884826417436,
+        "runFactor": 0.9444771896984224,
+        "n": 550,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Putrajaya": {
+        "swimFactor": 1.152337818033935,
+        "bikeFactor": 1.021059517096678,
+        "runFactor": 1.1687019139721102,
+        "n": 1283,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Princeton": {
+        "swimFactor": 1.0729534639719092,
+        "bikeFactor": 1.040894156052564,
+        "runFactor": 1.0190684115480022,
+        "n": 1605,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Kronborg": {
+        "swimFactor": 0.9579363286311388,
+        "bikeFactor": 0.9054328333622836,
+        "runFactor": 0.8599123865880443,
+        "n": 1467,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Luxembourg - RÃ©gion Moselle": {
+        "swimFactor": 0.9619575584779745,
+        "bikeFactor": 0.9604580895909717,
+        "runFactor": 0.909397666789842,
+        "n": 1767,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Goa": {
+        "swimFactor": 1.3105303560943717,
+        "bikeFactor": 1.1469625680600626,
+        "runFactor": 1.2261104688578086,
+        "n": 380,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Korea": {
+        "swimFactor": 1.1290061831299962,
+        "bikeFactor": 1.0127245311878936,
+        "runFactor": 1.0434323538450851,
+        "n": 380,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Busan": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.0494708843517309,
+        "runFactor": 1.0615323219381343,
+        "n": 313,
+        "confidence": "medium",
+        "era": "recent",
+        "clamped": true
+      },
+      "IRONMAN 70.3 Qujing": {
+        "swimFactor": 1.1207878186266522,
+        "bikeFactor": 1.0009532268591534,
+        "runFactor": 1.0163800488096653,
+        "n": 481,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Asia-Pacific Championship": {
+        "swimFactor": 1.198016458093249,
+        "bikeFactor": 1.0249694877801439,
+        "runFactor": 1.178499579902645,
+        "n": 1036,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Branson": {
+        "swimFactor": 1.0302272910816839,
+        "bikeFactor": 1.1446729492965815,
+        "runFactor": 1.0580760452480356,
+        "n": 1368,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Haugesund": {
+        "swimFactor": 0.957980046910747,
+        "bikeFactor": 0.9735133917382102,
+        "runFactor": 0.9321041358916157,
+        "n": 272,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Aarhus": {
+        "swimFactor": 0.9432251840647878,
+        "bikeFactor": 1.0069759060528805,
+        "runFactor": 0.9044827245621379,
+        "n": 1333,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Berlin": {
+        "swimFactor": 1.0679587269295387,
+        "bikeFactor": 0.9662342080041684,
+        "runFactor": 0.9485422150733778,
+        "n": 730,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Goseong": {
+        "swimFactor": 1.060729753904081,
+        "bikeFactor": 1.0231665336821942,
+        "runFactor": 1.0101856273610808,
+        "n": 1045,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Lubbock": {
+        "swimFactor": 1.031423349981849,
+        "bikeFactor": 0.9906287777111652,
+        "runFactor": 1.0305861533571483,
+        "n": 531,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Traverse City": {
+        "swimFactor": 1.0361061147041388,
+        "bikeFactor": 1.0660301036298079,
+        "runFactor": 1.0485504155776058,
+        "n": 1819,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Incheon Korea": {
+        "swimFactor": 1.0006838018708368,
+        "bikeFactor": 1.0123860141390517,
+        "runFactor": 1.0913978874444683,
+        "n": 358,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Ballarat": {
+        "swimFactor": 0.9325035603490979,
+        "bikeFactor": 0.9487850252298278,
+        "runFactor": 0.9289923848623994,
+        "n": 1538,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Saipan": {
+        "swimFactor": 1.2315617466554958,
+        "bikeFactor": 1.1032273195601436,
+        "runFactor": 1.2103769816587095,
+        "n": 71,
+        "confidence": "low",
+        "era": "allTime"
+      },
+      "IRONMAN Triathlon Kohala Coast": {
+        "swimFactor": 0.966805833701416,
+        "bikeFactor": 1.0444491342142557,
+        "runFactor": 1.1182688173423299,
+        "n": 596,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Mooseman": {
+        "swimFactor": 0.9848667144066517,
+        "bikeFactor": 1.1189851381271865,
+        "runFactor": 0.9302550633895603,
+        "n": 2250,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 China": {
+        "swimFactor": 1.0254977472850675,
+        "bikeFactor": 1.051398430061736,
+        "runFactor": 1.1531859389705166,
+        "n": 148,
+        "confidence": "low",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Shepparton": {
+        "swimFactor": 0.9531105251321166,
+        "bikeFactor": 0.9720765786577749,
+        "runFactor": 0.9525786665847763,
+        "n": 1752,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "IRONMAN 70.3 Pocono Mountains": {
+        "swimFactor": 0.9127510719316827,
+        "bikeFactor": 1.0189585157072836,
+        "runFactor": 0.9614852210111697,
+        "n": 801,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "IRONMAN Lake Tahoe": {
+        "swimFactor": 0.917614497863079,
+        "bikeFactor": 1.0203299207687373,
+        "runFactor": 1.0396087322992078,
+        "n": 323,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Tallinn": {
+        "swimFactor": 1.0225885537807426,
+        "bikeFactor": 0.9219398186023732,
+        "runFactor": 0.9149683262334167,
+        "n": 401,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "IRONMAN 70.3 Otepaa": {
+        "swimFactor": 0.9980161823152862,
+        "bikeFactor": 0.985351225555982,
+        "runFactor": 0.9712642699170496,
+        "n": 1695,
+        "confidence": "high",
+        "era": "recent"
+      }
+    }
+  },
+  "ironman": {
+    "distance": "ironman",
+    "referenceSwimSec": 4633.280081442823,
+    "referenceBikeSec": 22749.85106690803,
+    "referenceRunSec": 17517.573564958413,
+    "factors": {
+      "Ironman Arizona": {
+        "swimFactor": 1.0637322635618323,
+        "bikeFactor": 0.9875280231714771,
+        "runFactor": 0.998918972181136,
+        "n": 5365,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman France": {
+        "swimFactor": 0.9855513795065566,
+        "bikeFactor": 1.0353801513583387,
+        "runFactor": 0.954054948875169,
+        "n": 3503,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Austria": {
+        "swimFactor": 1.0358921581449452,
+        "bikeFactor": 1.0093377250956093,
+        "runFactor": 1.01651256407269,
+        "n": 5497,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Frankfurt": {
+        "swimFactor": 1.0363860644549012,
+        "bikeFactor": 1.004742397792962,
+        "runFactor": 1.0237405453808823,
+        "n": 5282,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Malaysia": {
+        "swimFactor": 1.013922774531197,
+        "bikeFactor": 1.0134336418914265,
+        "runFactor": 1.0287253421072384,
+        "n": 1252,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman China": {
+        "swimFactor": 1.0004663273778367,
+        "bikeFactor": 1.0234624828515004,
+        "runFactor": 1.102079692796024,
+        "n": 291,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "Ironman Lake Placid": {
+        "swimFactor": 1.0172768099968386,
+        "bikeFactor": 1.0327300655082117,
+        "runFactor": 1.0261126067944182,
+        "n": 5706,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Switzerland": {
+        "swimFactor": 1.0009936492025426,
+        "bikeFactor": 1.0196424946009184,
+        "runFactor": 1.0243887636599482,
+        "n": 3398,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman UK": {
+        "swimFactor": 1.002045453752541,
+        "bikeFactor": 1.069366477504513,
+        "runFactor": 1.005748659713738,
+        "n": 1769,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Louisville": {
+        "swimFactor": 0.9386822023810535,
+        "bikeFactor": 1.007679542202902,
+        "runFactor": 0.9997688850145354,
+        "n": 14359,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Lanzarote": {
+        "swimFactor": 1.0233798852684062,
+        "bikeFactor": 1.1081983688580581,
+        "runFactor": 1.0179674397826421,
+        "n": 2990,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Cozumel": {
+        "swimFactor": 0.9148814360810746,
+        "bikeFactor": 0.9758613311877754,
+        "runFactor": 1.0255611247297616,
+        "n": 3560,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Florida": {
+        "swimFactor": 1.0764688421588164,
+        "bikeFactor": 0.97702516617091,
+        "runFactor": 0.9937105865339371,
+        "n": 5854,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Wisconsin": {
+        "swimFactor": 1.0557991520809475,
+        "bikeFactor": 1.0282851214214686,
+        "runFactor": 0.9991857693357222,
+        "n": 3794,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Melbourne": {
+        "swimFactor": 0.9110274243660985,
+        "bikeFactor": 0.9766375721545392,
+        "runFactor": 0.9831639211174866,
+        "n": 4927,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Mont-Tremblant": {
+        "swimFactor": 1.0041986982096465,
+        "bikeFactor": 1.0063258556006656,
+        "runFactor": 1.0085543996093322,
+        "n": 2593,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman South Africa": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.0144579748400155,
+        "runFactor": 0.9867018904597131,
+        "n": 1587,
+        "confidence": "high",
+        "era": "recent",
+        "clamped": true
+      },
+      "Ironman Coeur d'Alene": {
+        "swimFactor": 1.0378987516939324,
+        "bikeFactor": 1.0421324617975773,
+        "runFactor": 1.0484831885276908,
+        "n": 1479,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Cairns": {
+        "swimFactor": 1.0099693881901546,
+        "bikeFactor": 1.0068552937209292,
+        "runFactor": 1.0105580864173644,
+        "n": 2852,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Barcelona": {
+        "swimFactor": 0.9956505167637021,
+        "bikeFactor": 0.9539315801789209,
+        "runFactor": 1.0013947731800288,
+        "n": 4434,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Brazil": {
+        "swimFactor": 1.0028658396343217,
+        "bikeFactor": 0.9949017283310155,
+        "runFactor": 0.9892662325320947,
+        "n": 2369,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Canada": {
+        "swimFactor": 1.0155253076744069,
+        "bikeFactor": 1.0296866048675732,
+        "runFactor": 1.0152826702861895,
+        "n": 1407,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Chattanooga": {
+        "swimFactor": 0.8412462778051357,
+        "bikeFactor": 1.0082648534825402,
+        "runFactor": 1.0301367756906683,
+        "n": 3364,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Copenhagen": {
+        "swimFactor": 0.9879426498896295,
+        "bikeFactor": 0.9648903154004835,
+        "runFactor": 0.9878664441938347,
+        "n": 5288,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Italy": {
+        "swimFactor": 0.9958240004993563,
+        "bikeFactor": 0.9640934114822958,
+        "runFactor": 0.9819864545313857,
+        "n": 5738,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Hamburg": {
+        "swimFactor": 1.0245919125810021,
+        "bikeFactor": 0.9705485400520071,
+        "runFactor": 0.9869233679106546,
+        "n": 5013,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Ireland": {
+        "swimFactor": 0.8120734486649399,
+        "bikeFactor": 1.0222774326773028,
+        "runFactor": 1.014872459568659,
+        "n": 730,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Sweden": {
+        "swimFactor": 0.9952379482933085,
+        "bikeFactor": 0.9820347331936657,
+        "runFactor": 0.9996049998458085,
+        "n": 4153,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Indiana": {
+        "swimFactor": 1.0584141237666327,
+        "bikeFactor": 0.966066527742583,
+        "runFactor": 0.9776723574179438,
+        "n": 644,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Maryland": {
+        "swimFactor": 1.0374682705161489,
+        "bikeFactor": 0.9507088349660052,
+        "runFactor": 1.0228896610819227,
+        "n": 3101,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Philippines": {
+        "swimFactor": 1.0432050764901013,
+        "bikeFactor": 1.0113765240818005,
+        "runFactor": 1.0281915530259627,
+        "n": 410,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Tallinn": {
+        "swimFactor": 1.0345336524481499,
+        "bikeFactor": 0.979655125839427,
+        "runFactor": 0.9913720439405762,
+        "n": 2277,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Texas": {
+        "swimFactor": 1.04084154044975,
+        "bikeFactor": 0.996574752993717,
+        "runFactor": 1.0254488125202625,
+        "n": 5440,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Tulsa": {
+        "swimFactor": 1.0650806331856388,
+        "bikeFactor": 1.0223643427245075,
+        "runFactor": 0.9903668399506924,
+        "n": 1598,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Vichy": {
+        "swimFactor": 1.0207082161680803,
+        "bikeFactor": 1.0593199022567523,
+        "runFactor": 1.0171813720197662,
+        "n": 1337,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman New York": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.0001477245507273,
+        "runFactor": 1.0309510504101347,
+        "n": 1302,
+        "confidence": "high",
+        "era": "allTime",
+        "clamped": true
+      },
+      "Ironman Wales": {
+        "swimFactor": 1.0202608297011033,
+        "bikeFactor": 1.0238646107120957,
+        "runFactor": 1.0129256855135946,
+        "n": 2304,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Western Australia": {
+        "swimFactor": 1.0262130798823876,
+        "bikeFactor": 0.9749587038600405,
+        "runFactor": 1.007564905475444,
+        "n": 1914,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Kazakhstan": {
+        "swimFactor": 1.0509583227622648,
+        "bikeFactor": 0.9818679760155908,
+        "runFactor": 1.014648936474695,
+        "n": 202,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Portugal - Cascais": {
+        "swimFactor": 1.0116898627074136,
+        "bikeFactor": 1.013200989028756,
+        "runFactor": 0.9949329698014834,
+        "n": 2634,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Finland": {
+        "swimFactor": 1.0133751345166875,
+        "bikeFactor": 1.0041969094626262,
+        "runFactor": 1.0100376886324427,
+        "n": 546,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Gdynia": {
+        "swimFactor": 1.0172020986450638,
+        "bikeFactor": 1.028385431606089,
+        "runFactor": 0.9920063507801372,
+        "n": 300,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Argentina": {
+        "swimFactor": 0.9776192703942285,
+        "bikeFactor": 1.0265309989288216,
+        "runFactor": 0.9938411166219109,
+        "n": 626,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Taiwan": {
+        "swimFactor": 1.157274294960745,
+        "bikeFactor": 0.9904965189555536,
+        "runFactor": 0.9783403949739297,
+        "n": 290,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Mallorca": {
+        "swimFactor": 0.9722673942299623,
+        "bikeFactor": 0.993147394417731,
+        "runFactor": 1.0021352220281492,
+        "n": 646,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman World Championship St George": {
+        "swimFactor": 1.0445423169023083,
+        "bikeFactor": 1.0890436687178127,
+        "runFactor": 1.1026781392720413,
+        "n": 1618,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Des Moines": {
+        "swimFactor": 0.9971792880654262,
+        "bikeFactor": 0.9999667018213807,
+        "runFactor": 1.0857563519747624,
+        "n": 540,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Maastricht-Limburg": {
+        "swimFactor": 1.019151557830428,
+        "bikeFactor": 1.0055771393931845,
+        "runFactor": 1.01402591087485,
+        "n": 414,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Alaska": {
+        "swimFactor": 0.75,
+        "bikeFactor": 1.0609068374561594,
+        "runFactor": 0.9988791394528446,
+        "n": 418,
+        "confidence": "medium",
+        "era": "recent",
+        "clamped": true
+      },
+      "Ironman Vitoria-Gasteiz": {
+        "swimFactor": 0.9973157291041004,
+        "bikeFactor": 0.9702902819192328,
+        "runFactor": 1.0069278576836516,
+        "n": 2836,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Pays d'Aix-en-Provence": {
+        "swimFactor": 0.997457725136221,
+        "bikeFactor": 1.0279486974161225,
+        "runFactor": 1.0059037155773123,
+        "n": 215,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Waco": {
+        "swimFactor": 1.0570170085073622,
+        "bikeFactor": 1.0172621104598287,
+        "runFactor": 1.0522412328637705,
+        "n": 605,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman California": {
+        "swimFactor": 0.8117041642629771,
+        "bikeFactor": 0.9849441343931957,
+        "runFactor": 0.994421948516193,
+        "n": 3566,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Israel": {
+        "swimFactor": 1.0867460348310278,
+        "bikeFactor": 0.9998592367870948,
+        "runFactor": 0.9746392330980044,
+        "n": 304,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman New Zealand": {
+        "swimFactor": 1.0159787224981942,
+        "bikeFactor": 1.008527493561294,
+        "runFactor": 1.0076566219361747,
+        "n": 2541,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Australia": {
+        "swimFactor": 0.9846127331386259,
+        "bikeFactor": 1.0196739763092468,
+        "runFactor": 1.0128748465190784,
+        "n": 1822,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman Regensburg": {
+        "swimFactor": 0.97965353814758,
+        "bikeFactor": 0.9940256570428533,
+        "runFactor": 0.983549976371981,
+        "n": 1783,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Gurye": {
+        "swimFactor": 1.0128206180698278,
+        "bikeFactor": 0.9863334527258579,
+        "runFactor": 0.9971953878452626,
+        "n": 483,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Japan": {
+        "swimFactor": 1.024339109513423,
+        "bikeFactor": 0.9905805441548288,
+        "runFactor": 0.9837031795351919,
+        "n": 309,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman St George": {
+        "swimFactor": 1.0541113617028037,
+        "bikeFactor": 1.0823026473299233,
+        "runFactor": 1.0295309865078563,
+        "n": 2835,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Lake Tahoe": {
+        "swimFactor": 0.9997810823830277,
+        "bikeFactor": 1.0766423761699935,
+        "runFactor": 1.0272285656766824,
+        "n": 1962,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Los Cabos": {
+        "swimFactor": 1.0157406993323803,
+        "bikeFactor": 1.0463595275998498,
+        "runFactor": 1.0274875667388328,
+        "n": 2064,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Boulder": {
+        "swimFactor": 1.054431623033688,
+        "bikeFactor": 0.977742408398611,
+        "runFactor": 1.0280428577455232,
+        "n": 752,
+        "confidence": "medium",
+        "era": "recent"
+      },
+      "Ironman Fortaleza": {
+        "swimFactor": 1.0912660136535706,
+        "bikeFactor": 1.0241614837788267,
+        "runFactor": 1.0490218314435062,
+        "n": 1338,
+        "confidence": "high",
+        "era": "allTime"
+      },
+      "Ironman Muskoka": {
+        "swimFactor": 0.9869759549498061,
+        "bikeFactor": 1.0147665148567397,
+        "runFactor": 1.0047029913741334,
+        "n": 802,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "Ironman Weymouth": {
+        "swimFactor": 0.9952487156672007,
+        "bikeFactor": 1.018836616585526,
+        "runFactor": 0.9921703885907687,
+        "n": 456,
+        "confidence": "medium",
+        "era": "allTime"
+      },
+      "Ironman Santa Rosa": {
+        "swimFactor": 1.0219441445272746,
+        "bikeFactor": 1.0067879331547551,
+        "runFactor": 0.9688961347395427,
+        "n": 1073,
+        "confidence": "high",
+        "era": "recent"
+      },
+      "Ironman North Carolina": {
+        "swimFactor": 0.8745967521038603,
+        "bikeFactor": 0.75,
+        "runFactor": 0.9354252311610521,
+        "n": 810,
+        "confidence": "medium",
+        "era": "allTime",
+        "clamped": true
+      },
+      "Ironman Norway": {
+        "swimFactor": 0.9858365830625377,
+        "bikeFactor": 1.0492267854628372,
+        "runFactor": 0.9822693971654615,
+        "n": 524,
+        "confidence": "medium",
+        "era": "allTime"
+      }
+    }
+  }
+}

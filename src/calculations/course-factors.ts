@@ -105,10 +105,15 @@ export function applyCourseFactors(
   }
 
   // ── Altitude (run + bike) ───────────────────────────────────────────────
+  // Use `!== 1.0` (not `> 1.0`) so any future sub-1.0 values (e.g. low-altitude
+  // boost from sea-level acclimatisation models) surface as negative deltas
+  // rather than being silently dropped. Today altitudeRunMultiplier /
+  // altitudeBikeMultiplier only return >= 1.0, so behaviour is unchanged for
+  // current data — but the gate no longer hides legitimate sub-1.0 cases.
   if (profile.altitudeM && profile.altitudeM >= 500) {
     const runFactor = altitudeRunMultiplier(profile.altitudeM);
     const bikeFactor = altitudeBikeMultiplier(profile.altitudeM);
-    if (runFactor > 1.0) {
+    if (runFactor !== 1.0) {
       runMult *= runFactor;
       factors.push({
         kind: 'altitude',
@@ -119,7 +124,7 @@ export function applyCourseFactors(
         multiplier: runFactor,
       });
     }
-    if (bikeFactor > 1.0) {
+    if (bikeFactor !== 1.0) {
       bikeMult *= bikeFactor;
       factors.push({
         kind: 'altitude',
@@ -149,9 +154,13 @@ export function applyCourseFactors(
   }
 
   // ── Wind exposure (bike) ────────────────────────────────────────────────
-  if (profile.windExposure && profile.windExposure !== 'sheltered') {
+  // Drop the `!== 'sheltered'` short-circuit — sheltered courses have a sub-1.0
+  // multiplier (faster bike split) and should display as a negative delta. The
+  // previous gate hid every sub-1.0 case (sheltered tailwinds, low-wind venues),
+  // making the panel look like every condition is a penalty.
+  if (profile.windExposure) {
     const factor = WIND_EXPOSURE_BIKE_MULTIPLIER[profile.windExposure];
-    if (factor > 1.0) {
+    if (factor !== 1.0) {
       bikeMult *= factor;
       factors.push({
         kind: 'wind',

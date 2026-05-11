@@ -11,6 +11,7 @@
  */
 
 import type { OnboardingState } from '@/types/onboarding';
+import { PAST_TRI_LEG_DISTANCES } from '@/types/onboarding';
 import type { CalculationResult } from './initialization';
 import { archiveCurrentWksIfPopulated, redistributeArchivedActivitiesToNewPlan } from './initialization';
 import type { TriConfig } from '@/types/triathlon';
@@ -22,10 +23,13 @@ import {
   DEFAULT_VOLUME_SPLIT,
   PLAN_WEEKS_DEFAULT,
   DEFAULT_WEEKLY_PEAK_HOURS,
+  RUN_FATIGUE_DISCOUNT_70_3,
+  RUN_FATIGUE_DISCOUNT_IRONMAN,
 } from '@/constants/triathlon-constants';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
 import { appendFtpSample, appendCssSample } from '@/calculations/tri-benchmark-history';
 import type { GarminActual } from '@/types/state';
+import { cv } from '@/calculations/vdot';
 
 /**
  * Initialize the store for triathlon mode.
@@ -60,6 +64,10 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       swim200Sec: state.triSwim?.pbs?.m200,
     });
 
+    // Derive benchmarks from a past race result entered during onboarding.
+    // Only fills gaps — wizard-entered CSS/FTP still takes priority below.
+    const pastRaceBench = derivePastRaceBenchmarks(state);
+
     // Merge user-entered benchmarks with history-derived ones. User input
     // always wins — derivation only fills in fields the user left blank.
     // Tag derived values with `*Source: 'derived'` so the launch-time refresh
@@ -87,6 +95,12 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       // Without the pair = medium (a single-source estimate the user typed).
       const hasPair = !!(swim.pbs?.m400 && swim.pbs?.m200);
       swim.cssConfidence = hasPair ? 'high' : 'medium';
+    }
+    if (!swim.cssSecPer100m && pastRaceBench.cssSecPer100m) {
+      swim.cssSecPer100m = pastRaceBench.cssSecPer100m;
+      swim.cssSource = 'derived';
+      swim.cssConfidence = pastRaceBench.cssConfidence ?? 'medium';
+      console.log(`[TriInit] CSS seeded from past race: ${swim.cssSecPer100m.toFixed(1)}s/100m`);
     }
     if (!swim.cssSecPer100m && derived.css.cssSecPer100m) {
       swim.cssSecPer100m = derived.css.cssSecPer100m;
@@ -178,6 +192,12 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // Plan generation — replaces any previously-stored running weeks.
     s.wks = generateTriathlonPlan(s);
 
+    // Seed run VDOT from past race when no other signal is available.
+    if (!s.v && pastRaceBench.vdot) {
+      s.v = pastRaceBench.vdot;
+      console.log(`[TriInit] VDOT seeded from past race run leg: ${s.v.toFixed(1)}`);
+    }
+
     // Seed prediction caches. Phase 4 computes real values.
     s.initialBaseline = null;
     s.currentFitness = null;
@@ -228,4 +248,55 @@ function collectActivityLog(s: {
     }
   }
   return list;
+}
+
+/**
+ * Derive CSS and run-VDOT from a past race entered during onboarding.
+ *
+ * Swim → CSS: race swim pace ≈ CSS for 70.3 (1.9 km) and IM (3.8 km).
+ * Confidence is 'high' for those distances because the race duration
+ * (25–40 min for 70.3, 55–80 min for IM) sits in the same severe-intensity
+ * domain that CSS is defined for (Dekerle 2002). Sprint and Olympic swims
+ * are shorter and faster than CSS — race pace alone is an overestimate of
+ * CSS so we mark confidence 'medium'.
+ *
+ * Run → VDOT: back-calculate a "fresh equivalent" run time using the
+ * published bike-to-run fatigue discounts (5% for 70.3, 11% for IM) that
+ * are already used in race-time prediction. Sprint/Olympic use the 70.3
+ * discount as a conservative approximation (shorter events have less
+ * cumulative fatigue — the 5% is slightly pessimistic, not optimistic).
+ * Confidence: 'medium' because the discount is population-average, not
+ * individual-specific.
+ *
+ * Bike time alone cannot derive FTP without watts — left for the FTP field
+ * on the triathlon-setup screen.
+ */
+function derivePastRaceBenchmarks(state: OnboardingState): {
+  cssSecPer100m?: number;
+  cssConfidence?: 'high' | 'medium' | 'low';
+  vdot?: number;
+} {
+  const past = state.triPastRace;
+  if (!past?.perLeg) return {};
+
+  const legs = past.perLeg;
+  const legDist = PAST_TRI_LEG_DISTANCES[past.distance];
+  const result: { cssSecPer100m?: number; cssConfidence?: 'high' | 'medium' | 'low'; vdot?: number } = {};
+
+  // CSS from swim leg
+  if (legs.swim > 0 && legDist.swimM > 0) {
+    result.cssSecPer100m = (legs.swim / legDist.swimM) * 100;
+    result.cssConfidence = (past.distance === '70.3' || past.distance === 'ironman') ? 'high' : 'medium';
+  }
+
+  // VDOT from run leg (back-calculate fresh-run equivalent)
+  if (legs.run > 0 && legDist.runKm > 0) {
+    const discount = past.distance === 'ironman' ? RUN_FATIGUE_DISCOUNT_IRONMAN : RUN_FATIGUE_DISCOUNT_70_3;
+    const freshRunSec = legs.run * (1 - discount);  // fewer seconds = faster = remove fatigue penalty
+    const runDistM = legDist.runKm * 1000;
+    const vdot = cv(runDistM, freshRunSec);
+    if (vdot > 20 && vdot < 90) result.vdot = vdot;  // sanity guard
+  }
+
+  return result;
 }

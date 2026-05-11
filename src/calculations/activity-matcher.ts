@@ -9,7 +9,7 @@ import { generateWeekWorkouts, calculateWorkoutLoad } from '@/workouts';
 import { findMatchingWorkout, parseDistanceKm, type ExternalActivity } from './matching';
 import { calculateITrimpFromSummary } from './trimp';
 import { calculateZones, computeHREffortScore, type HRProfile } from './heart-rate';
-import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem } from '@/types';
+import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
 import { log } from '@/ui/renderer';
 import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
 import { getEffectiveVdot } from './effective-vdot';
@@ -46,6 +46,14 @@ export interface GarminActivityRow {
    * rides with a power meter that fell within the per-sync stream-fetch
    * budget. */
   powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null;
+  /** Per-rep interval analysis for run/bike sessions where Strava laps
+   *  or stream-detection produced a clean rep cluster. Null when the
+   *  activity isn't an interval session. */
+  repData?: ActivityRepData | null;
+  /** Activity name as titled by the user / device (e.g. "HYROX Sim", "Mixed Session").
+   *  Used for HYROX detection when activity_type is missing — Strava and Garmin do not
+   *  yet expose a HYROX type, so name regex is the fallback signal. */
+  activity_name?: string | null;
 }
 
 /** Map Garmin activity type to app activity type */
@@ -408,6 +416,28 @@ function resolveITrimp(
 }
 
 /**
+ * 7-day rolling median of restingHR from physiologyHistory.
+ * Smooths out day-to-day spikes (illness, alcohol, poor sleep) so iTRIMP isn't
+ * understated on high-RHR days. Requires ≥3 readings; falls back to the raw
+ * snapshot when history is sparse. Median beats mean here — a single spike
+ * should not drag the baseline.
+ */
+export function computeRollingRestingHR(
+  physiologyHistory: { date: string; restingHR?: number }[] | undefined,
+  fallback: number | null | undefined,
+): number | null | undefined {
+  const readings = (physiologyHistory ?? [])
+    .slice(-7)
+    .map(d => d.restingHR)
+    .filter((v): v is number => v != null && v > 0);
+  if (readings.length < 3) return fallback;
+  const sorted = [...readings].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const median = sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  return Math.round(median);
+}
+
+/**
  * Main entry point: match Garmin activities to planned workouts and auto-complete.
  *
  * Activities are distributed to their correct plan week based on planStartDate,
@@ -426,6 +456,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 } {
   const s = getMutableState();
   if (!s.wks || s.wks.length === 0) return { changed: false, pending: [] };
+  const rhrBaseline = computeRollingRestingHR(s.physiologyHistory, s.restingHR);
 
   // Drop activities the user has explicitly discarded so a backfill cannot re-import them.
   const ignoredIds = s.ignoredGarminIds;
@@ -645,7 +676,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           avgHR: row.avg_hr ?? actual.avgHR,
           maxHR: row.max_hr ?? actual.maxHR,
           calories: row.calories ?? actual.calories,
-          iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? actual.iTrimp,
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? actual.iTrimp,
           hrZones: row.hrZones ?? actual.hrZones,
           polyline: row.polyline ?? actual.polyline,
           kmSplits: row.kmSplits ?? actual.kmSplits,
@@ -692,7 +723,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           item.startTime = row.start_time;
           if (row.distance_m != null) item.distanceM = row.distance_m;
           if (row.duration_sec) item.durationSec = row.duration_sec;
-          item.iTrimp = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+          item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? item.iTrimp;
           item.hrZones = row.hrZones ?? item.hrZones;
           item.polyline = row.polyline ?? item.polyline;
           item.kmSplits = row.kmSplits ?? item.kmSplits;
@@ -715,7 +746,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         item.avgHR = row.avg_hr ?? item.avgHR;
         item.maxHR = row.max_hr ?? item.maxHR;
         item.calories = row.calories ?? item.calories;
-        item.iTrimp = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex) ?? item.iTrimp;
+        item.iTrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex) ?? item.iTrimp;
         item.hrZones = row.hrZones ?? item.hrZones;
         item.polyline = row.polyline ?? item.polyline;
         item.kmSplits = row.kmSplits ?? item.kmSplits;
@@ -734,12 +765,12 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     // Prefer the DB / stream-computed iTrimp (most accurate).
     // But if the stored value is physically impossible (> 3 TSS/min implies
     // HR fraction exceeded 1 due to wrong maxHR), recompute from avg_hr.
-    const storedForCheck = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex);
+    const storedForCheck = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
     const durationMin = row.duration_sec / 60;
     const storedTSS = storedForCheck != null ? (storedForCheck * 100) / 15000 : 0;
     const freshITrimp = (storedForCheck != null && durationMin > 0 && storedTSS > durationMin * 3
-      && row.avg_hr != null && s.restingHR != null && s.maxHR != null)
-      ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, s.restingHR, s.maxHR, s.biologicalSex as 'male' | 'female' | undefined)
+      && row.avg_hr != null && rhrBaseline != null && s.maxHR != null)
+      ? calculateITrimpFromSummary(row.avg_hr, row.duration_sec, rhrBaseline, s.maxHR, s.biologicalSex as 'male' | 'female' | undefined)
       : storedForCheck;
     const freshZones = row.hrZones ?? null;
     if (freshITrimp == null && freshZones == null) continue;
@@ -817,14 +848,18 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   // Group unprocessed activities by their correct plan week.
   // Activities outside the plan date range are skipped.
   const rowsByWeek = new Map<number, GarminActivityRow[]>();
+  let outOfRangeCount = 0;
   for (const row of newRows) {
     const weekIdx = weekIndexForDate(new Date(row.start_time), s);
     if (weekIdx === null) {
-      console.log(`[ActivityMatcher] ${row.garmin_id} (${row.start_time}) outside plan range — skipping`);
+      outOfRangeCount++;
       continue;
     }
     if (!rowsByWeek.has(weekIdx)) rowsByWeek.set(weekIdx, []);
     rowsByWeek.get(weekIdx)!.push(row);
+  }
+  if (outOfRangeCount > 0) {
+    console.log(`[ActivityMatcher] ${outOfRangeCount} activities outside plan range — skipped`);
   }
   if (rowsByWeek.size === 0) return { changed: false, pending: [] };
 
@@ -885,6 +920,295 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
       const appType = mapGarminType(row.activity_type);
 
+      // HYROX mode: only reclassify activities as planned station/brick work
+      // when the signal is reasonably specific. Previously this matched any of
+      // {HIIT, STRENGTH_TRAINING, CROSS_TRAINING, FUNCTIONAL_TRAINING, CARDIO,
+      // AEROBIC_TRAINING, INDOOR_CARDIO} — that buckets too aggressively and
+      // mislogs a casual gym session or cardio class as completed station work.
+      // New rule: name regex (hyrox/mixed session/roxfit) OR activity_type === 'HIIT'
+      // (the most HYROX-shaped of the buckets). Other types fall through to
+      // cross-training and don't pollute weeklyActualMTL.
+      const isHyrox = s.eventType === 'hyrox';
+      const nameLooksLikeHyrox = isHyrox && /\b(hyrox|mixed\s*session|roxfit)\b/i.test(row.activity_name ?? '');
+      const isHyroxStationType = isHyrox && (
+        nameLooksLikeHyrox ||
+        row.activity_type === 'HIIT'
+      );
+
+      if (isHyroxStationType) {
+        const activityDayOfWeek = dayOfWeekFromDate(new Date(row.start_time));
+        const activityDurMin = row.duration_sec / 60;
+
+        // Find an unrated station/brick triWorkout on the same day (or ±1 day) with similar duration
+        const stationWorkouts = (wk.triWorkouts ?? []).filter((w: Workout) => {
+          if (wk.rated![w.id || w.n] !== undefined) return false;
+          const disc = (w as any).discipline as string | undefined;
+          return disc === 'station' || disc === 'brick';
+        });
+
+        let stationMatch: Workout | null = null;
+        // Prefer exact-day match, then ±1 day
+        for (const dayDelta of [0, -1, 1]) {
+          const targetDay = ((activityDayOfWeek + dayDelta + 7) % 7) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+          const candidate = stationWorkouts.find(w => {
+            if (w.dayOfWeek !== targetDay) return false;
+            const plannedDur = w.estimatedDurationMin ?? 30;
+            const ratio = activityDurMin / plannedDur;
+            return ratio >= 0.5 && ratio <= 2.0; // within 50–200% of planned duration
+          });
+          if (candidate) { stationMatch = candidate; break; }
+        }
+
+        if (stationMatch) {
+          const workoutId = stationMatch.id || stationMatch.n;
+          const rpe = deriveRPE(row, (stationMatch as any).rpe || (stationMatch as any).r || 6, s.maxHR, s.restingHR, s.onboarding?.age);
+          wk.rated![workoutId] = rpe;
+          wk.garminMatched![row.garmin_id] = workoutId;
+
+          if (!wk.garminActuals) wk.garminActuals = {};
+          wk.garminActuals[workoutId] = {
+            garminId: row.garmin_id,
+            startTime: row.start_time,
+            distanceKm: (row.distance_m ?? 0) / 1000,
+            durationSec: row.duration_sec,
+            avgPaceSecKm: null,
+            avgHR: row.avg_hr ?? null,
+            maxHR: row.max_hr ?? null,
+            calories: row.calories ?? null,
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            hrZones: row.hrZones ?? null,
+            activityType: row.activity_type,
+            plannedType: stationMatch.t ?? null,
+            hrEffortScore: null,
+            paceAdherence: null,
+            hrDrift: null,
+            ambientTempC: null,
+            plannedDistanceKm: null,
+            elevationGainM: null,
+            workoutName: stationMatch.n,
+          };
+
+          // Accumulate ACTUAL MTL from the matched workout — weeklyMTL holds the planned target;
+          // weeklyActualMTL holds completed station/brick load *this* week only. Skip the
+          // accumulator for past-week matches (e.g. backfilled historical activities)
+          // to avoid corrupting the current-week display.
+          const plannedMTL = (stationMatch as any).musculoTendonLoad as number | undefined;
+          if (plannedMTL && plannedMTL > 0 && s.hyroxConfig && weekIdx === s.w) {
+            s.hyroxConfig.weeklyActualMTL = (s.hyroxConfig.weeklyActualMTL ?? 0) + plannedMTL;
+          }
+
+          // HYROX activity-parser pass: if the activity has lap data (kmSplits already
+          // imported, full Garmin laps separately), try to decompose into per-station
+          // times and update calibrated benchmarks on PB. Best-effort, silent on failure.
+          if (s.hyroxConfig && nameLooksLikeHyrox) {
+            // We don't yet have GarminLap[] on row — just kmSplits. Schedule a follow-up
+            // import once full lap data lands; for now use the name signal alone to flag
+            // the activity for the activity-detail page to surface a "parse this" CTA.
+            (wk.garminActuals[workoutId] as any).hyroxParserHint = 'name-detected';
+          }
+
+          // Signal B TSS (no runSpec discount — station work is primary load in HYROX)
+          const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+          const rawTSS = (rawITrimp != null && rawITrimp > 0)
+            ? (rawITrimp * 100) / 15000
+            : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+          wk.actualTSS = (wk.actualTSS ?? 0) + rawTSS;
+
+          // Also store in garminPending so ActivityReview can surface it for re-rating
+          const stationPending: GarminPendingItem = {
+            garminId: row.garmin_id,
+            activityType: row.activity_type,
+            appType: 'gym',
+            startTime: row.start_time,
+            durationSec: row.duration_sec,
+            distanceM: row.distance_m ?? null,
+            avgPaceSecKm: null,
+            avgHR: row.avg_hr ?? null,
+            maxHR: row.max_hr ?? null,
+            aerobicEffect: row.aerobic_effect ?? null,
+            anaerobicEffect: row.anaerobic_effect ?? null,
+            garminRpe: row.garmin_rpe ?? null,
+            calories: row.calories ?? null,
+            iTrimp: rawITrimp,
+            hrZones: row.hrZones ?? null,
+            polyline: null,
+            kmSplits: null,
+          };
+          if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
+            wk.garminPending!.push(stationPending);
+          }
+
+          changed = true;
+          console.log(`[ActivityMatcher] HYROX: matched ${row.activity_type} (${Math.round(activityDurMin)}min) → "${stationMatch.n}" week ${weekIdx}`);
+          continue;
+        }
+
+        // No station plan match — fall through to standard non-run handling
+        // (adhoc for past weeks, pending for current week)
+        if (isPastWeek) {
+          const id = `garmin-${row.garmin_id}`;
+          const rpe = deriveRPE(row, 6, s.maxHR, s.restingHR, s.onboarding?.age);
+          addAdhocWorkout(wk, row, 'gym', id, rpe);
+          wk.garminMatched![row.garmin_id] = id;
+          if (!wk.garminActuals) wk.garminActuals = {};
+          if (!wk.garminActuals[id]) {
+            wk.garminActuals[id] = {
+              garminId: row.garmin_id,
+              startTime: row.start_time,
+              distanceKm: (row.distance_m ?? 0) / 1000,
+              durationSec: row.duration_sec,
+              avgPaceSecKm: null,
+              avgHR: row.avg_hr ?? null,
+              maxHR: row.max_hr ?? null,
+              calories: row.calories ?? null,
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+              hrZones: row.hrZones ?? null,
+              displayName: formatActivityType(row.activity_type),
+              activityType: row.activity_type,
+              polyline: null,
+              kmSplits: null,
+              elevationGainM: null,
+              averageWatts: null,
+              normalizedPowerW: null,
+              maxWatts: null,
+              deviceWatts: null,
+              kilojoules: null,
+            };
+          }
+          changed = true;
+          console.log(`[ActivityMatcher] HYROX: unmatched station ${row.activity_type} logged as adhoc (week ${weekIdx})`);
+          continue;
+        } else {
+          const item: GarminPendingItem = {
+            garminId: row.garmin_id,
+            activityType: row.activity_type,
+            appType: 'gym',
+            startTime: row.start_time,
+            durationSec: row.duration_sec,
+            distanceM: row.distance_m ?? null,
+            avgPaceSecKm: null,
+            avgHR: row.avg_hr ?? null,
+            maxHR: row.max_hr ?? null,
+            aerobicEffect: row.aerobic_effect ?? null,
+            anaerobicEffect: row.anaerobic_effect ?? null,
+            garminRpe: row.garmin_rpe ?? null,
+            calories: row.calories ?? null,
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            hrZones: row.hrZones ?? null,
+            polyline: null,
+            kmSplits: null,
+          };
+          if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
+            wk.garminPending!.push(item);
+          }
+          wk.garminMatched![row.garmin_id] = '__pending__';
+          allPending.push(item);
+          changed = true;
+          console.log(`[ActivityMatcher] HYROX: unmatched station ${row.activity_type} queued for review (week ${weekIdx})`);
+          continue;
+        }
+      }
+
+      // HYROX mode: match running activities against planned run triWorkouts.
+      // The regular running engine's regenerated workouts don't apply here.
+      if (isHyrox && appType === 'run') {
+        const activityDayOfWeek = dayOfWeekFromDate(new Date(row.start_time));
+        const activityDurMin = row.duration_sec / 60;
+        const activityDistKm = (row.distance_m ?? 0) / 1000;
+
+        const runWorkouts = (wk.triWorkouts ?? []).filter((w: Workout) => {
+          if (wk.rated![w.id || w.n] !== undefined) return false;
+          const disc = (w as any).discipline as string | undefined;
+          return disc === 'run' || !disc; // disc may be absent on older workouts
+        });
+
+        let hyroxRunMatch: Workout | null = null;
+        for (const dayDelta of [0, -1, 1]) {
+          const targetDay = ((activityDayOfWeek + dayDelta + 7) % 7) as 0 | 1 | 2 | 3 | 4 | 5 | 6;
+          const candidate = runWorkouts.find(w => {
+            if (w.dayOfWeek !== targetDay) return false;
+            // Match by duration (within 30%) or distance (within 25%)
+            const plannedDur = w.estimatedDurationMin ?? 30;
+            const durOk = activityDurMin / plannedDur >= 0.7 && activityDurMin / plannedDur <= 1.3;
+            if (activityDistKm > 0) {
+              const parsedKm = parseDistanceKm(w.d ?? '') ?? 0;
+              if (parsedKm > 0) {
+                const distRatio = activityDistKm / parsedKm;
+                return distRatio >= 0.75 && distRatio <= 1.25;
+              }
+            }
+            return durOk;
+          });
+          if (candidate) { hyroxRunMatch = candidate; break; }
+        }
+
+        if (hyroxRunMatch) {
+          const workoutId = hyroxRunMatch.id || hyroxRunMatch.n;
+          const rpe = deriveRPE(row, (hyroxRunMatch as any).rpe || (hyroxRunMatch as any).r || 5, s.maxHR, s.restingHR, s.onboarding?.age);
+          wk.rated![workoutId] = rpe;
+          wk.garminMatched![row.garmin_id] = workoutId;
+
+          if (!wk.garminActuals) wk.garminActuals = {};
+          wk.garminActuals[workoutId] = {
+            garminId: row.garmin_id,
+            startTime: row.start_time,
+            distanceKm: activityDistKm,
+            durationSec: row.duration_sec,
+            avgPaceSecKm: row.avg_pace_sec_km ?? null,
+            avgHR: row.avg_hr ?? null,
+            maxHR: row.max_hr ?? null,
+            calories: row.calories ?? null,
+            aerobicEffect: row.aerobic_effect ?? null,
+            anaerobicEffect: row.anaerobic_effect ?? null,
+            workoutName: hyroxRunMatch.n,
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
+            hrZones: row.hrZones ?? null,
+            activityType: row.activity_type,
+            plannedType: hyroxRunMatch.t ?? null,
+            hrEffortScore: getHREffort(row.avg_hr, hyroxRunMatch.t, s),
+            paceAdherence: getPaceAdherence(row.avg_pace_sec_km, hyroxRunMatch.t, s),
+            hrDrift: row.hrDrift ?? null,
+            ambientTempC: row.ambientTempC ?? null,
+            plannedDistanceKm: parseDistanceKm(hyroxRunMatch.d ?? '') ?? null,
+            elevationGainM: row.elevationGainM ?? null,
+          };
+
+          const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
+          const runTSS = (runITrimp != null && runITrimp > 0)
+            ? (runITrimp * 100) / 15000
+            : activityDurMin * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
+          wk.actualTSS = (wk.actualTSS ?? 0) + runTSS;
+
+          const pendingItem: GarminPendingItem = {
+            garminId: row.garmin_id,
+            activityType: row.activity_type,
+            appType: 'run',
+            startTime: row.start_time,
+            durationSec: row.duration_sec,
+            distanceM: row.distance_m ?? null,
+            avgPaceSecKm: row.avg_pace_sec_km ?? null,
+            avgHR: row.avg_hr ?? null,
+            maxHR: row.max_hr ?? null,
+            aerobicEffect: row.aerobic_effect ?? null,
+            anaerobicEffect: row.anaerobic_effect ?? null,
+            garminRpe: row.garmin_rpe ?? null,
+            calories: row.calories ?? null,
+            iTrimp: runITrimp,
+            hrZones: row.hrZones ?? null,
+            polyline: row.polyline ?? null,
+            kmSplits: row.kmSplits ?? null,
+          };
+          if (!wk.garminPending!.some(p => p.garminId === row.garmin_id)) {
+            wk.garminPending!.push(pendingItem);
+          }
+
+          changed = true;
+          console.log(`[ActivityMatcher] HYROX: matched run ${activityDistKm.toFixed(1)}km → "${hyroxRunMatch.n}" week ${weekIdx}`);
+          continue;
+        }
+        // Unmatched HYROX run: fall through to standard run handling below (adhoc/pending)
+      }
+
       if (appType !== 'run') {
         if (isPastWeek) {
           // Past week: log cross-training as adhoc directly — the plan for that week
@@ -906,7 +1230,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
               avgHR: row.avg_hr,
               maxHR: row.max_hr,
               calories: row.calories,
-              iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+              iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
               hrZones: row.hrZones ?? null,
               displayName: formatActivityType(row.activity_type),
               activityType: row.activity_type,
@@ -938,7 +1262,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             anaerobicEffect: row.anaerobic_effect ?? null,
             garminRpe: row.garmin_rpe ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
             hrZones: row.hrZones ?? null,
             polyline: row.polyline ?? null,
             kmSplits: row.kmSplits ?? null,
@@ -990,7 +1314,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           aerobicEffect: row.aerobic_effect ?? null,
           anaerobicEffect: row.anaerobic_effect ?? null,
           workoutName: match.workoutName || match.matchedWorkout?.n || undefined,
-          iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
           hrZones: row.hrZones ?? null,
           activityType: row.activity_type ?? (appType === 'run' ? 'RUNNING' : appType === 'gym' ? 'STRENGTH_TRAINING' : null),
           plannedType: match.matchedWorkout?.t ?? null,
@@ -1004,7 +1328,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         wk.garminActuals[match.workoutId] = actual;
 
         // Compute TSS-calibrated Training Load for this matched run
-        const runITrimp = resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex);
+        const runITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
         const runTL = (runITrimp != null && runITrimp > 0)
           ? (runITrimp * 100) / 15000
           : (actual.durationSec / 60) * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
@@ -1065,7 +1389,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           anaerobicEffect: row.anaerobic_effect ?? null,
           garminRpe: row.garmin_rpe ?? null,
           calories: row.calories ?? null,
-          iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+          iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
           hrZones: row.hrZones ?? null,
           polyline: row.polyline ?? null,
           kmSplits: row.kmSplits ?? null,
@@ -1104,7 +1428,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             anaerobicEffect: row.anaerobic_effect ?? null,
             garminRpe: row.garmin_rpe ?? null,
             calories: row.calories ?? null,
-            iTrimp: resolveITrimp(row, s.restingHR, s.maxHR, s.biologicalSex),
+            iTrimp: resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex),
             hrZones: row.hrZones ?? null,
             polyline: row.polyline ?? null,
             kmSplits: row.kmSplits ?? null,
@@ -1283,7 +1607,8 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
  */
 export function healMissingITrimp(): boolean {
   const s = getMutableState();
-  if (!s.restingHR || !s.maxHR) return false;
+  const rhrBaseline = computeRollingRestingHR(s.physiologyHistory, s.restingHR);
+  if (!rhrBaseline || !s.maxHR) return false;
   const sex = s.biologicalSex === 'male' || s.biologicalSex === 'female' ? s.biologicalSex : undefined;
   let changed = false;
   for (const wk of s.wks ?? []) {
@@ -1291,7 +1616,7 @@ export function healMissingITrimp(): boolean {
     for (const actual of Object.values(wk.garminActuals ?? {})) {
       if (actual.iTrimp != null && actual.iTrimp > 0) continue;
       if (!actual.avgHR || !actual.durationSec) continue;
-      const computed = calculateITrimpFromSummary(actual.avgHR, actual.durationSec, s.restingHR, s.maxHR, sex);
+      const computed = calculateITrimpFromSummary(actual.avgHR, actual.durationSec, rhrBaseline, s.maxHR, sex);
       if (computed != null && computed > 0) {
         actual.iTrimp = computed;
         changed = true;
@@ -1304,7 +1629,7 @@ export function healMissingITrimp(): boolean {
       const avgHR: number | null = wa.garminAvgHR ?? null;
       const durationSec: number = (wa.garminDurationMin ?? 0) * 60;
       if (!avgHR || !durationSec) continue;
-      const computed = calculateITrimpFromSummary(avgHR, durationSec, s.restingHR, s.maxHR, sex);
+      const computed = calculateITrimpFromSummary(avgHR, durationSec, rhrBaseline, s.maxHR, sex);
       if (computed != null && computed > 0) {
         wa.iTrimp = computed;
         changed = true;

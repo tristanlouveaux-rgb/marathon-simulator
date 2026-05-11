@@ -21,6 +21,8 @@ import { render, log } from './renderer';
 import { showSuggestionModal } from './suggestion-modal';
 import { ft, fp } from '@/utils';
 import { calculateLiveForecast } from '@/calculations/predictions';
+import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 import { getEffectiveVdot } from '@/calculations/effective-vdot';
 import { recordCapacityTest, hasPassedRequiredCapacityTests, applyPhaseProgression } from '@/injury/engine';
@@ -33,6 +35,7 @@ import {
 } from '@/calculations/lt-estimator';
 import { openActivityReReview } from '@/ui/activity-review';
 import { loadGpsRecording } from '@/gps/persistence';
+import { scoreRepAdherence, repAdherenceToEffortDev } from '@/calculations/rep-adherence';
 
 
 // Drag and drop state
@@ -318,6 +321,7 @@ export function init(): void {
   s.lt = ltTotalSec;
   s.ltPace = ltTotalSec;
   s.vo2 = vo2;
+  s.vo2UpdatedAt = undefined; // user/wizard source — preserve "no timestamp = fresh" policy
   s.typ = typ.charAt(0).toUpperCase() + typ.slice(1) as any;
   s.b = b;
   s.pac = pac;
@@ -351,7 +355,14 @@ export function init(): void {
   s.initialBaseline = blendedTime;
   s.currentFitness = blendedTime;
 
-  // Calculate expected final via centralized forecast model
+  // Calculate expected final via centralized forecast model. Anchor to the
+  // blended view of today's fitness so the forecast and "Current Race Estimate"
+  // surfaces stay on the same scale (single canonical prediction model). Feed
+  // the plan-prescribed mean volume — the horizon model is predicting gain
+  // FROM the plan, so the dose input should reflect what the plan will deliver
+  // (sessions × ref-km-per-session × build-phase factor), not the user's
+  // pre-plan maintenance volume.
+  const planMeanKm = getPlanPrescribedMeanWeeklyKm(s.epw, s.rd);
   const { forecastVdot, forecastTime } = calculateLiveForecast({
     currentVdot: s.v,
     targetDistance: s.rd,
@@ -359,13 +370,15 @@ export function init(): void {
     sessionsPerWeek: s.epw,
     runnerType: s.typ as any,
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-    weeklyVolumeKm: s.wkm,
+    weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,
     adaptationRatio: s.adaptationRatio,
+    blendedAnchorSec: blendedTime,
   });
   s.expectedFinal = forecastVdot;
   s.forecastTime = forecastTime;
+  refreshForecastCourseFactors(s);
 
   // Show UI panels
   document.getElementById('ctrl')?.classList.remove('hidden');
@@ -576,9 +589,14 @@ export function rate(
   const currentVDOT = getEffectiveVdot(s);
   s.pac = gp(currentVDOT, s.lt);
 
-  // Update Current prediction (what you'd race today)
+  // Anchor "current fitness" and "forecast" to the blended race-prediction time
+  // (single canonical model). The horizon gain is converted to a seconds delta
+  // via Daniels' table on both ends and applied to the blended anchor, so all
+  // race-time surfaces stay on the same scale.
   const raceDistKm = rdKm(s.rd);
-  s.currentFitness = tv(currentVDOT, raceDistKm);
+  const bareToday = tv(currentVDOT, raceDistKm);
+  const anchor = s.blendedRaceTimeSec ?? s.initialBaseline ?? bareToday;
+  s.currentFitness = anchor;
 
   // Update Forecast (end-of-plan projection)
   const totalExpectedGain = s.expectedFinal - s.iv;
@@ -586,7 +604,10 @@ export function rate(
   const remainingGain = totalExpectedGain > 0
     ? totalExpectedGain * ((s.tw - weeksCompleted) / s.tw)
     : 0;
-  s.forecastTime = tv(currentVDOT + remainingGain, raceDistKm);
+  const bareForecast = tv(currentVDOT + remainingGain, raceDistKm);
+  const horizonDeltaSec = bareToday - bareForecast;
+  s.forecastTime = anchor - horizonDeltaSec;
+  refreshForecastCourseFactors(s);
 
   // Record VDOT snapshot whenever RPE changes VDOT
   if (clampedWch !== 0) recordVdotHistory(s);
@@ -761,7 +782,8 @@ export async function next(): Promise<void> {
     wk.ph, s.rw, s.rd, s.typ, previousSkips, s.commuteConfig,
     injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
     undefined, undefined, s.w, s.tw, undefined, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Completion gating: count only unrated RUN workouts (exclude gym/cross/rest)
@@ -788,7 +810,8 @@ export async function next(): Promise<void> {
         nextWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig,
         injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
         undefined, undefined, s.w + 1, s.tw, undefined, s.gs,
-        getTrailingEffortScore(s.wks, s.w + 1), nextWk.scheduledAcwrStatus,
+        getTrailingEffortScore(s.wks, s.w + 1), nextWk.scheduledAcwrStatus, undefined,
+        s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
       );
       nextWeekHardCount = nextWeekWorkouts.filter(w => HARD_TYPES.includes(w.t)).length;
     }
@@ -896,7 +919,8 @@ export async function next(): Promise<void> {
       wk.ph, s.rw, s.rd, s.typ, prevSkips, s.commuteConfig,
       injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
       undefined, undefined, s.w, s.tw, undefined, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     );
     // Apply mods so replaced workouts count as 0km
     if (wk.workoutMods) {
@@ -945,17 +969,18 @@ export async function next(): Promise<void> {
     let totalDev = 0, ratedCount = 0;
     let rpeTotal = 0, rpeCount = 0;
     let hrTotal = 0, hrCount = 0;
-    // Include both planned workouts and adhoc runs (excess runs logged from Strava)
-    const allRunsForEffort = [
-      ...weekWos,
-      ...(wk.adhocWorkouts ?? []).filter((w: any) => w.id?.startsWith('garmin-') && !nonRunTypes.includes(w.t)),
-    ];
-    for (const wo of allRunsForEffort) {
+    // Plan-effort score is "did the user execute the planned workout harder/easier
+    // than expected". Adhoc activities (excess runs, cross-training) have no plan
+    // reference — they're tracked via load (Signal A/B) and recovery, not via this
+    // adherence signal. Only iterate planned workouts here. Mirror of the triathlon
+    // pattern in effort-multiplier.triathlon.ts:54-58.
+    for (const wo of weekWos) {
       if (nonRunTypes.includes(wo.t)) continue;
       const wId = wo.id || wo.n;
       const rating = wk.rated[wId];
       if (typeof rating !== 'number') continue;
-      const expected = wo.rpe || wo.r || 5;
+      const expected = wo.rpe ?? wo.r;
+      if (expected == null) continue;
       const rpeDev = rating - expected;
       rpeTotal += rpeDev;
       rpeCount++;
@@ -963,11 +988,32 @@ export async function next(): Promise<void> {
       // Check if this workout has an HR effort score from Strava HR data
       const actual = wk.garminActuals?.[wId];
       const hrScore = actual?.hrEffortScore;
-      if (hrScore != null) {
+
+      // Per-rep adherence (intervals only): if a rep cluster was detected
+      // AND the workout has a parseable interval target, the per-rep signal
+      // replaces the whole-session HR effort score for the objective half
+      // of the blend. Scores each rep against its target pace rather than
+      // averaging an entire session that included warmup + cooldown.
+      let perRepDev: number | null = null;
+      if (actual?.repData && actual.repData.reps.length > 0) {
+        const scored = scoreRepAdherence({
+          workout: wo,
+          actual,
+          discipline: 'run',
+          vdot: s.v,
+          ltPaceSecKm: s.ltPace ?? null,
+        });
+        if (scored) perRepDev = repAdherenceToEffortDev(scored);
+      }
+
+      if (perRepDev != null) {
+        // 60/40 RPE/per-rep — same shape as HR blend, sharper objective half.
+        totalDev += rpeDev * 0.6 + perRepDev * 0.4;
+        // Track for hrEffort summary so coach view still has signal.
+        if (hrScore != null) { hrTotal += hrScore; hrCount++; }
+      } else if (hrScore != null) {
         hrTotal += hrScore;
         hrCount++;
-        // Convert hrEffortScore to same scale as RPE deviation for legacy blend:
-        // hrScore 1.0 → 0 deviation, hrScore 1.2 → +2 deviation (overcooked)
         const hrDev = (hrScore - 1.0) * 10; // 0.1 hrScore ≈ 1 RPE point
         totalDev += rpeDev * 0.6 + hrDev * 0.4;
       } else {
@@ -1099,7 +1145,7 @@ export async function next(): Promise<void> {
   // reason on the next week so the banner appears when it's rendered.
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
 
   s.w++;
 
@@ -1499,7 +1545,7 @@ export function updateFitness(): void {
     s.lt = newLT;
     s.ltPace = newLT;
   }
-  if (newVO2val) s.vo2 = newVO2val;
+  if (newVO2val) { s.vo2 = newVO2val; s.vo2UpdatedAt = undefined; }
   s.adaptationRatio = trackingState.currentAdaptationRatio;
 
   // Store tracking state
@@ -1692,13 +1738,14 @@ export function logActivity(): void {
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, activityWeek, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, activityWeek), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, activityWeek), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Compute ACWR + floor for floor-aware reductions
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const _acwr = computeACWR(s.wks, activityWeek, _tier, s.ctlBaseline ?? undefined, s.planStartDate, _atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const _floorKm = computeRunningFloorKm(s.pac?.m, activityWeek, s.tw ?? 16, wk.ph);
 
   // -----------------------------------------------------------------------
@@ -2356,7 +2403,8 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Re-apply existing workoutMods so we don't double-modify
@@ -2592,7 +2640,7 @@ export function maybeInitKmNudge(): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks, s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   if (acwr.status !== 'safe') return;
 
   const floorKm = computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph);

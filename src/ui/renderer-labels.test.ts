@@ -23,7 +23,7 @@ function extractActivityName(modReason: string): string {
 /** Detail banner label for replaced / reduced workouts. */
 function formatBannerLabel(modReason: string, isReplaced: boolean): string {
   const activityName = extractActivityName(modReason);
-  return isReplaced ? `Replaced by ${activityName}` : `Reduced — ${activityName}`;
+  return isReplaced ? `Replaced by ${activityName}` : `Reduced: ${activityName}`;
 }
 
 /** Calendar compact card status label appended to workout name. */
@@ -75,20 +75,21 @@ describe('formatBannerLabel', () => {
   });
 
   it('formats a reduced workout with activity name', () => {
-    expect(formatBannerLabel('Garmin: Tennis (45min)', false)).toBe('Reduced — Tennis (45min)');
+    expect(formatBannerLabel('Garmin: Tennis (45min)', false)).toBe('Reduced: Tennis (45min)');
   });
 
-  it('formats a replaced workout — multi-activity', () => {
+  it('formats a replaced workout, multi-activity', () => {
     expect(formatBannerLabel('Garmin: 2 cross-training activities', true)).toBe('Replaced by 2 cross-training activities');
   });
 
-  it('formats a reduced workout — cycling', () => {
-    expect(formatBannerLabel('Garmin: Cycling 1h', false)).toBe('Reduced — Cycling 1h');
+  it('formats a reduced workout, cycling', () => {
+    expect(formatBannerLabel('Garmin: Cycling 1h', false)).toBe('Reduced: Cycling 1h');
   });
 
-  it('uses em-dash (—) not hyphen for reduced label', () => {
+  it('uses colon (not hyphen or em-dash) for reduced label', () => {
     const label = formatBannerLabel('Garmin: Swimming', false);
-    expect(label).toContain('—');
+    expect(label).toContain(':');
+    expect(label).not.toMatch(/Reduced\s*—/);
     expect(label).not.toMatch(/Reduced\s*-\s/);
   });
 

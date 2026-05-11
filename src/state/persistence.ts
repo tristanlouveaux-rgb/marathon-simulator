@@ -7,6 +7,7 @@ import { setState, setCrossActivities, getState, getCrossActivities, getDefaultS
 import { ft } from '@/utils/format';
 import { clearAllGpsData } from '@/gps/persistence';
 import { getWeeklyExcess, computePlannedSignalB } from '@/calculations/fitness-model';
+import { computePlanPhases } from '@/workouts/phases';
 
 const STATE_KEY = 'marathonSimulatorState';
 const CROSS_KEY = 'marathonSimulatorCross';
@@ -92,6 +93,25 @@ function migrateState(loaded: SimulatorState): SimulatorState {
     if (changedCount > 0) {
       console.log(`  Fixed ${changedCount} week phases`);
     }
+  }
+
+  // Migration: drop the legacy >16w block-cycle prefix.
+  // Plans that were initialised under the old model have `racePhaseStart` set and
+  // weeks 1..(tw-16) follow a base/build/peak/taper rotation. Re-derive phases
+  // from computePlanPhases so the visualisation and engine are consistent.
+  if (!loaded.continuousMode && loaded.wks && loaded.wks.length > 0 && loaded.racePhaseStart) {
+    console.log('Migrating from racePhaseStart block-cycle prefix to single coach-style arc');
+    const newPhases = computePlanPhases(loaded.wks.length);
+    for (let i = 0; i < loaded.wks.length; i++) {
+      loaded.wks[i].ph = newPhases[i].ph;
+      if (newPhases[i].checkpoint) {
+        loaded.wks[i].checkpoint = true;
+      } else if (loaded.wks[i].checkpoint) {
+        delete loaded.wks[i].checkpoint;
+      }
+    }
+    loaded.racePhaseStart = undefined;
+    console.log(`  Re-derived ${loaded.wks.length} week phases; cleared racePhaseStart`);
   }
 
   // Migration: derive planStartDate for existing users who don't have it yet.

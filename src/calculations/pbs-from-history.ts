@@ -66,8 +66,10 @@ export interface PBWithSource {
   timeSec: number;
   /** Source activity id (e.g. `strava-1234567`). */
   activityId: string;
-  /** Activity start date (ISO string). */
-  startDate: string;
+  /** Activity start date (ISO string). Undefined when neither the best_effort
+   *  entry nor the activity row had a usable start date — callers must handle
+   *  this (e.g. PB-recency penalty falls back to "no recency boost"). */
+  startDate?: string;
   /** Activity name as shown on Strava (e.g. "Berlin Marathon"). */
   activityName?: string;
 }
@@ -105,7 +107,12 @@ export function readPBsFromHistory(activities: ActivityWithBestEfforts[]): PBsWi
 
     const activityId = readField<string>(act, 'garminId', 'garmin_id');
     if (!activityId) continue;
-    const startDate = readField<string>(act, 'startTime', 'start_time') ?? '';
+    // Return undefined (not empty string) for missing start dates so callers
+    // can distinguish "no date available" from "date present but empty". Empty
+    // string was being silently swallowed by `if (date)` truthiness checks
+    // downstream, hiding a real data-shape bug from view.
+    const rawStart = readField<string>(act, 'startTime', 'start_time');
+    const startDate: string | undefined = (rawStart && rawStart.length > 0) ? rawStart : undefined;
     const activityName = readField<string>(act, 'activityName', 'activity_name') ?? undefined;
 
     for (const rawEntry of beRaw as RawBestEffort[]) {
@@ -118,10 +125,13 @@ export function readPBsFromHistory(activities: ActivityWithBestEfforts[]): PBsWi
       const field = DISTANCE_TO_FIELD[dist];
       const current = result[field];
       if (!current || t < current.timeSec) {
+        // Prefer the best_effort entry's own start_date (Strava provides this
+        // per effort), fall back to the activity's start_time.
+        const effStart = rawEntry.start_date && rawEntry.start_date.length > 0 ? rawEntry.start_date : undefined;
         result[field] = {
           timeSec: t,
           activityId,
-          startDate: rawEntry.start_date ?? startDate,
+          startDate: effStart ?? startDate,
           activityName,
         };
       }

@@ -118,11 +118,10 @@ function getModalHTML(injuryState: InjuryState): string {
           <input
             type="range"
             id="injury-pain"
+            class="m-slider-glass"
             min="1"
             max="10"
             value="${Math.max(1, injuryState.currentPain)}"
-            class="w-full h-2 rounded-lg appearance-none cursor-pointer"
-            style="background:rgba(0,0,0,0.08)"
           />
           <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
             <span>Mild</span>
@@ -513,11 +512,10 @@ export function openReturnToRunGateModal(): void {
         <input
           type="range"
           id="gate-pain-slider"
+          class="m-slider-glass"
           min="0"
           max="10"
           value="${injuryState.currentPain || 2}"
-          class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-          style="background:rgba(0,0,0,0.08)"
         />
         <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
           <span>No pain</span>
@@ -734,11 +732,10 @@ export function openGraduatedReturnCheckIn(): void {
         <input
           type="range"
           id="grad-pain-slider"
+          class="m-slider-glass"
           min="0"
           max="10"
           value="${injuryState.currentPain || 0}"
-          class="w-full h-2 rounded-lg appearance-none cursor-pointer accent-emerald-500"
-          style="background:rgba(0,0,0,0.08)"
         />
         <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
           <span>No pain</span>

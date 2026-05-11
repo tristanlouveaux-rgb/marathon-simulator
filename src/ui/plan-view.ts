@@ -16,7 +16,7 @@ import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisp
 import { openCheckinOverlay } from './checkin-overlay';
 import { applyIllnessMods, clearIllness, openIllnessModal } from './illness-modal';
 import { applyHolidayMods, buildHolidayBannerPlan, clearHoliday, cancelScheduledHoliday, openHolidayModal, isWeekInHoliday, getHolidayDaysForWeek, applyBridgeMods_renderTime } from './holiday-modal';
-import { openSessionGenerator } from './session-generator';
+import { openSessionGenerator, openVibesScienceModal } from './session-generator';
 import { openBenchmarkOverlay, maybeTriggerBenchmarkOverlay } from './benchmark-overlay';
 import { getReturnToRunLevelLabel, recordMorningPain } from '@/injury/engine';
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
@@ -27,7 +27,7 @@ import { normalizeSport } from '@/cross-training/activities';
 import { formatActivityType, getHREffort } from '@/calculations/activity-matcher';
 import { formatKm, fmtDesc, formatPace, ft } from '@/utils/format';
 import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-load-card';
-import { showRunBreakdownSheet, buildProgressBars } from './home-view';
+import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
 import type { MorningPainResponse } from '@/types/injury';
@@ -35,6 +35,7 @@ import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
 import type { RecoveryEntry, RecoveryLevel } from '@/recovery/engine';
 import { showWeekDebrief, shouldShowSundayDebrief } from '@/ui/week-debrief';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 
 // ─── Module state ────────────────────────────────────────────────────────────
 
@@ -99,8 +100,8 @@ function navigateTab(tab: TabId): void {
   _viewWeek = null;
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
-  } else if (tab === 'record') {
-    import('./record-view').then(({ renderRecordView }) => renderRecordView());
+  } else if (tab === 'forecast') {
+    import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   } else if (tab === 'stats') {
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   } else if (tab === 'account') {
@@ -157,7 +158,120 @@ const TODAY_ACCENT = '#C4553A';
 
 // Shared CARD shadow system for banners / notice cards on the Plan page.
 // Matches the aesthetic of Rolling Load / Load-Taper / Sleep.
-const PLAN_CARD_STYLE = 'background:var(--c-surface);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)';
+const PLAN_CARD_STYLE = 'background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)';
+
+// Hero name for the running plan, mirroring the triathlon view shape
+// ("Tristan's 70.3"). Race name takes precedence; distance label is the
+// fallback so unnamed targets still feel personal ("Tristan's 5k").
+function getDistanceLabel(dist: string | null | undefined): string | null {
+  if (!dist) return null;
+  if (dist === '5k') return '5k';
+  if (dist === '10k') return '10k';
+  if (dist === 'half') return 'Half Marathon';
+  if (dist === 'marathon') return 'Marathon';
+  return null;
+}
+
+function getRunnerHeroName(s: SimulatorState): string {
+  const firstName = (s.onboarding?.name || '').split(' ')[0]?.trim();
+  const possessive = firstName ? `${firstName}'s` : 'Your';
+  const raceName = (s.onboarding as any)?.selectedRace?.name?.toString().trim();
+  if (raceName) return `${possessive} ${raceName} Plan`;
+  const distLabel = getDistanceLabel(s.onboarding?.raceDistance ?? null);
+  if (distLabel) return `${possessive} ${distLabel}`;
+  return `${possessive} Running Plan`;
+}
+
+function daysUntilRace(iso: string | null | undefined): number {
+  if (!iso) return 0;
+  const target = new Date(iso).getTime();
+  if (!Number.isFinite(target)) return 0;
+  const now = new Date().setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((target - now) / 86400000));
+}
+
+function escapeHtmlPlan(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Count completed sessions in a week — mirrors the dedup logic in
+// home-view.buildProgressBars so both surfaces report the same number.
+// A "done" session is either a synced activity (Garmin/Strava) matched to a
+// slot, or an unsynced manual workout that has been rated (non-skip).
+function countDoneSessionsForWeek(wk: any): number {
+  if (!wk) return 0;
+  const doneIds = new Set<string>();
+  const actualsKeys = new Set<string>();
+  for (const [key, act] of Object.entries(wk.garminActuals || {})) {
+    const id = (act as any)?.garminId || key;
+    if (id) doneIds.add(id);
+    actualsKeys.add(key);
+  }
+  for (const w of (wk.adhocWorkouts || []) as any[]) {
+    if (w.id && actualsKeys.has(w.id)) continue;
+    const isSynced = w.id?.startsWith('garmin-') || w.id?.startsWith('strava-');
+    if (isSynced) doneIds.add(w.id);
+    else if (wk.rated?.[w.id] && wk.rated[w.id] !== 'skip') doneIds.add(w.id);
+  }
+  return doneIds.size;
+}
+
+// 3-column weekly summary card. Mirrors the triathlon Plan's summary strip
+// (Hours / Sessions / Week load) but adapted for running: Sessions / Distance
+// / Training Load. When `showActuals` is true the cell shows "actual / planned";
+// when false (future weeks) it shows planned only. Whole card is tappable —
+// `#plan-week-summary-card` is wired in `wirePlanHandlers` to open Load & Taper.
+function buildPlanWeekSummaryCard(args: {
+  plannedSessions: number;
+  actualSessions: number;
+  plannedKm: number;
+  actualKm: number;
+  plannedTSS: number;
+  actualTSS: number;
+  showActuals: boolean;
+  unitPref: 'km' | 'mi';
+}): string {
+  const { plannedSessions, actualSessions, plannedKm, actualKm, plannedTSS, actualTSS, showActuals, unitPref } = args;
+
+  const cellLabel = (text: string) =>
+    `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">${text}</div>`;
+
+  const cellValue = (mainText: string, suffix: string = '') =>
+    `<div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums;margin-top:2px">${mainText}${suffix ? `<span style="font-size:11px;color:var(--c-faint);font-weight:500;margin-left:2px">${suffix}</span>` : ''}</div>`;
+
+  const sessionsValue = showActuals
+    ? `${actualSessions} <span style="color:var(--c-faint);font-weight:400">/ ${plannedSessions}</span>`
+    : `${plannedSessions}`;
+  const kmValue = showActuals
+    ? `${formatKm(actualKm, unitPref).replace(/\s?(km|mi)$/, '')} <span style="color:var(--c-faint);font-weight:400">/ ${formatKm(plannedKm, unitPref).replace(/\s?(km|mi)$/, '')}</span>`
+    : `${formatKm(plannedKm, unitPref).replace(/\s?(km|mi)$/, '')}`;
+  const tssValue = showActuals
+    ? `${Math.round(actualTSS)} <span style="color:var(--c-faint);font-weight:400">/ ${Math.round(plannedTSS)}</span>`
+    : `${Math.round(plannedTSS)}`;
+
+  const kmUnit = unitPref === 'mi' ? 'mi' : 'km';
+
+  return `
+    <div style="padding:16px 20px 0">
+      <button id="plan-week-summary-card" style="all:unset;display:block;width:100%;cursor:pointer;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+        <div style="display:flex;gap:16px;justify-content:space-between">
+          <div style="flex:1;text-align:center">
+            ${cellLabel('Sessions')}
+            ${cellValue(sessionsValue)}
+          </div>
+          <div style="flex:1;text-align:center;border-left:1px solid rgba(0,0,0,0.06);border-right:1px solid rgba(0,0,0,0.06)">
+            ${cellLabel('Distance')}
+            ${cellValue(kmValue, kmUnit)}
+          </div>
+          <div style="flex:1;text-align:center">
+            ${cellLabel('Training Load')}
+            ${cellValue(tssValue, 'TSS')}
+          </div>
+        </div>
+      </button>
+    </div>
+  `;
+}
 
 function phaseBadge(ph: string): string {
   if (!ph) return '';
@@ -248,7 +362,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     const newDistance = timingMod?.newDistance ?? w.d ?? '';
     const tssNote = tssYesterday ? ` (${tssYesterday} TSS yesterday)` : '';
     html += `<div style="padding:9px 12px;background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.25);border-radius:var(--r-card);margin-bottom:10px">`;
-    html += `<div style="font-size:11px;font-weight:600;color:#F97316;margin-bottom:3px">Suggestion — hard session yesterday${tssNote}</div>`;
+    html += `<div style="font-size:11px;font-weight:600;color:#F97316;margin-bottom:3px">Suggestion: hard session yesterday${tssNote}</div>`;
     html += `<div style="font-size:12px;color:var(--c-muted);margin-bottom:8px">You trained hard yesterday. Consider ${suggestionLabel ?? 'an easier effort'} today, or move this session to a different day for full intensity.</div>`;
     if (suggestedType) {
       html += `<button class="plan-timing-accept" data-workout-name="${escapeHtml(w.n)}" data-day="${w.dayOfWeek ?? ''}" data-new-type="${escapeHtml(suggestedType)}" data-new-distance="${escapeHtml(newDistance)}" style="font-size:12px;font-weight:600;color:#F97316;background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:6px 12px;cursor:pointer">Apply: ${suggestionLabel ?? suggestedType} ↓</button>`;
@@ -364,12 +478,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     html += `</div>`;
   }
 
-  // ── Workout description ───────────────────────────────────────────────────
-  if (w.d && w.d.trim()) {
-    const descHtml = escapeHtml(fmtDesc(w.d, _s.unitPref ?? 'km')).replace(/\n/g, '<br>');
-    // Note: fmtDesc handles both km distances and M:SS/km pace strings
-    html += `<div style="font-size:13px;color:var(--c-muted);line-height:1.6;margin-bottom:14px">${descHtml}</div>`;
-  }
+  // Description is now always visible in the card body — not repeated here.
 
   // ── Planned vs Actual load ────────────────────────────────────────────────
   if (w.t && w.t !== 'rest') {
@@ -417,8 +526,8 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       if (_hrTarget) {
         const hasStructure = (w.d || '').toLowerCase().includes('warm up');
         const hrLine = hasStructure
-          ? `Expected HR — ${_hrTarget.zone} during effort · ${_hrTarget.min}–${_hrTarget.max} bpm`
-          : `Expected HR — ${_hrTarget.zone} · ${_hrTarget.min}–${_hrTarget.max} bpm`;
+          ? `Expected HR: ${_hrTarget.zone} during effort · ${_hrTarget.min}–${_hrTarget.max} bpm`
+          : `Expected HR: ${_hrTarget.zone} · ${_hrTarget.min}–${_hrTarget.max} bpm`;
         html += `<div style="font-size:11px;color:var(--c-muted);margin-top:3px">${hrLine}</div>`;
       }
       html += `</div>`;
@@ -711,6 +820,21 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
 
 // ─── Workout cards ────────────────────────────────────────────────────────────
 
+function runWorkoutTypeBadgeLabel(t: string, n: string): string {
+  const type = (t || '').toLowerCase();
+  if (type === 'easy' || type === 'recovery') return 'Easy';
+  if (type === 'long') return 'Long';
+  if (type === 'threshold' || type === 'tempo') return 'Threshold';
+  if (type === 'vo2' || type === 'intervals') return 'VO2';
+  if (type === 'marathon_pace' || type === 'race_pace') return 'MP';
+  if (type === 'fartlek') return 'Fartlek';
+  if (type === 'progressive' || (n || '').toLowerCase().includes('progression')) return 'Prog';
+  if (type === 'gym' || type === 'strength') return 'Gym';
+  if (type === 'cross' || type === 'cross_training') return 'Cross';
+  if (type === 'mixed') return 'Mixed';
+  return 'Run';
+}
+
 function buildWorkoutCards(
   s: SimulatorState,
   workouts: any[],
@@ -773,12 +897,15 @@ function buildWorkoutCards(
     });
 
     if (dayWorkouts.length === 0) {
-      // Rest day row — also a drop target
+      // Rest day — same row shape as triathlon Plan: day label + horizontal
+      // line + "Rest" tag. No outer card, no border-top — the day is just
+      // a header strip, matching the rhythm of workout days.
       dayFirstCardEmitted.add(dayIdx);
       cards.push(`
-        <div id="plan-day-${dayIdx}" class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:15px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
-          <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);width:36px">${DAY_SHORT[dayIdx]}</span>
-          <span class="plan-drop-label" style="font-size:12px;color:var(--c-faint);letter-spacing:0.02em">Rest</span>
+        <div id="plan-day-${dayIdx}" class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;gap:10px;padding:${dayIdx === 0 ? '4' : '20'}px 4px 8px;transition:background 0.15s;border-radius:6px">
+          <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:36px">${DAY_SHORT[dayIdx]}</span>
+          <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
+          <span class="plan-drop-label" style="font-size:11px;color:var(--c-faint);font-weight:500;letter-spacing:0.02em">Rest</span>
         </div>
       `);
       continue;
@@ -808,9 +935,10 @@ function buildWorkoutCards(
         const dayAnchorId = !dayFirstCardEmitted.has(dayIdx) ? `id="plan-day-${dayIdx}" ` : '';
         dayFirstCardEmitted.add(dayIdx);
         cards.push(`
-          <div ${dayAnchorId}class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;padding:15px 18px;border-top:1px solid var(--c-border);transition:background 0.15s">
-            <span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);width:36px">${DAY_SHORT[dayIdx]}</span>
-            <span class="plan-drop-label" style="font-size:12px;color:var(--c-faint);letter-spacing:0.02em">Rest</span>
+          <div ${dayAnchorId}class="plan-drop-zone" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;gap:10px;padding:${dayIdx === 0 ? '4' : '20'}px 4px 8px;transition:background 0.15s;border-radius:6px">
+            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-muted);min-width:36px">${DAY_SHORT[dayIdx]}</span>
+            <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
+            <span class="plan-drop-label" style="font-size:11px;color:var(--c-faint);font-weight:500;letter-spacing:0.02em">Rest</span>
           </div>
         `);
         continue;
@@ -822,7 +950,19 @@ function buildWorkoutCards(
       const isSkipped = ratingVal === 'skip';
 
       // Issue 1: show actual activity name when matched (e.g. "Swimming" not "General Sport 1")
-      const name = garminAct?.displayName || w.n || 'Workout';
+      const rawName = garminAct?.displayName || w.n || 'Workout';
+      const name = rawName.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+      // Cross-training sport swap: planned slot was one sport, the matched activity is another.
+      // The day-proximity fallback in activity-review.ts can attach a tennis activity to a wakeboarding
+      // slot, etc. When that happens the heading shows the actual sport and the planned description is
+      // misleading — replace it with a "Planned: <slot name>" caption.
+      const planNameLower = (w.n || '').toLowerCase().trim();
+      const actNameLower = (garminAct?.displayName || '').toLowerCase().trim();
+      const isSportSwap = !!garminAct && (w.t === 'cross' || w.t === 'gym')
+        && !!actNameLower && !!planNameLower
+        && actNameLower !== planNameLower
+        && !actNameLower.startsWith(planNameLower)
+        && !planNameLower.startsWith(actNameLower);
       const isReduced = !isDone && !isSkipped && (w as any).status === 'reduced' && !isTimingMod((w as any).modReason);
       const distKm = w.km || w.distanceKm;
       const durationMin = w.dur;
@@ -879,8 +1019,9 @@ function buildWorkoutCards(
         const matchDur = Math.round(garminAct.durationSec / 60);
         if (matchDur > 0) matchStats.push(`${matchDur} min`);
         const matchName = garminAct.workoutName || garminAct.displayName || '';
+        const showMatchName = !!matchName && matchName.toLowerCase().trim() !== (name || '').toLowerCase().trim();
         actMatchRow = `<div class="plan-act-open" data-workout-key="${escapeHtml(id)}" data-week-num="${viewWeek}" style="display:flex;align-items:center;gap:5px;margin-top:3px;cursor:pointer">
-          <span style="font-size:11px;color:var(--c-muted)">${matchName ? escapeHtml(matchName) + ' · ' : ''}${source}${matchStats.length ? ' · ' + matchStats.join(' · ') : ''}</span>
+          <span style="font-size:11px;color:var(--c-muted)">${showMatchName ? escapeHtml(matchName) + ' · ' : ''}${source}${matchStats.length ? ' · ' + matchStats.join(' · ') : ''}</span>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </div>`;
       } else if (isReplaced && replacedByAdhoc) {
@@ -904,30 +1045,31 @@ function buildWorkoutCards(
             style="padding:7px 10px;font-size:11px;border-radius:8px;border:1px solid var(--c-border);
                    background:transparent;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Remove</button>`
         : '';
+      // Value and expand arrows are now in the badge row / bottom chevron — rightContent
+      // only carries the Start button (today) and the Undo-adjustment link (reduced workouts).
       const rightContent = showHeaderStart
         ? `<div style="display:flex;gap:6px;align-items:center">${deleteBtn}<button class="plan-start-btn m-btn-primary" data-workout-id="${id}" data-week-num="${viewWeek}" style="padding:7px 14px;font-size:12px">
             <span style="width:10px;height:10px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
             Start
           </button></div>`
-        : isDone
-          ? `<div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:13px;font-weight:500;color:var(--c-muted)">${valueStr}</span>
-            <span class="plan-view-btn" data-workout-id="${id}" data-week="${viewWeek}" style="opacity:0.3;cursor:pointer;display:flex;align-items:center">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-            </span>
-          </div>`
-          : valueStr
-            ? `<div style="display:flex;align-items:center;gap:10px">
-            ${undoAdjBtn}
-            <span style="font-size:13px;font-weight:400;color:var(--c-muted)">${valueStr}</span>
-            <span class="plan-view-btn" data-workout-id="${id}" data-week="${viewWeek}" style="opacity:0.25;cursor:pointer;display:flex;align-items:center">
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--c-black)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-            </span>
-          </div>`
-            : undoAdjBtn ? `<div style="display:flex;align-items:center">${undoAdjBtn}</div>` : '';
+        : undoAdjBtn
+          ? `<div style="display:flex;align-items:center">${undoAdjBtn}</div>`
+          : '';
 
-      // Only first card of each day gets the scroll-anchor ID (no duplicate IDs)
-      const dayAnchorId = !dayFirstCardEmitted.has(dayIdx) ? `id="plan-day-${dayIdx}" ` : '';
+      // Day separator — emitted once before the first workout card of each day
+      const isFirstInDay = !dayFirstCardEmitted.has(dayIdx);
+      if (isFirstInDay) {
+        const sepAnchorId = `id="plan-day-${dayIdx}" `;
+        const nonRestCount = dayWorkouts.filter((dw: any) => dw.t !== 'rest').length;
+        const dayHeaderColor = isToday ? TODAY_ACCENT : '#0F172A';
+        cards.push(`
+          <div ${sepAnchorId}class="plan-day-sep" data-day-of-week="${dayIdx}" style="display:flex;align-items:center;gap:10px;padding:${dayIdx === 0 ? '4' : '20'}px 4px 8px">
+            <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:${dayHeaderColor};min-width:36px">${DAY_SHORT[dayIdx]}</span>
+            <span style="flex:1;height:1px;background:rgba(0,0,0,0.07)"></span>
+            ${nonRestCount > 1 ? `<span style="font-size:11px;color:var(--c-faint)">${nonRestCount} sessions</span>` : ''}
+          </div>
+        `);
+      }
       dayFirstCardEmitted.add(dayIdx);
 
       // Sub-rows for ACWR-reduced workouts: current plan + original plan
@@ -941,11 +1083,8 @@ function buildWorkoutCards(
         const origLabel = origDist || (wasMatch ? wasMatch[1] : null);
         const cardUnitPref = s.unitPref ?? 'km';
         const lines: string[] = [];
-        if (newDesc) {
-          lines.push(`<div style="font-size:12px;color:var(--c-text, #333);margin-top:2px">${fmtDesc(newDesc, cardUnitPref)}</div>`);
-        }
         if (origLabel) {
-          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:1px">Original plan: ${fmtDesc(origLabel, cardUnitPref)}</div>`);
+          lines.push(`<div style="font-size:11px;color:var(--c-faint);margin-top:2px">Original: ${fmtDesc(origLabel, cardUnitPref)}</div>`);
         }
         reducedBadge = lines.join('');
       }
@@ -953,7 +1092,7 @@ function buildWorkoutCards(
       const _autoReduceNote = (w as any).autoReduceNote as string | undefined;
       const _isAutoMod = _isAutoMod_pre && !isDone && !!_autoReduceNote;
       const autoReduceRow = _isAutoMod
-        ? `<div style="padding:6px 18px 10px;border-top:1px dashed var(--c-border);display:flex;align-items:center;justify-content:space-between;gap:8px">
+        ? `<div style="padding:6px 16px 10px;border-top:1px dashed var(--c-border);display:flex;align-items:center;justify-content:space-between;gap:8px">
             <span style="font-size:11px;color:var(--c-muted)">${escapeHtml(_autoReduceNote)}</span>
             <button class="plan-auto-undo-btn" data-workout-id="${escapeHtml(id)}" style="font-size:11px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;white-space:nowrap;flex-shrink:0;text-decoration:underline;text-underline-offset:2px">Undo</button>
           </div>`
@@ -964,28 +1103,63 @@ function buildWorkoutCards(
       const showCoachNote = isToday && !isDone && !isSkipped && !isReplaced && todayMod !== 'none' && !!coach;
       const coachNoteRow = showCoachNote
         ? (todayMod === 'skip'
-            ? `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
-            : `<div style="padding:10px 18px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Go easier today.</strong> ${coach!.primaryMessage}</div>`)
+            ? `<div style="padding:10px 16px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Consider rest today.</strong> ${coach!.primaryMessage}</div>`
+            : `<div style="padding:10px 16px;border-top:1px solid var(--c-border);font-size:12px;color:var(--c-muted);line-height:1.45"><strong style="color:var(--c-black);font-weight:600">Go easier today.</strong> ${coach!.primaryMessage}</div>`)
+        : '';
+
+      // Type badge + description (always visible)
+      const typeBadgeLabel = runWorkoutTypeBadgeLabel(w.t, w.n || '');
+      const descText = (w as any).d?.trim() ? fmtDesc((w as any).d, s.unitPref ?? 'km') : '';
+      const descRow = isSportSwap
+        ? `<div style="font-size:11px;color:var(--c-muted);margin-top:3px">Planned: ${escapeHtml((w.n || 'Cross-training').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))}</div>`
+        : (descText && !isReplaced
+          ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:4px">${escapeHtml(descText).replace(/\n/g, '<br>')}</div>`
+          : '');
+
+      // Status chip (right side of badge row — only show non-trivial states)
+      const showStatusChip = statusLabel !== 'Upcoming';
+      const statusChip = showStatusChip
+        ? `<span style="font-size:10px;font-weight:600;color:${statusLabelColor}">${statusLabel}</span>`
+        : '';
+
+      // Target pace note (below name)
+      const targetPaceRow = !isDone && !isSkipped && (w as any).targetPaceSecKm
+        ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fmtPacePlan((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>`
         : '';
 
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
+
       cards.push(`
-        <div ${dayAnchorId}class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="border-top:1px solid var(--c-border);${borderLeft}">
-          <div class="plan-card-header" style="display:flex;align-items:center;padding:${headerPad};gap:12px;cursor:pointer">
-            <div style="width:36px;flex-shrink:0">
-              <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:${dayLabelColor};line-height:1.2">${DAY_SHORT[dayIdx]}</div>
-              <div style="font-size:9px;font-weight:${statusLabelWeight};color:${statusLabelColor};margin-top:1px">${statusLabel}</div>
+        <div class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="
+          background:#fff;
+          border-radius:14px;
+          margin-bottom:8px;
+          overflow:hidden;
+          box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05);
+          ${borderLeft}
+        ">
+          <div class="plan-card-header" style="padding:14px 16px;cursor:pointer">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+              <span style="display:inline-flex;align-items:center;background:rgba(0,0,0,0.05);color:var(--c-muted);font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;padding:3px 8px;border-radius:100px">${typeBadgeLabel}</span>
+              ${valueStr ? `<span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">${valueStr}</span>` : ''}
+              <span style="flex:1"></span>
+              ${statusChip}
             </div>
-            <div style="flex:1;min-width:0">
-              <div style="font-size:15px;font-weight:400;letter-spacing:-0.01em;opacity:${nameOpacity};text-decoration:${nameDecoration};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${name}</div>
-              ${!isDone && !isSkipped && (w as any).targetPaceSecKm ? `<div style="font-size:11px;color:var(--c-muted);margin-top:2px">Target: ${fmtPacePlan((w as any).targetPaceSecKm, s.unitPref ?? 'km')}</div>` : ''}
-              ${actMatchRow}
-              ${isTimingMod((w as any).modReason) && !isDone ? `<div style="margin-top:3px"><span style="font-size:10px;font-weight:500;color:var(--c-muted);letter-spacing:0.01em">Suggestion — hard session yesterday</span></div>` : ''}
-              ${reducedBadge}
+            <div style="display:flex;align-items:flex-start;gap:8px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:15px;font-weight:600;letter-spacing:-0.01em;opacity:${nameOpacity};text-decoration:${nameDecoration}">${name}</div>
+                ${targetPaceRow}
+                ${descRow}
+                ${actMatchRow}
+                ${isTimingMod((w as any).modReason) && !isDone ? `<div style="margin-top:4px"><span style="font-size:10px;font-weight:500;color:var(--c-muted)">Suggestion: hard session yesterday</span></div>` : ''}
+                ${reducedBadge}
+              </div>
+              <div style="flex-shrink:0;display:flex;align-items:center;gap:6px">
+                ${rightContent}
+              </div>
             </div>
-            <div style="flex-shrink:0;display:flex;align-items:center;gap:6px">
-              ${rightContent}
-              <svg class="plan-card-chevron" style="transition:transform 0.2s;flex-shrink:0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            <div style="display:flex;justify-content:flex-end;padding-top:8px">
+              <svg class="plan-card-chevron" style="transition:transform 0.2s" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
             </div>
           </div>
           ${autoReduceRow}
@@ -1111,7 +1285,9 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
   const currentWeek = s.wks?.[(s.w ?? 1) - 1];
   if (currentWeek?.ph === 'taper') return '';
   const goalSec = s.initialBaseline;
-  const forecastSec = s.forecastTime;
+  // Use course-adjusted finish when available so the banner reflects the
+  // realistic prediction the user sees on the home card and detail view.
+  const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime;
   const gapSec = forecastSec - goalSec;
   if (gapSec < 20 * 60) return '';
   const gapMin = Math.round(gapSec / 60);
@@ -1122,6 +1298,46 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
       <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.5;margin-bottom:4px">Forecast finish ${ft(forecastSec)} is ${gapMin} min slower than your goal of ${ft(goalSec)}.</div>
       <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:${canAddSession ? '12px' : '0'}">The prediction updates weekly as your running data comes in. Adding a quality session raises the ceiling the plan can hit.</div>
       ${canAddSession ? `<button id="goal-add-session" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">Add a quality session</button>` : ''}
+    </div>
+  `;
+}
+
+/**
+ * Time-budget banner — fires when the rendered plan total exceeds the user's
+ * stated weekly hours by more than a small slack. Two CTAs: accept the shorter
+ * sessions (plan engine has already used soft floors), or bump the hours target
+ * to make it fit. Dismissal is tracked against the current `weeklyTrainingHours`
+ * value, so the banner re-arms if the user later changes their target.
+ *
+ * Plan-engine context: `applyHoursBudget` uses standard floors (easy 20m / long 40m),
+ * then drops to soft floors (15m / 30m) when standard would overflow, then accepts
+ * the residual overflow. The banner is the user-facing surface for that residual.
+ */
+function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number): string {
+  // Only show on current and future weeks — past weeks are immutable.
+  if (viewWeek < s.w) return '';
+  const target = s.onboarding?.weeklyTrainingHours;
+  if (target == null || target <= 0) return '';
+  const SLACK_MIN = 5;
+  const totalMin = workouts.reduce((sum, w) => sum + ((w as any).estimatedDurationMin ?? 0), 0);
+  const overflowMin = totalMin - target * 60;
+  if (overflowMin <= SLACK_MIN) return '';
+  // Dismissed for this hours value?
+  if (s.onboarding?.budgetAcceptedAtHours === target) return '';
+  // Round recommended hours up to the next 0.5h that fits the plan.
+  const recommendedHours = Math.ceil(totalMin / 30) / 2;
+  const overflowLabel = overflowMin >= 60
+    ? `${(overflowMin / 60).toFixed(1)} h`
+    : `${overflowMin} min`;
+  return `
+    <div style="margin:14px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:6px">Time budget</div>
+      <div style="font-size:14px;font-weight:500;color:var(--c-black);line-height:1.5;margin-bottom:4px">This week's plan totals about ${(totalMin / 60).toFixed(1)} h, ${overflowLabel} over your ${target} h target.</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Sessions are already at minimum effective duration. Quality work cannot be shortened without losing the training stimulus.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button id="budget-accept-btn" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">Accept shorter sessions</button>
+        <button id="budget-increase-btn" data-recommended="${recommendedHours}" style="padding:8px 14px;border-radius:100px;border:1px solid var(--c-border);background:transparent;color:var(--c-black);font-size:12px;font-weight:600;cursor:pointer">Increase to ${recommendedHours} h/week</button>
+      </div>
     </div>
   `;
 }
@@ -1420,7 +1636,7 @@ function buildRecoveryPill(s: SimulatorState): string {
           <span style="font-size:13px;color:var(--c-muted)">Sleep not logged yet</span>
         </div>
         <button id="plan-recovery-log"
-          style="font-size:12px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">
+          style="font-size:12px;font-weight:600;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">
           Log sleep →
         </button>
       </div>
@@ -1510,7 +1726,7 @@ function buildRecoveryLogPanel(s: SimulatorState): string {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <span style="font-size:12px;font-weight:600;color:var(--c-black);letter-spacing:-0.01em">Sleep · 7 days</span>
         <button id="plan-recovery-log-panel"
-          style="font-size:12px;font-weight:600;color:var(--c-accent);background:none;border:none;cursor:pointer;padding:0">
+          style="font-size:12px;font-weight:600;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">
           ${loggedToday ? 'Update ✓' : 'Log today'}
         </button>
       </div>
@@ -1626,7 +1842,8 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   if (wk.workoutMods && wk.workoutMods.length > 0) {
@@ -1708,7 +1925,7 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
                   <span style="font-size:14px;font-weight:600;color:var(--c-ok)">Run by feel</span>
                   ${level === 'red' || level === 'orange' ? `<span style="font-size:11px;font-weight:600;color:var(--c-ok);background:rgba(16,185,129,0.15);padding:2px 8px;border-radius:10px">Recommended</span>` : ''}
                 </div>
-                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Ignore pace targets — just get the run in</div>
+                <div style="font-size:12px;color:var(--c-muted);margin-top:2px">Ignore pace targets. Just get the run in.</div>
               </button>
             ` : `
               <button id="ra-downgrade" style="background:var(--c-ok-bg);border:1.5px solid var(--c-ok);border-radius:12px;padding:12px 14px;text-align:left;cursor:pointer">
@@ -1730,7 +1947,7 @@ export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
             </button>
           </div>
         ` : `
-          <p style="font-size:13px;color:var(--c-muted);margin:0 0 16px">No run scheduled today — no adjustments needed.</p>
+          <p style="font-size:13px;color:var(--c-muted);margin:0 0 16px">No run scheduled today. No adjustments needed.</p>
           <button id="ra-dismiss" class="m-btn-glass m-btn-glass--inset" style="width:100%">Dismiss</button>
         `}
       </div>
@@ -1801,6 +2018,36 @@ function buildCarryOverCard(wk: Week | undefined): string {
         <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${count} cross-training ${count === 1 ? 'activity' : 'activities'} carried over. Tap to adjust this week.</div>
       </div>
       <button id="plan-carry-over-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
+    </div>`;
+}
+
+// ─── Consecutive-skip coaching note ──────────────────────────────────────────
+
+/**
+ * Shows a plain coaching note when the user has pushed workouts in 2+ consecutive
+ * completed weeks. Signals that the sliding pattern is becoming a habit and will
+ * eventually cause workouts to be dropped.
+ *
+ * Only fires in the current week view (not future or past week previews) and
+ * only when there are actual skips detected.
+ */
+function buildConsecutiveSkipNote(s: SimulatorState, viewWeek: number): string {
+  if (viewWeek !== s.w) return '';
+  const wks = s.wks ?? [];
+  const completedWeeks = Math.max(0, (s.w ?? 1) - 1);
+  let consecutiveCount = 0;
+  for (let i = completedWeeks - 1; i >= 0; i--) {
+    if ((wks[i]?.skip?.length ?? 0) > 0) {
+      consecutiveCount++;
+    } else {
+      break;
+    }
+  }
+  if (consecutiveCount < 2) return '';
+  return `
+    <div style="margin:0 16px 8px;padding:11px 14px;border-radius:12px;background:var(--c-surface);border:1px solid var(--c-border)">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:2px">Sessions sliding for ${consecutiveCount} weeks</div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.45">Workouts pushed to next week will drop on a second skip and affect your race prediction. Consider reducing this week's volume instead.</div>
     </div>`;
 }
 
@@ -1911,6 +2158,38 @@ function buildKmNudgeCard(wk: Week | undefined, s: SimulatorState, workouts: Wor
     </div>`;
 }
 
+// ─── Vibes Run nudge card ────────────────────────────────────────────────────
+
+/**
+ * Build-phase discovery nudge for the Vibes Run feature. One-shot per plan:
+ * surfaces on the current week if it sits in a build phase and the user hasn't
+ * dismissed (or accepted) it yet. Excluded from triathlon and cycling modes.
+ */
+function buildVibesRunNudgeCard(s: SimulatorState, wk: Week | undefined, viewWeek: number): string {
+  if (!wk) return '';
+  if (viewWeek !== s.w) return '';
+  if (wk.ph !== 'build') return '';
+  if (s.vibesRunNudgeDismissed) return '';
+
+  return `
+    <div id="plan-vibes-nudge-card" style="margin:12px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE};position:relative;overflow:hidden">
+      <div aria-hidden="true" style="position:absolute;top:0;left:0;width:240px;height:240px;pointer-events:none;
+        background:radial-gradient(ellipse 70% 70% at 18% 18%, rgba(255,248,229,0.5) 0%, rgba(255,248,229,0.18) 30%, transparent 70%)"></div>
+      <div style="position:relative">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Run by Feel</div>
+            <div style="font-size:12px;color:var(--c-muted);line-height:1.55;margin-bottom:8px">Extra session. Sometimes plans are too prescriptive. Listening to your body lets you push yourself. 5km easy, then keep going if it's still fun.</div>
+            <div style="font-size:12px;color:var(--c-black);line-height:1.55;margin-bottom:8px;font-style:italic">Tristan (our founder) got his half marathon PB on one of these.</div>
+            <button id="vibes-nudge-science" style="background:none;border:none;padding:0;font-size:11px;color:var(--c-muted);cursor:pointer;text-align:left;font-family:var(--f);line-height:1.5">The science: fartlek, central governor, flow states, Born to Run</button>
+          </div>
+          <button id="vibes-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:var(--c-muted);font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
+        </div>
+        <button id="vibes-nudge-try" style="margin-top:6px;display:inline-flex;align-items:center;padding:9px 14px;font-size:12px;font-weight:600;color:var(--c-black);background:transparent;border:1px solid var(--c-border-strong);border-radius:10px;cursor:pointer;font-family:var(--f)">Try one</button>
+      </div>
+    </div>`;
+}
+
 // ─── Adjust week row ─────────────────────────────────────────────────────────
 
 function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
@@ -1973,6 +2252,7 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e, viewWeek, s.tw, s.v, s.gs,
       getTrailingEffortScore(s.wks, viewWeek), wk.scheduledAcwrStatus, (wk as any).forceDeload,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     )
     : [];
 
@@ -2246,49 +2526,43 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       .m-prog-fill { animation:barGrow 0.8s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
 
-    <div id="plan-view" style="position:relative;min-height:100vh;background:${_BG};font-family:var(--f);overflow-x:hidden">
-
-      <!-- Background — full-page gradient, phase-tinted, fading to cream -->
-      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
-        <div style="position:absolute;inset:0;background:linear-gradient(180deg, ${_pb.top} 0%, ${_pb.mid} 15%, #F0F7FC 35%, #F5F8FB 55%, ${_BG} 80%)"></div>
-        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="plBlur"><feGaussianBlur stdDeviation="20"/></filter>
-            <filter id="plSoft"><feGaussianBlur stdDeviation="6"/></filter>
-          </defs>
-          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#plSoft)" opacity="0.6"/>
-          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#plBlur)" opacity="0.35"/>
-          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#plBlur)" opacity="0.25"/>
-          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#plSoft)"/>
-          <path d="M-20,350 Q100,330 220,345 T440,335 L440,600 L-20,600 Z" fill="rgba(255,255,255,0.15)"/>
-        </svg>
+    <div id="plan-view" style="position:relative;min-height:100vh;background:${atmosphereGradient('sky')};font-family:var(--f);overflow-x:hidden">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('rp', { variant: 'sweep', palette: 'sky', pulse: true })}
       </div>
+      ${buildSunGlint('low')}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
 
-        <!-- Header bar: nav + profile -->
-        <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between">
-          <div style="display:flex;align-items:center;gap:8px">
-            ${navBtn('prev', canGoBack)}
-            ${navBtn('next', canGoForward)}
+        <!-- Header: archive nav (only when relevant) + race countdown + profile -->
+        <div class="plan-fade" style="animation-delay:0.02s;padding:56px 20px 0;display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="display:flex;align-items:center;gap:8px;min-height:36px">
+            ${(_viewArchiveIdx !== null || _liveArchives.length > 0) ? `${navBtn('prev', canGoBack)}${_viewArchiveIdx !== null ? navBtn('next', canGoForward) : ''}` : ''}
           </div>
-          <button id="plan-account-btn" style="
-            width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
-            background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);
-            display:flex;align-items:center;justify-content:center;
-            font-size:12px;font-weight:600;color:${_TM};font-family:var(--f);
-            box-shadow:0 1px 4px rgba(0,0,0,0.08);
-          ">${initials || 'Me'}</button>
+          <div style="display:flex;align-items:center;gap:8px">
+            ${(() => {
+              const _raceDays = daysUntilRace(s.onboarding?.customRaceDate ?? null);
+              if (_raceDays <= 0) return '';
+              const _disp = _raceDays > 14 ? `${Math.floor(_raceDays / 7)}` : `${_raceDays}`;
+              const _unit = _raceDays > 14 ? 'weeks' : 'days';
+              return `<div style="display:flex;align-items:baseline;gap:3px;padding:4px 12px;border-radius:100px;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,0.06)"><span style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:${_TM};line-height:1">${_disp}</span><span style="font-size:11px;font-weight:500;color:${_TS}">${_unit}</span></div>`;
+            })()}
+            <button id="plan-account-btn" style="
+              width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
+              background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);
+              display:flex;align-items:center;justify-content:center;
+              font-size:12px;font-weight:600;color:${_TM};font-family:var(--f);
+              box-shadow:0 1px 4px rgba(0,0,0,0.08);
+            ">${initials || 'Me'}</button>
+          </div>
         </div>
 
-        <!-- Hero: Week + phase + date + actions — all one block -->
+        <!-- Hero: race name + phase + week + actions -->
         <div class="plan-fade" style="animation-delay:0.06s;text-align:center;padding:20px 20px 0">
           ${_viewArchiveIdx !== null ? `<div style="font-size:11px;font-weight:600;color:${_TS};letter-spacing:0.08em;text-transform:uppercase;margin-bottom:10px">Past plan</div>` : ''}
-          <div style="font-size:48px;font-weight:700;color:${_TM};letter-spacing:-0.03em;line-height:1">
-            Week ${viewWeek}<span style="font-weight:300;color:${_TS}"> / ${s.tw}</span>
-          </div>
+          <div style="font-size:42px;font-weight:700;color:${_TM};letter-spacing:-0.03em;line-height:1.05">${escapeHtmlPlan(getRunnerHeroName(s))}</div>
           ${wk?.ph ? `<div style="font-size:17px;font-weight:700;color:${_TM};margin-top:10px;letter-spacing:-0.01em">${phaseLabel(wk.ph)}</div>` : ''}
-          ${dateRange ? `<div style="font-size:14px;font-weight:500;color:${_TS};margin-top:4px">${dateRange}</div>` : ''}
+          ${s.tw ? `<div style="font-size:14px;font-weight:500;color:${_TS};margin-top:4px">Week ${viewWeek} of ${s.tw}${dateRange ? ` · ${dateRange}` : ''}</div>` : ''}
           ${viewWeek < s.w ? `<div style="margin-top:8px"><button id="plan-jump-current" style="background:none;border:none;padding:0;font-size:13px;font-weight:600;color:${_TS};cursor:pointer;font-family:var(--f)">${_viewArchiveIdx !== null ? 'Back to current plan' : 'Go to current week'} \u2192</button></div>` : ''}
 
           <!-- Action buttons — part of the hero block -->
@@ -2301,26 +2575,45 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
           </div>
         </div>
 
-        <!-- This Week progress (current week only) -->
-        ${isCurrentWeek ? `<div class="plan-fade" style="animation-delay:0.12s;margin-top:20px">${buildProgressBars(s)}</div>` : (weekLoadBar || weekKmBar ? `
-        <div class="plan-fade" style="animation-delay:0.12s;margin:20px 16px 0;padding:14px 16px;${PLAN_CARD_STYLE}">
-          ${weekLoadBar}
-          ${weekKmBar}
-        </div>` : '')}
+        <!-- Weekly summary strip — 3-column card (Sessions / Distance / Load) mirroring triathlon Plan -->
+        <div class="plan-fade" style="animation-delay:0.10s">${buildPlanWeekSummaryCard({
+          plannedSessions: workouts.filter((w: any) => w.t !== 'rest').length,
+          actualSessions: countDoneSessionsForWeek(wk),
+          plannedKm: _plannedKm,
+          actualKm: _actualKm,
+          plannedTSS: _plannedTSS,
+          actualTSS: _weekTotalTSS,
+          showActuals: !isFutureWeek,
+          unitPref: s.unitPref ?? 'km',
+        })}</div>
+
+        <!-- Week navigation pills (1, 2, 3 … N) -->
+        <div class="plan-fade" style="animation-delay:0.14s;padding:8px 20px 8px">
+          <div style="display:flex;gap:5px;overflow-x:auto;padding:2px 0;-webkit-overflow-scrolling:touch">
+            ${Array.from({ length: s.tw }, (_, i) => {
+              const wkNum = i + 1;
+              const active = wkNum === viewWeek;
+              return `<button data-plan-week-nav="${wkNum}" style="flex-shrink:0;min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:${active ? 600 : 500};font-variant-numeric:tabular-nums;border-radius:8px;border:none;background:${active ? '#0F172A' : 'rgba(255,255,255,0.75)'};color:${active ? '#fff' : 'var(--c-muted)'};box-shadow:${active ? '0 2px 6px rgba(0,0,0,0.15)' : '0 1px 2px rgba(0,0,0,0.04)'};cursor:pointer">${wkNum}</button>`;
+            }).join('')}
+          </div>
+        </div>
 
         <!-- Workout card list -->
         <div id="plan-card-list" style="padding:12px 0 16px;${isFutureWeek ? 'opacity:0.75' : ''}">
-          ${isFutureWeek ? `<div class="plan-fade" style="animation-delay:0.16s;margin:4px 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:${_TS};line-height:1.5">Draft. Final workouts depend on the preceding week's performance.</div>` : ''}
+          ${isFutureWeek ? `<div class="plan-fade" style="animation-delay:0.16s;margin:4px 16px 8px;padding:12px 15px;${PLAN_CARD_STYLE};font-size:13px;font-weight:500;color:${_TS};line-height:1.5">Estimated from last week's load. Sessions and distances adjust as you train.</div>` : ''}
           ${buildCarryOverCard(wk)}
+          ${buildConsecutiveSkipNote(s, viewWeek)}
           ${buildKmNudgeCard(wk, s, workouts)}
+          ${buildVibesRunNudgeCard(s, wk, viewWeek)}
           ${buildAdjustWeekRow(wk, s)}
           ${buildGoalFeasibilityBanner(s)}
+          ${buildBudgetBanner(s, workouts, viewWeek)}
           ${buildInjuryBanner()}
           ${buildIllnessBanner()}
           ${buildHolidayBannerPlan(s)}
           ${buildMorningPainCheck()}
           ${buildBenchmarkPanel(s)}
-          <div id="plan-week-list" class="plan-fade" style="animation-delay:0.18s;margin:10px 16px 0;${PLAN_CARD_STYLE};overflow:hidden">
+          <div id="plan-week-list" class="plan-fade" style="animation-delay:0.18s;margin:6px 20px 0">
             ${buildWorkoutCards(s, workouts, viewWeek)}
           </div>
           ${buildActivityLog(wk, viewWeek, s.w)}
@@ -2355,6 +2648,24 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
   });
 
+  // 3-column weekly summary card (new shell) — whole card → Load & Taper.
+  document.getElementById('plan-week-summary-card')?.addEventListener('click', () => {
+    import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
+  });
+
+  // Week navigation pills (1, 2 … N). Clicking a pill previews that week
+  // without changing s.w — same semantics as the prev/next nav arrows but
+  // direct-jump. Tapping the live week resets the preview override.
+  document.querySelectorAll<HTMLElement>('[data-plan-week-nav]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const wkNum = parseInt(btn.getAttribute('data-plan-week-nav') || '0', 10);
+      if (!wkNum) return;
+      const liveS = getState();
+      _viewWeek = (wkNum === liveS.w && _viewArchiveIdx === null) ? null : wkNum;
+      renderPlanView();
+    });
+  });
+
   // (Week overview toggle removed — pills now inline)
 
   // Goal-feasibility: add a quality session. Mirror the onboarding
@@ -2365,6 +2676,35 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const ms = getMutableState();
     ms.rw = Math.min((ms.rw ?? 0) + 1, 7);
     ms.epw = Math.min((ms.epw ?? 0) + 1, 10);
+    saveState();
+    import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
+      refreshBlendedFitness(ms);
+      saveState();
+      renderPlanView();
+    });
+  });
+
+  // Budget banner — accept shorter sessions (record dismissal at current hours).
+  document.getElementById('budget-accept-btn')?.addEventListener('click', () => {
+    const ms = getMutableState();
+    if (ms.onboarding && ms.onboarding.weeklyTrainingHours != null) {
+      ms.onboarding.budgetAcceptedAtHours = ms.onboarding.weeklyTrainingHours;
+      saveState();
+      renderPlanView();
+    }
+  });
+
+  // Budget banner — bump the user's weekly hours to fit the plan, re-blend,
+  // then re-render. Plan workouts re-derive on render via generateWeekWorkouts.
+  document.getElementById('budget-increase-btn')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const recommended = parseFloat(btn.dataset.recommended || '');
+    if (!Number.isFinite(recommended) || recommended <= 0) return;
+    const ms = getMutableState();
+    if (!ms.onboarding) return;
+    ms.onboarding.weeklyTrainingHours = recommended;
+    // Clear dismissal — the user's situation has changed.
+    ms.onboarding.budgetAcceptedAtHours = undefined;
     saveState();
     import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
       refreshBlendedFitness(ms);
@@ -2686,7 +3026,8 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
         wk2.ph, s2.rw, s2.rd, s2.typ, [], s2.commuteConfig || undefined,
         null, s2.recurringActivities,
         s2.onboarding?.experienceLevel, undefined, s2.pac?.e, s2.w, s2.tw, s2.v, s2.gs,
-        getTrailingEffortScore(s2.wks, s2.w), wk2.scheduledAcwrStatus,
+        getTrailingEffortScore(s2.wks, s2.w), wk2.scheduledAcwrStatus, undefined,
+        s2.onboarding?.weeklyTrainingHours, s2.onboarding?.runningExcludedWorkouts,
       );
       // Apply existing mods so distances reflect current state
       for (const mod of (wk2.workoutMods ?? [])) {
@@ -2747,6 +3088,40 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const wk2 = s2.wks?.[s2.w - 1];
     if (!wk2) return;
     wk2.kmNudgeDismissed = true;
+    saveState();
+    renderPlanView();
+  });
+
+  // ─── Vibes Run nudge handlers ──────────────────────────────────────────────
+  document.getElementById('vibes-nudge-dismiss')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s2 = getMutableState();
+    s2.vibesRunNudgeDismissed = true;
+    saveState();
+    renderPlanView();
+  });
+  document.getElementById('vibes-nudge-science')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openVibesScienceModal();
+  });
+  document.getElementById('vibes-nudge-try')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const s2 = getMutableState();
+    const wk2 = s2.wks?.[s2.w - 1];
+    if (!wk2) return;
+    if (!wk2.adhocWorkouts) wk2.adhocWorkouts = [];
+    const jsDay = new Date().getDay();
+    const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+    wk2.adhocWorkouts.push({
+      id: `adhoc-${Date.now()}`,
+      t: 'vibes',
+      n: 'Run by Feel',
+      d: '5km easy, then keep going if it\'s still fun',
+      r: 4,
+      rpe: 4,
+      dayOfWeek: ourDay,
+    });
+    s2.vibesRunNudgeDismissed = true;
     saveState();
     renderPlanView();
   });
@@ -2887,6 +3262,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   // ─── Drag-and-drop reorder within week ──────────────────────────────────────
   let _dragId = '';
   let _dragDay = -1;
+  let _touchDraggingCard = false; // guards the page-level swipe handler
   document.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
     card.addEventListener('dragstart', (e) => {
       _dragId = card.dataset.workoutId || '';
@@ -2963,12 +3339,159 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
+  // ─── Touch DnD for iOS WKWebView (HTML5 drag events don't fire there) ────────
+  {
+    let _touchDragId = '';
+    let _touchDragDay = -1;
+    let _touchStartX = 0;
+    let _touchStartY = 0;
+    let _touchDragging = false;
+    let _touchClone: HTMLElement | null = null;
+    let _touchSourceCard: HTMLElement | null = null;
+    let _touchLastHighlight: HTMLElement | null = null;
+
+    document.querySelectorAll<HTMLElement>('.plan-workout-card').forEach(card => {
+      card.addEventListener('touchstart', (e) => {
+        const touch = e.touches[0];
+        _touchDragId = card.dataset.workoutId || '';
+        _touchDragDay = parseInt(card.dataset.dayOfWeek || '-1', 10);
+        _touchStartX = touch.clientX;
+        _touchStartY = touch.clientY;
+        _touchDragging = false;
+        _touchSourceCard = card;
+      }, { passive: true });
+
+      card.addEventListener('touchmove', (e) => {
+        if (!_touchDragId) return;
+        const touch = e.touches[0];
+        const dx = touch.clientX - _touchStartX;
+        const dy = touch.clientY - _touchStartY;
+        if (!_touchDragging && Math.sqrt(dx * dx + dy * dy) < 8) return;
+
+        if (!_touchDragging) {
+          _touchDragging = true;
+          _touchDraggingCard = true;
+          if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
+          _touchClone = card.cloneNode(true) as HTMLElement;
+          _touchClone.style.cssText = `position:fixed;pointer-events:none;opacity:0.75;z-index:9999;width:${card.offsetWidth}px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);`;
+          document.body.appendChild(_touchClone);
+        }
+
+        e.preventDefault();
+
+        if (_touchClone) {
+          _touchClone.style.left = `${touch.clientX - card.offsetWidth / 2}px`;
+          _touchClone.style.top  = `${touch.clientY - 30}px`;
+        }
+
+        if (_touchClone) _touchClone.style.visibility = 'hidden';
+        const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+        if (_touchClone) _touchClone.style.visibility = '';
+
+        if (_touchLastHighlight) {
+          _touchLastHighlight.style.outline = '';
+          _touchLastHighlight.style.background = '';
+          const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
+          if (lbl) lbl.textContent = 'Rest';
+          _touchLastHighlight = null;
+        }
+
+        const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
+        if (targetCard && targetCard !== card) {
+          targetCard.style.outline = '2px solid var(--c-accent)';
+          targetCard.style.outlineOffset = '-2px';
+          _touchLastHighlight = targetCard;
+          return;
+        }
+        const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
+        if (targetZone && !el?.closest('.plan-workout-card')) {
+          const tDay = parseInt(targetZone.dataset.dayOfWeek || '-1', 10);
+          if (tDay >= 0 && tDay !== _touchDragDay) {
+            targetZone.style.background = 'rgba(99,102,241,0.08)';
+            const lbl = targetZone.querySelector('.plan-drop-label') as HTMLElement | null;
+            if (lbl) lbl.textContent = 'Drop here';
+            _touchLastHighlight = targetZone;
+          }
+        }
+      }, { passive: false });
+
+      card.addEventListener('touchend', (e) => {
+        _touchDraggingCard = false;
+        if (!_touchDragging || !_touchDragId) {
+          _touchDragId = '';
+          _touchDragDay = -1;
+          _touchSourceCard = null;
+          _touchDragging = false;
+          return;
+        }
+
+        if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+        if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+        if (_touchLastHighlight) {
+          _touchLastHighlight.style.outline = '';
+          _touchLastHighlight.style.background = '';
+          const lbl = _touchLastHighlight.querySelector('.plan-drop-label') as HTMLElement | null;
+          if (lbl) lbl.textContent = 'Rest';
+          _touchLastHighlight = null;
+        }
+
+        const touch = e.changedTouches[0];
+        const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+
+        const srcId = _touchDragId;
+        const srcDay = _touchDragDay;
+        _touchDragId = '';
+        _touchDragDay = -1;
+        _touchDragging = false;
+        _touchSourceCard = null;
+
+        const applyMove = (targetId: string, targetDay: number) => {
+          if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
+          const ms = getMutableState();
+          const wk2 = ms.wks?.[viewWeek - 1];
+          if (!wk2) return;
+          const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+          moves[srcId] = targetDay;
+          if (targetId) moves[targetId] = srcDay;
+          mergeTimingMods(ms, wk2);
+          saveState();
+          rerenderWeekListLocal(viewWeek);
+        };
+
+        const applyMoveToDay = (targetDay: number) => {
+          if (srcDay === targetDay || srcDay < 0 || targetDay < 0) return;
+          const ms = getMutableState();
+          const wk2 = ms.wks?.[viewWeek - 1];
+          if (!wk2) return;
+          const moves = wk2.workoutMoves ?? ((wk2 as any).workoutMoves = {} as Record<string, number>);
+          moves[srcId] = targetDay;
+          mergeTimingMods(ms, wk2);
+          saveState();
+          rerenderWeekListLocal(viewWeek);
+        };
+
+        const targetCard = el?.closest<HTMLElement>('.plan-workout-card');
+        if (targetCard && targetCard !== card) {
+          const targetId = targetCard.dataset.workoutId || '';
+          const targetDay = parseInt(targetCard.dataset.dayOfWeek || '-1', 10);
+          applyMove(targetId, targetDay);
+          return;
+        }
+        const targetZone = el?.closest<HTMLElement>('.plan-drop-zone');
+        if (targetZone && !el?.closest('.plan-workout-card')) {
+          applyMoveToDay(parseInt(targetZone.dataset.dayOfWeek || '-1', 10));
+        }
+      });
+    });
+  }
+
   // Touch swipe for iOS/mobile (left = next week, right = prev week)
   let touchStartX = 0;
   const page = document.querySelector('.mosaic-page') as HTMLElement;
   if (page) {
     page.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
     page.addEventListener('touchend', (e) => {
+      if (_touchDraggingCard) return; // card drag was in progress — don't swipe
       const dx = e.changedTouches[0].clientX - touchStartX;
       if (Math.abs(dx) > 60) {
         // Delegate to the same prev/next click handlers so swipes can also
@@ -3406,7 +3929,7 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
 
   const currentWeekBlock = currentWk
     ? buildTrackOnlyWeekDetail(s, currentWk, 'This week')
-    : '<div style="font-size:13px;color:var(--c-muted);padding:18px">No current week — sync or record an activity to begin.</div>';
+    : '<div style="font-size:13px;color:var(--c-muted);padding:18px">No current week. Sync or record an activity to begin.</div>';
 
   const historyBlock = priorWks.length === 0 ? '' : `
     <div class="tp-rise" style="margin-top:22px;animation-delay:0.12s">
@@ -3420,13 +3943,16 @@ function getTrackOnlyPlanHTML(s: SimulatorState): string {
     <style>
       @keyframes floatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .tp-rise { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      .tp-week-row { background:#fff; border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04); padding:14px 16px; display:flex; align-items:center; gap:14px; }
+      .tp-week-row { background:rgba(255,255,255,0.78); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid rgba(255,255,255,0.65); border-radius:12px; box-shadow:0 1px 3px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.04); padding:14px 16px; display:flex; align-items:center; gap:14px; }
       .tp-week-num { font-size:10px; font-weight:600; color:#94A3B8; letter-spacing:0.05em; text-transform:uppercase; }
       .tp-week-total { font-size:18px; font-weight:700; color:#0F172A; letter-spacing:-0.01em; font-variant-numeric:tabular-nums; }
       .tp-week-sub { font-size:11px; color:#64748B; margin-top:2px; }
     </style>
-    <div class="mosaic-page" style="background:#FAF9F6;position:relative;min-height:100vh">
-      <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%);pointer-events:none"></div>
+    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('pln', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: true })}
+      </div>
+      ${buildSunGlint('low')}
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding:56px 16px 120px">
 
         <div class="tp-rise" style="padding:0 4px 18px">

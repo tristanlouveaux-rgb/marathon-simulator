@@ -809,7 +809,14 @@ export function buildSleepBankLineChart(
   const dataMin = Math.min(...deltas);
   const dataMax = Math.max(...deltas);
   const dataPad = Math.max((dataMax - dataMin) * 0.25, 900);
-  const minD = dataMin - dataPad;
+  // In debt mode (anchorZeroAtTop + fillToTargetGradient), enforce a minimum
+  // visible deficit range matching the "high" tier threshold (6h). Small/moderate
+  // debts then occupy a proportional slice of the canvas instead of filling it.
+  // The chart still auto-expands beyond 6h when debt grows past that.
+  const DEBT_MODE_FLOOR_SEC = -6 * 3600;
+  const minD = (anchorZeroAtTop && fillToTargetGradient)
+    ? Math.min(dataMin - dataPad, DEBT_MODE_FLOOR_SEC)
+    : dataMin - dataPad;
   // With anchorZeroAtTop, force the upper bound to 0 and give the target line
   // a small breathing pad (5% of the span below) so it doesn't sit flush with the top edge.
   const maxD = anchorZeroAtTop

@@ -14,8 +14,12 @@ export function openTriWorkoutDetail(workout: Workout): void {
   const existing = document.getElementById('tri-workout-detail-overlay');
   if (existing) existing.remove();
 
-  const discipline: BadgeKind = workout.discipline
-    ? workout.discipline
+  // HYROX-only disciplines ('station', 'brick') fall back to 'run' in this
+  // triathlon card — HYROX workouts render through their own modal.
+  const triDisc = (workout.discipline === 'swim' || workout.discipline === 'bike' || workout.discipline === 'run')
+    ? workout.discipline : undefined;
+  const discipline: BadgeKind = triDisc
+    ? triDisc
     : (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n)) ? 'strength'
     : 'run';
   const c = DISCIPLINE_COLOURS[discipline];
@@ -195,11 +199,9 @@ function renderBlock(b: WorkoutBlock, accent: string): string {
   const isEndpoint = b.label === 'Warm up' || b.label === 'Cool down' || b.label === 'Transition';
   return `
     <div style="display:flex;gap:14px;margin-bottom:16px">
-      <div style="flex-shrink:0;width:44px;padding-top:4px">
-        <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${isEndpoint ? 'var(--c-faint)' : accent}">${b.label.slice(0, 4).toUpperCase()}</div>
-      </div>
-      <div style="flex:1;border-left:2px solid ${isEndpoint ? 'rgba(0,0,0,0.08)' : accent};padding:4px 0 4px 14px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:${isEndpoint ? 'var(--c-muted)' : '#0F172A'};margin-bottom:4px">${b.label}</div>
+      <div style="width:3px;flex-shrink:0;background:${isEndpoint ? 'rgba(0,0,0,0.08)' : accent};border-radius:2px;margin-top:2px"></div>
+      <div style="flex:1;padding:2px 0">
+        <div style="font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:${isEndpoint ? 'var(--c-faint)' : accent};margin-bottom:4px">${b.label}</div>
         <div style="font-size:14px;color:#0F172A;line-height:1.55">${escapeHtml(b.body)}</div>
       </div>
     </div>
@@ -207,6 +209,7 @@ function renderBlock(b: WorkoutBlock, accent: string): string {
 }
 
 function formatTarget(t: import('@/types/triathlon').DisciplineTarget): string {
+  if (t.targetWattsLow && t.targetWattsHigh) return `${t.targetWattsLow}–${t.targetWattsHigh}W`;
   if (t.targetWatts) return `${t.targetWatts}W`;
   if (t.targetPctFtp) return `${Math.round(t.targetPctFtp * 100)}% FTP`;
   if (t.targetPaceSecPerKm) return `${Math.floor(t.targetPaceSecPerKm / 60)}:${String(Math.round(t.targetPaceSecPerKm % 60)).padStart(2, '0')}/km`;

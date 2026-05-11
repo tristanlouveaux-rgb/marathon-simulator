@@ -8,7 +8,29 @@ import type {
 } from './training';
 import type { CrossTrainingAdjustment, LoadBudget } from './activities';
 import type { OnboardingState, Marathon, RecurringActivity, TrainingFocus } from './onboarding';
-import type { EventType, TriConfig, Discipline } from './triathlon';
+import type { EventType, TriConfig, Discipline, HyroxConfig } from './triathlon';
+
+/** Cross-modal VO2max estimate confidence tier. Mirrors `hrCalibratedVdot.confidence`. */
+export type VO2Confidence = 'high' | 'medium' | 'low' | 'none';
+
+/** A single per-discipline VO2max estimate. */
+export interface VO2Estimate {
+  /** Estimated VO2max in ml/kg/min. Null when no usable data. */
+  value: number | null;
+  /** Confidence in this value. */
+  confidence: VO2Confidence;
+  /** Which estimator produced the value. */
+  source:
+    | 'effort-calibrated'   // Running pace–%VO2R regression (Daniels via cv())
+    | 'acsm-ftp'            // Cycling 10.8 × W/kg + 7
+    | 'uth-sorensen'        // 15.3 × HRmax/HRrest across all aerobic activity
+    | 'sustained-hr-cross-training'  // Swain %HRR × cardiac ceiling × duration credit
+    | 'none';
+  /** Number of points / activities feeding the estimate. */
+  n: number;
+  /** Short human caption. */
+  detail?: string;
+}
 
 /** Benchmark check-in types (4-tier system) */
 export type BenchmarkType =
@@ -69,8 +91,10 @@ export interface WorkoutDefinition {
 export interface Workout extends WorkoutDefinition {
   id?: string;                  // Stable unique ID (e.g., "W1-easy-0")
   t: string;                    // Workout type
-  /** Triathlon discipline the workout belongs to. Undefined = running (default for back-compat). */
-  discipline?: Discipline;
+  /** Triathlon or HYROX discipline the workout belongs to.
+   *  Undefined = running (default for back-compat).
+   *  'station' and 'brick' are HYROX-only values. */
+  discipline?: Discipline | 'station' | 'brick';
   /** Brick workouts carry two ordered segments (bike → run typically). Only set when t === 'brick'. */
   brickSegments?: import('./triathlon').BrickSegments['segments'];
   rpe?: number;                 // Expected RPE (alternative to r)
@@ -99,12 +123,29 @@ export interface Workout extends WorkoutDefinition {
    * generation time so downstream code (scheduler capacity, card chips,
    * detail modal) doesn't have to parse the description string. */
   estimatedDurationMin?: number;
+  /** Garmin/Strava activity ID matched to this workout. Populated by the tri matcher so
+   *  the effort multiplier can read powerAdherence from the matched actual. */
+  matchedActivityId?: string;
   /** Strava activity ID if this workout was paired via Strava enrich */
   stravaId?: string | null;
   /** iTRIMP from Strava HR stream (set on Garmin-sourced adhoc workouts after Strava enrich) */
   iTrimp?: number | null;
   /** Target pace in sec/km set when a session is generated with an effort selection. */
   targetPaceSecKm?: number;
+  /** HYROX mode: MusculoTendon Load for this session. Sum of component MTLs
+   *  (run segments + station components). Undefined for non-HYROX workouts. */
+  musculoTendonLoad?: number;
+  /** HYROX mode: component breakdown for brick and station sessions.
+   *  Used by plan-view workout cards and the detail modal. */
+  hyroxComponents?: import('./triathlon').HyroxComponent[];
+  /** HYROX mode: per-station substitution picks when the user lacks equipment.
+   *  Keyed by HyroxStation id, value is the substitution id from
+   *  `HYROX_STATION_SUBSTITUTIONS`. Display layer overlays the substitute name.
+   *  Component MTL is recomputed from the substitution's mtlFactor. */
+  hyroxStationSubs?: Record<string, string>;
+  /** HYROX mode: snapshot of the original component MTL values before any swaps,
+   *  keyed by HyroxStation. Used to revert correctly when a swap is undone. */
+  hyroxOriginalMtls?: Record<string, number>;
 }
 
 /** Skipped workout record */
@@ -136,6 +177,56 @@ export interface SimpleCross {
   ae: number;  // Aerobic effect
   an: number;  // Anaerobic effect
   l: number;   // Load
+}
+
+/**
+ * Per-session record used to fit the user's personal recovery rate (`k_user`).
+ *
+ * Created when a workout is completed (live) or reconstructed from history
+ * (one-shot backfill on first launch). `observedHours` is filled in once the
+ * user's HRV/RHR composite z-score returns to baseline — or capped at 96h
+ * (right-censored). The fitter aggregates `observed/predicted` ratios across
+ * recent entries to update `s.adaptiveRecovery.kUserHours`.
+ *
+ * See `src/calculations/adaptive-recovery.ts` for the fitting logic and
+ * `docs/SCIENCE_LOG.md` for the rationale.
+ */
+export interface SessionImpactEntry {
+  garminId: string;                 // ties back to the matched activity
+  date: string;                     // YYYY-MM-DD of the session
+  tss: number;                      // run-equiv TSS at completion
+  ctlAtTime: number;                // daily-equiv CTL at session time
+  recoveryMultAtTime: number;       // sport/intensity multiplier used in countdown
+  recoveryAdjAtTime: number;        // transient HRV/RHR/sleep adjustment used
+  predictedHours: number;           // hours-to-baseline predicted by current model
+  observedHours?: number;           // hours until composite signal returned to baseline
+  rightCensored?: boolean;          // true if observed hit the 96h cap without recovery
+  signalsUsed: Array<'hrv' | 'rhr' | 'checkin' | 'rpe'>;
+  rpeNextSession?: { expected: number; actual: number };
+  source: 'live' | 'historical-backfill';
+  fitWeight: number;                // 1.0 for live, 0.7 for historical
+}
+
+/**
+ * Learned recovery personalisation — tracks the user's `k_user` (the multiplier
+ * that replaces the population constant of 8 in the recovery countdown) and the
+ * confidence with which it has been fit.
+ *
+ * Confidence gating:
+ *   - none/low (< 16 sessions):  population default; UI shows "learning"
+ *   - medium  (16–29 sessions):  k_user used in recovery countdown only
+ *   - high    (30+ sessions):    k_user used in countdown AND ACWR ceiling shift
+ *
+ * Updated weekly on rollover. See `fitKUser` in `adaptive-recovery.ts`.
+ */
+export interface AdaptiveRecovery {
+  kUserHours: number;               // default 8 until learned; clamped [5, 13]
+  confidence: 'none' | 'low' | 'medium' | 'high';
+  sessionsObserved: number;         // count of entries with observedHours filled
+  lastFitAt?: string;               // ISO date of last weekly fit
+  emaHalfLifeWeeks: number;         // 4 — recency decay for the fit
+  history?: Array<{ date: string; k: number; n: number }>; // sparkline (cap 12)
+  notifiedMilestones?: string[];    // e.g. 'first-medium', 'first-high'
 }
 
 /** Single day of Garmin physiology data */
@@ -189,6 +280,7 @@ export interface GarminPendingItem {
   maxWatts?: number | null;
   deviceWatts?: boolean | null;       // true = real power meter, false = Strava estimate
   kilojoules?: number | null;
+  repData?: ActivityRepData | null;
 }
 
 /** Actual data from a matched Garmin activity */
@@ -261,6 +353,20 @@ export interface GarminActual {
    * weeks or below the budget cutoff). Fields may be individually null
    * when the ride was shorter than that window. */
   powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null;
+  /** Power adherence for bike workouts: adjusted actual NP vs FTP-derived target,
+   *  with a per-session-type tolerance band applied (soft gradient within band).
+   *  1.0 = on target. <1.0 = below target, >1.0 = above. Null when no power meter or no FTP target. */
+  powerAdherence?: number | null;
+  /** Per-rep interval analysis. Present on run/bike interval sessions where
+   *  Strava laps or stream-detection produced a clean rep cluster. */
+  repData?: ActivityRepData | null;
+  /** Swim environment tag — drives CSS pace normalisation to a wetsuit-lake
+   *  baseline so pool/lake/ocean swims pool into one CSS estimate consistently.
+   *  Auto-tagged as `pool` for SWIMMING/LAP_SWIMMING activityType. For
+   *  OPEN_WATER_SWIMMING the tag falls back to
+   *  `triConfig.swim.defaultOwSwimEnvironment` (set once during onboarding).
+   *  See `SWIM_TYPE_MULTIPLIER` in triathlon-course-factors.ts. */
+  swimEnvironment?: import('../constants/triathlon-course-factors').AthleteSwimEnvironment;
 }
 
 /** Per-lap split from Garmin activity details */
@@ -270,6 +376,47 @@ export interface GarminLap {
   durationSec: number;
   avgPaceSecKm: number;
   avgHR?: number;
+}
+
+/** A single rep within a detected interval session (run or bike). */
+export interface ActivityRep {
+  /** 1-based index within the rep set (recovery/warmup laps excluded). */
+  index: number;
+  distanceM: number;
+  durationSec: number;
+  /** sec/km — null when distance was 0 (rare device glitches). */
+  paceSecKm?: number | null;
+  /** Average HR for the rep — null when no HR stream/lap data. */
+  avgHR?: number | null;
+  /** Average watts — bike only, null otherwise. */
+  avgWatts?: number | null;
+}
+
+/**
+ * Detected interval reps + per-rep adherence aggregate. Set on `GarminActual`
+ * when the activity is recognised as a structured interval session and
+ * detection found a clean rep cluster.
+ */
+export interface ActivityRepData {
+  reps: ActivityRep[];
+  /** Where the reps came from. 'strava-laps' = user pressed lap on watch.
+   *  'auto-detected' = derived from pace/power stream. */
+  source: 'strava-laps' | 'auto-detected';
+  /** Aggregate score against the prescribed workout. Null when no plan
+   *  target is parseable. Computed lazily on the client (not stored in DB). */
+  score?: {
+    /** Reps within the per-rep tolerance band. */
+    inBand: number;
+    /** Total reps that were attempted to match. */
+    total: number;
+    /** Fade %: (last-half avg − first-half avg) / first-half avg × 100.
+     *  Positive = slowed/dropped power. Negative = negative split. */
+    fadePct: number;
+    /** Mean per-rep adherence (1.0 = on target). */
+    avgAdherence: number;
+    /** Prescribed-workout description that was parsed (for transparency). */
+    parsedFrom?: string;
+  };
 }
 
 /** Unspent load item — excess load from overflow/surplus activities */
@@ -288,6 +435,11 @@ export interface UnspentLoadItem {
 export interface Week {
   w: number;                            // Week number
   ph: TrainingPhase;                    // Training phase
+  /** True for the time-trial week at the end of cycle 1 in double-periodization
+   *  plans (≥33 weeks). Phase stays 'peak' so existing peak-phase logic applies;
+   *  the workout generator and Phase Timeline read this flag to swap content
+   *  and label. See src/workouts/phases.ts. */
+  checkpoint?: boolean;
   rated: Record<string, number | 'skip'>; // Workout ratings
   ratedChanges?: Record<string, number>;  // VDOT changes from ratings
   skip: SkippedWorkout[];               // Skipped workouts to carry forward
@@ -320,6 +472,11 @@ export interface Week {
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
   scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time — passed to generator
   carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
+  /** Triathlon-mode equivalent of `carriedTSS`: cross-training TSS pushed forward
+   *  from this week to next via the tri suggestion modal's "Push to next week"
+   *  button. Single number (cross-training stimulus isn't decomposed by zone).
+   *  Decayed via 7-day ATL τ when read by `computeDecayedTriCarry` (Tier 2). */
+  carriedCrossTrainingTSS?: number;
   acwrOverridden?: boolean;                     // User dismissed "Reduce this week" — adds synthetic ATL debt
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
   hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
@@ -380,6 +537,9 @@ export interface SimulatorState {
   /** Triathlon-specific configuration. Present only when eventType === 'triathlon'. */
   triConfig?: TriConfig;
 
+  /** HYROX-specific configuration. Present only when eventType === 'hyrox'. */
+  hyroxConfig?: HyroxConfig;
+
   // Week tracking
   w: number;              // Current week
   tw: number;             // Total weeks
@@ -428,6 +588,10 @@ export interface SimulatorState {
   /** Latest Garmin LT reading recorded by the sync (kept even when not active). */
   garminLT?: { ltPaceSecKm: number; ltHR?: number | null; asOf: string };
   vo2: number | null;     // Current VO2max
+  /** ISO date (YYYY-MM-DD) when s.vo2 was last written by a sync path.
+   *  Used by getPhysiologicalVdot's freshness gate so Garmin users whose
+   *  daily_metrics.vo2max updates from cycling don't mask a stale running VO2. */
+  vo2UpdatedAt?: string;
   initialLT: number | null;   // Initial LT at week 0
   initialVO2: number | null;  // Initial VO2 at week 0
   maxHR?: number;             // Maximum Heart Rate
@@ -436,7 +600,18 @@ export interface SimulatorState {
   // Race time tracking
   initialBaseline: number | null;   // Initial race time prediction
   currentFitness: number | null;    // Current race time estimate
-  forecastTime: number | null;      // Forecast race time after training
+  forecastTime: number | null;      // Forecast race time after training (raw VDOT)
+  /** Forecast race time after applying course factors (climate/altitude/elevation).
+   * Populated only when `selectedMarathon.profile` exists. Falls back to `forecastTime`. */
+  forecastTimeAdjusted?: number;
+  /** Itemised course factors backing `forecastTimeAdjusted` for UI display. */
+  forecastCourseFactors?: Array<{
+    kind: 'climate' | 'altitude' | 'run-elevation';
+    label: string;
+    value: string;
+    deltaSec: number;
+    multiplier: number;
+  }>;
 
   // Runner profile
   typ: RunnerType;                      // Effective runner type (used by engine)
@@ -489,6 +664,10 @@ export interface SimulatorState {
   // User dismissed the one-time Home banner. The Account view section stays.
   guestBannerDismissed?: boolean;
 
+  // User dismissed (or accepted) the build-phase Vibes Run nudge for the current plan.
+  // Reset implicitly when state is reset (new plan).
+  vibesRunNudgeDismissed?: boolean;
+
   // Integrations
   stravaConnected?: boolean;
   wearable?: 'garmin' | 'apple' | 'strava';  // Legacy — use accessors in src/data/sources.ts
@@ -540,6 +719,36 @@ export interface SimulatorState {
     points?: Array<{ vo2r: number; paceSecKm: number; durationSec: number }>;
   };
 
+  // Cross-modal VO2max — per-discipline estimates plus a cardiac ceiling that
+  // captures contributions from any aerobic sport via HR data. Computed every
+  // launch from the last 8 weeks of activities. See SCIENCE_LOG → "Cross-Modal
+  // VO2max" for the formulas, transfer coefficients, and citations.
+  vo2Source?: 'mosaic' | 'device';
+  /** Manual VO2max override. When present, takes priority over `vo2Source`
+   *  (mosaic|device) and over the orchestrator's computed headline.
+   *  Mirrors the LT override pattern (`override > Garmin > derived`). The
+   *  Mosaic / Watch toggle UI shows a third "Manual" pill while this is set;
+   *  the user clicks Reset to remove the override and restore the toggle. */
+  vo2Override?: {
+    value: number;            // ml/kg/min
+    setAt: string;            // ISO timestamp
+  };
+  vo2Estimates?: {
+    /** Running VO2max — effort-calibrated regression, lifted by cardiac ceiling. */
+    running: VO2Estimate;
+    /** Cycling VO2max — ACSM W/kg, lifted by cardiac ceiling. */
+    cycling: VO2Estimate;
+    /** Cardiac ceiling — Uth-Sørensen across all aerobic activity. */
+    cardiac: VO2Estimate;
+    /** Cross-training VO2max — sustained-HR aerobic capacity from non-run,
+     *  non-bike sport. Hidden when fewer than 3 qualifying sessions. */
+    crossTraining: VO2Estimate;
+    /** Highest demonstrated across all sources — the headline figure. */
+    headline: { value: number | null; confidence: VO2Confidence; sport: 'running' | 'cycling' | 'cardiac' | null };
+    /** ISO timestamp of the most recent recompute. */
+    computedAt: string;
+  };
+
   // Per-run summary cached at onboarding so the first blend has Tanda inputs
   // without waiting a week for standalone sync to fill garminActuals.
   // The rich quality fields (avgPaceSecKm, kmSplits, hrDrift, elevation, temp)
@@ -569,6 +778,14 @@ export interface SimulatorState {
   firstStravaActivityISO?: string | null;
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
   stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
+  /** True once the 16-week Apple Health backfill has run at least once.
+   * Subsequent launches use a 14-day incremental window. Same role as
+   * `stravaHistoryFetched` for the Apple-only path. */
+  appleHistoryFetched?: boolean;
+  /** ISO timestamp of the most recent successful Apple-history aggregation.
+   * Mirrors `historicLastRefreshedAt` for the Apple path; used to decide
+   * whether to refresh weekly baselines on launch. */
+  appleHistoryLastRefreshedAt?: string;
   ambientTempHealDone?: boolean;            // True once the post-column backfill heal has fetched ambient_temp_c for historical runs
   /** ISO timestamp of the most recent successful backfillStravaHistory completion.
    * Drives the weekly refresh of historicWeeklyTSS / signalBBaseline / ctlBaseline:
@@ -637,7 +854,11 @@ export interface SimulatorState {
   benchmarkResults?: BenchmarkResult[]; // History of optional benchmark check-ins
 
   // Long race plan structure (>16 weeks)
-  racePhaseStart?: number;        // 1-indexed week where race-specific training begins (last 16 weeks)
+  /** @deprecated Legacy field from the >16w block-cycle prefix model.
+   *  No longer set on new plans (always undefined). Kept in the interface so
+   *  reads from persisted state don't throw. Safe to remove after all users
+   *  have re-initialised a plan. */
+  racePhaseStart?: number;
 
   // Recovery tracking
   recoveryHistory?: import('../recovery/engine').RecoveryEntry[];
@@ -645,6 +866,16 @@ export interface SimulatorState {
 
   // Garmin physiology history (last 7 days from daily_metrics)
   physiologyHistory?: PhysiologyDayEntry[];
+
+  // Personalised recovery learning — fitted from the session impact log.
+  // Replaces the population recovery constant (8) when confidence is medium
+  // or higher. See `src/calculations/adaptive-recovery.ts`.
+  adaptiveRecovery?: AdaptiveRecovery;
+
+  // Per-session evidence for the recovery-rate fitter. Capped at 90 days of
+  // entries. Populated live as workouts are completed plus a one-shot
+  // historical backfill on first launch.
+  sessionImpactLog?: SessionImpactEntry[];
 
   // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal
   recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; garminId?: string; rbeProtected?: boolean }>;
@@ -703,6 +934,10 @@ export interface SimulatorState {
    * source of truth, local `previousPlanWks` is a hot cache.
    */
   lastHistoryAutoRestoreISO?: string;
+
+  // AI Coach (BYOK)
+  anthropicApiKeyStored?: boolean;  // flag only — actual key lives in Keychain / localStorage
+  coachConsentGiven?: boolean;      // one-time Anthropic data disclosure accepted
 }
 
 /** Summary of a completed training plan, stored permanently for plan-history view in Stats. */

@@ -10,7 +10,7 @@ describe('Pace Calculations', () => {
         const paces = gp(50, ltPace);
 
         expect(paces.t).toBe(240);           // Threshold = LT
-        expect(paces.e).toBeCloseTo(276, 0); // Easy: 15% slower
+        expect(paces.e).toBeCloseTo(288, 0); // Easy: 20% slower
         expect(paces.m).toBeCloseTo(252, 0); // Marathon: 5% slower
         expect(paces.i).toBeCloseTo(223, 0); // Interval: 7% faster
         expect(paces.r).toBeCloseTo(211, 0); // Rep: 12% faster

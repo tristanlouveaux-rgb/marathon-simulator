@@ -9,8 +9,13 @@ import {
   gp, blendPredictions
 } from '@/calculations';
 import { calculateForecast } from '@/calculations/predictions';
+import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { computePredictionInputs } from '@/calculations/prediction-inputs';
+import { refreshForecastCourseFactors } from '@/calculations/course-factors-running';
 import { initializeWeeks } from '@/workouts';
 import { initializeTriathlonSimulator } from './initialization.triathlon';
+import { initializeCyclingSimulator } from './initialization.cycling';
+import { initializeHyroxSimulator } from './initialization.hyrox';
 
 export interface CalculationResult {
   success: boolean;
@@ -255,6 +260,19 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       return initializeTriathlonSimulator(state);
     }
 
+    // Cycling fork (V1): single-discipline mode that reuses the triathlon
+    // plan engine with disciplines=['bike']. Plan engine + per-discipline
+    // CTL/ATL all key off the disciplines array so swim/run paths stay dark.
+    if (state.trainingMode === 'cycling') {
+      return initializeCyclingSimulator(state);
+    }
+
+    // HYROX fork: run + functional stations. Dedicated plan engine (Phase 1)
+    // fills weeks; Phase 0 creates skeleton weeks so the wizard completes.
+    if (state.trainingMode === 'hyrox') {
+      return initializeHyroxSimulator(state);
+    }
+
     // Just-Track mode: no plan is generated, but the state scaffolding is the
     // same as any non-event continuous user — a rolling week bucket so that
     // activity sync, GPS recordings, readiness, CTL, and ACWR all work
@@ -305,7 +323,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       }
       if (state.recentRace) s.rec = state.recentRace;
       if (state.ltPace != null) { s.lt = state.ltPace; s.ltPace = state.ltPace; }
-      if (state.vo2max != null) s.vo2 = state.vo2max;
+      if (state.vo2max != null) { s.vo2 = state.vo2max; s.vo2UpdatedAt = undefined; }
       if (state.restingHR) s.restingHR = state.restingHR;
       if (state.maxHR) s.maxHR = state.maxHR;
       if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
@@ -363,11 +381,48 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     const ltPace = state.ltPace || null;
     const vo2max = state.vo2max || null;
 
-    // Calculate blended prediction with all available data
+    // Calculate blended prediction with all available data. Pass volume
+    // signals derived from onboardingRunHistory (the runs the wizard pipeline
+    // just seeded from Strava) so:
+    //   1. Tanda can fire when there's enough recent training data
+    //   2. The marathon-specificity penalty fires when Tanda gates out and
+    //      recent volume is low (otherwise the baseline locks at PB time
+    //      regardless of the user's actual current marathon-specific fitness)
+    // computePredictionInputs returns weeklyKm=0 for users with no recent
+    // qualifying runs, which is the explicit signal the penalty needs.
+    const sCurrent = getMutableState();
+    const runsForBlend = (sCurrent.onboardingRunHistory ?? []).map(r => ({
+      startTime: r.startTime,
+      distKm: r.distKm,
+      durSec: r.durSec,
+      activityType: r.activityType,
+      avgHR: r.avgHR ?? null,
+    }));
+    const blendInputs = computePredictionInputs(runsForBlend);
+
+    // Marathon PB age (days) for the marathon-specificity penalty's PB-recency
+    // scaling. A recent marathon PB demonstrates current capability and lightens
+    // the penalty (which otherwise assumes PB is stale).
+    const marathonPbDateISO = state.pbDates?.m;
+    const marathonPbAgeDays = marathonPbDateISO
+      ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
+      : undefined;
+
     // Note: blendPredictions uses runnerType.toLowerCase() internally
     const blendedTime = blendPredictions(
       targetDistMeters, pbs, ltPace, vo2max, b,
-      runnerType.toLowerCase(), rec
+      runnerType.toLowerCase(),
+      blendInputs.recentRun ?? rec ?? null,
+      undefined,                             // athleteTier (set later)
+      blendInputs.weeklyKm,                  // pass actual value (0 = explicit zero)
+      blendInputs.avgPaceSecPerKm ?? undefined,
+      {
+        weeksCovered: blendInputs.weeksCovered,
+        paceConfidence: blendInputs.paceConfidence,
+        isStale: blendInputs.isStale,
+      },
+      undefined,                             // hrVdot (not derived at onboarding finalize)
+      marathonPbAgeDays,
     );
 
     if (!blendedTime || isNaN(blendedTime) || blendedTime <= 0) {
@@ -415,6 +470,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.lt = ltPace;
     s.ltPace = ltPace;
     s.vo2 = vo2max;
+    s.vo2UpdatedAt = undefined; // wizard source — preserve "no timestamp = fresh" policy
     s.typ = effectiveRunnerType;           // Effective type used by engine
     s.calculatedRunnerType = calculatedRunnerType; // Physics-derived type
     s.b = b;
@@ -441,39 +497,12 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       }
     }
 
-    // Long race plans (>16 weeks): block cycling for early weeks,
-    // then standard 16-week race-specific phasing for the final stretch
-    const RACE_PREP_WEEKS = 16;
-    if (state.trainingForEvent !== false && s.tw > RACE_PREP_WEEKS) {
-      const racePhaseStart = s.tw - RACE_PREP_WEEKS; // 0-indexed boundary
-      s.racePhaseStart = racePhaseStart + 1; // 1-indexed for UI
-
-      // Pre-race weeks: repeating 4-week block cycling
-      const blockPhases: Array<'base' | 'build' | 'peak' | 'taper'> = ['base', 'build', 'peak', 'taper'];
-      for (let i = 0; i < racePhaseStart; i++) {
-        s.wks[i].ph = blockPhases[i % 4];
-      }
-
-      // Race-specific weeks: standard 16-week phasing
-      // (same algorithm as initializeWeeks but scoped to 16 weeks)
-      const taperWeeks = Math.max(1, Math.ceil(RACE_PREP_WEEKS * 0.12)); // ~2 weeks
-      const taperStart = RACE_PREP_WEEKS - taperWeeks + 1;
-      const pre = taperStart - 1;
-      const baseWeeks = Math.max(1, Math.round(pre * 0.45));
-      const buildWeeks = Math.max(1, Math.round(pre * 0.40));
-      const baseEnd = baseWeeks;
-      const buildEnd = baseWeeks + buildWeeks;
-
-      for (let w = 1; w <= RACE_PREP_WEEKS; w++) {
-        let ph: 'base' | 'build' | 'peak' | 'taper' = 'base';
-        if (w >= taperStart) ph = 'taper';
-        else if (w > buildEnd) ph = 'peak';
-        else if (w > baseEnd) ph = 'build';
-        s.wks[racePhaseStart + w - 1].ph = ph;
-      }
-    } else if (state.trainingForEvent !== false) {
-      s.racePhaseStart = undefined; // ≤16 weeks: no block cycling phase
-    }
+    // Phase assignment is fully handled by initializeWeeks → computePlanPhases.
+    // The legacy racePhaseStart split (event plans >16 weeks got a 4-week block-cycle
+    // prefix) is removed: it produced a confusing "Base → Build → Base → Build" pattern
+    // in the timeline. Single coach-style arcs scale up to 32w; double periodization
+    // with a mid-plan checkpoint TT week takes over at ≥33w. See src/workouts/phases.ts.
+    s.racePhaseStart = undefined;
     s.skip = [];
     s.timp = 0;
 
@@ -515,17 +544,22 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
 
-    // Calculate expected final via shared forecast function
+    // Calculate expected final via shared forecast function. Anchor to the
+    // blended race-time so the projected end-of-plan finish stays on the same
+    // scale as the live "Current Race Estimate" surfaces (single canonical
+    // prediction model — see calculateForecast).
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions, state, runnerType
+      curr, runsPerWeek + effectiveCrossSessions, state, runnerType, blendedTime,
     );
     s.expectedFinal = forecast.forecastVdot;
     s.forecastTime = forecast.forecastTime;
 
-    // Store selected marathon
+    // Store selected marathon (must be set BEFORE refreshing course factors,
+    // since the helper reads s.selectedMarathon.profile)
     if (state.selectedRace) {
       s.selectedMarathon = state.selectedRace;
     }
+    refreshForecastCourseFactors(s);
 
     // Anchor all week date ranges to the Monday of the week the plan was created
     s.planStartDate = getMondayOf(new Date()).toISOString().slice(0, 10);

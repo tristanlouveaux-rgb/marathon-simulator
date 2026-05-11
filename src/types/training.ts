@@ -44,7 +44,8 @@ export type WorkoutType =
   | 'mixed'
   | 'progressive'
   | 'hill_repeats'
-  | 'float';
+  | 'float'
+  | 'vibes';
 
 /** Training phase */
 export type TrainingPhase = 'base' | 'build' | 'peak' | 'taper';
@@ -98,7 +99,10 @@ export interface TrainingHorizonInput {
   ability_band: AbilityBand;
   taper_weeks?: number;
   experience_level?: string;
+  /** History-derived weekly running km (s.wkm). Primary dose signal. */
   weekly_volume_km?: number;
+  /** User-stated weekly training hours (onboarding). Fallback when km unavailable. */
+  weekly_volume_hours?: number;
   long_run_max_km?: number;
   hm_pb_seconds?: number;
   lt_pace_sec_per_km?: number;

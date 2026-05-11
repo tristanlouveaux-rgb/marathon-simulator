@@ -20,26 +20,31 @@
  * the run projection.
  */
 
-import type { AbilityBand, RaceDistance, RunnerType } from '@/types';
+import type { AbilityBand } from '@/types';
 import {
   SWIM_HORIZON_PARAMS,
   BIKE_HORIZON_PARAMS,
+  RUN_HORIZON_PARAMS_703,
+  RUN_HORIZON_PARAMS_IM,
   TRI_K_SESSIONS,
   TRI_TAPER_WEEKS,
   type DisciplineHorizonParams,
 } from '@/constants/triathlon-horizon-params';
 import type { TriathlonDistance } from '@/types/triathlon';
-import { applyTrainingHorizonAdjustment } from './training-horizon';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Shared shape (mirrors `TrainingHorizonInput`/`TrainingHorizonResult`)
 // ───────────────────────────────────────────────────────────────────────────
 
+// `returning` raised 1.15 → 1.35 (recalibration 2026-05-06) — see
+// `training-horizon.ts` EXP_FACTORS for the science. Kept in lockstep across
+// running and triathlon since the underlying physiology (re-adaptation
+// advantage) is modality-agnostic.
 const EXP_FACTORS: Record<string, number> = {
   total_beginner: 0.75, beginner: 0.80,
   novice: 0.90, intermediate: 1.0,
   advanced: 1.05, competitive: 1.05,
-  returning: 1.15,
+  returning: 1.35,
   hybrid: 1.10,
 };
 
@@ -114,15 +119,31 @@ function computeImprovementPct(
     undertrainPenalty = params.undertrain_penalty_pct * (minSess - input.sessions_per_week) / Math.max(1, minSess);
   }
 
-  // Taper bonus — full bonus when taper duration meets the discipline default
-  const taperBonus = taperBon * Math.min(1, taper_eff / Math.max(1, taper_eff || 1));
+  // Taper bonus — scales by how much of the planned taper duration the
+  // athlete actually has time for. For races with a full taper window
+  // available (weeks_remaining ≥ planned taper) → full bonus. Race tomorrow
+  // (weeks_remaining = 0) → zero bonus. Previously the formula always
+  // returned the full bonus when taper_eff > 0 (Math.min(1, x/max(1,x)) is
+  // always 1 for x > 0) — predicted "full taper benefit" even with no time
+  // to taper. Now taperRatio is the meaningful share.
+  const plannedTaperWeeks = input.taper_weeks ?? 0;
+  const actualTaperWeeks = Math.max(0, Math.min(plannedTaperWeeks, input.weeks_remaining));
+  const taperRatio = plannedTaperWeeks > 0 ? actualTaperWeeks / plannedTaperWeeks : 0;
+  const taperBonus = taperBon * taperRatio;
 
   improvementPct = improvementPct + taperBonus - undertrainPenalty - adherencePen;
   improvementPct *= adaptation;
 
-  // Bounds
+  // Bounds. Clamp at 0 minimum (not max_slowdown_pct) — a *training* projection
+  // should never predict fitness LOSS. The negative-floor was hiding a
+  // degenerate case where weeksRemaining ≈ 0 + zero planned sessions made
+  // taper_bonus 0 and undertrain_penalty large, producing negative improvement
+  // and thus "training will make you slower" projections (e.g., race tomorrow
+  // showed VDOT 49.6 → 48.8). Floor at 0 means worst-case projection = current
+  // fitness, which is the correct semantic ("no time to improve, but also no
+  // regression from training itself").
   improvementPct = Math.max(
-    -params.max_slowdown_pct,
+    0,
     Math.min(params.max_gain_cap_pct, improvementPct),
   );
 
@@ -146,6 +167,7 @@ function computeImprovementPct(
 export function applyTriHorizonSwim(input: TriHorizonInput): TriHorizonResult {
   const { improvementPct, components } = computeImprovementPct(SWIM_HORIZON_PARAMS, input);
   const projected = input.baseline * (1 - improvementPct / 100);
+  console.log(`[TriHorizon:swim] band=${input.ability_band} sess=${input.sessions_per_week} weeks_rem=${input.weeks_remaining} → max_gain=${SWIM_HORIZON_PARAMS.max_gain_pct[input.ability_band]} week=${components.week_factor.toFixed(3)} sess=${components.session_factor.toFixed(3)} exp=${(EXP_FACTORS[input.experience_level ?? 'intermediate'] ?? 1.0).toFixed(2)} undertrain=${components.undertrain_penalty.toFixed(2)} taper=${components.taper_bonus.toFixed(2)} → improvement_pct=${improvementPct.toFixed(2)} CSS ${input.baseline.toFixed(0)} → ${projected.toFixed(0)}`);
   return { improvement_pct: improvementPct, projected, components };
 }
 
@@ -156,6 +178,7 @@ export function applyTriHorizonSwim(input: TriHorizonInput): TriHorizonResult {
 export function applyTriHorizonBike(input: TriHorizonInput): TriHorizonResult {
   const { improvementPct, components } = computeImprovementPct(BIKE_HORIZON_PARAMS, input);
   const projected = input.baseline * (1 + improvementPct / 100);
+  console.log(`[TriHorizon:bike] band=${input.ability_band} sess=${input.sessions_per_week} weeks_rem=${input.weeks_remaining} → max_gain=${BIKE_HORIZON_PARAMS.max_gain_pct[input.ability_band]} week=${components.week_factor.toFixed(3)} sess=${components.session_factor.toFixed(3)} exp=${(EXP_FACTORS[input.experience_level ?? 'intermediate'] ?? 1.0).toFixed(2)} undertrain=${components.undertrain_penalty.toFixed(2)} taper=${components.taper_bonus.toFixed(2)} → improvement_pct=${improvementPct.toFixed(2)} FTP ${input.baseline.toFixed(0)}W → ${projected.toFixed(0)}W (+${(projected - input.baseline).toFixed(1)}W)`);
   return { improvement_pct: improvementPct, projected, components };
 }
 
@@ -165,52 +188,27 @@ export function applyTriHorizonBike(input: TriHorizonInput): TriHorizonResult {
 
 export interface TriHorizonRunInput extends TriHorizonInput {
   triathlon_distance: TriathlonDistance;
-  runner_type?: RunnerType;
+  // runner_type and hm_pb_seconds are accepted for call-site compatibility
+  // but unused — triathlon run uses per-discipline params not the marathon
+  // guardrails.
+  runner_type?: string;
   hm_pb_seconds?: number;
   weekly_volume_km?: number;
 }
 
 export function applyTriHorizonRun(input: TriHorizonRunInput): TriHorizonResult {
-  // Map triathlon distance to the running-side `target_distance` so we
-  // pick up the correct marathon (IM) / half (70.3) horizon constants.
-  const target_distance: RaceDistance = input.triathlon_distance === 'ironman' ? 'marathon' : 'half';
+  // Use triathlon-calibrated run params (ref_sessions 3/wk for 70.3, 3.5/wk
+  // for IM) rather than marathon params (ref 5/wk). A triathlete doing 3
+  // focused runs/week alongside swim + bike is training optimally — the
+  // marathon model would wrongly penalise them as undertrained.
+  const params = input.triathlon_distance === 'ironman'
+    ? RUN_HORIZON_PARAMS_IM
+    : RUN_HORIZON_PARAMS_703;
 
-  const result = applyTrainingHorizonAdjustment({
-    baseline_vdot: input.baseline,
-    target_distance,
-    weeks_remaining: input.weeks_remaining,
-    sessions_per_week: input.sessions_per_week,
-    runner_type: input.runner_type ?? 'Balanced',
-    ability_band: input.ability_band,
-    taper_weeks: input.taper_weeks ?? 0,
-    experience_level: input.experience_level,
-    weekly_volume_km: input.weekly_volume_km,
-    hm_pb_seconds: input.hm_pb_seconds,
-  });
-
-  // Apply adaptation + adherence on top of the marathon-style gain (the
-  // marathon function does not yet take these inputs).
-  const adaptation = input.adaptation_ratio ?? 1.0;
-  const adherencePen = input.adherence_penalty_pct ?? 0;
-  let improvementPct = result.improvement_pct - adherencePen;
-  improvementPct *= adaptation;
-  // Clamp to the same marathon bounds (15% cap, 3% slowdown) — values from
-  // `TRAINING_HORIZON_PARAMS.max_gain_cap_pct/max_slowdown_pct`.
-  improvementPct = Math.max(-3.0, Math.min(15.0, improvementPct));
-
+  const { improvementPct, components } = computeImprovementPct(params, input);
   const projected = input.baseline + input.baseline * (improvementPct / 100);
-  return {
-    improvement_pct: improvementPct,
-    projected,
-    components: {
-      week_factor: result.components.week_factor,
-      session_factor: result.components.session_factor,
-      undertrain_penalty: result.components.undertrain_penalty,
-      taper_bonus: result.components.taper_bonus,
-      adherence_penalty: adherencePen,
-      adaptation_ratio: adaptation,
-    },
-  };
+  console.log(`[TriHorizon:run] dist=${input.triathlon_distance} band=${input.ability_band} sess=${input.sessions_per_week} weeks_rem=${input.weeks_remaining} → max_gain=${params.max_gain_pct[input.ability_band]} week=${components.week_factor.toFixed(3)} sess=${components.session_factor.toFixed(3)} exp=${(EXP_FACTORS[input.experience_level ?? 'intermediate'] ?? 1.0).toFixed(2)} undertrain=${components.undertrain_penalty.toFixed(2)} taper=${components.taper_bonus.toFixed(2)} → improvement_pct=${improvementPct.toFixed(2)} VDOT ${input.baseline.toFixed(1)} → ${projected.toFixed(1)} (+${(projected - input.baseline).toFixed(2)})`);
+  return { improvement_pct: improvementPct, projected, components };
 }
 
 // ───────────────────────────────────────────────────────────────────────────

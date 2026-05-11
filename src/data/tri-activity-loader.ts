@@ -119,6 +119,19 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
       powerCurve: r.power_curve ?? null,
     }));
 
+    // Pre-dedup count of rides with power data. If this shows curves in the
+    // DB but post-dedup shows zero, dedup is dropping the curve-bearing row.
+    const preBikes = activities.filter(a => {
+      const t = (a.activityType ?? '').toUpperCase();
+      return t === 'CYCLING' || t.includes('BIKE') || t.includes('RIDE');
+    });
+    if (preBikes.length > 0) {
+      const preCurve = preBikes.filter(b => b.powerCurve != null && Object.keys(b.powerCurve as object).length > 0).length;
+      const preAvgW = preBikes.filter(b => b.averageWatts != null && b.averageWatts > 0).length;
+      const preDev = preBikes.filter(b => b.deviceWatts === true).length;
+      console.log(`[tri-activity-loader] PRE-dedup ${preBikes.length} bike rows from DB — power_curve:${preCurve} averageWatts:${preAvgW} device_watts(true):${preDev}`);
+    }
+
     return dedupeActivities(activities);
   } catch (err) {
     console.warn('[tri-activity-loader] Unexpected error', err);
@@ -247,7 +260,25 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
       // Merge so power / HR / splits fields from the loser survive onto
       // the winner. Triples with three sources collapse correctly because
       // each successive duplicate merges into the running winner.
-      kept[dupOf] = mergeKeepingFields(winner, loser);
+      const merged = mergeKeepingFields(winner, loser);
+      kept[dupOf] = merged;
+      // Per-pair diagnostic for bike rides — load-bearing for FTP. Shows
+      // which row won, which lost, and what the merged row looks like so a
+      // future "FTP picked the wrong row" investigation has the trail. Skipped
+      // for run/swim to avoid log spam (they're the common dedup case).
+      if (cls === 'bike') {
+        const fmtPower = (a: GarminActual) =>
+          `avg=${a.averageWatts ?? '-'}W NP=${a.normalizedPowerW ?? '-'}W ` +
+          `dev_watts=${a.deviceWatts === true ? 'true' : a.deviceWatts === false ? 'false' : 'null'} ` +
+          `curve=${a.powerCurve != null && Object.keys(a.powerCurve as object).length > 0 ? 'yes' : 'no'}`;
+        const date = (winner.startTime ?? a.startTime ?? '?').slice(0, 10);
+        console.log(
+          `[tri-activity-loader] BIKE merge ${date}: ` +
+          `winner=${winner.garminId} (${fmtPower(winner)}) ← ` +
+          `loser=${loser.garminId} (${fmtPower(loser)}) → ` +
+          `merged (${fmtPower(merged)})`
+        );
+      }
     }
   }
 

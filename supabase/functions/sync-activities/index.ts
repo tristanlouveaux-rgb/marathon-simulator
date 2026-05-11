@@ -65,6 +65,8 @@ Deno.serve(async (req) => {
         // 2. Duration within 15% (avoids false matches between different same-day sessions)
         // Suppress the Garmin row when a Strava match is found.
         const stravaRows = allRows.filter((r: any) => r.garmin_id.startsWith('strava-'))
+        let suppressedCount = 0
+        const suppressedSample: string[] = []
         const rows = allRows.filter((r: any) => {
             if (r.garmin_id.startsWith('strava-')) return true
             const startMs = new Date(r.start_time).getTime()
@@ -78,9 +80,16 @@ Deno.serve(async (req) => {
                 }
                 return timeDiff < 10 * 60 * 1000  // fallback: strict 10-min window
             })
-            if (hasStrava) console.log(`[sync-activities] Suppressing Garmin ${r.garmin_id} — Strava counterpart exists`)
+            if (hasStrava) {
+                suppressedCount++
+                if (suppressedSample.length < 3) suppressedSample.push(r.garmin_id)
+            }
             return !hasStrava
         })
+        if (suppressedCount > 0) {
+            const suffix = suppressedCount > 3 ? `, …(+${suppressedCount - 3} more)` : ''
+            console.log(`[sync-activities] Suppressed ${suppressedCount} Garmin rows with Strava counterparts (sample: ${suppressedSample.join(', ')}${suffix})`)
+        }
 
         return new Response(JSON.stringify(rows), {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },

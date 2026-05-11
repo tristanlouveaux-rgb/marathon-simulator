@@ -144,6 +144,65 @@ describe('assignDefaultDays — standard scheduling', () => {
 });
 
 // ---------------------------------------------------------------------------
+// assignDefaultDays — weekday/weekend split (hard constraint)
+// ---------------------------------------------------------------------------
+
+describe('assignDefaultDays — weekday/weekend split', () => {
+  it('moves all sessions to weekend when weekday budget is 0h', () => {
+    const workouts = [
+      makeWorkout({ t: 'long', n: 'Long', estimatedDurationMin: 90 } as any),
+      makeWorkout({ t: 'threshold', n: 'Threshold', estimatedDurationMin: 60 } as any),
+      makeWorkout({ t: 'easy', n: 'Easy 1', estimatedDurationMin: 45 } as any),
+      makeWorkout({ t: 'easy', n: 'Easy 2', estimatedDurationMin: 45 } as any),
+    ];
+    // 0h weekday, 9h weekend
+    assignDefaultDays(workouts, 0, 540);
+    for (const w of workouts) {
+      expect(w.dayOfWeek).toBeGreaterThanOrEqual(5);
+      expect(w.dayOfWeek).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('moves long run off Sunday when weekend budget is 0h', () => {
+    const workouts = [
+      makeWorkout({ t: 'long', n: 'Long', estimatedDurationMin: 90 } as any),
+      makeWorkout({ t: 'easy', n: 'Easy', estimatedDurationMin: 45 } as any),
+    ];
+    // 9h weekday, 0h weekend
+    assignDefaultDays(workouts, 540, 0);
+    for (const w of workouts) {
+      expect(w.dayOfWeek).toBeGreaterThanOrEqual(0);
+      expect(w.dayOfWeek).toBeLessThanOrEqual(4);
+    }
+  });
+
+  it('does not rebalance when both sides are within budget', () => {
+    const workouts = [
+      makeWorkout({ t: 'long', n: 'Long', estimatedDurationMin: 90 } as any),
+      makeWorkout({ t: 'threshold', n: 'Threshold', estimatedDurationMin: 60 } as any),
+      makeWorkout({ t: 'easy', n: 'Easy', estimatedDurationMin: 45 } as any),
+    ];
+    // Generous budgets — should leave default placement (long on Sunday)
+    assignDefaultDays(workouts, 600, 600);
+    expect(workouts.find(w => w.t === 'long')!.dayOfWeek).toBe(6);
+  });
+
+  it('prefers moving easy/cross before quality when rebalancing', () => {
+    const workouts = [
+      makeWorkout({ t: 'threshold', n: 'Threshold', estimatedDurationMin: 60 } as any),
+      makeWorkout({ t: 'easy', n: 'Easy', estimatedDurationMin: 60 } as any),
+      makeWorkout({ t: 'cross', n: 'Cross', estimatedDurationMin: 60 } as any),
+    ];
+    // Tight weekday: 60 min — only one session can stay; easy/cross should
+    // move first, threshold should remain on weekday.
+    assignDefaultDays(workouts, 60, 600);
+    const threshold = workouts.find(w => w.t === 'threshold')!;
+    expect(threshold.dayOfWeek).toBeGreaterThanOrEqual(0);
+    expect(threshold.dayOfWeek).toBeLessThanOrEqual(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // checkConsecutiveHardDays
 // ---------------------------------------------------------------------------
 

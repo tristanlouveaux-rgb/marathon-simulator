@@ -2,6 +2,8 @@ import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, updateOnboarding } from '../controller';
 import { saveState } from '@/state/persistence';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
+import { poweredByStrava } from '@/ui/strava-brand';
 import {
   getAccessToken,
   SUPABASE_FUNCTIONS_BASE,
@@ -47,10 +49,15 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
       .cs-row-sub { font-size:12.5px; color:var(--c-faint); line-height:1.45; margin:2px 0 0; }
       .cs-privacy { font-size:11.5px; color:var(--c-faint); text-align:center; margin:14px 0 0; line-height:1.5; }
 
-      /* Primary CTA — Strava orange */
-      .cs-cta { width:100%; height:52px; border-radius:26px; background:#FC4C02; color:#FFFFFF; border:none; font-size:15px; font-weight:600; letter-spacing:0.01em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:10px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 1px 2px rgba(252,76,2,0.20), 0 9px 22px -8px rgba(252,76,2,0.35), 0 3px 8px -2px rgba(0,0,0,0.08); transition: transform 0.12s ease, box-shadow 0.2s ease; }
-      .cs-cta:active { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 1px 2px rgba(252,76,2,0.18), 0 3px 8px -2px rgba(0,0,0,0.12); }
-      .cs-cta[disabled] { opacity:0.55; cursor:wait; }
+      /* Primary CTA — official Strava button image */
+      .cs-cta { background:none; border:none; padding:0; cursor:pointer; width:100%; display:flex; justify-content:center; }
+      .cs-cta:disabled { cursor:default; }
+      .cs-cta img { display:block; width:100%; max-width:237px; height:auto; }
+
+      /* Connected state — bordered pill with no fill, status dot + muted text.
+         Matches account-view.ts pattern; no green tint, no green border. */
+      .cs-cta-connected { width:100%; max-width:237px; height:48px; border-radius:24px; background:transparent; color:var(--c-black); font-size:14px; font-weight:500; display:none; align-items:center; justify-content:center; border:1px solid var(--c-border-strong); margin:0 auto; }
+      .cs-status-dot { width:8px; height:8px; border-radius:50%; background:var(--c-ok); display:inline-block; margin-right:8px; vertical-align:middle; }
 
       /* Secondary skip link — muted text only, no colour, no border */
       .cs-skip { background:none; border:none; color:var(--c-muted); font-size:13px; cursor:pointer; padding:10px 6px; text-decoration:underline; }
@@ -63,31 +70,25 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
       .cs-secondary { width:100%; height:52px; border-radius:26px; background:var(--c-black); color:#FFFFFF; border:none; font-size:15px; font-weight:600; letter-spacing:0.01em; cursor:pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.20), 0 9px 22px -8px rgba(0,0,0,0.30), 0 3px 8px -2px rgba(0,0,0,0.08); transition: transform 0.12s ease, box-shadow 0.2s ease; display:flex; align-items:center; justify-content:center; gap:10px; }
       .cs-secondary:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.18), 0 3px 8px -2px rgba(0,0,0,0.12); }
       .cs-secondary:disabled { opacity:0.55; cursor:wait; }
-      .cs-secondary.connected { background:rgba(46,125,50,0.08); color:#2e7d32; cursor:default; box-shadow:none; border:1px solid rgba(46,125,50,0.3); }
+      /* Connected state — match Strava-connected pill: bordered, no fill, status
+         dot + muted text. Drops the dark fill so "connected" reads as a passive
+         status, not an active CTA. */
+      .cs-secondary.connected { background:transparent; color:var(--c-black); cursor:default; box-shadow:none; border:1px solid var(--c-border-strong); font-weight:500; font-size:14px; height:48px; border-radius:24px; }
 
       .cs-err { font-size:12px; color:var(--c-danger, #B91C1C); margin-top:10px; text-align:center; display:none; }
-
-      /* About-you card — age, weight, sex. Same visual language as cs-card,
-         tighter spacing because the rows are inputs not value-props. */
-      .cs-au-row { display:grid; grid-template-columns: 100px 1fr; gap:12px; align-items:center; padding:8px 0; }
-      .cs-au-row + .cs-au-row { border-top:1px solid rgba(0,0,0,0.05); }
-      .cs-au-label { font-size:13px; color:var(--c-black); font-weight:500; }
-      .cs-au-sub { font-size:11.5px; color:var(--c-faint); margin:2px 0 0; line-height:1.4; }
-      .cs-au-input { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.08); color:var(--c-black); border-radius:9px; padding:8px 10px; font-size:14px; width:100%; box-sizing:border-box; outline:none; font-variant-numeric: tabular-nums; }
-      .cs-au-input:focus { border-color:var(--c-black); }
-      .cs-au-suffix { display:flex; align-items:center; gap:8px; }
-      .cs-au-suffix-text { font-size:13px; color:var(--c-faint); white-space:nowrap; }
-      .cs-au-pillrow { display:flex; gap:6px; }
-      .cs-au-pill { flex:1; padding:8px 10px; border-radius:9px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.85); font-size:13px; color:var(--c-black); cursor:pointer; text-align:center; transition: all 0.12s ease; }
-      .cs-au-pill.active { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
     </style>
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 38%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Background layers: cool-blue atmosphere → asymmetric (right) rings → sun glint -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('cs', { variant: 'asymmetric', side: 'right' })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(3, 7)}
+        ${renderProgressIndicator(3, 8)}
 
         <div class="cs-rise" style="width:100%;max-width:460px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 10px;line-height:1.15">
@@ -127,16 +128,18 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
             </div>
           </div>
           <p class="cs-privacy">Read-only. Nothing is posted to your Strava feed.</p>
+          <p class="cs-privacy" style="margin-top:5px">Heart rate streams let us calibrate your load precisely, beyond just distance and duration.</p>
         </div>
 
         <div class="cs-rise" style="width:100%;max-width:460px;margin-top:28px;animation-delay:0.20s">
-          <button id="cs-connect" class="cs-cta" aria-label="Connect Strava">
-            <svg id="cs-strava-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M13.828 2 8 13.5h3.48L13.828 9l2.347 4.5h3.48L13.828 2Zm2.293 13.5-1.747 3.352L12.626 15.5h-2.5L14.374 23l4.25-7.5h-2.503Z"/>
-            </svg>
-            <span id="cs-strava-label">Connect Strava</span>
+          <button id="cs-connect" class="cs-cta" aria-label="Connect with Strava">
+            <img id="cs-strava-img" src="/connect-with-strava.svg" alt="Connect with Strava">
           </button>
+          <div id="cs-strava-connected" class="cs-cta-connected"><span class="cs-status-dot"></span>Strava connected</div>
           <p id="cs-error" class="cs-err"></p>
+          <div style="margin-top:16px;text-align:center">
+            ${poweredByStrava(18, 0.6)}
+          </div>
         </div>
 
         <!-- Secondary providers: Garmin (OAuth, web + iOS) and Apple Health (iOS native).
@@ -153,7 +156,7 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
           <p id="cs-garmin-status" style="font-size:12px;color:var(--c-muted);text-align:center;margin:6px 0 0;display:none"></p>
           <p id="cs-garmin-error" class="cs-err"></p>
 
-          <div id="cs-apple-wrap" style="margin-top:10px;display:none">
+          <div id="cs-apple-wrap" style="margin-top:10px">
             <button id="cs-connect-apple" class="cs-secondary" aria-label="Connect Apple Health">
               <span style="display:flex;align-items:center;gap:10px;justify-content:center">
                 <span id="cs-apple-label">Connect Apple Health</span>
@@ -166,17 +169,7 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
           <p style="font-size:11.5px;color:var(--c-faint);text-align:center;margin:10px 0 0;line-height:1.5">Pulls resting HR, HRV, and sleep so we can calibrate your VDOT from your training.</p>
         </div>
 
-        <!-- About-you: age, weight, sex. All optional except where noted; weight
-             falls back to a sex-based default and "Other" maps to male defaults
-             internally. Lives on this page because it's the same logical theme:
-             "things we need to know to make the plan accurate." -->
-        <div class="cs-rise shadow-ap cs-card" style="max-width:460px;margin-top:18px;animation-delay:0.26s">
-          <p style="font-size:11.5px;color:var(--c-faint);margin:-2px 0 6px;letter-spacing:0.04em;text-transform:uppercase">About you</p>
-          ${renderAboutYouRows(state)}
-        </div>
-
-        <div class="cs-rise" style="margin-top:14px;animation-delay:0.30s;display:flex;flex-direction:column;align-items:center;gap:6px">
-          <p id="cs-au-hint" style="font-size:12px;color:var(--c-faint);margin:0 0 4px;text-align:center;display:none"></p>
+        <div class="cs-rise" style="margin-top:22px;animation-delay:0.28s;display:flex;flex-direction:column;align-items:center;gap:6px">
           <button id="cs-continue" class="cs-skip" style="display:none;color:var(--c-black);font-weight:500">Continue →</button>
           <button id="cs-skip" class="cs-skip">Enter manually</button>
         </div>
@@ -186,152 +179,13 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
     </div>
   `;
 
-  wireHandlers(state);
-  wireAboutYouHandlers();
+  wireHandlers();
 }
 
-/**
- * About-you card rows. Each row uses one-line plain-language explanations —
- * we don't say "iTRIMP β coefficient" or "max HR estimate" because most users
- * have no map for those. We say what the input does for them.
- */
-function renderAboutYouRows(state: OnboardingState): string {
-  const age = state.age ?? '';
-  const weight = state.bodyWeightKg ?? '';
-  const sex = state.biologicalSex ?? '';
-  const bikeWeight = state.triBike?.bikeWeightKg ?? '';
-  const isTriathlon = state.trainingMode === 'triathlon';
-  const sexPills: Array<['male' | 'female' | 'prefer_not_to_say', string]> = [
-    ['male', 'Male'],
-    ['female', 'Female'],
-    ['prefer_not_to_say', 'Other'],
-  ];
-  return `
-    <div class="cs-au-row">
-      <div>
-        <div class="cs-au-label">Age</div>
-        <p class="cs-au-sub">So we can estimate your max heart rate.</p>
-      </div>
-      <div class="cs-au-suffix">
-        <input id="cs-au-age" class="cs-au-input" type="number" inputmode="numeric" min="14" max="90" placeholder="—" value="${age}" style="max-width:96px">
-        <span class="cs-au-suffix-text">years</span>
-      </div>
-    </div>
-    <div class="cs-au-row">
-      <div>
-        <div class="cs-au-label">Weight <span style="color:var(--c-faint);font-weight:400">(optional)</span></div>
-        <p class="cs-au-sub">Cycling tier is measured in watts per kg, not raw watts.${isTriathlon ? ' You can update this later under Bike setup for sharper power and climb-time numbers.' : ''}</p>
-      </div>
-      <div class="cs-au-suffix">
-        <input id="cs-au-weight" class="cs-au-input" type="number" inputmode="decimal" min="35" max="180" step="0.5" placeholder="—" value="${weight}" style="max-width:96px">
-        <span class="cs-au-suffix-text">kg</span>
-      </div>
-    </div>
-    ${isTriathlon ? `
-    <div class="cs-au-row">
-      <div>
-        <div class="cs-au-label">Bike weight</div>
-        <p class="cs-au-sub">Used for climb-time prediction. Heavier bikes lose time on hills.</p>
-      </div>
-      <div class="cs-au-suffix">
-        <input id="cs-au-bikew" class="cs-au-input" type="number" inputmode="decimal" min="5" max="20" step="0.1" placeholder="—" value="${bikeWeight}" style="max-width:96px">
-        <span class="cs-au-suffix-text">kg</span>
-      </div>
-    </div>
-    ` : ''}
-    <div class="cs-au-row">
-      <div>
-        <div class="cs-au-label">Sex</div>
-        <p class="cs-au-sub">Heart rate response and recovery norms differ slightly between men and women.</p>
-      </div>
-      <div class="cs-au-pillrow">
-        ${sexPills.map(([val, label]) => `
-          <button class="cs-au-pill ${sex === val ? 'active' : ''}" data-sex="${val}">${label}</button>
-        `).join('')}
-      </div>
-    </div>
-  `;
-}
-
-/**
- * Age + sex are required to advance: max-HR estimation and HR-zone modelling
- * both depend on them, so silently letting the user skip past produces a plan
- * built on guessed defaults. Weight stays optional (sex-based fallback exists).
- */
-function refreshAboutYouGate(): void {
-  const s = getState().onboarding;
-  if (!s) return;
-  const missing: string[] = [];
-  if (!s.age || s.age <= 0) missing.push('age');
-  if (!s.biologicalSex) missing.push('sex');
-
-  const hint = document.getElementById('cs-au-hint');
-  const skipBtn = document.getElementById('cs-skip') as HTMLButtonElement | null;
-  const continueBtn = document.getElementById('cs-continue') as HTMLButtonElement | null;
-  const blocked = missing.length > 0;
-
-  if (hint) {
-    if (blocked) {
-      hint.textContent = `Add your ${missing.join(' and ')} above to continue.`;
-      hint.style.display = 'block';
-    } else {
-      hint.style.display = 'none';
-    }
-  }
-  if (skipBtn) {
-    skipBtn.disabled = blocked;
-    skipBtn.style.opacity = blocked ? '0.45' : '';
-    skipBtn.style.cursor = blocked ? 'not-allowed' : 'pointer';
-  }
-  if (continueBtn) {
-    continueBtn.disabled = blocked;
-    continueBtn.style.opacity = blocked ? '0.45' : '';
-    continueBtn.style.cursor = blocked ? 'not-allowed' : 'pointer';
-  }
-}
-
-function wireAboutYouHandlers(): void {
-  const ageInput = document.getElementById('cs-au-age') as HTMLInputElement | null;
-  // 'input' fires on every keystroke so the gate updates as soon as a valid
-  // age is typed; 'change' alone would only release the gate on blur.
-  ageInput?.addEventListener('input', () => {
-    const v = Number(ageInput.value);
-    updateOnboarding({ age: Number.isFinite(v) && v > 0 ? v : undefined });
-    refreshAboutYouGate();
-  });
-
-  const weightInput = document.getElementById('cs-au-weight') as HTMLInputElement | null;
-  weightInput?.addEventListener('change', () => {
-    const v = Number(weightInput.value);
-    updateOnboarding({ bodyWeightKg: Number.isFinite(v) && v > 0 ? v : undefined });
-  });
-
-  document.querySelectorAll<HTMLButtonElement>('[data-sex]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const value = btn.getAttribute('data-sex') as 'male' | 'female' | 'prefer_not_to_say';
-      updateOnboarding({ biologicalSex: value });
-      document.querySelectorAll<HTMLButtonElement>('[data-sex]').forEach((b) => {
-        b.classList.toggle('active', b.getAttribute('data-sex') === value);
-      });
-      refreshAboutYouGate();
-    });
-  });
-
-  const bikeWeightInput = document.getElementById('cs-au-bikew') as HTMLInputElement | null;
-  bikeWeightInput?.addEventListener('change', () => {
-    const v = parseFloat(bikeWeightInput.value);
-    const onb = (getState().onboarding ?? {}) as OnboardingState;
-    const next = Number.isFinite(v) && v >= 5 && v <= 20 ? Math.round(v * 10) / 10 : undefined;
-    updateOnboarding({ triBike: { ...(onb.triBike ?? {}), bikeWeightKg: next } });
-  });
-
-  refreshAboutYouGate();
-}
-
-function wireHandlers(_state: OnboardingState): void {
+function wireHandlers(): void {
   const cta = document.getElementById('cs-connect') as HTMLButtonElement | null;
-  const stravaLabel = document.getElementById('cs-strava-label');
-  const stravaIcon = document.getElementById('cs-strava-icon');
+  const stravaImg = document.getElementById('cs-strava-img') as HTMLImageElement | null;
+  const stravaConnected = document.getElementById('cs-strava-connected');
   const errorEl = document.getElementById('cs-error') as HTMLElement | null;
   const continueBtn = document.getElementById('cs-continue') as HTMLButtonElement | null;
   const skipBtn = document.getElementById('cs-skip') as HTMLButtonElement | null;
@@ -341,16 +195,11 @@ function wireHandlers(_state: OnboardingState): void {
   // The user still needs the Garmin / Apple buttons below — that's why we no
   // longer auto-advance.
   isStravaConnected().then((connected) => {
-    if (connected && cta && stravaLabel) {
-      stravaLabel.textContent = '✓ Strava connected';
-      // Strip the orange brand colour to a muted connected style.
-      cta.style.background = 'rgba(46,125,50,0.08)';
-      cta.style.color = '#2e7d32';
-      cta.style.boxShadow = 'none';
+    if (connected && cta) {
+      if (stravaImg) stravaImg.style.display = 'none';
+      if (stravaConnected) stravaConnected.style.display = 'flex';
       cta.disabled = true;
-      if (stravaIcon) stravaIcon.style.display = 'none';
-      if (continueBtn) continueBtn.style.display = 'block';
-      if (skipBtn) skipBtn.style.display = 'none';
+      revealContinueButton();
     }
   }).catch(() => { /* check failed — leave button as Connect */ });
 
@@ -403,11 +252,16 @@ function wireHandlers(_state: OnboardingState): void {
     nextStep();
   });
 
-  // Continue button — only visible when at least Strava is connected. Advances
-  // through the normal flow (no skippedStrava flag, so review reads from history).
-  continueBtn?.addEventListener('click', () => {
+  // Continue button — visible when ANY source is connected (Strava, Garmin,
+  // or Apple Health). Strava-connected users follow the auto-fill PB flow;
+  // Apple- or Garmin-only users skip the Strava data chain (skippedStrava=true)
+  // and enter PBs manually in the review step. The flag is decided live at
+  // click time, not at render time, because Garmin OAuth re-enters this page
+  // and the user may have toggled state in between.
+  continueBtn?.addEventListener('click', async () => {
     if (continueBtn.disabled) return;
-    updateOnboarding({ skippedStrava: false });
+    const stravaOk = await isStravaConnected().catch(() => false);
+    updateOnboarding({ skippedStrava: !stravaOk });
     saveState();
     nextStep();
   });
@@ -433,11 +287,12 @@ function wireGarminHandler(): void {
     if (connected) {
       btn.classList.add('connected');
       btn.disabled = true;
-      label.textContent = '✓ Garmin connected';
+      label.innerHTML = '<span class="cs-status-dot"></span>Garmin connected';
       if (status) {
         status.textContent = 'Resting HR, max HR, HRV, and sleep will sync after setup.';
         status.style.display = 'block';
       }
+      revealContinueButton();
     }
   }).catch(() => { /* offline / edge fn down — leave button as Connect */ });
 
@@ -507,21 +362,32 @@ function wireAppleHandler(): void {
   const errEl = document.getElementById('cs-apple-error');
   if (!wrap || !btn || !label) return;
 
-  // Hide entirely off iOS.
+  // Off iOS native, the @capgo/capacitor-health bridge is a no-op — there
+  // is no HealthKit to talk to. Rather than hide the button (which gives
+  // the false impression we don't support Apple Watch at all), render it
+  // in an "iOS app only" state so the user knows the option exists and
+  // sees what they'd get on the iOS build. Click shows a soft explainer.
   if (!isNativeiOS()) {
-    wrap.style.display = 'none';
+    btn.disabled = true;
+    btn.style.opacity = '0.55';
+    btn.style.cursor = 'default';
+    label.textContent = 'Apple Watch — iOS app only';
+    if (status) {
+      status.textContent = 'Sleep, HRV, resting HR, and 16w of workouts. Available in the Mosaic iOS app.';
+      status.style.display = 'block';
+    }
     return;
   }
-  wrap.style.display = 'block';
 
   if (hasPhysiologySource(getState() as any, 'apple')) {
     btn.classList.add('connected');
     btn.disabled = true;
-    label.textContent = '✓ Apple Health connected';
+    label.innerHTML = '<span class="cs-status-dot"></span>Apple Health connected';
     if (status) {
       status.textContent = 'Sleep, HRV, resting HR will sync from your watch.';
       status.style.display = 'block';
     }
+    revealContinueButton();
   }
 
   btn.addEventListener('click', async () => {
@@ -533,11 +399,15 @@ function wireAppleHandler(): void {
     const result = await connectAppleHealth();
     if (result.ok) {
       btn.classList.add('connected');
-      label.textContent = '✓ Apple Health connected';
+      label.innerHTML = '<span class="cs-status-dot"></span>Apple Health connected';
       if (status) {
-        status.textContent = 'Sleep, HRV, resting HR will sync from your watch.';
+        // The 16-week activity backfill happens at the review step (after
+        // age has been entered), so we promise the workout sync here even
+        // though it hasn't started yet — keeps the user-facing copy honest.
+        status.textContent = 'Sleep, HRV, resting HR connected. Workouts will sync after Continue.';
         status.style.display = 'block';
       }
+      revealContinueButton();
     } else {
       const msg = result.reason === 'permission-denied'
         ? 'Permissions not granted. Open Settings → Privacy → Health → Mosaic to allow access.'
@@ -550,4 +420,16 @@ function wireAppleHandler(): void {
       label.textContent = 'Connect Apple Health';
     }
   });
+}
+
+/**
+ * Show the shared "Continue →" button and hide the "Enter manually" link.
+ * Called after any provider (Strava / Garmin / Apple) connects successfully —
+ * the user has data, so manual entry is no longer the right CTA.
+ */
+function revealContinueButton(): void {
+  const continueBtn = document.getElementById('cs-continue') as HTMLButtonElement | null;
+  const skipBtn = document.getElementById('cs-skip') as HTMLButtonElement | null;
+  if (continueBtn) continueBtn.style.display = 'block';
+  if (skipBtn) skipBtn.style.display = 'none';
 }

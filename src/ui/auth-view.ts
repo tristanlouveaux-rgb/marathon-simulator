@@ -256,7 +256,7 @@ function wireAuthHandlers(): void {
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
-          options: { emailRedirectTo: window.location.origin },
+          options: { emailRedirectTo: 'https://mosaicrunning.run/auth-success.html' },
         });
         if (error) throw error;
 

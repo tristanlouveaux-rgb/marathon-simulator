@@ -28,10 +28,8 @@ import {
 } from '@/calculations/sleep-insights';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ──────────────────────────────────────────────────────────────
-
-const CREAM      = '#FAF9F6';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M     = '#0F172A';
 const TEXT_S     = '#64748B';
 const PURPLE_A   = '#A78BFA';   // violet-400
@@ -324,8 +322,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     if (!debtOutlook || debtSec == null || debtSec < 2700) return null;
     if (debtOutlook.typicalDebtSec == null || debtOutlook.vsTypical == null) return null;
     const typicalStr = fmtSleepDebt(debtOutlook.typicalDebtSec);
-    if (debtOutlook.vsTypical === 'above') return `Above your typical ${typicalStr} — sleep is worse than usual.`;
-    if (debtOutlook.vsTypical === 'below') return `Below your typical ${typicalStr} — better than usual.`;
+    if (debtOutlook.vsTypical === 'above') return `Above your typical ${typicalStr}. Sleep is worse than usual.`;
+    if (debtOutlook.vsTypical === 'below') return `Below your typical ${typicalStr}. Better than usual.`;
     return `In line with your typical ${typicalStr}.`;
   })();
   // Status colour — independent of the absolute tier colour. Above = warn,
@@ -405,18 +403,17 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       }
       .sl-fade { opacity:0; animation:sleepFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .sleep-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
-      ${skyAnimationCSS('slp')}
     </style>
 
     <div id="sleep-view" style="
-      position:relative;min-height:100vh;background:${CREAM};
+      position:relative;min-height:100vh;background:${atmosphereGradient('indigo')};
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      ${buildSkyBackground('slp', 'indigo')}
+      ${buildFloweyBackground('slp', 'indigo')}${buildSunGlint('low')}
 
       <!-- Scrollable content -->
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -458,37 +455,29 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
 
         <!-- Ring -->
         <div class="sl-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="sleepRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="${PURPLE_A}"/>
-                  <stop offset="100%" stop-color="${PURPLE_B}"/>
+                <linearGradient id="sleepRingGrad" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="${bigScore != null && bigScore >= 55 ? '#DDD6FE' : '#FED7AA'}"/>
+                  <stop offset="50%"  stop-color="${bigScore != null && bigScore >= 55 ? '#8B5CF6' : '#FF9500'}"/>
+                  <stop offset="100%" stop-color="${bigScore != null && bigScore >= 55 ? '#4C1D95' : '#C2580A'}"/>
                 </linearGradient>
               </defs>
               <!-- Track -->
-              <circle cx="50" cy="50" r="${RING_R}"
-                fill="none"
-                fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)"
-                stroke-width="8"
-                stroke-linecap="round"/>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <!-- Fill -->
               ${bigScore != null ? `<circle id="sleep-ring-circle" cx="50" cy="50" r="${RING_R}"
                 fill="none"
-                stroke="${bigScore >= 55 ? 'url(#sleepRingGrad)' : '#FF9500'}"
+                stroke="url(#sleepRingGrad)"
                 stroke-width="8"
                 stroke-linecap="round"
                 stroke-dasharray="${RING_CIRC}"
                 stroke-dashoffset="${RING_CIRC}"
-                style="transition:stroke-dashoffset 1.0s cubic-bezier(0.34,1.2,0.64,1)"/>` : ''}
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"/>` : ''}
             </svg>
             <!-- Centre text -->
-            <div style="
-              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
-              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
-              width:180px;height:180px;border-radius:50%;
-              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               ${bigScore != null
                 ? `<div style="display:flex;align-items:baseline;color:${TEXT_M}">
                     <span style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1">${bigScore}</span>
@@ -622,7 +611,8 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

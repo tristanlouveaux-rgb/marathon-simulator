@@ -6,85 +6,122 @@ import type { PBs } from '@/types/training';
 import { nextStep, updateOnboarding } from '../controller';
 import { getState } from '@/state/store';
 import { renderProgressIndicator } from '../renderer';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 // Re-export for backwards compatibility
 export { initializeSimulator as initializeSimulatorFromOnboarding } from '@/state/initialization';
 export type { CalculationResult } from '@/state/initialization';
 
 /**
- * Render the initialization animation
- * Shows loading animation while calculating the plan
+ * Render the initialization animation.
+ * Glassy card with a central glass-circle filling indicator. Updates in-place
+ * via setStepLabel + setProgress as the pipeline advances — no full re-render.
  */
+const INIT_RADIUS = 44;
+const INIT_CIRCUMFERENCE = 2 * Math.PI * INIT_RADIUS; // ~276.5
+
 export function renderInitializing(container: HTMLElement, state: OnboardingState): void {
+  // Initial state: 0% filled, "Mapping" label.
   container.innerHTML = `
-    <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px">
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 42%, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
-      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
-      ${renderProgressIndicator(7, 7)}
+    <style>
+      @keyframes initRise { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+      .init-rise { opacity:0; animation: initRise 0.7s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes initBreathe { 0%, 100% { opacity: 0.85; } 50% { opacity: 1; } }
+      .init-fill { animation: initBreathe 2.6s ease-in-out infinite; }
+      .init-label-fade { transition: opacity 0.45s ease; }
+    </style>
 
-      <div style="max-width:480px;width:100%;text-align:center">
-        <div id="init-animation" style="margin-bottom:32px">
-          <div style="position:relative;width:80px;height:80px;margin:0 auto">
-            <svg class="animate-spin-slow" style="width:100%;height:100%" viewBox="0 0 100 100">
-              <path fill="currentColor" style="color:var(--c-black);opacity:0.15" d="M50 15a35 35 0 0 1 35 35 35 35 0 0 1-35 35 35 35 0 0 1-35-35 35 35 0 0 1 35-35m0-5a40 40 0 0 0-40 40 40 40 0 0 0 40 40 40 40 0 0 0 40-40 40 40 0 0 0-40-40z"/>
-              <circle cx="50" cy="50" r="25" fill="none" style="color:var(--c-black);opacity:0.25" stroke="currentColor" stroke-width="4" stroke-dasharray="20 10"/>
-            </svg>
-            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center">
-              <svg style="width:32px;height:32px;color:var(--c-black)" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
-              </svg>
-            </div>
-          </div>
-        </div>
+    <div style="min-height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;background:#FAF9F6">
 
-        <h2 id="init-title" style="font-size:1.5rem;font-weight:300;color:var(--c-black);margin-bottom:12px">
-          Analyzing your physiology...
-        </h2>
-
-        <p id="init-status" style="font-size:14px;color:var(--c-muted)">
-          Building a custom plan tailored to you
-        </p>
-
-        <div id="init-steps" style="margin-top:32px;display:flex;flex-direction:column;gap:12px;text-align:left;max-width:240px;margin-left:auto;margin-right:auto">
-          <div id="step-pbs" style="display:flex;align-items:center;gap:12px;font-size:14px">
-            <div id="step-pbs-icon" style="width:20px;height:20px;border-radius:50%;background:var(--c-black);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              <svg style="width:10px;height:10px;color:#FDFCF7" fill="currentColor" viewBox="0 0 20 20">
-                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16z" clip-rule="evenodd"/>
-              </svg>
-            </div>
-            <span id="step-pbs-text" style="color:var(--c-black)">Analyzing personal bests</span>
-          </div>
-          <div id="step-profile" style="display:flex;align-items:center;gap:12px;font-size:14px;opacity:0.4">
-            <div id="step-profile-icon" style="width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              <div style="width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,0.4)"></div>
-            </div>
-            <span id="step-profile-text" style="color:var(--c-faint)">Calculating runner profile</span>
-          </div>
-          <div id="step-plan" style="display:flex;align-items:center;gap:12px;font-size:14px;opacity:0.4">
-            <div id="step-plan-icon" style="width:20px;height:20px;border-radius:50%;background:rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;flex-shrink:0">
-              <div style="width:6px;height:6px;border-radius:50%;background:rgba(0,0,0,0.4)"></div>
-            </div>
-            <span id="step-plan-text" style="color:var(--c-faint)">Generating training plan</span>
-          </div>
-        </div>
+      <!-- Background: atmosphere → whisper rings → low glint -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('init', { variant: 'whisper' })}
+        ${buildSunGlint('low')}
       </div>
+
+      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
+        ${renderProgressIndicator(8, 8)}
+
+        <!-- Glass card -->
+        <div class="init-rise" style="width:100%;max-width:380px;
+             background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+             border:1px solid rgba(255,255,255,0.82);border-radius:28px;
+             padding:36px 28px 30px;
+             box-shadow:0 16px 56px rgba(0,0,0,0.08),0 2px 8px rgba(0,0,0,0.05);
+             animation-delay:0.06s;
+             display:flex;flex-direction:column;align-items:center;text-align:center">
+
+          <!-- Chip -->
+          <span style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
+                       color:rgba(0,0,0,0.35);background:rgba(255,255,255,0.7);
+                       border:1px solid rgba(0,0,0,0.07);border-radius:100px;
+                       padding:5px 13px;display:inline-block;margin-bottom:22px">
+            Building your plan
+          </span>
+
+          <!-- Glass circle filling -->
+          <div style="width:120px;height:120px;position:relative;margin-bottom:24px">
+            <svg width="120" height="120" viewBox="0 0 100 100" style="display:block">
+              <defs>
+                <linearGradient id="init-fill-grad" x1="20%" y1="10%" x2="80%" y2="90%">
+                  <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.95"/>
+                  <stop offset="50%"  stop-color="#5874A0" stop-opacity="0.85"/>
+                  <stop offset="100%" stop-color="#2E4668" stop-opacity="0.65"/>
+                </linearGradient>
+              </defs>
+              <circle cx="50" cy="50" r="${INIT_RADIUS}" fill="none"
+                      stroke="rgba(0,0,0,0.07)" stroke-width="3"/>
+              <circle id="init-fill" class="init-fill"
+                      cx="50" cy="50" r="${INIT_RADIUS}" fill="none"
+                      stroke="url(#init-fill-grad)" stroke-width="3"
+                      stroke-linecap="round"
+                      stroke-dasharray="${INIT_CIRCUMFERENCE.toFixed(1)}"
+                      stroke-dashoffset="${INIT_CIRCUMFERENCE.toFixed(1)}"
+                      transform="rotate(-90 50 50)"
+                      style="transition: stroke-dashoffset 0.7s cubic-bezier(0.16, 1, 0.3, 1)"/>
+            </svg>
+          </div>
+
+          <!-- Current step label -->
+          <p id="init-title" class="init-label-fade"
+             style="font-size:18px;font-weight:600;color:#1A1A1A;margin:0 0 8px;line-height:1.4">
+            Mapping your physiology
+          </p>
+
+          <!-- Status -->
+          <p id="init-status" class="init-label-fade"
+             style="font-size:13px;font-weight:300;color:rgba(0,0,0,0.50);line-height:1.55;margin:0;max-width:280px">
+            Building a plan tailored to your training history.
+          </p>
+        </div>
       </div>
     </div>
   `;
 
-  const style = document.createElement('style');
-  style.textContent = `
-    @keyframes spin-slow {
-      from { transform: rotate(0deg); }
-      to { transform: rotate(360deg); }
-    }
-    .animate-spin-slow {
-      animation: spin-slow 3s linear infinite;
-    }
-  `;
-  document.head.appendChild(style);
-
   runInitialization(state);
+}
+
+/** Smooth in-place fill update — no DOM re-render. pct = 0..1. */
+function setInitProgress(pct: number): void {
+  const fill = document.getElementById('init-fill') as SVGCircleElement | null;
+  if (!fill) return;
+  const clamped = Math.max(0, Math.min(1, pct));
+  fill.style.strokeDashoffset = (INIT_CIRCUMFERENCE * (1 - clamped)).toFixed(1);
+}
+
+/** Fade-swap the headline label so changes feel calm, not jumpy. */
+function setInitLabel(title: string, status?: string): void {
+  const titleEl = document.getElementById('init-title');
+  const statusEl = document.getElementById('init-status');
+  if (titleEl && titleEl.textContent !== title) {
+    titleEl.style.opacity = '0';
+    setTimeout(() => { titleEl.textContent = title; titleEl.style.opacity = '1'; }, 220);
+  }
+  if (statusEl && status !== undefined && statusEl.textContent !== status) {
+    statusEl.style.opacity = '0';
+    setTimeout(() => { statusEl.textContent = status; statusEl.style.opacity = '1'; }, 220);
+  }
 }
 
 async function runInitialization(state: OnboardingState): Promise<void> {
@@ -94,12 +131,29 @@ async function runInitialization(state: OnboardingState): Promise<void> {
   // new intent. Run the full init so state is rewritten cleanly.
   const rt = getState();
   const modeChanged = !!state.trackOnly !== !!rt.trackOnly;
-  // Triathlon ↔ running switch: if the user previously initialised as a triathlete
-  // and has now come back through the wizard as a runner (or vice versa), the old
-  // `wks` / `eventType` / `triConfig` are stale and must be rebuilt. Skipping
-  // reinit here caused half-marathon onboarding to surface "Ironman" on home and
-  // "Marathon" on plan-preview because `s.rd` held the triathlon placeholder.
-  const trainingModeChanged = (state.trainingMode === 'triathlon') !== (rt.eventType === 'triathlon');
+  // Cross-mode switch: if the user previously initialised in one mode and is
+  // now coming through the wizard as another, the old `wks` / `eventType` /
+  // `triConfig` / `hyroxConfig` are stale and must be rebuilt. The earlier
+  // narrow check (`(triMode==='triathlon') !== (eventType==='triathlon')`)
+  // missed three switches:
+  //   • running ↔ hyrox (both eventTypes mismatch but neither was 'triathlon')
+  //   • triathlon ↔ cycling (both set eventType='triathlon'; only `disciplines` distinguishes them)
+  //   • hyrox ↔ cycling
+  // Now we project `state.trainingMode` to the expected runtime shape (eventType
+  // + cycling-discipline flag) and compare against the actual runtime shape.
+  const expectedEventType: 'triathlon' | 'hyrox' | 'running' =
+    state.trainingMode === 'triathlon' || state.trainingMode === 'cycling' ? 'triathlon' :
+    state.trainingMode === 'hyrox' ? 'hyrox' :
+    'running';
+  const expectedIsCycling = state.trainingMode === 'cycling';
+  const actualIsCycling =
+    rt.eventType === 'triathlon'
+    && rt.triConfig?.disciplines?.length === 1
+    && rt.triConfig.disciplines[0] === 'bike';
+  const actualEventType = rt.eventType ?? 'running';
+  const trainingModeChanged =
+    expectedEventType !== actualEventType
+    || expectedIsCycling !== actualIsCycling;
   // Triathlon settings changes (hours, weekday split, distance, skill, FTP, CSS,
   // gym) must trigger a full reinit so the plan actually reflects what the
   // user just set. Otherwise the wizard's "Edit settings" flow silently keeps
@@ -110,7 +164,9 @@ async function runInitialization(state: OnboardingState): Promise<void> {
     state.triDistance !== rt.triConfig?.distance ||
     JSON.stringify(state.triSkillRating ?? null) !== JSON.stringify(rt.triConfig?.skillRating ?? null) ||
     JSON.stringify(state.triVolumeSplit ?? null) !== JSON.stringify(rt.triConfig?.volumeSplit ?? null) ||
-    (state.gymSessionsPerWeek ?? 0) !== (rt.gs ?? 0)
+    (state.gymSessionsPerWeek ?? 0) !== (rt.gs ?? 0) ||
+    (state.customRaceDate ?? null) !== (rt.triConfig?.raceDate ?? null) ||
+    (state.planDurationWeeks ?? null) !== (rt.triConfig?.weeksToRace ?? null)
   );
   // Running settings changes: flipping Yes/No event, swapping race distance, or
   // changing focus (for no-event plans) must force a full reinit. Without this,
@@ -127,69 +183,76 @@ async function runInitialization(state: OnboardingState): Promise<void> {
     // Target distance drifted (running event → different distance, or focus flip in no-event).
     (expectedRd ?? null) !== (rt.rd ?? null)
   );
-  if (rt.wks.length > 0 && !modeChanged && !triSettingsChanged && !trainingModeChanged && !runningSettingsChanged) {
+  // HYROX settings changes (hours, format, equipment, previous time → band,
+  // race date, plan length) must trigger a full reinit so the plan reflects
+  // the new inputs. Without this, the wizard's "Edit settings" flow silently
+  // keeps the old plan. Mirrors triSettingsChanged.
+  const hyroxSettingsChanged = state.trainingMode === 'hyrox' && (
+    (state.triTimeAvailableHoursPerWeek ?? null) !== (rt.hyroxConfig?.weeklyHoursAvailable ?? null) ||
+    (state.hyroxFormat ?? null) !== (rt.hyroxConfig?.format ?? null) ||
+    (state.previousHyroxTimeSec ?? null) !== (rt.hyroxConfig?.previousHyroxTimeSec ?? null) ||
+    (state.hyroxSledAccess ?? null) !== (rt.hyroxConfig?.stationAccess?.sled ?? null) ||
+    (state.hyroxHasSkiErg ?? null) !== (rt.hyroxConfig?.stationAccess?.skiErg ?? null) ||
+    (state.hyroxHasRowErg ?? null) !== (rt.hyroxConfig?.stationAccess?.rowErg ?? null) ||
+    (state.customRaceDate ?? null) !== (rt.hyroxConfig?.raceDate ?? null) ||
+    (state.planDurationWeeks ?? null) !== (rt.tw ?? null)
+  );
+  // Cycling settings changes. Cycling reuses `eventType: 'triathlon'` and the
+  // triConfig shape, so the same fields apply minus the tri-specific ones.
+  // `cyclingDistance` has no runtime echo (it lives only on onboarding), so
+  // hours and race-date edits are the reliable reinit signals here.
+  const cyclingSettingsChanged = state.trainingMode === 'cycling' && (
+    (state.triTimeAvailableHoursPerWeek ?? null) !== (rt.triConfig?.timeAvailableHoursPerWeek ?? null) ||
+    (state.triWeekdayHoursPerWeek ?? null) !== (rt.triConfig?.weekdayHoursPerWeek ?? null) ||
+    (state.gymSessionsPerWeek ?? 0) !== (rt.gs ?? 0) ||
+    (state.customRaceDate ?? null) !== (rt.triConfig?.raceDate ?? null) ||
+    (state.planDurationWeeks ?? null) !== (rt.triConfig?.weeksToRace ?? null)
+  );
+  if (
+    rt.wks.length > 0 &&
+    !modeChanged &&
+    !triSettingsChanged &&
+    !trainingModeChanged &&
+    !runningSettingsChanged &&
+    !hyroxSettingsChanged &&
+    !cyclingSettingsChanged
+  ) {
     nextStep();
     return;
   }
 
   await delay(600);
 
-  updateStep('step-pbs', true);
-  updateStatus('Mapping your physiology to training zones');
+  // Step 1/3: PBs analysed → 33% fill
+  setInitProgress(0.33);
+  setInitLabel('Mapping your physiology', 'Reading your training history into the model.');
 
-  // Smart recommendation: pause if volume upgrade is warranted
   await checkVolumeRecommendation(state);
 
-  updateStep('step-profile', false);
   await delay(500);
 
   const result = initializeSimulator(state);
-
   if (!result.success) {
     showError(result.error || 'Failed to initialize plan');
     return;
   }
 
-  updateStep('step-profile', true);
-  updateStep('step-plan', false);
-  updateStatus('Building your custom training plan');
-  await delay(600);
+  // Step 2/3: profile calculated → 66% fill
+  setInitProgress(0.66);
+  setInitLabel('Calculating your runner profile', 'Working out your runner type and pace zones.');
+  await delay(700);
 
-  updateStep('step-plan', true);
-  updateStatus('Your plan is ready!');
+  // Step 3/3: plan built → 100% fill
+  setInitProgress(1.0);
+  setInitLabel('Building your training plan', 'Final touches.');
+  await delay(700);
 
-  const titleEl = document.getElementById('init-title');
-  if (titleEl) {
-    titleEl.textContent = 'Your plan is ready!';
-    titleEl.style.color = 'var(--c-black)';
-  }
+  setInitLabel('Your plan is ready.', 'Loading.');
 
   updateOnboarding({ calculatedRunnerType: result.runnerType });
 
-  await delay(800);
+  await delay(700);
   nextStep();
-}
-
-function updateStep(stepId: string, complete: boolean): void {
-  const stepEl = document.getElementById(stepId);
-  if (!stepEl) return;
-  stepEl.style.opacity = '1';
-  const iconEl = document.getElementById(`${stepId}-icon`);
-  const textEl = document.getElementById(`${stepId}-text`);
-  if (complete && iconEl) {
-    iconEl.style.background = 'var(--c-black)';
-    iconEl.innerHTML = `<svg style="width:10px;height:10px;color:#FDFCF7" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg>`;
-    if (textEl) textEl.style.color = 'var(--c-black)';
-  } else if (iconEl) {
-    iconEl.style.background = 'var(--c-black)';
-    iconEl.innerHTML = `<svg style="width:10px;height:10px;color:#FDFCF7" class="animate-pulse" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16z" clip-rule="evenodd"/></svg>`;
-    if (textEl) textEl.style.color = 'var(--c-muted)';
-  }
-}
-
-function updateStatus(text: string): void {
-  const el = document.getElementById('init-status');
-  if (el) el.textContent = text;
 }
 
 function showError(message: string): void {

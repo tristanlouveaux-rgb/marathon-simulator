@@ -16,10 +16,9 @@ import {
 import { detectDurabilityFlag } from '@/calculations/daily-coach';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const APP_BG  = '#FAF9F6';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
+void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M  = '#0F172A';
 const TEXT_S  = '#64748B';
 const TEXT_L  = '#94A3B8';
@@ -88,7 +87,7 @@ function injuryCoaching(ratio: number, safeUpper: number, acute: number, chronic
 
 // ── SVG watercolour background ────────────────────────────────────────────────
 
-function skyBackground(): string { return buildSkyBackground('ir', 'amber'); }
+function skyBackground(): string { return buildFloweyBackground('ir', 'amber') + buildSunGlint('low'); }
 
 // ── Weekly ACWR trend ─────────────────────────────────────────────────────────
 
@@ -278,7 +277,31 @@ function getInjuryRiskHTML(s: SimulatorState): string {
   const latestWeekRatio = weeklyAcwr.length > 0 ? weeklyAcwr[weeklyAcwr.length - 1].ratio : undefined;
 
   const durability = detectDurabilityFlag(s);
-  const { headline, body } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic, latestWeekRatio, durability != null);
+  const { headline, body: rawBody } = injuryCoaching(acwr.ratio, acwr.safeUpper, acute, chronic, latestWeekRatio, durability != null);
+
+  // In tri mode, append per-discipline load status as a single flowing narrative.
+  let triContext = '';
+  if (s.eventType === 'triathlon' && s.triConfig?.fitness) {
+    const fit = s.triConfig.fitness;
+    const sentences: string[] = [];
+    for (const d of ['bike', 'run', 'swim'] as const) {
+      const f = fit[d];
+      const ratio = f.ctl > 2 ? f.atl / f.ctl : 0;
+      const name = d.charAt(0).toUpperCase() + d.slice(1);
+      if (f.atl === 0 && f.ctl < 2) {
+        sentences.push(`No ${name.toLowerCase()} activity this week.`);
+      } else if (ratio > 1.5) {
+        sentences.push(`${name} is at ${ratio.toFixed(1)}x its own baseline — a discipline spike carries injury risk in that sport independent of the combined number.`);
+      } else if (ratio > 1.3) {
+        sentences.push(`${name} is slightly elevated at ${ratio.toFixed(2)}x baseline.`);
+      } else if (ratio > 0 && ratio < 0.8) {
+        sentences.push(`${name} volume is reduced this week (${ratio.toFixed(2)}x).`);
+      }
+      // Optimal range: no news is good news — stay silent
+    }
+    if (sentences.length > 0) triContext = ' ' + sentences.join(' ');
+  }
+  const body = rawBody + triContext;
   const durabilityColor = durability?.level === 'high' ? '#EF4444' : '#F59E0B';
   const durabilityCard = durability ? `
     <div class="ir-fade" style="animation-delay:0.18s;padding:0 16px;margin-bottom:14px">
@@ -301,16 +324,15 @@ function getInjuryRiskHTML(s: SimulatorState): string {
       #ir-view *, #ir-view *::before, #ir-view *::after { box-sizing:inherit; }
       @keyframes irFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .ir-fade { opacity:0; animation:irFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('ir')}
     </style>
 
     <div id="ir-view" style="
-      position:relative;min-height:100vh;background:${APP_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('amber')};
       font-family:var(--f);overflow-x:hidden;
     ">
       ${skyBackground()}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="padding:56px 20px 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50">
@@ -328,34 +350,25 @@ function getInjuryRiskHTML(s: SimulatorState): string {
 
         <!-- Ring -->
         <div class="ir-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:8px 0 28px">
-          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="irGauge" x1="0%" y1="100%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="${ringGradA}"/>
-                  <stop offset="100%" stop-color="${ringGradB}"/>
+                <linearGradient id="irGauge" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="${zone.label === 'Very High' ? '#FCA5A5' : zone.label === 'High' ? '#FCD27A' : zone.label === 'Optimal' ? '#86EFAC' : '#CBD5E1'}"/>
+                  <stop offset="50%"  stop-color="${zone.label === 'Very High' ? '#EF4444' : zone.label === 'High' ? '#F59E0B' : zone.label === 'Optimal' ? '#22C55E' : '#94A3B8'}"/>
+                  <stop offset="100%" stop-color="${zone.label === 'Very High' ? '#991B1B' : zone.label === 'High' ? '#A16207' : zone.label === 'Optimal' ? '#166534' : '#475569'}"/>
                 </linearGradient>
-                <filter id="irGlow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="4" result="blur"/>
-                  <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-                </filter>
               </defs>
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <circle id="ir-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
                 stroke="url(#irGauge)"
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
                 data-target="${targetOffset}"
-                style="transition:stroke-dashoffset 1.5s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
-                filter="url(#irGlow)"
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
               />
             </svg>
-            <div style="
-              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
-              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
-              width:180px;height:180px;border-radius:50%;
-              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="display:flex;align-items:flex-start;color:${ringColor};margin-top:8px">
                 <span style="font-size:42px;font-weight:700;letter-spacing:-0.03em;line-height:1">${ratioStr}</span>
               </div>
@@ -394,7 +407,8 @@ function getInjuryRiskHTML(s: SimulatorState): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -494,14 +508,15 @@ function injectTriPerDisciplineLoad(s: SimulatorState): void {
     `;
   };
 
+  const cycling = isCyclingOnlyMode(s);
   const insertedHTML = `
     <div class="ir-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:14px">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:14px">By Discipline</div>
-      ${div('swim', 'Swim')}
+      ${cycling ? '' : div('swim', 'Swim')}
       ${div('bike', 'Bike')}
-      ${div('run', 'Run')}
+      ${cycling ? '' : div('run', 'Run')}
       <div style="font-size:11px;color:${TEXT_L};line-height:1.5;margin-top:8px;border-top:1px solid #F1F5F9;padding-top:10px">
-        Direct per-discipline activity (own sport only). Cross-training transfer is included in the combined ratio at the top — your bike work boosts overall load even on a rest swim day.
+        ${cycling ? 'Acute vs chronic load for your bike training.' : 'Each sport tracked independently. Cross-training transfer is factored into the combined ratio at the top.'}
       </div>
     </div>
   `;

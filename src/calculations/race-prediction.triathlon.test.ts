@@ -317,6 +317,37 @@ describe('predictTriathlonRace — end to end', () => {
     expect(p?.limitingFactor).toBe('volume_durability');
   });
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Taper invariant: when the race is inside the discipline's taper window,
+  // `projected` ≈ `current`. Taper consolidates fitness; it doesn't build it
+  // (Mujika 2002), and the user can't acquire new long-session durability or
+  // marker gains in 1–3 weeks. This test locks the invariant to prevent
+  // regressions like the swim engagement penalty leaking only into projected
+  // (causing a phantom +13:32 swim slowdown vs today) or the durability cap
+  // relaxing unconditionally (causing a phantom −14:02 run speedup vs today).
+  // ─────────────────────────────────────────────────────────────────────────
+  it('race inside taper window: projected per-leg matches current within 30s', () => {
+    // 1 week to race, IM. Run taper = 3w, swim taper = 2.5w, bike taper = 2w —
+    // every discipline is inside its taper window, so executionFactor = 0 and
+    // both predictions must use the same baselines + same longest sessions.
+    const state = baseState({
+      triConfig: {
+        distance: 'ironman',
+        raceDate: futureISO(1),
+        skillRating: { swim: 3, bike: 3, run: 3 },
+        swim: { cssSecPer100m: 95 },
+        bike: { ftp: 250, hasPowerMeter: true, bikeWeightKg: 9 },
+      } as any,
+    });
+    const p = predictTriathlonRace(state);
+    expect(p).not.toBeNull();
+    // Per-leg parity within ±30s (tight tolerance — penalty share = 1.0 in
+    // taper, baselines aligned, durability cap input identical).
+    expect(Math.abs(p!.swimSec - p!.currentSwimSec!)).toBeLessThan(30);
+    expect(Math.abs(p!.bikeSec - p!.currentBikeSec!)).toBeLessThan(30);
+    expect(Math.abs(p!.runSec  - p!.currentRunSec!)).toBeLessThan(30);
+  });
+
   it('confidence range widens for novice (years < 2) and narrows for veteran (>= 5)', () => {
     const novice = predictTriathlonRace(baseState({ firstStravaActivityISO: yearsAgoISO(1) }));
     const veteran = predictTriathlonRace(baseState({ firstStravaActivityISO: yearsAgoISO(7) }));

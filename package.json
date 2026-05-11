@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run lint:ui && tsc && vite build",
     "build:ios": "npm run build && npx cap sync ios",
     "open:ios": "npx cap open ios",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "lint:ui": "node scripts/ui-lint.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
@@ -28,9 +29,12 @@
     "@capacitor/core": "^8.0.1",
     "@capacitor/haptics": "^8.0.2",
     "@capacitor/ios": "^8.0.1",
+    "@capacitor/preferences": "^8.0.1",
     "@capgo/capacitor-health": "^8.2.16",
     "@mosaic/guided-voice": "file:ios-plugins/guided-voice",
+    "@mosaic/health-extras": "file:ios-plugins/health-extras",
     "@supabase/supabase-js": "^2.96.0",
-    "@transistorsoft/capacitor-background-geolocation": "^8.0.1"
+    "@transistorsoft/capacitor-background-geolocation": "^8.0.1",
+    "playwright": "^1.59.1"
   }
 }

@@ -8,12 +8,11 @@ import { getState } from '@/state';
 import type { SimulatorState, PhysiologyDayEntry } from '@/types/state';
 import { computeRecoveryScore } from '@/calculations/readiness';
 import { getSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
+import { CONF_MEDIUM_FLOOR, K_USER_DEFAULT } from '@/calculations/adaptive-recovery';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const APP_BG   = '#FAF9F6';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 const GREEN_A  = '#4ADE80';
 const GREEN_B  = '#22C55E';
 const GREEN_D  = '#16A34A';
@@ -239,7 +238,7 @@ function coachingText(
   }
   if (score >= 50) {
     const hrvLine = hrvParadox
-      ? `HRV at ${hrvStr} — today's reading is up, but the 7-day trend remains below your personal norm.`
+      ? `HRV at ${hrvStr}. Today's reading is up, but the 7-day trend remains below your personal norm.`
       : hrvStr ? `HRV at ${hrvStr}.` : '';
     return {
       headline: 'Adequate recovery',
@@ -247,7 +246,7 @@ function coachingText(
     };
   }
   const hrvLine = hrvParadox
-    ? `HRV at ${hrvStr} — today's reading is up, but the 7-day trend remains suppressed below your personal norm.`
+    ? `HRV at ${hrvStr}. Today's reading is up, but the 7-day trend remains suppressed below your personal norm.`
     : hrvStr ? `HRV at ${hrvStr}, below baseline.` : '';
   return {
     headline: 'Recovery limited',
@@ -255,7 +254,10 @@ function coachingText(
   };
 }
 
-function skyBackground(): string { return buildSkyBackground('rec', 'rose'); }
+function skyBackground(score: number): string {
+  const palette = score >= 70 ? 'teal' : score >= 40 ? 'blue' : 'rose';
+  return buildFloweyBackground('rec', palette) + buildSunGlint('low');
+}
 
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
@@ -367,17 +369,17 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
       #rec-view *, #rec-view *::before, #rec-view *::after { box-sizing:inherit; }
       @keyframes recFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .r-fade { opacity:0; animation:recFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('rec')}
+      ${floweyAnimationCSS('rec')}
       .rec-date-pill:hover { background:rgba(34,197,94,0.1)!important; }
     </style>
 
     <div id="rec-view" style="
-      position:relative;min-height:100vh;background:${APP_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
-      ${skyBackground()}
+      ${skyBackground(ringPct)}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="padding:56px 20px 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50">
@@ -423,33 +425,24 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
 
         <!-- Recovery ring -->
         <div class="r-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:8px 0 28px">
-          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="recGauge" x1="0%" y1="100%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="#34D399"/>
-                  <stop offset="100%" stop-color="#84CC16"/>
+                <linearGradient id="recGauge" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="#A7F3D0"/>
+                  <stop offset="50%"  stop-color="#34D399"/>
+                  <stop offset="100%" stop-color="#065F46"/>
                 </linearGradient>
-                <filter id="recGlow" x="-20%" y="-20%" width="140%" height="140%">
-                  <feGaussianBlur stdDeviation="4" result="blur"/>
-                  <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-                </filter>
               </defs>
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <circle id="rec-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
                 stroke="${score != null ? 'url(#recGauge)' : 'rgba(0,0,0,0.08)'}"
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
                 style="transition:stroke-dashoffset 1.5s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
-                ${score != null ? 'filter="url(#recGlow)"' : ''}
               />
             </svg>
-            <div style="
-              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
-              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
-              width:180px;height:180px;border-radius:50%;
-              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="display:flex;align-items:flex-start;color:${ringColor};margin-top:8px">
                 <span style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1">${score != null ? Math.round(ringPct) : '—'}</span>
                 ${score != null ? `<span style="font-size:22px;font-weight:700;line-height:1;margin-top:4px">%</span>` : ''}
@@ -612,6 +605,9 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
             <div style="display:flex;justify-content:space-between;margin-top:8px;padding:0 2px">${dayLabelRow}</div>
           </div>` : ''}
 
+          <!-- Personal recovery rate card -->
+          ${renderPersonalRecoveryCard(s)}
+
         </div>
 
       </div>
@@ -620,11 +616,68 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   `;
 }
 
+// ── Personal recovery rate card ──────────────────────────────────────────────
+
+/**
+ * Adaptive-recovery surface: shows the user where the personal recovery rate
+ * sits today. Three states:
+ *   - none/low (< 16 sessions):  learning meter ("9 / 16 sessions")
+ *   - medium  (16–29):           value with countdown-only impact line
+ *   - high    (30+):             value with full impact line (countdown + ramp)
+ *
+ * No card when adaptiveRecovery is undefined — feature only appears once we've
+ * actually started accumulating evidence.
+ */
+function renderPersonalRecoveryCard(s: SimulatorState): string {
+  const ar = s.adaptiveRecovery;
+  if (!ar) return '';
+
+  const ratio = ar.kUserHours / K_USER_DEFAULT;
+  const ratioPct = Math.round(ratio * 100);
+  const fasterOrSlower = ar.kUserHours < K_USER_DEFAULT
+    ? 'faster than average'
+    : ar.kUserHours > K_USER_DEFAULT
+    ? 'slower than average'
+    : 'on par with average';
+
+  const valueLine = ar.confidence === 'medium' || ar.confidence === 'high'
+    ? `<div style="display:flex;align-items:baseline;gap:6px;margin-top:4px">
+         <span style="font-size:24px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${ratio.toFixed(2)}×</span>
+         <span style="font-size:13px;font-weight:500;color:${TEXT_S}">${fasterOrSlower}</span>
+       </div>`
+    : `<div style="display:flex;align-items:baseline;gap:6px;margin-top:4px">
+         <span style="font-size:24px;font-weight:700;color:${TEXT_S};letter-spacing:-0.02em;line-height:1">${ar.sessionsObserved} / ${CONF_MEDIUM_FLOOR}</span>
+         <span style="font-size:13px;font-weight:500;color:${TEXT_S}">sessions</span>
+       </div>`;
+
+  const impactLine = ar.confidence === 'high'
+    ? `Used in your recovery countdown and load ramp.`
+    : ar.confidence === 'medium'
+    ? `Used in your recovery countdown. The load ramp picks this up at 30 sessions.`
+    : ar.confidence === 'low'
+    ? `Logging RPE and check-ins makes this faster.`
+    : `Each completed session and check-in teaches Mosaic how you recover.`;
+
+  return `
+    <div class="r-fade" style="animation-delay:0.32s;padding:0 16px;margin-bottom:14px">
+      <div style="background:white;border-radius:16px;padding:18px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${TEXT_L}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>
+          <span style="font-size:14px;font-weight:600;color:${TEXT_S}">Personal recovery rate</span>
+        </div>
+        ${valueLine}
+        <div style="font-size:12px;color:${TEXT_L};margin-top:8px;line-height:1.5">${impactLine}</div>
+      </div>
+    </div>
+  `;
+}
+
 // ── Navigation ───────────────────────────────────────────────────────────────
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -649,10 +702,10 @@ function showRecoveryInfoOverlay(): void {
       <div style="background:#F0FDF4;border-radius:14px;padding:14px">
         <div style="font-size:11px;font-weight:600;color:${GREEN_D};margin-bottom:10px;letter-spacing:0.05em">SCORE ZONES</div>
         <div style="font-size:13px;color:${TEXT_S};line-height:2">
-          <div><strong style="color:${TEXT_M}">75–100</strong> — Optimal. Full session appropriate.</div>
-          <div><strong style="color:${TEXT_M}">50–74</strong> — Adequate. Planned training is fine.</div>
-          <div><strong style="color:${TEXT_M}">25–49</strong> — Partial. Reduce intensity.</div>
-          <div><strong style="color:${TEXT_M}">0–24</strong> — Limited. Rest or very easy movement only.</div>
+          <div><strong style="color:${TEXT_M}">75–100</strong>: Optimal. Full session appropriate.</div>
+          <div><strong style="color:${TEXT_M}">50–74</strong>: Adequate. Planned training is fine.</div>
+          <div><strong style="color:${TEXT_M}">25–49</strong>: Partial. Reduce intensity.</div>
+          <div><strong style="color:${TEXT_M}">0–24</strong>: Limited. Rest or very easy movement only.</div>
         </div>
       </div>
     </div>

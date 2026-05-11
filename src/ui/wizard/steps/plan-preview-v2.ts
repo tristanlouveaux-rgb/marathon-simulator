@@ -6,6 +6,9 @@ import { completeOnboarding, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { ft } from '@/utils/format';
 import { getRunnerType, calculateLiveForecast } from '@/calculations';
+import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
+import { getAbilityBand } from '@/calculations/fatigue';
+import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
  * Page 7 — Plan Preview (v2).
@@ -33,21 +36,126 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
   const noEvent = !!s.continuousMode;
   const focusLabel = focusToLabel(state.trainingFocus);
 
+  const sessionsForHorizon = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
+  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
   const { forecastTime } = calculateLiveForecast({
     currentVdot: s.v || 50,
     targetDistance: s.rd,
     weeksRemaining: s.tw || 16,
-    sessionsPerWeek: (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0),
+    sessionsPerWeek: sessionsForHorizon,
     runnerType: getRunnerType(s.b || 1.06),
     experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-    weeklyVolumeKm: s.wkm,
+    weeklyVolumeKm: planMeanKm ?? s.wkm,
     hmPbSeconds: s.pbs?.h || undefined,
     ltPaceSecPerKm: s.lt || undefined,
+    blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
   });
 
-  const milestone = s.continuousMode
+  // ─── DIAGNOSTIC LOG (remove after horizon-input bug investigation) ───
+  // Dumps every input the horizon model receives and every component it
+  // returns, so we can see exactly why the predicted gain is what it is.
+  try {
+    const sessionsPerWeekForLog = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
+    const baselineVdotForLog = s.v || 50;
+    const abilityBandForLog = getAbilityBand(baselineVdotForLog);
+    const planMeanKmForLog = getPlanPrescribedMeanWeeklyKm(sessionsPerWeekForLog, s.rd);
+    const horizonForLog = applyTrainingHorizonAdjustment({
+      baseline_vdot: baselineVdotForLog,
+      target_distance: s.rd,
+      weeks_remaining: s.tw || 16,
+      sessions_per_week: sessionsPerWeekForLog,
+      runner_type: getRunnerType(s.b || 1.06),
+      ability_band: abilityBandForLog,
+      taper_weeks: Math.max(1, Math.ceil((s.tw || 16) * 0.15)),
+      experience_level: s.onboarding?.experienceLevel || 'intermediate',
+      weekly_volume_km: planMeanKmForLog ?? s.wkm,
+      hm_pb_seconds: s.pbs?.h || undefined,
+      lt_pace_sec_per_km: s.lt || undefined,
+    });
+    console.log('[PlanPreview:DIAG] inputs:', {
+      'baselineVdot (s.v)': baselineVdotForLog,
+      abilityBand: abilityBandForLog,
+      raceDist: s.rd,
+      weeksRemaining: s.tw,
+      sessionsPerWeek_raw: s.epw || s.rw,
+      sessionsPerWeek_total: sessionsPerWeekForLog,
+      runnerType: getRunnerType(s.b || 1.06),
+      experienceLevel: s.onboarding?.experienceLevel,
+      weeklyVolumeKm_state: s.wkm,
+      planPrescribedMeanWeeklyKm: planMeanKmForLog,
+      doseUsedByHorizon: planMeanKmForLog ?? s.wkm,
+      pb_marathon: s.pbs?.m,
+      pb_half: s.pbs?.h,
+      pb_10k: s.pbs?.k10,
+      pb_5k: s.pbs?.k5,
+      pbDates_raw: s.onboarding?.pbDates,
+      marathonPbDateISO: s.onboarding?.pbDates?.m,
+      marathonPbAgeDays: s.onboarding?.pbDates?.m
+        ? Math.floor((Date.now() - new Date(s.onboarding.pbDates.m).getTime()) / 86400000)
+        : 'undefined (no date persisted)',
+      ltPaceSecPerKm: s.lt,
+      vo2: s.vo2,
+      blendedRaceTimeSec: s.blendedRaceTimeSec,
+      initialBaseline: s.initialBaseline,
+      blendedAnchorUsed: s.blendedRaceTimeSec ?? s.initialBaseline,
+    });
+    // Reverse-derive effective_sessions from session_factor and from
+    // undertrain_penalty separately. If they disagree, the model has a real bug.
+    const sf = horizonForLog.components.session_factor;
+    const up = horizonForLog.components.undertrain_penalty;
+    const effFromSf = sf > 0 && sf < 1 ? 6.5 - Math.log((1 / sf) - 1) : NaN;  // assumes ref=6.5 (advanced marathon)
+    const effFromUp = up > 0 ? 3.5 - (up * 3.5 / 4.0) : NaN;                  // assumes min_sess=3.5, penalty_pct=4 (marathon)
+    console.log('[PlanPreview:DIAG] horizon result:', {
+      vdot_gain: horizonForLog.vdot_gain.toFixed(3),
+      improvement_pct: horizonForLog.improvement_pct.toFixed(3),
+      week_factor: horizonForLog.components.week_factor.toFixed(3),
+      session_factor: horizonForLog.components.session_factor.toFixed(3),
+      type_modifier: horizonForLog.components.type_modifier.toFixed(3),
+      undertrain_penalty: horizonForLog.components.undertrain_penalty.toFixed(3),
+      taper_bonus: horizonForLog.components.taper_bonus.toFixed(3),
+      effSessions_derived_from_session_factor: effFromSf.toFixed(3),
+      effSessions_derived_from_undertrain_penalty: effFromUp.toFixed(3),
+    });
+    console.log('[PlanPreview:DIAG] forecast output:', {
+      forecastTime,
+      forecastTime_formatted: ft(forecastTime),
+      initialBaseline_formatted: ft(s.initialBaseline ?? 0),
+      improvement_sec: (s.initialBaseline ?? 0) - forecastTime,
+    });
+  } catch (e) {
+    console.warn('[PlanPreview:DIAG] log failed:', e);
+  }
+  // ─── END DIAGNOSTIC LOG ───
+
+  const candidateMilestone = s.continuousMode
     ? null
     : findNearestMilestone(forecastTime, raceDistance, 0.05, state.experienceLevel || 'intermediate');
+
+  // Feasibility gate: only surface a milestone popup if adding one session/week
+  // would actually bring the forecast to or below the milestone time, AND there
+  // is real room to bump (rw < 7 and epw < 10 — same caps the accept handler uses).
+  // Otherwise we'd promise a goal the plan engine can't deliver.
+  const canBumpSessions = (s.rw ?? 0) < 7 && (s.epw ?? 0) < 10;
+  let milestone: MilestoneTarget | null = null;
+  if (candidateMilestone && canBumpSessions) {
+    const bumpedSessions = (s.epw || s.rw || 4) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0) + 1;
+    const bumpedPlanMeanKm = getPlanPrescribedMeanWeeklyKm(bumpedSessions, s.rd);
+    const { forecastTime: bumpedForecast } = calculateLiveForecast({
+      currentVdot: s.v || 50,
+      targetDistance: s.rd,
+      weeksRemaining: s.tw || 16,
+      sessionsPerWeek: bumpedSessions,
+      runnerType: getRunnerType(s.b || 1.06),
+      experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
+      weeklyVolumeKm: bumpedPlanMeanKm ?? s.wkm,
+      hmPbSeconds: s.pbs?.h || undefined,
+      ltPaceSecPerKm: s.lt || undefined,
+      blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
+    });
+    if (bumpedForecast <= candidateMilestone.time) {
+      milestone = candidateMilestone;
+    }
+  }
   const showMilestonePopup = !!milestone && !state.acceptedMilestoneChallenge && state.targetMilestone === null;
 
   const shownTime = state.targetMilestone ? state.targetMilestone.time : forecastTime;
@@ -56,6 +164,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
     <style>
       @keyframes ppRise { from { opacity:0; transform:translateY(10px) } to { opacity:1; transform:translateY(0) } }
       .pp-rise { opacity:0; animation: ppRise 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      ${ringAnimationCSS('pp')}
 
       .shadow-ap { box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08); }
 
@@ -99,10 +208,15 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 32%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Hero arrival: atmosphere → centered+pulse rings → mid glint. Same loud treatment as intro slides. -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('pp', { variant: 'centered', pulse: true })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(7, 7)}
+        ${renderProgressIndicator(8, 8)}
 
         <div class="pp-rise" style="width:100%;max-width:480px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -168,10 +282,10 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
             <div class="pp-row"><span class="pp-row-k">Weekly volume</span><span class="pp-row-v">~${s.wkm} km</span></div>
             <div class="pp-row"><span class="pp-row-k">Race preference</span><span class="pp-row-v">${s.typ}</span></div>
             <div class="pp-row">
-              <span class="pp-row-k">Starting VDOT</span>
+              <span class="pp-row-k">Starting VO2max</span>
               <span class="pp-row-v">
                 ${(s.v ?? 0).toFixed(1)}
-                <button id="pp-vdot-info" class="info" aria-label="What is VDOT?">
+                <button id="pp-vdot-info" class="info" aria-label="What is VO2max?">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01"/><path d="M11 12h1v5h1"/></svg>
                 </button>
               </span>
@@ -359,7 +473,7 @@ function showVDOTExplanation(): void {
       <div style="margin:14px 0 10px;padding:12px;background:var(--c-soft);border-radius:10px">
         <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 6px">HOW WE MEASURED YOURS</p>
         <p style="font-size:13px;color:var(--c-black);margin:0 0 6px;line-height:1.55">
-          Your VDOT of <strong>${v?.toFixed(1) ?? '—'}</strong> was measured from your heart rate response to pace across ${hr.n} steady ${runWord} in the last 8 weeks${r2}.
+          Your VO2max of <strong>${v?.toFixed(1) ?? '—'}</strong> was measured from your heart rate response to pace across ${hr.n} steady ${runWord} in the last 8 weeks${r2}.
         </p>
         <p style="font-size:12px;color:var(--c-muted);margin:0;line-height:1.55">
           ${tier}. We regress %HRR (heart rate reserve) against pace to find the pace your heart says corresponds to VO2 max, then invert Daniels' formula.
@@ -370,7 +484,7 @@ function showVDOTExplanation(): void {
       <div style="margin:14px 0 10px;padding:12px;background:var(--c-soft);border-radius:10px">
         <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 6px">HOW WE MEASURED YOURS</p>
         <p style="font-size:13px;color:var(--c-black);margin:0;line-height:1.55">
-          Your VDOT of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training. Connect Garmin or add a resting HR to calibrate it from your heart rate.
+          Your VO2max of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training. Connect Garmin or add a resting HR to calibrate it from your heart rate.
         </p>
       </div>`;
   } else if (hr && (hr.reason === 'too-few-points' || hr.reason === 'no-points' || hr.reason === 'no-maxhr')) {
@@ -378,7 +492,7 @@ function showVDOTExplanation(): void {
       <div style="margin:14px 0 10px;padding:12px;background:var(--c-soft);border-radius:10px">
         <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 6px">HOW WE MEASURED YOURS</p>
         <p style="font-size:13px;color:var(--c-black);margin:0;line-height:1.55">
-          Your VDOT of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training. Heart-rate calibration kicks in once a few more steady runs sync.
+          Your VO2max of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training. Heart-rate calibration kicks in once a few more steady runs sync.
         </p>
       </div>`;
   } else {
@@ -386,7 +500,7 @@ function showVDOTExplanation(): void {
       <div style="margin:14px 0 10px;padding:12px;background:var(--c-soft);border-radius:10px">
         <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 6px">HOW WE MEASURED YOURS</p>
         <p style="font-size:13px;color:var(--c-black);margin:0;line-height:1.55">
-          Your VDOT of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training.
+          Your VO2max of <strong>${v?.toFixed(1) ?? '—'}</strong> is estimated from your personal bests and recent training.
         </p>
       </div>`;
   }
@@ -396,14 +510,14 @@ function showVDOTExplanation(): void {
   popup.className = 'pp-overlay-backdrop';
   popup.innerHTML = `
     <div class="pp-overlay-card shadow-ap" style="max-width:440px">
-      <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0">ABOUT VDOT</p>
-      <h3 style="font-size:18px;font-weight:500;color:var(--c-black);margin:8px 0 10px">Running performance, as a single number.</h3>
+      <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0">ABOUT VO2MAX</p>
+      <h3 style="font-size:18px;font-weight:500;color:var(--c-black);margin:8px 0 10px">Aerobic capacity, as a single number.</h3>
       <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.55">
-        VDOT (Jack Daniels) models current running fitness as a single value. It correlates with VO2 max but also accounts for running economy, so it reflects race performance directly.
+        VO2max is how much oxygen your body can use at peak effort. We compute it from how your heart rate responds to pace (Jack Daniels' VDOT method), so the number reflects both aerobic capacity and running economy together.
       </p>
       ${methodBlock}
       <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.55">
-        Your VDOT drives training paces across every zone. As fitness changes, paces update automatically.
+        Your VO2max drives training paces across every zone. As fitness changes, paces update automatically.
       </p>
       <p style="font-size:11.5px;color:var(--c-faint);margin:0;line-height:1.5">References: Daniels' Running Formula (Jack Daniels, PhD); Swain & Leutholtz 1997 (%HRR ≈ %VO2R).</p>
       <div style="margin-top:16px">

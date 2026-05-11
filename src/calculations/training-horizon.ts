@@ -1,6 +1,83 @@
 import type { TrainingHorizonInput, TrainingHorizonResult, RaceDistance, AbilityBand, RunnerType } from '@/types';
 import { TRAINING_HORIZON_PARAMS, TAPER_NOMINAL, EXPECTED_GAINS } from '@/constants';
+import { REF_KM_PER_SESSION, HOURS_TO_KM_RATE } from '@/constants/training-params';
 import { inferLevel } from './fatigue';
+
+/**
+ * Build-phase volume factor: empirical average ratio of `mean weekly km across
+ * non-taper weeks` to `sessions × REF_KM_PER_SESSION` for canonical periodised
+ * plans. Pfitzinger 18-week intermediate marathon plans average ~50-55 km/wk
+ * across the 15 non-taper weeks for 4 sessions and ~65 km/wk for 5 sessions —
+ * 1.14-1.25× the bare `sessions × ref` reference. Daniels Q-plans show similar
+ * build-phase ramp shape. We use 1.2 as the centre of this empirical range.
+ *
+ * This factor is what makes "plan-prescribed dose" different from "maintenance
+ * dose at the current session count": a periodised plan ramps volume above the
+ * maintenance level to drive adaptation, then tapers below it for race day.
+ * The horizon model already removes taper weeks from `weeks_eff`, so we feed
+ * the *build-phase* mean — not peak (which would over-state the integral) and
+ * not the bare reference (which assumes flat maintenance volume).
+ */
+const PLAN_BUILD_PHASE_FACTOR = 1.2;
+
+/**
+ * Plan-prescribed mean weekly running volume across the build phase.
+ * Used as the dose input to the horizon model — represents what the plan
+ * WILL deliver if the user follows it, not what they're currently doing.
+ *
+ * Formula: `sessions × REF_KM_PER_SESSION[distance] × PLAN_BUILD_PHASE_FACTOR`.
+ * `REF_KM_PER_SESSION` is calibrated to Daniels/Pfitzinger intermediate plans
+ * (marathon=11 km, half=10, 10K=9, 5K=8). The build-phase factor lifts the
+ * reference to match periodised mean.
+ *
+ * Returns null when sessions are unknown — caller should fall back to the
+ * legacy `s.wkm` heuristic in that case.
+ */
+export function getPlanPrescribedMeanWeeklyKm(
+  sessionsPerWeek: number | null | undefined,
+  targetDistance: RaceDistance,
+): number | null {
+  if (sessionsPerWeek == null || sessionsPerWeek <= 0) return null;
+  const ref = REF_KM_PER_SESSION[targetDistance];
+  if (!ref) return null;
+  return sessionsPerWeek * ref * PLAN_BUILD_PHASE_FACTOR;
+}
+
+/**
+ * Convert raw `sessions_per_week` into dose-aware effective sessions.
+ *
+ * The base horizon model treats every session as a "standard" stimulus dose,
+ * which fails for users whose time budget produces very short or very long
+ * sessions. A 4×30-min marathon plan delivers roughly half the dose of a
+ * 4×60-min marathon plan; both currently feed the same `session_factor`.
+ *
+ * We compute `actual_km_per_session` from history (`weekly_volume_km`) when
+ * available, fall back to `weekly_volume_hours × HOURS_TO_KM_RATE` for new
+ * users, then ratio against `REF_KM_PER_SESSION[distance]`. Clamped to
+ * `[0.5, 1.3]` to keep the logistic in its meaningful range and prevent a
+ * single absurdly long-session plan from over-claiming gain.
+ */
+function computeEffectiveSessions(
+  sessions_per_week: number,
+  distance: RaceDistance,
+  weekly_volume_km?: number,
+  weekly_volume_hours?: number,
+): number {
+  const ref = REF_KM_PER_SESSION[distance];
+  if (!ref || sessions_per_week <= 0) return sessions_per_week;
+
+  let km_proxy: number | null = null;
+  if (weekly_volume_km != null && weekly_volume_km > 0) {
+    km_proxy = weekly_volume_km;
+  } else if (weekly_volume_hours != null && weekly_volume_hours > 0) {
+    km_proxy = weekly_volume_hours * HOURS_TO_KM_RATE;
+  }
+  if (km_proxy == null) return sessions_per_week;
+
+  const actual_km_per_session = km_proxy / sessions_per_week;
+  const dose_factor = Math.max(0.5, Math.min(1.3, actual_km_per_session / ref));
+  return sessions_per_week * dose_factor;
+}
 
 /**
  * Core training horizon calculation - returns VDOT gain from non-linear model
@@ -48,17 +125,32 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Early weeks: rapid gains; later weeks: diminishing returns
   const week_factor = weeks_eff > 0 ? (1 - Math.exp(-weeks_eff / tau)) : 0;
 
+  // Dose-aware effective sessions: scale raw count by km/session vs. reference.
+  // 4×30-min marathon plan ≠ 4×80-min marathon plan in terms of stimulus.
+  const effective_sessions = computeEffectiveSessions(
+    sessions_per_week,
+    distance_key,
+    params.weekly_volume_km,
+    params.weekly_volume_hours,
+  );
+
   // Session factor: logistic centered at ref_sessions
   // Below ref: slower gains; at ref: optimal; above ref: diminishing returns
   const k = TRAINING_HORIZON_PARAMS.k_sessions;
-  const session_factor = 1 / (1 + Math.exp(-k * (sessions_per_week - ref_sessions)));
+  const session_factor = 1 / (1 + Math.exp(-k * (effective_sessions - ref_sessions)));
 
-  // Experience factor (7 levels)
+  // Experience factor (7 levels). `returning` raised 1.15 → 1.35 (recalibration
+  // 2026-05-06): Mujika & Padilla (2003) and Coyle (1985) detraining-then-
+  // retraining studies show returning athletes regain capacity 1.5-2× faster
+  // than novices reach the same level — physiological "muscle memory" via
+  // satellite cell pools, capillary density preservation, and persistent
+  // mitochondrial enzyme expression. The previous 1.15 only captured a small
+  // fraction of this re-adaptation advantage.
   const EXP_FACTORS: Record<string, number> = {
     total_beginner: 0.75, beginner: 0.80,
     novice: 0.90, intermediate: 1.0,
     advanced: 1.05, competitive: 1.05,
-    returning: 1.15,
+    returning: 1.35,
     hybrid: 1.10,
   };
   const exp_factor = EXP_FACTORS[params.experience_level || 'intermediate'] || 1.0;
@@ -66,17 +158,23 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Base improvement (product of all factors)
   let improvement_pct = max_gain * type_mod * week_factor * session_factor * exp_factor;
 
-  // Undertraining penalty (if sessions too low)
+  // Undertraining penalty (if effective dose too low) — using effective_sessions
+  // so a user running 4× very short sessions still trips the penalty.
   const min_sess = TRAINING_HORIZON_PARAMS.min_sessions[distance_key] || 3.0;
   let undertrain_penalty = 0;
-  if (sessions_per_week < min_sess) {
+  if (effective_sessions < min_sess) {
     const penalty_pct = TRAINING_HORIZON_PARAMS.undertrain_penalty_pct[distance_key] || 2.5;
-    undertrain_penalty = penalty_pct * (min_sess - sessions_per_week) / min_sess;
+    undertrain_penalty = penalty_pct * (min_sess - effective_sessions) / min_sess;
   }
 
-  // Taper bonus (small freshness gain)
+  // Taper bonus (small freshness gain). Cap by weeks_remaining so an athlete
+  // with no time to taper doesn't get the full freshness bonus. Previously
+  // `taper_eff = taper_weeks` (planned duration) was used directly, so a
+  // race tomorrow still got "you'll be fully tapered" credit. Now scales
+  // by the actual taper window the athlete has access to.
   const taper_nominal = TAPER_NOMINAL[distance_key] || 2;
-  const taper_ratio = taper_eff > 0 ? Math.min(taper_eff / taper_nominal, 1) : 0;
+  const actual_taper_weeks = Math.max(0, Math.min(taper_eff, weeks_remaining));
+  const taper_ratio = taper_nominal > 0 ? Math.min(actual_taper_weeks / taper_nominal, 1) : 0;
   const taper_bonus = TRAINING_HORIZON_PARAMS.taper_bonus_pct[distance_key] * taper_ratio;
 
   // Final improvement (with bounds)

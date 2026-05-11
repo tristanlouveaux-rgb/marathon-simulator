@@ -6,13 +6,21 @@
  * on the plan and home views reassuring the user that skips won't hurt adherence.
  */
 
-import { getMutableState } from '@/state/store';
+import { getMutableState, getState } from '@/state/store';
 import { saveState } from '@/state';
 
 const MODAL_ID = 'illness-modal';
 
+function isMultiSport(): boolean {
+  const s = getState();
+  const mode = s.onboarding?.trainingMode;
+  return mode === 'triathlon' || mode === 'cycling' || mode === 'hyrox' || s.eventType === 'triathlon' || s.eventType === 'hyrox';
+}
+
 export function openIllnessModal(): void {
   document.getElementById(MODAL_ID)?.remove();
+
+  const multiSport = isMultiSport();
 
   const modal = document.createElement('div');
   modal.id = MODAL_ID;
@@ -27,15 +35,19 @@ export function openIllnessModal(): void {
       <button id="illness-opt-light"
         style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
                border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:8px;text-align:left">
-        <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">Still running</div>
-        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">Threshold, interval and tempo sessions converted to easy runs at 50% distance. Easy and long runs reduced to 60%.</div>
+        <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">${multiSport ? 'Still training' : 'Still running'}</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${multiSport
+          ? 'Quality sessions converted to easy effort at 50% volume. Low-intensity sessions reduced to 60%.'
+          : 'Threshold, interval and tempo sessions converted to easy runs at 50% distance. Easy and long runs reduced to 60%.'}</div>
       </button>
 
       <button id="illness-opt-resting"
         style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
                border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:18px;text-align:left">
         <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:4px">Full rest</div>
-        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">All running workouts replaced with rest. Resume training when you mark yourself recovered.</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">${multiSport
+          ? 'All sessions replaced with rest. Resume training when you mark yourself recovered.'
+          : 'All running workouts replaced with rest. Resume training when you mark yourself recovered.'}</div>
       </button>
 
       <button id="illness-cancel"

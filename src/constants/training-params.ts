@@ -1,13 +1,24 @@
 import type { TrainingHorizonParams, WorkoutImportance, TimeImpact, ExpectedGains } from '@/types';
 
-/** Training horizon parameters - Non-linear improvement model */
+/** Training horizon parameters - Non-linear improvement model
+ *
+ * Recalibration 2026-05-06: max_gain ceilings raised to reflect that Mosaic
+ * generates structured periodised plans (long runs, threshold, intervals,
+ * proper build/peak/taper). Ceilings now match Pfitzinger 2009 / Daniels 2014
+ * empirical outcomes for athletes following such plans, not the flat-volume
+ * maintenance averages the previous calibration assumed. Marathon intermediate
+ * was the most-affected band — bumped from 5.5 to 7.0 to match Pfitzinger
+ * intermediate-plan high-end outcomes.
+ */
 export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
-  // Maximum improvement ceiling by distance and ability (conservative defaults)
+  // Maximum improvement ceiling by distance and ability. Calibrated to outcomes
+  // achievable when following a structured periodised plan (which is what
+  // Mosaic generates).
   max_gain_pct: {
-    '5k': { beginner: 10.0, novice: 8.0, intermediate: 6.0, advanced: 4.0, elite: 2.5 },
-    '10k': { beginner: 11.0, novice: 9.0, intermediate: 7.0, advanced: 5.0, elite: 3.0 },
-    'half': { beginner: 12.0, novice: 10.0, intermediate: 8.0, advanced: 6.0, elite: 3.5 },
-    'marathon': { beginner: 8.0, novice: 6.8, intermediate: 5.5, advanced: 4.5, elite: 3.5 }
+    '5k': { beginner: 10.0, novice: 8.0, intermediate: 6.5, advanced: 4.5, elite: 2.5 },
+    '10k': { beginner: 11.0, novice: 9.0, intermediate: 7.5, advanced: 5.5, elite: 3.0 },
+    'half': { beginner: 12.0, novice: 10.0, intermediate: 8.5, advanced: 6.5, elite: 3.5 },
+    'marathon': { beginner: 9.0, novice: 7.5, intermediate: 7.0, advanced: 5.5, elite: 3.5 }
   },
 
   // Time constant (tau) for adaptation - smaller = faster gains
@@ -34,13 +45,51 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
     'marathon': { Speed: 1.15, Balanced: 1.00, Endurance: 0.90 }
   },
 
-  k_sessions: 1.0,  // Logistic steepness
+  // Logistic steepness for session_factor. Softened from 1.0 → 0.7 (recalibration
+  // 2026-05-06): the k=1.0 curve was too steep at the boundary, severely
+  // penalising 3-4 session plans below the ref_sessions centre. Empirically,
+  // a 4-session Pfitzinger marathon plan delivers ~70% of the gain that a
+  // 5-session plan delivers, not the 21% the steep curve produced. k=0.7 flattens
+  // the response so session-count-vs-outcome better matches published plan data.
+  k_sessions: 0.7,
   min_sessions: { '5k': 2.0, '10k': 2.5, 'half': 3.0, 'marathon': 3.5 },
   undertrain_penalty_pct: { '5k': 2.0, '10k': 2.5, 'half': 3.0, 'marathon': 4.0 },
   taper_bonus_pct: { '5k': 0.8, '10k': 1.0, 'half': 1.2, 'marathon': 1.5 },
   max_gain_cap_pct: 15.0,
   max_slowdown_pct: 3.0
 };
+
+/**
+ * Reference km per session at intermediate volume — derived from
+ * `ref_sessions[distance][intermediate]` × the canonical weekly mileage in
+ * Daniels (2005) and Pfitzinger (2009) intermediate plans.
+ *
+ *   5K:       ref_sessions=4.0  ×  ~32 km/wk → 8 km/session
+ *   10K:      ref_sessions=4.5  ×  ~40 km/wk → 9 km/session
+ *   Half:     ref_sessions=5.0  ×  ~50 km/wk → 10 km/session
+ *   Marathon: ref_sessions=5.5  ×  ~62 km/wk → 11 km/session (Pfitz 55–70 mpw)
+ *
+ * Used to convert weekly-volume into a "dose multiplier" that scales
+ * `effective_sessions_per_week` in the horizon adjustment. A 4×30-min
+ * marathon plan and a 4×80-min marathon plan should not predict the same
+ * gain — the dose differs by 2.5×.
+ */
+export const REF_KM_PER_SESSION: Record<string, number> = {
+  '5k': 8,
+  '10k': 9,
+  'half': 10,
+  'marathon': 11,
+};
+
+/**
+ * Generic intermediate easy pace (km/h) used to convert weekly hours
+ * into km-equivalent when km history is not yet populated. ~6:00/km easy
+ * pace, matches Daniels' intermediate-VDOT (45–50) easy zone median.
+ *
+ * Hours is a less precise signal than km because it does not account for
+ * pace, so this is only used as a fallback.
+ */
+export const HOURS_TO_KM_RATE = 10;
 
 /** Workout importance by race distance and type */
 export const IMP: WorkoutImportance = {

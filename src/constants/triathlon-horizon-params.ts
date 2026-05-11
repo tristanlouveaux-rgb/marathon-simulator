@@ -13,7 +13,7 @@
  *     as `projCss = currentCss * (1 - improvement_pct/100)`.
  *   - FTP: higher watts = faster. Apply as
  *     `projFtp = currentFtp * (1 + improvement_pct/100)`.
- *   - VDOT: higher = faster. Reuse marathon function; not in this file.
+ *   - VDOT: higher = faster. See `RUN_HORIZON_PARAMS_703` / `RUN_HORIZON_PARAMS_IM`.
  */
 
 import type { AbilityBand } from '@/types';
@@ -52,10 +52,17 @@ export interface DisciplineHorizonParams {
 
 export const SWIM_HORIZON_PARAMS: DisciplineHorizonParams = {
   // Max % CSS improvement over a full block (saturating asymptote).
+  // Beginner / novice raised (recalibration 2026-05-06): Costa 2010's data is
+  // sub-elite age-groupers who already have technique. True beginners learning
+  // proper stroke mechanics see 10-15% CSS gains over a 6-month block from
+  // technique alone (Maglischo 2003, Toussaint & Hollander 1994). Bumped to
+  // reflect this — beginner 6.0 → 9.0, novice 4.5 → 6.5. Intermediate+ stay
+  // (Costa data holds for athletes already past the technique-acquisition
+  // phase).
   max_gain_pct: {
-    beginner:     6.0,   // Costa 2010 (sub-elite age-grouper data)
-    novice:       4.5,
-    intermediate: 3.0,
+    beginner:     9.0,   // Maglischo 2003 (technique-driven novice gains)
+    novice:       6.5,
+    intermediate: 3.0,   // Costa 2010 (sub-elite age-grouper data)
     advanced:     1.8,   // Pyne 2004 (sub-elite peak progression)
     elite:        0.9,   // Pyne 2004 (Olympic-level peak progression)
   },
@@ -122,12 +129,19 @@ export const SWIM_HORIZON_PARAMS: DisciplineHorizonParams = {
 export const BIKE_HORIZON_PARAMS: DisciplineHorizonParams = {
   // Max % FTP gain over a full block. Untrained have most headroom; pros
   // plateau hard.
+  // Intermediate raised 6.0 → 8.0 (recalibration 2026-05-06): Coggan 2019's
+  // "typical season gain" is the average across all training-quality levels.
+  // Athletes following structured plans (which is what Mosaic generates —
+  // proper sweet spot, threshold, VO2 work, polarised distribution) see
+  // 8-12%/season at the intermediate level (Allen & Coggan Ch.7 high-end,
+  // Bouchard HERITAGE upper trainability quartile). Bumped to match what
+  // a structured plan empirically delivers, not the cross-quality average.
   max_gain_pct: {
     beginner:     15.0,  // HERITAGE-extrapolated; large headroom
     novice:       10.0,
-    intermediate: 6.0,   // Coggan 2019 typical season gain
-    advanced:     3.5,
-    elite:        1.5,   // Pinot 2011 pro longitudinal data
+    intermediate:  8.0,  // Coggan 2019 + Allen 2019 structured-plan high-end
+    advanced:      4.5,
+    elite:         1.5,  // Pinot 2011 pro longitudinal data
   },
   // FTP shifts visible in 4–6wk for untrained (Coggan CTL framework). Slower
   // for trained (Lucia 2000).
@@ -173,12 +187,143 @@ export const BIKE_HORIZON_PARAMS: DisciplineHorizonParams = {
 // Shared
 // ───────────────────────────────────────────────────────────────────────────
 
+// ───────────────────────────────────────────────────────────────────────────
+// Run — VDOT adaptation (triathlon-calibrated session frequencies)
+// Sources:
+//   - Daniels J (2014) "Daniels' Running Formula" 3rd ed. — max_gain_pct and
+//     tau_weeks mirror marathon/half values from TRAINING_HORIZON_PARAMS since
+//     run physiology is unchanged by context.
+//   - Midgley AW et al. (2006) "Training to enhance the physiological
+//     determinants of long-distance running performance" Sports Med 36:921–952 —
+//     5–8% VO2max gain in trained athletes over 8–16 week structured blocks.
+//   - Friel J (2012) "The Triathlete's Training Bible" 3rd ed. — 3 runs/week
+//     is the recommended frequency for 70.3; 3–4/wk for IM.
+//   - Dixon M (2015) "Fast-Track Triathlete" — quality over quantity in
+//     triathlon run training; 2–3 focused sessions sufficient when swim/bike
+//     aerobic base is high.
+//   - Laursen PB & Buchheit M (2019) "Science and Application of HIIT" —
+//     concurrent-training aerobic carryover: the aerobic stimulus from swim/
+//     bike reduces the run frequency needed to drive VO2max adaptation.
+//
+// Key difference from marathon model: ref_sessions reflects triathlon norms
+// (3/wk for 70.3, 3.5/wk for IM) rather than marathon norms (5/wk).
+// A triathlete doing 3 quality runs/week alongside swim and bike is training
+// optimally — the marathon model wrongly penalises them as undertrained.
+//
+// Confidence: max_gain_pct and tau from Daniels (high). Ref/min sessions
+// from Friel + Dixon coaching consensus (medium — no controlled trial
+// directly compares run frequencies in a concurrent triathlon context).
+// ───────────────────────────────────────────────────────────────────────────
+
+export const RUN_HORIZON_PARAMS_703: DisciplineHorizonParams = {
+  // Mirror TRAINING_HORIZON_PARAMS 'half' values — same physiology. Kept in
+  // lockstep with running half through the 2026-05-06 recalibration (8.0 → 8.5
+  // intermediate, 6.0 → 6.5 advanced).
+  max_gain_pct: {
+    beginner:     12.0,
+    novice:       10.0,
+    intermediate:  8.5,
+    advanced:      6.5,
+    elite:         3.5,
+  },
+  // Daniels half-marathon tau values.
+  tau_weeks: {
+    beginner:      6,
+    novice:        7,
+    intermediate:  8,
+    advanced:      9,
+    elite:        10,
+  },
+  // 3/wk at intermediate is the 70.3 sweet spot (Friel 2012; Dixon 2015).
+  // Concurrent aerobic base from swim/bike means this achieves the same
+  // VO2max stimulus as ~5/wk pure running.
+  ref_sessions: {
+    beginner:     2.0,
+    novice:       2.5,
+    intermediate: 3.0,
+    advanced:     3.5,
+    elite:        4.0,
+  },
+  min_sessions: {
+    beginner:     1.0,
+    novice:       1.5,
+    intermediate: 1.5,
+    advanced:     2.0,
+    elite:        2.0,
+  },
+  // Moderate penalty: cross-training aerobic carryover partially mitigates
+  // run-frequency shortfall (Laursen & Buchheit 2019).
+  undertrain_penalty_pct: 2.5,
+  // Mirrors TRAINING_HORIZON_PARAMS 'half' taper_bonus.
+  taper_bonus_pct: {
+    beginner:     1.2,
+    novice:       1.2,
+    intermediate: 1.2,
+    advanced:     1.2,
+    elite:        1.2,
+  },
+  max_gain_cap_pct: 15.0,
+  max_slowdown_pct:  3.0,
+};
+
+export const RUN_HORIZON_PARAMS_IM: DisciplineHorizonParams = {
+  // Mirrors TRAINING_HORIZON_PARAMS 'marathon' values — kept in lockstep
+  // with the running side. Recalibrated 2026-05-06 alongside running marathon
+  // (5.5 → 7.0 intermediate) so an IM athlete's run leg projects the same
+  // gain potential as a standalone marathon athlete with equivalent dose.
+  max_gain_pct: {
+    beginner:      9.0,
+    novice:        7.5,
+    intermediate:  7.0,
+    advanced:      5.5,
+    elite:         3.5,
+  },
+  // Daniels marathon tau values.
+  tau_weeks: {
+    beginner:      7,
+    novice:        8,
+    intermediate:  9,
+    advanced:     10,
+    elite:        11,
+  },
+  // IM run is 42km; slightly higher frequency beneficial (Friel 2012).
+  ref_sessions: {
+    beginner:     2.5,
+    novice:       3.0,
+    intermediate: 3.5,
+    advanced:     4.0,
+    elite:        4.5,
+  },
+  min_sessions: {
+    beginner:     1.5,
+    novice:       2.0,
+    intermediate: 2.0,
+    advanced:     2.5,
+    elite:        3.0,
+  },
+  undertrain_penalty_pct: 3.0,
+  // Mirrors TRAINING_HORIZON_PARAMS 'marathon' taper_bonus.
+  taper_bonus_pct: {
+    beginner:     1.5,
+    novice:       1.5,
+    intermediate: 1.5,
+    advanced:     1.5,
+    elite:        1.5,
+  },
+  max_gain_cap_pct: 15.0,
+  max_slowdown_pct:  3.0,
+};
+
 /**
- * Logistic steepness for the session-factor curve. Reused from marathon
- * (`TRAINING_HORIZON_PARAMS.k_sessions = 1.0`) because the shape is
- * discipline-agnostic.
+ * Logistic steepness for the session-factor curve. Softened from 1.0 → 0.7
+ * (recalibration 2026-05-06) in lockstep with running's `TRAINING_HORIZON_PARAMS.
+ * k_sessions`. The k=1.0 curve over-penalised plans below the ref_sessions
+ * centre — a 3-session/wk run leg in a 70.3 plan was getting ~13% credit when
+ * empirically (Friel 2012, Dixon 2015) it delivers ~30% of a 5-session plan's
+ * gain. k=0.7 flattens the response to better match published triathlon-plan
+ * dose-response data.
  */
-export const TRI_K_SESSIONS = 1.0;
+export const TRI_K_SESSIONS = 0.7;
 
 /**
  * Per-discipline taper duration in weeks (used as `taper_weeks` argument).

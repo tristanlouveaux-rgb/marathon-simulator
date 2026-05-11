@@ -69,6 +69,8 @@ const TOTAL_ANIMATION_MS = ANALYSIS_STEPS.length * STEP_DELAY_MS + 600; // total
 
 export function shouldAutoDebrief(): boolean {
   const s = getState() as any;
+  if (s.trackOnly) return false;
+  if (s.eventType === 'hyrox') return false;
   const completedWeek = (s.w ?? 1) - 1;
   if (completedWeek < 1) return false;
   if ((s.lastDebriefWeek ?? 0) >= completedWeek) return false;
@@ -108,6 +110,7 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
     });
     return;
   }
+  if (s.eventType === 'hyrox') return; // no hyrox debrief yet
   const targetWeek = pendingDebrief ? (s.w ?? 1) : (s.w ?? 1) - 1;
   // Don't block on unresolved activity assignments when the calendar has advanced past s.w
   // (pendingDebrief=true): the debrief must fire to allow week advancement.
@@ -119,12 +122,12 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
   // and lastDebriefWeek already covers week tw-1 (shouldAutoDebrief returns false too).
   const tw = s.tw as number | undefined;
   const lastComplete = (s.lastCompleteDebriefWeek ?? 0) as number;
-  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && !s.trackOnly) {
+  if (tw && (s.w ?? 0) >= tw && lastComplete < tw && s.eventType !== 'triathlon' && s.eventType !== 'hyrox' && !s.trackOnly) {
     showWeekDebrief(s.w, 'complete');
     return;
   }
 
-  if (pendingDebrief) {
+  if (pendingDebrief && !s.trackOnly) {
     showWeekDebrief(s.w, 'complete');
   } else if (shouldAutoDebrief()) {
     showWeekDebrief();
@@ -208,7 +211,8 @@ export function showWeekDebrief(
       wk.ph, s.rw, s.rd, s.typ, prevSkips, s.commuteConfig,
       injuryState, s.recurringActivities, s.onboarding?.experienceLevel,
       undefined, undefined, weekNum, s.tw, undefined, s.gs,
-      getTrailingEffortScore(s.wks, weekNum), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, weekNum), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     );
     // Apply mods so replaced workouts have correct RPE
     if (wk.workoutMods) {
@@ -339,7 +343,7 @@ export function showWeekDebrief(
 
         <!-- Header -->
         <div style="position:relative;text-align:center;margin-bottom:18px">
-          <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} — Week ${weekNum}${isLastWeek ? ' · Final week' : ''}</span>
+          <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${wk.ph ? PHASE_LABEL[wk.ph] + ' Phase' : ''} · Week ${weekNum}${isLastWeek ? ' · Final week' : ''}</span>
           <button id="debrief-cancel"
             style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
                    background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
@@ -760,9 +764,9 @@ function _wirePlanCompleteHandlers(
     ms2.continuousMode = true;
     saveSummary(); // saveSummary already calls saveState()
     document.getElementById('week-debrief-modal')?.remove();
-    // Direct dynamic import of plan-view avoids the double-async hop through main-view,
-    // ensuring renderPlanView() reads the already-mutated trackOnly=true state.
-    import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
+    // Use renderMainView so the mode router picks the correct plan view (running/tri/hyrox).
+
+    import('@/ui/main-view').then(({ renderMainView }) => renderMainView());
   });
   document.getElementById('plan-complete-new')?.addEventListener('click', () => {
     saveSummary();
@@ -863,7 +867,7 @@ function _renderPlanPreview(
   card.innerHTML = `
     <!-- Header -->
     <div style="position:relative;text-align:center;margin-bottom:18px">
-      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase — Week ${nextWeekIdx}</span>
+      <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">${PHASE_LABEL[nextPhase] ?? nextPhase} Phase · Week ${nextWeekIdx}</span>
       <button id="debrief-cancel"
         style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;border-radius:50%;border:1px solid var(--c-border);
                background:none;cursor:pointer;font-size:14px;color:var(--c-muted);
@@ -1072,7 +1076,7 @@ function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   if (mode === 'complete') {
     next(); // triggers setOnWeekAdvance callback → re-renders plan view
   } else {
-    import('@/ui/plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('@/ui/main-view').then(({ renderMainView }) => renderMainView());
   }
 }
 

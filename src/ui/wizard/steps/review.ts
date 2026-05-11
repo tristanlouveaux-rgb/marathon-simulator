@@ -7,6 +7,7 @@ import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { formatKm, fp } from '@/utils/format';
 import { hasPhysiologySource } from '@/data/sources';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import {
   SUPABASE_URL,
   SUPABASE_ANON_KEY,
@@ -29,6 +30,7 @@ import { cv } from '@/calculations/vdot';
 import { recomputeLT, diagnoseLTForState } from '@/data/ltSync';
 import { awaitStartupSyncs } from '@/main';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { poweredByStrava } from '@/ui/strava-brand';
 
 /**
  * Page 4 — "Here's what we found" magic-moment review.
@@ -202,6 +204,27 @@ function countRunningActivities(rows: ActivityWithBestEfforts[]): number {
   return n;
 }
 
+/** Fallback 4-week running km derived from the REST activity rows. Used when
+ *  `s.detectedWeeklyKm` is unset because the edge function's `mode:'history'`
+ *  aggregation returned empty (intermittent — see comment near line 110).
+ *  Without this fallback the row reads "--" even when the REST query returned
+ *  hundreds of runs. 28-day-from-now window (matches bike/swim rows). */
+function weeklyKmFromActivities(rows: ActivityWithBestEfforts[]): number {
+  const fourWeeksAgoMs = Date.now() - 28 * 24 * 60 * 60 * 1000;
+  let totalM = 0;
+  for (const r of rows) {
+    const t = ((r as any).activity_type ?? (r as any).activityType ?? '') as string;
+    if (!t || !t.toUpperCase().includes('RUN')) continue;
+    const startStr = (r as any).start_time ?? (r as any).startTime;
+    if (!startStr) continue;
+    const tMs = new Date(startStr).getTime();
+    if (!isFinite(tMs) || tMs < fourWeeksAgoMs) continue;
+    const distM = Number((r as any).distance_m ?? (r as any).distanceM ?? 0);
+    if (isFinite(distM) && distM > 0) totalM += distM;
+  }
+  return Math.round((totalM / 1000 / 4) * 10) / 10;
+}
+
 /** ---------- Entry point ---------- */
 
 export function renderReview(container: HTMLElement, state: OnboardingState): void {
@@ -213,7 +236,47 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
   if (state.skippedStrava) {
     cachedActivities = cachedActivities ?? [];
     cachedPbSources = cachedPbSources ?? {};
-    renderContent(container, state);
+    // Apple-only / Garmin-only users skip the Strava data chain but still
+    // need two things populated before render:
+    //   (1) Apple Health: a 16-week activity backfill seeded with the user's
+    //       age (collected in about-you, the step before this one) so iTRIMP
+    //       integration can resolve a Tanaka-derived maxHR. We defer the
+    //       backfill until here — running it at connect-strava time would
+    //       store 16w of activities with null iTRIMP and a duration-heuristic
+    //       CTL baseline. By the time the user lands on review, age is set.
+    //   (2) `refreshBlendedFitness` to compute `s.hrCalibratedVdot` from the
+    //       Apple-synced runs (avg_hr + iTrimp).
+    // The chain runs only when Apple is the connected physiology source —
+    // a pure manual-entry user (no source connected) skips both and renders
+    // immediately, same as the original behaviour.
+    const sNow = getState();
+    const hasApple = hasPhysiologySource(sNow as any, 'apple');
+    const finish = () => renderContent(container, state);
+    if (hasApple) {
+      // Show the existing loading state while the backfill runs (5–15s on
+      // first install). renderContent fires after both async tasks settle.
+      renderLoading(container, 1, false);
+      Promise.resolve()
+        .then(async () => {
+          const { syncAppleHealth } = await import('@/data/appleHealthSync');
+          await syncAppleHealth().catch((e) => { console.warn('[review] Apple backfill failed', e); });
+        })
+        .then(async () => {
+          const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
+          const { getMutableState } = await import('@/state/store');
+          try { refreshBlendedFitness(getMutableState()); } catch (e) { void e; }
+        })
+        .finally(finish);
+    } else {
+      // Pure manual-entry user — still call refreshBlendedFitness in case
+      // a previous session left HR/PB data around that can drive the row.
+      import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
+        import('@/state/store').then(({ getMutableState }) => {
+          try { refreshBlendedFitness(getMutableState()); } catch (e) { void e; }
+          finish();
+        });
+      }).catch(finish);
+    }
     return;
   }
 
@@ -315,35 +378,51 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
       cachedActivities = rows;
       cachedPbSources = readPBsFromHistory(rows);
 
-      // Client-side fallback for weekly volume. The canonical path is
-      // `fetchStravaHistory` (mode='history' on the edge function) writing
-      // `s.historicWeeklyKm` → derives `s.detectedWeeklyKm`. That path bails
-      // early when the aggregation returns zero rows, leaving weekly volume
-      // as `--` even when the user has hundreds of activities visible via
-      // REST (`cachedActivities`). This computes a 4-week average directly
-      // from the activities we already have, but only as a fallback — if
-      // the edge function aggregation produced a value, we leave it alone.
-      const sm = getMutableState();
-      if (sm.detectedWeeklyKm == null && rows.length > 0) {
-        const fourWeeksAgoMs = Date.now() - 28 * 24 * 60 * 60 * 1000;
-        const recentRunMeters = rows
-          .filter(r => {
-            const t = ((r as any).activity_type ?? '').toUpperCase();
-            const isRun = t === 'RUNNING' || t.includes('RUN');
-            const startMs = (r as any).start_time ? new Date((r as any).start_time).getTime() : 0;
-            return isRun && startMs >= fourWeeksAgoMs;
-          })
-          .reduce((sum, r) => sum + (((r as any).distance_m as number | null) ?? 0), 0);
-        if (recentRunMeters > 0) {
-          sm.detectedWeeklyKm = Math.round((recentRunMeters / 1000 / 4) * 10) / 10;
-          console.log(`[review] detectedWeeklyKm fallback: ${sm.detectedWeeklyKm} km/wk (4w avg from ${rows.length} REST activities)`);
+      // ─── DIAG: what did readPBsFromHistory produce? ───
+      // Particularly want to verify `startDate` is present for each PB —
+      // without it, the marathon-specificity penalty's PB-recency scaling
+      // can't fire and the penalty stays at full strength.
+      try {
+        const diagPbs: Record<string, unknown> = {};
+        for (const k of ['k5', 'k10', 'h', 'm'] as const) {
+          const src = cachedPbSources[k];
+          diagPbs[k] = src
+            ? { timeSec: src.timeSec, startDate: src.startDate || '(empty)', activityId: src.activityId, activityName: src.activityName ?? '(none)' }
+            : '(no PB)';
         }
+        console.log('[review:DIAG] cachedPbSources after readPBsFromHistory:', diagPbs);
+
+        // Also peek at the raw best_efforts of the marathon-PB activity to
+        // see what fields Strava actually stored.
+        if (cachedPbSources.m) {
+          const mActivity = rows.find((r: any) => (r.garmin_id ?? r.garminId) === cachedPbSources!.m!.activityId);
+          if (mActivity) {
+            const beRaw = (mActivity as any).best_efforts ?? (mActivity as any).bestEfforts;
+            const mEntry = Array.isArray(beRaw) ? beRaw.find((e: any) => /marathon$/i.test(String(e?.name ?? ''))) : null;
+            console.log('[review:DIAG] marathon activity row keys:', Object.keys(mActivity));
+            console.log('[review:DIAG] marathon best_effort entry:', mEntry);
+            console.log('[review:DIAG] marathon activity.start_time:', (mActivity as any).start_time, '/ startTime:', (mActivity as any).startTime);
+          } else {
+            console.warn('[review:DIAG] marathon-PB activity not found in cached rows by id', cachedPbSources.m.activityId);
+          }
+        }
+      } catch (e) {
+        console.warn('[review:DIAG] failed:', e);
       }
 
+      // Weekly running volume is set by `fetchStravaHistory` (mode='history'
+      // on the edge function) writing zero-filled `historicWeeklyKm`. We do
+      // not recompute it here from REST rows: a rolling 28-day-from-now window
+      // disagrees with Monday-aligned calendar weeks, and having two paths
+      // produced "5.3 one load, 0 the next" depending on which won the race.
+
       // Seed s.pbs immediately so the LT derivation's critical-speed path can fit
-      // race-distance PBs on the very first review render. The Continue handler
-      // still does an authoritative merge into onboarding.pbs (which the user can
-      // edit), but we don't want to wait until then to make the LT estimate good.
+      // race-distance PBs on the very first review render. ALSO seed
+      // onboarding.pbs so the Continue gate (which counts onboarding.pbs entries
+      // to enforce "at least one personal best") sees the auto-filled values
+      // without requiring the user to tap each row to confirm. The Continue
+      // handler does an authoritative re-merge later, but the gate must pass
+      // before the user can click Continue at all.
       // Fastest-wins merge: never replace a faster saved value with a slower one.
       if (cachedPbSources && Object.keys(cachedPbSources).length > 0) {
         const sm = getMutableState();
@@ -356,6 +435,51 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         };
         takeFastest('k5'); takeFastest('k10'); takeFastest('h'); takeFastest('m');
         sm.pbs = next;
+
+        // Mirror the merge into onboarding.pbs so the Continue gate sees them.
+        // Also persist PB dates onto onboarding.pbDates — `blendPredictions` uses
+        // PB recency to scale the marathon-specificity penalty (recent PB =
+        // demonstrated current capability = lighter penalty).
+        // Fallback chain for the date: best_effort.start_date (per-effort) →
+        // activity.start_time (from readPBsFromHistory) → activity.start_time
+        // looked up directly from cachedActivities by activityId. The third
+        // tier guards against a class of shape-mismatch bugs where readField's
+        // camel/snake fallback fails for some reason.
+        const findActivityStart = (activityId: string): string | undefined => {
+          if (!cachedActivities) return undefined;
+          const hit = cachedActivities.find((a: any) =>
+            (a.garminId ?? a.garmin_id) === activityId,
+          );
+          if (!hit) return undefined;
+          const t = (hit as any).startTime ?? (hit as any).start_time;
+          return (typeof t === 'string' && t.length > 0) ? t : undefined;
+        };
+
+        const nextOnb: PBs = { ...(sm.onboarding?.pbs ?? {}) };
+        const nextOnbDates = { ...(sm.onboarding?.pbDates ?? {}) };
+        const takeFastestOnb = (k: 'k5' | 'k10' | 'h' | 'm') => {
+          const src = cachedPbSources![k];
+          if (src?.timeSec == null) return;
+          const saved = nextOnb[k];
+          // Update time when src is faster (or no saved value), AND attempt to
+          // backfill the date even when time matches — earlier wizard runs may
+          // have written the time without the date (pre-pbDates code), so we
+          // need to fill the gap on a fresh render even if `time < saved` is false.
+          const date = src.startDate ?? findActivityStart(src.activityId);
+          if (saved == null || src.timeSec < saved) {
+            nextOnb[k] = src.timeSec;
+          }
+          if (date && (saved == null || src.timeSec <= saved)) {
+            // Set date when src is the canonical PB (faster or equal) — equal
+            // matters because the time is already there from a previous run.
+            nextOnbDates[k] = date;
+          }
+        };
+        takeFastestOnb('k5'); takeFastestOnb('k10'); takeFastestOnb('h'); takeFastestOnb('m');
+        if (sm.onboarding) {
+          sm.onboarding.pbs = nextOnb;
+          sm.onboarding.pbDates = nextOnbDates;
+        }
       }
 
       // Step 4: FTP, CSS, and threshold-pace calculation. Surfacing the step
@@ -365,10 +489,12 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
       // and the LT recompute that follows in `renderContent`.
       setStep(4);
 
-      // Triathlon mode: derive bike FTP + swim CSS from the history we just
-      // backfilled. Pre-fill onboarding state so the FTP / CSS rows render
-      // with the auto-derived values; the user can still edit either row.
-      if (state.trainingMode === 'triathlon') {
+      // Triathlon + cycling mode: derive bike FTP (and swim CSS for tri) from
+      // the history we just backfilled. Pre-fill onboarding state so the FTP /
+      // CSS rows render with the auto-derived values; the user can still edit
+      // either row. Cycling mode skips swim derivation since the discipline
+      // isn't active.
+      if (state.trainingMode === 'triathlon' || state.trainingMode === 'cycling') {
         t0 = performance.now();
         try {
           const triActs = await loadActivitiesFromDB(500);
@@ -437,6 +563,44 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
             `ftp:${cachedTriBenchmarks.ftp.ftpWatts ?? 'null'}W(${cachedTriBenchmarks.ftp.confidence},${cachedTriBenchmarks.ftp.bikeActivityCount} rides) ` +
             `css:${cachedTriBenchmarks.css.cssSecPer100m ?? 'null'}s/100m(${cachedTriBenchmarks.css.confidence},${cachedTriBenchmarks.css.swimActivityCount} swims)`);
 
+          // FTP health summary — single line every launch so the next regression
+          // is visible immediately without a debug round-trip. If this line
+          // shows ftp=null or src=fallback when src=curve was working
+          // yesterday, look here first. See ISSUE-156 / 2026-05-01 changelog
+          // for context on the structural device_watts / curve-fetch issues.
+          (() => {
+            const f = cachedTriBenchmarks!.ftp;
+            const bikes = triActs.filter(a => {
+              const u = (a.activityType ?? '').toUpperCase();
+              return u === 'CYCLING' || u.includes('BIKE') || u.includes('RIDE') || u === 'VIRTUAL_RIDE';
+            });
+            const withCurve = bikes.filter(b => b.powerCurve != null && Object.keys(b.powerCurve as object).length > 0).length;
+            const withNP = bikes.filter(b => b.normalizedPowerW != null && b.normalizedPowerW > 0).length;
+            const withAvgW = bikes.filter(b => b.averageWatts != null && b.averageWatts > 0).length;
+            const withDevTrue = bikes.filter(b => b.deviceWatts === true).length;
+            const withDevFalse = bikes.filter(b => b.deviceWatts === false).length;
+            const src = f.ftpWatts == null ? 'none'
+              : f.sourceWindow === 'whole-ride' ? 'fallback(NP×1.0)'
+              : `curve(${f.sourceWindow})`;
+            const pickedDate = f.sourceRideISO?.slice(0, 10) ?? '?';
+            const pickedW = f.sourceWatts ?? 'n/a';
+            console.log(
+              `[FTP health] ftp=${f.ftpWatts ?? 'null'}W src=${src} conf=${f.confidence} ` +
+              `picked=${pickedDate}(${pickedW}W) | bikes=${bikes.length} withCurve=${withCurve} ` +
+              `withNP=${withNP} withAvgW=${withAvgW} dw(t/f)=${withDevTrue}/${withDevFalse}`
+            );
+            // Loud warning when we have plenty of rides but no FTP — this is
+            // the regression class we keep hitting (gate drift, edge fn out of
+            // sync, etc). Flagging it here means the user sees it next launch.
+            if (f.ftpWatts == null && bikes.length >= 5) {
+              console.warn(
+                `[FTP health] WARNING: ${bikes.length} bike rides synced but no FTP derived. ` +
+                `Possible causes: edge function out of sync, all rides stale (>12w), ` +
+                `or watts streams not yet fetched. Check Supabase logs for [Power curve] lines.`
+              );
+            }
+          })();
+
           // Best wins (mirrors PB logic on the running side): take the
           // higher FTP and the faster CSS regardless of whether a stale
           // value sits in state. A stale 90W entered weeks ago must not
@@ -449,20 +613,33 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
           }
           const savedFtp = onb.triBike?.ftp;
           const savedFtpSrc = onb.triBike?.ftpSource;
+          const savedFtpConf = onb.triBike?.ftpConfidence;
           const derivedFtp = cachedTriBenchmarks.ftp.ftpWatts;
+          const derivedConf = cachedTriBenchmarks.ftp.confidence;
           // Auto-fill or refresh whenever the saved value isn't user-typed.
           // When the saved value IS user-typed, only override if the derived
           // beats it by ≥3W with high/medium confidence (matches main.ts).
-          const derivedConf = cachedTriBenchmarks.ftp.confidence;
           const userBeaten =
             savedFtpSrc === 'user' &&
             savedFtp != null &&
             derivedFtp != null &&
             derivedFtp >= savedFtp + 3 &&
             (derivedConf === 'high' || derivedConf === 'medium');
-          const refreshDerived = savedFtpSrc !== 'user' && derivedFtp != null;
+          // Derived → derived: ratchet up only (mirrors main.ts logic).
+          // A saved derived FTP should not regress to a lower derivation
+          // unless the new estimate carries higher confidence.
+          const confRank = (c: typeof derivedConf | undefined): number =>
+            c === 'high' ? 3 : c === 'medium' ? 2 : c === 'low' ? 1 : 0;
+          const refreshDerived =
+            savedFtpSrc !== 'user' &&
+            derivedFtp != null &&
+            (
+              savedFtp == null ||
+              derivedFtp >= savedFtp ||
+              confRank(derivedConf) > confRank(savedFtpConf)
+            );
           if (derivedFtp && (savedFtp == null || refreshDerived || userBeaten)) {
-            patch.triBike = { ...(onb.triBike ?? {}), ftp: derivedFtp, hasPowerMeter: true, ftpSource: 'derived' };
+            patch.triBike = { ...(onb.triBike ?? {}), ftp: derivedFtp, hasPowerMeter: true, ftpSource: 'derived', ftpConfidence: derivedConf };
           }
           if (Object.keys(patch).length > 0) updateOnboarding(patch);
 
@@ -555,20 +732,14 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
               .filter(a => filter(a) && a.startTime && new Date(a.startTime).getTime() >= fourWeeksAgoMs)
               .reduce((sum, a) => sum + (a.distanceKm ?? 0), 0);
           };
-          const totalRunKm4w = sumKm(a => {
-            const t = (a.activityType ?? '').toUpperCase();
-            return t === 'RUNNING' || t.includes('RUN');
-          });
           const totalBikeKm4w = sumKm(a => isBike(a.activityType));
           const totalSwimKm4w = sumKm(a => isSwim(a.activityType));
           cachedWeeklyBikeKm = totalBikeKm4w > 0 ? Math.round((totalBikeKm4w / 4) * 10) / 10 : null;
           cachedWeeklySwimKm = totalSwimKm4w > 0 ? Math.round((totalSwimKm4w / 4) * 10) / 10 : null;
-          // Override the running fallback when triathlon mode has the richer
-          // DB read available — same activities, more reliable distance field.
-          const sm2 = getMutableState();
-          if (totalRunKm4w > 0) {
-            sm2.detectedWeeklyKm = Math.round((totalRunKm4w / 4) * 10) / 10;
-          }
+          // Running km is owned by `fetchStravaHistory` (Monday-aligned, zero-
+          // filled). Don't override it here from a 28-day-from-now window —
+          // the two windows disagreed on different loads and produced the
+          // "5.3 one load, 0 the next" wobble.
           // Per-week breakdown for diagnostic — shows whether the 4-week avg
           // is dragged down by zero-run weeks (triathletes typically have them).
           const weeklyBuckets: Record<string, { run: number; bike: number; swim: number }> = {};
@@ -681,53 +852,143 @@ const LOADING_STEPS = [
   'Calculating FTP, CSS and threshold pace',
 ];
 
-function renderLoading(container: HTMLElement, activeStep: number, timedOut: boolean): void {
-  // Step-by-step checklist. Each step is one of:
-  //   done    — filled circle with a tick (steps before the active one)
-  //   active  — circle with an inline spinner (the step currently running)
-  //   pending — empty circle (steps still to come)
-  // Timeout state keeps the active step but swaps the footer note to an apology.
-  const note = timedOut
-    ? 'Still syncing — sorry, this is taking longer than usual. You can keep waiting, or come back to your profile from the Stats page once it has finished.'
-    : 'This can take 20 to 30 seconds on first connect.';
+const LOAD_RADIUS = 44;
+const LOAD_CIRCUMFERENCE = 2 * Math.PI * LOAD_RADIUS; // ~276.5
 
-  const rows = LOADING_STEPS.map((label, i) => {
-    let icon: string;
-    let color: string;
-    if (i < activeStep) {
-      icon = `<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3,7.5 6,10.5 11,4.5"/></svg>`;
-      color = 'var(--c-black)';
-    } else if (i === activeStep) {
-      icon = `<span class="r-step-spin"></span>`;
-      color = 'var(--c-black)';
-    } else {
-      icon = '';
-      color = 'var(--c-faint)';
+function loadDashoffset(activeStep: number): number {
+  const pct = Math.min(1, (activeStep + 1) / LOADING_STEPS.length);
+  return LOAD_CIRCUMFERENCE * (1 - pct);
+}
+
+function loadStepLabel(activeStep: number): string {
+  return LOADING_STEPS[Math.min(activeStep, LOADING_STEPS.length - 1)];
+}
+
+function loadNote(timedOut: boolean): string {
+  return timedOut
+    ? 'Still syncing — taking longer than usual. You can keep waiting, or come back from the Stats page later.'
+    : 'This can take 20 to 30 seconds on first connect.';
+}
+
+/**
+ * Update the loading progress in-place — no re-render. Called on every step change
+ * after the initial render. The fill ring smoothly transitions to the new % via
+ * its CSS transition; the label cross-fades.
+ */
+function updateLoadingProgress(activeStep: number, timedOut: boolean): boolean {
+  const fillEl = document.getElementById('revl-fill') as SVGCircleElement | null;
+  if (!fillEl) return false; // Not currently mounted; caller should do full render
+
+  fillEl.style.strokeDashoffset = loadDashoffset(activeStep).toFixed(1);
+
+  const labelEl = document.getElementById('revl-step-label');
+  if (labelEl) {
+    const newLabel = loadStepLabel(activeStep);
+    if (labelEl.textContent !== newLabel) {
+      labelEl.style.opacity = '0';
+      setTimeout(() => {
+        labelEl.textContent = newLabel;
+        labelEl.style.opacity = '1';
+      }, 220);
     }
-    const ring = i < activeStep
-      ? 'background:var(--c-black);color:var(--c-bg);border:1px solid var(--c-black)'
-      : i === activeStep
-        ? 'background:transparent;border:1px solid var(--c-black)'
-        : 'background:transparent;border:1px solid var(--c-border)';
-    return `
-      <div style="display:flex;align-items:center;gap:12px">
-        <span style="display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:50%;${ring};flex-shrink:0">${icon}</span>
-        <span style="font-size:13px;color:${color};line-height:1.4">${label}</span>
-      </div>
-    `;
-  }).join('');
+  }
+
+  const noteEl = document.getElementById('revl-note');
+  if (noteEl) noteEl.textContent = loadNote(timedOut);
+
+  return true;
+}
+
+function renderLoading(container: HTMLElement, activeStep: number, timedOut: boolean): void {
+  // Smooth in-place updates after first mount — avoids re-rendering the whole
+  // shell on every step change (the source of the "jumpy" feel).
+  if (updateLoadingProgress(activeStep, timedOut)) return;
+
+  // Initial mount — build the full glass shell.
+  const dashoffset = loadDashoffset(activeStep);
+  const currentLabel = loadStepLabel(activeStep);
+  const note = loadNote(timedOut);
 
   container.innerHTML = `
     <style>
-      @keyframes spin { to { transform: rotate(360deg); } }
-      .r-step-spin { width:10px; height:10px; border-radius:50%; border:1.5px solid rgba(0,0,0,0.15); border-top-color: var(--c-black); animation: spin 0.8s linear infinite; display:inline-block; }
+      @keyframes revLoadRise { from { opacity:0; transform:translateY(12px) } to { opacity:1; transform:translateY(0) } }
+      .rev-load-rise { opacity:0; animation: revLoadRise 0.7s cubic-bezier(0.2,0.8,0.2,1) forwards; }
+      @keyframes revLoadBreathe {
+        0%, 100% { opacity: 0.85; }
+        50%      { opacity: 1; }
+      }
+      .rev-load-fill { animation: revLoadBreathe 2.6s ease-in-out infinite; }
+      .rev-load-label-fade { transition: opacity 0.45s ease; }
     </style>
-    <div style="min-height:100vh;background:var(--c-bg);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 20px;gap:24px">
-      ${renderProgressIndicator(6, 7)}
-      <div style="display:flex;flex-direction:column;gap:12px;align-items:flex-start;min-width:240px">
-        ${rows}
+
+    <div style="min-height:100vh;position:relative;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:48px 24px;background:#FAF9F6">
+
+      <!-- Background: teal atmosphere → whisper rings (teal) → low glint -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase('teal')}
+        ${buildRingBackground('revl', { variant: 'whisper', palette: 'teal' })}
+        ${buildSunGlint('low')}
       </div>
-      <p style="font-size:11px;color:var(--c-faint);margin:0;text-align:center;max-width:340px;line-height:1.5">${note}</p>
+
+      <div style="position:relative;z-index:1;width:100%;display:flex;flex-direction:column;align-items:center">
+        ${renderProgressIndicator(7, 8)}
+
+        <!-- Glass card -->
+        <div class="rev-load-rise" style="width:100%;max-width:380px;
+             background:rgba(255,255,255,0.58);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);
+             border:1px solid rgba(255,255,255,0.82);border-radius:28px;
+             padding:36px 28px 30px;
+             box-shadow:0 16px 56px rgba(0,0,0,0.08),0 2px 8px rgba(0,0,0,0.05);
+             animation-delay:0.06s;
+             display:flex;flex-direction:column;align-items:center;text-align:center">
+
+          <!-- Chip -->
+          <span style="font-size:10px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;
+                       color:rgba(0,0,0,0.35);background:rgba(255,255,255,0.7);
+                       border:1px solid rgba(0,0,0,0.07);border-radius:100px;
+                       padding:5px 13px;display:inline-block;margin-bottom:22px">
+            Reading your training
+          </span>
+
+          <!-- Glass circle filling -->
+          <div style="width:120px;height:120px;position:relative;margin-bottom:24px">
+            <svg width="120" height="120" viewBox="0 0 100 100" style="display:block">
+              <defs>
+                <linearGradient id="revl-fill-grad" x1="20%" y1="10%" x2="80%" y2="90%">
+                  <stop offset="0%"   stop-color="#FFFFFF" stop-opacity="0.95"/>
+                  <stop offset="50%"  stop-color="#3F8F84" stop-opacity="0.85"/>
+                  <stop offset="100%" stop-color="#1C4A44" stop-opacity="0.65"/>
+                </linearGradient>
+              </defs>
+              <!-- Track -->
+              <circle cx="50" cy="50" r="${LOAD_RADIUS}" fill="none"
+                      stroke="rgba(0,0,0,0.07)" stroke-width="3"/>
+              <!-- Fill (rotates from top) -->
+              <circle id="revl-fill" class="rev-load-fill"
+                      cx="50" cy="50" r="${LOAD_RADIUS}" fill="none"
+                      stroke="url(#revl-fill-grad)" stroke-width="3"
+                      stroke-linecap="round"
+                      stroke-dasharray="${LOAD_CIRCUMFERENCE.toFixed(1)}"
+                      stroke-dashoffset="${dashoffset.toFixed(1)}"
+                      transform="rotate(-90 50 50)"
+                      style="transition: stroke-dashoffset 0.7s cubic-bezier(0.16, 1, 0.3, 1)"/>
+            </svg>
+          </div>
+
+          <!-- Current step label -->
+          <p id="revl-step-label" class="rev-load-label-fade"
+             style="font-size:15px;font-weight:500;color:#1A1A1A;margin:0 0 8px;line-height:1.4">
+            ${currentLabel}
+          </p>
+
+          <!-- Note -->
+          <p id="revl-note" style="font-size:12.5px;font-weight:300;color:rgba(0,0,0,0.50);line-height:1.5;margin:0;max-width:280px">
+            ${note}
+          </p>
+
+          <div style="margin-top:20px">${poweredByStrava(14, 0.45)}</div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -816,10 +1077,17 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
     }
   } catch (e) { console.warn('[review] recomputeLT failed:', e); }
   const unitPref = s.unitPref ?? 'km';
-  const weeklyKm = s.detectedWeeklyKm ?? 0;
+  const activityCount = cachedActivities ? countRunningActivities(cachedActivities) : 0;
+  // Prefer the canonical Monday-aligned value from `fetchStravaHistory`; fall
+  // back to a 28-day rolling sum from the REST rows when history aggregation
+  // came back empty. Both reach the user as "last 4 weeks" — different windows
+  // can disagree by a few % but that beats showing "--" alongside "153 runs".
+  const detectedKm = s.detectedWeeklyKm ?? 0;
+  const weeklyKm = detectedKm > 0
+    ? detectedKm
+    : (cachedActivities ? weeklyKmFromActivities(cachedActivities) : 0);
   const pbs = state.pbs ?? {};
   const pbSources: PBsWithSource = cachedPbSources ?? {};
-  const activityCount = cachedActivities ? countRunningActivities(cachedActivities) : 0;
 
   // PB-derived VDOT: compute from race times via Daniels (cv) and take the max.
   // Don't use s.v — that's blended with current volume/intensity and drags peak
@@ -885,10 +1153,16 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 32%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Background: teal atmosphere → focused rings (teal palette) → glint.
+           "Here's what we found" — soft green moment of recognition / data settled. -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase('teal')}
+        ${buildRingBackground('rev', { variant: 'focused', palette: 'teal' })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(6, 7)}
+        ${renderProgressIndicator(7, 8)}
 
         <div class="r-rise" style="width:100%;max-width:480px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -900,22 +1174,72 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
         </div>
 
         <div class="r-rise" style="width:100%;max-width:480px;margin-top:22px;animation-delay:0.12s;display:flex;flex-direction:column;gap:10px">
-          ${renderSectionLabel('Recent training')}
-          ${renderVolumeRow(weeklyKm, unitPref, activityCount)}
-          ${state.trainingMode === 'triathlon' && cachedWeeklyBikeKm != null
-            ? renderDisciplineVolumeRow('bike', cachedWeeklyBikeKm, unitPref) : ''}
-          ${state.trainingMode === 'triathlon' && cachedWeeklySwimKm != null
-            ? renderDisciplineVolumeRow('swim', cachedWeeklySwimKm, unitPref) : ''}
-          ${renderSectionLabel('What we measured')}
-          ${renderVdotRow(vdot)}
-          ${renderHRSparkline()}
-          ${renderLtRow(unitPref)}
-          ${state.trainingMode === 'triathlon' ? renderFtpRow(state) : ''}
+          ${(() => {
+            // Compose the Recent-training section. Hide the label entirely
+            // when there are no rows to show (e.g. fresh cycling user with
+            // no synced rides yet) so the user doesn't see an orphan label.
+            const isHyroxReview = state.trainingMode === 'hyrox';
+            const showRunVolume = state.trainingMode !== 'cycling' && !isHyroxReview;
+            const showBikeVolume = (state.trainingMode === 'triathlon' || state.trainingMode === 'cycling') && cachedWeeklyBikeKm != null;
+            const showSwimVolume = state.trainingMode === 'triathlon' && cachedWeeklySwimKm != null;
+            if (!showRunVolume && !showBikeVolume && !showSwimVolume && !isHyroxReview) return '';
+            if (isHyroxReview) {
+              const fmt = state.hyroxFormat ?? 'open_singles';
+              const fmtLabel = fmt.includes('pro') ? 'Pro' : fmt.includes('doubles') ? 'Doubles' : 'Open';
+              const prevTime = state.previousHyroxTimeSec;
+              const prevTimeStr = prevTime != null ? (() => {
+                const h = Math.floor(prevTime / 3600);
+                const m = Math.floor((prevTime % 3600) / 60);
+                const s = prevTime % 60;
+                return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}` : `${m}:${String(s).padStart(2,'0')}`;
+              })() : null;
+              const sessions = state.hyroxWeeklySessionCount ?? null;
+              const benchmarkCount = state.hyroxPreviousStationSplits ? Object.keys(state.hyroxPreviousStationSplits).length : 0;
+              const hours = state.triTimeAvailableHoursPerWeek;
+              return `
+                ${renderSectionLabel('HYROX setup')}
+                <div class="r-row readonly" style="cursor:default">
+                  <div class="r-row-body">
+                    <p class="r-row-label">Format</p>
+                    <p class="r-row-value">${fmtLabel}</p>
+                    ${prevTimeStr ? `<p class="r-row-sub">Previous finish: ${prevTimeStr}</p>` : ''}
+                  </div>
+                </div>
+                ${(sessions != null || hours != null) ? `
+                <div class="r-row readonly" style="cursor:default">
+                  <div class="r-row-body">
+                    <p class="r-row-label">Training</p>
+                    <p class="r-row-value">${sessions != null ? `${sessions} sessions/week` : ''}${hours != null ? ` · ${hours}h available` : ''}</p>
+                    ${benchmarkCount > 0 ? `<p class="r-row-sub">${benchmarkCount} station benchmarks imported</p>` : ''}
+                  </div>
+                </div>` : ''}
+                ${weeklyKm > 0 ? `
+                <div class="r-row readonly" style="cursor:default">
+                  <div class="r-row-body">
+                    <p class="r-row-label">Running base</p>
+                    <p class="r-row-value">${unitPref === 'mi' ? `${Math.round(weeklyKm / 1.609)} mi/week` : `${Math.round(weeklyKm)} km/week`}</p>
+                    <p class="r-row-sub">Used to calibrate run session pacing</p>
+                  </div>
+                </div>` : ''}
+              `;
+            }
+            return `
+              ${renderSectionLabel('Recent training')}
+              ${showRunVolume ? renderVolumeRow(weeklyKm, unitPref, activityCount) : ''}
+              ${showBikeVolume ? renderDisciplineVolumeRow('bike', cachedWeeklyBikeKm!, unitPref) : ''}
+              ${showSwimVolume ? renderDisciplineVolumeRow('swim', cachedWeeklySwimKm!, unitPref) : ''}
+            `;
+          })()}
+          ${state.trainingMode === 'hyrox' ? '' : renderSectionLabel('What we measured')}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderVdotRow(vdot)}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderLtRow(unitPref)}
+          ${(state.trainingMode === 'triathlon' || state.trainingMode === 'cycling') ? renderFtpRow(state) : ''}
           ${state.trainingMode === 'triathlon' ? renderCssRow(state) : ''}
-          ${renderSectionLabel('Athlete profile')}
-          ${renderAthleteTierRow()}
-          ${renderRunnerTypeRow(activeRunnerType)}
-          ${renderTriPbsSection(state, pbs, pbSources)}
+          ${state.trainingMode === 'triathlon' ? renderSwimEnvironmentRow(state) : ''}
+          ${state.trainingMode === 'hyrox' ? '' : renderSectionLabel('Athlete profile')}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderAthleteTierRow()}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderRunnerTypeRow(activeRunnerType)}
+          ${(state.trainingMode === 'cycling' || state.trainingMode === 'hyrox') ? '' : renderTriPbsSection(state, pbs, pbSources)}
         </div>
       </div>
 
@@ -935,24 +1259,36 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
 }
 
 /**
- * Triathlon plan generation needs the user's race-preference profile.
+ * Continue gate. Running-plan mode needs at least one PB (initialization
+ * fails with "No personal bests provided" otherwise). Triathlon mode needs
+ * the user's race-preference profile. Track-only has no requirements.
  * FTP and CSS are optional — the plan engine falls back to skill-rating
- * estimates and HR/RPE-only zones until a real number lands. We nudge the
- * user via the row caption instead of blocking continue.
+ * estimates and HR/RPE-only zones until a real number lands.
  */
 function refreshContinueGate(): void {
   const cta = document.getElementById('r-continue') as HTMLButtonElement | null;
   const hint = document.getElementById('r-continue-hint') as HTMLElement | null;
   if (!cta) return;
   const onb = (getState().onboarding ?? {}) as OnboardingState;
-  if (onb.trainingMode !== 'triathlon') {
+
+  if (onb.trackOnly) {
     cta.disabled = false;
     if (hint) hint.style.display = 'none';
     return;
   }
+
   const missing: string[] = [];
-  const runnerType = onb.confirmedRunnerType ?? onb.calculatedRunnerType ?? getState().typ ?? null;
-  if (!runnerType) missing.push('Race preference');
+  if (onb.trainingMode === 'triathlon') {
+    const runnerType = onb.confirmedRunnerType ?? onb.calculatedRunnerType ?? getState().typ ?? null;
+    if (!runnerType) missing.push('Race preference');
+  } else if (onb.trainingMode === 'cycling' || onb.trainingMode === 'hyrox') {
+    // Cycling and HYROX have no required benchmarks at review time — they refine
+    // via in-plan test cards (FTP test / HYROX assessment). Always enabled.
+  } else {
+    const pbCount = Object.values(onb.pbs ?? {}).filter(v => typeof v === 'number' && v > 0).length;
+    if (pbCount === 0) missing.push('at least one personal best');
+  }
+
   cta.disabled = missing.length > 0;
   if (hint) {
     if (missing.length > 0) {
@@ -1191,6 +1527,10 @@ function renderPbRow(
   let subline = 'Not found in recent activities';
   if (sourceWins && source) {
     subline = source.activityName ?? 'From your Strava history';
+  } else if (source && currentSec != null && stravaSec != null && currentSec === stravaSec) {
+    // Strava-sourced and we eagerly persisted it into state.pbs — the values
+    // match, so this isn't a manual entry. Attribute correctly to Strava.
+    subline = source.activityName ?? 'From your Strava history';
   } else if (displaySec != null && currentSec != null) {
     subline = 'Entered manually';
   } else if (source) {
@@ -1293,7 +1633,7 @@ function renderVdotRow(_vdot: number | undefined): string {
     <div class="r-row shadow-ap readonly">
       <div class="r-row-icon">${ICON_FITNESS}</div>
       <div class="r-row-body">
-        <p class="r-row-label">Current fitness (VDOT)${renderInfoButton('vdot')}</p>
+        <p class="r-row-label">Current VO2max${renderInfoButton('vdot')}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${sub}</p>
       </div>
@@ -1331,7 +1671,7 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
         // HR-calibrated → LT-back-derived → PB-median → Tanda. Captioning with
         // raw `s.v` would lie when any of the higher-priority tiers won.
         const usedVdot = getPhysiologicalVdot(s).vdot ?? s.v ?? 0;
-        basis = `Estimated from your VDOT (${usedVdot.toFixed(1)}). Refines as PBs and threshold runs come in.`;
+        basis = `Estimated from your VO2max (${usedVdot.toFixed(1)}). Refines as PBs and threshold runs come in.`;
         break;
       }
       case 'blended':
@@ -1350,53 +1690,6 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
         <p class="r-row-label">Lactate threshold pace${renderInfoButton('lt')}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${sub}</p>
-      </div>
-    </div>
-  `;
-}
-
-function renderHRSparkline(): string {
-  const hr = getState().hrCalibratedVdot as
-    | { points?: Array<{ vo2r: number; paceSecKm: number; durationSec: number }>; alpha?: number | null; beta?: number | null }
-    | undefined;
-  const pts = hr?.points;
-  if (!pts || pts.length < 3) return '';
-  const xs = pts.map(p => p.vo2r);
-  const ys = pts.map(p => p.paceSecKm);
-  const xMin = Math.min(...xs), xMax = Math.max(...xs);
-  const yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const xPad = (xMax - xMin) * 0.08 || 0.02;
-  const yPad = (yMax - yMin) * 0.12 || 5;
-  const x0 = xMin - xPad, x1 = xMax + xPad;
-  const y0 = yMin - yPad, y1 = yMax + yPad;
-  const W = 320, H = 88, ML = 8, MR = 8, MT = 10, MB = 10;
-  const sx = (x: number) => ML + ((x - x0) / (x1 - x0)) * (W - ML - MR);
-  const sy = (y: number) => MT + ((y - y0) / (y1 - y0)) * (H - MT - MB);
-  const dots = pts.map(p =>
-    `<circle cx="${sx(p.vo2r).toFixed(1)}" cy="${sy(p.paceSecKm).toFixed(1)}" r="2.6" fill="#0A0A0A"/>`,
-  ).join('');
-  let line = '';
-  if (hr?.alpha != null && hr?.beta != null) {
-    const xa = xMin, xb = xMax;
-    const ya = hr.alpha + hr.beta * xa;
-    const yb = hr.alpha + hr.beta * xb;
-    line = `<line x1="${sx(xa).toFixed(1)}" y1="${sy(ya).toFixed(1)}" x2="${sx(xb).toFixed(1)}" y2="${sy(yb).toFixed(1)}" stroke="rgba(0,0,0,0.55)" stroke-width="1.2"/>`;
-  }
-  // Pace axis: y is sec/km, smaller = faster (top of chart)
-  const fast = fp(yMin, 'km');
-  const slow = fp(yMax, 'km');
-  return `
-    <div class="r-row shadow-ap readonly" style="display:block;padding:14px 16px 10px">
-      <p class="r-row-label" style="margin-bottom:8px">Heart rate vs pace</p>
-      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block">
-        ${line}
-        ${dots}
-      </svg>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--c-faint);margin-top:4px">
-        <span>← easier</span><span>harder →</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--c-faint);margin-top:2px">
-        <span>${fast}</span><span>${slow}</span>
       </div>
     </div>
   `;
@@ -1535,12 +1828,19 @@ function renderFtpRow(state: OnboardingState): string {
       ? `Set manually. Your rides show ${derived!.ftpWatts} W. We'll update on next sync.`
       : 'Set manually.';
   } else if (derived && derived.confidence === 'none' && derived.bikeActivityCount > 0) {
-    sub = 'No recent FTP test. Tap to enter, or do a 20-min test.';
+    sub = `${derived.bikeActivityCount} ride${derived.bikeActivityCount === 1 ? '' : 's'} synced but no FTP derived.`;
   } else if (derivedSub) {
     sub = derivedSub;
   }
   const ftpChip = (ftp && derived?.ftpWatts === ftp)
     ? renderConfidenceChip(derived.confidence)
+    : '';
+  // "Show details" link — visible whenever we have bike rides, regardless of
+  // whether FTP landed or not. The most-load-bearing case is null FTP with
+  // rides synced (the regression class we keep hitting), but the link is
+  // also useful when confidence is low and the user wants to see why.
+  const showDetailsLink = derived && derived.bikeActivityCount > 0
+    ? `<span data-action="ftp-why" style="color:var(--c-muted);text-decoration:underline;cursor:pointer;margin-left:4px">Show details →</span>`
     : '';
   return `
     <button class="r-row shadow-ap" data-row="ftp">
@@ -1548,7 +1848,7 @@ function renderFtpRow(state: OnboardingState): string {
       <div class="r-row-body">
         <p class="r-row-label">Bike FTP</p>
         <p class="r-row-value">${value}${ftpChip}</p>
-        <p class="r-row-sub">${sub}</p>
+        <p class="r-row-sub">${sub}${showDetailsLink}</p>
       </div>
       <div class="r-row-chev">${CHEV}</div>
     </button>
@@ -1611,6 +1911,34 @@ function renderCssRow(state: OnboardingState): string {
       <div class="r-row-body">
         <p class="r-row-label">Swim CSS</p>
         <p class="r-row-value">${value}${cssChip}</p>
+        <p class="r-row-sub">${sub}</p>
+      </div>
+      <div class="r-row-chev">${CHEV}</div>
+    </button>
+  `;
+}
+
+function renderSwimEnvironmentRow(state: OnboardingState): string {
+  const choice = state.triSwim?.primarySwimEnvironment;
+  const label = ((): string => {
+    switch (choice) {
+      case 'pool':             return 'Pool';
+      case 'wetsuit-lake':     return 'Lake, wetsuit';
+      case 'non-wetsuit-lake': return 'Lake, no wetsuit';
+      case 'ocean':            return 'Ocean / sea';
+      case 'river':            return 'River';
+      default:                 return '--';
+    }
+  })();
+  const sub = choice
+    ? 'Used to normalise CSS across pool, lake and ocean swims.'
+    : 'Tap to set where you mostly swim. We use this to read your CSS honestly across environments.';
+  return `
+    <button class="r-row shadow-ap" data-row="swim-environment">
+      <div class="r-row-icon">${ICON_SWIM}</div>
+      <div class="r-row-body">
+        <p class="r-row-label">Swim environment</p>
+        <p class="r-row-value">${label}</p>
         <p class="r-row-sub">${sub}</p>
       </div>
       <div class="r-row-chev">${CHEV}</div>
@@ -1698,11 +2026,31 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
         openRunnerTypePicker(state);
       });
     }
+
+    if (row === 'swim-environment') {
+      el.addEventListener('click', async () => {
+        const { openSwimEnvironmentEditor } = await import('@/ui/triathlon/swim-normalisation-reveal');
+        const cur = (getState().onboarding ?? {}) as OnboardingState;
+        openSwimEnvironmentEditor({
+          initial: cur.triSwim?.primarySwimEnvironment,
+          onSave: (choice) => {
+            updateOnboarding({
+              triSwim: {
+                ...(cur.triSwim ?? {}),
+                primarySwimEnvironment: choice,
+                defaultOwSwimEnvironment: choice === 'pool' ? undefined : choice,
+              },
+            });
+            rerender(state);
+          },
+        });
+      });
+    }
   });
 
   // Cancel / Save buttons inside editing rows
   container.querySelectorAll<HTMLElement>('[data-action]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
+    btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const action = btn.getAttribute('data-action');
       if (action === 'cancel') {
@@ -1712,6 +2060,12 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
       }
       if (action === 'save') {
         commitEditing(state);
+        return;
+      }
+      if (action === 'ftp-why') {
+        if (!cachedTriBenchmarks?.ftp) return;
+        const { openFtpDebugOverlay } = await import('@/ui/ftp-debug-overlay');
+        openFtpDebugOverlay(cachedTriBenchmarks.ftp);
       }
     });
   });
@@ -1738,17 +2092,35 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
     if (cachedPbSources) {
       const cur = getState();
       const nextPbs: PBs = { ...(cur.onboarding?.pbs ?? {}) };
+      const nextPbDates = { ...(cur.onboarding?.pbDates ?? {}) };
+      const findActivityStart = (activityId: string): string | undefined => {
+        if (!cachedActivities) return undefined;
+        const hit = cachedActivities.find((a: any) =>
+          (a.garminId ?? a.garmin_id) === activityId,
+        );
+        if (!hit) return undefined;
+        const t = (hit as any).startTime ?? (hit as any).start_time;
+        return (typeof t === 'string' && t.length > 0) ? t : undefined;
+      };
       const takeFastest = (k: keyof PBsWithSource, slot: keyof PBs) => {
-        const stravaSec = cachedPbSources![k]?.timeSec;
-        if (stravaSec == null) return;
+        const src = cachedPbSources![k];
+        if (src?.timeSec == null) return;
         const saved = nextPbs[slot];
-        if (saved == null || stravaSec < saved) nextPbs[slot] = stravaSec;
+        const date = src.startDate ?? findActivityStart(src.activityId);
+        if (saved == null || src.timeSec < saved) {
+          nextPbs[slot] = src.timeSec;
+        }
+        // Backfill date when src is canonical (faster or equal) — handles the
+        // case where time was set by an earlier wizard render but date wasn't.
+        if (date && (saved == null || src.timeSec <= saved)) {
+          nextPbDates[slot] = date;
+        }
       };
       takeFastest('k5', 'k5');
       takeFastest('k10', 'k10');
       takeFastest('h', 'h');
       takeFastest('m', 'm');
-      updateOnboarding({ pbs: nextPbs });
+      updateOnboarding({ pbs: nextPbs, pbDates: nextPbDates });
     }
     // Clear caches so the next onboarding pass (if any) re-fetches fresh.
     cachedActivities = null;
@@ -1822,16 +2194,22 @@ function commitEditing(state: OnboardingState): void {
     const long = key === 'h' || key === 'm';
     const parsed = parseTime(input.value, long);
     const nextPbs: PBs = { ...state.pbs };
+    const nextPbDates = { ...(state.pbDates ?? {}) };
     if (parsed !== null) {
       nextPbs[key] = parsed;
+      // User edited the time manually — the previously-stored date no longer
+      // corresponds to this time. Drop it. Without a known date, the marathon
+      // -specificity penalty falls back to full strength (safe default).
+      delete nextPbDates[key];
     } else if (input.value.trim() === '') {
       delete nextPbs[key];
+      delete nextPbDates[key];
     } else {
       // Bad input — do not close the editor so the user can fix it.
       input.style.borderColor = 'rgba(185,28,28,0.6)';
       return;
     }
-    updateOnboarding({ pbs: nextPbs });
+    updateOnboarding({ pbs: nextPbs, pbDates: nextPbDates });
     editing = null;
     rerender(state);
   }
@@ -1898,10 +2276,10 @@ function showVDOTExplanation(): void {
     method = `<p style="font-size:13px;color:var(--c-black);margin:0 0 14px;line-height:1.5">Your value falls back to a PB-derived estimate. Connect Garmin or add a resting HR to switch to the heart-rate-calibrated method.</p>`;
   }
   openInfoPopup(`
-    <h3 style="font-size:18px;font-weight:500;margin:0 0 12px">Current fitness (VDOT)</h3>
+    <h3 style="font-size:18px;font-weight:500;margin:0 0 12px">Current VO2max</h3>
     ${method}
-    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">VDOT is your aerobic capacity expressed as a number. We estimate it from how your heart rate responds to pace.</p>
-    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">For each steady run we compute %HRR (Swain &amp; Leutholtz 1997, %HRR ≈ %VO₂R), then fit a weighted line through pace vs %HRR. The pace at 100% gives vVO₂max, which converts to VDOT via Daniels' formula.</p>
+    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">VO2max is how much oxygen your body can use at peak effort — your aerobic capacity expressed as a number. We estimate it from how your heart rate responds to pace.</p>
+    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">For each steady run we compute %HRR (Swain &amp; Leutholtz 1997, %HRR ≈ %VO₂R), then fit a weighted line through pace vs %HRR. The pace at 100% gives vVO₂max, which converts via Daniels' formula.</p>
     <p style="font-size:12px;color:var(--c-faint);margin:0;line-height:1.5">References: Daniels (Running Formula), Swain &amp; Leutholtz 1997.</p>
   `);
 }
@@ -1918,7 +2296,7 @@ function showLTExplanation(): void {
   } else if (src === 'blended') {
     method = `<p style="font-size:13px;color:var(--c-black);margin:0 0 14px;line-height:1.5">Blended from your half / 10K PBs and recent threshold-effort runs.</p>`;
   } else if (src === 'daniels') {
-    method = `<p style="font-size:13px;color:var(--c-black);margin:0 0 14px;line-height:1.5">Estimated from your VDOT via Daniels' T-pace (88% of vVO₂max). This is the rough-estimate fallback — refines as race-distance PBs and steady threshold runs arrive.</p>`;
+    method = `<p style="font-size:13px;color:var(--c-black);margin:0 0 14px;line-height:1.5">Estimated from your VO2max via Daniels' T-pace (88% of vVO₂max). This is the rough-estimate fallback — refines as race-distance PBs and steady threshold runs arrive.</p>`;
   } else if (src === 'critical-speed') {
     method = `<p style="font-size:13px;color:var(--c-black);margin:0 0 14px;line-height:1.5">Estimated from a Monod–Scherrer critical speed model — fits multi-distance results to a sustained-effort asymptote.</p>`;
   } else if (src === 'empirical') {
@@ -1928,7 +2306,7 @@ function showLTExplanation(): void {
     <h3 style="font-size:18px;font-weight:500;margin:0 0 12px">Lactate threshold pace</h3>
     ${method}
     <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">Lactate threshold is the fastest pace you can hold roughly steady-state — beyond it lactate accumulates and you slow.</p>
-    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">It anchors threshold and tempo workouts in your plan, and combines with VDOT to set easy / marathon / VO₂ paces.</p>
+    <p style="font-size:13px;color:var(--c-muted);margin:0 0 10px;line-height:1.5">It anchors threshold and tempo workouts in your plan, and combines with your VO2max to set easy / marathon / VO₂ paces.</p>
     <p style="font-size:12px;color:var(--c-faint);margin:0;line-height:1.5">References: Daniels (Running Formula), Monod &amp; Scherrer (critical-power model).</p>
   `);
 }

@@ -97,7 +97,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null; powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null; powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null; repData?: import('@/types').ActivityRepData | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
         if (!wk.garminMatched) continue;
@@ -149,6 +149,14 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           const same = cur && cur.p600 === row.powerCurve.p600 && cur.p1200 === row.powerCurve.p1200
             && cur.p1800 === row.powerCurve.p1800 && cur.p3600 === row.powerCurve.p3600;
           if (!same) { actual.powerCurve = row.powerCurve; extraPatched = true; }
+        }
+        // repData — overwrite when DB has a non-null value that differs.
+        // Detection runs server-side and is deterministic, so DB is canonical.
+        if (row.repData !== undefined) {
+          const a = actual.repData ?? null;
+          const b = row.repData ?? null;
+          const sameLen = a?.reps.length === b?.reps.length && a?.source === b?.source;
+          if (!sameLen) { actual.repData = b; extraPatched = true; }
         }
         if (!actual.startTime && row.start_time) { actual.startTime = row.start_time; extraPatched = true; }
         // Heal avgPaceSecKm: prefer DB moving-time pace over elapsed-time computation
@@ -209,6 +217,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           if (matchRow.deviceWatts != null) actual.deviceWatts = matchRow.deviceWatts;
           if (matchRow.kilojoules != null) actual.kilojoules = matchRow.kilojoules;
           if (matchRow.powerCurve != null) actual.powerCurve = matchRow.powerCurve;
+          if ((matchRow as any).repData !== undefined) actual.repData = (matchRow as any).repData;
           // Update garminMatched so the re-enrich loop can find it on future syncs.
           // This also overwrites any stale '__pending__' left by a prior corrupted sync.
           wk.garminMatched[matchRow.garmin_id] = wid;
@@ -249,10 +258,10 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
 
     if (extraPatched) saveState();
 
-    // Derive maxHR from Strava activities if not set (Apple Watch users don't get it
-    // from physiology sync). Uses 95th percentile of max_hr values from recent activities,
-    // filtering wrist-sensor spikes. Matches the server-side computation in the edge function.
-    if (!s.maxHR) {
+    // Derive maxHR from Strava activities. Uses 95th percentile of max_hr values,
+    // filtering wrist-sensor noise. Max HR is a physiological ceiling — only raise,
+    // never lower an existing value.
+    {
       const maxHrs = activityRows
         .map(r => r.max_hr)
         .filter((hr): hr is number => hr != null && hr > 100 && hr < 230);
@@ -260,9 +269,11 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         maxHrs.sort((a, b) => a - b);
         const idx = Math.floor(maxHrs.length * 0.95);
         const derived = maxHrs[Math.min(idx, maxHrs.length - 1)];
-        s.maxHR = derived;
-        saveState();
-        console.log(`[StravaSync] Derived maxHR=${derived} from ${maxHrs.length} activities (95th pct)`);
+        if (derived > (s.maxHR ?? 0)) {
+          s.maxHR = derived;
+          saveState();
+          console.log(`[StravaSync] Derived maxHR=${derived} from ${maxHrs.length} activities (95th pct)`);
+        }
       }
     }
 
@@ -330,11 +341,14 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
 
     // Handle envelope format (with debug info) or plain array (legacy)
     let rows: HistorySummaryRow[];
+    let serverWeeksBack: number | undefined;
     if (Array.isArray(raw)) {
       rows = raw;
     } else if (raw && typeof raw === 'object' && Array.isArray((raw as { rows: HistorySummaryRow[] }).rows)) {
       const env = raw as { rows: HistorySummaryRow[]; _debug?: Record<string, unknown> };
       rows = env.rows;
+      const wb = env._debug?.weeksBack;
+      if (typeof wb === 'number' && wb > 0) serverWeeksBack = wb;
       if (env._debug) {
         console.log(`[StravaHistory] DB debug: rowCount=${env._debug.rowCount}, historyStart=${env._debug.historyStart}, weeksBack=${env._debug.weeksBack}, user=${env._debug.userId}`);
       }
@@ -359,7 +373,39 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       d.setUTCDate(d.getUTCDate() + daysToMonday);
       return d.toISOString().split('T')[0];
     })();
-    const completedRows = rows.filter((r) => r.weekStart < thisMondayISO);
+
+    // Zero-fill missing calendar weeks. The edge fn only emits weeks that have
+    // at least one stored activity, so a stretch of pure rest/non-tracked weeks
+    // collapses out of the array. Downstream consumers (`slice(-N)`,
+    // per-week chart, CTL EMA, `detectedWeeklyKm`) are positional — they treat
+    // array index as calendar offset. Without zero-fill, `slice(-4)` for the
+    // 4-week running average reaches into older non-empty weeks and reports a
+    // stale run from 5+ weeks ago as "last 4 weeks", which drifts every time
+    // a new week comes in. Filling the array to the calendar span the server
+    // actually scanned makes positional indexing match wall-clock time.
+    const calendarWeeks = serverWeeksBack ?? weeks;
+    const byWeek = new Map<string, HistorySummaryRow>();
+    for (const r of rows) {
+      if (r.weekStart < thisMondayISO) byWeek.set(r.weekStart, r);
+    }
+    const completedRows: HistorySummaryRow[] = [];
+    const thisMonday = new Date(thisMondayISO + 'T00:00:00Z');
+    for (let i = calendarWeeks; i >= 1; i--) {
+      const d = new Date(thisMonday);
+      d.setUTCDate(d.getUTCDate() - i * 7);
+      const ws = d.toISOString().slice(0, 10);
+      const existing = byWeek.get(ws);
+      completedRows.push(existing ?? {
+        weekStart: ws,
+        totalTSS: 0,
+        rawTSS: 0,
+        runningKm: 0,
+        zoneBase: 0,
+        zoneThreshold: 0,
+        zoneIntensity: 0,
+        sportBreakdown: [],
+      });
+    }
     s.historicWeeklyTSS = completedRows.map((r) => r.totalTSS);
     s.historicWeeklyRawTSS = completedRows.map((r) => r.rawTSS ?? r.totalTSS); // fallback: use Signal A if rawTSS missing (old edge fn)
     s.historicWeeklyKm = completedRows.map((r) => r.runningKm);
@@ -695,29 +741,22 @@ export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult>
     const historyRows = await fetchStravaHistory(weeks);
     console.log(`[StravaBackfill] History now has ${historyRows.length} weeks of data`);
 
-    // Also populate extendedHistory so the 16w tab in stats works immediately.
-    // Filter out current partial week — same as fetchStravaHistory does.
+    // Populate extendedHistory + reset historicWeekly* to last 8 calendar weeks.
+    // `fetchStravaHistory` above already wrote `historicWeekly*` zero-filled to
+    // the full `weeks` calendar span — read those back rather than re-mapping
+    // raw `historyRows` (which still has gaps for empty weeks). All four
+    // arrays must be kept in lockstep so consumers can index them by the same
+    // calendar position.
     if (weeks >= 16 && historyRows.length > 0) {
       const s = getMutableState();
-      const thisMondayISO = (() => {
-        const d = new Date();
-        const dayOfWeek = d.getUTCDay();
-        const daysToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-        d.setUTCDate(d.getUTCDate() + daysToMonday);
-        return d.toISOString().split('T')[0];
-      })();
-      const completedHistRows = historyRows.filter((r) => r.weekStart < thisMondayISO);
       s.extendedHistoryWeeks = weeks;
-      s.extendedHistoryTSS = completedHistRows.map((r) => r.totalTSS);
-      s.extendedHistoryKm = completedHistRows.map((r) => r.runningKm);
-      s.extendedHistoryZones = completedHistRows.map((r) => ({ base: r.zoneBase, threshold: r.zoneThreshold, intensity: r.zoneIntensity }));
-      // historicWeekly* stays as the last 8 completed entries for the default "8w" view.
-      // All four arrays must be kept in lockstep — consumers index them by the same week.
-      const last8 = completedHistRows.slice(-8);
-      s.historicWeeklyTSS = last8.map((r) => r.totalTSS);
-      s.historicWeeklyRawTSS = last8.map((r) => r.rawTSS ?? r.totalTSS);
-      s.historicWeeklyKm = last8.map((r) => r.runningKm);
-      s.historicWeeklyZones = last8.map((r) => ({ base: r.zoneBase, threshold: r.zoneThreshold, intensity: r.zoneIntensity }));
+      s.extendedHistoryTSS = [...(s.historicWeeklyTSS ?? [])];
+      s.extendedHistoryKm = [...(s.historicWeeklyKm ?? [])];
+      s.extendedHistoryZones = [...(s.historicWeeklyZones ?? [])];
+      s.historicWeeklyTSS = (s.historicWeeklyTSS ?? []).slice(-8);
+      s.historicWeeklyRawTSS = (s.historicWeeklyRawTSS ?? []).slice(-8);
+      s.historicWeeklyKm = (s.historicWeeklyKm ?? []).slice(-8);
+      s.historicWeeklyZones = (s.historicWeeklyZones ?? []).slice(-8);
       saveState();
     }
 

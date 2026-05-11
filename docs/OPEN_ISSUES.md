@@ -10,17 +10,385 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ## 🔴 TOP PRIORITY — Next session
 
-### ISSUE-151: Triathlon mode shows the running suggestion modal for cross-training overload *(P2, 2026-04-30)* — **🟡 awaiting in-app confirmation**
+### ✅ ISSUE-185: HYROX previous-race format silently mis-classified doubles as singles *(P1, 2026-05-09, FIXED 2026-05-11)*
 
-**Status**: Code changes shipped 2026-04-30 (see CHANGELOG). Per CLAUDE.md issue-tracking workflow, do not mark `✅ FIXED` until Tristan has confirmed the fix in-app on a real Ironman setup. To verify: in tri mode, sync (or manually log) a cross-training session of ~80–90 min that pushes the week ~20% over plan — expect the **tri** suggestion modal (per-discipline mod, no "easy running equivalent" copy), not the running modal.
+**Confirmed by Tristan**: forecast affordance + wizard gating tested in the app.
 
-**What changed**:
-1. New detector `src/calculations/tri-cross-training-overload.ts` — fires when cross-training TSS > 15% of planned weekly tri TSS.
-2. Wired into `tri-suggestion-aggregator.ts` as a fourth detector (source: `'cross_training_overload'`).
-3. Mode-aware modal routing — running modal suppressed in tri mode at: `activity-review.ts` (both `showSuggestionModal` callsites + new `redirectToTriSuggestionFlow` helper), `events.ts:logActivity`, `main-view.ts:triggerACWRReduction`, `excess-load-card.ts:triggerExcessLoadAdjustment` (defensive). `gps/recording-handler.ts:196` deliberately untouched (run-only, see CHANGELOG entry for rationale).
-4. 11 unit tests + 1 aggregator integration test pinning thresholds and the running/tri routing.
+**Root cause**: `src/ui/wizard/steps/hyrox-setup.ts:92` rendered `prevTimeFormat = state.hyroxPreviousTimeFormat ?? format`, which lit up the toggle pill matching the **target** format whenever the user hadn't picked one. Users never saw the question as unanswered. `src/state/initialization.hyrox.ts:178` then defaulted the same way, silently filing doubles splits into the Singles slot. Predictor then read those values at full singles weight, producing impossible "top 1% on 8/8 stations" radars and a 1:07:28 singles prediction off a 1:00:43 doubles race.
 
-**Once Tristan confirms in-app**: change status to `✅ FIXED` and move to the resolved section.
+**Fix**:
+- Wizard render no longer pre-activates a pill (`hyrox-setup.ts:92` — explicit-only).
+- Wizard Continue gated on prev-format picked when prev-time entered (`hyrox-setup.ts:683`).
+- Init refuses to fall back to target when prev format unknown; skips banding and benchmark seeding (`initialization.hyrox.ts:115-178`).
+- New `src/state/hyrox-prev-format-fix.ts` exports `applyHyroxPrevFormatChange(format)` which slot-moves benchmarks, rewrites format on `stationBenchmarkHistory`, re-bands using cross-format factor, regenerates the plan.
+- New "Previous race: {format} · {time} · Change ›" link on forecast view hero card opens the format-pick modal (`forecast-view.ts`).
+
+### ISSUE-184: HYROX MTL — actual vs planned/CTL/ATL track different scopes *(P2, 2026-05-08)*
+
+The MusculoTendon Load drill-down (`src/ui/mtl-load-view.ts`) surfaced a model-level inconsistency that was hidden when the metric only had one display surface.
+
+**The mismatch**: `weeklyActualMTL` (per its type comment in `src/types/triathlon.ts`) is "Actual MTL accumulated this week from completed station/brick activities" — station + brick only. But `computeWeekMTL` in `src/calculations/mtl.ts` sums `musculoTendonLoad` across **all** `wk.triWorkouts` including runs, and `weeklyMTL` (planned) and `mtlCTL` / `mtlATL` are derived from it. So the drill-down's hero (actual = 0, station+brick scope) and its 12-week chronic / acute curve and discipline split (run included) measure different things.
+
+**Why it became visible**: The drill-down's discipline split shows Run = 54% of chronic load. Numerically correct under the current model — running has eccentric/impact factors in `RUN_MTL_FACTORS` and accumulates more weekly minutes than stations. But that means a card titled "actual" of 0 sits next to chronic numbers that include running, which can read as a bug.
+
+**Decision needed**: pick a single scope.
+
+- (a) Make all four (actual, planned, chronic, acute) **all-discipline** — change `weeklyActualMTL` to include run mechanical contribution from completed runs. Most consistent with how the readiness floor `mtlAcwr` is currently used (it already factors in everything via chronic/acute).
+- (b) Make all four **station + brick only** — change `computeWeekMTL` to filter on `discipline === 'station' || 'brick'`. Means the chronic/acute and the readiness floor become specifically a station-ramp signal. Run mechanical load would then need to live elsewhere (probably `legLoad`, which it already partially does).
+
+The naming rename to "MusculoTendon Load" (this session) defers the choice — but the actual/planned divergence is still there under the hood and any future tightening of the readiness floor or the cap-enforcement logic needs to pick a scope explicitly.
+
+**Files**: `src/types/triathlon.ts:73`, `src/calculations/mtl.ts:84`, `src/main.ts:664` (recompute block), `src/ui/mtl-load-view.ts` (the surface that exposed it).
+
+---
+
+### ISSUE-182: Apple Health full-parity plugin — VO2max, running power, GPS routes, FTP *(P1, 2026-05-06, code-complete pending on-device test)*
+
+**Status**: TypeScript + Swift implementation shipped. Plugin lives at `ios-plugins/health-extras/`. Wired into `ios/App/CapApp-SPM/Package.swift`, `Info.plist`, and `appleHealthSync.ts`. Awaiting on-device verification before marking ✅ FIXED.
+
+**Verification checklist** (Tristan, next session with iPhone + paired Apple Watch in Xcode):
+1. `npx cap sync ios` — refreshes Capacitor's SPM resolution to pick up the new `MosaicHealthExtras` package.
+2. Open `ios/App/App.xcworkspace` (or `.xcodeproj`) in Xcode; build for a real device (HealthKit data is not available on simulator).
+3. Onboarding → Apple Health connect — confirm the combined permission dialog lists the new types (VO2max, running power, GPS routes, etc.).
+4. Wizard review step — confirm 16w backfill runs, polyline-derived best-efforts auto-fill the PB rows.
+5. Stats view — confirm VO2max shows real device value (no "(est.)" label), trend chart renders.
+6. Activity detail on a recent outdoor run — confirm route map renders, km splits chart renders, source badge says "Apple Health".
+7. If `runningPower` data is present in Health app, confirm `averageWatts`/`maxWatts` flow through to the row.
+8. Triathlon mode FTP — if user has cycling FTP in Health app, confirm `s.onboarding.triBike.ftp` auto-populates.
+
+**Known soft risks** (compile-untested Swift):
+- `HKWorkoutRouteQuery` streaming pattern — verify the accumulator resolves only on `done==true` (a missed `done` would leave the promise pending).
+- ISO8601 date parsing — Apple's HK dates can be either `withFractionalSeconds` or not; the parser tries both formats.
+- iOS-17 type identifiers (`cyclingPower`, `cyclingFunctionalThresholdPower`, `cyclingCadence`, `cyclingSpeed`) — verify they compile on iOS 17 SDK; silently drop on iOS 16 via `#available`.
+
+**Goal**: Apple-only iOS users (no Strava, no Garmin) reach Garmin-tier feature parity. Today they're missing several HealthKit fields the current plugin (`@capgo/capacitor-health` v8.2.16) doesn't expose.
+
+**HealthKit fields capgo doesn't expose** that we want:
+- **VO2max** — `HKQuantityTypeIdentifierVO2Max` (iOS 11+). Apple Watch updates this from outdoor GPS runs. Without it we fall back to HR-calibrated/PB-derived VDOT (already wired) and label "(est.)". With it, the number matches what the user sees in their Health app.
+- **Running power** — `HKQuantityTypeIdentifierRunningPower` (iOS 16+). Native running power, no Stryd needed.
+- **Cycling power** — `HKQuantityTypeIdentifierCyclingPower` (iOS 17+). For triathletes with paired power meters.
+- **Cycling FTP** — `HKQuantityTypeIdentifierCyclingFunctionalThresholdPower` (iOS 17+). Apple's auto-derived FTP.
+- **HKWorkoutRoute** — GPS polyline per workout. Enables route maps + per-km splits + PB extraction (compute fastest 5K/10K/HM segments from the location stream → mirror Strava `best_efforts`).
+- **Running form** (iOS 16+): `runningStrideLength`, `runningGroundContactTime`, `runningVerticalOscillation`, `runningSpeed` (computes pace from this), step count → cadence.
+- **Wrist temperature** — `HKQuantityTypeIdentifierAppleSleepingWristTemperature` (iOS 16+, Series 8/Ultra). Recovery / illness / ovulation signal.
+- **Walking HR average** — `HKQuantityTypeIdentifierWalkingHeartRateAverage`. Slow fitness-trend proxy.
+
+**Recommended path: Hybrid.** Keep `@capgo/capacitor-health` for what it does well (sleep stages, HRV, RHR, HR streams, basic workouts, daily aggregates) — re-implementing those is pure waste. Add a small custom plugin in `ios/App/App/plugins/` that exposes only the gaps.
+
+**Why not switch to `@perfood/capacitor-healthkit`**: would mean re-validating every existing physiology code path. Hybrid keeps the working part working.
+
+**Why not fork capgo**: capgo's enum-based API can't extend cleanly to dynamic identifiers; their architecture would need restructuring.
+
+**Plugin scaffold** (under `ios/App/App/plugins/MosaicHealthExtras/`):
+- `MosaicHealthExtrasPlugin.swift` — register methods (~50 lines)
+- `MosaicHealthExtras.swift` — HK queries (~250-300 lines)
+- TS bridge: `src/data/healthExtras.ts` (~80 lines, `registerPlugin` + thin wrappers)
+- Methods: `requestPermissions(types)`, `readVO2Max(start, end)`, `readWorkoutRoute(uuid)` (CLLocation array → polyline encoder), `readWorkoutPowerSamples(uuid, type)`, `readCyclingFTP()`, `readWristTemperature(start, end)`, `readRunningFormMetrics(uuid)`.
+
+**Integration into `appleHealthSync.ts`**:
+1. After HR enrichment per workout, also query VO2 / running power / form metrics in the same window.
+2. After workout sync, fetch `HKWorkoutRoute` per running workout → polyline (use Strava's polyline encoder or store raw lat/lon array).
+3. Compute fastest 5K/10K/HM/marathon segments from the polyline → synthesize `best_efforts` shape on the row → existing `readPBsFromHistory` works unchanged.
+4. Standalone VO2 sync writes `s.vo2` directly; UI drops the "(est.)" label when `vo2Source === 'apple-device'`.
+5. Latest cycling FTP → `s.onboarding.triBike.ftp` for triathletes.
+
+**iOS deployment target**: bump to iOS 16 minimum. Series 8 (Sept 2022) and iPhone 8 (Apple's iOS 16 cutoff) cover >95% of likely Apple Watch users in 2026. iOS 17+ fields gated by `#available(iOS 17, *)` checks.
+
+**Estimated effort**: 1-2 focused days.
+- Plugin scaffold + Swift queries: 4-6h
+- TS bindings + integration into appleHealthSync.ts: 2-3h
+- On-device testing (Xcode + real iPhone with paired Apple Watch): 2-4h
+- Doc updates (CHANGELOG, FEATURES, this issue marked fixed): 1h
+
+**Open questions for execution session**:
+1. Does `HKWorkoutRoute` need a separate read permission beyond the workout permission? (Likely yes — `HKSeriesType.workoutRoute()`.)
+2. For running power: is it on the workout's metadata or queried by time-window like HR? (Should be sample-based, query by workout start/end.)
+3. Apple's VO2max sample frequency — per-workout, daily, or weekly? Need to know to pick the right query window.
+4. Polyline storage: encode via the same algorithm Strava uses, or store raw lat/lon array on the row?
+
+**Already shipped (2026-05-06) — foundation**:
+- 16-week activity backfill with HR-stream enrichment.
+- Per-workout iTRIMP + zones + observed maxHR (from HR streams across all hard workouts).
+- Weekly aggregation → `historicWeeklyTSS`, `ctlBaseline`, `detectedWeeklyKm`, `athleteTier`.
+- Onboarding: Apple Health button always visible (graceful "iOS app only" disabled state on web).
+- `stravaHistoryFetched` gates extended to also accept `appleHistoryFetched`.
+
+This issue completes the parity story.
+
+---
+
+### ✅ ISSUE-178: Triathlon forecast UI — multiple display inconsistencies *(P1, 2026-05-06)* — **FIXED 2026-05-06**
+
+**Resolved symptoms**:
+1. ~~LT 4:23 vs 4:08 across surfaces~~ → `race-forecast-card.ts` now anchors current LT to canonical `s.lt` and propagates the VDOT-projected delta. Both surfaces show the same number for "today".
+2. **VDOT vs VO2max** disconnect — *Not fixed in this pass*. Tracked separately as ISSUE-180 (cross-source validation needed; basic selection UI already exists per Tristan 2026-05-06).
+3. **Course-factor `+` labels** — *Partial fix*. The labels themselves weren't relabelled, but the underlying gates were corrected (item 5) so negative deltas now surface — making the sign convention clearer in practice. Pure label clarity ("Climate adds X to your run leg") deferred.
+4. ~~Bike modal 5:24 vs headline 6:44~~ → `bike-setup-view.ts` modal now labelled "Bike split (no conditions)" with subtext "race-day adds climate & wind". Modal preserves tuning-playground function as a clean baseline.
+5. **Bonus**: `course-factors.ts` + `course-factors-running.ts` had `if (factor > 1.0)` gates silently dropping sub-1.0 values (sheltered wind, ocean-current-assist swim). Changed to `!== 1.0` so legitimate negative course factors surface as faster-on-race-day deltas.
+6. **Bonus**: `bike-setup-view.ts` showed "Mean gradient 0.5%" for rolling courses. Changed to "≈900m climbing" when race-specific elevation data is available — cyclists quote elevation gain, not mean gradient.
+
+See CHANGELOG 2026-05-06 "Triathlon forecast UI cleanup" for full detail.
+
+### ✅ ISSUE-179: Swim-specificity penalty for low recent swim engagement *(P2, 2026-05-06)* — **RESOLVED 2026-05-06**
+
+Subsumed by the unified per-discipline race-readiness framework. The new `specificEndurancePenalty` covers swim alongside bike and run — when recent swim volume is low (`recentHoursByDiscipline(state, 8)['swim']`) and longest swim session is below the race-distance target, the swim leg's `current` prediction is penalised by up to 15% (IM) / 10% (70.3) / 5% (Olympic) / 3% (Sprint).
+
+The originally-proposed swim-specificity penalty would have only addressed swim. The unified framework handles all three disciplines with the same architecture, plus surfaces per-discipline scores via the new Race Readiness panel. See CHANGELOG 2026-05-06 "Race-readiness penalty + per-discipline UI surface (triathlon)" for the full picture.
+
+**Outstanding scope from this issue**: PB-recency for swim is NOT yet implemented (run-only in v1). Could extend later — recent open-water race / TT could reduce the swim penalty the same way recent marathon PB reduces the run penalty. Tracked as a sub-item; bike/swim PB recency is mentioned in the new SCIENCE_LOG entry as "deferred to v2".
+
+### ISSUE-180: VO2max source selection + validation *(P2, 2026-05-06)*
+
+**Problem**: VO2max comes from multiple sources (Garmin direct, Apple Health GPS-run estimate, Polar Running Index, manual entry, PB-derived VDOT). Currently the system picks one but doesn't explain choice, doesn't cross-validate against other signals (e.g., PB-derived VDOT), and doesn't detect stale device readings (Apple's VO2max only updates on outdoor GPS runs — could be 6+ months stale).
+
+**Status**: Tristan confirmed (2026-05-06) the user-facing VO2max selection control already exists in stats. The architectural improvements (cross-source validation, stale detection, conflict surfacing) are the open work — not the basic selection UI.
+
+**Reference**: `docs/WEARABLE.md` for source-by-source VO2max specifics (lines 12, 74, 105, 116, 232, 289, 332, 433).
+
+### ✅ ISSUE-181: Injury system mode-blind — triathlon has no injury UI or plan modification *(P1, 2026-05-05)*
+
+The running injury system (`applyAdvancedInjuryLogic`, `openInjuryModal`, injury banner, morning pain check) was entirely absent from the triathlon plan view. Triathletes with a lower-body injury saw unmodified run workouts — no UI to report the injury, no plan changes, no discipline-aware guidance on what was still safe to do.
+
+**Fix**: Added full discipline-aware injury support to triathlon plan view:
+- `getDisciplineStatusForInjury(location)`: maps injury location to per-discipline status (`ok` / `easy` / `stop`). Foot/knee/calf/hamstring/hip: run=stop, bike=easy, swim=ok. Back: all=easy. Other: run=easy, bike/swim=ok.
+- `buildTriInjuryBanner(inj)`: shows discipline table (Continue normally / Low intensity only / Paused), pain level, phase, Update/Recovered buttons.
+- `buildTriMorningPainCheck(inj)`: one-per-day Worse/Same/Better card. Persists via `recordMorningPain` + `lastMorningPainDate`.
+- Header: "In Recovery" pill replaces "Check-in" button when injury is active.
+- Workout rendering: stopped-discipline workouts render as greyed-out "Paused" cards (non-draggable, non-tappable). Easy-discipline workouts get an amber "Easy intensity only" note via `renderTriWorkoutCard`'s new `injuryEasy` opt.
+- Brick workouts: use the more restrictive of bike/run status.
+**Files**: `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/workout-card.ts`.
+
+---
+
+### ISSUE-177: Per-rep interval analysis — verify on real interval sessions *(P1, 2026-05-06)*
+
+**Status**: Built and tested in unit suite (`rep-detection.test.ts` 12 ✓, `rep-adherence.test.ts` 22 ✓, full suite 1413/1413). Edge function changes + DB migration NOT yet deployed. End-to-end behaviour unverified on real Strava data.
+
+**What ships**: per-rep table, fade %, in-band marker, and a one-line execution commentary on the activity-detail page for any structured interval session (run + bike). Per-rep adherence drives the running effort blend (`events.ts`) and the bike effort multiplier (`effort-multiplier.triathlon.ts`) so progression next week reflects rep-level execution, not whole-session averages.
+
+**Pre-test deploy steps**:
+1. Apply migration `supabase/migrations/20260505_rep_data.sql` (`supabase db push` or via dashboard).
+2. Deploy edge function: `supabase functions deploy sync-strava-activities`.
+3. Sync. New interval sessions detect on first sync; up to 8 historic sessions backfill per sync via the `REP_HEAL_BUDGET` heal pass.
+
+**Verification checklist**:
+1. **Run — track session with user-pressed laps** (e.g. 8×400m). After sync, open activity detail. Expect: "Reps" block with source "Strava laps", 8 rows showing distance/pace/HR/in-band marker, fade %, commentary like "8/8 reps in target band, no fade — strong execution".
+2. **Run — track session without lap presses** (just GPS). Expect rep block sourced "Auto-detected" if alternating fast/slow segments cleanly visible. Confidence is lower; some misses are OK.
+3. **Bike — 5×5min @ FTP with power meter**. Expect rep block detecting 5 reps from the watts stream, source "Auto-detected" (bike skips laps since auto-1km is the default). Watts and HR per rep, fade % flips sign so power drop = positive.
+4. **Bike — auto-1km easy ride** (uniform laps, no power surges). Expect NO rep block (CoV gate rejects uniform laps; baseline-power gate rejects flat rides).
+5. **Easy run with one fast km**. Expect NO rep block (σ-gap gate rejects single outlier).
+6. **Effort multiplier reactivity**: complete an interval workout that the rep scorer rates as undercooked (slower than target). Next week's prescription for that discipline should shrink (multiplier < 1.0). Conversely, on-target reps should hold or slightly grow next week.
+7. **Console logs**: `[Standalone:reps] strava-XXX: detected N reps (source)` on first sync; `[Standalone:rep-heal] strava-XXX: backfilled N reps` on heal pass.
+
+**Known limitations to expect** (not bugs):
+- 30/30s micros may not split cleanly because the bike-stream 10s smoothing window blurs short transitions.
+- Fartlek and progression sessions miss the σ-gap heuristic — no rep block surfaces. Acceptable.
+- Backfill mode (16-week one-shot history) doesn't run detection. Historic intervals trickle in via heal cap (8/sync).
+- Swim is out of scope for v1.
+
+**Tunable thresholds** if false positives/negatives show up:
+- `REP_PACE_GAP_SIGMA = 1.0` in `rep-detection.ts` — raise to be stricter (fewer false positives), lower to be more sensitive.
+- `REP_UNIFORM_DIST_COV = 0.08` — uniform-lap rejection threshold.
+- `RUN_PACE_BAND = 0.05` (±5%) and `BIKE_ADHERENCE_BAND` per session type — in-band tolerance for per-rep scoring.
+
+**Files**: `supabase/migrations/20260505_rep_data.sql`, `src/calculations/rep-detection.ts`, `src/calculations/rep-adherence.ts`, `src/calculations/{rep-detection,rep-adherence}.test.ts`, `src/types/state.ts`, `supabase/functions/sync-strava-activities/index.ts`, `src/calculations/activity-matcher.ts`, `src/data/stravaSync.ts`, `src/calculations/effort-multiplier.triathlon.ts`, `src/ui/events.ts`, `src/ui/activity-detail.ts`. See CHANGELOG 2026-05-06 + SCIENCE_LOG "Per-rep interval analysis" for the full rationale.
+
+---
+
+### ✅ ISSUE-151: Triathlon mode shows the running suggestion modal for cross-training overload *(P2, 2026-04-30)* — **confirmed in-app 2026-05-01**
+
+**Status**: v1 shipped 2026-04-30, **v2 shipped 2026-05-01** (see CHANGELOG). Per CLAUDE.md issue-tracking workflow, do not mark `✅ FIXED` until Tristan has confirmed in-app on a real Ironman setup.
+
+**v2 verification checklist**:
+1. Sync (or manually log) ~80–90 min tennis. Expect the tri modal with severity badge, discipline chips defaulting to **run** (tennis = leg-impact), Reduce / Replace & Reduce / Keep / Push-to-next-week buttons.
+2. Flip chips between run / bike / swim — proposed mod list re-renders. Below-floor disciplines de-emphasised but still clickable; modal warns before commit.
+3. Click *Reduce* → mods apply to `wk.triWorkouts`, modal closes.
+4. Repeat with ~90 min cycling → recommendation should default to **bike** (cycling = bike-affinity), not run.
+5. Repeat with ~120 min swim → recommendation should default to **swim**.
+6. Click *Push to next week* → `wk.carriedCrossTrainingTSS` increments, modal closes. Next week's home view shows "X TSS carried over from cross-training" banner; banner shrinks day-by-day, disappears after ~3 weeks.
+7. Plan-vs-extra: a planned `cross` or `gym` session in `wk.triWorkouts` (with `discipline` undefined) should NOT trigger the detector.
+
+**v1 changes** (still valid, see ARCHITECTURE.md → Cross-Training Engine for the full mode-routing map):
+- New detector `src/calculations/tri-cross-training-overload.ts` (rewritten in v2 — multi-mod, per-discipline, run-anchored).
+- Mode-aware modal routing at activity-review, events.ts, main-view ACWR, excess-load-card defensive guard. `gps/recording-handler.ts:196` deliberately untouched (run-only).
+- Aggregator wired with `cross_training_overload` source (v2 carries `overloadOptions` payload).
+
+**Update 2026-05-01 — home readiness CTA wired through (separate session)**: The home readiness card's "Adjust plan" button was a silent no-op in tri mode (it called `triggerACWRReduction` which early-returns for tri). Fixed: tri-mode click handler routes into `collectTriSuggestions` + `showTriSuggestionModal`; show-gate flipped to key off `bundle.mods.length > 0` so the button is hidden when no mod is actionable; CTA label switches to "Reduce session load" when the dominant mod is `cross_training_overload` or `readiness`. Drop handlers in `src/ui/triathlon/plan-view.ts` also surface the modal when a workout is dragged onto today (`maybeOpenSuggestionsAfterDrop`). See CHANGELOG 2026-05-01.
+
+**Update 2026-05-01 — home readiness composite fixed (confirmed in-app)**: `buildReadinessRing` now branches on `isTri`: calls `computeTriReadiness(s)`, uses worst-discipline `ReadinessResult` for score/label/colour/drivingSignal, and replaces the daily-coach sentence with `triReadinessResult.sentence`. Running-ACWR "Load spike" copy no longer appears in tri mode. Confirmed proportional and correct by Tristan on 2026-05-01.
+
+✅ FIXED — all sub-items resolved. Move to resolved section on next triage.
+
+---
+
+## Persona QA + Mode Audit Findings — 2026-05-05
+
+> Source: `/persona-qa all` + `/mode-audit all` run across 25 personas and 5 modes.
+> P0 = crash/blank · P1 = wrong data/broken logic · P2 = confusing UX · P3 = copy/polish
+
+---
+
+### ✅ ISSUE-156: Hyrox — plan view shows running plan structure *(P0, 2026-05-05)*
+
+`src/ui/plan-view.ts:3183` — `renderPlanView` routes `eventType === 'triathlon'` to the tri plan view but has no Hyrox branch. Hyrox athletes see the running plan view, which has no concept of stations, bricks, or MTL. Workout cards, skip handlers, and session types are all wrong.
+**Fix**: replaced all direct `renderPlanView()` navigation calls across 15 files with `renderMainView()` which already has the correct mode-aware routing (triathlon → tri plan, hyrox → hyrox plan, else → running plan). All `navigateTab` functions and post-action CTAs updated. Also fixed the `tab === 'plan'` routing in all triathlon sub-views.
+
+---
+
+### ✅ ISSUE-157: Hyrox — forecast tab shows blank screen *(P0, 2026-05-05)*
+
+`src/ui/triathlon/forecast-view.ts:54` — `renderTriathlonForecastView` checks `if (!tri) return` early. Hyrox athletes have no `s.triConfig`, so the tab renders blank with no error or empty state.
+**Fix**: removed the Forecast tab from Hyrox's tab bar (`tab-bar.ts:29` — `isTriathlon` now only `=== 'triathlon'`, not `=== 'hyrox'`). Hyrox has no race predictor yet; showing the tab was misleading. Also fixed the `renderPlanView` call inside forecast-view.ts navigateTab.
+
+---
+
+### ✅ ISSUE-158: Just-track — week debrief fires with no plan *(P0, 2026-05-05)*
+
+`src/ui/week-debrief.ts:122` — `shouldAutoDebrief()` does not check `s.trackOnly`. On week rollover, a just-track user gets a week debrief modal with plan-derived metrics (CTL, adherence, debrief copy) even though they have no plan. Confusing and misleading.
+**Fix**: added `if (s.trackOnly) return false;` at the top of `shouldAutoDebrief()`, and added `&& !s.trackOnly` guard to the `pendingDebrief` path in `fireDebriefIfReady`. The end-of-plan path already had this guard.
+
+---
+
+### ✅ ISSUE-159: Hyrox — week debrief shows running metrics *(P1, 2026-05-05)*
+
+`src/ui/week-debrief.ts:122` guard is `s.eventType !== 'triathlon' && !s.trackOnly` — Hyrox passes this and receives the running week debrief.
+**Fix**: Added `if (s.eventType === 'hyrox') return false` to `shouldAutoDebrief()`, `if (s.eventType === 'hyrox') return` early in `fireDebriefIfReady()`, and `&& s.eventType !== 'hyrox'` to the end-of-plan guard at line 123. Suppresses the running debrief entirely for Hyrox; a Hyrox-specific debrief remains a future build.
+
+---
+
+### ✅ ISSUE-160: Hyrox — holiday modal pre-shift silently fails *(P1, 2026-05-05)*
+
+`src/ui/holiday-modal.ts:438-493` — `computePreHolidayShifts` calls `generateWorkoutsForWeek` which produces running workout objects whose IDs never match any Hyrox session. Shifts silently fail.
+**Fix**: Added a Hyrox branch at the top of `computePreHolidayShifts` that reads `wk.triWorkouts` directly instead of re-generating running workouts. Same shift algorithm (shiftable types extended to include `station`, `mtl`). Also updated "Running on holiday" / "Are you planning on running?" copy to "Training on holiday" / "Are you planning on training?" for mode-neutrality. File: `src/ui/holiday-modal.ts`.
+
+---
+
+### ✅ ISSUE-161: Readiness commentary tone contradicts ring score *(P1, 2026-05-05)*
+
+`src/calculations/tri-readiness.ts:127` — the sentence "Load has jumped from cross-training. Ease back across all sessions this week." fires when `overall === 'Overreaching'` for a single discipline, but the ring score (computed by the systemic `computeReadiness`) can show "On Track" (57-59) because systemic HRV/sleep/TSB is fine. The ring says you're OK; the commentary says ease back. Directly contradictory.
+**Root cause**: two separate models — systemic (`computeReadiness`) and per-discipline (`computeTriReadiness`) — disagree and are displayed together without reconciliation.
+**Fix (Option A)**: when the systemic ring is "On Track" or "Primed", downgrade commentary to informational tone ("Cross-training has added bike load above baseline — watch volume on bike sessions this week") rather than alarm tone ("Ease back across all sessions"). Reserve alarm copy for when the ring itself reflects concern. Apply same principle to running-mode readiness sentences.
+
+---
+
+### ✅ ISSUE-162: Readiness score shows different values on home vs detail view *(P1, 2026-05-05)*
+
+Home view shows 60, readiness detail view shows 59 — same metric, same session, two different numbers. Violates the canonical-computation rule in CLAUDE.md.
+**Root cause**: two divergences in how `computeReadiness` is called:
+1. **Sleep score**: readiness view falls back to most recent historical sleep when today's hasn't synced; home view uses today-only and passes `null` if absent. One input differs → score differs by 1.
+2. **Metrics week index**: readiness view passes `completedWeek = s.w - 1`; home view passes `s.w`. Can shift CTL/TSB inputs.
+**Fix**: extract a canonical `buildReadinessInputs(s)` helper that both views call. Use the readiness view's sleep fallback (historical fallback is correct — morning before sync, yesterday's sleep is better than null). Same `completedWeek = Math.max(0, s.w - 1)` in both.
+
+---
+
+### ✅ ISSUE-163: Underachiever effort multiplier inverts — plan gets harder when you do less *(P1, 2026-05-05)*
+
+When a user consistently runs 30% shorter than planned with RPE 2-3 (easier than expected), the blended effort signal flips sign. `effortMultiplier` returns > 1.0 (clamped [0.85, 1.15]), making the following week longer. The plan escalates for someone chronically under-delivering.
+**Fix**: In `triTrailingEffortScore` (`effort-multiplier.triathlon.ts`), added an under-duration guard: if actual duration < 80% of planned, the workout's deviation is clamped to max 0. This prevents low-RPE short sessions from driving plan inflation — the session was cut short, not genuinely easy.
+
+---
+
+### ✅ ISSUE-164: Skip pattern invisible to plan engine and coach *(P1, 2026-05-05)*
+
+Chronic skipping (40%+ of workouts over 6+ weeks) produces no coaching signal and no plan re-fit.
+**Fix**: Added `buildConsecutiveSkipNote(s, viewWeek)` in `plan-view.ts`. Detects 2+ consecutive completed weeks where `wk.skip.length > 0` (workouts pushed). Surfaces a plain white card above the workout list: "Sessions sliding for N weeks. Workouts pushed to next week will drop on a second skip and affect your race prediction. Consider reducing this week's volume instead."
+
+---
+
+### ✅ ISSUE-165: Mid-plan injury — run CTL/VDOT don't decay during run layoff *(P1, 2026-05-05)*
+
+When a user reports a running injury and stops running, VDOT remains at its pre-injury value. Root cause: `refreshBlendedFitness` (called on every launch) overwrites `s.v` with the PB/HR blend — which uses pre-injury race times — undoing `advanceWeekToToday`'s weekly decay.
+**Fix**: Added an `injuryBlockingRun` guard in `blended-fitness.ts` at the `s.v = s.blendedEffectiveVdot` write. When `injuryState.active && injuryState.canRun === 'no'` (acute/rehab phases), the blend does not overwrite `s.v`. `advanceWeekToToday`'s weekly decay (1.2%/week from Coyle 1985) now accumulates unimpeded. Once `canRun` returns to `'limited'` or `'yes'` (return-to-run phase), the blend resumes writing normally so post-injury fitness is re-calibrated from actual runs. File: `src/calculations/blended-fitness.ts`.
+
+---
+
+### ✅ ISSUE-166: Wrong benchmarks — unreachable targets never flagged *(P1, 2026-05-05)*
+
+If a user sets FTP far too high, the plan generates unexecutable watt targets. After multiple weeks of high RPE (9-10), no coaching signal fires.
+**Fix**: Added `detectConsecutiveHighRpeBike()` and `maybePromptHighRpeBike()` in `src/ui/triathlon/plan-view.ts`. Detects 3+ consecutive completed weeks where all rated bike workouts had RPE ≥ 8. Shows a UX-compliant modal (no auto-correction): "Bike sessions consistently at high effort. Targets may be set too high relative to your current FTP." Two CTAs: "Review FTP" (opens benchmark overlay) and "Got it" (dismiss). Fires once per week via `triConfig.notifiedMarkers.highRpeBikeWeek`.
+
+---
+
+### ✅ ISSUE-167: Stale VDOT/LT/VO2 not cleared on mode switch *(P1, 2026-05-05)*
+
+Carrying over running VDOT to triathlon run-leg pacing is intentional — it's the best available fitness signal for the run discipline when switching. The guard `if (!s.v && pastRaceBench.vdot)` correctly only seeds when empty, not overwriting an existing value. No action needed; documented here as intentional design.
+
+---
+
+### ✅ ISSUE-168: Post-race banner not shown for triathlon or hyrox *(P2, 2026-05-05)*
+
+`buildRaceCompleteBanner` (home-view.ts:560) only checked running race date fields.
+**Fix**: extended `raceDate` lookup to also read `triConfig?.raceDate` and `hyroxConfig?.raceDate`. Hyrox race name shows "Your HYROX" instead of generic "Your race".
+
+---
+
+### ✅ ISSUE-169: Illness modal "Still running" copy ambiguous for triathlete *(P2, 2026-05-05)*
+
+`src/ui/illness-modal.ts` — button copy "Still running" and description "Easy and long runs reduced" are running-specific. For a triathlete managing illness, "Still running" is ambiguous (all three disciplines? just run?) and there's no tri-specific option like "Keep swim/bike, rest running."
+**Fix**: branched modal copy on `isMultiSport()`. Tri/cycling/hyrox: button reads "Still training", description uses sport-agnostic "Quality sessions converted to easy effort at 50% volume. Low-intensity sessions reduced to 60%." Full-rest description updated to "All sessions replaced with rest."
+
+---
+
+### ✅ ISSUE-170: Cycling wizard — isCyclingOnlyMode not confirmed before first plan render *(P2, 2026-05-05)*
+
+Verified not a real issue: `isCyclingOnlyMode` checks `onboarding.trainingMode === 'cycling'` first (set at the goals step, long before plan view renders), so the guard resolves correctly even before `triConfig.disciplines` is written by `initializeCyclingSimulator`. No code change needed.
+
+---
+
+### ISSUE-171: Non-tech user faces jargon wall on first use *(P2, 2026-05-05)*
+
+CTL, ACWR, VDOT, TSS, ATL, TSB all surface in home view, readiness view, and coach view without plain-language translation. A user who doesn't know these terms has no way to interpret them. The "what do I do today" answer is buried under unfamiliar metrics.
+**Fix**: add a plain-language label alongside or below each metric on first exposure: "CTL 42 — your current fitness base", "ACWR 1.12 — load is ramping faster than usual", etc. Could be a tooltip, a subtitle, or a one-time coach note. Discuss format with Tristan before building.
+
+---
+
+### ✅ ISSUE-172: General fitness mode — race forecast card may appear with no race *(P2, 2026-05-05)*
+
+Verified: `buildRaceForecastCard` already gates on `s.continuousMode` (returns '' for general fitness), `!s.rd` (no race distance), and `!s.initialBaseline` (no goal time). All three guards correctly suppress the card in non-race scenarios. No code change needed.
+
+---
+
+### ✅ ISSUE-173: benchmark-overlay Save/Skip CTAs navigate to plan view unconditionally *(P2, 2026-05-05)*
+
+Verified already fixed: both CTAs call `renderMainView()` (via dynamic import) which routes mode-correctly to the appropriate plan view (tri, hyrox, or running). The overlay is only opened from plan-surface buttons, so `renderMainView()` always returns to the correct opener. No code change needed.
+
+---
+
+### ✅ ISSUE-174: Mode-audit — accent colour on navigation links *(P2, 2026-05-05)*
+
+Checked all four reported instances. All were already using `var(--c-muted)` — the violations were resolved in a prior session. Verified: "Sync", "Edit", "Log sleep →" buttons all use muted colour, not accent.
+
+---
+
+### ✅ ISSUE-175: Mode-audit — hardcoded units in guided overlay *(P2, 2026-05-05)*
+
+Checked `src/ui/guided-overlay.ts:40-41`. The code already correctly handles both units: `pref === 'mi' ? ... mi : ... km`. No hardcoded violation exists. Resolved in a prior session.
+
+---
+
+### 🔄 ISSUE-177: Plan card mixes planned-sport and actual-sport when day-proximity fallback matches across sports *(P2, 2026-05-06)* — **fix pending on-device confirmation**
+
+**Symptom**: Card showed CROSS badge → "Tennis" heading → "60min wakeboarding" description → "Tennis · Strava · 2.9 km · …" sub-line. Heading is the actual sport (Strava `displayName`), description is the planned sport (`w.d`), sub-line repeats the actual sport. Reads as broken even though the load attribution is correct.
+
+**Root cause**: In `src/ui/activity-review.ts:1488-1503`, when no sport-name match exists, cross-training activities fall through to a closest-cross-slot-by-day picker. A tennis session can land in a wakeboarding slot. The renderer in `plan-view.ts` then pulls heading from one source (actual sport) and description from another (planned sport) without reconciling them.
+
+**Fix (2026-05-06)**: `src/ui/plan-view.ts` — added `isSportSwap` flag (cross/gym slot + activity `displayName !== w.n`); replaced the planned description with a `Planned: <slot name>` caption when set; dropped the activity-name prefix in `actMatchRow` whenever it duplicates the heading. Matcher behaviour unchanged — load attribution stays.
+
+**Verification**: needs on-device check after next Strava sync that produces a cross-sport swap (tennis in wakeboarding slot, etc.). Marker stays 🔄 until Tristan confirms.
+
+---
+
+### ✅ ISSUE-176: Mode-audit — em dashes in user-facing copy (10+ instances) *(P3, 2026-05-05)*
+
+Fixed prose em dashes in user-facing copy across:
+- `main-view.ts`: "Cross-training covering fitness load. Consider a short run for conditioning." and "Viewing. Return to current week."
+- `welcome-back.ts`: 7 prose em dashes rewritten with periods/commas
+- `stats-view.ts`: CTL/ATL/TSB/ACWR/momentum tooltip definitions rewritten
+- `activity-detail.ts`: FTP estimate sentences split with periods
+- `src/ui/home-view.ts:1943` — "Next: ${label} — ${next.n}"
+- `src/ui/coach-view.ts:175` — "ACWR ${n} — acute load spike."
+- `src/ui/account-view.ts:1635` — "Session expired — please sign in again"
+**Fix**: rewrite as period, comma, or colon per copy rules. Audit all files for remaining instances.
 
 ---
 
@@ -79,6 +447,32 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ✅ ISSUE-156: `sync-strava-activities` skipped watts streams when `device_watts !== true` *(P1, 2026-05-01)* — **confirmed in-app 2026-05-01**
+
+**Fix summary**: removed the `device_watts !== true` filter at `supabase/functions/sync-strava-activities/index.ts:1252`, replaced with an NP-threshold check (`avg/NP >= 120 W`). Client-side FTP estimator at `src/calculations/tri-benchmarks-from-history.ts` got the same treatment (drop the gate, downgrade confidence one tier when flag isn't `=== true`). Deployed at v78 (2026-05-02 08:01:16). After deploy + cold launch + auto-backfill, the curve path landed FTP correctly. User confirmed ("whatever has worked now works as its back").
+
+
+
+**Context**: The edge function step 5e fetches mean-max power curves only for rides flagged `device_watts=true` in the Strava DB rows. Strava's flag is structurally unreliable on Garmin → Strava transfers — Tristan's account has 60 of 63 recent rides flagged `device_watts: false` despite all of them being captured on a real power meter. So the curve fetch never fires for those rides, `garmin_activities.power_curve` stays null, and the client-side FTP estimator drops to whole-ride NP × 1.0 (which collapses on interval workouts because recovery sections drag NP down).
+
+**Confirmed via diagnostic** (2026-05-01): the user's 2026-04-27 hard ride (114 min, two 20-min intervals at 310 W) has the *correct* answer of FTP=295 W from the curve, but the DB row stores only `average_watts=193`, `normalized_power=null`, `power_curve=null`. The estimator picks 193 W because that's the only signal in the row. The 295 W is recoverable via watts-stream → mean-max → ×0.95 only.
+
+**Code change (deployed: NO, pushed locally only)**:
+
+- Removed the `device_watts !== true` filter at `supabase/functions/sync-strava-activities/index.ts:1252`.
+- Added an NP-threshold check (`avg/NP >= 120 W`) — strong enough to filter out commuter rides where Strava is genuinely estimating power from speed alone, but accepts real-meter rides whose flag Strava mislabeled.
+- Kept the 15-stream-per-sync budget and the NP-DESC ranking.
+
+**Deploy steps**:
+
+1. `supabase functions deploy sync-strava-activities --project-ref elnuiudfndsvtbfisaje`
+2. Wait for any active Strava 429 rate-limit window to clear.
+3. Trigger a manual backfill from the app (or wait for next launch — Mosaic auto-backfills on startup when conditions met).
+4. Reload review page; FTP should land at ~295 W with `confidence: 'high'` (the curve path).
+5. Mark ISSUE-156 ✅ FIXED in this file once the user confirms the 295 W lands.
+
+---
+
 ### ISSUE-155: Triathlon — per-discipline rawTSS routing for non-power-meter cyclists *(P3, 2026-04-30)*
 
 **Context**: `computeBikeTssFromHr` (HR-based bike TSS) and `computeSwimTss` (pace-based swim TSS) exist in `src/calculations/triathlon-tss.ts:71–86` and `:30–40` but are never called. Currently in tri mode, bike and swim activities don't reach per-discipline CTL because `rawTSS` computation is gated to running activities (`activity-matcher.ts:605`).
@@ -92,6 +486,232 @@ Note: we have had a persistence problem of open issues not being correctly logge
 - Result writes to `garminActuals.rawTSS` for tri mode (parallel to running)
 
 **Estimated**: ~2 hours. Tests should verify HR-only bike TSS values match the published Coggan zones.
+
+---
+
+### ISSUE-185: Triathlon — brick training should reduce the run-leg fatigue discount *(P2, 2026-05-08)*
+
+**Context**: Race prediction hard-codes `RUN_FATIGUE_DISCOUNT_70_3 = 5%` and `RUN_FATIGUE_DISCOUNT_IRONMAN = 11%` regardless of the athlete's brick history. The whole point of brick sessions is to reduce that bike-to-run fade — an athlete with 12 weeks of bricks should be markedly less affected than one with zero.
+
+**We already have**: `src/calculations/brick-detector.ts` counting brick sessions.
+
+**Proposed model**: `actualFatigueDiscount = baseDiscount × (1 - brickAdaptation)` where `brickAdaptation` scales with recent brick volume (e.g. last 8–12 weeks). Defensible per Millet & Vleck 2000 (brick-specific running economy adaptation).
+
+**Open questions before implementing**:
+- Cap on `brickAdaptation` (e.g. max 50% reduction in discount)? An IM-experienced triathlete still fades — never zero.
+- Window for "recent" — last 8 weeks of build, or rolling 12?
+- Volume metric — count of brick sessions, total brick-run minutes, or weighted (longer bricks > short ones)?
+
+**Files**: `src/calculations/race-prediction.triathlon.ts` (constants + discount application), `src/calculations/brick-detector.ts` (expose adaptation score). Update `docs/SCIENCE_LOG.md` with the Millet & Vleck citation and the constant calibration.
+
+---
+
+### ISSUE-186: Triathlon — open-water swim deficit not modelled *(P3, 2026-05-08)*
+
+**Context**: We use pool CSS as the swim pace anchor and apply a `swimType` multiplier (ocean/lake/etc.) on top. But the pool→open-water deficit is a real, separable physiological/skill effect: sighting losses, no walls/turns, contact, wetsuit drag. Veiga 2013 puts it at ~5% slower, varies heavily by athlete experience. Currently lumped into the climate-style factor.
+
+**Proposed model**: dedicated `openWaterAdjustment` scaled by athlete's recent open-water swim history (count + recency). Novice OW swimmer carries the full 5% penalty; experienced OW racer carries 1–2%.
+
+**Open questions**:
+- Detection — Strava sport `OPEN_WATER_SWIMMING` is reliable; do we also infer from venue/location data?
+- Adaptation curve — linear with sessions, or asymptotic (most gains in first 5–10 OW sessions)?
+
+**Files**: `src/calculations/race-prediction.triathlon.ts` swim-leg path, new helper in `src/calculations/swim-skill.ts` or extend existing. Citation: Veiga 2013.
+
+---
+
+### ISSUE-187: Triathlon — bike intensity factor should adapt to athlete experience *(P2, 2026-05-08)*
+
+**Context**: `RACE_INTENSITY_BY_DISTANCE = { '70.3': 0.78, ironman: 0.70 }` is fixed. Real IM bike pacing varies 0.65–0.80 IF depending on experience and strategy. A first-IM athlete pacing 0.78 will blow the run; an experienced one at 0.70 won't.
+
+**Two routes** (probe before implementing):
+- (a) **Ask** the user their pacing intent in race setup ("conservative / target / aggressive").
+- (b) **Infer** from `raceLog` IF distribution — first-timer defaults conservative, repeat racer matches their last race's IF.
+
+Probably (b) when history exists, fall back to (a) on first race.
+
+**Files**: `src/calculations/race-prediction.triathlon.ts`, race-setup UI for the prompt path.
+
+---
+
+### ISSUE-188: Triathlon — IM run leg uses blended VDOT, not run-specific *(P2, 2026-05-08)*
+
+**Problem**: `currentVdot = state.v` is the overall blended VDOT, pulled toward whatever signals dominate the blend. For triathletes, bike fitness can inflate VO2 via cross-training, but that doesn't translate fully to run-specific capacity. The IM marathon leg is then over-predicted.
+
+**Proposed**: a `runSpecificVdot` derived from run-only signals (PBs + recent run pace + run-derived HR-VDOT) used for the run leg of triathlon prediction. Bike/swim legs continue to use their own fitness anchors.
+
+**Files**: `src/calculations/vdot.ts` (or new `vdot-run-only.ts`), `src/calculations/race-prediction.triathlon.ts` run-leg path.
+
+**Mirror check**: running mode already uses run signals only — this brings tri-mode run-leg in line.
+
+---
+
+### ISSUE-189: Triathlon — verify aero/equipment inputs reach the headline forecast *(P1, 2026-05-08)*
+
+**Context**: The bike-aero modal collects rider weight, bike weight, position, tire type, course profile, custom CdA. The bike physics solver uses them via `paramsFromProfile`. But `predictTriathlonRace` re-derives bike speed via `estimateBikeSpeed`, which sometimes uses skill-slider fallbacks.
+
+**Concern**: a 15W-equivalent CdA improvement that the modal predicts at –5 min should hit the headline forecast at –5 min. We have not audited whether all the modal-collected inputs flow through every code path.
+
+**Action**:
+1. Trace every input from the bike-aero modal to its consumer in `predictTriathlonRace` / `estimateBikeSpeed`.
+2. Confirm the modal's local prediction and the headline forecast use the same physics model with the same parameters.
+3. Add a regression test: same inputs into the modal preview and the headline must produce the same bike-leg time within rounding.
+
+**Files**: `src/ui/triathlon/bike-aero-modal.ts`, `src/calculations/bike-physics.ts`, `src/calculations/race-prediction.triathlon.ts`, `src/calculations/cycling-vo2.ts`.
+
+---
+
+### ISSUE-190: Triathlon — heat acclimatisation should discount climate penalty *(P2, 2026-05-08)*
+
+**Context**: Currently the climate factor is a flat venue penalty regardless of where the athlete trains. Per Lorenzo & Cheuvront 2010, 10–14 days of heat acclimatisation delivers ~3–5% performance preservation in heat. A user training in Singapore racing IM Vietnam shouldn't carry the same 27-min climate penalty as someone training in Stockholm.
+
+**Proposed model**: a `trainingClimate` signal compared against `raceClimate`. If the athlete's recent training environment matches or exceeds the race environment in heat/humidity, discount the climate penalty (cap at ~50% reduction).
+
+**Source for `trainingClimate`**:
+- (a) Strava activity weather data (temp on most rides) — preferred, no user friction.
+- (b) Onboarding question — fallback for athletes without temp-tagged history.
+
+**Files**: `src/calculations/race-prediction.triathlon.ts` climate-factor application, new helper to derive `trainingClimate` from activity history. Citation: Lorenzo & Cheuvront 2010.
+
+---
+
+### ISSUE-191: Triathlon — credit marathon-PB depth on IM run leg *(P3, 2026-05-08)*
+
+**Context**: Two athletes with the same blended VDOT can have very different marathon experience — a 3:50 marathoner and a 2:50 marathoner. The 2:50 athlete handles IM marathon (essentially marathon at ~89% intensity) very differently — they have headroom and pacing experience. Currently we treat them identically.
+
+**Proposed**: a marathon-experience multiplier on the IM run leg — credit for sub-3:30 marathon PBs, more for sub-3:00. Smooth function, not a step.
+
+**Open questions**:
+- Curve shape — linear with PB time, or stepped tiers?
+- Recency — does a 2:50 from 5 years ago still count? Likely partial credit decays with time since PB.
+- Does this apply to 70.3 run leg too, or only IM where the duration is the differentiator?
+
+**Files**: `src/calculations/race-prediction.triathlon.ts` IM run-leg path, reads existing marathon PBs from `s.pbs`.
+
+---
+
+### ISSUE-192: Hyrox — per-station physiology fallback when historic race time is missing or stale *(P3, 2026-05-08)*
+
+**Context**: Sister issue to the staleness-blend wiring shipped 2026-05-08 (which applied existing `bandWeight` / `splitsWeight` from `hyrox-staleness.ts` to the predicted time). When a user has no calibrated benchmarks AND no recent race time, the prediction collapses to band-keyed seed times. We have richer physiology signals (VDOT, FTP, MTL CTL, Strava CTL) and known per-station training loads (sled-push reps/week, wall-ball cadence drift, erg paces) that could re-anchor the per-station estimates rather than defaulting to population averages.
+
+**Today's coverage** (already wired):
+- Run pace from VDOT — `src/calculations/hyrox-run-pace.ts:65-95` (overrides user-entered when faster)
+- VDOT + MTL CTL feed staleness mitigation — `src/calculations/hyrox-staleness.ts:70-92`
+- Strava `ctlBaseline` feeds projection time — `src/calculations/race-projection.hyrox.ts`
+
+**Gap**: stations other than running have no physiology fallback. `hyrox-station-potential.ts` exists but produces *improvement targets*, not absolute station times.
+
+**Open design questions** (must answer before implementing — no made-up numbers per CLAUDE.md):
+1. Which physiology signal predicts which station? Candidates per literature:
+   - **Sled push / sled pull**: lower-body strength × bodyweight ratio. Need a strength signal — gym 1RM if logged, or proxy from `weightSessionsPerWeek` × duration?
+   - **Wall balls / burpees**: cardiac fitness signal (VO2max, MAS, lactate threshold).
+   - **Sandbag lunges**: lower-body endurance + grip — proxy from MTL CTL?
+   - **Farmer carry**: grip endurance × bodyweight — no current signal.
+   - **Ski erg / row erg**: directly from FTP-equivalent on the erg if available; otherwise from running threshold pace.
+2. **Confidence weighting**: a sled-push estimate from gym log (high confidence) vs from `bricksPerWeek` proxy (low confidence) — how do we surface that without misleading the user?
+3. **Calibration data**: do we have research-grade mappings from VDOT → wall-ball time, FTP → row-erg time? If not, this needs literature work first.
+4. **Integration**: when does the physiology fallback win vs the band seed? Probably: only when confidence ≥ medium AND signal is present. Otherwise stick with the band seed.
+
+**Why P3, not P2**: the staleness blend (shipped today) already partially addresses the user's concern by blending stored band → VDOT-implied band when stale. A user with strong VDOT will see seeds shift toward the implied band's seeds. The full per-station physiology fallback is a refinement, not a fix to a broken prediction.
+
+**Files involved when this is built**: `src/calculations/race-prediction.hyrox.ts` (per-station fallback path), new helper(s) in `src/calculations/hyrox-station-physiology.ts`, citations into `docs/SCIENCE_LOG.md`.
+
+---
+
+### ISSUE-193: Hyrox — per-station detail view with sparklines *(P2, 2026-05-08)* — **🟡 code-complete pending in-app confirmation**
+
+**Context**: Tier 1 of the per-station UX work shipped 2026-05-08 — `stationBenchmarkHistory` field, append-on-test wiring, backfill, inline percentile, PR badge, staleness caption. Foundation is in place but no dedicated drill-down exists yet. Tapping a station row should open a detail page showing: sparkline of historical test times for the format, list of all entries with dates, current best/worst/average, comparison to band median.
+
+**Spec**:
+- New view at `src/ui/hyrox/station-detail-view.ts`
+- Trigger from a tap on `renderStationsTable` rows (forecast-view.ts:99-128)
+- Sparkline reads `getStationHistory(state, station)` filtered by current format
+- Show: best time + date, current/latest, improvement from first → latest, percentile evolution if percentiles can be retro-computed
+- "Test again" CTA at bottom navigates to plan view + un-dismisses benchmark card (mirrors the forecast banner pattern)
+
+**Files**: `src/ui/hyrox/station-detail-view.ts` (new), `src/ui/hyrox/forecast-view.ts:99-128` (wire row tap), reuse helpers from `src/calculations/hyrox-station-history.ts`.
+
+**Estimated**: ~2 h.
+
+---
+
+### ISSUE-194: Hyrox — weakest-link insight (highest-ROI station) *(P2, 2026-05-08)* — **🟡 code-complete pending in-app confirmation**
+
+**Context**: User asked about surfacing where the highest gain is. The skills-analysis panel in `src/ui/hyrox/forecast-view.ts:218-260` shows top strengths and limiters by percentile, but doesn't combine percentile with **time contribution** to the total. A sled push at p30 contributing 4 minutes to the total finish is a bigger lever than burpees at p25 contributing 90 seconds — the percentile tells you "weakness", time-share tells you "size of the prize".
+
+**Proposed model**:
+- For each station, compute `gainableSec = adjustedSec × (1 − bandMedianRatio)` — how many seconds you'd save by closing the gap to the band median (or some other target percentile).
+- Surface the top 1-2 stations by `gainableSec` as "Working on sled push has the highest forecast impact: ~45 sec gainable to band median."
+- Caveat: gain potential depends on training adaptability. A station the athlete has been at p30 on for 12 months may be a structural ceiling, not a low-hanging fruit. Could weight by improvement rate from `stationBenchmarkHistory` once enough data exists.
+
+**Open questions**:
+- Target percentile for the gain calculation: band median (p50)? Or "next tier up" (advance from p30 → p50)?
+- How to handle stations the user can't access (sled at home gym): exclude from the rec?
+- Surface as a card on the forecast view, or as a sub-section of skills analysis?
+
+**Files**: `src/calculations/hyrox-weakest-link.ts` (new), `src/ui/hyrox/forecast-view.ts` (surface in skills analysis or new card).
+
+**Estimated**: ~1.5 h.
+
+---
+
+### ISSUE-195: Hyrox — race-pace vs fresh-test fade visualisation *(P3, 2026-05-08)* — **🟡 Phase 1 code-complete pending confirmation, Phase 2 still gated on race-result import**
+
+**Context**: User asked: "we would need to track fitness decay across the race right?" — yes. The benchmark card stores fresh-test times (half distance × 2), but the forecast applies in-race fatigue separately via run-leg multipliers. The athlete-specific decay across the full race is not measured today; we use a band-scaled fatigue rate (`PER_STATION_FATIGUE_RATE_BY_BAND`).
+
+**Proposed feature**:
+- Per station, show the fresh-test time alongside the predicted race-day time. Format: "Fresh: 2:00 · Race-day: 2:15 · 7.5% fade." (dropped em-dashes per CLAUDE.md UI rules).
+- This is purely informational — surfacing what's already computed, not new math.
+- Connects to a future capability: when an athlete races a full Hyrox, extract per-station times from the result and compare to their fresh tests. Their personal `fadePerStation` factor replaces the band-scaled assumption.
+
+**Phase 1**: just surface the fade % on the per-station detail view (ISSUE-193). Reads `line.adjustedSec` (post-fatigue from run-leg multipliers) vs the fresh test time from history.
+
+**Phase 2**: extract per-station race times when a race result lands (currently only total race time is logged). Compute personal `fadeFactor[station]`. Replace the band-scaled fatigue rate for athletes with race history. Needs a race-result entry path (out of scope until logged race results carry per-station splits).
+
+**Files**: `src/ui/hyrox/station-detail-view.ts` (Phase 1, when ISSUE-193 ships), future `src/calculations/hyrox-personal-fade.ts` (Phase 2).
+
+**Estimated**: ~1 h for Phase 1 once 193 ships. Phase 2 gated on race-result-import design.
+
+---
+
+### ISSUE-196: Hyrox — goal-back-calculation (target time → required station times) *(P3, 2026-05-08)* — **🟡 code-complete pending in-app confirmation**
+
+**Context**: Inverts the prediction. Given a target finish time (e.g. "I want to break 75 minutes"), back-calculate the per-station times the athlete needs to achieve. Useful for setting test targets and structuring training around specific weaknesses.
+
+**Proposed model**:
+- Take the current prediction's per-station, run-leg, and roxzone breakdown.
+- Compute the gap: `gainNeeded = currentPredictionSec − targetSec`.
+- Distribute the gain across stations weighted by current ranking (lower percentile = more headroom) and time contribution. Avoid suggesting impossible station times (cap at the band's elite seed).
+- Surface as: "To break 75 min, you need wall balls under 1:55 (currently 2:10) and sled push under 1:30 (currently 1:42). Other stations stay near current."
+
+**Open questions**:
+- How aggressive to be on the distribution? Equal-time-share gain split is too naive (some stations have more headroom).
+- Surface where? Optional "set a target" CTA on the forecast view → opens a modal with goal slider → shows back-calc.
+- Validation: predicted times after applying the back-calc should sum to roughly the target. Edge case: if target is unrealistic (faster than band's elite seed), surface explicitly rather than silently clipping.
+
+**Files**: `src/calculations/hyrox-goal-back-calc.ts` (new), `src/ui/hyrox/goal-modal.ts` (new), surface CTA in `src/ui/hyrox/forecast-view.ts`.
+
+**Estimated**: ~3 h. Worth probing the design before building — multiple reasonable interpretations.
+
+---
+
+### ISSUE-197: Hyrox — within-station fatigue model (rep/segment decay) *(P3, 2026-05-08, blocked on data)*
+
+**Context**: Currently each station is a single time. In reality wall balls slow over the 100 reps, sled push slows on later 25m segments, sandbag lunges slow as form breaks down. Within-station decay is real but not modelled.
+
+**Why this is blocked, not just deferred**: per CLAUDE.md "no made-up numbers" rule, we can't invent the constants. We'd need either:
+1. Published HYROX rep-decay data (not aware of any).
+2. Coach-derived heuristics with confidence flagged as low.
+3. Empirical data from device sensors — wall-ball cadence from accelerometer, sled-push split times from manual segment markers, etc.
+
+**What this would unlock once data exists**:
+- More accurate per-station predictions (a 100-rep wall-ball block isn't 100 × first-rep pace).
+- Visualisation of "where the seconds bleed" within a station.
+- Coaching insights — "your wall ball cadence drops 12% over the last 25 reps, focus on cadence consistency".
+
+**Files when unblocked**: `src/calculations/hyrox-within-station-fatigue.ts` (new), feeds into `race-prediction.hyrox.ts` station-time computation, surfaces in detail view.
+
+**Estimated**: blocked — data-gathering first.
 
 ---
 
@@ -164,15 +784,11 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
-### ISSUE-138: Recovery workout tier added (easy → recovery downgrade) *(P2, provisional constants — 2026-04-15)*
+### ✅ ISSUE-138: Recovery workout tier added (easy → recovery downgrade) *(P2, fixed 2026-05-06)*
 
 **Problem**: When remaining runs are all already at or near the running floor and all easy, the suggester has no lever to absorb excess load — Reduce returns empty.
-**Fix applied**: Introduced a new `'recovery'` `WorkoutType` as the bottom of the intensity ladder. `downgradeType` chain extended: `… → marathon_pace → easy → recovery`. Easy distance-reduction branch now falls back to an easy → recovery conversion when the floor blocks a km cut (preserves distance, reduces load). Recovery counts toward `floorKm` at 1.0x (simplest — movement is movement).
-**Wiring**: Type def (`types/training.ts`), load profile (`constants/workouts.ts`), pace in `workouts/load.ts`, HR zone (`heart-rate.ts` → Z1), matcher pace (`activity-matcher.ts`), renderer colour (`renderer.ts`).
-**Provisional constants flagged for review** (written while Tristan was away; see `docs/SCIENCE_LOG.md`):
-  - `LOAD_PROFILES.recovery = { aerobic: 0.98, anaerobic: 0.02, base: 0.99, threshold: 0.01, intensity: 0 }` — extrapolated from easy (0.95/0.05/…).
-  - Pace multiplier `baseMinPerKm * 1.12` — ≈ +43 s/km on a 6:00/km easy base. Middle of the +30 to +60 s/km literature range for recovery runs. Tristan to confirm or override.
-**Status**: Type-safe, all cross-training tests pass. Needs on-device test (easy-only week that gets pushed over target — expect Reduce to offer easy → recovery) and sign-off on the two provisional constants.
+**Fix**: `'recovery'` is the bottom of the intensity ladder (`easy → recovery` in `downgradeType`). In `buildReduceAdjustments`, the easy-run branch now falls back to an `easy → recovery` intensity downgrade whenever distance cuts are blocked (floor-constrained OR run already at `MIN_EASY_KM`). `paceForType` and `paceLabelForType` in `applyAdjustments` handle `'recovery'` (pace = easy × 1.12; label = "recovery pace"). Removed the `if (workout.t !== 'easy')` guard that was blocking the type update. All 13 cross-training tests pass, typecheck clean.
+**Constants confirmed**: `LOAD_PROFILES.recovery = { aerobic: 0.98, anaerobic: 0.02 }`, pace `× 1.12`. Cycling/swim extension deferred — lower priority since cycling load is already runSpec-discounted 0.55×.
 
 ---
 
@@ -186,13 +802,9 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
-### ISSUE-131: Resting HR used for iTRIMP should be a rolling average, not today's snapshot *(P2)*
+### ✅ ISSUE-131: Resting HR used for iTRIMP should be a rolling average, not today's snapshot *(P2)*
 
-**Problem**: `s.restingHR` holds a single daily snapshot value. On days where resting HR spikes (illness, stress, poor sleep), iTRIMP is computed with an inflated resting HR, which compresses HRR and understates load for all activities that day.
-**Root cause**: `calculateITrimpFromSummary` receives `s.restingHR` directly. There is no smoothing applied before the value enters the formula.
-**Desired behaviour**: Use a 7-day rolling median (or EMA) of `restingHR` values from `s.physiologyHistory` as the baseline for iTRIMP computation. Fall back to `s.restingHR` if insufficient history.
-**Impact**: Affects every HR-based TSS figure — activity detail, fitness model CTL/ATL, ACWR, strain view.
-**Files**: `src/calculations/activity-matcher.ts` (`resolveITrimp`), `src/main.ts` (heal pass), `src/calculations/trimp.ts` (no change needed — consumer responsibility).
+Added `computeRollingRestingHR(physiologyHistory, fallback)` in `activity-matcher.ts`: takes the last 7 days of `physiologyHistory` entries with a valid `restingHR`, computes the median (≥3 readings required; falls back to raw snapshot if fewer). Both `matchAndAutoComplete` and `healMissingITrimp` now compute `rhrBaseline` once at entry and pass it to every `resolveITrimp` and `calculateITrimpFromSummary` call instead of `s.restingHR`. `deriveRPE` and `computeHRCalibratedVdot` still use the raw snapshot (lower sensitivity, separate concern). 1480/1480 tests pass.
 
 ---
 
@@ -387,15 +999,9 @@ All items in this section have been confirmed working on device.
 
 ---
 
-### ISSUE-133: Alpine skiing (and other sports) shows "Estimated" TSS — iTrimp not computed from Strava HR *(P2)*
+### ✅ ISSUE-133: Alpine skiing (and other sports) shows "Estimated" TSS — iTrimp not computed from Strava HR *(P2)*
 
-**Problem**: Strava HR data is available for alpine/backcountry skiing sessions, but the matching screen and activity log show "Estimated" TSS rather than "HR-based". The TSS falls back to `durationMin × TL_PER_MIN[rpe]`, which overestimates load for long ski sessions (~500 TSS for a 6h ski vs the correct ~30–50 iTrimp-based TSS).
-
-**Root cause**: `resolveITrimp` in `activity-matcher.ts` computes iTRIMP from `row.avg_hr + row.duration_sec` when HR is available. But the Strava edge function may not be returning `avg_hr` for non-running activities, or the computed `iTrimp` field from the edge function is null for ski/cross-training activity types.
-
-**Effect**: Total week Signal B TSS (shown as 663 / 310 on home view) is significantly overestimated for weeks with high ski volume, and the TSS bar looks alarming when it may be accurate.
-
-**Fix needed**: Verify that `avg_hr` is returned from the edge function for ski activities, and that `resolveITrimp` correctly falls back to `calculateITrimpFromSummary` when `row.iTrimp = null` but `row.avg_hr` is populated.
+Verified stale (2026-05-07): the edge function stores `avg_hr` for all activity types (not just running). `resolveITrimp` in `activity-matcher.ts` already falls back to `calculateITrimpFromSummary(avg_hr, duration, rhrBaseline, maxHR)` for any sport when `row.iTrimp` is null. HR-based TSS should be computed correctly for skiing/cross-training. No code change needed; if the "Estimated" label still appears, it means `avg_hr` was null for that specific activity (no HR device worn), which is correct behaviour.
 
 ---
 
@@ -769,10 +1375,8 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 
 ---
 
-### ISSUE-117: "Preview week" copy should say it will be based on last week *(P2)*
-**Symptom**: When a user looks ahead at a future plan week, the UI implies the week is already fully planned. In reality, durations, load, and pacing are generated as a factor of the preceding week's actual load and effort.
-**Design**: Change "Preview" language to something like "Based on last week — your plan adapts as you train." Add a sub-label on future week headers: "Estimated from last week's load." Remove any language that implies exact sessions are fixed in advance.
-**Files**: `src/ui/plan-view.ts` (week header, preview badge).
+### ✅ ISSUE-117: "Preview week" copy should say it will be based on last week *(P2, fixed 2026-05-11)*
+Changed the future-week banner from "Draft. Final workouts depend on the preceding week's performance." to "Estimated from last week's load. Sessions and distances adjust as you train." `plan-view.ts:2602`.
 
 ---
 
@@ -783,13 +1387,8 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 
 ---
 
-### ISSUE-119: Onboarding should be clearer about what the app actually does *(P2)*
-**Symptom**: New users finish setup without understanding the core promise: the app builds a personalised plan from their actual training history, adapts week to week based on how they train, and uses their watch data to adjust load. This is never stated plainly.
-**Design**: Add a single "Here's how it works" screen (3 bullets max) early in onboarding — before asking for Strava/Garmin connection. E.g.:
-- "Your plan is built from your real training history — not a generic template."
-- "Each week adapts based on how hard you actually trained."
-- "Connect Strava or Garmin so we can see your runs."
-**Files**: `src/ui/wizard/` (add a step before or during the connection prompt).
+### ISSUE-119: Onboarding "how it works" screen — deferred *(P3, 2026-05-11)*
+The current wizard already gates Strava connection behind goal/name setup and the review step shows what was inferred from history. A standalone "how it works" screen at wizard entry is standard onboarding padding — the highest-friction moment to add text. Better addressed via first-use contextual tooltips inside the app when/if retention data shows users are confused. Downgraded to P3.
 
 ---
 
@@ -1135,10 +1734,9 @@ suggest adding a session. Non-blocking nudge card.
 
 ---
 
-### ISSUE-91: Plan restart generates a different running profile — nondeterministic *(P2)*
-**Symptom**: Restarting the plan (clearing state and going through wizard again) produces a different running profile and plan structure than the first time, even with the same inputs.
-**Root cause**: Unknown — wizard initialisation may use non-deterministic logic or rely on stale state not fully cleared.
-**Files**: `src/ui/wizard/`, `src/state/persistence.ts`, plan generation logic.
+### ✅ ISSUE-91: Plan restart generates a different running profile — nondeterministic *(P2)*
+
+Verified stale (2026-05-07): no `Math.random` anywhere in plan generation or wizard initialisation (only in ID generation, which is correct). Any apparent non-determinism on restart was almost certainly a Strava backfill timing artifact — different Strava history landed on the second run, producing a different VDOT/CTL baseline. The plan engine itself is deterministic given the same inputs. No code change needed.
 
 ---
 
@@ -1170,6 +1768,7 @@ Today's planned workout (distance, target pace, session description) is passed i
 **Symptom**: The load figure on activity cards is a single number (e.g. "93 TSS") with no breakdown. Users want to see e.g. "40 TSS Running / 53 TSS Tennis" to understand where the load came from.
 **Fix**: Add a sport-type breakdown row to the activity load card when the week contains multiple sport types.
 **Files**: `src/ui/activity-review.ts`, `src/ui/excess-load-card.ts`.
+**Note (2026-05-11)**: The excess-load card is a narrow amber banner — fitting a sport breakdown in it is a design question. The activity review flow already shows each activity individually so the marginal value is lower than it looks. Parked for `[ui-ux-pro-max]` session.
 
 ---
 
@@ -1241,7 +1840,7 @@ Both views now read from the same computation path.
 | ✅ | ISSUE-99: Plan page load ≠ Stats page load | Calc | Small | High |
 | ✅ | ISSUE-100: Injury risk label "Low" vs "Manageable" mismatch | Copy | Small | Medium |
 | P2 | ISSUE-90: LT Threshold setup guidance + Garmin pull | Setup | Medium | Medium |
-| P2 | ISSUE-91: Plan restart nondeterministic profile | Wizard | Small | Medium |
+| ✅ | ISSUE-91: Plan restart nondeterministic — stale, no Math.random in plan gen | — | — | — |
 | ✅ | ISSUE-93: 8W/16W/All tabs confusing | Stats | Small | Low |
 | ✅ | ISSUE-95: Injury icon inconsistency — no emoji found, clean | UI | Small | Low |
 | ✅ | ISSUE-96: Start Run goes to blank record screen | Home | Small | Medium |
@@ -1307,12 +1906,9 @@ Both views now read from the same computation path.
 
 ---
 
-### ISSUE-128: Sleep analysis should use 7-day rolling window, not today's snapshot *(P2)*
+### ✅ ISSUE-128: Sleep analysis should use 7-day rolling window, not today's snapshot *(P2)*
 
-**Problem**: The sleep view and any sleep-derived signals (sleep score, debt, recovery) currently reflect only tonight's / last night's sleep. A single night is noisy — one unusually short night tanks the score, one good night looks like full recovery.
-**Root cause**: Sleep analysis is computed from the latest `physiologyHistory` entry rather than averaging across the recent window.
-**Fix**: All sleep metrics shown to the user (sleep duration, score, debt, HRV trend) should be derived from a 7-day rolling average. Single-night data can still appear as a detail, but the headline figures and any coaching decisions should use the rolling window.
-**Files**: `src/calculations/sleep-insights.ts`, `src/ui/sleep-view.ts`, `src/ui/home-view.ts` (sleep card)
+Verified stale (2026-05-07): `sleep-view.ts` already reads `physiologyHistory.slice(-7)` for the 7-day average score and `physiologyHistory.slice(-30)` for the 30-day duration baseline. The readiness model accepts `sleepHistory` and computes acute/chronic deltas from it. No code change needed.
 
 ---
 
@@ -1416,6 +2012,34 @@ Both views now read from the same computation path.
 
 ---
 
+### ISSUE-184: Checkpoint week TT workout content + deload weeks in long base *(P3, future build)*
+**What**: Two follow-ups from the 2026-05-11 plan-phasing rewrite:
+1. **Checkpoint TT workout content**: For plans ≥33 weeks, `computePlanPhases` flags the last peak week of cycle 1 with `wk.checkpoint = true`. The Phase Timeline labels it "Checkpoint", but `generateWeekWorkouts` currently produces standard peak-week content. Needs a TT-flavoured week (Mon-Wed easy / Thu opener / Sat 5K or 10K hard / Sun easy) and a post-TT hook that auto-refreshes VDOT, CSS, FTP from the result so cycle 2 calibrates against measured rather than predicted fitness.
+2. **Deload weeks in long base**: Plans 24+ weeks can have base blocks 15+ weeks long. A coach would deload every 4th week (~30% volume drop) to avoid monotony. The phase label stays "Base"; only the volume drops. Likely handled in `planWeekSessions` / `generator.ts` volume modulation, not phase tagging.
+**Why deferred**: No current user has a 33+ week plan; checkpoint weeks fall back to standard peak content for now. Deload-in-base same logic for 24+ week plans. Build when a real long plan is set up.
+**Files** (when ready): `src/workouts/generator.ts` (`generateWeekWorkouts` checkpoint branch), `src/workouts/plan_engine.ts` (deload-in-base modulation), `src/main.ts` (post-TT marker refresh trigger).
+
+---
+
+### ISSUE-183: HYROX session generator is a single Run by Feel shortcut *(P3, future build)*
+**What**: HYROX mode's `+ Add session` button (`src/ui/hyrox/plan-view.ts:113`) jumps straight to Run by Feel via `openSessionGenerator()` short-circuit (`src/ui/session-generator.ts:201`). No way to ad-hoc add a station block, a brick session, or a structured run from the picker.
+**Why deferred**: Single-button shortcut was the deliberate V1 call (2026-05-07). Tristan parked the broader picker until usage shows the rough edge.
+**When to revisit**: If users start asking for ad-hoc HYROX-specific shapes (sled push intervals, compromised-running blocks, brick run-after-station). Likely needs a 2-discipline picker — Run / Station — with kind sub-pickers under each (run shapes already exist in `intentToWorkout`; station shapes need a new builder, similar to `generateBikeSession`).
+**Files** (when ready): `src/ui/session-generator.ts` (new HYROX-mode flow), `src/workouts/hyrox/` (likely a new `station.ts` builder), `src/ui/hyrox/plan-view.ts` (button label might change).
+
+---
+
+### ISSUE-153: RPE rating bias for no-HR users — calibration needed *(P3, future build)*
+**What**: After the 2026-05-06 cross-training RPE work, no-HR users' rated RPE drives `aerobic`/`anaerobic` load on adhoc workouts (which feeds ACWR, recovery countdown, sleep insights, tri overload). For users who systematically over- or under-rate, this introduces consistent drift in one direction:
+- Always-high raters (9-10) → inflated load → false ACWR climb → softer plan → under-training.
+- Always-low raters (3-4) → understated load → ACWR low → potential under-recovery and injury risk.
+**HR users are unaffected** — the iTrimp guard short-circuits before any RPE-derived load mutation. Affects only no-HR cross-training, which is a small subset.
+**Why deferred**: Cheap hedges (cap RPE-derived TSS at 1.5× duration-at-neutral, soft floor at 0.5×) require made-up constants without data. Right next move is observability before mitigation: log RPE-derived load alongside iTrimp-derived load wherever both signals exist, build a sample, then compute personal calibration ratios.
+**Mitigations the system already has**: HRV/sleep/RHR feed `recoveryAdj` (`fitness-model.ts:1573-1576`) which can bump load up to 30% on objectively bad-recovery days, independent of what the user rated. So the worst overtraining cases get caught even if rating is consistently low.
+**Files** (when ready): `src/calculations/fitness-model.ts` (calibration computation), `src/calculations/activity-matcher.ts` (apply calibration to RPE-derived TSS).
+
+---
+
 ### ISSUE-132: Apple Watch — extend HealthKit plugin for advanced metrics *(P3, future build)*
 **What**: `@capgo/capacitor-health` does not expose several HealthKit data types that Apple Watch captures and Garmin doesn't (or does worse). These need a plugin contribution or fork to access.
 **Data to add**:
@@ -1437,7 +2061,7 @@ Both views now read from the same computation path.
 | P3 | ISSUE-109: Plan explainability — workout why | Medium | High |
 | P3 | ISSUE-110: Race narrative — what it takes to go faster | Medium | High |
 | P3 | ISSUE-113: Shareable moments | Medium | Medium |
-| P2 | ISSUE-128: Sleep analysis — 7-day rolling window, not today's snapshot | Low | High |
+| ✅ | ISSUE-128: Sleep analysis 7-day rolling — stale, already implemented | — | — |
 | P3 | ISSUE-127: REM sleep analysis — stage breakdown, trend, training link | Medium | High |
 | P3 | ISSUE-132: Apple Watch advanced metrics (temp, power, form, SpO2) | Large | High |
 

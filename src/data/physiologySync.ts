@@ -120,8 +120,16 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     if (vo2Value != null) {
       result.vo2 = vo2Value;
-      s.vo2 = vo2Value;
-      changed = true;
+      // Accept any increase. Accept a decline only if it's ≤ 5 points — a larger
+      // overnight drop is almost always a Garmin data glitch, not real detraining.
+      const currentVo2 = s.vo2 ?? 0;
+      if (currentVo2 === 0 || vo2Value >= currentVo2 || (currentVo2 - vo2Value) <= 5) {
+        s.vo2 = vo2Value;
+        s.vo2UpdatedAt = new Date().toISOString().slice(0, 10);
+        changed = true;
+      } else {
+        console.warn(`[PhysiologySync] Ignored VO2max drop ${currentVo2} → ${vo2Value} (>${5} point drop, likely bad data).`);
+      }
     } else if (s.vo2 != null && (rows.length > 0 || hasLatestPhysio)) {
       // Sync ran successfully (we got rows or a latestPhysio row back) but
       // userMetrics has not delivered a running-VO2 value. Clear any stale
@@ -131,6 +139,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       // response (rate limit, network blip).
       console.log(`[PhysiologySync] Clearing stale s.vo2=${s.vo2} — physiology_snapshots has no vo2_max_running for this account`);
       s.vo2 = undefined as unknown as number;
+      s.vo2UpdatedAt = undefined;
       changed = true;
     }
 
@@ -149,11 +158,16 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       changed = true;
     }
 
-    // Use all-time peak HR from the envelope (queried across all garmin_activities)
+    // Max HR is a physiological ceiling — only raise, never lower.
+    // A value from a low-intensity or wrist-sensor session is not the athlete's max.
     if (data.maxHR != null && data.maxHR > 0) {
       result.maxHR = data.maxHR;
-      s.maxHR = data.maxHR;
-      changed = true;
+      if (data.maxHR > (s.maxHR ?? 0)) {
+        s.maxHR = data.maxHR;
+        changed = true;
+      } else if (s.maxHR != null && data.maxHR < s.maxHR) {
+        console.warn(`[PhysiologySync] Ignored lower maxHR=${data.maxHR} (current=${s.maxHR}). Max HR can only increase.`);
+      }
     }
 
     // LT pace: prefer the date-windowed latest, fall back to latestPhysio (all-time)

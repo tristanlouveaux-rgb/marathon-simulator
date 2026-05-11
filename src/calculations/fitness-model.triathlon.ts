@@ -46,10 +46,10 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
   const disciplines: Discipline[] = ['swim', 'bike', 'run'];
 
   // Accumulate weighted sums per discipline for CTL (42d) and ATL (7d).
-  const acc: Record<Discipline, { ctlSum: number; atlSum: number }> = {
-    swim: { ctlSum: 0, atlSum: 0 },
-    bike: { ctlSum: 0, atlSum: 0 },
-    run:  { ctlSum: 0, atlSum: 0 },
+  const acc: Record<Discipline, { ctlSum: number; atlSum: number; directCount: number }> = {
+    swim: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    bike: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    run:  { ctlSum: 0, atlSum: 0, directCount: 0 },
   };
 
   // Combined CTL (and ATL) is the raw EMA across ALL activities without
@@ -70,6 +70,8 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
       const contribution = c.rawTSS * w;
       acc[d].ctlSum += contribution * ctlDecay;
       acc[d].atlSum += contribution * atlDecay;
+      // Only count as a direct activity when this sport IS this discipline (weight 1.0)
+      if (w === 1.0) acc[d].directCount++;
     }
 
     // Combined: raw contribution at full weight (no matrix). Every activity
@@ -91,13 +93,13 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
 }
 
 function finaliseFitness(
-  sums: { ctlSum: number; atlSum: number },
+  sums: { ctlSum: number; atlSum: number; directCount: number },
   normalise: (sum: number, tau: number) => number
 ): PerDisciplineFitness {
   const ctl = Math.round(normalise(sums.ctlSum, CTL_TAU_DAYS) * 10) / 10;
   const atl = Math.round(normalise(sums.atlSum, ATL_TAU_DAYS) * 10) / 10;
   const tsb = Math.round((ctl - atl) * 10) / 10;
-  return { ctl, atl, tsb };
+  return { ctl, atl, tsb, directCount: sums.directCount };
 }
 
 /**

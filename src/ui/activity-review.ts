@@ -88,7 +88,8 @@ function getWeekWorkoutsForReview() {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 }
 
@@ -250,11 +251,14 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
   const wk = s.wks?.[wkIdx];
   if (!wk?.garminPending?.length) return;
 
-  const isPreviousWeek = wkIdx < s.w - 1;
+  // Only weeks two or more back trigger the silent auto-log fallback. Last
+  // week's items can still be reviewed/re-matched from the home Recent list,
+  // so we open the full UI for wkIdx === s.w - 2 as well.
+  const isStalePreviousWeek = wkIdx < s.w - 2;
 
-  // Previous week: plan slots have passed — silently log all still-pending items as adhoc
+  // Stale previous week: plan slots have passed — silently log all still-pending items as adhoc
   // rather than showing the full review UI for a week the user can no longer affect.
-  if (isPreviousWeek) {
+  if (isStalePreviousWeek) {
     if (!wk.garminMatched) wk.garminMatched = {};
     for (const item of wk.garminPending) {
       if (wk.garminMatched[item.garminId] !== '__pending__') continue;
@@ -732,7 +736,7 @@ function renderCard(
       const prefix = match.confidence === 'high' ? 'Matches' : 'Possible match';
       matchHint = `<p class="text-xs mt-1" style="${color}">${prefix}: ${match.workoutName}</p>`;
     } else if (item.appType !== 'other') {
-      matchHint = `<p class="text-xs mt-1" style="color:var(--c-faint)">No planned session — will log as extra activity</p>`;
+      matchHint = `<p class="text-xs mt-1" style="color:var(--c-faint)">No planned session. Logged as extra activity.</p>`;
     }
   }
 
@@ -856,8 +860,29 @@ interface MatchedRunInfo {
   workoutId: string;
   workoutName: string;
   autoRpe: number;
+  /** Expected RPE from the planned workout (`rpe ?? r`). `null` for ad-hoc / unmatched activities — caption is hidden in that case. */
+  expectedRpe: number | null;
   distanceKm: number;
   durationMin: number;
+}
+
+/** Build a row entry for the RPE prompt from a matched activity. `plannedWorkout` provides the
+ *  expected RPE from the prescription (null = adhoc / no plan reference, caption hidden). */
+function buildRpeRow(
+  workoutId: string,
+  workoutName: string,
+  autoRpe: number,
+  plannedWorkout: { rpe?: number; r?: number } | null | undefined,
+  item: { distanceM?: number | null; durationSec: number },
+): MatchedRunInfo {
+  return {
+    workoutId,
+    workoutName,
+    autoRpe,
+    expectedRpe: plannedWorkout?.rpe ?? plannedWorkout?.r ?? null,
+    distanceKm: (item.distanceM ?? 0) / 1000,
+    durationMin: item.durationSec / 60,
+  };
 }
 
 function showRpePrompt(
@@ -881,37 +906,40 @@ function showRpePrompt(
 
   const rows = matchedRuns.map((run, i) => {
     const unitPref = getState().unitPref ?? 'km';
-    const dist = formatKm(run.distanceKm, unitPref);
     const mins = Math.round(run.durationMin);
+    // Hide distance for activities without meaningful distance (gym, strength, padel, etc.).
+    const meta = run.distanceKm > 0.1
+      ? `${formatKm(run.distanceKm, unitPref)} · ${mins} min`
+      : `${mins} min`;
+    const expectedCaption = run.expectedRpe != null
+      ? ` · Expected ${run.expectedRpe} (${RPE_LABELS[run.expectedRpe] ?? ''})`
+      : '';
     return `
       <div style="padding:12px 0;${i > 0 ? 'border-top:1px solid var(--c-border)' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
           <span style="font-size:13px;font-weight:600;color:var(--c-black)">${run.workoutName}</span>
-          <span style="font-size:11px;color:var(--c-muted)">${dist} · ${mins} min</span>
+          <span style="font-size:11px;color:var(--c-muted)">${meta}</span>
         </div>
         <div style="display:flex;align-items:center;gap:10px">
           <input type="range" min="1" max="10" step="1" value="${run.autoRpe}"
-                 data-wid="${run.workoutId}" class="rpe-slider"
-                 style="flex:1;accent-color:var(--c-black);height:4px">
+                 data-wid="${run.workoutId}" class="rpe-slider m-slider-glass"
+                 style="flex:1">
           <span class="rpe-val" data-wid="${run.workoutId}"
                 style="font-size:15px;font-weight:700;color:var(--c-black);min-width:20px;text-align:center">${run.autoRpe}</span>
         </div>
         <div class="rpe-label" data-wid="${run.workoutId}"
-             style="font-size:10px;color:var(--c-muted);margin-top:2px">${RPE_LABELS[run.autoRpe] ?? ''}</div>
+             style="font-size:10px;color:var(--c-muted);margin-top:2px"><span class="rpe-label-value">${RPE_LABELS[run.autoRpe] ?? ''}</span>${expectedCaption}</div>
       </div>`;
   }).join('');
 
   overlay.innerHTML = `
-    <div class="w-full max-w-sm" style="background:#FFFFFF;border:1px solid rgba(0,0,0,0.06);border-radius:20px;padding:22px;box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08)">
-      <p style="font-size:11px;color:var(--c-faint);letter-spacing:0.08em;margin:0 0 8px">LOG EFFORT</p>
-      <h3 style="font-size:18px;font-weight:500;color:var(--c-black);margin:0 0 6px;letter-spacing:-0.005em;line-height:1.25">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</h3>
-      <p style="font-size:13px;color:var(--c-muted);margin:0 0 14px;line-height:1.45">Rate perceived effort. 1 is very easy, 10 is maximum.</p>
+    <div class="w-full max-w-sm m-card rounded-2xl p-5" style="background:var(--c-surface)">
+      <h3 style="font-size:18px;font-weight:600;color:var(--c-black);margin:0 0 6px;letter-spacing:-0.005em;line-height:1.25">How hard did ${matchedRuns.length === 1 ? 'this' : 'these'} feel?</h3>
+      <p style="font-size:13px;color:var(--c-muted);margin:0 0 14px;line-height:1.45">Rate from 1 (very easy) to 10 (maximum). Ratings shape the load of future workouts.</p>
       ${rows}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:18px">
-        <button id="rpe-skip" style="height:46px;border-radius:23px;border:1px solid var(--c-border);
-                background:#FFFFFF;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer">Skip</button>
-        <button id="rpe-save" style="height:46px;border-radius:23px;border:none;
-                background:#0A0A0A;font-size:14px;font-weight:500;color:#FDFCF7;cursor:pointer;box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.1), 0 8px 22px -8px rgba(0,0,0,0.35)">Save</button>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:18px">
+        <button id="rpe-skip" style="height:44px;padding:0 18px;background:transparent;border:none;font-size:14px;font-weight:500;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Skip</button>
+        <button id="rpe-save" class="m-btn-glass m-btn-glass--inset" style="height:44px;min-width:120px">Save</button>
       </div>
     </div>`;
 
@@ -923,7 +951,7 @@ function showRpePrompt(
       const wid = slider.dataset.wid!;
       const val = parseInt(slider.value, 10);
       const valSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-val[data-wid="${wid}"]`);
-      const labelSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-label[data-wid="${wid}"]`);
+      const labelSpan = overlay.querySelector<HTMLSpanElement>(`.rpe-label[data-wid="${wid}"] .rpe-label-value`);
       if (valSpan) valSpan.textContent = String(val);
       if (labelSpan) labelSpan.textContent = RPE_LABELS[val] ?? '';
     });
@@ -935,6 +963,26 @@ function showRpePrompt(
         const wid = slider.dataset.wid!;
         const val = parseInt(slider.value, 10);
         wk.rated[wid] = val;
+
+        // Refresh adhoc load from the rated RPE — but ONLY when no HR signal exists.
+        // HR users (most): the iTrimp/aerobicEffect from Garmin/Strava is more reliable
+        // than self-rated RPE for steady-state activities, so we never overwrite it.
+        // No-HR users (manual entries, watches without HR): the auto-derived RPE was
+        // a guess; the user's rating is the only intensity signal we have, so it should
+        // drive the load that feeds ACWR (Signal A/B), recovery countdown, and tri overload.
+        const adhoc = wk.adhocWorkouts?.find(w => w.id === wid);
+        if (!adhoc) return; // Not an adhoc — planned workout, leave plan-prescribed load alone.
+        const actual = wk.garminActuals?.[wid];
+        const hasHrSignal =
+          (actual?.iTrimp != null && actual.iTrimp > 0) ||
+          (actual?.aerobicEffect != null && actual.aerobicEffect > 0);
+        if (hasHrSignal) return; // HR-derived load is canonical; rating is informational only.
+
+        adhoc.rpe = val;
+        adhoc.r = val;
+        const newLoads = calculateWorkoutLoad(adhoc.t, adhoc.d, val * 10, s.pac?.e);
+        adhoc.aerobic = newLoads.aerobic;
+        adhoc.anaerobic = newLoads.anaerobic;
       });
       saveState();
     }
@@ -1053,16 +1101,10 @@ function applyReview(
 
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
 
-      matchedRunsForRpe.push({
-        workoutId: match.workoutId,
-        workoutName: match.workoutName,
-        autoRpe: rpe,
-        distanceKm: (item.distanceM ?? 0) / 1000,
-        durationMin: item.durationSec / 60,
-      });
+      const matchedWorkout = allW.find(w => (w.id || w.n) === match.workoutId);
+      matchedRunsForRpe.push(buildRpeRow(match.workoutId, match.workoutName, rpe, matchedWorkout, item));
 
       // Surplus: if actual distance >30% over planned, add the excess to unspentLoad
-      const matchedWorkout = allW.find(w => (w.id || w.n) === match.workoutId);
       if (matchedWorkout) {
         const plannedKmMatch = (matchedWorkout.d || '').match(/(\d+\.?\d*)km/);
         const plannedKm = plannedKmMatch ? parseFloat(plannedKmMatch[1]) : 0;
@@ -1090,13 +1132,7 @@ function applyReview(
       addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
       wk.garminMatched[item.garminId] = adhocId;
       // Excess runs still deserve an RPE prompt
-      matchedRunsForRpe.push({
-        workoutId: adhocId,
-        workoutName: formatActivityType(item.activityType),
-        autoRpe: rpe,
-        distanceKm: (item.distanceM ?? 0) / 1000,
-        durationMin: item.durationSec / 60,
-      });
+      matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
     }
   }
 
@@ -1145,6 +1181,8 @@ function applyReview(
       if (idx >= 0) planCandidates.splice(idx, 1);
 
       log(`Garmin ${formatActivityType(item.activityType)}: ${Math.round(item.durationSec / 60)} min RPE ${rpe} → "${matchName}"`);
+      const gymPlanned = allWorkouts.find(w => (w.id || w.n) === matchId);
+      matchedRunsForRpe.push(buildRpeRow(matchId, matchName ?? formatActivityType(item.activityType), rpe, gymPlanned, item));
     } else {
       gymOverflow.push(item);
     }
@@ -1182,6 +1220,8 @@ function applyReview(
       if (idx >= 0) planCandidates.splice(idx, 1);
 
       log(`Garmin ${formatActivityType(item.activityType)}: ${Math.round(item.durationSec / 60)} min RPE ${rpe} → "${matchName}" (sport match)`);
+      const crossPlanned = allWorkouts.find(w => (w.id || w.n) === matchId);
+      matchedRunsForRpe.push(buildRpeRow(matchId, matchName ?? formatActivityType(item.activityType), rpe, crossPlanned, item));
     } else {
       sportOverflow.push(item);
     }
@@ -1242,6 +1282,7 @@ function applyReview(
       if (idx >= 0) genericCrossSlots.splice(idx, 1);
 
       log(`Garmin ${formatActivityType(item.activityType)}: filled generic cross slot "${bestSlot.n}"`);
+      matchedRunsForRpe.push(buildRpeRow(slotId, bestSlot.n, rpe, bestSlot, item));
     } else {
       trueOverflow.push(item);
     }
@@ -1251,11 +1292,13 @@ function applyReview(
   // Gym/strength sessions have no run-equivalent load; reducing runs for them is wrong.
   for (const item of gymOverflow) {
     const adhocId = `garmin-${item.garminId}`;
+    const rpe = deriveItemRPE(item, s);
     if (!wk.adhocWorkouts?.some(w => w.id === adhocId)) {
-      addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
+      addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
     }
     wk.garminMatched[item.garminId] = adhocId;
     log(`Garmin ${formatActivityType(item.activityType)}: no gym slot — logged as extra adhoc`);
+    matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
 
   const remainingCross = [...trueOverflow];
@@ -1285,7 +1328,7 @@ function applyReview(
 
   const _arTier = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-  const _arAcwr = computeACWR(s2.wks, s2.w, _arTier, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
+  const _arAcwr = computeACWR(s2.wks, s2.w, _arTier, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
   const ctx = {
     raceGoal: s2.rd,
     plannedRunsPerWeek: s2.rw,
@@ -1360,11 +1403,13 @@ function applyReview(
 
     for (const item of remainingCross) {
       const adhocId = `garmin-${item.garminId}`;
+      const rpe = deriveItemRPE(item, s3);
       if (!wk3.adhocWorkouts?.some(w => w.id === adhocId)) {
-        addAdhocWorkoutFromPending(wk3, item, adhocId, deriveItemRPE(item, s3));
+        addAdhocWorkoutFromPending(wk3, item, adhocId, rpe);
       }
       if (!wk3.garminMatched) wk3.garminMatched = {};
       wk3.garminMatched[item.garminId] = adhocId;
+      matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
     }
 
     // Store cross-training TL, impact load, and leg load
@@ -1382,7 +1427,7 @@ function applyReview(
       recordLegLoad(sport, combinedActivity.duration_min, new Date(mostRecentStart).getTime());
     }
 
-    const affectedStr = affectedNames.length > 0 ? ` — adjusted: ${affectedNames.join(', ')}` : '';
+    const affectedStr = affectedNames.length > 0 ? `. Adjusted: ${affectedNames.join(', ')}` : '';
     log(`Garmin: ${sportLabel} applied (${decision.choice}${affectedStr})`);
 
     saveState();
@@ -1537,13 +1582,13 @@ function showMatchingConfirmation(
       const id  = w.id || w.n;
       const day = w.dayOfWeek !== undefined ? DAY_SHORT_MC[w.dayOfWeek] : '';
       const sel = id === selectedId ? 'selected' : '';
-      return `<option value="${id}" ${sel}>${w.n}${day ? ` (${day})` : ''} — ${workoutTypeShort(w.t)}</option>`;
+      return `<option value="${id}" ${sel}>${w.n}${day ? ` (${day})` : ''}: ${workoutTypeShort(w.t)}</option>`;
     }).join('');
     const overflowSel = !p.proposedWorkoutId ? 'selected' : '';
     return `
       <select data-garmin-id="${p.item.garminId}"
-              class="w-full border text-xs rounded-lg px-2 py-1.5 mt-1.5" style="background:var(--c-bg);border-color:var(--c-border);color:var(--c-black)">
-        <option value="" ${overflowSel}>⚠ No slot — load adjustment modal</option>
+              class="m-select mt-1.5" style="font-size:12px;padding:6px 28px 6px 8px;background-position:right 8px center">
+        <option value="" ${overflowSel}>⚠ No slot (load adjustment modal)</option>
         ${options}
       </select>`;
   };
@@ -1577,7 +1622,7 @@ function showMatchingConfirmation(
     <div class="border-b" style="background:var(--c-surface);border-color:var(--c-border)">
       <div class="max-w-7xl mx-auto px-4 py-4">
         <h1 class="text-xl font-semibold" style="color:var(--c-black)">Confirm Matching</h1>
-        <p class="text-sm mt-0.5" style="color:var(--c-muted)">Review how each activity maps to your plan — adjust if needed.</p>
+        <p class="text-sm mt-0.5" style="color:var(--c-muted)">Review how each activity maps to your plan. Adjust if needed.</p>
       </div>
     </div>
 
@@ -1587,8 +1632,8 @@ function showMatchingConfirmation(
         ? 'background:rgba(245,158,11,0.08);border-color:rgba(245,158,11,0.3);color:var(--c-caution)'
         : 'background:rgba(34,197,94,0.08);border-color:rgba(34,197,94,0.3);color:var(--c-ok)'}">
         ${overflowCount > 0
-          ? `${overflowCount} activit${overflowCount === 1 ? 'y has' : 'ies have'} no slot — a load adjustment modal will follow.`
-          : 'All activities matched — no load adjustment needed.'}
+          ? `${overflowCount} activit${overflowCount === 1 ? 'y has' : 'ies have'} no slot. A load adjustment modal will follow.`
+          : 'All activities matched. No load adjustment needed.'}
       </div>
     </div>
 
@@ -1689,14 +1734,8 @@ export function autoProcessActivities(
       const idx = planCandidates.findIndex(w => (w.id || w.n) === match.workoutId);
       if (idx >= 0) planCandidates.splice(idx, 1);
       log(`Garmin run: ${((item.distanceM ?? 0) / 1000).toFixed(1)} km RPE ${rpe} → "${match.workoutName}"`);
-      autoMatchedRuns.push({
-        workoutId: match.workoutId,
-        workoutName: match.workoutName,
-        autoRpe: rpe,
-        distanceKm: (item.distanceM ?? 0) / 1000,
-        durationMin: item.durationSec / 60,
-      });
       const runW = allWorkouts.find(w => (w.id || w.n) === match.workoutId);
+      autoMatchedRuns.push(buildRpeRow(match.workoutId, match.workoutName, rpe, runW, item));
       const runDay = runW?.dayOfWeek !== undefined ? ` ${DAY_SHORT_AR[runW.dayOfWeek]}` : '';
       autoAssignLines.push(`${formatActivityType(item.activityType)} → ${match.workoutName}${runDay}`);
     } else {
@@ -1733,6 +1772,7 @@ export function autoProcessActivities(
       const gymW = allWorkouts.find(w => (w.id || w.n) === match.workoutId);
       const gymDay = gymW?.dayOfWeek !== undefined ? ` ${DAY_SHORT_AR[gymW.dayOfWeek]}` : '';
       autoAssignLines.push(`${formatActivityType(item.activityType)} → ${match.workoutName}${gymDay}`);
+      autoMatchedRuns.push(buildRpeRow(match.workoutId, match.workoutName, rpe, gymW, item));
     } else {
       gymOverflowAuto.push(item);
       autoAssignLines.push(`${formatActivityType(item.activityType)} → Logged (extra session)`);
@@ -1742,10 +1782,12 @@ export function autoProcessActivities(
   // Gym overflow: log as extra adhoc — must NOT trigger run-reduction modal
   for (const item of gymOverflowAuto) {
     const adhocId = `garmin-${item.garminId}`;
+    const rpe = deriveItemRPE(item, s);
     if (!wk.adhocWorkouts?.some(w => w.id === adhocId)) {
-      addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
+      addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
     }
     wk.garminMatched[item.garminId] = adhocId;
+    autoMatchedRuns.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
 
   // Sports → named recurring slot, then generic cross slot
@@ -1780,6 +1822,7 @@ export function autoProcessActivities(
       const nmW = allWorkouts.find(w => (w.id || w.n) === namedMatch.workoutId);
       const nmDay = nmW?.dayOfWeek !== undefined ? ` ${DAY_SHORT_AR[nmW.dayOfWeek]}` : '';
       autoAssignLines.push(`${formatActivityType(item.activityType)} → ${namedMatch.workoutName}${nmDay}`);
+      autoMatchedRuns.push(buildRpeRow(namedMatch.workoutId, namedMatch.workoutName, rpe, nmW, item));
       continue;
     }
     // Generic cross slot — closest by day
@@ -1818,6 +1861,7 @@ export function autoProcessActivities(
       log(`Garmin ${formatActivityType(item.activityType)}: filled generic cross slot "${bestSlot.n}"`);
       const csDay = bestSlot.dayOfWeek !== undefined ? ` ${DAY_SHORT_AR[bestSlot.dayOfWeek]}` : '';
       autoAssignLines.push(`${formatActivityType(item.activityType)} → ${bestSlot.n}${csDay}`);
+      autoMatchedRuns.push(buildRpeRow(slotId, bestSlot.n, rpe, bestSlot, item));
     } else {
       overflow.push(item);
       autoAssignLines.push(`${formatActivityType(item.activityType)} → Excess load`);
@@ -1838,20 +1882,14 @@ export function autoProcessActivities(
   populateUnspentLoadItems(overflow);
   for (const item of overflow) {
     const adhocId = `garmin-${item.garminId}`;
+    const rpe = deriveItemRPE(item, s);
     if (!wk.adhocWorkouts?.some(w => w.id === adhocId)) {
-      addAdhocWorkoutFromPending(wk, item, adhocId, deriveItemRPE(item, s));
+      addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
     }
     wk.garminMatched[item.garminId] = adhocId;
-    // Excess runs still deserve an RPE prompt
-    if (item.appType === 'run') {
-      autoMatchedRuns.push({
-        workoutId: adhocId,
-        workoutName: formatActivityType(item.activityType),
-        autoRpe: deriveItemRPE(item, s),
-        distanceKm: (item.distanceM ?? 0) / 1000,
-        durationMin: item.durationSec / 60,
-      });
-    }
+    // Every excess activity (run, gym, cross-training) gets an RPE prompt — adhoc
+    // load is later refreshed from the rated RPE when no HR signal exists.
+    autoMatchedRuns.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
   saveState();
 
@@ -1906,7 +1944,7 @@ export function autoProcessActivities(
     const _s = getMutableState();
     const _tier = _s.athleteTierOverride ?? _s.athleteTier;
     const _atlSeed = (_s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (_s.gs ?? 0), 0.3));
-    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined, undefined, (_s as any).previousPlanWks);
+    const _acwr = computeACWR(_s.wks ?? [], _s.w, _tier, _s.ctlBaseline ?? undefined, _s.planStartDate, _atlSeed, _s.signalBBaseline ?? undefined, undefined, (_s as any).previousPlanWks, _s.adaptiveRecovery);
     if (_acwr.status !== 'caution' && _acwr.status !== 'high') {
       showAssignmentToast(autoAssignLines);
       render();
@@ -1924,7 +1962,7 @@ export function autoProcessActivities(
   const weekRuns         = workoutsToPlannedRuns(freshWorkouts, s2.pac);
   const _arTier2 = s2.athleteTierOverride ?? s2.athleteTier;
   const _arAtl2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-  const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
+  const _arAcwr2 = computeACWR(s2.wks, s2.w, _arTier2, s2.ctlBaseline ?? undefined, s2.planStartDate, _arAtl2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
   const ctx = { raceGoal: s2.rd, plannedRunsPerWeek: s2.rw, injuryMode: !!(s2 as any).injuryState, easyPaceSecPerKm: s2.pac?.e, runnerType: s2.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s2.pac?.m, s2.w, s2.tw ?? 16, wk2?.ph), acwrStatus: _arAcwr2.status };
   const popup = buildCrossTrainingPopup(ctx, weekRuns, combinedActivity);
 

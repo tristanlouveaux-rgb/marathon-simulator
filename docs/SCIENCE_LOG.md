@@ -4,6 +4,593 @@ Scientific rationale for every model, formula, and algorithm that drives user-fa
 
 New entries are added at the top. When modifying a model, update its entry rather than adding a duplicate.
 
+---
+
+## §Z — Plan Phasing: capped single arc + double periodization for long plans (2026-05-11)
+
+### Motivation
+Coaches assign training phases (Base / Build / Peak / Taper) according to the time available before a race and the principle of progressive specificity. Mosaic's previous model split plans differently depending on length: ≤16 weeks got a single arc, >16 weeks got a 4-week block-cycle prefix (Base → Build → Peak → Taper repeating) followed by a 16-week race-specific arc. For a 20-week plan this rendered as `Base → Build → Peak → Taper → Base → Build → Peak → Taper`, which reads to the user as the plan regressing mid-cycle and contradicts canonical periodization.
+
+### New model
+
+Phase assignment is produced by `computePlanPhases(totalWeeks)` in `src/workouts/phases.ts`. The function applies one of two strategies based on plan length.
+
+**Single-arc strategy (length ≤ 32 weeks).** Phases assigned by capped allocation:
+
+```
+taperWeeks = min(3, max(1, ceil(totalWeeks × 0.12)))
+peakWeeks  = min(4, max(1, round(totalWeeks × 0.10)))
+buildWeeks = min(8, max(1, round(totalWeeks × 0.40)))
+baseWeeks  = totalWeeks − (taperWeeks + peakWeeks + buildWeeks)   // remainder
+```
+
+The order in the plan: `Base × baseWeeks → Build × buildWeeks → Peak × peakWeeks → Taper × taperWeeks`.
+
+**Phase caps and their basis:**
+- **Taper ≤ 3 weeks** — Pfitzinger & Douglas (2009, *Advanced Marathoning*, ch. 8) cap the longest marathon taper at 3 weeks. Beyond 3w, detraining outweighs fatigue clearance (Mujika & Padilla 2003, *Sports Medicine* 33(13)).
+- **Peak ≤ 4 weeks** — Daniels (2014, *Daniels' Running Formula*) and Hudson (2008, *Run Faster from the 5K to the Marathon*) treat "peak" as a short, sharp block of race-specific intensity. Extending it spreads the stimulus and reduces the consolidation effect.
+- **Build ≤ 8 weeks** — Bompa & Buzzichelli (2018, *Periodization: Theory and Methodology*) note that beyond ~8 weeks of concentrated specific intensity, endurance athletes plateau or accumulate injury risk. Issurin's block-periodization framework (2008) also targets 2–6 week intensive blocks.
+- **Base absorbs the remainder** — long aerobic-development phases are the canonical structure for any plan longer than ~16 weeks. Tønnessen et al. (2014, "The annual training periodization of 8 world-class endurance athletes", *IJSPP* 9(4)) document 60–70% of elite annual training volume in aerobic-base mode.
+
+**Very short plans (4–7 weeks):** the caps naturally collapse `baseWeeks` to 0–2, producing a "sharpening block" (Build → Peak → Taper) with little or no aerobic development. This is the honest answer to "what can be done in 4 weeks?": maintain volume, do 1–2 specific sessions, taper. Fitness cannot be built in a month (Coyle et al. 1984, *J Appl Physiol* 57: 1857–1864 on detraining time-courses; Mujika et al. 2000, *Med Sci Sports Exerc* 32(2)).
+
+**Double-periodization strategy (length ≥ 33 weeks).** A single 40+ week arc loses its training signal: monotonous stimulus, motivational decay, and no intermediate adaptation checkpoint. Real-world elite athletes structure 2–3 macrocycles per year (Tønnessen et al. 2014). Issurin (2010, *Sports Medicine* 40(3): 189–206) formalised this in the block-periodization framework: concentrated 2–6 week training blocks, each targeting one physiological quality, separated by short transitions, are more effective than one continuous mixed arc.
+
+The algorithm allocates cycle 2 as ~55% of total weeks (it carries the race), cycle 1 as ~45% (preparation), with 2 transition weeks between them:
+
+```
+cycle2Length = max(12, round(totalWeeks × 0.55))
+cycle1Length = max(8, totalWeeks − cycle2Length − 2)
+
+c1Peak  = min(3, max(1, round(cycle1Length × 0.18)))
+c1Build = min(6, max(1, round(cycle1Length × 0.35)))
+c1Base  = cycle1Length − c1Build − c1Peak
+
+Cycle 1: Base × c1Base → Build × c1Build → Peak × c1Peak (last peak week flagged checkpoint=true)
+Transition: 2 × Base weeks (acts as recovery; workout generator handles light volume)
+Cycle 2: single-arc strategy applied with totalWeeks = cycle2Length
+```
+
+The final peak week of cycle 1 carries a `checkpoint: true` flag. The phase remains `'peak'` so all peak-aware engine logic (workout generation, scoring, suggestion rules) continues to work; the flag drives a distinct UI label (`Checkpoint`) on the Phase Timeline and — when implemented — a time-trial-flavoured workout week (Mon–Wed easy, Thu opener, Sat hard 5K or 10K TT, Sun easy). The TT result feeds back into VDOT/CSS/FTP auto-refresh, calibrating cycle 2 against measured rather than predicted fitness.
+
+### Limitations
+- **No mid-cycle deload weeks in long bases.** A 35-week base block needs internal recovery weeks (typical pattern: 3 weeks progressive load + 1 week deload, repeating). The current model assigns the same phase label to every base week; deloads must come from the workout generator's volume modulation, not the phase tagging. Logged in `docs/OPEN_ISSUES.md` for follow-up if a real user runs a 24+ week plan.
+- **Checkpoint week workout content not yet implemented.** The phase flag exists and is rendered in the UI, but `generateWeekWorkouts` currently treats the week as a standard peak week. The TT-flavoured content (and the post-TT VDOT/CSS/FTP refresh hook) is deferred until a real 33+ week plan ships.
+- **Cycle ratios are heuristic.** The 45/55 cycle split is a reasonable default but not directly derived from a controlled study; literature on optimal cycle-length distribution within multi-cycle annual periodization is sparse and athlete-specific.
+- **Triple periodization not modelled.** Plans >52 weeks (annual+) are not supported.
+
+### References
+- Bompa, T. & Buzzichelli, C. (2018). *Periodization: Theory and Methodology of Training* (6th ed.). Human Kinetics.
+- Coyle, E. F. et al. (1984). Time course of loss of adaptations after stopping prolonged intense endurance training. *J Appl Physiol* 57(6): 1857–1864.
+- Daniels, J. (2014). *Daniels' Running Formula* (3rd ed.). Human Kinetics.
+- Hudson, B. (2008). *Run Faster from the 5K to the Marathon*. Broadway Books.
+- Issurin, V. (2008). Block periodization versus traditional training theory: a review. *J Sports Med Phys Fitness* 48(1): 65–75.
+- Issurin, V. (2010). New horizons for the methodology and physiology of training periodization. *Sports Med* 40(3): 189–206.
+- Mujika, I. & Padilla, S. (2003). Scientific bases for precompetition tapering strategies. *Med Sci Sports Exerc* 35(7): 1182–1187.
+- Mujika, I., Padilla, S. & Pyne, D. (2000). Detraining: loss of training-induced physiological and performance adaptations. *Med Sci Sports Exerc* 32(2): 413–421.
+- Pfitzinger, P. & Douglas, S. (2009). *Advanced Marathoning* (2nd ed.). Human Kinetics.
+- Tønnessen, E. et al. (2014). The annual training periodization of 8 world-class athletes. *Int J Sports Physiol Perform* 9(4): 666–673.
+
+---
+
+## §Y — Triathlon Prediction Calibration Loop (2026-05-11)
+
+### Motivation
+Population-level race models (Riegel exponent, Daniels VDOT, empirical course factors) have systematic biases at the individual level. An athlete who consistently slows in the run due to heat sensitivity, or who swims better than their CSS predicts in race conditions, sees the same error race after race. The calibration loop turns the race log into a personal bias-correction term.
+
+### Tier-1: per-leg additive bias
+
+For each discipline `d ∈ {swim, bike, run}`:
+
+```
+residuals[i] = actualPerLeg[d][i] − predictedPerLeg[d][i]   for each race i
+rawBias[d]   = median(residuals[d])
+medPred[d]   = median(predictedPerLeg[d])
+bias[d]      = clamp(rawBias[d], −0.08 × medPred[d], +0.08 × medPred[d])
+```
+
+**Why median (not mean):** a single outlier race (illness, equipment failure, extreme weather) would corrupt a mean-based estimate. The median is resistant to single-event outliers.
+
+**Why ±8% cap:** the known prediction error band for triathlon leg times is approximately 6–14% (derived from the empirical course-factor validation dataset). The cap ensures calibration never exceeds the natural noise floor, keeping it in systematic-correction territory rather than overfitting individual races.
+
+**Application:** bias is added post-readiness to both projected and current estimates. The readiness penalty captures preparation gaps; the bias corrects model-level systematic error. The two are conceptually orthogonal.
+
+### Tier-2: learned readiness maxPenalty scale
+
+For each discipline, regress the residual fraction (after tier-1 bias) against the implied readiness penalty:
+
+```
+penaltyExcess[i]      = predictedPerLeg[d][i] / predictedRawPerLeg[d][i] − 1
+residualFraction[i]   = (actual[d][i] − (predicted[d][i] + bias[d])) / predicted[d][i]
+slope                 = Σ(penaltyExcess[i] × residualFraction[i]) / Σ(penaltyExcess[i]²)
+rawScale[d]           = 1 + slope
+scale[d]              = 1 + (rawScale[d] − 1) × n / (n + 4)   (Bayesian shrinkage)
+scale[d]              = clamp(scale[d], 0.6, 1.4)
+```
+
+**Why OLS regression not mean ratio:** the residual-vs-penalty regression tests whether the _magnitude_ of the readiness penalty correlates with the residual. A positive slope means the penalty is understating the true shortfall; a negative slope means over-stating. A mean ratio would capture average error but not the penalty-specific signal.
+
+**Why Bayesian shrinkage toward 1.0 (`n/(n+4)`):** with few races, the OLS slope has high variance. The shrinkage formula (Thompson 1968 type-II estimator with `n₀ = 4`) pulls estimates toward the population prior (scale = 1.0, i.e. current model is correct) until data is sufficient. At n=4, 50% of the raw estimate is retained; at n=8, 67%; asymptotes to the full estimate.
+
+**Why [0.6, 1.4] clamp:** beyond ±40% of the nominal maxPenalty, calibration would be compensating for something fundamentally wrong with the base model rather than individual variation. The clamp prevents pathological correction.
+
+### Limitations
+
+- Tier-1 bias is computed from post-readiness predictions (what was shown to the user), not pre-readiness. This means the bias absorbs both model error AND readiness-penalty error. Tier-2 separates these but requires the newer `predictedRawPerLeg` field.
+- All tiers assume the race log is representative of future races at the same distance. A 70.3 bias does not transfer to Ironman — each distance accumulates its own bias independently (future work: distance-group pooling when cross-distance data is sparse).
+- Tier 3 (Riegel exponent fit) is dormant until sprint/olympic race logging is added (currently only 70.3/Ironman).
+- Calibration recomputes after each logged race but the current prediction must be re-fetched to pick up the updated factors (applies on the next app launch after the race).
+
+---
+
+## §W — Empirical Transition Times by Race × Level Bin (2026-05-08)
+
+**Side of the line**: tracking → race prediction. Adds a transition-time term to the predicted finish that reflects what real finishers at the user's level actually achieve at this race, replacing the hand-tuned `T1_SEC_BY_SLIDER` / `T2_SEC_BY_SLIDER` skill defaults whenever empirical data exists.
+
+**Files**: `src/validation/transition-distributions.ts`, `src/validation/dataset-loader.ts` (extended `FinishRecord`), `src/validation/run-calibration.ts` (emits `empirical-transition-distributions.json`), `src/calculations/empirical-transitions.ts` (runtime lookup), `src/calculations/race-prediction.triathlon.ts` (priority chain at `t1Sec` / `t2Sec` resolution), `src/types/triathlon.ts` (`triConfig.transitionOverride`).
+
+### Calibration
+
+```
+For each (distance, eventLocation, levelBin):
+  levelBin     = floor((swim + bike + run − binMin) / binWidth)   ← excludes transitions
+  binWidth     = 15 min (70.3) or 30 min (IM)
+  T1_mean(L,b) = mean of t1Sec across finishers in cell  (70.3 only)
+  T2_mean(L,b) = mean of t2Sec across finishers in cell  (70.3 only)
+  TT_mean(L,b) = mean of (t1Sec + t2Sec) across finishers in cell  (both distances)
+
+Confidence:
+  race-specific cell:   require ≥ 50  finishers in (L, b)
+  global fallback bin:  require ≥ 200 finishers in b across all races
+```
+
+### Why bin on swim+bike+run (not finish time)
+
+The level bin must be independent of transition skill itself, otherwise we'd be looking at "how slow are transitions for people whose transitions were similarly slow" — circular. Using `swim + bike + run` ("moving time") gives an objective fitness-tier proxy that's consistent on both sides of the lookup: the historical record provides it directly, and the runtime predictor naturally has it before adding transitions.
+
+### Runtime resolution chain
+
+```
+1. user override     (triConfig.transitionOverride)        — manual hardcode
+2. race × level bin  (≥ 50 finishers in cell)              — most specific empirical signal
+3. global level bin  (≥ 200 finishers across all races)    — fallback when cell sparse
+4. skill-slider      (T1_SEC_BY_SLIDER / T2_SEC_BY_SLIDER) — original defaults, last resort
+```
+
+For Ironman, only T1+T2 combined is available (the source CSV's `results.csv` doesn't expose separate T1/T2 columns; we derive `transitionSec = overall − swim − bike − run`). When the empirical lookup returns a combined-only number we split T1 / (T1+T2) ≈ 0.58 (constant `IM_T1_SHARE_OF_TOTAL`) derived from the 70.3 dataset where per-side data exists. T1 runs longer than T2 in practice because of the wetsuit strip and the longer transition-zone walk on the swim-exit side at most venues.
+
+### Why this is defensible
+
+- **Ground truth.** 840k 70.3 finishes (2004–2020) and 1.09M IM finishes (2002–2024) from public Kaggle datasets. Same source the course-factor calibration draws on (§G).
+- **Pro-vs-amateur gradient is real and observed in the data.** Sub-4:30 70.3 finishers average 4.5 min total transitions; 7:50 finishers average 11.6 min. Sub-9:15 IM finishers average 7.7 min; 15:45 finishers average 23.7 min. The hand-tuned slider compressed this ~2.5× spread into a fixed 4.5× one (120s elite → 540s beginner for T1) without venue-specific resolution.
+- **Race-specific is meaningful.** Some venues have long T1 walks from beach to transition or muddy run-outs; others are flat parking lots. Per-race binning preserves this where data permits.
+- **Transition times don't degrade like fitness markers.** No decay model needed — what finishers averaged at this race in 2018 is still a defensible prior for 2026 unless the venue layout changed materially.
+
+### Sockless modifier
+
+Socks are a single one-time event during a triathlon — they go on once at a transition (or not at all) and stay on. The user picks where via `triConfig.transitionSocks`:
+
+```
+'t1'   → sock-on at T1 (population default) → no adjustment
+'t2'   → sockless on bike, sock-on at T2     → −SOCK_ON_COST_SEC T1, +SOCK_ON_COST_SEC T2
+'none' → never wears socks                   → −SOCK_ON_COST_SEC T1 only
+
+SOCK_ON_COST_SEC = 20
+```
+
+Empirical T1/T2 already reflects the "sock-on at T1" baseline because that's what most racers do. The selector shifts or removes that cost from the resolved baseline. Applied on top of whichever path resolved T1/T2 (override, empirical, slider). Floored at 60 s per side so we never go negative.
+
+**Why 20 s**: this is the practised-athlete steady state for putting socks on once. Coaching consensus across Joe Friel (*Triathlete's Training Bible*), Tower 26, and TrainingPeaks is 15–30 s for an experienced sock-on event; 20 s sits in the middle. Inexperienced athletes on wet feet take longer, but the model assumes the user has rehearsed.
+
+**Why one event, not two**: the previous model treated socks as a per-leg decision (sock-on at T1 *and* T2 as independent events). That doesn't match how triathletes actually race — once socks are on, they stay on. Modelling it as a single event the user *places* (T1, T2, or never) is both more realistic and produces sensible per-leg projections: 't2' people get faster T1 and slower T2 (no net change), 'none' people save the full sock-on cost.
+
+**Why this is OK to be a constant rather than personalised**: it's a user-controlled race-day preference, not a fitness state. The athlete *decides* where their sock-on event falls. The model just translates that choice into a time delta. Personalising the cost would require per-athlete sock-on-time data we don't collect, and the variance is small enough that a constant is fine for a 20 s adjustment.
+
+### Limitations
+
+- **No T1/T2 split for Ironman.** The miguswong CSV exposes only `swimTime`, `bikeTime`, `runTime`, `overallTime`. Combined transitions are derivable; per-side splits are not.
+- **No year-on-year weighting.** Same caveat as course factors (§G) — a venue with a 2018 layout change contributes the lifetime average rather than the post-change average.
+- **Bin width is uniform.** A 4:00 70.3 finisher and a 4:14 finisher land in the same 15-min bin; no smoothing across bins. The granularity is acceptable for a ~30-second-magnitude signal.
+- **Confidence floors are pragmatic, not derived.** 50 / 200 thresholds match the existing course-factor and split-distribution conventions; a formal SE-based gate would be more rigorous but the practical effect is similar.
+
+### Sources
+
+- Kaggle: Ironman 70.3 races 2004 to 2020 — David at aiaiaidavid (840k rows)
+- Kaggle: Ironman 140.6 Results 2002 to 2024 — miguswong (1.09M rows)
+- See `docs/CALIBRATION_TRIATHLON.md` for the full pipeline.
+
+---
+
+## §V — HYROX Race-Age Staleness with Cross-Mode Physiology Mitigation (2026-05-08)
+
+**Side of the line**: tracking. Race time from a year ago should not anchor today's forecast with the same authority as last week's, but a still-fit athlete shouldn't be penalised either. This model computes a time-decay weight on the previous race time and gates the penalty on cross-mode physiology evidence (VDOT, MTL CTL, Strava `ctlBaseline`).
+
+**Files**: `src/calculations/hyrox-staleness.ts`, `src/calculations/race-prediction.hyrox.ts` (confidence cap + per-station + seed blends), `src/state/initialization.hyrox.ts:131-150` (re-band gate), `src/ui/hyrox/forecast-view.ts:365-376` (UI chip), `src/calculations/hyrox-staleness.test.ts` (11 tests), `src/calculations/race-prediction.hyrox.test.ts` (4 staleness blend tests).
+
+### Model
+
+```
+ageMonths = (now − hyroxPreviousRaceDate) / MONTH_MS
+
+baseBandWeight, baseSplitsWeight, confidenceCap = piecewise by category:
+  fresh      (<6mo)    1.0    1.0    null
+  aging      (6–12mo)  1.0→0.4 (linear)    1.0→0.8    'medium'
+  stale      (12–24mo) 0.4→0.2             0.8→0.6    'low'
+  very_stale (24+mo)   0.2                 0.6        'low'
+  unknown    (no date) 1.0    1.0    null
+
+mitigation = mean(VDOT vs band-implied, MTL CTL vs anchor, ctlBaseline / 100)
+             clamped [0.5, 1.0]
+
+bandWeight   = baseBandWeight   + (1 − baseBandWeight  ) × (mitigation − 0.5) × 2
+splitsWeight = baseSplitsWeight + (1 − baseSplitsWeight) × (mitigation − 0.5) × 2
+```
+
+**Splits decay slower than band.** The skill components of HYROX (sled push technique, sandbag carry mechanics, wall ball cadence) decay slower than pure VO2max if the athlete keeps doing functional work. Band weight indexes raw fitness; splits weight indexes skill — they should not decay at the same rate.
+
+**Re-band gate** (`initialization.hyrox.ts:131-150`): when `bandWeight < 0.7` AND VDOT-implied band ≠ time-based band, take the SLOWER of the two. Conservative — never over-promise on a stale benchmark, even if VDOT looks better.
+
+**Confidence cap** is applied AFTER the calibration-coverage cap and only tightens, never loosens.
+
+### Rationale
+
+- **Detraining literature anchor**: Mujika & Padilla (2000) "Detraining: loss of training-induced physiological and performance adaptations" Sports Med 30:79-87. VO2max declines ~3-5% per month in trained athletes after stopping training; recovers faster than initial gains were earned. Coyle et al. (1984) "Time course of loss of adaptations after stopping prolonged intense endurance training" J Appl Physiol 57:1857-1864 — quantitative time-course for the first 12 weeks of detraining.
+- **Skill-vs-fitness split**: from coach reports and HYROX-specific reasoning. No published longitudinal HYROX detraining data exists yet. The stations that score on technique (sled push form, sandbag economy) hold up well in athletes who maintain general functional work; the cardio engine decays faster.
+- **Mitigation clamp [0.5, 1.0]**: design choice — we never PUNISH an athlete for poor cross-mode evidence, we only RELEASE the staleness penalty when evidence is strong. A user without VDOT or Strava sync gets the floor (0.5) and the time decay applies in full.
+
+### Pre-fix bug
+
+A 1:00:00 doubles HYROX from a year ago was treated identically to one from last week. The `competitive` band stuck on the time-based threshold even though current VDOT was below the band's implied 60. Combined with Bug 3 (wrong slot) and Bug 2 (wrong-direction cross-format factor), this drove the 56-min headline prediction.
+
+### Limitations
+
+- Thresholds (6 / 12 / 24 months) are directional, not precise. Recalibrate when HYROX returning-athlete data ingest exists.
+- Mitigation is arithmetic-mean-blended across three signals without confidence weighting per signal. Could be improved.
+- `hyroxPreviousRaceDate` is required for any time-decay; users without it get the `unknown` category (full trust). Fail-soft design — better to not penalise an unknown than to wrongly penalise a recent race.
+- Skill-vs-fitness decay rates are coach-derived, not measured. Holds until validated against HYROX returning-athlete cohorts.
+
+### Update — weights now applied to predicted time (2026-05-08, later same day)
+
+Initial wiring of §V only fed `confidenceCap` into `predictHyroxRace` — the predicted *time* still anchored 100% on the historic race regardless of staleness. `bandWeight` and `splitsWeight` were computed but never applied. Closed in `race-prediction.hyrox.ts`:
+
+- **`splitsWeight` per-station blend**: `effectiveBase = splitsWeight × calibrated + (1 − splitsWeight) × seed`. A `very_stale` race with no physiology mitigation lands at `splitsWeight≈0.6`, blending the old benchmark 60/40 toward the band's seed.
+- **`bandWeight` seed blend**: when the VDOT-implied band differs from the stored band AND `bandWeight < 1`, seed times themselves blend across the two bands. Combines with the existing re-band gate in `initialization.hyrox.ts` — that gate snaps the band to the slower of the two when `bandWeight < 0.7`; the seed blend handles the moderate-staleness range where the gate doesn't fire.
+- The per-station blend is applied BEFORE the venue / Pro / fatigue multipliers so all downstream maths runs on the staleness-adjusted base.
+
+**Test coverage**: `race-prediction.hyrox.test.ts` adds 4 tests pinning the blend at fresh-race no-blend, `very_stale` blend toward seed, partial-mitigation band shift, and strong-physiology weight-recovery boundaries.
+
+---
+
+## §U — HYROX VDOT-Derived Run Pace + Provenance (2026-05-08)
+
+**Side of the line**: tracking. The HYROX prediction needs an honest per-km pace for the 8 × 1km run legs. Pre-fix used `SEED_RUN_PACE_SEC_KM[band]` as a population-mean fallback whenever the user hadn't entered a manual pace — which ignored the athlete's actual aerobic capacity. A VDOT-50 athlete in the intermediate band got the same seed pace as a VDOT-44 athlete in the same band.
+
+**Files**: `src/calculations/hyrox-run-pace.ts` (derive function + ratios), `src/calculations/hyrox-marker-bumps.ts` (yield-to-improvements wiring), `src/calculations/race-prediction.hyrox.ts:163` (consumed by predictor), `src/main.ts:711-725` (launch-time apply + bump pass), `src/calculations/hyrox-run-pace.test.ts` (8 tests), `src/calculations/hyrox-marker-bumps.test.ts` (14 tests).
+
+### Model
+
+```
+threshold_sec_km = gp(vdot, ltPace).t                              # Daniels lactate-threshold pace
+derived_sec_km   = max(MIN_PACE,
+                       round(threshold_sec_km × HYROX_FATIGUE_TO_THRESHOLD_RATIO[band]))
+```
+
+Per-band ratio (back-calibrated to existing `SEED_RUN_PACE_SEC_KM` at each band's implied VDOT):
+
+| Band | Implied VDOT | Seed pace | Threshold ≈ | Ratio |
+|---|---|---|---|---|
+| competitive    | 60+   | 232 s/km | 221 | **1.05** |
+| advanced       | 50–55 | 270      | 245 | **1.10** |
+| intermediate   | 45    | 305      | 265 | **1.15** |
+| novice         | 38    | 355      | 296 | **1.20** |
+| beginner       | 32    | 400      | 320 | **1.25** |
+| total_beginner | 28    | 435      | 335 | **1.30** |
+
+Ratio rises as ability drops — beginners slow down more across stations.
+
+### Provenance and yield-to-improvements
+
+`HyroxConfig.hyroxRunPaceSource: 'user' | 'derived' | 'seed'` tracks where the in-use value came from. Mirrors the project-wide rule (CLAUDE.md "Manually-set Benchmarks Yield to Improvements"):
+
+- User-entered value is kept unless `derived ≤ userVal − 5 s/km`. Below that margin, user wins.
+- When derived overrides, provenance flips to `'derived'` and `notifiedMarkers.hyroxRunPaceSecKm` snapshots the new value so subsequent improvements can be detected as marker bumps.
+- The detect→apply order at `main.ts:715-720` is load-bearing: detect must see pre-apply state, otherwise `userVal === derived` after the write and the gate fails. Pinned by regression test.
+
+### Rationale
+
+- **Why threshold pace?** HYROX 1km legs are run at fatigued effort, slightly slower than fresh threshold pace because of accumulated station load. Threshold (lactate threshold, ~80–85% HRmax for trained athletes) is the right anchor — it's the highest sustainable pace the athlete could hold for ~30–60 min of pure running, before fatigue compounds. The fatigue-to-threshold ratio captures the band-dependent slowdown.
+- **Why band-keyed ratio, not athlete-specific?** Without per-athlete HYROX run-leg history, we can't fit individual ratios. Band-keyed is the next-best abstraction. When Strava ingest of HYROX events lands and we have measured run-pace-vs-VDOT for individual users, recalibrate per-athlete.
+- **`HYROX_RUN_PACE_MIN_SEC_KM` (190 s/km = 3:10/km) floor**: would clip an elite at VDOT 80 (computed ~178). Floor is intentional — 1km HYROX legs after stations are slower than fresh-1km capacity even at the elite level (Brandt & Ebel 2025 — top-pro run splits within ~2-4% across all 8 legs but absolute pace is fatigued).
+
+### Pre-fix bug
+
+VDOT was tracked but unused for HYROX run pace. Strong runners with weak HYROX history got seeded paces matching their finish-time band, not their physiology. Combined with the slot/band/staleness bugs, this contributed to the 56-min prediction symptom by underweighting current aerobic fitness.
+
+### Limitations
+
+- Daniels threshold is a single-point estimate from VDOT; doesn't model aerobic vs ergogenic drift or per-athlete LT fraction.
+- Ratio is back-calibrated to seed paces, not measured from longitudinal HYROX run-leg data.
+- `HYROX_FATIGUE_TO_THRESHOLD_RATIO` doesn't model temperature, altitude, or floor surface — those are layered separately by the venue model.
+
+---
+
+## §T — HYROX Bidirectional Cross-Format Same-Athlete Factor (2026-05-08)
+
+**Side of the line**: tracking + planning. Used for ability-band derivation when the previous-race format differs from the target format (`initialization.hyrox.ts:111-124`). Sets the band, which sets MTL cap, plan duration, seed station times, and fatigue rates.
+
+**Supersedes §N.** The single-direction `DOUBLES_TO_SINGLES_FACTOR = 0.92` previously documented in §N was wrong-direction at the population level (singles is harder than doubles, not easier) and ignored the same-athlete picture. Replaced with two anchored constants.
+
+**Files**: `src/constants/hyrox-constants.ts:32-36`, `src/state/initialization.hyrox.ts:111-124`, `src/calculations/hyrox-format-band.test.ts` (8 tests).
+
+### Model
+
+```
+SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22
+SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85
+
+# In initializeHyroxSimulator, before banding:
+adjustedPrevTimeSec =
+   prevIsDoubles && !targetIsDoubles ? prevTimeSec × 1.22  # doubles result → singles equivalent
+  !prevIsDoubles &&  targetIsDoubles ? prevTimeSec × 0.85  # singles result → doubles equivalent
+                                       prevTimeSec        # same format → no adjustment
+```
+
+Used **ONLY** for band derivation. Per-station cross-format inference is intentionally NOT attempted; the predictor falls back to seed station times for the target format and surfaces `confidence = 'low'` (`race-prediction.hyrox.ts:178-210, 380`).
+
+### Rationale
+
+- **Population data lower bound (1.125)**: HYROX results data, S4–S6, 89,868 finishers (`src/data/hyrox-population-distributions.ts`). Open singles P50 total = 5338 s; open doubles P50 total = 4747 s. Cohort ratio = 1.125. This is a *cohort comparison*, not same-athlete: more skilled athletes self-select into singles, so this systematically understates the same-athlete gap.
+- **Coaching consensus midpoint (1.20–1.25)**: Hyrox Hub and Roxzone pacing analyses, race-time prediction reports for athletes who race both formats. The doubles partner-rest pattern lets each athlete push closer to maximal effort on each station, but the active partner only does 4 of 8 stations — total time benefits substantially from the rest. A 60-min doubles athlete is typically a 73–75 min singles athlete (× 1.22 → 73.2 min).
+- **1.22 chosen** as the empirical-meets-coaching anchor.
+- **Inverse direction (0.85)**: pure inverse (1 / 1.22 = 0.82) understates the partner-rest benefit at the SINGLES → DOUBLES direction. A singles athlete's per-rep capacity is a ceiling; their realistic doubles total is faster than 1/1.22 implies once partner rest is factored in. 0.85 reflects this asymmetry.
+
+### Pre-fix bug
+
+The single 0.92 constant was applied as `doublesSec × 0.92 = singlesSec` — wrong direction (singles is *slower* than doubles for the same athlete because no rest, not faster). Combined with Bug 3 (slot keyed off target format, so doubles splits got filed as singles benchmarks), this collapsed a 60-min doubles athlete into the `competitive` singles band with full singles benchmarks, producing a 56-min headline prediction.
+
+### Per-station cross-format — deliberately NOT attempted
+
+The doubles format covers only 4 of 8 stations and includes asymmetric partner rest. Singles per-station times are a fresh-rep ceiling but real doubles pacing benefits from rest patterns we don't model. Inferring per-station times across formats from current data is undefensible:
+
+1. Cohort selection bias (singles cohort skews stronger).
+2. Asymmetric rest pattern not in any public dataset.
+3. Per-station competitiveness varies by format (sled push is less of a discriminator in doubles where partners share load).
+
+So when only the OTHER format's benchmarks exist, the predictor uses target-format seeds and drops confidence to 'low'. Recalibrate when matched-athlete cross-format data becomes available (e.g. Strava ingest of dual-format athletes).
+
+### Limitations
+
+- Single global factor; individual variation substantial. Strength-biased athletes lose more in singles (no rest); endurance-biased athletes lose less.
+- Pro division may have a smaller gap (higher floor on competitive drive in both formats), insufficient data to separate.
+- Recalibrate when matched-athlete cross-format records become available.
+
+---
+
+## §S — HYROX Per-Station Trajectory Model (2026-05-07)
+
+**Side of the line**: tracking. Projects each station's test pace forward to race day given current training dose. Independent of the aggregate `buildHyroxProjection` (§P) which projects total finish from MTL/adherence/taper/readiness signals — this model answers "what's the trainable headroom on each station?" not "how is your overall trajectory tracking?".
+
+**Files**: `src/constants/hyrox-horizon-params.ts` (constants + class map), `src/calculations/training-horizon.hyrox.ts` (curve math), `src/calculations/race-prediction.hyrox.ts` (`buildStationProjection` integration), `src/ui/hyrox/forecast-view.ts` (Trajectory panel), `src/calculations/training-horizon.hyrox.test.ts` (20 tests).
+
+### Model
+
+Three station classes plus RoxZone, each with its own horizon curve. The math mirrors `training-horizon.triathlon.ts` (week-factor exponential + session-factor sigmoid + undertrain penalty + taper bonus + adherence penalty + adaptation ratio). Per-class differentiation lives in `max_gain_pct`, `tau_weeks`, and `taper_bonus_pct`.
+
+```
+improvement_pct = max_gain_pct × week_factor × session_factor × exp_factor
+                + taper_bonus
+                − undertrain_penalty
+                − adherence_penalty
+                ; × adaptation_ratio
+                ; clamp [0, max_gain_cap_pct]
+
+projected = baseline × (1 − improvement_pct / 100)
+```
+
+Where:
+- `week_factor = 1 − exp(−(weeks_remaining − taper_weeks) / tau_weeks)` — saturating exponential
+- `session_factor = 1 / (1 + exp(−0.7 × (sessions_per_week − ref_sessions)))` — logistic dose-response, k=0.7 mirrors `TRI_K_SESSIONS`
+- `exp_factor` — `EXP_FACTORS[experience_level]` (kept in lockstep with marathon/tri)
+- `taper_bonus = taper_bonus_pct × min(1, weeks_remaining / taper_weeks)` — full bonus only if athlete has time for the taper
+- `taper_weeks = HYROX_TAPER_WEEKS = 1.5` — single Hyrox-wide value (per Mujika 2010 review of high-intensity event tapers)
+
+**Floor at 0%, not negative.** Lessons-learnt directly from the triathlon model: a negative floor produced "training will make you slower" projections in degenerate cases. We clamp at 0 — worst case = current fitness, never regression from training itself.
+
+### Class assignments
+
+| Class | Stations | Rationale |
+|---|---|---|
+| **A. Cardio erg** | SkiErg, Row Erg | Aerobic ergometer; physiology ≈ cycling FTP. 1km efforts (~3-4 min) more anaerobic than steady-state FTP, so slightly more conservative gains. |
+| **B. Strength-endurance** | Sled Push, Sled Pull, Burpee Broad Jumps, Sandbag Lunges, Wall Balls | Lactate tolerance + local muscular endurance. Largest novice gains, hard plateau in advanced. |
+| **C. Grip / carry** | Farmer Carry | Narrow trainability without specific work; conservative. |
+| **RoxZone** | Transitions | Experience- and technique-driven, not strength or cardio. |
+
+### Calibrated constants (`max_gain_pct`, intermediate band)
+
+| | Class A | Class B | Class C | RoxZone |
+|---|---|---|---|---|
+| total_beginner | 14% | 18% | 12% | 10% |
+| beginner | 12% | 15% | 10% | 8% |
+| novice | 10% | 12% | 8% | 6% |
+| **intermediate** | **7%** | **8%** | **5%** | **5%** |
+| advanced | 4% | 5% | 3% | 3% |
+| competitive | 2% | 3% | 2% | 2% |
+
+### Citations
+
+- **Class A — Cardio erg**:
+  - Mikulic P & Ružić L (2008) "Predicting the 1000-m rowing ergometer performance" — well-trained rowers improve 5-10% in 12wk; novices 10-15%.
+  - Lawton TW, Cronin JB, McGuigan MR (2011) "Strength testing and training of rowers" Sports Med 41:413-432.
+  - Concept2 12-week 2k erg plan (empirical) — 3-7% intermediate gains.
+  - Coggan A & Allen H (2019) "Training and Racing with a Power Meter" 3rd ed. Ch. 7 — bike FTP curves as the cycling analogue (rowing/skiing physiology ≈ cycling).
+  - Crawford & Drake (2020) HIFT 6-wk intervention — 8-15% VO2max gains in mixed cohorts.
+- **Class B — Strength-endurance**:
+  - Bompa T & Buzzichelli C (2018) "Periodization Training for Sports" 4th ed. — LME 10-25% in 6-12 wk untrained; saturates rapidly when trained.
+  - ACSM Position Stand (2009) "Progression Models in Resistance Training" MSSE 41:687-708 — 10-20% gains untrained, 3-6% advanced.
+  - Schoenfeld BJ et al. (2021) "Loading Recommendations for Local Endurance" Sports 9:32 — 15+ rep schemes maximise LME.
+  - Brandt & Ebel (2025) "Acute physiological responses and performance determinants in Hyrox©" Frontiers in Physiology — sled push fastest despite heaviest load (power-endurance, not max strength).
+  - Mountain Tactical Institute mini-study — sled push intervals, 7-12% in 3-min Prone-to-Sprint over 8 wk.
+  - Kliszczewicz et al. (2014, 2019) — CrossFit metabolic-conditioning data for burpee-style efforts.
+- **Class C — Grip / carry**:
+  - Winwood PW et al. (2014) "Strength and conditioning practices of strongman athletes" J Strength Cond Res 28:3678-3686 — loaded carries respond well to specific work.
+  - Hindle BR et al. (2019) "Loaded carries — a review" Strength & Cond J 41:69-75 — 6-12 wk specific programs deliver 10-20%; without specific work, plateau quickly.
+  - McGill SM (2010) "Core training: evidence translating to better performance and injury prevention".
+- **RoxZone**:
+  - roxlyfe.com elite-vs-average — elite 2:54 transition total vs average 6:58 (4-min skill gap).
+  - HyroxDataLab target-split table — 6:30 transitions at intermediate, 12:00 at total_beginner.
+  - Brandt & Ebel (2025) — pacing and transition management as primary race-day differentiators.
+
+### Sessions/week — Hyrox-wide, not per-station
+
+A single `plannedHyroxSessionsPerWeek` count drives all three classes. Why: one Hyrox-style workout typically hits multiple stations and a run, so per-station counting would either double-count (every workout = 1 to every class) or be structurally noisy (only 0.3 sled sessions/wk would read as undertraining for sled even though every Hyrox session involves loaded movement). The literature reports class-level adaptation rates against total Hyrox-style frequency — we mirror that.
+
+`plannedHyroxSessionsPerWeek` reads `wk.triWorkouts` over the next 4 weeks and averages session count. Lesson from triathlon: PLANNED sessions, not historical. Historical reads 0/wk on a fresh plan and trips the undertrain penalty, making the projection slower than current.
+
+### Anchoring `currentSec` — display consistency rule
+
+The "current" value displayed in the trajectory panel IS the `baseSec` from the same `predictHyroxRace` call that drives the per-station forecast panel and benchmark cards. Computing it twice via two paths (a parallel re-derivation) was the bug behind the triathlon LT-pace mismatch (race-forecast-card.ts:370 — same user saw 4:23 in one place, 4:08 in another). The trajectory panel must NOT recompute "current" — it propagates the projection delta to the canonical baseline.
+
+**Venue factors are NOT applied to the trajectory.** This panel projects "test pace today → test pace race day" — unfatigued benchmark trajectory. Venue-day adjustments (floor, lap, temp, altitude) live in the existing course-factors panel and apply to the in-race adjusted time, not the test pace.
+
+### Confidence
+
+**Medium-low.** Several sources of uncertainty:
+
+1. **No HYROX-specific longitudinal trainability data exists.** Class B numbers extrapolate from LME literature with a discount factor; Class A from rowing-erg and bike-FTP studies; Class C from strongman and loaded-carry literature. The Brandt & Ebel 2025 paper has a sample size of 11 — not yet enough to validate per-station gain rates.
+2. **Class assignment is structural, not calibrated.** Wall balls in particular straddle the cardio/strength-endurance line; assigned to B because the limiting factor is squat-and-throw eccentric work, not pure aerobic capacity.
+3. **`adaptation_ratio` defaults to 1.0.** Per-class adaptation signals (HR-at-power drift on erg sessions, pace decay across sled reps) will plug in here as Phase 2 work — same architecture as the triathlon Phase 2A adaptation engine.
+4. **Adherence penalty defaults to 0** in v1. Future per-class scoring will track which classes the athlete actually executed vs missed.
+
+### Limitations
+
+- **In-race fatigue gap not modelled in the projection.** The trajectory shows test-pace improvement; actual in-race times will be slower because of accumulated station fatigue (which is modelled separately via `PER_STATION_FATIGUE_RATE_BY_BAND` for the run legs but not propagated to station times).
+- **Singles-only calibration.** Doubles format applies the same horizon model to the 4 active stations, but a doubles athlete's adaptation profile may differ from singles.
+- **No band-transition logic.** A novice who improves to intermediate during a long horizon should switch to intermediate's gain rates mid-block. The current model holds the band fixed.
+
+### Taper invariant (test-pinned 2026-05-09)
+
+Two unit tests in `training-horizon.hyrox.test.ts` pin the Mujika-grounded taper behaviour so future edits don't drift:
+
+1. **Race inside taper window yields meaningfully less gain than build-phase race.** At `weeks_remaining = 1.0` (inside `HYROX_TAPER_WEEKS = 1.5`), `weeks_eff = max(0, 1.0 - 1.5) = 0`, so `weekFactor = 0` and the build-phase fitness contribution collapses entirely. Only the taper bonus survives, scaled by `taperRatio = min(plannedTaperWeeks, weeksRemaining) / plannedTaperWeeks`. Build-phase gain (race in 8 weeks) must be at least 1.4× larger than taper-phase gain.
+2. **Race tomorrow with full sessions floors below 1% improvement.** At `weeks_remaining ≈ 0.05`, `taperRatio ≈ 0.033`, and total gain stays below 1% even with maximal session count. Prevents the pathological case where a user setting a plan one day before their race sees a "−5s SkiErg" projection that would only be earnable via real adaptation time.
+
+Both tests reflect Mujika & Padilla 2003 (*Med Sci Sports Exerc* 35(7):1182–1187): performance gains during a 1–3 week taper come from fatigue removal (super-compensation), not from new adaptive stimulus. The horizon model captures this by zeroing `weekFactor` inside the taper window and surfacing only the `taperBonus` component (which represents fitness coming forward, not new fitness arriving). User-facing implication: setting a plan one week before a race shows near-zero forecast movement, which is the honest and correct read.
+
+---
+
+## §R — HYROX Real Population Distributions (2026-05-07)
+
+**Source**: Kaggle dataset `jgug05/hyrox-results` (Seasons 4–6, ingested 2026-05-07). 92,375 raw rows → 89,868 after sanity filtering (dropped DNS/scoring outliers via `total_time ∈ [30 min, 5 h]`, `run_time ∈ [20 min, 2.5 h]`).
+
+**Methodology**: percentile breakpoints computed at p1, p5, p10, p25, p50, p75, p90, p95, p99 per format per metric. Lookup uses linear interpolation between adjacent breakpoints. Stored as `Array<[seconds, cumulativePercentile]>` in `src/data/hyrox-population-distributions.ts`.
+
+**Coverage**:
+- `open_singles` — 50,364 rows. Strong coverage.
+- `pro_singles` — 11,458 rows. Adequate; smaller sample so tail percentiles wider.
+- `open_doubles` — 28,046 rows.
+- `pro_doubles` — 0 rows (dataset doesn't separate). Falls back to synthesised distribution.
+
+**Validity caveats**:
+- Dataset is Seasons 4–6 (2022–2023). Newer seasons are not yet ingested — population may have shifted slightly with HYROX's growing accessibility.
+- Demographics not stratified: tables are gender-mixed and age-mixed. A 25-year-old male and a 50-year-old female get the same percentile mapping. Per-demographic tables are a future improvement.
+- The Kaggle dataset has no per-station split percentiles (only per-leg `run_n` and `work_n` cumulative). Per-station distributions remain synthesised — a follow-up if individual station times become available.
+
+**Refresh**: re-run `scripts/ingest-hyrox-results.mjs` with a fresher CSV, paste the generated tables back. Bump `LAST_REFRESH_DATE`.
+
+---
+
+## §Q — HYROX `hxFormat` workout tagging (deferred decision, 2026-05-07)
+
+**Problem**: when an activity-matcher derives a benchmark from a completed station/brick session, it currently writes the result to whichever benchmark slot matches the user's *current* `hyroxConfig.format` (Singles or Doubles). For a hybrid athlete who trains both formats in the same plan, this routes some sessions to the wrong slot.
+
+**Proposed fix**: tag each generated workout with `hxFormat?: HyroxFormat` at generation time so the matcher can route to the correct slot regardless of current config.
+
+**Decision: defer.** Rationale:
+- The current default behaviour (route to current config format) is correct for ≥95% of users — those who train one format at a time per plan. Hybrid trainers are an edge case worth fewer engineering hours today than the validation work outlined in §R.
+- Adding `hxFormat` to every generated workout requires plumbing through `hyrox-generators.ts` (5 generators), the plan engine, and the matcher. Non-trivial.
+- We have a workable substitute: the user's `hyroxConfig.format` reflects the format they're targeting. If they switch mid-plan, their existing benchmarks migrate via the existing slot logic.
+
+**Revisit when**: the first dogfood report from a hybrid athlete shows misrouted calibrations, OR the plan-engine adds explicit "hybrid" mode (alternate sessions in singles + doubles formats).
+
+---
+
+## §P — HYROX Race-Day Projection Model (2026-05-07)
+
+**Model**: `buildHyroxProjection` in `src/calculations/race-projection.hyrox.ts`.
+
+Adjusts the current "if you raced today" prediction toward race day via four stacked percentage factors. Same shape as the triathlon `buildProjection`/`applyTriHorizonRun` pattern (race-prediction.triathlon.ts:340).
+
+**Factor 1 — Training fitness** (±5% bound). `mtlCTL` is the 42-day daily-equivalent EMA of weekly MTL (the chronic load anchor). Compared to a band-anchored expectation: `expectedMtlCtl(band) = HYROX_MTL_CAP[band] × 0.70 ÷ 7` (~70% of the band's cap, daily-equivalent). Athletes training above their band's anchor are projected to outperform; below get penalised. Soft-saturating at ±5% prevents extreme ratios from overwhelming the projection.
+
+**Factor 2 — Weekly volume** (±3% bound). Configured `runsPerWeek + stationSessionsPerWeek + bricksPerWeek` vs `HYROX_WEEKLY_SESSIONS[band]` total. Smaller weight than fitness because volume is already partly captured in CTL.
+
+**Factor 3 — Plan adherence** (0..+4% slowdown). Completed sessions / planned sessions over the last 3 completed weeks. Same penalty pattern as triathlon's `tri-adherence.ts:80` — missed sessions incur a slowdown, full adherence is neutral.
+
+**Factor 4 — Taper bonus** (up to −1.5% improvement). Fires when race is within taper window (`HYROX_TAPER_DAYS[band] ÷ 7`). Mirrors triathlon's `taperRatio × taperBonus` logic from `training-horizon.triathlon.ts:131`. Magnitude of 1.5% is conservative — running's taper bonus is per-band (Bompa & Haff 2009: 0.5–3% gain), and HYROX's mixed-modal nature (eccentric stations + aerobic running) suggests the lower end of that range.
+
+**Confidence range** (`confidenceRangeSec: [low, high]`). Base ±4% widens with weeks-remaining (+1% past 4 weeks, +1% past 12 weeks — uncertainty grows with horizon) and with prediction confidence (low = +2%, medium = +1%). Tighter ranges for high-confidence near-term predictions; wider for low-calibration far-out projections.
+
+**Known limitations**:
+- Factor weights are heuristic, anchored on running/triathlon horizon-model parameters rather than HYROX-specific outcome data.
+- The expected-CTL anchor assumes 70% of cap as a "trained athlete on band" benchmark — not directly observed from population data.
+- No discipline-split CTL (we don't separately track run CTL vs station CTL) — would require extending `mtlHistory` similar to triathlon's `fitnessHistory.{swimCtl, bikeCtl, runCtl}`. Listed as a follow-up.
+- Race-day fatigue interaction with venue factors not modelled separately — projection is applied to current total, then venue factors are already in that total via `predictHyroxRace`.
+
+**Side**: tracking. Surfaced on the forecast view; not used for plan generation.
+
+---
+
+## §O — HYROX Prediction Confidence Model (2026-05-07)
+
+**Model**: `confidence: 'high'|'medium'|'low'` computed in `predictHyroxRace` (`src/calculations/race-prediction.hyrox.ts`).
+
+**Rules**:
+- `high`: ≥6 calibrated stations AND venue selected. Rationale: most of the prediction is driven by measured data; the remaining 1–2 seed stations contribute <15% of station time; venue-specific course factors are applied.
+- `medium`: ≥3 calibrated stations. More than half the station time is anchored; run pace may still be seed-derived.
+- `low`: <3 calibrated stations. Prediction is largely driven by ability-band seed times derived from population averages. Suitable as a rough benchmark only.
+
+**Known limitations**: confidence does not account for calibration recency (a 6-month-old benchmark may be outdated), for format-conversion bias (doubles→singles via the 0.92 factor introduces additional uncertainty), or for venue extrapolation accuracy.
+
+**Side**: tracking (prediction, not planning).
+
+---
+
+## §N — HYROX Doubles→Singles Time Conversion Factor (2026-05-07) — SUPERSEDED by §T
+
+> ⚠️ **Superseded 2026-05-08.** The 0.92 constant documented here was wrong-direction at the population level (singles is harder for the same athlete, not easier) and produced a chain of broken predictions for cross-format users. Replaced by bidirectional same-athlete factors `SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22` / `SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85`, used only for band derivation. Per-station cross-format inference is no longer attempted — the predictor falls back to target-format seeds with `confidence = 'low'`. See §T for the current model. This entry is preserved for historical context only.
+
+**Model**: `DOUBLES_TO_SINGLES_FACTOR = 0.92` in `src/constants/hyrox-constants.ts`.
+
+Applied when predicting a singles finish and the athlete only has doubles benchmarks: `estimatedSinglesSec = doublesSec × 0.92`.
+
+**Rationale**: Doubles athletes alternate station completion with a partner. The waiting partner accumulates metabolic fatigue but the active athlete can push closer to maximal effort on each station. However, competitive pacing in doubles format differs from open singles — athletes often pace conservatively on shared stations to manage team strategy. Comparison of HYROX results data (HyroxDataLab, 2023–2025) for athletes competing in both formats at similar fitness levels shows singles per-station times averaging ~8% faster than their corresponding doubles times. The 0.92 factor encodes this gap. Applied only to seed-unfilled slots when cross-format estimation is needed; when both singles and doubles benchmarks exist, the matching slot is used directly.
+
+**Inverse (singles→doubles)**: not converted — singles times represent unrestricted capacity and are used as a conservative ceiling for doubles prediction.
+
+**Known limitations**: the 0.92 factor is a global average; individual variation is substantial (particularly for strength-biased vs. endurance-biased athletes). Pro division doubles may have a different ratio (smaller gap, due to higher competitive drive) but insufficient data to separate.
+
+**Side**: tracking (prediction).
+
+---
+
+## Route Safety Rating — 300m Endpoint Trim (2026-05-07)
+
+**Model**: `trimRouteEnds(points, trimMeters=300)` in `src/gps/anonymize-route.ts`
+
+**What it does**: Strips the first and last ~300m of a GPS route before storing it in Supabase, so that the start and end points (which typically coincide with a runner's home, workplace, or car park) cannot be reverse-geocoded to an address.
+
+**Why 300m**:
+- A typical urban residential block is 80–150m (Gehl 2010, London street network median). A 300m strip clears 2+ full blocks in the worst case, taking the visible endpoint well into an anonymous mid-street or park segment.
+- Google Street View accuracy is ~10m; 300m puts the nearest stored point outside the resolution window at which a casual observer could identify a house frontage.
+- Long-distance runs are minimally affected: a 5km run retains ~88% of its route (9.4/10 km net after both ends trimmed). Shorter runs approaching 600m total are returned as null and not stored.
+
+**Known limitations**:
+- Cul-de-sac or dead-end routes may still reveal the endpoint even after trimming if the truncated polyline terminates near a unique street stub. Nothing in this model prevents that. Acceptable limitation for v1.
+- The trim is cumulative-distance based (Haversine), not time-based. Slow walks at the start/end cover less physical distance per second, so the trim is always a spatial guarantee, not a temporal one.
+- No simplification pass is applied — the full point density is retained inside the trim bounds. This is intentional: higher fidelity data for future aggregation. Storage cost is low (typical road run ~1,000 points after compression by Capacitor GPS provider).
+
+**Files**: `src/gps/anonymize-route.ts`, `supabase/migrations/20260507000001_route_safety_ratings.sql`
+
 ### Companion Research Documents
 
 For the full literature review, evidence synthesis, confidence levels, and bibliography behind the models documented here, see:
@@ -13,6 +600,845 @@ For the full literature review, evidence synthesis, confidence levels, and bibli
 - **HYROX**: `docs/research/hyrox.md` — three-dimensional load model (aerobic/anaerobic/MTL), station taxonomy, concurrent training, replacement matrix
 
 This log documents **formulas and implementation**. The research docs document **why those formulas are defensible**.
+
+---
+
+## Empirical course-factor calibration from race-finish data (2026-05-07)
+
+**Where**: `src/validation/{dataset-loader, course-factors, distribution, run-calibration}.ts`, `src/calculations/empirical-course-factors.ts`, `src/calculations/race-prediction.triathlon.ts` (course-factor source picker, ~line 530).
+
+**The problem.** Hand-tuned course factors (climate × altitude × elevation × wind × swim type) capture the *physics* of why a course is hard but miss everything a finisher's split actually encodes — specific roads, prevailing winds at race time, exact bike-leg gradient profile, micro-climate, athlete acclimatisation effects. We had no calibration step against actual race outcomes.
+
+**The fix (Tier B — what we built).** For each race location, compute multiplicative factors `(swim, bike, run)` from real splits. The factors are talent-controlled to remove the "fast races attract fast athletes" confound:
+
+- **IM data** (~850k finishes after PRO + finisher filters, 2002 to 2024) has `athleteID`. Each athlete who appears at multiple races contributes their pace at race L relative to their own multi-race average. The location's factor is the mean of those athlete-relative ratios. Athletes with only one race contribute nothing (no within-athlete contrast available). The mean of the relative ratio across the global population is approximately 1.0 by construction; values > 1.0 mean "athletes raced slower at this location vs their personal average," i.e., a hard course.
+
+- **70.3 data** (~840k finishes, 2004 to 2020) has no athlete ID. We stratify by `(gender, ageGroup)`: for each race, compute the mean leg time per `(M, 40-44)` bucket, divide by the global mean for that bucket, average those ratios across all buckets present at the race. Less precise than fixed effects but still talent-controlled.
+
+**Mathematical defensibility.** Athlete fixed effects is the gold standard for removing unobserved heterogeneity in panel data (Wooldridge 2010). Stratification is the next-best thing when athlete identity isn't available; the bucket-level controls (gender, age band) capture the dominant talent-distribution differences across races.
+
+**Sanity validation.** The math finds what the coaching community already knows:
+
+- Top hardest IM bikes: World Championship St George (1.089), regular St George (1.082), Lanzarote (1.082), Lake Tahoe (1.077), Alaska (1.061) — the textbook hardest IMs in the world.
+- Top hardest 70.3 bikes: Connecticut (1.244), Dun Laoghaire (1.209), UK (1.196), Edinburgh (1.172), Silverman (1.148) — all famously hilly.
+- Top hardest 70.3 runs: Subic Bay (1.258), Goa (1.226), Davao (1.223), Saipan (1.210) — all tropical heat-killers.
+
+These rankings emerge entirely from finishers' splits with no human input. Strong external validity for the methodology.
+
+**Confidence tiering.** ≥ 1000 finishers → high; 200 to 999 → medium; 50 to 199 → low (drop); < 50 → insufficient (drop). Runtime predictor uses empirical when high/medium; falls back to physical (climate × altitude × elevation × wind × swim type) for low/missing/new races. Physical model is preserved as the safety net — it works for any race with a `CourseProfile` regardless of dataset coverage.
+
+**Sanity caps.** Factors clamped to `[0.75, 1.40]`. Outliers usually represent data errors (course shortened due to weather, swim cancelled or shortened to non-wetsuit). Two clamped entries flagged: Ironman North Carolina (bike 0.750 — 2016 only, weather-shortened), Ironman Alaska (swim 0.750 — likely shortened or non-wetsuit).
+
+**Tier A distribution table** is also built from the same datasets but separately. For each total-time bin (15-min for 70.3, 30-min for IM), it stores mean and SD of each leg's fraction of total time. The runtime helper `validateAgainstDistribution(prediction)` returns z-scores per leg, flagging any leg outside ±2 SD of the empirical mean for the prediction's total-time bin. Useful for catching predictions that are individually plausible but proportionally wrong (e.g., 2:30 swim in a 5:30 70.3 — too long even if 2:30 swim is plausible in isolation).
+
+**What this DOES NOT calibrate.**
+- The prediction's *level* — that's still set by physiology models (FTP, CSS, VDOT, blended fitness regressions vs published literature).
+- The bike-to-run pace discount (5 to 11 percent). To calibrate this we'd need linked (open marathon, IM marathon split) pairs per athlete, which the public data doesn't provide.
+- The race-readiness penalty curve. Same constraint — needs linked training-volume to outcome data.
+
+**Limitations.**
+- Empirical factors are time-averaged. A race held under unusually hot conditions in a specific year contributes that bad year's slowness to the lifetime mean. We don't currently weight by recency or weather.
+- 70.3 stratification is less precise than IM fixed effects. A small race with unusual age-group mix can produce noisy factors even at "high confidence" sample sizes.
+- Course changes mid-history (e.g., Ironman Frankfurt course revisions over 20 years) are averaged through. A future enhancement could use only data from years with stable course profiles.
+- IM athlete-fixed-effects estimator drops athletes with only one race. About 30% of records get filtered this way, reducing effective sample from 1.93M raw to 1.33M.
+
+**References**:
+- Kaggle dataset, aiaiaidavid (2021) "Ironman 70.3 races 2004 to 2020". https://www.kaggle.com/datasets/aiaiaidavid/ironman-703-race-data-between-2004-and-2020
+- Kaggle dataset, miguswong (2024) "Ironman 140.6 Results 2002 to 2024". https://www.kaggle.com/datasets/miguswong/ironman-140-6-results-dataset-2002-2024
+- CoachCox IM Stats — original scrape source. https://www.coachcox.co.uk/imstats/
+- Wooldridge JM (2010). *Econometric Analysis of Cross Section and Panel Data* 2nd ed. MIT Press.
+- Friel J (2018). *The Triathlete's Training Bible* 4th ed. VeloPress.
+
+---
+
+## Race-readiness model upgrade: per-band targets, weighted score, sigmoid penalty, cross-discipline transfer, gap-aware closure (2026-05-07)
+
+**Where**: `src/constants/race-readiness-targets.ts`, `src/calculations/specific-endurance-penalty.ts`, `src/calculations/race-readiness.ts`, `src/calculations/race-prediction.triathlon.ts`.
+
+**The problem.** The original race-readiness model (2026-05-06) used a single intermediate-band target table, an unweighted geometric mean of `volumeRatio × longestRatio`, a linear `1 + (1 − score/100) × maxPenalty` curve, no cross-discipline transfer, and a fixed closure window. Five practical failure modes:
+
+1. A beginner triathlete with the same weekly volume as an intermediate gets identical readiness scores — but they shouldn't (a beginner's *target* is lower).
+2. Sprint and IM both weight volume and longest equally — but a sprint athlete doesn't need 4-hour rides, while an IM athlete does.
+3. Linear penalty over-penalises athletes who are 80% ready and under-penalises athletes who are 30% ready.
+4. A fit cyclist starting triathlon training gets zero credit for cycling's substantial cardiac transfer to running readiness.
+5. A near-ready athlete is treated as needing the full closure window even though most of the gap is already closed.
+
+**The five fixes (one pass).**
+
+### 1. Per-band targets
+
+Five Daniels bands (`beginner / novice / intermediate / advanced / elite`) instead of intermediate-only. Per-band volume multipliers `{0.55, 0.75, 1.00, 1.25, 1.45}` and longest multipliers `{0.70, 0.85, 1.00, 1.15, 1.25}`. Volume scales aggressively with band (Daniels VDOT plans show ~2.6× ratio elite-to-beginner weekly volume); longest-session scales less aggressively (race demands set the floor — even a beginner IM athlete must have done a 3-4hr ride). `getReadinessAbilityBand(state, discipline)` resolves per-discipline band: VDOT for run (Daniels), FTP for bike (Coggan tier approximation at ~70kg), CSS for swim.
+
+**Defensible because**: Daniels (2014) publishes intermediate-vs-elite weekly volume ratios for marathon plans (~1.45× elite / 0.75× novice ≈ Friel's coaching consensus for triathlon). Per-discipline bands respect the empirical reality that a triathlete can be advanced on bike but novice on swim — concurrent training literature (Millet & Vleck 2000) confirms training-age and ceiling differ across modalities even within the same athlete.
+
+### 2. Per-distance weighted geometric mean
+
+Score `= volumeRatio^vW × longestRatio^lW × 100`. Weights:
+
+| Distance | volume W | longest W | Rationale |
+|---|---|---|---|
+| Sprint | 0.70 | 0.30 | Race < 1.5h fits within glycolytic capacity — volume more important than long-session prep. |
+| Olympic | 0.60 | 0.40 | Slight shift toward longest as race exceeds 2h. |
+| 70.3 | 0.50 | 0.50 | Balanced — both weekly base AND specific peak prep matter equally. |
+| Ironman | 0.40 | 0.60 | Longest-heavy — fractional utilization decay (Coyle 1984; Mujika & Padilla 2000) means race-distance-specific 4hr+ rides + 2hr+ runs are non-negotiable. |
+| 5K / 10K | 0.70 / 0.60 | 0.30 / 0.40 | Mirrors Sprint/Olympic. |
+| Half / Marathon | 0.50 / 0.40 | 0.50 / 0.60 | Mirrors 70.3/IM. |
+
+**Defensible because**: Coyle's fractional-utilization decay literature shows endurance prep matters more as race duration increases. Friel (2018) coaching consensus is identical: short-course athletes can compensate for missing long sessions with more total volume; IM athletes cannot.
+
+### 3. Sigmoid penalty curve
+
+`penaltyShare = 1 / (1 + exp(k × (50 − score)))`, with `k = 0.08`. Anchor points at `k=0.08`:
+
+| Score | penaltyShare | Interpretation |
+|---|---|---|
+| 90 | 0.04 | Near-ready: only 4% of maxPenalty applied |
+| 70 | 0.17 | On track: small but real penalty |
+| 50 | 0.50 | Building: half of maxPenalty (curve midpoint) |
+| 30 | 0.83 | Underprepared: most of maxPenalty applied |
+| 10 | 0.96 | Not ready |
+| 0 | 0.98 | Asymptotic toward 1.0 |
+
+**Defensible because**: training adaptation is non-linear (Banister-Calvert IRF, Mujika 2009 detraining curves). The "last 20%" of readiness costs more than the first 50% — an athlete who has done all the long work but missed two weeks of base volume is much closer to ready than the score-arithmetic suggests. Linear curves over-penalise the strong-but-incomplete athlete.
+
+### 4. Cross-discipline transfer
+
+`CROSS_DISCIPLINE_TRANSFER[from][to]` matrix:
+
+|  | → swim | → bike | → run |
+|---|---|---|---|
+| **swim** | 1.00 | 0.10 | 0.10 |
+| **bike** | 0.05 | 1.00 | 0.30 |
+| **run** | 0.05 | 0.25 | 1.00 |
+
+Two-pass: first compute raw readiness per discipline; then for each target discipline, set `volumeRatio = sum over all sources of (transferFactor × source's raw volumeRatio)`. Capped at 1.2 (matches base ratio cap).
+
+**Defensible because**:
+- **Bassett & Howley (2000)** — VO2max adaptations are ~70-85% central/cardiac, partially shared across endurance modalities. Sets the upper bound on transfer (full transfer impossible because peripheral adaptations remain mode-specific).
+- **Tanaka (1995)** — meta-review of cross-training: ~50% of cycling-specific cardiac adaptations transfer to running; reverse direction less. Calibrates the bike→run = 0.30 weight.
+- **Mutton et al. (1993)** — direct cycling-to-running transfer measurement: ~30-40% of cycling-induced VO2max gain showed up in running performance. Anchors bike→run.
+- **Loy et al. (1995)** — cross-training maintenance during injury: 25-50% of endurance can be maintained via the alternate modality, supporting symmetric ~25-30% transfer between cycling and running.
+- **Millet & Vleck (2000)** — concurrent training in triathlon: swim is technique-bound and arm/leg mechanical separation makes peripheral transfer minimal. Justifies 0.05-0.10 transfer ratios involving swim.
+
+The asymmetry (bike→run > run→bike) reflects that running's high impact load and economy demand more peripheral specificity than cycling's smoother load.
+
+### 5. Gap-aware closure window
+
+`effectiveClosureWeeks = closureWeeks × sqrt(max(0, 1 − currentScore/100))`. Then `tau = effectiveClosureWeeks / 3`, `timeFactor = 1 − exp(−usefulWeeks / tau)`.
+
+For Ironman with `closureWeeks = 12`:
+
+| currentScore | effectiveClosureWeeks |
+|---|---|
+| 0 | 12.0 (full window — worst-case starting point) |
+| 30 | 10.0 |
+| 50 | 8.5 |
+| 80 | 5.4 (45% of full) |
+| 90 | 3.8 |
+
+**Defensible because**: closure is non-linear in starting position. The first 50 points of readiness gain require base-building from scratch (months of progressive overload, Issurin 2008 block periodization); the last 20 points are sharpening of an existing platform (Bompa & Buzzichelli 2015). `sqrt(gapFraction)` captures this — gap of 0.2 needs only `sqrt(0.2) ≈ 0.45` of the full window. Without this scaling, the model claimed a near-ready athlete needed 12 more weeks of full-dose training to close a 10-point gap, which contradicts both literature and intuition.
+
+**Combined effect on the canonical case** (Tristan, IM target, ~5 hrs/wk current bike, FTP 295W → bike band = advanced):
+
+- Old model: bike score 35/100, linear penalty 1.10 (full maxPenalty 0.15 × 0.65 gap fraction)
+- New model: bike score 52/100 (advanced-band target = 11.25 hrs vs 5 hrs actual; longestRatio more forgiving; cross-credit from run pulls volume up), sigmoid penalty 1.07 (50% of maxPenalty)
+
+A reasonable softening: still penalised for low recent volume, but no longer arithmetically wrong about how prepared he is.
+
+**Limitations**:
+- Per-band multipliers (0.55-1.45×) are calibrated to running literature; bike/swim per-band targets are an extrapolation. Friel doesn't publish per-band tables for swim/bike — only intermediate. Confidence: medium for run, lower for swim/bike.
+- Cross-discipline transfer factors are anchored to literature but assume equal recent training quality across disciplines. A user logging 10 hrs/wk of soft-pedalled commute cycling shouldn't get the same bike→run credit as a user logging 10 hrs/wk of structured cycling. v1 doesn't differentiate; future work could weight by intensity distribution (Seiler polarized model).
+- The sigmoid `k=0.08` is a clean S-curve but isn't empirically calibrated against outcome data. It replaces a worse linear default; tuning against finish-time outcomes would be the next step.
+- Gap-aware closure assumes physiological adaptation rate is constant and only the *gap* changes — true to first order but ignores that adaptations also slow at higher fitness levels (Issurin's "ceiling effect").
+
+**References (full)**:
+- Bassett DR, Howley ET (2000). Limiting factors for maximum oxygen uptake and determinants of endurance performance. *Med Sci Sports Exerc* 32(1):70-84.
+- Bompa TO, Buzzichelli C (2015). *Periodization Training for Sports* 3rd ed. Human Kinetics.
+- Coyle EF (1984). Substrate utilization during exercise in active people. *Am J Clin Nutr* 61(suppl):968S-979S.
+- Daniels J (2014). *Daniels' Running Formula* 3rd ed. Human Kinetics.
+- Friel J (2018). *The Triathlete's Training Bible* 4th ed. VeloPress.
+- Issurin VB (2008). Block periodization vs traditional training theory: a review. *J Sports Med Phys Fitness* 48(1):65-75.
+- Loy SF, Hoffmann JJ, Holland GJ (1995). Benefits and practical use of cross-training in sports. *Sports Med* 19(1):1-8.
+- Millet GP, Vleck VE (2000). Physiological and biomechanical adaptations to the cycle-to-run transition in Olympic triathlon. *Br J Sports Med* 34(5):384-90.
+- Mujika I, Padilla S (2000). Detraining: loss of training-induced physiological and performance adaptations. Part I. *Sports Med* 30(2):79-87.
+- Mujika I (2009). *Tapering and Peaking for Optimal Performance*. Human Kinetics.
+- Mutton DL, Loy SF, Rogers DM, Holland GJ, Vincent WJ, Heng M (1993). Effect of run vs combined cycle/run training on VO2max and running performance. *Med Sci Sports Exerc* 25(12):1393-7.
+- Tanaka H (1995). Effects of cross-training: transfer of training effects on VO2max between cycling, running and swimming. *Sports Med* 17(5):330-9.
+
+---
+
+## Adhoc activity RPE: signal channel separation (2026-05-06)
+
+**Where**: `src/ui/events.ts:967-982` (effortScore), `src/ui/activity-review.ts` (modal save handler), `src/calculations/fitness-model.ts:1632-1655` (recovery countdown fallback).
+
+**The problem.** Three distinct adhesion-to-plan vs body-stress channels were tangled into one code path:
+1. **Plan adherence** — "did the user execute the *prescribed* workout harder/easier than expected" → `effortScore` → drives next week's `effortMultiplier`.
+2. **Physiological load** — "how much total stress is the athlete carrying" → TSS / iTRIMP / ACWR → drives recovery countdown, `actualTSS`, sleep debt.
+3. **Subjective fatigue** — "how brutal did this feel" → user RPE rating.
+
+Cross-training (Padel, climbing, strength) has no plan reference. The prior implementation summed adhoc deviations into `effortScore` with a fabricated `expected = 5`, so a cross-training rating polluted plan-adherence signal. Separately, no-HR cross-training read into the recovery countdown only as raw `durationSec / 60`, ignoring intensity entirely — a brutal 90-min Padel rated 9/10 with no HR stream contributed identically to a 90-min walk.
+
+**The fix is signal separation, not signal blending.**
+
+- **Plan adherence** (channel 1): iterate planned workouts only; require explicit `expected = wo.rpe ?? wo.r` (no fallback). Adhocs are excluded by construction. Mirrors `effort-multiplier.triathlon.ts:54-58` which was already correct in tri mode.
+- **Physiological load** (channel 2): for HR-tracked activities (most users with watches), `iTrimp` from Garmin/Strava remains canonical — RPE rating is informational only. For no-HR activities, the rated RPE writes back into `workout.rpe`/`workout.r` and recomputes `aerobic`/`anaerobic` via `calculateWorkoutLoad`. Both paths converge on the same downstream consumers (Signal A/B at `fitness-model.ts:1149` already reads `w.rpe ?? w.r`; recovery countdown now mirrors that pattern at line 1637; tri overload at `tri-cross-training-overload.ts:316` reads `w.aerobic + anaerobic`). One number, one source.
+- **Subjective fatigue** (channel 3): every activity gets an RPE prompt now — runs, gym, cross-training. Stored in `wk.rated[id]` and displayed on the activity card.
+
+**Why HR-canonical for HR users.** Coggan & Allen 2019 (cycling) and Borg 1982 (perceived exertion) both establish that for steady-state effort, HR-derived load is more reliable than self-rated RPE — RPE conflates psychological state, environmental conditions, and recent food intake with intensity. For intermittent activities (stop-start sports, strength) HR misses CNS load and RPE is *more* reliable — but those activities also tend to lack reliable HR streams (no chest strap, drift on optical sensors during grip work). So the heuristic "trust HR if present, RPE if not" tracks the underlying signal quality.
+
+**Why we don't blend** (e.g., `0.6 × HR_load + 0.4 × RPE_load`). RPE has high inter-day variance and habituation effects (athletes who "always rate 7" inflate, athletes who "tough it out at 4" understate). Letting RPE shift HR-derived load would introduce noise into ACWR — a metric that needs week-to-week stability for its `1.3 / 1.5` thresholds to be meaningful. The blend would help no one and hurt the disciplined HR users who are the majority.
+
+**Limitations.**
+1. **Rating bias.** Athletes who systematically rate high will see inflated load (and consequently softer next-week plans) when they have no HR data. We have no calibration mechanism yet.
+2. **Mid-rating switching.** If a user added a watch mid-history, old no-HR weeks have RPE-derived load and new weeks have HR-derived; CTL ramp through that boundary may show a small visible step. Not corrected.
+3. **`TL_PER_MIN` table.** The recovery-countdown fallback uses `TL_PER_MIN[rpe]` which is calibrated against running. Cross-training RPE → `TL_PER_MIN` mapping is approximate; a strength session at RPE 8 produces different physiological strain than a 10K run at RPE 8.
+
+**Tests.** 1480/1480 passing. No existing tests guarded the prior `|| 5` fallback or the run-only push gate, so no expectations needed updating.
+
+---
+
+## Specific endurance penalty + race-readiness surface (2026-05-06)
+
+**Where**: `src/calculations/specific-endurance-penalty.ts` (per-discipline math), `src/calculations/race-readiness.ts` (tri-shaped aggregator), `src/constants/race-readiness-targets.ts` (Friel volume tables). Applied in `predictTriathlonRace` to the `current` ("today") prediction only.
+
+**Problem.** The triathlon prediction engine treats fitness markers (FTP, CSS, VDOT) as standalone capability — assumes the athlete can sustain those for the full race distance. That's true for *physiological capacity* but false for *endurance preparation*. An IM is 8-12 hours of work; without specific volume the athlete will:
+- Blow up on the bike (no muscular endurance for 6+ hours at IM-pace power)
+- Walk the marathon (no glycogen storage / heat tolerance / running economy for 42km off the bike)
+- Struggle on the swim (no open-water 3.8km familiarity)
+
+Markers are necessary but not sufficient. Diagnostic case: 3:09 marathon-PB + FTP 295W + CSS 2:22 athlete predicted as 12:32 IM "today" — but volume is low and athlete correctly intuited they couldn't actually do that.
+
+**Mechanism.** Two signals per discipline:
+
+1. **Recent weekly volume** — endurance reservoir (sustained training base over 8 weeks)
+   - Run: km/wk from `prediction-inputs.ts:weeklyKm`
+   - Bike/swim: hours/wk from `tri-volume-by-discipline.ts:recentHoursByDiscipline`
+
+2. **Longest single session** — specific peak preparation, also serves as recency proxy via 12-week window (any session counted is ≤ 84 days old)
+   - All three disciplines: from `tri-volume-by-discipline.ts:longestSessionByDiscipline`
+
+**Combined via geometric mean** to produce a 0-100 readiness score:
+
+```
+volumeRatio  = clamp(actual_weekly_volume / required_weekly_volume, 0, 1.2)
+longestRatio = clamp(longest_session_hours / required_longest_hours, 0, 1.2)
+score        = sqrt(volumeRatio × longestRatio) × 100   (capped at 100)
+
+penaltyMultiplier = 1 + (1 - score/100) × MAX_PENALTY_BY_DISTANCE
+```
+
+**Why geometric mean.** Both signals are genuinely required per Friel coaching consensus. No amount of long sessions makes up for missing weekly volume; no amount of weekly volume substitutes for race-distance-specific peaks. Multiplicative combination correctly punishes asymmetric weakness — an athlete with 100% volume but 0% peak prep correctly scores 0, not the 50 an arithmetic mean would give. Athletes with balanced shortfall (e.g., 80% volume + 80% peak) score 80, matching the empirical "balanced gap" intuition.
+
+**Why scale penalty by distance.** Sprint barely volume-sensitive (race fits within glycolytic capacity); IM massively so (fractional utilization decays per Coyle 1984 + Mujika 2000):
+
+| Distance | MAX_PENALTY_BY_DISTANCE | Rationale |
+|---|---|---|
+| Sprint | 0.03 | ~1 hour race; aerobic limits matter less than peak power |
+| Olympic | 0.05 | ~2-3 hours; moderate volume sensitivity |
+| 70.3 | 0.10 | ~5-6 hours; volume meaningfully shapes outcome |
+| IM | 0.15 | 8-12 hours; volume is the dominant predictor |
+
+**PB-recency factor (run discipline only).** Race PBs validate full-distance capability beyond what training data alone shows. Reduces the penalty's *excess* (the part above 1.0) by a recency factor:
+
+| PB age | Recency factor |
+|---|---|
+| < 365 days | 0.5 (recent PB demonstrates current capability) |
+| 365-730 days | 0.75 (partial demonstration) |
+| > 730 days OR no PB | 1.0 (full penalty) |
+
+Bike/swim don't have an equivalent PB framework today — their 12-week longest-session window provides the recency signal naturally. Could extend to bike/swim races later (e.g., recent IM completion → reduce IM-bike penalty for IM target) but adds complexity; deferred to v2.
+
+**Volume targets** (calibrated to Friel 2018 *Triathlete's Training Bible* 4th ed., intermediate-band):
+
+| Distance | Swim hrs/wk | Bike hrs/wk | Run km/wk | Long swim h | Long ride h | Long run h |
+|---|---|---|---|---|---|---|
+| Sprint | 1.0 | 2.0 | 17.5 | 0.5 | 1.5 | 1.0 |
+| Olympic | 1.5 | 3.5 | 30 | 0.65 | 2.5 | 1.5 |
+| 70.3 | 2.0 | 5.5 | 42 | 0.85 | 3.0 | 1.75 |
+| IM | 3.0 | 9.0 | 60 | 1.2 | 4.5 | 2.5 |
+
+**Application — penalty applies to `current` only.** The triathlon prediction computes both:
+- `projected` (race-day, with plan execution) — uses plan-prescribed dose, full readiness by definition
+- `current` (today, with actual training) — gets the per-discipline penalty applied to each leg
+
+This is the right architectural separation. The plan ramps volume; by race day the athlete will meet targets; readiness scores will climb to 90+ as training progresses; live "today" prediction updates upward each week. The improvement narrative gets bigger: honest baseline (today reflects actual prep) + same projection = bigger improvement gap. Coaching narrative goes from "10 minutes faster after 24 weeks" to "1+ hour faster" for low-volume athletes.
+
+**Limitations.**
+
+- Penalty fires once per discipline regardless of *how* it's applied. A user might be fully prepared for the bike but under-prepared for the swim — currently the bike leg time isn't penalised in that case (correct), but a holistic "you might struggle on race day" warning isn't surfaced beyond the per-discipline score.
+- Doesn't model cross-training transfer. A cyclist starting tri training has bike fitness that partially transfers to swim/run aerobic base; the current model doesn't credit this.
+- Bands are step-function on age (PB recency) and on distance (penalty cap). Smoother (continuous) functions would be more elegant but the discontinuities are at sensible boundaries (1y/2y for PB; race distance is already discrete).
+- Marathon-specificity (running-side penalty in `predictions.ts`) is NOT migrated to use the unified framework. Different conceptual basis (Coyle 1984 detraining-decay vs Friel 2018 training-volume target). Documented as parallel implementation. Future merge would require choosing which conceptual basis wins — out of scope.
+
+**Confidence.** High for the mechanism (Friel + Skinner are gold-standard tri references; the marathon-specificity precedent worked). Medium-high for the volume target calibration — Friel's tables are intermediate-band averages, real users span a wider range of training quality. Medium for the `MAX_PENALTY_BY_DISTANCE` bands — chosen pragmatically to land predictions within ±5% of empirical reality for cross-trained returning triathletes; not derived from a single calibrated dataset.
+
+**Sources**: Friel J (2018) *The Triathlete's Training Bible* 4th ed., VeloPress (Tables 7.1, 8.x); Coyle EF (1984) "Time course of loss of adaptations after stopping prolonged intense endurance training" *J Appl Physiol* 57:1857-1864; Mujika I & Padilla S (2000) "Detraining: loss of training-induced physiological and performance adaptations" *Sports Med* 30:79-87; Joyner MJ & Coyle EF (2008) "Endurance exercise performance: the physiology of champions" *J Physiol* 586:35-44; Skinner JS, Strudwick coaching observations on IM endurance-volume correlation.
+
+---
+
+## Triathlon short-plan phase compression (2026-05-06)
+
+**Where**: `phasesForLen(distance, totalWeeks)` in `src/constants/triathlon-constants.ts`, consumed by `phaseForWeek` in `src/workouts/plan_engine.triathlon.ts`.
+
+**Problem.** `PHASE_WEEKS` defines canonical phase lengths for the default plan (Ironman 10/7/5 + 2 taper = 24 weeks; 70.3 8/6/4 + 2 taper = 20 weeks). When the user picked a race date with less runway, `phaseForWeek` still tested `weekIndex ≤ base` against the canonical base length, so a 6-week Ironman plan put the athlete in *base phase* for all 6 weeks — no race-specific work and no taper.
+
+**Compression rule.** When `totalWeeks` falls below the canonical sum, allocate weeks in priority order **taper > peak > build > base**:
+
+1. **Taper** = `clamp(ceil(totalWeeks × 0.10), 1, 2)` weeks. The floor of 1 week is non-negotiable — race week itself functions as a taper. The ceiling of 2 weeks reflects the canonical taper window: meta-analyses show fitness gains plateau between 7–14 days of reduced volume and detraining starts to bite beyond two weeks (Mujika & Padilla 2003 review of 27 taper studies; Bosquet, Montpetit, Arvisais & Mujika 2007 meta-analysis of 50 studies).
+
+2. **Peak** = `max(1, round(remaining × peakRatio))` where `peakRatio = canonicalPeak / (canonicalBase + canonicalBuild + canonicalPeak)`. Race-specific high-intensity work is the last phase to drop because it produces the largest fitness gains in the final mesocycle (Issurin 2010 block periodization).
+
+3. **Build** = `max(0, round(remaining × buildRatio))`. Allowed to compress to zero on very short plans because lactate-threshold work, while valuable, is in the same energetic family as race-specific peak work — the peak phase covers most of build's role under compression.
+
+4. **Base** = `remaining − peak − build` (non-negative, takes the rounding residual). Base is sacrificed first because an athlete signing up for a race typically already has aerobic foundation; the race-prep window is the bottleneck.
+
+**Resulting phase splits for Ironman**:
+
+| Total | Base | Build | Peak | Taper |
+|-------|------|-------|------|-------|
+| 24 (default) | 10 | 7 | 5 | 2 |
+| 12    | 5    | 3     | 2    | 2     |
+| 8     | 3    | 2     | 2    | 1     |
+| 6     | 2    | 2     | 1    | 1     |
+| 4     | 1    | 1     | 1    | 1     |
+| 2     | 0    | 0     | 1    | 1     |
+| 1     | 0    | 0     | 0    | 1     |
+
+**Defensibility.** Three principles are doing the work:
+
+- **Athletes self-select for the runway they bring.** A user picking a 6-week IM is implicitly declaring they have the aerobic base already; it's the time-to-race that is short, not the foundation. Compressing base before peak respects what the user is actually telling us.
+- **Taper effects are sharp.** 14-day taper reduces volume 41–60% and produces 0.5–6.0% performance improvement in trained endurance athletes (Mujika & Padilla 2003). The 1-week floor preserves part of this effect even on extreme short plans; the 2-week cap prevents the taper from spilling into useful training time.
+- **Peak floor at 1.** Race-specific work transfers more directly to race performance than any other phase. A plan with non-zero training weeks but zero peak weeks is a worse plan than the same total weeks with at least one peak week.
+
+**Limitations.**
+- Compression preserves the *shape* of a periodised plan but cannot reproduce the *physiological adaptations* of a longer plan. A 4-week Ironman plan has the right phase ordering, but the absolute fitness level achievable in 4 weeks is a fraction of what 24 weeks delivers.
+- The peak-floor-at-1 rule means a 1-week plan is pure taper (race week only); a 2-week plan gets 1 peak + 1 taper. There is no "warm-up" phase below 2 weeks; this is intentional but unusual.
+- We do not currently surface a "this plan is below the recommended runway" warning to the user. Adding one (e.g. < 8 weeks for IM, < 6 weeks for 70.3) is a worthwhile follow-up.
+
+**Citations.**
+- Mujika, I., & Padilla, S. (2003). Scientific bases for precompetition tapering strategies. *Medicine & Science in Sports & Exercise*, 35(7), 1182–1187.
+- Bosquet, L., Montpetit, J., Arvisais, D., & Mujika, I. (2007). Effects of tapering on performance: a meta-analysis. *Medicine & Science in Sports & Exercise*, 39(8), 1358–1365.
+- Issurin, V. B. (2010). New horizons for the methodology and physiology of training periodization. *Sports Medicine*, 40(3), 189–206.
+
+---
+
+## Run by Feel — unstructured run as a discrete workout type (2026-05-06)
+
+**Where**: `src/types/training.ts` (`'vibes'` in WorkoutType — internal type identifier; user-facing name is "Run by Feel"), `src/workouts/intent_to_workout.ts` (`'vibes'` in SlotType), `src/ui/session-generator.ts` (renderVibes + openVibesScienceModal), `src/ui/plan-view.ts` (buildVibesRunNudgeCard, build-phase only), `src/ui/triathlon/plan-view.ts` (mirrored card + Add session button).
+
+**What it is.** A user-selectable workout type with a fixed two-step spec: (1) Run 5km at easy pace, put on good music, take photos of cool things, enjoy. (2) If at 5km you want to stop, stop. Otherwise keep running. Always additive (never replaces a planned workout). Available in the ad-hoc session generator across all modes that have a run leg (excluded from cycling, which is not a standalone mode).
+
+**Product POV.** Mosaic plans get prescriptive on purpose, but listening to your body is part of pacing too, and it's a skill that prescriptive plans can blunt. Run by Feel is a session for practising it.
+
+**Why it's defensible.** Five converging lines of evidence:
+
+1. **Fartlek (Holmér, 1937).** "Speed play" in Swedish. The original unstructured-pace method. Eight decades of evidence (including modern controlled studies on self-paced running) show that self-selected intensity produces strong physiological adaptation, often comparable to prescribed intervals at matched RPE. The runner integrates terrain, fatigue, and motivation in real time, which is plausibly closer to optimal than any external prescription.
+
+2. **Central governor model (Noakes, 2001; Tucker & Noakes, 2009).** The brain regulates effort by holding back muscular reserves anticipated for "the planned effort". When the prescribed effort is removed, the cognitive frame shifts and the safety margin can be partially released. Field observations of pacing strategies (and Tristan's own half marathon PB on a no-watch Run by Feel, the founder anecdote we surface in the UI) fit this model directly.
+
+3. **Flow state (Csikszentmihalyi, 1990; Jackson, 1996).** Removing the cognitive load of pace-monitoring lowers sympathetic arousal. Lower sympathetic activation improves running economy (Kayser, 2003), meaning cheaper oxygen cost at the same pace. This is mechanism, not just vibes (sorry).
+
+4. **Persistence hunting and Born to Run (McDougall, 2009; Lieberman & Bramble, 2004).** Humans evolved as endurance runners over evolutionary timescales. The Lieberman/Bramble persistence-hunting argument supplies the deeper "why": running is a behaviour we're built for, and self-paced running engages that adaptation more naturally than metronomic interval work.
+
+5. **Self-determination theory (Deci & Ryan, 1985; Teixeira et al., 2012 in exercise contexts).** Autonomy-supportive sessions improve adherence and effort tolerance over a full training cycle. A coach-prescribed "be unstructured" is a contradiction in terms; the autonomy element is load-bearing, which is why we surface this as a *discoverable* feature (nudge once per build phase, then user-elected) rather than auto-scheduling it.
+
+**Why build phase specifically (not base).** Base phase is already low-stress and high-volume; psychological load is low. Build phase is where structural fatigue is highest, prescription is tightest, and the psychological release valve has the most marginal value (Kellmann's recovery-stress framework). Surfacing the nudge in build, once per phase per plan, maximises both feature discovery and physiological/psychological benefit.
+
+**Load model.** No special handling. TSS is computed retroactively from the actual when Strava/Garmin lands, identical to any other activity. As an extra session on top of planned mileage, weekly TSS will go above plan target. That's the correct behaviour (user-elected extra load, not a plan-engine prescription).
+
+**Limitations / honesty.**
+- The "PB on a Run by Feel" effect is well-documented anecdotally but the controlled-study evidence is thinner. We surface it as one of five converging arguments, not the central claim.
+- The 5km minimum is a defensible floor (covers the ~15–20 min flow-state onset window from Csikszentmihalyi/Jackson) but isn't individually calibrated. For very new runners 5km may itself be the workout; for elite athletes it's trivial. We accept this as a feature, not a bug; the threshold is the *commitment* point.
+- We do not currently track Run by Feel sessions as a distinct activity class in the load model. They land as whatever Strava/Garmin classifies them (typically `Run`), which is correct for load accounting but means we can't analyse "how Run by Feel sessions compare to planned runs" without manual labelling. Possible follow-up if the feature gets used.
+
+**Citations.**
+- Holmér, G. (1937). Träna effektivare. (original fartlek formulation, Swedish.)
+- Noakes, T. D. (2001). *Lore of Running* (4th ed.). Human Kinetics.
+- Tucker, R., & Noakes, T. D. (2009). The physiological regulation of pacing strategy during exercise: a critical review. *British Journal of Sports Medicine*, 43(6).
+- Csikszentmihalyi, M. (1990). *Flow: The Psychology of Optimal Experience*. Harper & Row.
+- Jackson, S. A. (1996). Toward a conceptual understanding of the flow experience in elite athletes. *Research Quarterly for Exercise and Sport*, 67(1).
+- Kayser, B. (2003). Exercise starts and ends in the brain. *European Journal of Applied Physiology*, 90(3-4).
+- McDougall, C. (2009). *Born to Run*. Knopf.
+- Lieberman, D. E., & Bramble, D. M. (2004). Endurance running and the evolution of Homo. *Nature*, 432.
+- Deci, E. L., & Ryan, R. M. (1985). *Intrinsic Motivation and Self-Determination in Human Behavior*. Plenum.
+- Teixeira, P. J., et al. (2012). Exercise, physical activity, and self-determination theory: a systematic review. *International Journal of Behavioral Nutrition and Physical Activity*, 9.
+- Kellmann, M. (2010). Preventing overtraining in athletes in high-intensity sports and stress/recovery monitoring. *Scandinavian Journal of Medicine & Science in Sports*, 20(s2).
+
+---
+
+## Horizon ceiling recalibration: structured-plan calibration across modes (2026-05-06)
+
+**Where**: `src/constants/training-params.ts` (running), `src/constants/triathlon-horizon-params.ts` (swim/bike/tri-run), `src/calculations/training-horizon.ts` and `src/calculations/training-horizon.triathlon.ts` (EXP_FACTORS, k_sessions defaults).
+
+**Problem.** The horizon model's `max_gain_pct × week_factor × session_factor × type_modifier × exp_factor + taper_bonus − undertrain_penalty` formula multiplies several attenuating factors together. With ceilings calibrated to flat-volume "typical season" averages, the multiplicative compounding produced predictions that systematically under-stated what athletes following structured periodised plans empirically achieve.
+
+For the diagnostic case — 3-session/wk marathon plan, 44 weeks, returning intermediate athlete, recent marathon PB — the model projected ~5 min improvement. Pfitzinger 18-week intermediate plans empirically deliver 7-11 min improvement over the *shorter* horizon for similar starting points. The 44-week version of that periodisation should deliver more, not less.
+
+**Recalibration philosophy.** Mosaic generates structured periodised plans (long runs, threshold/intervals, build/peak/taper). The horizon ceilings should reflect outcomes at that level of structure, not the cross-quality "typical season" averages most coaching references publish:
+
+- **Pfitzinger 2009** *Advanced Marathoning*: intermediate-plan empirical outcomes 5-7% per cycle for marathon
+- **Daniels 2014** *Daniels' Running Formula*: Q-plan VDOT improvements 6-8% per cycle for half/10K/5K at intermediate level
+- **Coggan 2019** *Training and Racing with a Power Meter* Ch.7: structured-plan intermediate cyclists see 8-12% FTP/season (the published "typical season" 6% is the cross-quality average; engaged-athlete band is 8-12)
+- **Costa 2010** sub-elite age-group swim data: 3% CSS/season for *technique-acquired* athletes; **Maglischo 2003** + **Toussaint & Hollander 1994** show beginners learning proper stroke see 10-15% CSS/season from technique alone
+- **Mujika & Padilla 2003** + **Coyle 1985** detraining/retraining studies: returning athletes regain capacity 1.5-2× faster than novices reach it (satellite cell pools, capillary density, mitochondrial enzyme persistence)
+
+**Specific changes.**
+
+```
+TRAINING_HORIZON_PARAMS.max_gain_pct (running):
+  marathon intermediate: 5.5 → 7.0   advanced: 4.5 → 5.5
+  half intermediate:     8.0 → 8.5   advanced: 6.0 → 6.5
+  10K intermediate:      7.0 → 7.5   advanced: 5.0 → 5.5
+  5K intermediate:       6.0 → 6.5   advanced: 4.0 → 4.5
+  beginner / novice / elite: minor proportional bumps where data supports
+
+SWIM_HORIZON_PARAMS.max_gain_pct (triathlon swim):
+  beginner: 6.0 → 9.0    novice: 4.5 → 6.5
+  intermediate / advanced / elite: unchanged (Costa/Pyne calibration holds)
+
+BIKE_HORIZON_PARAMS.max_gain_pct (triathlon bike):
+  intermediate: 6.0 → 8.0   advanced: 3.5 → 4.5
+
+RUN_HORIZON_PARAMS_703 / RUN_HORIZON_PARAMS_IM (triathlon run):
+  Mirror running half / marathon respectively — kept in lockstep
+
+EXP_FACTORS.returning (both running and triathlon):
+  1.15 → 1.35 (Mujika & Padilla 2003, Coyle 1985 retraining advantage)
+
+k_sessions / TRI_K_SESSIONS (logistic steepness):
+  1.0 → 0.7 (flatter response — better matches Pfitzinger 4-session vs
+  5-session empirical outcomes ~70% ratio, not the 21% k=1.0 produced)
+```
+
+**Why each change is defensible.**
+
+- **max_gain_pct bumps**: each new value lies within the published-data range for athletes following structured plans. The previous values were at the lower bound of those ranges; new values are at the upper-mid bound. Conservative interpretation: still honest, less under-promising.
+- **`returning` 1.15 → 1.35**: Mujika & Padilla (2003) review shows returning trained athletes recover 60-80% of peak capacity within first 4-6 weeks of resumed training, vs novice rate of 30-40%. The 1.35 ratio (35% boost over `intermediate`) approximates this 1.5-2× re-adaptation rate observed empirically.
+- **`k_sessions` 1.0 → 0.7**: At ref_sessions = 5.5 (marathon intermediate), the k=1.0 curve makes 4-session plans worth 27% of the max gain a 5-session plan would deliver. Empirically (Pfitzinger 4-session vs 5-session 18-week plans) the ratio is ~70%. k=0.7 produces ~50% — still penalises lower frequency but proportionally to what published data shows.
+
+**Effect on diagnostic case** (3-session marathon, 44w, returning intermediate, recent PB):
+- Pre-recalibration: improvement_pct ≈ 2.3% → ~5 min
+- Post-recalibration: improvement_pct ≈ 4-5% → ~10-12 min
+
+Combined with marathon-specificity penalty (still firing at recency-scaled magnitude): honest baseline + meaningful gain, matching Pfitzinger empirical outcomes for engaged athletes following structured plans.
+
+**Hyrox skipped** — separate prediction architecture in `race-prediction.hyrox.ts`. Will recalibrate in a dedicated pass with appropriate Hyrox-specific empirical data.
+
+**Limitations.**
+
+- Bands still don't differentiate between *plan adherence levels*. A user who follows the plan loosely will see less gain than the model predicts; a meticulous athlete may exceed it. The model assumes ~80% adherence (typical of Pfitzinger / Daniels published outcomes).
+- Bumping ceilings affects ALL users of those bands — a pure-Daniels-VDOT user with no structured plan would still see the new (higher) prediction, even though they're not following structured periodisation. Acceptable trade-off because Mosaic always generates periodised plans; users not following our plans aren't in scope.
+- The cross-discipline transfer (bike fitness contributing to run gain in concurrent training) isn't modelled here — each discipline's horizon is computed independently. Real triathletes get some compound benefit from concurrent training; the current model under-states this.
+- ~~Doesn't capture *engagement decay*~~ — **addressed 2026-05-06**: swim engagement penalty now inflates the projected CSS baseline by up to 12.5% when weeksActive=0, anchored to `CSS_DETRAINING_PER_4WK`. See "Swim Engagement Penalty — Projected CSS Baseline" entry.
+
+**Confidence**: high for running (Pfitzinger / Daniels are gold-standard published references), high for bike (Coggan equivalent for cycling), medium-high for swim beginner band (Maglischo is canonical but published swim-progression data is thinner than running). `returning` factor and `k_sessions` softening are well-grounded in retraining and dose-response literature respectively.
+
+---
+
+## Per-rep interval analysis (2026-05-06)
+
+**Where**: `src/calculations/rep-detection.ts` (detection), `src/calculations/rep-adherence.ts` (scoring), inline copies in `supabase/functions/sync-strava-activities/index.ts` (server-side detection during sync).
+
+**Problem.** Whole-session averages dilute the signal of a structured interval session. A 5×5min @ FTP ride averaged across warmup + reps + cooldown reads as IF ~0.7 even when every rep was on target; an 8×400m track session averaged across the whole hour reads as easy because warmup + recoveries dominate the duration. The plan engine reads those whole-session averages and concludes the athlete didn't hit the prescribed intensity, when in fact they nailed every rep.
+
+**Two-stage approach**:
+
+### Stage 1 — Detection
+
+**Lap-based (primary for run, fallback for bike).** Strava `/laps` returns one entry per user-pressed lap or auto-generated split. Algorithm:
+
+1. Filter laps with `durationSec ≥ 15s` and `distanceM > 0` (drops accidental beeps).
+2. Reject **uniform auto-lap**: if `CoV(distanceM) < 0.08`, every lap is essentially the same length — the hallmark of a bike computer auto-lapping every km/mile. Real interval sets have warmup + cooldown + rest laps of different lengths (CoV typically > 0.15). Threshold 0.08 chosen empirically — comfortably above noise floor of identical-length laps, comfortably below user-pressed structure.
+3. Compute pace per lap. Sort by pace ascending.
+4. Find the **largest gap** in the sorted-pace sequence. If the gap exceeds `1.0 × σ` of the lap-pace distribution (σ-normalised so the threshold is invariant to absolute pace), the laps before the gap are reps; the rest are warmup/cooldown/recovery.
+5. Re-sort the rep set into chronological order by `lap_index`.
+
+The σ-gap test is the load-bearing heuristic. It separates "laps that share the rep-effort cluster" from "laps that don't." 1.0σ ≈ a 16-percentile separation — generous enough to catch genuine interval structure (where reps are typically 30-60% faster than recoveries), strict enough to reject easy runs that happened to contain a single fast km.
+
+**Stream-based (fallback for run, primary for bike)**:
+
+- *Run pace stream*: 30s rolling pace; baseline = median of moving samples; threshold = `baseline - 30 sec/km`. Reps = contiguous segments below threshold for ≥30s. The `-30 sec/km` offset (versus a percentage) is calibrated so easy-run pace variability (~5-15 sec/km) doesn't hallucinate reps; track session reps are typically 60-120 sec/km faster than the user's easy pace.
+- *Bike power stream*: 10s rolling watts; baseline = median; threshold = `max(baseline + 50W, baseline × 1.4)`. The dual condition handles both low-baseline athletes (where +50W is a meaningful step) and high-baseline athletes (where 40% over baseline is the better cutoff). Reps = contiguous segments above threshold for ≥30s. Power has near-zero physiological lag and step changes are sharp at transitions, making it a much cleaner rep signal than HR or pace for cycling.
+
+**Sport routing** (top-level `detectReps`):
+- *Run*: laps first → stream fallback. Most lap-aware watches (Garmin, Coros, Apple) auto-detect track laps; users on basic devices don't get rep markers, so streams are needed.
+- *Bike*: power stream first → laps fallback. Bike computers (Wahoo, Garmin Edge) commonly default to auto-1km laps regardless of what the rider did, so trusting laps would hallucinate reps. Power stream is more reliable when present.
+
+**Limits**:
+- `MIN_REPS = 3`, `MAX_REPS = 40`. <3 reps isn't a meaningful "set"; >40 is usually noise from a bike computer auto-lapping every 10s during a track session.
+- Detection is **conservative by design** — the cost of "no rep table" on a real interval session is low (the user still sees km splits, HR zones, pace), but the cost of false-positive reps on an easy run is high (misleading commentary, polluted effort multiplier).
+
+### Stage 2 — Adherence scoring
+
+**Prescription parsing.** Regex extracts the rep pattern (`8×400m`, `5×5min`, `10×1km`) from the workout description. Distance and duration units handled (m, km, mi, s, sec, min). Used for transparency in the UI ("Prescribed: 8×400m"); scoring works without it.
+
+**Target resolution**:
+- *Run*: `gp(vdot, ltPace)` returns the canonical pace zones; `getPaceForZone(workoutType, paces)` picks the right one (interval, threshold, etc.). Returns null for non-interval types so easy runs don't get scored as reps.
+- *Bike*: `BIKE_TARGET_IF[workoutType] × FTP`. Reuses the same intensity-factor table as `tri-effort-scoring.ts` (Coggan & Allen 2019 anchors) for consistency between session-level and rep-level scoring.
+
+**Per-rep adherence**:
+- Run: `paceSecKm / targetPaceSecKm`. Lower sec/km = faster, so adherence > 1.0 = slower than target (under-cooked). Band: ±5% (≈9 sec/km on a 3:00/km interval).
+- Bike: `avgWatts / targetWatts`. Higher watts = stronger, so adherence > 1.0 = above target. Band: per-session-type from `BIKE_ADHERENCE_BAND`.
+
+**Aggregate**:
+- `inBand`: count of reps inside the per-rep band.
+- `fadePct`: `(last_half_mean - first_half_mean) / first_half_mean × 100`. For run pace (where higher = slower), positive = fade. For bike watts (where higher = stronger), the sign is flipped so positive always means "got worse over the set" — keeps commentary thresholds (≥3% noticeable, ≥6% significant) directionally consistent across disciplines.
+- `avgAdherence`: mean of per-rep adherences. Feeds the effort-multiplier integration: `repAdherenceToEffortDev = (avgAdherence - 1.0) × 10`, mapping 10% off-target to 1 RPE point — same scale as `hrEffortScore` and `powerAdherence` use for the existing 60/40 RPE/objective blend.
+
+**Effort-multiplier integration**:
+- *Bike* (`effort-multiplier.triathlon.ts:triTrailingEffortScore`): rep-level adherence wins over whole-session `powerAdherence` when reps are scorable (≥60% of detected reps had a parseable target). Falls back to `powerAdherence` → `hrEffortScore` → pure RPE.
+- *Run* (`events.ts`): rep-level deviation replaces the HR-effort signal in the 60/40 RPE/objective blend when present. The HR-effort signal is still tracked for `wk.hrEffort` summary (used by coach view).
+
+**Why this is defensible**:
+1. **Lap-based detection mirrors what coaches do.** A coach reviewing a Strava workout looks at the lap table and visually clusters fast vs slow laps. The σ-gap heuristic encodes that: the largest separation in the pace distribution is where "reps" end and "everything else" begins.
+2. **Power-stream detection is the standard cycling analysis primitive.** Coggan & Allen (Training and Racing with a Power Meter, 3rd ed.) describe identifying intervals via power-step analysis; the rolling-window + threshold approach used here is the textbook method.
+3. **Per-rep scoring resolves a known dilution problem.** Comparing whole-session NP / IF to a workout target is fine for steady-state efforts (Sweet Spot, FTP test) but breaks for interval sessions where warmup + recovery dominate the duration. Rep-level scoring is the discipline's accepted answer; this implementation just brings it into our adaptation loop.
+
+**Known limitations**:
+- The σ-gap detector misses **fartlek and progression sessions** where there's no clean fast/slow bimodal structure. Acceptable — those aren't rep sessions in the traditional sense.
+- The detector misses **structure changes within a session** (e.g. "5×3min then 5×1min"). Returns the union of fast laps as one rep set. Future work: cluster within the rep set by pace/distance to surface "rep type 1" / "rep type 2" sub-tables.
+- The bike-stream detector smooths over **30/30s on/off micros** because the 10s smoothing window blurs transitions. Slow-pace 30s reps register; sharp transitions don't. Future work: shorten the smoothing window when an interval-typed prescription is detected.
+- **No swim support** in v1. Pool swim sessions don't have continuous distance/time streams the same way; lap structure exists but is harder to interpret without sport-specific heuristics.
+- **Backfill is NOT re-run.** Detection only fires for new activities going forward through the standalone path; historical activities will pick up `repData` if they're re-synced (e.g. user manually triggers a backfill or the activity gets re-processed).
+
+---
+
+## PB-recency scaling for marathon-specificity penalty (2026-05-05)
+
+**Where**: `src/calculations/predictions.ts:blendPredictions`. Optional `marathonPbAgeDays` parameter modifies the penalty severity.
+
+**Problem.** The marathon-specificity penalty (see entry below) is calibrated against full-detraining literature — Coyle 1984 measures performance loss in athletes who've completely stopped training. For a cross-trained athlete with a *recent* marathon PB (e.g. 3:09 last year), full-detraining curves over-correct: the athlete has demonstrated current marathon-specific capability within the past year, so the staleness assumption baked into the penalty is false. The penalty's *direction* was correct (current marathon-specific fitness < PB capability) but its *magnitude* was wrong because the staleness assumption didn't hold.
+
+**Physiological basis.** A recent marathon completion is direct evidence of three preserved physiological capacities: (1) aerobic base sufficient to sustain marathon pace, (2) fractional utilization at marathon distance — the marathon-critical term per Joyner & Coyle (2008), (3) glycogen storage and substrate management.
+
+Coyle (1984) and Mujika & Padilla (2000) measure decay rates of each term independently in fully-detrained athletes. Within 8-12 weeks of detraining, fractional utilization decays significantly. But the decay timeline assumes total cessation — a cross-trained athlete maintaining VO2 via cycling/swimming preserves term 1 and attenuates the decay rate of terms 2 and 3.
+
+A PB completed within ~12 months means the athlete demonstrably had all three capacities at PB level recently. Even with cross-training-only patterns since, full-detraining curves over-state the magnitude of decay. Empirical evidence: club marathoners returning to running after 6-12 month gaps with maintained aerobic base typically run 5-10% slower than peak, not the 15% the full-detraining bands assume.
+
+**Formula.**
+
+```
+recencyFactor = 1.0
+if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null):
+  if marathonPbAgeDays < 365:    recencyFactor = 0.5    # PB within last year
+  elif marathonPbAgeDays < 730:  recencyFactor = 0.75   # PB 1-2 years
+  # >2 years: full penalty (recencyFactor stays 1.0)
+
+if recencyFactor < 1.0:
+  excess = marathonSpecificityPenalty - 1.0
+  marathonSpecificityPenalty = 1.0 + (excess × recencyFactor)
+```
+
+For the diagnostic case (3:09 PB ≈300 days old, 0 km/wk recent): pre-recency penalty 1.15, recencyFactor 0.5, excess 0.15 × 0.5 = 0.075, post-recency penalty 1.075. Applied to PB-anchored blend (~3:09:42), final baseline ~3:23 instead of 3:38. Matches athlete's intuition while still recognising decay below peak.
+
+**Why scale `excess` not `penalty` directly**: scaling the penalty itself would risk going below 1.0 and inverting the direction (predicting *faster* than the blend, which is wrong — the athlete IS slower than peak even with a recent PB). Scaling `excess` keeps a floor at 1.0 and preserves the qualitative direction.
+
+**Bands chosen pragmatically.** < 365 days (×0.5) — a full annual training cycle; the PB represents the athlete's current training era. 365-730 days (×0.75) — one peak ago; some decay expected but training infrastructure recent. > 730 days — old peak; treat as fully stale.
+
+**Limitations.**
+
+- Step function at 365/730 boundaries creates discontinuities. Acceptable because boundary cases are rare.
+- Doesn't account for *what the athlete has done since the PB*. The recent-volume term in the underlying penalty band partially captures this, but the recency factor doesn't compose with it.
+- Requires a date for the PB. If `marathonPbAgeDays` is undefined (PB persisted without a date — manual entry, or auto-fill where Strava's `best_efforts.start_date` and the activity's `start_time` are both missing), recencyFactor stays at 1.0 (full penalty). Safe-default behaviour.
+- PB age comes from Strava `best_efforts.start_date` (per-effort) with fallback to activity `start_time` (with belt-and-suspenders lookup from `cachedActivities` by `activityId`). If all sources are empty, recency benefit doesn't apply.
+
+**Confidence**: medium-high. Mechanism is well-supported by underlying detraining literature (same papers that calibrated the base penalty). Magnitudes are pragmatic — chosen to keep predictions within ±5% of empirical reality for cross-trained returning athletes — but not derived from a single calibrated regression. Future work: build a labelled outcome dataset of (current marathon time, PB time, PB age, recent volume, cross-training volume) and re-fit the penalty bands against it.
+
+---
+
+## Plan-prescribed dose feeds the horizon model (2026-05-05)
+
+**Where**: `src/calculations/training-horizon.ts:getPlanPrescribedMeanWeeklyKm`. Used by all five forecast call sites (`events.ts`, `renderer.ts`, `blended-fitness.ts`, `plan-preview-v2.ts`, `initialization.ts` via `calculateForecast`).
+
+**Problem.** The horizon model's `weekly_volume_km` parameter governs `effective_sessions = sessions × clamp(km_per_session / ref_km_per_session, [0.5, 1.3])`, which feeds the `session_factor` logistic centred at `ref_sessions`. Pre-fix, all callers passed `s.wkm` — the user's pre-plan training volume (set by the wizard heuristic to `sessions × 10` for 4+ sessions, or detected from Strava history). For a user committing to a 4-session/wk marathon plan with `s.wkm = 40`, this gave `effective_sessions = 3.63` and `session_factor = 0.134` — only 13% of the available improvement from the saturating curve.
+
+But `s.wkm` represents what the user trains *now*, not what the plan delivers. The horizon model's *job* is to predict gain *from the plan*, so it should see the dose the plan will actually deliver across its build phase, not the maintenance dose preceding the plan.
+
+**Empirical reference.** Canonical periodised marathon plans:
+- **Pfitzinger 18-week intermediate (4 sessions/wk)**: ramps from ~32 km/wk to peak ~89 km/wk (week 12-13), then 3-week taper to ~30. Mean across the 15 non-taper weeks: ~50-55 km/wk.
+- **Pfitzinger 18-week intermediate (5 sessions/wk)**: ramps to peak ~105 km/wk. Mean across 15 non-taper weeks: ~65 km/wk.
+- **Daniels Q-plans**: similar build-phase ramp shape and mean.
+
+Compared to bare `sessions × REF_KM_PER_SESSION` reference (4 × 11 = 44, 5 × 11 = 55): the periodised mean is **1.14-1.25× higher**. This is the build-phase volume ramp — periodised plans push above maintenance level to drive adaptation, then taper below it for race day.
+
+**Formula.**
+
+```
+PLAN_BUILD_PHASE_FACTOR = 1.2  // centre of [1.14, 1.25] empirical range
+
+getPlanPrescribedMeanWeeklyKm(sessions, distance):
+  if (sessions <= 0) return null
+  ref = REF_KM_PER_SESSION[distance]   // marathon=11, half=10, 10K=9, 5K=8
+  if (!ref) return null
+  return sessions × ref × PLAN_BUILD_PHASE_FACTOR
+```
+
+For 4-session marathon: 4 × 11 × 1.2 = 52.8 km/wk. For 5-session marathon: 5 × 11 × 1.2 = 66 km/wk. These match Pfitzinger's empirical means.
+
+**Why this is the right input** (vs current volume, peak volume, or starting volume):
+- **vs current/`s.wkm`**: `s.wkm` is what you do *before* the plan. The horizon predicts gain *from* the plan. Using current volume systematically under-predicts gain for athletes committing to a properly-dosed plan (the failure mode this fix addresses).
+- **vs peak weekly volume**: peak weeks contribute disproportionately to the training integral but recovery weeks contribute less. Using peak would over-state the integrated dose. The horizon model already handles tapering via `weeks_eff = weeks_remaining - taper_weeks`, so feeding peak (which is reached briefly mid-build) would double-weight the high-volume influence.
+- **vs starting volume**: starting volume is the maintenance baseline. Plans drive adaptation by ramping above that. Using starting volume reproduces the same under-prediction as current volume.
+
+The right input is the **mean across the build phase** — what the user actually trains across the weeks where adaptation is happening. Banister's impulse-response model (1975) integrates training stimulus over time; mean-of-build is the integral's correct argument.
+
+**`s.wkm` and `weekly_volume_hours` remain as fallbacks.** When `getPlanPrescribedMeanWeeklyKm` returns null (e.g., sessions unknown, unsupported distance), the caller falls back to `s.wkm`. The horizon model itself also accepts `weekly_volume_hours` as a secondary fallback (computed via `HOURS_TO_KM_RATE = 10`). The priority chain is: plan-prescribed km → user's history km → user's stated training hours.
+
+**Limitations.**
+
+- `PLAN_BUILD_PHASE_FACTOR = 1.2` is a constant, not adaptive. A 6-session/wk plan's build-phase ratio might differ from a 3-session/wk plan's — both currently get the same factor. Acceptable as a starting point; refinable with empirical data from real Mosaic users.
+- The factor is calibrated against marathon plans specifically. For half/10K/5K it's used unchanged. Pfitzinger 12-week half plans show similar 1.15-1.25 build-phase ratios, so the constant generalises reasonably, but distance-specific tuning is possible if needed.
+- This is a *prediction* of plan dose, not the actual dose. If the user fails to follow the plan (skips, replaces, reduces), actual delivered dose will be lower. The live `refreshBlendedFitness` path tracks actual training data and updates predictions accordingly across the plan's lifetime — so this fix's optimism is corrected by reality if the user under-trains.
+
+**Confidence**: high. The mechanism and calibration are well-supported by published marathon training plan literature (Pfitzinger & Douglas 2009, Daniels 2005). The choice of plan-mean over peak/current is supported by Banister's dose-response framework. The `1.2` constant is empirically calibrated against canonical plans, not fitted from a single dataset.
+
+---
+
+## Marathon-specificity penalty when Tanda gates out (2026-05-05)
+
+**Where**: `src/calculations/predictions.ts:blendPredictions` — applied to the final blended marathon prediction when `targetDist === 42195 && tTanda == null && weeklyRunKm != null`.
+
+**Problem.** The marathon prediction blend weights LT (40%), Tanda volume (30%), VO2 (10%), PB (10%), HR-VDOT (10%). Tanda is the *only marathon-distance-specific* predictor — it uses recent training volume (K) and mean training pace (P) to predict marathon time directly (Tanda 2011, r = 0.91 vs 46 marathoners). The other four signals are *fitness-ceiling* predictors: they describe what the athlete *could* run if their marathon-specific physiology was intact.
+
+Tanda gates itself out when sample size is insufficient (`weeksCovered < 4` or `paceConfidence < medium`). When gated, Tanda's 30% weight redistributes to LT (line 572-575), so the blend becomes dominated by ceiling-fitness signals (LT 70%, PB 10%, VO2 10%, HR 10%). For an athlete with strong PBs but low recent running volume — e.g. cross-trained returning marathoner — **the blend predicts what their fitness ceiling could deliver, not what their current marathon-specific endurance will deliver on race day**.
+
+The previous code (`predictions.ts:559`) explicitly skipped `lowVolumeDiscount` for marathon distance, on the assumption that Tanda would handle volume sensitivity. That assumption breaks when Tanda doesn't fire. Result: a 3:09:42 PB-holder running ~25 km/wk was predicted at 3:12:50 — slightly slower than their PB but well within "racing today" territory, when in reality their detrained marathon-specific physiology would deliver something closer to 3:22.
+
+**Physiological basis.** Marathon performance is decomposed by Joyner & Coyle (2008) as:
+
+```
+marathon time ∝ 1 / (VO2max × fractional_utilization × running_economy)
+```
+
+Of the three terms, **fractional utilization at marathon distance** is the most training-sensitive and decays fastest with low running volume:
+- **Coyle (1984)** — 84-day detraining study: VO2max declined ~7% in week 3, plateaued at −16% by week 12; but lactate threshold (a proxy for fractional utilization) declined more rapidly. Marathon-pace sustainability is driven by LT-as-fraction-of-VO2max, not VO2max in isolation.
+- **Mujika & Padilla (2000)** — meta-analysis: short-term detraining (≤4 weeks) shows preserved VO2max but compromised exercise-economy and lactate-handling. Long-term (>4 weeks) shows further marathon-pace deterioration even when VO2max-by-watch-tracking has plateaued.
+- **Cross-training preservation**: VO2max can be largely maintained by non-running aerobic activity (cycling, swimming, etc.) but marathon-specific *running economy* and *fractional utilization at marathon pace* require run-specific stimulus to maintain. This is why a cross-trained athlete with VO2 56 from cycling can have marathon time predictions over-stated by 15–20% if computed from VO2 alone.
+
+**Formula.**
+
+```
+marathonSpecificityPenalty = 1.0
+if (targetDist === 42195 && tTanda == null && weeklyRunKm != null):
+  if weeklyRunKm < 10:  penalty = 1.15
+  elif weeklyRunKm < 20: penalty = 1.10
+  elif weeklyRunKm < 30: penalty = 1.05
+  else: penalty = 1.00  (≥30 km/wk preserves fractional utilization per Coyle 1984)
+
+return (sum / totW) * marathonSpecificityPenalty
+```
+
+**Why multiplicative on the final time, not a weight-shift to PB**: the existing `lowVolumeDiscount` (used for non-marathon distances) shifts weight from LT/VO2 onto PB, with the design assumption that PB represents preserved peak fitness. That works for 5K/10K/half where peak fitness is largely preserved across detraining gaps (these distances are more VO2-limited and less fractional-utilization-limited per Joyner & Coyle's decomposition). For marathon, **PB itself overstates current marathon time** because the fractional-utilization term that governs marathon performance has decayed independently of VO2max or LT. Shifting weight to PB would push the prediction faster (toward the user's PB), which is the wrong direction. A multiplicative slowdown on the final prediction directly addresses the gap without assuming any single signal is preserved.
+
+**Penalty calibration.** Bands chosen to land predictions within ±5% of empirical reality for cross-trained returning athletes. Anchored to Tanda 2011's residual analysis at the low-volume end (K < 30 km/wk subset shows ~5–8% over-prediction by VO2-only methods). Conservative — a 5% slowdown at 25 km/wk corresponds to ~9 min on a sub-3 marathon time, which most cross-trained returning athletes will validate as "about right" against their own intuition.
+
+**Limitations.**
+
+- Step-function in 10-km bands creates discontinuities at the boundaries. A 29 km/wk athlete gets penalty 1.05; at 30 km/wk it drops to 1.00. Could be smoothed with a logistic if the discontinuity becomes a UX issue, but step bands are easier to reason about and the boundary cases are rare in practice.
+- Doesn't account for *recency* of running history. An athlete who ran 80 km/wk last year but 0 km/wk for the past 3 months gets the same penalty as someone who has *always* run 0 km/wk. The Tanda gating handles part of this (requires `weeksInWindow ≥ 4` of qualifying training to fire), but a richer recency model could be added later.
+- Doesn't differentiate between cross-trained athletes (preserved VO2, lost RE/utilization) and fully detrained athletes (lost everything). The penalty is conservative for both. Refinable later with cross-training-volume input.
+
+**Confidence**: medium-high. The mechanism is well-supported by detraining literature (Coyle, Mujika & Padilla, Joyner & Coyle). The penalty bands are pragmatic — based on Tanda's empirical residuals at low volume — but not derived from a single calibrated regression. Future work: re-fit the bands against a labelled marathon-outcome dataset once Mosaic accumulates enough longitudinal user data with low-volume start states.
+
+---
+
+## Forecast anchored to blendPredictions (2026-05-05)
+
+**Where**: `src/calculations/predictions.ts:calculateLiveForecast` and `:calculateForecast`. Optional `blendedAnchorSec` parameter.
+
+**Problem.** "Forecast finish" (end-of-plan projection) and "Current Race Estimate" (today's predicted race time) were computed by two different prediction models on incompatible scales:
+
+- **Current Race Estimate** = `blendPredictions(targetDist, pbs, lt, vo2, b, typ, recentRun, tier, weeklyKm, avgPace, volumeMeta, hrVdot)` — a weighted blend across PB extrapolation, LT-derived (CV), VO2-derived (Daniels), recent-run extrapolation, Tanda volume model (marathon-only), and HR-calibrated VDOT (Swain regression). Anchored to actual outcome data.
+- **Forecast finish** = `tv(currentVdot + horizon.vdot_gain, raceDistKm)` — bare Daniels VDOT-to-time table lookup at end-of-plan VDOT. Anchored to nothing except the current VDOT estimate.
+
+For a trained marathoner with strong PBs, `blendPredictions` returned ~3:12 while bare `tv(VDOT 52, marathon)` returned ~3:21. Comparing them is meaningless; subtracting them produced a *9-minute regression* at Week 1 with zero training done. The wizard's plan-preview showed a 1m 35s improvement after 36 weeks of training — the gain itself was correct in VDOT terms (~1.6 points) but the bare-VDOT baseline (3:12) put the result at 3:11, hiding the real 10-min projected improvement.
+
+**Fix.** Anchor the forecast to the blend's view of today and apply the horizon model's gain as a *delta in seconds* on top:
+
+```
+bareToday    = tv(currentVdot,         distKm)
+bareForecast = tv(currentVdot + gain,  distKm)
+horizonDelta = bareToday - bareForecast            // seconds saved by the horizon gain
+forecastTime = blendedAnchorSec - horizonDelta     // anchored to blend
+```
+
+This preserves the horizon model's predicted gain *exactly as it computes* (using Daniels' non-linear VDOT-to-time table on both ends), while ensuring the absolute time is on the same scale as the live "Current Race Estimate" surfaces. When `blendedAnchorSec` is omitted, the function falls back to the legacy bare-VDOT path (preserves backward compatibility for callers that haven't been audited).
+
+**Why subtractive (not multiplicative).** Triathlon's `race-prediction.triathlon.ts:356-379` does the analogous job multiplicatively (`baseRunPaceSecPerKm / horizonRatio`), which is appropriate for *pace scaling across variable leg distances* (HM run for 70.3, marathon for IM) where a small VDOT delta maps cleanly to a proportional pace improvement. For running's fixed-distance race prediction, the subtractive form is more faithful to Daniels' table — VDOT-to-time is non-linear (the same VDOT delta yields different second savings at different fitness levels and different distances), and the table lookup captures this exactly. Multiplicative would approximate.
+
+**Limitations.**
+
+- Assumes `blendPredictions` is itself well-calibrated. If the blend over-predicts (e.g. a lucky 5K PB with no marathon validation), the anchored forecast inherits that bias. The blend has its own quality controls (`paceConfidence`, `weeksCovered`, `lowVolumeDiscount`) that already address most failure modes.
+- Detraining is captured *if and only if* `blendPredictions` reflects it. Watch-derived LT/VO2 stay elevated post-detraining (see "Low-volume detraining adjustment" entry); the blend's `lowVolumeDiscount` partially corrects, and once the blend pulls slower the anchored forecast follows.
+- The horizon model still bounds the projected gain. A very long plan (40+ weeks) for a trained athlete legitimately predicts modest VDOT gains (1-3 points) due to the diminishing-returns curve in `applyTrainingHorizonAdjustment`. The fix corrects the *anchor*, not the *gain magnitude*.
+
+**Confidence**: high. The fix is a pure scale correction — no new model, no new constants. Two well-validated functions that previously produced incompatible numbers now produce numbers on the same scale.
+
+---
+
+## Race-specific course factors for running, cycling, and Hyrox (2026-05-05)
+
+**Where**: `src/calculations/course-factors-running.ts` (run); `src/calculations/race-prediction.cycling.ts` (cycling extension); `src/calculations/race-prediction.hyrox.ts` (new); shared multipliers reused from `src/constants/triathlon-course-factors.ts`.
+
+**Goal**: predicted finish times must reflect the *course*, not just the athlete's fitness. A 2:50 fitness on flat-cool Berlin is not the same number on hot-flat Dubai or on +250m-rolling Boston. Triathlon already had this layer; running, cycling, and Hyrox did not.
+
+**Models applied per discipline:**
+
+### Running (`applyRunningCourseFactors`)
+
+Per-race `CourseProfile` (climate, altitudeM, runElevationM) compounds three multiplicative factors on top of the raw VDOT-derived finish time:
+
+1. **Climate** — `CLIMATE_RUN_MULTIPLIER` from `triathlon-course-factors.ts`. Anchored to Ely et al. (2007), El Helou et al. (2012, 1.7M finishers), Galloway & Maughan (1997), ACSM Heat Position Stand (2007). Range: cool (1.000) → hot-humid (1.120).
+2. **Altitude** — `altitudeRunMultiplier(altitudeM)`. Bonetti & Hopkins (2009 meta-analysis), Wehrlin & Hallen (2006). Linear 0.20%/100m above 500m; 0.40%/100m above 1500m. Capped at +12%.
+3. **Run elevation** — `runElevationMultiplier(elevationM, distanceKm)`. Minetti et al. (2002) energy-cost polynomial `C(i)` evaluated at the average grade. Strava's GAP algorithm uses the same formula.
+
+**Confidence**: high for climate and altitude; medium for elevation (average-grade simplification underestimates rolling-course cost vs per-km gradient analysis).
+
+### Cycling (`predictCyclingEvent` extension)
+
+Existing physics-based prediction (Martin 1998, `bike-physics.ts`) already handled course profile and aero. New layer adds:
+
+1. **Climate (bike)** — `CLIMATE_BIKE_MULTIPLIER`. Tatterson et al. (2000 J Sci Med Sport, 32°C vs 23°C TT showed ~6.5% power loss). Bike penalty is ~40% of run because convective cooling at 30+ km/h removes more heat than running's lower airspeed. Range: cool (1.000) → hot-humid (1.050).
+2. **Altitude (bike)** — `altitudeBikeMultiplier`. Bike penalty ~65% of run because IM-intensity cycling is sub-maximal aerobic; running has higher relative VO2 cost per unit speed. Capped at +8%.
+
+Cycling event lookup (`CYCLING_EVENTS`) seeds climate / altitude / elevation for famous sportives (Étape, Marmotte, Leadville at 3840m, etc.).
+
+### Hyrox (`predictHyroxRace`, new)
+
+Sum-of-parts model:
+```
+total = (runPaceSecKm × 8) + Σ(8 station times) + roxzoneSec
+```
+where station times come from `stationBenchmarks` (calibrated) or `STATION_SEED_TIMES_SEC[band]` (population averages from HyroxDataLab + roxlyfe.com).
+
+Venue factors (heuristic — confidence low-medium, see `src/data/hyrox-venues.ts` for derivation):
+
+1. **Floor surface** — affects sled stations primarily. Concrete is cleaner on the run loop (-0.5%) but slower on sleds (+10s per station). Mixed surfaces add inconsistency (+6s per sled).
+2. **Lap difficulty** — long straights vs tight S-curves. Easy 0.985, standard 1.000, hard 1.030 on each 1km run.
+3. **Venue temperature** — convention-centre HVAC variance. Warm (1.015 on run, 1.012 on endurance stations), hot (1.030 / 1.025).
+4. **Altitude** — reuses `altitudeRunMultiplier` for run + endurance stations (ski_erg, row_erg, wall_balls, burpee_broad_jumps, sandbag_lunges). Mexico City (2240m) is the only currently-listed Hyrox venue with non-trivial altitude.
+
+**Limitations**:
+- Hyrox venue multipliers are inferred from athlete reports and finishing-time spreads, not from a controlled cross-venue study. Treat as v1 heuristic — refresh when structured data becomes available.
+- Running elevation uses average grade. Rolling courses with equal up/down still show non-zero penalty due to asymmetric eccentric cost; that's a feature, not a bug, but the magnitude is uncertain.
+- Climate uses categorical buckets (cool/temperate/warm/hot/hot-humid) anchored to typical race-week wet-bulb temperature. Race-day weather can swing — Boston in particular is highly variable. Manual override path (per-race climate) is supported.
+
+**Compounding sanity-check**: `MAX_REASONABLE_LEG_PENALTY = 1.25` (25% combined). Logs a warning if any single mode produces a higher compound multiplier — e.g. a hot+altitude+elevation race like Leadville is at the upper bound.
+
+---
+
+## Volume-aware training horizon — running prediction now scales with weekly hours/km (2026-05-05)
+
+**Where**: `src/calculations/training-horizon.ts` — `applyTrainingHorizonAdjustment`. New helper `computeEffectiveSessions` and constants in `src/constants/training-params.ts` (`REF_KM_PER_SESSION`, `HOURS_TO_KM_RATE`).
+
+**Problem**: The horizon adjuster's `session_factor` logistic treated every session as a standard dose. A 4×30-min marathon plan and a 4×80-min marathon plan produced identical predicted VDOT gain. The `weekly_volume_km` field existed on `TrainingHorizonInput` but the function never read it. Result: a 10-h/week runner saw the same predicted improvement as a 3-h/week runner if both did 4 sessions.
+
+**Fix**: Convert raw `sessions_per_week` into `effective_sessions` via a dose multiplier:
+
+```
+ref_km_per_session = REF_KM_PER_SESSION[distance]   // 5K=8, 10K=9, half=10, marathon=11
+km_proxy           = weekly_volume_km ?? (weekly_volume_hours × HOURS_TO_KM_RATE)
+actual_km/session  = km_proxy / sessions_per_week
+dose_factor        = clamp(actual_km/session ÷ ref_km/session, 0.5, 1.3)
+effective_sessions = sessions_per_week × dose_factor
+```
+
+`effective_sessions` then feeds the existing `session_factor` logistic AND the undertraining penalty. Returns to legacy behaviour when neither km nor hours is provided.
+
+**Why these reference values are defensible**:
+
+The `REF_KM_PER_SESSION` table is derived directly from the existing `ref_sessions[distance][intermediate]` × the canonical weekly mileage in two long-published intermediate plans:
+
+- **5K**: ref_sessions=4.0 × ~32 km/wk → 8 km/session (Daniels' 5K Q1/Q2 plan).
+- **10K**: ref_sessions=4.5 × ~40 km/wk → 9 km/session (Daniels' 10K Phase II).
+- **Half-marathon**: ref_sessions=5.0 × ~50 km/wk → 10 km/session (Pfitzinger's 47-63 km HM plan).
+- **Marathon**: ref_sessions=5.5 × ~62 km/wk → 11 km/session (Pfitzinger's *Advanced Marathoning* 55-70 mpw plan).
+
+These are not invented: they are the per-session implications of the existing horizon parameters multiplied by the canonical weekly-mileage assumption in the source the horizon parameters were calibrated against.
+
+**Why the [0.5, 1.3] clamp**: The lower bound prevents a fully zero-credit collapse when a user enters wildly under-target volume — they still get *some* horizon credit for at least showing up. The upper bound prevents an absurd long-session plan (e.g. someone entering 200 km/wk) from inflating the gain past what real adaptation can produce. The bracket matches the dose-response saturation observed in Tanda 2011 (marathon time vs weekly km) — improvements flatten beyond ~85 km/wk in the Tanda dataset.
+
+**Why hours fallback uses 10 km/h**: Daniels' easy-pace zone for an intermediate VDOT (45-50) median is ~6:00/km = 10 km/h. The hours fallback is only used when `weekly_volume_km` is missing (new user with no run history) — once history exists, the more precise km signal takes over.
+
+**Knock-on benefit for triathlon and cycling**:
+
+The triathlon run-leg adjuster (`applyTriHorizonRun` in `training-horizon.triathlon.ts:178`) already passes `weekly_volume_km` to the same underlying function. With this fix, the field is finally consumed — meaning a 12 h/wk Ironman trainee now correctly sees a higher run-leg VDOT projection than a 5 h/wk one, which it previously did not. Cycling mode will inherit the same behaviour automatically when its predictor ships in V2.
+
+**Limitations**:
+
+- Hours-based fallback assumes uniform easy pace; ignores how the user actually splits intensity. Acceptable because km history overrides hours as soon as one week of data exists.
+- Dose factor uses *average* km-per-session, not the long-run shape. A plan with 4×5km + 1×40km has the same dose factor as 5×13km, but the long-run quality differs. The existing `long_run_max_km` field on `TrainingHorizonInput` could feed a future second-order adjustment; deferred until we have evidence the average misleads.
+- Reference values are intermediate-tier; we do not (yet) scale `REF_KM_PER_SESSION` per ability band. Beginners on low volume are protected by the existing `applyGuardrails` ceiling, so the floor isn't catastrophic for them.
+
+**Tests** (`training-horizon.test.ts > weekly volume effect`): 7 new tests covering high-vs-low volume separation, hours fallback, undertraining penalty trip on very short sessions, km-over-hours preference when both supplied, legacy behaviour preserved when neither supplied, and clamp behaviour at extreme volume.
+
+**References**:
+
+- Daniels, *Daniels' Running Formula* 4th ed. (2022), Chapter 9 (5K plans), Chapter 10 (10K plans). Per-distance weekly-mileage reference points for intermediate runners.
+- Pfitzinger & Douglas, *Advanced Marathoning* 3rd ed. (2019). 55-70 mpw and 70-85 mpw schedules, source for marathon and HM reference km/session.
+- Tanda G. (2011) "Prediction of marathon performance time on the basis of training indices." *J Human Sport & Exercise* 6(3). Marathon dose-response saturation beyond ~85 km/wk.
+- Foster C., Florhaug J.A., et al. (2001) "A new approach to monitoring exercise training." *J Strength Cond Res* 15(1):109-115. Training stimulus = volume × intensity, dose-response in untrained-to-recreational populations.
+
+---
+
+## Pro-grade bike workout kinds — over-unders, VO2 micros, VLamax (2026-05-02)
+
+**Where**: `src/workouts/bike.ts` adds three pro-grade `BikeSessionKind` values alongside the existing six (endurance/tempo/sweet_spot/threshold/vo2/hills). Each is selected by `pickBikeKind` for specific phase + slot combinations and rendered with literature-anchored interval prescriptions.
+
+### Over-unders (`over_under`)
+**Stimulus**: Alternating sub- and supra-threshold reps train lactate clearance at high intensity. The "under" sections force aerobic clearance of lactate produced during the "overs", improving the rider's ability to handle threshold-level surges in road racing or triathlon bike legs.
+
+**Formula / prescription**: Three variants, all anchored to Coggan & Allen, *Training and Racing with a Power Meter* (3rd ed., 2019), Ch. 7:
+- Classic over-under: 3× (3min @ 105% FTP → 3min @ 95% FTP), continuous, 5min easy between sets.
+- Criss-cross: 2× (5× (1min @ 110% FTP / 1min @ 85% FTP)), shorter alternations, 5min easy between blocks.
+- 2:1 ratio: 4× (2min @ 105% FTP → 1min @ 95% FTP) continuous, 4min easy between.
+
+**Defensibility**: Coggan & Allen explicitly recommend over-unders as a Z4 development tool. The 105/95% bracket sits inside MLSS variability across riders (≈90–105% FTP) so the "unders" remain near-threshold rather than easy, maximising clearance demand.
+
+**Load assumptions** (`tssPerMin = 1.65`, `anaerobicShare = 0.45`): Slightly above pure threshold work because the 105% overshoots compound load. Anaerobic share between sweet-spot (0.25) and threshold (0.40) — the unders pull the average down vs continuous threshold.
+
+**Limitations**: TSS-per-minute is a pragmatic estimate until Phase 4 wires real bTSS from .fit power streams. Actual NP/IF for these sessions averages ≈0.98–1.02 depending on variant; the IF entry in `tri-effort-scoring.ts` is set to 1.00.
+
+### VO2 micro-intervals (`vo2_micros`)
+**Stimulus**: Short (30s) high-intensity reps separated by short (30s) recoveries accumulate more total time at VO2max than longer reps because oxygen kinetics keep the athlete near VO2max during the brief recoveries. Lower lactate accumulation per minute of work than 3–5min reps, allowing higher total volume.
+
+**Formula / prescription**: Adapted from Billat V., *Sports Medicine* 31(1):13–31 (2001) "Interval training for performance: a scientific and empirical practice". Three variants:
+- 2× (10× 30s @ 120% FTP / 30s easy), 5min between blocks.
+- Continuous: 15× (30s @ 118% FTP / 30s @ 50% FTP).
+- 3× (8× 40s @ 115% FTP / 20s easy), 4min between blocks.
+
+**Defensibility**: Billat's 30/30 protocol was originally developed for runners at vVO2max but has been validated on bike (e.g., Rønnestad & Hansen, *Scand J Med Sci Sports* 2014, "Optimizing interval training at power output associated with peak oxygen uptake in well-trained cyclists"). 115–120% FTP corresponds approximately to %vVO2max for cyclists with FTP at ~85% of VO2max power.
+
+**Load assumptions** (`tssPerMin = 1.75`, `anaerobicShare = 0.55`): Below classic VO2 (1.9 / 0.60) because the 1:1 work:rest ratio means rest dominates more of the session than 3:3 reps. Still high anaerobic share due to repeated VO2 spikes.
+
+**Limitations**: %FTP targets are a reasonable proxy for vVO2max equivalent power but individual variation is large (±10%). Athletes with high VO2max-to-FTP ratios will under-stimulate at 115% FTP.
+
+### VLamax neuromuscular sprints (`vlamax`)
+**Stimulus**: Very short (6–15s) maximal efforts with long (3–5min) full-recovery rests target phosphocreatine resynthesis and glycolytic ceiling without inducing systemic aerobic fatigue. Develops peak power and rate of force development for race-day attacks, breakaways, and finishing sprints.
+
+**Formula / prescription**: Three variants, anchored to Coggan's Z6 / Z7 zones (*Training and Racing with a Power Meter* Ch. 4):
+- 8× 10s max sprint @ 160%+ FTP, 3min easy spin between.
+- 6× 15s standing-start @ 150%+ FTP, 4min full recovery.
+- 3× (4× 6s seated max sprint, 90s easy), 5min between blocks.
+
+**Defensibility**: 6–15s window matches the PCr-dominant energy system (Gastin, *Sports Medicine* 31(10):725–741, 2001). Full recovery (3–5min) is required because incomplete PCr resynthesis turns the session into a glycolytic-tolerance set rather than peak-power development. Total work volume capped at ~2min keeps systemic stress low.
+
+**Load assumptions** (`tssPerMin = 1.10`, `anaerobicShare = 0.75`): Lowest TSS per minute of any quality kind because most of the session is recovery. Highest anaerobic share — the actual work bouts are almost entirely PCr/glycolytic. Total session TSS for a 60min slot lands around 60–70 TSS, well below threshold work.
+
+**Limitations**: 160%+ FTP targets assume the athlete has the neuromuscular capability to reach those wattages — newer riders may produce considerably less. Phase 4 (.fit power streams) will give us real peak-power data per rep so the prescription can be calibrated per athlete.
+
+### Phase rotation logic
+`pickBikeKind` now alternates classic and pro-grade kinds week-to-week using a parity-of-weekIndex check. This matches periodisation practice — a 4-week build mesocycle should expose the rider to multiple stimulus shapes rather than the same workout four times. Endurance recovery slots are excluded from rotation because they should stay stable. Base phase has no supra-threshold rotation — the aerobic foundation comes first.
+
+---
+
+## Triathlon — Home readiness card uses tri composite (2026-05-01)
+
+**Why the tri composite, not the running composite**: The running-side `computeReadiness` is built around Signal A (run-equivalent iTRIMP with runSpec discounts). A week of heavy bike load produces low running ACWR but full physiological stress — the running composite would call it "safe" while the athlete is at genuine risk of accumulation. The tri composite (`computeTriReadiness`) runs the same engine once per discipline using that discipline's own CTL/ATL/TSB, then surfaces the worst label. This correctly detects bike or swim overload that the running composite would mask.
+
+**What is shared vs separated**: Sleep and HRV are passed identically to all three discipline calls — they are sport-agnostic. The freshness and load-safety sub-scores differ per discipline because each has its own TSB and ACWR. The "worst label across three" is the conservative, athlete-safe choice: one sport overreaching should suppress the overall readiness even if the others look fine.
+
+**Running mode unchanged**: The branch at `buildReadinessRing` is a strict `if (isTri)` guard. Running mode still calls `computeReadiness` with the running composite unchanged.
 
 ---
 
@@ -53,7 +1479,25 @@ v2 deferred: per-athlete calibration multiplier from rolling average of past rac
 
 ---
 
-## Triathlon cross-training overload detector (2026-04-30)
+## Triathlon cross-training overload detector — v2 (2026-05-01)
+
+**Updates v1** (entry below). Three significant design changes:
+
+**1. Run-anchored recommendation.** v1 picked the discipline with the most remaining planned TSS. v2 anchors on **run** by default. Most cross-training (tennis, padel, gym, hiking, soccer, basketball, walking) is leg-impact-loaded and substitutes for running stress more directly than for swim or bike. Categorical mapping in `classifyAffinity`: "bike" if name/activityType contains cycl/biking/mtb/spin/zwift; "swim" if it contains swim/aquatic/pool; "run" otherwise. Per CLAUDE.md "no made-up numbers" — this is a categorical rule, not an empirical transfer coefficient. Falls through to next-most-loaded discipline if the affinity-recommended discipline has no remaining work.
+
+**2. Multi-mod with severity tiers + saturation.** Mirrors running's suggester. Severity (light < 15%, heavy 15–25%, extreme > 25%) gates the max number of mods proposed (heavy → 2, extreme → 3 — smaller than running's 1/2/3 because tri has fewer mod-able workouts per discipline). Per-discipline candidate sets carry both `reduceMods` (downgrade quality, trim endurance) and `replaceMods` (interleave swap-easy + reduce). Saturation curve from running (`1500 × (1 - exp(-x/800))`) caps how much credit a single huge cross-training session can unlock.
+
+**3. Per-discipline floor + push-to-next-week carry.** New `computeTriDisciplineFloorTSS` (mirror of `computeRunningFloorKm`): returns 0 in taper, 0 when per-discipline ACWR > 1.3 (suspended for injury safety), `0.65 × plannedDisciplineTSS` otherwise. Per-discipline `belowFloor` flag fires in modal when reductions would breach floor — the modal warns but doesn't block (user override). Push-to-next-week stores cross-training TSS on `Week.carriedCrossTrainingTSS`; `computeDecayedTriCarry` (7-day τ, 3-week lookback) is consumed by the next week's detector so deferred load doesn't disappear — it just spreads exponentially.
+
+**Why these mirror running rather than reinvent**: per CLAUDE.md "Mirror rule — running and triathlon mode parity", and per the user's explicit instruction "take a lot from running here". The running suggester's severity / saturation / interleave / floor patterns work well; tri benefits from the same conceptual shape adapted to three disciplines.
+
+**Membership filter** (replaces v1's discipline filter): cross-training is identified by id-membership outside `wk.triWorkouts`, not by `discipline === undefined`. Per "anything in your plan is in your plan" — a planned cross/gym session in the tri plan engine no longer trips the detector.
+
+**Files**: `src/calculations/tri-cross-training-overload.ts` (detector), `src/calculations/tri-discipline-floor.ts` (floor), `src/calculations/tri-cross-training-carry.ts` (carry decay), `src/ui/triathlon/tri-suggestion-modal.ts` (chip switcher + 4-button layout), `src/ui/home-view.ts` (carry banner). 44 unit tests across the three calc files.
+
+---
+
+## Triathlon cross-training overload detector — v1 (2026-04-30)
 
 **Purpose.** When a triathlete logs cross-training (tennis, padel, racquet sports, gym work, anything outside swim/bike/run) that pushes the week's total TSS meaningfully over plan, surface a tri-aware suggestion to absorb the extra load. Mirrors the running-side `buildCrossTrainingPopup` intent but adapted to tri's three-discipline plan and TSS load currency.
 
@@ -251,7 +1695,20 @@ Sources:
 
 #### §F.3 Run horizon
 
-Reuses the existing `applyTrainingHorizonAdjustment` with `target_distance: 'marathon'` (IM) or `'half'` (70.3). The marathon constants in `TRAINING_HORIZON_PARAMS` are anchored to Daniels' tables and Tanda 2011 (see existing §"Tanda Marathon Predictor"). Adherence and adaptation are applied as additional multipliers on top.
+Uses `RUN_HORIZON_PARAMS_703` / `RUN_HORIZON_PARAMS_IM` (in `triathlon-horizon-params.ts`) via `computeImprovementPct` — the same generic function used for swim and bike. `max_gain_pct` and `tau_weeks` mirror `TRAINING_HORIZON_PARAMS` half/marathon values (Daniels 2014) since run physiology is unchanged by context. `ref_sessions` and `min_sessions` are triathlon-calibrated:
+
+| | 70.3 | IM |
+|---|---|---|
+| `ref_sessions` (intermediate) | 3.0 | 3.5 |
+| `min_sessions` (intermediate) | 1.5 | 2.0 |
+
+**Rationale for triathlon-specific session frequencies**: the marathon model uses `ref_sessions = 5.0` for intermediate runners (Daniels' optimal marathon training load). In a triathlon program, 3 runs/week is the standard recommendation (Friel 2012 "The Triathlete's Training Bible"; Dixon 2015 "Fast-Track Triathlete") because swim and bike volume provides concurrent aerobic stimulus, reducing the run frequency needed to drive VO2max adaptation (Laursen & Buchheit 2019). Using the marathon's `ref_sessions = 5.0` would treat a well-trained triathlete doing 3 runs/week as severely undertrained, suppressing a realistic 3–5% VDOT gain down to < 1%.
+
+**Effect at intermediate, 3 runs/week, 18 weeks**: session_factor = 0.5 (at ref), week_factor ≈ 0.87 → base improvement ≈ 3.5%, plus taper ≈ 4.7% before adaptation. Projected VDOT gain ≈ +2 points for Tristan's VDOT 48 baseline, consistent with Midgley et al. (2006) 5–8% VO2max range over 8–16 week blocks.
+
+**Confidence**: max_gain_pct and tau high (Daniels). Ref/min sessions medium — no controlled trial directly compares run frequencies in a concurrent triathlon context; figures are coaching consensus from Friel and Dixon.
+
+Adherence penalty and adaptation ratio are applied inside `computeImprovementPct` (same path as swim/bike).
 
 #### §F.4 Adaptation ratio (Phase 2 plan)
 
@@ -329,17 +1786,29 @@ These match the existing `WIND_LOSS_FACTOR` for `flat`/`rolling`/`hilly`/`mounta
 Sources:
 - **Toussaint HM et al. (1989)** *MSSE* 21:325–328 — wetsuit drag reduction ~14% at 1.25 m/s.
 - **Cordain L & Kopriva R (1991)** *Sports Med* 11:336–348 — ~5% time benefit for non-elite.
+- **de la Fuente Pacheco JG et al. (2020)** *Int J Sports Physiol Perform* 15:46–51 — 400m pool study, ~6% time reduction (~0.07 m/s).
 - **Baldassarre R et al. (2017)** *Front Physiol* 8:294 — open-water vs pool review.
+- **López-Belmonte Ó et al. (2024)** *Scand J Med Sci Sports* 34:e14702 — 1500m, n=14 elites; lower stroke length / index and higher stroke rate in OW vs pool, but no physiological differences and strong correlation in finish times.
 
 ```
-wetsuit-lake           = 1.00 (baseline)
+pool                   = 1.00 (athlete-side; ≡ wetsuit-lake at race effort)
+wetsuit-lake           = 1.00 (reference baseline)
 non-wetsuit-lake       = 1.04 (+4% drag without wetsuit)
 ocean                  = 1.05 (+5% chop; salinity buoyancy partially offsets)
 ocean-current-assisted = 0.97 (−3%; e.g. Roth canal, favourable Kona years)
 river                  = 1.00 (direction-dependent; neutral default)
 ```
 
-**Limitations**: river swims and ocean conditions vary year to year. The neutral defaults are deliberately conservative.
+**Pool coefficient = 1.00 (rationale).** A pool swim is faster than the equivalent open-water swim by ~5–10% (USMS coaching guidance, community data) — wall push-offs (3 per 100m in a 25m pool), no chop, no sighting, glide off each turn. A wetsuit makes an open-water swim ~5–6% faster than the same effort without one (Toussaint 1989, Cordain 1991, de la Fuente Pacheco 2020). The two effects approximately cancel: a pool swim ≈ a wetsuit-lake swim at equivalent effort. Pool = 1.00 is the "honest cancellation" choice — both effects are acknowledged but absorbed into the shared baseline rather than fabricating a pool-specific multiplier (per CLAUDE.md "no made-up numbers"). Confidence: medium. Could be wrong by a few percent in either direction depending on pool length (50m loses some wall benefit) and ocean conditions (heavy chop steepens the OW penalty).
+
+**Two unions, one multiplier table.**
+- `CourseProfile['swimType']` (race-side, 5 values): cannot be `pool` — you don't race in a pool.
+- `AthleteSwimEnvironment` (per-activity training tag, 5 values): cannot be `ocean-current-assisted` — that's a race-only condition, not a training baseline.
+- Shared `SWIM_TYPE_MULTIPLIER` covers all 6 keys.
+
+**Athlete-side normalisation** (added 2026-05-09). Each swim's pace is divided by `SWIM_TYPE_MULTIPLIER[swimEnvironment]` to yield a wetsuit-lake-equivalent pace before pooling into CSS. Race-side then re-applies the course factor for the actual race environment. This avoids the previous double-count where a pool-trained CSS was treated as already-in-wetsuit-lake conditions and then penalised again for ocean chop. Pool swims auto-tag from `activityType` (`SWIMMING` / `LAP_SWIMMING`); OW swims fall back to `triConfig.swim.defaultOwSwimEnvironment` (set once via the reveal modal). When no tag and no default exist, the multiplier is 1.0 — safe fallback that doesn't fabricate a number.
+
+**Limitations**: river swims and ocean conditions vary year to year. The neutral defaults are deliberately conservative. Saltwater/freshwater buoyancy is bundled into the ocean-vs-lake split rather than modelled as a separate axis (~2.5% body-mass buoyancy difference exists but lacks rigorous performance literature for trained swimmers). Pool length (25m vs 50m) is not differentiated in the multiplier; 50m pools lose some of the wall-push-off benefit but the user's `poolLengthM` field could be used in v2 to refine.
 
 ### §H Run-leg durability cap (the new triathlon-specific piece)
 
@@ -386,6 +1855,129 @@ Sources confirming the existing values:
 - **Landers (2008)** — 8–13% slower than open marathon for IM.
 
 The current values (11% IM, 5% 70.3) sit at the mid-range of published data. Kept as the floor; the durability cap can only widen, not narrow. **Confidence: high.**
+
+### §K Single-discipline cycling event finish-time prediction (2026-05-04)
+
+**File**: `src/calculations/race-prediction.cycling.ts`
+
+**Model**: Gran Fondo / sportive finish time from FTP × intensity factor, solved through the Martin et al. 1998 bike physics engine (`bike-physics.ts:solveSpeed`).
+
+**Intensity factor table** (Allen & Coggan, *Training and Racing with a Power Meter*, 2010 — power-duration zones):
+
+| Distance | Duration estimate | Zone     | IF   |
+|----------|-------------------|----------|------|
+| 50 km    | 1.5–2 h           | Sweet spot | 0.88 |
+| 100 km   | 3–4 h             | Tempo      | 0.80 |
+| 160 km   | 4.5–6 h           | End-tempo  | 0.74 |
+| 200 km   | 6–8 h             | Endurance  | 0.68 |
+| 300 km   | 9–12 h            | Ultra      | 0.62 |
+
+These IFs are higher than the triathlon bike-leg IFs (`RACE_INTENSITY_BY_DISTANCE`: 0.78 for 70.3, 0.70 for IM) because cycling events are single-discipline — no pre-swim fatigue, no pacing reserve needed for a run leg.
+
+**Physics path**: when an aero profile + body weight + bike weight are set, `solveSpeed` finds the equilibrium speed at `raceWatts = FTP × IF` solving `P = (CdA × ρ/2 × v² + Crr × m × g) × v + m × g × sin(θ) × v`. No iteration is needed here because the IF is distance-keyed (not duration-keyed), so there is no circularity.
+
+**Fallback path** (no aero profile): linear `kph = 20 + (watts − 100) × 0.067`, clamped 18–48 kph, with coarse gradient penalty (flat: 0, rolling: −1.5, hilly: −3.5, mountainous: −6.0 kph). Same coefficients as the triathlon predictor's no-aero path.
+
+**Confidence range**: ±10% > 4 weeks out, ±6% within 4 weeks. Gran Fondo pacing is less predictable than triathlon bike legs (group dynamics, feed-zone strategy, variable parcours) — bands are intentionally conservative.
+
+**Known limitations**: IF assumes solo pacing at even power; drafting in a large sportive can significantly lower the required power. The model is an FTP-fraction estimate, not a validated GF-specific model. No elevation integration (course profile is categorical, not a gradient profile).
+
+**Confidence: medium** — physics engine is well-validated; IF constants are from authoritative source; fallback linear path is a rough approximation only.
+
+---
+
+### §L MusculoTendon Load (MTL) — HYROX eccentric strain model (2026-05-04)
+
+**File**: `src/calculations/mtl.ts`, `src/constants/hyrox-constants.ts`
+
+**Problem**: aerobic TSS and impact load are insufficient for HYROX because station work (sleds, lunges, wall balls) produces significant eccentric/mechanical stress that does not scale with heart rate or run mileage. A third load currency is needed.
+
+**Model**:
+
+```
+rawComponentMTL = durationMin × sRPE × modalityFactor × impactFactor × (1 + externalLoadFactor)
+effectiveMTL    = cap × (1 − exp(−rawMTL / cap))
+```
+
+Where:
+- `sRPE` = session RPE (1–10) for this component — same method as Foster et al. 2001 session RPE.
+- `modalityFactor` = eccentric + mechanical loading multiplier relative to baseline IL. Ergs: 0.5; sled/farmer carry: 1.0–1.2; plyometrics (burpee BJ): 1.3. From Verkhoshansky & Siff 2009 on eccentric loading taxonomy.
+- `impactFactor` = ground-impact amplification. Ergs: 0.7 (minimal footstrike); sled push/pull/carry: 1.0; burpee BJ/sandbag lunges: 1.0–1.3. From Clarkson & Hubal 2002 on DOMS and eccentric exercise.
+- `externalLoadFactor = min(0.6, externalLoadKg / bodyWeightKg × 0.5)`. Caps at 0.6 (60% amplification) — conservative linear fit for external-to-body-weight ratio. Clamped because above bodyweight loads (e.g. heavy farmer carry) have diminishing marginal MTL per unit of extra load.
+- `cap` = per-band weekly MTL ceiling from `HYROX_MTL_CAP`. **Initial estimates pending real-training validation.**
+
+**Saturation curve rationale**: The one-minus-exponential form prevents linearly accumulating MTL at extreme loads. Real tissue tolerance asymptotes as load approaches and exceeds the individual's current capacity — analogous to the Banister impulse-response saturation used in some CTL models (Busso 2003, *Med Sci Sports Exerc* 35(7)). The saturation constant is set equal to `cap` so the 63% saturation point aligns with the per-band ceiling.
+
+**Station MTL factors** (from research doc §3.3):
+
+| Station           | modalityFactor | impactFactor |
+|-------------------|---------------|-------------|
+| SkiErg            | 0.5           | 0.7         |
+| Sled push         | 1.2           | 1.0         |
+| Sled pull         | 1.2           | 1.0         |
+| Burpee broad jump | 1.3           | 1.3         |
+| Row erg           | 0.5           | 0.7         |
+| Farmer carry      | 1.0           | 1.0         |
+| Sandbag lunges    | 1.1           | 1.0         |
+| Wall balls        | 1.1           | 1.0         |
+
+**Run intensity factors**:
+| Intensity   | modalityFactor | impactFactor |
+|-------------|---------------|-------------|
+| Easy        | 0.6           | 1.0         |
+| Tempo       | 0.8           | 1.0         |
+| Intervals   | 1.0           | 1.0         |
+
+**MTL caps** (initial estimates — pending real-training validation; to be refined after dogfooding):
+
+| Band           | Weekly MTL cap |
+|----------------|---------------|
+| Total beginner | 500           |
+| Beginner       | 700           |
+| Novice         | 1 000         |
+| Intermediate   | 1 300         |
+| Advanced       | 1 600         |
+| Competitive    | 2 000         |
+
+Cap derivation: rough scaling from the training-load literature on eccentric/mechanical stress tolerance across experience levels (Damas et al. 2016, *Eur J Appl Physiol* 116(5); Schoenfeld 2010, *J Strength Cond Res* 24(12)). Not empirically validated against HYROX athlete data.
+
+**Known limitations**:
+1. MTL factors for each station are ordinal estimates, not calibrated from actual athlete data. All HYROX-specific constants need real-training validation.
+2. External load factor uses a linear approximation; actual load-response relationship may be non-linear (especially at very high loads).
+3. The MTL cap table is not yet evidence-based — it will be tuned after dogfooding with actual HYROX training sessions.
+4. No time-decay model for MTL yet (Phase 3 will add MTL CTL/ATL EMA analogous to aerobic CTL).
+
+**Confidence: low (model structure) / none (constants)** — model structure is physiologically grounded but constants are initial estimates pending validation.
+
+---
+
+### §L2 HYROX run-leg fatigue model (2026-05-05)
+
+**File**: `src/calculations/race-prediction.hyrox.ts`
+
+**Problem**: a flat 8 × base pace predicts HYROX run splits incorrectly. Race data (HyroxDataLab finishing-time distributions) shows a clear within-race fatigue gradient: Run 1 is ~5% faster than average; Runs 7–8 are 5–8% slower, driven by cumulative eccentric + metabolic fatigue from completed stations.
+
+**Model**:
+```
+rawMultiplier(legIndex) = 1 + legIndex × PER_STATION_FATIGUE_RATE
+PER_STATION_FATIGUE_RATE = 0.008   // 0.8% per station completed
+normMultiplier(i) = rawMultiplier(i) / mean(rawMultiplier, 0..7)
+legPace(i) = basePace × venueMultiplier × normMultiplier(i)
+```
+
+`legIndex = 0` = Run 1 (no stations yet); `legIndex = 7` = Run 8 (after 7 stations completed).
+
+**Why normalise**: the raw multipliers sum to 8 × avgMult, not 8 × 1. Dividing by avgMult restores the energy-conservation constraint: total 8-run duration equals 8 × basePace × venueMultiplier. The normalisation is a mathematical identity — it does not change the predicted total, only the per-leg distribution.
+
+**Rationale for 0.8%/station**: Goss et al. 2021 (*Int J Sports Physiol Perform* 16(3)) found run-economy declined by 3–8% over repeated high-intensity bouts with eccentric loading in resistance-trained athletes. A 0.8% per-station rate implies 6.4% total degradation over 7 completed stations (Run 8 is 6.4% slower than Run 1, before normalisation). This sits in the lower half of the Goss range, reflecting that HYROX athletes are specifically trained for this format. HyroxDataLab's published average run-pace progressions (Open men average, 2023) show a ~1.4s/km per station, consistent with 0.8% for a ~3:00/km base pace.
+
+**Known limitations**:
+1. Linear model — actual fatigue may accelerate non-linearly at higher station loads (wall balls → lunges stack produces more fatigue than two ergometer stations).
+2. No individual station MTL weighting — all 8 stations are treated equally. Phase 2 could weight by station MTL factor.
+3. Normalisation preserves energy at the mean but not at extreme athlete bands (very fast athletes have a different physiological trajectory).
+4. PER_STATION_FATIGUE_RATE is a single constant across all ability bands. Competitive athletes likely show less degradation (better eccentric tolerance, higher training specificity).
+
+**Confidence: medium-low** — rate is consistent with published literature but not calibrated against HYROX-specific population data.
 
 ---
 
@@ -1243,7 +2835,7 @@ VDOT = max(VO2 / p, 15)                               -- clamped floor at 15
 
 **Method A -- from Lactate Threshold pace** (preferred when LT pace is known):
 ```
-Easy (E)        = ltPace * 1.15     (15% slower than LT)
+Easy (E)        = ltPace * 1.20     (20% slower than LT, ~65-70% VO2max)
 Marathon (M)    = ltPace * 1.05     (5% slower than LT)
 Threshold (T)   = ltPace * 1.00     (at LT pace)
 Interval (I)    = ltPace * 0.93     (7% faster than LT)
@@ -1262,6 +2854,8 @@ Repetition (R)  = (5K_time / 5km) * 0.97     (3% faster than 5K pace)
 **Ad-hoc zone mappings**: 10K pace = marathon pace * 0.95; half-marathon pace = marathon pace * 1.05.
 
 **Scientific basis**: Daniels' training zones. LT-anchored zones are more accurate because LT is directly measurable and represents the metabolic crossover point. VDOT-derived zones assume a fixed relationship between race performances and training intensities that holds for typical trained runners.
+
+Easy E-pace at 1.20 × LT places the zone at ~65-70% VO2max (mid-band of Daniels' E-pace range of 59-74%). The previous 1.15 multiplier sat at the fast edge of that band; calibration data (athlete feedback: prescribed easy felt like Z3, not Z2) confirmed it was too aggressive. Verified: for LT = 4:04 (VDOT 55), 1.20 gives easy 4:53/km vs Daniels table range of 4:44-5:12/km.
 
 **Known limitations**:
 - LT method assumes LT occurs at a consistent fraction of VO2max (~85-90%), which varies by training status
@@ -2660,7 +4254,16 @@ The 0.15%/°C coefficient is literature-approximate — controlled studies of en
 
 **Context**: The original estimator treated every ride's whole-activity normalised power (NP) as if it were a 20-min FTP test, applying `FTP = NP × 0.95` uniformly. This underestimated FTP for athletes whose powered rides were long endurance sessions rather than threshold tests. The 2026-04-27 quality-tiered rewrite classified rides as high-signal (20–75 min, avg/NP ≥ 0.88) or floor (>75 min, avg/NP ≥ 0.80) and applied duration-aware factors. Better than the uniform ×0.95, but still couldn't see *into* a long ride — a 110-min session containing two 20-min all-out efforts at 310 W would show whole-ride NP ≈ 251 W and the floor-tier formula would return FTP = 263 W, hiding the actual test result.
 
-**Why retained as fallback**: when the watts stream isn't yet processed (mid-backfill, rides outside the per-sync stream-fetch budget), the activity row carries `average_watts` / `normalized_power` but no `power_curve`. Rather than show "--", the new estimator falls back to the freshest real-meter ride's whole-ride NP × 1.00 within 12 weeks, tagged `confidence: 'low'`.
+**Why retained as fallback**: when the watts stream isn't yet processed (mid-backfill, rides outside the per-sync stream-fetch budget), the activity row carries `average_watts` / `normalized_power` but no `power_curve`. Rather than show "--", the new estimator falls back to a recent ride's whole-ride NP × 1.00 within 12 weeks, tagged `confidence: 'low'`.
+
+**Selection rule (2026-05-01 update)**: pick the *strongest* qualifying ride within 12 weeks, not the *freshest*. Whole-ride NP × 1.0 is conservative by construction — averaging across an entire ride dilutes the FTP signal — so picking the highest NP recent ride is the closest we can get to a real anchor without a curve. The earlier "freshest ride" rule had a degenerate failure mode: if the user's most recent ride was a Z2 endurance spin at NP 180 W, FTP would land at 180 W even when a tempo ride at NP 240 W from 3 weeks ago was sitting in the same data. Tiebreak on equal NP goes to the fresher ride.
+
+**device_watts gate dropped entirely (2026-05-01)**: real-world data shows Strava's `device_watts` flag is structurally unreliable — Tristan's account has 60 of 63 recent rides flagged `device_watts: false` despite all of them being captured on a real power meter. The bug is in the Garmin → Strava transfer pipeline, not Strava's estimation logic. So:
+
+- The earlier "reject `=== false`, accept null, downgrade unknown one tier" rule was still rejecting valid power-meter data wholesale.
+- We now drop the flag check entirely and rely instead on a hard NP/avg threshold (`>= 120 W`). Strava's speed-based power estimation produces typical values of 80–150 W for casual rides; a sustained NP at 280 W cannot come from speed alone.
+- Confidence downgrade is still applied when the flag isn't explicitly true (high → medium, medium → low). The 'low' tag and the existing UI prompt for a fresh test are the correct safety net.
+- The presence of a `power_curve` is a far stronger signal than `device_watts`: the curve is computed by the edge function from actual watts samples in the stream. If it exists, the data was real.
 
 ---
 
@@ -2675,7 +4278,7 @@ The 0.15%/°C coefficient is literature-approximate — controlled studies of en
    ```
    candidate = max(p600 × 0.92, p1200 × 0.95, p1800 × 0.97, p3600 × 1.00)
    ```
-   Whichever window produced the strongest signal wins for that ride. Real-meter only — `deviceWatts !== true` rides are excluded from the curve path entirely.
+   Whichever window produced the strongest signal wins for that ride. Reject only rides Strava explicitly marks `deviceWatts === false`. **Why not require `=== true`?** The `device_watts` flag is unreliable on Garmin → Strava transfers — it routinely arrives `null` (or even `false`) on real power-meter rides. Refusing those leaves new triathletes with a "--" Bike FTP forever; downgrading their confidence one tier (high→medium, medium→low) is a strictly better outcome and keeps the existing UI prompt for a fresh test.
 3. **Top-1 selection**: across all candidates within the last 12 weeks, take the single highest. The strongest single ride is the most informative single data point; averaging a fresh test with stale ones dilutes the signal.
 4. **Outlier guard**: if the top-pick's `p1200 > 1.4 × p3600`, the curve is suspicious (meter spike or stream gap during a 20-min window) — fall to the second-best.
 5. **Confidence by source-ride age** only:
@@ -2855,3 +4458,414 @@ A paired m400 + m200 PB on file shorts the cascade and is always tagged `high` (
 - The hard-effort delta uses the median across all sustained swims in the recency window, not a stratified set. If 80% of a swimmer's recent swims are 100m sprints with a single 1500m steady swim, the median is dragged toward the sprints and the 1500m may not flag as "hard-effort" even though it is the relevant threshold-pace data point. A future iteration could use a kernel-density approach or stratify by distance.
 - "Faster than median" is symmetric to volume: a swimmer who only does easy swims will have a low-spread distribution and never reach `'high'` confidence, which is actually correct (we genuinely don't know their threshold). The cost is that occasional hard swimmers will see "estimate — run the test" prompts they may consider noise.
 - The Dekerle 2002 critical-speed definition is more rigorous than "1500m at steady effort" — the formal test uses two distance trials and a least-squares fit. We accept the proxy because the goal is a usable CSS without a formal test, not a peer-reviewed threshold measurement.
+
+## Personal Recovery Rate (`k_user`) — Adaptive Recovery (2026-05-01)
+
+**Files**: `src/calculations/adaptive-recovery.ts` (the fitter + supporting helpers), `src/calculations/fitness-model.ts` (`computeToBaseline`, `computeACWR`).
+
+**Decision**: replace the literal recovery constant `8` in the recovery-countdown formula with a learned per-user value `k_user`, fit from observed post-session physiology trajectories. Apply a small ACWR safeUpper shift on top of the per-tier baseline once `k_user` is established with high confidence. Population default falls back when evidence is thin.
+
+**Model**:
+
+```
+sessionRecovery = k_user × TSS / ctlDaily × recoveryMult × recoveryAdj
+```
+
+where:
+- `k_user` is a persistent trait (this athlete's recovery profile) — clamped to `[5, 13]` ≈ 0.6× to 1.6× of population mean.
+- `recoveryAdj` is a transient state multiplier (today's HRV/sleep/RHR), already in the model — see `computeRecoveryScore`.
+- Composing the two separates "how I recover in general" from "how I'm doing right now".
+
+**ACWR ceiling shift**:
+
+```
+recoveryShift = clamp(−0.10, (8 − k_user) × 0.025, +0.10)
+safeUpper_effective = TIER_ACWR_CONFIG[tier].safeUpper + recoveryShift
+```
+
+Only applied at `confidence = high` (≥30 closed sessions). At `K_USER_MIN=5` the shift is `+0.075` (under-cap by design); at `K_USER_MAX=13` it would be `−0.125` and clamps to `−0.10`. The asymmetry is deliberate: slow recoverers carry injury risk, so the conservative side is firmer.
+
+**What we observe**: per session at date *T*,
+- **Predicted hours-to-baseline** under the current model — logged at session ingestion.
+- **Observed hours-to-baseline**: time after *T* until a composite recovery z-score returns to baseline. Composite = mean of available z-scores from `(HRV_t / +RHR_t_signFlipped)` against the user's 28-day pre-session baseline. Recovered = z ≥ −0.25 (a small negative tolerance — strict z ≥ 0 inflates observed hours due to noise). Capped at 96h (right-censored) when the signal never returns within the window.
+
+**Fit**: weighted-mean ratio with Bayesian prior. Per-session ratio `r_i = observed_i / predicted_i`. Aggregate:
+
+```
+weight_i  = sourceWeight_i × 0.5^(ageWeeks_i / halfLife)
+meanRatio = (Σ weight_i × r_i + PRIOR_WEIGHT × 1.0) / (Σ weight_i + PRIOR_WEIGHT)
+k_new     = clamp(8 × meanRatio, 5, 13)
+```
+
+with `halfLife = 4 weeks`, `PRIOR_WEIGHT = 4` (4 ghost samples that vote for `k=8`), `sourceWeight = 1.0` for live entries and `0.7` for historical-backfill entries.
+
+**Confidence gating**:
+
+| Sessions observed | Confidence | Behaviour |
+|---|---|---|
+| 0–7   | none    | population default of 8; UI shows "learning" |
+| 8–15  | low     | display only; not yet used in countdown |
+| 16+   | medium  | used in recovery countdown |
+| 30+   | high    | used in countdown AND ACWR ceiling shift |
+
+**Justification for constants**:
+- **`k_user` clamp `[5, 13]`** ≈ ±60% of population. Bounds outlier early evidence; calibrated against the Banister fitness/fatigue literature where individual recovery time-constants vary roughly within this range across athletic populations (Busso 2003, *Med Sci Sports Exerc* 35:1188–1195; review of intra-athlete variability in dose-response models).
+- **96h observation cap**: matches the upper bound of EPOC clearance for typical aerobic loads (Børsheim & Bahr 2003, *Sports Med* 33:1037–1060; recovery-O2 returns to baseline within 24–96h depending on duration/intensity). Sessions whose composite signal never recovers within this window are real ("strong negative evidence") and shouldn't be excluded — hence right-censoring at 96h, treated as observed=96h with an explicit flag.
+- **Composite z-threshold of −0.25**: empirical noise tolerance. Daily HRV CV is ~5–8% even for healthy stable athletes (Plews et al. 2012, *Eur J Appl Physiol* 112:3729–3741); a strict ≥0 cutoff would inflate observed hours through noise alone. −0.25 is roughly half a population standard deviation — small enough to remain meaningful, large enough to absorb single-day jitter.
+- **Recency half-life of 4 weeks**: matches the CTL EMA half-life used elsewhere in the model (`CTL_DECAY` corresponds to 42-day τ ≈ 6w half-life; we use 4w here because recovery-rate plasticity should track training adaptations, not lag them). Plews & Buchheit's monitoring guidance argues the recovery profile shifts within ~4–6w of meaningful training-load change.
+- **Bayesian prior of 4 ghost samples**: deliberately heavy-handed for low-N stability. Until ≥16 real sessions accumulate, the prior dominates the fit (4 prior + ≤16 real, evenly weighted) — keeps `k_user` close to 8 while evidence is thin. Once N=16, the prior drops to ~20% of the weighted mass, letting data dominate.
+- **Confidence floors (8 / 16 / 30)**: 16 ≈ 4–6 weeks of typical training matches the existing precedent for HRV baseline (`Score improves after 10 nights of data` in `recovery-view.ts`). 30 is the standard "law of large numbers" threshold below which a sample mean's standard error dominates. The countdown gate is at 16 because a wrong countdown is mostly informational; the ACWR ceiling gate is at 30 because a wrong ceiling could license excess load and carry injury risk.
+- **Historical-backfill weight of 0.7**: historical sessions reconstructed from physiology + activity history lack the RPE / check-in corrections of live sessions, so they carry less signal. The 0.7× downweight is a pragmatic discount — strong enough to let live evidence dominate as it accumulates, light enough to seed personalisation on day one rather than waiting weeks.
+- **Ceiling-shift coefficient `0.025` / shift cap `±0.10`**: the per-tier ACWR bands span 1.30 → 1.50 (a 0.20 range across the five tiers). Shift cap of 0.10 = half a tier's worth — meaningful but not enough to leapfrog tiers. Coefficient `0.025` × `(8 − k_user)` produces ±0.075 across most of the user range, with the clamp catching the outermost slow-recoverer band.
+
+**Defensibility of the overall approach**:
+- The model is a single-parameter Bayesian update on top of an existing physiologically-grounded formula. We aren't introducing a new physiological theory; we're fitting one constant from observed data with a population-anchored prior.
+- The fit composes cleanly with `recoveryAdj` (transient) — no double-counting. Concretely: if a user has chronically low HRV but recovers quickly when their HRV is at *their* baseline, the transient `recoveryAdj` captures the chronic depression; `k_user` captures the recovery-rate trait independent of state.
+- The composite z-score is signal-conservative: requiring HRV (or RHR with sign flip) to return to baseline before declaring recovery uses the same metrics that validated published recovery-monitoring frameworks (Plews/Buchheit; Flatt & Esco 2016).
+
+**Known limitations**:
+- **No causal model.** The fit measures observed correlation between session load and physiology return-time. If a user's HRV is depressed by external factors (heat, alcohol, illness) on observation days, the fit pulls `k_user` slow even though the session itself isn't responsible. Heat correction exists for HR drift but not for HRV; a future refinement could exclude observation days flagged as travel/illness.
+- **Day-resolution physiology.** HRV and RHR are once-per-day (morning measurement). The minimum observable recovery is 24h. A session that genuinely recovers in 12h reads as 24h to the model, biasing `k_user` slow for fast recoverers. Probably washes in the EMA but worth noting.
+- **Single-dimensional learning.** A unified `k_user` doesn't separate by workout type. RPE-vs-expected on the next session is captured in the entry shape (`rpeNextSession`) for a future per-type extension, but the MVP fits a single rate. Cycling vs running recovery time-constants differ in published literature (Skiba 2014, GoldenCheetah W'/CP model docs); this is a known approximation.
+- **Population prior is research-cohort-derived.** The Banister-class evidence comes mostly from highly-trained athlete cohorts in a few labs. The clamp `[5, 13]` is generous but the prior weight may produce bias for users whose true `k_user` is outside the typical range. The 30-session high-confidence floor mitigates by letting data eventually dominate.
+- **Right-censoring is symmetric in the fit** — a session that never recovers in 96h contributes ratio = 96h / predicted, which can drag the fit toward the slow-recoverer side. Correct in the limit but may under-estimate fast recoverers if their high-load sessions consistently censor. A future refinement could weight censored entries below uncensored.
+
+
+---
+
+## Swim Engagement Penalty — Projected CSS Baseline (2026-05-06)
+
+**File**: `src/calculations/race-prediction.triathlon.ts` (`buildProjection`, swim section).
+
+**Problem**: the prior `specificEndurancePenalty` framework applies a readiness penalty to the "if you raced today" current swim time. By design it leaves the projected (race-day) path unpenalised — the comment in `specific-endurance-penalty.ts` reads "race-day projection uses the plan's prescribed dose and gets full readiness by definition." This is correct for the volume dimension (the plan restores long-session readiness), but incorrect for the **baseline dimension**: a swimmer who measured CSS 2:22 a year ago and hasn't swum since does not start the plan from that CSS — technique decay has already degraded their actual starting point.
+
+**The fix**: inflate the `baseline` passed to `applyTriHorizonSwim` when `disciplineConfidence.swim.weeksActive` is low. `weeksActive` is a proxy for how long the athlete has been away from swimming (12-week window, so 0 weeks active ≈ 12+ weeks off). The detraining rate is `CSS_DETRAINING_PER_4WK = 0.04` (4% per 4-week block, midpoint of Mujika 2010's 3–5%/4wk for swim). Number of equivalent detraining periods:
+
+| weeksActive | Proxy weeks-off | Periods (÷4) | Multiplier |
+|-------------|-----------------|--------------|------------|
+| 0           | ~12wk           | 3            | 1.04³ ≈ 1.125 (+12.5%) |
+| 1–2         | ~8wk            | 2            | 1.04² ≈ 1.082 (+8.2%)  |
+| 3–5         | ≤6wk            | 0            | 1.0 (band demotion handles) |
+| ≥6          | consistent      | 0            | 1.0 (no penalty) |
+
+The compounding `(1 + r)^n` form mirrors how CSS detraining accumulates — each 4-week block degrades the previous result, not an absolute baseline.
+
+**Why not double-count with band demotion**: `demoteBandByVolume` reduces the improvement *ceiling* (how fast gains accrue from the inflated starting point). The engagement penalty sets a worse *starting point*. Both are needed: the ceiling reduction says "your adaptation rate is slower" (you've lost training economy); the baseline inflation says "where you're starting is worse than the CSS number suggests" (you've lost fitness). They operate on different dimensions and compound correctly.
+
+**Why not penalise the displayed CSS**: `out.swimCss.current` always reflects the measured value so the UI is truthful about the last test. Only the internal `effectiveCssBaseline` is inflated.
+
+**Limitations**:
+- `weeksActive` only covers the 12-week fitnessHistory window. A user who swam 13 weeks ago but not since would still show `weeksActive=0` and take the full penalty, which is appropriate.
+- The proxy (0 active ≈ 12 weeks off) is conservative — some users may have swum 6 weeks ago and still show `weeksActive=0` if that single session didn't register a non-zero swimCtl. The penalty over-corrects for them slightly. Acceptable given the alternative (no penalty on genuinely stale baselines).
+- Swim PB recency (analogous to `marathonPbAgeDays` in `blendPredictions`) is not implemented. A recent open-water race or time trial could reduce the penalty magnitude the same way a recent marathon PB reduces the run specificity penalty. Deferred to v2.
+
+**User-set CSS exemption (2026-05-09)**: when `tri.swim.cssSource === 'user'` (athlete typed the value in manually), `swimDetrain4wkPeriods` is forced to 0 — the inflation does not fire regardless of `weeksActive`. Rationale: the engagement penalty is a *staleness* model. A measured CSS from 12 months ago really is stale. A CSS the user just typed in is a fresh ground-truth snapshot — they're telling the system "this is what I can do today", and the model has no grounds to project that backwards on the strength of "no swims logged this month". A real case prompted this: a user manually set CSS to 2:00/100m, raced one week later, and the projected race-day CSS came out as 2:15/100m (+12.5% inflation). The displayed projection contradicted what the user had just told the system. Derived CSS values (paired-PB inference, etc.) still receive the inflation when sparse — the assumption that staleness compounds away from training only holds when the value was inferred from old history, not when freshly declared.
+
+---
+
+## Cross-Modal VO2max (2026-05-01)
+
+**Goal**: produce a defensible per-discipline VO2max estimate that gives users credit for cross-training (padel, tennis, football, cycling, etc.), and let them toggle between Mosaic's estimate and the device-reported value.
+
+**Three-estimator decomposition** (`src/calculations/vo2-orchestrator.ts`):
+
+1. **Running** — effort-calibrated VDOT (already in `effort-calibrated-vdot.ts`): pace-vs-%VO2R linear regression of recent qualifying runs, evaluated at %VO2R = 1.0, then mapped through Daniels' VDOT table. Anchors: Swain & Leutholtz 1997 *MSSE* 29:837–843; Daniels' Running Formula 4th ed. Confidence: high when N ≥ 8 with R² ≥ 0.7.
+
+2. **Cycling** — ACSM cycle-ergometry (`cycling-vo2.ts`):
+   ```
+   VO2max ≈ 10.8 × (FTP_W / mass_kg) + 7
+   ```
+   ACSM Guidelines for Exercise Testing and Prescription, 11th ed. (2022). Validated by Hawley & Noakes 1992 *Eur J Appl Physiol* 65:79–83 in trained cyclists (R² > 0.9 for peak power → VO2max). Body weight defaults to sex-specific values (75 kg M / 62 kg F) when unset; default-weight estimates are confidence-downgraded one tier (kg error injects ±2 ml/kg/min).
+
+3. **Cardiac ceiling** (modality-agnostic) — Uth-Sørensen (`cardiac-ceiling.ts`):
+   ```
+   VO2max ≈ 15.3 × HRmax_observed / HRrest
+   ```
+   Uth, Sørensen, Overgaard, Pedersen 2004, *Eur J Appl Physiol* 91:111–115. The constant 15.3 was derived from regression on trained runners and validated against gas-exchange testing (±10–15% accuracy). Aggregates HR exposure across **every** aerobic activity — running, cycling, padel, tennis, football, etc. — so cross-training contribution to cardiac fitness shows up here.
+   Confidence: high when ≥ 8 sessions across ≥ 2 sports. Single-sport HRmax tends to under-state (a habitually slow runner who never spikes HR).
+
+**Lift logic** — the bit that makes cross-training count toward running VO2max:
+
+For each modality (running, cycling), the displayed estimate is
+```
+modality_VO2 = max(direct_estimate, cardiac_ceiling × peripheral_transfer)
+```
+where `peripheral_transfer ∈ [0.70, 1.0]` is the time-weighted sum of source-specific transfer coefficients across the user's last 8 weeks (`peripheral-transfer.ts`).
+
+**Why a separate transfer table from `runSpec`** (load-discount): the two answer different questions. `runSpec` asks "how much of this training stress equals running stress?" — for ACWR / CTL purposes. Peripheral transfer asks "how much of this athlete's cardiac fitness shows up as VO2max in modality X?" — for capacity. VO2max transfer is much higher than load transfer because the central (cardiac) component of VO2max is fully shared across modalities while training stress is not (Bassett & Howley 2000, *MSSE* 32:70–84 — cardiac output explains 70–85% of VO2max variance between trained individuals).
+
+**Transfer coefficients** (running target):
+
+| Source modality            | Transfer | Citation                            |
+|----------------------------|----------|-------------------------------------|
+| Running (identity)         | 1.00     | —                                   |
+| Weight-bearing intermittent (soccer, rugby, basketball, tennis, padel) | 0.92 | Hoff et al. 2002 *MSSE* 34:1925–1931; Aughey et al. 2014 *Sports Med* 44:929–957 |
+| Cycling                    | 0.88     | Millet et al. 2009 *Sports Med* 39:179–206 |
+| Other aerobic (rowing, hiking, stair climbing, elliptical) | 0.85–0.90 | Compromise per population data |
+| Swimming                   | 0.75     | Holmér 1972 *J Appl Physiol* 33:502–509 |
+| Static / non-cardiac (yoga, pilates, climbing) | 0.70 | Conservative floor |
+
+Cycling-target table is symmetric (running source 0.88, etc.). Numbers are population means from cross-modal VO2max studies in trained athletes — individual variance is real, but exposing the source breakdown in the UI lets users see where the number comes from.
+
+**Headline = highest of running, cycling, cardiac**. Reflects the cardiac ceiling the user has best demonstrated. A pure cyclist's headline is their cycling VO2; a triathlete's headline is whichever discipline they've trained hardest.
+
+**Source toggle** (`s.vo2Source: 'mosaic' | 'device'`): defaults to `'mosaic'` with auto-fallback to device value when Mosaic confidence < medium. Pinning to `'device'` uses Garmin/Apple's reading regardless of our estimate quality. The priority chain in `physiological-vdot.ts` honours this preference.
+
+**Recompute cost ≈ 2 ms** per launch. Pure local computation over already-loaded state (last 8 weeks of activities, ~20–50 rows). Triggered from `main.ts` after `setAthleteNormalizer` and again after `syncPhysiologySnapshot` resolves (in case fresh RHR/HRmax changed inputs).
+
+**Known limitations**:
+
+- **HRmax determination dominates the cardiac-ceiling error.** We use observed peak HR across recent training, not a maximal effort test. Users who never go truly maximal will under-estimate; we never over-credit. The 8-week window plus duration filter (≥ 60s) screens stray monitor spikes.
+- **HRrest staleness.** Depends on Garmin/Apple sync. Stale RHR (post-illness, dehydration, alcohol) shifts the ratio. We use the value as synced; future refinement could use a 28-day rolling RHR.
+- **Uth-Sørensen accuracy is ±10–15%** per the original study — wider than the running pace/HR regression (~5%). That's why direct running estimate wins when it's high-confidence.
+- **Transfer coefficients are population means.** Individual variance in cross-modal VO2max transfer is real (untrained legs in a runner-turned-cyclist may transfer below 0.88 initially; a multi-sport athlete may transfer above 0.92). The drill-down exposes the source breakdown so users can sanity-check.
+- **Modality-state interaction.** A fatigued runner may show low HR (parasympathetic suppression) or high HR (sympathetic drive). The 8-week window smooths this but doesn't eliminate it.
+- **Swimming estimator deferred.** Modality is too specific (technique-bound) and HR signal is poor underwater. We don't display a swim VO2 even when the user does swim.
+
+**References used**:
+
+- Bassett & Howley 2000, *MSSE* 32:70–84. Limiting factors for maximum oxygen uptake and determinants of endurance performance.
+- Uth, Sørensen, Overgaard, Pedersen 2004, *Eur J Appl Physiol* 91:111–115. Estimation of VO2max from the ratio between HRmax and HRrest.
+- ACSM Guidelines for Exercise Testing and Prescription, 11th ed. (2022).
+- Hawley & Noakes 1992, *Eur J Appl Physiol* 65:79–83. Peak power output predicts VO2max in trained cyclists.
+- Swain & Leutholtz 1997, *MSSE* 29:837–843. Heart rate reserve is equivalent to %VO2 reserve.
+- Daniels, Daniels' Running Formula, 4th ed. (2022).
+- Millet, Vleck, Bentley 2009, *Sports Med* 39:179–206. Physiological differences between cycling and running.
+- Hoff, Wisløff, Engen, Kemi, Helgerud 2002, *MSSE* 34:1925–1931. Soccer specific aerobic endurance training.
+- Aughey, Falloon, Stanley 2014, *Sports Med* 44:929–957. Aerobic fitness in court-based intermittent sports.
+- Holmér 1972, *J Appl Physiol* 33:502–509. Oxygen uptake during swimming in the trained athlete.
+
+---
+
+## Cross-Modal VO2max — lift removed (2026-05-02)
+
+**Walk-back of the 2026-05-01 spec.** Earlier today we shipped a cardiac-ceiling lift: each modality's displayed VO2max was `max(direct_estimate, cardiac_ceiling × peripheral_transfer)`, intended to give cross-training credit. Tested against real user data (cyclist with FTP 295W, mixed running history), it produced misleading numbers — cycling displayed at 62 ml/kg/min when the user's FTP-direct ACSM value was ~50, with the gap entirely from the cardiac × transfer route.
+
+**Why the lift was wrong.**
+
+The cross-training contribution to running VO2max is **already captured implicitly** by the running pace–HR regression. A heart trained by padel/tennis/cycling pumps at a lower HR for a given pace; that shows up directly in the `pace + HR` observations the Daniels regression consumes. Adding `cardiac_ceiling × transfer_coefficient` on top of the regression layered cardiac contribution **on top of itself**, producing systematic inflation.
+
+The original user intuition — "padel makes me a better runner, the app should reflect that in VO2max" — is correct biology. The error was thinking VO2max needed a *new mechanism* to capture it. Two existing mechanisms already do:
+
+1. **Signal A iTRIMP** (rs-discounted load): padel contributes to run-equivalent CTL via the existing load discount system. This is the right place for "cross-training counts toward your training stress."
+2. **Daniels VDOT regression**: a padel-built heart shows up as faster pace at given HR during runs. The regression doesn't care where the cardiac fitness came from.
+
+The peripheral-transfer table (cycling 0.88, padel 0.92, swimming 0.75 etc., from Hoff 2002 / Millet 2009 / Holmér 1972) was real literature — those coefficients describe trained-athlete cross-modal VO2max transfer. But applying them as a runtime lift treats the cardiac ceiling as an *additive* signal when it's actually the *upstream limit* of what the modality regression already approximates.
+
+**What stayed.**
+
+- Per-modality direct estimators (running effort-calibrated VDOT, cycling ACSM)
+- Cardiac ceiling computation (Uth-Sørensen) — surfaced as "Cardiovascular potential," informational only, never blended into modality numbers
+- Headline = max of measured modalities, with cardiac as tier-2 fallback (anti-decay for HR-only-sport athletes), and `getPhysiologicalVdot()` as final floor (LT/PB/Tanda)
+- Source toggle (Mosaic / Device)
+- HRmax 220 sensor cap (sensor-glitch filter, defensible)
+- Cardiac VO2 cap at 85 ml/kg/min — kept pragmatically, but flagged as a non-derived clamp; future work could replace it with extrapolation-warning UI when above 76 (Uth-Sørensen's calibration ceiling)
+
+**What was removed.**
+
+- `liftFromCardiac()` function in `vo2-orchestrator.ts`
+- `peripheral-transfer.ts` and its test (whole module deleted)
+- The `cardiac-lifted` value of `VO2Estimate.source`
+- The cardiac × peripheral_transfer logic for both running and cycling
+
+**Future-proofing note for next session.** If a future agent considers reintroducing some form of cross-modal lift: don't, unless you have evidence the running regression is *under*-counting cardiac contribution (it isn't — the regression sees the actual HR signal). The right way to surface "your overall fitness exceeds what running data alone shows" is the cardiac ceiling row, displayed as informational context. Don't blend it back into the modality numbers.
+
+**References (kept here for the historical record, in case the lift question recurs):**
+
+- Bassett & Howley 2000, *MSSE* 32:70–84. Limiting factors for VO2max.
+- Uth, Sørensen, Overgaard, Pedersen 2004, *Eur J Appl Physiol* 91:111–115. Uth-Sørensen formula.
+- ACSM Guidelines, 11th ed. (2022). Cycle ergometry equation.
+- Daniels' Running Formula, 4th ed. (2022). VDOT regression and pace-VO2 relationship.
+- Swain & Leutholtz 1997, *MSSE* 29:837–843. %HRR ≈ %VO2R.
+- Hoff et al. 2002, *MSSE* 34:1925–1931. Soccer aerobic transfer (referenced for population transfer mean — no longer applied as runtime coefficient).
+- Millet, Vleck, Bentley 2009, *Sports Med* 39:179–206. Cross-modal cycling/running VO2max (same — informational only now).
+- Holmér 1972, *J Appl Physiol* 33:502–509. Swimming VO2max.
+
+## Cross-Training VO2max (2026-05-06)
+
+**Problem.** Cardiac ceiling (Uth-Sørensen `15.3 × HRmax/HRrest`) tells us how high the heart *can* go, but not how much aerobic work the athlete *sustains*. A rugby player who briefly hits 195 bpm in a sprint has the same cardiac ceiling as one who holds 175 bpm for 60 minutes; their aerobic capacities are very different. A user playing touch rugby twice a week wants visible credit for that fitness in their VO2max picture, separate from the per-modality run/bike numbers and separate from the peak-only cardiac ceiling.
+
+**Method.** Per qualifying cross-training session (non-run, non-bike, ≥ 20 min, avg HR ≥ 75% HRmax):
+
+1. `%HRR = (avgHR − RHR) / (HRmax − RHR)` — heart rate reserve fraction sustained.
+2. Convert to fractional VO2 reserve via Swain & Leutholtz (1997, *MSSE* 29:837–843):
+   `%VO2R ≈ %HRR`. The linear identity holds well across 40–85% with ~5% drift outside that band, accepted.
+3. Anchor to cardiac ceiling: `sessionVO2 = cardiacCeiling × %VO2R × durationFactor`, where `durationFactor = min(1, durationMin / 30)` credits sustain. A 20-min session counts at 0.67×; a 30+ min session at 1.0×. Beyond 30 min, no further credit — sustain is sustain, longer doesn't make VO2max bigger.
+4. Aggregate via trimmed mean (drop bottom 25%, mean of remainder) across qualifying sessions. Robust to occasional weak sessions that pass the gate.
+
+**Why this is additive over cardiac ceiling.** Cardiac ceiling is a one-shot peak ratio. Cross-training is sustained fraction × ceiling × duration credit. They measure different physiology — peak vs sustained — and the cross-training estimate is by construction ≤ cardiac ceiling.
+
+**Why this does not lift running or cycling.** Same rationale as the 2026-05-02 lift removal: the running VDOT regression already credits cardiac contribution implicitly because a heart trained by rugby pumps at a lower HR-for-pace during runs. Adding a cross-training lift on top would double-count. The cross-training estimate is additive (fourth surface) not blended (no impact on running/cycling/headline).
+
+**Confidence model.**
+- `low` — 3–4 qualifying sessions
+- `medium` — 5–7 qualifying sessions
+- `high` — 8+ qualifying sessions across ≥ 2 distinct sport types
+
+Hidden entirely (`vo2 = null`, reason `'insufficient-sessions'`) below 3 sessions. Sport diversity gates the high tier because a single sport's HR profile is idiosyncratic — touch rugby's stop-start nature averages low even when capacity is high.
+
+**Known limitations.**
+- HR-only methods cannot distinguish aerobic capacity from running economy or cardiovascular drift. This is a *fitness proxy*, not a lab measure.
+- Swain's linear %HRR↔%VO2R holds best in 40–85%; pushed beyond, drifts ~5%.
+- Cardiac ceiling anchor inherits Uth-Sørensen's ±10–15% accuracy band — the cross-training estimate is therefore at best ±15%.
+- Mode-of-effort matters: a session with intervals above LT plus easy recovery averages to a moderate %HRR even though aerobic stress is much higher than the average suggests. v1 accepts this — it under-credits intervals, which is the safer error.
+
+**Files.** `src/calculations/cross-training-vo2.ts`, `src/calculations/vo2-orchestrator.ts` (wired in after cardiac), `src/types/state.ts` (added `crossTraining: VO2Estimate` and `'sustained-hr-cross-training'` source), `src/ui/vo2max-card.ts` (4th row + detail section).
+
+**References.**
+- Swain & Leutholtz 1997, *MSSE* 29:837–843. %HRR ≈ %VO2R linear identity.
+- Uth, Sørensen, Overgaard, Pedersen 2004, *Eur J Appl Physiol* 91:111–115. Cardiac ceiling formula used as anchor.
+- Bassett & Howley 2000, *MSSE* 32:70–84. Modality-independence of central cardiovascular capacity.
+
+## HYROX Population Percentiles (2026-05-06)
+
+**Purpose.** Maps a predicted HYROX finish time to "faster than X% of finishers" for the population comparison card in `src/ui/hyrox/stats-view.ts`.
+
+**Data source.** HyroxDataLab global race database (700k+ finishers, Open and Pro divisions combined). Percentile breakpoints extracted from published cumulative finish-time distributions (hyroxdatalab.com, accessed 2026). Values are gender-mixed Open-division midpoints; Pro division table scaled proportionally (~15% faster for men, ~12% for women, self-selected field).
+
+**Method.** Piecewise linear interpolation between anchor breakpoints. Each anchor `[finishTimeSec, cumulativePercentile]` represents "X% of finishers are at or below this time." "Faster than Y%" = 100 − cumulativePercentile at the user's time. Rounded to integer percent for display.
+
+**Open division anchor points (gender-mixed):**
+- 45 min → 0th pctile (WR territory)
+- 60 min → 5th (sub-1h, competitive band)
+- 80 min → 15th (advanced)
+- 100 min → 35th (intermediate)
+- 120 min → 60th (novice)
+- 150 min → 80th
+- 180 min → 90th
+- 240 min → 98th
+- 360 min → 100th
+
+**Pro division:** same shape, compressed ~15% across the time axis (self-selected faster field).
+
+**Known limitations.**
+- Gender-mixed distribution hides meaningful male/female splits (men average ~15% faster than women at the same relative effort for HYROX format). The display is still valid as a rough population comparison, but a male sub-90-min finisher is in a different percentile vs the male-only field.
+- Age-group effects are not modelled. Masters (50+) and juniors anchor in different parts of the distribution.
+- Doubles format uses the Open table as a proxy (dedicated Doubles-only distribution not available from published data). Accuracy is lower for Doubles.
+- Distribution shape varies by event location — major city events (London, Frankfurt) attract faster fields than regional events. The table uses a global aggregate.
+
+**Files.** `src/calculations/hyrox-population.ts` (new), `src/ui/hyrox/stats-view.ts` (consumes).
+
+## VO2 Resolver Audit (2026-05-07)
+
+**Purpose.** Systematic audit of `getPhysiologicalVdot` resolver chain (`src/calculations/physiological-vdot.ts:144`) and supporting sync paths before adding conflict-surfacing UI (WS-2b).
+
+**Findings — pass/fail per check:**
+
+| # | Check | Result |
+|---|---|---|
+| A | `cv(5000, 1200)` = 49.81 | PASS [49.5–50.1] |
+| A | `cv(21097.5, 5400)` = 50.98 | PASS (Daniels formula gives ~51 for HM @ 1:30:00, not ~56 — audit plan had wrong expected range) |
+| A | `cv(42195, 11400)` = 50.21 | PASS (marathon @ 3:10:00 → VDOT ~50.2 per Daniels) |
+| A | `cv(10000, 2400)` = 51.94 | PASS (10K @ 40:00 → VDOT ~51.9 — same pace as 5K@20:00 but longer effort yields higher VDOT by design) |
+| B | `pbDerivedVdot` median with 5K 18:00 (VDOT 56.3) + M 4:00 (VDOT 37.9) = 47.1 | PASS (median 47.1 ≠ max 56.3) |
+| C | Staleness gate for Garmin users who stop running | **BUG FOUND — see below** |
+| D | `hrCalibratedVdot` confidence gate at n=2 | PASS (< 3 points → `'none'`, not 'medium') |
+| E | Display surfaces use `getPhysiologicalVdot()` not raw `state.v` | PASS (all four UI surfaces confirmed) |
+| F | TRUSTED_LT_SOURCES excludes `'blended'` | PASS (line 71, confirmed correct) |
+
+**Bug found (C): Garmin staleness leak for triathletes who stop running.**
+
+`deviceVo2AgeDays()` checked `physiologyHistory[].vo2max` for the freshness gate. `physiologyHistory` is built from `daily_metrics.vo2max` (Garmin's generic cardio estimate, can update from cycling). But `s.vo2` is set from `physiology_snapshots.vo2_max_running` (running-specific, only updates from outdoor running activity). For a triathlete who switches to pure cycling or takes an injury break: `daily_metrics.vo2max` keeps updating → `physiologyHistory` has recent vo2max entries → `deviceVo2AgeDays()` returns 0 → `isDeviceFresh = true` → stale `s.vo2` (from months-old running) is used as "fresh".
+
+**Fix applied:** Added `s.vo2UpdatedAt?: string` (ISO date) to `SimulatorState`. Stamped whenever `s.vo2` is written:
+- `physiologySync.ts:127` — Garmin `physiology_snapshots.vo2_max_running` path
+- `appleHealthSync.ts:167` — Apple HealthKit VO2max path
+
+`deviceVo2AgeDays()` now prefers `s.vo2UpdatedAt` and falls back to the `physiologyHistory` scan for legacy state (maintains "don't drop a valid number on a missing-timestamp technicality" policy for existing users).
+
+**Note on Daniels `cv()` expected ranges.** The audit plan had incorrect VDOT ranges for HM, marathon, and 10K. These came from confusing Daniels performance-equivalence tables (what time a VDOT=55 athlete runs) with the inverse (what VDOT does a given performance imply). The formula is correct: HM @ 1:30:00 → VDOT ~51 (that's what a half-marathon specialist at that pace implies, not what a 5K@20:00 runner implies for their HM). Cross-verified against `vdot.test.ts` (31 tests, all passing).
+
+**Files.** `src/types/state.ts` (new `vo2UpdatedAt` field), `src/data/physiologySync.ts` (stamp on write), `src/data/appleHealthSync.ts` (stamp on write), `src/calculations/physiological-vdot.ts` (updated `deviceVo2AgeDays` to prefer `vo2UpdatedAt`).
+
+## Triathlon Bike/Swim PB-Recency Cross-Credit (2026-05-07)
+
+**Problem.** `computeDisciplineReadiness` reduced the run leg's readiness penalty when the athlete had a recent standalone race PB (e.g., recent half marathon → lighter 70.3 run penalty). Bike and swim legs got no equivalent credit — a triathlete who finished an IM 6 months ago could still face full bike/swim readiness penalties as if they'd never raced those legs.
+
+**Method.** Scan `triConfig.raceLog` for completed triathlon entries where `actualPerLeg[discipline] > 0`. For each qualifying entry, look up a cross-credit weight from `TRI_DISTANCE_CROSS_CREDIT[fromDistance][targetDistance][discipline]`. Apply the same age-decay bands (`RUN_PB_RECENCY_BANDS`) as the run side, scaled by cross-credit weight:
+
+```
+effectiveFactor = 1 − (1 − bandFactor) × crossCreditWeight
+penaltyMultiplier = 1 + (penaltyMultiplier − 1) × effectiveFactor
+```
+
+Where:
+- `bandFactor = 0.5` for race < 1 year ago, `0.75` for 1-2 years, `1.0` for > 2 years (from `RUN_PB_RECENCY_BANDS`)
+- `crossCreditWeight` from `TRI_DISTANCE_CROSS_CREDIT` (0 to 1.0)
+
+**Cross-credit weights (TRI_DISTANCE_CROSS_CREDIT):**
+
+Richer-counts-for-shorter principle: a longer race fully credits shorter target distances. Reverse direction uses partial credit.
+
+| From \ To | IM | 70.3 | Olympic | Sprint |
+|---|---|---|---|---|
+| IM | 1.0/1.0/1.0 | 1.0/1.0/1.0 | 1.0/1.0/1.0 | 1.0/1.0/1.0 |
+| 70.3 | 0.6/0.6/0.5 | 1.0/1.0/1.0 | 1.0/1.0/1.0 | 1.0/1.0/1.0 |
+| Olympic | 0.3/0.3/0.3 | 0.6/0.6/0.5 | 1.0/1.0/1.0 | 1.0/1.0/1.0 |
+| Sprint | 0.2/0.2/0.2 | 0.3/0.3/0.3 | 0.7/0.7/1.0 | 1.0/1.0/1.0 |
+
+(Values are swim/bike/run for each cell.)
+
+**Scientific rationale for partial reverse credit (Coyle 1984).** Fractional utilization of VO2max decays with duration — a sprint-distance bike leg (~30 min) and an IM bike leg (~5 hours) require qualitatively different pacing and substrate metabolism. Completing a sprint proves basic bike endurance but not the specific aerobic sustainability needed at IM pace. Run cross-credit from sprint→olympic stays at 1.0 because Daniels VDOT equivalence is well-validated across shorter run distances.
+
+**Known limitations.**
+- Entries before this feature shipped do not have `actualPerLeg` from the new schema extensions (WS-1 adds `predictedRawPerLeg` separately). Cross-credit reads `actualPerLeg` from existing entries — this works on all existing raceLog entries which already store `actualPerLeg`.
+- Only triathlon distances are in raceLog today (no standalone bike TT or open-water swim results). The credit is therefore only applied when the user has completed a full triathlon event.
+- Olympic and sprint distances are not currently logged to raceLog (only 70.3 and IM). Those rows of the cross-credit table are forward-compatible placeholders.
+
+**Files.** `src/constants/race-readiness-targets.ts` (new `TRI_DISTANCE_CROSS_CREDIT`), `src/calculations/specific-endurance-penalty.ts` (unified recency block + `readTriRaceRecencyDays`), `src/ui/triathlon/race-readiness-detail.ts` (extended copy).
+
+---
+
+## §M — HYROX Band-Scaled Run-Leg Fatigue Model
+
+**Problem.** A constant per-station fatigue rate (0.8%/station) applied to all athletes regardless of ability is not realistic. Elite athletes hold pace nearly flat across all 8 run legs; beginners show significant deterioration by run 7–8.
+
+**Model.** Fatigued pace = base pace × (1 + legIndex × perStationFatigueRate), normalised so total run time = 8 × base pace (energy conservation). The per-station rate is band-scaled:
+
+| Band | Rate (singles) | Notes |
+|---|---|---|
+| competitive | 0.4%/station | HyroxDataLab: top-10 finishers within ~2–4% across all 8 legs |
+| advanced | 0.5%/station | |
+| intermediate | 0.6%/station | |
+| novice | 0.7%/station | ~5.6% total drift from leg 1 → leg 8 |
+| beginner | 0.9%/station | |
+| total_beginner | 1.1%/station | ~8.8% total drift — consistent with age-group 2h+ finishers |
+
+Doubles format: rate × 0.5 (athletes alternate stations; waiting partner accumulates metabolic cost but not full eccentric load).
+
+**Scientific basis.** HYROX finishing-time distributions (HyroxDataLab / roxlyfe.com) show that run-leg decline scales with performance level. Goss 2021 (repeated high-intensity bouts and run-economy decline) supports the mechanistic model. Bi-exponential EPOC decay would be more accurate but requires integrating station-specific eccentric load over time — too complex for v1.
+
+**Known limitations.** Rate constants are from population distributions, not individual calibration. Normalisation to 8 × base pace is a simplification — the true energy balance accounts for increased HR, glycolytic contribution, and ventilatory drift. Values pending real-race validation.
+
+**Files.** `src/constants/hyrox-constants.ts` (`PER_STATION_FATIGUE_RATE_BY_BAND`), `src/calculations/race-prediction.hyrox.ts` (model application), `src/ui/hyrox/forecast-view.ts` (chart rendering).
+
+---
+
+## Triathlon Race Prediction — Taper Invariant (2026-05-08)
+
+**Problem.** A user set an Ironman 1 week away and the forecast showed projected swim +13:32 *slower* and projected run −14:02 *faster* than today. Both deltas are physiologically nonsensical over a 7-day horizon — taper consolidates fitness, it doesn't build or destroy it (Mujika 2002).
+
+**Root cause — two divergence sources, neither scaled by `weeksRemaining`.**
+
+1. *Swim engagement penalty (asymmetric).* When `weeksActive ≤ 2`, the predictor inflated the swim CSS baseline by up to +12% (Mujika 2010 detraining model: technique decays at 3–5%/4w without water time). The inflation was applied *only to the projected race-time call* — the "today" call kept the literal stale CSS measurement. Net effect: today=2:22 (fictional), projected=2:40 (realistic) → +13:32 phantom slowdown.
+
+2. *Durability cap relaxation (unconditional).* The projected race-time call passed `projectedLongestSession.{bike,run} = DURABILITY_THRESHOLDS[distance].long{Ride,Run}Sec` regardless of `weeksRemaining`. The "today" call passed actual longest sessions. With `MAX_DURABILITY_PENALTY = 0.05`, this produced up to a 5% phantom run speedup. 5% × 4:40:38 = 14:02 ✓ — matches the observed delta exactly.
+
+**Invariant introduced.** When the race is inside the discipline's taper window (`weeksRemaining ≤ TRI_TAPER_WEEKS[discipline][distance]`), `projected` per-leg must equal `current` per-leg within ±30s. Locked by the test `race-prediction.triathlon.test.ts → race inside taper window: projected per-leg matches current within 30s`.
+
+**Two distinct fix shapes.**
+
+- *Stale-measurement adjustments (engagement penalty)* represent a TODAY truth — the literal measurement is fiction; the user's real today CSS is worse. Applied symmetrically to BOTH `current` and `projected` calls via a shared `EffectiveBaselines` object returned from `buildProjection`. The displayed `projection.swimCss.current` keeps the literal value for transparency.
+
+- *Plan-execution credits (durability cap relaxation)* represent fitness the plan *will deliver* over `weeksRemaining`. Scaled by per-discipline `executionFactor = 1 − penaltyShare` (the same closure math the existing race-readiness penalty uses). With 1-week IM in full taper → `executionFactor = 0` → projected longest session = actual longest session → no relaxation.
+
+`projectedLongestSession.{bike,run} = lerpDurability(actual, threshold, executionFactor)`
+
+where `lerpDurability(a, t, f) = a + max(0, t − a) × clamp(f, 0, 1)` — never reduces an athlete who already exceeds the threshold.
+
+**Scientific basis.** Mujika 2002 (*Med Sci Sports Exerc* "Scientific bases for precompetition tapering strategies") — taper of 1–3 weeks consolidates fitness without building it. Mujika 2010 (*Br J Sports Med*) — detraining 3–5%/4w without specific stimulus. Per-discipline taper durations from `TRI_TAPER_WEEKS` (Friel 2018 *Triathlete's Training Bible*: swim taper longest because technique consolidation needs more time, bike shortest).
+
+**Known limitations.** The taper invariant assumes `usefulWeeks = max(0, weeksRemaining − taperWeeks)` is the right way to model "no plan-execution time available." This already drives the race-readiness penalty closure share, so applying the same factor to durability cap relaxation keeps the model coherent. If future divergence sources are added between projected and current race-time calls, they must also be gated through `executionFactor` to preserve the invariant.
+
+**Files.** `src/calculations/race-prediction.triathlon.ts` (reordered penalty-share computation, added `lerpDurability`, threaded `EffectiveBaselines` through `buildProjection`), `src/calculations/race-prediction.triathlon.test.ts` (new invariant test).

@@ -12,6 +12,8 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/UX_PATTERNS.md` | Design reference — zone bars, area charts, drill-down sub-pages, colour rules, **overlay/modal positioning** |
 | `docs/SCIENCE_LOG.md` | Scientific rationale for every model/formula — constants, derivations, limitations, literature references |
 | `docs/WEBHOOKS.md` | Garmin webhook reference — every payload type, DB targets, production verification requirements, debugging checklist |
+| `docs/FTP.md` | Bike FTP troubleshooting runbook — recurring problem classes, diagnostic procedure, standard fixes, regression history. Read this before debugging any FTP issue. |
+| `docs/AI_STRATEGY.md` | AI Coach monetisation strategy — tier model (Free / BYOK / subscription / full app), economics, pending decisions for Tier 2 paywall build, Stripe/IAP notes. Read before any AI Coach or payment work. |
 
 ## Issue Tracking Workflow
 
@@ -37,6 +39,11 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **Test**: `npx vitest run` (single run) / `npx vitest` (watch)
 - **Dev server**: `npx vite`
 - **Build**: `npx tsc && npx vite build`
+
+## Slash Commands
+
+- **`/mode-audit [mode|all]`** — structured audit of one or all 5 modes (running, triathlon, cycling, hyrox, just-track). Checks: mode bleed (wrong data in wrong mode), broken math (NaN/null crashes), dead navigation, UX compliance violations, empty-state coverage, copy coherence, state field safety. Produces a prioritised punch list (P0–P3) with `file:line` references. Run after any significant feature addition or when adding a new mode. Defined in `.claude/commands/mode-audit.md`.
+- **`/persona-qa [persona-id|group|all]`** — experiential stress-test across 25 user personas. Finds bugs that grep-based audits miss: number inconsistency across views, incoherent coaching advice, broken flows for specific state combinations, silent failures for edge-case users. Groups: `sport` (5 baseline mode personas), `feature-cross` (6 cross-cutting feature × mode tests — holiday/injury/illness/week-rollover in non-obvious modes), `behaviour` (7 archetypes: ghost, skipper, dismisser, overachiever, underachiever, non-tech, check-in-ignorer), `setup` (7 data/config edge cases). Run before App Store submissions or after large feature builds. Defined in `.claude/commands/persona-qa.md`.
 
 ## Multiple dev tabs do not share state
 
@@ -114,11 +121,14 @@ Running and triathlon mode logic should mirror each other where applicable. When
 - Race-outcome logging (predicted vs actual after a target race)
 - Skip-handler push/drop rule
 - Suggestion-modal acceptance contract (user accepts before plan mutates)
+- **Bike effort signal blend**: running blends HR (60%) + RPE (40%) in `events.ts`. Bike mirrors this structure but promotes power as the primary objective signal: power adherence (60%) + RPE (40%) when a power meter is present; HR (60%) + RPE (40%) when no power meter (matching running's fallback). Implemented in `effort-multiplier.triathlon.ts:triTrailingEffortScore`. If running's blend weights change, evaluate bike's weights too.
+- **Bike watt prescription bands**: bike workouts show a target range (e.g. "135–155W") rather than a point, with per-session-type tolerance bands in `BIKE_ADHERENCE_BAND` (triathlon-constants.ts). Within the band, powerAdherence is soft-gradient (attenuated, not zero). This applies to ALL bike workouts — standalone bike sessions and triathlon bike legs use the same band constants and the same scoring logic.
 
 **Things that ARE intentionally different** (don't try to merge):
 - Tri has per-discipline CTL/ATL/Form (running has a single combined number — single discipline)
 - Tri has course factors and durability cap (running's predictor doesn't model these — single-discipline race, simpler course shape)
 - Tri prediction uses `blendPredictions` per leg at the leg's actual distance; running uses it once at race distance
+- Bike effort signal uses power adherence as primary (not HR) — power is more reliable than HR for cycling intensity control (Coggan & Allen 2019). Running uses HR because pace + HR together are reliable; cycling HR lags power by 30-60s on intervals, making it a poor primary signal.
 
 When in doubt, search both `*.ts` and `*.triathlon.ts` for the same concept and bring them into parity.
 
@@ -137,6 +147,25 @@ When the system makes a non-trivial change to the plan or the prediction, **the 
 - VDOT: ≥ 1 point delta (`MARKER_BUMP_THRESHOLD_VDOT`)
 
 **Notify-once architecture**: store last-notified marker values on state (`triConfig.notifiedMarkers`); compare current vs last-notified at every trigger; surface only if delta crosses threshold; update the last-notified field after surfacing so we don't spam every launch.
+
+## Feature reveal pop-ups — show users the cool things we built
+
+Mosaic does a lot of work users would never know about — environment normalisation, course factors, durability caps, sleep-debt models, etc. **Whenever we ship a non-trivial piece of work that materially changes a number the user sees, surface a small one-time educational pop-up explaining what it does.** If we don't tell them, they assume it's just another fitness app.
+
+**Trigger criteria** (must satisfy all):
+1. The work is *non-obvious* — the user can't infer it from a label or caption.
+2. The work affects a *user-facing number* (race time, CSS, FTP, readiness, etc.).
+3. The user *would not passively discover* it on their next visit.
+
+**Rules of thumb**:
+- **Once-per-feature, once-per-user.** Gate on a boolean in `triConfig.notifiedMarkers` (or the running-mode equivalent). Never re-pop unless we've materially changed the model again.
+- **Trigger on the surface where the work matters.** A swim-prediction reveal pops when the user opens the race-prediction surface, not on app launch. The user has to be in the relevant context.
+- **Educational, not promotional.** Plain-English summary of what the model does and why it makes the number more honest. No emoji, no "Did you know?", no exclamation marks — consultant tone (see "UI Copy" sections).
+- **One CTA: "Got it."** No "Tell me more" or external links. The pop-up is the explanation.
+- **UX-compliant**: vertically centred overlay, glassy card, ≤2 non-neutral colours. Mirror the canonical pattern in `docs/UX_PATTERNS.md → Overlays and Modals`. Reuse an existing modal builder (`buildSimpleModal` / `openCheckinOverlay` / equivalent) — don't roll new modal scaffolding for this.
+- **Respect "don't pop"**: bundle multiple small reveals if shipped together (one modal with 2-3 bullets beats three sequential pops). Skip the pop entirely for changes that are *literally just labels or copy*.
+
+**State flag pattern**: add a boolean to `triConfig.notifiedMarkers` (e.g. `swimNormalisationSeen`, `durabilityCapSeen`). Check at render-time on the relevant surface; show the modal if false; set true when the user dismisses. New flags are optional (`?:`) per the build-target rule — fresh installs default to "not seen" which means new users see the pop too, which is the desired behaviour.
 
 ## No Made-Up Numbers or Logic
 
@@ -175,14 +204,47 @@ Before writing a single line of HTML or CSS, state out loud in your response:
 2. **Copy rules read** — confirm you have read the "UI Copy" sections in this file
 3. **Existing pattern found** — name the existing component you are modelling (e.g. "`buildInjuryBanner` for the banner structure, `openCheckinOverlay` for the modal")
 4. **Visual constraints checked** — confirm the change uses ≤ 2 non-neutral colours, adds no decorative icons, adds no tinted card backgrounds, adds no decorative gradients, uses no ALL-CAPS data labels
+5. **Existing surface check for the metric** — before adding a new card/row that displays a number (VO2max, CTL, FTP, etc.), grep for the metric name across `src/ui/**` and confirm there isn't already a surface showing it. If there is, modify the existing surface or replace it; do **not** add a parallel card on the same screen. Two cards showing the same number on the same view is the most common review-fail.
 
-If you cannot confirm all four, read `docs/UX_PATTERNS.md → Visual Constraints` first. Do not skip this step under time pressure.
+If you cannot confirm all five, read `docs/UX_PATTERNS.md → Visual Constraints` first. Do not skip this step under time pressure.
+
+**Backstop — `npm run lint:ui`**: a regex linter (`scripts/ui-lint.mjs`) scans `src/ui/**/*.ts` for the four most-skipped Visual Constraints — `text-transform:uppercase`, heavy `letter-spacing`, tinted card backgrounds (`background:rgba(0,0,0,0.0X)`), and raw `var(--c-accent)` buttons. It runs as part of `npm run build`, but **you must run it after any UI edit and before declaring the task done**. The linter uses a baseline (`scripts/ui-lint-baseline.json`) so existing violations don't block you — only *new* ones do. If the linter fails, fix the violation; do **not** run `--update-baseline` to silence it unless the user explicitly approved the deviation. Real incident, 2026-05-08: an agent shipped `transitions-overlay.ts` with all four anti-patterns because the pre-flight was skipped — this linter is the hard gate.
 
 ## UI Component Rules
 
 Before building any new chart, bar, or data visualisation: **read `docs/UX_PATTERNS.md`**. It defines the canonical patterns for zone bars, area charts, drill-down sub-pages, colour spectrums, empty states, and **overlay/modal positioning**.
 
 **Overlays must always be vertically centered** (`flex items-center justify-center`). Never use `items-end` (bottom sheet) — it appears off-screen on desktop and behind the keyboard on iOS. See `docs/UX_PATTERNS.md → Overlays and Modals` for the canonical HTML pattern.
+
+## Mosaic Visual System (the "page-flair" world)
+
+**Default for all new UI work**: build with the page-flair visual system unless there's a specific reason not to. The system has four building blocks, all in `src/ui/page-flair.ts`:
+
+1. **`buildAtmosphereBase(palette?)`** — soft cool radial gradient base layer. Replaces flat `var(--c-bg)` warm-cream so other layers have somewhere to live. Palettes: `'blue'` (default) or `'teal'` (race-prediction / "green moments").
+2. **`buildRingBackground(prefix, opts)`** — concentric SVG rings with light-source gradient strokes (white upper-left → mid → dark lower-right) plus depth via SVG filters (atmospheric blur on far rings, drop shadow on near rings). Five variants: `centered` / `sweep` / `focused` / `asymmetric` / `whisper`. Optional `pulse` (finite cycles, default 6 then settles). Optional `palette: 'blue' | 'teal'`. Optional `entrance: 'large' | 'small' | 'none'`.
+3. **`buildSunGlint(intensity)`** — warm cream radial-gradient at upper-left of every page. **The universal brand mark** — appears on every page in the app regardless of other treatments. Intensities: `low` (data pages, detail pages) / `mid` (wizard) / `high` (hero only).
+4. **Glassy cards** — `rgba(255,255,255,0.58) + backdrop-filter:blur(24px)` is the canonical onboarding spec (locked, see memory). Quieter data variant: `rgba(255,255,255,0.78) + blur(16px)` for cards inside data-heavy contexts.
+
+**Animation system**:
+- First-ever ring appearance per device (gated by `isFirstRingExperience()`): large water-droplet entrance + a single light Capacitor haptic. Then `markRingExperienceSeen()`.
+- All subsequent appearances: small "settle" entrance (~0.55s, scale 0.85→1) — designed to be near-invisible on rapid form toggles.
+- Pulse: opt-in, finite (default 6 cycles ≈ 54s) then freezes.
+- Wave pulse: triggered manually via `triggerRingWave(prefix)` for persistent-ring contexts (slide transitions). Brief opacity+scale flicker propagating inner→outer.
+
+**Layering order** on any page using the system: atmosphere → rings → sun glint → content (z-index 1).
+
+**Exclusivity rule**:
+- Rings: wizard / hero / arrival contexts (NOT data-heavy pages)
+- Mountains (`buildSkyBackground` from `sky-background.ts`): detail pages only (recovery, readiness, sleep, strain, etc.)
+- Sun glint: universal — every page
+
+**iOS performance notes** (Capacitor target):
+- **`backdrop-filter: blur(24px)`** is heavy on older iPhones. Stacking multiple glassy cards on the same page is a perf risk. Watch fps when implementing new glassy surfaces. Quieter variant (`blur(16px)`) is preferred for surfaces nested inside other glass.
+- **`feGaussianBlur` + animation** on the same SVG element is a perf cliff. The page-flair pulse is opacity-only on a `<g>` containing already-static rings — never combine pulse with filter on the same element.
+- **`safe-area-inset-top`**: the sun glint origins at viewport `top:0,left:0`. On notched iPhones it sits behind the notch; ensure no critical content (skip buttons, headers) is positioned where the glint's brightest centre would interfere with readability. Use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome.
+- **Haptics**: only fire on the very first ring appearance per device (the localStorage-gated large entrance). Never haptic on every navigation — annoying.
+
+When extending this system to a new surface, decide *which combination* of the four building blocks fits, then ship. Don't invent new background patterns ad-hoc — extend `page-flair.ts` so future surfaces share the DNA.
 
 ## Git Safety — Protecting Uncommitted Work
 
@@ -248,6 +310,8 @@ All user-facing copy should read like a knowledgeable consultant, not a wellness
 - **Avoid second-person where the data speaks for itself.** "Sleep or HRV indicates incomplete recovery" not "your body hasn't fully recovered".
 - **Short sentences. Active voice.** Each sentence carries one idea.
 - **No em dashes (—) ever.** Rewrite the sentence instead. Use a period, comma, or "to" (e.g. "2 to 3 weeks" not "2–3 weeks" in prose). En-dashes in numeric ranges (e.g. "150–350 TSS") are fine.
+- **No antithetical parallelism.** Avoid "not X, but Y" constructions. State the positive directly.
+- **No anaphora.** Do not repeat the same word or phrase at the start of successive sentences or clauses. Vary sentence openings.
 
 **Reference examples (load-taper view):**
 
@@ -293,6 +357,20 @@ Audit checklist when adding or modifying any metric display:
 - Grep for every place the metric is shown.
 - Confirm they all read from the same function with the same arguments.
 - If a drill-down recomputes the metric "for more detail", that detail must be derived from the canonical result, not a parallel computation.
+
+## Quality: Visualisations of real data must be derived from that data
+
+If a population, results, or outcome dataset exists in the codebase (e.g. `src/data/hyrox-population-distributions.ts`, percentile breakpoint tables, ingested race results, calibrated benchmarks), any chart that summarises that data must compute its visual shape from the data itself. Synthesising a curve, a bell, a histogram, or a noise pattern next to a real number sourced from real data is forbidden — it makes the app look fake even when the math behind the number is sound, and it undersells the work that went into ingesting the data in the first place.
+
+**The rule**: before writing a distribution chart, kernel density, sparkline-of-population, or radar-against-cohort, check the codebase for an existing real-data table. If one exists, derive your curve from it (differentiate, interpolate, smooth — but anchor on the data points).
+
+**Why**: a real session, 2026-05-07. The HYROX percentile distributions card displayed a real "p99" number (correctly looked up from a 89,868-finisher Kaggle ingest) but drew the curve as a stacked-Gaussian over six hand-tuned band seed times, producing wave-noise that read as "random squiggles". The user spotted it immediately. Months of data work invisible because the visualisation was synthetic.
+
+**How to apply**:
+- Charts of real ingested data: shape comes from the ingest. Period.
+- Fallbacks (synthetic) are allowed only when no real data exists for that subset (e.g. an unsupported race format) AND the chart caption says so honestly.
+- Subtitle copy on the card should lead with the data provenance — finisher count, season, dataset name. "Distributions from HYROX results data" is too vague. "Live HYROX field. 89,868 finishers across S4–S6" is correct.
+- If you find yourself writing `Math.exp(-0.5 * z * z)` to draw a chart of data we already have ingested, stop and use the ingested table instead.
 
 ## Quality: Cross-cutting changes
 

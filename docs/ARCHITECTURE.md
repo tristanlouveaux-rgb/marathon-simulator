@@ -37,6 +37,7 @@
 | `ui/` | Dashboard, renderer, events, wizard, modals. Triathlon mode renders from `ui/triathlon/`. | `main-view.ts`, `renderer.ts`, `events.ts`, `wizard/controller.ts`, `wizard/steps/triathlon-setup.ts`, `activity-review.ts`, `welcome-back.ts`, `triathlon/{plan-view,home-view,stats-view,progress-detail-view,tab-bar,workout-card,race-forecast-card,colours}.ts` | `renderMainView()`, `render()`, `next()`, `rate()`, `skip()`, `initWizard()`, `showActivityReview()`, `detectMissedWeeks()`, `showWelcomeBackModal()`, `renderTriathlonPlanView()`, `renderTriathlonHomeView()`, `renderTriathlonStatsView()`, `renderTriProgressDetailView()` |
 | `constants/` | Static config, protocols, sport DB, training params. Triathlon adds `triathlon-constants.ts` and `transfer-matrix.ts`. | `index.ts`, `injury-protocols.ts`, `sports.ts`, `training-params.ts`, `triathlon-constants.ts`, `transfer-matrix.ts` | `INJURY_PROTOCOLS`, `SPORTS_DB`, `TRAINING_HORIZON_PARAMS`, `TRANSFER_MATRIX`, `COMBINED_CTL_WEIGHTS`, `DEFAULT_VOLUME_SPLIT`, `RACE_LEG_DISTANCES`, `RUN_FATIGUE_DISCOUNT_70_3`, `RUN_FATIGUE_DISCOUNT_IRONMAN` |
 | `types/` | All TypeScript interfaces and type unions. Triathlon adds `triathlon.ts`. | `state.ts`, `injury.ts`, `onboarding.ts`, `training.ts`, `activities.ts`, `gps.ts`, `triathlon.ts` | `SimulatorState`, `Workout`, `InjuryState`, `OnboardingState`, `TrainingPhase`, `EventType`, `Discipline`, `TriathlonDistance`, `TriConfig`, `TriSkillRating`, `TriVolumeSplit`, `TriRacePrediction` |
+| `coach/` | BYOK AI coaching layer — key storage, context serialization, tool definitions, streaming client | `api-key-store.ts`, `prompt-sanitizer.ts`, `coach-context-builder.ts`, `coach-tools.ts`, `coach-chat-client.ts` | `storeApiKey()`, `getApiKey()`, `clearApiKey()`, `hasApiKey()`, `sanitizeField()`, `buildCoachContext()`, `buildRunningCoachContext()`, `buildTriathlonCoachContext()`, `COACH_TOOLS`, `validateAndBuildPendingChange()`, `applyPendingChange()`, `streamCoachChat()`, `buildSystemPrompt()`, `testApiKey()` |
 | `data/` | Static data, Supabase client, wearable sync, source routing | `marathons.ts`, `supabaseClient.ts`, `activitySync.ts`, `stravaSync.ts`, `appleHealthSync.ts`, `physiologySync.ts`, `sources.ts` | Marathon catalog, `syncActivities()`, `syncStravaActivities()`, `syncAppleHealth()`, `syncAppleHealthPhysiology()`, `syncPhysiologySnapshot()`, `getActivitySource()`, `getPhysiologySource()` |
 | `utils/` | Formatting, helpers, platform detection | `format.ts`, `helpers.ts`, `platform.ts` | Time/pace formatting, platform checks |
 | `scripts/` | Offline audit/analysis scripts | `sanity_audit.ts`, `comprehensive_audit.ts` | Not imported at runtime |
@@ -133,6 +134,7 @@ user clicks "Complete Week"
 | Injury | `injuryState` (InjuryState), `rehabWeeksDone`, `lastMorningPainDate` |
 | Continuous mode | `continuousMode`, `blockNumber`, `benchmarkResults` |
 | Recovery | `recoveryHistory` (RecoveryEntry[]), `lastRecoveryPromptDate` |
+| Adaptive recovery | `adaptiveRecovery?: AdaptiveRecovery` — learned `kUserHours` + confidence band (none/low/medium/high), updated weekly; `sessionImpactLog?: SessionImpactEntry[]` — rolling 90-day evidence per completed session (predicted vs observed hours-to-baseline). Fitter at `src/calculations/adaptive-recovery.ts`. Population default of 8 falls back when confidence < medium. |
 | Integrations | `wearable` (legacy), `connectedSources?: { activity?, physiology? }` — use accessors in `src/data/sources.ts`; `stravaConnected?: boolean` — when true, Strava is the activity source regardless of wearable; `biologicalSex` (`'male' \| 'female' \| 'prefer_not_to_say'`) — for iTRIMP β |
 | Onboarding | `onboarding` (OnboardingState), `hasCompletedOnboarding` |
 | ACWR / Tier | `athleteTier?` — computed from CTL (5 tiers); `athleteTierOverride?` — manual override takes precedence |
@@ -162,6 +164,12 @@ Wizard data: `name`, `raceDistance`, `trainingForEvent`, `runsPerWeek`, `gymSess
 ### TrainingPhase
 
 `'base' | 'build' | 'peak' | 'taper'`
+
+Phase assignment is centralised in `src/workouts/phases.ts` (`computePlanPhases(totalWeeks)`). Called from `initializeWeeks` and from the persistence migration. Two strategies:
+- **Single arc (≤32 weeks)**: capped allocation — taper ≤ 3w, peak ≤ 4w, build ≤ 8w; base absorbs the remainder. Very short plans (4–7w) naturally collapse base to a sharpening block.
+- **Double periodization (≥33 weeks)**: cycle 1 (~45%) ends in a **Checkpoint** week (`wk.checkpoint = true`, `wk.ph = 'peak'`), 2-week transition, cycle 2 (~55%) carries the race.
+
+The legacy `s.racePhaseStart` field (which used to split plans into a 4-week block-cycle prefix + 16-week race-specific arc) is deprecated; persistence migrates affected plans on next launch.
 
 ---
 
@@ -283,7 +291,7 @@ threshold     → steady (halfway between easy and threshold, NOT true marathon 
 
 **Key invariant**: Adjustment `workoutId` and `dayIndex` come from the generator's `w.n` and `w.dayOfWeek`. Mods must store/match original generator names (before renderer deduplication renames them).
 
-**Mode-aware modal routing**: in triathlon mode (`s.eventType === 'triathlon'`), the running suggestion modal (`showSuggestionModal`) is suppressed and cross-training overload is surfaced via `tri-suggestion-modal.ts`. Routing happens at four sites:
+**Mode-aware modal routing** (v2, 2026-05-01): in triathlon mode (`s.eventType === 'triathlon'`), the running suggestion modal (`showSuggestionModal`) is suppressed and cross-training overload is surfaced via `tri-suggestion-modal.ts`. The tri modal renders a per-discipline chip switcher, defaults to **run** (most cross-training is leg-impact-loaded; affinity overrides only for cycling → bike, swimming → swim), and offers Reduce / Replace & Reduce / Keep / Push-to-next-week buttons mirroring running. Push-to-next-week stores the cross-training TSS on `wk.carriedCrossTrainingTSS`; `computeDecayedTriCarry` exponentially decays it (7-day τ) and the next week's detector adds the decayed residual to its overshoot calc. Banner on tri home view shows the live decayed value. Routing happens at four sites:
 - `activity-review.ts` — `redirectToTriSuggestionFlow` helper persists items as adhocs and shows the tri modal.
 - `events.ts:logActivity` — tri-mode branch persists the manual log + shows the tri modal.
 - `main-view.ts:triggerACWRReduction` — tri-mode early-return (tri uses per-discipline volume ramps, not run ACWR).
@@ -305,6 +313,17 @@ The tri detector is `src/calculations/tri-cross-training-overload.ts`; it sums n
 10. Store mods in wk.workoutMods[]
 11. saveState() + render()
 ```
+
+### Route Safety Ratings (`src/gps/anonymize-route.ts`, `src/data/safetyRatingSync.ts`)
+
+Post-run data collection to power a future women's night-running safety map.
+
+- **Trigger (live GPS)**: GPS completion modal (`src/ui/gps-completion-modal.ts`) — after RPE selection, optional safety slider (1–10 or N/A) shown for routes >= 1km.
+- **Trigger (imported)**: activity detail (`src/ui/activity-detail.ts`) — "Rate this route's safety" pill on any activity with a polyline.
+- **Privacy**: `trimRouteEnds()` strips ~300m from start and end of the raw GPS trace before storage, protecting home/work locations.
+- **Encoding**: trimmed `LatLng[]` → Google Polyline string via `encodePolyline()`. Decoder `decodePolylineToLatLng()` mirrors the inline decoder in `strava-detail.ts`.
+- **Storage**: Supabase table `route_safety_ratings` — score (nullable), trimmed polyline, bounds, centre, source, `rater_gender`. RLS: user sees only own rows. Future map reads aggregated data via service-role edge function.
+- **Supabase migration**: `supabase/migrations/20260507000001_route_safety_ratings.sql`
 
 ### GPS Tracking (`src/gps/`)
 
@@ -342,6 +361,26 @@ Morning check-in: sleep score + Garmin readiness + HRV status → `computeRecove
 - Trend escalation: 2 of 3 days low → escalate level
 - Non-green triggers adjustment modal: downgrade hard workout / reduce distance / flag as easy
 - Plan engine has built-in deload weeks via `isDeloadWeek()` (every 3rd–4th week by ability band)
+
+### Adaptive Recovery (`src/calculations/adaptive-recovery.ts`)
+
+Learns the user's per-athlete recovery rate `k_user` and feeds it into `computeToBaseline` (recovery countdown) and `computeACWR` (per-tier ceiling shift). Replaces the population constant of 8 once enough evidence accumulates; population default falls back at low confidence.
+
+**Lifecycle**:
+- `ingestNewActualsAsImpacts(s)` — walks current `wks` + archived plans for `garminActuals` not yet in `sessionImpactLog`, computes predicted hours, logs entries. Live (≤7d old) get fitWeight 1.0; older entries tagged `historical-backfill` at 0.7.
+- `closeOutObservedRecovery(s)` — for entries whose 96h observation window has elapsed, walks `physiologyHistory` to compute observed hours-to-baseline (composite HRV + sign-flipped RHR z-score against the 28-day pre-session baseline; recovered when z ≥ −0.25; capped at 96h right-censored).
+- `fitKUser(s)` — weighted-mean ratio of observed/predicted across closed entries, with 4-week recency half-life, fitWeight scaling, and a Bayesian prior of 4 ghost samples anchored at `k=8`. Result clamped to `[5, 13]`.
+
+All three run on every launch via `refreshAdaptiveRecovery()` in `main.ts` after physiology sync — cheap because the impact log is bounded at 90 days.
+
+**Composition with existing recovery model**:
+- `recoveryAdj` (transient, today's HRV/sleep/RHR) stays in `computeRecoveryScore` — it's the "right now" multiplier.
+- `k_user` (persistent trait) is the "this athlete in general" multiplier.
+- Both are applied to the countdown formula: `k_user × TSS / ctlDaily × recoveryMult × recoveryAdj`. No double-counting.
+
+**Confidence gating**: 0–7 → none (default 8); 8–15 → low (display only); 16+ → medium (countdown uses `k_user`); 30+ → high (countdown + ACWR ceiling shift). The ACWR ceiling shift is bounded to ±0.10 (half a tier's worth).
+
+**Call-site rule**: any consumer of `computeACWR` should thread `s.adaptiveRecovery` as the trailing 10th param so the safeUpper returned reflects the personalised ceiling. `computeReadinessACWR` (the canonical wrapper) auto-picks it up from the state object.
 
 ### Load Model & Plan Continuity (`src/calculations/fitness-model.ts`)
 
@@ -531,6 +570,49 @@ The shift modulates the RPE-based `ch` value by ±10–15%. Weekly cap: ±0.3 VD
 
 ---
 
+### BYOK AI Coach (`src/coach/`)
+
+Conversational coaching layer powered by the user's own Anthropic API key (zero cost to Mosaic).
+
+**Data flow:**
+```
+Account view → storeApiKey() → @capacitor/preferences (iOS Keychain)
+renderCoachView() → hasApiKey() → AI mode OR classic rules-based mode
+
+AI mode:
+  buildCoachContext(state)           — sanitized JSON of 4–8w pacing, readiness, plan
+  buildSystemPrompt(context)         — ~1000-char coach persona + hard rules
+  streamCoachChat(messages, ctx, key)
+    → POST /functions/v1/coach-chat  — Supabase JWT + X-Anthropic-Key header
+    → coach-chat edge function       — validates JWT, rate-limits (30/day), proxies to Anthropic
+    → Anthropic claude-sonnet-4-6    — streaming SSE response
+    → yields StreamChunks: text | tool_use | done | error
+  UI: text chunks → streaming brief; tool_use → validateAndBuildPendingChange() → Apply card
+  Apply button → applyPendingChange() → mutates wk.triWorkouts or wk.workoutMods → saveState()
+```
+
+**Security layers:**
+- `sanitizeField()` — strips HTML, collapses newlines, rejects injection patterns from all user-controlled strings before any LLM payload
+- `validateAndBuildPendingChange()` — validates every tool call parameter against actual plan state; silently returns null on invalid (no Apply card rendered)
+- `Apply required` — no state mutation without explicit user tap
+- `X-Anthropic-Key` never logged, stored server-side, or echoed; used once per request and discarded
+- Supabase JWT required on every edge function call; rate limit is per-user-id
+- `@capacitor/preferences` = iOS Keychain (encrypted, device-sandboxed)
+
+**State fields added (`src/types/state.ts`):**
+- `anthropicApiKeyStored?: boolean` — presence flag only; actual key lives in Keychain
+- `coachConsentGiven?: boolean` — one-time Anthropic data disclosure accepted
+
+**Coach tools (4):** `swap_workout`, `reduce_workout`, `skip_workout`, `adjust_intensity` — fixed parameter enums, all validated before Apply card renders.
+
+**Classic fallback** (no key): `computeDailyCoach()` stance + `primaryMessage` headline + rule-based signals. Same quality — not a degraded experience.
+
+**Supabase edge function** (`supabase/functions/coach-chat/`): BYOK variant of `coach-narrative`. Key differences: uses `X-Anthropic-Key` request header, returns streaming SSE, supports tool use, no global spend cap, 30-calls/day rate limit via `coach_chat_usage` table, 30s timeout.
+
+**DB table required:** `coach_chat_usage(user_id, date, call_count)` + `increment_coach_chat_usage(uid, today)` RPC function. See migration SQL in `supabase/migrations/` (deploy before enabling coach-chat edge function in production).
+
+---
+
 ## Page Map
 
 Complete navigation graph. Every full-page view, its entry points, and where its back button goes.
@@ -635,3 +717,4 @@ Each detail page has its own background theme. See `docs/UX_PATTERNS.md` for the
 | `docs/TECH_SPECS.md` | Technical specifications |
 | `docs/ENGINE_AUDIT.md` | Engine audit findings |
 | `docs/FORECAST_MATRIX_AUDIT.md` | Prediction model audit |
+| `docs/AI_STRATEGY.md` | AI Coach monetisation strategy — tier model, economics, pending Tier 2 decisions, Stripe/IAP tradeoffs |

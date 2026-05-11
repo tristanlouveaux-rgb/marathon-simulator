@@ -14,6 +14,7 @@
 
 import type { SimulatorState, RaceDistance } from '@/types';
 import { blendPredictions, calculateLiveForecast } from './predictions';
+import { getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import { computePredictionInputs, type RunActivityInput } from './prediction-inputs';
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv } from './vdot';
@@ -122,6 +123,18 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const runs = runsAll;
   const inputs = computePredictionInputs(runs);
 
+  // Pass `inputs.weeklyKm` directly (including 0) so blendPredictions can
+  // distinguish "explicit zero recent training" from "no volume signal at all".
+  // The marathon-specificity penalty (Tanda-gated path) only fires when an
+  // explicit signal is present, so passing the actual computed value (even 0)
+  // is the right behaviour — a user with 145 historical runs but zero in the
+  // 8-week window genuinely has zero recent training, which is signal, not noise.
+  // Marathon PB age scales the penalty: recent PB → demonstrated capability →
+  // lighter penalty.
+  const marathonPbDateISO = s.onboarding?.pbDates?.m;
+  const marathonPbAgeDays = marathonPbDateISO
+    ? Math.max(0, Math.floor((Date.now() - new Date(marathonPbDateISO).getTime()) / (24 * 60 * 60 * 1000)))
+    : undefined;
   const blended = blendPredictions(
     targetDistM,
     s.pbs,
@@ -131,10 +144,11 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
     (s.typ ?? 'Balanced').toLowerCase(),
     inputs.recentRun ?? s.rec ?? null,
     s.athleteTier ?? undefined,
-    inputs.weeklyKm || undefined,
+    inputs.weeklyKm,
     inputs.avgPaceSecPerKm ?? undefined,
     { weeksCovered: inputs.weeksCovered, paceConfidence: inputs.paceConfidence, isStale: inputs.isStale },
     hrVdot,
+    marathonPbAgeDays,
   );
 
   if (!blended || blended <= 0 || !isFinite(blended)) return false;
@@ -151,7 +165,13 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Hold s.v at its pre-taper value until we exit the low-volume phase.
   const currentWeek = (s.wks ?? [])[(s.w ?? 1) - 1];
   const inTaperOrDeload = currentWeek?.ph === 'taper';
-  if (!inTaperOrDeload) {
+  // During active injury where running is stopped (canRun='no'), the PB/HR
+  // blend reflects pre-injury fitness. Writing it back would undo the weekly
+  // VDOT decay applied by advanceWeekToToday. Allow it to write again once
+  // the user returns to running (canRun='limited'|'yes').
+  const injuryState = (s as any).injuryState;
+  const injuryBlockingRun = injuryState?.active && injuryState?.canRun === 'no';
+  if (!inTaperOrDeload && !injuryBlockingRun) {
     s.v = s.blendedEffectiveVdot;
   }
 
@@ -160,17 +180,21 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
   if (s.rd && s.typ && weeksRemaining > 0) {
     try {
+      const sessionsForHorizon = s.epw ?? s.rw ?? 3;
+      const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
       const { forecastVdot, forecastTime } = calculateLiveForecast({
         currentVdot: s.v,
         targetDistance: s.rd,
         weeksRemaining,
-        sessionsPerWeek: s.epw ?? s.rw ?? 3,
+        sessionsPerWeek: sessionsForHorizon,
         runnerType: s.typ as Parameters<typeof calculateLiveForecast>[0]['runnerType'],
         experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-        weeklyVolumeKm: s.wkm,
+        weeklyVolumeKm: planMeanKm ?? s.wkm,
+        weeklyVolumeHours: s.onboarding?.weeklyTrainingHours,
         hmPbSeconds: s.pbs?.h || undefined,
         ltPaceSecPerKm: s.lt || undefined,
         adaptationRatio: s.adaptationRatio,
+        blendedAnchorSec: blended,
       });
       s.expectedFinal = forecastVdot;
       s.forecastTime = forecastTime;

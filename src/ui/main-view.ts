@@ -53,12 +53,20 @@ function hasPlanStarted(s: SimulatorState): boolean {
  * Render the main workout view after onboarding is complete
  */
 export function renderMainView(): void {
-  // Triathlon fork — route straight to the triathlon plan view.
   const s = getState();
+
+  // Triathlon fork — route straight to the triathlon plan view.
   if (s.eventType === 'triathlon') {
     import('./triathlon/plan-view').then(({ renderTriathlonPlanView }) => renderTriathlonPlanView());
     return;
   }
+
+  // HYROX fork — route to the HYROX plan view.
+  if (s.eventType === 'hyrox' || s.onboarding?.trainingMode === 'hyrox') {
+    import('./hyrox/plan-view').then(({ renderHyroxPlanView }) => renderHyroxPlanView());
+    return;
+  }
+
   // Delegate to the running Plan view
   import('./plan-view').then(({ renderPlanView }) => renderPlanView());
 }
@@ -75,29 +83,6 @@ function getBlockNumber(currentWeek: number): number {
  */
 function getBlockWeek(currentWeek: number): number {
   return ((currentWeek - 1) % 4) + 1;
-}
-
-/**
- * Check if the current week is in the block cycling (pre-race) phase of a long plan
- */
-function isInBlockCyclingPhase(s: any, weekOverride?: number): boolean {
-  const week = weekOverride ?? s.w;
-  return !s.continuousMode && s.racePhaseStart && week < s.racePhaseStart;
-}
-
-/**
- * Get the race-prep week number (1-indexed within the 16-week race block)
- */
-function getRacePrepWeek(s: any, weekOverride?: number): number {
-  const week = weekOverride ?? s.w;
-  return week - (s.racePhaseStart - 1);
-}
-
-/**
- * Get the total race prep weeks (always 16 for long plans)
- */
-function getRacePrepTotal(s: any): number {
-  return s.tw - (s.racePhaseStart - 1);
 }
 
 /** Parse distance in km from a workout description string */
@@ -141,7 +126,8 @@ function _computeTotalKm(s: any): number {
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e,
       i + 1, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, i + 1), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, i + 1), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     );
 
     if (wk.workoutMods) {
@@ -189,23 +175,25 @@ function getWeekDateLabel(s: any, weekNum: number): string | null {
 }
 
 /**
+ * Get the phase label for the current week, swapping in "Checkpoint" when the
+ * week is the cycle-1 time-trial week of a double-periodization plan.
+ */
+function getCurrentPhaseLabel(s: any, terse: boolean): string {
+  const wk = s.wks?.[s.w - 1];
+  if (wk?.checkpoint) return 'Checkpoint';
+  return getPhaseLabel(wk?.ph, terse);
+}
+
+/**
  * Header subtitle text (below plan name)
  */
 function getHeaderSubtitle(s: any, blockNum: number): string {
   const dateLabel = getWeekDateLabel(s, s.w);
   const dateSuffix = dateLabel ? ` · ${dateLabel}` : '';
   if (s.continuousMode) {
-    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, true)}${dateSuffix}`;
+    return `Week ${s.w}, Block ${blockNum} · ${getCurrentPhaseLabel(s, true)}${dateSuffix}`;
   }
-  if (isInBlockCyclingPhase(s)) {
-    return `Week ${s.w} — Block ${blockNum} · ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)} (Race prep starts week ${s.racePhaseStart})${dateSuffix}`;
-  }
-  if (s.racePhaseStart) {
-    const rpWeek = getRacePrepWeek(s);
-    const rpTotal = getRacePrepTotal(s);
-    return `Race Prep — Week ${rpWeek} of ${rpTotal} — ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)}${dateSuffix}`;
-  }
-  return `Week ${s.w} of ${s.tw} — ${getPhaseLabel(s.wks?.[s.w - 1]?.ph, false)}${dateSuffix}`;
+  return `Week ${s.w} of ${s.tw} · ${getCurrentPhaseLabel(s, false)}${dateSuffix}`;
 }
 
 /**
@@ -215,14 +203,6 @@ function getWeekNavigatorLabel(s: any, blockNum: number): string {
   if (s.continuousMode) {
     return `Week ${s.w} · Block ${blockNum}`;
   }
-  if (isInBlockCyclingPhase(s)) {
-    return `Week ${s.w} · Block ${blockNum}`;
-  }
-  if (s.racePhaseStart) {
-    const rpWeek = getRacePrepWeek(s);
-    const rpTotal = getRacePrepTotal(s);
-    return `Race Prep ${rpWeek} of ${rpTotal}`;
-  }
   return `Week ${s.w} of ${s.tw}`;
 }
 
@@ -230,16 +210,6 @@ function getWeekNavigatorLabel(s: any, blockNum: number): string {
  * Week counter label inside the prediction/phase panel
  */
 function getWeekCounterLabel(s: any): string {
-  if (isInBlockCyclingPhase(s)) {
-    const blockNum = getBlockNumber(s.w);
-    const blockWeek = getBlockWeek(s.w);
-    return `Block ${blockNum} · Week ${blockWeek} of 4`;
-  }
-  if (s.racePhaseStart) {
-    const rpWeek = getRacePrepWeek(s);
-    const rpTotal = getRacePrepTotal(s);
-    return `Race Prep · Week ${rpWeek} of ${rpTotal}`;
-  }
   return `Week ${s.w} of ${s.tw}`;
 }
 
@@ -328,8 +298,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               </div>
 
               <!-- Week slider -->
-              <input type="range" id="week-slider" min="1" max="${maxViewableWeek}" value="${s.w}"
-                     class="w-full h-2 rounded-lg appearance-none cursor-pointer" style="background:rgba(0,0,0,0.10);accent-color:var(--c-ok)">
+              <input type="range" id="week-slider" class="m-slider-glass" min="1" max="${maxViewableWeek}" value="${s.w}">
 
               <div id="view-week-indicator" class="hidden mt-2 p-2 rounded text-xs text-center" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.25)"></div>
 
@@ -363,8 +332,11 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
           <!-- Right Column -->
           <div class="lg:col-span-2 space-y-4">
 
-            <!-- Strava Banner (only shown when not yet connected) -->
-            ${!s.stravaConnected ? `
+            <!-- Source-prompt banner: only shown when no activity source is connected.
+                 Apple Watch users (s.connectedSources.physiology === 'apple' or
+                 appleHistoryFetched) already auto-log; suppressing the Strava-tinted
+                 banner avoids the misleading "log via Strava" CTA. -->
+            ${!s.stravaConnected && !s.appleHistoryFetched && !hasPhysiologySource(s, 'apple') ? `
             <div class="rounded-lg p-4" style="background:rgba(249,115,22,0.07);border:1px solid rgba(249,115,22,0.20)">
               <div class="flex items-center gap-3">
                 <svg class="w-6 h-6" style="color:#F97316" viewBox="0 0 24 24" fill="currentColor">
@@ -384,7 +356,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               <!-- Phase Display (Big & Bold) -->
               <div class="mb-5 pb-5 border-b" style="border-color:var(--c-border)">
                 <div class="text-xs uppercase tracking-widest mb-1 font-semibold" style="color:var(--c-faint)">Current Phase</div>
-                <div id="phase-label" class="text-4xl font-bold tracking-tight" style="color:var(--c-black)">${getPhaseLabel(s.wks?.[s.w - 1]?.ph, s.continuousMode)}</div>
+                <div id="phase-label" class="text-4xl font-bold tracking-tight" style="color:var(--c-black)">${getCurrentPhaseLabel(s, s.continuousMode)}</div>
                 <p id="week-counter" class="text-sm mt-1 font-medium" style="color:var(--c-ok)">${getWeekCounterLabel(s)}</p>
               </div>
 
@@ -392,7 +364,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
               <h3 class="font-medium text-sm mb-4" style="color:var(--c-muted)">Race Prediction</h3>
               ${(() => {
                 const goalSec = s.initialBaseline || 0;
-                const forecastSec = s.forecastTime || 0;
+                const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? 0;
                 const dSec = Math.round(forecastSec - goalSec);
                 const dMin = Math.round(Math.abs(dSec) / 60);
                 let deltaText = '';
@@ -739,7 +711,7 @@ function renderContinuousProgressPanel(s: any): string {
     }"></div>
           `).join('')}
         </div>
-        ${blockWeek === 4 ? `<p class="text-xs mt-2" style="color:var(--c-accent)">Deload week — lighter training to clear fatigue</p>` : blockWeek === 3 ? `<p class="text-xs mt-2" style="color:#F97316">Intensify week — peak training load</p>` : ''}
+        ${blockWeek === 4 ? `<p class="text-xs mt-2" style="color:var(--c-muted)">Deload week. Lighter training to clear fatigue.</p>` : blockWeek === 3 ? `<p class="text-xs mt-2" style="color:#F97316">Intensify week. Peak training load.</p>` : ''}
       </div>
     </div>
   `;
@@ -846,12 +818,19 @@ function renderRecoveryPill(s: any): string {
   const { level, shouldPrompt } = computeRecoveryStatus(todayEntry, history);
 
   if (!todayEntry) {
-    // No data — prompt to log
+    // No data — prompt to log. Until the personal recovery rate has been fit
+    // to high confidence, surface a one-line note that this logging is what
+    // teaches the plan how the user recovers (motivates the soft check-in).
+    const arConf = s.adaptiveRecovery?.confidence ?? 'none';
+    const showLearningHint = arConf !== 'high';
     return `
-      <button id="btn-recovery-log" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium transition-colors" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-muted)">
-        <span class="w-2 h-2 rounded-full" style="background:var(--c-faint)"></span>
-        How are you feeling?
-      </button>
+      <div class="mb-4">
+        <button id="btn-recovery-log" class="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium transition-colors" style="background:rgba(0,0,0,0.05);border:1px solid var(--c-border);color:var(--c-muted)">
+          <span class="w-2 h-2 rounded-full" style="background:var(--c-faint)"></span>
+          How are you feeling?
+        </button>
+        ${showLearningHint ? `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.4">Helps Mosaic learn how you recover.</div>` : ''}
+      </div>
     `;
   }
 
@@ -1079,16 +1058,16 @@ function showRecoveryInputModal(): void {
       <p class="text-sm mb-5" style="color:var(--c-muted)">Quick check-in to optimize today's training.</p>
       <div class="flex flex-col gap-2">
         <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-ok);color:white" data-quality="great">
-          Great — Slept well
+          Great. Slept well.
         </button>
         <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.07);color:var(--c-black)" data-quality="good">
-          Good — Normal night
+          Good. Normal night.
         </button>
         <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-caution);color:white" data-quality="poor">
-          Poor — Restless/short
+          Poor. Restless or short.
         </button>
         <button class="recovery-quality-btn w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:var(--c-warn);color:white" data-quality="terrible">
-          Terrible — Barely slept
+          Terrible. Barely slept.
         </button>
         <button id="btn-recovery-skip" class="w-full py-2 text-xs transition-colors mt-1" style="color:var(--c-faint)">
           Skip
@@ -1155,7 +1134,8 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    undefined, wk.scheduledAcwrStatus,
+    undefined, wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Re-apply existing workoutMods so we see the true state
@@ -1248,7 +1228,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
           </button>
         </div>
       ` : `
-        <p class="text-xs mb-3" style="color:var(--c-faint)">No run workout scheduled today — no adjustments needed.</p>
+        <p class="text-xs mb-3" style="color:var(--c-faint)">No run workout scheduled today. No adjustments needed.</p>
         <button id="btn-recovery-dismiss" class="w-full py-2.5 font-medium rounded-lg transition-colors text-sm" style="background:rgba(0,0,0,0.05);color:var(--c-muted)">
           Dismiss
         </button>
@@ -1442,9 +1422,9 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
 
   // Show inline feedback instead of reloading
   const feedbackMessages = {
-    worse: 'Logged — pain worse. This will factor into your weekly check-in.',
-    same: 'Logged — pain unchanged. Noted for your weekly review.',
-    better: 'Logged — pain improving! This will be reflected in your weekly check-in.',
+    worse: 'Logged. Pain worse. Will factor into your weekly check-in.',
+    same: 'Logged. Pain unchanged. Noted for your weekly review.',
+    better: 'Logged. Pain improving. This will be reflected in your weekly check-in.',
   };
 
   const container = document.getElementById('morning-pain-check');
@@ -1592,7 +1572,8 @@ function updateLoadChart(s: SimulatorState): void {
     (s.maxHR || s.restingHR || s.onboarding?.age)
       ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
       : undefined,
-    easyPace, s.w, s.tw, currentVDOT, s.gs, trailingEffort, wk.scheduledAcwrStatus,
+    easyPace, s.w, s.tw, currentVDOT, s.gs, trailingEffort, wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   ) : [];
 
   // Sum planned loads in TL units (scale FCL output by TL_PER_MIN/LOAD_PER_MIN ratio)
@@ -1743,7 +1724,7 @@ function updateLoadChart(s: SimulatorState): void {
   // Gray = 0→CTL (your chronic baseline); Green = CTL→plan (the target zone);
   // Amber = plan→plan×1.2 (acceptable overrun); Red = beyond that (fills rest).
   const acwrAtlSeed1 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwrData = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed1, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const ctlWeeklyEquiv = acwrData.ctl;
   const ctlPctOfBar = barMax > 0 ? Math.min(100, (ctlWeeklyEquiv / barMax) * 100) : 0;
   const planPctOfBar = barMax > 0 ? Math.min(100, (plannedTotal / barMax) * 100) : 71;
@@ -1885,7 +1866,7 @@ function updateLoadChart(s: SimulatorState): void {
   if (volCrossUnitEl) volCrossUnitEl.textContent = `${volUnit} GPS sports`;
   if (volPlannedUnitEl) volPlannedUnitEl.textContent = volUnit;
   if (volNoteEl && actualCrossTSS > 0 && actualRunKm === 0) {
-    volNoteEl.textContent = 'Cross-training covering fitness load — consider a short run for conditioning';
+    volNoteEl.textContent = 'Cross-training covering fitness load. Consider a short run for conditioning.';
     volNoteEl.className = 'text-[10px]';
     volNoteEl.style.color = 'var(--c-caution)';
   } else if (volNoteEl) {
@@ -1967,12 +1948,12 @@ function updateACWRBar(s: SimulatorState): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed2 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed2, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
 
   if (acwr.status === 'unknown' && acwr.ratio === 0) {
     const histLen = (s.historicWeeklyTSS ?? []).length;
     const baselineMsg = histLen < 4
-      ? 'Building baseline — check back after a few more weeks'
+      ? 'Building baseline. Check back after a few more weeks.'
       : 'Not enough recent data to compute load ratio';
     container.innerHTML = `<p class="text-[10px]" style="color:var(--c-faint)">${baselineMsg}</p>`;
     if (reduceBtn) reduceBtn.classList.add('hidden');
@@ -1997,9 +1978,9 @@ function updateACWRBar(s: SimulatorState): void {
       : { fillStyle: 'background:var(--c-ok)', textStyle: 'color:var(--c-ok)' };
 
   const statusMsg = acwr.status === 'high'
-    ? `Load spike detected (${ratio.toFixed(2)}× baseline) — reduce this week`
+    ? `Load spike detected (${ratio.toFixed(2)}× baseline). Reduce load this week.`
     : acwr.status === 'caution'
-      ? `Load increasing quickly (${ratio.toFixed(2)}× baseline) — consider easing off`
+      ? `Load increasing quickly (${ratio.toFixed(2)}× baseline). Consider easing off.`
       : acwr.status === 'low'
         ? `Deload / low activity (${ratio.toFixed(2)}×)`
         : `Load well-managed (${ratio.toFixed(2)}× baseline)`;
@@ -2058,11 +2039,11 @@ function updateACWRBar(s: SimulatorState): void {
     const consecutiveOverrides = computeConsecutiveOverrides(s.wks ?? [], s.w);
     let riskHtml = '';
     if (consecutiveOverrides >= 3) {
-      riskHtml = `<p class="text-[10px] font-medium" style="color:var(--c-warn)">Risk: Extreme — injury window open (${consecutiveOverrides} consecutive overrides)</p>`;
+      riskHtml = `<p class="text-[10px] font-medium" style="color:var(--c-warn)">Risk: Extreme. Injury window open (${consecutiveOverrides} consecutive overrides).</p>`;
     } else if (consecutiveOverrides === 2) {
-      riskHtml = `<p class="text-[10px]" style="color:var(--c-warn)">Risk: Very High — we strongly advise reducing load</p>`;
+      riskHtml = `<p class="text-[10px]" style="color:var(--c-warn)">Risk: Very High. Reduce load this week.</p>`;
     } else if (consecutiveOverrides === 1) {
-      riskHtml = `<p class="text-[10px]" style="color:var(--c-caution)">Risk: High — you overrode a reduction recommendation</p>`;
+      riskHtml = `<p class="text-[10px]" style="color:var(--c-caution)">Risk: High. Reduction recommendation overridden.</p>`;
     } else if (acwr.status === 'high') {
       riskHtml = `<p class="text-[10px]" style="color:var(--c-warn)">Risk: High</p>`;
     } else if (acwr.status === 'caution') {
@@ -2171,7 +2152,7 @@ function updateLightenedWeekBanner(s: SimulatorState): void {
       <svg class="w-3.5 h-3.5 mt-0.5 flex-shrink-0" style="color:var(--c-caution)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
       </svg>
-      <span style="color:rgba(245,158,11,0.80)">Week ${s.w} was lightened — ${reason}</span>
+      <span style="color:rgba(245,158,11,0.80)">Week ${s.w} was lightened: ${reason}</span>
     </div>
   `;
 }
@@ -2201,7 +2182,8 @@ function getWeekWorkoutsForACWR(s: ReturnType<typeof getMutableState>) {
     (s.maxHR || s.restingHR || s.onboarding?.age)
       ? { lthr: undefined, maxHR: s.maxHR, restingHR: s.restingHR, age: s.onboarding?.age }
       : undefined,
-    gp(currentVDOT, s.lt).e, s.w, s.tw, currentVDOT, s.gs, trailingEffort, wk.scheduledAcwrStatus,
+    gp(currentVDOT, s.lt).e, s.w, s.tw, currentVDOT, s.gs, trailingEffort, wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 }
 
@@ -2218,7 +2200,7 @@ export function triggerACWRReduction(): void {
 
   const tier = s.athleteTierOverride ?? s.athleteTier;
   const acwrAtlSeed3 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed3, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
 
   // Build popup source: use unspent items if present, else synthesise from planned load
   let durationMin: number;
@@ -2321,7 +2303,7 @@ export function triggerACWRReduction(): void {
 
   const _mvTier = s.athleteTierOverride ?? s.athleteTier;
   const _mvAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const _mvAcwr = computeACWR(s.wks, s.w, _mvTier, s.ctlBaseline ?? undefined, s.planStartDate, _mvAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const ctx = { raceGoal: s.rd, plannedRunsPerWeek: s.rw, injuryMode: !!(s as any).injuryState, easyPaceSecPerKm: s.pac?.e, runnerType: s.typ as 'Speed' | 'Endurance' | 'Balanced' | undefined, floorKm: computeRunningFloorKm(s.pac?.m, s.w, s.tw ?? 16, wk.ph), acwrStatus: _mvAcwr.status };
   // When ACWR is barely above the ceiling (≤5%) OR below it, a single small
   // adjustment is enough. Matches the "A small adjustment is enough" copy in
@@ -2446,14 +2428,14 @@ function showACWRInfoSheet(): void {
         <button id="acwr-sheet-close" class="text-xl leading-none" style="color:var(--c-muted)">✕</button>
       </div>
       <div class="px-4 py-4 space-y-4 text-sm">
-        <p style="color:var(--c-muted)"><span style="color:var(--c-black);font-weight:500">Load Safety</span> measures how fast your training load is ramping. It compares your recent week to your long-term baseline — ACWR (Acute:Chronic Workload Ratio). A ratio near 1.0 means this week matches your 6-week average — safe territory.</p>
+        <p style="color:var(--c-muted)"><span style="color:var(--c-black);font-weight:500">Load Safety</span> measures how fast your training load is ramping. It compares your recent week to your long-term baseline (ACWR, Acute:Chronic Workload Ratio). A ratio near 1.0 means this week matches your 6-week average. Safe territory.</p>
         <div class="rounded-lg p-3 space-y-2" style="background:rgba(0,0,0,0.04)">
           <p class="text-xs font-medium uppercase tracking-wide" style="color:var(--c-faint)">Zones</p>
-          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-ok)"></div><span style="color:var(--c-ok)">Safe (0.8–threshold)</span><span style="color:var(--c-muted)" class="ml-1">— load increase is manageable</span></div>
-          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-caution)"></div><span style="color:var(--c-caution)">Caution</span><span style="color:var(--c-muted)" class="ml-1">— consider reducing one hard session</span></div>
-          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div><span style="color:var(--c-warn)">High Risk</span><span style="color:var(--c-muted)" class="ml-1">— load spike, ease back or swap for easy session</span></div>
+          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-ok)"></div><span style="color:var(--c-ok)">Safe (0.8–threshold)</span><span style="color:var(--c-muted)" class="ml-1">: load increase is manageable</span></div>
+          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-caution)"></div><span style="color:var(--c-caution)">Caution</span><span style="color:var(--c-muted)" class="ml-1">: consider reducing one hard session</span></div>
+          <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-warn)"></div><span style="color:var(--c-warn)">High Risk</span><span style="color:var(--c-muted)" class="ml-1">: ease back or swap for easy session</span></div>
         </div>
-        <p class="text-xs" style="color:var(--c-faint)">The safe threshold varies by your training history — experienced athletes tolerate higher ratios. Your threshold adjusts as you build history.</p>
+        <p class="text-xs" style="color:var(--c-faint)">The safe threshold varies by your training history. Experienced athletes tolerate higher ratios. Your threshold adjusts as you build history.</p>
         <p class="text-xs" style="color:var(--c-faint)">The ratio needs at least 3 completed weeks to become meaningful.</p>
       </div>
     </div>`;
@@ -2476,7 +2458,7 @@ function showTSSInfoSheet(): void {
 
         <div>
           <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">What is TSS?</p>
-          <p style="color:var(--c-muted)">TSS (Training Stress Score) measures how much stress your body absorbed from a session. It combines <span style="color:var(--c-black);font-weight:500">duration</span> and <span style="color:var(--c-black);font-weight:500">intensity</span> — a hard 30-minute run scores higher than an easy 60-minute one.</p>
+          <p style="color:var(--c-muted)">TSS (Training Stress Score) measures how much stress your body absorbed from a session. It combines <span style="color:var(--c-black);font-weight:500">duration</span> and <span style="color:var(--c-black);font-weight:500">intensity</span>. A hard 30-minute run scores higher than an easy 60-minute one.</p>
           <div class="rounded-lg p-3 space-y-2 mt-3" style="background:rgba(0,0,0,0.04)">
             <div class="flex justify-between text-xs"><span style="color:var(--c-muted)">Easy 60 min run</span><span style="color:var(--c-black);font-weight:500">≈ 55 TSS</span></div>
             <div class="flex justify-between text-xs"><span style="color:var(--c-muted)">Threshold 45 min</span><span style="color:var(--c-black);font-weight:500">≈ 80 TSS</span></div>
@@ -2506,7 +2488,7 @@ function showTSSInfoSheet(): void {
                 <div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-accent)"></div>
                 <span class="font-medium text-xs" style="color:var(--c-accent)">Freshness (TSB)</span>
               </div>
-              <p class="text-xs" style="color:var(--c-muted)">How ready you are to perform. Negative = accumulated fatigue, normal during hard training blocks. Positive = you're fresh. Best race form is TSB around 0 to +10 — fit but rested. During taper, Freshness should climb toward this range.</p>
+              <p class="text-xs" style="color:var(--c-muted)">How ready you are to perform. Negative = accumulated fatigue, normal during hard training blocks. Positive = you're fresh. Best race form is TSB around 0 to +10, fit but rested. During taper, Freshness should climb toward this range.</p>
             </div>
           </div>
         </div>
@@ -2514,23 +2496,23 @@ function showTSSInfoSheet(): void {
         <div>
           <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Bar zones</p>
           <div class="space-y-1.5">
-            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(0,0,0,0.15)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Gray</span> — your fitness baseline (◆). Load below this is recovery.</span></div>
-            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(34,197,94,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Green</span> — the planned target zone. Aim for this range.</span></div>
-            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(245,158,11,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Amber</span> — up to 20% above plan. Manageable if short-term.</span></div>
-            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(239,68,68,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Red</span> — significantly over plan. Injury risk rises here.</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(0,0,0,0.15)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Gray</span>: your fitness baseline (◆). Load below this is recovery.</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(34,197,94,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Green</span>: the planned target zone. Aim for this range.</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(245,158,11,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Amber</span>: up to 20% above plan. Manageable if short-term.</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-3 h-2 rounded shrink-0" style="background:rgba(239,68,68,0.25)"></div><span style="color:var(--c-muted)"><span style="color:var(--c-black)">Red</span>: significantly over plan. Injury risk rises here.</span></div>
           </div>
         </div>
 
         <div>
           <p class="text-xs font-medium uppercase tracking-wide mb-2" style="color:var(--c-faint)">Zone breakdown</p>
           <div class="space-y-1.5">
-            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-accent)"></div><span class="font-medium" style="color:var(--c-accent)">Base (Z1–Z2)</span><span style="color:var(--c-muted)">— easy aerobic, fat-burning, recovery</span></div>
-            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-caution)"></div><span class="font-medium" style="color:var(--c-caution)">Threshold (Z3)</span><span style="color:var(--c-muted)">— comfortably hard, lactate threshold</span></div>
-            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:#F97316"></div><span class="font-medium" style="color:#F97316">Intensity (Z4–Z5)</span><span style="color:var(--c-muted)">— hard intervals, VO2max, race pace</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-accent)"></div><span class="font-medium" style="color:var(--c-accent)">Base (Z1–Z2)</span><span style="color:var(--c-muted)">: easy aerobic, fat-burning, recovery</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:var(--c-caution)"></div><span class="font-medium" style="color:var(--c-caution)">Threshold (Z3)</span><span style="color:var(--c-muted)">: comfortably hard, lactate threshold</span></div>
+            <div class="flex items-center gap-2 text-xs"><div class="w-2 h-2 rounded-full shrink-0" style="background:#F97316"></div><span class="font-medium" style="color:#F97316">Intensity (Z4–Z5)</span><span style="color:var(--c-muted)">: hard intervals, VO2max, race pace</span></div>
           </div>
         </div>
 
-        <p class="text-xs" style="color:var(--c-faint)">When your Strava HR data is available, TSS is calculated from actual heart rate (iTRIMP). Otherwise it's estimated from your RPE rating. Planned TSS for cross-training may look higher than actual — the plan estimates by duration; real HR data captures the lower running-specific stress of cycling, tennis, etc.</p>
+        <p class="text-xs" style="color:var(--c-faint)">When your Strava HR data is available, TSS is calculated from actual heart rate (iTRIMP). Otherwise it's estimated from your RPE rating. Planned TSS for cross-training may look higher than actual. The plan estimates by duration; real HR data captures the lower running-specific stress of cycling, tennis, etc.</p>
       </div>
     </div>`;
   document.body.appendChild(overlay);
@@ -2607,7 +2589,7 @@ function wireEventHandlers(): void {
     if (dateLabelEl) dateLabelEl.textContent = getWeekDateLabel(s, viewWeek) ?? '';
     const viewWk = s.wks?.[viewWeek - 1];
     const phaseLabel = document.getElementById('phase-label');
-    if (phaseLabel && viewWk) phaseLabel.textContent = getPhaseLabel(viewWk.ph, s.continuousMode);
+    if (phaseLabel && viewWk) phaseLabel.textContent = viewWk.checkpoint ? 'Checkpoint' : getPhaseLabel(viewWk.ph, s.continuousMode);
     const weekCounter = document.getElementById('week-counter');
     if (weekCounter) {
       weekCounter.textContent = getWeekCounterLabel(viewState);

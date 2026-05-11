@@ -197,6 +197,265 @@ function computeMeanMax(watts: number[], windowSec: number): number | null {
   return Math.round((best / windowSec) * 10) / 10;
 }
 
+// ---------------------------------------------------------------------------
+// Rep detection (mirrored from src/calculations/rep-detection.ts)
+//
+// Edge function cannot import from `src/`, so the same logic is duplicated
+// here. KEEP IN SYNC with src/calculations/rep-detection.ts — when one
+// changes, change the other. The client module is tested via vitest;
+// this copy is exercised end-to-end via deployed sync runs.
+// ---------------------------------------------------------------------------
+
+interface RawLap {
+  lapIndex: number;
+  durationSec: number;
+  distanceM: number;
+  avgHR?: number | null;
+  avgWatts?: number | null;
+}
+
+interface DetectedRep {
+  index: number;
+  distanceM: number;
+  durationSec: number;
+  paceSecKm: number | null;
+  avgHR: number | null;
+  avgWatts: number | null;
+}
+
+interface DetectionResult {
+  reps: DetectedRep[];
+  source: "strava-laps" | "auto-detected";
+}
+
+const REP_MIN_REPS = 3;
+const REP_MAX_REPS = 40;
+const REP_UNIFORM_DIST_COV = 0.08;
+const REP_MIN_LAP_DURATION = 15;
+const REP_PACE_GAP_SIGMA = 1.0;
+const REP_FAST_OFFSET_SEC_KM = 30;
+const REP_MIN_DURATION_SEC = 30;
+const REP_PACE_SMOOTH_WINDOW_SEC = 30;
+const REP_POWER_SMOOTH_WINDOW_SEC = 10;
+const REP_POWER_OFFSET_W = 50;
+const REP_POWER_RATIO = 1.4;
+
+function repPaceSecKm(distanceM: number, durationSec: number): number | null {
+  if (distanceM <= 0 || durationSec <= 0) return null;
+  return Math.round((durationSec / distanceM) * 1000);
+}
+
+function repMean(xs: number[]): number {
+  return xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length;
+}
+
+function repStddev(xs: number[]): number {
+  if (xs.length < 2) return 0;
+  const m = repMean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
+}
+
+function repCov(xs: number[]): number {
+  if (xs.length < 2) return 0;
+  const m = repMean(xs);
+  return m === 0 ? 0 : repStddev(xs) / m;
+}
+
+function detectRepsFromLaps(laps: RawLap[], sport: "run" | "bike"): DetectionResult | null {
+  const candidates = laps.filter((l) => l.durationSec >= REP_MIN_LAP_DURATION && l.distanceM > 0);
+  if (candidates.length < REP_MIN_REPS) return null;
+  if (repCov(candidates.map((l) => l.distanceM)) < REP_UNIFORM_DIST_COV) return null;
+
+  const withPace = candidates
+    .map((l) => ({ lap: l, pace: repPaceSecKm(l.distanceM, l.durationSec) }))
+    .filter((x) => x.pace != null) as { lap: RawLap; pace: number }[];
+  if (withPace.length < REP_MIN_REPS) return null;
+
+  const byPace = [...withPace].sort((a, b) => a.pace - b.pace);
+  const paces = byPace.map((x) => x.pace);
+  const sd = repStddev(paces);
+  if (sd === 0) return null;
+
+  let gapIdx = -1, gapSize = 0;
+  for (let i = 0; i < paces.length - 1; i++) {
+    const g = paces[i + 1] - paces[i];
+    if (g > gapSize) { gapSize = g; gapIdx = i; }
+  }
+  if (gapIdx < 0) return null;
+  if (gapSize < REP_PACE_GAP_SIGMA * sd) return null;
+
+  const repCount = gapIdx + 1;
+  if (repCount < REP_MIN_REPS || repCount > REP_MAX_REPS) return null;
+
+  const repLaps = byPace.slice(0, repCount).map((x) => x.lap);
+  repLaps.sort((a, b) => a.lapIndex - b.lapIndex);
+
+  return {
+    reps: repLaps.map((l, i) => ({
+      index: i + 1,
+      distanceM: Math.round(l.distanceM),
+      durationSec: Math.round(l.durationSec),
+      paceSecKm: repPaceSecKm(l.distanceM, l.durationSec),
+      avgHR: l.avgHR ?? null,
+      avgWatts: sport === "bike" ? (l.avgWatts ?? null) : null,
+    })),
+    source: "strava-laps",
+  };
+}
+
+function detectRunRepsFromStream(
+  distData: number[],
+  timeData: number[],
+  hrData?: number[] | null,
+): DetectionResult | null {
+  if (!distData || !timeData || distData.length !== timeData.length) return null;
+  if (distData.length < 60) return null;
+  const n = distData.length;
+
+  const smooth: (number | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    let dSum = 0, tSum = 0;
+    for (let j = i; j >= 0; j--) {
+      const back = timeData[i] - timeData[j];
+      if (back > REP_PACE_SMOOTH_WINDOW_SEC) break;
+      const dd = j > 0 ? distData[j] - distData[j - 1] : 0;
+      const dt = j > 0 ? timeData[j] - timeData[j - 1] : 0;
+      if (dd > 0 && dt > 0) { dSum += dd; tSum += dt; }
+    }
+    if (dSum >= 5 && tSum > 0) smooth[i] = (tSum / dSum) * 1000;
+  }
+  const sorted = smooth.filter((v): v is number => v != null && v > 0).sort((a, b) => a - b);
+  if (sorted.length < 30) return null;
+  const baseline = sorted[Math.floor(sorted.length / 2)];
+  const threshold = baseline - REP_FAST_OFFSET_SEC_KM;
+
+  type Seg = { startIdx: number; endIdx: number };
+  const segs: Seg[] = [];
+  let inSeg = false, segStart = -1;
+  for (let i = 0; i < n; i++) {
+    const p = smooth[i];
+    const fast = p != null && p < threshold;
+    if (fast && !inSeg) { inSeg = true; segStart = i; }
+    if (!fast && inSeg) {
+      inSeg = false;
+      if (segStart >= 0) segs.push({ startIdx: segStart, endIdx: i - 1 });
+    }
+  }
+  if (inSeg && segStart >= 0) segs.push({ startIdx: segStart, endIdx: n - 1 });
+
+  const validSegs = segs.filter((s) => timeData[s.endIdx] - timeData[s.startIdx] >= REP_MIN_DURATION_SEC);
+  if (validSegs.length < REP_MIN_REPS || validSegs.length > REP_MAX_REPS) return null;
+
+  return {
+    reps: validSegs.map((s, i) => {
+      const distanceM = Math.max(0, distData[s.endIdx] - distData[s.startIdx]);
+      const durationSec = Math.max(0, timeData[s.endIdx] - timeData[s.startIdx]);
+      let avgHR: number | null = null;
+      if (hrData && hrData.length === n) {
+        let sum = 0, ct = 0;
+        for (let k = s.startIdx; k <= s.endIdx; k++) {
+          if (hrData[k] > 0) { sum += hrData[k]; ct++; }
+        }
+        if (ct > 0) avgHR = Math.round(sum / ct);
+      }
+      return {
+        index: i + 1,
+        distanceM: Math.round(distanceM),
+        durationSec: Math.round(durationSec),
+        paceSecKm: repPaceSecKm(distanceM, durationSec),
+        avgHR,
+        avgWatts: null,
+      };
+    }),
+    source: "auto-detected",
+  };
+}
+
+function detectBikeRepsFromPower(
+  wattsData: number[],
+  timeData: number[],
+  distData?: number[] | null,
+  hrData?: number[] | null,
+): DetectionResult | null {
+  if (!wattsData || !timeData || wattsData.length !== timeData.length) return null;
+  if (wattsData.length < 60) return null;
+  const n = wattsData.length;
+
+  const smooth: number[] = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    let sum = 0, ct = 0;
+    for (let j = i; j >= 0; j--) {
+      const back = timeData[i] - timeData[j];
+      if (back > REP_POWER_SMOOTH_WINDOW_SEC) break;
+      sum += wattsData[j]; ct++;
+    }
+    smooth[i] = ct > 0 ? sum / ct : 0;
+  }
+  const sorted = smooth.filter((v) => v > 0).sort((a, b) => a - b);
+  if (sorted.length < 30) return null;
+  const baseline = sorted[Math.floor(sorted.length / 2)];
+  const threshold = Math.max(baseline + REP_POWER_OFFSET_W, baseline * REP_POWER_RATIO);
+
+  type Seg = { startIdx: number; endIdx: number };
+  const segs: Seg[] = [];
+  let inSeg = false, segStart = -1;
+  for (let i = 0; i < n; i++) {
+    const above = smooth[i] >= threshold;
+    if (above && !inSeg) { inSeg = true; segStart = i; }
+    if (!above && inSeg) {
+      inSeg = false;
+      if (segStart >= 0) segs.push({ startIdx: segStart, endIdx: i - 1 });
+    }
+  }
+  if (inSeg && segStart >= 0) segs.push({ startIdx: segStart, endIdx: n - 1 });
+
+  const validSegs = segs.filter((s) => timeData[s.endIdx] - timeData[s.startIdx] >= REP_MIN_DURATION_SEC);
+  if (validSegs.length < REP_MIN_REPS || validSegs.length > REP_MAX_REPS) return null;
+
+  return {
+    reps: validSegs.map((s, i) => {
+      const durationSec = Math.max(0, timeData[s.endIdx] - timeData[s.startIdx]);
+      const distanceM = distData && distData.length === n
+        ? Math.max(0, distData[s.endIdx] - distData[s.startIdx]) : 0;
+      let sumW = 0, ctW = 0;
+      for (let k = s.startIdx; k <= s.endIdx; k++) {
+        if (wattsData[k] > 0) { sumW += wattsData[k]; ctW++; }
+      }
+      const avgWatts = ctW > 0 ? Math.round(sumW / ctW) : null;
+      let avgHR: number | null = null;
+      if (hrData && hrData.length === n) {
+        let sumH = 0, ctH = 0;
+        for (let k = s.startIdx; k <= s.endIdx; k++) {
+          if (hrData[k] > 0) { sumH += hrData[k]; ctH++; }
+        }
+        if (ctH > 0) avgHR = Math.round(sumH / ctH);
+      }
+      return {
+        index: i + 1,
+        distanceM: Math.round(distanceM),
+        durationSec: Math.round(durationSec),
+        paceSecKm: repPaceSecKm(distanceM, durationSec),
+        avgHR,
+        avgWatts,
+      };
+    }),
+    source: "auto-detected",
+  };
+}
+
+/** Convert Strava /laps response into RawLap[]. */
+function parseStravaLaps(rawLaps: unknown): RawLap[] {
+  if (!Array.isArray(rawLaps)) return [];
+  return (rawLaps as Record<string, unknown>[]).map((l, i) => ({
+    lapIndex: typeof l.lap_index === "number" ? l.lap_index : i + 1,
+    durationSec: typeof l.elapsed_time === "number" ? l.elapsed_time : 0,
+    distanceM: typeof l.distance === "number" ? l.distance : 0,
+    avgHR: typeof l.average_heartrate === "number" ? Math.round(l.average_heartrate) : null,
+    avgWatts: typeof l.average_watts === "number" ? Math.round(l.average_watts) : null,
+  }));
+}
+
+// ---------------------------------------------------------------------------
 /**
  * Fetch ambient temperature at the activity's start time and location from
  * Open-Meteo (free, no API key). Returns null if lat/lng missing or fetch fails.
@@ -531,10 +790,12 @@ Deno.serve(async (req) => {
     if (userErr || !user) return jsonError(401, { error: "invalid_auth" });
 
     const body = await req.json().catch(() => ({}));
-    const mode: "standalone" | "history" | "calibrate" | "backfill" =
+    const mode: "standalone" | "history" | "calibrate" | "backfill" | "powerCurveRefresh" | "getTriLaps" =
       body.mode === "history" ? "history"
       : body.mode === "calibrate" ? "calibrate"
       : body.mode === "backfill" ? "backfill"
+      : body.mode === "powerCurveRefresh" ? "powerCurveRefresh"
+      : body.mode === "getTriLaps" ? "getTriLaps"
       : "standalone";
     const afterTimestamp: number = body.after_timestamp ?? Math.floor(Date.now() / 1000) - 28 * 86400;
     const biologicalSex: "male" | "female" | undefined =
@@ -750,6 +1011,204 @@ Deno.serve(async (req) => {
     }
 
     // -----------------------------------------------------------------------
+    // POWER CURVE REFRESH mode — user-triggered escape hatch when the
+    // automatic backfill hasn't yet computed power curves for recent rides
+    // (or when its 15-stream budget didn't reach the rides the user cares
+    // about). Reads cycling activities directly from the DB (no Strava list
+    // refetch needed — they're already synced), filters to those without a
+    // power_curve, fetches the watts stream for each, computes mean-max,
+    // updates the row. Higher budget (30 streams) than the auto-backfill
+    // path because this is opt-in and the user is willing to wait.
+    // -----------------------------------------------------------------------
+    if (mode === "powerCurveRefresh") {
+      const REFRESH_BUDGET = 30;
+      const REFRESH_LOOKBACK_DAYS = 26 * 7;
+      const REFRESH_MIN_W = 120;
+      const cutoffISO = new Date(Date.now() - REFRESH_LOOKBACK_DAYS * 86400000).toISOString();
+
+      // Pull cycling rides without a power_curve, ranked by NP DESC. Limit
+      // to 60 candidates so the row scan is bounded; the budget below caps
+      // actual stream fetches.
+      const { data: candRows, error: candErr } = await supabase
+        .from("garmin_activities")
+        .select("garmin_id, start_time, duration_sec, activity_type, average_watts, normalized_power, power_curve")
+        .eq("user_id", user.id)
+        .gte("start_time", cutoffISO)
+        .in("activity_type", ["CYCLING", "MOUNTAIN_BIKING", "VIRTUAL_RIDE"])
+        .order("normalized_power", { ascending: false, nullsFirst: false })
+        .limit(60);
+
+      if (candErr) return jsonError(500, { error: "db_error", details: candErr.message });
+
+      const eligible = (candRows ?? []).filter((r) => {
+        // Already has a non-empty curve → skip
+        const pc = r.power_curve as Record<string, number | null> | null;
+        if (pc && Object.keys(pc).length > 0 && Object.values(pc).some((v) => v != null && v > 0)) return false;
+        // Power threshold (matches the auto-backfill logic).
+        const np = (r.normalized_power as number | null) ?? (r.average_watts as number | null);
+        if (np == null || np <= REFRESH_MIN_W) return false;
+        // Duration threshold.
+        const dur = (r.duration_sec as number | null) ?? 0;
+        if (dur < 25 * 60) return false;
+        return true;
+      }).slice(0, REFRESH_BUDGET);
+
+      console.log(`[Power curve refresh] ${eligible.length} eligible rides (out of ${candRows?.length ?? 0} cycling rows since ${cutoffISO.slice(0, 10)})`);
+
+      let fetched = 0;
+      let stored = 0;
+      let truncatedBy429 = false;
+      for (const row of eligible) {
+        const garminId = row.garmin_id as string;
+        const stravaId = garminId.replace(/^strava-/, "");
+        try {
+          const streamData = await stravaGet(
+            `/activities/${stravaId}/streams?keys=watts,time&key_by_type=true`,
+            accessToken,
+          ) as Record<string, { data: number[] }> | undefined;
+          fetched++;
+          const wattsData = streamData?.watts?.data;
+          if (!wattsData || wattsData.length < 600) continue;
+          const curve = {
+            p600:  computeMeanMax(wattsData, 600),
+            p1200: computeMeanMax(wattsData, 1200),
+            p1800: computeMeanMax(wattsData, 1800),
+            p3600: computeMeanMax(wattsData, 3600),
+          };
+          if (curve.p600 == null && curve.p1200 == null && curve.p1800 == null && curve.p3600 == null) continue;
+          const { error: upErr } = await supabase
+            .from("garmin_activities")
+            .update({ power_curve: curve })
+            .eq("garmin_id", garminId)
+            .eq("user_id", user.id);
+          if (upErr) {
+            console.warn(`[Power curve refresh] update failed for ${garminId}:`, upErr.message);
+            continue;
+          }
+          stored++;
+          console.log(`[Power curve refresh] ${garminId}: p600=${curve.p600} p1200=${curve.p1200} p1800=${curve.p1800} p3600=${curve.p3600}`);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("429")) {
+            truncatedBy429 = true;
+            console.warn(`[Power curve refresh] truncated by 429 after ${fetched} fetches`);
+            break;
+          }
+          console.warn(`[Power curve refresh] fetch failed for ${garminId}:`, msg);
+        }
+      }
+
+      console.log(`[Power curve refresh] DONE — eligible=${eligible.length} fetched=${fetched} stored=${stored}${truncatedBy429 ? " (truncated by 429)" : ""}`);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        eligibleCount: eligible.length,
+        fetched,
+        stored,
+        truncatedBy429,
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // -----------------------------------------------------------------------
+    // GET TRI LAPS mode — fetch per-leg split times from a Strava multi-sport
+    // triathlon activity. Called from the tri-past-race onboarding step when
+    // the user's race was recorded as a single multisport file (Garmin's
+    // triathlon activity mode, Suunto, Coros, Apple Watch multi-sport).
+    //
+    // Input:  body.stravaActivityId — the Strava activity ID (numeric string).
+    // Output: { swim, bike, run, totalSec, swimM, bikeKm, runKm } in seconds.
+    //
+    // Lap classification: sport_type per lap (Strava/Garmin multi-sport) →
+    // fallback to name keywords → fallback to distance heuristics.
+    // -----------------------------------------------------------------------
+    if (mode === "getTriLaps") {
+      const rawId = body.stravaActivityId;
+      if (!rawId) return jsonError(400, { error: "missing_stravaActivityId" });
+      const stravaId = String(rawId).replace(/^strava-/, "");
+
+      type StraveLap = {
+        sport_type?: string;
+        name?: string;
+        elapsed_time?: number;
+        moving_time?: number;
+        distance?: number;
+      };
+
+      let laps: StraveLap[];
+      try {
+        laps = await stravaGet(`/activities/${stravaId}/laps`, accessToken) as StraveLap[];
+      } catch (err) {
+        return jsonError(502, { error: "strava_laps_failed", details: String(err) });
+      }
+
+      if (!Array.isArray(laps) || laps.length === 0) {
+        return jsonError(404, { error: "no_laps_found" });
+      }
+
+      // Classify each lap as swim / bike / run / transition / unknown.
+      // Priority: sport_type → name keywords → distance heuristics (last resort).
+      function classifyLap(lap: StraveLap, context: { sawBike: boolean }): 'swim' | 'bike' | 'run' | 'transition' | 'unknown' {
+        const st = (lap.sport_type ?? '').toLowerCase();
+        const nm = (lap.name ?? '').toLowerCase();
+        const dist = lap.distance ?? 0;
+
+        if (st === 'swim' || st === 'openwaterswim') return 'swim';
+        if (st === 'ride' || st === 'virtualride') return 'bike';
+        if (st === 'run' || st === 'trailrun') return 'run';
+        if (st === 'transition') return 'transition';
+
+        if (nm.includes('swim')) return 'swim';
+        if (nm.includes('bike') || nm.includes('ride') || nm.includes('cycling')) return 'bike';
+        if (nm.includes('run') || nm.includes('jog')) return 'run';
+        if (nm.includes('t1') || nm.includes('t2') || nm.includes('transition')) return 'transition';
+
+        // Distance heuristics (last resort when device doesn't annotate laps).
+        // Swim: < 4 km; Run after bike: 4–45 km; Bike: ≥ 10 km.
+        // Transitions are very short duration with near-zero distance.
+        const durSec = lap.elapsed_time ?? 0;
+        if (dist < 100 && durSec < 600) return 'transition';
+        if (dist > 0 && dist < 4000) return 'swim';
+        if (dist >= 4000 && dist < 10000) return context.sawBike ? 'run' : 'bike';
+        if (dist >= 10000) return 'bike';
+        return 'unknown';
+      }
+
+      let swimSec = 0, bikeSec = 0, runSec = 0;
+      let swimM = 0, bikeM = 0, runM = 0;
+      let sawBike = false;
+
+      for (const lap of laps) {
+        const sport = classifyLap(lap, { sawBike });
+        const elapsed = lap.elapsed_time ?? 0;
+        const dist = lap.distance ?? 0;
+        if (sport === 'swim')  { swimSec += elapsed; swimM += dist; }
+        if (sport === 'bike')  { bikeSec += elapsed; bikeM += dist; sawBike = true; }
+        if (sport === 'run')   { runSec  += elapsed; runM  += dist; }
+        // transitions intentionally excluded — they inflate total
+      }
+
+      const totalSec = swimSec + bikeSec + runSec;
+
+      if (totalSec === 0) {
+        return jsonError(422, { error: "could_not_classify_laps", lapCount: laps.length });
+      }
+
+      console.log(`[getTriLaps] ${stravaId}: swim=${swimSec}s/${Math.round(swimM)}m bike=${bikeSec}s/${Math.round(bikeM/1000)}km run=${runSec}s/${Math.round(runM/1000)}km`);
+
+      return new Response(JSON.stringify({
+        ok: true,
+        swim: swimSec,
+        bike: bikeSec,
+        run: runSec,
+        totalSec,
+        swimM: Math.round(swimM),
+        bikeKm: Math.round(bikeM / 1000 * 10) / 10,
+        runKm:  Math.round(runM  / 1000 * 10) / 10,
+        lapCount: laps.length,
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // -----------------------------------------------------------------------
     // BACKFILL mode — fetch N weeks of Strava activity history, upsert with
     // HR-based iTRIMP. Full HR stream for most-recent ≤99 uncached activities,
     // avg_heartrate estimate for the remainder.
@@ -793,10 +1252,26 @@ Deno.serve(async (req) => {
         // List fetch returned nothing (likely 429 on page 1, or all already in DB with no new ones).
         // Still try to heal best_efforts for historical running rows — onboarding PB auto-fill
         // depends on this and would otherwise be blocked forever once list calls are rate-limited.
-        const { data: dbRuns } = await supabase
+        // Also: read the user's runs from the DB and return them in `runs` so the client can
+        // seed `onboardingRunHistory` even when there's nothing fresh from Strava. Without
+        // this, a fully-cached account (49 weeks of activity, 150 RUNNING rows) reports
+        // `runs:0` and the horizon model treats the user as untrained.
+        const sinceISO = new Date(afterTs * 1000).toISOString();
+        const { data: dbRuns, error: dbErr } = await supabase
           .from("garmin_activities")
-          .select("garmin_id, activity_type, duration_sec, distance_m, best_efforts")
-          .eq("user_id", user.id);
+          .select("garmin_id, activity_type, duration_sec, distance_m, best_efforts, start_time, activity_name, avg_hr")
+          .eq("user_id", user.id)
+          .gte("start_time", sinceISO);
+        if (dbErr) {
+          console.warn(`[Backfill] DB query failed: ${dbErr.message} (code=${dbErr.code}, hint=${dbErr.hint ?? 'none'})`);
+        } else {
+          const typeBreakdown = (dbRuns ?? []).reduce((acc: Record<string, number>, r) => {
+            const t = (r.activity_type as string) ?? 'NULL';
+            acc[t] = (acc[t] || 0) + 1;
+            return acc;
+          }, {});
+          console.log(`[Backfill] DB query returned ${dbRuns?.length ?? 0} rows since ${sinceISO}. Breakdown:`, JSON.stringify(typeBreakdown));
+        }
         const dbRunningNeedsBE = (dbRuns ?? []).filter((r) =>
           r.best_efforts == null
           && (r.activity_type === "RUNNING" || r.activity_type === "TRAIL_RUNNING")
@@ -851,13 +1326,38 @@ Deno.serve(async (req) => {
             break;
           }
         }
+        // Build the runs array from the DB rows we just queried. Same shape +
+        // same filter as the populated path (line ~1726): RUNNING-mapped,
+        // distKm > 0, durSec > 0. This is the canonical onboardingRunHistory
+        // seed for the cached-account case. `isRunningActivity` matches both
+        // "RUNNING" and any other RUN-containing variants in the DB so legacy
+        // rows aren't silently dropped.
+        const runs = (dbRuns ?? [])
+          .filter((r) =>
+            isRunningActivity((r.activity_type as string) ?? "")
+            && (r.distance_m as number | null) != null
+            && (r.distance_m as number) > 0
+            && (r.duration_sec as number | null) != null
+            && (r.duration_sec as number) > 0
+            && (r.start_time as string | null) != null,
+          )
+          .map((r) => ({
+            startTime: r.start_time as string,
+            distKm: (r.distance_m as number) / 1000,
+            durSec: r.duration_sec as number,
+            activityType: (r.activity_type as string) ?? "RUNNING",
+            activityName: (r.activity_name as string | null) ?? undefined,
+            avgHR: (r.avg_hr as number | null) ?? null,
+          }));
+
         console.log(
           `[Backfill] list empty — DB best_efforts heal: ${dbHealed}/${dbCandidates.length}` +
-          ` (pool: ${dbRunningNeedsBE.length} running rows without best_efforts${dbTruncatedBy429 ? ", truncated by 429" : ""})`,
+          ` (pool: ${dbRunningNeedsBE.length} running rows without best_efforts${dbTruncatedBy429 ? ", truncated by 429" : ""})` +
+          ` — seeded ${runs.length} runs from DB`,
         );
         return new Response(
           JSON.stringify({
-            processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, runs: [],
+            processed: 0, withHRStream: 0, withAvgHR: 0, hasHRMonitor: false, runs,
             bestEffortsHealed: dbHealed,
             bestEffortsCandidates: dbCandidates.length,
             bestEffortsPool: dbRunningNeedsBE.length,
@@ -1234,29 +1734,38 @@ Deno.serve(async (req) => {
       }
       console.log(`[Backfill] Power heal: attempted=${powerAttempted} patched=${powerHealed} (out of ${allActivities.length} activities)`);
 
-      // 5e. Power curve mean-max backfill — for cycling rides with a real
-      // power meter, fetch the watts stream and compute best-mean-max for
+      // 5e. Power curve mean-max backfill — for cycling rides with usable
+      // watts data, fetch the watts stream and compute best-mean-max for
       // [600, 1200, 1800, 3600] seconds. The FTP estimator reads p1200
       // directly (Coggan ×0.95) so a 110-min ride with two 20-min all-out
       // efforts at 310 W gives FTP ≈ 295 W — what whole-ride NP can never
       // surface. Budget = 15 streams per sync, biased to highest whole-ride
       // NP within the last 26 weeks (cheapest proxy for "ride contains a
       // hard interval").
+      //
+      // No `device_watts === true` gate. Strava's flag is structurally
+      // unreliable on Garmin → Strava transfers — it routinely arrives
+      // `false` on real power-meter rides. Refusing those leaves real
+      // power-meter owners with `power_curve: null` forever, and the client
+      // FTP estimator falls back to whole-ride NP × 1.0 which collapses on
+      // interval workouts (the recovery sections drag NP down). The
+      // NP-threshold filter below (>= 120 W average over a 25+ min ride)
+      // is a stronger proxy for "real power data" than the flag.
       const POWER_CURVE_BUDGET = 15;
       const POWER_CURVE_LOOKBACK_DAYS = 26 * 7;
+      const POWER_CURVE_MIN_W = 120;
       const powerCurveCutoffMs = Date.now() - POWER_CURVE_LOOKBACK_DAYS * 86400000;
       const powerCurveCandidates = allActivities
         .filter((a) => {
           const t = mapStravaType((a?.sport_type as string) || (a?.type as string) || "");
           if (t !== "CYCLING" && t !== "MOUNTAIN_BIKING") return false;
-          if (a?.device_watts !== true) return false;
           const dur = (a?.elapsed_time as number | undefined) ?? (a?.moving_time as number | undefined) ?? 0;
           if (dur < 25 * 60) return false;
           const startMs = Date.parse((a?.start_date as string) || "");
           if (!Number.isFinite(startMs) || startMs < powerCurveCutoffMs) return false;
           const np = (a?.weighted_average_watts as number | null | undefined)
             ?? (a?.average_watts as number | null | undefined);
-          return typeof np === "number" && np > 80;
+          return typeof np === "number" && np > POWER_CURVE_MIN_W;
         })
         .sort((a, b) => {
           const aNp = (a?.weighted_average_watts as number) ?? (a?.average_watts as number) ?? 0;
@@ -1542,11 +2051,27 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Fetch Strava activities
-    const activities = await stravaGet(
-      `/athlete/activities?per_page=50&after=${afterTimestamp}`,
-      accessToken,
-    ) as Array<Record<string, unknown>>;
+    // Fetch Strava activities. On 429 (rate limit) — and any other transient
+    // Strava API failure — return an empty success response rather than 500ing.
+    // Throwing here cascades to the top-level handler which returns 500 to the
+    // client; the client treats that as "sync failed entirely" and never seeds
+    // `onboardingRunHistory` from the DB. By degrading gracefully, downstream
+    // paths (refreshBlendedFitness, the wizard) can still read DB-resident
+    // activities. The next sync attempt will retry.
+    let activities: Array<Record<string, unknown>>;
+    try {
+      activities = await stravaGet(
+        `/athlete/activities?per_page=50&after=${afterTimestamp}`,
+        accessToken,
+      ) as Array<Record<string, unknown>>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(`[StandaloneSync] Strava list fetch failed: ${msg} — returning empty so client can fall back to DB`);
+      return new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     if (!Array.isArray(activities) || activities.length === 0) {
       return new Response(JSON.stringify([]), {
@@ -1600,11 +2125,11 @@ Deno.serve(async (req) => {
     const garminIds = activities.map((a) => `strava-${a.id as number}`);
     const { data: cachedRows } = await supabase
       .from("garmin_activities")
-      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c, polyline")
+      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c, polyline, rep_data")
       .eq("user_id", user.id)
       .in("garmin_id", garminIds);
 
-    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null; polyline: string | null }>();
+    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null; polyline: string | null; rep_data: DetectionResult | null }>();
     for (const r of (cachedRows ?? [])) {
       cachedMap.set(r.garmin_id, {
         itrimp: r.itrimp ?? null,
@@ -1614,6 +2139,7 @@ Deno.serve(async (req) => {
         hr_drift: r.hr_drift ?? null,
         ambient_temp_c: r.ambient_temp_c ?? null,
         polyline: r.polyline ?? null,
+        rep_data: (r.rep_data as DetectionResult | null) ?? null,
       });
     }
 
@@ -1642,6 +2168,12 @@ Deno.serve(async (req) => {
     // FTP derivation and on-screen power match what the user sees on Strava.
     const POWER_DETAIL_BUDGET = 5;
     let powerDetailRefetched = 0;
+    // One-time backfill of rep_data for activities that pre-date the rep
+    // detector. Only laps-based detection — stream-based would require
+    // re-fetching streams which is expensive. Cap at 8 per sync to stay
+    // well within Strava's 100 req / 15 min budget.
+    const REP_HEAL_BUDGET = 8;
+    let repHealCount = 0;
 
     for (const act of activities) {
       const stravaId = act.id as number;
@@ -1668,6 +2200,8 @@ Deno.serve(async (req) => {
       let ambientTempC: number | null = null;
       let avgPaceSecKm: number | null = null;
       let needsUpsert = false; // only write to DB when we have new stream data
+      let repData: DetectionResult | null = null;
+      const isBike = activityType === "CYCLING" || activityType === "MOUNTAIN_BIKING";
 
       // Distance-based pace (Strava doesn't give avg pace directly).
       // Use moving_time (excludes pauses) to match the pace Strava displays.
@@ -1690,6 +2224,33 @@ Deno.serve(async (req) => {
         kmSplits = cached.km_splits ?? [];
         hrDrift = cached.hr_drift ?? null;
         ambientTempC = cached.ambient_temp_c ?? null;
+        repData = cached.rep_data ?? null;
+        // Heal: cached run/bike activity that pre-dates rep detection.
+        // Try laps-based detection (one extra API call). Cap to avoid burning
+        // the Strava rate-limit budget.
+        if (
+          repData == null &&
+          (isRun || isBike) &&
+          repHealCount < REP_HEAL_BUDGET &&
+          durationSec >= 600 // ignore very short activities
+        ) {
+          try {
+            const rawLapsResp = await stravaGet(`/activities/${stravaId}/laps`, accessToken);
+            const rawLaps = parseStravaLaps(rawLapsResp);
+            if (rawLaps.length >= REP_MIN_REPS) {
+              const detected = detectRepsFromLaps(rawLaps, isBike ? "bike" : "run");
+              if (detected) {
+                repData = detected;
+                needsUpsert = true;
+                console.log(`[Standalone:rep-heal] ${garminId}: backfilled ${detected.reps.length} reps`);
+              }
+            }
+            repHealCount++;
+          } catch (lapsErr) {
+            console.log(`[Standalone:rep-heal] ${garminId}: laps fetch failed:`, lapsErr instanceof Error ? lapsErr.message : lapsErr);
+            repHealCount++; // count failed attempts against budget so we don't loop
+          }
+        }
         // Heal: cached activity still missing calories — fetch detail endpoint once (capped at 10)
         if (calories == null && calHealCount < 10) {
           try {
@@ -1705,7 +2266,11 @@ Deno.serve(async (req) => {
         // First time seeing this activity (or zones were missing) — fetch stream
         needsUpsert = true;
         try {
-          const streamKeys = isRun ? "heartrate,time,distance,moving" : "heartrate,time";
+          const streamKeys = isRun
+            ? "heartrate,time,distance,moving"
+            : isBike
+              ? "heartrate,time,distance,watts"
+              : "heartrate,time";
           const streamData = await stravaGet(
             `/activities/${stravaId}/streams?keys=${streamKeys}&key_by_type=true`,
             accessToken,
@@ -1715,6 +2280,7 @@ Deno.serve(async (req) => {
           const timeData = streamData?.time?.data as number[] | undefined;
           const distData = streamData?.distance?.data as number[] | undefined;
           const movingData = streamData?.moving?.data as boolean[] | undefined;
+          const wattsData = streamData?.watts?.data as number[] | undefined;
 
           if (hrData && timeData && hrData.length > 1 && hrData.length === timeData.length) {
             iTrimp = calculateITrimp(hrData, timeData, restingHR, maxHR, biologicalSex);
@@ -1750,6 +2316,44 @@ Deno.serve(async (req) => {
             // Fallback: compute from GPS streams if detail fetch failed or returned no splits
             if (isRun && kmSplits.length === 0 && distData && timeData && distData.length === timeData.length) {
               kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+            }
+          }
+
+          // ─── Rep detection ────────────────────────────────────────────────
+          // Run + bike only. We try Strava laps first (most reliable when the
+          // user pressed lap on the watch), then fall back to stream-based
+          // detection. The detector returns null when there's no clean rep
+          // structure, so this block silently no-ops on easy runs / endurance
+          // rides — only interval sessions surface a rep table.
+          if (isRun || isBike) {
+            try {
+              const rawLapsResp = await stravaGet(`/activities/${stravaId}/laps`, accessToken);
+              const rawLaps = parseStravaLaps(rawLapsResp);
+              if (isBike) {
+                // For bikes the power stream is the most reliable signal —
+                // many bike computers auto-lap every km regardless of what
+                // the rider did, so trusting laps[] would hallucinate reps.
+                if (wattsData && timeData && wattsData.length === timeData.length) {
+                  repData = detectBikeRepsFromPower(wattsData, timeData, distData, hrData);
+                }
+                if (!repData && rawLaps.length >= REP_MIN_REPS) {
+                  repData = detectRepsFromLaps(rawLaps, "bike");
+                }
+              } else {
+                // Run: laps first (track sessions almost always have user-pressed laps),
+                // then stream fallback.
+                if (rawLaps.length >= REP_MIN_REPS) {
+                  repData = detectRepsFromLaps(rawLaps, "run");
+                }
+                if (!repData && distData && timeData && distData.length === timeData.length) {
+                  repData = detectRunRepsFromStream(distData, timeData, hrData);
+                }
+              }
+              if (repData) {
+                console.log(`[Standalone:reps] ${garminId}: detected ${repData.reps.length} reps (${repData.source})`);
+              }
+            } catch (lapsErr) {
+              console.log(`[Standalone:reps] ${garminId}: laps fetch failed:`, lapsErr instanceof Error ? lapsErr.message : lapsErr);
             }
           }
         } catch (streamErr: any) {
@@ -1862,6 +2466,7 @@ Deno.serve(async (req) => {
             activity_name: activityName,
             elevation_gain_m: elevationGainM,
             polyline,
+            rep_data: repData,
             ...powerFields,
           },
           { onConflict: "garmin_id" },
@@ -1895,6 +2500,7 @@ Deno.serve(async (req) => {
         maxWatts: powerFields.max_watts,
         deviceWatts: powerFields.device_watts,
         kilojoules: powerFields.kilojoules,
+        repData,
       });
     }
 

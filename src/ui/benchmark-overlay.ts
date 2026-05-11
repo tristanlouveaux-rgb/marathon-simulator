@@ -112,11 +112,11 @@ export function openBenchmarkOverlay(): void {
   overlay.innerHTML = `
     <div class="w-full max-w-sm rounded-2xl" style="background:var(--c-surface);overflow:hidden;max-height:85vh;overflow-y:auto">
 
-      <!-- Header with subtle gradient -->
-      <div style="padding:24px 20px 18px;background:linear-gradient(to bottom,rgba(59,130,246,0.06),transparent)">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#64748B;margin-bottom:6px">Post-deload</div>
-        <div style="font-size:18px;font-weight:700;color:#0F172A;line-height:1.3;margin-bottom:6px">Fitness check-in</div>
-        <div style="font-size:13px;color:#64748B;line-height:1.5">End of deload week. Fatigue should be cleared and fitness at its peak. Good time to measure where things stand.</div>
+      <!-- Header -->
+      <div style="padding:24px 20px 18px">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:var(--c-muted);margin-bottom:6px">Post-deload</div>
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);line-height:1.3;margin-bottom:6px">Fitness check-in</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5">End of deload week. Fatigue should be cleared and fitness at its peak. Good time to measure where things stand.</div>
       </div>
 
       <!-- Options -->
@@ -158,7 +158,7 @@ export function openBenchmarkOverlay(): void {
       overlay.remove();
       addBenchmarkToWeek(bmType);
       // Re-render the plan view to show the new workout
-      import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      import('./main-view').then(({ renderMainView }) => renderMainView());
     });
   });
 
@@ -166,7 +166,7 @@ export function openBenchmarkOverlay(): void {
   document.getElementById('bm-overlay-skip')?.addEventListener('click', () => {
     overlay.remove();
     skipBenchmark();
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
   });
 }
 

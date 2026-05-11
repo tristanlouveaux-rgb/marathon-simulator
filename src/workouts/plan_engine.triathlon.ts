@@ -17,12 +17,13 @@
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider } from '@/types/triathlon';
-import { PHASE_WEEKS } from '@/constants/triathlon-constants';
+import { phasesForLen } from '@/constants/triathlon-constants';
 import { generateSwimSession, pickSwimKind } from './swim';
 import { generateBikeSession, pickBikeKind } from './bike';
 import { generateBrick } from './brick';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
+import { gp } from '@/calculations/paces';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -30,7 +31,7 @@ import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.tria
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 8;
+export const TRI_GENERATOR_VERSION = 11;
 
 /**
  * Generate a full triathlon plan for the current state.
@@ -116,14 +117,10 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
 // ───────────────────────────────────────────────────────────────────────────
 
 function phaseForWeek(weekIndex: number, totalWeeks: number, distance: '70.3' | 'ironman'): TrainingPhase {
-  const { base, build, peak } = PHASE_WEEKS[distance];
-  // Taper = remaining weeks after base + build + peak
-  const taperStart = base + build + peak + 1;
+  const { base, build, peak } = phasesForLen(distance, totalWeeks);
   if (weekIndex <= base) return 'base';
   if (weekIndex <= base + build) return 'build';
   if (weekIndex <= base + build + peak) return 'peak';
-  void totalWeeks;
-  void taperStart;
   return 'taper';
 }
 
@@ -143,6 +140,15 @@ function generateWeekForTriathlon(
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const gymSessions = state.gs ?? 0;
 
+  // Active disciplines — defaults to full triathlon when undefined so existing
+  // tri behaviour is preserved. Single-discipline modes (V1 cycling) set
+  // disciplines=['bike']; swim/run loops below skip when the discipline is
+  // absent.
+  const disciplines = tri.disciplines ?? ['swim', 'bike', 'run'];
+  const hasSwim = disciplines.includes('swim');
+  const hasBike = disciplines.includes('bike');
+  const hasRun = disciplines.includes('run');
+
   // Phase multiplier (fraction of peak hours this week represents)
   const phaseMult = phaseMultiplier(phase, weekIndex, totalWeeks);
   const isDeload = isDeloadWeek(weekIndex, phase);
@@ -154,10 +160,14 @@ function generateWeekForTriathlon(
   const bikeHours = weekHours * split.bike;
   const runHours  = weekHours * split.run;
 
-  // Session counts by phase
-  const swimSessions = countSessions(swimHours, 0.75, 3);
-  const bikeSessions = countSessions(bikeHours, 1.3,  3);
-  const runSessions  = countSessions(runHours,  0.9,  3);
+  // Session counts by phase. Disciplines that aren't active produce zero
+  // sessions so subsequent loops short-circuit to empty arrays. In single-
+  // discipline cycling mode the bike cap lifts to 5 because the discipline
+  // owns 100% of the week's hours rather than ~50%.
+  const isCyclingOnly = disciplines.length === 1 && hasBike;
+  const swimSessions = hasSwim ? countSessions(swimHours, 0.75, 3) : 0;
+  const bikeSessions = hasBike ? countSessions(bikeHours, 1.3, isCyclingOnly ? 5 : 3) : 0;
+  const runSessions  = hasRun  ? countSessions(runHours,  0.9,  3) : 0;
 
   // Generate swim sessions
   const swim: Workout[] = [];
@@ -179,7 +189,8 @@ function generateWeekForTriathlon(
   // Generate bike sessions. Last one is the "long" — we might swap for a brick.
   const bike: Workout[] = [];
   for (let i = 0; i < bikeSessions; i++) {
-    const kind = pickBikeKind(phase, i);
+    const excluded = new Set<string>(state.onboarding?.cyclingExcludedWorkouts ?? []);
+    const kind = pickBikeKind(phase, i, weekIndex, excluded);
     // Long ride gets bigger slice
     const share = i === bikeSessions - 1 ? 0.45 : (0.55 / Math.max(1, bikeSessions - 1));
     const minutes = Math.max(30, Math.round(bikeHours * 60 * share));
@@ -197,16 +208,21 @@ function generateWeekForTriathlon(
   }
 
   // Run sessions (simple: 1 quality, 1 easy, 1 long)
+  // Resolve easy pace — mirrors running mode: gp(vdot, ltPace) so LT anchors
+  // all zones when available. Without ltPace, gp() falls back to VDOT-only
+  // which diverges from the LT-anchored paces shown elsewhere in the UI.
+  const easyPaceSecPerKm = state.v ? gp(state.v, state.lt ?? null).e : undefined;
   const run: Workout[] = [];
   for (let i = 0; i < runSessions; i++) {
     const share = i === runSessions - 1 ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
     const minutes = Math.max(30, Math.round(runHours * 60 * share));
-    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex));
+    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, easyPaceSecPerKm));
   }
 
-  // Brick (phase: build or peak, weekly in those phases)
+  // Brick (phase: build or peak, weekly in those phases). Requires both bike
+  // and run disciplines active — single-discipline cycling mode skips bricks.
   let brick: Workout | null = null;
-  if ((phase === 'build' || phase === 'peak') && bike.length > 0) {
+  if ((phase === 'build' || phase === 'peak') && bike.length > 0 && hasRun && run.length > 0) {
     const bikeMinutes = Math.round(bikeHours * 60 * 0.40);  // Slightly shorter than solo long ride
     const runMinutes = Math.round(runHours * 60 * 0.25);
     if (bikeMinutes >= 45 && runMinutes >= 15) {
@@ -309,7 +325,7 @@ function isDeloadWeek(weekIndex: number, phase: TrainingPhase): boolean {
  * alongside duration for long runs so the user sees "~16 km (1h 45min)"
  * instead of bare minutes.
  */
-function easyPaceSecPerKm(skill: TriSkillSlider): number {
+function easyPaceSecPerKmFromSkill(skill: TriSkillSlider): number {
   // Skill 1 → 7:00/km, 5 → 4:30/km (linear interpolation)
   return 420 - (skill - 1) * 37.5;
 }
@@ -328,22 +344,22 @@ function fmtMin(mins: number): string {
 }
 
 const LONG_RUN_VARIANTS = [
-  (km: number, dur: string) => `~${km}km (${dur}) continuous Z2. Build aerobic endurance.`,
-  (km: number, dur: string) => `~${km}km (${dur}) with last 20min steady. Aerobic + mild fatigue resistance.`,
-  (km: number, dur: string) => `~${km}km (${dur}) progressive — start Z1, move to Z2 after 30min, hold steady.`,
+  (km: number, dur: string, easy: string) => `~${km}km (${dur}) @ ${easy}. Conversational throughout.`,
+  (km: number, dur: string, easy: string) => `~${km}km (${dur}) @ ${easy}, last 20min slightly quicker. Aerobic endurance with mild fatigue resistance.`,
+  (km: number, dur: string, easy: string) => `~${km}km (${dur}) — first 30min very relaxed, settle into ${easy} and hold.`,
 ];
 
 const THRESHOLD_RUN_VARIANTS = [
-  () => `15min Warm up, 3×8min @ threshold, 2min recovery, 10min Cool down.`,
-  () => `15min Warm up, 4×6min @ threshold, 90s recovery, 10min Cool down.`,
-  () => `15min Warm up, 2×12min @ threshold, 3min recovery, 10min Cool down.`,
-  () => `15min Warm up, 6×4min @ 10k pace, 90s jog, 10min Cool down.`,
+  (thr: string, _vo2: string, easy: string) => `15min warm up @ ${easy}. 3×8min @ ${thr}, 2min jog recovery. 10min cool down.`,
+  (thr: string, _vo2: string, easy: string) => `15min warm up @ ${easy}. 4×6min @ ${thr}, 90s jog recovery. 10min cool down.`,
+  (thr: string, _vo2: string, easy: string) => `15min warm up @ ${easy}. 2×12min @ ${thr}, 3min jog recovery. 10min cool down.`,
+  (_thr: string, vo2: string, easy: string) => `15min warm up @ ${easy}. 6×4min @ ${vo2}, 90s jog recovery. 10min cool down.`,
 ];
 
 const EASY_RUN_VARIANTS = [
-  (dur: string) => `${dur} Z1–Z2 easy. Conversational throughout.`,
-  (dur: string) => `${dur} easy with 6×20s strides at the end. Strides are smooth, not sprints.`,
-  (dur: string) => `${dur} easy on soft surface if available. Recovery priority.`,
+  (dur: string, easy: string) => `${dur} @ ${easy}. Conversational throughout.`,
+  (dur: string, easy: string) => `${dur} @ ${easy}, finish with 6×20s strides. Strides are smooth, not sprints.`,
+  (dur: string, easy: string) => `${dur} @ ${easy}. Soft surface if available.`,
 ];
 
 function generateRunSessionForTri(
@@ -353,10 +369,20 @@ function generateRunSessionForTri(
   minutes: number,
   skill: TriSkillSlider,
   weekIndex: number,
+  easyPaceSec?: number,
 ): Workout {
   void totalSlots;  // kept for signature clarity; slot position already drives isLong/isQuality
   const isLong = slotIndex === totalSlots - 1;
   const isQuality = slotIndex === 0 && (phase === 'build' || phase === 'peak');
+
+  // Derive pace labels — mirrors intent_to_workout.ts logic exactly.
+  const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
+  const pace = easyPaceSec ?? easyPaceSecPerKmFromSkill(skill);
+  const thresholdSec = pace / 1.15;
+  const vo2Sec = pace * 0.809;
+  const easyLabel = `${fmtPace(pace)}/km`;
+  const thresholdLabel = `${fmtPace(thresholdSec)}/km`;
+  const vo2Label = `${fmtPace(vo2Sec)}/km`;
 
   let name: string;
   let desc: string;
@@ -371,11 +397,10 @@ function generateRunSessionForTri(
 
   if (isLong) {
     const r = roundMin(minutes);
-    const pace = easyPaceSecPerKm(skill);
     const km = Math.round(((r * 60) / pace) * 2) / 2;  // nearest 0.5 km
     const idx = rotKey % LONG_RUN_VARIANTS.length;
     name = 'Long run';
-    desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r));
+    desc = LONG_RUN_VARIANTS[idx](km, fmtMin(r), easyLabel);
     t = 'long';
     rpe = phase === 'peak' ? 6 : 5;
     aerobic = Math.round(r * 1.1);
@@ -383,7 +408,7 @@ function generateRunSessionForTri(
   } else if (isQuality) {
     const idx = rotKey % THRESHOLD_RUN_VARIANTS.length;
     name = 'Threshold run';
-    desc = THRESHOLD_RUN_VARIANTS[idx]();
+    desc = THRESHOLD_RUN_VARIANTS[idx](thresholdLabel, vo2Label, easyLabel);
     t = 'threshold';
     rpe = 8;
     aerobic = Math.round(minutes * 1.2);
@@ -392,7 +417,7 @@ function generateRunSessionForTri(
     const r = roundMin(minutes);
     const idx = rotKey % EASY_RUN_VARIANTS.length;
     name = 'Easy run';
-    desc = EASY_RUN_VARIANTS[idx](fmtMin(r));
+    desc = EASY_RUN_VARIANTS[idx](fmtMin(r), easyLabel);
     t = 'easy';
     rpe = 4;
     aerobic = Math.round(r * 0.95);

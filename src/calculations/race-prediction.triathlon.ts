@@ -74,17 +74,34 @@ import {
   applyTriHorizonRun,
   defaultTaperWeeks,
 } from './training-horizon.triathlon';
-import { yearsOfTrainingToExperienceLevel } from '@/constants/triathlon-horizon-params';
+import {
+  yearsOfTrainingToExperienceLevel,
+  SWIM_HORIZON_PARAMS,
+  BIKE_HORIZON_PARAMS,
+  RUN_HORIZON_PARAMS_703,
+  RUN_HORIZON_PARAMS_IM,
+} from '@/constants/triathlon-horizon-params';
 import {
   recentHoursByDiscipline,
   plannedSessionsPerWeekByDiscipline,
+  plannedHoursPerWeekByDiscipline,
   longestSessionByDiscipline,
 } from './tri-volume-by-discipline';
 import { computeTriAdherence } from './tri-adherence';
 import { applyCourseFactors } from './course-factors';
+import { lookupEmpiricalCourseFactors, pickCourseFactors } from './empirical-course-factors';
+import {
+  lookupEmpiricalTransitions,
+  splitCombinedTransition,
+  applySockSavings,
+} from './empirical-transitions';
 import { applyDurabilityCap, DURABILITY_THRESHOLDS } from './durability-cap';
 import { computeTriAdaptationRatios, type TriAdaptationRatios } from './tri-adaptation-ratio';
 import { computeTriDisciplineConfidence, type TriDisciplineConfidence } from './tri-discipline-confidence';
+import { computeTriRaceReadiness, computeProjectionPenaltyShare } from './race-readiness';
+import { RACE_READINESS_TARGETS } from '@/constants/race-readiness-targets';
+import { TRI_TAPER_WEEKS } from '@/constants/triathlon-horizon-params';
+import { CSS_DETRAINING_PER_4WK } from '@/constants/triathlon-constants';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
@@ -100,7 +117,12 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
 
   // ── Course profile lookup (race data file is canonical; do not mutate state) ──
   const raceId = state.onboarding?.selectedTriathlonId;
-  const raceProfile = raceId ? getTriathlonById(raceId)?.profile : undefined;
+  const raceEntry = raceId ? getTriathlonById(raceId) : undefined;
+  const raceProfile = raceEntry?.profile;
+  // Race name flows through to empirical course-factor lookup (calibrated
+  // against ~1.7M historical finishes per race location). Predictor uses
+  // empirical when high/medium confidence; falls back to physical otherwise.
+  const raceName = raceEntry?.name;
 
   // ── Live projection inputs ───────────────────────────────────────────────
   const weeksRemaining = computeWeeksRemaining(state);
@@ -109,6 +131,7 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   // fresh plan with no logged sessions yet, historical would read 0/wk and
   // hit the undertraining penalty, making the projection slower than current.
   const sessions = plannedSessionsPerWeekByDiscipline(state, 4);
+  const plannedHours = plannedHoursPerWeekByDiscipline(state, 4);
   const adherence = computeTriAdherence(state, 4);
   const longestSession = longestSessionByDiscipline(state, 12);
   const yearsTraining = computeYearsOfTraining(state);
@@ -128,10 +151,11 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   const currentVdot = state.v;
 
   // ── Projected race-day fitness markers (the key new piece) ───────────────
-  const projection = buildProjection({
+  const projectionResult = buildProjection({
     currentCss,
     currentFtp,
     currentVdot,
+    cssSource: tri.swim?.cssSource,
     weeksRemaining,
     sessions,
     adherence,
@@ -140,27 +164,152 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     adaptation,
     disciplineConfidence,
   });
+  const projection = projectionResult.markers;
+  const baselines = projectionResult.baselines;
+
+  // ── Race-readiness penalty (per-discipline) ──────────────────────────────
+  // Per-discipline endurance penalty that lowers predictions for athletes
+  // whose recent volume / longest sessions don't match the race distance's
+  // endurance demands. Generalises the marathon-specificity pattern across
+  // triathlon's three disciplines and four distances.
+  //
+  // **Per-discipline time-to-close scaling.** The penalty represents an
+  // endurance-prep gap that *the plan closes over weeks of training at the
+  // reference dose*. Closure rate scales per-discipline by both:
+  //   1. weeksRemaining (more time = more closure)
+  //   2. planned sessions/wk for that discipline vs reference (higher
+  //      commitment closes faster; lower commitment leaves more penalty
+  //      on race day)
+  //
+  // So a 12-week plan at 7 sessions/wk closes the gap differently than
+  // 12 weeks at 3 sessions/wk — and the per-discipline split means a user
+  // committing to bike volume but neglecting run gets bike penalty closed
+  // faster than run.
+  //
+  // `current` (today) always gets the full penalty — the gap exists today
+  // regardless of future plans. `projected` (race day) gets the residual
+  // penalty after the plan's closing share is credited.
+  //
+  // Without this scaling, a "race tomorrow" prediction showed today=15:05,
+  // projected=13:02 — falsely promising 2 hours of improvement from 1 day
+  // of training. The user can't close a multi-week endurance gap overnight.
+  //
+  // See `src/calculations/race-readiness.ts:computeProjectionPenaltyShare`
+  // and SCIENCE_LOG entry "Specific endurance penalty + race-readiness surface".
+  const raceReadiness = computeTriRaceReadiness(state, distance);
+
+  // Reference sessions/wk per discipline at intermediate band — anchored to
+  // the existing horizon-model parameters so the closure-rate calibration
+  // stays in lockstep with the gain-rate calibration. Per-distance
+  // `closureWeeks` from `RACE_READINESS_TARGETS` recognises that shorter
+  // races have smaller volume gaps to close (sprint = 4w, IM = 12w).
+  const swimRef = SWIM_HORIZON_PARAMS.ref_sessions['intermediate'];
+  const bikeRef = BIKE_HORIZON_PARAMS.ref_sessions['intermediate'];
+  const runRefParams = distance === 'ironman' ? RUN_HORIZON_PARAMS_IM : RUN_HORIZON_PARAMS_703;
+  const runRef = runRefParams.ref_sessions['intermediate'];
+  const closureWeeks = RACE_READINESS_TARGETS[distance].closureWeeks;
+
+  // Per-discipline taper weeks — subtracted from useful build time so a race
+  // in taper window doesn't get "training closure" credit (it's freshness,
+  // not endurance build). Per Mujika 2002 + Friel 2018: swim taper is longest
+  // (technique consolidation), bike shortest. From `TRI_TAPER_WEEKS`.
+  const swimTaper = TRI_TAPER_WEEKS.swim[distance];
+  const bikeTaper = TRI_TAPER_WEEKS.bike[distance];
+  const runTaper  = TRI_TAPER_WEEKS.run[distance];
+
+  // Per-discipline reference WEEKLY VOLUME (hours for swim/bike, km for run).
+  // Combined with planned hours, this lets the dose factor see "5 short bike
+  // sessions" as a smaller commitment than "5 long bike sessions" — pure
+  // session-count would treat them identically. Run target is in km not hours,
+  // so for the run discipline we omit hours and fall back to session-count
+  // alone (the run-side `weeklyVolumeKm` signal lives in the readiness
+  // `current` calculation, not the projection closure).
+  const targets = RACE_READINESS_TARGETS[distance];
+
+  // Per-discipline reference hours (intermediate band) for the dose factor's
+  // hours-ratio dimension. Pulled from the per-band targets table — uses
+  // intermediate as the reference (athletes above/below intermediate get
+  // their per-band target via the band lookup in `computeDisciplineReadiness`,
+  // but the hours signal here is a closure-pace reference for the projection,
+  // not a readiness threshold). Run target is km/wk not hours; passed as
+  // undefined so dose falls back to session-count-only.
+  const swimRefHours = targets.swim.byBand.intermediate.weeklyVolume;
+  const bikeRefHours = targets.bike.byBand.intermediate.weeklyVolume;
+
+  const swimPenaltyShare = computeProjectionPenaltyShare({
+    weeksRemaining, plannedSessions: sessions.swim, refSessions: swimRef,
+    closureWeeks, taperWeeks: swimTaper,
+    plannedHours: plannedHours.swim, refHours: swimRefHours,
+    currentScore: raceReadiness.swim.score,
+  });
+  const bikePenaltyShare = computeProjectionPenaltyShare({
+    weeksRemaining, plannedSessions: sessions.bike, refSessions: bikeRef,
+    closureWeeks, taperWeeks: bikeTaper,
+    plannedHours: plannedHours.bike, refHours: bikeRefHours,
+    currentScore: raceReadiness.bike.score,
+  });
+  const runPenaltyShare = computeProjectionPenaltyShare({
+    weeksRemaining, plannedSessions: sessions.run, refSessions: runRef,
+    closureWeeks, taperWeeks: runTaper,
+    currentScore: raceReadiness.run.score,
+    // Run target is km/wk not hours; pass undefined to fall back to
+    // session-count-only dose factor (sessionRatio).
+  });
+  const projPenalty = (mult: number, share: number) => 1 + (mult - 1) * share;
 
   // ── Compute both predictions: projected (headline) and current ───────────
-  // Asymmetric durability: the projection assumes plan execution, including
-  // the long-ride / long-run sessions that the plan prescribes. So we credit
-  // the projected run leg with threshold-met long sessions (cap relaxed).
-  // The current leg keeps the actual long-session shortfall — that's "if you
-  // raced today" with no plan execution.
+  // **Invariant**: when `weeksRemaining ≤ taperWeeks` (race is in the taper
+  // window), `projected` must equal `current`. Taper consolidates fitness; it
+  // doesn't build it (Mujika 2002), and the user can't acquire new long-session
+  // durability or marker gains in 1-3 weeks. Every divergence between the two
+  // race-time calls is therefore scaled by the discipline's `executionFactor`
+  // = (1 - penaltyShare) — the same closure math the readiness penalty uses.
+  //
+  // Two divergence shapes:
+  //   1. **Stale-measurement adjustments** (e.g. swim engagement penalty) —
+  //      represent a TODAY truth (the literal CSS measurement is fiction;
+  //      the user's real today CSS is worse). Applied symmetrically: BOTH
+  //      `current` and `projected` use the engagement-adjusted baseline. Not
+  //      scaled by weeksRemaining.
+  //   2. **Plan-execution credits** (e.g. durability cap relaxation —
+  //      "the plan's long sessions will materialise before race day"). Scaled
+  //      by `executionFactor`. With 1-week IM in full taper → factor = 0 →
+  //      projected uses the current longest session → no fake speedup.
+  //
+  // The discipline's effective baseline (post stale-measurement adjustment)
+  // feeds both `computeRaceTime` calls. The projected longest session lerps
+  // between the actual and the threshold by `executionFactor`.
+  // Swim has no durability cap (durability-cap.ts models bike + run only), so
+  // the swim execution factor is unused here. Bike and run lerp between actual
+  // and threshold by their respective factors.
+  const bikeExecutionFactor = 1 - bikePenaltyShare;
+  const runExecutionFactor  = 1 - runPenaltyShare;
+
   const projectedLongestSession = {
+    // Swim has no durability cap; pass through actual longest swim.
     swim: longestSession.swim,
-    bike: DURABILITY_THRESHOLDS[distance].longRideSec,
-    run:  DURABILITY_THRESHOLDS[distance].longRunSec,
+    bike: lerpDurability(
+      longestSession.bike,
+      DURABILITY_THRESHOLDS[distance].longRideSec,
+      bikeExecutionFactor,
+    ),
+    run: lerpDurability(
+      longestSession.run,
+      DURABILITY_THRESHOLDS[distance].longRunSec,
+      runExecutionFactor,
+    ),
   };
+
   const projected = computeRaceTime({
     state,
     distance,
     legs,
     rating,
-    css: projection.swimCss.projected ?? currentCss,
-    ftp: projection.bikeFtp.projected ?? currentFtp,
-    vdot: projection.runVdot.projected ?? currentVdot,
+    css:  projection.swimCss.projected ?? baselines.css ?? currentCss,
+    ftp:  projection.bikeFtp.projected ?? baselines.ftp ?? currentFtp,
+    vdot: projection.runVdot.projected ?? baselines.vdot ?? currentVdot,
     raceProfile,
+    raceName,
     longestSession: projectedLongestSession,
     applyDurability: true,
   });
@@ -170,16 +319,54 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     distance,
     legs,
     rating,
-    css: currentCss,
-    ftp: currentFtp,
-    vdot: currentVdot,
+    // Use the engagement-adjusted baselines so today and projected sit on the
+    // same yardstick. Display values in `projection.{swimCss,bikeFtp,runVdot}.current`
+    // remain the literal last measurements for transparency.
+    css:  baselines.css  ?? currentCss,
+    ftp:  baselines.ftp  ?? currentFtp,
+    vdot: baselines.vdot ?? currentVdot,
     raceProfile,
+    raceName,
     longestSession,
     applyDurability: true,
   });
 
+  let adjustedCurrentSwim = current.swimSec * raceReadiness.swim.penaltyMultiplier;
+  let adjustedCurrentBike = current.bikeSec * raceReadiness.bike.penaltyMultiplier;
+  let adjustedCurrentRun  = current.runSec  * raceReadiness.run.penaltyMultiplier;
+
+  // Apply per-discipline scaled penalty to the projected race-day legs.
+  let adjustedProjectedSwim = projected.swimSec * projPenalty(raceReadiness.swim.penaltyMultiplier, swimPenaltyShare);
+  let adjustedProjectedBike = projected.bikeSec * projPenalty(raceReadiness.bike.penaltyMultiplier, bikePenaltyShare);
+  let adjustedProjectedRun  = projected.runSec  * projPenalty(raceReadiness.run.penaltyMultiplier,  runPenaltyShare);
+
+  // ── Tier-1 calibration bias ──────────────────────────────────────────────
+  // Per-user systematic bias (median actual − predicted across past races),
+  // capped at ±8% of median predicted leg time at compute time. Applied
+  // post-readiness to both projected and current predictions so both
+  // surfaces reflect the same systematic correction. Floored at 60s per
+  // leg so no discipline gets a nonsensical near-zero value.
+  const calBias = (tri.calibration?.tier ?? 0) >= 1 ? tri.calibration!.perLegBiasSec : null;
+  if (calBias) {
+    adjustedProjectedSwim = Math.max(60, adjustedProjectedSwim + calBias.swim);
+    adjustedProjectedBike = Math.max(60, adjustedProjectedBike + calBias.bike);
+    adjustedProjectedRun  = Math.max(60, adjustedProjectedRun  + calBias.run);
+    adjustedCurrentSwim   = Math.max(60, adjustedCurrentSwim   + calBias.swim);
+    adjustedCurrentBike   = Math.max(60, adjustedCurrentBike   + calBias.bike);
+    adjustedCurrentRun    = Math.max(60, adjustedCurrentRun    + calBias.run);
+  }
+
+  const adjustedCurrentTotal = Math.round(
+    adjustedCurrentSwim + current.t1Sec + adjustedCurrentBike + current.t2Sec + adjustedCurrentRun,
+  );
+
+  const adjustedProjectedTotal = Math.round(
+    adjustedProjectedSwim + projected.t1Sec + adjustedProjectedBike + projected.t2Sec + adjustedProjectedRun,
+  );
+
   // ── Confidence range ─────────────────────────────────────────────────────
-  const totalRangeSec = computeRangeSec(projected.totalSec, distance, weeksRemaining, yearsTraining);
+  // Anchor to the adjusted projected total — the headline race-day number.
+  const totalRangeSec = computeRangeSec(adjustedProjectedTotal, distance, weeksRemaining, yearsTraining);
 
   // ── Sprint/Olympic side-effects (use projected fitness) ──────────────────
   const sideCss = projection.swimCss.projected ?? currentCss;
@@ -189,17 +376,17 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   const olympicTotalSec = estimateSideDistance('olympic', sideCss, sideBikeKph, sideRunPace);
 
   return {
-    totalSec: projected.totalSec,
-    swimSec: projected.swimSec,
+    totalSec: adjustedProjectedTotal,
+    swimSec: Math.round(adjustedProjectedSwim),
     t1Sec: projected.t1Sec,
-    bikeSec: projected.bikeSec,
+    bikeSec: Math.round(adjustedProjectedBike),
     t2Sec: projected.t2Sec,
-    runSec: projected.runSec,
+    runSec: Math.round(adjustedProjectedRun),
     totalRangeSec,
-    currentTotalSec: current.totalSec,
-    currentSwimSec: current.swimSec,
-    currentBikeSec: current.bikeSec,
-    currentRunSec: current.runSec,
+    currentTotalSec: adjustedCurrentTotal,
+    currentSwimSec: Math.round(adjustedCurrentSwim),
+    currentBikeSec: Math.round(adjustedCurrentBike),
+    currentRunSec: Math.round(adjustedCurrentRun),
     courseFactors: projected.courseFactors,
     // Surface the CURRENT-state limiting factor — "you're missing long
     // sessions today" is what the user needs to see. The projected leg
@@ -210,6 +397,12 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     adaptation,
     sprintTotalSec,
     olympicTotalSec,
+    raceReadiness,
+    rawProjectedPerLeg: {
+      swim: projected.swimSec,
+      bike: projected.bikeSec,
+      run:  projected.runSec,
+    },
     computedAtISO: new Date().toISOString(),
   };
 }
@@ -218,10 +411,45 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
 // Build projected race-day fitness markers
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Effective baselines — the user's *real* today capability, after applying any
+ * stale-measurement adjustments (currently swim engagement penalty). These are
+ * the inputs both the "today" and "projected" race-time calls should use, so
+ * the two predictions sit on the same yardstick. The displayed `current`
+ * markers remain the literal last measurement (transparency for the user).
+ */
+interface EffectiveBaselines {
+  css?: number;
+  ftp?: number;
+  vdot?: number;
+}
+
+/**
+ * Lerp the projected longest-session duration between the athlete's actual
+ * longest and the threshold-met value, by `executionFactor` (0–1).
+ *
+ * - `executionFactor = 0` (race in taper window): projected = actual. No fake
+ *   plan-execution credit when there's no time left to execute.
+ * - `executionFactor = 1` (full closure window with reference dose): projected
+ *   = threshold. The plan is credited with delivering the long sessions.
+ *
+ * Crucially never *reduces* the actual — an athlete who already exceeds the
+ * threshold keeps the credit; the lerp only adds upward closure.
+ */
+function lerpDurability(actualSec: number, thresholdSec: number, executionFactor: number): number {
+  const t = Math.max(0, Math.min(1, executionFactor));
+  const gap = Math.max(0, thresholdSec - actualSec);
+  return actualSec + gap * t;
+}
+
 function buildProjection(args: {
   currentCss: number | undefined;
   currentFtp: number | undefined;
   currentVdot: number | undefined;
+  /** Provenance of the current CSS — `'user'` means the athlete just set it
+   * manually and we should treat it as a fresh ground-truth snapshot, even if
+   * recent swim activity is sparse. Skips the detraining inflation below. */
+  cssSource: 'user' | 'derived' | undefined;
   weeksRemaining: number;
   sessions: { swim: number; bike: number; run: number };
   adherence: ReturnType<typeof computeTriAdherence>;
@@ -229,12 +457,17 @@ function buildProjection(args: {
   distance: '70.3' | 'ironman';
   adaptation: TriAdaptationRatios;
   disciplineConfidence: TriDisciplineConfidence;
-}): TriProjectionMarkers {
+}): { markers: TriProjectionMarkers; baselines: EffectiveBaselines } {
   const out: TriProjectionMarkers = {
     swimCss: {},
     bikeFtp: {},
     runVdot: {},
     weeksRemaining: args.weeksRemaining,
+  };
+  const baselines: EffectiveBaselines = {
+    css: args.currentCss,
+    ftp: args.currentFtp,
+    vdot: args.currentVdot,
   };
 
   // Swim — CSS goes down as ability goes up. Ability-band approximated from CSS:
@@ -242,11 +475,44 @@ function buildProjection(args: {
   // Volume demotion: if recent training is thin we drop the band so the horizon
   // sees more headroom — a strong CSS from a year ago doesn't make you Advanced
   // for the purposes of how fast you can rebuild fitness.
+  //
+  // Engagement penalty (ISSUE-179): band demotion limits the improvement ceiling
+  // but leaves the CSS baseline untouched. When weeksActive is very low the
+  // baseline itself is stale — technique decays without water time (Toussaint &
+  // Hollander 1994) at a rate consistent with CSS_DETRAINING_PER_4WK (Mujika
+  // 2010, 3–5%/4wk → 4% midpoint). We proxy elapsed weeks-off from weeksActive:
+  //   0 weeks active → ~12 weeks off → 3 detraining periods → +12% on CSS time
+  //   1–2 weeks active → ~8 weeks off → 2 detraining periods → +8%
+  //   3–5 weeks active → band demotion already fires; no baseline inflation
+  //   ≥6 weeks active → no penalty
+  // The penalty is applied only to the horizon baseline, not the displayed CSS
+  // value, so the UI still shows the user's actual last measurement.
   if (args.currentCss != null) {
+    const swimWeeksActive = args.disciplineConfidence.swim.weeksActive;
+    // A user-set CSS is a fresh ground-truth snapshot — skip the detraining
+    // inflation even if recent swim activity is sparse. The user has just told
+    // the system what their CSS is; we should not project it backwards on the
+    // strength of "no swims logged this month".
+    const userSetCss = args.cssSource === 'user';
+    const swimDetrain4wkPeriods = userSetCss ? 0
+      : swimWeeksActive === 0 ? 3
+      : swimWeeksActive <= 2 ? 2
+      : 0;
+    const swimEngagementMultiplier = Math.pow(1 + CSS_DETRAINING_PER_4WK, swimDetrain4wkPeriods);
+    const effectiveCssBaseline = args.currentCss * swimEngagementMultiplier;
+    // The engagement penalty represents inferred detraining that has already
+    // happened — the literal stale measurement no longer reflects today's real
+    // CSS. Both the "today" and "projected" race-time predictions should use
+    // this same effective baseline so they sit on the same yardstick. The
+    // displayed `swimCss.current` keeps the literal value for transparency.
+    baselines.css = effectiveCssBaseline;
+    if (swimDetrain4wkPeriods > 0) {
+      console.log(`[swimEngagement] weeksActive=${swimWeeksActive}, detrain periods=${swimDetrain4wkPeriods}, penalty=${((swimEngagementMultiplier - 1) * 100).toFixed(1)}% → effectiveCss=${effectiveCssBaseline.toFixed(1)} (measured=${args.currentCss})`);
+    }
     const rawSwimBand = cssToAbilityBand(args.currentCss);
-    const swimBand = demoteBandByVolume(rawSwimBand, args.disciplineConfidence.swim.weeksActive);
+    const swimBand = demoteBandByVolume(rawSwimBand, swimWeeksActive);
     const result = applyTriHorizonSwim({
-      baseline: args.currentCss,
+      baseline: effectiveCssBaseline,
       weeks_remaining: args.weeksRemaining,
       sessions_per_week: args.sessions.swim,
       ability_band: swimBand,
@@ -294,7 +560,7 @@ function buildProjection(args: {
     out.runVdot = { current: args.currentVdot, projected: result.projected };
   }
 
-  return out;
+  return { markers: out, baselines };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -310,6 +576,8 @@ interface ComputeRaceTimeArgs {
   ftp: number | undefined;
   vdot: number | undefined;
   raceProfile: ReturnType<typeof getTriathlonById> extends infer T ? (T extends { profile?: infer P } ? P : undefined) : undefined;
+  /** Race name (e.g., "IRONMAN Lanzarote") — drives empirical course-factor lookup. */
+  raceName: string | undefined;
   longestSession: { swim: number; bike: number; run: number };
   applyDurability: boolean;
 }
@@ -382,11 +650,20 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   const baseRunSec = args.legs.runKm * baseRunPaceSecPerKm * (1 + fatigueDiscount);
 
   // ── Apply course factors ────────────────────────────────────────────────
-  const cf = applyCourseFactors(
-    args.raceProfile,
-    { swimSec: baseSwimSec, bikeSec: baseBikeSec, runSec: baseRunSec },
-    args.legs.runKm,
-  );
+  // Two sources, picked by confidence:
+  //   1. Empirical (calibrated against ~1.7M historical race finishes per
+  //      location, athlete-fixed-effects on IM and age/gender-stratified on
+  //      70.3). Captures gradient + wind + heat + altitude + course-specific
+  //      surface in a single number — implicitly comprehensive.
+  //   2. Physical (climate / altitude / elevation / wind / swim type from
+  //      the CourseProfile data file). Hand-calibrated science model.
+  // When the empirical entry exists with high or medium confidence, use it
+  // (more comprehensive). Otherwise fall back to physical.
+  const baseSec = { swimSec: baseSwimSec, bikeSec: baseBikeSec, runSec: baseRunSec };
+  const empirical = lookupEmpiricalCourseFactors(args.raceName, args.distance, baseSec);
+  const physical  = applyCourseFactors(args.raceProfile, baseSec, args.legs.runKm);
+  const picked    = pickCourseFactors(empirical, physical);
+  const cf        = picked.output;
 
   let swimSec = baseSwimSec * cf.swimMultiplier;
   let bikeSec = baseBikeSec * cf.bikeMultiplier;
@@ -403,8 +680,54 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     limitingFactor = dc.limitingFactor;
   }
 
-  const t1Sec = T1_SEC_BY_SLIDER[args.rating.bike as TriSkillSlider];
-  const t2Sec = T2_SEC_BY_SLIDER[args.rating.bike as TriSkillSlider];
+  // ── Resolve transitions ─────────────────────────────────────────────────
+  // Priority: user override → empirical (race × level bin) → empirical
+  // (global level bin) → skill-slider default. Empirical lookups bin on the
+  // user's predicted swim+bike+run (excluding transitions) so the bin is
+  // independent of transition skill — see transition-distributions.ts.
+  //
+  // For 70.3, T1 and T2 come back separately. For IM, the dataset only
+  // exposes T1+T2 combined (no per-transition columns), so we split it
+  // asymmetrically using the empirical T1 share (~58%) derived from 70.3
+  // bins — T1 runs longer than T2 in practice (wetsuit strip, longer
+  // transition-zone walks).
+  const sliderT1 = T1_SEC_BY_SLIDER[args.rating.bike as TriSkillSlider];
+  const sliderT2 = T2_SEC_BY_SLIDER[args.rating.bike as TriSkillSlider];
+  const override = args.state.triConfig?.transitionOverride;
+  const movingSec = swimSec + bikeSec + runSec;
+  const empTrans = args.raceName != null
+    ? lookupEmpiricalTransitions(args.raceName, args.distance, movingSec)
+    : null;
+
+  let t1Sec: number;
+  let t2Sec: number;
+  if (override?.t1Sec != null && override?.t2Sec != null) {
+    t1Sec = override.t1Sec;
+    t2Sec = override.t2Sec;
+  } else if (empTrans && empTrans.source !== 'none') {
+    if (empTrans.t1Sec != null && empTrans.t2Sec != null) {
+      t1Sec = override?.t1Sec ?? Math.round(empTrans.t1Sec);
+      t2Sec = override?.t2Sec ?? Math.round(empTrans.t2Sec);
+    } else {
+      const split = splitCombinedTransition(empTrans.transitionSec ?? sliderT1 + sliderT2);
+      t1Sec = override?.t1Sec ?? split.t1;
+      t2Sec = override?.t2Sec ?? split.t2;
+    }
+  } else {
+    t1Sec = override?.t1Sec ?? sliderT1;
+    t2Sec = override?.t2Sec ?? sliderT2;
+  }
+
+  // Sockless modifier: subtract savings only for legs the user has chosen
+  // to skip socks on. Applied on top of whichever resolution path won —
+  // override, empirical, or slider. The override is treated as the raw
+  // transition time with full socks; the selector adjusts from there.
+  const sockChoice = args.state.triConfig?.transitionSocks;
+  if (sockChoice && sockChoice !== 't1') {
+    const adj = applySockSavings(t1Sec, t2Sec, sockChoice);
+    t1Sec = adj.t1;
+    t2Sec = adj.t2;
+  }
 
   const totalSec = Math.round(swimSec + t1Sec + bikeSec + t2Sec + runSec);
 
@@ -611,7 +934,7 @@ import type { AbilityBand } from '@/types';
  *   <140 s/100m = novice
  *   else        = beginner
  */
-function cssToAbilityBand(cssSec: number): AbilityBand {
+export function cssToAbilityBand(cssSec: number): AbilityBand {
   if (cssSec < 90)  return 'elite';
   if (cssSec < 100) return 'advanced';
   if (cssSec < 115) return 'intermediate';
@@ -651,7 +974,7 @@ function demoteBandByVolume(band: AbilityBand, weeksActive: number): AbilityBand
  *   < 320W  advanced
  *   else    elite
  */
-function ftpToAbilityBand(ftpW: number): AbilityBand {
+export function ftpToAbilityBand(ftpW: number): AbilityBand {
   if (ftpW < 175) return 'beginner';
   if (ftpW < 220) return 'novice';
   if (ftpW < 270) return 'intermediate';

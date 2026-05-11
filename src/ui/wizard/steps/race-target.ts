@@ -1,8 +1,9 @@
 import type { OnboardingState, Marathon, TrainingFocus } from '@/types/onboarding';
 import type { RaceDistance } from '@/types/training';
-import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil } from '@/data/marathons';
+import { getMarathonsByDistance, formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
+import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
  * Page 5 — Race / Target (mode-branched).
@@ -21,7 +22,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
  * - `rtRise` entry animation
  */
 
-type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'fitness';
+type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'fitness';
 
 /** How many races to show in the scrollable event list. 16 gives enough tiles to
  * cover the world-majors + second tier without overwhelming the scroll region. */
@@ -92,8 +93,6 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
       .rt-race-thumb .rt-thumb-img { position:absolute; inset:0; background-size:cover; background-position:center; filter: grayscale(1) contrast(1.05); }
       .rt-race-thumb .rt-thumb-vignette { position:absolute; inset:0; background: linear-gradient(180deg, rgba(0,0,0,0) 35%, rgba(0,0,0,0.32) 100%); }
       .rt-race-thumb .rt-thumb-mono { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:rgba(253,252,247,0.92); font-size:17px; font-weight:500; letter-spacing:-0.01em; }
-      .rt-race-thumb .rt-thumb-landmark { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:rgba(253,252,247,0.88); }
-      .rt-race-thumb .rt-thumb-landmark svg { width:38px; height:38px; }
       .rt-row.selected .rt-race-thumb { box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 1px 2px rgba(0,0,0,0.4); }
 
       .rt-row-body { flex:1; min-width:0; }
@@ -144,10 +143,14 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 32%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Glint only — race photos own the visual space. Atmosphere base ties it to the family. -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildSunGlint('low')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(4, 7)}
+        ${renderProgressIndicator(5, 8)}
 
         <div class="rt-rise" style="width:100%;max-width:460px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -300,46 +303,10 @@ function renderWeeksStepper(state: OnboardingState): string {
 }
 
 /**
- * City landmark line-illustrations, keyed by race id or lowercased city.
- * Rendered inside the thumb when `imageUrl` is absent. Falls back to the
- * two-letter monogram for any race without a landmark entry.
- */
-const RACE_LANDMARKS: Record<string, string> = {
-  // London — Tower Bridge
-  london: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18h18"/><path d="M5 8h4v10H5z"/><path d="M15 8h4v10h-4z"/><path d="M5 8l2-2 2 2"/><path d="M15 8l2-2 2 2"/><path d="M9 11c2 2 4 2 6 0"/><path d="M9 15h6"/></svg>`,
-  // Berlin — Brandenburg Gate
-  berlin: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19h18"/><path d="M3 7h18"/><path d="M3 9h18"/><path d="M5 9v10"/><path d="M9 9v10"/><path d="M12 9v10"/><path d="M15 9v10"/><path d="M19 9v10"/><path d="M10 7V4h4v3"/></svg>`,
-  // Boston — Zakim Bridge
-  boston: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 17L12 3l1.5 14"/><path d="M3 19h18"/><path d="M12 4L4 19"/><path d="M12 4l8 15"/><path d="M12 9l-5 10"/><path d="M12 9l5 10"/></svg>`,
-  // NYC — Empire State Building
-  nyc: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"/><path d="M11 6h2v3h-2z"/><path d="M9 9h6v4h-6z"/><path d="M7 13h10v7"/><path d="M7 20v-7"/><path d="M3 20h18"/></svg>`,
-  'nyc-half': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3"/><path d="M11 6h2v3h-2z"/><path d="M9 9h6v4h-6z"/><path d="M7 13h10v7"/><path d="M7 20v-7"/><path d="M3 20h18"/></svg>`,
-  // Chicago — Willis Tower
-  chicago: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3v3"/><path d="M14 3v3"/><path d="M7 6h10v14"/><path d="M7 20V6"/><path d="M7 10h10"/><path d="M7 14h10"/><path d="M3 20h18"/></svg>`,
-  // Tokyo — Tokyo Tower
-  tokyo: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v2"/><path d="M12 5L7 20"/><path d="M12 5l5 15"/><path d="M9 12h6"/><path d="M8.5 14h7"/><path d="M3 20h18"/></svg>`,
-  // Paris — Eiffel Tower
-  paris: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v2"/><path d="M12 5c-1 6 -4 10 -5 15"/><path d="M12 5c1 6 4 10 5 15"/><path d="M9.5 11h5"/><path d="M8 17c1.5 -1.5 6.5 -1.5 8 0"/><path d="M3 20h18"/></svg>`,
-  // Valencia — Hemisfèric (Ciutat de les Arts)
-  valencia: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15c2 -8 16 -8 18 0"/><path d="M3 15h18"/><path d="M5 18h14"/><circle cx="12" cy="12" r="2"/></svg>`,
-  // Sydney — Opera House sails
-  sydney: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19h18"/><path d="M4 19c0 -4 2 -7 5 -8"/><path d="M9 19c0 -5 2 -9 5 -10"/><path d="M13 19c0 -4 2 -7 5 -8"/><path d="M3 21h18"/></svg>`,
-  // Amsterdam — canal house gables
-  amsterdam: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 19h18"/><path d="M5 19V10l2-2 2 2v9"/><path d="M9 19V9l2.5-2.5L14 9v10"/><path d="M14 19v-7l2-2 2 2v7"/><path d="M3 21h18"/></svg>`,
-};
-
-function getRaceLandmark(race: { id: string; city?: string }): string | null {
-  const byId = RACE_LANDMARKS[race.id];
-  if (byId) return byId;
-  const cityKey = (race.city || '').toLowerCase().replace(/[^a-z]/g, '');
-  return RACE_LANDMARKS[cityKey] ?? null;
-}
-
-/**
  * Left-side thumb for a race row. Uses `race.imageUrl` when present (greyscale
- * treated), otherwise prefers a city landmark SVG, falling back to a
- * deterministic charcoal gradient with two-letter monogram. Real photos can
- * be dropped into `src/assets/races/<id>.jpg` and wired via `imageUrl`.
+ * treated), otherwise renders a deterministic charcoal gradient with the
+ * city's two-letter monogram. Real photos can be dropped into
+ * `src/assets/races/<id>.jpg` and wired via `imageUrl`.
  */
 function renderRaceThumb(race: { id: string; name: string; city?: string; imageUrl?: string }): string {
   if (race.imageUrl) {
@@ -356,15 +323,6 @@ function renderRaceThumb(race: { id: string; name: string; city?: string; imageU
   const base = 14 + (h % 18);
   const peak = 30 + (h % 18);
   const bg = `linear-gradient(135deg, #${base.toString(16).padStart(2,'0')}${base.toString(16).padStart(2,'0')}${base.toString(16).padStart(2,'0')} 0%, #${peak.toString(16).padStart(2,'0')}${peak.toString(16).padStart(2,'0')}${peak.toString(16).padStart(2,'0')} 55%, #141414 100%)`;
-  const landmark = getRaceLandmark(race);
-  if (landmark) {
-    return `
-      <div class="rt-race-thumb" style="background:${bg}">
-        <div class="rt-thumb-landmark">${landmark}</div>
-        <div class="rt-thumb-vignette"></div>
-      </div>
-    `;
-  }
   const source = race.city || race.name;
   const monogram = source.replace(/[^A-Za-z]/g, '').slice(0, 2).toUpperCase();
   return `
@@ -408,7 +366,7 @@ function renderEventPicker(state: OnboardingState): string {
                 <p class="rt-row-label">${race.name}</p>
                 <p class="rt-row-sub">${formatRaceDate(race.date)}${race.city ? ' · ' + race.city : ''}</p>
               </div>
-              <span style="font-size:12px;font-weight:600;opacity:${selected ? '0.9' : '0.7'};flex-shrink:0">${race.weeksUntil ?? '--'}wk</span>
+              <span style="font-size:12px;font-weight:600;opacity:${selected ? '0.9' : '0.7'};flex-shrink:0">${formatTimeUntil(race.date) ?? '--'}</span>
             </button>
           `;
         }).join('')}

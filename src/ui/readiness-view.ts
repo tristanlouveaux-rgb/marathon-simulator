@@ -6,7 +6,7 @@
  */
 
 import { getState } from '@/state';
-import type { SimulatorState } from '@/types/state';
+import type { SimulatorState, Week } from '@/types/state';
 import {
   computeReadinessACWR,
   computeLiveSameSignalTSB,
@@ -21,20 +21,23 @@ import {
 import {
   computeReadiness,
   readinessColor,
+  readinessColorStops,
   computeRecoveryScore,
   LEG_LOAD_MODERATE,
   LEG_LOAD_HEAVY,
 } from '@/calculations/readiness';
-import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
+import { getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { TL_PER_MIN } from '@/constants';
 import { computeDailyCoach } from '@/calculations/daily-coach';
+import { computeTriReadiness } from '@/calculations/tri-readiness';
+import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
+import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const APP_BG = '#FAF9F6';
+import { buildFloweyHaloBackground, floweyHaloAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+// Suppress unused warnings — keeping legacy sky imports for safety
+void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
 const RING_R = 46;
@@ -43,7 +46,9 @@ const RING_C = +(2 * Math.PI * RING_R).toFixed(2);
 // ── Sky background (same visual language as recovery-view) ────────────────────
 // Gradient IDs are prefixed "rdn" to avoid conflicts when both views exist in DOM
 
-function skyBackground(): string { return buildSkyBackground('rdn', 'blue'); }
+function skyBackground(_isHyrox: boolean): string {
+  return buildFloweyHaloBackground('rdn', 'blue') + buildSunGlint('low');
+}
 
 // ── Explanatory copy ──────────────────────────────────────────────────────────
 
@@ -81,7 +86,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const acwr = computeReadinessACWR(s);
   // Live TSB with intra-week decay through today (shared with home-view so scores match).
   const completedWeek = Math.max(0, s.w - 1);
-  const archivedPlans = (s as any).previousPlanWks ?? undefined;
+  const archivedPlans = s.previousPlanWks ?? undefined;
   const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const tsb = liveTSB.tsb;
   const ctlNow = liveTSB.ctl;
@@ -107,6 +112,15 @@ function getReadinessHTML(s: SimulatorState): string {
     : null;
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget);
+  const dailyTSSByDate = buildDailySignalBTSS(s.wks ?? [], archivedPlans);
+  const debtOutlook = computeSleepDebtOutlook(
+    s.physiologyHistory ?? [], dailyTSSByDate, s.athleteTier ?? 'recreational', effectiveSleepTarget,
+  );
+  // Excess above personal baseline: positive = worse than usual, negative = better than usual.
+  // null when fewer than 14 nights of history (computeSleepDebtOutlook returns typicalDebtSec: null).
+  const sleepDebtExcessSec = debtOutlook.typicalDebtSec != null
+    ? debtOutlook.debtSec - debtOutlook.typicalDebtSec
+    : null;
 
   // ── Recovery sub-signal (computed first — feeds into readiness composite) ──
   const noGarminSleep = !(s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
@@ -135,7 +149,8 @@ function getReadinessHTML(s: SimulatorState): string {
   const plannedWorkouts = (strainWk && !s.trackOnly) ? generateWeekWorkouts(
     strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus,
+    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   ) : [];
   if (strainWk?.workoutMoves) {
     for (const [workoutId, newDay] of Object.entries(strainWk.workoutMoves)) {
@@ -173,6 +188,11 @@ function getReadinessHTML(s: SimulatorState): string {
     : 0;
   const adhocPct = matchedActivityToday && perSessionAvg > 0 ? (todaySignalBTSS / perSessionAvg) * 100 : 0;
 
+  const isHyroxMode = s.eventType === 'hyrox';
+  const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
+  const hxMtlATL = s.hyroxConfig?.mtlATL ?? 0;
+  const mtlAcwrValue = isHyroxMode && hxMtlCTL >= 15 ? hxMtlATL / hxMtlCTL : null;
+
   const readiness = computeReadiness({
     tsb,
     acwr: acwr.ratio,
@@ -182,20 +202,96 @@ function getReadinessHTML(s: SimulatorState): string {
     sleepHistory: s.physiologyHistory ?? [],
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
+    sleepDebtExcessSec,
     weeksOfHistory: metrics.length,
     strainPct: todaySignalBTSS > 0 ? strainPct : null,
     recentLegLoads: s.recentLegLoads ?? [],
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     acwrSafeUpper: acwr.safeUpper,
+    mtlAcwr: mtlAcwrValue,
   });
+
+  const isTri = s.eventType === 'triathlon';
+  const isHyrox = isHyroxMode;
+  const triReadiness = isTri ? computeTriReadiness(s) : null;
+
+  // Cross-training readiness for non-tri modes — compute ATL/CTL from non-run garminActuals.
+  // Tri mode reads crossTrainingAtl/Ctl from triConfig.fitness (already computed at launch).
+  const crossTrainingLoad = (() => {
+    if (isTri) return null;  // tri mode uses triReadiness.crossTraining instead
+    const archivedWks = (s.previousPlanWks ?? []).flatMap(p => p.weeks as Week[]);
+    const allWks: Week[] = [...archivedWks, ...(s.wks ?? [])];
+    const now = Date.now();
+    const normalise = (sum: number, tau: number) => (sum / tau) * 7;
+    let atlSum = 0, ctlSum = 0;
+    for (const wk of allWks) {
+      for (const a of Object.values(wk.garminActuals ?? {})) {
+        if (!a.startTime) continue;
+        const sport = classifyActivity(a.activityType);
+        if (sport === 'run') continue;  // only cross-training
+        const day = Math.floor((now - Date.parse(a.startTime)) / 86400000);
+        if (day < 0 || day > 120) continue;
+        const tss = a.iTrimp != null && a.iTrimp > 0 ? a.iTrimp / 150
+          : (a.durationSec ?? 0) / 60 * 0.8;
+        if (tss <= 0) continue;
+        atlSum += tss * Math.exp(-day / ATL_TAU_DAYS);
+        ctlSum += tss * Math.exp(-day / CTL_TAU_DAYS);
+      }
+    }
+    const atl = Math.round(normalise(atlSum, ATL_TAU_DAYS) * 10) / 10;
+    const ctl = Math.round(normalise(ctlSum, CTL_TAU_DAYS) * 10) / 10;
+    if (atl <= 0) return null;
+    return { atl, ctl, result: computeReadiness({
+      tsb: (ctl - atl) / 7,
+      acwr: ctl >= 10 ? atl / ctl : 1.0,
+      ctlNow: ctl / 7,
+      sleepScore: null, sleepHistory: [], hrvRmssd: null, hrvPersonalAvg: null,
+      sleepDebtExcessSec: null, weeksOfHistory: 0,
+    }) };
+  })();
 
   // Use the central daily-coach for the sentence (auto-derives strain context)
   const _coach = computeDailyCoach(s);
-  const coachMessage = _coach.primaryMessage;
+  const coachMessage = (() => {
+    if (!isTri || !triReadiness) return _coach.primaryMessage;
+
+    // Determine the most important systemic signal (sleep, HRV, load) — may override
+    // or augment the discipline sentence depending on severity.
+    const hrvDrop = (hrvRmssd != null && hrvPersonalAvg != null && hrvPersonalAvg > 0)
+      ? (hrvPersonalAvg - hrvRmssd) / hrvPersonalAvg
+      : null;
+    const debtExcessHours = debtOutlook.typicalDebtSec != null
+      ? (debtOutlook.debtSec - debtOutlook.typicalDebtSec) / 3600
+      : null;
+
+    const systemicNote = (() => {
+      if (hrvDrop != null && hrvDrop > 0.30)
+        return 'HRV is significantly suppressed. Avoid high-intensity work today.';
+      if (hrvDrop != null && hrvDrop > 0.20)
+        return 'HRV is moderately suppressed. High-intensity work carries more risk today.';
+      if (sleepScore != null && sleepScore < 50)
+        return 'Last night\'s sleep was poor. Recovery is reduced.';
+      if (debtExcessHours != null && debtExcessHours >= 2)
+        return `Sleep debt is ${Math.round(debtExcessHours)}h above your typical level. Prioritise sleep tonight.`;
+      return null;
+    })();
+
+    // If systemic signals are the primary driver (HRV or sleep) and disciplines are clear,
+    // lead with the systemic note rather than defaulting to "all disciplines are clear".
+    const discIssue = triReadiness.overall !== 'On Track' && triReadiness.overall !== 'Primed';
+    if (!discIssue && systemicNote) return systemicNote;
+
+    // Disciplines have an issue — lead with that, append systemic context if notable.
+    const discSentence = triReadiness.sentence;
+    if (systemicNote) return `${discSentence} ${systemicNote}`;
+    return discSentence;
+  })();
   const sessionNote = _coach.sessionNote;
   const activeStrainPct = todaySignalBTSS > 0 ? strainPct : 0;
 
+  // Big ring = global recovery readiness (mirrors home card big ring).
   const ringColor = readinessColor(readiness.label);
+  const ringStops = readinessColorStops(readiness.label);
   const score = readiness.score;
   const targetOffset = +(RING_C * (1 - score / 100)).toFixed(2);
   const ringLabel = _coach.ringLabel;
@@ -211,7 +307,7 @@ function getReadinessHTML(s: SimulatorState): string {
   // Same model as freshness page: all recent sessions stacked, sport-adjusted,
   // sleep/HRV-adjusted. See computeToBaseline() in fitness-model.ts.
   const ctlForBaseline = liveTSB.ctl / 7;
-  const baselineResult = computeToBaseline(s.wks ?? [], completedWeek, ctlForBaseline, s.planStartDate, s.physiologyHistory);
+  const baselineResult = computeToBaseline(s.wks ?? [], completedWeek, ctlForBaseline, s.planStartDate, s.physiologyHistory, s.adaptiveRecovery);
   const fatigueDecayHours = baselineResult?.hours ?? null;
 
   // ── Load Ratio sub-signal ───────────────────────────────────────────────────
@@ -262,7 +358,7 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // ── Card builder ───────────────────────────────────────────────────────────
   const card = (content: string, id?: string, extraStyle?: string) =>
-    `<div ${id ? `id="${id}"` : ''} style="background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:12px;cursor:pointer;${extraStyle ?? ''}">${content}</div>`;
+    `<div ${id ? `id="${id}"` : ''} style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin-bottom:12px;cursor:pointer;${extraStyle ?? ''}">${content}</div>`;
 
   // Adhoc activity on a non-planned day: show TSS + adhocPct label (no plan to compare %)
   const isAdhoc = matchedActivityToday && !hasPlannedWorkout;
@@ -381,7 +477,7 @@ function getReadinessHTML(s: SimulatorState): string {
   // same debt number the user sees when they tap through.
   const cumulativeDebtSec = computeSleepDebt(
     s.physiologyHistory ?? [],
-    buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks),
+    buildDailySignalBTSS(s.wks ?? [], s.previousPlanWks),
     s.athleteTier ?? 'recreational',
     effectiveSleepTarget,
   );
@@ -413,22 +509,108 @@ function getReadinessHTML(s: SimulatorState): string {
     }</div>
   `, 'rdn-card-sleep-history');
 
+  // Tri mode: per-discipline readiness bars shown at top of the sub-signal section
+  const triDiscCard = (() => {
+    if (!triReadiness) return '';
+    const LABEL_RANK: Record<string, number> = {
+      'Primed': 0, 'On Track': 1, 'Manage Load': 2, 'Ease Back': 3, 'Overreaching': 4,
+    };
+    const shortStatus = (label: string) =>
+      label === 'Overreaching' ? 'Back off'
+      : label === 'Ease Back' ? 'Ease back'
+      : label === 'Manage Load' ? 'Manage'
+      : label === 'On Track' ? 'Clear'
+      : 'Primed';
+    // No bar can show a better label than the overall ring — avoids "Clear" bars
+    // alongside an "Ease Back" ring, which would imply permission to push.
+    const capLabel = (discLabel: string) =>
+      LABEL_RANK[discLabel] >= LABEL_RANK[triReadiness.overall] ? discLabel : triReadiness.overall;
+    const makeBar = (discName: string, result: { score: number; label: string }, last = false) => {
+      const label = capLabel(result.label);
+      const col = readinessColor(label as any);
+      return `<div style="${last ? '' : 'margin-bottom:14px'}">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+          <div style="font-size:12px;font-weight:600;color:${TEXT_M}">${discName}</div>
+          <div style="display:flex;align-items:baseline;gap:6px">
+            <div style="font-size:14px;font-weight:600;color:${col}">${result.score}</div>
+            <div style="font-size:11px;color:${TEXT_S}">${shortStatus(label)}</div>
+          </div>
+        </div>
+        <div style="position:relative;height:8px;border-radius:4px;background:rgba(0,0,0,0.07);overflow:hidden">
+          <div style="position:absolute;left:0;top:0;height:100%;width:${result.score}%;background:${col};border-radius:4px;transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
+        </div>
+      </div>`;
+    };
+    const fit = s.triConfig?.fitness;
+    type DiscEntry = { name: string; key: 'swim' | 'bike' | 'run'; result: typeof triReadiness.swim };
+    const allDiscs: DiscEntry[] = [
+      { name: 'Swim', key: 'swim', result: triReadiness.swim },
+      { name: 'Bike', key: 'bike', result: triReadiness.bike },
+      { name: 'Run',  key: 'run',  result: triReadiness.run  },
+    ];
+    // Require both meaningful training volume (CTL ≥ 1) and at least one direct
+    // activity — a single ghost swim from months ago decays to ~0.1 CTL and
+    // shouldn't surface the discipline in readiness bars.
+    const discs = allDiscs.filter(d => (fit?.[d.key]?.directCount ?? 0) > 0 && (fit?.[d.key]?.ctl ?? 0) >= 1);
+
+    if (discs.length === 0) return '';
+    const crossTrainingBar = triReadiness.crossTraining
+      ? makeBar('Cross-training', triReadiness.crossTraining, true)
+      : '';
+    const bars = discs.map(d => makeBar(d.name, d.result)).join('');
+    return card(`
+      <div style="font-size:11px;color:${TEXT_S};margin-bottom:14px;font-weight:500">Discipline Readiness</div>
+      ${bars}
+      ${crossTrainingBar ? `<div style="margin-top:14px">${crossTrainingBar}</div>` : ''}
+    `, 'rdn-card-disciplines');
+  })();
+
+  // Cross-training card for non-tri modes — shown when there is any non-run load.
+  const crossTrainingCard = (() => {
+    if (isTri || !crossTrainingLoad) return '';
+    const shortStatus = (label: string) =>
+      label === 'Overreaching' ? 'Back off'
+      : label === 'Ease Back' ? 'Ease back'
+      : label === 'Manage Load' ? 'Manage'
+      : label === 'On Track' ? 'Clear'
+      : 'Primed';
+    const LABEL_RANK: Record<string, number> = {
+      'Primed': 0, 'On Track': 1, 'Manage Load': 2, 'Ease Back': 3, 'Overreaching': 4,
+    };
+    const rawLabel = crossTrainingLoad.result.label;
+    const label = LABEL_RANK[rawLabel] >= LABEL_RANK[readiness.label] ? rawLabel : readiness.label;
+    const col = readinessColor(label as any);
+    return card(`
+      <div style="font-size:11px;color:${TEXT_S};margin-bottom:14px;font-weight:500">Cross-training Load</div>
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
+        <div style="font-size:12px;font-weight:600;color:${TEXT_M}">Cross-training</div>
+        <div style="display:flex;align-items:baseline;gap:6px">
+          <div style="font-size:14px;font-weight:600;color:${col}">${crossTrainingLoad.result.score}</div>
+          <div style="font-size:11px;color:${TEXT_S}">${shortStatus(label)}</div>
+        </div>
+      </div>
+      <div style="position:relative;height:8px;border-radius:4px;background:rgba(0,0,0,0.07);overflow:hidden">
+        <div style="position:absolute;left:0;top:0;height:100%;width:${crossTrainingLoad.result.score}%;background:${col};border-radius:4px;transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
+      </div>
+    `, 'rdn-card-cross-training');
+  })();
+
   return `
     <style>
       #rdn-view { box-sizing:border-box; }
       #rdn-view *, #rdn-view *::before, #rdn-view *::after { box-sizing:inherit; }
       @keyframes rdnFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .rdn-fade { opacity:0; animation:rdnFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('rdn')}
+      ${floweyHaloAnimationCSS('rdn')}
     </style>
 
     <div id="rdn-view" data-readiness-label="${readiness.label}" style="
-      position:relative;min-height:100vh;background:${APP_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
-      ${skyBackground()}
+      ${skyBackground(isHyrox)}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -458,9 +640,19 @@ function getReadinessHTML(s: SimulatorState): string {
             box-shadow:0 6px 40px -8px rgba(0,0,0,0.15);
           ">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
+              <defs>
+                <!-- Same gradient recipe as the page-flair rings, tinted to the readiness colour.
+                     SVG is rotated -90deg overall, so visual upper-left = local lower-left.
+                     Stops chosen so visually the highlight falls on the upper-left arc. -->
+                <linearGradient id="rdn-ring-grad" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"  stop-color="${ringStops.highlight}"/>
+                  <stop offset="50%" stop-color="${ringStops.mid}"/>
+                  <stop offset="100%" stop-color="${ringStops.shadow}"/>
+                </linearGradient>
+              </defs>
               <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <circle id="rdn-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
-                stroke="${ringColor}" stroke-width="8" stroke-linecap="round"
+                stroke="url(#rdn-ring-grad)" stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}"
                 stroke-dashoffset="${RING_C}"
                 data-target-offset="${targetOffset}"
@@ -481,6 +673,41 @@ function getReadinessHTML(s: SimulatorState): string {
 
         <!-- Sub-signal cards -->
         <div class="rdn-fade" style="animation-delay:0.18s;padding:0 16px">
+          ${triDiscCard}
+          ${crossTrainingCard}
+          ${isHyrox ? (() => {
+            const weeklyActualMTL = s.hyroxConfig?.weeklyActualMTL ?? 0;
+            const weeklyPlannedMTL = s.hyroxConfig?.weeklyMTL ?? 0;
+            const mtlCap = s.hyroxConfig?.mtlCap ?? 1000;
+            const mtlPct = mtlCap > 0 ? Math.min(1, weeklyActualMTL / mtlCap) : 0;
+            const acwrVal = mtlAcwrValue;
+            const zone = acwrVal == null ? 'safe'
+              : acwrVal > 1.5 ? 'high' : acwrVal > 1.3 ? 'caution' : 'safe';
+            const zoneLabel = zone === 'high' ? 'Ease Back' : zone === 'caution' ? 'Manage Load' : 'Safe';
+            const zoneColor = zone === 'high' ? 'var(--c-warn)' : zone === 'caution' ? 'var(--c-caution)' : 'var(--c-ok)';
+            const zoneNote = zone === 'high'
+              ? 'Eccentric load spiked this week. Skip or downgrade density sessions.'
+              : zone === 'caution'
+              ? 'Mechanical load is elevated. Avoid adding extra eccentric work.'
+              : weeklyActualMTL < 1 && weeklyPlannedMTL < 1
+              ? 'Mechanical load is building. No concern yet.'
+              : 'Mechanical load is progressing safely.';
+            const plannedLine = weeklyPlannedMTL > 0 && Math.round(weeklyPlannedMTL) !== Math.round(weeklyActualMTL)
+              ? ` · ${Math.round(weeklyPlannedMTL)} planned`
+              : '';
+            return card(`
+              <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">MusculoTendon Load</div>
+              <div style="display:flex;align-items:baseline;gap:10px;margin-bottom:4px">
+                <div style="font-size:24px;font-weight:600;color:${zoneColor};line-height:1">${acwrVal != null ? acwrVal.toFixed(2) + '×' : '—'}</div>
+                <div style="font-size:13px;color:#94A3B8">${zoneLabel}</div>
+              </div>
+              <div style="height:5px;background:rgba(0,0,0,0.06);border-radius:3px;overflow:hidden;margin:8px 0">
+                <div style="height:100%;width:${Math.round(mtlPct * 100)}%;background:${mtlPct > 0.9 ? 'var(--c-warn)' : mtlPct > 0.65 ? 'var(--c-caution)' : '#b8742c'};border-radius:3px;transition:width 0.4s"></div>
+              </div>
+              <div style="font-size:12px;color:${TEXT_S};margin-top:2px">${Math.round(weeklyActualMTL)} / ${Math.round(mtlCap)} MTL this week${plannedLine}</div>
+              <div style="font-size:13px;color:${TEXT_S};line-height:1.45;margin-top:8px">${zoneNote}</div>
+            `, 'rdn-card-mtl');
+          })() : ''}
           ${strainCard}
           ${freshCard}
           ${injuryCard}
@@ -513,7 +740,8 @@ function getReadinessHTML(s: SimulatorState): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -555,12 +783,20 @@ function wireReadinessHandlers(): void {
     import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any, () => renderReadinessView()));
   });
 
+  document.getElementById('rdn-card-disciplines')?.addEventListener('click', () => {
+    import('./rolling-load-view').then(({ renderRollingLoadView }) => renderRollingLoadView());
+  });
+
   document.getElementById('rdn-card-rolling-load')?.addEventListener('click', () => {
     import('./rolling-load-view').then(({ renderRollingLoadView }) => renderRollingLoadView());
   });
 
   document.getElementById('rdn-card-leg-load')?.addEventListener('click', () => {
     import('./leg-load-view').then(({ renderLegLoadView }) => renderLegLoadView(() => renderReadinessView()));
+  });
+
+  document.getElementById('rdn-card-mtl')?.addEventListener('click', () => {
+    import('./mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderReadinessView()));
   });
 
   document.getElementById('rdn-card-sleep-history')?.addEventListener('click', () => {

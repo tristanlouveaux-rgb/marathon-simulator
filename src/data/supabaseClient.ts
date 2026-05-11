@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 
 /** Supabase project config — values injected by Vite from .env.local */
 export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-export const SUPABASE_FUNCTIONS_BASE = import.meta.env.VITE_SUPABASE_FUNCTIONS_BASE as string;
+export const SUPABASE_FUNCTIONS_BASE = (import.meta.env.VITE_SUPABASE_FUNCTIONS_BASE as string)?.trim();
 export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 /** Supabase client — manages auth sessions automatically via localStorage */
