@@ -13,14 +13,28 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
 import { openTriWorkoutDetail } from './workout-detail-modal';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
+import { openVibesScienceModal } from '../session-generator';
+import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { getTriathlonById } from '@/data/triathlons';
 import { DAY_NAMES } from '@/workouts/scheduler.triathlon';
 import type { Workout } from '@/types/state';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
+import { openInjuryModal, isInjuryActive, markAsRecovered, getInjuryStateForDisplay } from '../injury/modal';
+import { recordMorningPain } from '@/injury/engine';
+import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
+import type { InjuryState, InjuryLocation } from '@/types/injury';
+
+// ─── Module-level navigation state ───────────────────────────────────────────
+// null = show the live current week (s.w). Non-null = preview another week
+// without changing s.w — same pattern as running plan-view.
+let _viewWeek: number | null = null;
 
 function navigateTab(tab: TabId): void {
+  _viewWeek = null; // leaving the plan tab resets to live week on return
   if (tab === 'home') {
     import('../home-view').then(({ renderHomeView }) => renderHomeView());
-  } else if (tab === 'record') {
-    import('../record-view').then(({ renderRecordView }) => renderRecordView());
+  } else if (tab === 'forecast') {
+    import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   } else if (tab === 'stats') {
     import('../stats-view').then(({ renderStatsView }) => renderStatsView());
   } else if (tab === 'account') {
@@ -39,15 +53,23 @@ export function renderTriathlonPlanView(): void {
   const tri = s.triConfig;
   if (!tri) return;
 
-  const viewWeek = s.w;
+  const viewWeek = _viewWeek ?? s.w;
+  const isFutureWeek = viewWeek > s.w;
   const wk = s.wks?.[viewWeek - 1];
   const workouts = wk?.triWorkouts ?? [];
   const phase = wk?.ph ? capitalize(wk.ph) : '';
-  const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${tri.distance === 'ironman' ? 'Ironman' : '70.3'}` : `Your ${tri.distance === 'ironman' ? 'Ironman' : '70.3'}`;
+  const cyclingLabel = getCyclingEventLabel(s);
+  const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
+  const raceCity = cyclingLabel ? null : (getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null);
+  const eventLabel = raceCity ? `${raceCity} ${baseEventLabel}` : baseEventLabel;
+  const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${eventLabel}` : `Your ${eventLabel}`;
   const raceDate = s.onboarding?.customRaceDate;
   const raceDays = raceDate ? daysUntil(raceDate) : 0;
   const raceCountdownDisplay = raceDays > 14 ? `${Math.floor(raceDays / 7)}` : `${raceDays}`;
   const raceCountdownUnit = raceDays > 14 ? 'weeks' : 'days';
+
+  // Dismissed benchmark tests — chips only show after the test card is dismissed
+  const dismissedTests = new Set<string>((tri as any).dismissedTests as string[] ?? []);
 
   // Weekly totals
   const totalMin = workouts.reduce((acc, w) => acc + estimateMinutes(w), 0);
@@ -71,6 +93,10 @@ export function renderTriathlonPlanView(): void {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
+  const injuryActive = isInjuryActive();
+  const injState = injuryActive ? getInjuryStateForDisplay() : null;
+  const injStatus = injState ? getDisciplineStatusForInjury(injState.location) : null;
+
   container.innerHTML = `
     <style>
       @keyframes floatUp {
@@ -79,22 +105,11 @@ export function renderTriathlonPlanView(): void {
       }
       .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
     </style>
-    <div class="mosaic-page" style="background:#FAF9F6;position:relative;min-height:100vh">
-      <!-- Full-page sky gradient — identical to running plan/home -->
-      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
-        <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%)"></div>
-        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="tpBlur"><feGaussianBlur stdDeviation="20"/></filter>
-            <filter id="tpSoft"><feGaussianBlur stdDeviation="6"/></filter>
-          </defs>
-          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#tpSoft)" opacity="0.6"/>
-          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#tpBlur)" opacity="0.35"/>
-          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#tpBlur)" opacity="0.25"/>
-          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#tpSoft)"/>
-          <path d="M-20,350 Q100,330 220,345 T440,335 L440,600 L-20,600 Z" fill="rgba(255,255,255,0.15)"/>
-        </svg>
+    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('tp', { variant: 'asymmetric', side: 'right', palette: 'sky', pulse: true })}
       </div>
+      ${buildSunGlint('low')}
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
 
@@ -115,9 +130,12 @@ export function renderTriathlonPlanView(): void {
           ${phase ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:10px;letter-spacing:-0.01em">${phase}</div>` : ''}
           ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">Week ${s.w} of ${s.tw}</div>` : ''}
 
-          <div style="display:flex;justify-content:center;gap:8px;margin-top:18px">
+          <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
             <button id="tri-coach-btn" class="m-btn-glass">Coach</button>
-            <button id="tri-checkin-btn" class="m-btn-glass">Check-in</button>
+            ${injuryActive
+              ? `<button id="tri-injury-header-btn" style="padding:8px 18px;border-radius:100px;border:none;background:rgba(234,88,12,0.12);backdrop-filter:blur(8px);cursor:pointer;font-size:13px;font-weight:600;color:#92400E;font-family:var(--f);box-shadow:0 1px 4px rgba(0,0,0,0.06)">In Recovery</button>`
+              : `<button id="tri-checkin-btn" class="m-btn-glass">Check-in</button>`}
+            ${!isFutureWeek ? `<button id="tri-plan-generate-session" class="m-btn-glass">+ Add session</button>` : ''}
           </div>
         </div>
 
@@ -138,12 +156,14 @@ export function renderTriathlonPlanView(): void {
             </div>
           </div>
           <!-- Discipline mini-bars -->
-          <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-            ${renderDisciplineMini('swim', minByDisc.swim, totalMin)}
-            ${renderDisciplineMini('bike', minByDisc.bike, totalMin)}
-            ${renderDisciplineMini('run', minByDisc.run, totalMin)}
+          <div style="margin-top:10px;display:grid;grid-template-columns:${isCyclingOnlyMode(s) ? '1fr' : '1fr 1fr 1fr'};gap:8px">
+            ${isCyclingOnlyMode(s)
+              ? renderDisciplineMini('bike', minByDisc.bike, totalMin)
+              : `${renderDisciplineMini('swim', minByDisc.swim, totalMin)}
+                 ${renderDisciplineMini('bike', minByDisc.bike, totalMin)}
+                 ${renderDisciplineMini('run', minByDisc.run, totalMin)}`}
           </div>
-          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours per discipline this week</div>
+          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours${isCyclingOnlyMode(s) ? '' : ' per discipline'} this week</div>
         </div>
 
         <!-- Week navigation strip -->
@@ -153,18 +173,51 @@ export function renderTriathlonPlanView(): void {
               const wkNum = i + 1;
               const active = wkNum === viewWeek;
               return `
-                <div style="flex-shrink:0;min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:${active ? 600 : 500};font-variant-numeric:tabular-nums;border-radius:8px;background:${active ? '#0F172A' : 'rgba(255,255,255,0.75)'};color:${active ? '#fff' : 'var(--c-muted)'};box-shadow:${active ? '0 2px 6px rgba(0,0,0,0.15)' : '0 1px 2px rgba(0,0,0,0.04)'}">${wkNum}</div>
+                <button data-tri-week-nav="${wkNum}" style="flex-shrink:0;min-width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:${active ? 600 : 500};font-variant-numeric:tabular-nums;border-radius:8px;border:none;background:${active ? '#0F172A' : 'rgba(255,255,255,0.75)'};color:${active ? '#fff' : 'var(--c-muted)'};box-shadow:${active ? '0 2px 6px rgba(0,0,0,0.15)' : '0 1px 2px rgba(0,0,0,0.04)'};cursor:pointer">${wkNum}</button>
               `;
             }).join('')}
           </div>
         </div>
 
-        <!-- Refine your benchmarks (sticks until done or dismissed) -->
-        ${renderBenchmarkTestsCard(s)}
+        <!-- Future-week draft banner (mirrors running plan-view) -->
+        ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Draft. Final workouts depend on the preceding week\'s performance.</div>` : ''}
+
+        <!-- Injury banner + morning check (current week only) -->
+        ${!isFutureWeek && injuryActive && injState ? `
+          <div style="padding:0 20px">
+            ${buildTriMorningPainCheck(injState)}
+            ${buildTriInjuryBanner(injState)}
+          </div>
+        ` : ''}
+
+        <!-- Refine your benchmarks (sticks until done or dismissed, current week only) -->
+        ${!isFutureWeek ? renderBenchmarkTestsCard(s) : ''}
+
+        <!-- Vibes Run nudge (build phase only, current week only, once per plan) -->
+        ${!isFutureWeek && wk?.ph === 'build' && !s.vibesRunNudgeDismissed ? `
+          <div style="padding:0 20px;margin-bottom:8px">
+            <div id="tri-vibes-nudge-card" style="padding:14px 16px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);border:1px solid rgba(0,0,0,0.06);border-radius:14px;position:relative;overflow:hidden">
+              <div aria-hidden="true" style="position:absolute;top:0;left:0;width:240px;height:240px;pointer-events:none;
+                background:radial-gradient(ellipse 70% 70% at 18% 18%, rgba(255,248,229,0.5) 0%, rgba(255,248,229,0.18) 30%, transparent 70%)"></div>
+              <div style="position:relative">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px">
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13px;font-weight:600;color:#0F172A;margin-bottom:4px">Run by Feel</div>
+                    <div style="font-size:12px;color:#64748B;line-height:1.55;margin-bottom:8px">Extra session. Sometimes plans are too prescriptive. Listening to your body lets you push yourself. 5km easy, then keep going if it's still fun.</div>
+                    <div style="font-size:12px;color:#0F172A;line-height:1.55;margin-bottom:8px;font-style:italic">Tristan (our founder) got his half marathon PB on one of these.</div>
+                    <button id="tri-vibes-nudge-science" style="background:none;border:none;padding:0;font-size:11px;color:#64748B;cursor:pointer;text-align:left;font-family:inherit;line-height:1.5">The science: fartlek, central governor, flow states, Born to Run</button>
+                  </div>
+                  <button id="tri-vibes-nudge-dismiss" style="flex-shrink:0;background:none;border:none;cursor:pointer;padding:0;color:#64748B;font-size:18px;line-height:1;opacity:0.5" aria-label="Dismiss">×</button>
+                </div>
+                <button id="tri-vibes-nudge-try" style="margin-top:6px;display:inline-flex;align-items:center;padding:9px 14px;font-size:12px;font-weight:600;color:#0F172A;background:transparent;border:1px solid rgba(0,0,0,0.15);border-radius:10px;cursor:pointer;font-family:inherit">Try one</button>
+              </div>
+            </div>
+          </div>
+        ` : ''}
 
         <!-- Day-by-day -->
         <div class="hf" data-delay="0.18" style="padding:12px 20px">
-          ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [])).join('')}
+          ${Array.from({ length: 7 }, (_, d) => renderDay(d, byDay[d] ?? [], { cssSecPer100m: tri.swim?.cssSecPer100m ?? null, ftp: tri.bike?.ftp ?? null, dismissedTests }, injStatus)).join('')}
         </div>
 
       </div>
@@ -188,10 +241,80 @@ export function renderTriathlonPlanView(): void {
     import('../checkin-overlay').then(({ openCheckinOverlay }) => openCheckinOverlay());
   });
 
-  // Workout card → full breakdown modal
+  // Injury header button (replaces check-in when injured)
+  document.getElementById('tri-injury-header-btn')?.addEventListener('click', () => openInjuryModal());
+
+  // Injury banner buttons
+  document.getElementById('tri-injury-update')?.addEventListener('click', () => openInjuryModal());
+  document.getElementById('tri-injury-recovered')?.addEventListener('click', () => markAsRecovered());
+
+  // Add session button → opens the session generator picker. In tri mode the
+  // picker is filtered to Vibes Run only for V1; full discipline-aware picker
+  // (swim/bike/run × types each) is a follow-up.
+  document.getElementById('tri-plan-generate-session')?.addEventListener('click', () => {
+    import('../session-generator').then(({ openSessionGenerator }) => openSessionGenerator());
+  });
+
+  // Vibes Run nudge handlers
+  document.getElementById('tri-vibes-nudge-dismiss')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const ms = getMutableState();
+    ms.vibesRunNudgeDismissed = true;
+    saveState();
+    renderTriathlonPlanView();
+  });
+  document.getElementById('tri-vibes-nudge-science')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openVibesScienceModal();
+  });
+  document.getElementById('tri-vibes-nudge-try')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const ms = getMutableState();
+    const wkLive = ms.wks?.[ms.w - 1];
+    if (!wkLive) return;
+    if (!wkLive.triWorkouts) wkLive.triWorkouts = [];
+    const jsDay = new Date().getDay();
+    const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+    wkLive.triWorkouts.push({
+      id: `adhoc-${Date.now()}`,
+      t: 'vibes',
+      n: 'Run by Feel',
+      d: '5km easy, then keep going if it\'s still fun',
+      r: 4,
+      rpe: 4,
+      dayOfWeek: ourDay,
+      dayName: DAY_NAMES[ourDay],
+      discipline: 'run',
+    });
+    ms.vibesRunNudgeDismissed = true;
+    saveState();
+    renderTriathlonPlanView();
+  });
+
+  // Morning pain check buttons
+  document.querySelectorAll<HTMLElement>('.tri-morning-pain-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const response = btn.getAttribute('data-response') as 'worse' | 'same' | 'better' | null;
+      if (response) handleTriMorningPainResponse(response);
+    });
+  });
+
+  // Week navigation pills
+  document.querySelectorAll<HTMLElement>('[data-tri-week-nav]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const wkNum = parseInt(btn.getAttribute('data-tri-week-nav') || '0', 10);
+      if (!wkNum) return;
+      _viewWeek = wkNum === getState().w ? null : wkNum;
+      renderTriathlonPlanView();
+    });
+  });
+
+  // Workout card → full breakdown modal (suppressed for future-week previews and injury-stopped cards)
   document.querySelectorAll<HTMLElement>('[data-tri-workout-id]').forEach((el) => {
     el.addEventListener('click', () => {
+      if (isFutureWeek) return;
       if (_dragSuppressClick) { _dragSuppressClick = false; return; }
+      if (el.getAttribute('draggable') === 'false') return; // injury-stopped card
       const id = el.getAttribute('data-tri-workout-id');
       if (!id) return;
       const st = getState();
@@ -202,6 +325,10 @@ export function renderTriathlonPlanView(): void {
   });
 
   wireTriWorkoutDnd();
+  wireTriWorkoutTouchDnd();
+
+  // Prompt for chronic high-RPE bike pattern (fires after view mounts)
+  maybePromptHighRpeBike();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -211,6 +338,16 @@ export function renderTriathlonPlanView(): void {
 let _dragId = '';
 let _dragDay = -1;
 let _dragSuppressClick = false;
+
+// Touch DnD state (iOS — HTML5 drag events don't fire in WKWebView)
+let _touchDragId = '';
+let _touchDragDay = -1;
+let _touchStartX = 0;
+let _touchStartY = 0;
+let _touchDragging = false;
+let _touchClone: HTMLElement | null = null;
+let _touchSourceCard: HTMLElement | null = null;
+let _touchLastHighlight: HTMLElement | null = null;
 
 function wireTriWorkoutDnd(): void {
   document.querySelectorAll<HTMLElement>('.tri-workout-card').forEach((card) => {
@@ -249,6 +386,7 @@ function wireTriWorkoutDnd(): void {
       _dragId = '';
       _dragDay = -1;
       renderTriathlonPlanView();
+      maybeOpenSuggestionsAfterDrop(targetDay);
     });
   });
 
@@ -285,6 +423,7 @@ function wireTriWorkoutDnd(): void {
       _dragId = '';
       _dragDay = -1;
       renderTriathlonPlanView();
+      maybeOpenSuggestionsAfterDrop(targetDay);
     });
   });
 
@@ -324,6 +463,153 @@ function wireTriWorkoutDnd(): void {
       _dragId = '';
       _dragDay = -1;
       renderTriathlonPlanView();
+      maybeOpenSuggestionsAfterDrop(targetDay);
+    });
+  });
+}
+
+/**
+ * Touch-based DnD for iOS WKWebView — HTML5 drag events don't fire there.
+ * Uses touchstart/touchmove/touchend + document.elementFromPoint to replicate
+ * the mouse drag behaviour. Only calls e.preventDefault() after the finger
+ * moves ≥8px so vertical scroll still works for short taps.
+ */
+function wireTriWorkoutTouchDnd(): void {
+  document.querySelectorAll<HTMLElement>('.tri-workout-card').forEach((card) => {
+    card.addEventListener('touchstart', (e) => {
+      const touch = e.touches[0];
+      _touchDragId = card.getAttribute('data-tri-workout-id') || '';
+      _touchDragDay = parseInt(card.getAttribute('data-tri-day-of-week') || '-1', 10);
+      _touchStartX = touch.clientX;
+      _touchStartY = touch.clientY;
+      _touchDragging = false;
+      _touchSourceCard = card;
+    }, { passive: true });
+
+    card.addEventListener('touchmove', (e) => {
+      if (!_touchDragId) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - _touchStartX;
+      const dy = touch.clientY - _touchStartY;
+
+      if (!_touchDragging && Math.sqrt(dx * dx + dy * dy) < 8) return;
+
+      if (!_touchDragging) {
+        _touchDragging = true;
+        if (_touchSourceCard) _touchSourceCard.style.opacity = '0.4';
+        _touchClone = card.cloneNode(true) as HTMLElement;
+        _touchClone.style.cssText = `position:fixed;pointer-events:none;opacity:0.75;z-index:9999;width:${card.offsetWidth}px;border-radius:14px;box-shadow:0 8px 24px rgba(0,0,0,0.18);`;
+        document.body.appendChild(_touchClone);
+      }
+
+      e.preventDefault();
+
+      if (_touchClone) {
+        _touchClone.style.left = `${touch.clientX - card.offsetWidth / 2}px`;
+        _touchClone.style.top  = `${touch.clientY - 30}px`;
+      }
+
+      if (_touchClone) _touchClone.style.visibility = 'hidden';
+      const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+      if (_touchClone) _touchClone.style.visibility = '';
+
+      if (_touchLastHighlight) {
+        _touchLastHighlight.style.outline = '';
+        _touchLastHighlight.style.background = '';
+        const rl = _touchLastHighlight.querySelector('.tri-day-rest-label') as HTMLElement | null;
+        if (rl) rl.textContent = 'Rest';
+        _touchLastHighlight = null;
+      }
+
+      const targetCard = el?.closest<HTMLElement>('.tri-workout-card');
+      if (targetCard && targetCard !== card) {
+        targetCard.style.outline = '2px solid #0F172A';
+        targetCard.style.outlineOffset = '-2px';
+        _touchLastHighlight = targetCard;
+        return;
+      }
+      const targetHeader = el?.closest<HTMLElement>('.tri-day-header');
+      if (targetHeader) {
+        const tDay = parseInt(targetHeader.getAttribute('data-tri-day-stack') || '-1', 10);
+        if (tDay >= 0 && tDay !== _touchDragDay) {
+          targetHeader.style.background = 'rgba(15,23,42,0.06)';
+          _touchLastHighlight = targetHeader;
+        }
+        return;
+      }
+      const targetRow = el?.closest<HTMLElement>('.tri-day-row');
+      if (targetRow && !el?.closest('.tri-workout-card')) {
+        const tDay = parseInt(targetRow.getAttribute('data-tri-day-drop') || '-1', 10);
+        if (tDay >= 0 && tDay !== _touchDragDay) {
+          targetRow.style.background = 'rgba(15,23,42,0.04)';
+          const rl = targetRow.querySelector('.tri-day-rest-label') as HTMLElement | null;
+          if (rl) rl.textContent = 'Drop here';
+          _touchLastHighlight = targetRow;
+        }
+      }
+    }, { passive: false });
+
+    card.addEventListener('touchend', (e) => {
+      if (!_touchDragging || !_touchDragId) {
+        _touchDragId = '';
+        _touchDragDay = -1;
+        _touchSourceCard = null;
+        _touchDragging = false;
+        return;
+      }
+
+      if (_touchClone) { _touchClone.remove(); _touchClone = null; }
+      if (_touchSourceCard) { _touchSourceCard.style.opacity = ''; }
+      if (_touchLastHighlight) {
+        _touchLastHighlight.style.outline = '';
+        _touchLastHighlight.style.background = '';
+        const rl = _touchLastHighlight.querySelector('.tri-day-rest-label') as HTMLElement | null;
+        if (rl) rl.textContent = 'Rest';
+        _touchLastHighlight = null;
+      }
+
+      const touch = e.changedTouches[0];
+      const el = document.elementFromPoint(touch.clientX, touch.clientY) as HTMLElement | null;
+
+      const srcId = _touchDragId;
+      const srcDay = _touchDragDay;
+      _touchDragId = '';
+      _touchDragDay = -1;
+      _touchDragging = false;
+      _touchSourceCard = null;
+      _dragSuppressClick = true;
+      setTimeout(() => { _dragSuppressClick = false; }, 0);
+
+      const targetCard = el?.closest<HTMLElement>('.tri-workout-card');
+      if (targetCard && targetCard !== card) {
+        const targetId = targetCard.getAttribute('data-tri-workout-id') || '';
+        const targetDay = parseInt(targetCard.getAttribute('data-tri-day-of-week') || '-1', 10);
+        if (targetId && targetDay >= 0 && targetDay !== srcDay) {
+          swapWorkoutDays(srcId, targetId, srcDay, targetDay);
+          renderTriathlonPlanView();
+          maybeOpenSuggestionsAfterDrop(targetDay);
+          return;
+        }
+      }
+      const targetHeader = el?.closest<HTMLElement>('.tri-day-header');
+      if (targetHeader) {
+        const targetDay = parseInt(targetHeader.getAttribute('data-tri-day-stack') || '-1', 10);
+        if (targetDay >= 0 && targetDay !== srcDay) {
+          moveWorkoutToDay(srcId, targetDay);
+          renderTriathlonPlanView();
+          maybeOpenSuggestionsAfterDrop(targetDay);
+          return;
+        }
+      }
+      const targetRow = el?.closest<HTMLElement>('.tri-day-row');
+      if (targetRow && !el?.closest('.tri-workout-card') && !el?.closest('.tri-day-header')) {
+        const targetDay = parseInt(targetRow.getAttribute('data-tri-day-drop') || '-1', 10);
+        if (targetDay >= 0 && targetDay !== srcDay) {
+          moveWorkoutToDay(srcId, targetDay);
+          renderTriathlonPlanView();
+          maybeOpenSuggestionsAfterDrop(targetDay);
+        }
+      }
     });
   });
 }
@@ -350,11 +636,204 @@ function moveWorkoutToDay(srcId: string, targetDay: number): void {
   saveState();
 }
 
+/**
+ * After a drop that lands a workout on today, surface the tri suggestion
+ * modal if the drop has produced a mod targeting today specifically. We
+ * deliberately filter out mods that aren't about today's load — the user
+ * just made a change to today, the response should be about today, not
+ * about next week's volume ramp or a cross-training overload elsewhere
+ * in the week. Call after the plan re-render so the user sees the new
+ * layout under the modal.
+ *
+ * Today-relevant filter:
+ * - source `readiness` and `rpe_blown` are today-centric by construction
+ *   (the aggregator picks today's quality workout when emitting them).
+ * - any mod whose `targetWorkoutId` resolves to a workout currently on
+ *   today is also today-relevant — covers `cross_training_overload` when
+ *   the recommended discipline's first mod happens to land on today.
+ * - everything else (`volume_ramp` for next week, cross-training overload
+ *   targeting another day) is dropped here. Those mods still surface via
+ *   the home readiness CTA, which is the "everything actionable" entry
+ *   point — they just don't pop a modal mid-drag.
+ */
+function maybeOpenSuggestionsAfterDrop(targetDay: number): void {
+  const todayDow = (new Date().getDay() + 6) % 7;
+  if (targetDay !== todayDow) return;
+  import('@/calculations/tri-suggestion-aggregator').then(({ collectTriSuggestions }) => {
+    const state = getState();
+    const bundle = collectTriSuggestions(state);
+    if (bundle.mods.length === 0) return;
+
+    const todayWorkoutIds = new Set(
+      (state.wks?.[state.w - 1]?.triWorkouts ?? [])
+        .filter((w: Workout) => w.dayOfWeek === todayDow)
+        .map((w: Workout) => w.id ?? w.n)
+        .filter((id): id is string => !!id),
+    );
+    const todayMods = bundle.mods.filter((m) =>
+      m.source === 'readiness' || m.source === 'rpe_blown' ||
+      (m.targetWorkoutId && todayWorkoutIds.has(m.targetWorkoutId)),
+    );
+    if (todayMods.length === 0) return;
+
+    const todayBundle = { ...bundle, mods: todayMods };
+    import('./tri-suggestion-modal').then(({ showTriSuggestionModal }) => {
+      showTriSuggestionModal(todayBundle).then(() => renderTriathlonPlanView());
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Injury system — triathlon discipline-aware adaptation
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DisciplineStatus = 'ok' | 'easy' | 'stop';
+
+/**
+ * Returns per-discipline training status based on injury location.
+ * Lower-body injuries stop running but allow easy bike and normal swim.
+ * Back injuries reduce all disciplines to easy. Everything else eases run only.
+ */
+function getDisciplineStatusForInjury(location: InjuryLocation): Record<'swim' | 'bike' | 'run', DisciplineStatus> {
+  switch (location) {
+    case 'foot':
+    case 'knee':
+    case 'calf':
+    case 'hamstring':
+    case 'hip':
+      return { swim: 'ok', bike: 'easy', run: 'stop' };
+    case 'back':
+      return { swim: 'easy', bike: 'easy', run: 'easy' };
+    case 'other':
+    default:
+      return { swim: 'ok', bike: 'ok', run: 'easy' };
+  }
+}
+
+function buildTriInjuryBanner(inj: InjuryState): string {
+  const status = getDisciplineStatusForInjury(inj.location);
+  const protocol = INJURY_PROTOCOLS[inj.type];
+  const displayName = protocol?.displayName || inj.type;
+
+  const phaseLabels: Record<string, string> = {
+    acute: 'Acute — Rest',
+    rehab: 'Rehabilitation',
+    test_capacity: 'Capacity Testing',
+    return_to_run: 'Return to Run',
+    graduated_return: 'Graduated Return',
+    resolved: 'Resolved',
+  };
+  const phaseLabelText = phaseLabels[inj.injuryPhase] || 'Rehabilitation';
+
+  const discRow = (disc: 'swim' | 'bike' | 'run', label: string): string => {
+    const st = status[disc];
+    const text = st === 'ok' ? 'Continue normally' : st === 'easy' ? 'Low intensity only' : 'Paused';
+    const colour = st === 'ok' ? '#5a8050' : st === 'easy' ? '#92400E' : '#94A3B8';
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid rgba(0,0,0,0.05)">
+      <span style="font-size:12px;font-weight:600;color:#0F172A">${label}</span>
+      <span style="font-size:11px;font-weight:500;color:${colour}">${text}</span>
+    </div>`;
+  };
+
+  return `
+    <div style="margin-bottom:12px;padding:16px;background:#fff;border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+        <div>
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Recovery mode</div>
+          <div style="font-size:16px;font-weight:600;color:#0F172A;letter-spacing:-0.01em">${displayName}</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:3px">${phaseLabelText}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Pain</div>
+          <div style="font-size:28px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:#0F172A">${inj.currentPain}<span style="font-size:12px;color:var(--c-faint);font-weight:400">/10</span></div>
+        </div>
+      </div>
+      <div style="margin-bottom:12px">
+        ${discRow('swim', 'Swim')}
+        ${discRow('bike', 'Bike')}
+        ${discRow('run', 'Run')}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button id="tri-injury-update" style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;color:var(--c-black);font-weight:500;cursor:pointer;font-family:var(--f)">Update injury</button>
+        <button id="tri-injury-recovered" style="flex:1;font-size:13px;padding:10px 0;text-align:center;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#fff;font-weight:500;cursor:pointer;font-family:var(--f)">I'm recovered</button>
+      </div>
+    </div>
+  `;
+}
+
+function buildTriMorningPainCheck(inj: InjuryState): string {
+  const s = getState();
+  const today = new Date().toISOString().split('T')[0];
+  if ((s as any).lastMorningPainDate === today) return '';
+
+  const protocol = INJURY_PROTOCOLS[inj.type];
+  const injName = protocol?.displayName || inj.type;
+  const pain = inj.currentPain || 0;
+  const btnBase = 'padding:12px 0;border-radius:10px;border:1px solid var(--c-border-strong);background:transparent;cursor:pointer;font-size:13px;font-weight:500;color:var(--c-black);font-family:var(--f)';
+
+  return `
+    <div id="tri-morning-pain-check" style="margin-bottom:12px;padding:16px;background:#fff;border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 14px rgba(0,0,0,0.05)">
+      <div style="margin-bottom:13px">
+        <div style="font-size:14px;font-weight:600;letter-spacing:-0.01em;color:var(--c-black);margin-bottom:3px">Morning check-in</div>
+        <div style="font-size:12px;color:var(--c-muted);line-height:1.5">How does your ${injName.toLowerCase()} feel vs yesterday? <span style="color:var(--c-faint);font-weight:500">Pain ${pain}/10</span></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px">
+        <button class="tri-morning-pain-btn" data-response="worse" style="${btnBase}">Worse</button>
+        <button class="tri-morning-pain-btn" data-response="same" style="${btnBase}">Same</button>
+        <button class="tri-morning-pain-btn" data-response="better" style="${btnBase}">Better</button>
+      </div>
+    </div>
+  `;
+}
+
+function handleTriMorningPainResponse(response: 'worse' | 'same' | 'better'): void {
+  const s = getMutableState() as any;
+  const today = new Date().toISOString().split('T')[0];
+  s.lastMorningPainDate = today;
+  const injuryState = s.injuryState;
+  if (!injuryState) return;
+  const entry = {
+    date: today,
+    response,
+    painLevel: injuryState.currentPain || 0,
+  };
+  if (!injuryState.morningPainResponses) injuryState.morningPainResponses = [];
+  injuryState.morningPainResponses.push(entry);
+  const newPain = response === 'better'
+    ? Math.max(0, (injuryState.currentPain || 1) - 1)
+    : response === 'worse'
+    ? Math.min(10, (injuryState.currentPain || 1) + 1)
+    : injuryState.currentPain;
+  s.injuryState = recordMorningPain(injuryState, newPain);
+  saveState();
+  const card = document.getElementById('tri-morning-pain-check');
+  if (card) {
+    card.innerHTML = `<div style="font-size:13px;color:var(--c-muted);padding:4px 0;font-weight:500">Noted — ${response === 'better' ? 'good to hear.' : response === 'worse' ? 'take it easy today.' : 'maintaining the plan.'}</div>`;
+  }
+}
+
+/** Render a greyed-out rest placeholder for a discipline-stopped workout. */
+function renderInjuryRestCard(w: Workout, disc: string): string {
+  const discLabel = disc === 'swim' ? 'Swim' : disc === 'bike' ? 'Bike' : 'Run';
+  return `
+    <div class="tri-workout-card" data-tri-workout-id="${escapeHtml(w.id ?? w.n)}" data-tri-day-of-week="${w.dayOfWeek ?? ''}" draggable="false" style="
+      background:#f8fafc;border-radius:14px;padding:14px 16px;margin-bottom:8px;
+      box-shadow:0 1px 2px rgba(0,0,0,0.04);opacity:0.55;cursor:default;
+    ">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:100px;background:rgba(0,0,0,0.06);color:#94A3B8;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase">${discLabel} — Paused</span>
+      </div>
+      <div style="font-size:15px;font-weight:600;color:#94A3B8;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
+      <div style="font-size:12px;color:#94A3B8;line-height:1.5">${discLabel} training paused during injury recovery.</div>
+    </div>
+  `;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function renderDay(d: number, list: Array<any>): string {
+function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: number | null; ftp: number | null; dismissedTests?: Set<string> }, injStatus: Record<'swim' | 'bike' | 'run', DisciplineStatus> | null = null): string {
   const dayLabel = DAY_NAMES[d];
   if (list.length === 0) {
     return `
@@ -367,6 +846,24 @@ function renderDay(d: number, list: Array<any>): string {
       </div>
     `;
   }
+
+  const renderedCards = list.map((w) => {
+    const rawDisc = w.discipline as 'swim' | 'bike' | 'run' | undefined;
+    // Non-tri-discipline workouts (strength, gym) are never injury-restricted
+    if (!injStatus || !rawDisc || (rawDisc !== 'swim' && rawDisc !== 'bike' && rawDisc !== 'run')) {
+      return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests });
+    }
+    // For bricks: use the more restrictive of bike/run status
+    let disc: 'swim' | 'bike' | 'run' = rawDisc;
+    if (w.t === 'brick') {
+      const rank: Record<DisciplineStatus, number> = { ok: 0, easy: 1, stop: 2 };
+      disc = rank[injStatus.bike] >= rank[injStatus.run] ? 'bike' : 'run';
+    }
+    const status = injStatus[disc];
+    if (status === 'stop') return renderInjuryRestCard(w, rawDisc);
+    return renderTriWorkoutCard(w, { ...benchmarkCtx, dismissedTests: benchmarkCtx.dismissedTests, injuryEasy: status === 'easy' });
+  }).join('');
+
   return `
     <div class="tri-day-row" data-tri-day-drop="${d}" style="margin-bottom:16px;padding:6px 8px;border-radius:10px;transition:background 0.15s">
       <div class="tri-day-header" data-tri-day-stack="${d}" style="display:flex;align-items:center;gap:12px;margin-bottom:8px;border-radius:6px;transition:background 0.15s">
@@ -374,7 +871,7 @@ function renderDay(d: number, list: Array<any>): string {
         <span style="flex:1;height:1px;background:rgba(0,0,0,0.06)"></span>
         <span class="tri-day-stack-label" style="font-size:11px;color:var(--c-faint);font-weight:500">${list.length > 1 ? `${list.length} sessions` : ''}</span>
       </div>
-      ${list.map((w) => renderTriWorkoutCard(w)).join('')}
+      ${renderedCards}
     </div>
   `;
 }
@@ -433,4 +930,83 @@ function capitalize(s: string): string {
 
 function escapeHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ─── Chronic high-RPE bike prompt ─────────────────────────────────────────────
+
+/**
+ * Detects 3+ consecutive completed weeks where all rated bike workouts had
+ * RPE ≥ 8. Returns the count, or 0 if the pattern isn't present.
+ * Only counts weeks where at least one bike workout was rated.
+ */
+function detectConsecutiveHighRpeBike(state: ReturnType<typeof getState>): number {
+  const wks = state.wks ?? [];
+  const completedWeeks = Math.max(0, (state.w ?? 1) - 1);
+  let consecutiveCount = 0;
+  for (let i = completedWeeks - 1; i >= 0; i--) {
+    const wk = wks[i];
+    if (!wk?.triWorkouts || !wk.rated) break;
+    const bikeWorkouts = wk.triWorkouts.filter(w => (w.discipline ?? 'run') === 'bike' && w.id);
+    const ratedBike = bikeWorkouts.filter(w => typeof wk.rated![w.id!] === 'number');
+    if (ratedBike.length === 0) break; // week had no rated bike workouts — stop
+    const allHigh = ratedBike.every(w => (wk.rated![w.id!] as number) >= 8);
+    if (!allHigh) break;
+    consecutiveCount++;
+  }
+  return consecutiveCount;
+}
+
+/**
+ * Prompts the user once when 3+ consecutive bike weeks have all been rated RPE 8+.
+ * No auto-correction. User confirms they've seen it; stored in notifiedMarkers
+ * so it doesn't fire every render.
+ */
+function maybePromptHighRpeBike(): void {
+  const s = getState();
+  const tri = s.triConfig;
+  if (!tri) return;
+  const count = detectConsecutiveHighRpeBike(s);
+  if (count < 3) return;
+  // Already notified for this week or later
+  if ((tri.notifiedMarkers?.highRpeBikeWeek ?? 0) >= (s.w ?? 1)) return;
+
+  // Delay so the plan view mounts first
+  setTimeout(() => {
+    if (document.getElementById('high-rpe-bike-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.id = 'high-rpe-bike-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:20px;padding:24px;max-width:360px;width:100%;box-shadow:0 8px 32px rgba(0,0,0,0.18)">
+        <div style="font-size:15px;font-weight:700;color:#0F172A;margin-bottom:8px">Bike sessions consistently at high effort</div>
+        <div style="font-size:13px;color:#475569;line-height:1.55;margin-bottom:18px">
+          Bike workouts have been rated 8 to 10 RPE for ${count} weeks. Targets may be set too high relative to your current FTP. Sustained overreaching limits adaptation and raises injury risk.
+          <br><br>
+          Consider retesting your FTP or reducing watt targets. Nothing in your plan changes automatically.
+        </div>
+        <div style="display:flex;gap:10px">
+          <button id="high-rpe-review-ftp" style="flex:1;padding:12px;border-radius:12px;border:1px solid #CBD5E1;background:#fff;font-size:13px;font-weight:600;color:#0F172A;cursor:pointer">Review FTP</button>
+          <button id="high-rpe-dismiss" style="flex:1;padding:12px;border-radius:12px;border:none;background:#0F172A;font-size:13px;font-weight:600;color:#fff;cursor:pointer">Got it</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const dismiss = () => {
+      overlay.remove();
+      const ms = getMutableState();
+      if (ms.triConfig) {
+        if (!ms.triConfig.notifiedMarkers) ms.triConfig.notifiedMarkers = {};
+        ms.triConfig.notifiedMarkers.highRpeBikeWeek = ms.w ?? 1;
+        saveState();
+      }
+    };
+
+    document.getElementById('high-rpe-dismiss')?.addEventListener('click', dismiss);
+    document.getElementById('high-rpe-review-ftp')?.addEventListener('click', () => {
+      dismiss();
+      import('../benchmark-overlay').then(({ openBenchmarkOverlay }) => openBenchmarkOverlay());
+    });
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) dismiss(); });
+  }, 500);
 }

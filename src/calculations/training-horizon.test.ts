@@ -124,6 +124,105 @@ describe('Training Horizon', () => {
       });
     });
 
+    describe('weekly volume effect (dose-aware sessions)', () => {
+      // baseParams: marathon, 5 sessions/wk, intermediate (ref=11 km/session, min=3.5)
+      // 4×80km marathon plan = 80 km/wk → ~16 km/session → factor capped at 1.3 (full credit)
+      // 4×30min marathon plan ≈ 20 km/wk → ~4 km/session → factor 0.36 → effective ~1.4 sessions
+
+      it('should give more improvement to a high-volume plan than a low-volume one', () => {
+        const lowVolume = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 20,  // 5 km/session — short
+        });
+        const highVolume = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 60,  // 15 km/session — proper marathon dose
+        });
+        expect(highVolume.improvement_pct).toBeGreaterThan(lowVolume.improvement_pct);
+      });
+
+      it('should treat 10h/week and 3h/week as meaningfully different (hours fallback)', () => {
+        // No km history — onboarding-only user with stated weekly hours.
+        const lowHours = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_hours: 3,   // ~30 km/wk equivalent → 7.5 km/session
+        });
+        const highHours = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_hours: 10,  // ~100 km/wk equivalent → cap kicks in but still > low
+        });
+        expect(highHours.improvement_pct).toBeGreaterThan(lowHours.improvement_pct);
+      });
+
+      it('should trip undertraining penalty when sessions are very short', () => {
+        // 4 sessions × 14 min/wk for marathon: ~9 km/wk → 2.25 km/session
+        // dose_factor clamped to 0.5 → effective_sessions = 2.0 (< marathon min 3.5)
+        const tooShort = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 9,
+        });
+        expect(tooShort.components.undertrain_penalty).toBeGreaterThan(0);
+      });
+
+      it('should not penalise when km/session is at or above the reference', () => {
+        // Marathon ref = 11 km/session × 4 = 44 km/wk
+        const onTarget = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 44,
+        });
+        expect(onTarget.components.undertrain_penalty).toBe(0);
+      });
+
+      it('should prefer km history over hours when both provided', () => {
+        // km says ample volume, hours says minimal — km should win.
+        const kmDominant = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 60,
+          weekly_volume_hours: 1,  // ignored
+        });
+        const hoursOnlyLow = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_hours: 1,
+        });
+        expect(kmDominant.improvement_pct).toBeGreaterThan(hoursOnlyLow.improvement_pct);
+      });
+
+      it('should fall back to legacy behaviour when neither km nor hours provided', () => {
+        const noVolume = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+        });
+        // Should match the result you'd get with effective_sessions == sessions_per_week,
+        // i.e. the same as before this change for the same session count.
+        expect(noVolume.improvement_pct).toBeGreaterThan(0);
+        expect(noVolume.components.undertrain_penalty).toBe(0); // 4 > marathon min 3.5
+      });
+
+      it('should cap dose_factor so absurd long sessions cannot infinitely boost gain', () => {
+        // Even an unrealistic 200 km/wk over 4 sessions clamps factor to 1.3.
+        const realistic = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 60,  // factor = 60/4/11 = 1.36 → clamped to 1.3
+        });
+        const absurd = applyTrainingHorizonAdjustment({
+          ...baseParams,
+          sessions_per_week: 4,
+          weekly_volume_km: 200, // factor = 200/4/11 = 4.5 → clamped to 1.3
+        });
+        // Both clamp to the same effective_sessions, so improvement_pct matches.
+        expect(absurd.improvement_pct).toBeCloseTo(realistic.improvement_pct, 5);
+      });
+    });
+
     describe('ability band effect', () => {
       it('should give more improvement to beginners than elites', () => {
         const resultBeginner = applyTrainingHorizonAdjustment({

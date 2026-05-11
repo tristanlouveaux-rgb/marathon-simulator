@@ -19,6 +19,7 @@ const STEP_ORDER: OnboardingStep[] = [
   'welcome',
   'goals',
   'connect-strava',
+  'about-you',
   'race-target',
   'schedule',
   'review',
@@ -56,7 +57,7 @@ export function initWizard(): void {
   // removed during cleanup, e.g. 'runner-type' after the merge into review),
   // bump the user to a sensible re-entry point. Preserves name/PBs.
   const current = getState().onboarding;
-  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup') {
+  if (current && !STEP_ORDER.includes(current.currentStep) && current.currentStep !== 'manual-entry' && current.currentStep !== 'triathlon-setup' && current.currentStep !== 'tri-past-race' && current.currentStep !== 'tri-workout-preview' && current.currentStep !== 'cycling-setup' && current.currentStep !== 'hyrox-setup' && current.currentStep !== 'hyrox-workout-preview' && current.currentStep !== 'workout-preview' && current.currentStep !== 'about-you') {
     updateState({
       onboarding: { ...current, currentStep: current.name ? 'goals' : 'welcome' },
     });
@@ -123,10 +124,89 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'connect-strava') {
+      goToStep('about-you');
+      return;
+    }
+    if (s.onboarding.currentStep === 'about-you') {
       goToStep('triathlon-setup');
       return;
     }
     if (s.onboarding.currentStep === 'triathlon-setup') {
+      goToStep('tri-past-race');
+      return;
+    }
+    if (s.onboarding.currentStep === 'tri-past-race') {
+      goToStep('tri-workout-preview');
+      return;
+    }
+    if (s.onboarding.currentStep === 'tri-workout-preview') {
+      goToStep('review');
+      return;
+    }
+    if (s.onboarding.currentStep === 'initializing') {
+      completeOnboarding();
+      goToStep('main-view');
+      return;
+    }
+  }
+
+  // Branch: HYROX users route from goals → connect-strava → about-you →
+  // hyrox-setup → hyrox-workout-preview → initializing → main-view.
+  // The previous review step was killed because for HYROX users it duplicated
+  // the setup screen; the workout preview now shows the prescribed session
+  // library so users see plan depth before committing.
+  if (s.onboarding.trainingMode === 'hyrox') {
+    if (s.onboarding.currentStep === 'goals') {
+      goToStep('connect-strava');
+      return;
+    }
+    if (s.onboarding.currentStep === 'connect-strava') {
+      goToStep('about-you');
+      return;
+    }
+    if (s.onboarding.currentStep === 'about-you') {
+      goToStep('hyrox-setup');
+      return;
+    }
+    if (s.onboarding.currentStep === 'hyrox-setup') {
+      goToStep('hyrox-workout-preview');
+      return;
+    }
+    if (s.onboarding.currentStep === 'hyrox-workout-preview') {
+      // Skip the recap review step for HYROX — the workout-preview is the
+      // final reveal before initializing the plan.
+      goToStep('initializing');
+      return;
+    }
+    if (s.onboarding.currentStep === 'initializing') {
+      completeOnboarding();
+      goToStep('main-view');
+      return;
+    }
+  }
+
+  // Branch: cycling users route from goals → connect-strava → about-you →
+  // cycling-setup → workout-preview → review → initializing → main-view.
+  // workout-preview is the "research showcase" step that lists the bike
+  // workout library before plan generation.
+  if (s.onboarding.trainingMode === 'cycling') {
+    if (s.onboarding.currentStep === 'goals') {
+      goToStep('connect-strava');
+      return;
+    }
+    if (s.onboarding.currentStep === 'connect-strava') {
+      goToStep('about-you');
+      return;
+    }
+    if (s.onboarding.currentStep === 'about-you') {
+      goToStep('cycling-setup');
+      return;
+    }
+    if (s.onboarding.currentStep === 'cycling-setup') {
+      goToStep('workout-preview');
+      return;
+    }
+    if (s.onboarding.currentStep === 'workout-preview') {
       goToStep('review');
       return;
     }
@@ -145,16 +225,19 @@ export function nextStep(): void {
     return;
   }
 
-  // Branch: manual-entry rejoins the linear order after connect-strava. Since
-  // connect-strava now sits after goals, the user has already picked a mode by
-  // the time they take the manual detour — route them to the mode-appropriate
-  // next step (triathlon-setup for tri, race-target for running).
+  // Branch: manual-entry rejoins the flow at about-you (so age + sex still
+  // get captured even if the user skipped Strava OAuth). about-you then
+  // routes to the mode-appropriate next step.
   if (s.onboarding.currentStep === 'manual-entry') {
-    if (s.onboarding.trainingMode === 'triathlon') {
-      goToStep('triathlon-setup');
-    } else {
-      goToStep('race-target');
-    }
+    goToStep('about-you');
+    return;
+  }
+
+  // Branch: about-you for running mode (no specific trainingMode or 'running' /
+  // 'fitness') routes to race-target. Other modes are handled by their
+  // mode-specific blocks above.
+  if (s.onboarding.currentStep === 'about-you') {
+    goToStep('race-target');
     return;
   }
 
@@ -162,6 +245,18 @@ export function nextStep(): void {
   // users skip schedule (no plan to size) but still see the review/profile
   // reveal so they get the same "this is who you are" moment.
   if (s.onboarding.currentStep === 'race-target' && s.onboarding.trackOnly) {
+    goToStep('review');
+    return;
+  }
+
+  // Branch: running users (no specific trainingMode or mode === 'running') go
+  // schedule → workout-preview → review. Other modes skip workout-preview.
+  const isRunningMode = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
+  if (s.onboarding.currentStep === 'schedule' && isRunningMode && !s.onboarding.trackOnly) {
+    goToStep('workout-preview');
+    return;
+  }
+  if (s.onboarding.currentStep === 'workout-preview') {
     goToStep('review');
     return;
   }
@@ -217,9 +312,53 @@ export function previousStep(): void {
   const s = getState();
   if (!s.onboarding) return;
 
-  // Branch: triathlon-setup back → goals.
+  // Branch: triathlon-setup back → about-you (its prior step).
   if (s.onboarding.currentStep === 'triathlon-setup') {
-    goToStep('goals');
+    goToStep('about-you');
+    return;
+  }
+
+  // Branch: tri-past-race back → triathlon-setup.
+  if (s.onboarding.currentStep === 'tri-past-race') {
+    goToStep('triathlon-setup');
+    return;
+  }
+
+  // Branch: tri-workout-preview back → tri-past-race.
+  if (s.onboarding.currentStep === 'tri-workout-preview') {
+    goToStep('tri-past-race');
+    return;
+  }
+
+  // Branch: hyrox-setup back → about-you.
+  if (s.onboarding.currentStep === 'hyrox-setup') {
+    goToStep('about-you');
+    return;
+  }
+
+  // Branch: hyrox-workout-preview back → hyrox-setup.
+  if (s.onboarding.currentStep === 'hyrox-workout-preview') {
+    goToStep('hyrox-setup');
+    return;
+  }
+
+  // Branch: cycling-setup back → about-you (the previous step in cycling flow).
+  if (s.onboarding.currentStep === 'cycling-setup') {
+    goToStep('about-you');
+    return;
+  }
+
+  // Branch: about-you back → connect-strava (covers all modes; manual-entry
+  // detour is handled by its own back branch below).
+  if (s.onboarding.currentStep === 'about-you') {
+    goToStep('connect-strava');
+    return;
+  }
+
+  // Branch: workout-preview back → cycling-setup (cycling) or schedule (running).
+  if (s.onboarding.currentStep === 'workout-preview') {
+    const isRunning = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
+    goToStep(isRunning ? 'schedule' : 'cycling-setup');
     return;
   }
 
@@ -235,15 +374,22 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: review back depends on mode. Triathlon: → triathlon-setup. Track-only:
-  // → race-target (no schedule step in their path). Everyone else: → schedule.
+  // Branch: review back depends on mode. Triathlon: → tri-past-race. Cycling:
+  // → workout-preview. Running (no mode / 'running'): → workout-preview.
+  // Track-only: → race-target (no schedule step). HYROX: → hyrox-setup.
   if (s.onboarding.currentStep === 'review') {
     if (s.onboarding.trainingMode === 'triathlon') {
-      goToStep('triathlon-setup');
+      goToStep('tri-workout-preview');
+    } else if (s.onboarding.trainingMode === 'hyrox') {
+      goToStep('hyrox-setup');
+    } else if (s.onboarding.trainingMode === 'cycling') {
+      goToStep('workout-preview');
     } else if (s.onboarding.trackOnly) {
       goToStep('race-target');
     } else {
-      goToStep('schedule');
+      // Running mode (default): schedule → workout-preview → review.
+      // Track-only already handled above; non-track running goes back to workout-preview.
+      goToStep('workout-preview');
     }
     return;
   }

@@ -24,12 +24,27 @@
 import { getState } from '@/state/store';
 import type { SimulatorState, Week, Workout, GarminActual } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL } from './colours';
+import { DISCIPLINE_LABEL } from './colours';
+
+// Blue/indigo spectrum — from the UX_PATTERNS zone colour scale.
+// Swim = sky, Bike = blue, Run = indigo. All from the same tonal family.
+const DISC_CHART = {
+  swim: { stroke: '#38BDF8', fill: 'rgba(56,189,248,0.08)' },
+  bike: { stroke: '#8B5CF6', fill: 'rgba(139,92,246,0.08)' },
+  run:  { stroke: '#14B8A6', fill: 'rgba(20,184,166,0.08)' },
+} as const;
 import { sportToTransferSource } from '@/constants/transfer-matrix';
 import { formatKm, type UnitPref } from '@/utils/format';
+import {
+  smoothAreaPath,
+  chartEmptyState,
+  animateChartDrawOn,
+} from './benchmark-charts';
+import { computeTriPlanAdherence } from '@/calculations/plan-adherence.triathlon';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 
 type Discipline = 'swim' | 'bike' | 'run';
-type ProgressRange = '4w' | '12w' | 'all' | 'forecast';
+export type ProgressRange = '4w' | '12w' | 'all' | 'forecast';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Navigation
@@ -39,9 +54,9 @@ function navigateTab(tab: TabId): void {
   if (tab === 'home') {
     import('../home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'plan') {
-    import('../plan-view').then(({ renderPlanView }) => renderPlanView());
-  } else if (tab === 'record') {
-    import('../record-view').then(({ renderRecordView }) => renderRecordView());
+    import('../main-view').then(({ renderMainView }) => renderMainView());
+  } else if (tab === 'forecast') {
+    import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   } else if (tab === 'account') {
     import('../account-view').then(({ renderAccountView }) => renderAccountView());
   } else if (tab === 'stats') {
@@ -201,11 +216,14 @@ function rangeSlice(s: SimulatorState, range: ProgressRange): RangedSeries {
   const wks = s.wks ?? [];
   const currentIdx = (s.w ?? 1) - 1;
 
-  // History up to and including the current week.
-  const histAll = all.slice(0, Math.min(all.length, currentIdx + 1));
+  // Exclude the current in-progress week — showing a partially-complete week
+  // (e.g. Monday morning with near-zero volume) makes the trend look like
+  // training collapsed. Volume charts show completed weeks only.
+  const completedCount = Math.max(0, Math.min(all.length, currentIdx));
+  const histAll = all.slice(0, completedCount);
 
   if (range === 'forecast') {
-    // Show last 8 history weeks + next 8 planned weeks.
+    // Show last 8 completed history weeks + next 8 planned weeks.
     const past = histAll.slice(-8);
     const future: WeekDisciplineSlice[] = [];
     for (let i = currentIdx + 1; i < Math.min(wks.length, currentIdx + 1 + 8); i++) {
@@ -216,6 +234,25 @@ function rangeSlice(s: SimulatorState, range: ProgressRange): RangedSeries {
 
   const sliceCount = range === '4w' ? 4 : range === '12w' ? 12 : undefined;
   const trimmed = sliceCount === undefined ? histAll : histAll.slice(-sliceCount);
+
+  // Fall back to fitnessHistory km when plan-week actuals are missing or too
+  // sparse to draw a chart (< 2 completed weeks, or no km in any discipline).
+  const hasEnoughActualData = trimmed.length >= 2
+    && trimmed.some(sl => sl.km.swim > 0 || sl.km.bike > 0 || sl.km.run > 0);
+  if (!hasEnoughActualData) {
+    const fh = s.triConfig?.fitnessHistory ?? [];
+    const fhSliced = sliceCount ? fh.slice(-sliceCount) : fh;
+    const hasHistoryKm = fhSliced.some(h => (h.swimKm ?? 0) > 0 || (h.bikeKm ?? 0) > 0 || (h.runKm ?? 0) > 0);
+    console.log(`[tri:rangeSlice] plan actuals insufficient (${trimmed.length}w) — fh entries: ${fhSliced.length}, hasHistoryKm: ${hasHistoryKm}`);
+    if (fhSliced.length >= 2 && hasHistoryKm) {
+      const fhSlices: WeekDisciplineSlice[] = fhSliced.map(h => ({
+        km:  { swim: h.swimKm ?? 0, bike: h.bikeKm ?? 0, run: h.runKm ?? 0 },
+        tss: { swim: 0, bike: 0, run: 0 },
+      }));
+      return { history: fhSlices, forecast: [], histLen: fhSlices.length };
+    }
+  }
+
   return { history: trimmed, forecast: [], histLen: trimmed.length };
 }
 
@@ -231,12 +268,6 @@ function chartGridLines(maxVal: number, yOf: (v: number) => number, W: number, p
     lines.push(`<line x1="${padL}" y1="${gy}" x2="${W - padR}" y2="${gy}" stroke="rgba(0,0,0,0.05)" stroke-width="0.5"/>`);
   }
   return lines.join('');
-}
-
-function smoothAreaPath(pts: [number, number][]): string {
-  if (pts.length === 0) return '';
-  if (pts.length === 1) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-  return `M ${pts.map(p => `${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' L ')}`;
 }
 
 function buildWeekLabels(n: number, labelStep = 1, futureCount = 0): string {
@@ -262,13 +293,6 @@ function buildWeekLabels(n: number, labelStep = 1, futureCount = 0): string {
   }).join('');
 }
 
-function chartEmptyState(height = 65, msg = 'Not enough data yet', sub = 'Needs at least 2 weeks'): string {
-  return `<div style="height:${height}px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;background:rgba(0,0,0,0.02);border-radius:10px">
-    <div style="font-size:13px;color:var(--c-muted);text-align:center">${msg}</div>
-    <div style="font-size:11px;color:var(--c-faint);text-align:center">${sub}</div>
-  </div>`;
-}
-
 // ────────────────────────────────────────────────────────────────────────────
 // Range toggle pill
 // ────────────────────────────────────────────────────────────────────────────
@@ -284,7 +308,6 @@ function buildRangeToggle(active: ProgressRange): string {
       ${btn('4w', '4w')}
       ${btn('12w', '12w')}
       ${btn('all', 'All')}
-      ${btn('forecast', 'Forecast')}
     </div>`;
 }
 
@@ -317,8 +340,8 @@ function buildDisciplineKmChart(
     ? pts.slice(Math.max(0, series.histLen - 1)) // bridge with last hist point
     : [];
 
-  const accent = DISCIPLINE_COLOURS[discipline].accent;
-  const fill = DISCIPLINE_COLOURS[discipline].badge;
+  const accent = DISC_CHART[discipline].stroke;
+  const fill = DISC_CHART[discipline].fill;
 
   const histTopPath = smoothAreaPath(histPts);
   const histAreaPath = histPts.length >= 2
@@ -338,11 +361,11 @@ function buildDisciplineKmChart(
 
   return `
     <div style="position:relative;padding-right:36px">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
         ${chartGridLines(maxVal, yOf, W, padL, padR)}
         ${histAreaPath ? `<path d="${histAreaPath}" fill="${fill}" stroke="none"/>` : ''}
-        ${histTopPath ? `<path d="${histTopPath}" class="chart-draw" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linejoin="round"/>` : ''}
-        ${futTopPath ? `<path d="${futTopPath}" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 3" opacity="0.7"/>` : ''}
+        ${histTopPath ? `<path d="${histTopPath}" class="chart-draw" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ''}
+        ${futTopPath ? `<path d="${futTopPath}" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 3" opacity="0.7" vector-effect="non-scaling-stroke"/>` : ''}
       </svg>
       <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
@@ -353,13 +376,13 @@ function buildDisciplineKmChart(
 // Per-discipline TSS chart — three lines on one chart
 // ────────────────────────────────────────────────────────────────────────────
 
-function buildPerDisciplineTSSChart(series: RangedSeries): string {
+function buildPerDisciplineTSSChart(series: RangedSeries, cycling = false): string {
   const all = [...series.history, ...series.forecast];
   const n = all.length;
   const swim = all.map(s => s.tss.swim);
   const bike = all.map(s => s.tss.bike);
   const run = all.map(s => s.tss.run);
-  const allFlat = [...swim, ...bike, ...run];
+  const allFlat = [...(cycling ? [] : swim), ...bike, ...(cycling ? [] : run)];
 
   if (n < 2 || allFlat.every(v => v === 0)) return chartEmptyState(75);
 
@@ -370,19 +393,27 @@ function buildPerDisciplineTSSChart(series: RangedSeries): string {
   const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
   const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
 
-  const lineFor = (vals: number[], color: string, dashed: boolean): string => {
+  const lineFor = (vals: number[], color: string, fill: string): string => {
     const histPts: [number, number][] = vals.slice(0, series.histLen).map((v, i) => [xOf(i), yOf(v)]);
     const futPts: [number, number][] = series.forecast.length > 0
       ? vals.slice(Math.max(0, series.histLen - 1)).map((v, i) => [xOf(i + series.histLen - 1), yOf(v)])
       : [];
-    const histPath = histPts.length >= 2
-      ? `<path d="${smoothAreaPath(histPts)}" class="chart-draw" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>`
+    const lastHistX = histPts.length > 0 ? xOf(series.histLen - 1).toFixed(1) : '0';
+    const firstHistX = histPts.length > 0 ? xOf(0).toFixed(1) : '0';
+    const histTopPath = histPts.length >= 2 ? smoothAreaPath(histPts) : '';
+    const histAreaPath = histTopPath
+      ? `${histTopPath} L ${lastHistX} ${H} L ${firstHistX} ${H} Z`
+      : '';
+    const histAreaEl = histAreaPath
+      ? `<path d="${histAreaPath}" fill="${fill}" stroke="none"/>`
+      : '';
+    const histLineEl = histTopPath
+      ? `<path d="${histTopPath}" class="chart-draw" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>`
       : '';
     const futPath = futPts.length >= 2
       ? `<path d="${smoothAreaPath(futPts)}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 3" opacity="0.7"/>`
       : '';
-    return histPath + futPath;
-    void dashed; // currently unused, kept for API symmetry
+    return histAreaEl + histLineEl + futPath;
   };
 
   const tickStep = maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
@@ -396,11 +427,11 @@ function buildPerDisciplineTSSChart(series: RangedSeries): string {
 
   return `
     <div style="position:relative;padding-right:36px">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
         ${chartGridLines(maxVal, yOf, W, padL, padR)}
-        ${lineFor(swim, DISCIPLINE_COLOURS.swim.accent, false)}
-        ${lineFor(bike, DISCIPLINE_COLOURS.bike.accent, false)}
-        ${lineFor(run,  DISCIPLINE_COLOURS.run.accent,  false)}
+        ${cycling ? '' : lineFor(swim, DISC_CHART.swim.stroke, DISC_CHART.swim.fill)}
+        ${lineFor(bike, DISC_CHART.bike.stroke, DISC_CHART.bike.fill)}
+        ${cycling ? '' : lineFor(run,  DISC_CHART.run.stroke,  DISC_CHART.run.fill)}
       </svg>
       <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
@@ -424,10 +455,11 @@ function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): st
 
   // Display as TrainingPeaks daily-equivalent (÷7) — same convention as the
   // running stats CTL chart and the tri Load page.
+  const cycling = isCyclingOnlyMode(s);
   const swim = sliced.map(h => h.swimCtl / 7);
   const bike = sliced.map(h => h.bikeCtl / 7);
   const run = sliced.map(h => h.runCtl / 7);
-  const allFlat = [...swim, ...bike, ...run];
+  const allFlat = [...(cycling ? [] : swim), ...bike, ...(cycling ? [] : run)];
 
   const W = 320, H = 65, padL = 6, padR = 6;
   const usableW = W - padL - padR;
@@ -439,6 +471,11 @@ function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): st
   const linePath = (vals: number[]): string => {
     const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
     return smoothAreaPath(pts);
+  };
+  const areaPath = (vals: number[]): string => {
+    const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
+    const top = smoothAreaPath(pts);
+    return `${top} L ${xOf(n - 1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
   };
 
   const tickStep = maxVal <= 30 ? 10 : maxVal <= 60 ? 15 : maxVal <= 120 ? 30 : 50;
@@ -459,150 +496,165 @@ function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): st
 
   return `
     <div style="position:relative;padding-right:36px">
-      <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
         ${chartGridLines(maxVal, yOf, W, padL, padR)}
-        <path d="${linePath(swim)}" class="chart-draw" fill="none" stroke="${DISCIPLINE_COLOURS.swim.accent}" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="${linePath(bike)}" class="chart-draw" fill="none" stroke="${DISCIPLINE_COLOURS.bike.accent}" stroke-width="1.5" stroke-linejoin="round"/>
-        <path d="${linePath(run)}"  class="chart-draw" fill="none" stroke="${DISCIPLINE_COLOURS.run.accent}"  stroke-width="1.5" stroke-linejoin="round"/>
+        ${cycling ? '' : `<path d="${areaPath(swim)}" fill="${DISC_CHART.swim.fill}" stroke="none"/>`}
+        <path d="${areaPath(bike)}" fill="${DISC_CHART.bike.fill}" stroke="none"/>
+        ${cycling ? '' : `<path d="${areaPath(run)}"  fill="${DISC_CHART.run.fill}"  stroke="none"/>`}
+        ${cycling ? '' : `<path d="${linePath(swim)}" class="chart-draw" fill="none" stroke="${DISC_CHART.swim.stroke}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`}
+        <path d="${linePath(bike)}" class="chart-draw" fill="none" stroke="${DISC_CHART.bike.stroke}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+        ${cycling ? '' : `<path d="${linePath(run)}"  class="chart-draw" fill="none" stroke="${DISC_CHART.run.stroke}"  stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`}
       </svg>
       <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
       <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
     </div>`;
 }
 
+
 // ────────────────────────────────────────────────────────────────────────────
-// Benchmark trend charts — FTP / CSS over time
+// Stat list — per-discipline aggregates + adherence + time + total TSS
 // ────────────────────────────────────────────────────────────────────────────
 
-interface BenchmarkSample { date: string; value: number }
-
-function buildBenchmarkTrendChart(
-  samples: BenchmarkSample[],
-  accent: string,
-  fill: string,
-  unitSuffix: string,
-  inverted = false,
-): string {
-  if (samples.length < 2) {
-    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far — needs 2+');
-  }
-
-  // Sort chronologically.
-  const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-  const n = sorted.length;
-  const vals = sorted.map(s => s.value);
-  const W = 320, H = 50, padL = 6, padR = 6;
-  const usableW = W - padL - padR;
-  const minV = Math.min(...vals);
-  const maxV = Math.max(...vals);
-  const span = Math.max(1, maxV - minV);
-  const padding = span * 0.15;
-  const lo = minV - padding;
-  const hi = maxV + padding;
-
-  const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
-  const yOf = (v: number) => {
-    const norm = (v - lo) / (hi - lo);
-    const flipped = inverted ? norm : 1 - norm;
-    return Math.max(2, flipped * (H - 4) + 2);
-  };
-
-  const pts: [number, number][] = vals.map((v, i) => [xOf(i), yOf(v)]);
-  const topPath = smoothAreaPath(pts);
-  const areaPath = `${topPath} L ${xOf(n - 1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
-
-  const labelStep = n > 6 ? Math.ceil(n / 6) : 1;
-  const labels = sorted.map((s, i) => {
-    if (i % labelStep !== 0 && i !== n - 1) return '<span></span>';
-    const d = new Date(s.date);
-    const lbl = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    return `<span style="font-size:9px;color:${i === n - 1 ? 'var(--c-black)' : 'var(--c-faint)'};font-weight:${i === n - 1 ? '600' : '400'}">${lbl}</span>`;
-  }).join('');
-
-  const latest = sorted[n - 1].value;
-  const first = sorted[0].value;
-  const delta = latest - first;
-  const deltaSign = delta >= 0 ? '+' : '';
-  const better = inverted ? delta < 0 : delta > 0;
-  const deltaCol = Math.abs(delta) < 0.01 ? 'var(--c-muted)' : (better ? '#5a8050' : '#c06a50');
-
-  return `
-    <div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
-        <span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${latest.toFixed(unitSuffix === 'W' ? 0 : 1)}${unitSuffix ? `<span style="font-size:11px;color:var(--c-muted);font-weight:400;margin-left:2px">${unitSuffix}</span>` : ''}</span>
-        <span style="font-size:11px;color:${deltaCol};font-variant-numeric:tabular-nums">${deltaSign}${delta.toFixed(unitSuffix === 'W' ? 0 : 1)} since first sample</span>
-      </div>
-      <div style="position:relative">
-        <svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block;overflow:visible">
-          <path d="${areaPath}" fill="${fill}" stroke="none"/>
-          <path d="${topPath}" class="chart-draw" fill="none" stroke="${accent}" stroke-width="1.5" stroke-linejoin="round"/>
-        </svg>
-        <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
-      </div>
-    </div>`;
+interface DisciplineAggregates {
+  distanceKm: number;
+  count: number;
+  longestKm: number;
+  durationSec: number;
+  tss: number;
 }
 
-function fmtCssPace(secPer100m: number): string {
-  const m = Math.floor(secPer100m / 60);
-  const s = Math.round(secPer100m % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
+function emptyAggs(): DisciplineAggregates {
+  return { distanceKm: 0, count: 0, longestKm: 0, durationSec: 0, tss: 0 };
 }
 
-function buildCssTrendChart(samples: BenchmarkSample[]): string {
-  if (samples.length < 2) {
-    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far — needs 2+');
-  }
-  const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
-  const latest = sorted[sorted.length - 1].value;
-  const first = sorted[0].value;
-  const delta = latest - first;
-  const better = delta < 0; // CSS lower = faster = better
-  const deltaCol = Math.abs(delta) < 0.5 ? 'var(--c-muted)' : (better ? '#5a8050' : '#c06a50');
-  const sign = delta >= 0 ? '+' : '';
-  const inner = buildBenchmarkTrendChart(samples, DISCIPLINE_COLOURS.swim.accent, DISCIPLINE_COLOURS.swim.badge, '/100m', /*inverted*/ true)
-    // Replace the headline number/delta with pace-formatted versions.
-    .replace(/<span style="font-size:14px;font-weight:600[^>]*>[^<]*(?:<span[^>]*>[^<]*<\/span>)?<\/span>/,
-      `<span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtCssPace(latest)}<span style="font-size:11px;color:var(--c-muted);font-weight:400;margin-left:2px">/100m</span></span>`)
-    .replace(/<span style="font-size:11px;color:[^"]+;font-variant-numeric:tabular-nums">[^<]*<\/span>/,
-      `<span style="font-size:11px;color:${deltaCol};font-variant-numeric:tabular-nums">${sign}${delta.toFixed(1)}s since first sample</span>`);
-  return inner;
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// All-time tile
-// ────────────────────────────────────────────────────────────────────────────
-
-function buildAllTimeTile(s: SimulatorState, unitPref: UnitPref): string {
-  const wks = s.wks ?? [];
-  const totals = { swim: 0, bike: 0, run: 0 };
-  const counts = { swim: 0, bike: 0, run: 0 };
-  for (const wk of wks) {
+/** Walk completed weeks (current plan + archived previous plans) accumulating
+ * per-discipline distance / count / longest / time / TSS, sliced to the
+ * requested range (4w / 12w / all). */
+function aggregatePerDiscipline(s: SimulatorState, range: ProgressRange): { swim: DisciplineAggregates; bike: DisciplineAggregates; run: DisciplineAggregates } {
+  const out = { swim: emptyAggs(), bike: emptyAggs(), run: emptyAggs() };
+  const archivedWeeks = (s.previousPlanWks ?? []).flatMap(plan => plan.weeks as Week[]);
+  const currentPlanCompleted = (s.wks ?? []).filter(wk => wk.w < (s.w ?? 1));
+  const allCompleted = [...archivedWeeks, ...currentPlanCompleted];
+  const sliceCount = range === '4w' ? 4 : range === '12w' ? 12 : undefined;
+  const weeks = sliceCount === undefined ? allCompleted : allCompleted.slice(-sliceCount);
+  for (const wk of weeks) {
     forEachActual(wk, a => {
       const d = disciplineOf(a);
       if (!d) return;
-      totals[d] += a.distanceKm || 0;
-      counts[d] += 1;
+      const slot = out[d];
+      const km = a.distanceKm || 0;
+      slot.distanceKm += km;
+      slot.count += 1;
+      slot.longestKm = Math.max(slot.longestKm, km);
+      slot.durationSec += a.durationSec || 0;
+      slot.tss += iTrimpToTSS(a.iTrimp);
     });
   }
-  const total = totals.swim + totals.bike + totals.run;
-  if (total === 0) return '';
+  return out;
+}
 
-  const cell = (d: Discipline) => `
-    <div style="flex:1;padding:10px 12px;background:rgba(0,0,0,0.02);border-radius:8px;border:1px solid var(--c-border)">
-      <div style="font-size:10px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em">${DISCIPLINE_LABEL[d]}</div>
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px">
-        <span style="font-size:15px;font-weight:600;color:${DISCIPLINE_COLOURS[d].accent};font-variant-numeric:tabular-nums">${formatKm(totals[d], unitPref)}</span>
-        <span style="font-size:10px;color:var(--c-muted)">${counts[d]} session${counts[d] === 1 ? '' : 's'}</span>
-      </div>
+function fmtHM(sec: number): string {
+  if (sec <= 0) return '—';
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  if (h > 0 && m > 0) return `${h}h ${m}m`;
+  if (h > 0) return `${h}h`;
+  return `${m}m`;
+}
+
+function buildStatListCard(s: SimulatorState, unitPref: UnitPref, range: ProgressRange): string {
+  const aggs = aggregatePerDiscipline(s, range);
+  const totalSec = aggs.swim.durationSec + aggs.bike.durationSec + aggs.run.durationSec;
+  const totalTSS = aggs.swim.tss + aggs.bike.tss + aggs.run.tss;
+  const nWeeks = range === '4w' ? 4 : range === '12w' ? 12 : undefined;
+  const adh = computeTriPlanAdherence(s, nWeeks);
+
+  const row = (label: string, value: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--c-border)">
+      <span style="font-size:13px;color:var(--c-muted)">${label}</span>
+      <span style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${value}</span>
     </div>`;
+  const rowFinal = (label: string, value: string) => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0">
+      <span style="font-size:13px;color:var(--c-muted)">${label}</span>
+      <span style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${value}</span>
+    </div>`;
+
+  const fmtKm = (km: number) => km > 0 ? formatKm(km, unitPref) : '—';
+
+  // Longest rows only render when there's something to show.
+  const longestRows: string[] = [];
+  if (aggs.swim.longestKm > 0) longestRows.push(row('Longest swim', fmtKm(aggs.swim.longestKm)));
+  if (aggs.bike.longestKm > 0) longestRows.push(row('Longest ride', fmtKm(aggs.bike.longestKm)));
+  if (aggs.run.longestKm > 0)  longestRows.push(row('Longest run',  fmtKm(aggs.run.longestKm)));
+
+  const finalRows = [
+    `${row('Plan adherence', adh.pct != null ? `${adh.pct}%` : '—')}`,
+    `${row('Time active',    fmtHM(totalSec))}`,
+    `${rowFinal('Total load', totalTSS > 0 ? `${Math.round(totalTSS).toLocaleString()} TSS` : '—')}`,
+  ].join('');
+
+  const cycling = isCyclingOnlyMode(s);
+  return `
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      ${cycling ? '' : row(`Swim · ${aggs.swim.count} session${aggs.swim.count === 1 ? '' : 's'}`, fmtKm(aggs.swim.distanceKm))}
+      ${row(`Bike · ${aggs.bike.count} session${aggs.bike.count === 1 ? '' : 's'}`, fmtKm(aggs.bike.distanceKm))}
+      ${cycling ? '' : row(`Run · ${aggs.run.count} session${aggs.run.count === 1 ? '' : 's'}`, fmtKm(aggs.run.distanceKm))}
+      ${longestRows.join('')}
+      ${finalRows}
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Phase Timeline (mirrors running stats `buildPhaseTimeline`)
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildPhaseTimeline(s: SimulatorState): string {
+  const weeks = s.wks ?? [];
+  if (weeks.length === 0) return '';
+
+  const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' };
+
+  type Seg = { phase: string; start: number; end: number };
+  const segs: Seg[] = [];
+  for (let i = 0; i < weeks.length; i++) {
+    const ph = weeks[i].ph || 'base';
+    if (!segs.length || segs[segs.length - 1].phase !== ph) segs.push({ phase: ph, start: i + 1, end: i + 1 });
+    else segs[segs.length - 1].end = i + 1;
+  }
+
+  const total = weeks.length;
+  const bars = segs.map((seg, si) => {
+    const w = ((seg.end - seg.start + 1) / total * 100).toFixed(1);
+    const label = phaseText[seg.phase] ?? seg.phase;
+    const isCurr = s.w >= seg.start && s.w <= seg.end;
+    const isPast = seg.end < s.w;
+    const isFirst = si === 0;
+    const isLast = si === segs.length - 1;
+    // Active phase: accent blue. Past: faint slate. Future: light slate.
+    const color = isCurr ? 'var(--c-accent)' : '#94A3B8';
+    const opacity = isCurr ? 1 : isPast ? 0.3 : 0.5;
+    const dotPct = seg.end > seg.start ? ((s.w - seg.start) / (seg.end - seg.start) * 100) : 50;
+    return `
+      <div style="display:flex;flex-direction:column;width:${w}%">
+        <div style="height:8px;border-radius:${isFirst ? '4px 0 0 4px' : ''}${isLast ? '0 4px 4px 0' : ''};background:${color};opacity:${opacity};position:relative">
+          ${isCurr ? `<div style="position:absolute;top:50%;left:${Math.max(8, Math.min(92, dotPct))}%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:white;border:2px solid var(--c-accent);box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>` : ''}
+        </div>
+        <span style="font-size:9px;color:${isCurr ? 'var(--c-black)' : 'var(--c-faint)'};margin-top:5px;font-weight:${isCurr ? '600' : '400'}">${label}</span>
+      </div>`;
+  }).join('');
+
+  const currSeg = segs.find(seg => s.w >= seg.start && s.w <= seg.end);
+  const currPhaseLabel = currSeg ? (phaseText[currSeg.phase] ?? currSeg.phase) + ' phase' : '';
 
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#0F172A;margin-bottom:10px">Lifetime totals</div>
-      <div style="display:flex;gap:8px">
-        ${cell('swim')}
-        ${cell('bike')}
-        ${cell('run')}
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Phase Timeline</div>
+      <div style="display:flex;width:100%;gap:2px;margin-bottom:6px">${bars}</div>
+      <div style="display:flex;justify-content:space-between;font-size:9px;color:var(--c-faint)">
+        <span>Start</span>
+        <span style="color:var(--c-black);font-weight:600">Week ${s.w} of ${s.tw ?? total} · ${currPhaseLabel}</span>
+        <span>Race day</span>
       </div>
     </div>`;
 }
@@ -624,13 +676,80 @@ function buildDetailHeader(title: string): string {
 // ────────────────────────────────────────────────────────────────────────────
 
 function legendChip(d: Discipline): string {
-  return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--c-muted)">
-    <span style="width:8px;height:2px;background:${DISCIPLINE_COLOURS[d].accent};display:inline-block;border-radius:1px"></span>${DISCIPLINE_LABEL[d]}
+  return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--c-muted)">
+    <span style="width:14px;height:3px;background:${DISC_CHART[d].stroke};display:inline-block;border-radius:2px"></span>${DISCIPLINE_LABEL[d]}
   </span>`;
 }
 
-function legendRow(): string {
-  return `<div style="display:flex;gap:12px;margin-bottom:10px">${legendChip('swim')}${legendChip('bike')}${legendChip('run')}</div>`;
+function legendRow(cycling = false): string {
+  return `<div style="display:flex;gap:12px;margin-bottom:10px">${cycling ? '' : legendChip('swim')}${legendChip('bike')}${cycling ? '' : legendChip('run')}</div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Exported content block — used by the unified stats page
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Returns the full progress section HTML (range toggle + all cards) without
+ * any page wrapper, header, or tab bar. Suitable for embedding in the unified
+ * triathlon stats page. */
+export function buildProgressContent(s: SimulatorState, range: ProgressRange): string {
+  const unitPref = s.unitPref ?? 'km';
+  const series = rangeSlice(s, range);
+  const cycling = isCyclingOnlyMode(s);
+
+  const rangeNote = range === 'forecast'
+    ? 'Solid line is what you have done. Dashed line is what your plan calls for over the next 8 weeks.'
+    : range === '4w' ? 'Last 4 weeks.'
+    : range === '12w' ? 'Last 12 weeks.'
+    : 'All available history.';
+
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      ${buildRangeToggle(range)}
+      <div style="font-size:10px;color:var(--c-faint);max-width:60%;text-align:right;line-height:1.4">${rangeNote}</div>
+    </div>
+
+    ${buildStatListCard(s, unitPref, range)}
+    ${buildPhaseTimeline(s)}
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Fitness by discipline (CTL)</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">42-day rolling load · daily-equivalent units</div>
+      ${legendRow(cycling)}
+      ${buildPerDisciplineCTLChart(s, range)}
+    </div>
+
+    ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Swim</span>
+      </div>
+      ${buildDisciplineKmChart(series, 'swim', unitPref)}
+    </div>`}
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Bike</span>
+      </div>
+      ${buildDisciplineKmChart(series, 'bike', unitPref)}
+    </div>
+
+    ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Run</span>
+      </div>
+      ${buildDisciplineKmChart(series, 'run', unitPref)}
+    </div>`}
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Weekly load (TSS) by discipline</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
+      ${legendRow(cycling)}
+      ${buildPerDisciplineTSSChart(series, cycling)}
+    </div>
+  `;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -640,9 +759,7 @@ function legendRow(): string {
 function buildPage(s: SimulatorState, range: ProgressRange): string {
   const unitPref = s.unitPref ?? 'km';
   const series = rangeSlice(s, range);
-  const tri = s.triConfig;
-  const ftpHistory = tri?.bike?.ftpHistory ?? [];
-  const cssHistory = tri?.swim?.cssHistory ?? [];
+  const cycling = isCyclingOnlyMode(s);
 
   const rangeNote = range === 'forecast'
     ? 'Solid line is what you have done. Dashed line is what your plan calls for over the next 8 weeks.'
@@ -654,7 +771,7 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildDetailHeader('Progress')}
 
-      <div style="padding:12px 18px 80px;overflow-y:auto">
+      <div id="tri-progress-content" style="max-width:600px;margin:0 auto;padding:12px 18px 80px;overflow-y:auto">
 
         <!-- Range toggle + caption -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -662,64 +779,53 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           <div style="font-size:10px;color:var(--c-faint);max-width:60%;text-align:right;line-height:1.4">${rangeNote}</div>
         </div>
 
-        <!-- Lifetime totals tile -->
-        ${buildAllTimeTile(s, unitPref)}
+        <!-- Stat list — per-discipline aggregates + adherence + time + total TSS -->
+        ${buildStatListCard(s, unitPref, range)}
+
+        <!-- Phase Timeline -->
+        ${buildPhaseTimeline(s)}
 
         <!-- Per-discipline fitness (CTL) -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Fitness by discipline (CTL)</div>
           <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">42-day rolling load · daily-equivalent units</div>
-          ${legendRow()}
+          ${legendRow(cycling)}
           ${buildPerDisciplineCTLChart(s, range)}
         </div>
 
         <!-- Weekly km — Swim -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
+        ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISCIPLINE_COLOURS.swim.accent}"></span>
+            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
             <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Swim</span>
           </div>
           ${buildDisciplineKmChart(series, 'swim', unitPref)}
-        </div>
+        </div>`}
 
         <!-- Weekly km — Bike -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISCIPLINE_COLOURS.bike.accent}"></span>
+            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
             <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Bike</span>
           </div>
           ${buildDisciplineKmChart(series, 'bike', unitPref)}
         </div>
 
         <!-- Weekly km — Run -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
+        ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-            <span style="width:8px;height:8px;border-radius:2px;background:${DISCIPLINE_COLOURS.run.accent}"></span>
+            <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
             <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Run</span>
           </div>
           ${buildDisciplineKmChart(series, 'run', unitPref)}
-        </div>
+        </div>`}
 
         <!-- Weekly TSS by discipline -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Weekly load (TSS) by discipline</div>
           <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
-          ${legendRow()}
-          ${buildPerDisciplineTSSChart(series)}
-        </div>
-
-        <!-- FTP trend -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
-          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">FTP trend</div>
-          <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Functional threshold power · auto-derived from rides + your tests</div>
-          ${buildBenchmarkTrendChart(ftpHistory, DISCIPLINE_COLOURS.bike.accent, DISCIPLINE_COLOURS.bike.badge, 'W', /*inverted*/ false)}
-        </div>
-
-        <!-- CSS trend -->
-        <div class="m-card" style="padding:16px;margin-bottom:10px">
-          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">CSS trend</div>
-          <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Critical swim speed · faster pace = lower number</div>
-          ${buildCssTrendChart(cssHistory)}
+          ${legendRow(cycling)}
+          ${buildPerDisciplineTSSChart(series, cycling)}
         </div>
 
       </div>
@@ -747,34 +853,24 @@ export function renderTriProgressDetailView(): void {
     import('./stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
   });
 
+  wireProgressRangeButtons(s);
+}
+
+function wireProgressRangeButtons(s: SimulatorState): void {
   document.querySelectorAll<HTMLButtonElement>('.tri-progress-range-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const r = btn.dataset.range as ProgressRange;
-      if (!r) return;
+      if (!r || r === _activeRange) return;
       _activeRange = r;
-      renderTriProgressDetailView();
+      const content = document.getElementById('tri-progress-content');
+      if (content) {
+        content.innerHTML = buildProgressContent(s, _activeRange);
+        animateChartDrawOn();
+        wireProgressRangeButtons(s);
+      } else {
+        renderTriProgressDetailView();
+      }
     });
   });
 }
 
-// Local copy of the chart-draw animation helper used by running stats. Kept
-// inline so this file has no cross-mode dependency back into stats-view.ts.
-function animateChartDrawOn(): void {
-  requestAnimationFrame(() => {
-    document.querySelectorAll<SVGPathElement>('path.chart-draw').forEach(path => {
-      const len = path.getTotalLength();
-      path.style.strokeDasharray = String(len);
-      path.style.strokeDashoffset = String(len);
-      path.getBoundingClientRect();
-      path.style.transition = 'stroke-dashoffset 1.2s ease-out';
-      path.style.strokeDashoffset = '0';
-      const clear = () => {
-        path.style.strokeDasharray = '';
-        path.style.strokeDashoffset = '';
-        path.removeEventListener('transitionend', clear);
-      };
-      path.addEventListener('transitionend', clear, { once: true });
-      setTimeout(clear, 1400);
-    });
-  });
-}

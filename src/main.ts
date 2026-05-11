@@ -4,8 +4,8 @@
  */
 
 import './styles.css';
-import { loadState, getState, getMutableState, saveState } from '@/state';
-import { restorePlanFromSupabase } from '@/data/planSettingsSync';
+import { loadState, getState, getMutableState, saveState, clearState } from '@/state';
+import { restorePlanFromSupabase, getLocalStateOwner, setLocalStateOwner } from '@/data/planSettingsSync';
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
@@ -13,6 +13,8 @@ import { advanceWeekToToday, recordAppOpen, isWeekPendingDebrief } from '@/ui/we
 import { checkHolidayEnd, showHolidayWelcomeBack } from '@/ui/holiday-modal';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
+import { refreshVO2Estimates } from '@/data/vo2Sync';
+import { closeOutObservedRecovery, fitKUser, ingestNewActualsAsImpacts } from '@/calculations/adaptive-recovery';
 import { syncActivities, processPendingCrossTraining } from '@/data/activitySync';
 import { healMissingITrimp } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
@@ -22,12 +24,26 @@ import { renderAuthView } from '@/ui/auth-view';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
 import { getActivitySource, hasPhysiologySource } from '@/data/sources';
+import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnostic';
 import '@/ui/strava-detail';
+
+// Console-callable VO2max diagnostic: run `diagnoseVO2()` in the browser console
+// to see every available VO2max signal computed from the current state, plus
+// the HR-regression's internal points and HRR distribution. Read-only.
+(window as any).diagnoseVO2 = (): unknown => {
+  const d = runVO2Diagnostic();
+  printVO2Diagnostic(d);
+  return d;
+};
 
 /** True when running in local simulator mode (no auth required) */
 export function isSimulatorMode(): boolean {
   return localStorage.getItem('mosaic_simulator_mode') === '1';
 }
+
+// Tracks the userId active when launchApp() last ran.
+// Suppresses the duplicate SIGNED_IN that Supabase fires for an already-valid session on page load.
+let launchedUserId: string | null = null;
 
 /**
  * Startup-sync coordination. `launchApp` fires several fire-and-forget
@@ -173,17 +189,56 @@ async function bootstrap(): Promise<void> {
 
   // Authenticated (anon or real) — proceed with app
   await launchApp();
+  const { data: { user: launchedUser } } = await supabase.auth.getUser();
+  launchedUserId = launchedUser?.id ?? null;
   setupAuthListener();
 }
 
 /**
  * Listen for auth state changes (login/logout)
+ *
+ * SIGNED_IN here only fires on explicit sign-in via the auth form (the
+ * anonymous bootstrap sign-in happens before this listener is attached, so
+ * its event is missed by design). On explicit sign-in, the user expects
+ * their account's plan to load — but launchApp's default path checks
+ * localStorage first and skips restore-from-Supabase if anything is there.
+ * That left users seeing the previous (anon / signed-out) session's state.
+ *
+ * On SIGNED_IN: try restorePlanFromSupabase first; only overwrite local
+ * state if the cloud backup actually exists. If no backup, keep whatever
+ * was in localStorage so we don't strand a user mid-wizard.
+ *
+ * Upgrade-guest flow uses updateUser → USER_UPDATED, not SIGNED_IN, so
+ * guest data is preserved on that path.
  */
 function setupAuthListener(): void {
   supabase.auth.onAuthStateChange((event) => {
     if (event === 'SIGNED_IN') {
-      void launchApp();
+      void (async () => {
+        const { data: { user } } = await supabase.auth.getUser();
+        const newUserId = user?.id;
+        // Supabase fires SIGNED_IN for the already-valid session on page load,
+        // not only for explicit user sign-ins. Suppress the duplicate to avoid
+        // running launchApp() twice on every page load.
+        if (newUserId && newUserId === launchedUserId) return;
+        // On explicit sign-in, the user expects their account's plan. The
+        // localStorage state may belong to a previous (anonymous or
+        // signed-out) session — owner_id stamped by save/restore tells us
+        // whose data is on disk. If owner mismatches the new user, wipe it
+        // before restore so we never show one user another's plan.
+        // If restore returns false (no cloud backup), launchApp falls
+        // through to the wizard — the right outcome for a fresh account.
+        const owner = getLocalStateOwner();
+        if (newUserId && owner && owner !== newUserId) {
+          clearState();
+          setLocalStateOwner(null);
+        }
+        await restorePlanFromSupabase();
+        await launchApp();
+        launchedUserId = newUserId ?? null;
+      })();
     } else if (event === 'SIGNED_OUT') {
+      launchedUserId = null;
       renderAuthView();
     }
   });
@@ -266,6 +321,20 @@ async function launchApp(): Promise<void> {
   // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
   setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
 
+  // Cross-modal VO2max — refresh per-discipline estimates + cardiac ceiling
+  // from the last 8 weeks of activity. Cheap (~2ms), pure local computation.
+  //
+  // Tri mode skips this launch-top call: the canonical activity log lives in
+  // the DB, not `s.wks[].garminActuals`, so a wks-only orchestrator run
+  // produces a different result than the post-benchmark-derive run a few
+  // hundred ms later (different HRmax sample, different point count). Firing
+  // once here and once after benchmarks made the headline visibly flap
+  // between two values within a single launch. Tri mode runs it once after
+  // `loadActivitiesFromDB` resolves — see line ~530.
+  if (state.eventType !== 'triathlon') {
+    refreshVO2Estimates();
+  }
+
   // Calibrate personal TSS-per-active-minute from logged activities
   const calibrated = calibrateTssPerActiveMinute(state.wks);
   if (calibrated != null) {
@@ -330,7 +399,7 @@ async function launchApp(): Promise<void> {
       const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {
         swim400Sec: state.triConfig?.swim?.pbs?.m400,
         swim200Sec: state.triConfig?.swim?.pbs?.m200,
-      });
+      }, state.triConfig?.swim?.defaultOwSwimEnvironment);
       // ALSO compute the DIRECT (no transfer matrix) per-discipline fitness
       // for the user-facing display. The matrix-adjusted version (above) goes
       // to race prediction internals because cross-training transfer is real
@@ -342,18 +411,19 @@ async function launchApp(): Promise<void> {
       // Diagnostic — once-per-launch so we can see why Training Load might be
       // zero. Activity count, derived fitness per discipline, and how many
       // historical weeks have non-zero CTL.
+      const { classifyActivity } = await import('@/calculations/tri-benchmarks-from-history');
+      const swimActivities = activityLog
+        .filter(a => classifyActivity(a.activityType) === 'swim')
+        .map(a => ({ type: a.activityType, date: a.startTime?.slice(0, 10), distKm: a.distanceKm }));
       console.log('[tri:fitness-diag]', {
         activityCount: activityLog.length,
-        swimCtl: derived.fitness.swim.ctl,
-        bikeCtl: derived.fitness.bike.ctl,
-        runCtl:  derived.fitness.run.ctl,
+        swimDirectCount: directFitness.swim.directCount ?? 0,
+        swimCtl: directFitness.swim.ctl,
+        bikeCtl: directFitness.bike.ctl,
+        runCtl:  directFitness.run.ctl,
         combinedCtl: derived.fitness.combinedCtl,
         historyLen: derived.fitnessHistory.length,
-        historyNonZero: {
-          swim: derived.fitnessHistory.filter(h => h.swimCtl > 0).length,
-          bike: derived.fitnessHistory.filter(h => h.bikeCtl > 0).length,
-          run:  derived.fitnessHistory.filter(h => h.runCtl  > 0).length,
-        },
+        swimActivities,
       });
 
       // Update per-discipline fitness every boot so CTL reflects what's
@@ -367,6 +437,8 @@ async function launchApp(): Promise<void> {
           bike: directFitness.bike,
           run:  directFitness.run,
           combinedCtl: derived.fitness.combinedCtl,  // matrix-aggregate stays
+          crossTrainingAtl: directFitness.crossTrainingAtl,
+          crossTrainingCtl: directFitness.crossTrainingCtl,
         };
         mutable.triConfig.fitnessHistory = derived.fitnessHistory.slice(-52);
         // Fill or refresh CSS / FTP. Per CLAUDE.md "Manually-set Benchmarks
@@ -417,10 +489,10 @@ async function launchApp(): Promise<void> {
         const bike = mutable.triConfig.bike;
         const bikeSrc = bike?.ftpSource;
         const currentFtp = bike?.ftp;
+        const currentConf = bike?.ftpConfidence;
         const derivedFtp = derived.ftp.ftpWatts;
         const ftpConf = derived.ftp.confidence;
         const ftpBlank = !currentFtp;
-        const ftpDerivedRefresh = bikeSrc === 'derived';
         // FTP higher = better. Require medium/high confidence so a low-signal
         // estimate cannot overwrite a deliberate test value. Require ≥3W
         // improvement to ignore noise from rounding/normalisation.
@@ -430,9 +502,35 @@ async function launchApp(): Promise<void> {
           derivedFtp != null &&
           derivedFtp >= currentFtp + 3 &&
           (ftpConf === 'high' || ftpConf === 'medium');
+        // Derived → derived: ratchet up only. A saved derived FTP should
+        // never be replaced by a *lower* derived value within the same
+        // session — that's the regression class where a curve-based 295W
+        // gets clobbered by a fallback 193W when the curve temporarily
+        // disappears (Strava re-processed, etc). The correct "FTP went
+        // down" path is the user manually entering a lower value, which
+        // flips ftpSource to 'user'.
+        //
+        // Exception: if the new derivation has *higher* confidence (e.g.
+        // we previously had 'low' fallback and now have 'high' curve),
+        // accept it even if the value is slightly lower — better data
+        // wins over a stale higher number.
+        const confRank = (c: typeof ftpConf | undefined): number =>
+          c === 'high' ? 3 : c === 'medium' ? 2 : c === 'low' ? 1 : 0;
+        const ftpDerivedRefresh =
+          bikeSrc === 'derived' &&
+          derivedFtp != null &&
+          (
+            currentFtp == null ||
+            derivedFtp >= currentFtp ||
+            confRank(ftpConf) > confRank(currentConf)
+          );
         if ((ftpBlank || ftpDerivedRefresh || ftpUserBeaten) && derivedFtp) {
           if (ftpUserBeaten) {
             console.log(`[tri] FTP auto-improved: user ${currentFtp}W → derived ${derivedFtp}W (${ftpConf} conf)`);
+          } else if (ftpDerivedRefresh && currentFtp != null && derivedFtp > currentFtp) {
+            console.log(`[tri] FTP auto-improved: derived ${currentFtp}W → ${derivedFtp}W (${ftpConf} conf)`);
+          } else if (ftpDerivedRefresh && currentFtp != null && derivedFtp < currentFtp) {
+            console.log(`[tri] FTP refreshed with higher-confidence derivation: ${currentFtp}W (${currentConf}) → ${derivedFtp}W (${ftpConf})`);
           }
           mutable.triConfig.bike = {
             ...(bike ?? {}),
@@ -442,6 +540,11 @@ async function launchApp(): Promise<void> {
             hasPowerMeter: true,
           };
           appendFtpSample(mutable.triConfig.bike, derivedFtp, 'derived', ftpConf);
+        } else if (bikeSrc === 'derived' && currentFtp != null && derivedFtp != null && derivedFtp < currentFtp) {
+          // Saved derived value was held; the new derivation produced a
+          // *lower* number with same-or-worse confidence. Log the rejection
+          // so future "why didn't FTP update?" is one log line away.
+          console.log(`[tri] FTP held: derived path returned ${derivedFtp}W (${ftpConf}) but saved is ${currentFtp}W (${currentConf}) — ratchet-up rule, will not regress.`);
         } else if (bikeSrc === 'user' && bike?.ftp) {
           // User-set FTP — 'high' if they actually ran the 20-min test,
           // 'medium' otherwise. Refresh every launch so completing the test
@@ -469,12 +572,33 @@ async function launchApp(): Promise<void> {
 
       saveState();
 
+      // FTP / CSS may have just been auto-derived from the activity backfill.
+      // Re-run the cross-modal VO2 orchestrator with the DB activity log so:
+      //  (a) cycling estimator picks up fresh FTP this launch
+      //  (b) running HR-regression sees ALL activities, not just those that
+      //      ended up in `wks[].garminActuals` — closing the gap with running
+      //      mode where the same activities are co-located in wks.
+      const orchestratorActivities = activityLog.map(a => ({
+        startTime: a.startTime ?? null,
+        durationSec: a.durationSec ?? 0,
+        distanceKm: a.distanceKm ?? 0,
+        avgHR: a.avgHR ?? null,
+        maxHR: a.maxHR ?? null,
+        hrDrift: a.hrDrift ?? null,
+        activityType: a.activityType ?? null,
+        manualSport: a.manualSport ?? null,
+      }));
+      refreshVO2Estimates(orchestratorActivities);
+
       // Re-render the current view so fitness/CTL values surface immediately
       // after the async backfill. Without this, the stats view that rendered
       // pre-backfill keeps showing zeros until a manual reload.
       if (document.getElementById('tri-bike-setup-btn')) {
         const { renderTriathlonStatsView } = await import('@/ui/triathlon/stats-view');
         renderTriathlonStatsView();
+      } else if (document.getElementById('tri-progress-back')) {
+        const { renderTriProgressDetailView } = await import('@/ui/triathlon/progress-detail-view');
+        renderTriProgressDetailView();
       } else if (document.getElementById('home-tss-row')) {
         scheduleHomeRefresh();
       }
@@ -492,6 +616,162 @@ async function launchApp(): Promise<void> {
     }
   }
 
+  // HYROX: refresh MTL CTL/ATL from planned weeks on every launch.
+  if (hasState && state.eventType === 'hyrox' && state.hyroxConfig) {
+    // ── Format & benchmark migration (one-time, idempotent) ─────────────────
+    // 1. Old format values (open/pro/doubles) → new 4-value format.
+    // 2. Legacy stationBenchmarks (pooled) → format-specific Singles/Doubles slot.
+    try {
+      const mutable = getMutableState();
+      const hx = mutable.hyroxConfig!;
+      const oldFormat = hx.format as string;
+      if (oldFormat === 'open')         hx.format = 'open_singles' as any;
+      else if (oldFormat === 'pro')     hx.format = 'pro_singles' as any;
+      else if (oldFormat === 'doubles') hx.format = 'open_doubles' as any;
+
+      const isDoubles = hx.format === 'open_doubles' || hx.format === 'pro_doubles';
+      const hasLegacy = hx.stationBenchmarks != null && Object.keys(hx.stationBenchmarks).length > 0;
+      const hasSingles = hx.stationBenchmarksSingles != null && Object.keys(hx.stationBenchmarksSingles).length > 0;
+      const hasDoubles = hx.stationBenchmarksDoubles != null && Object.keys(hx.stationBenchmarksDoubles).length > 0;
+      if (hasLegacy && !hasSingles && !hasDoubles) {
+        if (isDoubles) {
+          hx.stationBenchmarksDoubles = { ...hx.stationBenchmarks };
+        } else {
+          hx.stationBenchmarksSingles = { ...hx.stationBenchmarks };
+        }
+        console.log(`[hyrox migration] copied legacy stationBenchmarks → ${isDoubles ? 'Doubles' : 'Singles'} slot (${Object.keys(hx.stationBenchmarks!).length} stations)`);
+      }
+
+      // 3. Doubles-in-singles repair: pre-fix init logic keyed slot off the
+      //    target format. Users who entered doubles splits got them stored in
+      //    the Singles slot. Detection condition is sharp (prev fmt = doubles
+      //    AND singles populated AND doubles empty) — idempotent on already-
+      //    correct state.
+      const prevFmt = hx.hyroxPreviousTimeFormat;
+      const prevIsDoubles = prevFmt === 'open_doubles' || prevFmt === 'pro_doubles';
+      const refreshedSingles = hx.stationBenchmarksSingles
+        && Object.keys(hx.stationBenchmarksSingles).length > 0;
+      const refreshedDoublesEmpty = !hx.stationBenchmarksDoubles
+        || Object.keys(hx.stationBenchmarksDoubles).length === 0;
+      if (prevIsDoubles && refreshedSingles && refreshedDoublesEmpty) {
+        hx.stationBenchmarksDoubles = { ...hx.stationBenchmarksSingles };
+        hx.stationBenchmarksSingles = undefined;
+        console.log(`[hyrox migration] moved ${Object.keys(hx.stationBenchmarksDoubles!).length} stations Singles→Doubles slot (prev race was ${prevFmt})`);
+      }
+
+      // 4. Backfill stationBenchmarkHistory for users with existing benchmarks
+      //    but no history records (existing users from before history landed).
+      //    Seeds one entry per station with today's date and source 'manual'.
+      //    The actual test was older; today is a pragmatic anchor for future
+      //    PR comparisons. Idempotent: skipped when history already has entries
+      //    for the station.
+      const fmt = hx.format as 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+      const isDouble = fmt === 'open_doubles' || fmt === 'pro_doubles';
+      const currentBenchmarks = isDouble
+        ? hx.stationBenchmarksDoubles
+        : hx.stationBenchmarksSingles;
+      if (currentBenchmarks && Object.keys(currentBenchmarks).length > 0) {
+        hx.stationBenchmarkHistory = hx.stationBenchmarkHistory ?? {};
+        const today = new Date().toISOString().slice(0, 10);
+        let backfilled = 0;
+        for (const [station, sec] of Object.entries(currentBenchmarks)) {
+          if (sec == null) continue;
+          const existingForStation = hx.stationBenchmarkHistory[station as keyof typeof hx.stationBenchmarkHistory];
+          if (existingForStation && existingForStation.length > 0) continue;
+          hx.stationBenchmarkHistory[station as keyof typeof hx.stationBenchmarkHistory] = [{
+            dateISO: today,
+            sec: sec as number,
+            source: 'manual' as const,
+            format: fmt,
+            proWeights: !!hx.benchmarksAtProWeights,
+          }];
+          backfilled += 1;
+        }
+        if (backfilled > 0) {
+          console.log(`[hyrox migration] backfilled stationBenchmarkHistory for ${backfilled} station${backfilled > 1 ? 's' : ''}`);
+        }
+      }
+
+      saveState();
+    } catch (err) {
+      console.warn('[hyrox] format/benchmark migration failed', err);
+    }
+
+    // Plan regeneration when the HYROX generator version bumps. Mirrors the
+    // triathlon path at the top of this file. Without this, every bump of
+    // HYROX_GENERATOR_VERSION was a silent no-op for existing users — the
+    // header comment claimed regen-on-launch but the wiring was never built.
+    try {
+      const { generateHyroxPlan, HYROX_GENERATOR_VERSION } = await import('@/workouts/plan_engine.hyrox');
+      const mutable = getMutableState();
+      const savedVersion = mutable.hyroxConfig?.generatorVersion ?? 0;
+      if (savedVersion < HYROX_GENERATOR_VERSION && mutable.hyroxConfig) {
+        const freshWeeks = generateHyroxPlan(mutable);
+        if (freshWeeks.length > 0) {
+          for (let i = 0; i < Math.min(mutable.wks.length, freshWeeks.length); i++) {
+            mutable.wks[i].triWorkouts = freshWeeks[i].triWorkouts;
+            mutable.wks[i].ph = freshWeeks[i].ph;
+          }
+          mutable.hyroxConfig.generatorVersion = HYROX_GENERATOR_VERSION;
+          console.log(`[hyrox] plan regenerated (generator v${savedVersion} → v${HYROX_GENERATOR_VERSION})`);
+          saveState();
+        }
+      }
+    } catch (err) {
+      console.warn('[hyrox] plan regeneration failed', err);
+    }
+
+    try {
+      const { computeMTLFitnessFatigue, computeMTLFitnessFatigueByDiscipline } = await import('@/calculations/mtl');
+      const mutable = getMutableState();
+      const weeks = mutable.wks ?? [];
+      const currentIdx = Math.max(0, (mutable.w ?? 1) - 1);
+      const { mtlCTL, mtlATL } = computeMTLFitnessFatigue(weeks, currentIdx);
+      const split = computeMTLFitnessFatigueByDiscipline(weeks, currentIdx);
+      if (mutable.hyroxConfig) {
+        mutable.hyroxConfig.mtlCTL = mtlCTL;
+        mutable.hyroxConfig.mtlATL = mtlATL;
+        mutable.hyroxConfig.runMtlCTL     = split.runMtlCTL;
+        mutable.hyroxConfig.runMtlATL     = split.runMtlATL;
+        mutable.hyroxConfig.stationMtlCTL = split.stationMtlCTL;
+        mutable.hyroxConfig.stationMtlATL = split.stationMtlATL;
+        mutable.hyroxConfig.brickMtlCTL   = split.brickMtlCTL;
+        mutable.hyroxConfig.brickMtlATL   = split.brickMtlATL;
+        // weeklyMTL = current week's planned MTL (for display / cap enforcement)
+        const { computeWeekMTL } = await import('@/calculations/mtl');
+        mutable.hyroxConfig.weeklyMTL = computeWeekMTL(weeks[currentIdx] ?? { triWorkouts: [] } as any);
+        console.log(`[hyrox] MTL CTL/ATL refreshed: CTL=${mtlCTL.toFixed(1)} ATL=${mtlATL.toFixed(1)} ACWR=${mtlCTL > 0 ? (mtlATL / mtlCTL).toFixed(2) : '—'} · run=${split.runMtlCTL.toFixed(1)} station=${split.stationMtlCTL.toFixed(1)} brick=${split.brickMtlCTL.toFixed(1)}`);
+      }
+      saveState();
+    } catch (err) {
+      console.warn('[hyrox] MTL refresh failed', err);
+    }
+
+    // HYROX run pace yield-to-improvements. Auto-derive from VDOT and overwrite
+    // hx.hyroxRunPaceSecKm when the derived value is meaningfully faster than
+    // the stored user value. Mirrors triathlon's marker-bump pattern. Toast
+    // surfacing happens inside the forecast view on next render.
+    try {
+      const { applyHyroxRunPaceDerivation, detectHyroxMarkerBumps, snapshotHyroxNotifiedMarkers }
+        = await import('@/calculations/hyrox-marker-bumps');
+      const mutable = getMutableState();
+      // Order matters: detect BEFORE apply. detectHyroxMarkerBumps re-derives
+      // from current state and gates on `result.source === 'derived'`. If apply
+      // ran first, it would have already written derived→hyroxRunPaceSecKm,
+      // making the next derive call see userVal === derived and return
+      // source='user' — bump never fires. See hyrox-marker-bumps.test.ts.
+      const bumps = detectHyroxMarkerBumps(mutable);
+      const wrote = applyHyroxRunPaceDerivation(mutable);
+      for (const b of bumps) {
+        console.log(`[hyrox marker-bump] ${b.toastText}`);
+      }
+      snapshotHyroxNotifiedMarkers(mutable);
+      if (wrote || bumps.length > 0) saveState();
+    } catch (err) {
+      console.warn('[hyrox] marker-bump pass failed', err);
+    }
+  }
+
   // Check if onboarding is complete
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
@@ -502,6 +782,13 @@ async function launchApp(): Promise<void> {
     try {
       const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
       refreshBlendedFitness(getMutableState());
+    } catch {}
+
+    // Boot-time: refresh course-factor adjusted forecast so users who picked
+    // a race before this feature shipped see the new adjustment immediately.
+    try {
+      const { refreshForecastCourseFactors } = await import('@/calculations/course-factors-running');
+      refreshForecastCourseFactors(getMutableState());
     } catch {}
 
     // One-time migration (v2): wipe sportNameMappings entirely. Name-keyed
@@ -831,6 +1118,9 @@ async function launchApp(): Promise<void> {
                   // Re-set normalizer in case physiology sync updated HR profile
                   const ps = getState();
                   setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+                  refreshVO2Estimates();
+                  // Close out + refit k_user against the freshly-synced physiology.
+                  refreshAdaptiveRecovery();
                   // Re-render home view so sleep/HRV cards update without requiring
                   // manual navigation — physiology data lands in state after the view
                   // was first rendered, so we need an explicit refresh.
@@ -870,6 +1160,8 @@ async function launchApp(): Promise<void> {
           syncPhysiologySnapshot(90).then(() => {
             const ps2 = getState();
             setAthleteNormalizer(ps2.ltHR, ps2.restingHR, ps2.maxHR);
+            refreshVO2Estimates();
+            refreshAdaptiveRecovery();
             scheduleHomeRefresh();
             const todayStr = new Date().toISOString().split('T')[0];
             const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
@@ -1050,6 +1342,11 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
     const { detectAndLogRaceOutcome } = await import('@/calculations/tri-race-outcome');
     const outcome = detectAndLogRaceOutcome(s);
     if (outcome) {
+      // Recompute calibration immediately after a new race is logged.
+      const { computeTriCalibration } = await import('@/calculations/tri-calibration');
+      const cal = computeTriCalibration(s.triConfig?.raceLog);
+      if (s.triConfig) s.triConfig.calibration = cal;
+      console.log('[tri:calibration] tier', cal.tier, 'from', cal.basedOnRaceCount, 'races');
       saveState();
       console.log('[tri:race-outcome] logged', {
         date: outcome.dateISO,
@@ -1057,6 +1354,14 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
         actual: outcome.actualTotalSec,
         gap: outcome.predictedTotalSec - outcome.actualTotalSec,
       });
+    } else if (s.triConfig?.raceLog?.length && !s.triConfig.calibration) {
+      // First launch after raceLog has entries but calibration was never computed
+      // (e.g. user upgraded from a pre-WS-1 build with existing race history).
+      const { computeTriCalibration } = await import('@/calculations/tri-calibration');
+      const cal = computeTriCalibration(s.triConfig.raceLog);
+      s.triConfig.calibration = cal;
+      console.log('[tri:calibration] backfilled tier', cal.tier, 'from', cal.basedOnRaceCount, 'races');
+      saveState();
     }
   } catch (e) {
     console.warn('[tri:race-outcome] detection failed', e);
@@ -1071,6 +1376,27 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
   // gate) as a single accept/dismiss modal. Skipped silently if no triggers
   // fired or the user is mid-onboarding.
   await maybeShowTriSuggestionModal();
+}
+
+/**
+ * Refresh adaptive recovery state: close out any session impact entries whose
+ * 96h observation window has elapsed, then refit `k_user` from all closed
+ * evidence. Cheap (bounded by the 90-day rolling log) so it can run on every
+ * launch after physiology sync — no need to gate on week rollover.
+ *
+ * Surfaces a one-line console note when confidence first crosses medium/high
+ * so we have a paper trail of when the personalisation kicked in.
+ */
+function refreshAdaptiveRecovery(): void {
+  const ms = getMutableState();
+  const before = ms.adaptiveRecovery?.confidence ?? 'none';
+  const { added, addedHistorical } = ingestNewActualsAsImpacts(ms as any);
+  const closed = closeOutObservedRecovery(ms);
+  const fitted = fitKUser(ms);
+  if (fitted.confidence !== before && (fitted.confidence === 'medium' || fitted.confidence === 'high')) {
+    console.log(`[AdaptiveRecovery] Confidence → ${fitted.confidence}; k_user=${fitted.kUserHours} (n=${fitted.sessionsObserved}; ingested=${added} live+historical=${addedHistorical}, closed this pass=${closed})`);
+  }
+  saveState();
 }
 
 /**
@@ -1106,7 +1432,7 @@ async function maybeShowMarkerBumpToast(): Promise<void> {
 async function runTriActivityMatching(): Promise<void> {
   const { getMutableState, saveState } = await import('@/state');
   const s = getMutableState();
-  const wk = s.wks?.[s.w ?? 0];
+  const wk = s.wks?.[(s.w ?? 1) - 1];
   if (!wk?.triWorkouts || !wk.garminActuals) return;
 
   const { matchTriathlonWeek } = await import('@/calculations/activity-matcher.triathlon');
@@ -1134,6 +1460,8 @@ async function runTriActivityMatching(): Promise<void> {
       workout.status = 'completed';
       changed = true;
     }
+    // Store the match link so the effort multiplier can read per-actual signals.
+    workout.matchedActivityId = m.activityId;
     const discipline = classifyActivity(actual.activityType);
     if (discipline === 'swim' || discipline === 'bike' || discipline === 'run') {
       const scores = scoreTriEffort(
@@ -1147,11 +1475,13 @@ async function runTriActivityMatching(): Promise<void> {
         hrProfile,
       );
       if (scores.paceAdherence != null) actual.paceAdherence = scores.paceAdherence;
-      // HR effort score for bike (cross-check or no-power fallback). Run leg
-      // already populates this via the running-side matcher; swim doesn't yet
-      // (most users don't wear HR straps in water).
-      if (discipline === 'bike' && scores.hrEffortScore != null && actual.hrEffortScore == null) {
-        actual.hrEffortScore = scores.hrEffortScore;
+      if (discipline === 'bike') {
+        // Power adherence feeds the effort multiplier blend (60% power / 40% RPE).
+        if (scores.powerAdherence != null) actual.powerAdherence = scores.powerAdherence;
+        // HR is the objective fallback when no power meter is present.
+        if (scores.hrEffortScore != null && actual.hrEffortScore == null) {
+          actual.hrEffortScore = scores.hrEffortScore;
+        }
       }
     }
   }

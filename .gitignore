@@ -25,3 +25,7 @@ marque-cli/
 
 # Supabase CLI transient state
 supabase/.temp/
+.vercel
+
+# Calibration datasets — large CSVs not source of truth (regenerate from Kaggle)
+validation/data/

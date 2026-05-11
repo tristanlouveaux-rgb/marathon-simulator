@@ -1,29 +1,33 @@
 /**
- * Triathlon stats view — race forecast + adaptation + per-discipline CTL trend.
+ * Triathlon Stats — single scrollable page.
  *
- * Earlier iterations layered readiness, recovery, benchmarks and a Training
- * Load shortcut card here. Those were nav-only or duplicated content from
- * Home / Load / Account, so the page now keeps just the three things that
- * belong on Stats: race forecast, adaptation response, and progress trend.
+ * Sections (top to bottom):
+ *   1. Your Numbers — CSS / FTP / LT / VO2max zone bars
+ *   2. Trends — benchmark sparklines (CSS, FTP, LT, VO2max)
+ *   3. Progress — range toggle, stat list, phase timeline, CTL + volume charts
+ *
+ * Race estimates live on the Forecast tab.
  */
 
 import { getState } from '@/state/store';
+import { getMutableState, saveState } from '@/state';
+import type { SimulatorState } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { renderRaceForecastCard } from './race-forecast-card';
-import { renderTriAdaptationCard } from './adaptation-card';
-import { DISCIPLINE_COLOURS } from './colours';
+import { getCyclingEventLabel } from '@/calculations/cycling-mode';
+import { getTriathlonById } from '@/data/triathlons';
+import { buildYourNumbersCard, buildTrendCards } from './fitness-detail-view';
+import { buildProgressContent, type ProgressRange } from './progress-detail-view';
+import { animateChartDrawOn } from './benchmark-charts';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 
 function navigateTab(tab: TabId): void {
-  if (tab === 'home') {
-    import('../home-view').then(({ renderHomeView }) => renderHomeView());
-  } else if (tab === 'plan') {
-    import('../plan-view').then(({ renderPlanView }) => renderPlanView());
-  } else if (tab === 'record') {
-    import('../record-view').then(({ renderRecordView }) => renderRecordView());
-  } else if (tab === 'account') {
-    import('../account-view').then(({ renderAccountView }) => renderAccountView());
-  }
+  if (tab === 'home') import('../home-view').then(({ renderHomeView }) => renderHomeView());
+  else if (tab === 'plan') import('../main-view').then(({ renderMainView }) => renderMainView());
+  else if (tab === 'forecast') import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
+  else if (tab === 'account') import('../account-view').then(({ renderAccountView }) => renderAccountView());
 }
+
+let _activeRange: ProgressRange = '12w';
 
 export function renderTriathlonStatsView(): void {
   const container = document.getElementById('app-root');
@@ -32,10 +36,15 @@ export function renderTriathlonStatsView(): void {
   const tri = s.triConfig;
   if (!tri) return;
 
-  const history = tri.fitnessHistory ?? [];
-
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+
+  const cyclingLabel = getCyclingEventLabel(s);
+  const baseEventLabel = cyclingLabel ?? (tri.distance === 'ironman' ? 'Ironman' : '70.3');
+  const raceCity = cyclingLabel ? null : (getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city ?? null);
+  const eventLabel = raceCity ? `${raceCity} ${baseEventLabel}` : baseEventLabel;
+  const raceName = s.onboarding?.name ? `${s.onboarding.name}'s ${eventLabel}` : `Your ${eventLabel}`;
+  const escapeHtml = (str: string) => String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   container.innerHTML = `
     <style>
@@ -44,25 +53,16 @@ export function renderTriathlonStatsView(): void {
         to   { opacity:1; transform:translateY(0) scale(1); }
       }
       .hf { opacity:0; animation:floatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      .tri-stats-card { background:#fff;border-radius:14px;padding:16px;box-shadow:0 2px 4px rgba(0,0,0,0.04),0 8px 24px rgba(0,0,0,0.05);margin-bottom:14px }
-      .tri-stats-label { font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:#0F172A;margin-bottom:10px }
     </style>
-    <div class="mosaic-page" style="background:#FAF9F6;position:relative;min-height:100vh">
-      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
-        <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%)"></div>
-        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="tsBlur"><feGaussianBlur stdDeviation="20"/></filter>
-            <filter id="tsSoft"><feGaussianBlur stdDeviation="6"/></filter>
-          </defs>
-          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#tsSoft)" opacity="0.6"/>
-          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#tsSoft)"/>
-        </svg>
+    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('ts', { variant: 'centered', palette: 'sky', pulse: true })}
       </div>
+      ${buildSunGlint('low')}
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
 
-        <!-- Header -->
+        <!-- Account button -->
         <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px" class="hf" data-delay="0.02">
           <button id="tri-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
@@ -70,37 +70,26 @@ export function renderTriathlonStatsView(): void {
         <!-- Hero -->
         <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 20px">
           <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Stats</div>
-          <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${tri.distance === 'ironman' ? 'Ironman' : '70.3'} — Week ${s.w} of ${s.tw}</div>
+          <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${escapeHtml(raceName)} — Week ${s.w} of ${s.tw}</div>
         </div>
 
         <div style="padding:0 20px">
 
-          ${renderRaceOutcomeRetroCard(s)}
-
-          <!-- Race forecast -->
+          <!-- Your Numbers: CSS / FTP / LT / VO2max zone bars -->
           <div class="hf" data-delay="0.10">
-            ${renderRaceForecastCard(s)}
+            ${buildYourNumbersCard(s)}
           </div>
 
-          <!-- Adaptation: how the athlete is responding to training -->
-          ${renderTriAdaptationCard(s)}
+          <!-- Trends: sparklines per benchmark -->
+          <div class="hf" data-delay="0.14">
+            ${buildTrendCards(s)}
+          </div>
 
-          <!-- Progress: per-discipline CTL trend; tap to drill down. Hidden until
-               2+ weeks of history exist (UX_PATTERNS empty-state rule). -->
-          ${history.length >= 2 ? `
-            <div id="tri-progress-card" class="tri-stats-card hf" data-delay="0.13" style="cursor:pointer">
-              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
-                <div class="tri-stats-label" style="margin-bottom:0">Progress</div>
-                <span style="font-size:11px;color:var(--c-muted)">Detail →</span>
-              </div>
-              ${renderFitnessChart(history)}
-              <div style="display:flex;gap:14px;margin-top:8px;font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums">
-                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.swim.accent};vertical-align:middle;margin-right:4px"></span>Swim</span>
-                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.bike.accent};vertical-align:middle;margin-right:4px"></span>Bike</span>
-                <span><span style="display:inline-block;width:8px;height:2px;background:${DISCIPLINE_COLOURS.run.accent};vertical-align:middle;margin-right:4px"></span>Run</span>
-              </div>
-            </div>
-          ` : ''}
+          <!-- Progress section -->
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin:18px 0 10px" class="hf" data-delay="0.17">Progress</div>
+          <div id="tri-progress-section" class="hf" data-delay="0.18">
+            ${buildProgressContent(s, _activeRange)}
+          </div>
 
         </div>
       </div>
@@ -110,91 +99,141 @@ export function renderTriathlonStatsView(): void {
   `;
 
   wireTabBarHandlers(navigateTab);
+  animateChartDrawOn();
   document.getElementById('tri-account-btn')?.addEventListener('click', () => navigateTab('account'));
-  document.getElementById('tri-progress-card')?.addEventListener('click', () => {
-    import('./progress-detail-view').then(({ renderTriProgressDetailView }) => renderTriProgressDetailView());
+
+  document.getElementById('vo2-info-btn')?.addEventListener('click', () => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 24px 48px rgba(0,0,0,0.18)">
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:14px">VO2max sources</div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Mosaic</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Computed from your training data. Running uses pace-vs-HR regression (Daniels VDOT). Cycling uses the ACSM power formula: <span style="font-variant-numeric:tabular-nums">10.8 × W/kg + 7</span>, derived from your FTP. Cardiac ceiling is your aerobic upper bound (peak HR ÷ resting HR, Uth-Sørensen) — a theoretical ceiling, not current fitness. Cross-training, when shown, is sustained-HR aerobic capacity from non-run, non-bike sport. The headline shows your highest measured value, falling back to cardiac ceiling only when no measured signal exists.
+        </div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Read directly from your device. Garmin and Apple Watch use their own proprietary algorithms — typically HR variability during GPS activities. Updates automatically when your device syncs. May differ from Mosaic; neither is ground truth.
+        </div>
+
+        <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding-top:12px;border-top:1px solid var(--c-border)">
+          Running, cycling, and cardiac are shown separately because each measures a different aspect of aerobic fitness. A strong cyclist may score higher in cycling than running — both are real.
+        </div>
+
+        <button id="vo2-info-close" style="margin-top:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Close</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('vo2-info-close')?.addEventListener('click', close);
   });
-  document.getElementById('tri-bike-setup-btn')?.addEventListener('click', () => {
-    import('./bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
+
+  document.getElementById('vo2-src-mosaic')?.addEventListener('click', () => {
+    getMutableState().vo2Source = 'mosaic';
+    saveState();
+    renderTriathlonStatsView();
+  });
+  document.getElementById('vo2-src-device')?.addEventListener('click', () => {
+    const sv = getState();
+    if (!(sv.vo2 != null && sv.vo2 > 0)) return;
+    getMutableState().vo2Source = 'device';
+    saveState();
+    renderTriathlonStatsView();
+  });
+
+  wireStatsProgressRangeButtons(s);
+
+  // Drill-through from the "Your Numbers" bars. Each bar id (css/ftp/lt/vo2)
+  // routes to its own detail page with a matching override card. LT reuses
+  // the running-stats page (mode-agnostic); CSS/FTP/VO2max use the
+  // tri-specific pages in `benchmark-detail-pages.ts`. The back button is
+  // always rebound to return to *this* view, not the running fitness detail
+  // page that running's flow uses.
+  document.querySelectorAll<HTMLElement>('[data-tri-metric-detail]').forEach(el => {
+    const handler = async () => {
+      const id = el.dataset.triMetricDetail;
+      const root = document.getElementById('app-root');
+      if (!root) return;
+      const sv = getState();
+
+      if (id === 'lt') {
+        const { buildLTMetricPage, wireLTOverrideHandlers, wireInfoButtons } =
+          await import('../stats-view');
+        root.innerHTML = buildLTMetricPage(sv);
+        animateChartDrawOn();
+        wireTabBarHandlers(navigateTab);
+        wireLTOverrideHandlers(sv);
+        wireInfoButtons();
+      } else if (id === 'css') {
+        const { buildCSSDetailPage, wireCSSDetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildCSSDetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireCSSDetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else if (id === 'ftp') {
+        const { buildFTPDetailPage, wireFTPDetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildFTPDetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireFTPDetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else if (id === 'vo2') {
+        const { buildVO2DetailPage, wireVO2DetailHandlers } =
+          await import('./benchmark-detail-pages');
+        const rerender = () => {
+          root.innerHTML = buildVO2DetailPage(getState());
+          animateChartDrawOn();
+          wireTabBarHandlers(navigateTab);
+          wireVO2DetailHandlers(rerender);
+          rebindBack();
+        };
+        rerender();
+        return;
+      } else {
+        return;
+      }
+
+      rebindBack();
+    };
+
+    const rebindBack = () => {
+      const back = document.getElementById('stats-metric-back');
+      back?.addEventListener('click', () => renderTriathlonStatsView());
+    };
+
+    el.addEventListener('click', handler);
+    el.addEventListener('touchend', (e) => { e.preventDefault(); handler(); }, { passive: false });
   });
 }
 
-// ─── Chart ──────────────────────────────────────────────────────────────────
-
-function renderFitnessChart(history: Array<{ weekISO: string; swimCtl: number; bikeCtl: number; runCtl: number; combinedCtl: number }>): string {
-  const W = 560;
-  const H = 140;
-  const pad = { top: 10, right: 8, bottom: 20, left: 32 };
-  const plotW = W - pad.left - pad.right;
-  const plotH = H - pad.top - pad.bottom;
-  const n = history.length;
-  // Internal CTL is a weekly EMA of TSS. Display as TrainingPeaks-style
-  // daily-equivalent (÷7) so the y-axis matches the "Current fitness" card.
-  const norm = (v: number) => v / 7;
-  const maxY = Math.max(
-    10,
-    ...history.map((h) => Math.max(norm(h.swimCtl), norm(h.bikeCtl), norm(h.runCtl)))
-  );
-
-  const x = (i: number) => pad.left + (plotW * i) / Math.max(1, n - 1);
-  const y = (v: number) => pad.top + plotH - (v / maxY) * plotH;
-
-  const lineFor = (key: 'swimCtl' | 'bikeCtl' | 'runCtl') =>
-    history.map((h, i) => `${i === 0 ? 'M' : 'L'}${x(i).toFixed(1)},${y(norm(h[key])).toFixed(1)}`).join(' ');
-
-  const gridLines = [0.25, 0.5, 0.75].map((f) => {
-    const gy = pad.top + plotH * (1 - f);
-    return `<line x1="${pad.left}" y1="${gy}" x2="${W - pad.right}" y2="${gy}" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>`;
-  }).join('');
-
-  const yLabels = [0, 0.5, 1].map((f) => {
-    const v = Math.round(maxY * f);
-    const gy = pad.top + plotH * (1 - f);
-    return `<text x="${pad.left - 6}" y="${gy + 3}" text-anchor="end" font-size="9" fill="var(--c-faint)" font-variant-numeric="tabular-nums">${v}</text>`;
-  }).join('');
-
-  const xLabels = history.map((h, i) => {
-    if (i !== 0 && i !== n - 1 && i !== Math.floor(n / 2)) return '';
-    const d = new Date(h.weekISO);
-    const label = `${d.getDate()}/${d.getMonth() + 1}`;
-    return `<text x="${x(i)}" y="${H - 4}" text-anchor="middle" font-size="9" fill="var(--c-faint)">${label}</text>`;
-  }).join('');
-
-  return `
-    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="xMidYMid meet" style="display:block">
-      ${gridLines}
-      ${yLabels}
-      ${xLabels}
-      <path d="${lineFor('swimCtl')}" fill="none" stroke="${DISCIPLINE_COLOURS.swim.accent}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
-      <path d="${lineFor('bikeCtl')}" fill="none" stroke="${DISCIPLINE_COLOURS.bike.accent}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
-      <path d="${lineFor('runCtl')}" fill="none" stroke="${DISCIPLINE_COLOURS.run.accent}" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
-    </svg>
-  `;
-}
-
-// ─── Race-outcome retrospective ───────────────────────────────────────────
-
-function renderRaceOutcomeRetroCard(state: ReturnType<typeof getState>): string {
-  const log = state.triConfig?.raceLog;
-  if (!log || log.length === 0) return '';
-  const latest = log[log.length - 1];
-  const gap = latest.predictedTotalSec - latest.actualTotalSec;
-  if (gap < 60) return '';  // Below 1-minute threshold
-
-  const fmt = (sec: number) => {
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const ss = Math.round(sec % 60);
-    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${m}:${String(ss).padStart(2, '0')}`;
-  };
-  const gapMin = Math.floor(gap / 60);
-  const gapTxt = gapMin === 1 ? '1 min' : `${gapMin} min`;
-
-  return `
-    <div class="hf" data-delay="0.08" style="margin-bottom:14px;background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px">
-      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#5a8050;margin-bottom:6px">Last race</div>
-      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your prediction by ${gapTxt}</div>
-      <div style="font-size:12px;color:#64748B;line-height:1.5">Predicted ${fmt(latest.predictedTotalSec)}, actual ${fmt(latest.actualTotalSec)}.</div>
-    </div>
-  `;
+function wireStatsProgressRangeButtons(s: SimulatorState): void {
+  document.querySelectorAll<HTMLButtonElement>('.tri-progress-range-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const r = btn.dataset.range as ProgressRange;
+      if (!r || r === _activeRange) return;
+      _activeRange = r;
+      const section = document.getElementById('tri-progress-section');
+      if (section) {
+        section.innerHTML = buildProgressContent(s, _activeRange);
+        animateChartDrawOn();
+        wireStatsProgressRangeButtons(s);
+      } else {
+        renderTriathlonStatsView();
+      }
+    });
+  });
 }

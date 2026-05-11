@@ -20,10 +20,7 @@ import {
 import { reconcileRecentLegLoads } from './sport-picker-modal';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const APP_BG = '#FAF9F6';
+import { atmosphereGradient } from './page-flair';
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
 const TEXT_L = '#94A3B8';
@@ -272,12 +269,12 @@ function getLegLoadHTML(): string {
     </style>
 
     <div id="legload-view" style="
-      position:relative;min-height:100vh;background:${APP_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('blue')};
       font-family:var(--f);overflow-x:hidden;
     ">
       ${buildSkyBackground('ll', 'sage')}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -341,7 +338,8 @@ function getLegLoadHTML(): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

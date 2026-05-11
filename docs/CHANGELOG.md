@@ -4,6 +4,471 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-11 — B1/B3/B4/B6 triathlon calibration sweep
+
+**B1 — Race name aliases for empirical course-factor lookup**
+- Added `RACE_NAME_ALIASES` table to `src/calculations/empirical-course-factors.ts`. Applied before normalisation so library names with city suffixes, renamed editions, or dataset typos resolve correctly.
+- 9 new aliases: IRONMAN France Nice, Switzerland Thun, Italy Emilia-Romagna, Japan South Hokkaido, Gurye Korea, Portugal-Cascais, Canada-Ottawa; 70.3 Edinburgh (dataset typo "Edinburg"), 70.3 Aix-en-Provence, 70.3 Emilia-Romagna.
+- IRONMAN World Championship (Kona) intentionally unmapped — only Kaggle entry is for St George 2022, a different course.
+
+**B3 — Sprint/Olympic target distance (audit finding, no code change)**
+- `TriathlonDistance = '70.3' | 'ironman'` is intentional. Sprint/Olympic are only supported as past race formats. The predictor produces sprint/olympic times as side-effect predictions. No type-narrowing breaks exist.
+
+**B4 — Distribution validator wired to forecast card**
+- Added `renderDistributionBanner` to `src/ui/triathlon/race-forecast-card.ts`. Shows a warm-cream note when any leg z-score exceeds ±2.5 SD against the empirical split-distribution (730k finishers). Modelled on `renderLimitingBanner`. No new build-time outputs needed.
+
+**B6 — COVID year exclusion from course-factor calibration**
+- Added `EXCLUDED_YEARS: ReadonlySet<number> = new Set([2020, 2021])` to `src/validation/course-factors.ts` with rationale comment.
+- Applied to per-location accumulation in both IM (Pass 2) and 70.3 (Step 2). Per-athlete baselines not filtered.
+- Updated `calibration.test.ts` default `eventYear` from 2020 to 2022.
+
+---
+
+## 2026-05-11 — MTL chronic/acute now read from completed work, not planned
+
+The MusculoTendon Load drill-down was showing chronic 7.5 / acute 30.9 against a hero of "0 of 2000 cap" — confusing because the EMA was eating the user's planned workouts as if they had happened. Running CTL/ATL reads completed TSS; MTL CTL/ATL was reading planned MTL. Fixed.
+
+**`src/calculations/mtl.ts`** — `computeMTLFitnessFatigue` and `computeMTLFitnessFatigueByDiscipline` now iterate `computeWeekActualMTL` / `computeWeekActualMTLByDiscipline` (new), which only credit workouts with a `matchedActivityId`. Planned weekly MTL (`computeWeekMTL`) stays as-is for plan-engine cap enforcement at generation time. The two scopes are now explicit and consistent: planned numbers come from `computeWeekMTL`, fitness/fatigue numbers come from actuals.
+
+**Effect on the drill-down**: for a fresh user with no matched sessions, chronic and acute are 0 instead of phantom values lifted from the plan's intent. Once activities start matching, the numbers populate from real work — matching how the hero "0 of 2000 cap" reads completed-only data. All four numbers (actual, planned, chronic, acute) now share one source-of-truth convention.
+
+**Effect on the readiness floor** (`mtlAcwr` in `src/calculations/readiness.ts`): for users with no history the ratio is null and the floor doesn't fire — correct (a brand-new user shouldn't be capped). Once activities accumulate, the floor activates on real ramp rate.
+
+**Tests**: added `computeWeekActualMTL`, `computeWeekActualMTLByDiscipline`, and an "uses actuals" variant of `computeMTLFitnessFatigue` to `mtl-by-discipline.test.ts`. Existing fixtures were given `matchedActivityId: 'stub-activity'` so the discipline-CTL tests still credit them.
+
+## 2026-05-11 — HYROX test updates for prevFormatKnown guard
+
+- `initialization.hyrox.test.ts`: updated two stale tests that encoded the old "guess and proceed" fallback.
+  - "singles target + missing prevTimeFormat" now asserts neither benchmark slot is populated (seeding correctly skipped when format unknown).
+  - "missing prevFmt" now asserts `athleteBand` is `'intermediate'` (falls back to `bandFromExperience('intermediate')`, not the time-based `'advanced'`).
+- No production code changed; the `prevFormatKnown` guard in `initialization.hyrox.ts:118-131` is correct behaviour.
+
+---
+
+## 2026-05-11 — Plan phasing: single coach-style arc with double periodization for long plans
+
+Replaced the legacy `>16w racePhaseStart` block-cycle prefix that produced a confusing `Base → Build → Base → Build → Peak → Taper` pattern on long plans. New rule scales coherently across all plan lengths:
+
+- **4–7 weeks**: sharpening block — capped phases collapse base to 0–2 weeks (honest: you cannot build fitness in a month).
+- **8–32 weeks**: single arc — `Base → Build → Peak → Taper` with phase caps (taper ≤ 3w, peak ≤ 4w, build ≤ 8w). Base absorbs the remainder, which is correct training science for long plans.
+- **33–50 weeks**: double periodization. Cycle 1 (~45%): `Base → Build → Peak` ending in a **Checkpoint** time-trial week. 2-week transition. Cycle 2 (~55%): full `Base → Build → Peak → Taper` arc into the race.
+
+Science backing: Bompa & Buzzichelli (2018), Pfitzinger & Douglas (2009), Daniels (2014) for single-arc caps. Issurin (2010) and Tønnessen et al. (2014) for double-periodization at long lead times. See `docs/SCIENCE_LOG.md` for details.
+
+**Changes**:
+- `src/workouts/phases.ts` — new module, `computePlanPhases(totalWeeks) → PlanPhaseWeek[]`.
+- `src/workouts/generator.ts` — `initializeWeeks` now delegates to `computePlanPhases`.
+- `src/types/state.ts` — `Week.checkpoint?: boolean` added; `racePhaseStart` marked deprecated.
+- `src/state/initialization.ts` — deleted the `>16w` block-cycle prefix.
+- `src/state/persistence.ts` — one-time migration re-derives phases for existing plans that still carry `racePhaseStart`.
+- `src/ui/main-view.ts` — header subtitle and week-navigator collapse to `Week X of Y · Phase`. Checkpoint weeks show "Checkpoint" instead of "Peak".
+- `src/ui/stats-view.ts` — Phase Timeline renders Checkpoint as its own segment.
+- `src/workouts/phases.test.ts` — 10 new tests.
+
+**Deferred** (`docs/OPEN_ISSUES.md`): TT workout content for checkpoint weeks (Mon–Wed easy, Thu opener, Sat 5K/10K TT, Sun easy). Currently falls back to standard peak workouts; no current user has a 33+ week plan.
+
+---
+
+## 2026-05-11 — WS-1: Triathlon prediction calibration loop
+
+Self-correcting per-user calibration derived from the race log. Three-tier ladder gated on data volume so calibration is proportional to evidence:
+
+- **Tier 0** (< 2 races): current behaviour unchanged.
+- **Tier 1** (2+ races): per-leg additive bias. `bias = median(actual − predicted)` per leg, capped at ±8% of median predicted leg time to stay within the known 6–14% prediction error band. Applied post-readiness to both the projected and "today" predictions.
+- **Tier 2** (4+ races with `predictedRawPerLeg`): learned readiness maxPenalty scale per leg. OLS slope of leg-residual vs penalty-excess, Bayesian-shrunk toward 1.0 with `scale = 1 + (raw−1) × n/(n+4)`. Dormant for pre-WS-1 entries; activates as new races accumulate.
+- **Tier 3** (6+ races spanning 3+ distances): placeholder for Riegel exponent fit. Effectively dormant today (only 70.3 and Ironman are logged).
+
+**Schema changes** (all optional — no migration needed):
+- `TriRaceLogEntry`: `predictedRawPerLeg?` (pre-readiness projected leg times) + `predictionVdotSnapshot?` (state.v at prediction time).
+- `TriRacePrediction`: `rawProjectedPerLeg?` — passed from `predictTriathlonRace` to the race-outcome logger.
+- `TriConfig`: `calibration?: TriCalibration`.
+- `TriConfig.notifiedMarkers`: `calibrationTier?: number` — tracks last-shown tier for the debrief note.
+
+**Wiring**:
+- `src/calculations/tri-calibration.ts` — new module, `computeTriCalibration(raceLog) → TriCalibration`.
+- `race-prediction.triathlon.ts` — exposes `rawProjectedPerLeg`; applies tier-1 bias post-readiness.
+- `tri-race-outcome.ts` — populates `predictedRawPerLeg` and `predictionVdotSnapshot` on new entries.
+- `main.ts` — calls `computeTriCalibration` after each race is logged; backfills on first launch when raceLog has entries but calibration is absent.
+- `forecast-view.ts` — faint caption "Predictions calibrated from your last N races." when tier ≥ 1.
+- `tri-week-debrief.ts` — one-time tier-up note in the plan-preview step when tier advances.
+
+Tests: 14 new unit tests in `tri-calibration.test.ts` (tier transitions, bias math, cap, shrinkage, edge cases). Full suite 1699/1699 passing (pre-existing Hyrox band test excluded).
+
+---
+
+## 2026-05-11 — Empirical course-factor calibration: follow-up fixes (clamp drop, recency, altitude flag, source-aware caption, unit tests)
+
+- **Drop clamped entries from runtime**: course-factor entries that hit the sanity clamp `[0.75, 1.40]` (data errors — typically course-shortened or weather-cancelled races) are now flagged at calibration time with `clamped: true` and dropped from the runtime lookup. Previously they shipped as if reliable. Fixes the IM North Carolina case where a single 2016 weather-shortened race was serving a 25%-faster bike prediction. Seven entries dropped: IRONMAN 70.3 Edinburgh, Panama, Connecticut, Busan; Ironman New York, Alaska, North Carolina. These fall back to the physical model.
+- **Recency weighting (RECENCY_WINDOW_YEARS = 5)**: course factors are now computed from the last five years of finishes when sample is sufficient (`≥ 200 recent finishers`), falling back to the all-time average otherwise. Catches course revisions without being so short that COVID-disrupted years dominate. 222 of 263 races use the recent variant; 41 fall back to all-time. The `era` field surfaces which window was used. Athlete personal baselines for the IM fixed-effects estimator stay computed across all years (the baseline shouldn't drift with race-year selection).
+- **Altitude acclimatisation flag**: races with altitude `≥ 800m` now show a small note in the course-factors panel: *"Race altitude is N m. Penalty depends on your acclimatisation, which we don't track. Sea-level athletes may run slower than the factor suggests."* Acknowledges that empirical factors are talent-controlled but include altitude-acclimatised locals.
+- **Source-aware caption**: the prediction-card calibration caption now branches on whether the empirical or physical model was used. Empirical: "Calibrated against 1.3 million historical Ironman and 70.3 race finishes…" Physical (no empirical entry, or low confidence, or clamped): "Course factors for this race use the physical model — the dataset doesn't yet cover this venue or has too few finishers for a reliable empirical fit."
+- **Unit tests**: 22 new tests in `src/validation/calibration.test.ts` covering `parseTimeToSec`, `buildDistribution`, `validateAgainstDistribution`, `buildCourseFactors` IM fixed-effects (flat = 1.0, hilly > 1.0, clamping, era selection), 70.3 stratified, and `lookupEmpiricalCourseFactors` runtime (hit, miss, clamped drop, name normalisation, distance separation).
+- **Files**: modified `src/validation/course-factors.ts` (clamped + era + recency split), `src/calculations/empirical-course-factors.ts` (drop clamped, surface era), `src/ui/triathlon/race-forecast-card.ts` (altitude flag, source-aware caption), regenerated all three `src/constants/empirical-*.json`. New `src/validation/calibration.test.ts`. All 22 new tests pass; full suite 1683/1685 — the two failures are pre-existing HYROX init tests unrelated to this work.
+
+---
+
+## 2026-05-11 — `trainingModeChanged` now covers all cross-mode switches
+
+The wizard re-init guard at `initializing.ts:139` was a narrow `(state.trainingMode === 'triathlon') !== (rt.eventType === 'triathlon')` check that only detected toggles between triathlon and not-triathlon. Three switches slipped through silently:
+
+- **running ↔ hyrox** — both modes had `eventType !== 'triathlon'` on each side, so the predicate read `false !== false`.
+- **triathlon ↔ cycling** — both set `eventType: 'triathlon'` at runtime; only `triConfig.disciplines` distinguishes them.
+- **hyrox ↔ cycling** — neither side is `'triathlon'` on one of the two checks.
+
+A user going through Edit Settings to switch from one of these to another kept the stale plan and never tripped reinit. Replaced with a projection: `state.trainingMode` → expected `(eventType, isCycling)` pair, compared against the actual runtime pair (`eventType ?? 'running'`, `triConfig.disciplines === ['bike']`). Cycling-vs-triathlon disambiguates by inspecting `triConfig.disciplines` — the same signal `plan_engine.triathlon.ts:167` uses for `isCyclingOnly`.
+
+**Note on `hyroxRunPaceSecKm` yield-to-improvements**: this was the second outstanding item I flagged earlier — already shipped in a parallel session (`src/calculations/hyrox-marker-bumps.ts` + wiring in `main.ts:750-772`). The full pattern is in place: `hyroxRunPaceSource: 'user' | 'derived' | 'seed'` provenance field, `applyHyroxRunPaceDerivation()` auto-yield, `detectHyroxMarkerBumps()` toast trigger, `snapshotHyroxNotifiedMarkers()` notify-once gate. Station benchmarks still don't auto-yield (out of scope per the marker-bump module's header comment — needs a training-side signal first).
+
+**Files:**
+- `src/ui/wizard/steps/initializing.ts` — replaced narrow `trainingModeChanged` with the projection-based check
+
+**Tests**: 1661/1663 passing. Two pre-existing failures in `src/state/initialization.hyrox.test.ts` (`singles target + missing prevTimeFormat → splits fall back to target slot (legacy)` and `missing prevFmt → no factor applied (legacy path)`) are caused by an unrelated parallel change in `initialization.hyrox.ts` that added a `prevFormatKnown` guard at lines 118-131 — the new behaviour intentionally skips band derivation and benchmark seeding when format is unconfirmed, but the tests still encode the old "guess and proceed" fallback. They need updating to match the new design intent and belong to whoever shipped the guard.
+
+---
+
+## 2026-05-11 — Future week copy (ISSUE-117), triage ISSUE-119 + ISSUE-98
+
+Future-week banner in plan-view changed from "Draft. Final workouts depend on the preceding week's performance." to "Estimated from last week's load. Sessions and distances adjust as you train." ISSUE-119 downgraded to P3. ISSUE-98 parked for ui-ux-pro-max.
+
+---
+
+## 2026-05-11 — Home "Review →" button: surface on Mondays / fresh weeks across every mode
+
+The small "Review →" button next to the Home view's "Recent" section was gated on `s.wks[s.w - 1].garminPending.length > 0` — i.e., the *current* week only. On a Monday morning before the first activity of the week syncs, the button hides even though last week's runs/cross-training are still listed in Recent and remain re-matchable. From the user's perspective this looked like "only a few modes have the Review button" — really it was only weeks/modes that happened to have a fresh sync in the current week.
+
+- `src/ui/home-view.ts:2147` — gate broadened to `currentPending > 0 || prevPending > 0` so the button stays visible whenever either of the two weeks shown in Recent has synced items.
+- `src/ui/home-view.ts:2955` — click handler now picks `weekNum = s.w` if current week has pending, else `s.w - 1`, and passes it through to `openActivityReReview` so the matching screen opens for the right week instead of doing nothing.
+- `src/ui/activity-review.ts:254` — silent-convert fallback now triggers at `wkIdx < s.w - 2` (two or more weeks back) instead of `< s.w - 1`. Last week's pending items open the full review/matching UI instead of being auto-logged as adhoc. Two-weeks-back behaviour unchanged.
+
+## 2026-05-11 — HYROX forecast UX follow-ups: avg run pace header, radar empty state, distribution label collision
+
+Three targeted UX fixes after dogfooding the new Race Order card.
+
+- **Average run pace header on Race Order card** (`src/ui/hyrox/forecast-view.ts:650`) — summary row at the top of the card showing the post-venue average 1km pace across all 8 legs, with `today → race-day` projection when the horizon model yields gain. Computed from `prediction.runSec / 8` so the header sums to the same number as the rows.
+- **Performance radar empty state** (`src/ui/hyrox/performance-radar.ts:158`) — when zero stations are calibrated, the polygon would plot every axis at the band's seed percentile (a regular N-gon that reads as a circle and carries no signal). Replaced with a calibration prompt: "Calibrate stations to see your strengths and limiters" + Test stations CTA. CTA reuses the existing `wireCalibrateCta` handler (un-dismisses the benchmark card and navigates to plan view). Partial calibration (1–7 of 8) keeps current behaviour — hollow dots on uncalibrated axes.
+- **Where you sit chart label collision** (`src/ui/hyrox/percentile-distributions.ts:263`) — the "you" pill and p25/p50/p75 captions previously rendered on the same y-line and collided when the user's value fell near a percentile tick. Stacked into two rows (strip height 14 → 26px, p-labels at top:0, "you" at top:13px). No collision detection needed.
+
+---
+
+## 2026-05-11 — HYROX event picker: hide past races
+
+- The wizard's race picker hardcoded a `'2026-05-01'` cutoff, so events whose date had passed (Hong Kong May 8, Helsinki May 9) were still listed for selection on May 11. Switched `getFutureHyroxEvents` to receive today's ISO date via `new Date().toISOString().slice(0, 10)` so the dropdown rolls forward as time passes.
+- Verified May–June 2026 entries in `src/data/hyrox-events.ts` against multiple independent calendars (gowod, RoxRadar, HyResult, hybridfitnessmedia) — all genuine, sponsor names and dates match.
+- `src/ui/wizard/steps/hyrox-setup.ts:172`
+
+## 2026-05-11 — Triathlon transitions: sock-on event model, asymmetric IM split
+
+- **Bug**: race-forecast transitions modal showed T1 = T2 = 10:34 for an Ironman because the Ironman dataset has no per-side T1/T2 split (only combined transition time) and the code halved 50/50. Replaced with an empirical T1 share derived from the 70.3 dataset: `IM_T1_SHARE_OF_TOTAL = 0.58` (T1 runs longer than T2 because of the wetsuit strip and longer transition-zone walks). Helper: `splitCombinedTransition(combinedSec)` in `empirical-transitions.ts`. Predictor and overlay both use it.
+- **Sock model rewritten as a single one-time event**: the original Yes/No flag deducted from both T1 and T2 simultaneously, which doesn't match how triathletes race — socks go on once and stay on. New 3-way selector: `At T1` (population default — no adjustment), `At T2` (shifts the ~20s sock-on cost from T1 to T2, net total unchanged), `Sockless` (removes the cost entirely, −20s at T1). Single constant `SOCK_ON_COST_SEC = 20`. State field renamed `transitionSockless: boolean` → `transitionSocks: 't1' | 't2' | 'none'`. Shared helper `applySockSavings(t1, t2, choice)` in `empirical-transitions.ts` keeps overlay and predictor in lockstep. Selector is always visible (no longer hidden when both T1/T2 are hardcoded — overrides are treated as raw times that the sock choice adjusts).
+- `src/constants/triathlon-constants.ts`: new `IM_T1_SHARE_OF_TOTAL = 0.58`, single `SOCK_ON_COST_SEC = 20` (replaced the asymmetric pair).
+- `src/calculations/empirical-transitions.ts`: exports `splitCombinedTransition`, `applySockSavings`, `TransitionSocks` type.
+- `src/calculations/race-prediction.triathlon.ts`: uses `splitCombinedTransition` for IM, `applySockSavings` for the sock-on adjustment.
+- `src/ui/triathlon/transitions-overlay.ts`: 3-button sock selector replaces Yes/No toggle; always shown.
+- `src/types/triathlon.ts`: `transitionSockless` → `transitionSocks` on `triConfig`.
+- SCIENCE_LOG §W rewritten around the one-event model and the asymmetric IM split.
+
+## 2026-05-09 — HYROX previous-race format: stop silently defaulting to target
+
+- Fixed root cause of "doubles times treated as singles" prediction bug. The wizard pre-lit the previous-format pill matching the target format whenever the user had not picked one, so a doubles race entered while target was singles silently filed splits into the Singles slot. The predictor then read those values at full singles weight, producing impossible "top 1% on 8/8 stations" radars.
+- `src/ui/wizard/steps/hyrox-setup.ts`: previous-format pill now only highlights when the user explicitly picked one. Continue button disables when a previous time is entered without a format. Hint text shifts to amber-prompt when unanswered.
+- `src/state/initialization.hyrox.ts`: when `hyroxPreviousTimeFormat` is missing, no longer falls back to target format. Skips the cross-format factor, skips banding from time, and refuses to seed station benchmarks. Console-warns so future regressions are visible.
+- New: `src/state/hyrox-prev-format-fix.ts` — `applyHyroxPrevFormatChange(format)` slot-moves benchmarks, rewrites format on per-station history entries, re-bands using the cross-format factor, and regenerates the plan.
+- `src/ui/hyrox/forecast-view.ts`: hero card surfaces "Previous race: {format} · {time} · Change ›" beneath the target line. Tap opens a 4-format modal that calls the fix helper. Repairs existing broken states without losing completed activities.
+
+## 2026-05-09 — Triathlon forecast: always show all four projected markers; trust user-set CSS
+
+Two fixes to the race forecast card that surfaced when testing an Ironman 1 week from race day with manually-set FTP and CSS.
+
+- **Always render CSS / FTP / LT pace / VDOT rows** in `renderProjectedMarkers` (`src/ui/triathlon/race-forecast-card.ts`). Previously each row was gated on a delta threshold (`|Δ| ≥ 1 sec/100m` for CSS, `≥ 2W` for FTP, `≥ 0.5` for VDOT, `≥ 1s` for LT), which meant race-week or low-headroom athletes saw an almost-empty projected-markers panel even though the benchmarks were set. Rows now show today's value when projected ≈ current and the "current → projected" arrow only when the delta exceeds the threshold. Same thresholds, just used to decide arrow vs no arrow rather than show vs hide.
+- **Skip the swim detraining inflation for user-set CSS** in `buildProjection` (`src/calculations/race-prediction.triathlon.ts`). The engagement penalty (ISSUE-179) inflates the CSS baseline up to +12% when `weeksActive` is low, on the principle that a stale measurement no longer reflects today's real CSS. But that logic is only defensible for a *derived* value — when the user has just typed their CSS in manually, we should treat it as a fresh ground-truth snapshot regardless of whether they have swims logged. A user reported their manually-set 2:00/100m CSS being projected to 2:15/100m for a race one week away — the +12.5% detraining penalty firing on a value the user had told us was current. Now: `cssSource === 'user'` → `swimDetrain4wkPeriods = 0`. Derived values still get the inflation when sparse, since they really can be stale.
+
+## 2026-05-09 — Swim environment normalisation: pool / lake / ocean → wetsuit-lake baseline
+
+Closed an asymmetry in the triathlon swim model. Race-side already had a 5-category course factor for swim environment (`SWIM_TYPE_MULTIPLIER` in `src/constants/triathlon-course-factors.ts`), but the athlete-side CSS estimator pooled paces from pool, lake, and ocean swims as if they were equivalent. A pool-trained CSS could then be penalised again at race-time for ocean conditions, double-counting the environment effect.
+
+- **Extended `SWIM_TYPE_MULTIPLIER`** to include `pool: 1.00`. Pool ≡ wetsuit-lake at the system level: the pool→OW penalty (~+5–10% time, mostly lost wall push-offs and sighting) approximately cancels the wetsuit benefit (~−5–6%), so a pool swim ≈ a wetsuit-lake swim at race effort. Honest "two effects assumed to cancel" — no fabricated number per CLAUDE.md "no made-up numbers" rule.
+- **Refreshed wetsuit citations** with de la Fuente Pacheco et al. 2020 (Int J Sports Physiol Perform) — 400m pool, ~6% time reduction (~0.07 m/s) — alongside Toussaint 1989 + Cordain 1991. Added López-Belmonte et al. 2024 (Scand J Med Sci Sports) — kinematic shifts but no physiological differences between pool and OW at 1500m, n=14 elites.
+- **Per-activity tagging** via `GarminActual.swimEnvironment` (`pool` / `wetsuit-lake` / `non-wetsuit-lake` / `ocean` / `river`). Auto-tag rule: pool swims tag from `activityType` (`SWIMMING` / `LAP_SWIMMING`); OW swims fall back to `triConfig.swim.defaultOwSwimEnvironment` (set once via the reveal modal).
+- **CSS normalisation**: `estimateCSSFromSwimActivities` now divides each swim's pace by `SWIM_TYPE_MULTIPLIER[env]` to convert to wetsuit-lake equivalent before pooling. Race-side then re-applies the course factor for the actual race environment cleanly. Three new unit tests lock the math.
+- **One-time reveal modal** (`src/ui/triathlon/swim-normalisation-reveal.ts`) explains the work to users on first visit to the triathlon forecast view. Captures the OW default in the same dismissal. Gated on `triConfig.notifiedMarkers.swimNormalisationSeen`.
+- **CLAUDE.md addition**: new "Feature reveal pop-ups" section codifying the rule — when we ship non-trivial work that materially changes a user-facing number, surface a one-time educational modal so users actually see what was built.
+- Tests: 61 CSS estimator tests pass (3 new normalisation tests added). Full suite 1663/1663 pass. Typecheck clean.
+
+## 2026-05-09 — HYROX prediction: race-order forecast, benchmark card cleanup, taper invariant test
+
+Three coupled changes to the HYROX prediction surface so the per-station forecast reads honestly and matches the race experience.
+
+- **BENCHMARKS card** (`src/ui/hyrox/stats-view.ts:297`) — stripped the per-station "Top X% / faster than Y%" comparison. Benchmark times are max-effort with rest; the population dataset captures mid-race fatigued station splits, so the comparison was apples-to-oranges. Card is now a personal ledger: time + "Calibrated" caption (with "X mo ago" when the test is ≥4 mo old). Headline finish-time percentile (predicted race time vs population race times — apples-to-apples) stays.
+- **Forecast view** (`src/ui/hyrox/forecast-view.ts`) — singles format now renders one **Race Order** card with 16 interleaved rows (R1 → SkiErg → R2 → Sled Push → … → R8 → Wall Balls), each showing "today → race-day projection" with a delta. Replaces the previously separate Run Legs + Per-station Forecast + Trajectory cards. The opaque `+3s` venue-adjustment column is gone; the trajectory is the projection from `HyroxProjectionMarkers.stations[]` (already produced by the engine, just not surfaced this clearly before). Doubles still uses the legacy split layout because the athlete only does 4 of 8 stations.
+- **Taper invariant** (`src/calculations/training-horizon.hyrox.test.ts`) — added two explicit tests: race inside the taper window shows materially less gain than a build-phase race (≥40% smaller), and race-tomorrow with full sessions floors at <1% improvement. The horizon model already gradiented this correctly via `weeks_eff = weeks_remaining - taper_weeks` and a `taperRatio`-scaled bonus; the tests pin the user-facing invariant ("setting a plan one week out promises near-zero new gain") so future edits don't drift.
+
+Why this matters: the previous benchmark percentile made benchmark times look elite-tier even for novice athletes (because they were beating fatigued race splits, not fresh-effort peers), which corrupted the user's mental model. The new race-order layout makes "today vs end of plan" the primary read, which is what users actually want to know when committing to a plan.
+
+---
+
+## 2026-05-08 — Race pickers: hide past races, fix sub-week proximity label
+
+Two bugs in the wizard race picker (running + triathlon):
+
+1. **Past races showing.** `calculateWeeksUntil` uses `Math.ceil`, so a race 1–6 days in the past returned `0` and slipped through `weeksUntil >= 0` filters. Today is 8 May; IRONMAN 70.3 Venice-Jesolo (3 May) was still in the list.
+2. **"1wk" for events 1 day away.** IRONMAN 70.3 Mallorca (9 May, tomorrow) was labelled `1wk` because `Math.ceil(1/7) = 1`, identical to a race 6 days out.
+
+Fix in `src/data/marathons.ts`: added `calculateDaysUntil`, `formatTimeUntil` (`Today` / `Tomorrow` / `Xd` / `Xwk`, returns `null` for past), and `isUpcoming` (date-level, not weeks-level). `getMarathonsByDistance`, `getAllUpcomingRaces`, and `getTriathlonsByDistance` now filter past races by date instead of relying on `weeksUntil`. Race-row pills in `race-target.ts` and `triathlon-setup.ts` switched from `${weeksUntil}wk` to `formatTimeUntil(date)`.
+
+## 2026-05-08 — HYROX onboarding: race picker order + clearer past-race dropdown
+
+`src/ui/wizard/steps/hyrox-setup.ts` reordered. The "Which race?" upcoming-event picker now sits directly below "Competition format" instead of being buried after Previous Hyrox time and Station splits — it's the second-most important decision on the screen, so it should be reachable without scrolling. Animation delay shifted from 0.18s to 0.12s to match its new position in the rise sequence.
+
+The past-race dropdown ("Which race was that?") was reading as if "Don't remember / not listed" was the default answer, which surfaced the date-of-race input to everyone before they'd even engaged with the dropdown. Restructured to mirror the upcoming-race pattern: a non-selectable `Select your race…` placeholder at top, the past events in the middle, and `Other / not listed` as an explicit option at the bottom. The month/year date input now only appears when the user picks "Other / not listed" (or returns to the screen with a previously-stored date and no race id). Change handler updated to match.
+
+## 2026-05-08 — HYROX: Week 1 station calibration test offered to everyone
+
+`plan_engine.hyrox.ts:255-260` previously skipped the Week 1 HYROX Assessment for users with ≥4 calibrated station benchmarks (assumed they had race data). Now the assessment is auto-included in Week 1 for everyone — including users with prior benchmarks, who can use it as a re-test. Users who don't want it skip/replace it like any other workout.
+
+## 2026-05-08 — Transitions overlay UX compliance + new `lint:ui` backstop
+
+The race-forecast Transitions modal (`src/ui/triathlon/transitions-overlay.ts`) was shipped with four Visual Constraint violations: `text-transform:uppercase` + heavy `letter-spacing:0.06em` on the "RACE FORECAST" eyebrow and the T1/T2/TOTAL micro-labels, a tinted readout strip (`background:rgba(0,0,0,0.02)`), and a blue `var(--c-accent)` Save button. All four are now corrected — eyebrow and micro-labels are sentence-case at `var(--c-faint)`, the readout strip relies on the existing border separator, and Save uses dark slate `#0F172A` (matching the sibling pattern in `benchmark-tests-card.ts`).
+
+To stop the same class of violation slipping through again: `scripts/ui-lint.mjs` is a regex linter that scans `src/ui/**/*.ts` for those four anti-patterns and fails the build on anything that isn't already in `scripts/ui-lint-baseline.json` (which captures the 673 historical violations across 75 files at the time of writing). Wired into `npm run build` as `npm run lint:ui && tsc && vite build`. CLAUDE.md now points the next agent at the backstop.
+
+Touched: `src/ui/triathlon/transitions-overlay.ts`, `scripts/ui-lint.mjs` (new), `scripts/ui-lint-baseline.json` (new), `package.json` (build chain + `lint:ui`), `CLAUDE.md` (UI Pre-flight backstop pointer).
+
+---
+
+## 2026-05-08 — Triathlon page titles include race city (Plan / Home / Forecast / Stats)
+
+The four main triathlon page headers now read e.g. `T's Valencia 70.3` instead of `T's 70.3`. The city is pulled from `getTriathlonById(s.onboarding.selectedTriathlonId).city`; falls back to the bare distance label when no race is selected, and to the cycling-event label in cycling-only mode.
+
+Touched: `src/ui/home-view.ts` (`getHomePlanName` triathlon branch), `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/forecast-view.ts`, `src/ui/triathlon/stats-view.ts`. Each view imports `getTriathlonById` from `@/data/triathlons`. Tri Load view still shows the bare event label — left alone since it's a deeper-level page where the city would just be repetition.
+
+---
+
+## 2026-05-08 — Race prediction: empirical transitions calibrated from 1.3M finishes
+
+Predicted transition times now come from the same Kaggle datasets that drive course-factor calibration (840k 70.3 finishes, 1.09M IM finishes), instead of the hand-tuned `T1_SEC_BY_SLIDER` / `T2_SEC_BY_SLIDER` defaults.
+
+Added `validation/transition-distributions.ts` to build per-(distance, race location, level bin) average T1/T2/T1+T2 with sample size. Bin key is the user's predicted **swim+bike+run** time — independent of transition skill — in 15-min bins for 70.3 and 30-min for IM, matching the existing split-distribution table.
+
+`run-calibration.ts` now also emits `src/constants/empirical-transition-distributions.json`. The 70.3 dataset has separable `Transition1Time` / `Transition2Time` columns; the IM `results.csv` doesn't, so for IM we derive `transitionSec = overall − swim − bike − run` and skip per-T1/T2 splits.
+
+At runtime, `lookupEmpiricalTransitions` (in `src/calculations/empirical-transitions.ts`) is consulted from `race-prediction.triathlon.ts:645`. Resolution order:
+
+1. **User override** — new `triConfig.transitionOverride: { t1Sec?, t2Sec? }` field, hardcoded transition time.
+2. **Race-specific empirical bin** — when ≥ 50 finishers landed in the user's level bin at this race.
+3. **Global level-bin fallback** — average across all races at the user's level bin (≥ 200 finishers).
+4. **Skill-slider default** — original `T1/T2_SEC_BY_SLIDER`.
+
+**Override UI**: opened from the Forecast tab by tapping the existing T1 / T2 row on the race-forecast card. Vertically-centered modal overlay (`src/ui/triathlon/transitions-overlay.ts`) follows the canonical pattern from `bike-setup-view.ts`: header + provenance line, live readout strip showing the resolved T1 / T2 / total, two `m:ss` inputs, accent-coloured Save button + Cancel / Reset to default. The overlay receives the live `TriRacePrediction` from the forecast view so the level bin is always computed from the up-to-date prediction (fixes a bug where stale `triConfig.prediction` cache could land users on the slider fallback even when their race + fitness was perfectly resolvable).
+
+Calibration produces an ~515 KB JSON (187 race locations for 70.3, 67 for IM, with 16 level bins each). Sample numbers: sub-4:30 70.3 finishers average 4.5 min total transitions, 7:50 finishers average 11.6 min. Sub-9:15 IM finishers average 7.7 min, 15:45 finishers average 23.7 min.
+
+**Sockless modifier**: a "Wearing socks?" Yes / No toggle inside the same overlay subtracts 15 s from T1 and 30 s from T2 (45 s combined) when set to No. Stored as `triConfig.transitionSockless`. Suppressed when both T1 and T2 are hardcoded (the user's number already reflects whatever sock decision they made), and floored at 60 s per side so we never go negative. Constants in `triathlon-constants.ts`, rationale in SCIENCE_LOG §W.
+
+Touched: `src/validation/dataset-loader.ts` (extend `FinishRecord` with `t1Sec` / `t2Sec` / `transitionSec`), `src/validation/transition-distributions.ts` (new), `src/validation/run-calibration.ts` (emit the new JSON + report block), `src/constants/empirical-transition-distributions.json` (new), `src/calculations/empirical-transitions.ts` (new), `src/calculations/race-prediction.triathlon.ts` (priority chain), `src/types/triathlon.ts` (`transitionOverride` field), `src/ui/triathlon/transitions-overlay.ts` (new), `src/ui/triathlon/race-forecast-card.ts` (T1 / T2 row is now a tap-to-open button), `src/ui/triathlon/forecast-view.ts` (wires the click handler).
+
+---
+
+## 2026-05-08 — Race forecast: taper invariant (projected ≡ current inside taper window)
+
+Stress-testing exposed a 1-week-out IM forecast that showed projected swim **+13:32 slower** and projected run **−14:02 faster** than today. Both deltas are physiologically nonsensical over 7 days — taper consolidates fitness, doesn't build or destroy it (Mujika 2002).
+
+**Root cause: two divergence sources in `predictTriathlonRace`, neither scaled by `weeksRemaining`.**
+
+1. *Swim engagement penalty was asymmetric.* The horizon model inflated CSS baseline by up to +12% (Mujika 2010 detraining model) when `weeksActive ≤ 2`, but only the projected race-time call used the inflated baseline. The "today" call used the literal stale CSS measurement. Net: today=2:22 (fictional), projected=2:40 (realistic) → +13:32 phantom slowdown vs today.
+
+2. *Durability cap relaxation was unconditional.* Projected race-time always passed `projectedLongestSession.{bike,run} = DURABILITY_THRESHOLDS[distance]` (full threshold), regardless of `weeksRemaining`. The "today" call used actual longest sessions. With `MAX_DURABILITY_PENALTY = 0.05`, this produced up to a 5% phantom run speedup. 5% × 4:40:38 = 14:02 ✓ — matched the observed delta exactly.
+
+**Fix — single invariant, two shapes.**
+
+When the race is inside the discipline's taper window (`weeksRemaining ≤ TRI_TAPER_WEEKS[discipline][distance]`), `projected` per-leg must equal `current` per-leg.
+
+- *Stale-measurement adjustments* (engagement penalty) — applied symmetrically to both calls via a shared `EffectiveBaselines` object returned from `buildProjection`. Display values keep the literal last measurement for transparency.
+- *Plan-execution credits* (durability cap relaxation) — scaled by per-discipline `executionFactor = 1 − penaltyShare` (the same closure math the existing race-readiness penalty uses). New `lerpDurability(actual, threshold, executionFactor)` helper interpolates between actual and threshold, never reducing an athlete who already exceeds threshold.
+
+Reordered: penalty shares now compute before the projected race-time call so `executionFactor` can feed into `projectedLongestSession`. New invariant test in `race-prediction.triathlon.test.ts`: race in 1 week IM → projected per-leg matches current within ±30s. Locks the fix against future regressions. SCIENCE_LOG entry added.
+
+Files: `src/calculations/race-prediction.triathlon.ts` (helpers + reorder), `src/calculations/race-prediction.triathlon.test.ts` (invariant test). Typecheck clean. 1658/1658 tests pass.
+
+---
+
+## 2026-05-08 — Bugfix: CSS / FTP test results not flowing into race forecast
+
+User did a CSS test via the "Refine your benchmarks" card and the new value didn't update the race-forecast time. Root cause: the forecast card reads `tri.prediction ?? predictTriathlonRace(state)`, so if a cached `triConfig.prediction` exists it wins — and none of the user-facing CSS / FTP save sites were invalidating the cache. Only `bike-setup-view.ts:1016` had the right pattern (clear `triConfig.prediction` on save).
+
+Added `if (ms.triConfig.prediction) ms.triConfig.prediction = undefined;` at every CSS / FTP write site:
+- `src/ui/triathlon/benchmark-tests-card.ts` — swim CSS test (200m + 400m pair) and FTP 20-min test save.
+- `src/ui/triathlon/benchmark-detail-pages.ts` — CSS override save + reset, FTP override save + reset.
+- `src/ui/activity-detail.ts` — "this swim looks like a CSS test" inline apply, FTP toggle apply.
+
+Next render of the forecast card recomputes from current state, so saved tests now flow through to the headline race time and per-leg breakdown immediately.
+
+---
+
+## 2026-05-08 — Race forecast: aggregate physical course factors per leg
+
+Stress-testing predictions exposed a layout discrepancy: calibrated venues like IRONMAN 70.3 Ohio rendered three clean course-factor rows (Swim / Bike / Run, one each), while uncalibrated venues like IRONMAN Vietnam rendered five rows (Run / Bike / Run / Bike / Swim) because the physical Tier-A model emits one entry per *dimension* (Climate, Run elevation, Bike elevation, Swim type ...). For a hot, hilly venue, that produced two Run rows and two Bike rows — visually incoherent next to Ohio's clean shape.
+
+Both modes now render one row per leg:
+- **Empirical (calibrated)** — unchanged. Single row per leg with `legCommentary` describing the venue's physical attributes.
+- **Physical (Tier-A fallback)** — entries grouped by leg, deltas summed, and the contributing dimensions surfaced as a breakdown line ("Climate · Run elevation"). Single-dimension legs show the raw value (e.g. "Climate · Hot-humid (~30°C)") so the user still sees the actual reading.
+
+`src/ui/triathlon/race-forecast-card.ts:316` (`renderCourseFactorsPanel`). Typecheck clean. 19/19 triathlon prediction tests pass.
+
+The user also flagged a separate "no test" + missing FTP/VDOT projection on the IM Vietnam screen vs full markers on the 70.3 screen — clarified as cross-device divergence (different localStorage state per device, no-watch device lacks Garmin physiology sync). Tracked separately for follow-up; not addressed in this commit.
+
+---
+
+## 2026-05-08 — Page-flair backgrounds: kill the constant motion
+
+Tristan flagged that the Stats page was pulsing forever. Investigation found four `infinite` CSS animations baked into `src/ui/page-flair.ts`, plus a docstring at the top of the file that incorrectly claimed all motion was "finite cycles … then freezes". The actual constant pulsing on Stats / Plan / Forecast was the **drift ring** keyframe embedded inside `buildRingBackground`'s SVG `<style>` (line 443) — it ran a 6.5s outward-ripple loop forever.
+
+**Changes** (all in `src/ui/page-flair.ts`):
+- Drift ring: `infinite` → `1 forwards`. Single ripple on arrival, then gone.
+- `ringAnimationCSS()` pulse: `infinite` → `1 forwards`. Single 9s opacity breath on arrival.
+- `floweyAnimationCSS()` (Recovery): all 4 wave drifts `infinite` → `1 forwards`.
+- `floweyHaloAnimationCSS()` (Readiness): all 5 ring breathes + 2 accent drifts `infinite` → `1 forwards`.
+- Added `@media (prefers-reduced-motion: reduce)` overrides on every animation block — iOS Reduce Motion users now get the static end-state immediately (no entrance, drift, pulse, wave, breathe, or accent drift).
+- Removed dead `pulseCycles` field from `RingOptions` (was never wired into the function body — pure docstring lie).
+- Updated the file's top docstring to match the new behaviour.
+
+**Net effect**: every page that uses a page-flair background now feels alive on arrival and goes still afterwards. The pulse-class CSS isn't actually injected on the data tabs (Stats / Plan / Forecast), so the user-visible change there is the drift ring stopping after one cycle. Wizard welcome + plan-preview-v2 do inject the pulse CSS — they get one breath instead of forever. Recovery and Readiness get one parallax tide / one halo breath instead of forever.
+
+No callers passed the removed `pulseCycles`; typecheck clean.
+
+---
+
+## 2026-05-08 — HYROX Tier 2: per-station detail view, weakest-link card, goal-back-calc modal
+
+Built on top of the morning's Tier 1 (history field + PR/percentile/staleness inline). Closes ISSUE-193, ISSUE-194, ISSUE-195 (Phase 1), ISSUE-196.
+
+**ISSUE-193 — per-station detail sub-page** (`src/ui/hyrox/station-detail-view.ts`):
+- New full-page drill-down triggered by tapping a row in the per-station forecast table. Back arrow returns to forecast.
+- Hero: station name, current adjusted time, percentile.
+- Sparkline of historical test entries chronologically (faster = top), built as inline SVG with `vector-effect="non-scaling-stroke"` per CLAUDE.md sizing rules.
+- Stats card: best, latest, population estimate, improvement since first test, race-day fade %.
+- Full history list with date, time, source label, "Best" badge on the best entry, "Pro weights" caption when applicable.
+- Test-again CTA un-dismisses the benchmark card and navigates to plan view (mirrors the forecast banner pattern).
+- Per-station rows on the forecast table now have a `›` chevron and `cursor:pointer` to signal tappability.
+
+**ISSUE-195 Phase 1 — race-day fade visualisation**: included in the detail view's stats card. Shows `Fresh: 2:00 · Race-day: 2:09 · +7.5%` from `line.adjustedSec` (post-fatigue) vs the latest `stationBenchmarkHistory` entry. Phase 2 (extracting per-station times from logged race results) remains gated on race-result-import work.
+
+**ISSUE-194 — "Where to gain" weakest-link card** (`src/calculations/hyrox-weakest-link.ts` + UI in forecast view):
+- Reuses the existing `prediction.projection.stations[]` from the per-class horizon model — no new constants. The horizon model already encodes "what's achievable with training" given weeks remaining + planned sessions, so we just rank stations by `gainableSec = currentSec - projectedSec` and surface the top 2.
+- Card sits between the skills analysis and per-station forecast, glass-styled to match.
+- Hidden when no station has ≥1 sec of gain available (no race date set, or already at projected ceiling).
+- 7 unit tests pinning ranking, zero-gain filtering, source preservation, top-N slicing.
+
+**ISSUE-196 — goal-back-calc modal** (`src/calculations/hyrox-goal-back-calc.ts` + `src/ui/hyrox/goal-modal.ts`):
+- "Set a target finish ›" CTA on the forecast hero opens a modal where the user enters a target time. Live updates the per-station + run-pace targets as they type.
+- Headroom-weighted distribution against the `competitive` band's seed times (per-station floor) + `HYROX_RUN_PACE_MIN_SEC_KM × 8` (run pace floor). No new constants — reuses existing population data as practical floors.
+- Iterative allocator: distributes gain proportional to headroom, caps any component at its floor, redistributes the excess. Bounded by slot count; converges in ≤ 9 iterations.
+- Three feasibility tiers: `already_on_pace` (target slower than current, no work), `achievable` (within 70% of total headroom), `stretch` (70-100% — caveat surfaces "most athletes need 6+ months"), `unrealistic` (target below population floor — surfaces shortfall in seconds).
+- Persists to existing `hyroxConfig.targetFinishTimeSec` field — Save / Clear / cancel handlers wired.
+- 8 unit tests pinning all four feasibility tiers, the allocator's correctness (sum of allocated deltas = gain, achievedSec sums to target), the floor respect, and the cap/redistribute behaviour.
+
+**Tests**: 15 new (7 weakest-link + 8 goal-back-calc). 1657 pass total.
+
+---
+
+## 2026-05-08 — HYROX per-station progression: history field, PR detection, inline percentile, staleness caption
+
+Foundation for per-station growth tracking — the missing piece in the "predict every station, see your improvement, see your ranking" story. Pre-fix: station benchmarks were a single scalar per station with no history. Users couldn't see growth, no PR comparison was possible, and a 4-month-old test was treated identically to last week's.
+
+**What changed**:
+- New state field `hyroxConfig.stationBenchmarkHistory` (`src/types/triathlon.ts`) — append-only `{dateISO, sec, source, format, proWeights?}` per station. Mirrors the `ftpHistory` / `cssHistory` pattern from triathlon mode. Optional per iOS-ship rule.
+- New helpers in `src/calculations/hyrox-station-history.ts` — `getStationHistory`, `appendStationTest`, `latestStationTest`, `latestTestAgeMonths`, `bestStationTime`, `latestIsPR`, `latestImprovementSec`. All format-aware (singles vs doubles tracked separately so a singles PR doesn't count against doubles history).
+- `src/ui/hyrox/benchmark-card.ts` writes append a history entry alongside the existing scalar update.
+- Launch-time backfill in `src/main.ts` seeds one entry per existing station benchmark with today's date and source `'manual'` for users from before the field existed. Idempotent: skipped when history already populated.
+- `renderStationsTable` (`src/ui/hyrox/forecast-view.ts:99-128`) now shows inline `p73`-style percentile, a "New PR" badge when the latest history entry beats all priors for the format, and a "Tested 4 mo ago" caption when the latest test is at least 4 months old.
+
+**Tier 2 ideas logged**: ISSUE-193 (per-station detail view + sparklines), ISSUE-194 (weakest-link insight), ISSUE-195 (race-pace vs fresh-test fade), ISSUE-196 (goal-back-calculation), ISSUE-197 (within-station fatigue, blocked on data).
+
+**Tests**: 16 new in `hyrox-station-history.test.ts`. 1642 pass total.
+
+---
+
+## 2026-05-08 — HYROX forecast: surface station-test CTA so users actually calibrate
+
+The half-distance station-test flow (`src/ui/hyrox/benchmark-card.ts`) has been built since early Hyrox work but only surfaced on the plan view, where users with mostly-seed predictions never saw it. The forecast view showed passive warnings ("Mostly seed data — only 2/8 stations calibrated. Best treated as a rough benchmark.") with no action affordance.
+
+**What changed** in `src/ui/hyrox/forecast-view.ts`:
+- Glass-card banner inserted directly below the hero finish-time card whenever `calibratedCount < total` stations.
+- Two copy variants: default ("Test your stations to sharpen this forecast.") and softer ("Your race time is anchoring this forecast. Station tests sharpen the per-leg detail.") when `prediction.staleness?.category === 'fresh'` (race ≤ 6 mo).
+- Bordered-pill CTA "Test stations →" navigates to the plan view and un-dismisses `dismissedBenchmarkCard` so a previously-hidden card resurfaces — without that, the navigation would dead-end on a still-dismissed card.
+- Tightened the existing `runPaceSourceNote` copy to remove an em-dash (CLAUDE.md UI copy rule).
+
+**Net effect on the user's question**: testing was already built, but the prediction system's tracking-grade data path was hidden behind a passive warning. Now any user looking at a low-confidence forecast has a one-tap path to fix it.
+
+---
+
+## 2026-05-08 — HYROX prediction: Pro↔Open conversion in both directions + staleness/format integration
+
+Pre-fix the predictor only handled Open→Pro conversion (multiply by `HYROX_PRO_STATION_MULTIPLIER`). The reverse direction — Pro-weighted benchmarks predicting an Open race — used the Pro time as-is, producing too-slow Open predictions (sled push: ~149s used as 149s instead of 149/1.15 ≈ 130s).
+
+**What changed** in `src/calculations/race-prediction.hyrox.ts`:
+- Format conversion now applied PER-CONTRIBUTOR before the staleness blend. Calibrated benchmarks (potentially Pro-weighted) and seed times (always Open) are each adjusted to the target format independently, then blended. This avoids over-correcting the seed portion when both staleness and format mismatches are active.
+- Conversion rules: Open source → Pro target multiplies by the Pro factor; Pro source → Open target divides by it; same regime is identity. Erg / bodyweight stations have a 1.0 multiplier so the conversion is a no-op there.
+- Removed the redundant post-blend `applyProMult` loop — the weight regime is now baked into `baseSec`, leaving the venue loop to handle only temperature/altitude effects.
+
+**Test coverage**: 5 new tests in `race-prediction.hyrox.test.ts → 'Pro ↔ Open conversion'` pinning all 4 directions + the erg-no-effect case.
+
+**Tests**: 1626 pass (was 1621).
+
+---
+
+## 2026-05-08 — HYROX prediction: apply staleness weights to predicted time
+
+Closes the gap surfaced in the Hyrox prediction audit: `bandWeight` and `splitsWeight` from `computeHyroxStaleness` were computed but only ever capped the confidence label — the predicted time anchored 100% on the historic race regardless of age. A 24-month-old race carried the same numerical authority as last week's.
+
+**What changed** in `src/calculations/race-prediction.hyrox.ts`:
+- `splitsWeight` now blends per-station calibrated benchmarks toward the band's seed time. Fresh race → `splitsWeight=1` → benchmark used in full. `very_stale` + no physiology mitigation → `splitsWeight≈0.6` → 60/40 blend toward seed.
+- `bandWeight` blends seed times across the stored band and the VDOT-implied band when they differ (skill-component decay slower than VO2max per the staleness module's design).
+- Strong current physiology (VDOT, MTL CTL, Strava CTL baseline) pulls both weights back toward 1.0 via the existing `applyMitigation` lerp — an athlete who clearly held fitness escapes the staleness penalty entirely.
+
+**Files**:
+- `src/calculations/race-prediction.hyrox.ts:153-300` — moved `computeHyroxStaleness` call earlier, added effective-seeds blend and per-station blend.
+- `src/calculations/race-prediction.hyrox.test.ts` — 4 new tests pinning fresh-race no-blend, very-stale blend toward seed, band-shift behaviour, and physiology-mitigation pulling weight back toward 1.0.
+
+**Issue logged for follow-up**: ISSUE-192 covers the per-station physiology fallback (predicting wall-ball time from VO2max, sled push from strength signals, etc.) when no calibrated benchmarks exist — needs research-grade mappings before any constants land.
+
+**Tests**: 1621 pass.
+
+---
+
+## 2026-05-08 — HYROX prediction bug-chain repair (Bugs 2/3/4/5 + marker-bump wiring)
+
+Five linked fixes to the HYROX prediction path. User-visible symptom pre-fix: a 1:00:00 doubles HYROX from a year ago was predicted as a 56-min singles athlete (top 1% globally), with the population radar pinned to the outer ring on every spoke. Post-fix the same state predicts ~75–80 min with confidence='low' due to race-age staleness.
+
+- **Bug 3 — slot keyed off TARGET format.** Pre-fix, `initialization.hyrox.ts` stored station splits in the slot matching the *target* format (e.g. singles aim → Singles slot). Users with a doubles previous race got their doubles splits filed as singles benchmarks. Now keyed off `hyroxPreviousTimeFormat` (`src/state/initialization.hyrox.ts:172`). One-time idempotent boot migration in `src/main.ts:640-650` repairs existing state. New tests: `src/state/initialization.hyrox.test.ts` (10), `src/state/hyrox-boot-migration.test.ts` (6).
+- **Bug 2 — cross-format conversion direction was inverted.** Replaced single `DOUBLES_TO_SINGLES_FACTOR = 0.92` (wrong direction at population level) with bidirectional `SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES = 1.22` and `SAME_ATHLETE_TOTAL_SINGLES_TO_DOUBLES = 0.85` (`src/constants/hyrox-constants.ts:32-36`). Used ONLY for band derivation, not per-station inference. Per-station cross-format inference removed in `src/calculations/race-prediction.hyrox.ts:178-210`; cross-format predictions now fall back to seed station times for the target format and force `confidence = 'low'`. See SCIENCE_LOG §T.
+- **Bug 4 — VDOT-derived run pace.** New `deriveHyroxRunPace(state)` in `src/calculations/hyrox-run-pace.ts` returns `gp(vdot, ltPace).t × HYROX_FATIGUE_TO_THRESHOLD_RATIO[band]` with provenance (`'user' | 'derived' | 'seed'`). Mirrors the "Manually-set Benchmarks Yield to Improvements" rule — manual values are kept unless derived is faster by ≥5 s/km. Wired into `predictHyroxRace` (`race-prediction.hyrox.ts:163`) and surfaced via `hyroxRunPaceSource` on the prediction. UI caption "Updated from your runs — beat your last test." in `src/ui/hyrox/stats-view.ts:275`. See SCIENCE_LOG §U.
+- **Bug 5 — race-age staleness with cross-mode physiology mitigation.** New `computeHyroxStaleness(state)` in `src/calculations/hyrox-staleness.ts` returns `{ ageMonths, category, bandWeight, splitsWeight, confidenceCap, physiologyMitigation }`. Categories: `fresh` (<6mo) / `aging` (6–12) / `stale` (12–24) / `very_stale` (24+) / `unknown`. Mitigation blends VDOT vs band-implied, MTL CTL vs anchor, Strava `ctlBaseline`, clamped `[0.5, 1.0]`, and pulls weights back toward 1.0 — a still-fit athlete keeps a stale-but-credible band. Confidence cap applied AFTER calibration-coverage cap in `race-prediction.hyrox.ts:378-385`. Re-band gate in `initialization.hyrox.ts:131-150` takes the slower of time-based vs VDOT-based bands when `bandWeight < 0.7`. New `<input type="month">` in the wizard at `src/ui/wizard/steps/hyrox-setup.ts:188-190` for users without an event-id pick. Staleness chip in `src/ui/hyrox/forecast-view.ts:365-376`. See SCIENCE_LOG §V.
+- **P1 marker-bump wiring fix.** `detectHyroxMarkerBumps` was structurally a no-op as wired: `applyHyroxRunPaceDerivation` → `detectHyroxMarkerBumps` meant the detector saw the just-written derived value as `userVal`, so `deriveHyroxRunPace` returned `source: 'user'` and the gate failed. Reversed the order to detect-then-apply at `src/main.ts:715-720` with an explanatory comment. New `src/calculations/hyrox-marker-bumps.test.ts` (14 cases) including an explicit regression test that pins the wrong order swallowing the bump.
+
+Recovery context: an agent ran `git stash --keep-index` for a typecheck diagnostic during the build (forbidden per CLAUDE.md "Git Safety"). Pop failed on a CHANGELOG conflict; 131 files of pre-session work were extracted from `stash@{0}` via `git show stash@{0}:<path>`. Audit confirmed line counts match expected, no doubling, no orphaned references to the removed `DOUBLES_TO_SINGLES_FACTOR`. Stash kept as safety net pending Tristan's confirmation; safe to drop after dogfooding.
+
+**Test status**: 126 HYROX tests across 12 files (was 98). All pass. Typecheck clean.
+
+---
+
+## 2026-05-08 — Triathlon course-factors panel: per-leg commentary, green-for-faster, drop per-row noise
+
+Visual + content overhaul of the Course Factors block in the triathlon race forecast card (`src/ui/triathlon/race-forecast-card.ts:renderCourseFactorsPanel`). Each row previously displayed `Calibrated swim factor (swim)   high, n=6480   +7:23` — the `(swim)` was redundant with the label, and `high, n=6480` repeated identically across all three rows because confidence/n come from a single empirical fit per venue. The 1.3M finishes show-off was buried in a footnote spelled out as "around one point three million". And the rows offered no answer to the obvious question — "why is Ohio slow swim, fast bike, slow run?".
+
+- Rows reduced to discipline label + delta only: `Swim   +7:23`. Confidence band and venue n no longer compete with the headline number.
+- Negative deltas (faster) now render in green (`var(--c-ok)`), matching the existing `legCell` pattern in the per-leg breakdown. Slower stays default `var(--c-black)` — no new red token introduced (sticks to the project's two-non-neutral-colour visual constraint).
+- Per-leg commentary: a new helper `legCommentary(leg, deltaSec, profile)` reads the venue's `CourseProfile` (`swimType`, `bikeProfile`/`runProfile`, `bikeElevationM`/`runElevationM`, `altitudeM`, `windExposure`, `climate`) and emits one short, attribute-grounded sentence per row. Honest where physics alone doesn't explain the empirical signal — e.g. a flat course that still runs slow gets `Flat 30m course; warm conditions and exposed wind weigh on the leg.` rather than implying terrain. We can't decompose the empirical multiplier into physics + weather + field, but we can describe the physical attributes that plausibly drive the direction.
+- Single quiet panel footer surfaces venue sample size once: `6,480 finishes from this venue.`
+- Bottom calibration caption rewritten to lead with a numeric, weight-500 `1.3 million` (was: spelled-out and faint).
+
+---
+
+## 2026-05-08 — Sleep debt chart axis floor
+
+Cumulative sleep debt chart (`src/calculations/sleep-insights.ts:buildSleepBankLineChart`) auto-scaled tight to the data range, which made any moderate debt visually fill the canvas. Added a 6h minimum visible deficit range (matching the "high" tier threshold used by `classifySleepDebt`) when in debt mode (anchorZeroAtTop + fillToTargetGradient). Small/moderate debts now occupy a proportional slice of the chart instead of dominating it; chart still auto-expands when debt grows past 6h.
+
+---
+
 ## 2026-04-30 — Triathlon Stats page: kill nav-only cards, inline Progress sparkline, regroup Bike & aero with Course Factors
 
 Cleanup of the bottom of the triathlon Stats page (`src/ui/triathlon/stats-view.ts`, `adaptation-card.ts`, `race-forecast-card.ts`). The page had three near-empty cards each containing a single "Open X →" bordered button: Adaptation (with a "no data yet" placeholder), Progress, and Training Load. Per `docs/UX_PATTERNS.md` (empty-state rule, drill-down chevron rule, navigation-button colour rule):

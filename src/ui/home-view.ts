@@ -10,9 +10,11 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource } from '@/data/sources';
 import { computeWeekTSS, computeWeekRawTSS, computeACWR, computeReadinessACWR, computeFitnessModel, computeLiveSameSignalTSB, getWeeklyExcess, computePlannedSignalB, getTrailingEffortScore, computeTodayStrainTSS, computePlannedDaySignalBTSS, estimateWorkoutDurMin, computeDecayedCarry, computeDayTargetTSS, REST_DAY_OVERREACH_RATIO } from '@/calculations/fitness-model';
-import { computeReadiness, readinessColor, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { computeReadiness, readinessColor, readinessColorStops, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { computeTriReadiness } from '@/calculations/tri-readiness';
+import { computeDecayedTriCarry } from '@/calculations/tri-cross-training-carry';
 import { computeDailyCoach, type StrainContext, type CoachState } from '@/calculations/daily-coach';
-import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget } from '@/calculations/sleep-insights';
+import { getSleepInsight, fmtSleepDuration, sleepScoreColor, buildBarChart, getSleepBank, fmtSleepBank, deriveSleepTarget, buildDailySignalBTSS, computeSleepDebtOutlook } from '@/calculations/sleep-insights';
 import type { PhysiologyDayEntry } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
@@ -29,14 +31,22 @@ import { getEffectiveSport } from './sport-picker-modal';
 import { SPORT_LABELS } from '@/constants';
 import { isSleepDataPending } from '@/data/sleepPoller';
 import { computePlanAdherence } from '@/calculations/plan-adherence';
+import { collectTriSuggestions, type TriSuggestionBundle } from '@/calculations/tri-suggestion-aggregator';
+import { getCyclingEventLabel } from '@/calculations/cycling-mode';
+import { getTriathlonById } from '@/data/triathlons';
+import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 
 // ─── Navigation ────────────────────────────────────────────────────────────
 
 function navigateTab(tab: TabId): void {
   if (tab === 'plan') {
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
-  } else if (tab === 'record') {
-    import('./record-view').then(({ renderRecordView }) => renderRecordView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
+  } else if (tab === 'forecast') {
+    if (getState().eventType === 'hyrox') {
+      import('./hyrox/forecast-view').then(({ renderHyroxForecastView }) => renderHyroxForecastView());
+    } else {
+      import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
+    }
   } else if (tab === 'stats') {
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   } else if (tab === 'account') {
@@ -382,7 +392,8 @@ export function showRunBreakdownSheet(s: SimulatorState, weekNum?: number): void
         wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
         null, s.recurringActivities,
         s.onboarding?.experienceLevel, undefined, s.pac?.e, wkIndex + 1, s.tw, s.v, s.gs,
-        getTrailingEffortScore(s.wks, wkIndex + 1), wk.scheduledAcwrStatus,
+        getTrailingEffortScore(s.wks, wkIndex + 1), wk.scheduledAcwrStatus, undefined,
+        s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
       ).filter((w: any) => IS_RUN_TYPE(w.t || ''))
     : [];
   const garminActuals = wk?.garminActuals ?? {};
@@ -554,7 +565,9 @@ function buildGuestAccountBanner(s: SimulatorState): string {
 function buildRaceCompleteBanner(s: SimulatorState): string {
   if (s.trackOnly || s.continuousMode) return '';
   if ((s as any).racePastPromptDismissed) return '';
-  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate;
+  const raceDate = s.selectedMarathon?.date || s.onboarding?.customRaceDate
+    || (s as any).triConfig?.raceDate
+    || (s as any).hyroxConfig?.raceDate;
   if (!raceDate) return '';
   const race = new Date(raceDate);
   const now = new Date();
@@ -562,7 +575,9 @@ function buildRaceCompleteBanner(s: SimulatorState): string {
   now.setHours(0, 0, 0, 0);
   const daysPast = Math.round((now.getTime() - race.getTime()) / 86400000);
   if (daysPast < 1) return '';
-  const raceName = s.selectedMarathon?.name || 'Your race';
+  const raceName = s.selectedMarathon?.name
+    || (s.eventType === 'hyrox' ? 'Your HYROX' : null)
+    || 'Your race';
   return `
     <div id="home-race-done-banner" style="padding:12px 16px;margin:4px 16px 10px;background:#fff;border-radius:14px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)" class="hf" data-delay="0.05">
       <div style="display:flex;align-items:flex-start;gap:10px">
@@ -655,7 +670,8 @@ export function buildProgressBars(s: SimulatorState): string {
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
       null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     )
     : [];
   const adhocExtra = wk
@@ -787,7 +803,9 @@ const RACE_DIST_LABEL: Record<string, string> = {
 function buildRaceForecastCard(s: SimulatorState): string {
   if (s.continuousMode || !s.rd || !s.initialBaseline) return '';
 
-  const forecastSec = s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
+  // Prefer course-adjusted forecast (climate/altitude/elevation) when available
+  // — that is the realistic finish time. Falls back to raw VDOT prediction.
+  const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
   if (!forecastSec || forecastSec <= 0) return '';
 
   const goalSec = s.initialBaseline;
@@ -799,6 +817,25 @@ function buildRaceForecastCard(s: SimulatorState): string {
   else deltaStr = `−${deltaMin} min`;
 
   const distLabel = RACE_DIST_LABEL[s.rd] ?? 'Race';
+
+  // Course-adjustment caption — phrased as a percentage because that's the
+  // constant (a 4% heat penalty is 4% whether you run 2:00 or 4:00). Suppress
+  // tiny adjustments under 0.5% so micro-bumps from a 30m hill don't crowd
+  // the card. Pulled from the compounded factor multipliers, not derived from
+  // seconds, so the percentage doesn't drift with the user's fitness changes.
+  const factors = s.forecastCourseFactors ?? [];
+  const compoundedMult = factors.reduce((acc, f) => acc * f.multiplier, 1);
+  const adjustmentPct = (compoundedMult - 1) * 100;
+  const showAdjustmentCaption = Math.abs(adjustmentPct) >= 0.5 && factors.length > 0;
+  const factorWords = factors
+    .map(f => f.kind === 'run-elevation' ? 'elevation' : f.kind === 'climate' ? 'climate' : 'altitude')
+    .filter((v, i, arr) => arr.indexOf(v) === i)
+    .join(', ');
+  const pctStr = `${adjustmentPct >= 0 ? '+' : '−'}${Math.abs(adjustmentPct).toFixed(1)}%`;
+  const slowerOrFaster = adjustmentPct >= 0 ? 'slower' : 'faster';
+  const adjustmentCaption = showAdjustmentCaption
+    ? `<div style="font-size:11px;color:#94A3B8;margin-top:8px;line-height:1.4">Athletes tend to run ${pctStr} ${slowerOrFaster} here (${factorWords}). Tap for breakdown.</div>`
+    : '';
 
   return `
     <div style="padding:0 16px;margin-bottom:10px" class="hf" data-delay="0.16">
@@ -814,6 +851,7 @@ function buildRaceForecastCard(s: SimulatorState): string {
             <div style="color:#0F172A;font-weight:600">${deltaStr}</div>
           </div>
         </div>
+        ${adjustmentCaption}
       </div>
     </div>
   `;
@@ -822,6 +860,7 @@ function buildRaceForecastCard(s: SimulatorState): string {
 // ─── Training Readiness Ring ────────────────────────────────────────────────
 
 function buildReadinessRing(s: SimulatorState): string {
+  const isTri = s.eventType === 'triathlon';
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeReadinessACWR(s);
 
@@ -834,7 +873,7 @@ function buildReadinessRing(s: SimulatorState): string {
   const ctlNow = liveTSB.ctl;
 
   // Weighted directional momentum: recent week-over-week CTL deltas weighted 4/3/2/1 (newest first)
-  const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
+  const metrics = computeFitnessModel(s.wks ?? [], completedWeek, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
   const ctlHistory = [ctlNow, ...([4,3,2,1].map(i => metrics[metrics.length - 1 - i]?.ctl ?? ctlNow))];
   // ctlHistory[0]=now, [1]=1wk ago, [2]=2wk, [3]=3wk, [4]=4wk
@@ -865,6 +904,11 @@ function buildReadinessRing(s: SimulatorState): string {
 
   const effectiveSleepTarget0 = s.sleepTargetSec ?? deriveSleepTarget(s.physiologyHistory ?? []);
   const sleepBank = getSleepBank(s.physiologyHistory ?? [], effectiveSleepTarget0);
+  const _rdnDailyTSS = buildDailySignalBTSS(s.wks ?? [], (s as any).previousPlanWks);
+  const _rdnDebtOutlook = computeSleepDebtOutlook(s.physiologyHistory ?? [], _rdnDailyTSS, s.athleteTier ?? 'recreational', effectiveSleepTarget0);
+  const sleepDebtExcessSec = _rdnDebtOutlook.typicalDebtSec != null
+    ? _rdnDebtOutlook.debtSec - _rdnDebtOutlook.typicalDebtSec
+    : null;
 
   // ── Strain Score ───────────────────────────────────────────────────────────
   // Today's completed Signal B TSS vs the day's target.
@@ -881,7 +925,8 @@ function buildReadinessRing(s: SimulatorState): string {
   const plannedWorkouts = strainWk ? generateWeekWorkouts(
     strainWk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus,
+    s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), strainWk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   ) : [];
   // Apply day moves so target matches what the plan view shows
   if (strainWk?.workoutMoves) {
@@ -946,6 +991,15 @@ function buildReadinessRing(s: SimulatorState): string {
   const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
   const recoveryResult = computeRecoveryScore(physioForRecovery0, { manualSleepScore: noGarminSleep0 ? (manualSleepToday0?.sleepScore ?? undefined) : undefined, sleepDebtSec: sleepDebtForRecovery });
 
+  const triReadinessResult = isTri ? computeTriReadiness(s) : null;
+
+  // Big ring = global recovery readiness (sleep + HRV + physiology + combined load).
+  // Per-discipline load status surfaces in the discipline ring row in tri mode.
+  // MTL ACWR for HYROX — station eccentric ramp rate
+  const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
+  const hxMtlATL = s.hyroxConfig?.mtlATL ?? 0;
+  const mtlAcwr = s.eventType === 'hyrox' && hxMtlCTL >= 15 ? hxMtlATL / hxMtlCTL : null;
+
   const readiness: ReadinessResult = computeReadiness({
     tsb,
     acwr: acwr.ratio,
@@ -955,11 +1009,13 @@ function buildReadinessRing(s: SimulatorState): string {
     sleepHistory: s.physiologyHistory ?? [],
     hrvPersonalAvg,
     sleepBankSec: sleepBank.nightsWithData >= 3 ? sleepBank.bankSec : null,
+    sleepDebtExcessSec,
     weeksOfHistory: metrics.length,
     strainPct: todaySignalBTSS > 0 ? strainPctLinear : null,
     recentLegLoads: s.recentLegLoads ?? [],
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     acwrSafeUpper: acwr.safeUpper,
+    mtlAcwr,
   });
 
   // ── Primary message (single authoritative sentence) ─────────────────────
@@ -982,10 +1038,14 @@ function buildReadinessRing(s: SimulatorState): string {
   };
 
   const coach = computeDailyCoach(s, strainCtx);
-  const readinessSentence = coach.primaryMessage;
+  const readinessSentence = isTri
+    ? (triReadinessResult?.sentence ?? readiness.sentence)
+    : coach.primaryMessage;
 
   const color = readinessColor(readiness.label);
-  const ringLabel = coach.ringLabel;
+  const rdnStops = readinessColorStops(readiness.label);
+  // In tri mode skip the post-session label override — tri readiness label is already definitive.
+  const ringLabel = isTri ? readiness.label : coach.ringLabel;
 
   // SVG rings: 270° arc, starts bottom-left (135°), fills clockwise. 120×120 for side-by-side layout.
   const CX = 60, CY = 60, R = 44, SW = 8;
@@ -1027,6 +1087,10 @@ function buildReadinessRing(s: SimulatorState): string {
     strainLabel = isRestDay ? 'Rest day' : (hasPlannedWorkout ? 'Not started' : 'Rest day');
   }
 
+  const strainGradH = strainColor === 'var(--c-warn)' ? '#FCD27A' : strainColor === 'var(--c-ok)' ? '#86EFAC' : '#CBD5E1';
+  const strainGradM = strainColor === 'var(--c-warn)' ? '#F59E0B' : strainColor === 'var(--c-ok)' ? '#22C55E' : '#94A3B8';
+  const strainGradS = strainColor === 'var(--c-warn)' ? '#A16207' : strainColor === 'var(--c-ok)' ? '#166534' : '#475569';
+
   // Ring fill: TSS as fraction of ringMax
   const strainFillPct = todaySignalBTSS > 0 ? Math.min(todaySignalBTSS / strainRingMax, 1) : 0;
   const strainFillEnd = START + strainFillPct * SWEEP;
@@ -1040,6 +1104,9 @@ function buildReadinessRing(s: SimulatorState): string {
   // Sleep ring
   const sleepDurationSec = garminTodaySleep?.sleepDurationSec ?? null;
   const sleepRingColor = sleepScore != null ? sleepScoreColor(sleepScore) : 'var(--c-faint)';
+  const sleepGradH = sleepScore != null && sleepScore >= 65 ? '#DDD6FE' : '#FED7AA';
+  const sleepGradM = sleepScore != null && sleepScore >= 65 ? '#8B5CF6' : '#F59E0B';
+  const sleepGradS = sleepScore != null && sleepScore >= 65 ? '#4C1D95' : '#A16207';
   const sleepFillEnd = START + ((sleepScore ?? 0) / 100) * SWEEP;
   const slTrackPath = arcPath(CX, CY, R, START, START + SWEEP);
   const slArcFill = sleepScore != null && sleepScore > 0
@@ -1060,6 +1127,10 @@ function buildReadinessRing(s: SimulatorState): string {
   const recoveryScoreColor = recoveryResult.hasData
     ? (recoveryResult.score! >= 80 ? 'var(--c-ok)' : recoveryResult.score! >= 65 ? 'var(--c-ok-muted)' : recoveryResult.score! >= 50 ? 'var(--c-caution)' : 'var(--c-warn)')
     : 'var(--c-faint)';
+  const recScore = recoveryResult.hasData && recoveryResult.score != null ? recoveryResult.score : -1;
+  const recGradH = recScore >= 65 ? '#86EFAC' : recScore >= 50 ? '#FCD27A' : recScore >= 0 ? '#FCA5A5' : '#CBD5E1';
+  const recGradM = recScore >= 65 ? '#22C55E' : recScore >= 50 ? '#F59E0B' : recScore >= 0 ? '#EF4444' : '#94A3B8';
+  const recGradS = recScore >= 65 ? '#166534' : recScore >= 50 ? '#A16207' : recScore >= 0 ? '#991B1B' : '#475569';
 
   // Recovery ring arc paths
   const recFillPct = recoveryResult.hasData && recoveryResult.score != null ? recoveryResult.score : 0;
@@ -1078,12 +1149,25 @@ function buildReadinessRing(s: SimulatorState): string {
     ? `<div style="font-size:9px;color:var(--c-warn);margin-top:3px;font-weight:600">⬇ Main factor</div>`
     : '';
 
+  // Tri mode: source the Adjust-plan affordance from the tri suggestion
+  // pipeline (collectTriSuggestions → showTriSuggestionModal). The running-side
+  // composite's drivingSignal does not map onto tri's per-discipline ramps,
+  // and `triggerACWRReduction` is a no-op in tri mode (main-view.ts:2217).
+  const isTriMode = s.eventType === 'triathlon';
+  const triBundle: TriSuggestionBundle | null = isTriMode ? collectTriSuggestions(s) : null;
+  const triHasMods = (triBundle?.mods.length ?? 0) > 0;
+  const triDominantSource = triBundle?.mods[0]?.source;
+
   // ISSUE 3: Adjust button text varies by driving signal
-  const adjustText = readiness.drivingSignal === 'fitness' ? 'Adjust plan'
-    : readiness.drivingSignal === 'safety' ? 'Reduce session load'
-      : readiness.drivingSignal === 'recovery' ? 'Take it lighter today'
-        : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
-          : "Keep consistency — don't skip";
+  const adjustText = isTriMode
+    ? (triDominantSource === 'cross_training_overload' || triDominantSource === 'readiness'
+        ? 'Reduce session load'
+        : 'Adjust plan')
+    : readiness.drivingSignal === 'fitness' ? 'Adjust plan'
+      : readiness.drivingSignal === 'safety' ? 'Reduce session load'
+        : readiness.drivingSignal === 'recovery' ? 'Take it lighter today'
+          : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
+            : "Keep consistency — don't skip";
 
   // Hide the adjust button when its handler has nothing to do — otherwise the
   // user taps and lands silently on the plan view. Mirror the click-handler's
@@ -1109,11 +1193,15 @@ function buildReadinessRing(s: SimulatorState): string {
   });
   const hasRemainingRun = remainingUnratedWorkouts.length > 0;
   const hasRemainingHardRun = remainingUnratedWorkouts.some((w: any) => isHardWorkout(w.t));
-  const showAdjustButton = readiness.score <= 59 && (
-    readiness.drivingSignal === 'legLoad'
-      ? (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingHardRun)
-      : (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingRun)
-  );
+  const showAdjustButton = isTriMode
+    // Tri: only show the button when the suggestion pipeline has something to
+    // act on. A poor readiness score with no actionable mod is a dead button.
+    ? triHasMods
+    : readiness.score <= 59 && (
+        readiness.drivingSignal === 'legLoad'
+          ? (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingHardRun)
+          : (acwrElevatedForBtn || hasUnspentForBtn || hasRemainingRun)
+      );
 
   const recoveryPillHtml = recoveryResult.hasData
     ? `<div class="home-readiness-pill" data-pill="recovery" style="flex:1;min-width:80px;cursor:pointer;${drivingBorderStyle('recovery')}">
@@ -1146,8 +1234,15 @@ function buildReadinessRing(s: SimulatorState): string {
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:8px">Readiness</div>
             <div style="position:relative;width:120px;height:120px">
               <svg viewBox="0 0 120 120" width="120" height="120" style="display:block;overflow:visible">
+                <defs>
+                  <linearGradient id="homeRdnGrad" x1="15" y1="15" x2="105" y2="105" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%"   stop-color="${rdnStops.highlight}"/>
+                    <stop offset="50%"  stop-color="${rdnStops.mid}"/>
+                    <stop offset="100%" stop-color="${rdnStops.shadow}"/>
+                  </linearGradient>
+                </defs>
                 <path d="${trackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${fillPathStr ? (() => { const arcLen = Math.ceil(2 * Math.PI * R * (readiness.score / 100) * (SWEEP / 360)); return `<path d="${fillPathStr}" fill="none" stroke="${color}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${arcLen}" stroke-dashoffset="${arcLen}" class="arc-anim"/>`; })() : ''}
+                ${fillPathStr ? (() => { const arcLen = Math.ceil(2 * Math.PI * R * (readiness.score / 100) * (SWEEP / 360)); return `<path d="${fillPathStr}" fill="none" stroke="url(#homeRdnGrad)" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${arcLen}" stroke-dashoffset="${arcLen}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 <div style="font-size:32px;font-weight:300;letter-spacing:-0.04em;line-height:1;color:${color}">${readiness.score}</div>
@@ -1165,8 +1260,15 @@ function buildReadinessRing(s: SimulatorState): string {
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Sleep</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
+                <defs>
+                  <linearGradient id="homeSlGrad" x1="15" y1="15" x2="105" y2="105" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%"   stop-color="${sleepGradH}"/>
+                    <stop offset="50%"  stop-color="${sleepGradM}"/>
+                    <stop offset="100%" stop-color="${sleepGradS}"/>
+                  </linearGradient>
+                </defs>
                 <path d="${slTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${slArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((sleepScore ?? 0) / 100) * (SWEEP / 360)); return `<path d="${slArcFill}" fill="none" stroke="${sleepRingColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
+                ${slArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((sleepScore ?? 0) / 100) * (SWEEP / 360)); return `<path d="${slArcFill}" fill="none" stroke="url(#homeSlGrad)" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 ${sleepScore != null
@@ -1187,8 +1289,15 @@ function buildReadinessRing(s: SimulatorState): string {
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Strain</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
+                <defs>
+                  <linearGradient id="homeStGrad" x1="15" y1="15" x2="105" y2="105" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%"   stop-color="${strainGradH}"/>
+                    <stop offset="50%"  stop-color="${strainGradM}"/>
+                    <stop offset="100%" stop-color="${strainGradS}"/>
+                  </linearGradient>
+                </defs>
                 <path d="${sTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${sArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * strainFillPct * (SWEEP / 360)); return `<path d="${sArcFill}" fill="none" stroke="${strainColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
+                ${sArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * strainFillPct * (SWEEP / 360)); return `<path d="${sArcFill}" fill="none" stroke="url(#homeStGrad)" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 ${todaySignalBTSS > 0
@@ -1209,8 +1318,15 @@ function buildReadinessRing(s: SimulatorState): string {
             <div style="font-size:10px;font-weight:600;letter-spacing:0.08em;color:var(--c-faint);text-transform:uppercase;margin-bottom:6px">Physiology</div>
             <div style="position:relative;width:66px;height:66px">
               <svg viewBox="0 0 120 120" width="66" height="66" style="display:block;overflow:visible">
+                <defs>
+                  <linearGradient id="homeRecGrad" x1="15" y1="15" x2="105" y2="105" gradientUnits="userSpaceOnUse">
+                    <stop offset="0%"   stop-color="${recGradH}"/>
+                    <stop offset="50%"  stop-color="${recGradM}"/>
+                    <stop offset="100%" stop-color="${recGradS}"/>
+                  </linearGradient>
+                </defs>
                 <path d="${recTrackPath}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="${SW}" stroke-linecap="round"/>
-                ${recArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((recoveryResult.score ?? 0) / 100) * (SWEEP / 360)); return `<path d="${recArcFill}" fill="none" stroke="${recoveryScoreColor}" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
+                ${recArcFill ? (() => { const al = Math.ceil(2 * Math.PI * R * ((recoveryResult.score ?? 0) / 100) * (SWEEP / 360)); return `<path d="${recArcFill}" fill="none" stroke="url(#homeRecGrad)" stroke-width="${SW}" stroke-linecap="round" stroke-dasharray="${al}" stroke-dashoffset="${al}" class="arc-anim"/>`; })() : ''}
               </svg>
               <div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-top:-2px">
                 ${recoveryResult.hasData && recoveryResult.score != null
@@ -1253,7 +1369,7 @@ function buildReadinessRing(s: SimulatorState): string {
         <!-- Sentence -->
         <p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;max-width:none">${readinessSentence}</p>
         ${readiness.suppressStreak != null ? `<p style="font-size:12px;color:var(--c-muted);text-align:center;line-height:1.4;margin:-6px 16px 14px;opacity:0.75">Sleep has limited your score for ${readiness.suppressStreak} consecutive days.</p>` : ''}
-        ${coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
+        ${!isTri && coach.sessionNote ? `<p style="font-size:13px;color:var(--c-muted);text-align:center;line-height:1.45;margin:0 16px 14px;padding:10px 16px 0;border-top:1px solid var(--c-border)">${coach.sessionNote}</p>` : ''}
 
         ${showAdjustButton ? `
         <div style="padding:0 14px 16px">
@@ -1500,14 +1616,14 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
         ? `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
              <span style="font-size:11px;color:var(--c-muted)">No sleep data from Garmin yet</span>
              <div style="display:flex;gap:10px">
-               <button id="sleep-sync-btn" style="font-size:11px;color:var(--c-accent);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Sync</button>
+               <button id="sleep-sync-btn" style="font-size:11px;color:var(--c-muted);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Sync</button>
                <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-muted);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Log manually</button>
              </div>
            </div>`
         : hasManual
           ? `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
                <span style="font-size:11px;color:var(--c-muted)">Sleep logged manually</span>
-               <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-accent);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Edit</button>
+               <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-muted);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Edit</button>
              </div>`
           : `<div style="margin-top:6px;text-align:right">
                <button id="sleep-log-manual-btn" style="font-size:11px;color:var(--c-faint);background:none;border:none;padding:0;cursor:pointer;font-family:var(--f)">Log manually</button>
@@ -1663,7 +1779,7 @@ function buildCompletedActivityHero(act: CompletedActivity, ourDay: number, s: S
     : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
   return `
-    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
+    <div style="margin:0 16px 14px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.05),0 12px 32px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
       <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
         <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.12)" stroke-width="1.2"/>
         <circle cx="100" cy="100" r="55" stroke="rgba(0,0,0,0.09)" stroke-width="1.2"/>
@@ -1697,7 +1813,8 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 
   // Apply mods
@@ -1800,7 +1917,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
       : '';
 
   return `
-    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
+    <div style="margin:0 16px 14px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.05),0 12px 32px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
       <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
         <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.12)" stroke-width="1.2"/>
         <circle cx="100" cy="100" r="55" stroke="rgba(0,0,0,0.09)" stroke-width="1.2"/>
@@ -1847,7 +1964,7 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
   if (isRest && s) {
     const wk = s.wks?.[s.w - 1];
     if (wk) {
-      const workouts = generateWeekWorkouts(wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined, null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus);
+      const workouts = generateWeekWorkouts(wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined, null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e, s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined, s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts);
       // Apply day moves so "Next workout" reflects any plan-tab reorders
       if ((wk as any).workoutMoves) {
         for (const [workoutId, newDay] of Object.entries((wk as any).workoutMoves as Record<string, number>)) {
@@ -1866,7 +1983,7 @@ function buildNoWorkoutHero(title: string, subtitle: string, isRest: boolean, s?
   }
 
   return `
-    <div style="margin:0 16px 14px;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
+    <div style="margin:0 16px 14px;background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 4px 12px rgba(0,0,0,0.05),0 12px 32px rgba(0,0,0,0.06);position:relative;overflow:hidden" class="hf" data-delay="0.26">
       <svg style="position:absolute;right:-60px;top:50%;transform:translateY(-50%);pointer-events:none" width="200" height="200" viewBox="0 0 200 200" fill="none">
         <circle cx="100" cy="100" r="30" stroke="rgba(0,0,0,0.08)" stroke-width="1"/>
         <circle cx="100" cy="100" r="60" stroke="rgba(0,0,0,0.06)" stroke-width="1"/>
@@ -2027,10 +2144,23 @@ function buildRecentActivity(s: SimulatorState): string {
   `;
   }).join('');
 
+  // Recent shows current + previous week activities, so the Review button must
+  // surface whenever EITHER week has synced items — otherwise on a Monday with
+  // no fresh activity yet, the button hides even though last week's runs are
+  // visible and re-matchable.
+  const wkForReview = s.wks?.[s.w - 1];
+  const prevWkForReview = s.wks?.[s.w - 2];
+  const currentPending = wkForReview?.garminPending?.length ?? 0;
+  const prevPending = prevWkForReview?.garminPending?.length ?? 0;
+  const hasReviewable = currentPending > 0 || prevPending > 0;
+
   return `
     <div style="padding:0 16px;margin-bottom:14px" class="hf" data-delay="0.32">
-      <div style="font-size:12px;font-weight:600;color:#64748B;margin-bottom:8px">Recent</div>
-      <div style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">${rowsHtml}</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:12px;font-weight:600;color:#64748B">Recent</div>
+        ${hasReviewable ? `<button id="home-tri-review-btn" style="font-size:11px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font-family:var(--f);font-weight:500">Review →</button>` : ''}
+      </div>
+      <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.65);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">${rowsHtml}</div>
     </div>
   `;
 }
@@ -2049,8 +2179,23 @@ function buildSyncActions(s: SimulatorState): string {
 // ─── Main render ────────────────────────────────────────────────────────────
 
 function getHomePlanName(s: SimulatorState): string {
+  if (s.eventType === 'hyrox') {
+    const fmt = s.hyroxConfig?.format ?? 'open_singles';
+    const fmtLabel = fmt.includes('doubles') ? 'Doubles' : fmt.includes('pro') ? 'Pro' : 'Open';
+    const raceDate = s.hyroxConfig?.raceDate ?? s.onboarding?.customRaceDate;
+    if (raceDate) {
+      const d = new Date(raceDate);
+      const month = d.toLocaleString('en-US', { month: 'short' });
+      return `HYROX ${fmtLabel} · ${month} ${d.getFullYear()}`;
+    }
+    return `HYROX ${fmtLabel}`;
+  }
   if (s.eventType === 'triathlon') {
-    return s.triConfig?.distance === 'ironman' ? 'Ironman' : '70.3';
+    const cycling = getCyclingEventLabel(s);
+    if (cycling) return cycling;
+    const distLabel = s.triConfig?.distance === 'ironman' ? 'Ironman' : '70.3';
+    const city = getTriathlonById(s.onboarding?.selectedTriathlonId ?? '')?.city;
+    return city ? `${city} ${distLabel}` : distLabel;
   }
   if (s.continuousMode) {
     const focus = s.onboarding?.trainingFocus;
@@ -2251,7 +2396,7 @@ export function renderTrackOnlyWeekDetail(): void {
   container.innerHTML = `
     <div style="min-height:100vh;background:#FAF9F6;position:relative;overflow-x:hidden">
       <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%);pointer-events:none"></div>
-      <div style="position:relative;z-index:10;max-width:520px;margin:0 auto;padding:56px 16px 120px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding:56px 16px 120px">
 
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
           <button id="tow-back" style="width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,0.08);display:flex;align-items:center;justify-content:center;color:#334155">
@@ -2521,8 +2666,11 @@ function getHomeHTML(s: SimulatorState): string {
   // Race countdown for hero header. Tri users never read selectedMarathon —
   // that's a marathon-mode artifact. Use the user's entered race date only.
   const isTri = s.eventType === 'triathlon';
-  const raceDate = isTri ? (s.triConfig?.raceDate || s.onboarding?.customRaceDate) : (s.selectedMarathon?.date || s.onboarding?.customRaceDate);
-  const raceName = isTri ? null : (s.selectedMarathon?.name || null);
+  const isHyrox = s.eventType === 'hyrox';
+  const raceDate = isHyrox ? (s.hyroxConfig?.raceDate ?? s.onboarding?.customRaceDate)
+    : isTri ? (s.triConfig?.raceDate || s.onboarding?.customRaceDate)
+    : (s.selectedMarathon?.date || s.onboarding?.customRaceDate);
+  const raceName = (isTri || isHyrox) ? null : (s.selectedMarathon?.name || null);
   const raceDays = raceDate && !s.continuousMode ? daysUntil(raceDate) : 0;
   const hasRaceCountdown = raceDays > 0;
   const raceCountdownDisplay = raceDays <= 14 ? `${raceDays}` : `${Math.floor(raceDays / 7)}`;
@@ -2548,21 +2696,11 @@ function getHomeHTML(s: SimulatorState): string {
       @keyframes arcSweep { to { stroke-dashoffset:0 } }
     </style>
     <div class="mosaic-page" style="background:#FAF9F6;position:relative">
-      <!-- Full-page sky gradient — same as plan page -->
-      <div style="position:absolute;top:0;left:0;width:100%;height:100%;overflow:hidden;pointer-events:none;z-index:0">
-        <div style="position:absolute;inset:0;background:linear-gradient(180deg, #C5DFF8 0%, #E3F0FA 15%, #F0F7FC 35%, #F5F8FB 55%, #FAF9F6 80%)"></div>
-        <svg style="position:absolute;top:0;left:0;width:100%;height:600px" viewBox="0 0 400 600" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <filter id="hmBlur"><feGaussianBlur stdDeviation="20"/></filter>
-            <filter id="hmSoft"><feGaussianBlur stdDeviation="6"/></filter>
-          </defs>
-          <ellipse cx="200" cy="100" rx="100" ry="70" fill="rgba(255,255,255,0.5)" filter="url(#hmSoft)" opacity="0.6"/>
-          <ellipse cx="80" cy="180" rx="60" ry="25" fill="white" filter="url(#hmBlur)" opacity="0.35"/>
-          <ellipse cx="340" cy="160" rx="50" ry="20" fill="white" filter="url(#hmBlur)" opacity="0.25"/>
-          <path d="M-40,280 Q60,240 150,265 T320,245 T440,270 L440,600 L-40,600 Z" fill="rgba(255,255,255,0.25)" filter="url(#hmSoft)"/>
-          <path d="M-20,350 Q100,330 220,345 T440,335 L440,600 L-20,600 Z" fill="rgba(255,255,255,0.15)"/>
-        </svg>
-      </div>
+      <!-- Continuous scroll-page atmosphere — softer "sky" palette + halo shifted
+           upper-right so it balances the upper-left sun glint. Differentiates
+           home from readiness (which uses the tighter centred halo). -->
+      ${buildScrollAtmosphereBackground('hm', 'sky', { haloCenter: { cx: 320, cy: 200 } })}
+      ${buildSunGlint('low')}
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
 
       <!-- Header bar: profile + race countdown -->
@@ -2587,6 +2725,7 @@ function getHomeHTML(s: SimulatorState): string {
         <div style="display:flex;justify-content:center;gap:8px;margin-top:18px">
           <button id="home-coach-btn" class="m-btn-glass">Coach</button>
           <button id="home-checkin-btn" class="m-btn-glass">Check-in</button>
+          <button id="home-record-btn" class="m-btn-glass">Record</button>
         </div>
       </div>
 
@@ -2594,8 +2733,9 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildHolidayBannerHome(s)}
       ${buildRaceCompleteBanner(s)}
       ${buildGuestAccountBanner(s)}
-      ${s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
-      ${s.eventType === 'triathlon' ? '' : buildRaceForecastCard(s)}
+      ${s.eventType === 'triathlon' ? buildTriCarryBanner(s) : ''}
+      ${s.eventType === 'hyrox' ? buildTodayWorkoutHyrox(s) : s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
+      ${s.eventType === 'triathlon' || s.eventType === 'hyrox' ? '' : buildRaceForecastCard(s)}
       ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}
@@ -2603,6 +2743,28 @@ function getHomeHTML(s: SimulatorState): string {
       </div>
     </div>
     ${renderTabBar('home', isSimulatorMode())}
+  `;
+}
+
+/**
+ * Carry-over banner: shows when the user clicked "Push to next week" on a
+ * cross-training overload modal in a previous week. The carried TSS decays
+ * exponentially (7-day τ) — banner displays the current decayed value so
+ * it shrinks visibly over the days following the push and disappears after
+ * ~3 weeks.
+ */
+function buildTriCarryBanner(s: SimulatorState): string {
+  const decayed = computeDecayedTriCarry(s);
+  if (decayed < 5) return ''; // hide trivial residuals
+  return `
+    <div style="margin:10px 16px 0;padding:11px 14px;border-radius:10px;
+      background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25);
+      display:flex;align-items:center;justify-content:space-between;gap:10px">
+      <div style="font-size:12px;line-height:1.4;color:#0F172A">
+        <strong>${Math.round(decayed)} TSS</strong> carried over from cross-training pushed to this week.
+        <span style="color:var(--c-muted)">Decays over ~5 days.</span>
+      </div>
+    </div>
   `;
 }
 
@@ -2661,6 +2823,59 @@ function buildTriathlonHeroCard(w: any): string {
       <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
       <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${escapeAttr(desc)}</div>
       ${isBrick ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.06);font-size:11px;color:var(--c-faint)">Brick — bike ${w.brickSegments[0].durationMin ?? 0}m + run ${w.brickSegments[1].durationMin ?? 0}m</div>` : ''}
+      <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
+        <span>Tap for full breakdown</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </div>
+    </div>
+  `;
+}
+
+// ─── HYROX today's workout ────────────────────────────────────────────────────
+
+function buildTodayWorkoutHyrox(s: SimulatorState): string {
+  const wk = s.wks?.[s.w - 1];
+  if (!wk) return buildNoWorkoutHero('No plan this week', 'Complete onboarding to generate your HYROX plan.', false);
+
+  const jsDay = new Date().getDay();
+  const ourDay = jsDay === 0 ? 6 : jsDay - 1;
+
+  const todayList = (wk.triWorkouts ?? []).filter((w: any) => w.dayOfWeek === ourDay);
+  if (todayList.length === 0) {
+    return buildNoWorkoutHero('Rest Day', 'No structured training today. Walk, stretch, sleep.', true, s);
+  }
+
+  const cards = todayList.map((w: any) => buildHyroxHeroCard(w)).join('');
+  return `<div style="padding:0 20px 16px">${cards}</div>`;
+}
+
+function buildHyroxHeroCard(w: any): string {
+  const disc = String(w.discipline || 'run');
+  const accent = disc === 'station' ? '#b8742c' : disc === 'brick' ? '#5b6ea0' : '#7a845c';
+  const badgeBg = disc === 'station' ? 'rgba(184,116,44,0.14)' : disc === 'brick' ? 'rgba(91,110,160,0.14)' : 'rgba(122,132,92,0.14)';
+  const badgeText = disc === 'station' ? '#8a5820' : disc === 'brick' ? '#3d4f80' : '#4f5a3b';
+  const label = disc === 'station' ? 'Station' : disc === 'brick' ? 'Brick' : 'Run';
+  const rpe = w.rpe ?? w.r ?? 5;
+  const mtl = w.musculoTendonLoad;
+  const dur = w.estimatedDurationMin;
+  const durStr = dur ? (dur >= 60 ? `${Math.floor(dur / 60)}h ${dur % 60 > 0 ? `${dur % 60}m` : ''}`.trim() : `${dur}m`) : '';
+
+  return `
+    <div data-hx-hero-workout-id="${escapeAttr(w.id || w.n)}" style="
+      background:#fff;border-radius:16px;
+      padding:20px 22px;margin-bottom:12px;
+      box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);
+      cursor:pointer;transition:transform 0.15s ease,box-shadow 0.15s ease;
+    " class="hx-hero-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <span style="display:inline-flex;align-items:center;background:${badgeBg};color:${badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:4px 10px;border-radius:100px">${label}</span>
+        ${durStr ? `<span style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums">${durStr}</span>` : ''}
+        <span style="flex:1"></span>
+        <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
+        ${mtl != null && mtl > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">MTL ${Math.round(mtl)}</span>` : ''}
+      </div>
+      <div style="font-size:22px;font-weight:700;color:#0F172A;margin-bottom:6px;letter-spacing:-0.015em">${escapeAttr(w.n)}</div>
+      <div style="font-size:14px;color:var(--c-muted);line-height:1.55">${escapeAttr(w.d || '')}</div>
       <div style="margin-top:12px;display:flex;align-items:center;gap:6px;font-size:11px;color:${accent};font-weight:600">
         <span>Tap for full breakdown</span>
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
@@ -2734,6 +2949,21 @@ function wireHomeHandlers(): void {
   // Check-in button
   document.getElementById('home-checkin-btn')?.addEventListener('click', () => openCheckinOverlay());
 
+  // Record button
+  document.getElementById('home-record-btn')?.addEventListener('click', () => {
+    import('./record-view').then(({ renderRecordView }) => renderRecordView());
+  });
+
+  // Pending-review button → activity-review flow for whichever week has pending
+  // items (prefer current; fall back to last week so Mondays / fresh weeks still
+  // open the right matching surface).
+  document.getElementById('home-tri-review-btn')?.addEventListener('click', () => {
+    const st = getState();
+    const cur = st.wks?.[st.w - 1]?.garminPending?.length ?? 0;
+    const weekNum = cur > 0 ? st.w : st.w - 1;
+    (window as any).openActivityReReview?.(() => renderHomeView(), weekNum);
+  });
+
   // Just-Track upgrade CTA → relaunch wizard at goals (trainingMode + trainingForEvent)
   document.getElementById('home-create-plan-btn')?.addEventListener('click', () => {
     import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
@@ -2798,7 +3028,7 @@ function wireHomeHandlers(): void {
 
   // View plan button (from workout hero)
   document.getElementById('home-view-plan-btn')?.addEventListener('click', () => {
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
   });
 
   // "Done · View" pill on today's hero — open activity detail
@@ -2814,13 +3044,13 @@ function wireHomeHandlers(): void {
         renderActivityDetail(actual, actual.workoutName || actual.displayName || workoutKey || 'Activity', 'home', undefined, workoutKey);
       });
     } else {
-      import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      import('./main-view').then(({ renderMainView }) => renderMainView());
     }
   });
 
   // Sync button → go to plan (which has sync)
   document.getElementById('home-sync-btn')?.addEventListener('click', () => {
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
   });
 
   // Race forecast card — opens full-page chart
@@ -2880,10 +3110,24 @@ function wireHomeHandlers(): void {
   document.getElementById('readiness-adjust-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const s2 = getState();
+
+    // Tri mode: route into the tri suggestion pipeline. The button gate (see
+    // buildReadinessRing) only renders the button when bundle.mods is
+    // non-empty, but recompute here so we get fresh state at click time.
+    if (s2.eventType === 'triathlon') {
+      const bundle = collectTriSuggestions(s2);
+      if (bundle.mods.length > 0) {
+        import('./triathlon/tri-suggestion-modal').then(({ showTriSuggestionModal }) =>
+          showTriSuggestionModal(bundle).then(() => renderHomeView()),
+        );
+      }
+      return;
+    }
+
     const wk2 = s2.wks?.[s2.w - 1];
     const tier2 = s2.athleteTierOverride ?? s2.athleteTier;
     const atlSeed2 = (s2.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s2.gs ?? 0), 0.3));
-    const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks);
+    const acwr2 = computeACWR(s2.wks ?? [], s2.w, tier2, s2.ctlBaseline ?? undefined, s2.planStartDate, atlSeed2, s2.signalBBaseline ?? undefined, undefined, (s2 as any).previousPlanWks, s2.adaptiveRecovery);
     const acwrElevated = acwr2.status === 'caution' || acwr2.status === 'high';
     const hasUnspent = (wk2?.unspentLoadItems?.length ?? 0) > 0;
     if (acwrElevated || hasUnspent) {
@@ -2894,7 +3138,7 @@ function wireHomeHandlers(): void {
       // otherwise navigate to plan so the user can see their week
       const opened = showRecoveryAdviceSheet();
       if (!opened) {
-        import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+        import('./main-view').then(({ renderMainView }) => renderMainView());
       }
     }
   });
@@ -2952,6 +3196,18 @@ function wireHomeHandlers(): void {
       const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
       if (!w) return;
       import('./triathlon/workout-detail-modal').then(({ openTriWorkoutDetail }) => openTriWorkoutDetail(w));
+    });
+  });
+
+  // HYROX today hero card → workout detail modal
+  document.querySelectorAll<HTMLElement>('.hx-hero-card').forEach((el) => {
+    el.addEventListener('click', () => {
+      const st = getState();
+      const wk = st.wks?.[st.w - 1];
+      if (!wk) return;
+      const id = el.getAttribute('data-hx-hero-workout-id');
+      const w = (wk.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
+      if (w) import('./hyrox/workout-detail-modal').then(({ openHyroxWorkoutDetail }) => openHyroxWorkoutDetail(w));
     });
   });
 
@@ -3019,7 +3275,7 @@ function showManualSleepPicker(): void {
         <span id="sleep-score-display" style="font-size:56px;font-weight:300;color:var(--c-black);font-variant-numeric:tabular-nums;line-height:1">${initialValue}</span><span style="font-size:20px;font-weight:300;color:var(--c-faint)">/100</span>
       </div>
       <div style="padding:4px 0 24px">
-        <input id="sleep-score-slider" type="range" min="1" max="100" value="${initialValue}">
+        <input id="sleep-score-slider" class="m-slider-glass" type="range" min="1" max="100" value="${initialValue}">
       </div>
       <button id="sleep-picker-save" style="width:100%;padding:13px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f);margin-bottom:8px">Save</button>
       <button id="sleep-picker-cancel" style="width:100%;padding:13px;border-radius:12px;border:1px solid var(--c-border);background:transparent;color:var(--c-muted);font-size:14px;cursor:pointer;font-family:var(--f)">Cancel</button>
@@ -3074,7 +3330,8 @@ function showRecoveryAdviceSheet(): boolean {
     const workouts = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
       s.onboarding?.experienceLevel, undefined, undefined, s.w, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     ) as any[];
 
     // Apply existing day moves so we see the current layout
@@ -3228,7 +3485,7 @@ function showRecoveryAdviceSheet(): boolean {
   // Reorder the week — navigate to plan view so user can rearrange
   overlay.querySelector('#rec-advice-reorder')?.addEventListener('click', () => {
     close();
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
   });
 
   // Reduce intensity — downgrade today's workout to easy effort

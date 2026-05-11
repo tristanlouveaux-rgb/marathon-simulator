@@ -1,17 +1,20 @@
 import type { OnboardingState } from '@/types/onboarding';
 import { nextStep, updateOnboarding } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 import runningImgUrl from '@/assets/onboarding/running.jpg';
 import hyroxImgUrl from '@/assets/onboarding/hyrox.jpg';
 import triathlonImgUrl from '@/assets/onboarding/triathlon.jpg';
+import cyclingImgUrl from '@/assets/onboarding/cycling.jpg';
 import trackImgUrl from '@/assets/onboarding/track.jpg';
 
-type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'track';
+type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'track';
 
 // Monochrome line marks — watermark inside each tile until the real photo lands.
 const ICON_RUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4.5" r="1.6"/><path d="M7 11l3.5-3 3 1.5 2.5 3 2.5 0.5"/><path d="M10.5 8.5l-3 4 3 2 0.5 4.5"/><path d="M5 16l3.5 1 2-1.5"/><path d="M13.5 14l-1 4.5"/></svg>`;
 const ICON_HYROX = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5v3"/><path d="M21.5 10.5v3"/><path d="M5.5 8v8"/><path d="M18.5 8v8"/><path d="M5.5 12h13"/></svg>`;
 const ICON_TRI = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17c1.5-1 3-1 4.5 0s3 1 4.5 0 3-1 4.5 0 3 1 4.5 0"/><circle cx="17" cy="7" r="1.4"/><path d="M6 14l3-3 3 1 3-1"/></svg>`;
+const ICON_CYCLE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="16.5" r="3.5"/><circle cx="18" cy="16.5" r="3.5"/><path d="M6 16.5l5-7h6"/><path d="M11 9.5l3.5 7"/><circle cx="14.5" cy="5.5" r="1.2"/></svg>`;
 const ICON_TRACK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l4 4 12-12"/><path d="M4 18h16"/></svg>`;
 
 interface ModeTile {
@@ -21,6 +24,9 @@ interface ModeTile {
   icon: string;
   placeholderBg: string;
   imageUrl?: string;
+  /** Override for `background-position` (default '70% 20%'). Use when a tile's
+   * photo has a focal point that needs different framing. */
+  imagePosition?: string;
   disabled?: boolean;
   badge?: string;
 }
@@ -41,8 +47,7 @@ const MODE_TILES: ModeTile[] = [
     icon: ICON_HYROX,
     placeholderBg: 'linear-gradient(135deg, #1f1f1f 0%, #2e2e2e 55%, #1a1a1a 100%)',
     imageUrl: hyroxImgUrl,
-    disabled: true,
-    badge: 'Coming soon',
+    badge: 'New',
   },
   {
     id: 'triathlon',
@@ -51,6 +56,18 @@ const MODE_TILES: ModeTile[] = [
     icon: ICON_TRI,
     placeholderBg: 'linear-gradient(135deg, #1d1d1d 0%, #2b2b2b 55%, #171717 100%)',
     imageUrl: triathlonImgUrl,
+    badge: 'New',
+  },
+  {
+    id: 'cycling',
+    label: 'Cycling',
+    sub: 'Gran Fondo, sportive, audax',
+    icon: ICON_CYCLE,
+    placeholderBg: 'linear-gradient(135deg, #1c1c1c 0%, #2a2a2a 55%, #161616 100%)',
+    imageUrl: cyclingImgUrl,
+    // Cycling photo: face/helmet sits in upper-mid of the source image. 30% Y
+    // brings the face into frame without clipping it under the badge.
+    imagePosition: '50% 30%',
     badge: 'New',
   },
   {
@@ -96,10 +113,15 @@ export function renderGoals(container: HTMLElement, state: OnboardingState): voi
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 38%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Background layers: cool-blue atmosphere → rings (sweep variant) → sun glint -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('goals', { variant: 'sweep' })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(2, 7)}
+        ${renderProgressIndicator(2, 8)}
 
         <div class="g-rise" style="width:100%;max-width:460px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -129,7 +151,7 @@ function renderModeTile(t: ModeTile, idx: number): string {
   const classes = ['mode-tile', 'g-rise', t.disabled ? 'disabled' : ''].filter(Boolean).join(' ');
   const delay = 0.12 + idx * 0.06;
   const imgStyle = t.imageUrl
-    ? `background-image:url('${t.imageUrl}');background-position:70% 20%;filter:grayscale(1)`
+    ? `background-image:url('${t.imageUrl}');background-position:${t.imagePosition ?? '70% 20%'};filter:grayscale(1)`
     : `background:${t.placeholderBg}`;
   return `
     <button data-mode="${t.id}" class="${classes}" style="animation-delay:${delay}s" ${t.disabled ? 'aria-disabled="true"' : ''}>
@@ -189,8 +211,34 @@ function wireEventHandlers(): void {
           selectedRace: null,
           customRaceDate: null,
         });
+      } else if (mode === 'cycling') {
+        // Cycling V1: Gran Fondo / sportive target. Single-discipline mode that
+        // reuses the triathlon plan engine with disciplines=['bike']. The next
+        // step collects event distance, race date, weekly hours, and FTP.
+        updateOnboarding({
+          trainingMode: 'cycling',
+          trackOnly: false,
+          continuousMode: false,
+          trainingForEvent: true,
+          raceDistance: null,
+          trainingFocus: null,
+          selectedRace: null,
+          customRaceDate: null,
+        });
+      } else if (mode === 'hyrox') {
+        // HYROX: run + functional stations. hyrox-setup collects format,
+        // previous time, equipment access, and race date.
+        updateOnboarding({
+          trainingMode: 'hyrox',
+          trackOnly: false,
+          continuousMode: false,
+          trainingForEvent: true,
+          raceDistance: null,
+          trainingFocus: null,
+          selectedRace: null,
+          customRaceDate: null,
+        });
       } else {
-        // hyrox — disabled tile, shouldn't fire. Guard anyway.
         return;
       }
 

@@ -32,6 +32,7 @@ import {
 } from '@/calculations/bike-physics';
 import { BIKE_SETUP_AUTO_FILL } from '@/constants/feature-flags';
 import { getTriathlonById } from '@/data/triathlons';
+import { applyCourseFactors } from '@/calculations/course-factors';
 
 const OVERLAY_ID = 'bike-setup-overlay';
 
@@ -122,13 +123,14 @@ interface AutoCalibUI {
 function bikeProfileFromRaceId(raceId: string | null | undefined): {
   course: BikeCourseProfile;
   raceName: string;
+  bikeElevationM?: number;
 } | null {
   if (!raceId) return null;
   const race = getTriathlonById(raceId);
   const bp = race?.profile?.bikeProfile;
   if (!race || !bp) return null;
   const course: BikeCourseProfile = bp === 'mountainous' ? 'hilly' : bp;
-  return { course, raceName: race.name };
+  return { course, raceName: race.name, bikeElevationM: race.profile?.bikeElevationM };
 }
 
 function initialFormState(): FormState {
@@ -247,7 +249,7 @@ function initialFormState(): FormState {
 
 /** Resolve the user's selected race → course bucket mapping for option
  *  labelling. Returns null if no race or its profile is missing. */
-function selectedRaceCourseMatch(): { course: BikeCourseProfile; raceName: string } | null {
+function selectedRaceCourseMatch(): { course: BikeCourseProfile; raceName: string; bikeElevationM?: number } | null {
   const s = getState();
   return bikeProfileFromRaceId(s.onboarding?.selectedTriathlonId);
 }
@@ -401,8 +403,27 @@ function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'): { kph:
   const v = solveSpeed(raceWatts, params);
   const kph = msToKph(v);
   const distKm = distance === 'ironman' ? 180.2 : 90;
-  const splitSec = v > 0 ? Math.round((distKm * 1000) / v) : 0;
-  return { kph, splitSec };
+  const baseSplitSec = v > 0 ? (distKm * 1000) / v : 0;
+
+  // Apply race-day course factors (climate, wind, altitude, etc.) so the
+  // modal's predicted split matches the race-day bike split shown in the
+  // headline forecast. Modal exists for users to tune fit/CdA against the
+  // *actual* race they're targeting — bare physics without conditions would
+  // be misleading because the user can't change the conditions, only their
+  // setup. The kph stays as the bare-physics speed (it's the physical answer
+  // for the user's setup; conditions slow the *time* not the underlying
+  // capability).
+  const s = getState();
+  const raceId = s.onboarding?.selectedTriathlonId;
+  const race = raceId ? getTriathlonById(raceId) : null;
+  const cf = applyCourseFactors(
+    race?.profile ?? undefined,
+    { swimSec: 0, bikeSec: baseSplitSec, runSec: 0 },
+    0,
+  );
+  const adjustedSplitSec = Math.round(baseSplitSec * cf.bikeMultiplier);
+
+  return { kph, splitSec: adjustedSplitSec };
 }
 
 function fmtDuration(sec: number): string {
@@ -483,9 +504,14 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
       </div>
 
       <!-- Live prediction strip -->
+      <!-- This split is the IM-paced bike time WITH race-day course factors
+           applied. Modal exists for tuning fit/CdA against the actual race —
+           bare physics without conditions would be misleading because the
+           user can't change conditions, only their setup. Should match the
+           headline forecast's bike leg. -->
       <div style="padding:14px 20px;background:rgba(0,0,0,0.02);border-bottom:1px solid var(--c-border);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div>
-          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--c-faint)">Predicted split</div>
+          <div style="font-size:10px;text-transform:uppercase;letter-spacing:0.06em;color:var(--c-faint)">Race-day bike split</div>
           <div style="font-size:20px;font-weight:500;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtDuration(split.splitSec)}</div>
         </div>
         <div>
@@ -545,8 +571,15 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
 }
 
 function renderCourseSection(form: FormState): string {
-  const gradient = `${(COURSE_GRADIENT[form.course] * 100).toFixed(1)}%`;
   const raceMatch = selectedRaceCourseMatch();
+  // Cyclists quote total elevation gain, not mean gradient — 0.5% over 180km
+  // doesn't *feel* like 0.5%, it feels like 900m of climbing. Show climb total
+  // when we have race-specific data; fall back to gradient % when only the
+  // course bucket is known (no race elevation in the profile).
+  const elevM = raceMatch?.bikeElevationM;
+  const climbingLabel = (elevM != null && elevM > 0)
+    ? `≈${elevM}m climbing`
+    : `Mean gradient ${(COURSE_GRADIENT[form.course] * 100).toFixed(1)}%`;
 
   if (!form.courseDropdownOpen && raceMatch && raceMatch.course === form.course) {
     // Passive readout: we picked this from the user's race. Small "Change"
@@ -555,7 +588,7 @@ function renderCourseSection(form: FormState): string {
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 12px;border-radius:10px;background:rgba(0,0,0,0.03)">
         <div style="min-width:0">
           <div style="font-size:13px;color:var(--c-black);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${COURSE_HEADWORD[form.course]} · ${raceMatch.raceName}</div>
-          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Detected from your race · Mean gradient ${gradient}</div>
+          <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Detected from your race · ${climbingLabel}</div>
         </div>
         <button id="bike-setup-course-change" style="background:transparent;border:none;font-size:12px;color:var(--c-muted);cursor:pointer;padding:0 4px;flex-shrink:0">Change</button>
       </div>
@@ -567,7 +600,7 @@ function renderCourseSection(form: FormState): string {
     label: courseOptionLabel(c, raceMatch),
   }));
   return select('course', form.course, opts) +
-    hint(`Mean gradient: ${gradient}`);
+    hint(climbingLabel);
 }
 
 function renderCalibration(form: FormState, distance: '70.3' | 'ironman'): string {
@@ -797,8 +830,6 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
 
     persistForm(form);
     overlay.remove();
-    // Refresh the stats / forecast view that hosted the entry point.
-    import('./stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
   });
 
   // Number inputs — fire on blur, not on every keystroke. `<input type="number">`

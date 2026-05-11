@@ -602,7 +602,27 @@ function buildReduceAdjustments(
         }
         maxReductionKm = Math.min(maxReductionKm, slack);
 
-        if (maxReductionKm < 0.5) continue;
+        if (maxReductionKm < 0.5) {
+          // No room to cut distance (run already at minimum or floor too tight).
+          // Fall back to intensity downgrade: easy → recovery pace.
+          // Keeps running volume; reduces load via slower pace + aerobic-only profile.
+          const recoveryLoad = computeWorkoutWeightedLoad('recovery', runKm, 3);
+          const loadReduction = Math.max(0, runLoad - recoveryLoad);
+          if (loadReduction <= minLoadThreshold) continue;
+          const actualReduction = adjustments.length === 0 ? loadReduction : Math.min(loadReduction, remainingLoad);
+          adjustments.push({
+            workoutId: run.workoutId,
+            dayIndex: run.dayIndex,
+            action: 'downgrade',
+            originalType: run.workoutType,
+            originalDistanceKm: runKm,
+            newType: 'recovery',
+            newDistanceKm: runKm,
+            loadReduction: actualReduction,
+          });
+          remainingLoad -= actualReduction;
+          continue;
+        }
 
         let newKm = runKm - maxReductionKm;
         if (newKm < MIN_EASY_KM) newKm = MIN_EASY_KM;
@@ -1078,7 +1098,7 @@ export function buildCrossTrainingPopup(
   // Helper: label for downgrade (threshold→marathon_pace shows "steady")
   const downgradePaceLabel = (a: Adjustment): string => {
     if (a.originalType === 'threshold' && a.newType === 'marathon_pace') return 'steady';
-    return a.newType === 'marathon_pace' ? 'marathon pace' : a.newType === 'threshold' ? 'threshold' : 'easy';
+    return a.newType === 'marathon_pace' ? 'marathon pace' : a.newType === 'threshold' ? 'threshold' : a.newType === 'recovery' ? 'recovery pace' : 'easy';
   };
 
   let reduceDescription = 'No adjustments needed.';
@@ -1262,13 +1282,14 @@ export function applyAdjustments(
     if (wt === 'marathon_pace') return `${fmtPace(paces.m)}/km`;
     if (wt === 'threshold') return `${fmtPace(paces.t)}/km`;
     if (wt === 'easy') return `${fmtPace(paces.e)}/km`;
+    if (wt === 'recovery') return `${fmtPace(Math.round(paces.e * 1.12))}/km`;
     return wt;
   };
 
   const paceLabelForType = (wt: WorkoutType, origType?: WorkoutType): string => {
     // Threshold → "steady" label
     if (origType === 'threshold' && wt === 'marathon_pace') return 'steady';
-    return wt === 'marathon_pace' ? 'marathon pace' : wt === 'threshold' ? 'threshold' : 'easy';
+    return wt === 'marathon_pace' ? 'marathon pace' : wt === 'threshold' ? 'threshold' : wt === 'recovery' ? 'recovery pace' : 'easy';
   };
 
   for (const adj of adjustments) {
@@ -1340,7 +1361,7 @@ export function applyAdjustments(
 
       workout.modReason = `Downgraded from ${adj.originalType} to ${label} due to ${sportName}`;
       workout.confidence = 'medium';
-      if (workout.t !== 'easy') workout.t = adj.newType;
+      workout.t = adj.newType;
     } else if (adj.action === 'reduce') {
       workout.status = 'reduced';
       workout.originalDistance = workout.d;

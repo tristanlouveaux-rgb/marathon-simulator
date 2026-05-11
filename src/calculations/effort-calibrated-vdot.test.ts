@@ -66,7 +66,7 @@ describe('computeHRCalibratedVdot — filters', () => {
   });
 
   it('accepts runs with null hrDrift (keeps the point)', () => {
-    // 3 runs spanning a small effort range; null drift → no drift filter applied.
+    // null drift → drift filter not applied, point is still usable.
     const runs = [
       mkRun(1, 10, 310, 150, null),
       mkRun(3,  8, 295, 160, null),
@@ -164,6 +164,36 @@ describe('computeHRCalibratedVdot — regression', () => {
     const r = computeHRCalibratedVdot(runs, RHR, MAX, NOW);
     expect(['low', 'medium']).toContain(r.confidence);
     expect(r.vdot).not.toBeNull();
+  });
+});
+
+describe('computeHRCalibratedVdot — outlier removal', () => {
+  const RHR = 50, MAX = 190;
+
+  it('removes a bonked run and produces a clean estimate', () => {
+    // 4 coherent runs spanning 63–81% HRR, plus one bonk: same HRR as the
+    // hardest run but 55 sec/km slower — the bonk's residual will be >>2.5σ.
+    const goodRuns = [
+      mkRun(2,  10, 310, 145),  // 67% HRR, 5:10/km
+      mkRun(4,  12, 330, 140),  // 64% HRR, 5:30/km
+      mkRun(6,  10, 295, 152),  // 72% HRR, 4:55/km
+      mkRun(10, 10, 245, 165),  // 82% HRR, 4:05/km — race effort
+    ];
+    const bonk = mkRun(8, 18, 302, 164, null); // 82% HRR, 5:02/km — bonked 18km
+    const r = computeHRCalibratedVdot([...goodRuns, bonk], RHR, MAX, NOW);
+    expect(r.vdot).not.toBeNull();
+    expect(r.n).toBe(goodRuns.length); // bonk removed
+  });
+
+  it('keeps all points when there are no outliers', () => {
+    const runs = [
+      mkRun(2,  10, 310, 145),
+      mkRun(4,  12, 330, 140),
+      mkRun(6,  10, 295, 152),
+      mkRun(10, 10, 245, 165),
+    ];
+    const r = computeHRCalibratedVdot(runs, RHR, MAX, NOW);
+    expect(r.n).toBe(runs.length);
   });
 });
 

@@ -123,6 +123,41 @@ export function plannedSessionsPerWeekByDiscipline(
 }
 
 /**
+ * Average weekly hours per discipline from the **planned** upcoming weeks
+ * (`triWorkouts`), summing each workout's `durationMin` per discipline.
+ * Drives the race-readiness "dose" signal — captures that 5 short bike
+ * sessions/wk ≠ 5 long bike sessions/wk (same session count, very different
+ * volume). Falls back to 0 for weeks with no `triWorkouts` entries.
+ *
+ * Defaults to a 4-week look-ahead window (matches `plannedSessionsPerWeekByDiscipline`).
+ */
+export function plannedHoursPerWeekByDiscipline(
+  state: SimulatorState,
+  weeks: number = 4,
+): VolumePerDiscipline {
+  const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
+  const wks = state.wks ?? [];
+  const currentWeek = state.w ?? 0;
+  let weeksCovered = 0;
+  for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
+    const wk = wks[w];
+    if (!wk?.triWorkouts) continue;
+    weeksCovered += 1;
+    for (const workout of wk.triWorkouts) {
+      const d = workout.discipline;
+      const minutes = workout.estimatedDurationMin ?? 0;
+      if (d === 'swim' || d === 'bike' || d === 'run') totals[d] += minutes / 60;
+    }
+  }
+  const divisor = Math.max(1, weeksCovered);
+  return {
+    swim: totals.swim / divisor,
+    bike: totals.bike / divisor,
+    run:  totals.run / divisor,
+  };
+}
+
+/**
  * Longest single-session duration (seconds) per discipline in the last
  * `weeks` weeks. Drives the run-leg durability cap.
  */

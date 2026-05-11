@@ -16,7 +16,7 @@ import type { SimulatorState } from '@/types/state';
 import { tv, rdKm } from '@/calculations/vdot';
 import { ft } from '@/utils/format';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
-import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
@@ -46,6 +46,69 @@ const RACE_DIST_LABEL: Record<string, string> = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+function fmtShortDelta(sec: number): string {
+  const abs = Math.abs(sec);
+  if (abs < 60) return `${Math.round(abs)}s`;
+  const m = Math.floor(abs / 60);
+  const s = Math.round(abs - m * 60);
+  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+}
+
+function buildCourseFactorsPanel(
+  factors: SimulatorState['forecastCourseFactors'],
+  raceName: string | undefined,
+  rawSec: number,
+  adjustedSec: number,
+): string {
+  if (!factors || factors.length === 0) return '';
+  const rows = factors.map(f => {
+    const pct = (f.multiplier - 1) * 100;
+    const sign = pct >= 0 ? '+' : '−';
+    const tone = pct >= 0 ? '#9A6A20' : '#1F7A3D';
+    return `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;font-size:13px;border-top:1px solid rgba(0,0,0,0.04)">
+        <span style="color:${TEXT_S}">${f.label}</span>
+        <span style="display:flex;gap:14px;align-items:center">
+          <span style="color:${TEXT_M}">${f.value}</span>
+          <span style="color:${tone};font-variant-numeric:tabular-nums;min-width:56px;text-align:right">${sign}${Math.abs(pct).toFixed(1)}%</span>
+        </span>
+      </div>
+    `;
+  }).join('');
+
+  const compoundedMult = factors.reduce((acc, f) => acc * f.multiplier, 1);
+  const totalPct = (compoundedMult - 1) * 100;
+  const totalSign = totalPct >= 0 ? '+' : '−';
+  const slowerOrFaster = totalPct >= 0 ? 'slower' : 'faster';
+
+  return `
+    <div class="rfc-fade" style="animation-delay:0.13s;padding:0 16px;margin-bottom:14px">
+      <div style="${CARD};padding:18px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+          <div style="font-size:12px;color:${TEXT_S};font-weight:500">Course factors${raceName ? ` · ${raceName}` : ''}</div>
+          <div style="font-size:11px;color:${TEXT_L}">Lower is faster</div>
+        </div>
+        <div style="font-size:11px;color:${TEXT_L};line-height:1.5;margin-bottom:10px">
+          Athletes tend to run ${totalSign}${Math.abs(totalPct).toFixed(1)}% ${slowerOrFaster} here than on a flat, cool, sea-level course. Climate, altitude, and elevation each contribute. Your finish-time impact scales with your pace.
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 12px;font-size:12px">
+          <span style="color:${TEXT_S}">Raw fitness pace</span>
+          <span style="color:${TEXT_M};font-variant-numeric:tabular-nums">${ft(rawSec)}</span>
+        </div>
+        ${rows}
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0 4px;font-size:13px;border-top:1px solid rgba(0,0,0,0.10);margin-top:4px">
+          <span style="color:${TEXT_M};font-weight:600">Adjusted finish</span>
+          <span style="display:flex;gap:14px;align-items:center">
+            <span style="color:${TEXT_M};font-weight:600;font-variant-numeric:tabular-nums">${ft(adjustedSec)}</span>
+            <span style="color:${TEXT_S};font-variant-numeric:tabular-nums;min-width:56px;text-align:right">${totalSign}${Math.abs(totalPct).toFixed(1)}%</span>
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 
 function deltaString(forecastSec: number, goalSec: number): { text: string; tone: 'on'|'slow'|'fast' } {
   const d = Math.round(forecastSec - goalSec);
@@ -191,7 +254,11 @@ function getRaceForecastHTML(s: SimulatorState): string {
   const distKm = rdKm(distKey);
 
   const goalSec = s.initialBaseline ?? 0;
-  const forecastSec = s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
+  const rawForecastSec = s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
+  // Adjusted time is the realistic prediction (climate / altitude / elevation
+  // applied). Falls back to the raw VDOT forecast when no race profile.
+  const forecastSec = s.forecastTimeAdjusted ?? rawForecastSec;
+  const courseFactors = s.forecastCourseFactors ?? [];
 
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
@@ -214,10 +281,13 @@ function getRaceForecastHTML(s: SimulatorState): string {
     ? history[history.length - 1].timeSec
     : (s.blendedRaceTimeSec ?? s.currentFitness ?? forecastSec);
 
-  // Projection: from currentWeek to totalWeeks ending at forecastSec
+  // Projection chart shows the FITNESS trajectory (raw VDOT-derived) — course
+  // factors are a separate constant adjustment shown in the panel below. Mixing
+  // them into the trajectory line would imply weather/elevation are training-
+  // sensitive, which they are not.
   const projection: ChartPoint[] = [];
-  if (forecastSec > 0 && currentWeek < totalWeeks) {
-    projection.push({ week: totalWeeks, timeSec: forecastSec, kind: 'projection' });
+  if (rawForecastSec > 0 && currentWeek < totalWeeks) {
+    projection.push({ week: totalWeeks, timeSec: rawForecastSec, kind: 'projection' });
   }
 
   // Hero ring: amber by default (warm palette), red when seriously off-track.
@@ -236,6 +306,12 @@ function getRaceForecastHTML(s: SimulatorState): string {
     : (slowSec > 900 ? '#A33A33' : '#9A6A20');
 
   const chart = buildForecastChart(nowSec, goalSec, history, projection, totalWeeks);
+  const courseFactorsPanel = buildCourseFactorsPanel(
+    courseFactors,
+    s.selectedMarathon?.name,
+    rawForecastSec,
+    forecastSec,
+  );
 
   // CTA conditions: race mode, forecast ≥ +20 min slower than goal, not in taper, epw < 7
   const inTaper = (s.wks ?? [])[currentWeek - 1]?.ph === 'taper';
@@ -288,16 +364,18 @@ function getRaceForecastHTML(s: SimulatorState): string {
       #rfc-view *, #rfc-view *::before, #rfc-view *::after { box-sizing:inherit; }
       @keyframes rfcFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .rfc-fade { opacity:0; animation:rfcFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('rfc')}
     </style>
 
     <div id="rfc-view" style="
-      position:relative;min-height:100vh;background:${PAGE_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('sky')};
       font-family:var(--f);overflow-x:hidden;
     ">
-      ${buildSkyBackground('rfc', 'amber')}
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('rfc', { variant: 'sweep', palette: 'sky', pulse: true })}
+      </div>
+      ${buildSunGlint('low')}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -357,6 +435,8 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
         ${statRow}
 
+        ${courseFactorsPanel}
+
         ${chart ? `
         <!-- Chart card -->
         <div class="rfc-fade" style="animation-delay:0.16s;padding:0 16px;margin-bottom:14px">
@@ -393,7 +473,7 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

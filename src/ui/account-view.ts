@@ -8,6 +8,7 @@ import { syncActivities, processPendingCrossTraining } from '@/data/activitySync
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, restoreHistoryFromServer } from '@/data/stravaSync';
 import { syncPhysiologySnapshot } from '@/data/physiologySync';
 import { vt } from '@/calculations/vdot';
+import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
 import { isSimulatorMode } from '@/main';
@@ -18,6 +19,9 @@ import { saveState } from '@/state/persistence';
 import { initializeSimulator } from '@/state/initialization';
 import { isWakeLockSupported } from '@/utils/wake-lock';
 import type { SimulatorState } from '@/types/state';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
+import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
+import { poweredByStrava } from './strava-brand';
 
 let garminConnected = false;
 let stravaConnectedStatus = false;
@@ -189,8 +193,10 @@ function getAccountHTML(): string {
     : email.slice(0, 2).toUpperCase();
 
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      <div style="max-width:600px;margin:0 auto">
+    <div class="mosaic-page" style="background:var(--c-bg);position:relative">
+      ${buildScrollAtmosphereBackground('acc', 'grey', { haloCenter: { cx: 200, cy: 700 } })}
+      ${buildSunGlint('low')}
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
 
       <!-- Profile header -->
       <div style="padding:32px 20px 24px;display:flex;flex-direction:column;align-items:center;gap:6px">
@@ -220,7 +226,10 @@ function getAccountHTML(): string {
         ${sectionLabel('Preferences')}
         ${renderPreferencesGroup()}
 
-        ${(s.stravaConnected || s.stravaHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
+        ${sectionLabel('AI Coach')}
+        ${renderAICoachGroup()}
+
+        ${(s.stravaConnected || s.stravaHistoryFetched || s.appleHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
 
         ${renderRecurringActivitiesRow(s)}
 
@@ -236,7 +245,7 @@ function getAccountHTML(): string {
         ${groupCard(`
           <button id="btn-reset-vdot" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
             <div>
-              <div style="font-size:15px;color:var(--c-black);text-align:left">Reset VDOT</div>
+              <div style="font-size:15px;color:var(--c-black);text-align:left">Reset VO2max</div>
               <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Recalibrates from your next training data</div>
             </div>
             ${chevron()}
@@ -298,7 +307,7 @@ function renderGarminRow(): string {
   const expired = garminTokenExpired && !checkingGarmin;
   const dotColor = expired ? 'var(--c-warn)' : connected ? 'var(--c-ok)' : 'var(--c-faint)';
   const sub = checkingGarmin ? 'Checking…'
-    : expired ? 'Token expired — reconnect'
+    : expired ? 'Token expired. Reconnect.'
     : connected ? (lastGarminSyncDate ? `Connected · last sync ${lastGarminSyncDate}` : 'Connected')
     : 'Not connected';
 
@@ -361,12 +370,13 @@ function renderStravaStandaloneRow(): string {
           </div>` : ''}
     </div>
     ${syncResultMsg && stravaConnectedStatus ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
+    ${stravaConnectedStatus ? `<div style="padding:0 16px 10px;text-align:right">${poweredByStrava(16, 0.55)}</div>` : ''}
   `;
 }
 
 function renderStravaEnrichRow(): string {
   const dotColor = stravaConnectedStatus ? 'var(--c-ok)' : 'var(--c-faint)';
-  const sub = checkingStrava ? 'Checking…' : stravaConnectedStatus ? 'Connected · HR enrichment active' : 'Not connected — add for accurate load';
+  const sub = checkingStrava ? 'Checking…' : stravaConnectedStatus ? 'Connected · HR enrichment active' : 'Not connected. Add for accurate load.';
   return `
     <div style="padding:14px 16px;display:flex;align-items:center;gap:12px">
       <div style="flex:1;min-width:0">
@@ -384,6 +394,7 @@ function renderStravaEnrichRow(): string {
           </div>` : ''}
     </div>
     ${syncResultMsg && stravaConnectedStatus ? `<div style="padding:0 16px 10px 60px;font-size:12px;color:${syncResultOk ? 'var(--c-ok)' : 'var(--c-warn)'}">${syncResultMsg}</div>` : ''}
+    ${stravaConnectedStatus ? `<div style="padding:0 16px 10px;text-align:right">${poweredByStrava(16, 0.55)}</div>` : ''}
   `;
 }
 
@@ -410,6 +421,9 @@ function renderTriBenchmarksGroup(s: ReturnType<typeof getState>): string {
   const ftpVal = tri.bike?.ftp ? `${tri.bike.ftp}W` : '—';
   const hoursVal = tri.timeAvailableHoursPerWeek ? `${tri.timeAvailableHoursPerWeek}h` : '—';
   const splitVal = `S ${pct(tri.volumeSplit?.swim)} · B ${pct(tri.volumeSplit?.bike)} · R ${pct(tri.volumeSplit?.run)}`;
+  // Refresh action only matters when FTP is auto-derived. User-set values
+  // shouldn't be silently overwritten — the user typed them deliberately.
+  const showFtpRefreshTri = tri.bike?.ftp != null && tri.bike?.ftpSource === 'derived';
 
   const row = (label: string, value: string) => `
     <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center">
@@ -418,10 +432,46 @@ function renderTriBenchmarksGroup(s: ReturnType<typeof getState>): string {
     </div>
   `;
 
+  // FTP row variant with an inline "Refresh" button on the right when the
+  // value is derived. Same action as the Profile-card button — see
+  // `btn-refresh-ftp-tri` handler in `wireAccountHandlers`.
+  const ftpRow = showFtpRefreshTri ? `
+    <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <span style="font-size:14px;color:var(--c-black)">Bike FTP</span>
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:14px;color:var(--c-muted);font-variant-numeric:tabular-nums">${ftpVal}</span>
+        <button id="btn-refresh-ftp-tri"
+          style="padding:5px 10px;border-radius:6px;border:1px solid var(--c-border);background:var(--c-surface);font-size:11px;font-weight:600;color:var(--c-muted);cursor:pointer;font-family:var(--f);-webkit-tap-highlight-color:transparent">
+          Refresh
+        </button>
+      </div>
+    </div>
+    <div id="btn-refresh-ftp-tri-status" style="font-size:11px;color:var(--c-faint);padding:0 16px 6px;text-align:right;min-height:0"></div>
+  ` : row('Bike FTP', ftpVal);
+
+  const swimEnvLabel = ((): string => {
+    switch (tri.swim?.primarySwimEnvironment) {
+      case 'pool':             return 'Pool';
+      case 'wetsuit-lake':     return 'Lake, wetsuit';
+      case 'non-wetsuit-lake': return 'Lake, no wetsuit';
+      case 'ocean':            return 'Ocean / sea';
+      case 'river':            return 'River';
+      default:                 return '—';
+    }
+  })();
+
   return groupCard(`
     ${row('Swim CSS', cssVal)}
     ${rowDivider(16)}
-    ${row('Bike FTP', ftpVal)}
+    <button id="account-swim-env-btn" style="width:100%;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;background:none;border:none;cursor:pointer;text-align:left;font-family:var(--f)">
+      <span style="font-size:14px;color:var(--c-black)">Swim environment</span>
+      <span style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:14px;color:var(--c-muted)">${swimEnvLabel}</span>
+        ${chevron()}
+      </span>
+    </button>
+    ${rowDivider(16)}
+    ${ftpRow}
     ${rowDivider(16)}
     ${row('Hours / week', hoursVal)}
     ${rowDivider(16)}
@@ -452,13 +502,18 @@ function renderProfileGroup(): string {
     : 'Not set';
 
   const isTriathlon = s.eventType === 'triathlon';
+  const isCycling = isCyclingOnlyMode(s);
 
   let benchmarkSection = '';
   if (isTriathlon) {
     const tri = s.triConfig;
     const ftp = tri?.bike?.ftp;
     const css = tri?.swim?.cssSecPer100m;
-    const vdot = s.v;
+    // Use the canonical physiological-VDOT resolver so this benchmark agrees
+    // with every other VO2max surface in the app: same toggle (Mosaic/Device),
+    // same priority chain, same result. Falls back to s.v only as the chain's
+    // own final tier.
+    const vdot = getPhysiologicalVdot(s).vdot ?? s.v;
     const isIM = tri?.distance === 'ironman';
     const raceKm = isIM ? 42.2 : 21.0975;
     const raceLabel = isIM ? 'marathon' : 'half marathon';
@@ -500,16 +555,48 @@ function renderProfileGroup(): string {
       return undefined;
     })();
 
-    benchmarkSection = `
-      ${rowDivider()}
-      <div style="padding:14px 16px">
-        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
-          ${card('Bike FTP', ftp ? `${ftp} W` : '—', ftpHint)}
-          ${card('Swim CSS', css ? `${fmtCss(css)} /100m` : '—', cssHint)}
-          ${card('Run VDOT', vdot ? String(Math.round(vdot)) : '—', vdotEquivSec ? `≈ ${fmtEquiv(vdotEquivSec)} ${raceLabel}` : undefined)}
-        </div>
-      </div>`;
+    // FTP refresh action — only meaningful when there's a bike workflow
+    // (cycling or triathlon mode) and the value is auto-derived. Triggers
+    // a server-side power-curve refresh that fetches missing watts streams,
+    // then re-derives FTP locally. Surfaces inline so users don't have to
+    // hunt for it in the wizard's debug overlay.
+    const showFtpRefresh = (isCycling || isTriathlon)
+      && ftp != null
+      && tri?.bike?.ftpSource === 'derived';
+    const ftpRefreshHtml = showFtpRefresh ? `
+      <div style="text-align:center;margin-top:8px">
+        <button id="btn-refresh-ftp"
+          style="padding:8px 14px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-surface);font-size:12px;font-weight:600;color:var(--c-black);cursor:pointer;font-family:var(--f);-webkit-tap-highlight-color:transparent">
+          Refresh FTP from rides
+        </button>
+        <div id="btn-refresh-ftp-status" style="font-size:11px;color:var(--c-faint);margin-top:6px;min-height:14px"></div>
+      </div>` : '';
+
+    if (isCycling) {
+      // Cycling-only mode: drop Swim CSS and Run VO2max — neither applies.
+      // Single-card layout keeps the FTP benchmark front and centre.
+      benchmarkSection = `
+        ${rowDivider()}
+        <div style="padding:14px 16px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
+          <div style="display:grid;grid-template-columns:1fr;gap:8px">
+            ${card('Bike FTP', ftp ? `${ftp} W` : '—', ftpHint)}
+          </div>
+          ${ftpRefreshHtml}
+        </div>`;
+    } else {
+      benchmarkSection = `
+        ${rowDivider()}
+        <div style="padding:14px 16px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.07em;color:var(--c-faint);margin-bottom:10px">Benchmarks</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            ${card('Bike FTP', ftp ? `${ftp} W` : '—', ftpHint)}
+            ${card('Swim CSS', css ? `${fmtCss(css)} /100m` : '—', cssHint)}
+            ${card('Run VO2max', vdot ? String(Math.round(vdot)) : '—', vdotEquivSec ? `≈ ${fmtEquiv(vdotEquivSec)} ${raceLabel}` : undefined)}
+          </div>
+          ${ftpRefreshHtml}
+        </div>`;
+    }
   } else {
     const pbItems = [
       { label: '5K', val: pbs.k5 },
@@ -636,7 +723,7 @@ function renderTrainingHistoryGroup(): string {
       </div>` : '',
     avgKm !== null ? `
       <div style="padding:14px 16px;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:15px;color:var(--c-black)">Running volume</span>
+        <span style="font-size:15px;color:var(--c-black)">${isCyclingOnlyMode(s) ? 'Riding volume' : 'Running volume'}</span>
         <span style="font-size:15px;color:var(--c-muted)">${s.unitPref === 'mi' ? ((avgKm ?? 0) * 0.621371).toFixed(0) : avgKm} <span style="font-size:12px">${s.unitPref === 'mi' ? 'mi' : 'km'}/wk</span></span>
       </div>` : '',
     tierLabel ? `
@@ -723,9 +810,9 @@ function renderPreferencesGroup(): string {
         <div style="font-size:11px;color:var(--c-faint);margin-top:2px">Speech rate for coaching cues. Slower is easier to follow; faster keeps the run moving.</div>
       </div>
       <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
-        <input id="input-guided-rate" type="range" min="0.8" max="1.4" step="0.05"
+        <input id="input-guided-rate" type="range" class="m-slider-glass" min="0.8" max="1.4" step="0.05"
           value="${(s.guidedVoiceRate ?? 1.0).toFixed(2)}"
-          style="width:110px;accent-color:var(--c-black)"/>
+          style="width:110px"/>
         <span id="label-guided-rate" style="font-size:13px;color:var(--c-muted);min-width:38px;text-align:right;font-variant-numeric:tabular-nums">${(s.guidedVoiceRate ?? 1.0).toFixed(2)}×</span>
       </div>
     </div>
@@ -832,7 +919,82 @@ function renderPreferencesGroup(): string {
         <button id="btn-save-hr" style="padding:8px 18px;border-radius:8px;background:transparent;border:1px solid var(--c-border-strong);font-size:13px;font-weight:600;color:var(--c-black);cursor:pointer">Save</button>
       </div>
     </div>
+    ${rowDivider()}
+    ${renderVO2SourceRow(s)}
   `);
+}
+
+// ─── AI Coach Group ────────────────────────────────────────────────────────────
+
+function renderAICoachGroup(): string {
+  const s = getState();
+  const keyStored = s.anthropicApiKeyStored ?? false;
+  return groupCard(`
+    <div style="padding:14px 16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:14px;color:var(--c-black);font-weight:500">Anthropic API key</span>
+        ${keyStored
+          ? `<div style="display:flex;align-items:center;gap:8px">
+               <span id="ai-coach-status" style="font-size:12px;color:var(--c-ok)">Connected</span>
+               <button id="btn-ai-coach-clear" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Clear</button>
+             </div>`
+          : `<button id="btn-ai-coach-test" style="display:none;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Test</button>`
+        }
+      </div>
+      ${keyStored
+        ? `<div style="font-size:13px;color:var(--c-muted)">●●●●●●●●●●●●●●●●</div>`
+        : `<input id="input-anthropic-key" type="password" placeholder="sk-ant-…"
+             style="width:100%;padding:8px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:13px;background:transparent;color:var(--c-black);box-sizing:border-box;margin-top:4px"
+             autocomplete="off" autocorrect="off" spellcheck="false"/>`
+      }
+      ${!keyStored ? `
+        <button id="btn-ai-coach-save" style="margin-top:10px;width:100%;padding:9px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;background:var(--c-black);color:#fff;border:none">
+          Save key
+        </button>` : ''}
+      <div id="ai-coach-msg" style="font-size:12px;color:var(--c-muted);margin-top:4px;min-height:16px"></div>
+    </div>
+    ${rowDivider()}
+    <div style="padding:12px 16px">
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
+        Your API key is stored on this device only. When the AI coach is active, recent training data (pacing, HR, readiness scores) is sent to Anthropic to generate coaching. Anthropic does not train on API data.
+      </div>
+    </div>
+  `);
+}
+
+// ─── VO2max source toggle ──────────────────────────────────────────────────────
+
+/**
+ * VO2max source selector. Mosaic = our cross-modal estimator (running pace/HR
+ * regression + cycling FTP + cardiac ceiling as upper bound + cross-training
+ * sustained-HR estimate when ≥3 qualifying sessions). Device = the value
+ * reported by Garmin/Apple. Defaults to Mosaic with automatic fallback to
+ * Device when our confidence is too low.
+ */
+function renderVO2SourceRow(s: ReturnType<typeof getState>): string {
+  const useMosaic = (s.vo2Source ?? 'mosaic') === 'mosaic';
+  const headline = s.vo2Estimates?.headline;
+  const hasMosaic = headline?.value != null && headline.confidence !== 'none';
+  const hasDevice = s.vo2 != null && s.vo2 > 0;
+  const subLabel = hasMosaic
+    ? `Mosaic estimates VO2max from your training across all sports. Your device's reading is also available.`
+    : `Need ~6 to 8 sessions of training data before Mosaic can estimate. Showing your device value until then.`;
+  const offStyle = `padding:6px 16px;font-size:13px;font-weight:500;cursor:${hasDevice ? 'pointer' : 'not-allowed'};border:none;${!useMosaic ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  const onStyle = `padding:6px 16px;font-size:13px;font-weight:500;cursor:pointer;border:none;${useMosaic ? 'background:var(--c-black);color:#fff' : 'background:transparent;color:var(--c-muted)'}`;
+  return `
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div>
+        <div style="font-size:15px;color:var(--c-black)">VO2max source</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px;line-height:1.4">${subLabel}</div>
+      </div>
+      <div style="display:flex;border:1px solid var(--c-border-strong);border-radius:8px;overflow:hidden;flex-shrink:0">
+        <button id="btn-vo2-source-device"${hasDevice ? '' : ' disabled'}
+          style="${offStyle}">Device</button>
+        <button id="btn-vo2-source-mosaic"
+          style="${onStyle}">Mosaic</button>
+      </div>
+    </div>
+  `;
 }
 
 // ─── Recover Plan Row (inside Advanced group) ──────────────────────────────────
@@ -969,14 +1131,13 @@ function renderRecoverPlanRow(): string {
         <div style="display:flex;flex-direction:column;gap:8px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
             <label style="font-size:13px;color:var(--c-muted);flex-shrink:0">Plan started</label>
-            <input type="date" id="recovery-start-date"
-              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:7px 10px;border:1px solid var(--c-border-strong)"
+            <input type="date" id="recovery-start-date" class="m-input" style="font-size:13px;padding:7px 10px;width:auto"
               value="${suggestedStart}">
           </div>
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
             <label style="font-size:13px;color:var(--c-muted);flex-shrink:0">I was on week</label>
-            <input type="number" id="recovery-week" min="1" max="52"
-              style="background:var(--c-faint);color:var(--c-black);font-size:13px;border-radius:8px;padding:7px 10px;border:1px solid var(--c-border-strong);width:64px;text-align:center"
+            <input type="number" id="recovery-week" class="m-input" min="1" max="52"
+              style="font-size:13px;padding:7px 10px;width:64px;text-align:center"
               value="${currentWeek}">
           </div>
         </div>
@@ -1016,7 +1177,9 @@ function wireAccountHandlers(): void {
     if (tab === 'home') {
       import('./home-view').then(({ renderHomeView }) => renderHomeView());
     } else if (tab === 'plan') {
-      import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      import('./main-view').then(({ renderMainView }) => renderMainView());
+    } else if (tab === 'forecast') {
+      import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
     } else if (tab === 'record') {
       import('./record-view').then(({ renderRecordView }) => renderRecordView());
     } else if (tab === 'stats') {
@@ -1029,6 +1192,54 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
+  // ── AI Coach key management ──────────────────────────────────────────────
+  const setAiMsg = (msg: string, color = 'var(--c-muted)') => {
+    const el = document.getElementById('ai-coach-msg');
+    if (el) { el.textContent = msg; el.style.color = color; }
+  };
+
+  document.getElementById('btn-ai-coach-save')?.addEventListener('click', async () => {
+    const input = document.getElementById('input-anthropic-key') as HTMLInputElement | null;
+    const key = input?.value.trim() ?? '';
+    if (!key.startsWith('sk-ant-')) {
+      setAiMsg('Key must start with sk-ant-', 'var(--c-danger)');
+      return;
+    }
+    const btn = document.getElementById('btn-ai-coach-save') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
+    setAiMsg('');
+    try {
+      const { storeApiKey } = await import('@/coach/api-key-store');
+      const { testApiKey } = await import('@/coach/coach-chat-client');
+      await storeApiKey(key);
+      const result = await testApiKey(key);
+      if (!result.ok) {
+        setAiMsg(result.error ?? 'Connection failed. Check your key.', 'var(--c-danger)');
+        btn.disabled = false;
+        btn.textContent = 'Save key';
+        return;
+      }
+      const ms = getMutableState();
+      ms.anthropicApiKeyStored = true;
+      saveState();
+      rerender();
+    } catch (err) {
+      setAiMsg('Error saving key.', 'var(--c-danger)');
+      btn.disabled = false;
+      btn.textContent = 'Save key';
+    }
+  });
+
+  document.getElementById('btn-ai-coach-clear')?.addEventListener('click', async () => {
+    const { clearApiKey } = await import('@/coach/api-key-store');
+    await clearApiKey();
+    const ms = getMutableState();
+    ms.anthropicApiKeyStored = false;
+    saveState();
+    rerender();
+  });
+
   // Guest-account upgrade — opens auth view in upgrade mode (signUp uses
   // updateUser to preserve the user_id and all data attached to the guest).
   document.getElementById('btn-save-account')?.addEventListener('click', () => {
@@ -1039,6 +1250,89 @@ function wireAccountHandlers(): void {
     (document.getElementById('sleep-target-display') as HTMLElement).style.display = 'none';
     (document.getElementById('sleep-target-edit') as HTMLElement).style.display = '';
   });
+
+  // FTP refresh — calls the edge function's `powerCurveRefresh` mode to fetch
+  // missing watts streams, then re-derives FTP locally and updates state. The
+  // ratchet-up rule (main.ts) ensures we only accept the result when it
+  // improves on the saved value or carries higher confidence. Two surfaces:
+  // - `btn-refresh-ftp` on the Profile/Benchmarks card (3-card grid layout)
+  // - `btn-refresh-ftp-tri` inline on the Triathlon group's Bike FTP row
+  // Both call the same handler.
+  const wireFtpRefresh = (btnId: string, statusId: string, defaultLabel: string): void => {
+    document.getElementById(btnId)?.addEventListener('click', async () => {
+      const btn = document.getElementById(btnId) as HTMLButtonElement | null;
+      const status = document.getElementById(statusId);
+      if (!btn) return;
+      btn.disabled = true;
+      btn.textContent = 'Fetching…';
+      if (status) status.textContent = '';
+      try {
+        const { recomputePowerCurves } = await import('@/data/recompute-power-curves');
+        const result = await recomputePowerCurves();
+        if (!result.ok) {
+          btn.textContent = defaultLabel;
+          btn.disabled = false;
+          if (status) status.textContent = result.message ?? 'Refresh failed';
+          return;
+        }
+        btn.textContent = 'Updating FTP…';
+        const [{ loadActivitiesFromDB }, { deriveTriBenchmarksFromHistory }] = await Promise.all([
+          import('@/data/tri-activity-loader'),
+          import('@/calculations/tri-benchmarks-from-history'),
+        ]);
+        const activities = await loadActivitiesFromDB(500);
+        const sm = getMutableState();
+        const derived = deriveTriBenchmarksFromHistory(activities, undefined, {
+          swim400Sec: sm.triConfig?.swim?.pbs?.m400,
+          swim200Sec: sm.triConfig?.swim?.pbs?.m200,
+        }, sm.triConfig?.swim?.defaultOwSwimEnvironment);
+        const newFtp = derived.ftp.ftpWatts;
+        const newConf = derived.ftp.confidence;
+        const currentFtp = sm.triConfig?.bike?.ftp;
+        const currentConf = sm.triConfig?.bike?.ftpConfidence;
+        const confRank = (c: typeof newConf | undefined) =>
+          c === 'high' ? 3 : c === 'medium' ? 2 : c === 'low' ? 1 : 0;
+        const accept = newFtp != null && (
+          currentFtp == null ||
+          newFtp >= currentFtp ||
+          confRank(newConf) > confRank(currentConf)
+        );
+        if (accept && newFtp != null && sm.triConfig?.bike) {
+          sm.triConfig.bike = {
+            ...sm.triConfig.bike,
+            ftp: newFtp,
+            ftpSource: 'derived',
+            ftpConfidence: newConf,
+          };
+          saveState();
+          const summary = result.stored && result.stored > 0
+            ? `Stored ${result.stored} new ${result.stored === 1 ? 'curve' : 'curves'}. FTP → ${newFtp} W (${newConf}).`
+            : `FTP → ${newFtp} W (${newConf}).`;
+          if (status) status.textContent = summary;
+          setTimeout(() => {
+            const container = document.getElementById('app-root');
+            if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+          }, 1400);
+        } else {
+          btn.textContent = defaultLabel;
+          btn.disabled = false;
+          if (status) {
+            const fetched = result.stored && result.stored > 0 ? `Stored ${result.stored} curves. ` : '';
+            const why = newFtp == null
+              ? 'Estimator returned no FTP.'
+              : `New estimate ${newFtp} W (${newConf}) didn't beat saved ${currentFtp ?? '—'} W (${currentConf ?? '—'}).`;
+            status.textContent = `${fetched}${why}`;
+          }
+        }
+      } catch (err) {
+        btn.textContent = defaultLabel;
+        btn.disabled = false;
+        if (status) status.textContent = err instanceof Error ? err.message : 'Refresh failed';
+      }
+    });
+  };
+  wireFtpRefresh('btn-refresh-ftp', 'btn-refresh-ftp-status', 'Refresh FTP from rides');
+  wireFtpRefresh('btn-refresh-ftp-tri', 'btn-refresh-ftp-tri-status', 'Refresh');
 
   document.getElementById('btn-sleep-target-cancel')?.addEventListener('click', () => {
     (document.getElementById('sleep-target-edit') as HTMLElement).style.display = 'none';
@@ -1090,6 +1384,21 @@ function wireAccountHandlers(): void {
     if (dispResting) dispResting.textContent = s.restingHR != null ? String(s.restingHR) : '—';
     (document.getElementById('hr-edit') as HTMLElement).style.display = 'none';
     (document.getElementById('hr-display') as HTMLElement).style.display = '';
+  });
+
+  document.getElementById('btn-vo2-source-mosaic')?.addEventListener('click', () => {
+    getMutableState().vo2Source = 'mosaic';
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+  });
+
+  document.getElementById('btn-vo2-source-device')?.addEventListener('click', () => {
+    if (!(getState().vo2 != null && getState().vo2! > 0)) return;
+    getMutableState().vo2Source = 'device';
+    saveState();
+    const container = document.getElementById('app-root');
+    if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
   });
 
   document.getElementById('btn-unit-km')?.addEventListener('click', () => {
@@ -1189,6 +1498,22 @@ function wireAccountHandlers(): void {
     import('./triathlon/bike-setup-view').then(({ openBikeSetupOverlay }) => openBikeSetupOverlay());
   });
 
+  document.getElementById('account-swim-env-btn')?.addEventListener('click', () => {
+    import('./triathlon/swim-normalisation-reveal').then(({ openSwimEnvironmentEditor }) => {
+      // No callback — editor writes directly to triConfig.swim and persists.
+      openSwimEnvironmentEditor();
+      // Re-render account view when the overlay is removed so the row label
+      // updates immediately rather than waiting for a navigation.
+      const observer = new MutationObserver(() => {
+        if (!document.getElementById('swim-env-editor')) {
+          observer.disconnect();
+          renderAccountView();
+        }
+      });
+      observer.observe(document.body, { childList: true });
+    });
+  });
+
   document.getElementById('btn-recurring-activities')?.addEventListener('click', () => {
     showRecurringActivitiesModal();
   });
@@ -1211,8 +1536,8 @@ function wireAccountHandlers(): void {
     s.physioAdj = 0;
     saveState();
     if (btn) {
-      const original = btn.textContent ?? 'Reset VDOT calibration';
-      btn.textContent = 'VDOT calibration reset. Your score will update with your next training data.';
+      const original = btn.textContent ?? 'Reset VO2max calibration';
+      btn.textContent = 'VO2max calibration reset. Your score will update with your next training data.';
       btn.disabled = true;
       setTimeout(() => {
         btn.textContent = original;
@@ -1259,7 +1584,7 @@ function wireAccountHandlers(): void {
   document.getElementById('btn-rebuild-plan')?.addEventListener('click', () => {
     const s = getState();
     if (!s.onboarding) {
-      alert('Onboarding data not found — cannot rebuild plan.');
+      alert('Onboarding data not found. Cannot rebuild plan.');
       return;
     }
 
@@ -1343,7 +1668,7 @@ function wireAccountHandlers(): void {
     } catch (err) {
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
         if (errorEl) {
-          errorEl.innerHTML = `Session expired — please <a href="#" id="garmin-sign-in-link" class="underline text-blue-400">sign in again</a>`;
+          errorEl.innerHTML = `Session expired. Please <a href="#" id="garmin-sign-in-link" class="underline text-blue-400">sign in again</a>.`;
           errorEl.classList.remove('hidden');
           document.getElementById('garmin-sign-in-link')?.addEventListener('click', (e) => {
             e.preventDefault();
@@ -1427,7 +1752,7 @@ function wireAccountHandlers(): void {
         syncAppleHealth(),
         syncAppleHealthPhysiology(28),
       ]);
-      syncResultMsg = 'Sync complete — activities, sleep, and recovery updated.';
+      syncResultMsg = 'Sync complete. Activities, sleep, and recovery updated.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;
@@ -1441,8 +1766,8 @@ function wireAccountHandlers(): void {
   // Re-review pending activities
   document.getElementById('btn-review-pending')?.addEventListener('click', () => {
     // Navigate back to Plan tab first so the review modal renders over the correct view
-    import('./plan-view').then(({ renderPlanView }) => {
-      renderPlanView();
+    import('./main-view').then(({ renderMainView }) => {
+      renderMainView();
       // Small delay to let the plan view mount before showing the modal
       setTimeout(() => processPendingCrossTraining(), 150);
     });
@@ -1482,7 +1807,7 @@ function wireAccountHandlers(): void {
     }
     saveState();
 
-    if (resultEl) { resultEl.textContent = 'Plan restored! Reloading and re-syncing...'; resultEl.className = 'text-xs text-emerald-400'; resultEl.classList.remove('hidden'); }
+    if (resultEl) { resultEl.textContent = 'Plan restored! Reloading and re-syncing...'; resultEl.className = 'text-xs'; resultEl.style.color = 'var(--c-ok)'; resultEl.classList.remove('hidden'); }
     setTimeout(() => window.location.reload(), 800);
   });
 
@@ -1527,8 +1852,8 @@ function wireAccountHandlers(): void {
     saveState();
 
     if (resultEl) {
-      resultEl.textContent = `Stepping back to Week ${ms.w} — reloading and re-syncing...`;
-      resultEl.className = 'text-xs text-emerald-400';
+      resultEl.textContent = `Stepping back to Week ${ms.w}. Reloading and re-syncing...`;
+      resultEl.className = 'text-xs'; resultEl.style.color = 'var(--c-ok)';
       resultEl.classList.remove('hidden');
     }
     setTimeout(() => window.location.reload(), 800);
@@ -1596,7 +1921,7 @@ function wireAccountHandlers(): void {
     rerender();
     try {
       await syncStravaActivities();
-      syncResultMsg = 'Sync complete — check your plan for updated activities.';
+      syncResultMsg = 'Sync complete. Check your plan for updated activities.';
       syncResultOk = true;
     } catch (err) {
       syncResultMsg = `Sync failed: ${err instanceof Error ? err.message : 'check your connection'}`;
@@ -1677,19 +2002,19 @@ function showRunnerTypeModal(): void {
           ${types.map(t => `
             <button class="runner-type-option"
               data-type="${t.key}"
-              style="text-align:left;padding:12px 14px;border-radius:12px;border:1.5px solid ${t.key === currentType ? '#3b82f6' : '#e5e7eb'};background:${t.key === currentType ? 'rgba(59,130,246,0.06)' : 'transparent'};cursor:${t.key === currentType ? 'default' : 'pointer'}">
+              style="text-align:left;padding:12px 14px;border-radius:12px;border:1.5px solid ${t.key === currentType ? 'var(--c-black)' : 'var(--c-border)'};background:${t.key === currentType ? 'rgba(0,0,0,0.04)' : 'transparent'};cursor:${t.key === currentType ? 'default' : 'pointer'}">
               <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:2px">
-                <span style="font-size:14px;font-weight:600;color:${t.key === currentType ? '#3b82f6' : '#1a1a1a'}">
+                <span style="font-size:14px;font-weight:600;color:var(--c-black)">
                   ${t.label}
                 </span>
-                ${t.key === currentType ? `<span style="font-size:11px;font-weight:600;color:#3b82f6;background:rgba(59,130,246,0.1);padding:2px 8px;border-radius:10px">Current</span>` : ''}
+                ${t.key === currentType ? `<span style="font-size:11px;font-weight:600;color:var(--c-black);background:rgba(0,0,0,0.06);padding:2px 8px;border-radius:10px">Current</span>` : ''}
               </div>
-              <div style="font-size:12px;color:#6b7280">${t.desc}</div>
+              <div style="font-size:12px;color:var(--c-muted)">${t.desc}</div>
             </button>
           `).join('')}
         </div>
         <button id="btn-cancel-runner-type"
-          style="width:100%;padding:10px;background:none;border:none;cursor:pointer;font-size:14px;color:#9ca3af">
+          style="width:100%;padding:10px;background:none;border:none;cursor:pointer;font-size:14px;color:var(--c-muted)">
           Cancel
         </button>
       </div>
@@ -1753,9 +2078,9 @@ function applyRunnerTypeChange(newType: string): void {
   const spinner = document.createElement('div');
   spinner.style.cssText = 'position:fixed;inset:0;background:rgba(255,255,255,0.92);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;';
   spinner.innerHTML = `
-    <div style="width:40px;height:40px;border:3px solid #e2e8f0;border-top-color:#3b82f6;border-radius:50%;animation:spin 0.7s linear infinite;margin-bottom:16px"></div>
-    <div style="font-size:15px;font-weight:600;color:#1a1a1a">Rebuilding plan…</div>
-    <div style="font-size:12px;color:#6b7280;margin-top:4px">Recalculating your workouts</div>
+    <div style="width:40px;height:40px;border:3px solid var(--c-border);border-top-color:var(--c-black);border-radius:50%;animation:spin 0.7s linear infinite;margin-bottom:16px"></div>
+    <div style="font-size:15px;font-weight:600;color:var(--c-black)">Rebuilding plan…</div>
+    <div style="font-size:12px;color:var(--c-muted);margin-top:4px">Recalculating your workouts</div>
     <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
   `;
   document.body.appendChild(spinner);

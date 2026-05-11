@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/master.swiftdeps"
+  },
+  "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/HealthExtrasPlugin.swift": {
+    "dependencies": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/HealthExtrasPlugin.d",
+    "object": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/HealthExtrasPlugin.swift.o",
+    "swiftmodule": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/HealthExtrasPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/HealthExtrasPlugin.swiftdeps",
+    "diagnostics": "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/HealthExtrasPlugin.dia"
+  }
+}

@@ -4,6 +4,7 @@ import { updateOnboarding, nextStep } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
  * Page 3b — Manual fallback.
@@ -112,10 +113,15 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 30%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirror of connect-strava (alternate path). -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('me', { variant: 'asymmetric', side: 'right' })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:48px 20px 24px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(3, 7)}
+        ${renderProgressIndicator(3, 8)}
 
         <div class="m-rise" style="width:100%;max-width:480px;text-align:center;margin-top:4px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.6rem,5.6vw,2.1rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 8px;line-height:1.15">
@@ -231,17 +237,23 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
 
   const commitPbs = () => {
     const current = { ...state.pbs };
+    // Manually-entered PBs have no source date — drop any stored pbDates so the
+    // marathon-specificity penalty's recency scaling falls back to full strength
+    // rather than using a now-mismatched date.
+    const currentDates = { ...(state.pbDates ?? {}) };
     pbFields.forEach(({ id, key, long }) => {
       const input = document.getElementById(id) as HTMLInputElement | null;
       if (!input) return;
       const parsed = parseTime(input.value, long);
       if (parsed !== null) {
         (current as any)[key] = parsed;
+        delete (currentDates as any)[key];
       } else {
         delete (current as any)[key];
+        delete (currentDates as any)[key];
       }
     });
-    updateOnboarding({ pbs: current });
+    updateOnboarding({ pbs: current, pbDates: currentDates });
   };
 
   pbFields.forEach(({ id, long }) => {

@@ -134,6 +134,8 @@ export function detectAndLogRaceOutcome(state: SimulatorState): TriRaceLogEntry 
       bike: pred.bikeSec,
       run:  pred.runSec,
     },
+    predictedRawPerLeg: pred.rawProjectedPerLeg,
+    predictionVdotSnapshot: state.v ?? undefined,
     actualTotalSec,
     actualPerLeg,
     predictedAtISO: pred.computedAtISO,

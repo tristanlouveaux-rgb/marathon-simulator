@@ -1,0 +1,336 @@
+{
+  "70.3": {
+    "distance": "70.3",
+    "totalRecords": 840075,
+    "minBinN": 30,
+    "bins": [
+      {
+        "centerSec": 14850,
+        "n": 6870,
+        "swimFracMean": 0.10658088087847581,
+        "swimFracSD": 0.010385879586283028,
+        "bikeFracMean": 0.5462399672649815,
+        "bikeFracSD": 0.01868631549530271,
+        "runFracMean": 0.3306648262041398,
+        "runFracSD": 0.016705429791755627
+      },
+      {
+        "centerSec": 15750,
+        "n": 18086,
+        "swimFracMean": 0.10977848681473339,
+        "swimFracSD": 0.011857424614694917,
+        "bikeFracMean": 0.5393960356117232,
+        "bikeFracSD": 0.020329298994101498,
+        "runFracMean": 0.3325131849826097,
+        "runFracSD": 0.018250125804312737
+      },
+      {
+        "centerSec": 16650,
+        "n": 37913,
+        "swimFracMean": 0.1114024364376838,
+        "swimFracSD": 0.012853037857984279,
+        "bikeFracMean": 0.5328075917992028,
+        "bikeFracSD": 0.021501574942969684,
+        "runFracMean": 0.33610275986681093,
+        "runFracSD": 0.02041152356372654
+      },
+      {
+        "centerSec": 17550,
+        "n": 62289,
+        "swimFracMean": 0.11236977119749768,
+        "swimFracSD": 0.013932868639353327,
+        "bikeFracMean": 0.5264922171592016,
+        "bikeFracSD": 0.02280984300753332,
+        "runFracMean": 0.34013383556717824,
+        "runFracSD": 0.022452153704450667
+      },
+      {
+        "centerSec": 18450,
+        "n": 79981,
+        "swimFracMean": 0.11266195666290592,
+        "swimFracSD": 0.01483170142204394,
+        "bikeFracMean": 0.5210911152275952,
+        "bikeFracSD": 0.024489647179038166,
+        "runFracMean": 0.3440841039006246,
+        "runFracSD": 0.024451172413239797
+      },
+      {
+        "centerSec": 19350,
+        "n": 96142,
+        "swimFracMean": 0.1124111303641422,
+        "swimFracSD": 0.015548571570705872,
+        "bikeFracMean": 0.515608842382527,
+        "bikeFracSD": 0.026148786701491403,
+        "runFracMean": 0.3487355253533987,
+        "runFracSD": 0.02666940116557877
+      },
+      {
+        "centerSec": 20250,
+        "n": 100095,
+        "swimFracMean": 0.11192771223585189,
+        "swimFracSD": 0.016205136626047268,
+        "bikeFracMean": 0.5107716124287656,
+        "bikeFracSD": 0.028027138308793845,
+        "runFracMean": 0.35316183878360735,
+        "runFracSD": 0.028886525744023093
+      },
+      {
+        "centerSec": 21150,
+        "n": 98758,
+        "swimFracMean": 0.1113087782387668,
+        "swimFracSD": 0.01682440559519578,
+        "bikeFracMean": 0.5059311068477768,
+        "bikeFracSD": 0.029828779860636388,
+        "runFracMean": 0.35799035770988935,
+        "runFracSD": 0.03095853916178492
+      },
+      {
+        "centerSec": 22050,
+        "n": 81847,
+        "swimFracMean": 0.11090204090273749,
+        "swimFracSD": 0.017476216208347432,
+        "bikeFracMean": 0.5013101510464375,
+        "bikeFracSD": 0.03183451388959767,
+        "runFracMean": 0.36259632452787494,
+        "runFracSD": 0.03299631218081083
+      },
+      {
+        "centerSec": 22950,
+        "n": 71048,
+        "swimFracMean": 0.1099927898469809,
+        "swimFracSD": 0.018005297066193065,
+        "bikeFracMean": 0.4964993627911949,
+        "bikeFracSD": 0.033776270834089066,
+        "runFracMean": 0.3680292909643032,
+        "runFracSD": 0.0348342279050369
+      },
+      {
+        "centerSec": 23850,
+        "n": 55042,
+        "swimFracMean": 0.10941538725908356,
+        "swimFracSD": 0.018553500686218645,
+        "bikeFracMean": 0.49220824700209403,
+        "bikeFracSD": 0.03513376942957239,
+        "runFracMean": 0.37279233544472856,
+        "runFracSD": 0.03624761814026044
+      },
+      {
+        "centerSec": 24750,
+        "n": 42106,
+        "swimFracMean": 0.10915122262266942,
+        "swimFracSD": 0.019118193179157212,
+        "bikeFracMean": 0.48811753502799166,
+        "bikeFracSD": 0.03653768968552625,
+        "runFracMean": 0.377140998588267,
+        "runFracSD": 0.03749646337169538
+      },
+      {
+        "centerSec": 25650,
+        "n": 29246,
+        "swimFracMean": 0.10860452153680775,
+        "swimFracSD": 0.01966300362350353,
+        "bikeFracMean": 0.4852949070079863,
+        "bikeFracSD": 0.03785089327600789,
+        "runFracMean": 0.3806541959361717,
+        "runFracSD": 0.03847472369828449
+      },
+      {
+        "centerSec": 26550,
+        "n": 21114,
+        "swimFracMean": 0.10807617109508104,
+        "swimFracSD": 0.02013204664304241,
+        "bikeFracMean": 0.48265004393012406,
+        "bikeFracSD": 0.03857819485629639,
+        "runFracMean": 0.3841164866734531,
+        "runFracSD": 0.03919839386059315
+      },
+      {
+        "centerSec": 27450,
+        "n": 14574,
+        "swimFracMean": 0.10788201647833993,
+        "swimFracSD": 0.02052706781386244,
+        "bikeFracMean": 0.4801873803557453,
+        "bikeFracSD": 0.03906395332754199,
+        "runFracMean": 0.3869746897395052,
+        "runFracSD": 0.03900013979458321
+      },
+      {
+        "centerSec": 28350,
+        "n": 9845,
+        "swimFracMean": 0.107714824822133,
+        "swimFracSD": 0.02061788755321855,
+        "bikeFracMean": 0.47916459006050216,
+        "bikeFracSD": 0.03927131476089421,
+        "runFracMean": 0.38855059130188235,
+        "runFracSD": 0.038788865960486696
+      }
+    ]
+  },
+  "ironman": {
+    "distance": "ironman",
+    "totalRecords": 850167,
+    "minBinN": 30,
+    "bins": [
+      {
+        "centerSec": 33300,
+        "n": 12769,
+        "swimFracMean": 0.10412429439982808,
+        "swimFracSD": 0.018067731989536286,
+        "bikeFracMean": 0.5262801715239425,
+        "bikeFracSD": 0.028209731130353466,
+        "runFracMean": 0.3574748676857531,
+        "runFracSD": 0.033444401919256295
+      },
+      {
+        "centerSec": 35100,
+        "n": 32009,
+        "swimFracMean": 0.10560463857636267,
+        "swimFracSD": 0.015834766260247695,
+        "bikeFracMean": 0.5216641734621628,
+        "bikeFracSD": 0.024168611478051952,
+        "runFracMean": 0.35994929837439693,
+        "runFracSD": 0.02839845727693244
+      },
+      {
+        "centerSec": 36900,
+        "n": 47305,
+        "swimFracMean": 0.10551326660841004,
+        "swimFracSD": 0.015368037719249064,
+        "bikeFracMean": 0.5169782835742334,
+        "bikeFracSD": 0.023958295874251436,
+        "runFracMean": 0.36399751851428647,
+        "runFracSD": 0.03134742593559283
+      },
+      {
+        "centerSec": 38700,
+        "n": 67854,
+        "swimFracMean": 0.10527443602687468,
+        "swimFracSD": 0.015460673562717919,
+        "bikeFracMean": 0.5115122646897681,
+        "bikeFracSD": 0.025719677752282594,
+        "runFracMean": 0.3685401238119792,
+        "runFracSD": 0.03458595206164937
+      },
+      {
+        "centerSec": 40500,
+        "n": 74644,
+        "swimFracMean": 0.10448779623342822,
+        "swimFracSD": 0.0157458550087793,
+        "bikeFracMean": 0.5077622957102281,
+        "bikeFracSD": 0.026787720633749287,
+        "runFracMean": 0.3719519757648927,
+        "runFracSD": 0.03761434643640984
+      },
+      {
+        "centerSec": 42300,
+        "n": 88450,
+        "swimFracMean": 0.1036866762481263,
+        "swimFracSD": 0.01588245140772609,
+        "bikeFracMean": 0.503842297496005,
+        "bikeFracSD": 0.027701212086247935,
+        "runFracMean": 0.37509685264740816,
+        "runFracSD": 0.03735882068119457
+      },
+      {
+        "centerSec": 44100,
+        "n": 81250,
+        "swimFracMean": 0.10258122136577583,
+        "swimFracSD": 0.01676416619906307,
+        "bikeFracMean": 0.5003022260026617,
+        "bikeFracSD": 0.029780351614449044,
+        "runFracMean": 0.3782368688286701,
+        "runFracSD": 0.03728868143031639
+      },
+      {
+        "centerSec": 45900,
+        "n": 85484,
+        "swimFracMean": 0.10160697270503369,
+        "swimFracSD": 0.016371541331529394,
+        "bikeFracMean": 0.4965463295914603,
+        "bikeFracSD": 0.030891961678186797,
+        "runFracMean": 0.3816136789242408,
+        "runFracSD": 0.03733118532175907
+      },
+      {
+        "centerSec": 47700,
+        "n": 71859,
+        "swimFracMean": 0.1005206658418574,
+        "swimFracSD": 0.01677233957963455,
+        "bikeFracMean": 0.4935948615965776,
+        "bikeFracSD": 0.031640170843217304,
+        "runFracMean": 0.3844209554297984,
+        "runFracSD": 0.038483410511335234
+      },
+      {
+        "centerSec": 49500,
+        "n": 69755,
+        "swimFracMean": 0.09958489396008145,
+        "swimFracSD": 0.017069125191400105,
+        "bikeFracMean": 0.49041277397193833,
+        "bikeFracSD": 0.032318079643159296,
+        "runFracMean": 0.38757640849788416,
+        "runFracSD": 0.03881169382303819
+      },
+      {
+        "centerSec": 51300,
+        "n": 54975,
+        "swimFracMean": 0.09851510964636104,
+        "swimFracSD": 0.01727259873917005,
+        "bikeFracMean": 0.4876475322014452,
+        "bikeFracSD": 0.03288724648795872,
+        "runFracMean": 0.39051649356359264,
+        "runFracSD": 0.03910199134205412
+      },
+      {
+        "centerSec": 53100,
+        "n": 50654,
+        "swimFracMean": 0.09771793482938908,
+        "swimFracSD": 0.01750932787635608,
+        "bikeFracMean": 0.48481844911448185,
+        "bikeFracSD": 0.03297078649256819,
+        "runFracMean": 0.3936463519631987,
+        "runFracSD": 0.039524994866633495
+      },
+      {
+        "centerSec": 54900,
+        "n": 37941,
+        "swimFracMean": 0.09696257264146792,
+        "swimFracSD": 0.0170568440096521,
+        "bikeFracMean": 0.4822913423914678,
+        "bikeFracSD": 0.03323849908502312,
+        "runFracMean": 0.3963050525852037,
+        "runFracSD": 0.03934163966018824
+      },
+      {
+        "centerSec": 56700,
+        "n": 33009,
+        "swimFracMean": 0.09662565209771762,
+        "swimFracSD": 0.016530696294720273,
+        "bikeFracMean": 0.47991743078575627,
+        "bikeFracSD": 0.03243768957754985,
+        "runFracMean": 0.398860464206043,
+        "runFracSD": 0.03810828567625859
+      },
+      {
+        "centerSec": 58500,
+        "n": 23651,
+        "swimFracMean": 0.09631565063597941,
+        "swimFracSD": 0.01617314376626187,
+        "bikeFracMean": 0.4776939223298125,
+        "bikeFracSD": 0.03029371321416925,
+        "runFracMean": 0.4014538229818113,
+        "runFracSD": 0.03612846476294193
+      },
+      {
+        "centerSec": 60300,
+        "n": 14603,
+        "swimFracMean": 0.09684790570576626,
+        "swimFracSD": 0.015783596176144363,
+        "bikeFracMean": 0.477717520085876,
+        "bikeFracSD": 0.028486224016019787,
+        "runFracMean": 0.4014839086882522,
+        "runFracSD": 0.036818697865990825
+      }
+    ]
+  }
+}

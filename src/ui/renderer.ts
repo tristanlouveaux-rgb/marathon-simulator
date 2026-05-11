@@ -6,6 +6,7 @@ import {
   rdKm, tv, gp, getRunnerType,
   calculateLiveForecast
 } from '@/calculations';
+import { getPlanPrescribedMeanWeeklyKm } from '@/calculations/training-horizon';
 import { IMP, TL_PER_MIN, LOAD_PER_MIN_BY_INTENSITY } from '@/constants';
 import {
   generateWeekWorkouts, parseWorkoutDescription,
@@ -196,17 +197,20 @@ export function render(): void {
     forecast = s.forecastTime;
   } else {
     const wr = s.tw - realW + 1;
+    const sessionsForHorizon = (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0);
+    const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
     const { forecastTime: rawForecast } = calculateLiveForecast({
       currentVdot: currentVDOT,
       targetDistance: s.rd,
       weeksRemaining: wr,
-      sessionsPerWeek: (s.epw || s.rw) + (s.commuteConfig?.enabled ? s.commuteConfig.commuteDaysPerWeek : 0),
+      sessionsPerWeek: sessionsForHorizon,
       runnerType: getRunnerType(s.b),
       experienceLevel: s.onboarding?.experienceLevel || 'intermediate',
-      weeklyVolumeKm: s.wkm,
+      weeklyVolumeKm: planMeanKm ?? s.wkm,
       hmPbSeconds: s.pbs?.h || undefined,
       ltPaceSecPerKm: s.lt || undefined,
       adaptationRatio: s.adaptationRatio,
+      blendedAnchorSec: s.blendedRaceTimeSec ?? s.initialBaseline ?? undefined,
     });
     forecast = rawForecast;
     if (s.timp > 0) forecast += s.timp;
@@ -264,7 +268,7 @@ export function render(): void {
   const injuryState = (s as any).injuryState || null;  // Get injury state for plan adaptation
   const trailingEffort = getTrailingEffortScore(s.wks, s.w);
   const acwrAtlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwrForRender = computeACWR(s.wks ?? [], s.w, s.athleteTierOverride ?? s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, acwrAtlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   let wos = generateWeekWorkouts(
     wk.ph,
     s.rw,
@@ -285,7 +289,11 @@ export function render(): void {
     currentVDOT, // vdot for plan engine (includes RPE and training gains)
     s.gs,  // gym sessions per week
     trailingEffort, // effort score for adaptive scaling
-    (acwrForRender.status === 'unknown' || acwrForRender.status === 'low') ? undefined : acwrForRender.status // acwrStatus — reduces quality sessions when elevated
+    (acwrForRender.status === 'unknown' || acwrForRender.status === 'low') ? undefined : acwrForRender.status, // acwrStatus — reduces quality sessions when elevated
+    undefined, // forceDeload (renderer uses wk.forceDeload at re-gen sites)
+    s.onboarding?.weeklyTrainingHours,
+    s.onboarding?.runningExcludedWorkouts,
+    s.onboarding?.weekdayTrainingHours,
   );
 
   // 1. Apply stored modifications BEFORE renaming duplicates.
@@ -647,7 +655,7 @@ export function render(): void {
   // Paces
   h += `<div class="mt-3 text-xs mb-1" style="color:var(--c-muted)">Your current paces</div>`;
   h += `<div class="grid grid-cols-2 gap-1 text-xs">`;
-  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Easy (no faster than): <strong style="color:var(--c-black)">${fp(s.pac.e)}</strong></div>`;
+  h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Easy: <strong style="color:var(--c-black)">${fp(s.pac.e)} – ${fp(Math.round(s.pac.e * 13 / 12))}</strong><span style="color:var(--c-faint);font-size:10px;margin-left:4px">slower is fine</span></div>`;
   h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Threshold: <strong style="color:var(--c-black)">${fp(s.pac.t)}</strong></div>`;
   h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">VO2 Builder: <strong style="color:var(--c-black)">${fp(s.pac.i)}</strong></div>`;
   h += `<div class="p-1.5 rounded" style="background:var(--c-surface);color:var(--c-muted)">Marathon: <strong style="color:var(--c-black)">${fp(s.pac.m)}</strong></div></div>`;
@@ -926,7 +934,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       const modStyleAttr = isReplaced
         ? 'background:rgba(6,182,212,0.06);border-color:rgba(6,182,212,0.3);color:var(--c-accent)'
         : 'background:rgba(78,159,229,0.06);border-color:rgba(78,159,229,0.3);color:var(--c-accent)';
-      const modLabel = isReplaced ? `Replaced by ${activityName}` : `Reduced — ${activityName}`;
+      const modLabel = isReplaced ? `Replaced by ${activityName}` : `Reduced: ${activityName}`;
       const isGarminMod = w.modReason.startsWith('Garmin:') || !!garminActualsData;
       const undoOnclick = isGarminMod
         ? `window.openActivityReReview()`
@@ -1531,11 +1539,10 @@ function renderGarminSyncedSection(wk: Week): string {
  * Render cross-training form
  */
 function renderCrossTrainingForm(): string {
-  const inputStyle = 'background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black)';
   let h = `<div id="crossForm" class="mt-3 p-3 rounded border" style="background:var(--c-surface);border-color:var(--c-border)">`;
   h += `<div class="font-bold text-sm mb-2" style="color:var(--c-black)">Manual upload</div>`;
   h += `<div class="grid grid-cols-3 gap-1 mb-2">`;
-  h += `<select id="crossSport" class="text-xs rounded px-1 py-1" style="${inputStyle}">`;
+  h += `<select id="crossSport" class="m-select" style="font-size:12px;padding:6px 28px 6px 8px;background-position:right 8px center">`;
   h += `<option value="generic_sport">Activity</option>`;
   h += `<option value="run">Run</option>`;
   h += `<option value="cycling">Cycling</option>`;
@@ -1547,8 +1554,8 @@ function renderCrossTrainingForm(): string {
   h += `<option value="rowing">Rowing</option>`;
   h += `<option value="rest">Rest/Recovery</option>`;
   h += `</select>`;
-  h += `<input type="number" id="crossDur" placeholder="Duration (min)" class="text-xs rounded px-1 py-1" style="${inputStyle}" min="1" max="600">`;
-  h += `<div class="relative"><input type="number" id="crossRPE" placeholder="RPE (1-10)" class="text-xs rounded px-1 py-1 w-full" style="${inputStyle}" min="1" max="10">`;
+  h += `<input type="number" id="crossDur" placeholder="Duration (min)" class="m-input" style="font-size:12px;padding:6px 8px" min="1" max="600">`;
+  h += `<div class="relative"><input type="number" id="crossRPE" placeholder="RPE (1-10)" class="m-input" style="font-size:12px;padding:6px 8px" min="1" max="10">`;
   h += `<span class="rpe-help absolute right-1 top-1 cursor-help text-xs" style="color:var(--c-faint)" title="1-3: Easy conversation\n4-6: Short sentences\n7-8: 1-2 words\n9-10: Gasping/Max">(?)</span></div>`;
   h += `</div>`;
   h += `<button onclick="window.logActivity()" class="w-full py-1.5 rounded text-xs font-bold" style="background:var(--c-ok);color:white">Add Activity</button>`;
@@ -1620,7 +1627,9 @@ export function setupSyncListener(): void {
     const wos = generateWeekWorkouts(
       wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig, null, s.recurringActivities,
       undefined, undefined, undefined, s.w, s.tw, s.v, s.gs,
-      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus
+      getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
+      s.onboarding?.weekdayTrainingHours,
     );
 
     // Filter out already-rated workouts

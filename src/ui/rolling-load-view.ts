@@ -19,10 +19,8 @@ import {
 } from '@/calculations/readiness';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const PAGE_BG  = '#FAF9F6';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M   = '#0F172A';
 const TEXT_S   = '#64748B';
 const TEXT_L   = '#94A3B8';
@@ -50,7 +48,7 @@ function fmtDateCompact(date: string): string {
 
 // ── Dark hero gradient with integrated mountains ────────────────────────────
 
-function heroBackground(): string { return buildSkyBackground('rl', 'deepBlue'); }
+function heroBackground(): string { return buildFloweyBackground('rl', 'deepBlue') + buildSunGlint('low'); }
 
 // ── Chart builder (sharp angular lines, HTML labels) ────────────────────────
 
@@ -261,7 +259,7 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const acwr = computeACWR(
     s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined,
     s.planStartDate, acwrSeed, acwrSeed, undefined,
-    _archivedPlansForACWR,
+    _archivedPlansForACWR, s.adaptiveRecovery,
   );
 
   const rollingTSS = Math.round(acwr.atl);
@@ -347,16 +345,15 @@ function getRollingLoadHTML(s: SimulatorState): string {
       #rl-view *, #rl-view *::before, #rl-view *::after { box-sizing:inherit; }
       @keyframes rlFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .rl-fade { opacity:0; animation:rlFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('rl')}
     </style>
 
     <div id="rl-view" style="
-      position:relative;min-height:100vh;background:${PAGE_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('deepBlue')};
       font-family:var(--f);overflow-x:hidden;
     ">
       ${heroBackground()}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -383,33 +380,25 @@ function getRollingLoadHTML(s: SimulatorState): string {
 
         <!-- Ring -->
         <div class="rl-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div style="
-            position:relative;width:220px;height:220px;
-            display:flex;align-items:center;justify-content:center;
-          ">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="rlRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="${RING_BLUE_A}"/>
-                  <stop offset="100%" stop-color="${RING_BLUE_B}"/>
+                <linearGradient id="rlRingGrad" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="${ringColor === '#FF3B30' ? '#FCA5A5' : '#BFDBFE'}"/>
+                  <stop offset="50%"  stop-color="${ringColor === '#FF3B30' ? '#EF4444' : '#5880B0'}"/>
+                  <stop offset="100%" stop-color="${ringColor === '#FF3B30' ? '#991B1B' : '#1E3A5F'}"/>
                 </linearGradient>
               </defs>
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <circle id="rl-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
-                stroke="${ringColor === '#FF3B30' ? ringColor : 'url(#rlRingGrad)'}"
+                stroke="url(#rlRingGrad)"
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_CIRC}"
                 stroke-dashoffset="${RING_CIRC}"
-                style="transition:stroke-dashoffset 1.4s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
               />
             </svg>
-            <div style="
-              position:absolute;width:180px;height:180px;border-radius:50%;
-              background:rgba(255,255,255,0.75);backdrop-filter:blur(12px);
-              box-shadow:inset 0 0 12px rgba(255,255,255,0.5);
-              display:flex;flex-direction:column;align-items:center;justify-content:center;
-              top:50%;left:50%;transform:translate(-50%,-50%);padding-top:4px;
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding-top:4px">
               <div style="display:flex;align-items:baseline;color:${TEXT_M};font-weight:700">
                 <span style="font-size:48px;letter-spacing:-0.03em;line-height:1;font-weight:700">${rollingTSS}</span>
                 <span style="font-size:14px;margin-left:3px;font-weight:400;color:${TEXT_S}">TSS</span>
@@ -461,7 +450,8 @@ function getRollingLoadHTML(s: SimulatorState): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -511,7 +501,7 @@ export function renderRollingLoadView(): void {
   container.innerHTML = html;
   // Extract ringOffset from the rendered state
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks ?? [], s.w, s.athleteTier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, atlSeed, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const rollingTSS = Math.round(acwr.atl);
   const chronicTSS = Math.round(acwr.ctl);
   const loadRatio = chronicTSS > 0 ? rollingTSS / chronicTSS : 0;

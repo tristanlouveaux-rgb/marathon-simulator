@@ -186,6 +186,63 @@ describe('estimateCSSFromSwimActivities', () => {
     ] as GarminActual[], REF);
     expect(est.sourceWeeksOld).toBe(2.0);
   });
+
+  // ── Environment normalisation ────────────────────────────────────────────
+  // A non-wetsuit lake swim is +4% slower than the wetsuit-lake baseline. A
+  // pace of 117 s/100m raw in non-wetsuit conditions normalises to ≈ 112.5
+  // s/100m at the baseline. CSS = best + 5s = 118 (vs 122 if not normalised).
+
+  // For a 1500m swim, durationSec = pace × 15 (because pace = sec / (m/100)).
+  // raw 117 s/100m → 1755 s. raw 100 s/100m → 1500 s.
+
+  it('normalises a non-wetsuit-lake swim to wetsuit-lake baseline', () => {
+    const est = estimateCSSFromSwimActivities([
+      {
+        activityType: 'OpenWaterSwim',
+        distanceKm: 1.5,
+        durationSec: 117 * 15,  // 117 s/100m raw
+        startTime: daysAgo(4),
+        swimEnvironment: 'non-wetsuit-lake',
+      } as Partial<GarminActual>,
+    ] as GarminActual[], REF);
+    // 117 / 1.04 = 112.5 → +5 buffer → rounds to 118 (Math.round half-to-even nudges 117.5 → 118 here)
+    expect(est.cssSecPer100m).toBe(118);
+  });
+
+  it('treats a pool swim ≡ wetsuit-lake (factor 1.00)', () => {
+    const poolEst = estimateCSSFromSwimActivities([
+      {
+        activityType: 'LAP_SWIMMING',
+        distanceKm: 1.5,
+        durationSec: 100 * 15,  // 100 s/100m
+        startTime: daysAgo(4),
+        swimEnvironment: 'pool',
+      } as Partial<GarminActual>,
+    ] as GarminActual[], REF);
+    const wetsuitEst = estimateCSSFromSwimActivities([
+      {
+        activityType: 'OpenWaterSwim',
+        distanceKm: 1.5,
+        durationSec: 100 * 15,
+        startTime: daysAgo(4),
+        swimEnvironment: 'wetsuit-lake',
+      } as Partial<GarminActual>,
+    ] as GarminActual[], REF);
+    expect(poolEst.cssSecPer100m).toBe(wetsuitEst.cssSecPer100m);
+  });
+
+  it('falls back to defaultOwSwimEnvironment when an OW swim has no explicit tag', () => {
+    // raw 117 s/100m OW swim, no tag. Default = ocean (1.05). 117 / 1.05 ≈ 111.43 → +5 → 116.
+    const est = estimateCSSFromSwimActivities([
+      {
+        activityType: 'OpenWaterSwim',
+        distanceKm: 1.5,
+        durationSec: 117 * 15,
+        startTime: daysAgo(4),
+      } as Partial<GarminActual>,
+    ] as GarminActual[], REF, 'ocean');
+    expect(est.cssSecPer100m).toBe(116);
+  });
 });
 
 // ─── FTP estimate ───────────────────────────────────────────────────────────
@@ -314,13 +371,45 @@ describe('estimateFTPFromBikeActivities', () => {
 
   // ── Real-meter requirement ───────────────────────────────────────────────
 
-  it('curve from a non-real-meter ride (deviceWatts=false) is ignored', () => {
-    // No real-meter rides → falls through to whole-ride fallback, which also
-    // requires deviceWatts=true. Result: confidence none.
+  it('curve from a deviceWatts=false ride is still accepted (Strava flag is unreliable)', () => {
+    // Strava's `device_watts` flag arrives `false` on real power-meter rides
+    // routinely (Garmin → Strava transfer bug). The existence of a power
+    // curve is a stronger signal than the flag — the curve is computed
+    // from actual watts samples by the edge function. Confidence is
+    // downgraded one tier (high → medium) since the flag isn't trustworthy.
     const est = estimateFTPFromBikeActivities([
-      { activityType: 'Ride', durationSec: 60 * 60, deviceWatts: false, startTime: daysAgo(1), powerCurve: curve(280, 290, 270, 240) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 60 * 60, deviceWatts: false, startTime: daysAgo(1), powerCurve: curve(280, 310, 285, 250) } as PoweredActivity,
     ], REF);
-    expect(est.confidence).toBe('none');
+    expect(est.ftpWatts).toBe(295);  // 310 × 0.95
+    expect(est.confidence).toBe('medium');
+  });
+
+  it('curve from a ride with unknown deviceWatts (null) is accepted with downgraded confidence', () => {
+    // Garmin → Strava transfers frequently null the device_watts flag even
+    // for real power-meter rides. Accept and downgrade one tier: a ride that
+    // would have been 'high' (≤4w) lands at 'medium'.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, deviceWatts: null, startTime: daysAgo(1), powerCurve: curve(280, 310, 285, 250) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(295);  // 310 × 0.95
+    expect(est.confidence).toBe('medium');
+    expect(est.sourceWindow).toBe('20-min');
+  });
+
+  it('curve from a ride with undefined deviceWatts is also accepted', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, startTime: daysAgo(1), powerCurve: curve(280, 310, 285, 250) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(295);
+    expect(est.confidence).toBe('medium');
+  });
+
+  it('unknown-flag ride at 8 weeks (would have been medium) downgrades to low', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, deviceWatts: null, startTime: daysAgo(50), powerCurve: curve(280, 310, 285, 250) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(295);
+    expect(est.confidence).toBe('low');
   });
 
   it('caps FTP at 500W even from a curve', () => {
@@ -332,22 +421,60 @@ describe('estimateFTPFromBikeActivities', () => {
 
   // ── Fallback path (no curves available) ──────────────────────────────────
 
-  it('fallback: freshest real-meter ride within 12 weeks → NP × 1.00, low confidence', () => {
-    // No power curve on any ride. Use whole-ride NP of the freshest real-meter ride.
+  it('fallback: strongest qualifying ride within 12 weeks → NP × 1.00, low confidence', () => {
+    // No power curve on any ride. Use whole-ride NP of the *strongest* recent
+    // ride (not the freshest) — whole-ride NP × 1.0 is conservative anyway,
+    // and a recent recovery spin would peg FTP absurdly low.
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 110 * 60, normalizedPowerW: 251, deviceWatts: true, startTime: daysAgo(1) } as PoweredActivity,
       { activityType: 'Ride', durationSec: 60 * 60,  normalizedPowerW: 270, deviceWatts: true, startTime: daysAgo(40) } as PoweredActivity,
     ], REF);
-    expect(est.ftpWatts).toBe(251);
+    expect(est.ftpWatts).toBe(270);
     expect(est.confidence).toBe('low');
     expect(est.sourceWindow).toBe('whole-ride');
   });
 
-  it('fallback excludes Strava-estimated power even without curves', () => {
+  it('fallback prefers a strong ride from 6 weeks ago over a recent recovery spin', () => {
+    // The user's "ride from last week we agreed fit" scenario: a tempo
+    // ride at NP 240 W from 6 weeks ago should anchor FTP, not yesterday's
+    // 110 W recovery spin.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 30 * 60, averageWatts: 110, deviceWatts: null, startTime: daysAgo(2) } as PoweredActivity,
+      { activityType: 'Ride', durationSec: 90 * 60, averageWatts: 240, deviceWatts: null, startTime: daysAgo(42) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(240);
+    expect(est.confidence).toBe('low');
+  });
+
+  it('fallback accepts a deviceWatts=false ride when NP is high enough to be plausibly real', () => {
+    // The Strava flag is structurally unreliable — refusing every false-flag
+    // ride leaves real power-meter owners with FTP=null forever. NP=280W
+    // for an hour is far above what speed-based estimation produces (Strava's
+    // estimator caps casual rides at ~150W). Trust the data, tag 'low' so
+    // the UI prompts a fresh test.
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 280, deviceWatts: false, startTime: daysAgo(1) } as PoweredActivity,
     ], REF);
+    expect(est.ftpWatts).toBe(280);
+    expect(est.confidence).toBe('low');
+  });
+
+  it('fallback rejects rides below the 120W threshold (filters out estimated commuter rides)', () => {
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, averageWatts: 110, deviceWatts: false, startTime: daysAgo(1) } as PoweredActivity,
+    ], REF);
     expect(est.confidence).toBe('none');
+  });
+
+  it('fallback accepts unknown-flag rides (deviceWatts null) — confidence stays low', () => {
+    // No power curve, deviceWatts unknown. Strava's flag is unreliable on
+    // Garmin transfers, so we accept and rely on the existing 'low' tag to
+    // prompt a fresh test.
+    const est = estimateFTPFromBikeActivities([
+      { activityType: 'Ride', durationSec: 60 * 60, normalizedPowerW: 251, deviceWatts: null, startTime: daysAgo(1) } as PoweredActivity,
+    ], REF);
+    expect(est.ftpWatts).toBe(251);
+    expect(est.confidence).toBe('low');
   });
 
   it('fallback skips rides shorter than 20 min', () => {

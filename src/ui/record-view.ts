@@ -23,13 +23,16 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { isSimulatorMode } from '@/main';
 import { getState } from '@/state';
 import { formatKm, type UnitPref } from '@/utils/format';
+import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 
 function navigateTab(tab: TabId): void {
   setOnTrackingTick(null);
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'plan') {
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
+  } else if (tab === 'forecast') {
+    import('./triathlon/forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   } else if (tab === 'account') {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   } else if (tab === 'stats') {
@@ -574,7 +577,7 @@ export function renderRecordView(): void {
     const { trackOnly } = getState() as { trackOnly?: boolean };
     const subcopy = trackOnly
       ? 'Start a run. We\'ll log distance, pace, and heart rate.'
-      : 'Unstructured run — we\'ll fit it into your plan automatically.';
+      : 'Unstructured run. Recorded and fitted to your plan.';
     content = `
       <div class="flex-1 flex flex-col items-center justify-center px-6">
         <div class="flex items-center justify-center mb-4" style="width:64px;height:64px;border-radius:50%;background:rgba(0,0,0,0.06)">
@@ -595,14 +598,18 @@ export function renderRecordView(): void {
   }
 
   container.innerHTML = `
-    <div class="flex flex-col pb-16" style="min-height:100vh;background:var(--c-bg)">
+    <div class="flex flex-col pb-16" style="min-height:100vh;background:var(--c-bg);position:relative">
+      ${buildScrollAtmosphereBackground('rec', 'deepBlue', { haloCenter: { cx: 200, cy: 350 } })}
+      ${buildSunGlint('low')}
+      <div style="position:relative;z-index:10;display:flex;flex-direction:column;flex:1">
       <div style="background:var(--c-surface);border-bottom:1px solid var(--c-border)">
         <div class="max-w-7xl mx-auto px-4 py-4">
           <h1 class="text-xl font-semibold" style="color:var(--c-black)">Record</h1>
         </div>
       </div>
       ${content}
-      ${renderTabBar('record', isSimulatorMode())}
+      ${renderTabBar('home', isSimulatorMode())}
+      </div>
     </div>
   `;
 

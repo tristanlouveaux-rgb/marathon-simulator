@@ -158,17 +158,63 @@ export const WIND_EXPOSURE_BIKE_MULTIPLIER: Record<WindExposureCategory, number>
 //     swimming" MSSE 21:325–328 — ~14% drag reduction at 1.25 m/s.
 //   - Cordain L & Kopriva R (1991) "Wetsuits, body density and swimming
 //     performance" Sports Med 11:336–348 — ~5% time benefit for non-elite.
+//   - de la Fuente Pacheco JG et al. (2020) "Is swimmers' performance
+//     influenced by wetsuit use?" Int J Sports Physiol Perform 15:46–51 —
+//     400m pool study, ~6% time reduction (~0.07 m/s).
 //   - Baldassarre R et al. (2017) "Pacing and hazards in long-distance open-
 //     water swimming" Front Physiol 8:294 — open-water vs pool review.
+//   - López-Belmonte Ó et al. (2024) "Swimming performance in elite
+//     triathletes: comparison between open water and pool conditions" Scand J
+//     Med Sci Sports 34:e14702 — 1500m, n=14, no physiological differences
+//     between conditions; kinematic shifts (lower stroke length / index, higher
+//     stroke rate in OW) but strong correlation between pool and OW finish time.
+//
+// Two unions (sharing the same multiplier table):
+//   - `SwimTypeCategory`: wider — includes both race-side and athlete-side
+//     environments. Used as the multiplier-table key.
+//   - `CourseProfile['swimType']`: narrower (5 values). Race profiles cannot
+//     be `pool` (you don't race in a pool).
+//   - `AthleteSwimEnvironment`: per-activity tag for training swims. Excludes
+//     `ocean-current-assisted` (direction-dependent; not a training baseline).
+//
+// Athlete-side normalisation: each swim's pace is divided by
+// `SWIM_TYPE_MULTIPLIER[swim.swimEnvironment]` to yield a wetsuit-lake-
+// equivalent pace before pooling into CSS. Race-side then re-applies the
+// course factor for the race environment. This avoids the previous double-
+// count where a pool-trained CSS was treated as already in wetsuit-lake
+// conditions and then penalised again for ocean chop.
+//
+// Pool coefficient = 1.00. The pool→open-water penalty (~+5–10%, mostly lost
+// wall push-offs + sighting; USMS coaching guidance) approximately cancels
+// the wetsuit benefit (~−5–6%, Cordain 1991 / de la Fuente Pacheco 2020), so
+// a pool swim ≈ a wetsuit-lake swim at race effort. The decision is "no made-
+// up number" honest: both effects are acknowledged but absorbed into the
+// shared baseline rather than fabricating a pool-specific multiplier.
+//
 // Confidence: medium-high for wetsuit, medium for water-type, low for current-
-// assisted (direction-dependent and race-specific).
+// assisted (direction-dependent and race-specific), medium for pool=1.00 (two
+// effects assumed to cancel; could be wrong by a few percent in either
+// direction depending on pool length and ocean conditions).
 // ───────────────────────────────────────────────────────────────────────────
 
-export type SwimTypeCategory = NonNullable<CourseProfile['swimType']>;
+/** Wider union covering both race-side and athlete-side environments. Used
+ *  as the multiplier-table key. */
+export type SwimTypeCategory =
+  | 'pool'                      // ATHLETE-only — training in a pool
+  | 'wetsuit-lake'              // shared
+  | 'non-wetsuit-lake'          // shared
+  | 'ocean'                     // shared
+  | 'ocean-current-assisted'    // RACE-only — favourable current
+  | 'river';                    // shared
+
+/** Subset of SwimTypeCategory valid as an athlete-side per-activity tag.
+ *  Excludes `ocean-current-assisted` (no training baseline). */
+export type AthleteSwimEnvironment = Exclude<SwimTypeCategory, 'ocean-current-assisted'>;
 
 export const SWIM_TYPE_MULTIPLIER: Record<SwimTypeCategory, number> = {
+  pool:                      1.00,  // Pool ≈ wetsuit-lake (pool→OW penalty cancels wetsuit benefit)
   'wetsuit-lake':            1.00,  // Reference baseline
-  'non-wetsuit-lake':        1.04,  // +4% drag without wetsuit (Toussaint 1989)
+  'non-wetsuit-lake':        1.04,  // +4% drag without wetsuit (Toussaint 1989, Cordain 1991, de la Fuente Pacheco 2020)
   ocean:                     1.05,  // +5% chop, sighting; salinity buoyancy partially offsets
   'ocean-current-assisted':  0.97,  // -3% (e.g. Roth canal, Kona favourable years)
   river:                     1.00,  // Direction-dependent; neutral default

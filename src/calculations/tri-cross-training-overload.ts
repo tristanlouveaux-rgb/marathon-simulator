@@ -28,8 +28,10 @@
  */
 
 import type { SimulatorState, Workout, Week } from '@/types/state';
+import type { GarminActual } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
 import { computeTriDisciplineFloorTSS } from './tri-discipline-floor';
+import { computeDecayedTriCarry } from './tri-cross-training-carry';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constants
@@ -73,6 +75,33 @@ const REPLACE_WITH_EASY_TSS_REDUCTION = 0.50;
 const DOWNGRADE_TSS_REDUCTION = 0.25;
 
 const DISCIPLINES: Discipline[] = ['swim', 'bike', 'run'];
+
+/**
+ * Cross-training → discipline affinity. Determines which tri discipline a
+ * cross-training session most closely substitutes for. Used to anchor the
+ * default recommendation on the discipline whose load the cross-training
+ * actually displaced.
+ *
+ * Default = 'run'. Most cross-training (tennis, padel, gym, hiking, soccer,
+ * basketball, walking) is leg-impact-loaded and substitutes for running
+ * stress more directly than for swim or bike. Bike-affinity and swim-affinity
+ * are explicit overrides for sport types that clearly belong elsewhere.
+ *
+ * Per CLAUDE.md "no made-up numbers": this is a categorical mapping based on
+ * obvious biomechanical specificity, not empirically-derived per-discipline
+ * transfer coefficients. Future v3 could refine via SPORTS_DB extensions.
+ */
+type Affinity = Discipline;
+
+const AFFINITY_BIKE_KEYWORDS = ['cycl', 'biking', 'mountainbike', 'mtb', 'spin', 'zwift'];
+const AFFINITY_SWIM_KEYWORDS = ['swim', 'aquatic', 'pool'];
+
+function classifyAffinity(rawType?: string | null, name?: string | null): Affinity {
+  const blob = `${rawType ?? ''} ${name ?? ''}`.toLowerCase().replace(/[_\s-]/g, '');
+  if (AFFINITY_BIKE_KEYWORDS.some(k => blob.includes(k))) return 'bike';
+  if (AFFINITY_SWIM_KEYWORDS.some(k => blob.includes(k))) return 'swim';
+  return 'run';
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Output shape
@@ -147,10 +176,20 @@ export function detectCrossTrainingOverload(
   );
   if (plannedTriTSS <= 0) return null;
 
-  const crossTrainingTSS = computeCrossTrainingTSS(wk);
-  if (crossTrainingTSS <= 0) return null;
+  const summary = computeCrossTrainingTSS(wk);
+  // Decayed carry from prior weeks (push-to-next-week mechanism). Adds to
+  // this week's cross-training stimulus so a deferred load doesn't disappear
+  // — it just spreads out exponentially. Attributed to run-affinity since
+  // the carry is sport-agnostic by the time it lands here, and run-anchor is
+  // our default recommendation.
+  const carriedTSS = computeDecayedTriCarry(state, weekIdx);
+  if (carriedTSS > 0) {
+    summary.totalTSS += carriedTSS;
+    summary.byAffinity.run += carriedTSS;
+  }
+  if (summary.totalTSS <= 0) return null;
 
-  const overshootPct = crossTrainingTSS / plannedTriTSS;
+  const overshootPct = summary.totalTSS / plannedTriTSS;
   if (overshootPct < OVERLOAD_THRESHOLD) return null;
 
   const severity: 'heavy' | 'extreme' = overshootPct > EXTREME_THRESHOLD ? 'extreme' : 'heavy';
@@ -158,9 +197,8 @@ export function detectCrossTrainingOverload(
 
   // Saturation: a single huge cross-training session shouldn't unlock
   // unbounded reductions. Cap the "credit" available per discipline by
-  // running's saturation curve. The cap is applied to TSS reductions
-  // proposed per discipline.
-  const reductionCredit = SATURATION_CAP * (1 - Math.exp(-crossTrainingTSS / SATURATION_TAU));
+  // running's saturation curve.
+  const reductionCredit = SATURATION_CAP * (1 - Math.exp(-summary.totalTSS / SATURATION_TAU));
 
   const options = {
     swim: buildDisciplineOption(state, wk, weekIdx, 'swim', todayDow, maxMods, reductionCredit),
@@ -168,23 +206,14 @@ export function detectCrossTrainingOverload(
     run:  buildDisciplineOption(state, wk, weekIdx, 'run',  todayDow, maxMods, reductionCredit),
   };
 
-  // Recommended = discipline with most remaining planned TSS. Ties broken
-  // by an implicit order (bike, run, swim) — bike is typically the largest
-  // share of an Ironman week, so a tie-break that favours it is sane default.
-  const recommendedDiscipline =
-    options.bike.remainingTSS >= options.run.remainingTSS &&
-    options.bike.remainingTSS >= options.swim.remainingTSS
-      ? 'bike'
-      : options.run.remainingTSS >= options.swim.remainingTSS
-        ? 'run'
-        : 'swim';
+  const recommendedDiscipline = pickRecommendedDiscipline(summary.byAffinity, options);
 
   // If the recommended discipline has zero remaining TSS (everything done or
   // skipped), the detector has nothing to act on. Don't emit a flag.
   if (options[recommendedDiscipline].remainingTSS <= 0) return null;
 
   return {
-    crossTrainingTSS: Math.round(crossTrainingTSS),
+    crossTrainingTSS: Math.round(summary.totalTSS),
     plannedTriTSS: Math.round(plannedTriTSS),
     overshootPct,
     severity,
@@ -193,11 +222,55 @@ export function detectCrossTrainingOverload(
   };
 }
 
+/**
+ * Recommendation logic — anchored to RUN by default.
+ *
+ * Most cross-training is leg-impact-loaded (tennis, padel, gym, hiking, soccer)
+ * and substitutes for running stress more directly than for swim or bike.
+ * Running is also the highest-injury-risk discipline in tri training, so the
+ * conservative default protects the run.
+ *
+ * Override only when the cross-training is clearly bike-shaped (cycling) or
+ * swim-shaped: pick that discipline if it has the largest single-affinity
+ * contribution AND the matching tri discipline has remaining work to reduce.
+ *
+ * Fallback chain when the preferred discipline has no remaining workouts:
+ *   run → bike → swim (in remaining-TSS order).
+ */
+function pickRecommendedDiscipline(
+  byAffinity: { swim: number; bike: number; run: number },
+  options: { swim: DisciplineOption; bike: DisciplineOption; run: DisciplineOption },
+): Discipline {
+  // Find the affinity bucket with the most TSS. Ties favour run.
+  const sortedAffinities: Discipline[] = ['run', 'bike', 'swim'];
+  sortedAffinities.sort((a, b) => byAffinity[b] - byAffinity[a]);
+  const primary = sortedAffinities[0];
+
+  // If the primary affinity discipline has remaining work, use it.
+  if (byAffinity[primary] > 0 && options[primary].remainingTSS > 0) {
+    return primary;
+  }
+
+  // Fallback: walk the affinity-sorted list to find any discipline with work.
+  for (const d of sortedAffinities) {
+    if (options[d].remainingTSS > 0) return d;
+  }
+
+  // Last resort: run. (Caller already returns null if all options are empty.)
+  return 'run';
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Cross-training TSS sum (with dedup, membership filter)
 // ───────────────────────────────────────────────────────────────────────────
 
-function computeCrossTrainingTSS(wk: Week): number {
+interface CrossTrainingSummary {
+  totalTSS: number;
+  /** TSS broken down by which discipline the activity most resembles. */
+  byAffinity: { swim: number; bike: number; run: number };
+}
+
+function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   // Membership filter: a session is cross-training if its id is NOT in
   // `wk.triWorkouts`. Per "anything in your plan is in your plan" — a
   // planned `cross`/`gym` session in triWorkouts is plan, not overload.
@@ -206,13 +279,24 @@ function computeCrossTrainingTSS(wk: Week): number {
   );
   const countedIds = new Set<string>();
   let total = 0;
+  const byAffinity = { swim: 0, bike: 0, run: 0 };
+
+  const credit = (tss: number, affinity: Affinity) => {
+    total += tss;
+    byAffinity[affinity] += tss;
+  };
 
   // Pass 1: adhocWorkouts — manual entries land here exclusively; synced
   // entries land here AND in garminActuals at the same id (we dedupe in pass 2).
   for (const adhoc of wk.adhocWorkouts ?? []) {
     if (adhoc.id && planIds.has(adhoc.id)) continue; // in-plan: skip
     if (adhoc.id) countedIds.add(adhoc.id);
-    total += tssOfWorkout(adhoc);
+    const tss = tssOfWorkout(adhoc);
+    if (tss <= 0) continue;
+    // For adhocs we read the workout name (`n`) since manual entries don't
+    // carry a Garmin/Strava activityType. Synced ones may have either.
+    const affinity = classifyAffinity(adhocActivityType(wk, adhoc.id), adhoc.n);
+    credit(tss, affinity);
   }
 
   // Pass 2: garminActuals — only count entries we haven't already attributed
@@ -221,15 +305,25 @@ function computeCrossTrainingTSS(wk: Week): number {
     if (countedIds.has(workoutId)) continue;
     if (planIds.has(workoutId)) continue;
     if (actual.iTrimp == null || actual.iTrimp <= 0) continue;
-    total += actual.iTrimp / 150;
+    const tss = actual.iTrimp / 150;
+    const affinity = classifyAffinity(actual.activityType, actual.displayName);
+    credit(tss, affinity);
   }
 
-  return total;
+  return { totalTSS: total, byAffinity };
 }
 
 function tssOfWorkout(w: Workout): number {
   if (w.iTrimp != null && w.iTrimp > 0) return w.iTrimp / 150;
   return (w.aerobic ?? 0) + (w.anaerobic ?? 0);
+}
+
+/** When an adhoc has a twin in garminActuals, read the activityType from there
+ *  for affinity classification — it's the canonical raw sport string. */
+function adhocActivityType(wk: Week, adhocId: string | undefined): string | null {
+  if (!adhocId) return null;
+  const twin: GarminActual | undefined = wk.garminActuals?.[adhocId];
+  return twin?.activityType ?? null;
 }
 
 // ───────────────────────────────────────────────────────────────────────────

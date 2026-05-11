@@ -1,0 +1,27 @@
+{
+  "name": "@mosaic/health-extras",
+  "version": "1.0.0",
+  "description": "Native HealthKit reader for fields @capgo/capacitor-health doesn't expose: VO2max, running power, cycling power, FTP, HKWorkoutRoute, running form metrics, wrist temperature.",
+  "private": true,
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "ios/Sources",
+    "Package.swift",
+    "dist/"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "ios",
+    "healthkit"
+  ],
+  "license": "UNLICENSED"
+}

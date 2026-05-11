@@ -1,5 +1,5 @@
 import type { Triathlon } from '@/types/onboarding';
-import { calculateWeeksUntil } from '@/data/marathons';
+import { calculateWeeksUntil, isUpcoming } from '@/data/marathons';
 import { COURSE_PROFILES } from '@/data/triathlon-course-profiles';
 
 /**
@@ -102,7 +102,7 @@ export function getTriathlonsByDistance(
   minWeeks: number = 8,
 ): Triathlon[] {
   return WORLD_TRIATHLONS
-    .filter(t => t.distance === distance)
+    .filter(t => t.distance === distance && isUpcoming(t.date))
     .map(t => attachProfile({ ...t, weeksUntil: calculateWeeksUntil(t.date) }))
     .filter(t => t.weeksUntil !== undefined && t.weeksUntil >= minWeeks)
     .sort((a, b) => (a.weeksUntil ?? 0) - (b.weeksUntil ?? 0));

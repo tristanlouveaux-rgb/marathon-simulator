@@ -10,6 +10,8 @@ import { computeWeekRawTSS, computePlannedSignalB, computeDecayedCarry } from '@
 import { computeLoadBreakdown, breakdownShade, type LoadSegment } from './home-view';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ const PHASE_INFO: Record<string, PhaseInfo> = {
 function heroBackground(isArchive: boolean = false): string {
   // Archive (past plan) view shifts the hero to the neutral grey palette so the
   // page reads as historic, matching the plan-view's archive treatment.
-  return buildSkyBackground('ltp', isArchive ? 'grey' : 'slate');
+  return buildFloweyBackground('ltp', isArchive ? 'grey' : 'slate') + buildSunGlint('low');
 }
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
@@ -395,16 +397,15 @@ export function renderLoadTaperView(
       #ltp-view *, #ltp-view *::before, #ltp-view *::after { box-sizing:inherit; }
       @keyframes ltpFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .ltp-fade { opacity:0; animation:ltpFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('ltp')}
     </style>
 
     <div id="ltp-view" style="
-      position:relative;min-height:100vh;background:${PAGE_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient(_isArchive ? 'grey' : 'slate')};
       font-family:var(--f);overflow-x:hidden;
     ">
       ${heroBackground(_isArchive)}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px;max-width:480px;margin:0 auto">
+      <div style="position:relative;z-index:10;padding-bottom:48px;max-width:600px;margin:0 auto">
 
         <!-- Header -->
         <div style="
@@ -519,7 +520,7 @@ export function renderLoadTaperView(
 
   document.getElementById('ltp-back')?.addEventListener('click', () => {
     if (returnTo === 'plan') {
-      import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+      import('./main-view').then(({ renderMainView }) => renderMainView());
     } else {
       import('./home-view').then(({ renderHomeView }) => renderHomeView());
     }
@@ -530,7 +531,8 @@ export function renderLoadTaperView(
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }

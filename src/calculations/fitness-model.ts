@@ -18,6 +18,7 @@ import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
 import { normalizeSport } from '@/cross-training/activities';
 import { computeRecoveryScore } from '@/calculations/readiness';
+import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -1224,10 +1225,13 @@ export function computeACWR(
   signalBSeed?: number,
   norm?: number,
   archivedPlans?: Array<{ planStartDate: string; weeks: any[] }>,
+  adaptiveRecovery?: import('@/types/state').AdaptiveRecovery,
 ): AthleteACWR {
   const tier = athleteTier ?? 'recreational';
   const tierCfg = TIER_ACWR_CONFIG[tier] ?? TIER_ACWR_CONFIG.recreational;
-  const { safeUpper } = tierCfg;
+  // Effective ceiling: tier baseline plus any personal-recovery shift (only
+  // non-zero at adaptiveRecovery confidence = high). See adaptive-recovery.ts.
+  const safeUpper = getEffectiveSafeUpper(tierCfg.safeUpper, adaptiveRecovery);
 
   let ctl: number;
   let atl: number;
@@ -1473,6 +1477,7 @@ export function computeReadinessACWR(s: {
   planStartDate?: string;
   gs?: number | null;
   previousPlanWks?: Array<{ planStartDate: string; weeks: any[] }>;
+  adaptiveRecovery?: import('@/types/state').AdaptiveRecovery;
 }) {
   const tier = s.athleteTierOverride ?? s.athleteTier ?? undefined;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
@@ -1486,6 +1491,7 @@ export function computeReadinessACWR(s: {
     s.signalBBaseline ?? undefined,
     undefined,
     s.previousPlanWks,
+    s.adaptiveRecovery,
   );
 }
 
@@ -1538,8 +1544,12 @@ export function computeLiveSameSignalTSB(
  * Stacked session recovery: "To Baseline" hours.
  *
  * Walks forward chronologically through recent sessions (current week + last 3 days of
- * previous week). Each session adds `8 × TSS / ctlDaily × recoveryMult × recoveryAdj`
+ * previous week). Each session adds `k × TSS / ctlDaily × recoveryMult × recoveryAdj`
  * hours to the running total. Elapsed time ticks down between sessions and after the last.
+ *
+ * `k` defaults to the population value of 8 but is replaced by the user's
+ * learned `kUserHours` when `adaptiveRecovery` confidence reaches medium. See
+ * `adaptive-recovery.ts` for the fitter.
  *
  * recoveryAdj comes from sleep/HRV/RHR (computeRecoveryScore).
  * recoveryMult comes from sport type (SPORTS_DB).
@@ -1550,6 +1560,7 @@ export function computeToBaseline(
   ctlDaily: number,
   planStartDate: string | undefined,
   physiologyHistory: PhysiologyDayEntry[] | undefined,
+  adaptiveRecovery?: import('@/types/state').AdaptiveRecovery,
 ): { hours: number; totalHours: number } | null {
   if (!planStartDate || ctlDaily <= 0) return null;
 
@@ -1564,6 +1575,11 @@ export function computeToBaseline(
     recoveryAdj = 1.0 + (50 - recScore.score) * 0.006;
     recoveryAdj = Math.max(0.7, Math.min(1.3, recoveryAdj));
   }
+
+  // Personal recovery rate (k_user). Falls back to population default of 8
+  // until adaptiveRecovery confidence reaches medium. See `getEffectiveKUser`
+  // in adaptive-recovery.ts for the gating policy.
+  const kUser = getEffectiveKUser(adaptiveRecovery);
 
   // Collect recent days
   type DayEntry = { date: string; tss: number; noonMs: number; weekIdx: number };
@@ -1613,12 +1629,28 @@ export function computeToBaseline(
     if (wk?.garminActuals) {
       let totalTss = 0;
       let weightedSum = 0;
-      for (const [, actual] of Object.entries(wk.garminActuals)) {
+      for (const [id, actual] of Object.entries(wk.garminActuals)) {
         if (!actual.startTime?.startsWith(session.date)) continue;
         const sportKey = actual.activityType ? normalizeSport(actual.activityType) : 'generic_sport';
         const config = SPORTS_DB[sportKey];
         const rm = config?.recoveryMult ?? 1.0;
-        const actTss = actual.iTrimp ? actual.iTrimp / 150 : (actual.durationSec ?? 0) / 60;
+        // RPE-aware fallback when iTrimp is missing — mirrors the Signal A/B pattern
+        // at line 1148-1150. Without this, no-HR cross-training contributed only raw
+        // duration to the recovery countdown, so a brutal 90-min Padel session with
+        // no HR signal but rated 9/10 read identically to an easy 90-min walk.
+        let actTss: number;
+        if (actual.iTrimp != null && actual.iTrimp > 0) {
+          actTss = actual.iTrimp / 150;
+        } else {
+          const durMin = (actual.durationSec ?? 0) / 60;
+          const rated = wk.rated?.[id];
+          const adhoc = wk.adhocWorkouts?.find(w => w.id === id);
+          const rpe = (typeof rated === 'number' ? rated : null)
+            ?? adhoc?.rpe
+            ?? adhoc?.r
+            ?? 5;
+          actTss = durMin * (TL_PER_MIN[Math.round(rpe)] ?? 1.15);
+        }
         totalTss += actTss;
         weightedSum += actTss * rm;
         const startMs = new Date(actual.startTime).getTime();
@@ -1631,7 +1663,7 @@ export function computeToBaseline(
     const elapsed = Math.max(0, sessionEndMs - lastEndMs);
     runningRecoveryMs = Math.max(0, runningRecoveryMs - elapsed);
 
-    const sessionRecovery = 8 * session.tss / ctlDaily * weightedRecoveryMult * recoveryAdj;
+    const sessionRecovery = kUser * session.tss / ctlDaily * weightedRecoveryMult * recoveryAdj;
     runningRecoveryMs += sessionRecovery * 3600000;
     totalRecoverySum += sessionRecovery;
     lastEndMs = sessionEndMs;

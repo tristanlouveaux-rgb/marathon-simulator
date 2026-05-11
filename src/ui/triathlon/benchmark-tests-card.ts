@@ -16,6 +16,7 @@ import type { SimulatorState } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { computeCSSFromPair } from '@/calculations/tri-benchmarks-from-history';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 
 type TestId = 'css-pair' | 'ftp-20min';
 
@@ -55,14 +56,18 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
   // Undefined confidence = pre-confidence persisted value; the launch-refresh
   // in main.ts writes a real tier on every boot. Treat undefined as 'medium'
   // (don't nag) to avoid surprising existing users.
+  // Cycling-only mode skips swim entirely — no CSS test, no swim leg in
+  // predictions. Gate the test list on the active disciplines.
+  const hasSwim = !isCyclingOnlyMode(s);
+
   const cssConf = tri.swim?.cssConfidence;
   const cssLowConf = cssConf === 'low' || cssConf === 'none';
-  const cssNeedsTest = cssLowConf || tri.swim?.cssSecPer100m == null;
+  const cssNeedsTest = hasSwim && (cssLowConf || tri.swim?.cssSecPer100m == null);
   if (cssNeedsTest && !dismissed.has('css-pair')) {
     out.push({
       id: 'css-pair',
       label: 'Swim CSS test',
-      why: 'Locks in your threshold swim pace. Anchors all swim workout targets and 70.3 / Ironman swim-leg time predictions.',
+      why: 'Locks in your threshold swim pace. Anchors all swim workout targets and swim-leg time predictions.',
       protocol: 'Warm-up 200m easy. Swim 400m all-out, time it, rest 5 min. Swim 200m all-out, time it. Cool-down 100m easy.',
       inputs: [
         { id: 't400', label: '400m time', placeholder: 'e.g. 7:00', mmss: true },
@@ -233,9 +238,28 @@ function openResultModal(id: TestId, onChange: () => void): void {
       values[inp.id] = el?.value ?? '';
     }
     const errEl = document.getElementById('bench-error');
-    const err = test.apply(getMutableState(), values);
+    const ms = getMutableState();
+    const err = test.apply(ms, values);
     if (err) {
       if (errEl) { errEl.textContent = err; errEl.style.display = 'block'; }
+      return;
+    }
+    // Invalidate cached race prediction so the forecast card recomputes with the
+    // new CSS/FTP. The forecast reads `tri.prediction ?? predictTriathlonRace(state)`.
+    if (ms.triConfig?.prediction) ms.triConfig.prediction = undefined;
+    // Regenerate plan immediately so workout descriptions pick up new CSS/FTP.
+    if (ms.eventType === 'triathlon' && ms.triConfig && ms.wks?.length) {
+      import('@/workouts/plan_engine.triathlon').then(({ generateTriathlonPlan, TRI_GENERATOR_VERSION }) => {
+        const fresh = generateTriathlonPlan(ms);
+        for (let i = 0; i < Math.min(ms.wks!.length, fresh.length); i++) {
+          ms.wks![i].triWorkouts = fresh[i].triWorkouts;
+          ms.wks![i].ph = fresh[i].ph;
+        }
+        if (ms.triConfig) ms.triConfig.generatorVersion = TRI_GENERATOR_VERSION;
+        saveState();
+        close();
+        onChange();
+      });
       return;
     }
     saveState();

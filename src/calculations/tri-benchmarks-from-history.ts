@@ -25,6 +25,7 @@
 import type { GarminActual } from '@/types/state';
 import type { PerDisciplineFitness } from '@/types/triathlon';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
+import { SWIM_TYPE_MULTIPLIER } from '@/constants/triathlon-course-factors';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Activity classification — shared helpers
@@ -38,6 +39,32 @@ export function classifyActivity(activityType: string | null | undefined): 'swim
   if (s.includes('ride') || s.includes('cycl') || s.includes('bike') || s.includes('biking') || s.includes('virtualride')) return 'bike';
   if (s === 'run' || s.includes('running')) return 'run';
   return 'other';
+}
+
+/** True for OPEN_WATER_SWIMMING (and any activity-type string that contains
+ *  "open"). Pool swims (SWIMMING / LAP_SWIMMING) are NOT open-water. */
+export function isOpenWaterSwim(activityType: string | null | undefined): boolean {
+  if (!activityType) return false;
+  const s = activityType.toLowerCase();
+  return s.includes('open') && s.includes('water');
+}
+
+/**
+ * Resolve a swim activity's environment tag. Order:
+ *   1. Explicit per-activity tag wins (user set it in the activity card).
+ *   2. Pool swims auto-tag as `pool` from activityType.
+ *   3. Open-water swims fall back to the user's profile default
+ *      (`triConfig.swim.defaultOwSwimEnvironment`).
+ *   4. If no default, returns undefined — caller treats as wetsuit-lake (1.0)
+ *      so we don't fabricate a number.
+ */
+export function resolveSwimEnvironment(
+  activity: { activityType?: string | null; swimEnvironment?: import('../constants/triathlon-course-factors').AthleteSwimEnvironment },
+  defaultOw?: 'wetsuit-lake' | 'non-wetsuit-lake' | 'ocean' | 'river',
+): import('../constants/triathlon-course-factors').AthleteSwimEnvironment | undefined {
+  if (activity.swimEnvironment) return activity.swimEnvironment;
+  if (isOpenWaterSwim(activity.activityType)) return defaultOw;
+  return 'pool';
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -81,15 +108,24 @@ const CSS_BUFFER_SEC_PER_100M = 5;    // Conservative buffer applied to fastest 
  * Estimate CSS from a list of swim activities.
  *
  * Method: scan activities of at least 800m (threshold for "sustained" effort).
- * For each, compute avg pace in sec/100m. Take the BEST (fastest) sustained
- * pace observed as CSS_estimate, then add a conservative buffer of +5s/100m
- * so we don't overestimate from a one-off hot session.
+ * For each, compute avg pace in sec/100m, then NORMALISE to a wetsuit-lake
+ * baseline by dividing by `SWIM_TYPE_MULTIPLIER[env]`. Take the BEST (fastest)
+ * normalised sustained pace as CSS_estimate, then add a conservative buffer
+ * of +5s/100m so we don't overestimate from a one-off hot session.
+ *
+ * Why normalise: a non-wetsuit lake swim is ~4% slower than the equivalent
+ * effort would have been with a wetsuit, an ocean swim ~5%, etc. Pooling
+ * raw paces from mixed environments biases CSS towards whichever environment
+ * dominates the recent training data. Race-side then re-applies the course
+ * factor for the actual race environment cleanly.
  *
  * Science: CSS is formally the 30-min threshold pace (Dekerle 2002). A
  * 1500m+ sustained swim at steady effort approximates lactate threshold for
- * trained swimmers. We trade precision for robustness — the CSS test
- * (400m + 200m max) remains the gold standard and the user is prompted to
- * run it at any time from the Stats page.
+ * trained swimmers. The wetsuit-lake reference is anchored on Toussaint 1989
+ * + Cordain 1991 + de la Fuente Pacheco 2020 (~14% drag, ~5–6% time benefit).
+ * Pool ≡ wetsuit-lake (pool→OW penalty cancels wetsuit benefit; see
+ * `triathlon-course-factors.ts`). The CSS test (400m + 200m max) remains the
+ * gold standard and the user is prompted to run it at any time.
  *
  * Confidence: see `CssEstimate.confidence`. Recency, sustained distance, and
  * pace-deviation from the user's own median together drive the tier. A pool
@@ -98,8 +134,9 @@ const CSS_BUFFER_SEC_PER_100M = 5;    // Conservative buffer applied to fastest 
  * data — and the UI prompts the user to run a paired-TT test.
  */
 export function estimateCSSFromSwimActivities(
-  activities: Array<Pick<GarminActual, 'activityType' | 'distanceKm' | 'durationSec' | 'startTime'>>,
+  activities: Array<Pick<GarminActual, 'activityType' | 'distanceKm' | 'durationSec' | 'startTime' | 'swimEnvironment'>>,
   referenceDateISO: string = new Date().toISOString(),
+  defaultOwEnvironment?: 'wetsuit-lake' | 'non-wetsuit-lake' | 'ocean' | 'river',
 ): CssEstimate {
   const swims = activities.filter((a) => classifyActivity(a.activityType) === 'swim');
   if (swims.length === 0) return { swimActivityCount: 0, confidence: 'none' };
@@ -112,10 +149,17 @@ export function estimateCSSFromSwimActivities(
   const refValid = Number.isFinite(refTs);
 
   // Per-100m pace for each — LOWER is faster. Tag with weeks-old for recency.
+  // Pace is normalised to a wetsuit-lake equivalent by dividing by the env
+  // multiplier (e.g. an ocean swim at 105 s/100m raw → 100 s/100m baseline,
+  // because ocean is +5% slower than baseline; the same effort in a wetsuit
+  // lake would have been ~5% faster).
   const withPace = sustained
     .map((a) => {
       const metres = (a.distanceKm ?? 0) * 1000;
-      const pace = (a.durationSec ?? 0) / (metres / 100);
+      const rawPace = (a.durationSec ?? 0) / (metres / 100);
+      const env = resolveSwimEnvironment(a, defaultOwEnvironment);
+      const factor = env ? SWIM_TYPE_MULTIPLIER[env] : 1.0;
+      const pace = rawPace / factor;
       let weeksOld = 0;
       if (a.startTime && refValid) {
         const aTs = Date.parse(a.startTime);
@@ -239,6 +283,35 @@ export interface FtpEstimate {
   sourceWindow?: '10-min' | '20-min' | '30-min' | '60-min' | 'whole-ride';
   /** The watts at the source window (e.g. p1200 = 310). For UI captions. */
   sourceWatts?: number;
+  /** Funnel breakdown of why rides were rejected. Populated whenever the
+   * fallback path runs (with or without success), so the UI can render a
+   * "why don't we have an FTP?" drill-down without re-running the estimator. */
+  diagnostics?: {
+    totalRides: number;
+    withCurve: number;
+    withDeviceWattsTrue: number;
+    withDeviceWattsFalse: number;
+    withNP: number;
+    withAvgWatts: number;
+    /** Fallback-path funnel — counts at each rejection stage. */
+    funnel: {
+      noUsablePower: number;     // NP and avg both ≤ FALLBACK_MIN_W (or both null)
+      tooShort: number;          // duration < 20 min
+      tooOld: number;            // > HARD_CUTOFF_WEEKS old
+    };
+    /** Top 5 candidates after all filters, for the debug overlay. Empty when
+     * the funnel rejected everything — in that case the rejection reason
+     * counts above tell you why. */
+    topCandidates: Array<{
+      startISO?: string;
+      durationMin: number;
+      np: number | null;
+      avgWatts: number | null;
+      deviceWatts: boolean | null;
+      weeksOld: number;
+      power: number;
+    }>;
+  };
 }
 
 /** Optional fields the activity MAY carry once the edge function is extended. */
@@ -312,11 +385,25 @@ const PC_MULTIPLIERS = {
  *   `confidence: 'low'` so the UI prompts for a fresh test. Better than
  *   showing "--" for every triathlete who hasn't synced a curve yet.
  *
- * Confidence is a function of the source ride's age only:
+ * Confidence is primarily a function of the source ride's age:
  *   ≤ 4 weeks  → high
  *   ≤ 8 weeks  → medium
  *   ≤ 12 weeks → low
  *   > 12 weeks → none (return undefined ftpWatts)
+ *
+ * **device_watts handling**: Strava's `device_watts` flag is unreliable on
+ * Garmin → Strava transfers — it routinely arrives `null` (or even `false`)
+ * on real power-meter rides. So:
+ *   - `deviceWatts === false` → reject (Strava explicitly says estimated).
+ *   - `deviceWatts === true`  → accept at the age-based confidence.
+ *   - `deviceWatts == null`   → accept but downgrade one tier (high→medium,
+ *                               medium→low, low stays low). The 'low' tag
+ *                               surfaces the existing UI prompt for a fresh
+ *                               test, which is the right safety net.
+ *
+ * The alternative — refuse to estimate FTP for any ride with an unknown flag
+ * — leaves new triathletes staring at "--" forever even when their rides
+ * carry valid power data. That outcome is worse than a one-tier downgrade.
  */
 export function estimateFTPFromBikeActivities(
   activities: PoweredActivity[],
@@ -324,11 +411,36 @@ export function estimateFTPFromBikeActivities(
 ): FtpEstimate {
   const rides = activities.filter((a) => classifyActivity(a.activityType) === 'bike');
   if (rides.length === 0) {
-    return { bikeActivityCount: 0, derivedFromPower: false, confidence: 'none' };
+    return {
+      bikeActivityCount: 0,
+      derivedFromPower: false,
+      confidence: 'none',
+      diagnostics: {
+        totalRides: 0,
+        withCurve: 0,
+        withDeviceWattsTrue: 0,
+        withDeviceWattsFalse: 0,
+        withNP: 0,
+        withAvgWatts: 0,
+        funnel: { noUsablePower: 0, tooShort: 0, tooOld: 0 },
+        topCandidates: [],
+      },
+    };
   }
 
   const refTs = Date.parse(referenceDateISO);
   const refValid = Number.isFinite(refTs);
+
+  // Inventory counts — surface in `diagnostics` on every return so the UI
+  // overlay can render the breakdown without re-running the estimator.
+  const inventory = {
+    totalRides: rides.length,
+    withCurve: rides.filter((r) => r.powerCurve != null && Object.keys(r.powerCurve as object).length > 0).length,
+    withDeviceWattsTrue: rides.filter((r) => r.deviceWatts === true).length,
+    withDeviceWattsFalse: rides.filter((r) => r.deviceWatts === false).length,
+    withNP: rides.filter((r) => r.normalizedPowerW != null && r.normalizedPowerW > 0).length,
+    withAvgWatts: rides.filter((r) => r.averageWatts != null && r.averageWatts > 0).length,
+  };
 
   // Walk every ride. If it has a power curve, build a curve-based candidate.
   // Real power-meter rides only — Strava-estimated power is unreliable for
@@ -340,13 +452,19 @@ export function estimateFTPFromBikeActivities(
     startISO?: string;
     p1200: number | null;
     p3600: number | null;
+    flagKnown: boolean;
   };
   const curveCandidates: CurveCandidate[] = [];
 
   for (const r of rides) {
     const pc = r.powerCurve;
     if (!pc) continue;
-    if (r.deviceWatts !== true) continue;  // real meter only
+    // No `device_watts` gate. The flag is structurally unreliable on
+    // Garmin → Strava transfers (it routinely arrives `false` even on real
+    // power-meter rides — see activity-detail.ts:142, bike-setup-view.ts:294).
+    // The existence of a `power_curve` itself is a stronger signal: it's only
+    // computed by the edge function from a non-empty watts stream. We
+    // downgrade confidence by one tier when the flag isn't explicitly true.
 
     let weeksOld = 0;
     if (r.startTime && refValid) {
@@ -375,6 +493,7 @@ export function estimateFTPFromBikeActivities(
       startISO: r.startTime ?? undefined,
       p1200: pc.p1200,
       p3600: pc.p3600,
+      flagKnown: r.deviceWatts === true,
     });
   }
 
@@ -395,10 +514,16 @@ export function estimateFTPFromBikeActivities(
     }
 
     const ftp = Math.min(500, Math.round(pick.watts));
-    const confidence: 'high' | 'medium' | 'low' =
+    const baseConf: 'high' | 'medium' | 'low' =
       pick.weeksOld <= HIGH_TIER_WEEKS ? 'high'
       : pick.weeksOld <= MED_TIER_WEEKS ? 'medium'
       : 'low';
+    // Downgrade one tier when the device_watts flag isn't explicitly true —
+    // the underlying signal might be Strava-estimated rather than a real
+    // meter. high → medium → low. (low stays low; can't go below.)
+    const confidence: 'high' | 'medium' | 'low' = pick.flagKnown
+      ? baseConf
+      : baseConf === 'high' ? 'medium' : 'low';
 
     return {
       ftpWatts: ftp,
@@ -409,6 +534,11 @@ export function estimateFTPFromBikeActivities(
       newestContributingRideWeeksOld: Math.round(pick.weeksOld * 10) / 10,
       sourceRideISO: pick.startISO,
       sourceWindow: pick.window,
+      diagnostics: {
+        ...inventory,
+        funnel: { noUsablePower: 0, tooShort: 0, tooOld: 0 },
+        topCandidates: [],
+      },
       sourceWatts: Math.round(
         pick.window === '10-min' ? pick.watts / PC_MULTIPLIERS.p600
         : pick.window === '20-min' ? pick.watts / PC_MULTIPLIERS.p1200
@@ -418,35 +548,102 @@ export function estimateFTPFromBikeActivities(
     };
   }
 
-  // Fallback: no power curves available. Use the freshest real-meter ride's
+  // Fallback: no power curves available. Use the strongest qualifying ride's
   // whole-ride NP as a conservative floor. Better than '--' while the
   // backfill catches up. Tagged 'low' confidence so the UI nudges a test.
-  const fallback = rides
-    .filter((r) => r.deviceWatts === true)
-    .filter((r) => {
-      const np = r.normalizedPowerW;
-      const avg = r.averageWatts;
-      return (np != null && np > 80) || (avg != null && avg > 80);
-    })
-    .filter((r) => r.durationSec >= 20 * 60)
+  //
+  // Selection: highest NP (or averageWatts when NP missing) within 12 weeks.
+  // We pick the *strongest* — not the *freshest* — because whole-ride NP × 1.0
+  // is an underestimate by construction, and the freshest ride might be a Z2
+  // endurance spin or recovery ride that pegs FTP unreasonably low. The
+  // strongest recent ride is the best anchor we have without a power curve.
+  //
+  // No `device_watts` gate. Strava's flag is structurally unreliable on
+  // Garmin → Strava transfers — the user's real-meter rides routinely arrive
+  // tagged `device_watts: false`. Refusing those leaves real power-meter
+  // owners with FTP=null forever. We rely instead on a hard NP/avg threshold
+  // (>= 120 W) that's well above what Strava's speed-based estimation
+  // produces on casual rides — that's the actual filter we want anyway.
+  const FALLBACK_MIN_W = 120;
+  const ridesAfterPower = rides.filter((r) => {
+    const np = r.normalizedPowerW;
+    const avg = r.averageWatts;
+    return (np != null && np > FALLBACK_MIN_W) || (avg != null && avg > FALLBACK_MIN_W);
+  });
+  const ridesAfterDuration = ridesAfterPower.filter((r) => r.durationSec >= 20 * 60);
+  const candidates = ridesAfterDuration
     .map((r) => {
-      let weeksOld = 0;
+      let weeksOld = Number.POSITIVE_INFINITY;
       if (r.startTime && refValid) {
         const aTs = Date.parse(r.startTime);
         if (Number.isFinite(aTs)) weeksOld = Math.max(0, (refTs - aTs) / (7 * 86400 * 1000));
       }
-      return { r, weeksOld };
+      const power = r.normalizedPowerW ?? r.averageWatts ?? 0;
+      return { r, weeksOld, power };
     })
     .filter((x) => x.weeksOld <= HARD_CUTOFF_WEEKS)
-    .sort((a, b) => a.weeksOld - b.weeksOld)[0];
+    // Sort by power DESC. Tiebreak by recency (fresher first) so equal-NP
+    // rides converge on the most recent.
+    .sort((a, b) => b.power - a.power || a.weeksOld - b.weeksOld);
+  const fallback = candidates[0];
+
+  // Build the funnel diagnostics regardless of fallback success — the UI
+  // overlay needs the breakdown for both the "no FTP" and the "low-confidence"
+  // explanations. `inventory` was computed earlier (shared with curve path).
+  const tooShort = ridesAfterPower.length - ridesAfterDuration.length;
+  const tooOld = ridesAfterDuration.length - candidates.length;
+  const buildDiagnostics = () => ({
+    ...inventory,
+    funnel: {
+      noUsablePower: rides.length - ridesAfterPower.length,
+      tooShort,
+      tooOld,
+    },
+    topCandidates: candidates.slice(0, 5).map((c) => ({
+      startISO: c.r.startTime ?? undefined,
+      durationMin: Math.round(c.r.durationSec / 60),
+      np: c.r.normalizedPowerW ?? null,
+      avgWatts: c.r.averageWatts ?? null,
+      deviceWatts: c.r.deviceWatts ?? null,
+      weeksOld: Math.round(c.weeksOld * 10) / 10,
+      power: Math.round(c.power),
+    })),
+  });
 
   if (!fallback) {
-    return { bikeActivityCount: rides.length, derivedFromPower: false, confidence: 'none' };
+    // Diagnostic: surface where the funnel collapsed so the next "why is
+    // FTP still --?" is one log line away.
+    console.log(
+      `[ftp-estimator] fallback rejected all rides — total:${rides.length} ` +
+      `noUsablePower(NP&avg≤${FALLBACK_MIN_W}):${rides.length - ridesAfterPower.length} ` +
+      `tooShort(<20min):${tooShort} tooOld(>${HARD_CUTOFF_WEEKS}w):${tooOld}`
+    );
+    return {
+      bikeActivityCount: rides.length,
+      derivedFromPower: false,
+      confidence: 'none',
+      diagnostics: buildDiagnostics(),
+    };
   }
-  const np = fallback.r.normalizedPowerW ?? fallback.r.averageWatts ?? 0;
-  if (np <= 80) {
-    return { bikeActivityCount: rides.length, derivedFromPower: false, confidence: 'none' };
-  }
+
+  // Diagnostic: top 5 candidates so we can verify the picked ride is the
+  // strongest the user actually did. If a known hard interval session is
+  // ranked below an unexpected ride, the dedup or the watts stream is the
+  // suspect — not the estimator.
+  const top = candidates.slice(0, 5).map((c) => {
+    const dateStr = c.r.startTime ? c.r.startTime.slice(0, 10) : '?';
+    const dur = Math.round(c.r.durationSec / 60);
+    const np = c.r.normalizedPowerW;
+    const avg = c.r.averageWatts;
+    const flag = c.r.deviceWatts === true ? 'true' : c.r.deviceWatts === false ? 'false' : 'null';
+    return `${dateStr}(${dur}m,NP=${np ?? '-'}/avg=${avg ?? '-'},dw=${flag},${c.weeksOld.toFixed(1)}w)`;
+  }).join(' | ');
+  console.log(`[ftp-estimator] fallback top candidates: ${top}`);
+  console.log(`[ftp-estimator] picked → ${candidates[0].r.startTime?.slice(0, 10)} ${candidates[0].power}W (NP=${candidates[0].r.normalizedPowerW ?? 'null'} avg=${candidates[0].r.averageWatts ?? 'null'})`);
+
+  const np = fallback.power;
+  // Confidence stays 'low' (whole-ride NP × 1.0 is conservative anyway). If
+  // the source ride's flag isn't explicitly true we already can't go lower.
   return {
     ftpWatts: Math.min(500, Math.round(np)),
     bikeActivityCount: rides.length,
@@ -457,6 +654,7 @@ export function estimateFTPFromBikeActivities(
     sourceRideISO: fallback.r.startTime ?? undefined,
     sourceWindow: 'whole-ride',
     sourceWatts: Math.round(np),
+    diagnostics: buildDiagnostics(),
   };
 }
 
@@ -469,6 +667,10 @@ export interface PerDisciplineCtlEstimate {
   bike: PerDisciplineFitness;
   run: PerDisciplineFitness;
   combinedCtl: number;
+  /** ATL contribution from cross-training (non-swim/bike/run) activities. */
+  crossTrainingAtl?: number;
+  /** CTL from non-swim/bike/run activities — same decay (42d) as discipline CTLs. */
+  crossTrainingCtl?: number;
   /** Total activities contributing. */
   activityCount: number;
 }
@@ -521,9 +723,9 @@ export function estimatePerDisciplineCTLFromActivities(
   };
 
   const acc = {
-    swim: { ctlSum: 0, atlSum: 0 },
-    bike: { ctlSum: 0, atlSum: 0 },
-    run:  { ctlSum: 0, atlSum: 0 },
+    swim: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    bike: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    run:  { ctlSum: 0, atlSum: 0, directCount: 0 },
   };
   let combinedSum = 0;
 
@@ -537,16 +739,17 @@ export function estimatePerDisciplineCTLFromActivities(
       const contribution = c.tss * w;
       acc[d].ctlSum += contribution * ctlDecay;
       acc[d].atlSum += contribution * atlDecay;
+      if (w === 1.0) acc[d].directCount++;
     }
     combinedSum += c.tss * ctlDecay;
   }
 
   const normalise = (sum: number, tau: number) => (sum / tau) * 7;
 
-  const finalise = (sums: { ctlSum: number; atlSum: number }): PerDisciplineFitness => {
+  const finalise = (sums: { ctlSum: number; atlSum: number; directCount: number }): PerDisciplineFitness => {
     const ctl = Math.round(normalise(sums.ctlSum, CTL_TAU_DAYS) * 10) / 10;
     const atl = Math.round(normalise(sums.atlSum, ATL_TAU_DAYS) * 10) / 10;
-    return { ctl, atl, tsb: Math.round((ctl - atl) * 10) / 10 };
+    return { ctl, atl, tsb: Math.round((ctl - atl) * 10) / 10, directCount: sums.directCount };
   };
 
   return {
@@ -586,16 +789,17 @@ export function estimateDirectPerDisciplineCTLFromActivities(
   if (!Number.isFinite(refTs)) return zeroEstimate(activities.length);
 
   const acc = {
-    swim: { ctlSum: 0, atlSum: 0 },
-    bike: { ctlSum: 0, atlSum: 0 },
-    run:  { ctlSum: 0, atlSum: 0 },
+    swim: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    bike: { ctlSum: 0, atlSum: 0, directCount: 0 },
+    run:  { ctlSum: 0, atlSum: 0, directCount: 0 },
   };
   let combinedSum = 0;
+  let crossAtlSum = 0;
+  let crossCtlSum = 0;
   let count = 0;
 
   for (const a of activities) {
     const sport = classifyActivity(a.activityType);
-    if (sport === 'other') continue;
     const iso = a.startTime;
     if (!iso) continue;
     const aTs = Date.parse(iso);
@@ -605,20 +809,29 @@ export function estimateDirectPerDisciplineCTLFromActivities(
 
     const tss = estimateTss(a, sport);
     if (tss <= 0) continue;
-    count += 1;
 
     const ctlDecay = Math.exp(-day / CTL_TAU_DAYS);
     const atlDecay = Math.exp(-day / ATL_TAU_DAYS);
+
+    if (sport === 'other') {
+      // Cross-training: track ATL and CTL for readiness bar but don't count toward discipline CTLs.
+      crossAtlSum += tss * atlDecay;
+      crossCtlSum += tss * ctlDecay;
+      continue;
+    }
+
+    count += 1;
     acc[sport].ctlSum += tss * ctlDecay;
     acc[sport].atlSum += tss * atlDecay;
+    acc[sport].directCount++;
     combinedSum += tss * ctlDecay;
   }
 
   const normalise = (sum: number, tau: number) => (sum / tau) * 7;
-  const finalise = (sums: { ctlSum: number; atlSum: number }): PerDisciplineFitness => {
+  const finalise = (sums: { ctlSum: number; atlSum: number; directCount: number }): PerDisciplineFitness => {
     const ctl = Math.round(normalise(sums.ctlSum, CTL_TAU_DAYS) * 10) / 10;
     const atl = Math.round(normalise(sums.atlSum, ATL_TAU_DAYS) * 10) / 10;
-    return { ctl, atl, tsb: Math.round((ctl - atl) * 10) / 10 };
+    return { ctl, atl, tsb: Math.round((ctl - atl) * 10) / 10, directCount: sums.directCount };
   };
 
   return {
@@ -626,6 +839,8 @@ export function estimateDirectPerDisciplineCTLFromActivities(
     bike: finalise(acc.bike),
     run:  finalise(acc.run),
     combinedCtl: Math.round(normalise(combinedSum, CTL_TAU_DAYS) * 10) / 10,
+    crossTrainingAtl: Math.round(normalise(crossAtlSum, ATL_TAU_DAYS) * 10) / 10,
+    crossTrainingCtl: Math.round(normalise(crossCtlSum, CTL_TAU_DAYS) * 10) / 10,
     activityCount: count,
   };
 }
@@ -652,11 +867,150 @@ function estimateTss(
 
 function zeroEstimate(count: number): PerDisciplineCtlEstimate {
   return {
-    swim: { ctl: 0, atl: 0, tsb: 0 },
-    bike: { ctl: 0, atl: 0, tsb: 0 },
-    run:  { ctl: 0, atl: 0, tsb: 0 },
+    swim: { ctl: 0, atl: 0, tsb: 0, directCount: 0 },
+    bike: { ctl: 0, atl: 0, tsb: 0, directCount: 0 },
+    run:  { ctl: 0, atl: 0, tsb: 0, directCount: 0 },
     combinedCtl: 0,
+    crossTrainingAtl: 0,
+    crossTrainingCtl: 0,
     activityCount: count,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// CSS test detection
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface CssTestSignal {
+  likely: boolean;
+  /** Estimated CSS in sec/100m if we can infer it from distance + duration. Null if not enough signal. */
+  estimatedCss: number | null;
+  reason: string;
+}
+
+/**
+ * Heuristic: a swim activity looks like a CSS test (400m + 200m all-out) when:
+ *   - activityType is swim-related (SWIMMING, OPEN_WATER_SWIMMING, etc.)
+ *   - total distance is 600–1400m (WU + 400 + rest + 200 + CD)
+ *   - pace is faster than 2:30/100m (slow swimmers doing a test still go hard)
+ *
+ * When `likely`, we can also estimate CSS from the whole-session pace because:
+ *   the WU + CD drag the average slower than the test efforts, so whole-session
+ *   pace is a conservative (safe) CSS estimate. We apply a 5s/100m buffer to
+ *   account for that bias — same buffer used by the existing CSS-from-history estimator.
+ */
+export function looksLikeCssTest(a: Pick<GarminActual, 'activityType' | 'distanceKm' | 'durationSec' | 'hrZones'>): CssTestSignal {
+  const type = (a.activityType ?? '').toLowerCase();
+  if (!type.includes('swim')) {
+    return { likely: false, estimatedCss: null, reason: `Not a swim activity (${a.activityType ?? 'unknown'})` };
+  }
+
+  const distM = (a.distanceKm ?? 0) * 1000;
+  if (distM < 600 || distM > 1400) {
+    return { likely: false, estimatedCss: null, reason: `Distance outside CSS test range (${Math.round(distM)}m)` };
+  }
+
+  const hundredMChunks = distM / 100;
+  const pace = (a.durationSec ?? 0) / hundredMChunks; // sec/100m
+  if (pace >= 150) {
+    return { likely: false, estimatedCss: null, reason: `Pace too slow for a test effort (${Math.round(pace)}s/100m)` };
+  }
+
+  // HR confirmation: if HR zones are available, require z4+z5 > 25% of total
+  // time to confirm the swim involved genuine high-intensity efforts. Without HR
+  // data we fall back to the pace/distance heuristic alone.
+  const hz = a.hrZones;
+  if (hz) {
+    const total = hz.z1 + hz.z2 + hz.z3 + hz.z4 + hz.z5;
+    const hiPct = total > 0 ? (hz.z4 + hz.z5) / total : 0;
+    if (hiPct < 0.25) {
+      return { likely: false, estimatedCss: null, reason: `Low HR intensity (${Math.round(hiPct * 100)}% Z4+Z5 — likely easy swim, not a test)` };
+    }
+  }
+
+  const estimatedCss = Math.round(pace + CSS_BUFFER_SEC_PER_100M);
+  return {
+    likely: true,
+    estimatedCss,
+    reason: `Short swim (${Math.round(distM)}m) at test-grade intensity${hz ? ' + high HR' : ''}`,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// FTP test detection
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface FtpTestSignal {
+  likely: boolean;
+  /** Best 20-min power from powerCurve, or null if not available */
+  best20MinW: number | null;
+  /** Estimated FTP (best20MinW × 0.95), or null */
+  estimatedFtp: number | null;
+  reason: string;
+}
+
+/**
+ * Heuristic: a bike activity looks like a 20-min FTP test when:
+ *   - activityType is cycling-related
+ *   - powerCurve.p1200 exists (best 20-min power was recorded) AND p1200 >= 80W
+ *   - p1200 >= 0.85 × averageWatts (the test segment dominated the ride, i.e.
+ *     the user wasn't cruising easy for an hour then hammered 20 min)
+ *   OR alternatively: averageWatts exists and duration is 1000–1400s (16–23 min)
+ *     meaning the whole ride WAS basically the 20-min effort
+ *
+ * FTP = best20MinW × 0.95 (Coggan standard)
+ */
+export function looksLikeFtpTest(a: Pick<GarminActual, 'activityType' | 'durationSec' | 'averageWatts' | 'normalizedPowerW' | 'deviceWatts' | 'powerCurve'>): FtpTestSignal {
+  const type = (a.activityType ?? '').toLowerCase();
+  const isCycling = type.includes('cycl') || type.includes('bike') || type.includes('ride') || type.includes('biking');
+  if (!isCycling) {
+    return { likely: false, best20MinW: null, estimatedFtp: null, reason: `Not a cycling activity (${a.activityType ?? 'unknown'})` };
+  }
+
+  if (a.deviceWatts !== true) {
+    return { likely: false, best20MinW: null, estimatedFtp: null, reason: 'No real power meter (device_watts not true)' };
+  }
+
+  const p1200 = a.powerCurve?.p1200;
+  if (p1200 != null && p1200 >= 80) {
+    const avgW = a.averageWatts ?? 0;
+    if (p1200 >= avgW * 0.85) {
+      const estimatedFtp = Math.round(p1200 * 0.95);
+      return {
+        likely: true,
+        best20MinW: p1200,
+        estimatedFtp,
+        reason: `Best 20-min power ${Math.round(p1200)}W dominated the ride (${Math.round(p1200 / Math.max(avgW, 1) * 100)}% of avg)`,
+      };
+    }
+    return {
+      likely: false,
+      best20MinW: p1200,
+      estimatedFtp: null,
+      reason: `20-min power (${Math.round(p1200)}W) was less than 85% of avg watts — likely an interval-training ride, not a standalone FTP test`,
+    };
+  }
+
+  // Fallback: no power curve, but the whole ride duration is 16–23 min (the effort IS the test)
+  const dur = a.durationSec ?? 0;
+  const avgW = a.averageWatts ?? 0;
+  if (dur >= 1000 && dur <= 1400 && avgW >= 80) {
+    const estimatedFtp = Math.round(avgW * 0.95);
+    return {
+      likely: true,
+      best20MinW: avgW,
+      estimatedFtp,
+      reason: `Whole ride was ~${Math.round(dur / 60)} min at ${Math.round(avgW)}W — consistent with a solo FTP effort`,
+    };
+  }
+
+  return {
+    likely: false,
+    best20MinW: p1200 ?? null,
+    estimatedFtp: null,
+    reason: p1200 != null
+      ? `20-min power exists (${Math.round(p1200)}W) but ride pattern does not match a standalone test`
+      : 'No power curve and ride duration outside 16–23 min test window',
   };
 }
 
@@ -670,6 +1024,9 @@ export interface FitnessHistoryEntry {
   bikeCtl: number;
   runCtl: number;
   combinedCtl: number;
+  swimKm?: number;
+  bikeKm?: number;
+  runKm?: number;
 }
 
 /**
@@ -681,7 +1038,7 @@ export interface FitnessHistoryEntry {
  * look-back ran off the end of the activity log.
  */
 export function buildTriFitnessHistory(
-  activities: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp'>>,
+  activities: Array<Pick<GarminActual, 'activityType' | 'durationSec' | 'startTime' | 'iTrimp' | 'distanceKm'>>,
   referenceDateISO: string = new Date().toISOString(),
   weeks = 12,
 ): FitnessHistoryEntry[] {
@@ -699,14 +1056,37 @@ export function buildTriFitnessHistory(
     // training" signal.
     const direct = estimateDirectPerDisciplineCTLFromActivities(activities, weekISO);
     const matrix = estimatePerDisciplineCTLFromActivities(activities, weekISO);
+
+    // Weekly km per discipline: sum activities in the 7-day window ending at
+    // weekTs. Half-open [weekTs-7d, weekTs) so consecutive weeks don't overlap.
+    const weekStart = weekTs - 7 * 86400000;
+    let swimKm = 0, bikeKm = 0, runKm = 0;
+    for (const a of activities) {
+      if (!a.startTime) continue;
+      const aTs = Date.parse(a.startTime);
+      if (!Number.isFinite(aTs) || aTs < weekStart || aTs >= weekTs) continue;
+      const disc = classifyActivity(a.activityType);
+      const km = a.distanceKm ?? 0;
+      if (disc === 'swim') swimKm += km;
+      else if (disc === 'bike') bikeKm += km;
+      else if (disc === 'run') runKm += km;
+    }
+
     out.push({
       weekISO,
       swimCtl: direct.swim.ctl,
       bikeCtl: direct.bike.ctl,
       runCtl: direct.run.ctl,
       combinedCtl: matrix.combinedCtl,
+      swimKm,
+      bikeKm,
+      runKm,
     });
   }
+  const totalSwimKm = out.reduce((s, e) => s + (e.swimKm ?? 0), 0);
+  const totalBikeKm = out.reduce((s, e) => s + (e.bikeKm ?? 0), 0);
+  const totalRunKm  = out.reduce((s, e) => s + (e.runKm  ?? 0), 0);
+  console.log(`[tri:km-history] ${out.length}w — swim ${totalSwimKm.toFixed(1)}km bike ${totalBikeKm.toFixed(1)}km run ${totalRunKm.toFixed(1)}km`);
   return out;
 }
 
@@ -743,14 +1123,19 @@ export interface DirectBenchmarkInputs {
 export function deriveTriBenchmarksFromHistory(
   activities: GarminActual[],
   referenceDateISO: string = new Date().toISOString(),
-  direct: DirectBenchmarkInputs = {}
+  direct: DirectBenchmarkInputs = {},
+  /** Athlete's default open-water environment tag. Read from
+   *  `triConfig.swim.defaultOwSwimEnvironment` by callers. When undefined,
+   *  un-tagged OW swims contribute pace at the wetsuit-lake baseline (factor
+   *  1.0) — the safe fallback that doesn't fabricate a number. */
+  defaultOwSwimEnvironment?: 'wetsuit-lake' | 'non-wetsuit-lake' | 'ocean' | 'river',
 ): TriBenchmarks {
   // Prefer paired-TT CSS when both 400m and 200m are provided. Otherwise
   // fall back to the best-sustained-pace estimate from swim activities.
   // Paired-TT is gold-standard so we tag it 'high' confidence regardless of
   // the activity-history estimator's tier.
   const cssFromPair = computeCSSFromPair(direct.swim400Sec, direct.swim200Sec);
-  const swimEst = estimateCSSFromSwimActivities(activities, referenceDateISO);
+  const swimEst = estimateCSSFromSwimActivities(activities, referenceDateISO, defaultOwSwimEnvironment);
   const css: CssEstimate = cssFromPair != null
     ? {
         cssSecPer100m: cssFromPair,

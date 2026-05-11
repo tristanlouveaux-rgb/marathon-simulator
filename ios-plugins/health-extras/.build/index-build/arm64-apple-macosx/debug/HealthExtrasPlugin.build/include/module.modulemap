@@ -1,0 +1,3 @@
+module HealthExtrasPlugin {
+    header "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/include/HealthExtrasPlugin-Swift.h"
+}

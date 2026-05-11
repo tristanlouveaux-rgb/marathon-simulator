@@ -9,6 +9,9 @@ import { formatPace, formatWorkoutTime, formatKm } from '@/utils';
 import { parseDistanceKm } from '@/calculations/matching';
 import { getState } from '@/state';
 import { summariseAdherence, type AdherenceSummary } from '@/guided/adherence';
+import { createSafetySlider } from '@/ui/safety-slider';
+import { trimRouteEnds } from '@/gps/anonymize-route';
+import { submitRouteSafetyRating } from '@/data/safetyRatingSync';
 
 const MODAL_ID = 'gps-completion-modal';
 
@@ -103,6 +106,9 @@ export function openGpsCompletionModal(
         </div>
       </div>
 
+      <!-- Safety rating block inserted dynamically if route >= 1km -->
+      <div id="gps-safety-block"></div>
+
       <!-- Buttons rendered dynamically via showMainButtons() -->
       <div id="gps-btn-row" class="flex gap-3"></div>
     </div>
@@ -112,6 +118,14 @@ export function openGpsCompletionModal(
 
   let selectedRpe = 0;
   let currentSaveBtn: HTMLButtonElement | null = null;
+
+  // Safety slider — only for outdoor routes >= 1km
+  let safetySlider: ReturnType<typeof createSafetySlider> | null = null;
+  const hasRoute = recording.route.length >= 2 && actualDistKm >= 1;
+  if (hasRoute) {
+    safetySlider = createSafetySlider();
+    document.getElementById('gps-safety-block')?.appendChild(safetySlider.el);
+  }
 
   function showMainButtons(): void {
     const row = document.getElementById('gps-btn-row');
@@ -130,7 +144,29 @@ export function openGpsCompletionModal(
     saveBtn.textContent = saveLabel;
     saveBtn.disabled = selectedRpe === 0;
     saveBtn.addEventListener('click', () => {
-      if (selectedRpe > 0) { closeGpsCompletionModal(); onComplete(selectedRpe); }
+      if (selectedRpe > 0) {
+        closeGpsCompletionModal();
+        onComplete(selectedRpe);
+        if (safetySlider && hasRoute) {
+          const trimResult = trimRouteEnds(recording.route);
+          if (trimResult) {
+            void submitRouteSafetyRating({
+              activityId: recording.id,
+              source: 'gps_recording',
+              polylineTrimmed: trimResult.encodedPolyline,
+              pointCount: trimResult.pointCount,
+              distanceKm: trimResult.distanceKm,
+              safetyScore: safetySlider.getScore(),
+              centerLat: trimResult.centerLat,
+              centerLng: trimResult.centerLng,
+              boundsNorth: trimResult.boundsNorth,
+              boundsSouth: trimResult.boundsSouth,
+              boundsEast: trimResult.boundsEast,
+              boundsWest: trimResult.boundsWest,
+            });
+          }
+        }
+      }
     });
 
     currentSaveBtn = saveBtn;

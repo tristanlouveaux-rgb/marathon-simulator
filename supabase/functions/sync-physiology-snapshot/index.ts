@@ -146,7 +146,10 @@ Deno.serve(async (req) => {
             .sort((a, b) => a.calendar_date.localeCompare(b.calendar_date))
 
         // Robust max HR: 95th percentile of all activity max HRs (filters wrist-sensor spikes)
-        const allMaxHRs = (maxHRRes.data ?? []).map((r: any) => r.max_hr as number).filter(v => v > 0)
+        // Exclude obvious wrist-sensor noise: walking/swimming wrist HR frequently
+        // reads 50-120 bpm without reflecting true exertion. Floor at 120 so only
+        // sessions where the heart was actually working contribute to the estimate.
+        const allMaxHRs = (maxHRRes.data ?? []).map((r: any) => r.max_hr as number).filter(v => v > 120)
         let allTimeMaxHR: number | null = null
         if (allMaxHRs.length >= 5) {
             allMaxHRs.sort((a: number, b: number) => a - b)

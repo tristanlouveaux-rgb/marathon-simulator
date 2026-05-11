@@ -17,6 +17,7 @@ export type OnboardingStep =
   | 'goals'
   | 'connect-strava'
   | 'manual-entry'
+  | 'about-you'
   | 'review'
   | 'race-target'
   | 'schedule'
@@ -24,7 +25,38 @@ export type OnboardingStep =
   | 'initializing'
   | 'runner-type'
   | 'triathlon-setup'
+  | 'tri-past-race'
+  | 'cycling-setup'
+  | 'hyrox-setup'
+  | 'workout-preview'
+  | 'tri-workout-preview'
+  | 'hyrox-workout-preview'
   | 'main-view';
+
+/** Race distances supported for past-race entry (includes sprint/olympic not in active race plans). */
+export type PastTriathlonDistance = 'sprint' | 'olympic' | '70.3' | 'ironman';
+
+/** Distances (m) for each past-race format — used to derive CSS and run pace from leg times. */
+export const PAST_TRI_LEG_DISTANCES: Record<PastTriathlonDistance, { swimM: number; bikeKm: number; runKm: number }> = {
+  'sprint':   { swimM: 750,  bikeKm: 20,    runKm: 5    },
+  'olympic':  { swimM: 1500, bikeKm: 40,    runKm: 10   },
+  '70.3':     { swimM: 1900, bikeKm: 90,    runKm: 21.1 },
+  'ironman':  { swimM: 3800, bikeKm: 180.2, runKm: 42.2 },
+};
+
+/** A past triathlon result entered during onboarding. Used to seed CSS and run-VDOT benchmarks. */
+export interface TriPastRaceEntry {
+  distance: PastTriathlonDistance;
+  /** ISO month string (YYYY-MM) or full date (YYYY-MM-DD). */
+  dateISO: string;
+  totalSec: number;
+  perLeg?: {
+    swim: number;   // seconds
+    bike: number;   // seconds
+    run: number;    // seconds
+  };
+  source: 'manual' | 'strava';
+}
 
 /** Recurring cross-training activity from onboarding */
 export interface RecurringActivity {
@@ -48,6 +80,9 @@ export interface Marathon {
   distance: 'half' | 'marathon';
   weeksUntil?: number;             // Computed at runtime
   imageUrl?: string;               // Optional city/race tile image
+  /** Per-race course facts. Optional — populated from marathon-course-profiles.ts.
+   * Only `runElevationM`, `climate`, `altitudeM`, `runProfile` are used for running. */
+  profile?: CourseProfile;
 }
 
 /**
@@ -128,7 +163,7 @@ export interface OnboardingState {
 
 
   // Step 2: Training Goal
-  trainingMode?: 'running' | 'hyrox' | 'triathlon' | 'fitness' | null;
+  trainingMode?: 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'fitness' | null;
   trainingForEvent: boolean | null;
   raceDistance: RaceDistance | null;
   trainingFocus: TrainingFocus | null;
@@ -154,6 +189,15 @@ export interface OnboardingState {
 
   // Step 6: PBs
   pbs: PBs;
+  /**
+   * ISO start dates of the activities that produced each PB. Used by
+   * `blendPredictions` to scale the marathon-specificity penalty: a recent
+   * marathon PB is *demonstrated current capability*, so the penalty (which
+   * assumes PB might be stale and over-state current marathon-specific
+   * fitness) should be reduced when the PB is fresh. Optional — when absent,
+   * the penalty applies at full strength (legacy behaviour).
+   */
+  pbDates?: { k5?: string; k10?: string; h?: string; m?: string };
   recentRace: RecentRun | null;
 
   // Step 7: Fitness Data (smartwatch)
@@ -211,8 +255,109 @@ export interface OnboardingState {
   /** True when the wizard used the Strava express path (§18.9) to auto-fill tri fields. */
   triUsedStravaExpressPath?: boolean;
 
+  /** Past triathlon result entered on the tri-past-race wizard step. Seeds CSS + run-VDOT benchmarks. */
+  triPastRace?: TriPastRaceEntry | null;
+
   /** Selected IRONMAN-branded race (sets customRaceDate from race.date). */
   selectedTriathlonId?: string | null;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────
+  // Running-specific onboarding fields (active when trainingMode is null / 'running').
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Peak weekly training hours for running. Used by the plan engine to right-size
+   *  easy and long session durations. Quality session durations are never reduced. */
+  weeklyTrainingHours?: number;
+  /** How much of weeklyTrainingHours falls on Mon–Fri (remainder lands Sat–Sun). */
+  weekdayTrainingHours?: number;
+  /** Running session types the user has opted out of on the workout-preview step.
+   *  Filtered from the quality priority list in plan_engine. Empty / undefined = include all. */
+  runningExcludedWorkouts?: string[];
+  /** When the plan-view "budget overflow" banner is dismissed via "Accept shorter sessions",
+   *  we record the hours value at dismissal time. The banner stays hidden as long as
+   *  weeklyTrainingHours equals this value; if the user later changes their hours target,
+   *  the banner re-arms so the trade-off can be re-surfaced. */
+  budgetAcceptedAtHours?: number;
+
+  // Cycling-specific onboarding fields (active when trainingMode === 'cycling').
+  // V1 covers Gran Fondo / sportive / audax targets. Reuses triBike for FTP
+  // and triTimeAvailableHoursPerWeek / triWeekdayHoursPerWeek for hours.
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Cycling event target distance — sportive / Gran Fondo / audax presets. */
+  cyclingDistance?: '50km' | '100km' | '160km' | '200km' | '300km';
+
+  /** Optional cycling event ID — picks a famous event (Étape, Marmotte, etc.).
+   *  When set, climate/altitude are sourced from CYCLING_EVENT_PROFILES. */
+  cyclingEventId?: string;
+
+  /** Typical race-day climate. Anchored to wet-bulb temperature (see triathlon-course-factors).
+   *  Falls back to undefined = no climate penalty. Auto-populated from cyclingEventId. */
+  cyclingClimate?: 'cool' | 'temperate' | 'warm' | 'hot' | 'hot-humid';
+
+  /** Course altitude in metres (peak or sustained, whichever is more limiting).
+   *  Used by altitudeBikeMultiplier; under 500 m has no effect. */
+  cyclingAltitudeM?: number;
+
+  /**
+   * Bike workout kinds the user has opted out of on the workout-preview step.
+   * Plan engine substitutes excluded kinds with the closest in-tier sibling.
+   * Empty / undefined = include all 9 kinds (default).
+   */
+  cyclingExcludedWorkouts?: string[];
+
+  // ─────────────────────────────────────────────────────────────────────
+  // HYROX-specific onboarding fields (active when trainingMode === 'hyrox').
+  // ─────────────────────────────────────────────────────────────────────
+
+  /** Competition format. */
+  hyroxFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+
+  /** Which format the user's *previous* HYROX time was set in (may differ from current target format). */
+  hyroxPreviousTimeFormat?: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+
+  /** Which past HYROX event the previous time was set at (id from `HYROX_WORLD_SERIES`).
+   *  Drives venue-aware scaling when comparing past time to a future race at a different venue. */
+  hyroxPreviousTimeRaceId?: string;
+
+  /** ISO date (YYYY-MM-DD) of the previous HYROX time. Required when no event ID
+   *  is selected so the staleness model has a reference point. Derived from
+   *  the picked event's date when an event is selected. */
+  hyroxPreviousRaceDate?: string;
+
+  /** Selected HYROX venue id (from `HYROX_VENUES`). Drives course-factor adjustments.
+   *  Populated automatically when user picks a specific race from the race calendar. */
+  hyroxVenueId?: string;
+
+  /** Selected HYROX race event id (from `HYROX_WORLD_SERIES`). When set, the venue is
+   *  derived from the event so the user does not pick venue separately. */
+  hyroxRaceEventId?: string;
+
+  /** Previous HYROX finish time in seconds — drives ability band derivation.
+   *  Shown live on hyrox-setup as the band classification updates. */
+  previousHyroxTimeSec?: number;
+
+  /** Per-station split times from a previous HYROX race (seconds each).
+   *  Entered optionally in hyrox-setup. Seeds stationBenchmarks at init time. */
+  hyroxPreviousStationSplits?: Partial<Record<string, number>>;
+
+  /** Sled access at the athlete's training venue. */
+  hyroxSledAccess?: 'always' | 'sometimes' | 'never';
+
+  /** Whether the athlete's gym has a SkiErg. */
+  hyroxHasSkiErg?: boolean;
+
+  /** Whether the athlete's gym has a row erg. */
+  hyroxHasRowErg?: boolean;
+
+  /** Total weekly sessions target (runs + stations + bricks combined).
+   *  Overrides the band default from HYROX_WEEKLY_SESSIONS. */
+  hyroxWeeklySessionCount?: number;
+
+  /** 1km run pace (seconds/km) derived from previous HYROX race results paste.
+   *  Seeds hyroxConfig.hyroxRunPaceSecKm at init time and drives the forecast engine. */
+  hyroxRunPaceSecKm?: number;
 }
 
 /** Default onboarding state */

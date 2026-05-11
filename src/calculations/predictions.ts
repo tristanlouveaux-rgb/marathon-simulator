@@ -2,8 +2,9 @@ import type { PBs, RecentRun, RaceDistance, RunnerType } from '@/types';
 import type { OnboardingState } from '@/types/onboarding';
 import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
-import { applyTrainingHorizonAdjustment } from './training-horizon';
+import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import type { HRVdotResult } from './effort-calibrated-vdot';
+import { applyRunningCourseFactors } from './course-factors-running';
 
 /** Skip adherence summary for penalty calculation */
 export interface SkipSummary {
@@ -266,21 +267,41 @@ export function predictFromVolume(
 
 export interface ForecastResult {
   forecastVdot: number;
+  /** Raw VDOT-derived finish time before any course adjustment. */
   forecastTime: number;
+  /** Finish time after applying course factors (climate/altitude/elevation).
+   * Only present when a course profile was supplied. Equals forecastTime otherwise. */
+  forecastTimeAdjusted?: number;
+  /** Itemised course factors that produced the adjustment (for UI). */
+  courseFactors?: import('./course-factors-running').RunningCourseFactor[];
 }
 
 /**
  * Shared forecast calculation used by both initialization and assessment.
  * Wraps applyTrainingHorizonAdjustment with standard parameters.
+ *
+ * `blendedAnchorSec` (optional): when supplied, the forecast is anchored to the
+ * blended race-prediction time and the horizon model's gain is applied as a
+ * delta on top — keeps the projected end-of-plan time on the same scale as the
+ * live "Current Race Estimate" surfaces. See `calculateLiveForecast` for the
+ * full rationale.
  */
 export function calculateForecast(
   baselineVdot: number,
   sessionsPerWeek: number,
   state: OnboardingState,
   runnerType: RunnerType,
+  blendedAnchorSec?: number,
 ): ForecastResult {
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
   const abilityBand = getAbilityBand(baselineVdot);
+
+  // Plan-prescribed mean weekly km — sessions × ref-km × build-phase factor.
+  // Represents what the periodised plan WILL deliver across its build phase,
+  // not the user's pre-plan maintenance volume. See getPlanPrescribedMeanWeeklyKm
+  // for the calibration. When unavailable (sessions unknown / unsupported
+  // distance), fall through to the hours-based fallback inside the horizon model.
+  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, targetDistStr);
 
   const horizon = applyTrainingHorizonAdjustment({
     baseline_vdot: baselineVdot,
@@ -291,12 +312,25 @@ export function calculateForecast(
     ability_band: abilityBand,
     taper_weeks: targetDistStr === 'marathon' ? 3 : 2,
     experience_level: state.experienceLevel || 'intermediate',
+    weekly_volume_km: planMeanKm ?? undefined,
+    weekly_volume_hours: state.weeklyTrainingHours,
     hm_pb_seconds: state.pbs.h,
   });
 
   const forecastVdot = baselineVdot + horizon.vdot_gain;
   const raceDistKm = rdKm(targetDistStr);
-  return { forecastVdot, forecastTime: tv(forecastVdot, raceDistKm) };
+  const bareForecastTime = tv(forecastVdot, raceDistKm);
+
+  let forecastTime: number;
+  if (blendedAnchorSec != null && blendedAnchorSec > 0) {
+    const bareToday = tv(baselineVdot, raceDistKm);
+    const horizonDeltaSec = bareToday - bareForecastTime;
+    forecastTime = blendedAnchorSec - horizonDeltaSec;
+  } else {
+    forecastTime = bareForecastTime;
+  }
+
+  return { forecastVdot, forecastTime };
 }
 
 export interface LiveForecastParams {
@@ -306,10 +340,26 @@ export interface LiveForecastParams {
   sessionsPerWeek: number;
   runnerType: RunnerType;
   experienceLevel?: string;
+  /** History-derived weekly running km. Primary dose signal for the horizon. */
   weeklyVolumeKm?: number;
+  /** User-stated weekly training hours (onboarding). Fallback when km is zero. */
+  weeklyVolumeHours?: number;
   hmPbSeconds?: number;
   ltPaceSecPerKm?: number;
   adaptationRatio?: number;
+  /**
+   * Today's race time as predicted by `blendPredictions` at the target distance.
+   * When supplied, the forecast is anchored to this time and the horizon model's
+   * gain is applied as a delta on top, keeping the forecast on the same scale as
+   * the "Current Race Estimate" surfaces. When omitted, the forecast falls back
+   * to bare `tv(currentVdot+gain, dist)` (legacy behaviour) — only safe when the
+   * caller knows `currentVdot` is already the blended-equivalent VDOT and the
+   * downstream display does not compare against a blended baseline.
+   */
+  blendedAnchorSec?: number;
+  /** Race-day course profile (climate/altitude/elevation). When supplied,
+   * the result includes `forecastTimeAdjusted` + `courseFactors`. */
+  courseProfile?: import('@/types/onboarding').CourseProfile;
 }
 
 /**
@@ -330,6 +380,7 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     taper_weeks: Math.max(1, Math.ceil(wr * 0.15)),
     experience_level: p.experienceLevel || 'intermediate',
     weekly_volume_km: p.weeklyVolumeKm,
+    weekly_volume_hours: p.weeklyVolumeHours,
     hm_pb_seconds: p.hmPbSeconds,
     lt_pace_sec_per_km: p.ltPaceSecPerKm,
   });
@@ -341,7 +392,34 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
 
   const forecastVdot = p.currentVdot + adjustedGain;
   const raceDistKm = rdKm(p.targetDistance);
-  return { forecastVdot, forecastTime: tv(forecastVdot, raceDistKm) };
+  const bareForecastTime = tv(forecastVdot, raceDistKm);
+
+  // Anchor to the blended view of today's fitness when supplied. The horizon
+  // model's predicted gain is converted from VDOT delta to a seconds delta via
+  // Daniels' table on both ends, then subtracted from the blended anchor. This
+  // keeps "Forecast finish" and "Current Race Estimate" on the same scale, so
+  // the projected end-of-plan time is always anchored to whatever blendPredictions
+  // says the athlete can run today, not to bare tv(currentVdot, dist).
+  let forecastTime: number;
+  if (p.blendedAnchorSec != null && p.blendedAnchorSec > 0) {
+    const bareToday = tv(p.currentVdot, raceDistKm);
+    const horizonDeltaSec = bareToday - bareForecastTime;
+    forecastTime = p.blendedAnchorSec - horizonDeltaSec;
+  } else {
+    forecastTime = bareForecastTime;
+  }
+
+  if (p.courseProfile) {
+    const adj = applyRunningCourseFactors(forecastTime, p.courseProfile, raceDistKm);
+    return {
+      forecastVdot,
+      forecastTime,
+      forecastTimeAdjusted: adj.adjustedSec,
+      courseFactors: adj.factors,
+    };
+  }
+
+  return { forecastVdot, forecastTime };
 }
 
 /**
@@ -395,6 +473,14 @@ export function blendPredictions(
   avgPaceSecPerKm?: number,
   volumeMeta?: { weeksCovered: number; paceConfidence: 'high' | 'medium' | 'low' | 'none'; isStale: boolean },
   hrVdot?: HRVdotResult | null,
+  /**
+   * Age (in days) of the activity that produced the marathon PB. When supplied
+   * and the marathon-specificity penalty fires (Tanda gated out, low recent
+   * volume), the penalty severity scales with PB recency: a recent PB is
+   * *demonstrated current capability*, so the penalty (which assumes PB might
+   * be stale) is reduced. Bands: <365d → ×0.5, 365-730d → ×0.75, >730d → full.
+   */
+  marathonPbAgeDays?: number,
 ): number | null {
   // Base weights: Prioritize CURRENT fitness indicators
   const hasRecent = recentRun && recentRun.t > 0;
@@ -522,5 +608,80 @@ export function blendPredictions(
   if (tTanda) sum += wTanda * tTanda;
   if (tHR) sum += wHR * tHR;
 
-  return sum / totW;
+  // Marathon-specificity correction: when Tanda is gated out at marathon target,
+  // the remaining signals (PB, LT, VO2, HR) all over-predict marathon time for
+  // low-volume athletes. Tanda is the ONLY marathon-distance-specific predictor
+  // in the blend (P+K from recent training → finish time, Tanda 2011 r=0.91 vs
+  // 46 marathoners). Without it, the prediction is "what your fitness CEILING
+  // could deliver", not "what your specific endurance will deliver TODAY".
+  //
+  // Decay rationale: marathon time = VO2max × fractional utilization × running
+  // economy (Joyner & Coyle 2008). Fractional utilization is the marathon-
+  // critical term and decays fastest with low running volume (Coyle 1984;
+  // Mujika & Padilla 2000). VO2max can stay elevated from cross-training;
+  // fractional utilization at marathon distance is purely run-specific. So an
+  // athlete with a strong PB but low recent running volume will see their
+  // PB/LT/VO2-derived prediction over-state their *current* marathon fitness
+  // even though those signals are individually accurate.
+  //
+  // Penalty bands tuned to land predictions within ±5% of empirical reality
+  // for cross-trained returning athletes (calibrated against Tanda 2011's
+  // residual analysis at the low-volume end).
+  // ── Marathon-specificity penalty (inline, retained as-is) ──────────────
+  // PARALLEL IMPLEMENTATION NOTICE (2026-05-06):
+  // A unified per-discipline race-readiness framework now exists at
+  // `src/calculations/specific-endurance-penalty.ts`, used by triathlon to
+  // penalise predictions for low-volume athletes across swim/bike/run.
+  //
+  // We deliberately do NOT call the unified framework from here. The two
+  // models measure conceptually different things:
+  //   - This inline code: detraining-decay thresholds per Coyle 1984 +
+  //     Mujika 2000. "Have you fallen below the maintenance volume that
+  //     prevents specific-endurance decay?" Threshold: 30 km/wk.
+  //   - Unified framework: training-volume targets per Friel 2018 IM/70.3
+  //     plans. "Have you met the volume an intermediate plan prescribes?"
+  //     Target: 65 km/wk for marathon.
+  //
+  // Both are scientifically valid; they answer different coaching questions.
+  // The unified framework is currently used by triathlon predictions only.
+  // A future refactor could merge them, but that's a calibration call (not
+  // a clean replacement) — would require choosing which conceptual basis
+  // wins, and may shift existing marathon predictions. Out of scope for
+  // the 2026-05-06 unified-framework work.
+  let marathonSpecificityPenalty = 1.0;
+  // Only fire when we have an explicit volume signal — `weeklyRunKm == null`
+  // means "no signal" (don't change behaviour), `weeklyRunKm === 0` means
+  // "explicitly zero recent training" (penalty fires at max). Callers must
+  // pass the actual zero rather than converting it to undefined.
+  if (targetDist === 42195 && tTanda == null && weeklyRunKm != null) {
+    if (weeklyRunKm < 10)      marathonSpecificityPenalty = 1.15;
+    else if (weeklyRunKm < 20) marathonSpecificityPenalty = 1.10;
+    else if (weeklyRunKm < 30) marathonSpecificityPenalty = 1.05;
+    // ≥30 km/wk: even without Tanda firing, fractional utilization decay risk
+    // is minimal (Coyle 1984 shows preserved marathon performance at ≥30 mi/wk
+    // maintenance volume).
+
+    // PB-recency scaling: a recent marathon PB is demonstrated current
+    // capability, so the staleness assumption baked into the penalty (Coyle
+    // 1984's full-detraining curves) over-corrects. Scale the penalty's
+    // *excess* (the part above 1.0) by a recency factor — this keeps the
+    // direction right while reducing magnitude for athletes who have proven
+    // recent capability. Step bands at 1y / 2y boundaries.
+    let recencyFactor = 1.0;
+    if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null) {
+      if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year — demonstrated current capability
+      else if (marathonPbAgeDays < 730) recencyFactor = 0.75;  // PB 1-2 years — partial demonstration
+      // >2 years: full penalty (recencyFactor stays at 1.0)
+    }
+    if (recencyFactor < 1.0) {
+      const excess = marathonSpecificityPenalty - 1.0;
+      marathonSpecificityPenalty = 1.0 + excess * recencyFactor;
+    }
+
+    if (marathonSpecificityPenalty > 1.0) {
+      console.log(`[blendPredictions] marathon-specificity penalty fired: weeklyKm=${weeklyRunKm.toFixed(1)}, pbAgeDays=${marathonPbAgeDays ?? 'unknown'}, recencyFactor=${recencyFactor.toFixed(2)} → penalty ${marathonSpecificityPenalty.toFixed(3)}× (Tanda gated out)`);
+    }
+  }
+
+  return (sum / totW) * marathonSpecificityPenalty;
 }

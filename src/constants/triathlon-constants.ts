@@ -64,6 +64,30 @@ export const T2_SEC_BY_SLIDER: Record<1 | 2 | 3 | 4 | 5, number> = {
   5: 120,
 };
 
+/**
+ * Time cost of putting socks on once during a triathlon. Modelled as a
+ * single one-time event — the athlete either does it at T1 (default), at
+ * T2, or never. The 20s figure is the practised-athlete steady state from
+ * coaching consensus (Joe Friel, Tower 26, TrainingPeaks: 15–30s once
+ * rehearsed). See SCIENCE_LOG §W for references and rationale.
+ *
+ * Population baseline T1/T2 (empirical data) already reflects T1 sock-on —
+ * the default. `triConfig.transitionSocks` shifts or removes that cost:
+ *   't1':   no adjustment (matches baseline)
+ *   't2':   −SOCK_ON_COST_SEC on T1, +SOCK_ON_COST_SEC on T2 (shift)
+ *   'none': −SOCK_ON_COST_SEC on T1 only (removed)
+ */
+export const SOCK_ON_COST_SEC = 20;
+
+/**
+ * T1 share of combined transition time, used when only a combined T1+T2 mean
+ * is available (Ironman dataset has no per-side split). Derived from the
+ * 70.3 dataset where typical-finisher bins (4–6 h moving time) show
+ * T1 / (T1+T2) ≈ 0.58 — T1 is longer because of the wetsuit strip and
+ * longer transition-zone walks at most venues.
+ */
+export const IM_T1_SHARE_OF_TOTAL = 0.58;
+
 // ───────────────────────────────────────────────────────────────────────────
 // Periodisation
 // ───────────────────────────────────────────────────────────────────────────
@@ -85,6 +109,53 @@ export const PHASE_WEEKS: Record<TriathlonDistance, { base: number; build: numbe
   '70.3':    { base: 8, build: 6, peak: 4 },
   'ironman': { base: 10, build: 7, peak: 5 },
 };
+
+/**
+ * Resolve the four-phase split (base/build/peak/taper) for a plan of a given
+ * length. Returns canonical PHASE_WEEKS when the plan is long enough; for
+ * shorter plans, weeks are compressed proportionally with priority order
+ * taper > peak > build > base. Base is sacrificed first because an athlete
+ * signing up for a race typically already has aerobic foundation — what
+ * they're short of is race-specific work and a taper.
+ *
+ * Taper: clamped to [1, 2] weeks. Floor at 1 because race week itself is
+ * taper; cap at 2 because detraining begins to bite beyond two weeks of
+ * reduced volume (Mujika & Padilla 2003).
+ *
+ * Peak: floored at 1 whenever there's at least 1 non-taper week to spend —
+ * the race-specific phase is the last to drop.
+ */
+export function phasesForLen(
+  distance: TriathlonDistance,
+  totalWeeks: number,
+): { base: number; build: number; peak: number; taper: number } {
+  const def = PHASE_WEEKS[distance];
+  const total = Math.max(1, Math.round(totalWeeks));
+
+  const taper = Math.max(1, Math.min(2, Math.ceil(total * 0.10)));
+  const remaining = total - taper;
+  if (remaining <= 0) {
+    return { base: 0, build: 0, peak: 0, taper: total };
+  }
+
+  const sum = def.base + def.build + def.peak;
+  let peak  = Math.max(1, Math.round((remaining * def.peak)  / sum));
+  let build = Math.max(0, Math.round((remaining * def.build) / sum));
+  let base  = remaining - peak - build;
+
+  // Defensive: if rounding pushed peak+build above remaining, take it back
+  // out of build first, then peak, so total weeks always equals totalWeeks.
+  if (base < 0) {
+    const overshoot = -base;
+    const fromBuild = Math.min(build, overshoot);
+    build -= fromBuild;
+    const leftover = overshoot - fromBuild;
+    if (leftover > 0) peak = Math.max(1, peak - leftover);
+    base = 0;
+  }
+
+  return { base, build, peak, taper };
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Volume
@@ -165,6 +236,27 @@ export const TRI_EFFORT_MULT_BOUNDS: readonly [number, number] = [0.85, 1.15] as
  */
 export const TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC = 60;
 
+/**
+ * Per-session-type power tolerance band (half-width, as a fraction of target watts).
+ * Within the band, powerAdherence is soft-gradient (attenuated signal, not zero).
+ * Outside the band, the raw deviation drives the effort multiplier at full weight.
+ *
+ * Tighter for quality sessions (threshold, over-unders) where hitting the zone
+ * matters. Looser for endurance, VO2 repeats, and terrain-dependent sessions.
+ * Values from Coggan & Allen 2019 acceptable power variance per zone.
+ */
+export const BIKE_ADHERENCE_BAND: Record<string, number> = {
+  bike_endurance:  0.10,
+  bike_tempo:      0.08,
+  bike_sweet_spot: 0.06,
+  bike_threshold:  0.05,
+  bike_over_under: 0.05,
+  bike_vo2:        0.08,
+  bike_vo2_micros: 0.08,
+  bike_hills:      0.08,
+  bike_vlamax:     0.10,
+};
+
 // ───────────────────────────────────────────────────────────────────────────
 // Adaptation transparency — marker auto-bump notification thresholds
 // ───────────────────────────────────────────────────────────────────────────
@@ -188,3 +280,39 @@ export const RACE_LEG_DISTANCES: Record<TriathlonDistance, { swimM: number; bike
   '70.3':    { swimM: 1900, bikeKm: 90,    runKm: 21.1 },
   'ironman': { swimM: 3800, bikeKm: 180.2, runKm: 42.2 },
 };
+
+// ───────────────────────────────────────────────────────────────────────────
+// Cycling event prediction
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Intensity factor (IF = watts / FTP) for single-discipline cycling events by
+ * target distance. Derived from Allen & Coggan (2010) "Training and Racing with
+ * a Power Meter" power-duration zones — the same source as `RACE_INTENSITY_BY_DISTANCE`
+ * for triathlon. Cycling events are single-discipline so IF is higher than an
+ * equivalent-duration tri bike leg (no pre-swim fatigue). Confirmed 2026-05-04.
+ *
+ *   50 km  ≈ 1.5–2h → Sweet spot zone, 0.88
+ *  100 km  ≈ 3–4h   → Tempo midpoint,  0.80
+ *  160 km  ≈ 4.5–6h → Endurance-tempo, 0.74
+ *  200 km  ≈ 6–8h   → Long endurance,  0.68
+ *  300 km  ≈ 9–12h  → Ultra-endurance, 0.62
+ */
+export const CYCLING_EVENT_INTENSITY_FACTOR: Record<string, number> = {
+  '50km':  0.88,
+  '100km': 0.80,
+  '160km': 0.74,
+  '200km': 0.68,
+  '300km': 0.62,
+};
+
+/**
+ * Confidence range half-width for cycling event predictions (fraction of total
+ * time). Gran Fondo pacing is less predictable than tri bike legs because
+ * group dynamics, parcours sections, and nutrition strategy vary more.
+ * Tighter as event day approaches — modelled as a flat ±10% until <4 weeks,
+ * then narrows to ±6%. Values are conservative given the single-discipline,
+ * single-day nature of the event.
+ */
+export const CYCLING_PREDICTION_RANGE_FAR = 0.10;   // > 4 weeks out
+export const CYCLING_PREDICTION_RANGE_NEAR = 0.06;  // ≤ 4 weeks out

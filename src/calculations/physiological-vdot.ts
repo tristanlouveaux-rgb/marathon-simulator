@@ -28,7 +28,9 @@ import { deriveVdotFromLT } from './lt-derivation';
 // ─── Types ────────────────────────────────────────────────────────────────
 
 export type PhysiologicalVdotSource =
+  | 'override'        // s.vo2Override, user-set lab/test value — top priority
   | 'device'          // s.vo2, fresh
+  | 'mosaic-running'  // s.vo2Estimates.running (cross-modal lift), medium+ confidence
   | 'hr-calibrated'   // s.hrCalibratedVdot, medium+ confidence
   | 'lt-derived'      // deriveVdotFromLT(s.lt) — only when LT was observation-based
   | 'pb-median'       // median of cv() across race-distance PBs
@@ -99,13 +101,26 @@ export function pbDerivedVdot(s: SimulatorState): number | null {
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
 /**
- * Days since the most recent `physiologyHistory` entry that carried a
- * non-null `vo2max`. Returns null when the history is empty or absent —
- * legacy state where we have `s.vo2` but no dated history is treated as
- * "fresh enough", because dropping a perfectly good number on a missing-
- * timestamp technicality would be worse than the (small) staleness risk.
+ * Days since `s.vo2` was last written by a sync path.
+ *
+ * Prefers `s.vo2UpdatedAt` (stamped by both Garmin + Apple sync since
+ * 2026-05-07) because `physiologyHistory[].vo2max` comes from
+ * `daily_metrics.vo2max` — a generic Garmin cardio estimate that updates
+ * from cycling. A triathlete who stops running but keeps cycling would
+ * have a recent `physiologyHistory` vo2max entry from cycling while
+ * `s.vo2` (from `physiology_snapshots.vo2_max_running`) could be months
+ * stale. The `vo2UpdatedAt` field tracks the actual `s.vo2` write time.
+ *
+ * Falls back to `physiologyHistory` scan when `vo2UpdatedAt` is absent
+ * (legacy state) — same "treat missing timestamp as fresh" policy as before
+ * to avoid dropping a valid value on a missing-timestamp technicality.
  */
 function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
+  if (s.vo2UpdatedAt) {
+    const ageMs = now.getTime() - new Date(s.vo2UpdatedAt).getTime();
+    return isFinite(ageMs) ? ageMs / DAY_MS : null;
+  }
+  // Legacy fallback: scan physiologyHistory for most recent vo2max entry.
   const hist = s.physiologyHistory;
   if (!hist || hist.length === 0) return null;
   let mostRecent: string | null = null;
@@ -125,6 +140,11 @@ function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
  * priority chain and returns the first source that yields a usable value.
  *
  * Priority:
+ *   0. `s.vo2Override` — manual user override. Top priority. Mirrors the LT
+ *      override pattern. The launch-time refresh in main.ts auto-clears the
+ *      override when a derived estimate clearly beats it (≥ 3 ml/kg/min,
+ *      medium+ confidence) per the "Manually-set Benchmarks Yield to
+ *      Improvements" rule in CLAUDE.md.
  *   1. `s.vo2` (device-direct), when within {DEVICE_FRESHNESS_DAYS} of the
  *      most recent `physiologyHistory` reading. Watch is ground truth.
  *   2. `s.hrCalibratedVdot.vdot`, when confidence is 'high' or 'medium'.
@@ -142,7 +162,7 @@ function deviceVo2AgeDays(s: SimulatorState, now: Date): number | null {
  */
 export function getPhysiologicalVdot(
   s: SimulatorState,
-  opts: { now?: string | Date } = {},
+  opts: { now?: string | Date; skipMosaic?: boolean; skipDevice?: boolean } = {},
 ): PhysiologicalVdotResult {
   const now = opts.now
     ? (opts.now instanceof Date ? opts.now : new Date(opts.now))
@@ -152,8 +172,57 @@ export function getPhysiologicalVdot(
   const isDeviceFresh = s.vo2 != null && s.vo2 > 0
     && (deviceAgeDays == null || deviceAgeDays <= DEVICE_FRESHNESS_DAYS);
 
-  // 1. Device-direct, fresh.
-  if (isDeviceFresh) {
+  // 0. Manual override. Top priority. Mirrors `s.ltOverride` semantics: the
+  // launch-time refresh auto-clears it when a derived estimate clearly
+  // improves on it. Until then, this value pins the resolved VDOT and flows
+  // to all consumers — race predictions, training paces, blended fitness.
+  if (s.vo2Override && s.vo2Override.value > 0) {
+    return {
+      vdot: s.vo2Override.value,
+      source: 'override',
+      confidence: 'high',
+      detail: 'Manually set',
+      isDeviceFresh: false,
+      deviceAgeDays,
+    };
+  }
+
+  // Source toggle. Default = 'mosaic' (preferred when our estimate has
+  // medium+ confidence, otherwise fall back to device). 'device' pins the
+  // chain to the watch reading regardless of our estimate quality.
+  // `skipMosaic` is set by the cross-modal orchestrator when it calls this
+  // function for its own fallback — including the mosaic-running tier there
+  // would create a stale-state loop where last launch's stored estimate
+  // pre-empts a freshly-improved LT or PB.
+  const vo2Source = s.vo2Source ?? 'mosaic';
+  const mosaicRunning = s.vo2Estimates?.running;
+  const mosaicUsable = !opts.skipMosaic
+    && mosaicRunning?.value != null
+    && (mosaicRunning.confidence === 'high' || mosaicRunning.confidence === 'medium');
+
+  // 1a. Mosaic running estimate, when toggle = 'mosaic' AND our confidence
+  //     is high enough to displace the device value. This wins over device
+  //     so users who don't trust their watch get our regression-derived value.
+  if (vo2Source === 'mosaic' && mosaicUsable) {
+    const n = mosaicRunning!.n;
+    const detail = n > 0
+      ? `Calibrated from ${n} steady run${n === 1 ? '' : 's'}`
+      : (mosaicRunning!.detail ?? 'Estimated from your running fitness');
+    return {
+      vdot: mosaicRunning!.value!,
+      source: 'mosaic-running',
+      confidence: mosaicRunning!.confidence,
+      detail,
+      isDeviceFresh: false,
+      deviceAgeDays,
+    };
+  }
+
+  // 1b. Device-direct, fresh. Skipped when the orchestrator is computing its
+  // own "Mosaic" running estimate — that path needs a value derived purely
+  // from our own methods, not the device value, otherwise toggling Mosaic
+  // vs Device would surface the same number.
+  if (isDeviceFresh && !opts.skipDevice) {
     return {
       vdot: s.vo2 as number,
       source: 'device',
@@ -201,7 +270,7 @@ export function getPhysiologicalVdot(
       vdot: pbVdot,
       source: 'pb-median',
       confidence: 'medium',
-      detail: 'Median of your race-distance PBs',
+      detail: 'From your race-distance PBs',
       isDeviceFresh: false,
       deviceAgeDays,
     };

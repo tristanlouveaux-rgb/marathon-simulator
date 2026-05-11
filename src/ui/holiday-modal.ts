@@ -146,7 +146,7 @@ export function openHolidayModal(): void {
 
         <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer">
           <input type="checkbox" id="hol-starting-today" ${startingToday ? 'checked' : ''}
-            style="width:16px;height:16px;accent-color:var(--c-accent)">
+            style="width:16px;height:16px">
           <span style="font-size:13px;color:var(--c-black)">Starting today</span>
         </label>
 
@@ -163,8 +163,7 @@ export function openHolidayModal(): void {
             <div style="font-size:11px;font-weight:600;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.04em">Duration</div>
             <div id="hol-dur-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${duration} day${duration === 1 ? '' : 's'}</div>
           </div>
-          <input type="range" id="hol-dur-slider" min="1" max="${MAX_HOLIDAY_DAYS}" value="${duration}"
-            style="width:100%;accent-color:var(--c-black)">
+          <input type="range" id="hol-dur-slider" class="m-slider-glass" min="1" max="${MAX_HOLIDAY_DAYS}" value="${duration}">
           <div style="display:flex;justify-content:space-between;margin-top:2px">
             <span style="font-size:10px;color:var(--c-faint)">1 day</span>
             <span style="font-size:10px;color:var(--c-faint)">${MAX_HOLIDAY_DAYS} days</span>
@@ -242,8 +241,8 @@ export function openHolidayModal(): void {
   function renderStep2() {
     modal.innerHTML = `
       <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
-        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Running on holiday</div>
-        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px">Are you planning on running?</div>
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:4px">Training on holiday</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:16px">Are you planning on training?</div>
 
         <button id="hol-run-yes"
           style="width:100%;display:flex;flex-direction:column;align-items:flex-start;padding:12px 14px;border-radius:12px;
@@ -419,7 +418,7 @@ function confirmHoliday(
   }
 
   saveState();
-  import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+  import('./main-view').then(({ renderMainView }) => renderMainView());
 }
 
 /** Generate workouts for a given week using state — centralises the parameter list. */
@@ -430,7 +429,8 @@ function generateWorkoutsForWeek(s: SimulatorState, weekNum: number): Workout[] 
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e, weekNum, s.tw, s.v, s.gs,
-    getTrailingEffortScore(s.wks, weekNum), wk.scheduledAcwrStatus,
+    getTrailingEffortScore(s.wks, weekNum), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
 }
 
@@ -443,6 +443,35 @@ function computePreHolidayShifts(s: SimulatorState, startDate: string): Record<s
 
   const holidayStartDay = dayOfWeekIndex(startDate);
   const shifts: Record<string, number> = {};
+
+  // Hyrox (and any future triWorkouts-based mode) uses the stored plan workouts directly
+  // rather than re-generating running workouts whose IDs would never match.
+  if ((s as any).eventType === 'hyrox') {
+    const triWorkouts = (wk as any).triWorkouts ?? [];
+    const existingMoves = wk.workoutMoves ?? {};
+    for (const w of triWorkouts) {
+      const wId = w.id ?? w.n;
+      if (existingMoves[wId] != null) w.dayOfWeek = existingMoves[wId];
+    }
+    const occupiedDays = new Set<number>(triWorkouts.map((w: any) => w.dayOfWeek ?? 4));
+    const shiftableTypes = ['threshold', 'vo2', 'long', 'station', 'mtl', 'race_pace', 'progressive'];
+    for (const w of triWorkouts) {
+      const wId = w.id ?? w.n;
+      const effectiveDay: number = w.dayOfWeek ?? 0;
+      const isShiftable = shiftableTypes.some((t: string) => (w.t ?? '').toLowerCase().includes(t));
+      if (!isShiftable || effectiveDay < holidayStartDay - 2 || effectiveDay > holidayStartDay) continue;
+      let targetDay = Math.max(0, effectiveDay - 2);
+      while (targetDay < effectiveDay && occupiedDays.has(targetDay)) targetDay++;
+      if (targetDay >= effectiveDay) continue;
+      shifts[wId] = targetDay;
+      occupiedDays.add(targetDay);
+    }
+    if (Object.keys(shifts).length > 0) {
+      if (!wk.workoutMoves) wk.workoutMoves = {};
+      Object.assign(wk.workoutMoves, shifts);
+    }
+    return shifts;
+  }
 
   const workouts = generateWorkoutsForWeek(s, startWeek);
 
@@ -785,7 +814,7 @@ export function cancelScheduledHoliday(onComplete?: () => void): void {
   s.holidayState = undefined as any;
   saveState();
   if (onComplete) onComplete();
-  else import('./plan-view').then(({ renderPlanView }) => renderPlanView());
+  else import('./main-view').then(({ renderMainView }) => renderMainView());
 }
 
 // ─── Clear holiday ──────────────────────────────────────────────────────────
@@ -803,7 +832,7 @@ export function clearHoliday(onComplete?: () => void): void {
   const holiday = s.holidayState;
   if (!holiday?.active) return;
 
-  const rerender = onComplete ?? (() => import('./plan-view').then(({ renderPlanView }) => renderPlanView()));
+  const rerender = onComplete ?? (() => import('./main-view').then(({ renderMainView }) => renderMainView()));
   const daysActive = daysBetween(holiday.startDate, todayISO()) + 1;
 
   // Short holiday (< 3 days): just cancel, no penalty

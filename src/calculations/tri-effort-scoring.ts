@@ -19,7 +19,7 @@
 import type { GarminActual, SimulatorState } from '@/types/state';
 import type { Workout } from '@/types/state';
 import type { Discipline } from '@/types/triathlon';
-import { BIKE_LTHR_OFFSET_VS_RUN } from '@/constants/triathlon-constants';
+import { BIKE_LTHR_OFFSET_VS_RUN, BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 
 export interface TriEffortScores {
   /** Pace ratio (1.0 = on target, 1.1 = 10% slower than target). Null if no target. */
@@ -47,6 +47,9 @@ const BIKE_TARGET_IF: Record<string, number> = {
   bike_threshold:   0.95,  // Z4 threshold (sub-FTP intervals)
   bike_vo2:         1.10,  // Z5 VO2max repeats — short bursts above FTP
   bike_hills:       0.90,  // Sustained climbs
+  bike_over_under:  1.00,  // Alternating 105/95% averages threshold
+  bike_vo2_micros:  1.05,  // 30s on / 30s off averages between threshold and VO2 over the set
+  bike_vlamax:      0.85,  // Short max sprints with full recovery — set IF stays moderate
 };
 
 /**
@@ -117,7 +120,16 @@ export function scoreBikeEffort(
     intensityFactor = actual.normalizedPowerW / ftp;
     const targetIf = workout ? BIKE_TARGET_IF[workout.t] : undefined;
     if (targetIf != null) {
-      powerAdherence = intensityFactor / targetIf;
+      const rawAdherence = intensityFactor / targetIf;
+      // Soft gradient: attenuation is maximum (50%) at centre, zero at band
+      // edge — continuously differentiable so there is no signal jump when
+      // crossing the boundary (1 watt over the edge ≠ 3× stronger signal).
+      // Outside the band: full raw deviation passes through.
+      const bandHalf = BIKE_ADHERENCE_BAND[workout?.t ?? ''] ?? 0.07;
+      const deviation = rawAdherence - 1.0;
+      const absDeviation = Math.abs(deviation);
+      const attenuation = Math.max(0, 1 - absDeviation / bandHalf) * 0.5;
+      powerAdherence = 1.0 + deviation * (1 - attenuation);
     }
   }
 

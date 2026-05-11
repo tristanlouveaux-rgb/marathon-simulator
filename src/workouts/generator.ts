@@ -11,6 +11,7 @@ import { planWeekSessions } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
 import { generateGymWorkouts } from './gym';
+import { computePlanPhases } from './phases';
 
 /**
  * Generate workouts for a week based on phase and runner profile
@@ -41,7 +42,10 @@ export function generateWeekWorkouts(
   gymSessionsPerWeek?: number,
   effortScore?: number,
   acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown',
-  forceDeload?: boolean
+  forceDeload?: boolean,
+  weeklyHoursTarget?: number,
+  excludedSlots?: string[],
+  weekdayHoursTarget?: number,
 ): Workout[] {
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here.
@@ -62,6 +66,8 @@ export function generateWeekWorkouts(
       effortScore,
       acwrStatus,
       forceDeload,
+      weeklyHoursTarget,
+      excludedSlots,
     });
     for (const intent of intents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
@@ -221,8 +227,20 @@ export function generateWeekWorkouts(
     }
   }
 
-  // Assign days of week
-  let scheduledWorkouts = assignDefaultDays(workouts);
+  // Assign days of week — pass weekday/weekend minute budgets when both
+  // weeklyHoursTarget and weekdayHoursTarget are set, so the scheduler can
+  // honour the user's Mon–Fri / Sat–Sun split (hard constraint).
+  let weekdayBudgetMin: number | undefined;
+  let weekendBudgetMin: number | undefined;
+  if (
+    weeklyHoursTarget != null && weeklyHoursTarget > 0 &&
+    weekdayHoursTarget != null && weekdayHoursTarget >= 0 &&
+    weekdayHoursTarget <= weeklyHoursTarget
+  ) {
+    weekdayBudgetMin = weekdayHoursTarget * 60;
+    weekendBudgetMin = (weeklyHoursTarget - weekdayHoursTarget) * 60;
+  }
+  let scheduledWorkouts = assignDefaultDays(workouts, weekdayBudgetMin, weekendBudgetMin);
 
   // Apply injury adaptations if injury is active
   if (injuryState && injuryState.active) {
@@ -255,38 +273,20 @@ export function generateWeekWorkouts(
  * @returns Array of week objects
  */
 export function initializeWeeks(totalWeeks: number): Week[] {
-  const weeks: Week[] = [];
-
-  // Phase boundaries: taper = last ~12% (min 1 week), then 45% base, 40% build, rest peak
-  const taperWeeks = Math.max(1, Math.ceil(totalWeeks * 0.12));
-  const taperStart = totalWeeks - taperWeeks + 1;
-  const pre = taperStart - 1;
-  const baseWeeks = Math.max(1, Math.round(pre * 0.45));
-  const buildWeeks = Math.max(1, Math.round(pre * 0.40));
-  const baseEnd = baseWeeks;
-  const buildEnd = baseWeeks + buildWeeks;
-
-  for (let w = 1; w <= totalWeeks; w++) {
-    let ph: TrainingPhase = 'base';
-    if (w >= taperStart) ph = 'taper';
-    else if (w > buildEnd) ph = 'peak';
-    else if (w > baseEnd) ph = 'build';
-
-    weeks.push({
-      w,
-      ph,
-      rated: {},
-      skip: [],
-      cross: [],
-      wkGain: 0,
-      workoutMods: [],
-      adjustments: [],
-      unspentLoad: 0,
-      extraRunLoad: 0
-    });
-  }
-
-  return weeks;
+  const planPhases = computePlanPhases(totalWeeks);
+  return planPhases.map((p, i) => ({
+    w: i + 1,
+    ph: p.ph,
+    ...(p.checkpoint ? { checkpoint: true } : {}),
+    rated: {},
+    skip: [],
+    cross: [],
+    wkGain: 0,
+    workoutMods: [],
+    adjustments: [],
+    unspentLoad: 0,
+    extraRunLoad: 0,
+  }));
 }
 
 /**

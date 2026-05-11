@@ -33,7 +33,16 @@ interface SwimSessionInput {
   /** Slot index within the week (0-based). Used for variant rotation so
    * two same-kind sessions in one week don't render identical descriptions. */
   slotIndex?: number;
+  /** Explicit variant index (0-based). When set, overrides the
+   * weekIndex+slotIndex rotation. Used by the ad-hoc session generator
+   * when the user picks a specific structure. */
+  variantIndex?: number;
 }
+
+/** Number of variants per swim kind. Source of truth for the picker drill-down. */
+export const SWIM_VARIANT_COUNT: Record<SwimSessionKind, number> = {
+  technique: 3, endurance: 3, threshold: 3, speed: 3,
+};
 
 const swimTypeMap: Record<SwimSessionKind, TriWorkoutType> = {
   technique: 'swim_technique',
@@ -68,7 +77,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
   const { phase, skill, kind, targetMinutes, cssSecPer100m } = input;
 
   const totalM = estimateDistanceMetres(targetMinutes, skill, cssSecPer100m);
-  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill, input.weekIndex, input.slotIndex ?? 0);
+  const desc = describeSwimSession(kind, totalM, cssSecPer100m, skill, input.weekIndex, input.slotIndex ?? 0, input.variantIndex);
   const rpe = rpeForSwim(kind, phase);
 
   const { aerobic, anaerobic } = loadForSwim(kind, targetMinutes);
@@ -93,7 +102,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
 // Helpers
 // ───────────────────────────────────────────────────────────────────────────
 
-function estimateDistanceMetres(minutes: number, skill: TriSkillSlider, css?: number): number {
+export function estimateDistanceMetres(minutes: number, skill: TriSkillSlider, css?: number): number {
   // Estimate average pace from skill (sec/100m) if CSS not supplied.
   // Rough: skill 1 ≈ 2:45/100m, skill 5 ≈ 1:25/100m — linear interpolation.
   const paceSecPer100 = css ?? (165 - (skill - 1) * 20);  // 1→165, 5→85
@@ -118,9 +127,9 @@ function nameForSwim(kind: SwimSessionKind): string {
  */
 const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: string) => string>> = {
   technique: [
-    (m, _) => `${m}m total. 200m Warm up. Drills: 4×50m catch-up. Main: 6×100m easy @ +10s/100m, focus body position. 200m Cool down.`,
-    (m, _) => `${m}m total. 200m Warm up. Drills: 4×50m single-arm + 4×50m fingertip drag. Main: 4×150m easy. 200m Cool down.`,
-    (m, _) => `${m}m total. 200m Warm up. Drills: 6×25m fist swim + 4×50m 6-kick switch. Main: 8×75m easy pull. 200m Cool down.`,
+    (m, hint) => `${m}m total. 200m Warm up. Drills: 4×50m catch-up. Main: 6×100m easy${hint || ' @ +10s/100m'}, focus body position. 200m Cool down.`,
+    (m, hint) => `${m}m total. 200m Warm up. Drills: 4×50m single-arm + 4×50m fingertip drag. Main: 4×150m easy${hint || ''}. 200m Cool down.`,
+    (m, hint) => `${m}m total. 200m Warm up. Drills: 6×25m fist swim + 4×50m 6-kick switch. Main: 8×75m easy pull${hint || ''}. 200m Cool down.`,
   ],
   endurance: [
     (m, hint) => {
@@ -170,22 +179,28 @@ const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: st
   ],
 };
 
-function describeSwimSession(
+export function describeSwimSession(
   kind: SwimSessionKind,
   totalM: number,
   css: number | undefined,
   skill: TriSkillSlider,
   weekIndex: number,
-  slotIndex: number = 0
+  slotIndex: number = 0,
+  explicitVariantIndex?: number,
 ): string {
   const paceHint = css ? ` @ ${formatPace(css)}/100m (CSS)` : '';
+  // Technique sessions swim ~10s/100m slower than CSS — show absolute pace when CSS is known.
+  const techHint = css ? ` @ ${formatPace(css + 10)}/100m` : '';
   const drillHint = skill <= 2 ? ' Focus on body position and breathing.' : '';
   const variants = SWIM_VARIANTS[kind];
   // Rotate by weekIndex + slotIndex so two same-kind sessions in one week
   // produce different variants. Shift by slotIndex * 2 to ensure adjacent
   // slots land on different variants even when the modulo wraps.
-  const idx = Math.abs((weekIndex - 1) + slotIndex * 2) % variants.length;
-  return variants[idx](totalM, paceHint) + (kind === 'technique' ? drillHint : '');
+  const idx = (explicitVariantIndex != null
+    ? explicitVariantIndex
+    : Math.abs((weekIndex - 1) + slotIndex * 2)) % variants.length;
+  const hint = kind === 'technique' ? techHint : paceHint;
+  return variants[idx](totalM, hint) + (kind === 'technique' ? drillHint : '');
 }
 
 function rpeForSwim(kind: SwimSessionKind, phase: TrainingPhase): number {

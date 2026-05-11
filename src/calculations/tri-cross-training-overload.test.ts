@@ -112,9 +112,11 @@ describe('detectCrossTrainingOverload — severity tiers', () => {
   });
 });
 
-describe('detectCrossTrainingOverload — recommended discipline', () => {
-  it('recommends the discipline with the most remaining planned TSS', () => {
-    // Bike has 220 TSS (most), so bike should be recommended.
+describe('detectCrossTrainingOverload — recommended discipline (run-anchored)', () => {
+  it('anchors on run for default cross-training (tennis = leg-impact, run-affinity)', () => {
+    // Tennis is leg-impact-loaded → run-affinity → recommend run, even though
+    // bike has more remaining planned TSS (220 vs 220 for run, but tied tests
+    // would otherwise prefer bike under the old "most-loaded" heuristic).
     const s = state({
       wks: [{
         ...canonicalTriWeek(),
@@ -122,13 +124,46 @@ describe('detectCrossTrainingOverload — recommended discipline', () => {
       }] as any,
     });
     const r = detectCrossTrainingOverload(s, 0);
-    expect(r!.recommendedDiscipline).toBe('bike');
+    expect(r!.recommendedDiscipline).toBe('run');
   });
 
-  it('flips recommendation when remaining shifts (e.g. completed sessions)', () => {
-    // Mark Saturday's bike as completed → remaining bike = 0; remaining run = 210; recommended = run.
+  it('anchors on run for gym/strength (also leg-impact)', () => {
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [{ id: 'gym', t: 'cross', n: 'strength', d: '60min', r: 6, iTrimp: 15000 }],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)!.recommendedDiscipline).toBe('run');
+  });
+
+  it('overrides to bike when cross-training is clearly cycling', () => {
+    // Extra Zwift / cycling session → bike-affinity → recommend bike.
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [{ id: 'zwift', t: 'cross', n: 'cycling', d: '90min', r: 6, iTrimp: 15000 }],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)!.recommendedDiscipline).toBe('bike');
+  });
+
+  it('overrides to swim when cross-training is clearly swimming', () => {
+    // Extra pool swim outside the plan → swim-affinity → recommend swim.
+    const s = state({
+      wks: [{
+        ...canonicalTriWeek(),
+        adhocWorkouts: [{ id: 'extra-swim', t: 'cross', n: 'swimming', d: '60min', r: 5, iTrimp: 15000 }],
+      }] as any,
+    });
+    expect(detectCrossTrainingOverload(s, 0)!.recommendedDiscipline).toBe('swim');
+  });
+
+  it('falls through to bike when run-affinity is recommended but run has no remaining work', () => {
+    // Tennis (run-affinity) but all run sessions are completed → fall through
+    // to next-most-loaded discipline. Bike has 220 TSS remaining.
     const wk = canonicalTriWeek();
-    wk.triWorkouts.find((w: any) => w.id === 'sat-b').status = 'completed';
+    wk.triWorkouts.filter((w: any) => w.discipline === 'run').forEach((w: any) => { w.status = 'completed'; });
     const s = state({
       wks: [{
         ...wk,
@@ -136,10 +171,10 @@ describe('detectCrossTrainingOverload — recommended discipline', () => {
       }] as any,
     });
     const r = detectCrossTrainingOverload(s, 0);
-    expect(r!.recommendedDiscipline).toBe('run');
+    expect(r!.recommendedDiscipline).toBe('bike');
   });
 
-  it('returns null when the recommended discipline has no remaining TSS', () => {
+  it('returns null when ALL disciplines have no remaining TSS', () => {
     // Every workout completed → no recommendation possible.
     const wk = canonicalTriWeek();
     wk.triWorkouts.forEach((w: any) => { w.status = 'completed'; });

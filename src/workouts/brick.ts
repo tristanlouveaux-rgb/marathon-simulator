@@ -13,6 +13,7 @@
 import type { Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { Discipline, DisciplineTarget, TriSkillSlider, TriWorkoutType } from '@/types/triathlon';
+import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 
 interface BrickInput {
   phase: TrainingPhase;
@@ -26,16 +27,21 @@ interface BrickInput {
 export function generateBrick(input: BrickInput): Workout {
   const { phase, bikeMinutes, runMinutes, ftp, hasPowerMeter } = input;
 
+  const brickWorkoutType = phase === 'peak' ? 'bike_sweet_spot' : 'bike_endurance';
+  const brickPct = phase === 'peak' ? 0.82 : 0.78;
+  const brickBand = BIKE_ADHERENCE_BAND[brickWorkoutType] ?? 0.07;
   const bikePower = hasPowerMeter && ftp
-    ? `${Math.round(ftp * (phase === 'peak' ? 0.82 : 0.78))}W`
+    ? `${Math.round(ftp * brickPct * (1 - brickBand))}–${Math.round(ftp * brickPct * (1 + brickBand))}W`
     : phase === 'peak' ? 'tempo Z3' : 'endurance Z2';
   const runTarget = phase === 'peak' ? 'race pace' : 'steady Z2';
 
   const bikeSeg: DisciplineTarget = {
     discipline: 'bike',
     durationMin: bikeMinutes,
-    targetPctFtp: phase === 'peak' ? 0.82 : 0.78,
-    targetWatts: hasPowerMeter && ftp ? Math.round(ftp * (phase === 'peak' ? 0.82 : 0.78)) : undefined,
+    targetPctFtp: brickPct,
+    targetWatts:     hasPowerMeter && ftp ? Math.round(ftp * brickPct) : undefined,
+    targetWattsLow:  hasPowerMeter && ftp ? Math.round(ftp * brickPct * (1 - brickBand)) : undefined,
+    targetWattsHigh: hasPowerMeter && ftp ? Math.round(ftp * brickPct * (1 + brickBand)) : undefined,
   };
 
   const runSeg: DisciplineTarget = {

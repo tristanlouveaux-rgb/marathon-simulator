@@ -1,0 +1,321 @@
+{
+  "src/ui/account-view.ts": {
+    "uppercase": 4,
+    "letter-spacing": 4,
+    "tinted-bg": 1
+  },
+  "src/ui/activity-detail.ts": {
+    "tinted-bg": 6,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/activity-review.ts": {
+    "tinted-bg": 7
+  },
+  "src/ui/auth-view.ts": {
+    "uppercase": 2,
+    "letter-spacing": 3
+  },
+  "src/ui/benchmark-overlay.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1,
+    "tinted-bg": 1
+  },
+  "src/ui/coach-view.ts": {
+    "uppercase": 3
+  },
+  "src/ui/events.ts": {
+    "tinted-bg": 8
+  },
+  "src/ui/freshness-view.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2
+  },
+  "src/ui/ftp-debug-overlay.ts": {
+    "uppercase": 5,
+    "letter-spacing": 5
+  },
+  "src/ui/holiday-modal.ts": {
+    "uppercase": 5,
+    "tinted-bg": 2,
+    "accent-button": 3
+  },
+  "src/ui/home-view.ts": {
+    "tinted-bg": 15,
+    "accent-button": 5,
+    "uppercase": 26,
+    "letter-spacing": 24
+  },
+  "src/ui/hyrox/add-session-modal.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/hyrox/forecast-view.ts": {
+    "tinted-bg": 2,
+    "uppercase": 13,
+    "letter-spacing": 13
+  },
+  "src/ui/hyrox/goal-modal.ts": {
+    "tinted-bg": 2,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/hyrox/percentile-distributions.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/hyrox/performance-radar.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/hyrox/plan-view.ts": {
+    "uppercase": 6,
+    "letter-spacing": 5,
+    "tinted-bg": 3
+  },
+  "src/ui/hyrox/station-detail-view.ts": {
+    "uppercase": 4,
+    "letter-spacing": 4
+  },
+  "src/ui/hyrox/stats-view.ts": {
+    "uppercase": 8,
+    "letter-spacing": 8,
+    "tinted-bg": 3
+  },
+  "src/ui/hyrox/workout-card.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/hyrox/workout-detail-modal.ts": {
+    "uppercase": 8,
+    "letter-spacing": 8,
+    "tinted-bg": 2
+  },
+  "src/ui/injury/modal.ts": {
+    "tinted-bg": 2,
+    "accent-button": 1
+  },
+  "src/ui/injury-risk-view.ts": {
+    "uppercase": 3,
+    "letter-spacing": 3
+  },
+  "src/ui/load-taper-view.ts": {
+    "tinted-bg": 8,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/main-view.ts": {
+    "tinted-bg": 29,
+    "accent-button": 6
+  },
+  "src/ui/matching-screen.ts": {
+    "tinted-bg": 2,
+    "uppercase": 2,
+    "letter-spacing": 2
+  },
+  "src/ui/mtl-load-view.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  },
+  "src/ui/plan-view.ts": {
+    "accent-button": 1,
+    "uppercase": 20,
+    "letter-spacing": 19,
+    "tinted-bg": 14
+  },
+  "src/ui/readiness-view.ts": {
+    "tinted-bg": 3
+  },
+  "src/ui/record-view.ts": {
+    "tinted-bg": 5,
+    "accent-button": 1
+  },
+  "src/ui/recovery-view.ts": {
+    "uppercase": 3,
+    "tinted-bg": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/renderer.ts": {
+    "tinted-bg": 16,
+    "accent-button": 1
+  },
+  "src/ui/rolling-load-view.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/session-generator.ts": {
+    "tinted-bg": 14,
+    "uppercase": 11
+  },
+  "src/ui/sleep-view.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/stats-view.ts": {
+    "tinted-bg": 11,
+    "uppercase": 33,
+    "letter-spacing": 33,
+    "accent-button": 1
+  },
+  "src/ui/strain-view.ts": {
+    "tinted-bg": 4,
+    "letter-spacing": 2
+  },
+  "src/ui/suggestion-modal.ts": {
+    "tinted-bg": 2
+  },
+  "src/ui/toast.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/benchmark-charts.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/benchmark-detail-pages.ts": {
+    "uppercase": 6,
+    "letter-spacing": 6
+  },
+  "src/ui/triathlon/benchmark-tests-card.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/bike-setup-view.ts": {
+    "uppercase": 5,
+    "letter-spacing": 5,
+    "tinted-bg": 7,
+    "accent-button": 1
+  },
+  "src/ui/triathlon/fitness-detail-view.ts": {
+    "tinted-bg": 1,
+    "uppercase": 2,
+    "letter-spacing": 2
+  },
+  "src/ui/triathlon/forecast-view.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/plan-view.ts": {
+    "uppercase": 9,
+    "letter-spacing": 8,
+    "tinted-bg": 4
+  },
+  "src/ui/triathlon/progress-detail-view.ts": {
+    "tinted-bg": 1,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/race-forecast-card.ts": {
+    "uppercase": 8,
+    "letter-spacing": 8,
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/race-readiness-card.ts": {
+    "tinted-bg": 1,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/race-readiness-detail.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/stats-view.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/transitions-overlay.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/tri-load-view.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  },
+  "src/ui/triathlon/tri-week-debrief.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/triathlon/workout-card.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 2
+  },
+  "src/ui/triathlon/workout-detail-modal.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  },
+  "src/ui/vo2max-card.ts": {
+    "uppercase": 4,
+    "letter-spacing": 4
+  },
+  "src/ui/week-debrief.ts": {
+    "tinted-bg": 1,
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/connect-strava.ts": {
+    "tinted-bg": 1,
+    "uppercase": 1
+  },
+  "src/ui/wizard/steps/cycling-setup.ts": {
+    "uppercase": 1
+  },
+  "src/ui/wizard/steps/goals.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/hyrox-setup.ts": {
+    "uppercase": 1,
+    "tinted-bg": 4
+  },
+  "src/ui/wizard/steps/hyrox-workout-preview.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/initializing.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/manual-entry.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/plan-preview-v2.ts": {
+    "letter-spacing": 7
+  },
+  "src/ui/wizard/steps/race-target.ts": {
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/review.ts": {
+    "uppercase": 3,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  },
+  "src/ui/wizard/steps/runner-type.ts": {
+    "tinted-bg": 1
+  },
+  "src/ui/wizard/steps/schedule.ts": {
+    "letter-spacing": 1,
+    "tinted-bg": 2
+  },
+  "src/ui/wizard/steps/tri-past-race.ts": {
+    "uppercase": 1
+  },
+  "src/ui/wizard/steps/tri-workout-preview.ts": {
+    "uppercase": 1,
+    "letter-spacing": 1
+  },
+  "src/ui/wizard/steps/triathlon-setup.ts": {
+    "uppercase": 2,
+    "letter-spacing": 1,
+    "tinted-bg": 2
+  },
+  "src/ui/wizard/steps/welcome.ts": {
+    "uppercase": 2,
+    "letter-spacing": 3
+  },
+  "src/ui/wizard/steps/workout-preview.ts": {
+    "uppercase": 2,
+    "letter-spacing": 2,
+    "tinted-bg": 1
+  }
+}

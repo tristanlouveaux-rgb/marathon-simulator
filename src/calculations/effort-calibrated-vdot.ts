@@ -17,6 +17,12 @@
  * NOT fabricate a default — we return null and the blend falls back to
  * Tanda/hard-effort/PB.
  *
+ * Outlier removal: after the initial fit, any point whose residual exceeds
+ * 2.5 standard deviations is removed and the regression is refit. This catches
+ * efforts like bonked long runs (high avgHR from fade, slow avgPace) without
+ * needing to know the activity type. One pass only; uses unweighted residual
+ * std so that long-duration runs don't define their own outlier threshold.
+ *
  * Anchors: Swain & Leutholtz 1997 (%HRR ≈ %VO2R), Daniels' VDOT tables,
  * Friel/Maffetone (drift <5% aerobic, >8% fatigued), Monod–Scherrer
  * (multi-point regression to asymptote).
@@ -62,6 +68,28 @@ export interface HRVdotResult {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+type Pt = { pace: number; vo2r: number; duration: number; ageDays: number };
+
+/** Weighted linear regression of pace on %VO2R (weights = duration).
+ *  Returns null when the fit is degenerate (collinear or too few points). */
+function fitWeightedRegression(pts: Pt[]): { alpha: number; beta: number; r2: number } | null {
+  if (pts.length < 3) return null;
+  let sumW = 0, sumWX = 0, sumWY = 0;
+  for (const p of pts) { sumW += p.duration; sumWX += p.duration * p.vo2r; sumWY += p.duration * p.pace; }
+  const meanX = sumWX / sumW;
+  const meanY = sumWY / sumW;
+  let num = 0, den = 0;
+  for (const p of pts) { const dx = p.vo2r - meanX; num += p.duration * dx * (p.pace - meanY); den += p.duration * dx * dx; }
+  if (den <= 0) return null;
+  const beta = num / den;
+  const alpha = meanY - beta * meanX;
+  let ssRes = 0, ssTot = 0;
+  for (const p of pts) { const pred = alpha + beta * p.vo2r; ssRes += p.duration * (p.pace - pred) ** 2; ssTot += p.duration * (p.pace - meanY) ** 2; }
+  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+  return { alpha, beta, r2 };
+}
+
 const WINDOW_WEEKS = 8;
 const MIN_DURATION_SEC = 20 * 60;          // <20 min: HR–pace linearity breaks (Swain domain is steady submax)
 const MAX_HR_DRIFT_PCT = 8;                // Friel 5% aerobic, 8% = upper bound before supra-threshold
@@ -97,7 +125,6 @@ export function computeHRCalibratedVdot(
 
   const windowStartMs = now.getTime() - WINDOW_WEEKS * 7 * DAY_MS;
 
-  type Pt = { pace: number; vo2r: number; duration: number; ageDays: number };
   const points: Pt[] = [];
 
   for (const r of runs) {
@@ -123,49 +150,44 @@ export function computeHRCalibratedVdot(
     });
   }
 
+  if (points.length < 3) {
+    const exp = points.map(p => ({ vo2r: p.vo2r, paceSecKm: p.pace, durationSec: p.duration }));
+    return { ...empty, n: points.length, reason: points.length === 0 ? 'no-points' : 'too-few-points', points: exp };
+  }
+
+  // Initial weighted regression.
+  let fit = fitWeightedRegression(points);
+  if (!fit) return { ...empty, n: points.length, reason: 'bad-fit' };
+
+  // Outlier removal via leave-one-out. σ-based detection masks itself when N
+  // is small because the outlier inflates std. LOO directly finds the single
+  // point whose removal most improves R²; if the gain is ≥ 0.25 we remove it
+  // and refit. One point removed per call, one pass only.
+  if (fit.r2 < 0.6 && points.length >= 4) {
+    let bestGain = 0.25; // minimum gain to justify removing a point
+    let bestIdx = -1;
+    for (let i = 0; i < points.length; i++) {
+      const subset = points.filter((_, j) => j !== i);
+      const f = fitWeightedRegression(subset);
+      if (f && f.r2 - fit.r2 > bestGain) { bestGain = f.r2 - fit.r2; bestIdx = i; }
+    }
+    if (bestIdx >= 0) {
+      points.splice(bestIdx, 1);
+      fit = fitWeightedRegression(points) ?? fit;
+    }
+  }
+
+  const { alpha, beta, r2 } = fit;
   const exposedPoints = points.map(p => ({ vo2r: p.vo2r, paceSecKm: p.pace, durationSec: p.duration }));
 
-  if (points.length < 3) {
-    return { ...empty, n: points.length, reason: points.length === 0 ? 'no-points' : 'too-few-points', points: exposedPoints };
-  }
-
-  // Weighted linear regression: y (pace) on x (%VO2R), weights = duration.
-  // β = Σw(x − x̄)(y − ȳ) / Σw(x − x̄)²
-  // α = ȳ − β·x̄
-  let sumW = 0, sumWX = 0, sumWY = 0;
-  for (const p of points) {
-    sumW += p.duration;
-    sumWX += p.duration * p.vo2r;
-    sumWY += p.duration * p.pace;
-  }
-  const meanX = sumWX / sumW;
-  const meanY = sumWY / sumW;
-
-  let numerator = 0, denomX = 0;
-  for (const p of points) {
-    const dx = p.vo2r - meanX;
-    numerator += p.duration * dx * (p.pace - meanY);
-    denomX   += p.duration * dx * dx;
-  }
-
-  if (denomX <= 0) return { ...empty, n: points.length, reason: 'bad-fit', points: exposedPoints };
-
-  const beta = numerator / denomX;
-  const alpha = meanY - beta * meanX;
-
-  // Physiological sanity: effort rises → pace gets faster → pace decreases → β must be negative.
-  // A non-negative β means the HR-pace relationship is inverted (noisy data, poor HR monitor,
-  // or too-narrow effort range). Reject rather than emit a nonsense VDOT.
+  // Physiological sanity: β must be negative (higher effort → faster pace → lower sec/km).
   if (beta >= 0) return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2: null, paceAtVO2max: null, reason: 'bad-fit', points: exposedPoints };
 
-  // R² (weighted): 1 - SS_res / SS_tot
-  let ssRes = 0, ssTot = 0;
-  for (const p of points) {
-    const predicted = alpha + beta * p.vo2r;
-    ssRes += p.duration * (p.pace - predicted) ** 2;
-    ssTot += p.duration * (p.pace - meanY) ** 2;
+  // Reject weak fits — R² < 0.25 means the pace–HR relationship is too noisy
+  // to trust the extrapolation to 100% HRR even after outlier removal.
+  if (r2 < 0.25) {
+    return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2, paceAtVO2max: null, reason: 'bad-fit', points: exposedPoints };
   }
-  const r2 = ssTot > 0 ? 1 - (ssRes / ssTot) : 0;
 
   const paceAtVO2max = alpha + beta * 1.0;
   if (paceAtVO2max < MIN_PACE_SEC_PER_KM * 0.8 || paceAtVO2max > MAX_PACE_SEC_PER_KM) {

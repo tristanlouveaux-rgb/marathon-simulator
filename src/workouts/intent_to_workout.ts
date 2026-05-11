@@ -1,7 +1,7 @@
 import type { Workout, RaceDistance, RunnerType } from '@/types';
 
 /** Workout slot type for plan engine */
-export type SlotType = 'easy' | 'long' | 'threshold' | 'vo2' | 'marathon_pace' | 'progressive' | 'float';
+export type SlotType = 'easy' | 'long' | 'threshold' | 'vo2' | 'marathon_pace' | 'progressive' | 'float' | 'vibes';
 
 /** Time-based session intent from plan engine */
 export interface SessionIntent {
@@ -31,7 +31,7 @@ export function intentToWorkout(
   // Derive actual paces from easy pace for readable descriptions
   const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
   const vo2PaceSec = easyPaceSecPerKm ? easyPaceSecPerKm * 0.809 : 0;
-  const thresholdPaceSec = easyPaceSecPerKm ? easyPaceSecPerKm / 1.15 : 0;
+  const thresholdPaceSec = easyPaceSecPerKm ? easyPaceSecPerKm / 1.20 : 0;
   const vo2Pace = easyPaceSecPerKm ? fmtPace(vo2PaceSec) : null;   // ~VO2max/5K pace
   const thresholdPace = easyPaceSecPerKm ? fmtPace(thresholdPaceSec) : null;  // ~LT pace
   const mpPace = easyPaceSecPerKm ? fmtPace(easyPaceSecPerKm * 0.913) : null;     // ~Marathon pace
@@ -53,6 +53,7 @@ export function intentToWorkout(
         d: `${km}km`,
         r: 3,
         rpe: 3,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -67,6 +68,7 @@ export function intentToWorkout(
           d: `${km}km: last ${fastKm} @ ${mpLabel}`,
           r: 5,
           rpe: 5,
+          estimatedDurationMin: totalMinutes,
         };
       }
       return {
@@ -75,6 +77,7 @@ export function intentToWorkout(
         d: `${km}km`,
         r: 3,
         rpe: 3,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -89,6 +92,7 @@ export function intentToWorkout(
           d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
           r: 7,
           rpe: 7,
+          estimatedDurationMin: totalMinutes,
         };
       }
       const mainSet = `${workMinutes}min @ ${thresholdLabel} (~${fmtDist(workMinutes, thresholdPaceSec)})`;
@@ -99,6 +103,7 @@ export function intentToWorkout(
         d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
         r: 7,
         rpe: 7,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -113,6 +118,7 @@ export function intentToWorkout(
           d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
           r: 8,
           rpe: 8,
+          estimatedDurationMin: totalMinutes,
         };
       }
       const mainSet = `${workMinutes}min @ ${vo2Label} (~${fmtDist(workMinutes, vo2PaceSec)})`;
@@ -123,6 +129,7 @@ export function intentToWorkout(
         d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
         r: 8,
         rpe: 8,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -133,6 +140,7 @@ export function intentToWorkout(
         d: `${workMinutes}min @ ${mpLabel}`,
         r: 6,
         rpe: 6,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -145,6 +153,7 @@ export function intentToWorkout(
         d: `${km}km: last ${workKm} @ ${mpLabel}`,
         r: 5,
         rpe: 5,
+        estimatedDurationMin: totalMinutes,
       };
     }
 
@@ -163,6 +172,7 @@ export function intentToWorkout(
           d: wucd ? `${wucd}km warm up (${easyLabel}+)\n${mainSet}\n${wucd}km cool down (${easyLabel}+)` : mainSet,
           r: 7,
           rpe: 7,
+          estimatedDurationMin: totalMinutes,
         };
       }
       // Continuous float (float long run): alternating blocks at MP and float pace
@@ -173,6 +183,18 @@ export function intentToWorkout(
         d: `${km}km: alternating 3km @ ${mpLabel} / 2km @ ${floatLabel}`,
         r: 6,
         rpe: 6,
+        estimatedDurationMin: totalMinutes,
+      };
+    }
+
+    case 'vibes': {
+      return {
+        t: 'vibes',
+        n: 'Run by Feel',
+        d: '5km easy, then keep going if it\'s still fun',
+        r: 4,
+        rpe: 4,
+        estimatedDurationMin: 35,
       };
     }
 
@@ -184,6 +206,7 @@ export function intentToWorkout(
         d: `${km}km`,
         r: 3,
         rpe: 3,
+        estimatedDurationMin: totalMinutes,
       };
     }
   }
@@ -240,6 +263,7 @@ function nameForSlot(slot: SlotType, intent: SessionIntent): string {
       if (intent.reps) return `Float Fartlek ${intent.reps}×${fmtMin(intent.repMinutes!)}`;
       return 'Float Long Run';
     }
+    case 'vibes': return 'Run by Feel';
     default: return 'Run';
   }
 }

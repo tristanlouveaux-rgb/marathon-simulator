@@ -26,6 +26,7 @@ import { isSleepDataPending } from '@/data/sleepPoller';
 import { heatAdjust } from '@/calculations/daily-coach';
 import { deriveLTForState, diagnoseLTForState, recomputeLT, clearLTSuggestion } from '@/data/ltSync';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -34,9 +35,7 @@ function navigateTab(tab: TabId): void {
   if (tab === 'home') {
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
   } else if (tab === 'plan') {
-    import('./plan-view').then(({ renderPlanView }) => renderPlanView());
-  } else if (tab === 'record') {
-    import('./record-view').then(({ renderRecordView }) => renderRecordView());
+    import('./main-view').then(({ renderMainView }) => renderMainView());
   } else if (tab === 'account') {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());
   }
@@ -173,6 +172,8 @@ function plannedWeekKm(s: SimulatorState, wkIdx: number): number {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel,
     undefined, s.pac?.e, wkIdx + 1, s.tw, s.v, s.gs,
+    undefined, undefined, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
   let km = 0;
   for (const w of workouts) {
@@ -190,6 +191,8 @@ function plannedWeekTSS(s: SimulatorState, wkIdx: number): number {
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel,
     undefined, s.pac?.e, wkIdx + 1, s.tw, s.v, s.gs,
+    undefined, undefined, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
   let tss = 0;
   for (const w of workouts) {
@@ -486,11 +489,11 @@ function buildOnePositionBar(opts: {
 }
 
 const INFO_TEXTS: Record<string, string> = {
-  ctl: 'Running Load (CTL) — a 42-day rolling average of your run-equivalent training load, shown in daily-equivalent units (TrainingPeaks-compatible). Running counts fully; cross-training at a discount (e.g. cycling 55%, padel 45%, gym 35%) — because it doesn\'t fully replace running-specific adaptation.',
-  atl: 'Fatigue (ATL) — a 7-day rolling average of your total physiological load: runs, gym, cross-training, everything, shown in daily-equivalent units. Your body doesn\'t care what sport caused the fatigue — hard is hard. When this rises well above your Running Load, injury risk increases even if you haven\'t been running much.',
-  tsb: 'Form (TSB = Running Load − Fatigue) — positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
-  acwr: 'Load Ratio (Fatigue ÷ Running Load) — compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
-  momentum: 'Running Load Momentum — your 4-week trend in running load (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped — try to stay consistent, since skipping sessions compounds quickly.',
+  ctl: 'Running Load (CTL): a 42-day rolling average of your run-equivalent training load, shown in daily-equivalent units (TrainingPeaks-compatible). Running counts fully; cross-training at a discount (e.g. cycling 55%, padel 45%, gym 35%), because it doesn\'t fully replace running-specific adaptation.',
+  atl: 'Fatigue (ATL): a 7-day rolling average of your total physiological load across runs, gym, cross-training, and everything else, shown in daily-equivalent units. Hard is hard regardless of sport. When this rises well above your Running Load, injury risk increases even without much running.',
+  tsb: 'Form (TSB = Running Load minus Fatigue). Positive means you\'re fresh and ready to perform. Negative means you\'re carrying fatigue. Aim to race when form is between +5 and +15.',
+  acwr: 'Load Ratio (Fatigue divided by Running Load). Compares total body fatigue against what you\'re adapted to run. A cross-training-heavy week correctly raises this even without much running. Values above your safe ceiling significantly increase injury risk.',
+  momentum: 'Running Load Momentum: your 4-week trend in running load (CTL). Building means your training load has been increasing and your body is adapting. Stable means consistent training. Declining means your load has dropped. Try to stay consistent, since skipping sessions compounds quickly.',
   vdot: 'VO2 Max reflects your aerobic ceiling, the primary predictor of endurance potential. When a device value is available (Garmin, Strava), that is shown directly. Otherwise it is estimated from training data using the Daniels VDOT model. Zones are sex-calibrated using ACSM standards.',
   aerobic: 'VO2 Max — your ceiling for oxygen uptake, the primary predictor of long-term endurance potential. When connected to a device (Garmin, Strava), the reported value is shown. Otherwise it is estimated from training data. Zones are sex-calibrated using ACSM standards.',
   lt: 'Lactate Threshold (LT) pace — the fastest pace you can sustain without accumulating lactic acid. The most trainable of the three metrics. A higher LT pace (further right on the bar) means you can race faster at aerobic effort.',
@@ -512,7 +515,10 @@ const INFO_TEXTS: Record<string, string> = {
 // Calibration status
 
 function buildCalibrationStatus(s: SimulatorState): string {
-  if (!s.stravaHistoryFetched) return '';
+  // Either history source (Strava DB-backed or Apple local-backfilled) qualifies
+  // a user for the calibration card — the math below operates on `s.wks` rows
+  // that match either path.
+  if (!s.stravaHistoryFetched && !s.appleHistoryFetched) return '';
   const completedRuns = (s.wks ?? []).reduce((acc, wk) => {
     for (const actual of Object.values(wk.garminActuals ?? {})) {
       if ((actual.iTrimp ?? 0) > 0 && (actual.durationSec ?? 0) > 600) acc++;
@@ -559,24 +565,7 @@ function buildProgressCard_Opening(s: SimulatorState): string {
 
   if (isRaceMode) {
     // Race mode: arc/timeline from plan start → race day
-    const forecastSec  = s.forecastTime ?? s.currentFitness ?? 0;
-    const initialSec   = s.initialBaseline ?? forecastSec;
-    // On track = forecast is faster than or equal to initial fitness (plan is helping)
-    // Slightly behind = up to 15 min slower than initial; off track = >15 min slower
-    const diffSec = forecastSec - initialSec; // positive = slower than starting fitness
-
-    let pillText: string;
-    let pillColor: string;
-    if (diffSec <= 300) {
-      pillText = 'On track ↗';
-      pillColor = 'var(--c-ok)';
-    } else if (diffSec <= 900) {
-      pillText = 'Slightly behind';
-      pillColor = 'var(--c-caution)';
-    } else {
-      pillText = 'Off track ↓';
-      pillColor = 'var(--c-warn)';
-    }
+    const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.currentFitness ?? 0;
 
     // Timeline progress bar
     const totalWks = s.tw ?? (s.wks?.length ?? 16);
@@ -596,9 +585,6 @@ function buildProgressCard_Opening(s: SimulatorState): string {
         <div class="m-card" style="padding:18px">
           <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Progress</div>
 
-          <!-- Timeline bar: "Week X of Y" rides above a monochrome progress line.
-               Label position tracks the progress percent and is clamped 6–94%
-               so it never collides with the Start / Race day captions. -->
           <div style="position:relative;margin-bottom:14px;padding-top:22px">
             <div style="position:absolute;top:0;left:${Math.max(6, Math.min(94, pct))}%;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--c-black);white-space:nowrap">
               Week ${currentWk} of ${totalWks}
@@ -612,13 +598,9 @@ function buildProgressCard_Opening(s: SimulatorState): string {
             </div>
           </div>
 
-          <!-- Forecast + pill -->
-          <div style="display:flex;align-items:center;justify-content:space-between">
-            <div>
-              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Forecast finish</div>
-              <div style="font-size:28px;font-weight:300;letter-spacing:-0.03em;color:var(--c-black)">${fmtT(forecastSec)}</div>
-            </div>
-            <span style="font-size:12px;font-weight:600;color:${pillColor};background:${pillColor}18;padding:5px 12px;border-radius:20px">${pillText}</span>
+          <div>
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Forecast finish</div>
+            <div style="font-size:28px;font-weight:300;letter-spacing:-0.03em;color:var(--c-black)">${fmtT(forecastSec)}</div>
           </div>
         </div>
       </div>`;
@@ -741,7 +723,7 @@ function buildReadinessCard_Opening(s: SimulatorState): string {
 
   const tier = s.athleteTier ?? 'recreational';
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, archivedPlans);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, archivedPlans, s.adaptiveRecovery);
   const metrics = computeFitnessModel(s.wks ?? [], s.w, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, undefined, archivedPlans);
   const ctlFourWeeksAgo = metrics[metrics.length - 5]?.ctl ?? ctlNow;
 
@@ -1127,6 +1109,30 @@ function buildStatsSummary(s: SimulatorState): string {
   if (s.trackOnly) {
     return `
       <div class="mosaic-page" style="background:var(--c-bg)">
+        <div style="max-width:600px;margin:0 auto">
+          <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
+            <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
+          </div>
+          ${buildProgressCard_Opening(s)}
+          <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
+            <div style="height:1px;background:var(--c-border)"></div>
+          </div>
+          ${buildFitnessCard_Opening(s)}
+          ${buildTrackOnlyVolumeCard(s)}
+          ${buildTrackOnlyLoadCard(s)}
+        </div>
+      </div>
+      ${renderTabBar('stats', isSimulatorMode())}`;
+  }
+
+  return `
+    <div class="mosaic-page" style="background:${atmosphereGradient('sky')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('sts', { variant: 'centered', palette: 'sky', pulse: true })}
+      </div>
+      ${buildSunGlint('low')}
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto">
         <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
           <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
           <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
@@ -1136,24 +1142,8 @@ function buildStatsSummary(s: SimulatorState): string {
           <div style="height:1px;background:var(--c-border)"></div>
         </div>
         ${buildFitnessCard_Opening(s)}
-        ${buildTrackOnlyVolumeCard(s)}
-        ${buildTrackOnlyLoadCard(s)}
+        ${buildSummarySection(s)}
       </div>
-      ${renderTabBar('stats', isSimulatorMode())}`;
-  }
-
-  return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      <div style="padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center">
-        <div style="font-size:22px;font-weight:700;letter-spacing:-0.03em;color:var(--c-black)">Stats</div>
-        <button id="stats-account-btn" style="width:32px;height:32px;border-radius:50%;border:1px solid var(--c-border-strong);background:transparent;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:0.02em;cursor:pointer;color:var(--c-black);font-family:var(--f);flex-shrink:0">${initials || 'Me'}</button>
-      </div>
-      ${buildProgressCard_Opening(s)}
-      <div style="padding:0 18px;margin-top:4px;margin-bottom:4px">
-        <div style="height:1px;background:var(--c-border)"></div>
-      </div>
-      ${buildFitnessCard_Opening(s)}
-      ${buildSummarySection(s)}
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
 }
@@ -1183,32 +1173,40 @@ function buildPhaseTimeline(s: SimulatorState): string {
 
   const phaseColors: Record<string, string> = {
     base: 'rgba(37,99,235,0.75)', build: 'rgba(249,115,22,0.75)', peak: 'rgba(168,85,247,0.75)', taper: 'rgba(234,179,8,0.75)',
+    checkpoint: 'rgba(20,184,166,0.85)',
   };
-  const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' };
+  const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper', checkpoint: 'Checkpoint' };
+
+  // Checkpoint weeks (double-periodization TT week) are visualised as their own
+  // segment so the cycle-1 → cycle-2 boundary reads clearly. Underlying ph stays
+  // 'peak' for engine purposes; only the grouping key changes here.
+  const segKey = (i: number): string => (weeks[i].checkpoint ? 'checkpoint' : (weeks[i].ph || 'base'));
 
   type Seg = { phase: string; start: number; end: number };
   const segs: Seg[] = [];
   for (let i = 0; i < weeks.length; i++) {
-    const ph = weeks[i].ph || 'base';
+    const ph = segKey(i);
     if (!segs.length || segs[segs.length - 1].phase !== ph) segs.push({ phase: ph, start: i + 1, end: i + 1 });
     else segs[segs.length - 1].end = i + 1;
   }
 
   const total = weeks.length;
   const bars = segs.map((seg, si) => {
-    const w = ((seg.end - seg.start + 1) / total * 100).toFixed(1);
+    const wPct = (seg.end - seg.start + 1) / total * 100;
+    const w = wPct.toFixed(1);
     const color = phaseColors[seg.phase] ?? 'var(--c-muted)';
     const label = phaseText[seg.phase] ?? seg.phase;
     const isCurr = s.w >= seg.start && s.w <= seg.end;
     const isFirst = si === 0;
     const isLast  = si === segs.length - 1;
     const dotPct  = seg.end > seg.start ? ((s.w - seg.start) / (seg.end - seg.start) * 100) : 50;
+    const showLabel = wPct >= 8;
     return `
       <div style="display:flex;flex-direction:column;width:${w}%">
         <div style="height:8px;border-radius:${isFirst ? '4px 0 0 4px' : ''}${isLast ? '0 4px 4px 0' : ''};background:${color};opacity:${isCurr ? '1' : '0.35'};position:relative">
           ${isCurr ? `<div style="position:absolute;top:50%;left:${Math.max(8, Math.min(92, dotPct))}%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:white;border:2px solid ${color};box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>` : ''}
         </div>
-        <span style="font-size:9px;color:var(--c-faint);margin-top:5px;font-weight:${isCurr ? '600' : '400'}">${label}</span>
+        ${showLabel ? `<span style="font-size:9px;color:var(--c-faint);margin-top:5px;font-weight:${isCurr ? '600' : '400'};white-space:nowrap;overflow:hidden;text-overflow:clip">${label}</span>` : '<span style="margin-top:5px;height:13px"></span>'}
       </div>`;
   }).join('');
 
@@ -1248,7 +1246,7 @@ function buildLoadLineChart(s: SimulatorState, range: ChartRange, cssClass: stri
   const topPath = smoothAreaPath(pts);
   const areaPath = `${topPath} L ${xOf(n-1).toFixed(1)} ${H} L ${xOf(0).toFixed(1)} ${H} Z`;
 
-  const tickStep = maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
+  const tickStep = maxVal <= 100 ? 25 : maxVal <= 250 ? 50 : maxVal <= 600 ? 100 : maxVal <= 1200 ? 200 : 400;
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
     yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
@@ -1340,7 +1338,7 @@ function buildForecastLoadChart(s: SimulatorState): string {
   const fAreaPath = `${fSmooth} L ${forecastPts[forecastPts.length - 1][0].toFixed(1)} ${H} L ${forecastPts[0][0].toFixed(1)} ${H} Z`;
 
   // Y-axis labels
-  const tickStep = maxVal <= 100 ? 25 : maxVal <= 200 ? 50 : 100;
+  const tickStep = maxVal <= 100 ? 25 : maxVal <= 250 ? 50 : maxVal <= 600 ? 100 : maxVal <= 1200 ? 200 : 400;
   const yAxisHtml: string[] = [];
   for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
     yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
@@ -1976,7 +1974,7 @@ function buildProgressDetailPage(s: SimulatorState): string {
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildDetailHeader('Progress')}
 
-      <div style="padding:12px 18px 14px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:12px 18px 14px;overflow-y:auto">
 
         ${toggleHTML}
 
@@ -2391,7 +2389,7 @@ function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummar
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildDetailHeader(title)}
 
-      <div style="padding:8px 18px 14px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:8px 18px 14px;overflow-y:auto">
 
         <div style="font-size:12px;color:var(--c-muted);margin-bottom:14px">
           ${dateLabel} · ${summary.totalWeeks}w
@@ -2541,7 +2539,7 @@ function buildCTLLearnMorePage(s: SimulatorState): string {
       </div>
 
       <!-- Content -->
-      <div style="overflow-y:auto;padding:16px 16px 32px;display:flex;flex-direction:column;gap:12px">
+      <div style="overflow-y:auto;padding:16px 16px 32px;display:flex;flex-direction:column;gap:12px;max-width:600px;margin:0 auto">
 
         <!-- What it measures -->
         <div style="background:var(--c-surface);border-radius:14px;padding:16px 18px">
@@ -2886,6 +2884,73 @@ function buildVO2ChangeNote(data: Array<{ date: string; value: number }>): strin
   }
 }
 
+/**
+ * Scatter showing the pace ↔ HR-effort relationship that backs the
+ * HR-calibrated VDOT estimate. Pace on x (faster left, slower right),
+ * vo2r on y (harder up, easier down). Returns '' when fewer than 3 runs
+ * have fed the regression.
+ *
+ * Why HTML dots instead of `<circle>`: the SVG uses
+ * `preserveAspectRatio="none"` so it can stretch to card width while
+ * keeping a constant height — that distortion would turn `<circle>` into
+ * ellipses (and our SVG-sizing memory bans circles inside stretched SVGs).
+ * Only the regression line lives in the SVG, with `vector-effect=
+ * non-scaling-stroke` so its width stays 1.5px after the stretch.
+ */
+function buildHrPaceCalibrationCard(s: SimulatorState): string {
+  const hr = s.hrCalibratedVdot;
+  const pts = hr?.points;
+  if (!pts || pts.length < 3) return '';
+
+  const unitPref = s.unitPref ?? 'km';
+  const xs = pts.map(p => p.paceSecKm);
+  const ys = pts.map(p => p.vo2r);
+  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const xPad = (xMax - xMin) * 0.10 || 5;
+  const yPad = (yMax - yMin) * 0.15 || 0.02;
+  const x0 = xMin - xPad, x1 = xMax + xPad;
+  const y0 = yMin - yPad, y1 = yMax + yPad;
+
+  const xPct = (x: number) => ((x - x0) / (x1 - x0)) * 100;
+  const yPct = (y: number) => (1 - (y - y0) / (y1 - y0)) * 100;
+
+  const dots = pts.map(p =>
+    `<span style="position:absolute;left:${xPct(p.paceSecKm).toFixed(1)}%;top:${yPct(p.vo2r).toFixed(1)}%;width:6px;height:6px;border-radius:50%;background:var(--c-black);transform:translate(-50%,-50%);pointer-events:none"></span>`,
+  ).join('');
+
+  let line = '';
+  if (hr?.alpha != null && hr?.beta != null) {
+    // Regression: paceSecKm = alpha + beta * vo2r. Project onto the observed
+    // vo2r endpoints so the line spans the data, not the padded chart edges.
+    const paceAtMinY = hr.alpha + hr.beta * yMin;
+    const paceAtMaxY = hr.alpha + hr.beta * yMax;
+    line = `<line x1="${xPct(paceAtMinY).toFixed(1)}" y1="${yPct(yMin).toFixed(1)}" x2="${xPct(paceAtMaxY).toFixed(1)}" y2="${yPct(yMax).toFixed(1)}" stroke="#64748B" stroke-width="1.5" stroke-linecap="round" vector-effect="non-scaling-stroke"/>`;
+  }
+
+  const fast = fp(xMin, unitPref);
+  const slow = fp(xMax, unitPref);
+  const n = pts.length;
+
+  return `
+    <div class="m-card" style="padding:16px;margin-top:14px">
+      <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">HR vs pace calibration</div>
+      <div style="font-size:11px;color:var(--c-faint);line-height:1.45;margin-bottom:14px">
+        Each dot is a recent run. The line is the fit used to translate heart-rate effort into pace.
+      </div>
+      <div style="position:relative;width:100%;height:160px">
+        <svg viewBox="0 0 100 100" width="100%" height="100%" preserveAspectRatio="none" style="display:block">${line}</svg>
+        ${dots}
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:10px;color:var(--c-faint)">
+        <span>Faster · ${fast}</span>
+        <span>Slower · ${slow}</span>
+      </div>
+      <div style="font-size:10px;color:var(--c-faint);margin-top:2px">Calibrated from ${n} runs.</div>
+    </div>
+  `;
+}
+
 /** Fallback: VDOT change note when no device VO2 data exists. */
 function buildVdotChangeNote(history: Array<{ week: number; vdot: number; date?: string }>): string {
   if (history.length < 2) return '';
@@ -2948,7 +3013,7 @@ function buildFitnessDetailPage(s: SimulatorState): string {
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildDetailHeader('Fitness')}
 
-      <div style="padding:12px 18px 14px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:12px 18px 14px;overflow-y:auto">
 
         <!-- Scale bars -->
         ${buildProgressScaleBars(s, ctl, metrics)}
@@ -2984,7 +3049,7 @@ function buildFitnessDetailPage(s: SimulatorState): string {
 // METRIC HISTORY SUB-PAGES
 // ══════════════════════════════════════════════════════════════════════════════
 
-function buildMetricSubHeader(title: string): string {
+export function buildMetricSubHeader(title: string): string {
   return `
     <div style="padding:max(16px, env(safe-area-inset-top)) 18px 12px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--c-border)">
       <button id="stats-metric-back" style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:none;border:none;cursor:pointer;font-size:20px;color:var(--c-black);font-family:var(--f);flex-shrink:0;margin-left:-8px">←</button>
@@ -3019,7 +3084,7 @@ function buildCTLMetricPage(s: SimulatorState): string {
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildMetricSubHeader('Running Load')}
-      <div style="padding:18px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
         <div style="margin-bottom:4px;font-size:28px;font-weight:300;color:var(--c-black)">${currentCtl}</div>
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">Daily-equivalent CTL · 42-day running average</div>
         <div class="m-card" style="padding:16px">
@@ -3077,7 +3142,7 @@ function buildVDOTMetricPage(s: SimulatorState): string {
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildMetricSubHeader('VO2 Max')}
-      <div style="padding:18px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
           <span style="font-size:28px;font-weight:300;color:var(--c-black)">${vo2metric > 0 ? Math.round(vo2metric) : '—'}</span>
           <span style="font-size:18px;color:${trendColor}">${trendArrow}</span>
@@ -3085,12 +3150,13 @@ function buildVDOTMetricPage(s: SimulatorState): string {
         <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${sourceLabel}</div>
         ${chartHtml ? `<div class="m-card" style="padding:16px">${chartHtml}</div>` : ''}
         ${changeNote}
+        ${isEstimated ? buildHrPaceCalibrationCard(s) : ''}
       </div>
     </div>
     ${renderTabBar('stats', isSimulatorMode())}`;
 }
 
-function buildLTMetricPage(s: SimulatorState): string {
+export function buildLTMetricPage(s: SimulatorState): string {
   const unitPref = s.unitPref ?? 'km';
   const currentLT = s.lt ?? 0;
   const currentHR = s.ltHR ?? null;
@@ -3149,7 +3215,7 @@ function buildLTMetricPage(s: SimulatorState): string {
   return `
     <div class="mosaic-page" style="background:var(--c-bg)">
       ${buildMetricSubHeader('Lactate Threshold')}
-      <div style="padding:18px;overflow-y:auto">
+      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
         <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px">
           <span style="font-size:28px;font-weight:300;color:var(--c-black)">${ltLabel}</span>
           ${currentHR ? `<span style="font-size:14px;color:var(--c-muted)">· ${currentHR} bpm</span>` : ''}
@@ -3160,6 +3226,29 @@ function buildLTMetricPage(s: SimulatorState): string {
         ${sparkline}
         ${methodsCard}
         ${overrideCard}
+        ${s.pac ? `
+        <div style="margin-top:16px">
+          <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">Training Paces</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div class="m-card" style="padding:12px 14px">
+              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Easy</div>
+              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.e, unitPref)} – ${fp(Math.round(s.pac.e * 13 / 12), unitPref)}</div>
+              <div style="font-size:10px;color:var(--c-faint);margin-top:2px">slower is fine</div>
+            </div>
+            <div class="m-card" style="padding:12px 14px">
+              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Marathon</div>
+              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.m, unitPref)}</div>
+            </div>
+            <div class="m-card" style="padding:12px 14px">
+              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">Threshold</div>
+              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.t, unitPref)}</div>
+            </div>
+            <div class="m-card" style="padding:12px 14px">
+              <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">VO2max</div>
+              <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${fp(s.pac.i, unitPref)}</div>
+            </div>
+          </div>
+        </div>` : ''}
         <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:14px">
           LT pace anchors threshold workouts and feeds race-time predictions. We blend Daniels VDOT, critical-speed fits, and recent steady-state runs. Override below if you trust a lab test or race time more.
         </div>
@@ -3180,7 +3269,7 @@ function sourceToLabel(src: SimulatorState['ltSource']): string {
   }
 }
 
-function buildConfidenceChip(c: 'high' | 'medium' | 'low'): string {
+export function buildConfidenceChip(c: 'high' | 'medium' | 'low'): string {
   const colorMap = {
     high: { bg: 'rgba(52,199,89,0.12)', fg: '#15803D' },
     medium: { bg: 'rgba(245,158,11,0.12)', fg: '#B45309' },
@@ -3313,7 +3402,7 @@ function buildLTOverrideCard(
           <span style="font-size:11px;color:var(--c-muted)">LT pace</span>
           <span id="lt-override-pace-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${fp(seedPace, unitPref)}</span>
         </div>
-        <input type="range" id="lt-override-pace" min="${minPace}" max="${maxPace}" step="1" value="${seedPace}" style="width:100%;accent-color:var(--c-black)">
+        <input type="range" id="lt-override-pace" class="m-slider-glass" min="${minPace}" max="${maxPace}" step="1" value="${seedPace}">
         <div style="display:flex;justify-content:space-between;margin-top:2px">
           <span style="font-size:10px;color:var(--c-faint)">${fp(minPace, unitPref)}</span>
           <span style="font-size:10px;color:var(--c-faint)">${fp(maxPace, unitPref)}</span>
@@ -3324,7 +3413,7 @@ function buildLTOverrideCard(
           <span style="font-size:11px;color:var(--c-muted)">LT heart rate</span>
           <span id="lt-override-hr-label" style="font-size:14px;font-weight:600;color:var(--c-black)">${seedHR} bpm</span>
         </div>
-        <input type="range" id="lt-override-hr" min="${minHR}" max="${maxHR}" step="1" value="${seedHR}" style="width:100%;accent-color:var(--c-black)">
+        <input type="range" id="lt-override-hr" class="m-slider-glass" min="${minHR}" max="${maxHR}" step="1" value="${seedHR}">
         <div style="display:flex;justify-content:space-between;margin-top:2px">
           <span style="font-size:10px;color:var(--c-faint)">${minHR} bpm</span>
           <span style="font-size:10px;color:var(--c-faint)">${maxHR} bpm</span>
@@ -3350,7 +3439,7 @@ function buildRaceProgressDetail(s: SimulatorState): string {
   if (s.continuousMode || !s.initialBaseline || !s.currentFitness) return '';
   const initial  = s.initialBaseline;
   const current  = s.currentFitness;
-  const forecast = s.forecastTime ?? current;
+  const forecast = s.forecastTimeAdjusted ?? s.forecastTime ?? current;
   const onTrack  = forecast <= initial * 1.005;
   const totalImp = initial - forecast;
   const curImp   = initial - current;
@@ -3515,23 +3604,26 @@ function buildForecastTimesCard(s: SimulatorState): string {
 /** Training paces card (standalone). */
 function buildPacesCard(s: SimulatorState, unitPref: UnitPref): string {
   if (!s.pac) return '';
-  const paces = [
-    { label: 'Easy',      value: s.pac.e, color: 'var(--c-ok)' },
-    { label: 'Marathon',  value: s.pac.m, color: 'var(--c-accent)' },
-    { label: 'Threshold', value: s.pac.t, color: 'var(--c-caution)' },
-    { label: 'VO2max',    value: s.pac.i, color: 'var(--c-warn)' },
-  ].filter(p => p.value);
+  const easyLo = s.pac.e;
+  const easyHi = Math.round(s.pac.e * 13 / 12); // LT × 1.30
+  const rows = [
+    { label: 'Easy',      value: `${fp(easyLo, unitPref)} – ${fp(easyHi, unitPref)}`, sub: 'slower is fine' },
+    { label: 'Marathon',  value: fp(s.pac.m, unitPref), sub: null },
+    { label: 'Threshold', value: fp(s.pac.t, unitPref), sub: null },
+    { label: 'VO2max',    value: fp(s.pac.i, unitPref), sub: null },
+  ].filter(r => r.value && r.value !== '—');
 
-  if (!paces.length) return '';
+  if (!rows.length) return '';
 
   return `
-    <div class="m-card" style="padding:14px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:10px">Training Paces</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-        ${paces.map(p => `
-          <div style="background:rgba(0,0,0,0.03);border-radius:8px;padding:9px 11px;display:flex;align-items:center;justify-content:space-between">
-            <span style="font-size:11px;color:var(--c-muted)">${p.label}</span>
-            <span style="font-size:14px;font-weight:600;color:${p.color}">${fp(p.value!, unitPref)}</span>
+    <div style="padding:0 18px;margin-bottom:10px">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:8px">Training Paces</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        ${rows.map(r => `
+          <div class="m-card" style="padding:12px 14px">
+            <div style="font-size:11px;color:var(--c-muted);margin-bottom:2px">${r.label}</div>
+            <div style="font-size:16px;font-weight:300;color:var(--c-black);line-height:1.2">${r.value}</div>
+            ${r.sub ? `<div style="font-size:10px;color:var(--c-faint);margin-top:2px">${r.sub}</div>` : ''}
           </div>`).join('')}
       </div>
     </div>`;
@@ -4078,7 +4170,7 @@ function buildFreshnessCard(s: SimulatorState): string {
 function buildInjuryRiskCard(s: SimulatorState): string {
   const tier = (s as any).athleteTierOverride ?? s.athleteTier;
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
-  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks);
+  const acwr = computeACWR(s.wks ?? [], s.w, tier, s.ctlBaseline ?? undefined, s.planStartDate, atlSeed, s.signalBBaseline ?? undefined, undefined, (s as any).previousPlanWks, s.adaptiveRecovery);
   const ratio = acwr.ratio;
   const safeUpper = acwr.safeUpper;
   const cautionUpper = safeUpper + 0.2;
@@ -4339,7 +4431,7 @@ function buildProgressCardCompact(s: SimulatorState): string {
   };
 
   if (isRaceMode) {
-    const forecastSec = s.forecastTime ?? s.currentFitness ?? 0;
+    const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.currentFitness ?? 0;
     const initialSec  = s.initialBaseline ?? forecastSec;
     const diffSec = forecastSec - initialSec;
     const totalWks  = s.tw ?? (s.wks?.length ?? 16);
@@ -4415,7 +4507,7 @@ function buildStatsScroll(s: SimulatorState): string {
 // EVENT WIRING
 // ══════════════════════════════════════════════════════════════════════════════
 
-function wireInfoButtons(): void {
+export function wireInfoButtons(): void {
   document.querySelectorAll<HTMLButtonElement>('.stats-info-btn').forEach(btn => {
     const handler = (e: Event) => {
       e.stopPropagation();
@@ -4645,7 +4737,7 @@ function wireMetricBack(s: SimulatorState): void {
 }
 
 /** Wire override sliders + conflict-resolution buttons on the LT metric page. */
-function wireLTOverrideHandlers(s: SimulatorState): void {
+export function wireLTOverrideHandlers(s: SimulatorState): void {
   const unitPref = s.unitPref ?? 'km';
   const paceSlider = document.getElementById('lt-override-pace') as HTMLInputElement | null;
   const paceLabel  = document.getElementById('lt-override-pace-label');
@@ -4762,6 +4854,11 @@ export function renderStatsView(): void {
   // Triathlon fork — full per-discipline stats view handles its own render.
   if (s.eventType === 'triathlon') {
     import('./triathlon/stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
+    return;
+  }
+  // HYROX fork — MTL load + station benchmarks stats view.
+  if (s.eventType === 'hyrox') {
+    import('./hyrox/stats-view').then(({ renderHyroxStatsView }) => renderHyroxStatsView());
     return;
   }
   container.innerHTML = buildStatsSummary(s);

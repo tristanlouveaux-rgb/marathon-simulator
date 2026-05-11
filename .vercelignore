@@ -1,0 +1,33 @@
+# Vercel deploys the web app only. Native / research / validation artifacts
+# never need to be uploaded — they bloat the upload past Vercel's 100MB-per-file
+# limit and waste minutes on every deploy.
+
+# Native iOS project (Capacitor app shell + custom plugins + SPM build caches).
+# The web build that Capacitor consumes is already in dist/ — iOS source is
+# only used by `npx cap sync ios` locally and Xcode builds.
+ios/
+ios-plugins/
+
+# Bulk validation datasets (CSVs of triathlon race results used by the
+# offline validation harness). Not consumed at runtime.
+validation/
+
+# Research artefacts and scratch tooling — not needed at deploy time.
+Research/
+marque-cli/
+
+# Strava screenshots used in docs / decks, not the runtime app.
+strava-screenshots/
+
+# Local Swift Package Manager build artefacts (can appear anywhere a
+# Package.swift is indexed by Xcode / SourceKit).
+**/.build/
+.swiftpm/
+
+# Test coverage output — regenerated on demand.
+coverage/
+
+# Large image assets in repo root that don't ship with the app.
+v3-goals.png
+slide4-teal.png
+droplet-slide.png

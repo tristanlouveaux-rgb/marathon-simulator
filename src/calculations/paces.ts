@@ -10,7 +10,7 @@ import { vt } from './vdot';
 export function gp(vdot: number, ltPace?: number | null): Paces {
   if (ltPace) {
     return {
-      e: ltPace * 1.15,      // Easy: 15% slower than LT
+      e: ltPace * 1.20,      // Easy: 20% slower than LT (~65-70% VO2max, mid-Daniels E-pace band)
       m: ltPace * 1.05,      // Marathon: 5% slower than LT
       t: ltPace,             // Threshold: at LT
       i: ltPace * 0.93,      // Interval: 7% faster than LT

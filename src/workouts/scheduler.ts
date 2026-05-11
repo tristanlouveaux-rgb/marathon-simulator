@@ -33,10 +33,22 @@ export function isHardWorkout(workoutType: string): boolean {
  * When total workouts <= 7 a deconfliction pass ensures
  * no day has more than one workout.
  *
+ * When `weekdayBudgetMin` / `weekendBudgetMin` are provided, a final
+ * rebalance pass moves sessions across the Mon–Fri / Sat–Sun divide
+ * to honour the user's weekday/weekend hours preference. This is a
+ * hard constraint: stacking on the receiving side is permitted when
+ * the split forces it. Users can drag individual sessions afterwards.
+ *
  * @param workouts - Array of workouts to schedule
+ * @param weekdayBudgetMin - Optional Mon–Fri minutes budget
+ * @param weekendBudgetMin - Optional Sat–Sun minutes budget
  * @returns Workouts with dayOfWeek assigned
  */
-export function assignDefaultDays(workouts: Workout[]): Workout[] {
+export function assignDefaultDays(
+  workouts: Workout[],
+  weekdayBudgetMin?: number,
+  weekendBudgetMin?: number,
+): Workout[] {
   // ---- Categorise workouts ----
   const long = workouts.find(w => w.t === 'long');
   const quality = workouts.filter(w =>
@@ -192,6 +204,11 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
     spreadToAvoidStacking(workouts);
   }
 
+  // ---- 6. Honour weekday/weekend hours preference (hard constraint) ----
+  if (weekdayBudgetMin != null && weekendBudgetMin != null) {
+    respectWeekdaySplit(workouts, weekdayBudgetMin, weekendBudgetMin);
+  }
+
   // Ensure all workouts have a day assigned
   workouts.forEach(w => {
     if (w.dayOfWeek === undefined) {
@@ -201,6 +218,76 @@ export function assignDefaultDays(workouts: Workout[]): Workout[] {
   });
 
   return workouts;
+}
+
+/** Day indices: 0–4 = Mon–Fri, 5–6 = Sat–Sun. */
+const WEEKDAY_DAYS = [0, 1, 2, 3, 4];
+const WEEKEND_DAYS = [5, 6];
+
+function durationOf(w: Workout): number {
+  return (w as any).estimatedDurationMin ?? 0;
+}
+
+function sumMinutesOnDays(workouts: Workout[], days: number[]): number {
+  const set = new Set(days);
+  return workouts.reduce((sum, w) =>
+    w.dayOfWeek !== undefined && set.has(w.dayOfWeek) ? sum + durationOf(w) : sum, 0);
+}
+
+function leastBusyDay(workouts: Workout[], days: number[]): number {
+  const minutesByDay: Record<number, number> = {};
+  for (const d of days) minutesByDay[d] = 0;
+  for (const w of workouts) {
+    if (w.dayOfWeek !== undefined && minutesByDay[w.dayOfWeek] !== undefined) {
+      minutesByDay[w.dayOfWeek] += durationOf(w);
+    }
+  }
+  return [...days].sort((a, b) => minutesByDay[a] - minutesByDay[b])[0];
+}
+
+/**
+ * Move sessions across the Mon–Fri / Sat–Sun divide so each side honours
+ * the user's hours preference. Hard constraint: stacking on the receiving
+ * side is permitted when the split forces it (e.g. 0h weekday with 5 runs
+ * stacks them on Sat/Sun). Users can drag individual sessions afterwards.
+ *
+ * Move priority is reused from `movePriority`: cross > easy > commute >
+ * gym > hard. Quality and long are moved last, only when no flexible
+ * sessions remain on the over-budget side.
+ *
+ * Termination: each iteration moves a session, decreasing the source
+ * side's count of movable items, so the loops are finite.
+ */
+function respectWeekdaySplit(
+  workouts: Workout[],
+  weekdayBudgetMin: number,
+  weekendBudgetMin: number,
+): void {
+  const moveOne = (fromDays: number[], toDays: number[]): boolean => {
+    const fromSet = new Set(fromDays);
+    const candidates = workouts.filter(w =>
+      w.dayOfWeek !== undefined && fromSet.has(w.dayOfWeek),
+    );
+    if (candidates.length === 0) return false;
+    candidates.sort((a, b) => movePriority(b) - movePriority(a));
+    const target = candidates[0];
+    const dest = leastBusyDay(workouts, toDays);
+    target.dayOfWeek = dest;
+    target.dayName = DAY_NAMES[dest];
+    return true;
+  };
+
+  // Rebalance weekday → weekend if Mon–Fri is over budget.
+  let safety = workouts.length + 1;
+  while (sumMinutesOnDays(workouts, WEEKDAY_DAYS) > weekdayBudgetMin && safety-- > 0) {
+    if (!moveOne(WEEKDAY_DAYS, WEEKEND_DAYS)) break;
+  }
+
+  // Rebalance weekend → weekday if Sat–Sun is over budget.
+  safety = workouts.length + 1;
+  while (sumMinutesOnDays(workouts, WEEKEND_DAYS) > weekendBudgetMin && safety-- > 0) {
+    if (!moveOne(WEEKEND_DAYS, WEEKDAY_DAYS)) break;
+  }
 }
 
 /**

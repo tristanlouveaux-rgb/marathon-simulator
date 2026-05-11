@@ -5,6 +5,7 @@ import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
 import { renderConnectStrava } from './steps/connect-strava';
 import { renderManualEntry } from './steps/manual-entry';
+import { renderAboutYou } from './steps/about-you';
 import { renderReview } from './steps/review';
 import { renderInitializing } from './steps/initializing';
 import { renderRaceTarget } from './steps/race-target';
@@ -12,6 +13,12 @@ import { renderSchedule } from './steps/schedule';
 import { renderPlanPreviewV2 } from './steps/plan-preview-v2';
 import { renderRunnerType } from './steps/runner-type';
 import { renderTriathlonSetup } from './steps/triathlon-setup';
+import { renderTriPastRace } from './steps/tri-past-race';
+import { renderCyclingSetup } from './steps/cycling-setup';
+import { renderHyroxSetup } from './steps/hyrox-setup';
+import { renderWorkoutPreview } from './steps/workout-preview';
+import { renderTriWorkoutPreview } from './steps/tri-workout-preview';
+import { renderHyroxWorkoutPreview } from './steps/hyrox-workout-preview';
 
 /**
  * Get the app root container
@@ -51,6 +58,10 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderManualEntry(container, state);
       break;
 
+    case 'about-you':
+      renderAboutYou(container, state);
+      break;
+
     case 'review':
       renderReview(container, state);
       break;
@@ -77,6 +88,30 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
 
     case 'triathlon-setup':
       renderTriathlonSetup(container, state);
+      break;
+
+    case 'tri-past-race':
+      renderTriPastRace(container, state);
+      break;
+
+    case 'cycling-setup':
+      renderCyclingSetup(container, state);
+      break;
+
+    case 'hyrox-setup':
+      renderHyroxSetup(container, state);
+      break;
+
+    case 'workout-preview':
+      renderWorkoutPreview(container, state);
+      break;
+
+    case 'tri-workout-preview':
+      renderTriWorkoutPreview(container, state);
+      break;
+
+    case 'hyrox-workout-preview':
+      renderHyroxWorkoutPreview(container, state);
       break;
 
     case 'main-view':

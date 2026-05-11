@@ -11,8 +11,9 @@ import {
   HOURS_RANGE,
 } from '@/constants/triathlon-constants';
 import { getTriathlonsByDistance, getTriathlonById } from '@/data/triathlons';
-import { formatRaceDate } from '@/data/marathons';
+import { formatRaceDate, calculateWeeksUntil, formatTimeUntil } from '@/data/marathons';
 import type { Triathlon } from '@/types/onboarding';
+import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
  * Triathlon setup — the single consolidated step that replaces
@@ -57,9 +58,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
       .tri-pill { flex:1; min-width:120px; padding:12px 14px; border-radius:12px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); font-size:14px; color:var(--c-black); cursor:pointer; text-align:left; transition: all 0.15s ease; }
       .tri-pill.active { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
       .tri-pill .tri-pill-sub { display:block; font-size:11px; opacity:0.65; margin-top:2px; }
-      .tri-slider { -webkit-appearance:none; appearance:none; width:100%; height:4px; background:rgba(0,0,0,0.12); border-radius:4px; outline:none; margin:10px 0 2px; }
-      .tri-slider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
-      .tri-slider::-moz-range-thumb { width:20px; height:20px; background:var(--c-black); border-radius:50%; cursor:pointer; border:none; box-shadow:0 1px 3px rgba(0,0,0,0.2); }
+      /* Single sliders use the canonical .m-slider-glass class from styles.css. */
       .tri-row { display:flex; justify-content:space-between; align-items:baseline; font-size:13px; color:var(--c-black); }
       .tri-row .tri-value { font-size:16px; font-weight:500; font-variant-numeric: tabular-nums; }
       .tri-input { background:rgba(255,255,255,0.95); border:1px solid rgba(0,0,0,0.08); color:var(--c-black); border-radius:10px; padding:9px 12px; font-size:14px; width:100%; box-sizing:border-box; outline:none; }
@@ -74,6 +73,13 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
       .tri-split-cell .tri-split-pct { font-size:18px; font-weight:500; }
       .tri-split-cell .tri-split-lbl { font-size:11px; color:var(--c-muted); margin-top:2px; text-transform:uppercase; letter-spacing:0.05em; }
       .tri-split-cell .tri-split-hrs { font-size:11px; color:var(--c-faint); margin-top:3px; }
+      .tri-split-bar { position:relative; display:flex; height:10px; border-radius:6px; background:rgba(255,255,255,0.55); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px); border:1px solid rgba(0,0,0,0.06); user-select:none; touch-action:pan-y; margin:18px 6px 12px; box-shadow: inset 0 1px 2px rgba(0,0,0,0.04); }
+      .tri-split-seg { height:100%; transition: width 0.06s linear; }
+      .tri-split-seg-swim { background:rgba(0,0,0,0.05); border-radius:6px 0 0 6px; }
+      .tri-split-seg-bike { background:rgba(0,0,0,0.10); }
+      .tri-split-seg-run  { background:rgba(0,0,0,0.05); border-radius:0 6px 6px 0; }
+      .tri-split-handle { position:absolute; top:50%; transform:translate(-50%, -50%); width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.7); backdrop-filter:blur(12px) saturate(1.4); -webkit-backdrop-filter:blur(12px) saturate(1.4); border:1px solid rgba(255,255,255,0.8); box-shadow: 0 1px 2px rgba(0,0,0,0.1), 0 4px 12px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.06); cursor:ew-resize; z-index:2; touch-action:none; transition: transform 120ms ease, box-shadow 120ms ease; }
+      .tri-split-handle:active { transform:translate(-50%, -50%) scale(1.08); box-shadow: 0 2px 4px rgba(0,0,0,0.12), 0 6px 18px rgba(0,0,0,0.16), inset 0 1px 0 rgba(255,255,255,0.9); }
       .tri-race-list { display:flex; flex-direction:column; gap:8px; max-height:340px; overflow-y:auto; padding-right:4px; }
       .tri-race-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:11px 13px; border-radius:10px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.9); text-align:left; cursor:pointer; transition:all 0.15s ease; width:100%; }
       .tri-race-row.selected { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
@@ -85,10 +91,15 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
     </style>
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;display:flex;flex-direction:column">
-      <div aria-hidden="true" style="position:absolute;inset:0;background:radial-gradient(ellipse 720px 560px at 50% 20%, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 72%);pointer-events:none"></div>
+      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirrors connect-strava. -->
+      <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildAtmosphereBase()}
+        ${buildRingBackground('tri', { variant: 'asymmetric', side: 'right' })}
+        ${buildSunGlint('mid')}
+      </div>
 
       <div style="position:relative;z-index:1;padding:36px 20px 140px;flex:1;display:flex;flex-direction:column;align-items:center">
-        ${renderProgressIndicator(4, 7)}
+        ${renderProgressIndicator(5, 8)}
 
         <div class="t-rise" style="width:100%;max-width:480px;text-align:center;margin-bottom:20px;animation-delay:0.05s">
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
@@ -126,7 +137,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
               <span>Peak weekly hours</span>
               <span class="tri-value" id="tri-hours-value">${hoursPerWeek}h</span>
             </div>
-            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="tri-slider" id="tri-hours">
+            <input type="range" min="${hoursRange.min}" max="${hoursRange.max}" step="1" value="${hoursPerWeek}" class="m-slider-glass" id="tri-hours">
             <p class="tri-hint" id="tri-hours-hint">${hoursCommentary(distance, hoursPerWeek)}</p>
 
             <div style="margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
@@ -134,7 +145,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
                 <span style="font-size:13px;color:var(--c-black)">Mon–Fri split</span>
                 <span class="tri-value" id="tri-weekday-value">${weekdayHours}h weekday / ${weekendHours.toFixed(1)}h weekend</span>
               </div>
-              <input type="range" min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}" class="tri-slider" id="tri-weekday">
+              <input type="range" min="0" max="${hoursPerWeek}" step="0.5" value="${weekdayHours}" class="m-slider-glass" id="tri-weekday">
               <p class="tri-hint">How much of the week's training fits into weekdays. Long bike + long run always land Sat/Sun. If you work a 9-to-5, keeping weekdays short and piling the weekend is a good default.</p>
             </div>
           </div>
@@ -142,14 +153,16 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
           <!-- Volume split -->
           <div class="tri-card t-rise" style="animation-delay:0.22s">
             <div class="tri-label">Volume split</div>
-            <p class="tri-hint" style="margin:-4px 0 12px">Recommended default shown. Adjust if you want to emphasise a discipline.</p>
+            <p class="tri-hint" style="margin:-4px 0 12px">Recommended default shown. Drag the dividers to emphasise a discipline.</p>
             <div class="tri-split-grid" id="tri-split-grid">
               ${renderSplitCells(split, hoursPerWeek)}
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px">
-              <input type="range" min="5" max="40" step="1" value="${Math.round(split.swim * 100)}" class="tri-slider" data-split-key="swim">
-              <input type="range" min="20" max="70" step="1" value="${Math.round(split.bike * 100)}" class="tri-slider" data-split-key="bike">
-              <input type="range" min="15" max="60" step="1" value="${Math.round(split.run * 100)}" class="tri-slider" data-split-key="run">
+            <div class="tri-split-bar" id="tri-split-bar" role="group" aria-label="Volume split between swim, bike and run">
+              <div class="tri-split-seg tri-split-seg-swim" data-seg="swim" style="width:${(split.swim * 100).toFixed(2)}%"></div>
+              <div class="tri-split-seg tri-split-seg-bike" data-seg="bike" style="width:${(split.bike * 100).toFixed(2)}%"></div>
+              <div class="tri-split-seg tri-split-seg-run"  data-seg="run"  style="width:${(split.run  * 100).toFixed(2)}%"></div>
+              <div class="tri-split-handle" data-handle="swim-bike" role="slider" aria-label="Swim/bike divider" aria-valuemin="5" aria-valuemax="40" aria-valuenow="${Math.round(split.swim * 100)}" tabindex="0" style="left:${(split.swim * 100).toFixed(2)}%"></div>
+              <div class="tri-split-handle" data-handle="bike-run"  role="slider" aria-label="Bike/run divider"  aria-valuemin="40" aria-valuemax="85" aria-valuenow="${Math.round((split.swim + split.bike) * 100)}" tabindex="0" style="left:${((split.swim + split.bike) * 100).toFixed(2)}%"></div>
             </div>
           </div>
 
@@ -160,7 +173,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
               <span>Strength sessions per week</span>
               <span class="tri-value" id="tri-gym-value">${gymSessions}</span>
             </div>
-            <input type="range" min="0" max="3" step="1" value="${gymSessions}" class="tri-slider" id="tri-gym">
+            <input type="range" min="0" max="3" step="1" value="${gymSessions}" class="m-slider-glass" id="tri-gym">
             <p class="tri-hint">Optional. 1–2 sessions/week of full-body strength helps running economy and injury resilience but isn't required. Set to 0 to skip.</p>
           </div>
 
@@ -230,7 +243,7 @@ function renderRacePicker(state: OnboardingState, distance: TriathlonDistance): 
               <div class="tri-race-sub">${formatRaceDate(race.date)} · ${race.city}, ${race.country}</div>
               ${race.profile?.notes ? `<div class="tri-race-sub" style="margin-top:4px">${race.profile.notes}</div>` : ''}
             </div>
-            <span class="tri-race-weeks">${race.weeksUntil ?? '--'}wk</span>
+            <span class="tri-race-weeks">${formatTimeUntil(race.date) ?? '--'}</span>
           </button>
         `;
       }).join('')}
@@ -349,10 +362,8 @@ function wireEventHandlers(): void {
     updateOnboarding({ triWeekdayHoursPerWeek: wd });
   });
 
-  // Split sliders (normalise so they always sum to ~1.0)
-  document.querySelectorAll<HTMLInputElement>('[data-split-key]').forEach((slider) => {
-    slider.addEventListener('input', () => onSplitSliderChange(slider));
-  });
+  // Split bar — drag the swim|bike and bike|run dividers
+  wireSplitBarHandlers();
 
   // Gym sessions slider
   const gymInput = document.getElementById('tri-gym') as HTMLInputElement | null;
@@ -389,8 +400,14 @@ function wireEventHandlers(): void {
       finalPatch.triWeekdayHoursPerWeek = Math.round(totalH * 0.4 * 2) / 2;
     }
     if (!current.triDistance) finalPatch.triDistance = '70.3';
-    // Set the plan duration from the distance default so initializer receives it.
-    finalPatch.planDurationWeeks = PLAN_WEEKS_DEFAULT[current.triDistance ?? finalPatch.triDistance ?? '70.3'];
+    // Plan length follows the actual race date when one is picked, so a race
+    // 6 weeks out produces a 6-week plan rather than the 20/24-week distance
+    // default. The default is only used when no date is set.
+    const distanceForDefault = current.triDistance ?? finalPatch.triDistance ?? '70.3';
+    const raceDateIso = current.customRaceDate ?? null;
+    finalPatch.planDurationWeeks = raceDateIso
+      ? Math.max(1, calculateWeeksUntil(raceDateIso))
+      : PLAN_WEEKS_DEFAULT[distanceForDefault];
     // Anchor trainingForEvent = true. Triathlon is always race-mode (§18.10).
     finalPatch.trainingForEvent = true;
     if (Object.keys(finalPatch).length > 0) updateOnboarding(finalPatch);
@@ -485,28 +502,99 @@ function rerenderRaceCardForceMode(mode: 'list' | 'custom'): void {
 }
 void _forceMode;
 
-function onSplitSliderChange(changed: HTMLInputElement): void {
-  const changedKey = changed.getAttribute('data-split-key') as keyof TriVolumeSplit;
-  const rawChanged = Number(changed.value) / 100;
+// Hard limits for each leg's share of weekly volume. Same bounds as the
+// previous slider min/max — they keep the user from picking a split that the
+// plan engine can't honour (e.g. 70% swim).
+const SPLIT_BOUNDS = {
+  swim: { min: 5, max: 40 },
+  bike: { min: 20, max: 70 },
+  run: { min: 15, max: 60 },
+} as const;
 
-  // Read the other two sliders and normalise so all three sum to 1.0.
-  const all = Array.from(document.querySelectorAll<HTMLInputElement>('[data-split-key]'));
-  const others = all.filter((s) => s.getAttribute('data-split-key') !== changedKey);
-  const othersTotal = others.reduce((acc, s) => acc + Number(s.value) / 100, 0);
-  const remaining = Math.max(0, 1 - rawChanged);
-  const scale = othersTotal > 0 ? remaining / othersTotal : 0.5;
+/**
+ * Single horizontal bar with two draggable dividers replaces the three
+ * independent sliders. Mental model: dragging the swim|bike divider resizes
+ * swim vs bike while run stays fixed; dragging the bike|run divider resizes
+ * bike vs run while swim stays fixed. Constraints below clamp each handle so
+ * all three legs stay inside SPLIT_BOUNDS.
+ */
+function wireSplitBarHandlers(): void {
+  const bar = document.getElementById('tri-split-bar');
+  if (!bar) return;
 
-  const split: TriVolumeSplit = { swim: 0, bike: 0, run: 0 };
-  split[changedKey] = rawChanged;
-  others.forEach((s) => {
-    const k = s.getAttribute('data-split-key') as keyof TriVolumeSplit;
-    const scaled = (Number(s.value) / 100) * scale;
-    split[k] = scaled;
-    // Update slider visual to reflect normalisation
-    s.value = String(Math.round(scaled * 100));
+  const handles = bar.querySelectorAll<HTMLElement>('[data-handle]');
+  handles.forEach((handle) => {
+    handle.addEventListener('pointerdown', (ev) => onSplitHandlePointerDown(ev, handle, bar));
+    handle.addEventListener('keydown', (ev) => onSplitHandleKeyDown(ev, handle));
   });
+}
 
-  updateOnboarding({ triVolumeSplit: split });
+function onSplitHandlePointerDown(ev: PointerEvent, handle: HTMLElement, bar: HTMLElement): void {
+  ev.preventDefault();
+  handle.setPointerCapture(ev.pointerId);
+
+  const which = handle.getAttribute('data-handle') as 'swim-bike' | 'bike-run';
+
+  const move = (e: PointerEvent) => {
+    const rect = bar.getBoundingClientRect();
+    if (rect.width <= 0) return;
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const pct = Math.max(0, Math.min(100, ratio * 100));
+    applySplitFromHandle(which, pct);
+  };
+  const up = (e: PointerEvent) => {
+    handle.releasePointerCapture(e.pointerId);
+    handle.removeEventListener('pointermove', move);
+    handle.removeEventListener('pointerup', up);
+    handle.removeEventListener('pointercancel', up);
+  };
+  handle.addEventListener('pointermove', move);
+  handle.addEventListener('pointerup', up);
+  handle.addEventListener('pointercancel', up);
+}
+
+function onSplitHandleKeyDown(ev: KeyboardEvent, handle: HTMLElement): void {
+  const step = ev.shiftKey ? 5 : 1;
+  let delta = 0;
+  if (ev.key === 'ArrowLeft' || ev.key === 'ArrowDown') delta = -step;
+  else if (ev.key === 'ArrowRight' || ev.key === 'ArrowUp') delta = step;
+  else return;
+  ev.preventDefault();
+
+  const which = handle.getAttribute('data-handle') as 'swim-bike' | 'bike-run';
+  const current = Number(handle.getAttribute('aria-valuenow') ?? '0');
+  applySplitFromHandle(which, current + delta);
+}
+
+function applySplitFromHandle(which: 'swim-bike' | 'bike-run', pctRaw: number): void {
+  const onb = getCurrentOnboarding();
+  const split = { ...(onb.triVolumeSplit ?? DEFAULT_VOLUME_SPLIT) };
+  const swimPct = split.swim * 100;
+  const bikePct = split.bike * 100;
+  const handle1 = swimPct;                  // swim|bike position
+  const handle2 = swimPct + bikePct;        // bike|run position
+
+  let h1 = handle1;
+  let h2 = handle2;
+
+  if (which === 'swim-bike') {
+    // h1 must respect swim bounds AND keep bike inside its bounds (h2 fixed).
+    const lo = Math.max(SPLIT_BOUNDS.swim.min, h2 - SPLIT_BOUNDS.bike.max);
+    const hi = Math.min(SPLIT_BOUNDS.swim.max, h2 - SPLIT_BOUNDS.bike.min);
+    h1 = Math.max(lo, Math.min(hi, pctRaw));
+  } else {
+    // h2 must keep run inside its bounds AND bike inside its bounds (h1 fixed).
+    const lo = Math.max(h1 + SPLIT_BOUNDS.bike.min, 100 - SPLIT_BOUNDS.run.max);
+    const hi = Math.min(h1 + SPLIT_BOUNDS.bike.max, 100 - SPLIT_BOUNDS.run.min);
+    h2 = Math.max(lo, Math.min(hi, pctRaw));
+  }
+
+  const swim = h1 / 100;
+  const bike = (h2 - h1) / 100;
+  const run = (100 - h2) / 100;
+  const next: TriVolumeSplit = { swim, bike, run };
+
+  updateOnboarding({ triVolumeSplit: next });
   refreshSplitCells();
 }
 
@@ -550,7 +638,23 @@ function refreshSplitCells(): void {
     const hrs = document.querySelector(`[data-hrs="${k}"]`);
     if (pct) pct.textContent = `${Math.round(split[k] * 100)}%`;
     if (hrs) hrs.textContent = `${(split[k] * hours).toFixed(1)}h`;
+    const seg = document.querySelector<HTMLElement>(`[data-seg="${k}"]`);
+    if (seg) seg.style.width = `${(split[k] * 100).toFixed(2)}%`;
   });
+
+  const swimPct = split.swim * 100;
+  const handle1 = swimPct;
+  const handle2 = swimPct + split.bike * 100;
+  const h1 = document.querySelector<HTMLElement>('[data-handle="swim-bike"]');
+  const h2 = document.querySelector<HTMLElement>('[data-handle="bike-run"]');
+  if (h1) {
+    h1.style.left = `${handle1.toFixed(2)}%`;
+    h1.setAttribute('aria-valuenow', String(Math.round(handle1)));
+  }
+  if (h2) {
+    h2.style.left = `${handle2.toFixed(2)}%`;
+    h2.setAttribute('aria-valuenow', String(Math.round(handle2)));
+  }
 }
 
 // Keep unused distance helper around for reference until scheduling uses it (§3).

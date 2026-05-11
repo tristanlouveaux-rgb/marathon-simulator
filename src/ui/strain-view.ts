@@ -26,10 +26,11 @@ import { isTimingMod } from '@/cross-training/timing-check';
 import { formatActivityType } from '@/calculations/activity-matcher';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const CREAM     = '#FAF9F6';
 const GRAD_BG   = 'linear-gradient(180deg, #2d1810 0%, #4a2518 40%, #5d3020 100%)';
 const ORANGE_A  = '#FF9A44';
 const ORANGE_B  = '#FF512F';
@@ -223,7 +224,8 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
     plannedWorkouts = generateWeekWorkouts(
       wkForPlan.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
       null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-      viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wkForPlan.scheduledAcwrStatus,
+      viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wkForPlan.scheduledAcwrStatus, undefined,
+      s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
     );
     if (wkForPlan.workoutMoves) {
       for (const [workoutId, newDay] of Object.entries(wkForPlan.workoutMoves)) {
@@ -351,7 +353,7 @@ function coachingText(
     if (actual === 0) {
       return isToday ? 'No activity logged yet today.' : 'No activity logged on this day.';
     }
-    if (isOverreaching) return `${actual} TSS logged. A high load — consider keeping tomorrow easier.${kmNote}`;
+    if (isOverreaching) return `${actual} TSS logged. A high load. Consider keeping tomorrow easier.${kmNote}`;
     return `${actual} TSS logged.${kmNote}`;
   }
 
@@ -365,7 +367,7 @@ function coachingText(
   // Training day (past)
   if (!isToday) {
     if (actual === 0) return target > 0 ? `No activities recorded. ${target} TSS planned.` : 'Rest day.';
-    if (strainPct >= 130) return `${actual} TSS — ${Math.round(strainPct - 100)}% above the ${target} TSS plan.${kmNote}`;
+    if (strainPct >= 130) return `${actual} TSS, ${Math.round(strainPct - 100)}% above the ${target} TSS plan.${kmNote}`;
     return `${actual} TSS logged against ${target} TSS planned.${kmNote}`;
   }
 
@@ -436,7 +438,8 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
   const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
-    viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wk.scheduledAcwrStatus,
+    viewWeek, s.tw, s.v, s.gs, getTrailingEffortScore(wks, viewWeek), wk.scheduledAcwrStatus, undefined,
+    s.onboarding?.weeklyTrainingHours, s.onboarding?.runningExcludedWorkouts,
   );
   // Apply day moves so bar TSS matches what the plan view shows
   if (wk.workoutMoves) {
@@ -531,18 +534,17 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
   const sevenDays = getLast7Days(today, s);
   const weekBarDays = getWeekBarDays(displayDate, s, today);
 
-  // ── Ring: multi-colour segments — green → orange → red ─────────────
-  // ringMax anchors target.hi at ~91% of the ring so green dominates when
-  // inside target. The ×1.08 factor on actual keeps a consistent gap at
-  // the top (~7–8%) so the ring never fully closes — the start/end caps
-  // stay cleanly separated near 12 o'clock.
-  const ringMax = Math.max(target.hi * 1.1, actualTSS * 1.08, 1);
+  // ── Ring: full circle, matches readiness/freshness/rolling-load pattern exactly ──
+  // SVG is rotated -90deg so dashoffset sweeps from 12 o'clock CW.
+  // Scale: target.hi maps to ~67% of the circle so the arc is visually informative
+  // even at low TSS values. Color communicates status: blue=below, green=in, red=over.
+  const hasTarget = target.mid > 0;
+  const ringMax = Math.max(target.hi * 1.5, actualTSS * 1.1, 1);
 
   // Status label
   let statusLabel = '';
   let statusColor = 'rgba(255,255,255,0.6)';
   if (isRestDay && isOverreaching) {
-    // Track-only never had a concept of "rest day" (no plan) — relabel accordingly.
     statusLabel = s.trackOnly ? 'High load today' : 'High for a rest day';
     statusColor = '#FF6B6B';
   } else if (target.mid > 0 && actualTSS > target.hi) {
@@ -553,128 +555,14 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
     statusColor = '#34C759';
   }
 
-  // Segment arc lengths (in SVG dasharray units)
-  // Green: 0 → min(actual, target.lo)
-  // Orange: target.lo → min(actual, target.hi)
-  // Red: target.hi → actual
-  const hasTarget = target.mid > 0;
-  const greenEnd = hasTarget ? Math.min(actualTSS, target.lo) : actualTSS;
-  const orangeEnd = hasTarget ? Math.min(Math.max(actualTSS - target.lo, 0), target.hi - target.lo) : 0;
-  const redEnd = hasTarget ? Math.max(actualTSS - target.hi, 0) : 0;
+  // Progress color: one of three states.
+  const progressColor = !hasTarget ? '#007AFF'
+    : actualTSS > target.hi ? '#FF3B30'
+    : actualTSS >= target.lo ? '#34C759'
+    : '#007AFF';
 
-  const greenPct = Math.min((greenEnd / ringMax) * 100, 100);
-  const orangePct = Math.min((orangeEnd / ringMax) * 100, 100);
-  const redPct = Math.min((redEnd / ringMax) * 100, 100);
-
-  const greenArc = RING_CIRC * (greenPct / 100);
-  const orangeArc = RING_CIRC * (orangePct / 100);
-  const redArc = RING_CIRC * (redPct / 100);
-
-  const toDeg = (arc: number) => (arc / RING_CIRC) * 360;
-  const gEnd = toDeg(greenArc);
-  const oEnd = toDeg(greenArc + orangeArc);
-  const totalDeg = toDeg(greenArc + orangeArc + redArc);
-  const endColor = redArc > 0 ? '#FF3B30' : orangeArc > 0 ? '#FF9500' : '#34C759';
-
-  // Build an SVG stroked-arc path from angle a0 to a1 (both CW degrees from 12 o'clock).
-  // Deterministic CW arc (sweep=1). Returns empty string for zero-length spans.
-  const arcPath = (a0: number, a1: number): string => {
-    if (a1 - a0 <= 0.01) return '';
-    const rad0 = (a0 * Math.PI) / 180;
-    const rad1 = (a1 * Math.PI) / 180;
-    const x0 = 50 + RING_R * Math.sin(rad0);
-    const y0 = 50 - RING_R * Math.cos(rad0);
-    const x1 = 50 + RING_R * Math.sin(rad1);
-    const y1 = 50 - RING_R * Math.cos(rad1);
-    const large = a1 - a0 > 180 ? 1 : 0;
-    return `M ${x0.toFixed(3)} ${y0.toFixed(3)} A ${RING_R} ${RING_R} 0 ${large} 1 ${x1.toFixed(3)} ${y1.toFixed(3)}`;
-  };
-
-  const pointOn = (angle: number, r: number): [number, number] => {
-    const rad = (angle * Math.PI) / 180;
-    return [50 + r * Math.sin(rad), 50 - r * Math.cos(rad)];
-  };
-
-  // Build segmented colour paths with blend zones at boundaries.
-  // BLEND = half-width of each colour-to-colour transition, in degrees.
-  const BLEND = 15;
-  const hasOrange = orangeArc > 0;
-  const hasRed = redArc > 0;
-  type RingSeg = { d: string; stroke: string };
-  const ringSegs: RingSeg[] = [];
-  const blendGrads: Array<{ id: string; x1: number; y1: number; x2: number; y2: number; c0: string; c1: string }> = [];
-
-  const gSolidEnd = hasOrange ? Math.max(0, gEnd - BLEND) : gEnd;
-  if (gSolidEnd > 0.1) ringSegs.push({ d: arcPath(0, gSolidEnd), stroke: '#34C759' });
-
-  if (hasOrange) {
-    const b0 = Math.max(0, gEnd - BLEND);
-    const b1 = Math.min(oEnd, gEnd + BLEND);
-    if (b1 - b0 > 0.1) {
-      const [x1, y1] = pointOn(b0, RING_R);
-      const [x2, y2] = pointOn(b1, RING_R);
-      blendGrads.push({ id: 'strBlendGO', x1, y1, x2, y2, c0: '#34C759', c1: '#FF9500' });
-      ringSegs.push({ d: arcPath(b0, b1), stroke: 'url(#strBlendGO)' });
-    }
-
-    const oStart = Math.min(oEnd, gEnd + BLEND);
-    const oSolidEnd = hasRed ? Math.max(oStart, oEnd - BLEND) : oEnd;
-    if (oSolidEnd - oStart > 0.1) ringSegs.push({ d: arcPath(oStart, oSolidEnd), stroke: '#FF9500' });
-  }
-
-  if (hasRed) {
-    const b0 = Math.max(hasOrange ? gEnd + BLEND : 0, oEnd - BLEND);
-    const b1 = Math.min(totalDeg, oEnd + BLEND);
-    if (b1 - b0 > 0.1) {
-      const [x1, y1] = pointOn(b0, RING_R);
-      const [x2, y2] = pointOn(b1, RING_R);
-      blendGrads.push({ id: 'strBlendOR', x1, y1, x2, y2, c0: '#FF9500', c1: '#FF3B30' });
-      ringSegs.push({ d: arcPath(b0, b1), stroke: 'url(#strBlendOR)' });
-    }
-
-    const rStart = Math.min(totalDeg, oEnd + BLEND);
-    if (totalDeg - rStart > 0.1) ringSegs.push({ d: arcPath(rStart, totalDeg), stroke: '#FF3B30' });
-  }
-
-  // Single reveal mask — one smooth CW draw for the whole ring.
-  const revealPathD = arcPath(0, totalDeg);
-  const revealLen = (totalDeg / 360) * RING_CIRC;
-
-  // Target zone tick marks (outside the ring) at target.lo and target.hi boundaries.
-  // Only shown when the boundary falls within the drawn arc.
-  const tickAngles: number[] = [];
-  if (hasTarget && ringMax > 0) {
-    const loDeg = (target.lo / ringMax) * 360;
-    const hiDeg = (target.hi / ringMax) * 360;
-    if (loDeg > 0.5 && loDeg < totalDeg - 0.5) tickAngles.push(loDeg);
-    if (hiDeg > 0.5 && hiDeg < totalDeg - 0.5) tickAngles.push(hiDeg);
-  }
-  const tickMarks = tickAngles.map(a => {
-    const [x1, y1] = pointOn(a, RING_R + 5);
-    const [x2, y2] = pointOn(a, RING_R + 9);
-    return `<line x1="${x1.toFixed(2)}" y1="${y1.toFixed(2)}" x2="${x2.toFixed(2)}" y2="${y2.toFixed(2)}" stroke="rgba(0,0,0,0.35)" stroke-width="0.6" stroke-linecap="round"/>`;
-  }).join('');
-  // "Target" label positioned at midpoint of orange zone, just outside the ring.
-  let targetLabelSvg = '';
-  if (hasTarget && hasOrange && ringMax > 0) {
-    const midDeg = ((target.lo + target.hi) / 2 / ringMax) * 360;
-    const [lx, ly] = pointOn(midDeg, RING_R + 13);
-    targetLabelSvg = `<text x="${lx.toFixed(2)}" y="${ly.toFixed(2)}" font-size="5.2" font-weight="600" fill="rgba(0,0,0,0.55)" text-anchor="middle" dominant-baseline="middle" style="font-family:var(--f)">Target</text>`;
-  }
-
-  // Rounded caps as half-disks (flat side flush with stroke butt, curved side
-  // bulges INTO the arc only, never into the gap).
-  const CAP_R = 4;
-  const startCapPath = `M 50 8 A ${CAP_R} ${CAP_R} 0 0 1 50 0 Z`;
-  const thetaEnd = (totalDeg * Math.PI) / 180;
-  const sinE = Math.sin(thetaEnd);
-  const cosE = Math.cos(thetaEnd);
-  const endOuterX = 50 + (RING_R + CAP_R) * sinE;
-  const endOuterY = 50 - (RING_R + CAP_R) * cosE;
-  const endInnerX = 50 + (RING_R - CAP_R) * sinE;
-  const endInnerY = 50 - (RING_R - CAP_R) * cosE;
-  const endCapPath = `M ${endInnerX.toFixed(3)} ${endInnerY.toFixed(3)} A ${CAP_R} ${CAP_R} 0 0 0 ${endOuterX.toFixed(3)} ${endOuterY.toFixed(3)} Z`;
-  const startCapColor = '#34C759';
+  // Stroke-dashoffset target: RING_CIRC × (1 − fill fraction). Starts at RING_CIRC (hidden).
+  const strainTargetOffset = +(RING_CIRC * (1 - Math.min(actualTSS / ringMax, 1))).toFixed(2);
 
 
   // Target label: show range
@@ -764,18 +652,17 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
       .s-fade { opacity:0; animation:strainFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
       .strain-act-row:active { transform:scale(0.98); }
       .strain-date-pill:hover { background:rgba(0,0,0,0.04)!important; color:${TEXT_M}!important; }
-      ${skyAnimationCSS('str')}
     </style>
 
     <div id="strain-view" style="
-      position:relative;min-height:100vh;background:${CREAM};
+      position:relative;min-height:100vh;background:${atmosphereGradient('coral')};
       font-family:var(--f);overflow-x:hidden;
     ">
 
-      ${buildSkyBackground('str', 'red')}
+      ${buildFloweyBackground('str', 'coral')}${buildSunGlint('low')}
 
       <!-- ── Scrollable content ──────────────────────────────────────── -->
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="
@@ -822,52 +709,27 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
           <div style="display:flex;gap:6px;width:max-content;padding-bottom:2px">${datePills}</div>
         </div>
 
-        <!-- Ring -->
+        <!-- Ring — identical pattern to readiness/freshness: rotate(-90deg), circle elements, dashoffset JS -->
         <div class="s-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
-            <!-- Grey track -->
-            <svg style="position:absolute;width:100%;height:100%" viewBox="0 0 100 100">
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
-            </svg>
-            ${totalDeg > 0 ? `
-            <!-- Colour ring: segmented CW stroked paths with linearGradient blend zones
-                 at colour boundaries. All segments revealed together by a single mask
-                 whose stroke-dashoffset animates from full→0 for a smooth CW fill. -->
-            <svg style="position:absolute;width:100%;height:100%;overflow:visible" viewBox="0 0 100 100">
+          <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
+            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <mask id="strainReveal" maskUnits="userSpaceOnUse">
-                  <rect width="100" height="100" fill="black"/>
-                  <path d="${revealPathD}" fill="none" stroke="white" stroke-width="9" stroke-linecap="butt"
-                    stroke-dasharray="${revealLen.toFixed(3)} ${RING_CIRC.toFixed(3)}"
-                    stroke-dashoffset="${revealLen.toFixed(3)}"
-                    style="animation:strainArcDraw 0.7s cubic-bezier(0.2,0.8,0.2,1) 0.1s forwards"/>
-                </mask>
-                ${blendGrads.map(g => `<linearGradient id="${g.id}" gradientUnits="userSpaceOnUse" x1="${g.x1.toFixed(3)}" y1="${g.y1.toFixed(3)}" x2="${g.x2.toFixed(3)}" y2="${g.y2.toFixed(3)}"><stop offset="0%" stop-color="${g.c0}"/><stop offset="100%" stop-color="${g.c1}"/></linearGradient>`).join('')}
+                <!-- SVG is rotated -90deg; gradient coords are in rotated space -->
+                <linearGradient id="strain-ring-grad" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="${progressColor === '#FF3B30' ? '#FCA5A5' : progressColor === '#34C759' ? '#86EFAC' : '#93C5FD'}"/>
+                  <stop offset="50%"  stop-color="${progressColor === '#FF3B30' ? '#EF4444' : progressColor === '#34C759' ? '#22C55E' : '#3B82F6'}"/>
+                  <stop offset="100%" stop-color="${progressColor === '#FF3B30' ? '#991B1B' : progressColor === '#34C759' ? '#166534' : '#1D4ED8'}"/>
+                </linearGradient>
               </defs>
-              <g mask="url(#strainReveal)">
-                ${ringSegs.map(s => `<path d="${s.d}" fill="none" stroke="${s.stroke}" stroke-width="8" stroke-linecap="butt"/>`).join('')}
-              </g>
-              <!-- Half-disk caps: flat side flush with stroke butt; curved side into arc. -->
-              <path d="${startCapPath}" fill="${startCapColor}"
-                style="opacity:0;animation:strainCapIn 0.35s ease-out 0.1s forwards"/>
-              <path d="${endCapPath}" fill="${endColor}"
-                style="opacity:0;animation:strainCapIn 0.35s ease-out 0.55s forwards"/>
-              <!-- Target zone markers -->
-              <g style="opacity:0;animation:strainCapIn 0.5s ease-out 0.4s forwards">
-                ${tickMarks}
-                ${targetLabelSvg}
-              </g>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+              <circle id="strain-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
+                stroke="url(#strain-ring-grad)" stroke-width="8" stroke-linecap="round"
+                stroke-dasharray="${RING_CIRC}"
+                stroke-dashoffset="${RING_CIRC}"
+                data-target-offset="${strainTargetOffset}"
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"/>
             </svg>
-            <style>
-              @keyframes strainArcDraw { to { stroke-dashoffset:0; } }
-              @keyframes strainCapIn { to { opacity:1; } }
-            </style>` : ''}
-            <div style="
-              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
-              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
-              width:180px;height:180px;border-radius:50%;
-              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               ${ringInnerHTML}
             </div>
           </div>
@@ -914,7 +776,8 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -947,12 +810,13 @@ function showStrainInfoOverlay(): void {
       <p style="font-size:14px;line-height:1.6;color:${TEXT_S};margin:0 0 16px">
         The target adjusts based on readiness. When recovery is suppressed, the target drops automatically.
       </p>
-      <div style="background:#FFF3ED;border-radius:14px;padding:14px">
-        <div style="font-size:11px;font-weight:600;color:${ORANGE_B};margin-bottom:10px;letter-spacing:0.05em">RING COLOURS</div>
+      <div style="background:#F0F6FF;border-radius:14px;padding:14px">
+        <div style="font-size:11px;font-weight:600;color:#007AFF;margin-bottom:10px;letter-spacing:0.05em">RING COLOURS</div>
         <div style="font-size:13px;color:${TEXT_S};line-height:2">
-          <div><strong style="color:#34C759">Green</strong> — below target range, building toward it</div>
-          <div><strong style="color:#FF9500">Orange</strong> — inside target range</div>
-          <div><strong style="color:#FF3B30">Red</strong> — above target range, load exceeded</div>
+          <div><strong style="color:#007AFF">Blue</strong>: building toward the target range</div>
+          <div><strong style="color:#34C759">Green</strong>: inside target range</div>
+          <div><strong style="color:#FF3B30">Red</strong>: above target range, load exceeded</div>
+          <div style="margin-top:4px;font-size:12px"><span style="letter-spacing:0.1em;opacity:0.5">· · ·</span> Dotted arc marks the target zone</div>
         </div>
       </div>
     </div>
@@ -967,10 +831,15 @@ function showStrainInfoOverlay(): void {
 let strainOnBack: (() => void) | null = null;
 
 function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadinessLabel?: ReadinessLabel | null): void {
-  // Ring reveal is handled by CSS (#strain-ring-gradient opacity animation).
-
   // Tab bar
   wireTabBarHandlers(navigateTab);
+
+  // Ring sweep animation — same pattern as readiness-view.ts
+  setTimeout(() => {
+    const circle = document.getElementById('strain-ring-circle');
+    const target = (circle as HTMLElement | null)?.dataset.targetOffset;
+    if (circle && target) (circle as unknown as SVGCircleElement).style.strokeDashoffset = target;
+  }, 50);
 
   // Back → caller (defaults to home)
   document.getElementById('strain-back-btn')?.addEventListener('click', () => {

@@ -1,42 +1,46 @@
 /**
- * Bottom tab bar — Home | Plan | Record | Stats
- * Account moved to header button in home-view.
+ * Bottom tab bar.
+ * Running/cycling: Home | Plan | Stats (3 tabs)
+ * Triathlon:       Home | Plan | Forecast | Stats (4 tabs)
+ *
+ * Mode is auto-detected from state — no call-site changes needed.
  */
 
-export type TabId = 'home' | 'plan' | 'record' | 'stats' | 'account';
+import { getState } from '@/state/store';
+
+export type TabId = 'home' | 'plan' | 'record' | 'forecast' | 'stats' | 'account';
+
+const HOME_ICON = `<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+                   <polyline points="9 22 9 12 15 12 15 22"/>`;
+const PLAN_ICON = `<rect x="3" y="4" width="18" height="18" rx="2"/>
+                   <path d="M16 2v4M8 2v4M3 10h18"/>
+                   <path d="M8 14h4M8 17h8"/>`;
+const FORECAST_ICON = `<path d="M4 22V4"/>
+                        <path d="M4 4h14l-3.5 5 3.5 5H4"/>`;
+const STATS_ICON = `<path d="M18 20V10M12 20V4M6 20v-6"/>`;
 
 /**
  * Render the bottom tab bar HTML.
  * @param activeTab - Currently active tab
- * @param isSimulator - Whether the app is in simulator mode (unused, kept for compat)
+ * @param _isSimulator - Unused, kept for call-site compat
  */
 export function renderTabBar(activeTab: TabId, _isSimulator?: boolean): string {
-  const tabs: { id: TabId; label: string; icon: string }[] = [
-    {
-      id: 'home',
-      label: 'Home',
-      icon: `<path d="M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
-             <polyline points="9 22 9 12 15 12 15 22"/>`,
-    },
-    {
-      id: 'plan',
-      label: 'Plan',
-      icon: `<rect x="3" y="4" width="18" height="18" rx="2"/>
-             <path d="M16 2v4M8 2v4M3 10h18"/>
-             <path d="M8 14h4M8 17h8"/>`,
-    },
-    {
-      id: 'record',
-      label: 'Record',
-      icon: `<circle cx="12" cy="12" r="9"/>
-             <circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none"/>`,
-    },
-    {
-      id: 'stats',
-      label: 'Stats',
-      icon: `<path d="M18 20V10M12 20V4M6 20v-6"/>`,
-    },
-  ];
+  const _et = getState().eventType;
+  const isTriathlon = _et === 'triathlon';
+  const isHyrox = _et === 'hyrox';
+
+  const tabs: { id: TabId; label: string; icon: string }[] = (isTriathlon || isHyrox)
+    ? [
+        { id: 'home',     label: 'Home',     icon: HOME_ICON },
+        { id: 'plan',     label: 'Plan',     icon: PLAN_ICON },
+        { id: 'forecast', label: 'Forecast', icon: FORECAST_ICON },
+        { id: 'stats',    label: 'Stats',    icon: STATS_ICON },
+      ]
+    : [
+        { id: 'home',  label: 'Home',  icon: HOME_ICON },
+        { id: 'plan',  label: 'Plan',  icon: PLAN_ICON },
+        { id: 'stats', label: 'Stats', icon: STATS_ICON },
+      ];
 
   const tabsHtml = tabs.map(tab => {
     const isActive = tab.id === activeTab;
@@ -67,9 +71,7 @@ if (typeof document !== 'undefined') {
     if (btn && _tabHandler) {
       const tab = btn.getAttribute('data-tab') as TabId;
       if (tab) {
-        if (tab !== 'record') {
-          import('./guided-overlay').then(({ unmountGuidedOverlay }) => unmountGuidedOverlay());
-        }
+        import('./guided-overlay').then(({ unmountGuidedOverlay }) => unmountGuidedOverlay());
         _tabHandler(tab);
       }
     }

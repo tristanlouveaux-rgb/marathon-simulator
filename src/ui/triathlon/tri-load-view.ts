@@ -18,11 +18,12 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL } from './colours';
 import { readTriFitness, perDisciplineACWR } from '@/calculations/fitness-model.triathlon';
 import { computeTriDisciplineConfidence } from '@/calculations/tri-discipline-confidence';
+import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('../home-view').then(({ renderHomeView }) => renderHomeView());
-  else if (tab === 'plan') import('../plan-view').then(({ renderPlanView }) => renderPlanView());
-  else if (tab === 'record') import('../record-view').then(({ renderRecordView }) => renderRecordView());
+  else if (tab === 'plan') import('../main-view').then(({ renderMainView }) => renderMainView());
+  else if (tab === 'forecast') import('./forecast-view').then(({ renderTriathlonForecastView }) => renderTriathlonForecastView());
   else if (tab === 'account') import('../account-view').then(({ renderAccountView }) => renderAccountView());
 }
 
@@ -37,6 +38,8 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
   const fitness = readTriFitness(s);
   const history = tri.fitnessHistory ?? [];
   const confidence = computeTriDisciplineConfidence(s, 12);
+  const cycling = isCyclingOnlyMode(s);
+  const disciplines = (cycling ? ['bike'] : ['swim', 'bike', 'run']) as ('swim' | 'bike' | 'run')[];
 
   // Total combined load — sum of direct per-discipline (everything you did),
   // displayed as TrainingPeaks-style daily-equivalent (÷7).
@@ -86,9 +89,9 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
           <div class="tri-load-card hf" data-delay="0.10">
             <div class="tri-load-label">By discipline</div>
             <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
-              Direct activity in each sport — what you actually swam / cycled / ran. Cross-training transfer is captured in the total above; here we show the work itself.
+              ${cycling ? 'Bike training load — chronic fitness, acute fatigue, and form.' : 'Direct activity in each sport — what you actually swam / cycled / ran. Cross-training transfer is captured in the total above; here we show the work itself.'}
             </div>
-            ${(['swim', 'bike', 'run'] as const).map((d) => {
+            ${disciplines.map((d) => {
               const f = fitness[d];
               const c = DISCIPLINE_COLOURS[d];
               const fitnessVal = f.ctl / 7;
@@ -128,7 +131,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
             </div>
             ${renderChart(history)}
             <div style="margin-top:10px;display:flex;justify-content:center;gap:18px;font-size:11px">
-              ${(['swim', 'bike', 'run'] as const).map((d) => {
+              ${disciplines.map((d) => {
                 const c = DISCIPLINE_COLOURS[d];
                 const f = fitness[d];
                 const value = (f.ctl / 7).toFixed(1);

@@ -47,18 +47,19 @@ describe('collectTriSuggestions', () => {
     expect(r.mods).toEqual([]);
   });
 
-  it('cross-training overload pushes a cross_training_overload mod with overloadOptions', () => {
+  it('cross-training overload pushes a cross_training_overload mod with overloadOptions (run-anchored)', () => {
     // Planned 400 TSS tri week, +120 TSS tennis logged as adhoc → 30%
     // overshoot → extreme severity (mapped to 'warning' on the mod).
-    // v2 recommends bike (most remaining TSS) and surfaces the full per-
-    // discipline option set via `overloadOptions`.
+    // v2 anchors recommendation on RUN by default for tennis (run-affinity)
+    // and surfaces the full per-discipline option set via `overloadOptions`.
+    // All workouts dated dow=6 so they're upcoming regardless of "today".
     const s = state({
       w: 0,
       wks: [{
         triWorkouts: [
-          { id: 'b1', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 5 },
-          { id: 'r1', t: 'threshold', n: 'Run threshold', d: '60min', r: 8, discipline: 'run', aerobic: 80, anaerobic: 30, dayOfWeek: 1 },
-          { id: 's1', t: 'swim_endurance', n: 'Swim', d: '45min', r: 4, discipline: 'swim', aerobic: 60, anaerobic: 10, dayOfWeek: 2 },
+          { id: 'b1', t: 'bike_endurance', n: 'Long bike', d: '4h', r: 5, discipline: 'bike', aerobic: 200, anaerobic: 20, dayOfWeek: 6 },
+          { id: 'r1', t: 'threshold', n: 'Run threshold', d: '60min', r: 8, discipline: 'run', aerobic: 80, anaerobic: 30, dayOfWeek: 6 },
+          { id: 's1', t: 'swim_endurance', n: 'Swim', d: '45min', r: 4, discipline: 'swim', aerobic: 60, anaerobic: 10, dayOfWeek: 6 },
         ],
         adhocWorkouts: [
           { id: 'tennis', t: 'cross', n: 'tennis', d: '120min', r: 7, iTrimp: 18000 } as any,
@@ -69,10 +70,10 @@ describe('collectTriSuggestions', () => {
     const xt = r.mods.find(m => m.source === 'cross_training_overload');
     expect(xt).toBeDefined();
     expect(xt!.severity).toBe('warning'); // detector 'extreme' → mod 'warning'
-    expect(xt!.discipline).toBe('bike'); // bike has most remaining TSS
+    expect(xt!.discipline).toBe('run'); // tennis = run-affinity → run-anchored
     expect(xt!.overloadOptions).toBeDefined();
-    expect(xt!.overloadOptions!.recommendedDiscipline).toBe('bike');
-    expect(xt!.overloadOptions!.options.bike.reduceMods.length).toBeGreaterThan(0);
+    expect(xt!.overloadOptions!.recommendedDiscipline).toBe('run');
+    expect(xt!.overloadOptions!.options.run.reduceMods.length).toBeGreaterThan(0);
     expect(r.diagnostics.crossTrainingOverload).toBe(true);
   });
 

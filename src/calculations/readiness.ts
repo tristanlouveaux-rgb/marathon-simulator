@@ -17,13 +17,15 @@
  *   ACWR 1.3–1.5         → score ≤ 59 (Manage Load)
  *   Sleep < 45           → score ≤ 59 (Manage Load)
  *   Sleep < 60           → score ≤ 74 (prevents Primed on a bad night)
- *   Sleep bank > 5h debt → score ≤ 59 (Manage Load)
- *   Sleep bank > 3h debt → score ≤ 74 (prevents Primed on chronic deficit)
- *   Strain 50–100%       → floor slides linearly 100→59 (session in progress)
- *   Strain 100–130%      → score ≤ 59 (Manage Load — daily target hit)
- *   Strain > 130%        → score ≤ 39 (Ease Back — well exceeded target)
  *   Leg load >= 20       → score ≤ 54 (Manage Load — moderate eccentric/impact damage)
  *   Leg load >= 60       → score ≤ 34 (Ease Back — heavy EIMD, 72-96h recovery window)
+ *
+ * CONTINUOUS PENALTIES (not hard caps):
+ *   Sleep debt above personal baseline → −5 pts/hr excess, max −25 pts (Van Dongen 2003)
+ *   HRV drop > 15% below personal avg  → −(dropFraction−0.15)×100 pts, max −25 pts (Plews 2013)
+ *   Strain 50–100%       → floor descends linearly 100→54 (approaching target)
+ *   Strain 100–180%      → floor continues linearly 54→10 (target exceeded, no step-jump)
+ *   Recovery (HRV+sleep+RHR)           → 35% of composite weight; no additional hard floor
  *
  * Internal names (ATL/CTL/TSB/ACWR) must NEVER appear in user-facing copy.
  * User-facing names: Freshness, Load Safety, Momentum, Recovery.
@@ -190,7 +192,7 @@ function legLoadTimeframe(timestampMs: number, nowMs: number): string {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type ReadinessLabel = 'Primed' | 'On Track' | 'Manage Load' | 'Ease Back' | 'Overreaching';
-export type DrivingSignal = 'fitness' | 'safety' | 'recovery' | 'legLoad';
+export type DrivingSignal = 'fitness' | 'safety' | 'recovery' | 'legLoad' | 'mtlLoad';
 
 export interface ReadinessInput {
   /** TSB = CTL − ATL. Negative = fatigued, positive = fresh. */
@@ -212,10 +214,16 @@ export interface ReadinessInput {
   hrvPersonalAvg?: number | null;
   /**
    * 7-day cumulative sleep bank in seconds (sum of actual_sleep − sleep_need per night).
-   * Negative = deficit. Applied as a hard floor below the composite score.
-   * > 3h deficit → score ≤ 74; > 5h deficit → score ≤ 59.
+   * Negative = deficit. Used as fallback penalty when no personal baseline is available.
    */
   sleepBankSec?: number | null;
+  /**
+   * How far current cumulative sleep debt sits above the athlete's personal 30-day typical
+   * debt (debtSec − typicalDebtSec from computeSleepDebtOutlook). Positive = worse than
+   * usual; negative = better than usual; null = insufficient history for a baseline.
+   * When provided, replaces sleepBankSec for the sleep penalty calculation.
+   */
+  sleepDebtExcessSec?: number | null;
   /**
    * Number of completed plan weeks with data.
    * < 3 → insufficient history, return safe default "On Track".
@@ -247,6 +255,14 @@ export interface ReadinessInput {
    * Defaults to 1.3 if not provided (beginner-level conservative).
    */
   acwrSafeUpper?: number;
+  /**
+   * MTL ACWR: ratio of acute MTL (7-day EMA) to chronic MTL (42-day EMA).
+   * Captures ramp rate of eccentric/station load independently of aerobic load.
+   * Relevant for HYROX and any training with significant eccentric loading.
+   * Threshold mirrors aerobic ACWR: > 1.3 → Manage Load floor, > 1.5 → Ease Back floor.
+   * Null or absent = no MTL data, no floor applied.
+   */
+  mtlAcwr?: number | null;
 }
 
 export interface ReadinessResult {
@@ -271,7 +287,7 @@ export interface ReadinessResult {
   /** Decayed leg load sum (0+). 0 = fresh. >= LEG_LOAD_MODERATE caps readiness; >= LEG_LOAD_HEAVY hard caps. */
   legLoadTotal: number;
   /** Which hard floor (if any) is actively capping the readiness score. Null when no floor is binding. */
-  hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | null;
+  hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | 'mtlLoad' | null;
   /**
    * How many consecutive days the active sleep-related floor has been suppressing the score.
    * Only set for sleep/sleepBank floors with ≥ 2 days. Null otherwise.
@@ -313,6 +329,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   const {
     tsb, acwr, ctlNow,
     sleepScore, sleepHistory, hrvRmssd, hrvPersonalAvg, sleepBankSec,
+    sleepDebtExcessSec,
     weeksOfHistory = 0,
     strainPct,
     recentLegLoads,
@@ -473,7 +490,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // A good sleep doesn't make a load spike safe. ACWR is a hard constraint.
   // Track which hard floor is the most restrictive (lowest cap wins).
   // Thresholds are tier-aware: safeUpper from TIER_ACWR_CONFIG, caution = safeUpper + 0.2.
-  let hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | null = null;
+  let hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | 'mtlLoad' | null = null;
 
   // ── Hard floors — recalibrated for non-linear sub-scores ─────────────────
   // Label boundaries: Primed >= 75, On Track >= 55, Manage Load >= 35, Ease Back < 35.
@@ -495,41 +512,100 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     else if (sleepScore < 60 && score > 74)           { score = Math.min(score, 74); hardFloor = 'sleep'; }
   }
 
-  // HRV floor — a large acute drop signals autonomic stress that overrides other signals.
+  // HRV penalty — continuous, proportional to how far HRV sits below personal average.
+  //
+  // Replaces former binary caps (>20% → cap 74, >30% → cap 54).
+  // Plews et al. (2013) and Buchheit (2014): acute HRV suppression correlates
+  // linearly with autonomic stress load. A 30% drop is meaningful; a 50% drop
+  // is severe — the penalty should scale rather than snap to a floor.
+  //
+  // Formula: penalty = clamp((dropFraction − 0.15) × 100, 0, 25)
+  //   15% drop → 0 pts  (noise floor — within normal day-to-day variation)
+  //   20% drop → 5 pts
+  //   30% drop → 15 pts  (was hard-capped at 54)
+  //   40% drop → 25 pts  (max)
   if (hrvRmssd != null && hrvPersonalAvg != null && hrvPersonalAvg > 0) {
     const hrvDropFraction = (hrvPersonalAvg - hrvRmssd) / hrvPersonalAvg;
-    if (hrvDropFraction > 0.30 && score > 54)      { score = Math.min(score, 54); hardFloor = 'hrv'; }
-    else if (hrvDropFraction > 0.20 && score > 74) { score = Math.min(score, 74); hardFloor = 'hrv'; }
+    if (hrvDropFraction > 0.15) {
+      const penalty = Math.min(25, Math.round((hrvDropFraction - 0.15) * 100));
+      if (penalty > 0) {
+        score = Math.max(0, score - penalty);
+        if (penalty >= 5) hardFloor = 'hrv';
+      }
+    }
   }
 
-  // Sleep bank floor — fixed 54 cap (independent of consecutive-night decay).
-  // sleepBank is accumulated debt, not a streak signal — keep them separate.
-  if (sleepBankSec != null && sleepBankSec < 0) {
-    if (sleepBankSec < -9000 && score > SLEEP_CAP_MAX) { score = Math.min(score, SLEEP_CAP_MAX); hardFloor = 'sleepBank'; }
-    else if (sleepBankSec < -5400 && score > 74)        { score = Math.min(score, 74); hardFloor = 'sleepBank'; }
+  // Sleep debt penalty — continuous, baseline-aware (replaces former hard cap).
+  //
+  // When a personal 30-day baseline is available (sleepDebtExcessSec != null):
+  //   Penalty = clamp(excessHours × 5, 0, 25)
+  //   Rationale: Van Dongen et al. (2003) shows linear dose-response between
+  //   cumulative sleep debt and neurobehavioral performance. 5 pts/hr excess is
+  //   calibrated so that 5h above personal baseline (~1 extra sleepless night)
+  //   pushes an otherwise On-Track score to the Manage Load boundary. Below
+  //   baseline (vsTypical 'on_par' or 'below') → no penalty at all.
+  //
+  // Fallback (no personal baseline, <14 nights of history): use absolute debt
+  // tiers from classifySleepDebt as graduated penalties instead of hard caps.
+  if (sleepDebtExcessSec != null) {
+    if (sleepDebtExcessSec > 0) {
+      const excessHours = sleepDebtExcessSec / 3600;
+      const penalty = Math.min(25, Math.round(excessHours * 5));
+      if (penalty > 0) {
+        score = Math.max(0, score - penalty);
+        if (penalty >= 8) hardFloor = 'sleepBank';
+      }
+    }
+    // Below or on-par with personal baseline: no penalty.
+  } else if (sleepBankSec != null && sleepBankSec < 0) {
+    // Fallback: tier-based penalties (no hard caps).
+    const abs = Math.abs(sleepBankSec);
+    const penalty = abs < 2700 ? 0       // on track
+      : abs < 5400  ? 3                  // caught up
+      : abs < 10800 ? 8                  // mild
+      : abs < 21600 ? 15                 // moderate
+      : abs < 32400 ? 22                 // high
+      : 25;                              // severe
+    if (penalty > 0) {
+      score = Math.max(0, score - penalty);
+      if (penalty >= 8) hardFloor = 'sleepBank';
+    }
   }
 
-  // Recovery floor — sliding scale so low recovery caps readiness even when fitness/safety are maxed.
-  // floor = 35 + (recoveryScore × 0.60): recovery=100 → no cap, recovery=55 → cap 68 (On Track),
-  // recovery=33 → cap 55 (On Track boundary), recovery=0 → cap 35 (Ease Back boundary).
-  if (precomputedRecoveryScore != null) {
-    const recoveryFloor = Math.round(35 + precomputedRecoveryScore * 0.60);
-    score = Math.min(score, recoveryFloor);
-  }
+  // Recovery is already in the composite at 35% weight. Individual HRV and sleep
+  // penalties add graduated signal-specific pressure. No additional hard floor.
 
   // Strain floor — today's accumulated load reduces "readiness for more" as target is approached.
-  // 50-100%: linear floor 100→54 (approaching target).
-  // 100-130%: floor 54 (hit target, Manage Load).
-  // >130%: floor 34 (well exceeded, Ease Back).
+  // Strain penalty — continuous gradient, no step-jumps.
+  // 50-100%: floor descends 100→54 (approaching daily target).
+  // 100%+:   floor continues descending 54→10 over the next 80pp (sp 100→180%).
+  //          Slope ≈ 0.55 pts/% so at 130% floor ≈ 38, at 150% floor ≈ 27, at 180%+ floor = 10.
   const sp = strainPct;
   if (sp != null && sp > 50) {
     let strainFloor: number;
-    if (sp >= 130)      strainFloor = 34;
-    else if (sp >= 100) strainFloor = 54;
-    else                strainFloor = Math.round(100 - (sp - 50) * (46 / 50));
+    if (sp <= 100) {
+      strainFloor = Math.round(100 - (sp - 50) * (46 / 50));   // 100→54
+    } else {
+      strainFloor = Math.max(10, Math.round(54 - (sp - 100) * (44 / 80)));  // 54→10
+    }
     if (strainFloor < score) {
       score = strainFloor;
       hardFloor = 'strain';
+    }
+  }
+
+  // MTL load floor — eccentric ramp rate for HYROX and station-heavy modes.
+  // MTL ACWR mirrors aerobic ACWR thresholds: > 1.3 → Manage Load, > 1.5 → Ease Back.
+  // Applies only when mtlAcwr is provided and MTL history is meaningful (ratio > 0).
+  // Does not overwrite a stricter floor already applied by ACWR, sleep, or leg load.
+  const mtlAcwr = input.mtlAcwr ?? null;
+  if (mtlAcwr != null && mtlAcwr > 0) {
+    if (mtlAcwr > 1.5 && score > 34) {
+      score = 34;
+      hardFloor = 'mtlLoad';
+    } else if (mtlAcwr > 1.3 && score > 54) {
+      score = 54;
+      hardFloor = 'mtlLoad';
     }
   }
 
@@ -608,6 +684,17 @@ export function readinessColor(label: ReadinessLabel): string {
   if (label === 'On Track')      return 'var(--c-info)';
   if (label === 'Manage Load')   return 'var(--c-caution)';
   return 'var(--c-warn)';
+}
+
+/** Three-stop gradient for the data ring stroke. Same recipe as the page-flair
+ *  rings (light highlight → mid colour → darker shadow), but tinted to the
+ *  semantic readiness colour. Apply via SVG `<linearGradient>` to give the
+ *  data ring the same lit-from-upper-left depth as the brand background rings. */
+export function readinessColorStops(label: ReadinessLabel): { highlight: string; mid: string; shadow: string } {
+  if (label === 'Primed')      return { highlight: '#86EFAC', mid: '#22C55E', shadow: '#166534' };
+  if (label === 'On Track')    return { highlight: '#BAD6F2', mid: '#7FB4E8', shadow: '#3B7FBF' };
+  if (label === 'Manage Load') return { highlight: '#FCD27A', mid: '#F59E0B', shadow: '#A16207' };
+  return                            { highlight: '#FCA5A5', mid: '#EF4444', shadow: '#991B1B' };
 }
 
 /** Short display string for each driving signal's pill label. */

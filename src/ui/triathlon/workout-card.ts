@@ -8,7 +8,7 @@
 import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
 
-export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean } = {}): string {
+export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean } = {}): string {
   const discipline: BadgeKind = badgeKindFor(w);
   const c = DISCIPLINE_COLOURS[discipline];
   const label = DISCIPLINE_LABEL[discipline];
@@ -45,6 +45,8 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean } = {
           ${label}
         </span>
         ${durLabel ? `<span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">${durLabel}</span>` : ''}
+        ${discipline === 'swim' && opts.cssSecPer100m == null && opts.dismissedTests?.has('css-pair') ? `<span style="font-size:10px;font-weight:500;color:var(--c-faint);background:rgba(0,0,0,0.04);border-radius:100px;padding:2px 8px;letter-spacing:0.02em">No CSS</span>` : ''}
+        ${discipline === 'bike' && opts.ftp == null && opts.dismissedTests?.has('ftp-20min') ? `<span style="font-size:10px;font-weight:500;color:var(--c-faint);background:rgba(0,0,0,0.04);border-radius:100px;padding:2px 8px;letter-spacing:0.02em">No FTP</span>` : ''}
         <span style="flex:1"></span>
         <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">RPE ${rpe}</span>
         ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
@@ -52,6 +54,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean } = {
       <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escapeHtml(expandedDesc)}</div>
       ${brickFootnote}
+      ${opts.injuryEasy ? `<div style="margin-top:8px;padding:5px 10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:11px;color:#92400E;font-weight:500">Easy intensity only — injury management</div>` : ''}
     </div>
   `;
 }
@@ -63,9 +66,13 @@ function escapeHtml(s: string): string {
 }
 
 /** Map a workout to the right badge — gym/strength shows its own, tri
- * disciplines keep theirs, legacy unlabelled workouts fall back to run. */
+ * disciplines keep theirs, legacy unlabelled workouts fall back to run.
+ * HYROX-only disciplines ('station', 'brick') fall back to 'run' here
+ * since HYROX workouts render through their own card component. */
 function badgeKindFor(w: Workout): BadgeKind {
-  if (w.discipline) return w.discipline;
+  if (w.discipline === 'swim' || w.discipline === 'bike' || w.discipline === 'run') {
+    return w.discipline;
+  }
   if (w.t === 'gym' || w.t === 'strength' || /strength|gym/i.test(w.n)) return 'strength';
   return 'run';
 }

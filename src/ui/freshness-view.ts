@@ -17,10 +17,8 @@ import {
 
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
-
-// ── Design tokens ─────────────────────────────────────────────────────────────
-
-const APP_BG  = '#FAF9F6';
+import { buildFloweyBackground, floweyAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
+void buildSkyBackground; void skyAnimationCSS;
 const BLUE_A  = '#60A5FA';   // blue-400
 const BLUE_B  = '#3B82F6';   // blue-500
 const BLUE_D  = '#2563EB';   // blue-600
@@ -38,12 +36,12 @@ interface TsbZone { label: string; color: string; bg: string; }
  *  Must match readiness-view.ts thresholds exactly. */
 function tsbZone(rawTsb: number): TsbZone {
   const d = Math.round(rawTsb / 7);
-  if (d > 0)     return { label: 'Fresh',       color: '#22C55E', bg: 'rgba(34,197,94,0.08)' };
-  if (d >= -3)   return { label: 'Recovering',  color: BLUE_B,    bg: 'rgba(59,130,246,0.08)' };
-  if (d >= -8)   return { label: 'Fatigued',    color: '#F59E0B', bg: 'rgba(245,158,11,0.08)' };
-  if (d >= -15)  return { label: 'Heavy',       color: '#F59E0B', bg: 'rgba(245,158,11,0.08)' };
-  if (d >= -25)  return { label: 'Overloaded',  color: '#EF4444', bg: 'rgba(239,68,68,0.08)' };
-  return            { label: 'Overreaching', color: '#EF4444', bg: 'rgba(239,68,68,0.08)' };
+  if (d > 0)     return { label: 'Fresh',       color: 'var(--c-ok)',      bg: 'rgba(34,197,94,0.08)' };
+  if (d >= -3)   return { label: 'Recovering',  color: BLUE_B,             bg: 'rgba(59,130,246,0.08)' };
+  if (d >= -8)   return { label: 'Fatigued',    color: 'var(--c-caution)', bg: 'rgba(245,158,11,0.08)' };
+  if (d >= -15)  return { label: 'Heavy',       color: 'var(--c-caution)', bg: 'rgba(245,158,11,0.08)' };
+  if (d >= -25)  return { label: 'Overloaded',  color: 'var(--c-warn)',    bg: 'rgba(239,68,68,0.08)' };
+  return            { label: 'Overreaching', color: 'var(--c-warn)',    bg: 'rgba(239,68,68,0.08)' };
 }
 
 function tsbBarColor(rawTsb: number): string {
@@ -66,7 +64,7 @@ function tsbZoneDescription(rawTsb: number): string {
 
 // ── SVG watercolour background (shared with recovery) ─────────────────────────
 
-function skyBackground(): string { return buildSkyBackground('frs', 'mint'); }
+function skyBackground(): string { return buildFloweyBackground('frs', 'mint') + buildSunGlint('low'); }
 
 // ── Weekly TSB data ───────────────────────────────────────────────────────────
 
@@ -303,7 +301,7 @@ function getFreshnessHTML(s: SimulatorState): string {
 
   const ctlDaily = ctl / 7;
 
-  const baseline = computeToBaseline(s.wks ?? [], completedWeek, ctlDaily, s.planStartDate, s.physiologyHistory);
+  const baseline = computeToBaseline(s.wks ?? [], completedWeek, ctlDaily, s.planStartDate, s.physiologyHistory, s.adaptiveRecovery);
   const sessionRecoveryHours = baseline?.hours ?? null;
   const sessionTotalHours = baseline?.totalHours ?? null;
 
@@ -367,16 +365,15 @@ function getFreshnessHTML(s: SimulatorState): string {
       #fresh-view *, #fresh-view *::before, #fresh-view *::after { box-sizing:inherit; }
       @keyframes fFloatUp { from { opacity:0; transform:translateY(16px) scale(0.97); } to { opacity:1; transform:translateY(0) scale(1); } }
       .f-fade { opacity:0; animation:fFloatUp 0.6s cubic-bezier(0.2,0.8,0.2,1) forwards; }
-      ${skyAnimationCSS('frs')}
     </style>
 
     <div id="fresh-view" style="
-      position:relative;min-height:100vh;background:${APP_BG};
+      position:relative;min-height:100vh;background:${atmosphereGradient('mint')};
       font-family:var(--f);overflow-x:hidden;
     ">
       ${skyBackground()}
 
-      <div style="position:relative;z-index:10;padding-bottom:48px">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
         <!-- Header -->
         <div style="padding:56px 20px 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50">
@@ -394,28 +391,24 @@ function getFreshnessHTML(s: SimulatorState): string {
 
         <!-- Ring -->
         <div class="f-fade" style="animation-delay:0.08s;display:flex;flex-direction:column;align-items:center;margin:8px 0 28px">
-          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
               <defs>
-                <linearGradient id="freshGauge" x1="0%" y1="100%" x2="100%" y2="0%">
-                  <stop offset="0%" stop-color="${zone.color === '#22C55E' ? '#4ADE80' : zone.color === '#EF4444' ? '#F87171' : zone.color === '#F59E0B' ? '#FBBF24' : BLUE_A}"/>
-                  <stop offset="100%" stop-color="${zone.color === '#22C55E' ? '#16A34A' : zone.color === '#EF4444' ? '#DC2626' : zone.color === '#F59E0B' ? '#D97706' : BLUE_D}"/>
+                <linearGradient id="freshGauge" x1="20%" y1="90%" x2="80%" y2="10%">
+                  <stop offset="0%"   stop-color="${zone.color === '#22C55E' ? '#86EFAC' : zone.color === '#EF4444' ? '#FCA5A5' : zone.color === '#F59E0B' ? '#FCD27A' : '#93C5FD'}"/>
+                  <stop offset="50%"  stop-color="${zone.color === '#22C55E' ? '#22C55E' : zone.color === '#EF4444' ? '#EF4444' : zone.color === '#F59E0B' ? '#F59E0B' : '#3B82F6'}"/>
+                  <stop offset="100%" stop-color="${zone.color === '#22C55E' ? '#166534' : zone.color === '#EF4444' ? '#991B1B' : zone.color === '#F59E0B' ? '#A16207' : '#1D4ED8'}"/>
                 </linearGradient>
               </defs>
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
+              <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
               <circle id="fresh-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
                 stroke="url(#freshGauge)"
                 stroke-width="8" stroke-linecap="round"
                 stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
-                style="transition:stroke-dashoffset 1.5s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
+                style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
               />
             </svg>
-            <div style="
-              position:absolute;display:flex;flex-direction:column;align-items:center;justify-content:center;
-              background:rgba(255,255,255,0.95);backdrop-filter:blur(8px);
-              width:180px;height:180px;border-radius:50%;
-              box-shadow:inset 0 2px 8px rgba(0,0,0,0.03);border:1px solid rgba(255,255,255,0.5);
-            ">
+            <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
               <div style="display:flex;align-items:flex-start;color:${ringColor};margin-top:8px">
                 <span style="font-size:48px;font-weight:700;letter-spacing:-0.03em;line-height:1">${tsbLabel}</span>
               </div>
@@ -532,7 +525,8 @@ function getFreshnessHTML(s: SimulatorState): string {
 
 function navigateTab(tab: TabId): void {
   if (tab === 'home') import('./home-view').then(m => m.renderHomeView());
-  else if (tab === 'plan') import('./plan-view').then(m => m.renderPlanView());
+  else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
+  else if (tab === 'forecast') import('./triathlon/forecast-view').then(m => m.renderTriathlonForecastView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
 }
@@ -644,7 +638,7 @@ function injectTriPerDisciplineForm(s: SimulatorState): void {
   const insertedHTML = `
     <div class="f-fade" style="animation-delay:0.34s;background:white;border-radius:16px;padding:20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);margin:0 16px 14px">
       <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:${TEXT_L};margin-bottom:8px">Form by Discipline</div>
-      <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:6px">Each discipline's Fitness − Fatigue, separately. A single discipline can be carrying significant fatigue while another is fresh — useful when planning today's session.</div>
+      <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:6px">Each discipline's Fitness − Fatigue, separately. A single discipline can be carrying significant fatigue while another is fresh. Useful when planning today's session.</div>
       ${row('swim', 'Swim')}
       ${row('bike', 'Bike')}
       ${row('run',  'Run')}

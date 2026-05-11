@@ -351,6 +351,80 @@ Bar represents actual vs target for each stage (e.g. REM target = 25% of sleep d
 
 ---
 
+## Population Distribution Charts (PDF from real breakpoints)
+
+Used in: `src/ui/hyrox/percentile-distributions.ts` ("Where you sit" card on the HYROX forecast).
+
+### Purpose
+
+Show the user where their result sits inside the population — a single asymmetric bell (or right-skewed shape) per metric, with the user's line on it.
+
+### Rule: never synthesise a curve when real data exists
+
+If the codebase has cumulative-percentile breakpoints for the metric (e.g. `[[3829, 1], [4163, 5], …, [8856, 99]]` = 1% of finishers at-or-below 3829s, etc.), the curve must be **derived from those points**:
+
+1. **Differentiate**: per-segment density = `(p_{i+1} − p_i) / (t_{i+1} − t_i)`, anchored at the segment midpoint.
+2. **Pad the tails** with zero-density anchors slightly outside the data range so the bell fades to zero at the edges.
+3. **Oversample** with linear interpolation to ~80 samples across the visible range.
+4. **3-point box smooth** for visual cleanliness (no Bézier, no spline — area-chart pattern is sharp lines).
+5. **Plot** as a polyline + filled area underneath.
+
+If no real data exists for a subset (e.g. unsupported race format), fall back to a synthesised band-anchored Gaussian only when explicitly labelled as "approximate".
+
+### Layout
+
+- **Card**: canonical data-glass (`rgba(255,255,255,0.78) + blur(16px) + soft shadow + no border`).
+- **Subtitle leads with provenance** — finisher count, season, dataset name. "Live HYROX field. 89,868 finishers across S4–S6" beats "Distributions from results data".
+- **Per-row layout**: label (left) + user time + tier label (right, e.g. "top 1%", "median", "bottom 25%") on top; chart underneath.
+- **Chart height**: 64px viewBox.
+- **One data colour**: `STROKE = #64748B` slate-500 line at 1.5px, `FILL = rgba(100,116,139,0.12)` underneath, `USER_LINE = #0F172A` slate-900 for the marker. Plus `rgba(0,0,0,0.10)` dashed for p25/p50/p75 guides. No chromatic accents.
+- **Reference markers** (p25 / p50 / p75): vertical dashed SVG lines, with HTML `<span>` labels positioned via `left:%` in a 14px row underneath the chart. Never SVG `<text>` (would distort with `preserveAspectRatio="none"`).
+- **User marker**: vertical solid line + small HTML overlay dot at the top, plus a small "you" label in the under-chart label row. Edge-aware horizontal anchoring (left, right, or centred) so the label never bleeds off the chart.
+- **Off-chart users**: when the user's time falls outside the visible range, pin at edge and show a small `◂` or `▸` indicator instead of clipping the line.
+
+### SVG sizing rules (compulsory)
+
+- `preserveAspectRatio="none"` + explicit `height:Npx` + `width:100%`.
+- `vector-effect="non-scaling-stroke"` on every `<line>` and `<path>` stroke so widths render true regardless of horizontal stretch.
+- **No `<circle>` and no `<text>` inside the SVG** — both distort under non-uniform scaling. Move them to HTML overlays positioned via `left:%`.
+
+### Tier label translation
+
+Display the friendly tier instead of "p99" jargon: `top 1% / top 5% / top 10% / top N% (50<f<90) / median / bottom N% / bottom 5%`. The percentile number stays in the audit log internally but the user sees plain words.
+
+---
+
+## Radar / Spider Charts (HTML labels, gutter zones)
+
+Used in: `src/ui/hyrox/performance-radar.ts` (HYROX 8-axis station percentile).
+
+### Rule: SVG holds geometry, HTML holds labels
+
+Long axis labels ("Sandbag Lunges", "Burpee Broad Jumps") clip at the SVG viewBox edge in narrow containers when written as `<text>`. Always render labels as HTML `<span>` elements absolutely-positioned over a `position:relative` square wrapper. The SVG sits inset from each side, leaving gutters for labels.
+
+### Layout
+
+- **Wrapper**: `position:relative; aspect-ratio:1/1; max-width:380px; margin:0 auto`.
+- **SVG inset**: ~19% per side. SVG viewBox `0 0 200 200`, polygon outer radius `200 × 0.42`.
+- **Labels** snap to one of nine zones based on axis angle:
+  - Pure top / bottom (`|cos(θ)| < 0.20`): `left:50%`, `text-align:center`, `max-width:54%`, anchored to top/bottom edge.
+  - Pure left / right (`|sin(θ)| < 0.20`): pinned to wrapper edge with `text-align:right` (right side) or `left` (left side), `max-width:20%`.
+  - Corners: pinned to top/bottom corners (`top:13%` or `top:87%`), anchored to outer wrapper edge, `max-width:28%`.
+- **Why zone snapping not polar maths**: at any container width, labels sit fully inside the wrapper and never overlap the polygon. They wrap to two lines naturally when text is long.
+
+### Polygon polish
+
+- **Fill**: radial-gradient from `rgba(slate-600, 0.18)` at centre to `rgba(slate-600, 0.04)` at the edge — gives lift without violating the no-decorative-gradient rule (this is data-carrying, marks where the user's polygon is).
+- **Stroke**: linear-gradient `slate-900 → slate-600` (corner to corner). 1.6px, `stroke-linejoin:round`.
+- **Dashed when uncalibrated**: any seed-only station turns the whole polygon stroke into `stroke-dasharray="4 3"` to communicate provisional status.
+- **Dots**: calibrated stations get a filled `slate-900` dot with a `rgba(255,255,255,0.95)` halo behind it (premium "lifted off the page" feel). Seed-only stations get a hollow open circle (white fill, slate-900 stroke).
+
+### Subtitle
+
+Same rule as distributions: lead with the data — "Each spoke shows where you sit on that station vs S4–S6 field. Outer ring is top 1%."
+
+---
+
 ## Visual Constraints
 
 These apply to every component, chart, and card in the app. Check all four before writing any UI code.
@@ -496,21 +570,51 @@ All detail pages share a single type hierarchy. Reference: `recovery-view.ts` (P
 
 ### Ring SVG structure (canonical pattern)
 
-All hero rings use the same SVG setup. Reference: `recovery-view.ts`.
+All hero rings use a **glass container + 3-stop gradient arc**. This is the single canonical pattern — do not use flat single colors or 2-stop opacity fades on rings. Reference: `readiness-view.ts` (first and definitive implementation).
 
+**Glass outer container** (the 220px div IS the visible circle — no separate inner white disk):
 ```html
-<div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
+<div style="
+  position:relative;width:220px;height:220px;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);
+  border-radius:50%;border:1px solid rgba(255,255,255,0.6);
+  box-shadow:0 6px 40px -8px rgba(0,0,0,0.15);
+">
   <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
-    <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="track-color" stroke-width="8"/>
-    <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="fill-color" stroke-width="8"
-      stroke-linecap="round" stroke-dasharray="${RING_C}" stroke-dashoffset="${targetOffset}"
+    <defs>
+      <!-- SVG is rotated -90deg; visual upper-left light source = bottom-left in rotated coords -->
+      <linearGradient id="unique-ring-grad" x1="20%" y1="90%" x2="80%" y2="10%">
+        <stop offset="0%"   stop-color="${stops.highlight}"/>
+        <stop offset="50%"  stop-color="${stops.mid}"/>
+        <stop offset="100%" stop-color="${stops.shadow}"/>
+      </linearGradient>
+    </defs>
+    <circle cx="50" cy="50" r="${RING_R}" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+    <circle cx="50" cy="50" r="${RING_R}" fill="none"
+      stroke="url(#unique-ring-grad)" stroke-width="8" stroke-linecap="round"
+      stroke-dasharray="${RING_C}" stroke-dashoffset="${RING_C}"
+      data-target-offset="${targetOffset}"
       style="transition:stroke-dashoffset 1.2s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"/>
   </svg>
-  <!-- Centre text overlay -->
+  <!-- Centre text: position:relative;z-index:1 (no separate background circle) -->
+  <div style="position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;justify-content:center">
+    <!-- hero number + label -->
+  </div>
 </div>
 ```
 
-**Fixed values**: container 220×220, viewBox `0 0 100 100`, center `50,50`, stroke-width `8`. Do not use other viewBox sizes (130×130, 160×160) or other centers (65,65 or 80,80) — these are legacy.
+**3-stop gradient recipe**: derive `highlight` (bright), `mid` (main), `shadow` (dark) from the metric's semantic color. Use `readinessColorStops()` as the reference. Gradient direction `x1="20%" y1="90%" x2="80%" y2="10%"` is fixed — this positions the visual light source at the upper-left of the arc after the -90deg SVG rotation.
+
+**Home page arc rings** (270° sweep, `<path>` based, viewBox `0 0 120 120`): use `gradientUnits="userSpaceOnUse"` with `x1="15" y1="15" x2="105" y2="105"`. This maps the upper-left highlight to the top-left portion of the arc and shadow to the lower-right end.
+
+**Do not**:
+- Use an opaque inner 180px white disk (removed — the glass outer container replaces it)
+- Use only 2 gradient stops (opacity 0→1 or just light→dark without a mid stop)
+- Use a glow filter (`feGaussianBlur`) on the ring circle — it blurs the crisp arc edge
+- Use flat single `stroke` colors on any ring
+
+**Fixed values**: container 220×220, viewBox `0 0 100 100`, center `50,50`, stroke-width `8`, `RING_R = 46`, `RING_C ≈ 289.03`. Do not use other viewBox sizes (130×130, 160×160) or other centers (65,65 or 80,80) — these are legacy.
 
 ### Hero numbers
 
@@ -583,9 +687,101 @@ This is the one permitted use of uppercase in cards — for section labels only,
 
 These three are permitted together in zone charts because they ARE the data.
 
+### Triathlon discipline / benchmark colours (canonical — do not change without explicit ask)
+
+Used on the triathlon Stats page: trend sparklines, CTL chart, TSS chart, volume charts, and legend chips. All four are cool tones; area fill opacity is 0.08.
+
+| Metric / Discipline | Stroke | Fill |
+|---|---|---|
+| VO2max | `#34C759` green | `rgba(52,199,89,0.08)` |
+| Swim / CSS | `#38BDF8` sky | `rgba(56,189,248,0.08)` |
+| Bike / FTP | `#8B5CF6` violet | `rgba(139,92,246,0.08)` |
+| Run / LT | `#14B8A6` teal | `rgba(20,184,166,0.08)` |
+
+The line colour is fixed per metric/discipline for visual identity. The delta change label turns `#34C759` (green) when improving and `#FF3B30` (red) when declining — independently of the line colour.
+
+Implemented in `src/ui/triathlon/benchmark-charts.ts` (sparklines) and `src/ui/triathlon/progress-detail-view.ts` (`DISC_CHART` constant).
+
 ---
 
-## Page Backgrounds
+## Ring Backgrounds + Sun Glint (the "page-flair" system)
+
+The default visual system for new UI work. Lives in `src/ui/page-flair.ts`. Three layered building blocks designed to be composed per page:
+
+### The four building blocks
+
+| Block | Function | Purpose |
+|-------|----------|---------|
+| Atmosphere | `buildAtmosphereBase(palette?)` | Soft cool radial gradient base. Replaces flat `var(--c-bg)` warm cream so other layers have somewhere to live. |
+| Rings | `buildRingBackground(prefix, opts)` | Concentric SVG circles with light-source gradient strokes. Five composition variants. Optional pulse + entrance animation. |
+| Sun glint | `buildSunGlint(intensity)` | Warm cream radial-gradient at upper-left of every page. The universal brand mark. |
+| Glassy card | inline CSS recipe | `rgba(255,255,255,0.58) + backdrop-filter:blur(24px)` (locked spec for onboarding). Quieter data variant: `0.78 + blur(16px)`. |
+
+### Layering order
+
+`atmosphere → rings → sun glint → content` (z-index 1 on content). Background layers sit absolutely positioned inside a `position:relative; overflow:hidden` outer container.
+
+### Ring variants
+
+| Variant | Composition | Use for |
+|---------|-------------|---------|
+| `centered` | 5 rings + 2 off-axis ellipses, centred. Optional pulse. | Hero / arrival moments (intro slides, plan-preview-v2, week debrief) |
+| `sweep` | 4 large rings centred off-canvas below — only top arcs visible | Goals — "rising from below" feel |
+| `focused` | 3 small rings tight in upper area | Review — "you're nearly there" energy |
+| `asymmetric` | 3 rings offset to one side (`side: 'left' \| 'right'`) | Connect-Strava (right), Schedule (left), Triathlon-setup, Manual-entry |
+| `whisper` | 2 huge faint arcs only | Welcome name page, Initialising screen — barely-there family signature |
+
+### Ring options
+
+- `palette: 'blue' | 'teal'` — default `'blue'`. Teal used for race-prediction surfaces and any "green" moment.
+- `entrance: 'large' | 'small' | 'none'` — default `'small'`. Use `'large'` only for the first-ever ring appearance per device (gate via `isFirstRingExperience()`).
+- `pulse: boolean` — opt-in. Pulses the near-ring group only (motion parallax sells depth). Finite cycles (`pulseCycles`, default 6 ≈ 54s).
+
+### Depth recipe (why rings feel layered, not flat)
+
+Three gradient tiers (outer / mid / inner) with progressive opacity envelopes — the same DNA, different intensities so inner rings pop and outer rings recede. Plus SVG filters: `feGaussianBlur` (atmospheric perspective on far rings) + drop-shadow on near rings (lift off page).
+
+### Sun glint intensities
+
+| Intensity | Use for |
+|-----------|---------|
+| `low` | Home, Plan, Stats, Account, all detail pages (alongside mountain backgrounds) |
+| `mid` | Wizard steps (alongside ring backgrounds) |
+| `high` | Hero / celebration moments only |
+
+### Animation system
+
+- **First-ever ring** (per device, gated by `isFirstRingExperience()`): large water-droplet entrance (~1.4s, scale 0.28→1, 200ms stagger inner→outer) plus a single light Capacitor haptic. Mark seen via `markRingExperienceSeen()`.
+- **All subsequent**: small "settle" entrance (~0.55s, scale 0.85→1, 80ms stagger). Designed to be near-invisible on rapid form toggles.
+- **Pulse**: opt-in, finite cycles, freezes at opacity 1.
+- **Wave pulse**: trigger via `triggerRingWave(prefix)` for persistent-ring contexts (slide transitions). Subtle scale flicker propagates inner→outer like dipping a finger in water.
+
+### Exclusivity rule (do NOT mix backgrounds)
+
+- **Rings**: wizard / hero / arrival contexts. Never on data-heavy pages where they'd compete with charts/cards.
+- **Mountains** (`buildSkyBackground` from `sky-background.ts`): detail pages only (recovery, readiness, sleep, etc.).
+- **Sun glint**: universal — every page in the app.
+
+Do NOT paint rings behind a mountain page or vice versa.
+
+### iOS Performance
+
+- `backdrop-filter: blur(24px)` is heavy on older iPhones. Stacking multiple glassy cards on the same page is a perf risk — use the quieter `blur(16px)` for nested-glass surfaces.
+- `feGaussianBlur` + animation on the same element is a perf cliff. The page-flair pulse is opacity-only on a `<g>` containing static rings — never combine pulse with filter.
+- Sun glint sits at viewport `top:0,left:0`. On notched iPhones use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome (skip buttons, headers) so it doesn't clash with the notch area.
+- Haptics: only fire on the very first ring entrance (gated by localStorage). Never on every navigation.
+
+### When to use vs when not
+
+**Use when**: building a wizard step, an onboarding moment, a hero arrival page, an info screen with light content (Account-style).
+
+**Don't use rings when**: the page is data-heavy (cards, charts, calendars, lists) — they'll compete. Use sun glint alone in those contexts.
+
+**Don't invent new backgrounds**: extend `page-flair.ts` instead. Adding a new variant or palette there means future surfaces inherit the family DNA.
+
+---
+
+## Page Backgrounds (legacy mountain scenes — detail pages only)
 
 Each detail page has a unique SVG nature scene in warm tones. The background is a `position:absolute` div at `z-index:0` behind the content, with a bottom fade to `PAGE_BG`.
 

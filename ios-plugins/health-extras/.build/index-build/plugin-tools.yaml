@@ -1,0 +1,47 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module": ["<HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module>"]
+  "test": ["<HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module>"]
+default: "main"
+nodes:
+  "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+commands:
+  "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/HealthExtrasPlugin.swift"]
+    outputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/sources"]
+    description: "Write auxiliary file /Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/sources"
+
+  "/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
+    outputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+
+  "<HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module>":
+    tool: phony
+    inputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/Modules/HealthExtrasPlugin.swiftmodule"]
+    outputs: ["<HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module>"]
+
+  "C.HealthExtrasPlugin-arm64-apple-macosx26.0-debug.module":
+    tool: shell
+    inputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/HealthExtrasPlugin.swift","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/sources"]
+    outputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/Modules/HealthExtrasPlugin.swiftmodule"]
+    description: "Compiling Swift Module 'HealthExtrasPlugin' (1 sources)"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","HealthExtrasPlugin","-emit-dependencies","-emit-module","-emit-module-path","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/Modules/HealthExtrasPlugin.swiftmodule","-output-file-map","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/output-file-map.json","-parse-as-library","-incremental","@/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/sources","-I","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx10.13","-incremental","-enable-batch-mode","-serialize-diagnostics","-Onone","-enable-testing","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-parse-as-library","-emit-objc-header","-emit-objc-header-path","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/.build/index-build/arm64-apple-macosx/debug/HealthExtrasPlugin.build/include/HealthExtrasPlugin-Swift.h","-swift-version","5","-Xfrontend","-experimental-lazy-typecheck","-Xfrontend","-experimental-skip-all-function-bodies","-Xfrontend","-experimental-allow-module-with-compiler-errors","-Xfrontend","-empty-abi-descriptor","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","health_extras"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/Package.swift","/Users/tristanlouveaux/Documents/marathon-simulator/ios-plugins/health-extras/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+
