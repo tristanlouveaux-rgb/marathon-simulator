@@ -108,7 +108,7 @@ export function buildCSSDetailPage(s: SimulatorState): string {
 
   const sparkline = history.length >= 2
     ? `<div class="m-card" style="padding:14px;margin-bottom:8px">
-         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Trend</div>
+         <div style="font-size:13px;color:var(--c-black);margin-bottom:10px">Trend</div>
          ${buildCssTrendChart(history)}
        </div>`
     : '';
@@ -135,7 +135,7 @@ function buildCSSOverrideCard(currentCss: number | null, isUser: boolean): strin
   const max = Math.min(180, seed + 20);
   return `
     <div class="m-card" style="padding:16px;margin-bottom:8px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">Override</div>
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:6px">Override</div>
       <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Saved overrides flow through to swim paces and race-time predictions immediately. Auto-clears when your training data clearly beats it.</div>
       <div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
@@ -211,7 +211,7 @@ export function buildFTPDetailPage(s: SimulatorState): string {
 
   const sparkline = history.length >= 2
     ? `<div class="m-card" style="padding:14px;margin-bottom:8px">
-         <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:8px">Trend</div>
+         <div style="font-size:13px;color:var(--c-black);margin-bottom:10px">Trend</div>
          ${buildBenchmarkTrendChart(history, '#8B5CF6', 'rgba(139,92,246,0.08)', 'W', false)}
        </div>`
     : '';
@@ -238,7 +238,7 @@ function buildFTPOverrideCard(currentFtp: number | null, isUser: boolean): strin
   const max = Math.min(500, seed + 60);
   return `
     <div class="m-card" style="padding:16px;margin-bottom:8px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">Override</div>
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:6px">Override</div>
       <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">Saved overrides flow through to bike zones and race-time predictions immediately. Auto-clears when your training data clearly beats it.</div>
       <div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
@@ -402,11 +402,16 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
   const r = est.running, c = est.cycling, ca = est.cardiac, ct = est.crossTraining;
   const ceiling = ca.value;
 
-  type BarSpec = { key: 'running' | 'cycling' | 'crossTraining'; label: string; value: number; colour: string };
+  type BarSpec = { key: 'running' | 'cycling' | 'crossTraining'; label: string; value: number };
   const bars: BarSpec[] = [];
-  if (r.value != null) bars.push({ key: 'running', label: 'Running', value: r.value, colour: '#7B9E89' });
-  if (c.value != null) bars.push({ key: 'cycling', label: 'Cycling', value: c.value, colour: '#C58D6A' });
-  if (ct.value != null) bars.push({ key: 'crossTraining', label: 'Cross-training', value: ct.value, colour: '#9C8FB5' });
+  if (r.value != null) bars.push({ key: 'running', label: 'Running', value: r.value });
+  if (c.value != null) bars.push({ key: 'cycling', label: 'Cycling', value: c.value });
+  if (ct.value != null) bars.push({ key: 'crossTraining', label: 'Cross-training', value: ct.value });
+
+  // Best-of bar gets the accent fill; others read in neutral grey. Length still
+  // encodes value — colour only differentiates which source is currently the
+  // headline. Keeps the chart within the 2-non-neutral colour budget.
+  const bestValue = bars.length > 0 ? Math.max(...bars.map(b => b.value)) : null;
 
   // No measured bars and no ceiling — render the original row layout as a
   // graceful fallback. Doesn't happen in practice (ceiling needs HRmax/RHR
@@ -423,6 +428,8 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
 
   const barRow = (b: BarSpec): string => {
     const pct = Math.min(100, Math.max(0, (b.value / domainMax) * 100));
+    const isBest = bestValue != null && b.value === bestValue;
+    const fill = isBest ? 'var(--c-black)' : 'rgba(0,0,0,0.25)';
     return `
       <div style="margin-bottom:10px">
         <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:4px">
@@ -430,13 +437,13 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
           <span style="font-size:13px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${Math.round(b.value)}</span>
         </div>
         <div style="position:relative;height:10px;border-radius:5px;background:var(--c-border);overflow:hidden">
-          <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${b.colour};border-radius:5px"></div>
+          <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${fill};border-radius:5px"></div>
         </div>
       </div>`;
   };
 
   // Best measured value drives the headroom narrative.
-  const bestMeasured = bars.length > 0 ? Math.max(...bars.map(b => b.value)) : null;
+  const bestMeasured = bestValue;
   const headroomCopy = (ceiling != null && bestMeasured != null)
     ? `Best measured ${Math.round(bestMeasured)} · ceiling ${Math.round(ceiling)} — ${Math.round(ceiling - bestMeasured)} points of theoretical headroom. Not a target to chase; the ceiling rises naturally as your underlying fitness builds.`
     : (ceiling != null ? `Cardiac ceiling ${Math.round(ceiling)} — your aerobic upper bound from peak HR ÷ resting HR. Not a measure of current fitness.` : '');
@@ -451,7 +458,7 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
 
   return `
     <div class="m-card" style="padding:14px 16px;margin-bottom:8px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:14px">Per source</div>
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:14px">Per source</div>
       <div style="position:relative;padding-top:24px">
         ${ceilingMarker}
         ${bars.map(barRow).join('')}
@@ -467,7 +474,7 @@ function buildVO2OverrideCard(currentVal: number | null, hasOverride: boolean): 
   const max = Math.min(85, seed + 15);
   return `
     <div class="m-card" style="padding:16px;margin-bottom:8px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:6px">Override</div>
+      <div style="font-size:13px;color:var(--c-black);margin-bottom:6px">Override</div>
       <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">A saved override pins this value above both the Mosaic estimate and your watch, and feeds race predictions. Use this if you have a lab test. The override will auto-clear when your training data clearly beats it (≥ 3 ml/kg/min, medium+ confidence), so you can set it once and move on.</div>
       <div style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
