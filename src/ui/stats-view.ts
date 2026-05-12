@@ -3278,13 +3278,8 @@ function sourceToLabel(src: SimulatorState['ltSource']): string {
 }
 
 export function buildConfidenceChip(c: 'high' | 'medium' | 'low'): string {
-  const colorMap = {
-    high: { bg: 'rgba(52,199,89,0.12)', fg: '#15803D' },
-    medium: { bg: 'rgba(245,158,11,0.12)', fg: '#B45309' },
-    low: { bg: 'rgba(148,163,184,0.18)', fg: '#475569' },
-  } as const;
-  const m = colorMap[c];
-  return `<span style="font-size:9px;font-weight:600;letter-spacing:0.05em;text-transform:uppercase;padding:2px 7px;border-radius:99px;background:${m.bg};color:${m.fg};margin-left:4px">${c} confidence</span>`;
+  const label = c === 'high' ? 'High confidence' : c === 'medium' ? 'Medium confidence' : 'Low confidence';
+  return `<span style="font-size:11px;color:var(--c-muted);margin-left:6px">· ${label}</span>`;
 }
 
 function buildLTSparkline(hist: PhysiologyDayEntry[]): string {

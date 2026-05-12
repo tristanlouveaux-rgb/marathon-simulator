@@ -4,6 +4,14 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-12 — Benchmark detail pages: visual-constraint cleanup
+
+`src/ui/triathlon/benchmark-detail-pages.ts`, `src/ui/stats-view.ts` — VO2max / FTP / CSS detail pages violated three Visual Constraints:
+
+- Section labels ("Per source", "Trend", "Override") were rendered as 10px ALL-CAPS with 0.1em letter-spacing — spreadsheet-dashboard styling banned by `UX_PATTERNS.md → Visual Constraints`. Replaced with plain 13px body labels in `var(--c-black)`.
+- `buildConfidenceChip()` rendered "MEDIUM CONFIDENCE" as an amber pill (`#B45309` on `rgba(245,158,11,0.12)`) with ALL-CAPS + letter-spacing. Replaced with an inline muted suffix (`· Medium confidence`). Eliminates the chip's non-neutral colour and the ALL-CAPS styling everywhere `buildConfidenceChip` is consumed (stats-view headline, all three benchmark detail pages).
+- VO2max "Per source" bars used three hex hues (`#7B9E89` green / `#C58D6A` orange / `#9C8FB5` purple) — three non-neutral colours when the budget is two. Switched to neutral fills: best-of-source bar in `var(--c-black)`, the rest in `rgba(0,0,0,0.25)`. Length still encodes value; colour now only differentiates which source is the headline.
+
 ## 2026-05-12 — Fix VO2 source toggle on triathlon Fitness detail page
 
 `src/ui/triathlon/fitness-detail-view.ts` — `renderTriFitnessDetailView` rendered the Mosaic/Watch source toggle (and the `i` info button) inside the "Your Numbers" card but never wired their click handlers. Tapping Watch did nothing; tapping the info pill did nothing. Handlers existed only on the parent stats page (`triathlon/stats-view.ts:134-145`), so the toggle silently broke on this drill-down. Added the missing wiring with a re-render via `renderTriFitnessDetailView` so the value updates in place without bouncing back to the stats list.
