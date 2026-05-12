@@ -683,3 +683,78 @@ Not a technical decision, but affects architecture (how many tiers, what goes wh
 - [ ] Rate limit tested (simulate 4th call, verify 429 + cached response)
 - [ ] Auth bypass tested (call without JWT, verify 401)
 - [ ] Subscription check tested (call as free user, verify 403)
+
+---
+
+## Pre-launch Direction (2026-05-12) — Coach v2
+
+Captured during the pre-launch coach review with Tristan. Supersedes parts of the older "BYOK is live" framing in `AI_STRATEGY.md`. Resolved direction below.
+
+### Resolved direction
+
+| Decision | Choice | Reasoning |
+|---|---|---|
+| BYOK (Anthropic API plugin) | **Delete entirely** | Single path, smaller surface to test before launch. No power-user escape hatch. |
+| Paywall mode for now | **UID allowlist** (Tristan only) | Real LLM calls land for the allowlisted user. Everyone else sees "AI Coach — coming soon". Lets the feature be exercised against real data before Stripe is built. |
+| Model | **Haiku** (`claude-haiku-4-5-20251001`) | 10x cheaper than Sonnet; the work is structured retrieval + tweak proposals, not deep reasoning. Re-evaluate if dogfood shows shallow tweaks. |
+| Edge functions | **Keep only `coach-chat`** | Single endpoint for both the daily brief (streamed assistant opening turn) and follow-up chat with tool calls. `coach-narrative` is deleted. |
+| Context scope | **Full plan structure + 4w activity detail + adaptation log** | The coach must see the shape of the whole plan to explain it, and the next 2-3 weeks in detail to tweak it without cascading badly. |
+
+### What makes a good coach (the design brief)
+
+The coach has two jobs: **explain** the plan and **tweak** the plan.
+
+**To explain** — "why is this week threshold-heavy?", "why am I doing less than last month?", "where am I in the build?" — the LLM needs the shape of the whole plan, not just the current week. Current-week-only context produces shallow advice. The athlete is asking about the *trajectory*.
+
+**To tweak** — the tool calls in `COACH_TOOLS` already work (swap / reduce / skip / intensity cap, with Apply cards). What's missing is the context to call them *well*. A tweak proposal is only good if the LLM knows:
+- The next 2-3 weeks of workouts, so a swap doesn't cascade badly into a key session
+- Which sessions are load-bearing vs flexible (key sessions vs fill-in easy days)
+- The user's recent adherence pattern (chronic easy-day skipper → push back; coming off a bug → cut load)
+- The adaptation log: marker bumps, race-prediction trend, effort multiplier evolution, plan-reset history
+
+### Context payload (target ~5K tokens, $0.005 input on Haiku)
+
+| Tier | Contents | ~Tokens |
+|---|---|---|
+| Plan skeleton (all weeks) | per-week: phase, planned TSS, planned km/hours, key session names only | ~800 |
+| Current + next 2 weeks | full workout list with paces/RPE/duration | ~1,200 |
+| Recent activities (4w, already in builder) | matched workout, pace, HR, adherence, drift, splits | ~2,000 |
+| Adaptation log | marker bumps, race-prediction trend (last 8), effort-mult history, plan-reset notes, skipped-session pattern | ~500 |
+| Readiness + benchmarks (already in builder) | TSB/ACWR/HRV/sleep, VDOT/FTP/CSS/PBs | ~500 |
+| **Total** | | **~5,000** |
+
+### Economics at $4.99/month
+
+At Haiku pricing ($1/MTok in, $5/MTok out), 5K input + 500 output ≈ **$0.0075 per session**. Round up to $0.01 to be conservative.
+
+| Usage | Monthly cost | Margin at $4.99 |
+|---|---|---|
+| Light user (5 sessions/mo) | $0.05 | $4.94 (99%) |
+| Typical user (15 sessions/mo) | $0.15 | $4.84 (97%) |
+| Heavy user (30 sessions/mo) | $0.30 | $4.69 (94%) |
+| Hard cap (5 sessions/day × 30) | $1.50 | $3.49 (70%) |
+
+Single endpoint matters more than the $0.07/user/month cost difference vs the two-endpoint design — two rate-limit tables, two prompts, two paywall checks is double the surface for the same margin.
+
+### Implementation plan
+
+**Session 1 — Paywall + Haiku swap (~2-3 hr)**
+- `supabase/functions/coach-chat/index.ts`: drop `X-Anthropic-Key` header path, read `Deno.env.ANTHROPIC_API_KEY`. Switch `ANTHROPIC_MODEL` to `claude-haiku-4-5-20251001`. Add allowlist check (env `ALLOWED_USER_IDS`, comma-separated). Non-allowlisted requests return `{ error: 'subscription_required' }` 402.
+- Client: delete `src/coach/api-key-store.ts`. Remove BYOK CTA from `coach-view.ts` and `account-view.ts`. Replace with "AI Coach — coming soon" lock screen for non-allowlisted users. Coach view always uses the Mosaic-paid path.
+- Deploy: `supabase secrets set ANTHROPIC_API_KEY=… ALLOWED_USER_IDS=<tristan-uid>` then `supabase functions deploy coach-chat`.
+
+**Session 2 — Full-program context (~2-3 hr)**
+- Expand `src/coach/coach-context-builder.ts` with the four context tiers above. Compress aggressively: plan skeleton uses short codes (phase letter, integer TSS), full detail only for current + next 2 weeks.
+- Update system prompt in `coach-chat-client.ts:buildSystemPrompt` with section markers (`# PLAN SKELETON`, `# THIS WEEK`, `# NEXT 2 WEEKS`, `# RECENT ACTIVITY`, `# ADAPTATION LOG`) so Haiku navigates the bigger payload reliably.
+- Add token-budget guard (warn if input > 10K tokens; truncate adaptation log first).
+- Delete `coach-narrative` edge fn + table. Rewire the Brain-tab narrative card to read the first 2-3 sentences of the latest `coach-chat` session instead.
+
+**Session 3 — Dogfood + prompt iteration**
+- Tristan runs one session/day for a week against real data. Validate explanation quality at the new context size, tool-call accuracy, tweak relevance.
+- Iterate prompt as needed (consultant tone — see CLAUDE.md UI Copy).
+
+### Open questions / push-backs
+
+- **Haiku vs Sonnet for tweaking**: Haiku handles structured retrieval well, but Sonnet is meaningfully better at reasoning about trade-offs ("should I cut the long run or the threshold this week?"). If dogfood shows shallow tweaks, the upgrade is a one-line model swap. At ~$0.05/session on Sonnet the margin at $4.99 is still ~90%.
+- **Stripe build is deferred**: the UID allowlist is a stepping stone, not the launch state. Validating Tier 2 via BYOK was the prior plan in `AI_STRATEGY.md`; this replaces that with "dogfood on allowlist, then build Stripe when the feature feels right".
+- **Existing tool-call infrastructure is reused**: `COACH_TOOLS` + Apply cards in `coach-view.ts` already work. Don't rebuild — just feed them better context.

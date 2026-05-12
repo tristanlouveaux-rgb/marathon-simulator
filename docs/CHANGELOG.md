@@ -4,6 +4,20 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-12 — Fix VO2 source toggle on triathlon Fitness detail page
+
+`src/ui/triathlon/fitness-detail-view.ts` — `renderTriFitnessDetailView` rendered the Mosaic/Watch source toggle (and the `i` info button) inside the "Your Numbers" card but never wired their click handlers. Tapping Watch did nothing; tapping the info pill did nothing. Handlers existed only on the parent stats page (`triathlon/stats-view.ts:134-145`), so the toggle silently broke on this drill-down. Added the missing wiring with a re-render via `renderTriFitnessDetailView` so the value updates in place without bouncing back to the stats list.
+
+## 2026-05-12 — Coach v2 pre-launch direction logged in BRAIN.md
+
+`docs/BRAIN.md` — added a "Pre-launch Direction (Coach v2)" section at the end capturing the resolved direction for AI Coach before launch: delete BYOK, paywall via UID allowlist (Tristan only) instead of Stripe for now, switch the model to Haiku, collapse to a single `coach-chat` endpoint, expand context to the full plan structure + 4w activity + adaptation log. Includes the design brief (what makes a good coach: explain + tweak), the target ~5K-token context payload, the $4.99/month economics, and a 3-session implementation plan. No code changes in this entry.
+
+## 2026-05-12 — Triathlon stats: total weekly TSS chart
+
+`src/ui/triathlon/progress-detail-view.ts` — new "Total weekly load (TSS)" card appended below the per-discipline TSS chart. Single line summing `series.history[i].tss.swim + .tss.bike + .tss.run` (cycling-only mode sums bike only), neutral charcoal stroke (`#0F172A`), same solid-history + dashed-forecast pattern as the discipline chart. Y-axis tick step scales 50/100/200/500 with total magnitude. Added to both `buildProgressContent` (embedded in the triathlon stats page) and `buildPage` (Progress drill-down) so the chart shows in both places. Header doc-comment section list updated.
+
+---
+
 ## 2026-05-12 — Triathlon plan header: completed vs planned
 
 `src/ui/triathlon/plan-view.ts` — the weekly-summary strip now shows completion against the plan:

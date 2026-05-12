@@ -8,8 +8,9 @@
  *  3. Weekly km — Bike (own chart)
  *  4. Weekly km — Run  (own chart)
  *  5. Weekly TSS per discipline (3 lines on one chart)
- *  6. FTP trend (line chart, fills from `tri.bike.ftpHistory`)
- *  7. CSS trend (line chart, fills from `tri.swim.cssHistory`)
+ *  6. Total weekly TSS (single line, sum across disciplines)
+ *  7. FTP trend (line chart, fills from `tri.bike.ftpHistory`)
+ *  8. CSS trend (line chart, fills from `tri.swim.cssHistory`)
  *
  * Range toggle: 4w / 12w / All / Forecast — Forecast extends km + TSS with
  * the planned `triWorkouts` from the current and future weeks (dashed
@@ -439,6 +440,60 @@ function buildPerDisciplineTSSChart(series: RangedSeries, cycling = false): stri
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// Total weekly TSS chart — single line, sum across disciplines
+// ────────────────────────────────────────────────────────────────────────────
+
+function buildTotalTSSChart(series: RangedSeries): string {
+  const all = [...series.history, ...series.forecast];
+  const n = all.length;
+  const totals = all.map(s => s.tss.swim + s.tss.bike + s.tss.run);
+
+  if (n < 2 || totals.every(v => v === 0)) return chartEmptyState(75);
+
+  const W = 320, H = 65, padL = 6, padR = 6;
+  const usableW = W - padL - padR;
+  const maxVal = Math.max(...totals, 1) * 1.1;
+
+  const xOf = (i: number) => padL + (n <= 1 ? usableW / 2 : i * usableW / (n - 1));
+  const yOf = (v: number) => H - Math.max(2, (v / maxVal) * (H - 8));
+
+  const stroke = '#0F172A';
+  const fill = 'rgba(15,23,42,0.08)';
+
+  const histPts: [number, number][] = totals.slice(0, series.histLen).map((v, i) => [xOf(i), yOf(v)]);
+  const futPts: [number, number][] = series.forecast.length > 0
+    ? totals.slice(Math.max(0, series.histLen - 1)).map((v, i) => [xOf(i + series.histLen - 1), yOf(v)])
+    : [];
+  const lastHistX = histPts.length > 0 ? xOf(series.histLen - 1).toFixed(1) : '0';
+  const firstHistX = histPts.length > 0 ? xOf(0).toFixed(1) : '0';
+  const histTopPath = histPts.length >= 2 ? smoothAreaPath(histPts) : '';
+  const histAreaPath = histTopPath
+    ? `${histTopPath} L ${lastHistX} ${H} L ${firstHistX} ${H} Z`
+    : '';
+
+  const tickStep = maxVal <= 200 ? 50 : maxVal <= 500 ? 100 : maxVal <= 1000 ? 200 : 500;
+  const yAxisHtml: string[] = [];
+  for (let v = tickStep; v <= maxVal * 0.95; v += tickStep) {
+    yAxisHtml.push(`<span style="position:absolute;top:${(yOf(v) / H * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:#94A3B8;line-height:1;font-variant-numeric:tabular-nums">${v}</span>`);
+  }
+
+  const labelStep = n > 12 ? 2 : 1;
+  const labels = buildWeekLabels(n, labelStep, series.forecast.length);
+
+  return `
+    <div style="position:relative;padding-right:36px">
+      <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none" style="display:block;overflow:visible">
+        ${chartGridLines(maxVal, yOf, W, padL, padR)}
+        ${histAreaPath ? `<path d="${histAreaPath}" fill="${fill}" stroke="none"/>` : ''}
+        ${histTopPath ? `<path d="${histTopPath}" class="chart-draw" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>` : ''}
+        ${futPts.length >= 2 ? `<path d="${smoothAreaPath(futPts)}" fill="none" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round" stroke-dasharray="3 3" opacity="0.7" vector-effect="non-scaling-stroke"/>` : ''}
+      </svg>
+      <div style="position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none">${yAxisHtml.join('')}</div>
+      <div style="display:flex;justify-content:space-between;padding:3px ${padR}px 0 ${padL}px">${labels}</div>
+    </div>`;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // Per-discipline CTL chart — pulled from `tri.fitnessHistory`
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -765,6 +820,12 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
       ${legendRow(cycling)}
       ${buildPerDisciplineTSSChart(series, cycling)}
     </div>
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Total weekly load (TSS)</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Sum across${cycling ? ' bike' : ' swim, bike, and run'} · iTRIMP-derived</div>
+      ${buildTotalTSSChart(series)}
+    </div>
   `;
 }
 
@@ -842,6 +903,13 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
           ${legendRow(cycling)}
           ${buildPerDisciplineTSSChart(series, cycling)}
+        </div>
+
+        <!-- Total weekly TSS -->
+        <div class="m-card" style="padding:16px;margin-bottom:10px">
+          <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Total weekly load (TSS)</div>
+          <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Sum across${cycling ? ' bike' : ' swim, bike, and run'} · iTRIMP-derived</div>
+          ${buildTotalTSSChart(series)}
         </div>
 
       </div>
