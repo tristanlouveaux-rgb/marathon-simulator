@@ -4,6 +4,220 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-12 — Triathlon plan header: completed vs planned
+
+`src/ui/triathlon/plan-view.ts` — the weekly-summary strip now shows completion against the plan:
+
+- Under each of the three top stats (Weekly hours / Sessions / Week load) a small muted "X done" caption appears for the current and past weeks. Future weeks remain planned-only.
+- The swim/bike/run pills below were previously share-of-week splits. They now display as true progress bars: fill width = completed minutes / planned minutes (capped at 100%), and the right-side label reads "Xh / Yh" (done over planned) instead of just the planned total.
+- Caption under the pills switched from "Hours per discipline this week" to "Completed vs planned this week" on the current/past weeks; future weeks keep the old phrasing.
+- Completed minutes use matched activity `durationSec` where available, falling back to `estimateMinutes()`. Completed TSS sums planned aerobic+anaerobic of `status === 'completed'` workouts.
+
+No state changes; pure presentation.
+
+---
+
+## 2026-05-12 — Post-race state audit + fixes (all three modes)
+
+Closing the gap between "plan finished" and "next thing happens". Audit found several real issues; this session fixes the obvious ones and adds the missing race-outcome telemetry for running and HYROX.
+
+**P0 — archive plan on completion** (`src/ui/events.ts:1217`): `complete()` did not call `archiveCurrentWksIfPopulated()`, so a finished race plan never landed in `s.previousPlanWks`. Adding the archive call inside the non-continuous branch of the `s.w > s.tw` rollover so CTL lookback, past-plan history, and the polyline-stripped archive all survive race-day transitions.
+
+**P0 — clear stale mode config on mode switch** (`src/state/initialization.ts:457`, `src/state/initialization.triathlon.ts:154`): running init only cleared `triConfig`, leaving `hyroxConfig.raceDate` behind on hyrox → running switches; same gap on hyrox → triathlon. Both inits now clear the *other* mode's config alongside the matching set. Mirrors the existing hyrox init (which already clears `triConfig`).
+
+**P1 — Plan Complete UI guard** (5 sites): the strings "Week 17 of 16" rendered on the home hero, triathlon plan hero, hyrox plan hero, hyrox stats card, and three week-label helpers in `main-view.ts` when `s.w > s.tw`. All sites now render "Plan complete" instead.
+
+**P1 — running + HYROX race-outcome modules** (mirror rule, CLAUDE.md): triathlon has `tri-race-outcome.ts` that logs predicted vs actual after the race; running and HYROX had nothing. Built `src/calculations/run-race-outcome.ts` and `src/calculations/hyrox-race-outcome.ts` mirroring the tri detector — idempotent on `dateISO`, runs once per launch via a new `detectRaceOutcomeAfterSync()` dispatcher in `main.ts` that fires after the existing Strava sync.
+
+- Running: pulls predicted from `state.blendedRaceTimeSec`, actual from the longest running activity in the race-day window. Stored on `state.runRaceLog[]`.
+- HYROX: no continuously cached prediction (forecast is client-side), so the "predicted" slot is the user's `targetFinishTimeSec` if set; actual is the sum of activity durations in the race window. Stored on `hyroxConfig.raceLog[]`.
+
+Surface-level rendering of these logs is out of scope for this pass — telemetry first, retrospective UI later.
+
+**Out of scope but flagged on the punch list**: race day is currently rendered as a generic taper week (no race-day-specific session prescription); CTL/ATL do not get a synthetic spike from the race itself (the race activity contributes naturally via sync, but no extra fatigue model); the race-complete banner still only offers "Switch to tracking", no "New Plan" CTA. Open issues, not regressions.
+
+---
+
+## 2026-05-12 — Injury report modal: visual polish
+
+`src/ui/injury/modal.ts` — UX cleanup of the "Weekly injury update" / "Report injury" modal:
+
+- Canonical overlay shell (`rounded-2xl`, `p-5`, `border:1px solid var(--c-border)`) replaces the heavier `rounded-xl p-6` + `border-strong` shell.
+- Softer input style across all selects/textareas: `1px solid var(--c-border)`, `10px` radius, `padding:10px 12px` (was `1.5px solid var(--c-border-strong)`).
+- Location and "Side" combined into a 2/3 + 1/3 grid row.
+- "Can you run?" radios replaced by an iOS-style segmented pill control (Yes / With pain / No), with scoped CSS in the modal.
+- "Advanced" and "Physio notes" `<details>` blocks lost their tinted grey background; now use a thin divider line + custom chevron marker.
+- Bordered "Saving will activate injury mode..." note replaced by a small muted caption.
+- Buttons restacked vertically: primary action uses `m-btn-primary` (black pill — the red `#EF4444` block was off-brand). "Mark resolved" sits below as `m-btn-glass--inset`. "Cancel" is a muted text link.
+
+No logic changes. `handleSaveInjury` reads `canRun` from the segmented control's `data-active="true"` button instead of the old radio input.
+
+---
+
+## 2026-05-12 — Triathlon prediction model improvements (ISSUE-186/188/190/191/200)
+
+Five athlete-specific model improvements to `race-prediction.triathlon.ts`:
+
+- **ISSUE-200 (brick fatigue discount)**: `RUN_FATIGUE_DISCOUNT` is no longer fixed. `computeBrickAdaptation()` in `brick-detector.ts` computes a recency-weighted (half-life 4 weeks) brick session score from `state.wks` actuals. Score scales the discount down by up to 40%. `BRICK_FULL_ADAPT_COUNT = 12`, `BRICK_MAX_DISCOUNT_REDUCTION = 0.40` in `triathlon-constants.ts`. Millet & Vleck 2000.
+- **ISSUE-188 (run VDOT horizon)**: Horizon-scaling denominator changed from `args.state.v` (blended) to `runDerivedCurrentVdot = cv(runDistM, blendedOpenSec)` — explicitly run-anchored. Numerically equivalent for normal cases; guards against future divergence. Comment explains equivalence.
+- **ISSUE-190 (heat acclimatisation)**: `computeTrainingTempC()` reads `ambientTempC` from recent activities (Open-Meteo, last 4 weeks, min 4 readings). `computeHeatAcclimatisationDiscounts()` discounts the physical climate penalty on bike + run by up to 50% when training temperature matches race anchor. Linear decay: 0% discount at 15°C below race anchor, 50% at or above. Lorenzo & Cheuvront 2010.
+- **ISSUE-186 (OW swim deficit)**: `computeOwAdaptation()` counts `OPEN_WATER_SWIMMING` activities (26-week window, older sessions at 50%). Asymptotic adaptation curve `1 − exp(−count/5)`. Base OW penalties: non-wetsuit 5%, wetsuit 2% (Veiga 2013; Toussaint 2002). Penalty applied to `baseSwimSec` before course factors.
+- **ISSUE-191 (marathon PB depth)**: IM run leg only. Sub-3:30 marathon PB applies a smooth linear credit up to 4% (2:45 PB, recent). Recency gates: < 2yr = 1.0, 2–4yr = 0.6, > 4yr = 0.3. `MAX_MARATHON_DEPTH_CREDIT = 0.04` confirmed by Tristan. Laursen & Rhodes 2001.
+
+All constants live in `triathlon-constants.ts`. ISSUE-185 numbering collision fixed (triathlon brick issue renumbered to 200).
+
+---
+
+## 2026-05-12 — Marathon prediction audit #12: dual-tau adaptation + onboarding cross-check
+
+Follow-up to audit #11 (ISSUE-145). Two remaining gaps closed:
+
+**Gap 1 — Onboarding PB / experience-level mismatch.** A 3:37 marathoner could self-select "beginner" with no validation, silently inflating the horizon model's `max_gain_pct` (9% vs 7%) and slashing `ref_sessions` (4 vs 5.5). New pure function `checkExperienceLevelVsPBs` (`src/calculations/experience-level-validation.ts`) maps PBs → VDOT → expected band (Daniels 2014) and flags inconsistencies. Inline notice in `manual-entry.ts` offers one-tap correction. Asymmetric: only flags under-claiming (over-claiming is allowed — yields more conservative forecasts). `returning` and `hybrid` bypass the check by design. 13 unit tests covering consistency / inconsistency / VDOT edge cases.
+
+**Gap 2 — Long-plan saturation.** Single-tau `weekFactor = 1 - exp(-t/tau)` saturated at 99% by week 41 (tau=9 for marathon intermediate), so a 43-week plan and a 25-week plan claimed nearly identical improvement. Conflicts with documented two-phase adaptation: VO2max plateaus by week 16-20 (Bouchard 1999, Midgley 2007) but LT/economy continue to week 52+ (Seiler 2010, Coyle 1984, Moore 2016). Replaced with additive dual-tau model:
+
+```
+weekFactor = (1 - slow_weight) * (1 - exp(-t/tau_fast))
+           +  slow_weight      * (1 - exp(-t/tau_slow))
+```
+
+- tau_fast 3.5-9.5 weeks (ability-scaled, VO2max + neuromuscular)
+- tau_slow 14-30 weeks (ability-scaled, LT + fractional utilization + economy)
+- slow_weight 0.30 (5K) → 0.55 (marathon) per Joyner & Coyle (2008) decomposition
+
+Calibration: 18-week intermediate marathon plan still produces ~3.3% improvement (matches Pfitzinger 5-10 min intermediate-plan outcomes). 43-week plan now produces 4.05% (was 3.50%) — gap widened from 0.18% to 0.73%, better matching documented 43-week two-block outcomes. Diminishing returns preserved.
+
+**For Tristan-shape** (VDOT 42, intermediate returning Speed, 5 sessions, 43-week marathon): forecast goes 3:37 → ~3:19 (18 min improvement) vs the previous claim of 3:37 → ~3:28 (11 min). Now matches the empirical range for dedicated first-year-structured returning runners.
+
+**Verified non-issues**:
+- Gap 3 (beginner > intermediate at 4 sessions) — structural artefact only fires under mis-labelling, which Gap 1 catches at source.
+- Gap 4 (returning+Speed+sessions stacks unguarded) — max output for intermediate at 8 sessions over 43 weeks is VDOT 46.5 (~3:18), within Pfitzinger advanced + Daniels returning-trainee literature. No change.
+
+**Files**: `src/types/training.ts` (TrainingHorizonParams extended), `src/constants/training-params.ts` (tau_fast_weeks / tau_slow_weeks / slow_weight added), `src/calculations/training-horizon.ts` (dual-tau weekFactor), `src/calculations/experience-level-validation.ts` (new), `src/calculations/experience-level-validation.test.ts` (new, 13 tests), `src/calculations/training-horizon.test.ts` (+5 dual-tau tests), `src/ui/wizard/steps/manual-entry.ts` (inline consistency notice + apply-handler), `docs/SCIENCE_LOG.md` (audit #12 entry + week_factor section rewritten).
+
+**Validation**: 1806/1806 tests pass. 0 typecheck errors. Pending on-device confirmation of the onboarding notice before declaring closed.
+
+---
+
+## 2026-05-12 — VO2 HR-calibrated regression: per-km segments from Strava
+
+The HR-calibrated VDOT regression used one (avgPace, avgHR) point per run, which discarded all within-run HR variation. A 21K with a tempo finish at HR 174 (~86 % HRR) was averaged into 165 bpm — far below threshold — so qualifying runs clustered in the 60–80 % HRR band and extrapolation to 100 % HRR overshot (one cached value briefly hit VDOT 77 on an athlete whose other signals all converged around 51–55). The data we need is already in Strava's `splits_metric[].average_heartrate`; we were just throwing it away on the way in.
+
+Fix is a vertical change through the stack so the regression sees within-run variation:
+
+- **DB**: new `garmin_activities.km_hr_splits int[]` column, parallel-indexed to `km_splits`. Migration `20260512_km_hr_splits.sql`.
+- **Edge fn (`sync-strava-activities`)**: new `calculateKmHRSplits()` (per-km mean over the HR stream) + `buildSplitsFromMetric()` (extract pace + HR per split from Strava's detail endpoint). All three split-extraction sites updated; backfill heal pass populates historical rows on next sync.
+- **Client sync (`stravaSync.ts`)**: patches `actual.kmHRSplits` like `kmSplits`. The Strava-wins upgrade also strips stale Garmin `laps` so dead lap shells with broken HR fields don't survive.
+- **State**: added `kmHRSplits?: number[]` to `GarminActual` (`src/types/state.ts`).
+- **Regression (`effort-calibrated-vdot.ts`)**: `HRRunInput` gains `isSegment?: boolean`. Segment-level samples use a 60 s duration floor (instead of 20 min) and skip the drift gate (drift is a whole-run aerobic-decoupling signal). All existing run-level filters and the regression math are unchanged. 5 new tests cover segment behaviour; 17 existing run-level tests still pass.
+- **Orchestrator (`vo2-orchestrator.ts`)**: `OrchestratorActivity` gains `kmSplits`/`kmHRSplits`. When both arrays align, the run emits one segment per km; otherwise it falls back to the single (avgPace, avgHR) point (legacy path). A 21K with a tempo finish now contributes ~21 (pace, HR) points spanning the run's HRR range instead of one diluted point.
+
+Net effect: with per-km HR populated for the last 16 weeks (backfill triggered on next sync), the VO2 HR-calibrated regression has real near-threshold and near-vVO2max data to fit against instead of extrapolating from a tempo cluster. SCIENCE_LOG entry "Effort-Calibrated VDOT — per-segment extension (2026-05-12)" documents the rationale and limitations.
+
+## 2026-05-12 — Marathon prediction audit #11 (ISSUE-145 closure)
+
+Resolved ISSUE-145 (P1, open since 2026-04-16). The speed-profile marathon baseline was producing predictions ~3 min faster than the empirical first-marathon range, and the failing test had been silently widened (10500 → 10080 lower bound) to mask the bug rather than fix it. Four-part fix in `src/calculations/predictions.ts`:
+
+- **`predictFromLT` marathon multipliers**: Speed column raised at performance & trained tiers (1.08 → 1.10, 1.10 → 1.12). Speed-profile runners sustain 3-5% less of LT pace at marathon than equivalent-aerobic-capacity endurance runners (Billat 2003, Coyle 1988). Original calibration assumed demonstrated marathon fitness.
+- **`predictFromLT` tier boundary smoothing**: linear interpolation between tier VDOT anchors (30/38/45/52/60) replaces the previous step function. Eliminates the ~2 min discontinuity that flipped predictions on ±0.5 VDOT jitter.
+- **`predictFromPB` Riegel exponent floor**: when extrapolating from a short anchor (≤10K) to ≥half-marathon, clamp `safeB` to 1.10 (in addition to the existing 1.15 ceiling). Speed profiles' b=1.05-1.08 from k5→k10 under-correct the endurance drop-off past 21K (Cameron 1997, Vickers & Vertosick 2016, Riegel 1981).
+- **`blendPredictions` no-long-race-PB penalty**: when `targetDist === 42195 && pbs.h == null && pbs.m == null && tTanda == null`, apply multiplier 1.02 (Speed) / 1.01 (Balanced) / 1.00 (Endurance). Independent of and stacks with `marathonSpecificityPenalty` (which gates on weeklyRunKm). Captures the "fractional utilization is undemonstrated" uncertainty per Joyner & Coyle 2008, Florence & Weir 1997, Foster 1994.
+
+**Effect on ISSUE-145 profile** (sub-18 5K, LT 3:45/km, Speed, no marathon history): 2:51:53 → **2:58:48**, within the empirical 2:55-3:10 first-marathon range.
+
+Test lower bound restored to 10500s. Added 3 new `predictions.test.ts` tests covering Riegel floor behaviour. Also fixed stale `returning: 1.15` reference in SCIENCE_LOG horizon table (code has been 1.35 since 2026-05-06). Full SCIENCE_LOG entry under "Marathon Prediction Audit #11".
+
+**Validation**: 1783/1783 tests pass. Pending on-device confirmation before marking ISSUE-145 officially closed.
+
+Earlier in the day: `calculateLiveForecast` taper-weeks bug (Math.ceil(wr*0.15) → TAPER_NOMINAL lookup).
+
+---
+
+## 2026-05-12 — HYROX run-pace v2: Critical Pace anchor, continuous interpolation, format conversion, Bayesian personalisation
+
+The HYROX run-pace model was structurally wrong for trained athletes — it floored at "5% slower than threshold" for every tier, making sub-1h athletes look 30+ s/km slower than they actually run. Rewrite anchored on **Critical Pace** (Hill 1923; Jones et al. 2010; Galbraith 2014) instead of LT pace, which matches the interval-with-recovery physiology of HYROX run legs.
+
+**Four coupled changes:**
+
+- **Continuous CP-anchored fatigue ratio table** (`src/calculations/hyrox-run-pace.ts`) — replaces the discrete `band → ratio` lookup with linear interpolation between VDOT-keyed anchor points. Anchor values descend below 1.0 for advanced/competitive tiers (the v1 floor was 1.05), correctly capturing that trained HYROXers pace at or faster than threshold because the stations are recovery. Old `HYROX_FATIGUE_TO_THRESHOLD_RATIO` table values updated and retained as a back-compat export.
+- **Format-specific pace conversion** (`DOUBLES_TO_SINGLES_PACE_FACTOR`, `convertHyroxRunPaceFormat`) — tier-aware doubles ↔ singles conversion (1.05 → 1.10 by tier). Built into `derivePopulationRunPace` so a doubles-format target naturally produces a faster pace than singles for the same athlete. v1 numbers gut-anchored from elite splits + interval-recovery literature; flagged for empirical Kaggle calibration.
+- **Bayesian personalisation loop** (new `src/calculations/hyrox-personal-pace.ts`) — when a race is logged, back-computes observed run pace (`finish − stations − roxzone, ÷ 8`) and blends the residual into a personal offset stored on `hyroxConfig.personalRunPaceOffsetSec`. Weight 0.6 when stations come from pasted splits, 0.35 when estimated from band seeds. Magnitude clamped ±60 s/km. Decays linearly to 0 over 12 months without fresh evidence. Initial offset computed at HYROX init from any onboarding-supplied race data.
+- **Critical Pace card on Stats view** (`src/ui/hyrox/stats-view.ts`) — surfaces the derivation chain visibly: VDOT → threshold → CP ratio → CP → format factor → personal offset → HYROX pace. Tap-to-explain modal walks through each step with the scientific anchor and the rationale for personalisation.
+
+New state fields on `HyroxConfig`: `personalRunPaceOffsetSec`, `personalRunPaceOffsetUpdatedAtISO`, `personalRunPaceOffsetConfidence`. All optional (no migration needed for existing users — the field defaults to no offset).
+
+**Test coverage:**
+- `hyrox-run-pace.test.ts` rewritten for v2 — 28 tests covering CP-ratio interpolation (continuity, clamping, monotonicity, below-1.0 floor), format conversion (round-trip, tier ordering), full-pipeline behaviour including user-override + personal offset + decay.
+- `hyrox-personal-pace.test.ts` new — 17 tests covering back-computation correctness, blend math, magnitude clamp, 12-month decay boundary, half-decay proportionality.
+- `hyrox-marker-bumps.test.ts` — two existing assertions updated to v2 expected numerical ranges.
+
+Full suite: 1778/1778 passing. Rationale, citations, and wiring map in `docs/SCIENCE_LOG.md §AA`.
+
+---
+
+## 2026-05-12 — Plan phasing: extended to tri + hyrox, transition fix, checkpoint caption
+
+Follow-up to yesterday's plan-phasing rewrite. Three changes:
+
+**1. Inter-cycle transition weeks now labelled `'taper'` (was `'base'`).**
+For double-periodization plans (≥33 weeks running, ≥28 tri/hyrox), the 2-week transition between cycles is now a real mini-taper. The workout generator's existing taper-phase volume drop fires automatically — no new flag required. The Phase Timeline renders the honest two-arc story: `Base → Build → Peak → Taper → Base → Build → Peak → Taper`. Physiologically aligned with Mujika & Padilla's "intra-cycle recovery" (2003).
+
+**2. Checkpoint TT caption on Phase Timeline.**
+When the current week is the cycle-1 checkpoint week, the Phase Timeline now shows a teal caption: *"Race a parkrun on Saturday or do a 10K time trial. The result recalibrates VDOT before cycle 2 begins."* The user does the TT; existing activity matcher + VDOT/CSS/FTP auto-refresh handles the recalibration through the standard path. Cheap 80%-of-value implementation of the deferred TT-content build.
+
+**3. Tri and hyrox now use the same phase strategy.**
+Both formats had ratio-based single-arc allocation with no double-periodization path. Refactored `computePlanPhases` to accept a `PhaseConfig`, then added `computeTriPlanPhases(distance, totalWeeks)` in `triathlon-constants.ts` and `computeHyroxPlanPhases(totalWeeks)` in `hyrox-constants.ts`. Each format keeps its canonical ratios so default-length plans (70.3 / 20w → 8/6/4/2; Ironman / 24w → 10/7/5/2; HYROX / 18w → 7/6/3/2) reproduce exactly. Tri/hyrox double-periodization threshold is **28 weeks** (vs running's 33) because multi-discipline fatigue compresses the productive single-arc window.
+
+**Files**:
+- `src/workouts/phases.ts` — `PhaseConfig` interface, `RUNNING_PHASE_CONFIG` default, transition→taper change.
+- `src/workouts/phases.test.ts` — 12 tests (2 new for the transition fix).
+- `src/constants/triathlon-constants.ts` — `TRI_PHASE_CONFIGS`, `computeTriPlanPhases`. `phasesForLen` marked `@deprecated`.
+- `src/constants/hyrox-constants.ts` — `HYROX_PHASE_CONFIG`, `computeHyroxPlanPhases`. `hyroxPhasesForLen` marked `@deprecated`.
+- `src/constants/tri-hyrox-phases.test.ts` — 11 new tests.
+- `src/workouts/plan_engine.triathlon.ts` — uses `computeTriPlanPhases`, propagates `wk.checkpoint`.
+- `src/workouts/plan_engine.hyrox.ts` — uses `computeHyroxPlanPhases`, propagates `wk.checkpoint`.
+- `src/ui/stats-view.ts` — checkpoint caption.
+
+Tests: 23 new (12+11) covering tri/hyrox canonical splits, double-periodization threshold transitions, and the transition=taper rule. Full suite: 1737/1741 (the 4 failures are pre-existing in `hyrox-run-pace.test.ts` and `hyrox-marker-bumps.test.ts` testing pace derivation math, unrelated to phase assignment).
+
+ISSUE-184 portion (transition workout volume) resolved by the taper relabel. Remaining: TT-flavoured workout content for the checkpoint week itself (parkrun caption is the interim solution).
+
+---
+
+## 2026-05-12 — ISSUE-189 fix: bike-setup modal preview now matches headline forecast
+
+The bike-aero modal's `predictBikeSplit` was applying physics + physical course factors only — missing the empirical course-factor calibration (shipped 2026-05-07, ~1.3M historical finishes) and the race-readiness penalty multiplier the headline forecast applies. Net effect: modal showed a different bike split than the prediction card on the forecast page, eroding trust in both. **Fix**: modal now routes through the same `pickCourseFactors(empirical, physical)` picker as the predictor, and reads `raceReadiness.bike.penaltyMultiplier` from the cached prediction (computing fresh via `computeTriRaceReadiness` on first launch / after invalidation). New regression test `src/ui/triathlon/bike-setup-preview.test.ts` locks parity to within 10s and validates CdA tuning still moves the split in the expected direction. Files: `src/ui/triathlon/bike-setup-view.ts:399-441`. 1730/1730 tests pass; typecheck clean.
+
+---
+
+## 2026-05-12 — Tri completed-efforts section (ISSUE-153) + future-week copy
+
+Added completed-efforts section to tri Plan view for past weeks: discipline-badged rows showing actual duration and effort signal (power/pace/HR adherence), tappable to open a detail pop-up with planned vs actual stats and plain-language signal note. `buildCompletedEfforts` + `openCompletedEffortDetail` in `src/ui/triathlon/plan-view.ts`. Future-week banner updated to "Estimated from last week's load. Sessions and distances adjust as you train." (mirrors running plan-view). 1726 tests pass.
+
+---
+
+## 2026-05-12
+
+- **Home UX: remove forecast card from running home, promote readiness** — the marathon forecast card has been removed from the home page (still accessible via the Forecast tab). Readiness now sits directly below today's workout, matching the cleaner triathlon home layout. "Go easier today" note is now suppressed when the scheduled workout is already classified as easy (`t === 'easy'`) or has RPE ≤ 3 — the readiness score communicates the same information without conflicting with the assigned intensity.
+
+---
+
+## 2026-05-11
+
+- **Fix: `calculateLiveForecast` taper weeks** — was using `Math.max(1, Math.ceil(wr * 0.15))` which gave 7 taper weeks for a 43-week marathon plan. Now uses `TAPER_NOMINAL[distance]` (marathon=3, half=2, 10k/5k=1-2) to match the onboarding path (`calculateForecast`). Impact is small at long plans but removes the inconsistency between live dashboard and plan-preview forecasts.
+
+---
+
+## 2026-05-11 — Swim environment: retire forecast popup, capture at onboarding, edit in settings
+
+Follow-up to the 2026-05-09 swim-environment work. The auto-trigger reveal modal on the Forecast page didn't pass the UX bar: kept popping on re-renders, no close X, no visual depth, awkward 2-column 5-chip grid. Replaced with:
+
+- **Onboarding wizard step** (`src/ui/wizard/steps/review.ts`) — new "Swim environment" row directly under "Swim CSS" in the review screen. Mirrors the `renderCssRow` shape (icon / label / value / sub / chevron). Tap opens the chip editor; save writes to `onboarding.triSwim.primarySwimEnvironment` + `defaultOwSwimEnvironment`, which the triathlon initialiser carries through to `triConfig.swim`.
+- **Settings entry** (`src/ui/account-view.ts:453`) — the "Swim environment" row in the triathlon benchmarks card (already in place from 2026-05-09). Opens the same chip editor; writes directly to `triConfig.swim`.
+- **Editor redesigned** (`src/ui/triathlon/swim-normalisation-reveal.ts`) — close X in top-right, single-column chip layout (no orphan), 16 px border-radius, filled-black Save pill + transparent Cancel link, Save disabled until a chip is picked. Accepts an optional `onSave` callback so it works for both wizard (writes to `onboarding.triSwim`) and account view (writes to `triConfig.swim`).
+- **Auto-trigger removed** from `src/ui/triathlon/forecast-view.ts`. The `notifiedMarkers.swimNormalisationSeen` flag in state is now unused but kept on the type for back-compat.
+- **CLAUDE.md "Feature reveal pop-ups"** rule tightened: any reveal must mirror a canonical modal (close X, primary CTA, visual hierarchy). If the surface can't carry that depth, capture at onboarding instead.
+
 ## 2026-05-11 — B1/B3/B4/B6 triathlon calibration sweep
 
 **B1 — Race name aliases for empirical course-factor lookup**
@@ -447,7 +661,7 @@ Five linked fixes to the HYROX prediction path. User-visible symptom pre-fix: a 
 
 Recovery context: an agent ran `git stash --keep-index` for a typecheck diagnostic during the build (forbidden per CLAUDE.md "Git Safety"). Pop failed on a CHANGELOG conflict; 131 files of pre-session work were extracted from `stash@{0}` via `git show stash@{0}:<path>`. Audit confirmed line counts match expected, no doubling, no orphaned references to the removed `DOUBLES_TO_SINGLES_FACTOR`. Stash kept as safety net pending Tristan's confirmation; safe to drop after dogfooding.
 
-**Test status**: 126 HYROX tests across 12 files (was 98). All pass. Typecheck clean.
+**Test status**: 13 HYROX test files. Pass count pending a separate bug pass that needs to update two stale assertions in `initialization.hyrox.test.ts` (legacy-fallback paths that the new conservative-banding code no longer satisfies — code change is correct, tests encode the old behaviour). Typecheck clean.
 
 ---
 

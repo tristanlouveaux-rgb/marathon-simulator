@@ -52,9 +52,14 @@ import {
   RACE_LEG_DISTANCES,
   RUN_FATIGUE_DISCOUNT_70_3,
   RUN_FATIGUE_DISCOUNT_IRONMAN,
+  BRICK_MAX_DISCOUNT_REDUCTION,
+  BASE_OW_PENALTY_NON_WETSUIT,
+  BASE_OW_PENALTY_WETSUIT,
+  OW_ADAPT_HALF_SESSIONS,
   T1_SEC_BY_SLIDER,
   T2_SEC_BY_SLIDER,
 } from '@/constants/triathlon-constants';
+import { detectBricks, computeBrickAdaptation, type DetectionActivity } from './brick-detector';
 import {
   solveSpeed,
   paramsFromProfile,
@@ -102,6 +107,12 @@ import { computeTriRaceReadiness, computeProjectionPenaltyShare } from './race-r
 import { RACE_READINESS_TARGETS } from '@/constants/race-readiness-targets';
 import { TRI_TAPER_WEEKS } from '@/constants/triathlon-horizon-params';
 import { CSS_DETRAINING_PER_4WK } from '@/constants/triathlon-constants';
+import {
+  CLIMATE_ANCHOR_TEMP_C,
+  CLIMATE_RUN_MULTIPLIER,
+  CLIMATE_BIKE_MULTIPLIER,
+  type ClimateCategory,
+} from '@/constants/triathlon-course-factors';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
@@ -300,6 +311,14 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     ),
   };
 
+  // ── Athlete-history signals for model improvements ───────────────────────
+  const allActuals = gatherDetectionActivities(state);
+  const detectedBricks = detectBricks(allActuals);
+  const brickAdaptation = computeBrickAdaptation(detectedBricks, allActuals);
+  const owAdaptation = computeOwAdaptation(state);
+  const isWetsuitSwim = isWetsuitSwimCourse(raceProfile);
+  const trainingTempC = computeTrainingTempC(state);
+
   const projected = computeRaceTime({
     state,
     distance,
@@ -312,6 +331,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     raceName,
     longestSession: projectedLongestSession,
     applyDurability: true,
+    brickAdaptation,
+    owAdaptation,
+    isWetsuitSwim,
+    trainingTempC,
   });
 
   const current = computeRaceTime({
@@ -329,6 +352,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     raceName,
     longestSession,
     applyDurability: true,
+    brickAdaptation,
+    owAdaptation,
+    isWetsuitSwim,
+    trainingTempC,
   });
 
   let adjustedCurrentSwim = current.swimSec * raceReadiness.swim.penaltyMultiplier;
@@ -580,6 +607,17 @@ interface ComputeRaceTimeArgs {
   raceName: string | undefined;
   longestSession: { swim: number; bike: number; run: number };
   applyDurability: boolean;
+  /** 0–1 score from computeBrickAdaptation. Reduces the run-leg fatigue discount
+   *  proportionally to how many recent brick sessions the athlete has logged.
+   *  0 = no bricks (full discount), 1 = fully adapted (max 40% discount reduction). */
+  brickAdaptation: number;
+  /** Open-water adaptation score (0–1). Reduces the pool→OW swim penalty.
+   *  0 = never swum OW (full penalty), 1 = experienced OW racer (near-zero penalty). */
+  owAdaptation: number;
+  /** Whether the race's swim course uses wetsuit — drives which OW base penalty applies. */
+  isWetsuitSwim: boolean;
+  /** Training heat index in °C derived from recent activity ambientTempC. Null if unavailable. */
+  trainingTempC: number | null;
 }
 
 interface ComputeRaceTimeResult {
@@ -599,6 +637,15 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   // Swim base: race pace = CSS + 5 s/100m (Dekerle 2002).
   const swimPaceSecPer100m = args.css + 5;
   const baseSwimSec = (args.legs.swimM / 100) * swimPaceSecPer100m;
+
+  // ISSUE-186: Open-water swim deficit scaled by athlete OW experience.
+  // Penalty = base penalty × (1 − owAdaptation). Wetsuit races have a smaller
+  // base penalty because buoyancy partially offsets OW inefficiencies (Veiga 2013;
+  // Toussaint 2002). Applied to baseSwimSec before course factors since it is
+  // an athlete-skill offset on pace, not a venue-condition amplification.
+  const owBasePenalty = args.isWetsuitSwim ? BASE_OW_PENALTY_WETSUIT : BASE_OW_PENALTY_NON_WETSUIT;
+  const owPenaltyFraction = args.owAdaptation < 1 ? owBasePenalty * (1 - args.owAdaptation) : 0;
+  const owAdjustedSwimSec = baseSwimSec * (1 + owPenaltyFraction);
 
   // Bike base: physics-based when possible, else legacy fallback.
   const bikeAvgKph = estimateBikeSpeed(
@@ -631,14 +678,24 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     baseRunPaceSecPerKm = estimateRunPaceFromSkill(args.rating.run as TriSkillSlider, args.distance);
   }
 
-  // Apply horizon-driven scale: if the projected leg's vdot is higher than
-  // current vdot, scale the open-race pace by the gain ratio. Same
-  // interpretation as the running side's `calculateLiveForecast` — the
-  // training block delivers a fitness improvement that propagates to race
-  // time. Skip when blendedOpenSec wasn't used (then the vdot path already
+  // Apply horizon-driven scale: if the projected leg's VDOT is higher than
+  // current, scale the open-race pace by the gain ratio.
+  //
+  // ISSUE-188: Use run-derived current VDOT as the denominator. `state.v` is
+  // the overall blended VDOT which bike training can inflate. Using
+  // `runDerivedCurrentVdot` (back-converted from the run-specific blend)
+  // makes the denominator explicitly run-anchored. Since `applyTriHorizonRun`
+  // applies a percentage improvement, the ratio is numerically equivalent —
+  // but the code intent is now explicit and guards against future changes that
+  // might decouple the numerator from the run-specific baseline.
+  //
+  // Skip when blendedOpenSec wasn't used (then the vdot path already
   // applied via vdotToRacePaceSecPerKm).
   if (blendedOpenSec != null && args.vdot != null && args.state.v != null && args.state.v > 0) {
-    const horizonRatio = args.vdot / args.state.v;
+    const runDistM = args.legs.runKm * 1000;
+    const runDerivedCurrentVdot = cv(runDistM, blendedOpenSec);
+    const denominator = runDerivedCurrentVdot > 0 ? runDerivedCurrentVdot : args.state.v;
+    const horizonRatio = args.vdot / denominator;
     if (horizonRatio > 1.0 && horizonRatio < 1.30) {
       // VDOT is higher = faster = pace is shorter. Speed scales roughly
       // linearly with VDOT for a small range; pace = distance / speed.
@@ -646,8 +703,23 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
     }
   }
 
-  const fatigueDiscount = args.distance === 'ironman' ? RUN_FATIGUE_DISCOUNT_IRONMAN : RUN_FATIGUE_DISCOUNT_70_3;
-  const baseRunSec = args.legs.runKm * baseRunPaceSecPerKm * (1 + fatigueDiscount);
+  // ISSUE-200: Brick-adapted fatigue discount. Base discount reduced proportionally
+  // to recent brick history. Max 40% reduction — even a veteran still fades
+  // (Bentley 2007; Landers 2008). Millet & Vleck 2000: brick-specific running
+  // economy adapts over 10–15 sessions.
+  const baseDiscount = args.distance === 'ironman' ? RUN_FATIGUE_DISCOUNT_IRONMAN : RUN_FATIGUE_DISCOUNT_70_3;
+  const fatigueDiscount = baseDiscount * (1 - args.brickAdaptation * BRICK_MAX_DISCOUNT_REDUCTION);
+
+  // ISSUE-191: Marathon PB depth credit on IM run leg only.
+  // A sub-3:30 marathoner running the IM marathon (85% intensity) has headroom
+  // to maintain form and even pace; a 3:50 marathoner is near their ceiling.
+  // Laursen & Rhodes 2001 (triathlon physiology review). Smooth function, not
+  // stepped tiers. Recency-gated: recent PBs carry full credit; older ones decay.
+  const marathonDepthMultiplier = args.distance === 'ironman'
+    ? computeMarathonDepthMultiplier(args.state)
+    : 1.0;
+
+  const baseRunSec = args.legs.runKm * baseRunPaceSecPerKm * (1 + fatigueDiscount) * marathonDepthMultiplier;
 
   // ── Apply course factors ────────────────────────────────────────────────
   // Two sources, picked by confidence:
@@ -659,15 +731,34 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   //      the CourseProfile data file). Hand-calibrated science model.
   // When the empirical entry exists with high or medium confidence, use it
   // (more comprehensive). Otherwise fall back to physical.
-  const baseSec = { swimSec: baseSwimSec, bikeSec: baseBikeSec, runSec: baseRunSec };
+  // Pass owAdjustedSwimSec as the swim base so course factors multiply on top
+  // of the athlete-specific OW skill adjustment (ISSUE-186).
+  const baseSec = { swimSec: owAdjustedSwimSec, bikeSec: baseBikeSec, runSec: baseRunSec };
   const empirical = lookupEmpiricalCourseFactors(args.raceName, args.distance, baseSec);
   const physical  = applyCourseFactors(args.raceProfile, baseSec, args.legs.runKm);
   const picked    = pickCourseFactors(empirical, physical);
   const cf        = picked.output;
 
-  let swimSec = baseSwimSec * cf.swimMultiplier;
+  let swimSec = owAdjustedSwimSec * cf.swimMultiplier;
   let bikeSec = baseBikeSec * cf.bikeMultiplier;
   let runSec = baseRunSec * cf.runMultiplier;
+
+  // ISSUE-190: Heat acclimatisation discount on run and bike.
+  // Athletes training in heat comparable to the race environment perform
+  // better than the average field used to calibrate the climate penalty.
+  // Lorenzo & Cheuvront 2010: 10–14 days of heat acclimatisation preserves
+  // ~3–5% performance. We discount the physical climate penalty by up to 50%.
+  // Swim is less heat-sensitive (water cooling) — no discount applied.
+  if (args.trainingTempC != null && args.raceProfile?.climate) {
+    const { runDiscount, bikeDiscount } = computeHeatAcclimatisationDiscounts(
+      args.trainingTempC,
+      args.raceProfile.climate,
+      baseBikeSec,
+      baseRunSec,
+    );
+    bikeSec -= bikeDiscount;
+    runSec  -= runDiscount;
+  }
 
   // ── Apply run-leg durability cap ────────────────────────────────────────
   let limitingFactor: LimitingFactor = null;
@@ -1008,6 +1099,168 @@ function computeYearsOfTraining(state: SimulatorState): number | undefined {
   const now = new Date();
   const yrs = (now.getTime() - first.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
   return yrs > 0 ? yrs : undefined;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Athlete-history signal helpers (ISSUE-186, 190, 191, 200)
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Convert state.wks actuals to DetectionActivity[] for brick detection. */
+function gatherDetectionActivities(state: SimulatorState): DetectionActivity[] {
+  const activities: DetectionActivity[] = [];
+  for (const wk of state.wks ?? []) {
+    if (!wk?.garminActuals) continue;
+    for (const actual of Object.values(wk.garminActuals)) {
+      if (!actual?.startTime || !actual.durationSec) continue;
+      const startTs = Date.parse(actual.startTime) / 1000;
+      if (isNaN(startTs)) continue;
+      activities.push({
+        id: actual.garminId,
+        sport: actual.activityType ?? '',
+        startTs,
+        durationSec: actual.durationSec,
+      });
+    }
+  }
+  return activities;
+}
+
+/**
+ * ISSUE-186: Open-water swim adaptation score (0–1).
+ * Counts Strava OPEN_WATER_SWIMMING activities in the last 26 weeks with
+ * recency weighting (sessions older than 12 weeks count at 50%).
+ * Asymptotic curve: `1 − exp(−count / OW_ADAPT_HALF_SESSIONS)`.
+ */
+function computeOwAdaptation(state: SimulatorState): number {
+  const nowMs = Date.now();
+  const lookbackMs = 26 * 7 * 24 * 3600 * 1000;
+  const halfLifeMs = 12 * 7 * 24 * 3600 * 1000;
+  let effectiveCount = 0;
+
+  for (const wk of state.wks ?? []) {
+    if (!wk?.garminActuals) continue;
+    for (const actual of Object.values(wk.garminActuals)) {
+      const type = (actual?.activityType ?? '').toUpperCase();
+      if (!type.includes('OPEN_WATER')) continue;
+      if (!actual.startTime) continue;
+      const ageMs = nowMs - Date.parse(actual.startTime);
+      if (ageMs < 0 || ageMs > lookbackMs) continue;
+      effectiveCount += ageMs > halfLifeMs ? 0.5 : 1.0;
+    }
+  }
+
+  return 1 - Math.exp(-effectiveCount / OW_ADAPT_HALF_SESSIONS);
+}
+
+/** ISSUE-186: Whether the race swim course uses a wetsuit. */
+function isWetsuitSwimCourse(
+  raceProfile: ComputeRaceTimeArgs['raceProfile'],
+): boolean {
+  const swimType = raceProfile?.swimType ?? '';
+  return swimType.includes('wetsuit') || swimType === 'wetsuit-lake';
+}
+
+/**
+ * ISSUE-190: Average training temperature from recent outdoor activities.
+ * Uses ambientTempC stored on GarminActual (populated by Open-Meteo for
+ * outdoor runs/rides with a GPS start location). Returns null when fewer
+ * than 4 activities in the last 4 weeks have temperature data.
+ */
+function computeTrainingTempC(state: SimulatorState): number | null {
+  const nowMs = Date.now();
+  const lookbackMs = 4 * 7 * 24 * 3600 * 1000;
+  const temps: number[] = [];
+
+  for (const wk of state.wks ?? []) {
+    if (!wk?.garminActuals) continue;
+    for (const actual of Object.values(wk.garminActuals)) {
+      if (actual?.ambientTempC == null) continue;
+      if (!actual.startTime) continue;
+      if (nowMs - Date.parse(actual.startTime) > lookbackMs) continue;
+      temps.push(actual.ambientTempC);
+    }
+  }
+
+  if (temps.length < 4) return null;
+  return temps.reduce((a, b) => a + b, 0) / temps.length;
+}
+
+/**
+ * ISSUE-190: Compute heat acclimatisation time savings on bike and run.
+ * Returns seconds to subtract from post-course-factor leg times.
+ *
+ * Logic: if training temperature ≥ race anchor temperature, discount the
+ * physical climate penalty by up to 50%. Discount scales linearly from 0
+ * (training 15°C cooler than race) to 0.5 (training at or hotter than race).
+ * Lorenzo & Cheuvront 2010: 10–14 days of heat acclimatisation → 3–5%
+ * performance preservation.
+ */
+function computeHeatAcclimatisationDiscounts(
+  trainingTempC: number,
+  raceClimate: ClimateCategory,
+  baseBikeSec: number,
+  baseRunSec: number,
+): { runDiscount: number; bikeDiscount: number } {
+  const raceAnchorTemp = CLIMATE_ANCHOR_TEMP_C[raceClimate];
+  const runClimatePenaltyFraction  = CLIMATE_RUN_MULTIPLIER[raceClimate]  - 1.0;
+  const bikeClimatePenaltyFraction = CLIMATE_BIKE_MULTIPLIER[raceClimate] - 1.0;
+
+  // No meaningful penalty for cool/temperate venues — nothing to discount.
+  if (runClimatePenaltyFraction <= 0 && bikeClimatePenaltyFraction <= 0) {
+    return { runDiscount: 0, bikeDiscount: 0 };
+  }
+
+  const tempGap = raceAnchorTemp - trainingTempC;  // positive = training is cooler
+  if (tempGap >= 15) return { runDiscount: 0, bikeDiscount: 0 };
+
+  // Discount fraction: 0.5 at tempGap ≤ 0, 0 at tempGap = 15, linear between.
+  const discountFraction = Math.max(0, 0.5 * (1 - tempGap / 15));
+
+  return {
+    runDiscount:  baseRunSec  * runClimatePenaltyFraction  * discountFraction,
+    bikeDiscount: baseBikeSec * bikeClimatePenaltyFraction * discountFraction,
+  };
+}
+
+/**
+ * ISSUE-191: Marathon PB depth credit for IM run leg.
+ * A fast marathoner running the IM marathon (85% intensity) has substantial
+ * headroom — they can maintain form and even pace through the back half.
+ * Returns a multiplier < 1 (faster) for athletes with recent sub-3:30 PBs.
+ *
+ * Laursen & Rhodes 2001 (triathlon physiology): marathon-experienced athletes
+ * manage IM marathon pacing materially better than matched-VDOT runners with
+ * only shorter race experience.
+ *
+ * MAX_MARATHON_DEPTH_CREDIT = 0.04 (4% pace benefit at sub-2:45, ≈7 min on a
+ * 2:45 IM marathon split). Confirmed by Tristan 2026-05-12.
+ */
+const MAX_MARATHON_DEPTH_CREDIT = 0.04;
+const MARATHON_CREDIT_ONSET_SEC = 4.5 * 3600;  // 4:30 — credit starts here
+const MARATHON_CREDIT_MAX_SEC   = 2.75 * 3600; // 2:45 — full credit
+
+function computeMarathonDepthMultiplier(state: SimulatorState): number {
+  const marathonPbSec = state.pbs?.m;
+  if (!marathonPbSec) return 1.0;
+
+  // No credit for slow PBs (≥ 4:30) or missing PBs.
+  if (marathonPbSec >= MARATHON_CREDIT_ONSET_SEC) return 1.0;
+
+  // Recency: PB < 2 years = 1.0, 2–4 years = 0.6, > 4 years = 0.3.
+  let recencyFactor = 1.0;
+  const pbDateISO = state.onboarding?.pbDates?.m;
+  if (pbDateISO) {
+    const ageDays = (Date.now() - Date.parse(pbDateISO)) / (1000 * 60 * 60 * 24);
+    if      (ageDays > 4 * 365) recencyFactor = 0.3;
+    else if (ageDays > 2 * 365) recencyFactor = 0.6;
+  }
+
+  // Smooth linear from 0 at onset (4:30) to 1 at max (2:45).
+  const depthRaw = Math.min(1, (MARATHON_CREDIT_ONSET_SEC - marathonPbSec) /
+                               (MARATHON_CREDIT_ONSET_SEC - MARATHON_CREDIT_MAX_SEC));
+  const credit = depthRaw * MAX_MARATHON_DEPTH_CREDIT * recencyFactor;
+
+  return 1.0 - credit;
 }
 
 // Re-export for ergonomics

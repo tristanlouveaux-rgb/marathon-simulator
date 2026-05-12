@@ -113,7 +113,6 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Get parameters for this distance/ability
   const distance_key = target_distance;
   const max_gain = TRAINING_HORIZON_PARAMS.max_gain_pct[distance_key]?.[ability_band] || 5.0;
-  const tau = TRAINING_HORIZON_PARAMS.tau_weeks[distance_key]?.[ability_band] || 8.0;
   const ref_sessions = TRAINING_HORIZON_PARAMS.ref_sessions[distance_key]?.[ability_band] || 4.0;
   const type_mod = TRAINING_HORIZON_PARAMS.type_modifier[distance_key]?.[runner_type] || 1.0;
 
@@ -121,9 +120,40 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   const taper_eff = taper_weeks || 0;
   const weeks_eff = Math.max(0, weeks_remaining - taper_eff);
 
-  // Week factor: saturating exponential (1 - e^(-w/tau))
-  // Early weeks: rapid gains; later weeks: diminishing returns
-  const week_factor = weeks_eff > 0 ? (1 - Math.exp(-weeks_eff / tau)) : 0;
+  // ── Week factor: dual-tau saturation (2026-05-12 audit #12) ─────────────
+  //
+  // weekFactor = w_fast * (1 - exp(-t/tau_fast)) + w_slow * (1 - exp(-t/tau_slow))
+  //   where w_fast + w_slow = 1.
+  //
+  // Captures the documented two-phase adaptation profile for endurance
+  // running: VO2max (fast) plateaus by ~18-24 weeks; LT + fractional
+  // utilization + economy (slow) continue to ~52 weeks. Per-distance slow
+  // weights skew toward LT/economy for longer races (marathon = 0.55 slow,
+  // 5K = 0.30 slow) per Joyner & Coyle (2008) decomposition.
+  //
+  // Falls back to legacy single-tau if dual-tau params are missing (defensive
+  // — the constants are populated in `training-params.ts`).
+  let week_factor: number;
+  if (weeks_eff <= 0) {
+    week_factor = 0;
+  } else {
+    const tauFastTable = TRAINING_HORIZON_PARAMS.tau_fast_weeks;
+    const tauSlowTable = TRAINING_HORIZON_PARAMS.tau_slow_weeks;
+    const slowWeightTable = TRAINING_HORIZON_PARAMS.slow_weight;
+    const tauFast = tauFastTable?.[distance_key]?.[ability_band];
+    const tauSlow = tauSlowTable?.[distance_key]?.[ability_band];
+    const slowWeight = slowWeightTable?.[distance_key];
+    if (tauFast != null && tauSlow != null && slowWeight != null) {
+      const fastWeight = 1 - slowWeight;
+      const fastComponent = 1 - Math.exp(-weeks_eff / tauFast);
+      const slowComponent = 1 - Math.exp(-weeks_eff / tauSlow);
+      week_factor = fastWeight * fastComponent + slowWeight * slowComponent;
+    } else {
+      // Defensive fallback to single-tau (legacy behaviour)
+      const tau = TRAINING_HORIZON_PARAMS.tau_weeks[distance_key]?.[ability_band] || 8.0;
+      week_factor = 1 - Math.exp(-weeks_eff / tau);
+    }
+  }
 
   // Dose-aware effective sessions: scale raw count by km/session vs. reference.
   // 4×30-min marathon plan ≠ 4×80-min marathon plan in terms of stimulus.

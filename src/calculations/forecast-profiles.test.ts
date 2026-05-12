@@ -199,8 +199,11 @@ const PROFILES: TestProfile[] = [
     experienceLevel: 'intermediate',
     runsPerWeek: 5, recurringActivities: [], activeLifestyle: false,
     planDurationWeeks: 20, raceDistance: 'marathon',
-    baselineRange: [10080, 12900],  // 2:48–3:35; 18:00 5K + LT 3:45/km predicts ~2:51:50
-    forecastRange: [9600, 12300],   // lower bound: marathon max_gain reduced (audit #10)
+    // Lower bound 10500 = 2:55:00 (science audit #8). 2026-05-12 audit #11 fixed
+    // the predictors so the speed-profile-no-marathon-PB case lands in the
+    // empirically-observed 2:55-3:10 first-marathon range (was 2:51:50).
+    baselineRange: [10500, 12900],  // 2:55–3:35
+    forecastRange: [9900, 12300],   // lower bound: marathon max_gain reduced (audit #10), audit #11 shifts +300s
   },
   {
     name: '8. Endurance → 5K',

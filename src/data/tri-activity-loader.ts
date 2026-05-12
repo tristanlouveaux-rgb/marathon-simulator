@@ -36,6 +36,7 @@ interface GarminActivityRow {
   itrimp: number | null;
   hr_zones: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
   km_splits: number[] | null;
+  km_hr_splits: number[] | null;
   polyline: string | null;
   activity_name: string | null;
   elevation_gain_m: number | null;
@@ -65,7 +66,7 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
     const select = [
       'garmin_id', 'activity_type', 'start_time', 'duration_sec', 'distance_m',
       'avg_pace_sec_km', 'avg_hr', 'max_hr', 'calories', 'itrimp', 'hr_zones',
-      'km_splits', 'polyline', 'activity_name', 'elevation_gain_m', 'hr_drift',
+      'km_splits', 'km_hr_splits', 'polyline', 'activity_name', 'elevation_gain_m', 'hr_drift',
       'ambient_temp_c', 'average_watts', 'normalized_power', 'max_watts',
       'device_watts', 'kilojoules', 'power_curve',
     ].join(',');
@@ -106,6 +107,7 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
       iTrimp: r.itrimp ?? null,
       hrZones: r.hr_zones ?? null,
       kmSplits: r.km_splits ?? null,
+      kmHRSplits: r.km_hr_splits ?? null,
       polyline: r.polyline ?? null,
       displayName: r.activity_name ?? undefined,
       elevationGainM: r.elevation_gain_m ?? null,

@@ -147,6 +147,17 @@ export interface HyroxConfig {
    *  auto-derived from VDOT (mirrors CLAUDE.md "manually-set yields to
    *  improvements" rule), 'seed' = no calibration available, used band default. */
   hyroxRunPaceSource?: 'user' | 'derived' | 'seed';
+  /** Bayesian personalisation: observed-vs-population-model run-pace residual
+   *  from logged races. Positive = model predicts faster than the athlete
+   *  actually runs HYROX (rare); negative = athlete runs faster than the
+   *  population model. Magnitude clamped to ±60 s/km. Decays linearly to 0
+   *  over 12 months without new race observations. See `hyrox-personal-pace.ts`. */
+  personalRunPaceOffsetSec?: number;
+  /** ISO timestamp of the most recent race observation that updated the offset. */
+  personalRunPaceOffsetUpdatedAtISO?: string;
+  /** Confidence weight [0..1] for `personalRunPaceOffsetSec`. Climbs toward
+   *  1.0 with each fresh race observation; reset when offset is decayed out. */
+  personalRunPaceOffsetConfidence?: number;
   /** Selected race venue id (from `HYROX_VENUES`). Drives course-factor adjustments
    *  on the predicted finish time. Derived from `raceEventId` when an event is picked;
    *  set directly only on the manual-date path. */
@@ -162,6 +173,30 @@ export interface HyroxConfig {
    * `TriConfig.generatorVersion`.
    */
   generatorVersion?: number;
+  /**
+   * Race outcome log — actual race-day finish times against the target.
+   * Idempotent on `dateISO`. Mirrors `triConfig.raceLog` for parity across
+   * modes. Optional so existing state objects stay valid.
+   */
+  raceLog?: HyroxRaceLogEntry[];
+}
+
+/**
+ * Single HYROX race outcome — actual finish time logged after a target race.
+ * HYROX has no continuously cached prediction the way triathlon does, so the
+ * "predicted" slot stores the user's target if set, otherwise undefined.
+ */
+export interface HyroxRaceLogEntry {
+  /** ISO date the race ran (YYYY-MM-DD). */
+  dateISO: string;
+  /** Format raced. */
+  format: 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+  /** User-set target finish time at the moment of detection (seconds). */
+  targetTotalSec?: number;
+  /** Actual race-day finish — sum of activity duration in the race window. */
+  actualTotalSec: number;
+  /** Race id from `HYROX_WORLD_SERIES`, if the user picked one. */
+  raceEventId?: string;
 }
 
 /** One component within a HYROX brick or station session (run leg or station). */

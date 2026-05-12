@@ -33,6 +33,8 @@ import {
 import { BIKE_SETUP_AUTO_FILL } from '@/constants/feature-flags';
 import { getTriathlonById } from '@/data/triathlons';
 import { applyCourseFactors } from '@/calculations/course-factors';
+import { lookupEmpiricalCourseFactors, pickCourseFactors } from '@/calculations/empirical-course-factors';
+import { computeTriRaceReadiness } from '@/calculations/race-readiness';
 
 const OVERLAY_ID = 'bike-setup-overlay';
 
@@ -79,7 +81,7 @@ function courseOptionLabel(
 const ALL_POSITIONS: BikePosition[] = ['hoods', 'drops', 'clip-ons', 'tt-bike'];
 
 /** Local working state of the overlay — mutates as the user changes inputs. */
-interface FormState {
+export interface FormState {
   riderKg: number;
   bikeKg: number;
   position: BikePosition;
@@ -396,7 +398,7 @@ function buildProfile(form: FormState): BikeAeroProfile {
   };
 }
 
-function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'): { kph: number; splitSec: number } {
+export function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'): { kph: number; splitSec: number } {
   const profile = buildProfile(form);
   const params = paramsFromProfile(profile, form.riderKg, form.bikeKg, form.course);
   const raceWatts = form.ftp * RACE_INTENSITY_BY_DISTANCE[distance];
@@ -405,23 +407,47 @@ function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'): { kph:
   const distKm = distance === 'ironman' ? 180.2 : 90;
   const baseSplitSec = v > 0 ? (distKm * 1000) / v : 0;
 
-  // Apply race-day course factors (climate, wind, altitude, etc.) so the
-  // modal's predicted split matches the race-day bike split shown in the
-  // headline forecast. Modal exists for users to tune fit/CdA against the
-  // *actual* race they're targeting — bare physics without conditions would
-  // be misleading because the user can't change the conditions, only their
-  // setup. The kph stays as the bare-physics speed (it's the physical answer
-  // for the user's setup; conditions slow the *time* not the underlying
-  // capability).
+  // Apply the same bike-leg adjustments the headline forecast uses, so the
+  // modal's predicted split matches what the user will see on the prediction
+  // card. Three components, in the same order as race-prediction.triathlon.ts:
+  //
+  //   1. Course factors — empirical (calibrated against historical finishes
+  //      per race location) if a high/medium confidence entry exists, else
+  //      physical (climate × altitude × elevation × wind × swim-type).
+  //   2. Race-readiness penalty — captures low recent bike volume / longest
+  //      ride relative to the race distance's endurance demands. Read from
+  //      the cached prediction since readiness doesn't change with bike
+  //      equipment; only volume / training history shifts it.
+  //
+  // The bare-physics speed (`kph`) stays unchanged — it's the physical answer
+  // for the user's setup. Conditions and readiness slow the *time*, not the
+  // underlying capability.
   const s = getState();
   const raceId = s.onboarding?.selectedTriathlonId;
   const race = raceId ? getTriathlonById(raceId) : null;
-  const cf = applyCourseFactors(
-    race?.profile ?? undefined,
-    { swimSec: 0, bikeSec: baseSplitSec, runSec: 0 },
-    0,
-  );
-  const adjustedSplitSec = Math.round(baseSplitSec * cf.bikeMultiplier);
+  const raceName = race?.name;
+  const baseSec = { swimSec: 0, bikeSec: baseSplitSec, runSec: 0 };
+  const empirical = lookupEmpiricalCourseFactors(raceName, distance, baseSec);
+  const physical = applyCourseFactors(race?.profile ?? undefined, baseSec, 0);
+  const picked = pickCourseFactors(empirical, physical);
+  const cf = picked.output;
+
+  // Readiness multiplier: read from cached prediction when present (matches
+  // exactly what the headline card just rendered), else compute fresh —
+  // important on first launch / after invalidation, otherwise the preview is
+  // ~10-15% optimistic vs the headline for low-readiness athletes.
+  const triDist = s.triConfig?.distance;
+  const cached = s.triConfig?.prediction?.raceReadiness?.bike?.penaltyMultiplier;
+  let readinessBikeMult: number;
+  if (cached != null) {
+    readinessBikeMult = cached;
+  } else if (triDist === '70.3' || triDist === 'ironman') {
+    readinessBikeMult = computeTriRaceReadiness(s, triDist).bike.penaltyMultiplier;
+  } else {
+    readinessBikeMult = 1;
+  }
+
+  const adjustedSplitSec = Math.round(baseSplitSec * cf.bikeMultiplier * readinessBikeMult);
 
   return { kph, splitSec: adjustedSplitSec };
 }

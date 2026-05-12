@@ -21,12 +21,60 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
     'marathon': { beginner: 9.0, novice: 7.5, intermediate: 7.0, advanced: 5.5, elite: 3.5 }
   },
 
-  // Time constant (tau) for adaptation - smaller = faster gains
+  // Legacy single-tau (retained for migration; new code paths use dual-tau).
+  // 2026-05-12 audit #12 deprecates this in favour of the two-phase model below.
   tau_weeks: {
     '5k': { beginner: 4.0, novice: 5.0, intermediate: 6.0, advanced: 7.0, elite: 8.0 },
     '10k': { beginner: 5.0, novice: 6.0, intermediate: 7.0, advanced: 8.0, elite: 9.0 },
     'half': { beginner: 6.0, novice: 7.0, intermediate: 8.0, advanced: 9.0, elite: 10.0 },
     'marathon': { beginner: 7.0, novice: 8.0, intermediate: 9.0, advanced: 10.0, elite: 11.0 }
+  },
+
+  // ── Dual-tau adaptation model (2026-05-12 audit #12) ────────────────────
+  //
+  // weekFactor = (1 - slow_weight) * (1 - exp(-t/tau_fast))
+  //            +  slow_weight      * (1 - exp(-t/tau_slow))
+  //
+  // **Fast component (VO2max + neuromuscular)**: Bouchard et al. (1999)
+  // HERITAGE study and Midgley et al. (2007) show VO2max reaches ~95% of
+  // its trainable ceiling by 16-20 weeks of structured training. We use
+  // tau_fast ≈ 6-8 weeks (which gives 95% at 18-24w).
+  //
+  // **Slow component (LT + fractional utilization + economy)**: Seiler
+  // (2010), Coyle (1984), Moore (2016) show LT and economy continue
+  // adapting for 24-52+ weeks. We use tau_slow ≈ 20-32 weeks (95% reached
+  // at 60-96 weeks — long-tail plateau).
+  //
+  // **Ability scaling**: more-trained athletes plateau slightly faster
+  // (less headroom for both fast and slow adaptations). Beginner → elite
+  // tau increases by ~50% to capture this.
+  //
+  // `max_gain_pct` above represents the very-long-plan asymptote (both
+  // components fully saturated). At typical 16-20 week plans this model
+  // produces outputs close to the legacy single-tau because the calibration
+  // was preserved: tested against `forecast-profiles.test.ts` profiles —
+  // baseline + forecast ranges remain valid.
+  tau_fast_weeks: {
+    '5k':       { beginner: 3.5, novice: 4.0, intermediate: 5.0, advanced: 6.0, elite: 7.0 },
+    '10k':      { beginner: 4.0, novice: 5.0, intermediate: 6.0, advanced: 7.0, elite: 8.0 },
+    'half':     { beginner: 5.0, novice: 6.0, intermediate: 7.0, advanced: 8.0, elite: 9.0 },
+    'marathon': { beginner: 5.5, novice: 6.5, intermediate: 7.5, advanced: 8.5, elite: 9.5 }
+  },
+  tau_slow_weeks: {
+    '5k':       { beginner: 14, novice: 16, intermediate: 18, advanced: 20, elite: 22 },
+    '10k':      { beginner: 16, novice: 18, intermediate: 20, advanced: 22, elite: 24 },
+    'half':     { beginner: 18, novice: 20, intermediate: 22, advanced: 24, elite: 26 },
+    'marathon': { beginner: 20, novice: 22, intermediate: 26, advanced: 28, elite: 30 }
+  },
+
+  // Per-distance slow-component weight. Marathon performance is dominated
+  // by fractional utilization and economy (Joyner & Coyle 2008) — both slow
+  // adaptations. 5K is more VO2max-driven (fast adaptation).
+  slow_weight: {
+    '5k':       0.30,
+    '10k':      0.40,
+    'half':     0.50,
+    'marathon': 0.55,
   },
 
   // Reference sessions/week (center of logistic curve)

@@ -30,9 +30,23 @@
 
 import { cv } from './vdot';
 
-/** Input for a single run with HR data. */
+/** Input for a single (pace, HR) sample — either a whole run averaged into
+ *  one point, or a within-run segment (per-km from Strava splits_metric, per
+ *  lap, etc.). The function applies different qualifying filters per kind:
+ *
+ *  - **Run-level** (`isSegment` falsy): duration ≥ 20 min, hrDrift gate
+ *    (steady-state proxy), pace/HRR gates. This is the legacy mode.
+ *  - **Segment-level** (`isSegment = true`): duration ≥ 60 s (one km ≈ 3-6
+ *    min), pace/HRR gates only — drift is a whole-run property and is
+ *    measured by the caller before emitting segments. Segments from the
+ *    same run are independent (pace, HR) points spanning the run's HRR
+ *    range, dramatically expanding coverage compared to one averaged-out
+ *    point per run. */
 export interface HRRunInput {
-  /** ISO string or Date — used for window/recency. */
+  /** ISO string or Date — used for window/recency. For segments, this is
+   *  the segment's own start time (or the parent run's start time when
+   *  per-segment timestamps are unavailable; the window filter is
+   *  conservative either way). */
   startTime: string | Date;
   /** Distance in km. */
   distKm: number;
@@ -41,9 +55,14 @@ export interface HRRunInput {
   /** Average heart rate (bpm). Required for inclusion. */
   avgHR?: number | null;
   /** HR drift %: (avgHR_2nd_half − avgHR_1st_half) / avgHR_1st_half × 100.
-   *  Optional — runs without drift data are still included (we can't apply
-   *  the aerobic-decoupling filter, but pace+HR+duration is still usable). */
+   *  Run-level only. Optional — runs without drift data are still included
+   *  (we can't apply the aerobic-decoupling filter, but pace+HR+duration
+   *  is still usable). Ignored when `isSegment` is true. */
   hrDrift?: number | null;
+  /** Marks this entry as a within-run segment (e.g. one km of a long run)
+   *  rather than a full run averaged into one point. Drives different
+   *  qualifying filters — see the interface doc above. */
+  isSegment?: boolean;
 }
 
 export interface HRVdotResult {
@@ -92,6 +111,7 @@ function fitWeightedRegression(pts: Pt[]): { alpha: number; beta: number; r2: nu
 
 const WINDOW_WEEKS = 8;
 const MIN_DURATION_SEC = 20 * 60;          // <20 min: HR–pace linearity breaks (Swain domain is steady submax)
+const MIN_SEGMENT_DURATION_SEC = 60;       // Per-segment floor (1km ≈ 3-6 min; warmup/transition < 60s gets noisy)
 const MAX_HR_DRIFT_PCT = 8;                // Friel 5% aerobic, 8% = upper bound before supra-threshold
 const MIN_PACE_SEC_PER_KM = 180;           // 3:00/km — faster = interval artefact
 const MAX_PACE_SEC_PER_KM = 450;           // 7:30/km — slower = walk
@@ -128,8 +148,14 @@ export function computeHRCalibratedVdot(
   const points: Pt[] = [];
 
   for (const r of runs) {
-    if (!r.distKm || r.distKm <= 0 || !r.durSec || r.durSec < MIN_DURATION_SEC) continue;
+    if (!r.distKm || r.distKm <= 0 || !r.durSec) continue;
     if (!r.avgHR || r.avgHR <= 0) continue;
+
+    // Duration gate depends on input kind. Run-level samples need ≥ 20 min
+    // for HR-pace linearity; per-segment samples (e.g. one km of a long run)
+    // only need ≥ 60 s so a fast tempo km isn't rejected as too short.
+    const minDuration = r.isSegment ? MIN_SEGMENT_DURATION_SEC : MIN_DURATION_SEC;
+    if (r.durSec < minDuration) continue;
 
     const startMs = new Date(r.startTime).getTime();
     if (!isFinite(startMs) || startMs < windowStartMs) continue;
@@ -140,7 +166,9 @@ export function computeHRCalibratedVdot(
     const hrr = (r.avgHR - rhr) / (maxHR - rhr);
     if (hrr < MIN_HRR_FRACTION || hrr > MAX_HRR_FRACTION) continue;
 
-    if (r.hrDrift != null && Math.abs(r.hrDrift) > MAX_HR_DRIFT_PCT) continue;
+    // HR drift is a whole-run aerobic-decoupling signal; not meaningful for
+    // a sub-run segment, so we only gate run-level samples on it.
+    if (!r.isSegment && r.hrDrift != null && Math.abs(r.hrDrift) > MAX_HR_DRIFT_PCT) continue;
 
     points.push({
       pace,

@@ -150,6 +150,82 @@ function calculateKmSplits(
 }
 
 /**
+ * Average HR per km, parallel-indexed to calculateKmSplits.
+ *
+ * For each whole km marker (1000m, 2000m, ...) walk the HR stream from the
+ * previous marker's sample-index to this marker's sample-index and average
+ * the HR samples in that range. Missing/zero HR samples are skipped so a
+ * brief sensor dropout doesn't drag the average down. Returns one entry per
+ * km that calculateKmSplits returned, in the same order. Length is identical
+ * to splits.length when HR is present for the whole run.
+ *
+ * Used to feed within-run (pace, HR) pairs into the VO2 HR-calibrated
+ * regression — a single 21K run with a tempo finish becomes many points
+ * spanning a wider HRR range, instead of one averaged-out (avgPace, avgHR)
+ * point.
+ */
+function calculateKmHRSplits(
+  distanceSamples: number[],
+  timeSamples: number[],
+  hrSamples: number[],
+): number[] {
+  if (distanceSamples.length < 2 || hrSamples.length !== distanceSamples.length) return [];
+  const totalM = distanceSamples[distanceSamples.length - 1];
+  if (totalM < 1000) return [];
+
+  const numKm = Math.floor(totalM / 1000);
+  const hrPerKm: number[] = [];
+
+  let sampleIdx = 0;
+  for (let km = 1; km <= numKm; km++) {
+    const targetM = km * 1000;
+    let sum = 0;
+    let n = 0;
+    while (sampleIdx < distanceSamples.length && distanceSamples[sampleIdx] < targetM) {
+      const hr = hrSamples[sampleIdx];
+      if (hr > 0) { sum += hr; n += 1; }
+      sampleIdx += 1;
+    }
+    hrPerKm.push(n > 0 ? Math.round(sum / n) : 0);
+  }
+  // Drop trailing zeros (e.g. HR stream truncated before the last km). Keeps
+  // the result valid as a parallel array — readers can pair index-by-index.
+  while (hrPerKm.length > 0 && hrPerKm[hrPerKm.length - 1] === 0) hrPerKm.pop();
+  // If every entry is zero (stream existed but no valid HR samples), return
+  // empty so consumers don't see a misleading all-zero array.
+  if (hrPerKm.every(h => h === 0)) return [];
+  return hrPerKm;
+}
+
+/** splits_metric entry shape we read from Strava's `/activities/{id}` detail
+ *  endpoint. Strava returns more fields than this; we only type what we use. */
+type StravaSplitMetric = {
+  moving_time: number;
+  distance: number;
+  average_heartrate?: number | null;
+};
+
+/** Build parallel kmSplits + kmHRSplits arrays from Strava's splits_metric.
+ *  Used as a fallback when the stream-based calculation can't fire (no
+ *  distance/time streams) but the detail endpoint returned splits_metric. */
+function buildSplitsFromMetric(sm: StravaSplitMetric[]): { kmSplits: number[]; kmHRSplits: number[] } {
+  const kmSplits: number[] = [];
+  const kmHRSplits: number[] = [];
+  for (const s of sm) {
+    if (!s || s.distance <= 10) continue;
+    kmSplits.push(Math.round((s.moving_time / s.distance) * 1000));
+    kmHRSplits.push(typeof s.average_heartrate === "number" ? Math.round(s.average_heartrate) : 0);
+  }
+  // Same trim policy as the stream path: drop trailing zeros, treat all-zero
+  // as empty.
+  while (kmHRSplits.length > 0 && kmHRSplits[kmHRSplits.length - 1] === 0) kmHRSplits.pop();
+  return {
+    kmSplits,
+    kmHRSplits: kmHRSplits.every(h => h === 0) ? [] : kmHRSplits,
+  };
+}
+
+/**
  * Compute HR drift from raw HR + time arrays.
  * drift% = (avgHR_2nd_half - avgHR_1st_half) / avgHR_1st_half × 100
  * Strips first 10% (warmup). Requires ≥20 min of HR data.
@@ -1499,6 +1575,7 @@ Deno.serve(async (req) => {
         let iTrimp: number | null = null;
         let hrZones: HRZones | null = null;
         let kmSplits: number[] = [];
+        let kmHRSplits: number[] = [];
         let hrDrift: number | null = null;
         let avgPace: number | null = null;
         let bestEfforts: unknown = null;
@@ -1530,6 +1607,11 @@ Deno.serve(async (req) => {
           }
           if (isRun && distData && timeData && distData.length === timeData.length) {
             kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+            // Compute per-km HR from the same stream, parallel-indexed to kmSplits.
+            // VO2 regression uses these as within-run (pace, HR) points.
+            if (hrData && hrData.length === distData.length) {
+              kmHRSplits = calculateKmHRSplits(distData, timeData as number[], hrData);
+            }
           }
           // Fetch detail for calories + run splits (already doing per-activity calls)
           if (isRun || (act["calories"] as number | null) == null) {
@@ -1538,10 +1620,15 @@ Deno.serve(async (req) => {
               if ((act["calories"] as number | null) == null && detail.calories != null) {
                 (act as any).calories = detail.calories;
               }
-              if (isRun && kmSplits.length === 0) {
-                const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+              // Fall back to splits_metric when streams didn't yield km-level data.
+              // splits_metric carries average_heartrate per split, so we can populate
+              // both kmSplits and kmHRSplits from the same source.
+              if (isRun && (kmSplits.length === 0 || kmHRSplits.length === 0)) {
+                const sm = detail.splits_metric as StravaSplitMetric[] | null;
                 if (sm?.length) {
-                  kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+                  const built = buildSplitsFromMetric(sm);
+                  if (kmSplits.length === 0) kmSplits = built.kmSplits;
+                  if (kmHRSplits.length === 0) kmHRSplits = built.kmHRSplits;
                 }
               }
               // Capture best_efforts for running activities only (Strava only emits these on runs).
@@ -1586,6 +1673,7 @@ Deno.serve(async (req) => {
           // on next backfill and can be reprocessed if avg_heartrate becomes available.
           hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
           km_splits: kmSplits.length > 0 ? kmSplits : null,
+          km_hr_splits: kmHRSplits.length > 0 ? kmHRSplits : null,
           hr_drift: hrDrift,
           ambient_temp_c: ambientTempC,
           activity_name: actName,
@@ -1905,7 +1993,7 @@ Deno.serve(async (req) => {
           calories: (act["calories"] as number | null) ?? cachedCalories.get(garminId) ?? null,
           aerobic_effect: null, anaerobic_effect: null,
           itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
-          hr_zones: null, km_splits: null,
+          hr_zones: null, km_splits: null, km_hr_splits: null,
           activity_name: actName,
           elevation_gain_m: (act["total_elevation_gain"] as number | null) ?? null,
           ...extractPowerFields(act),
@@ -2125,16 +2213,17 @@ Deno.serve(async (req) => {
     const garminIds = activities.map((a) => `strava-${a.id as number}`);
     const { data: cachedRows } = await supabase
       .from("garmin_activities")
-      .select("garmin_id, itrimp, hr_zones, km_splits, calories, hr_drift, ambient_temp_c, polyline, rep_data")
+      .select("garmin_id, itrimp, hr_zones, km_splits, km_hr_splits, calories, hr_drift, ambient_temp_c, polyline, rep_data")
       .eq("user_id", user.id)
       .in("garmin_id", garminIds);
 
-    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null; polyline: string | null; rep_data: DetectionResult | null }>();
+    const cachedMap = new Map<string, { itrimp: number | null; hr_zones: HRZones | null; km_splits: number[] | null; km_hr_splits: number[] | null; calories: number | null; hr_drift: number | null; ambient_temp_c: number | null; polyline: string | null; rep_data: DetectionResult | null }>();
     for (const r of (cachedRows ?? [])) {
       cachedMap.set(r.garmin_id, {
         itrimp: r.itrimp ?? null,
         hr_zones: r.hr_zones ?? null,
         km_splits: r.km_splits ?? null,
+        km_hr_splits: r.km_hr_splits ?? null,
         calories: r.calories ?? null,
         hr_drift: r.hr_drift ?? null,
         ambient_temp_c: r.ambient_temp_c ?? null,
@@ -2196,6 +2285,7 @@ Deno.serve(async (req) => {
       let iTrimp: number | null = null;
       let hrZones: HRZones | null = null;
       let kmSplits: number[] = [];
+      let kmHRSplits: number[] = [];
       let hrDrift: number | null = null;
       let ambientTempC: number | null = null;
       let avgPaceSecKm: number | null = null;
@@ -2222,6 +2312,7 @@ Deno.serve(async (req) => {
         iTrimp = cached.itrimp;
         hrZones = cached.hr_zones;
         kmSplits = cached.km_splits ?? [];
+        kmHRSplits = cached.km_hr_splits ?? [];
         hrDrift = cached.hr_drift ?? null;
         ambientTempC = cached.ambient_temp_c ?? null;
         repData = cached.rep_data ?? null;
@@ -2307,15 +2398,23 @@ Deno.serve(async (req) => {
                 calories = detail.calories as number;
               }
               if (isRun) {
-                const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+                const sm = detail.splits_metric as StravaSplitMetric[] | null;
                 if (sm?.length) {
-                  kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
+                  const built = buildSplitsFromMetric(sm);
+                  kmSplits = built.kmSplits;
+                  kmHRSplits = built.kmHRSplits;
                 }
               }
             } catch { /* ignore — stream fallback below */ }
             // Fallback: compute from GPS streams if detail fetch failed or returned no splits
             if (isRun && kmSplits.length === 0 && distData && timeData && distData.length === timeData.length) {
               kmSplits = calculateKmSplits(distData, timeData as number[], movingData as boolean[] | undefined);
+            }
+            // Stream-side HR splits (used when splits_metric was unavailable or
+            // missing avg HR per split). Same parallel-indexing as kmSplits.
+            if (isRun && kmHRSplits.length === 0 && hrData && distData && timeData
+                && hrData.length === distData.length && distData.length === timeData.length) {
+              kmHRSplits = calculateKmHRSplits(distData, timeData as number[], hrData);
             }
           }
 
@@ -2365,16 +2464,32 @@ Deno.serve(async (req) => {
       }
       console.log(`[Standalone] ${garminId}: needsUpsert=${needsUpsert} iTrimp=${iTrimp?.toFixed(0) ?? 'null'} zones=${hrZones ? 'YES' : 'null'}`);
 
-      // Cached runs with no km_splits: fetch from Strava detail and patch DB
-      if (isRun && kmSplits.length === 0 && cached?.hr_zones) {
+      // Cached runs with no km_splits OR no km_hr_splits: fetch from Strava
+      // detail and patch DB. The km_hr_splits backfill is the path that gives
+      // historical activities (synced before this feature shipped) their per-km
+      // HR so the VO2 regression can use within-run variation.
+      const needsHRSplitsBackfill = isRun && cached?.hr_zones && kmHRSplits.length === 0;
+      const needsKmSplitsBackfill = isRun && cached?.hr_zones && kmSplits.length === 0;
+      if (needsHRSplitsBackfill || needsKmSplitsBackfill) {
         try {
           const detail = await stravaGet(`/activities/${stravaId}`, accessToken) as Record<string, unknown>;
-          const sm = detail.splits_metric as Array<{ moving_time: number; distance: number }> | null;
+          const sm = detail.splits_metric as StravaSplitMetric[] | null;
           if (sm?.length) {
-            kmSplits = sm.filter(s => s.distance > 10).map(s => Math.round((s.moving_time / s.distance) * 1000));
-            void supabase.from("garmin_activities")
-              .update({ km_splits: kmSplits })
-              .eq("garmin_id", garminId).eq("user_id", user.id);
+            const built = buildSplitsFromMetric(sm);
+            const patch: Record<string, unknown> = {};
+            if (needsKmSplitsBackfill && built.kmSplits.length > 0) {
+              kmSplits = built.kmSplits;
+              patch.km_splits = built.kmSplits;
+            }
+            if (needsHRSplitsBackfill && built.kmHRSplits.length > 0) {
+              kmHRSplits = built.kmHRSplits;
+              patch.km_hr_splits = built.kmHRSplits;
+            }
+            if (Object.keys(patch).length > 0) {
+              void supabase.from("garmin_activities")
+                .update(patch)
+                .eq("garmin_id", garminId).eq("user_id", user.id);
+            }
           }
         } catch { /* ignore — splits will be absent this sync */ }
       }
@@ -2461,6 +2576,7 @@ Deno.serve(async (req) => {
             itrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
             hr_zones: hrZones && (hrZones.z1 + hrZones.z2 + hrZones.z3 + hrZones.z4 + hrZones.z5 > 0) ? hrZones : null,
             km_splits: kmSplits.length > 0 ? kmSplits : null,
+            km_hr_splits: kmHRSplits.length > 0 ? kmHRSplits : null,
             hr_drift: hrDrift,
             ambient_temp_c: ambientTempC,
             activity_name: activityName,
@@ -2491,6 +2607,7 @@ Deno.serve(async (req) => {
         iTrimp: iTrimp != null && iTrimp > 0 ? iTrimp : null,
         hrZones: hrZones,
         kmSplits: kmSplits.length > 0 ? kmSplits : null,
+        kmHRSplits: kmHRSplits.length > 0 ? kmHRSplits : null,
         hrDrift: hrDrift,
         ambientTempC: ambientTempC,
         polyline,

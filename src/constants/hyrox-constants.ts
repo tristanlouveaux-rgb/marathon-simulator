@@ -11,6 +11,7 @@
  */
 
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/workouts/phases';
 
 /** Same-athlete cross-format TOTAL time multiplier — DOUBLES → SINGLES.
  *  In singles, the athlete completes all 8 stations continuously without the
@@ -74,6 +75,11 @@ export const HYROX_PHASE_WEEKS = {
  *
  * Peak: floored at 1 whenever there's at least 1 non-taper week to spend —
  * the race-specific phase is the last to drop.
+ *
+ * @deprecated Use `computeHyroxPlanPhases(totalWeeks)` instead — it returns
+ * per-week phases (including the checkpoint flag for double-periodization plans
+ * ≥28 weeks) and shares its strategy with running and triathlon mode. Kept
+ * temporarily for any callers that depend on the count-based shape.
  */
 export function hyroxPhasesForLen(
   totalWeeks: number,
@@ -104,6 +110,46 @@ export function hyroxPhasesForLen(
   }
 
   return { base, build, peak, taper };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Phase config + per-week phase computation (shared strategy with running / tri)
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Tuned to reproduce the canonical HYROX_PHASE_WEEKS split (6/6/3) at the
+ * default plan length (18 weeks → 7/6/3/2). Peak capped at 3 because HYROX peak
+ * = race-specific compromised-running and station-density work — beyond 3w the
+ * stimulus plateaus and accumulated fatigue compromises race day.
+ *
+ * Double-periodization threshold is 28 weeks (matching triathlon). HYROX lead
+ * times are typically 12–20 weeks, so the double-cycle path is rarely engaged.
+ */
+const HYROX_PHASE_CONFIG: PhaseConfig = {
+  taperCap: 2,
+  peakCap: 3,
+  buildCap: 8,
+  taperRatio: 0.10,
+  peakRatio: 0.20,             // 3 / ~18 (raised to cap at 18w canonical)
+  buildRatio: 0.333,           // 6 / 18
+  doublePeriodizationThreshold: 28,
+  cycle2Fraction: 0.55,
+  transitionWeeks: 2,
+  cycle1PeakCap: 3,
+  cycle1BuildCap: 6,
+  cycle1PeakRatio: 0.18,
+  cycle1BuildRatio: 0.35,
+  cycle1Min: 8,
+  cycle2Min: 12,
+};
+
+/**
+ * Compute per-week phases for a HYROX plan. Returned array length equals
+ * `totalWeeks`; index i corresponds to plan week i+1. Plans ≥28 weeks switch
+ * to double periodization with a Checkpoint (TT) week at the end of cycle 1.
+ */
+export function computeHyroxPlanPhases(totalWeeks: number): PlanPhaseWeek[] {
+  return computePlanPhases(totalWeeks, HYROX_PHASE_CONFIG);
 }
 
 /** Taper length (days) by ability band. Shorter taper for faster bands because

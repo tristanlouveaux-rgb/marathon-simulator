@@ -83,7 +83,9 @@ HYROX is a fully-separate mode for the hybrid run+functional-station racing form
 
 **Key files**: `src/ui/hyrox/plan-view.ts`, `src/ui/hyrox/workout-card.ts`, `src/ui/hyrox/benchmark-card.ts`, `src/ui/hyrox/forecast-view.ts`, `src/ui/home-view.ts`, `src/ui/wizard/steps/hyrox-setup.ts`, `src/calculations/training-horizon.hyrox.ts`, `src/constants/hyrox-horizon-params.ts`, `src/calculations/hyrox-volume.ts`
 
-**Test status**: ⚠️ Trajectory horizon model has 22 unit tests (`src/calculations/training-horizon.hyrox.test.ts`, including two taper-invariant assertions added 2026-05-08 pinning that race-inside-taper produces materially less gain than race-in-build, and race-tomorrow floors near zero). Forecast UI itself is manual-test only. Bug-chain repair (2026-05-08, see CHANGELOG and SCIENCE_LOG §T/§U/§V) added: `hyrox-format-band.test.ts` (8), `hyrox-run-pace.test.ts` (8), `hyrox-staleness.test.ts` (10), `hyrox-marker-bumps.test.ts` (14), `initialization.hyrox.test.ts` (10), `hyrox-boot-migration.test.ts` (6) — total 128 HYROX tests across 12 files.
+**Run-pace model v2 — Critical Pace anchor + Bayesian personalisation** (added 2026-05-12, see SCIENCE_LOG §AA): the previous run-pace derivation (`threshold × tier-ratio ≥ 1.05`) was structurally wrong for trained HYROXers — it implicitly assumed every athlete runs slower than threshold, when in fact trained athletes pace 1km HYROX legs at or faster than threshold because stations act as metabolic recovery. The v2 model anchors on **Critical Pace** (Hill 1923; Jones et al. 2010; Galbraith 2014), uses **continuous interpolation by VDOT** (no more discrete band steps), allows ratios < 1.0 for advanced/competitive tiers, and adds **format-specific pace conversion** for singles ↔ doubles (1.05–1.10 factor). Each logged HYROX race feeds a **Bayesian personal offset** that biases future predictions toward the athlete's actual observed pace, decaying linearly to 0 over 12 months without fresh evidence. **Critical Pace card** on Stats view surfaces the full derivation chain (VDOT → threshold → CP → format → personal offset → HYROX pace) with a tap-to-explain modal covering the scientific rationale. Wiring: `src/calculations/hyrox-run-pace.ts`, `src/calculations/hyrox-personal-pace.ts`, `src/state/initialization.hyrox.ts` (initial offset from onboarding race data), `src/ui/hyrox/stats-view.ts`.
+
+**Test status**: ⚠️ Run-pace v2 has 28 unit tests in `hyrox-run-pace.test.ts` (cpRatio interpolation, format conversion round-trip, full pipeline w/ offset + decay) and 17 in `hyrox-personal-pace.test.ts` (back-computation, blend math, decay boundary). Trajectory horizon model has 22 unit tests (`training-horizon.hyrox.test.ts`, including two taper-invariant assertions). Forecast UI itself is manual-test only. Other HYROX test files: `hyrox-format-band.test.ts` (8), `hyrox-staleness.test.ts` (10), `hyrox-marker-bumps.test.ts` (14, two updated for v2 numerical ranges), `initialization.hyrox.test.ts` (10), `hyrox-boot-migration.test.ts` (6). Full suite: 1778/1778 passing.
 
 ### H4. HYROX Activity Matching (Phase 4)
 
@@ -158,7 +160,9 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 **Key files**: `src/calculations/race-prediction.triathlon.ts`, `src/calculations/specific-endurance-penalty.ts`, `src/calculations/race-readiness.ts`, `src/constants/race-readiness-targets.ts`, `src/ui/triathlon/race-forecast-card.ts`, `src/ui/triathlon/race-readiness-card.ts`, `src/ui/triathlon/race-readiness-detail.ts`
 **Tests**: `src/calculations/race-readiness.test.ts` — ✅ Passing (20 tests: per-discipline scoring, penalty bands, geometric mean, PB recency, aggregator); core race-prediction logic ⚠️ not yet covered
 
-**Prediction calibration loop (added 2026-05-11)**: per-user systematic bias correction derived from `triConfig.raceLog`. Three-tier ladder: tier 0 (< 2 races) = no change; tier 1 (2+ races) = per-leg additive bias (median actual − predicted, ±8% cap); tier 2 (4+ races with `predictedRawPerLeg`) = Bayesian-shrunk readiness maxPenalty scale per leg; tier 3 (6+ races spanning 3+ distances) = dormant until sprint/olympic logging is added. Calibration updates after each logged race and backfills on first launch when raceLog exists without calibration. Forecast view shows a faint caption when tier ≥ 1. First tier-up surfaced once in the week-debrief plan-preview step. **Key file**: `src/calculations/tri-calibration.ts` ✅ 14 tests. **Known gap**: running mode calibration loop is deferred (no equivalent raceLog).
+**Prediction calibration loop (added 2026-05-11)**: per-user systematic bias correction derived from `triConfig.raceLog`. Three-tier ladder: tier 0 (< 2 races) = no change; tier 1 (2+ races) = per-leg additive bias (median actual − predicted, ±8% cap); tier 2 (4+ races with `predictedRawPerLeg`) = Bayesian-shrunk readiness maxPenalty scale per leg; tier 3 (6+ races spanning 3+ distances) = dormant until sprint/olympic logging is added. Calibration updates after each logged race and backfills on first launch when raceLog exists without calibration. Forecast view shows a faint caption when tier ≥ 1. First tier-up surfaced once in the week-debrief plan-preview step. **Key file**: `src/calculations/tri-calibration.ts` ✅ 14 tests.
+
+**Race-outcome logging across modes (added 2026-05-12)**: parity pass to mirror tri's race outcome logger into running and HYROX (CLAUDE.md mirror rule). Running stores entries on `state.runRaceLog[]` with predicted from `state.blendedRaceTimeSec`; HYROX stores on `hyroxConfig.raceLog[]` using `targetFinishTimeSec` as the "predicted" slot since HYROX has no continuously cached prediction. Both detectors run idempotently after Strava sync via a new `detectRaceOutcomeAfterSync()` dispatcher in `main.ts`. **Key files**: `src/calculations/run-race-outcome.ts`, `src/calculations/hyrox-race-outcome.ts`. **Retro UI surface for running/HYROX is deferred** — telemetry-first; v1 logs, doesn't display. Running calibration loop (analogue of `tri-calibration.ts`) also deferred.
 
 ### T7. Discipline-aware Activity Matcher + Brick Detection
 **What it does**: Matches synced swim / bike / run activities to planned `triWorkouts` — discipline first, then same-day, then nearest duration. Brick detector flags bike → run pairs where the run starts within 30 min of bike end (§18.1). After matching, each workout stores `matchedActivityId` so the effort multiplier can look up objective signals on the matched actual.
@@ -180,7 +184,7 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 **Tests**: `src/calculations/brick-detector.test.ts` — ✅ Passing (5 tests). Matcher ⚠️ not yet covered.
 
 ### T8. Triathlon UI (Plan / Home / Stats)
-**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage), and supports drag-and-drop reorder within the week — drop a card on another card to swap days, drop on the day-header strip to stack onto that day, or drop on an empty rest row to move there. Bricks are atomic single workouts so they always move as one. Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats mirrors the running stats summary → drill-down pattern: marquee race forecast card at the top (full per-leg breakdown + course factors + bike & aero entry), then a compact **Fitness summary card** (three rows showing Swim CSS · Bike FTP · Run LT pace with their tier label, tap → Fitness detail), then a **More stats →** link that opens the Progress detail page. Fitness detail (`src/ui/triathlon/fitness-detail-view.ts`) holds the "Your Numbers" zone-position bars for CSS / FTP / LT pace with per-discipline adaptation captions above each bar, three benchmark trend sparklines, and a Current Race Estimates card (Sprint / Olympic / target distance). Progress detail (`src/ui/triathlon/progress-detail-view.ts`) holds the per-discipline stat list (distance, sessions, longest, plan adherence, time, total TSS), Phase Timeline, per-discipline CTL chart, weekly volume charts, and weekly TSS chart.
+**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage), and supports drag-and-drop reorder within the week — drop a card on another card to swap days, drop on the day-header strip to stack onto that day, or drop on an empty rest row to move there. Bricks are atomic single workouts so they always move as one. The weekly summary strip at the top of the Plan view shows Weekly hours / Sessions / Week load with a small muted "X done" caption beneath each headline on the current and past weeks; the swim/bike/run pills underneath act as progress bars (fill = completed minutes ÷ planned minutes, right-side label `Xh / Yh`). Future weeks render planned-only. Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats mirrors the running stats summary → drill-down pattern: marquee race forecast card at the top (full per-leg breakdown + course factors + bike & aero entry), then a compact **Fitness summary card** (three rows showing Swim CSS · Bike FTP · Run LT pace with their tier label, tap → Fitness detail), then a **More stats →** link that opens the Progress detail page. Fitness detail (`src/ui/triathlon/fitness-detail-view.ts`) holds the "Your Numbers" zone-position bars for CSS / FTP / LT pace with per-discipline adaptation captions above each bar, three benchmark trend sparklines, and a Current Race Estimates card (Sprint / Olympic / target distance). Progress detail (`src/ui/triathlon/progress-detail-view.ts`) holds the per-discipline stat list (distance, sessions, longest, plan adherence, time, total TSS), Phase Timeline, per-discipline CTL chart, weekly volume charts, and weekly TSS chart.
 **Key files**: `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/home-view.ts`, `src/ui/triathlon/stats-view.ts`, `src/ui/triathlon/fitness-detail-view.ts`, `src/ui/triathlon/progress-detail-view.ts`, `src/ui/triathlon/benchmark-charts.ts`, `src/ui/triathlon/tab-bar.ts`, `src/ui/triathlon/workout-card.ts`, `src/ui/triathlon/race-forecast-card.ts`, `src/ui/triathlon/colours.ts`, `src/calculations/plan-adherence.triathlon.ts`
 **Tests**: — (UI) ⚠️ Manual test only
 
@@ -272,6 +276,15 @@ Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode
 
 **Key file**: `src/calculations/physiology-tracker.ts`
 **Tests**: `src/calculations/physiology-tracker.test.ts` — ✅ Passing
+
+---
+
+### 6a. Effort-Calibrated VDOT (per-segment HR regression)
+**What it does**: Estimates current running VDOT from recent training by fitting a weighted linear regression of pace on %HRR (Swain & Leutholtz 1997 %HRR ≈ %VO2R), then mapping the projected pace at vVO2max to VDOT via Daniels' tables. Per-segment input (per-km from Strava `splits_metric`) means within-run variation — e.g. a tempo finish on a long run — feeds the regression as separate (pace, HR) points spanning the run's HRR range, instead of being averaged into one diluted point per run.
+
+**Key files**: `src/calculations/effort-calibrated-vdot.ts`, `src/calculations/vo2-orchestrator.ts`, edge fn `supabase/functions/sync-strava-activities/index.ts` (per-km HR extraction)
+**Tests**: `src/calculations/effort-calibrated-vdot.test.ts` — ✅ Passing (22 tests; 17 run-level + 5 segment-level)
+**Science**: `docs/SCIENCE_LOG.md → Effort-Calibrated VDOT (2026-04-24)` + per-segment extension (2026-05-12)
 
 ---
 
@@ -410,18 +423,22 @@ Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTra
 ---
 
 ### 8.1 Plan Phasing
-**What it does**: Assigns Base / Build / Peak / Taper labels to every week of a plan with a single rule that scales coherently from 4-week sharpening blocks up to 50-week double-periodization arcs.
+**What it does**: Assigns Base / Build / Peak / Taper labels to every week of a plan with a single rule that scales coherently from 4-week sharpening blocks up to 50-week double-periodization arcs. Shared across running, triathlon, and HYROX via a `PhaseConfig`-driven engine; each format supplies its own caps and ratios.
 
-- **4–7 weeks**: sharpening block (no real base — fitness cannot be built in a month)
-- **8–32 weeks**: single coach-style arc with capped phases (taper ≤ 3w, peak ≤ 4w, build ≤ 8w; base absorbs the remainder)
-- **33–50 weeks**: double periodization — cycle 1 (~45%) ends in a **Checkpoint** time-trial week, 2-week transition, cycle 2 (~55%) carries the race
+- **Very short (4–7w)**: sharpening block (no real base — fitness cannot be built in a month)
+- **Single arc (8–32w running; 8–27w tri/hyrox)**: capped phases (running: taper ≤ 3w, peak ≤ 4w, build ≤ 8w; tri: taper ≤ 2w, peak ≤ 5w; hyrox: taper ≤ 2w, peak ≤ 3w). Base absorbs the remainder.
+- **Double periodization (≥33w running; ≥28w tri/hyrox)**: cycle 1 (~45%) ends in a **Checkpoint** time-trial week, 2-week inter-cycle taper, cycle 2 (~55%) full Base → Build → Peak → Taper arc into the race. Phase Timeline shows the honest two-arc story.
 
-Replaces the legacy `>16w racePhaseStart` block-cycle prefix that produced a confusing `Base → Build → Base → Build → Peak → Taper` pattern. The Phase Timeline now renders Checkpoint weeks as their own segment with a distinct teal colour.
+When the current week is the checkpoint, the Phase Timeline shows a teal caption telling the user to race a parkrun or 10K time trial that Saturday. The result feeds VDOT/CSS/FTP auto-refresh through the existing activity matcher.
 
-Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014 (single-arc caps); Issurin 2010, Tønnessen et al. 2014 (double periodization). Full derivation in `docs/SCIENCE_LOG.md §Z`.
+Format-specific configs preserve canonical splits at default plan lengths: running marathon 16w → 6/6/2/2; tri 70.3 / 20w → 8/6/4/2; tri Ironman / 24w → 10/7/5/2; HYROX / 18w → 7/6/3/2.
 
-**Key files**: `src/workouts/phases.ts` (`computePlanPhases`), `src/workouts/generator.ts` (`initializeWeeks`), `src/state/persistence.ts` (migration), `src/ui/stats-view.ts` (`buildPhaseTimeline`)
-**Tests**: `src/workouts/phases.test.ts` — ✅ Passing (10 tests)
+Replaces the legacy running-mode `>16w racePhaseStart` block-cycle prefix and extends double-periodization to tri/hyrox (neither had it before).
+
+Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014 (single-arc caps); Issurin 2010, Tønnessen et al. 2014 (double periodization); Mujika & Padilla 2003 (inter-cycle taper). Full derivation in `docs/SCIENCE_LOG.md §Z`.
+
+**Key files**: `src/workouts/phases.ts` (`computePlanPhases`, `PhaseConfig`), `src/constants/triathlon-constants.ts` (`computeTriPlanPhases`), `src/constants/hyrox-constants.ts` (`computeHyroxPlanPhases`), `src/workouts/generator.ts` (`initializeWeeks`), `src/workouts/plan_engine.triathlon.ts`, `src/workouts/plan_engine.hyrox.ts`, `src/state/persistence.ts` (migration), `src/ui/stats-view.ts` (`buildPhaseTimeline` + checkpoint caption)
+**Tests**: `src/workouts/phases.test.ts` (12) + `src/constants/tri-hyrox-phases.test.ts` (11) — ✅ Passing
 
 ---
 

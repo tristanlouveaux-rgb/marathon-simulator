@@ -10,6 +10,7 @@
  */
 
 import type { TriathlonDistance, TriVolumeSplit } from '../types/triathlon';
+import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/workouts/phases';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Load model
@@ -124,6 +125,11 @@ export const PHASE_WEEKS: Record<TriathlonDistance, { base: number; build: numbe
  *
  * Peak: floored at 1 whenever there's at least 1 non-taper week to spend —
  * the race-specific phase is the last to drop.
+ *
+ * @deprecated Use `computeTriPlanPhases(distance, totalWeeks)` instead — it
+ * returns per-week phases (including the checkpoint flag for double-periodization
+ * plans ≥28 weeks) and shares its strategy with running mode. Kept temporarily
+ * for the test suite. Will be removed once all callers migrate.
  */
 export function phasesForLen(
   distance: TriathlonDistance,
@@ -155,6 +161,71 @@ export function phasesForLen(
   }
 
   return { base, build, peak, taper };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Phase config + per-week phase computation (shared strategy with running)
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Per-distance phase configs feeding the shared `computePlanPhases` strategy.
+ *
+ * Ratios are tuned to reproduce the canonical PHASE_WEEKS split exactly at the
+ * default plan length (70.3 / 20 weeks → 8/6/4/2; ironman / 24 weeks → 10/7/5/2),
+ * so any user already running a default-length plan sees the same numbers.
+ *
+ * Taper capped at 2 (Mujika & Padilla 2003) — tri detraining bites sooner than
+ * running because of the cross-training fatigue load.
+ *
+ * Double-periodization threshold is **28 weeks** for tri — sooner than running's
+ * 33 — because tri's monotony pain shows earlier when training across three
+ * disciplines (multi-discipline volume + brick fatigue compresses the productive
+ * single-arc window).
+ */
+const TRI_PHASE_CONFIGS: Record<TriathlonDistance, PhaseConfig> = {
+  '70.3': {
+    taperCap: 2,
+    peakCap: 5,
+    buildCap: 8,
+    taperRatio: 0.10,
+    peakRatio: 0.20,           // 4 / 20 default
+    buildRatio: 0.30,          // 6 / 20 default
+    doublePeriodizationThreshold: 28,
+    cycle2Fraction: 0.55,
+    transitionWeeks: 2,
+    cycle1PeakCap: 3,
+    cycle1BuildCap: 6,
+    cycle1PeakRatio: 0.18,
+    cycle1BuildRatio: 0.35,
+    cycle1Min: 8,
+    cycle2Min: 12,
+  },
+  'ironman': {
+    taperCap: 2,
+    peakCap: 5,
+    buildCap: 8,
+    taperRatio: 0.10,
+    peakRatio: 0.208,          // 5 / 24 default
+    buildRatio: 0.292,         // 7 / 24 default
+    doublePeriodizationThreshold: 28,
+    cycle2Fraction: 0.55,
+    transitionWeeks: 2,
+    cycle1PeakCap: 3,
+    cycle1BuildCap: 6,
+    cycle1PeakRatio: 0.18,
+    cycle1BuildRatio: 0.35,
+    cycle1Min: 8,
+    cycle2Min: 12,
+  },
+};
+
+/**
+ * Compute per-week phases for a triathlon plan. Returned array length equals
+ * `totalWeeks`; index i corresponds to plan week i+1. Plans ≥28 weeks switch
+ * to double periodization with a Checkpoint (TT) week at the end of cycle 1.
+ */
+export function computeTriPlanPhases(distance: TriathlonDistance, totalWeeks: number): PlanPhaseWeek[] {
+  return computePlanPhases(totalWeeks, TRI_PHASE_CONFIGS[distance]);
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -208,6 +279,42 @@ export const BIKE_LTHR_OFFSET_VS_RUN = -7;  // Midpoint of −5 to −10
 
 /** Brick detection window in seconds. Two sequential activities within this gap are treated as a brick. */
 export const BRICK_DETECTION_WINDOW_SEC = 30 * 60;  // 30 min — §18.1
+
+/**
+ * Brick adaptation — how many (recency-weighted) brick sessions equal "fully adapted".
+ * Millet & Vleck 2000: 10–15 bricks saturate the running-economy adaptation.
+ * Using 12 as midpoint.
+ */
+export const BRICK_FULL_ADAPT_COUNT = 12;
+
+/**
+ * Maximum fraction by which brick history can reduce the run-leg fatigue discount.
+ * Capped at 40% — even a brick-veteran still fades on the IM run; the discount
+ * never reaches zero (Bentley 2007, Landers 2008 document residual fade even in
+ * elite triathletes with high brick volume).
+ */
+export const BRICK_MAX_DISCOUNT_REDUCTION = 0.40;
+
+/**
+ * Base open-water swim penalty for a novice OW swimmer racing non-wetsuit.
+ * Veiga et al. 2013: pool-trained athletes ~5% slower in open water due to
+ * sighting loss, no turn walls, contact, and lack of buoyancy.
+ */
+export const BASE_OW_PENALTY_NON_WETSUIT = 0.05;
+
+/**
+ * Base open-water swim penalty for a novice OW swimmer racing in a wetsuit.
+ * Wetsuit provides buoyancy that partially offsets OW inefficiencies — deficit
+ * narrows to ~2% (Veiga 2013; Toussaint et al. 2002 on wetsuit buoyancy benefit).
+ */
+export const BASE_OW_PENALTY_WETSUIT = 0.02;
+
+/**
+ * Number of OW swim sessions at which the athlete has recovered ~63% of their
+ * adaptation (1 − 1/e of the asymptote). Asymptotic curve: most gains come in
+ * the first 5–10 sessions as the athlete learns sighting and drafting.
+ */
+export const OW_ADAPT_HALF_SESSIONS = 5;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Adaptation engine — auto-progression

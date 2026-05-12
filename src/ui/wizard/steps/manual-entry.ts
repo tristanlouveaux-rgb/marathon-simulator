@@ -5,6 +5,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
+import { checkExperienceLevelVsPBs } from '@/calculations/experience-level-validation';
 
 /**
  * Page 3b — Manual fallback.
@@ -145,6 +146,7 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
               `;
             }).join('')}
           </div>
+          ${renderExperienceConsistencyNotice(state)}
         </div>
 
         <div class="m-rise" style="width:100%;max-width:480px;margin-top:22px;animation-delay:0.18s">
@@ -196,6 +198,44 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
   `;
 
   wireHandlers(state, unitPref);
+}
+
+/**
+ * Render an inline notice when the entered PBs are inconsistent with the
+ * selected experience level. Surface-only — the consistency check itself
+ * lives in `@/calculations/experience-level-validation`. Returns empty
+ * string when consistent (so the section collapses to nothing).
+ *
+ * The notice offers a one-tap apply for the suggested level. The user can
+ * also dismiss by re-selecting their original level or by entering different
+ * PBs. We deliberately do NOT block "next" — over-claiming experience is
+ * always allowed; we just flag under-claiming (which silently distorts the
+ * forecast). See SCIENCE_LOG audit #11 follow-up.
+ */
+function renderExperienceConsistencyNotice(state: OnboardingState): string {
+  const check = checkExperienceLevelVsPBs(state.experienceLevel, state.pbs ?? {});
+  if (check.isConsistent || !check.suggested) return '';
+
+  return `
+    <div id="exp-consistency-notice" style="margin-top:12px;padding:12px 14px;background:rgba(255,255,255,0.85);border:1px solid rgba(0,0,0,0.08);border-radius:12px;backdrop-filter:blur(16px)">
+      <p style="font-size:12px;color:var(--c-black);margin:0 0 6px;line-height:1.45">
+        ${escapeText(check.reason ?? '')}
+      </p>
+      <button id="exp-apply-suggested" type="button" class="d-pill shadow-ap"
+        style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;font-size:12px;font-weight:500;background:rgba(255,255,255,0.95);color:var(--c-black);border:1px solid rgba(0,0,0,0.1);border-radius:999px;cursor:pointer"
+        data-suggested="${check.suggested}">
+        Use "${check.suggested}"
+      </button>
+    </div>
+  `;
+}
+
+/** Minimal HTML escape — copy lives here so the wizard step has no
+ *  dependency on the broader app. Same shape as DOMPurify but trimmed. */
+function escapeText(s: string): string {
+  return s.replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c] ?? c));
 }
 
 function renderPBRow(label: string, id: string, value: number | undefined, placeholder: string, isLong: boolean): string {
@@ -272,10 +312,24 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
       if (err) err.style.display = ok ? 'none' : 'block';
       return ok;
     };
-    input.addEventListener('blur', () => { validate(); commitPbs(); });
+    // After PB blur, re-render so the experience-consistency notice can fire
+    // if the new PBs contradict the selected level. Re-render is the same
+    // mechanism the experience pills use (see `wireHandlers` top), so the
+    // notice surfaces immediately rather than waiting for the next step.
+    input.addEventListener('blur', () => { validate(); commitPbs(); rerender(); });
     input.addEventListener('input', () => {
       if (input.classList.contains('invalid')) validate();
     });
+  });
+
+  // Wire the "Use suggested level" CTA inside the consistency notice. The
+  // notice itself is conditionally rendered; this no-ops when absent.
+  document.getElementById('exp-apply-suggested')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const suggested = btn.getAttribute('data-suggested') as RunnerExperience | null;
+    if (!suggested) return;
+    updateOnboarding({ experienceLevel: suggested });
+    rerender();
   });
 
   // Weekly volume — write to global state.detectedWeeklyKm (always stored as km).

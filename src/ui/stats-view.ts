@@ -1214,6 +1214,14 @@ function buildPhaseTimeline(s: SimulatorState): string {
   const currSeg = segs.find(seg => s.w >= seg.start && s.w <= seg.end);
   const currPhaseLabel = currSeg ? (phaseText[currSeg.phase] ?? currSeg.phase) + ' phase' : '';
 
+  // Checkpoint caption: only when current week is the checkpoint TT week.
+  // The TT result feeds VDOT/CSS/FTP auto-refresh via the existing activity matcher.
+  const isCheckpointWeek = weeks[s.w - 1]?.checkpoint === true;
+  const checkpointCaption = isCheckpointWeek ? `
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(20,184,166,0.08);border-left:2px solid rgba(20,184,166,0.85);border-radius:4px;font-size:12px;line-height:1.4;color:var(--c-black)">
+        Race a parkrun on Saturday or do a 10K time trial. The result recalibrates VDOT before cycle 2 begins.
+      </div>` : '';
+
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:12px">Phase Timeline</div>
@@ -1222,7 +1230,7 @@ function buildPhaseTimeline(s: SimulatorState): string {
         <span>Start</span>
         <span style="color:var(--c-accent);font-weight:600">Week ${s.w} of ${s.tw ?? total} · ${currPhaseLabel}</span>
         <span>Race day</span>
-      </div>
+      </div>${checkpointCaption}
     </div>`;
 }
 

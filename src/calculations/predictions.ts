@@ -3,6 +3,7 @@ import type { OnboardingState } from '@/types/onboarding';
 import { rdKm, tv, cv } from './vdot';
 import { getAbilityBand } from './fatigue';
 import { applyTrainingHorizonAdjustment, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
+import { TAPER_NOMINAL } from '@/constants/training-params';
 import type { HRVdotResult } from './effort-calibrated-vdot';
 import { applyRunningCourseFactors } from './course-factors-running';
 
@@ -60,7 +61,19 @@ export function predictFromPB(targetDist: number, pbs: PBs, b: number): number |
   avail.sort((a, c) => Math.abs(a.d - targetDist) - Math.abs(c.d - targetDist));
   const anchor = avail[0];
 
-  const safeB = Math.min(b, 1.15); // Cap extreme fatigue exponents
+  // Cap extreme fatigue exponents at 1.15 (ceiling — prevents over-penalising
+  // extreme endurance profiles).
+  //
+  // 2026-05-12 audit: add a floor of 1.10 when extrapolating from a short
+  // anchor (≤10K) to half-marathon or longer. Speed-profile runners (b≈1.05-
+  // 1.08 derived from k5→k10) under-correct at marathon distance because the
+  // endurance drop-off past 21K is not captured by short-race ratios. Cameron
+  // (1997) and Riegel (1981) both note that extrapolations >4× the anchor
+  // distance require b≥1.10 for trained runners. SCIENCE_LOG.md audit #11.
+  let safeB = Math.min(b, 1.15);
+  if (targetDist >= 21097 && anchor.d <= 10000) {
+    safeB = Math.max(safeB, 1.10);
+  }
   return anchor.t * Math.pow(targetDist / anchor.d, safeB);
 }
 
@@ -146,13 +159,34 @@ export function predictFromLT(
   // Marathon: tier-aware. Research shows marathon pace = 104-114% of LT pace,
   // with fitter athletes closer to the low end (Daniels tables, critical speed
   // studies). Beginners lose more efficiency over 42K (fuelling, pacing, EIMD).
+  //
+  // 2026-05-12 audit: speed-column multipliers raised by 0.02 across performance
+  // and trained tiers. The original calibration was based on runners with
+  // demonstrated marathon fitness; for speed-profile runners with no marathon
+  // history the LT→marathon pace ratio is wider (Billat et al. 2003 — speed
+  // runners sustain 3-5% less of LT pace at marathon distance than endurance
+  // runners at equivalent aerobic capacity). See SCIENCE_LOG.md audit #11.
   const marathonMult: Record<string, Record<string, number>> = {
-    high_volume:  { speed: 1.08, balanced: 1.06, endurance: 1.04 },
-    performance:  { speed: 1.08, balanced: 1.06, endurance: 1.04 },
-    trained:      { speed: 1.10, balanced: 1.08, endurance: 1.06 },
+    high_volume:  { speed: 1.10, balanced: 1.06, endurance: 1.04 },
+    performance:  { speed: 1.10, balanced: 1.06, endurance: 1.04 },
+    trained:      { speed: 1.12, balanced: 1.08, endurance: 1.06 },
     recreational: { speed: 1.12, balanced: 1.10, endurance: 1.08 },
     beginner:     { speed: 1.14, balanced: 1.115, endurance: 1.09 },
   };
+
+  // Tier ordering and VDOT cut-points for linear interpolation between tiers.
+  // The previous step function flipped the multiplier by 0.02 at hard cut-points
+  // (VDOT 45 trained→performance, VDOT 52 performance→high_volume), producing
+  // up to a 2-min discontinuity in marathon prediction for athletes near a
+  // boundary. Linear interpolation between the two nearest tiers smooths this.
+  // 2026-05-12 audit: SCIENCE_LOG.md audit #11.
+  const tierAnchors: { name: string; vdot: number }[] = [
+    { name: 'beginner',     vdot: 30 },  // floor anchor
+    { name: 'recreational', vdot: 38 },
+    { name: 'trained',      vdot: 45 },
+    { name: 'performance',  vdot: 52 },
+    { name: 'high_volume',  vdot: 60 },  // ceiling anchor
+  ];
 
   const runnerTypeLower = runnerType ? runnerType.toLowerCase() : 'balanced';
 
@@ -170,13 +204,24 @@ export function predictFromLT(
     // marathon-specific endurance. LT pace at ~60min effort → approximate VDOT
     // via 10K equivalent, then map to tier.
     const ltVdot = cv(10000, ltPaceSecPerKm * 10);
-    const runTier = ltVdot >= 60 ? 'high_volume'
-      : ltVdot >= 52 ? 'performance'
-      : ltVdot >= 45 ? 'trained'
-      : ltVdot >= 38 ? 'recreational'
-      :                'beginner';
-    const tierMult = marathonMult[runTier] || marathonMult.recreational;
-    m = tierMult[runnerTypeLower] ?? 1.10;
+
+    // Linear interpolation between adjacent tier anchors. Clamps at the two
+    // endpoints (≤beginner anchor or ≥high_volume anchor) so extreme values
+    // stay at the boundary multiplier.
+    let lower = tierAnchors[0];
+    let upper = tierAnchors[tierAnchors.length - 1];
+    for (let i = 0; i < tierAnchors.length - 1; i++) {
+      if (ltVdot >= tierAnchors[i].vdot && ltVdot <= tierAnchors[i + 1].vdot) {
+        lower = tierAnchors[i];
+        upper = tierAnchors[i + 1];
+        break;
+      }
+    }
+    const lowerMult = marathonMult[lower.name]?.[runnerTypeLower] ?? marathonMult.recreational[runnerTypeLower] ?? 1.10;
+    const upperMult = marathonMult[upper.name]?.[runnerTypeLower] ?? marathonMult.recreational[runnerTypeLower] ?? 1.10;
+    const span = upper.vdot - lower.vdot;
+    const t = span > 0 ? Math.max(0, Math.min(1, (ltVdot - lower.vdot) / span)) : 0;
+    m = lowerMult + t * (upperMult - lowerMult);
   } else {
     m = mult[distKey]?.[runnerTypeLower] ?? 1.0;
   }
@@ -377,7 +422,7 @@ export function calculateLiveForecast(p: LiveForecastParams): ForecastResult {
     sessions_per_week: p.sessionsPerWeek,
     runner_type: p.runnerType,
     ability_band: abilityBand,
-    taper_weeks: Math.max(1, Math.ceil(wr * 0.15)),
+    taper_weeks: TAPER_NOMINAL[p.targetDistance] ?? Math.max(1, Math.ceil(wr * 0.15)),
     experience_level: p.experienceLevel || 'intermediate',
     weekly_volume_km: p.weeklyVolumeKm,
     weekly_volume_hours: p.weeklyVolumeHours,
@@ -683,5 +728,42 @@ export function blendPredictions(
     }
   }
 
-  return (sum / totW) * marathonSpecificityPenalty;
+  // ── No-long-race-PB uncertainty penalty (2026-05-12 audit, ISSUE-145) ──
+  //
+  // Cold-start onboarding case: a runner with 5K/10K PBs but no half-marathon
+  // or marathon time has demonstrated VO2max/LT capacity but NOT fractional
+  // utilization at marathon distance. Florence & Weir (1997) showed critical
+  // velocity over-predicts first-marathon by 8-12%; Vickers & Vertosick (2016)
+  // showed Riegel under-predicts marathon by 3-7% when the anchor is ≤10K and
+  // recent long-run mileage is low; Foster et al. (1994) and Siler & Martin
+  // (1991) document the same pattern for speed-dominant athletes specifically.
+  //
+  // This penalty is multiplicative on the final blended prediction. It is
+  // INDEPENDENT of `marathonSpecificityPenalty` above — the two penalties fire
+  // on disjoint conditions:
+  //   - marathonSpecificityPenalty: weeklyRunKm signal exists AND volume is low
+  //   - this penalty: no long-race PB exists (cold-start / first marathoner)
+  // Both can fire simultaneously (worst case: stack multiplicatively). Tanda
+  // gating: if Tanda is producing a prediction, it already captures marathon-
+  // specific endurance from training data, so skip this penalty.
+  //
+  // Magnitude calibrated to land speed-profile first-marathoners in the
+  // empirically-observed 2:55-3:10 range for a sub-18 5K runner (rather than
+  // the 2:48-2:51 the bare LT/PB blend produces). SCIENCE_LOG.md audit #11.
+  let noLongRacePenalty = 1.0;
+  if (targetDist === 42195
+      && tTanda == null
+      && pbs.h == null
+      && pbs.m == null) {
+    const rt = (runnerType || '').toLowerCase();
+    if (rt === 'speed')           noLongRacePenalty = 1.02; // +2%
+    else if (rt === 'endurance')  noLongRacePenalty = 1.00; // endurance profile already favours marathon
+    else                          noLongRacePenalty = 1.01; // balanced / unknown: +1%
+  }
+
+  if (noLongRacePenalty > 1.0) {
+    console.log(`[blendPredictions] no-long-race-PB penalty fired: runnerType=${runnerType}, hasHmPb=${pbs.h != null}, hasMPb=${pbs.m != null}, tTanda=${tTanda != null} → penalty ${noLongRacePenalty.toFixed(3)}× (no demonstrated marathon endurance)`);
+  }
+
+  return (sum / totW) * marathonSpecificityPenalty * noLongRacePenalty;
 }

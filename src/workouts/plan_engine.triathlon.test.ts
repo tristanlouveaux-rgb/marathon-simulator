@@ -111,6 +111,46 @@ describe('Triathlon plan engine — generation shape', () => {
     }
   });
 
+  it('30-week Ironman plan engages double periodization with a checkpoint week', () => {
+    const weeks = generateTriathlonPlan(makeTriState({
+      tw: 30,
+      triConfig: {
+        distance: 'ironman',
+        timeAvailableHoursPerWeek: 14,
+        volumeSplit: { swim: 0.175, bike: 0.475, run: 0.35 },
+        skillRating: { swim: 3, bike: 3, run: 3 },
+      },
+    }));
+    expect(weeks).toHaveLength(30);
+
+    // Exactly one checkpoint week, sitting on a peak phase, in the first half
+    const checkpointWeeks = weeks.filter((w) => (w as any).checkpoint);
+    expect(checkpointWeeks).toHaveLength(1);
+    expect(checkpointWeeks[0].ph).toBe('peak');
+    const checkpointIdx = weeks.findIndex((w) => (w as any).checkpoint);
+    expect(checkpointIdx).toBeLessThan(weeks.length / 2);
+
+    // Two taper segments — inter-cycle (after checkpoint) and race taper (end)
+    const seq: string[] = [];
+    for (const w of weeks) {
+      if (seq[seq.length - 1] !== w.ph) seq.push(w.ph);
+    }
+    expect(seq).toEqual(['base', 'build', 'peak', 'taper', 'base', 'build', 'peak', 'taper']);
+
+    // Race-end taper still ends the plan
+    expect(weeks[weeks.length - 1].ph).toBe('taper');
+
+    // Every week still has workouts (the inter-cycle taper doesn't go empty)
+    for (const wk of weeks) {
+      expect((wk.triWorkouts ?? []).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('20-week 70.3 plan stays single arc — no checkpoint flag', () => {
+    const weeks = generateTriathlonPlan(makeTriState({ tw: 20 }));
+    expect(weeks.some((w) => (w as any).checkpoint)).toBe(false);
+  });
+
   it('disciplines span swim, bike, and run when weekly hours are sufficient', () => {
     const weeks = generateTriathlonPlan(makeTriState({
       tw: 20,

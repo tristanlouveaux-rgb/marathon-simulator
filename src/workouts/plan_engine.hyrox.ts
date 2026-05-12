@@ -25,7 +25,7 @@ import {
   HYROX_PEAK_MULT,
   HYROX_DELOAD_FACTOR,
   hyroxBaseMultiplier,
-  hyroxPhasesForLen,
+  computeHyroxPlanPhases,
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment } from './hyrox-generators';
 import { scheduleHyroxWeek } from './scheduler.hyrox';
@@ -37,21 +37,9 @@ import { scheduleHyroxWeek } from './scheduler.hyrox';
 export const HYROX_GENERATOR_VERSION = 9;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
-
-/**
- * Resolve the phase for a given week using length-aware compression. Short
- * plans (e.g. a 7-week race window) used to slip a fraction-based bucketing
- * that left the final week in `peak` with no taper. `hyroxPhasesForLen`
- * compresses base→build→peak→taper proportionally and floors the taper at 1
- * week so race week is always tapered.
- */
-function phaseForWeek(weekIndex: number, totalWeeks: number): 'base' | 'build' | 'peak' | 'taper' {
-  const { base, build, peak } = hyroxPhasesForLen(totalWeeks);
-  if (weekIndex <= base) return 'base';
-  if (weekIndex <= base + build) return 'build';
-  if (weekIndex <= base + build + peak) return 'peak';
-  return 'taper';
-}
+// Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
+// hyrox-constants.ts, which shares the strategy with running and triathlon and
+// adds the double-periodization arc for plans ≥28 weeks.
 
 function phaseMultiplier(
   phase: 'base' | 'build' | 'peak' | 'taper',
@@ -307,15 +295,18 @@ export function generateHyroxPlan(state: SimulatorState): Week[] {
   if (!state.hyroxConfig) return [];
 
   const totalWeeks = state.tw || 16;
+  const planPhases = computeHyroxPlanPhases(totalWeeks);
   const weeks: Week[] = [];
 
   for (let w = 1; w <= totalWeeks; w++) {
-    const phase = phaseForWeek(w, totalWeeks);
+    const p = planPhases[w - 1];
+    const phase = p.ph;
     const workouts = generateWeekSessions(state, w, totalWeeks, phase);
 
     weeks.push({
       w,
       ph: phase as any,
+      ...(p.checkpoint ? { checkpoint: true } : {}),
       triWorkouts: workouts,
       rated: {},
       skip: [],

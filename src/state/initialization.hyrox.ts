@@ -28,6 +28,15 @@ import {
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
+import { HYROX_STATION_ORDER, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
+import { derivePopulationRunPace } from '@/calculations/hyrox-run-pace';
+import {
+  backComputeRunPaceFromRace,
+  blendPersonalRunPaceOffset,
+  estimateStationsAndRoxzoneFromBand,
+  type HyroxRaceObservation,
+} from '@/calculations/hyrox-personal-pace';
+import type { SimulatorState } from '@/types/state';
 
 // ─── Band derivation ─────────────────────────────────────────────────────────
 
@@ -187,6 +196,78 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     // will detect missing-but-time-set state and ask the user to confirm.
     const prevTimeFormat = prevFormatKnown ? prevFmt : undefined;
 
+    const prevRaceDateISO =
+      (state.hyroxPreviousTimeRaceId && getHyroxEventById(state.hyroxPreviousTimeRaceId)?.date)
+      || state.hyroxPreviousRaceDate;
+
+    // ── Personal run-pace offset from historic race ──────────────────────
+    // Compute an initial Bayesian residual: observed run pace from the
+    // pasted/derived historic race vs the population model's prediction at
+    // that race's format. Stored in sec/km of pace, decays linearly to 0
+    // over 12 months without fresh evidence. See SCIENCE_LOG §X.
+    let personalRunPaceOffsetSec: number | undefined;
+    let personalRunPaceOffsetUpdatedAtISO: string | undefined;
+    let personalRunPaceOffsetConfidence: number | undefined;
+    if (prevTimeSec != null && prevFormatKnown && typeof s.v === 'number' && s.v >= 25 && s.v <= 85) {
+      const prevFormat = prevFmt as 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles';
+      const splits = state.hyroxPreviousStationSplits;
+      const splitCount = splits ? Object.keys(splits).length : 0;
+      const hasSplits = splitCount >= 6;  // need most stations for honest reconstruction
+      let stationsTotalSec: number;
+      let roxzoneSec: number;
+      let stationsFromSplits = false;
+      if (hasSplits) {
+        stationsTotalSec = HYROX_STATION_ORDER.reduce(
+          (sum, st) => sum + ((splits as Record<string, number>)[st] ?? 0),
+          0,
+        );
+        roxzoneSec = SEED_ROXZONE_SEC[band] ?? 0;
+        stationsFromSplits = true;
+      } else {
+        const est = estimateStationsAndRoxzoneFromBand(band, prevFormat);
+        stationsTotalSec = est.stationsTotalSec;
+        roxzoneSec = est.roxzoneSec;
+      }
+      const observation: HyroxRaceObservation = {
+        finishSec: prevTimeSec,
+        stationsTotalSec,
+        roxzoneSec,
+        format: prevFormat,
+        dateISO: prevRaceDateISO ?? new Date().toISOString().slice(0, 10),
+        stationsFromSplits,
+      };
+      const observedPaceSecKm = backComputeRunPaceFromRace(observation);
+      if (observedPaceSecKm != null) {
+        const prevTargetFormat: 'singles' | 'doubles' =
+          (prevFormat === 'open_doubles' || prevFormat === 'pro_doubles') ? 'doubles' : 'singles';
+        const fakeState: SimulatorState = {
+          ...s,
+          hyroxConfig: {
+            ...(s.hyroxConfig ?? ({} as HyroxConfig)),
+            format: prevFormat,
+            athleteBand: band,
+          },
+        };
+        const modelAtPrev = derivePopulationRunPace(fakeState, prevTargetFormat);
+        if (modelAtPrev) {
+          const blended = blendPersonalRunPaceOffset({
+            observedPaceSecKm,
+            modelPaceSecKm: modelAtPrev.paceSecKm,
+            stationsFromSplits,
+          });
+          if (blended.offsetSec !== 0) {
+            personalRunPaceOffsetSec = blended.offsetSec;
+            personalRunPaceOffsetUpdatedAtISO = observation.dateISO;
+            personalRunPaceOffsetConfidence = blended.confidence;
+            console.log(
+              `[hyrox init] personalised run-pace offset = ${blended.offsetSec >= 0 ? '+' : ''}${blended.offsetSec} s/km` +
+              ` (observed ${observedPaceSecKm}, model ${modelAtPrev.paceSecKm}, splits=${stationsFromSplits}, conf=${blended.confidence.toFixed(2)})`,
+            );
+          }
+        }
+      }
+    }
+
     const hyroxConfig: HyroxConfig = {
       format,
       athleteBand: band,
@@ -213,6 +294,9 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       bricksPerWeek: sessions.bricks,
       raceDate: state.customRaceDate ?? undefined,
       hyroxRunPaceSecKm: state.hyroxRunPaceSecKm,
+      personalRunPaceOffsetSec,
+      personalRunPaceOffsetUpdatedAtISO,
+      personalRunPaceOffsetConfidence,
       weeklyHoursAvailable: state.triTimeAvailableHoursPerWeek ?? HYROX_HOURS_RANGE[band].default,
       stationBenchmarksSingles: benchmarkSingles,
       stationBenchmarksDoubles: benchmarkDoubles,

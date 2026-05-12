@@ -148,24 +148,23 @@ When the system makes a non-trivial change to the plan or the prediction, **the 
 
 **Notify-once architecture**: store last-notified marker values on state (`triConfig.notifiedMarkers`); compare current vs last-notified at every trigger; surface only if delta crosses threshold; update the last-notified field after surfacing so we don't spam every launch.
 
-## Feature reveal pop-ups — show users the cool things we built
+## Feature reveals — show users the cool things we built
 
-Mosaic does a lot of work users would never know about — environment normalisation, course factors, durability caps, sleep-debt models, etc. **Whenever we ship a non-trivial piece of work that materially changes a number the user sees, surface a small one-time educational pop-up explaining what it does.** If we don't tell them, they assume it's just another fitness app.
+Mosaic does a lot of work users would never know about — environment normalisation, course factors, durability caps, sleep-debt models, etc. When we ship a non-trivial piece of work that materially changes a number the user sees, **make it discoverable** — but not via a popup unless the popup carries real visual depth.
 
-**Trigger criteria** (must satisfy all):
-1. The work is *non-obvious* — the user can't infer it from a label or caption.
-2. The work affects a *user-facing number* (race time, CSS, FTP, readiness, etc.).
-3. The user *would not passively discover* it on their next visit.
+**Order of preference for surfacing a reveal:**
+1. **Capture at onboarding.** If the work introduces a user-facing setting (an environment tag, a default, a toggle), add a row to the relevant wizard step so the user configures it once during setup. New users naturally encounter it; existing users edit from settings. This is the default — most reveals belong here.
+2. **Settings entry-point.** Pair the onboarding step with a row on the account/profile page so the user can change the setting later. Use the same chip selector / modal so behaviour is identical in both places.
+3. **Inline caption next to the number.** For changes the user can passively read (e.g. "Updated from your rides — beat your last test."), a one-line caption on the existing surface is sufficient. No popup needed.
+4. **Reveal popup.** Last resort. Only when the work changes a user-facing number AND has no natural setting AND can't be conveyed via inline caption. If you take this route, the popup must pass the bar below.
 
-**Rules of thumb**:
-- **Once-per-feature, once-per-user.** Gate on a boolean in `triConfig.notifiedMarkers` (or the running-mode equivalent). Never re-pop unless we've materially changed the model again.
-- **Trigger on the surface where the work matters.** A swim-prediction reveal pops when the user opens the race-prediction surface, not on app launch. The user has to be in the relevant context.
-- **Educational, not promotional.** Plain-English summary of what the model does and why it makes the number more honest. No emoji, no "Did you know?", no exclamation marks — consultant tone (see "UI Copy" sections).
-- **One CTA: "Got it."** No "Tell me more" or external links. The pop-up is the explanation.
-- **UX-compliant**: vertically centred overlay, glassy card, ≤2 non-neutral colours. Mirror the canonical pattern in `docs/UX_PATTERNS.md → Overlays and Modals`. Reuse an existing modal builder (`buildSimpleModal` / `openCheckinOverlay` / equivalent) — don't roll new modal scaffolding for this.
-- **Respect "don't pop"**: bundle multiple small reveals if shipped together (one modal with 2-3 bullets beats three sequential pops). Skip the pop entirely for changes that are *literally just labels or copy*.
+**Reveal popup bar** (hard requirements — if you can't meet all four, use one of the options above):
+- **Visual depth**: close X in top-right, primary CTA as a filled-black pill ("Save" / "Done" / "Got it"), optional secondary as a transparent "Cancel" link. Single-column content layout (no 2-column orphan grids). 14–16 px border-radius. Glass spec from `docs/UX_PATTERNS.md → Overlays and Modals`. Mirror `transitions-overlay.ts`.
+- **Hard once-only guard**: gate on BOTH a persisted boolean (`triConfig.notifiedMarkers.<feature>Seen` or equivalent) AND a module-level `shownThisSession` boolean. Set both as soon as the modal is created (not on dismiss) so navigating away can't cause a re-pop. Real incident, 2026-05-11: a popup that only set the flag on dismiss kept reappearing because the overlay attached to `document.body` survived navigation, and saveState races caused multiple triggers.
+- **Educational, not promotional**: plain-English summary of what the model does and why it makes the number more honest. No emoji, no "Did you know?", no exclamation marks — consultant tone (see "UI Copy" sections).
+- **Trigger on the surface where the work matters**: not on app launch. The user must be in the relevant context to find it useful.
 
-**State flag pattern**: add a boolean to `triConfig.notifiedMarkers` (e.g. `swimNormalisationSeen`, `durabilityCapSeen`). Check at render-time on the relevant surface; show the modal if false; set true when the user dismisses. New flags are optional (`?:`) per the build-target rule — fresh installs default to "not seen" which means new users see the pop too, which is the desired behaviour.
+**State flag pattern** (when you do build a popup): add a boolean to `triConfig.notifiedMarkers` (e.g. `swimNormalisationSeen`, `durabilityCapSeen`). Optional field (`?:`) per the build-target rule.
 
 ## No Made-Up Numbers or Logic
 

@@ -455,6 +455,10 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // even though the wizard just generated a running plan.
     s.eventType = 'running';
     s.triConfig = undefined;
+    // Mirror: also clear stale hyroxConfig so post-race mode switches from
+    // hyrox → running don't leave hyroxConfig.raceDate driving home banners
+    // and plan previews. Same incident class as the triConfig clear above.
+    s.hyroxConfig = undefined;
     s.w = 1;
     s.tw = state.planDurationWeeks;
     s.v = curr;

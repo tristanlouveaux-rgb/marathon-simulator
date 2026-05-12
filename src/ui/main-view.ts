@@ -193,6 +193,7 @@ function getHeaderSubtitle(s: any, blockNum: number): string {
   if (s.continuousMode) {
     return `Week ${s.w}, Block ${blockNum} · ${getCurrentPhaseLabel(s, true)}${dateSuffix}`;
   }
+  if (s.w > s.tw) return `Plan complete${dateSuffix}`;
   return `Week ${s.w} of ${s.tw} · ${getCurrentPhaseLabel(s, false)}${dateSuffix}`;
 }
 
@@ -203,6 +204,7 @@ function getWeekNavigatorLabel(s: any, blockNum: number): string {
   if (s.continuousMode) {
     return `Week ${s.w} · Block ${blockNum}`;
   }
+  if (s.w > s.tw) return 'Plan complete';
   return `Week ${s.w} of ${s.tw}`;
 }
 
@@ -210,6 +212,7 @@ function getWeekNavigatorLabel(s: any, blockNum: number): string {
  * Week counter label inside the prediction/phase panel
  */
 function getWeekCounterLabel(s: any): string {
+  if (s.w > s.tw) return 'Plan complete';
   return `Week ${s.w} of ${s.tw}`;
 }
 

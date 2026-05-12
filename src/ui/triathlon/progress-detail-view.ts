@@ -613,12 +613,17 @@ function buildPhaseTimeline(s: SimulatorState): string {
   const weeks = s.wks ?? [];
   if (weeks.length === 0) return '';
 
-  const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper' };
+  const phaseText: Record<string, string> = { base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper', checkpoint: 'Checkpoint' };
+
+  // Checkpoint weeks (double-periodization TT week) are visualised as their
+  // own segment so the cycle-1 → cycle-2 boundary reads clearly. Underlying ph
+  // stays 'peak' for engine purposes; only the grouping key changes here.
+  const segKey = (i: number): string => (weeks[i].checkpoint ? 'checkpoint' : (weeks[i].ph || 'base'));
 
   type Seg = { phase: string; start: number; end: number };
   const segs: Seg[] = [];
   for (let i = 0; i < weeks.length; i++) {
-    const ph = weeks[i].ph || 'base';
+    const ph = segKey(i);
     if (!segs.length || segs[segs.length - 1].phase !== ph) segs.push({ phase: ph, start: i + 1, end: i + 1 });
     else segs[segs.length - 1].end = i + 1;
   }
@@ -631,21 +636,32 @@ function buildPhaseTimeline(s: SimulatorState): string {
     const isPast = seg.end < s.w;
     const isFirst = si === 0;
     const isLast = si === segs.length - 1;
-    // Active phase: accent blue. Past: faint slate. Future: light slate.
-    const color = isCurr ? 'var(--c-accent)' : '#94A3B8';
+    // Active phase: accent blue (or teal for checkpoint). Past: faint slate. Future: light slate.
+    const isCheckpointSeg = seg.phase === 'checkpoint';
+    const activeColor = isCheckpointSeg ? 'rgba(20,184,166,0.85)' : 'var(--c-accent)';
+    const color = isCurr ? activeColor : (isCheckpointSeg ? 'rgba(20,184,166,0.55)' : '#94A3B8');
     const opacity = isCurr ? 1 : isPast ? 0.3 : 0.5;
     const dotPct = seg.end > seg.start ? ((s.w - seg.start) / (seg.end - seg.start) * 100) : 50;
     return `
       <div style="display:flex;flex-direction:column;width:${w}%">
         <div style="height:8px;border-radius:${isFirst ? '4px 0 0 4px' : ''}${isLast ? '0 4px 4px 0' : ''};background:${color};opacity:${opacity};position:relative">
-          ${isCurr ? `<div style="position:absolute;top:50%;left:${Math.max(8, Math.min(92, dotPct))}%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:white;border:2px solid var(--c-accent);box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>` : ''}
+          ${isCurr ? `<div style="position:absolute;top:50%;left:${Math.max(8, Math.min(92, dotPct))}%;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:white;border:2px solid ${activeColor};box-shadow:0 1px 3px rgba(0,0,0,0.2)"></div>` : ''}
         </div>
         <span style="font-size:9px;color:${isCurr ? 'var(--c-black)' : 'var(--c-faint)'};margin-top:5px;font-weight:${isCurr ? '600' : '400'}">${label}</span>
       </div>`;
   }).join('');
 
   const currSeg = segs.find(seg => s.w >= seg.start && s.w <= seg.end);
-  const currPhaseLabel = currSeg ? (phaseText[currSeg.phase] ?? currSeg.phase) + ' phase' : '';
+  const currPhaseLabel = currSeg ? (phaseText[currSeg.phase] ?? currSeg.phase) + (currSeg.phase === 'checkpoint' ? ' week' : ' phase') : '';
+
+  // Checkpoint caption: shown only when the current week is the cycle-1 TT week.
+  // The TT result (a parkrun or solo 10K) flows through the standard activity
+  // matcher → VDOT/CSS/FTP auto-refresh path.
+  const isCheckpointWeek = weeks[s.w - 1]?.checkpoint === true;
+  const checkpointCaption = isCheckpointWeek ? `
+      <div style="margin-top:12px;padding:10px 12px;background:rgba(20,184,166,0.08);border-left:2px solid rgba(20,184,166,0.85);border-radius:4px;font-size:12px;line-height:1.4;color:var(--c-black)">
+        Race a parkrun on Saturday or do a 10K time trial. The result recalibrates your run benchmark before cycle 2 begins.
+      </div>` : '';
 
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
@@ -655,7 +671,7 @@ function buildPhaseTimeline(s: SimulatorState): string {
         <span>Start</span>
         <span style="color:var(--c-black);font-weight:600">Week ${s.w} of ${s.tw ?? total} · ${currPhaseLabel}</span>
         <span>Race day</span>
-      </div>
+      </div>${checkpointCaption}
     </div>`;
 }
 

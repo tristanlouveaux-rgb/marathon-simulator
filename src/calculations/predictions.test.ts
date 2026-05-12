@@ -41,12 +41,48 @@ describe('Predictions', () => {
       expect(predicted).toBeNull();
     });
 
-    it('should scale times with fatigue exponent', () => {
+    it('should scale times with fatigue exponent (above floor)', () => {
       const pbsK5: PBs = { k5: 20 * 60 };
-      // Higher fatigue exponent = slower at longer distances
-      const predictedHighB = predictFromPB(42195, pbsK5, 1.10);
-      const predictedLowB = predictFromPB(42195, pbsK5, 1.04);
+      // Higher fatigue exponent = slower at longer distances. Both values
+      // chosen above the 1.10 Riegel floor (audit #11) so they actually
+      // produce distinct extrapolations rather than both clamping to the floor.
+      const predictedHighB = predictFromPB(42195, pbsK5, 1.14);
+      const predictedLowB = predictFromPB(42195, pbsK5, 1.11);
       expect(predictedHighB).toBeGreaterThan(predictedLowB!);
+    });
+
+    it('should apply Riegel floor of 1.10 when extrapolating short anchor (≤10K) to marathon', () => {
+      // 2026-05-12 audit #11: speed-profile runners with b<1.10 derived from
+      // k5→k10 alone under-correct the endurance drop-off past 21K. Floor at
+      // 1.10 prevents marathon-from-5K extrapolations from being optimistic.
+      const pbsK5: PBs = { k5: 20 * 60 };
+      const predictedAtFloor = predictFromPB(42195, pbsK5, 1.10);
+      const predictedBelowFloor = predictFromPB(42195, pbsK5, 1.04);
+      // b=1.04 should be clamped up to 1.10 for marathon-from-5K, producing
+      // the same time as b=1.10.
+      expect(predictedBelowFloor).toBeCloseTo(predictedAtFloor!, 5);
+    });
+
+    it('should NOT apply Riegel floor when extrapolating from HM anchor', () => {
+      // Floor only fires for short anchors (≤10K). A half-marathon anchor
+      // has demonstrated some long-distance endurance, so the derived b is
+      // trusted.
+      const pbsHM: PBs = { h: 90 * 60 };
+      const predictedLowB = predictFromPB(42195, pbsHM, 1.04);
+      const predictedHighB = predictFromPB(42195, pbsHM, 1.10);
+      expect(predictedHighB).toBeGreaterThan(predictedLowB!);
+    });
+
+    it('should NOT apply Riegel floor for 5K target', () => {
+      // Floor only fires for targetDist >= 21097. 5K predictions from a
+      // 10K anchor should still respect low b values.
+      const pbsK10: PBs = { k10: 42 * 60 };
+      const predictedLowB = predictFromPB(5000, pbsK10, 1.04);
+      const predictedHighB = predictFromPB(5000, pbsK10, 1.10);
+      // For shorter target than anchor, higher b means more aggressive
+      // speed-up — but the floor doesn't activate either way. Just verify
+      // they're not equal (i.e. floor isn't masking the b parameter).
+      expect(predictedHighB).not.toBe(predictedLowB);
     });
   });
 
