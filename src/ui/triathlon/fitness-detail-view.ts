@@ -16,6 +16,7 @@
  */
 
 import { getState } from '@/state/store';
+import { getMutableState, saveState } from '@/state';
 import type { SimulatorState, VO2Estimate, VO2Confidence } from '@/types';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
@@ -540,5 +541,47 @@ export function renderTriFitnessDetailView(): void {
 
   document.getElementById('tri-fitness-back')?.addEventListener('click', () => {
     import('./stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
+  });
+
+  document.getElementById('vo2-src-mosaic')?.addEventListener('click', () => {
+    getMutableState().vo2Source = 'mosaic';
+    saveState();
+    renderTriFitnessDetailView();
+  });
+  document.getElementById('vo2-src-device')?.addEventListener('click', () => {
+    const sv = getState();
+    if (!(sv.vo2 != null && sv.vo2 > 0)) return;
+    getMutableState().vo2Source = 'device';
+    saveState();
+    renderTriFitnessDetailView();
+  });
+
+  document.getElementById('vo2-info-btn')?.addEventListener('click', () => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:18px;padding:24px;max-width:340px;width:100%;box-shadow:0 24px 48px rgba(0,0,0,0.18)">
+        <div style="font-size:16px;font-weight:600;color:var(--c-black);margin-bottom:14px">VO2max sources</div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Mosaic</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Computed from your training data. Running uses pace-vs-HR regression (Daniels VDOT). Cycling uses the ACSM power formula: <span style="font-variant-numeric:tabular-nums">10.8 × W/kg + 7</span>, derived from your FTP. Cardiac ceiling is your aerobic upper bound (peak HR ÷ resting HR, Uth-Sørensen) — a theoretical ceiling, not current fitness. Cross-training, when shown, is sustained-HR aerobic capacity from non-run, non-bike sport. The headline shows your highest measured value, falling back to cardiac ceiling only when no measured signal exists.
+        </div>
+
+        <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch</div>
+        <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+          Read directly from your device. Garmin and Apple Watch use their own proprietary algorithms — typically HR variability during GPS activities. Updates automatically when your device syncs. May differ from Mosaic; neither is ground truth.
+        </div>
+
+        <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding-top:12px;border-top:1px solid var(--c-border)">
+          Running, cycling, and cardiac are shown separately because each measures a different aspect of aerobic fitness. A strong cyclist may score higher in cycling than running — both are real.
+        </div>
+
+        <button id="vo2-info-close" style="margin-top:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Close</button>
+      </div>`;
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    document.getElementById('vo2-info-close')?.addEventListener('click', close);
   });
 }
