@@ -264,14 +264,53 @@ export function runVO2Diagnostic(s: SimulatorState = getState(), now: Date = new
   // ─── Signal 3: Watch reading ────────────────────────────────────────────
   const vdotWatch = s.vo2 ?? null;
 
-  // ─── Signal 4: HR regression (current method) ───────────────────────────
-  const hrRunInputs = runs.map(r => ({
-    startTime: r.startTime,
-    distKm: r.distKm,
-    durSec: r.durSec,
-    avgHR: r.avgHR,
-    hrDrift: r.hrDrift,
-  }));
+  // ─── Signal 4: HR regression (current orchestrator path) ────────────────
+  // Mirrors vo2-orchestrator.ts: prefer per-km segments when both kmSplits
+  // and kmHRSplits are populated on the activity; fall back to one run-level
+  // (avgPace, avgHR) point per run otherwise.
+  type RunInputArr = Parameters<typeof computeHRCalibratedVdot>[0];
+  const hrRunInputs: RunInputArr = [];
+  for (const wk of s.wks ?? []) {
+    if (!wk.garminActuals) continue;
+    for (const id in wk.garminActuals) {
+      const a = wk.garminActuals[id];
+      if (!a.startTime || !a.durationSec) continue;
+      const isRun = (a.activityType ?? '').toUpperCase().includes('RUNNING')
+        || a.manualSport === 'running';
+      if (!isRun) continue;
+      const startMs = new Date(a.startTime).getTime();
+      if (!isFinite(startMs) || startMs < now.getTime() - WINDOW_WEEKS * 7 * DAY_MS) continue;
+      if (!a.distanceKm || !a.avgHR || a.avgHR <= 0) continue;
+      const splits = a.kmSplits ?? null;
+      const hrSplits = a.kmHRSplits ?? null;
+      let emitted = 0;
+      if (splits && splits.length > 0 && hrSplits && hrSplits.length > 0) {
+        const pairedLen = Math.min(splits.length, hrSplits.length);
+        for (let i = 0; i < pairedLen; i++) {
+          const paceSecKm = splits[i];
+          const hr = hrSplits[i];
+          if (!paceSecKm || paceSecKm <= 0 || !hr || hr <= 0) continue;
+          hrRunInputs.push({
+            startTime: a.startTime,
+            distKm: 1.0,
+            durSec: paceSecKm,
+            avgHR: hr,
+            isSegment: true,
+          });
+          emitted += 1;
+        }
+      }
+      if (emitted === 0) {
+        hrRunInputs.push({
+          startTime: a.startTime,
+          distKm: a.distanceKm,
+          durSec: a.durationSec,
+          avgHR: a.avgHR,
+          hrDrift: a.hrDrift ?? null,
+        });
+      }
+    }
+  }
   const hrFit = computeHRCalibratedVdot(hrRunInputs, s.restingHR, s.maxHR, now);
 
   // ─── Signal 5: T-pace anchor (steady runs at 85–92 % HRmax) ─────────────

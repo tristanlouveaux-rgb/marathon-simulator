@@ -144,7 +144,7 @@ export const SPORT_LABELS: Record<SportKey, string> = {
   kayaking: 'Kayaking',
   wakeboarding: 'Wakeboarding',
   generic_sport: 'General Sport',
-  hybrid_test_sport: 'Hybrid Test Sport',
+  hybrid_test_sport: 'Other',
 };
 
 /** Sport name aliases — maps common variants to canonical SportKey */

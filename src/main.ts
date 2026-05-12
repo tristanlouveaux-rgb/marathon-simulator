@@ -770,6 +770,19 @@ async function launchApp(): Promise<void> {
     } catch (err) {
       console.warn('[hyrox] marker-bump pass failed', err);
     }
+
+    // Boot-time: compute the initial personal run-pace offset for existing
+    // HYROX users who pre-date the v2 (CP-anchored) model. Idempotent —
+    // skips when the offset has already been populated. Without this,
+    // existing users wouldn't see the Bayesian personalisation until they
+    // re-onboard. See SCIENCE_LOG §AA.
+    try {
+      const { refreshHyroxPersonalRunPaceOffset } = await import('@/calculations/hyrox-run-pace');
+      const mutable = getMutableState();
+      if (refreshHyroxPersonalRunPaceOffset(mutable)) saveState();
+    } catch (err) {
+      console.warn('[hyrox] personal run-pace offset refresh failed', err);
+    }
   }
 
   // Check if onboarding is complete
@@ -1094,6 +1107,9 @@ async function launchApp(): Promise<void> {
           // confidence range. Recomputing the live prediction picks up any new
           // volume/long-session data from this sync.
           refreshTriPredictionAfterSync().catch(() => {});
+          // Running + HYROX race-outcome detection. Mirrors the tri logger
+          // above so post-race results are captured across all three modes.
+          detectRaceOutcomeAfterSync().catch(() => {});
         }).catch(() => {});
         if (hasPhysiologySource(state, 'apple')) {
           // Apple Watch physiology: sleep, HRV, resting HR, steps from HealthKit
@@ -1376,6 +1392,46 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
   // gate) as a single accept/dismiss modal. Skipped silently if no triggers
   // fired or the user is mid-onboarding.
   await maybeShowTriSuggestionModal();
+}
+
+/**
+ * Running + HYROX race-outcome detection. Runs after activity sync so any
+ * race-day activities that just landed are visible to the detector. Both
+ * detectors no-op when the user is in another mode, so the cost is a single
+ * dynamic import per launch and a few state reads. Mirrors the tri logger
+ * baked into refreshTriPredictionAfterSync above.
+ */
+async function detectRaceOutcomeAfterSync(): Promise<void> {
+  const { getMutableState, saveState } = await import('@/state');
+  const s = getMutableState();
+  try {
+    if (s.eventType === 'hyrox' && s.hyroxConfig) {
+      const { detectAndLogHyroxRaceOutcome } = await import('@/calculations/hyrox-race-outcome');
+      const outcome = detectAndLogHyroxRaceOutcome(s);
+      if (outcome) {
+        saveState();
+        console.log('[hyrox:race-outcome] logged', {
+          date: outcome.dateISO,
+          target: outcome.targetTotalSec,
+          actual: outcome.actualTotalSec,
+        });
+      }
+    } else if (!s.eventType || s.eventType === 'running') {
+      const { detectAndLogRunRaceOutcome } = await import('@/calculations/run-race-outcome');
+      const outcome = detectAndLogRunRaceOutcome(s);
+      if (outcome) {
+        saveState();
+        console.log('[run:race-outcome] logged', {
+          date: outcome.dateISO,
+          predicted: outcome.predictedTotalSec,
+          actual: outcome.actualTotalSec,
+          gap: outcome.predictedTotalSec - outcome.actualTotalSec,
+        });
+      }
+    }
+  } catch (e) {
+    console.warn('[race-outcome] detection failed', e);
+  }
 }
 
 /**

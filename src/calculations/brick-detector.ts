@@ -11,7 +11,7 @@
  * unaffected by this detector.
  */
 
-import { BRICK_DETECTION_WINDOW_SEC } from '@/constants/triathlon-constants';
+import { BRICK_DETECTION_WINDOW_SEC, BRICK_FULL_ADAPT_COUNT } from '@/constants/triathlon-constants';
 
 export interface DetectionActivity {
   id: string;
@@ -51,6 +51,52 @@ export function detectBricks(activities: DetectionActivity[]): DetectedBrick[] {
   }
 
   return bricks;
+}
+
+// Half-life for recency weighting: a brick 4 weeks ago counts as half a current brick.
+// Captures that recent bricks matter more for race-day adaptation than distant ones.
+const BRICK_HALF_LIFE_WEEKS = 4;
+
+/**
+ * Compute a brick adaptation score (0–1) for use in the run-leg fatigue discount.
+ *
+ * Returns 0 when no bricks are detected in the lookback window, rising toward 1
+ * as the athlete accumulates recency-weighted brick sessions. Uses an exponential
+ * decay so recent bricks count more than old ones (half-life = 4 weeks).
+ *
+ * Calibration: BRICK_FULL_ADAPT_COUNT weighted sessions = score 1.0 (fully adapted).
+ * Millet & Vleck 2000 — 10–15 bricks saturate the running-economy adaptation.
+ *
+ * @param detectedBricks - Output of detectBricks()
+ * @param activities     - Same DetectionActivity[] passed to detectBricks() — needed for timestamps
+ * @param nowMs          - Current time in ms (defaults to Date.now())
+ * @param lookbackWeeks  - How far back to look (default 12 weeks)
+ */
+export function computeBrickAdaptation(
+  detectedBricks: DetectedBrick[],
+  activities: DetectionActivity[],
+  nowMs: number = Date.now(),
+  lookbackWeeks: number = 12,
+): number {
+  if (!detectedBricks.length) return 0;
+
+  const idToStartTs = new Map<string, number>();
+  for (const a of activities) idToStartTs.set(a.id, a.startTs);
+
+  const nowSec = nowMs / 1000;
+  const lookbackSec = lookbackWeeks * 7 * 86400;
+
+  let weightedCount = 0;
+  for (const brick of detectedBricks) {
+    const startTs = idToStartTs.get(brick.bikeId);
+    if (startTs == null) continue;
+    const ageSec = nowSec - startTs;
+    if (ageSec < 0 || ageSec > lookbackSec) continue;
+    const ageWeeks = ageSec / (7 * 86400);
+    weightedCount += Math.exp(-ageWeeks / BRICK_HALF_LIFE_WEEKS);
+  }
+
+  return Math.min(weightedCount / BRICK_FULL_ADAPT_COUNT, 1.0);
 }
 
 function isBike(sport: string): boolean {

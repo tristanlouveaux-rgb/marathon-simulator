@@ -414,21 +414,9 @@ Fixed prose em dashes in user-facing copy across:
 
 ---
 
-### ISSUE-153: Triathlon — completed-efforts tracking page (mirror running's pattern) *(P2, 2026-04-30)*
+### ✅ ISSUE-153: Triathlon — completed-efforts tracking page (mirror running's pattern) *(P2, fixed 2026-05-11)*
 
-**Context**: Running mode has a tracking surface that shows completed sessions vs planned (effort scores, pace adherence, HR drift per session). Triathlon has none of that — a completed `triWorkout` shows `status='completed'` in state but the user has no surface to review their week of completed sessions per discipline.
-
-**Why this matters**: It's the largest user-facing gap remaining in tri mode. The Stats page shows the forecast and adaptation; the Load page shows training load; but neither shows "here are the sessions I actually did, how I rated them, and how my HR / pace tracked vs planned".
-
-**What it looks like**:
-- New tri view (likely `src/ui/triathlon/tri-tracking-view.ts`) accessible from Stats or Plan
-- Per-week list of completed sessions grouped by discipline
-- Each row: workout name, planned vs actual duration, RPE rated, `hrEffortScore` (if available), `paceAdherence` (if available)
-- Sparkline of effort trend per discipline (RPE deviation week-over-week)
-
-**Mirror reference**: Running's progress views (`src/ui/triathlon/progress-detail-view.ts` for visual style, plus running's activity history surfaces). Per CLAUDE.md mirror rule, structure should match.
-
-**Estimated**: ~3–4 hours.
+Added `buildCompletedEfforts(wk, s)` and `openCompletedEffortDetail(id, wk, s)` to `src/ui/triathlon/plan-view.ts`. When you navigate to a past week on the tri Plan tab, a "Completed" card appears below the week navigation pills listing every `triWorkout` with `status='completed'`. Each row shows discipline badge, workout name, day + actual duration, and a signal label (On target / Above target / Hard effort / Off pace etc.) derived from `powerAdherence` (bike), `paceAdherence` (swim), or `hrEffortScore` (run). Tapping a row opens a vertically-centred modal showing planned vs actual duration, distance, avg HR, RPE rated, and a plain-language signal note. 1726/1726 tests pass, typecheck clean.
 
 ---
 
@@ -489,7 +477,7 @@ Fixed prose em dashes in user-facing copy across:
 
 ---
 
-### ISSUE-185: Triathlon — brick training should reduce the run-leg fatigue discount *(P2, 2026-05-08)*
+### ✅ ISSUE-200: Triathlon — brick training should reduce the run-leg fatigue discount *(P2, 2026-05-08, FIXED 2026-05-12)*
 
 **Context**: Race prediction hard-codes `RUN_FATIGUE_DISCOUNT_70_3 = 5%` and `RUN_FATIGUE_DISCOUNT_IRONMAN = 11%` regardless of the athlete's brick history. The whole point of brick sessions is to reduce that bike-to-run fade — an athlete with 12 weeks of bricks should be markedly less affected than one with zero.
 
@@ -506,7 +494,7 @@ Fixed prose em dashes in user-facing copy across:
 
 ---
 
-### ISSUE-186: Triathlon — open-water swim deficit not modelled *(P3, 2026-05-08)*
+### ✅ ISSUE-186: Triathlon — open-water swim deficit not modelled *(P3, 2026-05-08, FIXED 2026-05-12)*
 
 **Context**: We use pool CSS as the swim pace anchor and apply a `swimType` multiplier (ocean/lake/etc.) on top. But the pool→open-water deficit is a real, separable physiological/skill effect: sighting losses, no walls/turns, contact, wetsuit drag. Veiga 2013 puts it at ~5% slower, varies heavily by athlete experience. Currently lumped into the climate-style factor.
 
@@ -534,7 +522,7 @@ Probably (b) when history exists, fall back to (a) on first race.
 
 ---
 
-### ISSUE-188: Triathlon — IM run leg uses blended VDOT, not run-specific *(P2, 2026-05-08)*
+### ✅ ISSUE-188: Triathlon — IM run leg uses blended VDOT, not run-specific *(P2, 2026-05-08, FIXED 2026-05-12)*
 
 **Problem**: `currentVdot = state.v` is the overall blended VDOT, pulled toward whatever signals dominate the blend. For triathletes, bike fitness can inflate VO2 via cross-training, but that doesn't translate fully to run-specific capacity. The IM marathon leg is then over-predicted.
 
@@ -546,22 +534,23 @@ Probably (b) when history exists, fall back to (a) on first race.
 
 ---
 
-### ISSUE-189: Triathlon — verify aero/equipment inputs reach the headline forecast *(P1, 2026-05-08)*
+### ✅ ISSUE-189: Triathlon — verify aero/equipment inputs reach the headline forecast *(P1, fixed 2026-05-12, pending in-app confirmation)*
 
-**Context**: The bike-aero modal collects rider weight, bike weight, position, tire type, course profile, custom CdA. The bike physics solver uses them via `paramsFromProfile`. But `predictTriathlonRace` re-derives bike speed via `estimateBikeSpeed`, which sometimes uses skill-slider fallbacks.
+**Root cause**: the bike-aero modal's `predictBikeSplit` applied physics + physical course factors only. Two gaps vs the headline forecast in `predictTriathlonRace`:
+1. **Empirical course factors** (shipped 2026-05-07, ~1.3M historical finishes per race location) were ignored — for any race with a high/medium confidence empirical entry (most majors), the modal preview disagreed with the headline by whatever the empirical-vs-physical delta is.
+2. **Race-readiness penalty multiplier** (`raceReadiness.bike.penaltyMultiplier`) was not applied — captures low recent bike volume / longest ride relative to the race distance's endurance demands. For a low-readiness profile this is a ~5–10% slowdown the modal missed entirely.
 
-**Concern**: a 15W-equivalent CdA improvement that the modal predicts at –5 min should hit the headline forecast at –5 min. We have not audited whether all the modal-collected inputs flow through every code path.
+Net effect: modal showed a 2:35 bike split when the headline said 2:50. A 15W-equivalent CdA improvement that the modal predicted at –5 min would still land at the headline forecast, but starting from a wrong baseline.
 
-**Action**:
-1. Trace every input from the bike-aero modal to its consumer in `predictTriathlonRace` / `estimateBikeSpeed`.
-2. Confirm the modal's local prediction and the headline forecast use the same physics model with the same parameters.
-3. Add a regression test: same inputs into the modal preview and the headline must produce the same bike-leg time within rounding.
+**Fix** (`src/ui/triathlon/bike-setup-view.ts:399-427` `predictBikeSplit`):
+- Replace `applyCourseFactors(...)` alone with the same `pickCourseFactors(empirical, physical)` source picker the predictor uses, routed through `lookupEmpiricalCourseFactors` for the empirical lookup.
+- Read `raceReadiness.bike.penaltyMultiplier` from the cached prediction when present; compute fresh via `computeTriRaceReadiness(state, distance)` on first launch / after invalidation.
 
-**Files**: `src/ui/triathlon/bike-aero-modal.ts`, `src/calculations/bike-physics.ts`, `src/calculations/race-prediction.triathlon.ts`, `src/calculations/cycling-vo2.ts`.
+**Regression test**: `src/ui/triathlon/bike-setup-preview.test.ts` — locks the modal-vs-headline parity to within 10s and validates that CdA tuning still moves the predicted split in the expected direction. 2 tests, both pass. Pending in-app confirmation that the prediction strip now matches the forecast card for Tristan's actual race.
 
 ---
 
-### ISSUE-190: Triathlon — heat acclimatisation should discount climate penalty *(P2, 2026-05-08)*
+### ✅ ISSUE-190: Triathlon — heat acclimatisation should discount climate penalty *(P2, 2026-05-08, FIXED 2026-05-12)*
 
 **Context**: Currently the climate factor is a flat venue penalty regardless of where the athlete trains. Per Lorenzo & Cheuvront 2010, 10–14 days of heat acclimatisation delivers ~3–5% performance preservation in heat. A user training in Singapore racing IM Vietnam shouldn't carry the same 27-min climate penalty as someone training in Stockholm.
 
@@ -575,7 +564,7 @@ Probably (b) when history exists, fall back to (a) on first race.
 
 ---
 
-### ISSUE-191: Triathlon — credit marathon-PB depth on IM run leg *(P3, 2026-05-08)*
+### ✅ ISSUE-191: Triathlon — credit marathon-PB depth on IM run leg *(P3, 2026-05-08, FIXED 2026-05-12)*
 
 **Context**: Two athletes with the same blended VDOT can have very different marathon experience — a 3:50 marathoner and a 2:50 marathoner. The 2:50 athlete handles IM marathon (essentially marathon at ~89% intensity) very differently — they have headroom and pacing experience. Currently we treat them identically.
 
@@ -852,7 +841,20 @@ Added `computeRollingRestingHR(physiologyHistory, fallback)` in `activity-matche
 
 ---
 
-### ISSUE-145: Speed-profile marathon baseline too optimistic *(P1, logged 2026-04-16, not acted on)*
+### ISSUE-145: Speed-profile marathon baseline too optimistic *(P1, logged 2026-04-16, ✅ FIXED 2026-05-12 — pending Tristan's on-device confirmation)*
+
+**Fix summary (2026-05-12 audit #11)**: All four candidate fixes implemented. ISSUE-145 profile now blends to 2:58:48 (was 2:51:53). Test lower bound restored to 10500s (science audit floor — had been silently lowered to 10080s to mask the bug). All 1783 tests pass. See SCIENCE_LOG.md "Marathon Prediction Audit #11" for full physiological rationale and four-part fix detail.
+
+Files touched: `src/calculations/predictions.ts` (`predictFromLT` tier smoothing + raised speed mults, `predictFromPB` Riegel floor 1.10 for marathon-from-short-anchor, `blendPredictions` no-long-race-PB penalty), `src/calculations/forecast-profiles.test.ts` (lower bound 10080 → 10500), `src/calculations/predictions.test.ts` (added 3 new tests covering the Riegel floor behaviour).
+
+**Audit #12 follow-up (same day, 2026-05-12)**: Two adjacent gaps closed.
+
+- **Onboarding PB / experience-level cross-check** — `src/calculations/experience-level-validation.ts` (new) plus inline notice in `src/ui/wizard/steps/manual-entry.ts`. A 3:37 marathoner could self-select "beginner" with no validation; the model would silently use `max_gain_pct=9` + `ref_sessions=4` (vs intermediate 7 / 5.5) and over-claim improvement. Now flags inconsistency at PB-entry with one-tap correction. Asymmetric — only flags under-claiming. 13 unit tests.
+- **Dual-tau adaptation model** — `src/calculations/training-horizon.ts` + new constants in `training-params.ts`. Single-tau `1 - exp(-t/tau)` saturated at 99% by week 41, so 43-week plans claimed nearly identical improvement to 25-week plans. Replaced with additive fast (VO2max) + slow (LT/economy) model per Joyner & Coyle 2008 + Seiler 2010 + Bouchard 1999. 18-week Pfitzinger calibration preserved; 43-week claim widened (Tristan-shape 3:37 → 3:19 instead of 3:28). 5 new dual-tau guards.
+
+1806/1806 tests pass. SCIENCE_LOG audit #12 entry.
+
+
 
 **Symptom**: `forecast-profiles.test.ts > Per-profile pipeline tests > 7. Speed → Marathon` has been failing since the science-audit change that raised the lower bound of the expected baseline range. One test fails, 35 in the same file pass.
 
@@ -1330,6 +1332,28 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 ---
 
 ## P3 — New Features / Future
+
+### ISSUE-201: Race day is rendered as a generic taper week (running + tri + hyrox) *(P2, 2026-05-12)*
+**Observation (from post-race audit)**: race week falls out of the phase machine as a taper week. There is no race-day-specific session prescription. For running, this is acceptable (a rest or 20 min shakeout fits inside taper). For triathlon, race day should specifically prescribe a short swim + spin + jog warmup, not whatever the taper sequence places there. For HYROX, race day should be 20 min easy run + brief station familiarity, not a hard taper workout. Risk: athletes following the plan literally do a normal taper workout on race morning.
+**Fix sketch**: Add `computeRaceWeek()` to each plan engine that detects `wk.w === s.tw` and `wkDay === raceDayOffset` and substitutes a race-day-specific micro-session. Constants live in `triathlon-constants.ts` / `hyrox-constants.ts`. Running's taper already handles this acceptably; tri + hyrox are the priorities.
+**Files**: `src/workouts/plan_engine.triathlon.ts`, `src/workouts/plan_engine.hyrox.ts`.
+
+### ISSUE-202: Race-complete banner offers only "Switch to tracking", no "New Plan" CTA *(P2, 2026-05-12)*
+**Observation**: `buildRaceCompleteBanner` in `src/ui/home-view.ts:565-594` shows after the race date passes, but only offers a single CTA — downgrade to tracking. To set a new race or start the next training cycle, the user has to navigate Account → wizard. The natural moment to ask "what's next" is right here.
+**Fix sketch**: Add a primary "Plan next race" CTA next to the existing "Switch to tracking" button. Route to the appropriate wizard step based on `s.eventType` (running → marathon picker; tri → triathlon picker; hyrox → hyrox event picker). Keep the dismiss X.
+**Files**: `src/ui/home-view.ts:581-594`, plus a wire-up in the home event handlers.
+
+### ISSUE-203: The race itself is not modelled as a fatigue spike *(P3, 2026-05-12)*
+**Observation**: when the race-day activity syncs, it contributes TSS / iTRIMP naturally through the matcher, so CTL/ATL do update. However, the recovery countdown and Today's Load detail don't recognise "you just raced" as a categorically different event from "you just trained hard". A user who finished a marathon yesterday sees the same recovery countdown shape as someone who finished a long run yesterday.
+**Fix sketch**: When `runRaceLog` / `hyroxConfig.raceLog` / `triConfig.raceLog` gets a new entry for `dateISO === today − 1`, surface a "Race recovery" banner that shows a longer-than-usual recovery window (e.g. 2× normal for marathon, 3× for IM). Don't double-count TSS — this is a UX overlay, not a model change.
+**Files**: `src/ui/recovery-view.ts`, possibly a new `race-recovery-banner.ts`.
+
+### ISSUE-204: Running + HYROX race-outcome retro UI surface not built *(P3, 2026-05-12)*
+**Status**: detection + logging modules shipped 2026-05-12 (`run-race-outcome.ts`, `hyrox-race-outcome.ts`). Entries land on `state.runRaceLog[]` and `state.hyroxConfig.raceLog[]` after race day, but no UI surface reads them yet. Triathlon already has `getRaceOutcomeRetro()` wired into `tri-week-debrief.ts:161`.
+**Fix sketch**: Mirror the tri pattern — a small retro card on stats / forecast surfaces when the latest entry beat the prediction by ≥ threshold (60s for running, TBD for HYROX). Surfacing tier-1 calibration for running is a separate follow-up (no `run-calibration.ts` analogue yet).
+**Files**: new `src/calculations/run-race-outcome.ts` (already shipped — extend the export surface); new `src/ui/running/race-outcome-card.ts` (or inline in stats-view).
+
+---
 
 ### ISSUE-132: Garmin daily steps as background load signal in Today's Load *(P3)*
 **Motivation**: A rest day with 18,000 steps is physiologically different from a sedentary rest day. Steps are a proxy for non-structured activity (standing, walking, general movement) that contributes meaningfully to daily fatigue but isn't captured by structured training alone.
@@ -2013,10 +2037,13 @@ Verified stale (2026-05-07): `sleep-view.ts` already reads `physiologyHistory.sl
 ---
 
 ### ISSUE-184: Checkpoint week TT workout content + deload weeks in long base *(P3, future build)*
-**What**: Two follow-ups from the 2026-05-11 plan-phasing rewrite:
-1. **Checkpoint TT workout content**: For plans ≥33 weeks, `computePlanPhases` flags the last peak week of cycle 1 with `wk.checkpoint = true`. The Phase Timeline labels it "Checkpoint", but `generateWeekWorkouts` currently produces standard peak-week content. Needs a TT-flavoured week (Mon-Wed easy / Thu opener / Sat 5K or 10K hard / Sun easy) and a post-TT hook that auto-refreshes VDOT, CSS, FTP from the result so cycle 2 calibrates against measured rather than predicted fitness.
-2. **Deload weeks in long base**: Plans 24+ weeks can have base blocks 15+ weeks long. A coach would deload every 4th week (~30% volume drop) to avoid monotony. The phase label stays "Base"; only the volume drops. Likely handled in `planWeekSessions` / `generator.ts` volume modulation, not phase tagging.
-**Why deferred**: No current user has a 33+ week plan; checkpoint weeks fall back to standard peak content for now. Deload-in-base same logic for 24+ week plans. Build when a real long plan is set up.
+**What**: Three follow-ups from the 2026-05-11 plan-phasing rewrite, status updated 2026-05-12:
+
+1. ~~**Inter-cycle transition volume drop**~~ — **Resolved 2026-05-12** by relabelling the 2-week inter-cycle transition from `'base'` to `'taper'`. The workout generator's existing taper-phase volume drop now fires automatically.
+2. **Checkpoint TT explicit workout content**: For plans in double-periodization (running ≥33w, tri/hyrox ≥28w), `computePlanPhases` flags the last peak week of cycle 1 with `wk.checkpoint = true`. The Phase Timeline labels it "Checkpoint" and shows a caption telling the user to race a parkrun or 10K TT that Saturday (added 2026-05-12). The result feeds VDOT/CSS/FTP auto-refresh through the existing activity matcher — covering ~80% of the value. *Still deferred*: explicit TT-flavoured workout content (Mon-Wed easy / Thu opener / Sat 5K or 10K hard / Sun easy) so the generator produces the right shape automatically. Currently the generator produces standard peak-week sessions and the user substitutes the TT manually.
+3. **Deload weeks in long base**: Plans 24+ weeks can have base blocks 15+ weeks long. A coach would deload every 4th week (~30% volume drop) to avoid monotony. The phase label stays "Base"; only the volume drops. Likely handled in `planWeekSessions` / `generator.ts` volume modulation, not phase tagging.
+
+**Why deferred**: No current user has a 28+ week plan; the parkrun-caption path covers the checkpoint week for now.
 **Files** (when ready): `src/workouts/generator.ts` (`generateWeekWorkouts` checkpoint branch), `src/workouts/plan_engine.ts` (deload-in-base modulation), `src/main.ts` (post-TT marker refresh trigger).
 
 ---
@@ -2214,3 +2241,39 @@ These are not bugs or features — they are design decisions to revisit as the p
 **When to revisit**: When users request multi-device sync (phone + tablet, phone + web). At that point, flip the architecture: Supabase becomes the source of truth, localStorage becomes a read-through cache. The data flows already exist — it's a meaningful but not huge refactor.
 
 **Do not build this until a real user asks for it.**
+
+---
+
+### ISSUE-198: mtl-by-discipline transient test failures *(P2, 2026-05-12)*
+
+**Symptom**: In a 2026-05-12 session, `src/calculations/mtl-by-discipline.test.ts` reported 3 failures even when run in isolation:
+- "produces separate CTL/ATL per discipline" — expected CTL 1, got 0 (EMA not accumulating)
+- "CTL stays below ATL when load is rising" — expected CTL < 3, got 7.44 (ratio inverted)
+- "respects currentWeekIndex limit" — expected defined value, got undefined
+
+**Current state**: Tests pass 11/11 in isolation and 1726/1726 in the full suite on subsequent runs. The failures could not be reproduced after the session ended.
+
+**Root cause hypothesis**: The failures coincided with an in-session MTL refactor ("MTL chronic/acute now read from completed work, not planned" — `computeMTLFitnessFatigueByDiscipline` rewrite landed in the same session). The tests likely ran against a mid-refactor code state where implementation and test expectations were momentarily inconsistent. The committed code is correct.
+
+**What to watch**: If these tests start failing reproducibly again, the suspect is `computeMTLFitnessFatigueByDiscipline` in `src/calculations/mtl.ts` — specifically the EMA accumulation loop and discipline-bucket routing. Check whether `computeWeekActualMTLByDiscipline` is being called correctly with `matchedActivityId`-gated logic.
+
+**Files**: `src/calculations/mtl.ts`, `src/calculations/mtl-by-discipline.test.ts`
+
+---
+
+### ISSUE-199: vo2-sources test pollution when run in full suite *(P2, 2026-05-12)*
+
+**Symptom**: In a 2026-05-12 session, 3 tests in `src/calculations/vo2-sources.test.ts` failed only in the full suite (not in isolation):
+- "returns no conflict when fewer than 2 sources available"
+- "returns no conflict when sources agree within threshold"
+- "includes device when s.vo2 > 0"
+
+**Current state**: Tests pass 12/12 in isolation and in the full suite on subsequent runs. Not currently reproducible.
+
+**Root cause hypothesis**: A test earlier in the suite is mutating the `getState()` singleton (likely setting `s.vo2` or `s.maxHR`) and not resetting it, leaving the shared state polluted when `vo2-sources.test.ts` runs. The MTL refactor that was in-progress during the same session is a likely candidate — it calls `getMutableState()` directly.
+
+**What to watch**: If these become reproducible, run `npx vitest run --reporter=verbose` and look at which test file runs immediately before `vo2-sources.test.ts`. The polluter will have set a `vo2`-related field on the singleton without a matching `beforeEach` reset.
+
+**Fix pattern**: The polluting test needs a `beforeEach(() => { getMutableState().vo2 = undefined; })` guard, or `vo2-sources.test.ts` needs to reset the relevant fields before each test rather than relying on a clean slate.
+
+**Files**: `src/calculations/vo2-sources.test.ts`, unknown polluter (likely in `src/calculations/mtl*.test.ts` or `src/state/initialization*.test.ts`)

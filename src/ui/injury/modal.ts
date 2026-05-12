@@ -78,19 +78,36 @@ const CROSS_TRAINING_LABELS: Record<string, string> = {
   yoga: 'Yoga',
 };
 
-const INPUT_STYLE = `background:var(--c-bg);border:1.5px solid var(--c-border-strong);color:var(--c-black);border-radius:8px;width:100%;padding:8px 12px;font-size:14px;outline:none`;
+const INPUT_STYLE = `background:var(--c-bg);border:1px solid var(--c-border);color:var(--c-black);border-radius:10px;width:100%;padding:10px 12px;font-size:14px;outline:none;font-family:var(--f)`;
+const LABEL_STYLE = `display:block;font-size:12px;font-weight:600;color:var(--c-muted);margin-bottom:6px;letter-spacing:0.01em`;
 
 function getModalHTML(injuryState: InjuryState): string {
   const injuryTypes = Object.keys(INJURY_PROTOCOLS) as InjuryType[];
   const protocol = INJURY_PROTOCOLS[injuryState.type] || INJURY_PROTOCOLS.general;
   const crossTrainingOptions = (protocol.allowedActivities || [])
     .filter((a: string) => a in CROSS_TRAINING_LABELS);
+  const pain = Math.max(1, injuryState.currentPain);
+  const canRun = injuryState.canRun || 'no';
+
+  const segOption = (value: 'yes' | 'limited' | 'no', label: string) => `
+    <button type="button" data-value="${value}" data-active="${canRun === value}">${label}</button>
+  `;
 
   return `
-    <div class="rounded-xl p-6 w-full max-w-md mx-4 shadow-xl overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border-strong);max-height:90vh">
-      <div class="flex items-center justify-between mb-4">
-        <h2 class="text-lg font-semibold" style="color:var(--c-black)">${injuryState.active ? 'Weekly Injury Update' : 'Report Injury'}</h2>
-        <button id="injury-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0">
+    <style>
+      #${MODAL_ID} #injury-form details > summary { list-style:none; cursor:pointer; display:flex; align-items:center; justify-content:space-between; font-size:13px; font-weight:500; color:var(--c-muted); padding:10px 0; }
+      #${MODAL_ID} #injury-form details > summary::-webkit-details-marker { display:none; }
+      #${MODAL_ID} #injury-form details > summary::after { content:''; width:8px; height:8px; border-right:1.5px solid var(--c-faint); border-bottom:1.5px solid var(--c-faint); transform:rotate(-45deg); transition:transform 0.2s; }
+      #${MODAL_ID} #injury-form details[open] > summary::after { transform:rotate(45deg); }
+      #${MODAL_ID} #can-run-segment { display:grid; grid-template-columns:repeat(3, 1fr); gap:3px; padding:3px; background:rgba(0,0,0,0.04); border:1px solid var(--c-border); border-radius:11px; }
+      #${MODAL_ID} #can-run-segment button { background:transparent; border:none; border-radius:8px; padding:8px 6px; font-size:13px; font-weight:500; color:var(--c-muted); cursor:pointer; transition:background 0.15s, color 0.15s, box-shadow 0.15s; font-family:var(--f); }
+      #${MODAL_ID} #can-run-segment button[data-active="true"] { background:var(--c-surface); color:var(--c-black); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,0.06), 0 1px 0 rgba(0,0,0,0.04); }
+      #${MODAL_ID} #injury-form select:focus, #${MODAL_ID} #injury-form input:focus, #${MODAL_ID} #injury-form textarea:focus { border-color:var(--c-border-strong); }
+    </style>
+    <div class="rounded-2xl p-5 w-full max-w-md mx-4 shadow-xl overflow-y-auto" style="background:var(--c-surface);border:1px solid var(--c-border);max-height:90vh">
+      <div class="flex items-center justify-between mb-5">
+        <h2 style="font-size:17px;font-weight:600;color:var(--c-black);letter-spacing:-0.01em">${injuryState.active ? 'Weekly injury update' : 'Report injury'}</h2>
+        <button id="injury-modal-close" style="color:var(--c-faint);background:none;border:none;cursor:pointer;padding:4px;margin:-4px">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -98,69 +115,73 @@ function getModalHTML(injuryState: InjuryState): string {
       </div>
 
       <form id="injury-form" class="space-y-4">
-        <!-- 1. Body Part Location -->
-        <div>
-          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Where does it hurt?</label>
-          <select id="injury-location" style="${INPUT_STYLE}">
-            ${(Object.keys(LOCATION_LABELS) as InjuryLocation[]).map(loc => `
-              <option value="${loc}" ${injuryState.location === loc ? 'selected' : ''}>
-                ${LOCATION_LABELS[loc]}
-              </option>
-            `).join('')}
-          </select>
+        <!-- 1. Location + Side -->
+        <div class="grid grid-cols-3 gap-3">
+          <div class="col-span-2">
+            <label style="${LABEL_STYLE}">Where does it hurt?</label>
+            <select id="injury-location" style="${INPUT_STYLE}">
+              ${(Object.keys(LOCATION_LABELS) as InjuryLocation[]).map(loc => `
+                <option value="${loc}" ${injuryState.location === loc ? 'selected' : ''}>
+                  ${LOCATION_LABELS[loc]}
+                </option>
+              `).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="${LABEL_STYLE}">Side</label>
+            <input
+              type="text"
+              id="injury-location-detail"
+              placeholder="L / R / Both"
+              value="${injuryState.locationDetail || ''}"
+              style="${INPUT_STYLE}"
+            />
+          </div>
         </div>
 
         <!-- 2. Pain Level Slider -->
         <div>
-          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">
-            Pain Level: <span id="pain-value" class="font-bold" style="color:var(--c-black)">${Math.max(1, injuryState.currentPain)}</span>/10
-          </label>
+          <div class="flex items-center justify-between mb-2">
+            <label style="${LABEL_STYLE};margin-bottom:0">Pain level</label>
+            <span style="font-size:12px;color:var(--c-muted)"><span id="pain-value" style="font-weight:600;color:var(--c-black)">${pain}</span> / 10</span>
+          </div>
           <input
             type="range"
             id="injury-pain"
             class="m-slider-glass"
             min="1"
             max="10"
-            value="${Math.max(1, injuryState.currentPain)}"
+            value="${pain}"
           />
-          <div class="flex justify-between text-xs mt-1" style="color:var(--c-faint)">
+          <div class="flex justify-between mt-1.5" style="font-size:11px;color:var(--c-faint)">
             <span>Mild</span>
             <span>Severe</span>
           </div>
         </div>
 
-        <!-- 3. Mobility Status -->
+        <!-- 3. Walking -->
         <div>
-          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Can you walk pain-free?</label>
+          <label style="${LABEL_STYLE}">Can you walk pain-free?</label>
           <select id="injury-mobility" style="${INPUT_STYLE}">
-            <option value="yes">Yes - walking is fine</option>
-            <option value="limited">Limited - some discomfort</option>
-            <option value="no">No - walking is painful</option>
+            <option value="yes">Yes, walking is fine</option>
+            <option value="limited">Limited, some discomfort</option>
+            <option value="no">No, walking is painful</option>
           </select>
         </div>
 
-        <!-- 3.5. Can you run? -->
+        <!-- 4. Can you run? — segmented pill -->
         <div>
-          <label class="block text-sm font-medium mb-2" style="color:var(--c-muted)">Can you run?</label>
-          <div class="flex gap-4">
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-yes" value="yes" ${injuryState.canRun === 'yes' ? 'checked' : ''} class="w-4 h-4">
-              <span class="text-sm" style="color:var(--c-black)">Yes</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-limited" value="limited" ${injuryState.canRun === 'limited' ? 'checked' : ''} class="w-4 h-4">
-              <span class="text-sm" style="color:var(--c-black)">Limited / With pain</span>
-            </label>
-            <label class="flex items-center gap-2 cursor-pointer">
-              <input type="radio" name="can-run" id="can-run-no" value="no" ${!injuryState.canRun || injuryState.canRun === 'no' ? 'checked' : ''} class="w-4 h-4">
-              <span class="text-sm" style="color:var(--c-black)">No</span>
-            </label>
+          <label style="${LABEL_STYLE}">Can you run?</label>
+          <div id="can-run-segment" role="radiogroup">
+            ${segOption('yes', 'Yes')}
+            ${segOption('limited', 'With pain')}
+            ${segOption('no', 'No')}
           </div>
         </div>
 
-        <!-- 3.6. Preferred Cross-Training -->
+        <!-- 5. Preferred Cross-Training -->
         <div>
-          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Preferred rehab exercise</label>
+          <label style="${LABEL_STYLE}">Preferred rehab activity</label>
           <select id="injury-cross-training" style="${INPUT_STYLE}">
             <option value="" ${!injuryState.preferredCrossTraining ? 'selected' : ''}>Auto (protocol default)</option>
             ${crossTrainingOptions.map((a: string) => `
@@ -169,25 +190,15 @@ function getModalHTML(injuryState: InjuryState): string {
               </option>
             `).join('')}
           </select>
-          <p class="text-xs mt-1" style="color:var(--c-faint)">Choose your preferred activity for rehab days.</p>
         </div>
 
-        <!-- 4. Side/Detail (optional) -->
-        <div>
-          <label class="block text-sm font-medium mb-1" style="color:var(--c-muted)">Which side? (optional)</label>
-          <input
-            type="text"
-            id="injury-location-detail"
-            placeholder="e.g., Left, Right, Both"
-            value="${injuryState.locationDetail || ''}"
-            style="${INPUT_STYLE}"
-          />
-        </div>
+        <!-- Advanced sections divider -->
+        <div style="border-top:1px solid var(--c-border);margin-top:8px"></div>
 
-        <!-- 5. Injury Type (collapsed) -->
-        <details class="rounded-lg p-3" style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border)">
-          <summary class="text-sm font-medium cursor-pointer" style="color:var(--c-muted)">Advanced: Specific diagnosis (optional)</summary>
-          <div class="mt-3">
+        <!-- 6. Injury Type (collapsed) -->
+        <details>
+          <summary>Specific diagnosis (optional)</summary>
+          <div style="padding-bottom:10px">
             <select id="injury-type" style="${INPUT_STYLE}">
               ${injuryTypes.map(type => `
                 <option value="${type}" ${injuryState.type === type ? 'selected' : ''}>
@@ -195,52 +206,49 @@ function getModalHTML(injuryState: InjuryState): string {
                 </option>
               `).join('')}
             </select>
-            <p class="text-xs mt-1" style="color:var(--c-faint)">Leave as "General" if unsure — we'll adapt your plan based on pain level.</p>
+            <p style="font-size:11px;color:var(--c-faint);margin-top:6px">Leave as General if unsure. The plan adapts based on pain level.</p>
           </div>
         </details>
 
-        <!-- 6. Physio Notes (collapsed) -->
-        <details class="rounded-lg p-3" style="background:rgba(0,0,0,0.03);border:1px solid var(--c-border)">
-          <summary class="text-sm font-medium cursor-pointer" style="color:var(--c-muted)">Physio notes (optional)</summary>
-          <div class="mt-3">
+        <!-- 7. Physio Notes (collapsed) -->
+        <details style="border-top:1px solid var(--c-border);margin-top:0">
+          <summary>Physio notes (optional)</summary>
+          <div style="padding-bottom:10px">
             <textarea
               id="injury-physio-notes"
               rows="3"
-              placeholder="Enter notes from your physiotherapist..."
+              placeholder="Notes from your physiotherapist..."
               class="resize-none"
               style="${INPUT_STYLE};height:auto"
             >${injuryState.physioNotes || ''}</textarea>
           </div>
         </details>
 
-        <!-- Note -->
-        <div class="rounded-lg p-3" style="border:1px solid var(--c-border)">
-          <p class="text-xs" style="color:var(--c-muted)">
-            Saving will automatically activate injury mode and adjust your training plan.
-          </p>
-        </div>
+        <!-- Caption -->
+        <p style="font-size:11px;color:var(--c-faint);text-align:center;margin-top:4px">
+          Saving activates injury mode and adjusts your training plan.
+        </p>
 
         <!-- Buttons -->
-        <div class="flex gap-3 pt-2">
-          <button type="button" id="injury-cancel" class="m-btn-glass m-btn-glass--inset">
-            Cancel
+        <div class="flex flex-col gap-2 pt-1">
+          <button
+            type="submit"
+            class="m-btn-primary"
+            style="width:100%;justify-content:center;padding:11px 18px;font-size:14px"
+          >
+            ${injuryState.active ? 'Update status' : 'Save and activate'}
           </button>
           ${injuryState.active ? `
-            <button
-              type="button"
-              id="injury-resolve"
-              class="px-4 py-2 rounded-lg text-sm font-medium"
-              style="background:var(--c-ok-bg);border:1px solid rgba(34,197,94,0.4);color:var(--c-ok-text)"
-            >
-              Mark Resolved
+            <button type="button" id="injury-resolve" class="m-btn-glass m-btn-glass--inset" style="width:100%">
+              Mark resolved
             </button>
           ` : ''}
           <button
-            type="submit"
-            class="flex-1 px-4 py-2 rounded-lg text-sm font-medium"
-            style="background:#EF4444;color:white"
+            type="button"
+            id="injury-cancel"
+            style="background:none;border:none;color:var(--c-muted);padding:8px;font-size:13px;cursor:pointer;font-family:var(--f)"
           >
-            ${injuryState.active ? 'Update Status' : 'Save & Activate'}
+            Cancel
           </button>
         </div>
       </form>
@@ -267,6 +275,16 @@ function wireModalHandlers(): void {
   }
 
   document.getElementById('injury-cancel')?.addEventListener('click', () => closeInjuryModal());
+
+  // Segmented "Can you run?" control
+  document.querySelectorAll<HTMLButtonElement>('#can-run-segment button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll<HTMLButtonElement>('#can-run-segment button').forEach(b => {
+        b.dataset.active = 'false';
+      });
+      btn.dataset.active = 'true';
+    });
+  });
 
   document.getElementById('injury-resolve')?.addEventListener('click', () => {
     showInjuryConfirm(
@@ -305,8 +323,8 @@ async function handleSaveInjury(): Promise<void> {
   const location = locationSelect.value as InjuryLocation;
   const locationDetail = locationDetailInput?.value || '';
   const physioNotes = physioNotesTextarea?.value || '';
-  const canRunEl = document.querySelector('input[name="can-run"]:checked') as HTMLInputElement;
-  const canRun = (canRunEl?.value || 'no') as 'yes' | 'limited' | 'no';
+  const canRunEl = document.querySelector('#can-run-segment button[data-active="true"]') as HTMLButtonElement | null;
+  const canRun = ((canRunEl?.dataset.value as 'yes' | 'limited' | 'no' | undefined) || 'no');
   const crossTrainingSelect = document.getElementById('injury-cross-training') as HTMLSelectElement;
   const preferredCrossTraining = crossTrainingSelect?.value || null;
 

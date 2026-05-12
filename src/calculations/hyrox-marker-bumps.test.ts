@@ -54,9 +54,9 @@ describe('applyHyroxRunPaceDerivation', () => {
     const wrote = applyHyroxRunPaceDerivation(s);
     expect(wrote).toBe(true);
     expect(s.hyroxConfig!.hyroxRunPaceSource).toBe('derived');
-    // VDOT 46 + intermediate ratio 1.15 ≈ 304 s/km
-    expect(s.hyroxConfig!.hyroxRunPaceSecKm!).toBeGreaterThan(290);
-    expect(s.hyroxConfig!.hyroxRunPaceSecKm!).toBeLessThan(315);
+    // v2 (CP-anchored): VDOT 46 → cpRatio ≈ 1.045 × threshold ≈ 264 → ~276
+    expect(s.hyroxConfig!.hyroxRunPaceSecKm!).toBeGreaterThan(260);
+    expect(s.hyroxConfig!.hyroxRunPaceSecKm!).toBeLessThan(290);
   });
 
   it('idempotent: second call on already-derived state returns false', () => {
@@ -75,10 +75,11 @@ describe('applyHyroxRunPaceDerivation', () => {
   });
 
   it('user pace within 5s margin of derived: source stays user, no write', () => {
-    const s = buildState({ vdot: 46, hyroxRunPaceSecKm: 303, hyroxRunPaceSource: 'user' });
+    // v2 derived at VDOT 46 ≈ 276; user at 278 is within 5 s/km margin.
+    const s = buildState({ vdot: 46, hyroxRunPaceSecKm: 278, hyroxRunPaceSource: 'user' });
     const wrote = applyHyroxRunPaceDerivation(s);
     expect(wrote).toBe(false);
-    expect(s.hyroxConfig!.hyroxRunPaceSecKm).toBe(303);
+    expect(s.hyroxConfig!.hyroxRunPaceSecKm).toBe(278);
     expect(s.hyroxConfig!.hyroxRunPaceSource).toBe('user');
   });
 

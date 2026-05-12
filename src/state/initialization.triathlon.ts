@@ -152,6 +152,9 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // instead. (Using 'marathon' avoids widening the RaceDistance type.)
     s.eventType = 'triathlon';
     s.triConfig = triConfig;
+    // Clear stale hyroxConfig so a hyrox → triathlon switch doesn't leave
+    // hyroxConfig.raceDate driving home banners or plan previews.
+    s.hyroxConfig = undefined;
     s.trackOnly = false;
     s.continuousMode = false;
     s.w = 1;

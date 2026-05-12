@@ -120,7 +120,7 @@ export function renderHyroxPlanView(): void {
           <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">HYROX</div>
           <div style="font-size:15px;font-weight:500;color:#64748B;margin-top:6px">${bandLabel} · ${(format === 'pro_singles' || format === 'pro_doubles') ? 'Pro' : 'Open'} ${(format === 'open_doubles' || format === 'pro_doubles') ? 'Doubles' : 'Singles'}</div>
           ${phase ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:8px;letter-spacing:-0.01em">${phase}</div>` : ''}
-          ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">Week ${s.w} of ${s.tw}</div>` : ''}
+          ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`}</div>` : ''}
 
           ${viewWeek === s.w ? `
             <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">

@@ -1213,6 +1213,10 @@ export async function next(): Promise<void> {
       log(`Block ${s.blockNumber} started (Weeks ${s.tw - BLOCK_SIZE + 1}–${s.tw})`);
     } else {
       recordVdotHistory(s);
+      // Archive the completed plan into s.previousPlanWks so CTL lookback and
+      // past-plan history survive the transition. Without this, a finished
+      // race plan vanishes the moment the user crosses race week.
+      archiveCurrentWksIfPopulated();
       saveState();
       complete();
       return;

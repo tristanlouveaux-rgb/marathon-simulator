@@ -73,6 +73,13 @@ export interface OrchestratorActivity {
   hrDrift?: number | null;
   activityType?: string | null;
   manualSport?: string | null;
+  /** Per-km pace (sec/km), parallel-indexed to kmHRSplits. Runs only. When
+   *  both arrays are present and indices align, the HR regression takes
+   *  per-km (pace, HR) points instead of the single (avgPace, avgHR) per-run
+   *  point. */
+  kmSplits?: number[] | null;
+  /** Per-km average HR (bpm), parallel-indexed to kmSplits. */
+  kmHRSplits?: number[] | null;
 }
 
 /** Build per-modality activity samples — flatten weeks' garminActuals
@@ -115,13 +122,46 @@ function collectActivitySamples(
       || (a.activityType ?? '').toUpperCase().includes('RUNNING');
 
     if (isRun && (a.distanceKm ?? 0) > 0 && a.avgHR != null && a.avgHR > 0) {
-      runs.push({
-        startTime: a.startTime,
-        distKm: a.distanceKm as number,
-        durSec: a.durationSec,
-        avgHR: a.avgHR,
-        hrDrift: a.hrDrift ?? null,
-      });
+      // Prefer per-km (pace, HR) segments when both arrays are present and
+      // index-aligned. A 21K run with a tempo finish becomes ~21 (pace, HR)
+      // points spanning the HRR range, instead of one diluted (avgPace,
+      // avgHR) point. Each segment passes through the same regression with
+      // segment-level qualifying filters (≥ 60s, pace/HRR gates).
+      const splits = a.kmSplits ?? null;
+      const hrSplits = a.kmHRSplits ?? null;
+      const haveValidSegments = splits && splits.length > 0
+        && hrSplits && hrSplits.length > 0;
+      let emittedSegments = 0;
+      if (haveValidSegments) {
+        const pairedLen = Math.min(splits.length, hrSplits.length);
+        for (let i = 0; i < pairedLen; i++) {
+          const paceSecKm = splits[i];
+          const hr = hrSplits[i];
+          if (!paceSecKm || paceSecKm <= 0) continue;
+          if (!hr || hr <= 0) continue;
+          runs.push({
+            startTime: a.startTime,
+            distKm: 1.0,            // each km split represents 1 km
+            durSec: paceSecKm,      // duration for 1 km at this pace
+            avgHR: hr,
+            isSegment: true,
+          });
+          emittedSegments += 1;
+        }
+      }
+      // Fallback: emit the run-level average when no segments qualified
+      // (e.g. activity synced before km_hr_splits was populated, or a run
+      // where only the avg HR was reported). Carries the drift gate the
+      // segment path skips, so the run-level filter still applies.
+      if (emittedSegments === 0) {
+        runs.push({
+          startTime: a.startTime,
+          distKm: a.distanceKm as number,
+          durSec: a.durationSec,
+          avgHR: a.avgHR,
+          hrDrift: a.hrDrift ?? null,
+        });
+      }
     }
 
     if (a.maxHR != null && a.maxHR > 0) {

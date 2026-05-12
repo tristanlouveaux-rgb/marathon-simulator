@@ -72,29 +72,44 @@ describe('computePlanPhases', () => {
     expect(counts.base).toBeGreaterThanOrEqual(15);
   });
 
-  it('33-week plan switches to double periodization with one checkpoint', () => {
+  it('33-week plan switches to double periodization with one checkpoint and two tapers', () => {
     const weeks = computePlanPhases(33);
     expect(weeks).toHaveLength(33);
     const checkpoints = weeks.filter(w => w.checkpoint);
     expect(checkpoints).toHaveLength(1);
     // Checkpoint sits on a peak week
     expect(checkpoints[0].ph).toBe('peak');
-    // Sequence: base → build → peak → base → build → peak → taper
+    // Sequence: two complete arcs, transition between cycles labelled 'taper'
     const seq = phaseSequence(weeks);
-    expect(seq).toEqual(['base', 'build', 'peak', 'base', 'build', 'peak', 'taper']);
+    expect(seq).toEqual(['base', 'build', 'peak', 'taper', 'base', 'build', 'peak', 'taper']);
   });
 
-  it('50-week plan: two cycles, single checkpoint, taper ≤ 3, no terminal junk', () => {
+  it('cycle 1 ends in a 2-week taper immediately after the checkpoint week', () => {
+    const weeks = computePlanPhases(40);
+    const checkpointIdx = weeks.findIndex(w => w.checkpoint);
+    expect(checkpointIdx).toBeGreaterThan(0);
+    // The two weeks immediately after the checkpoint must be taper (inter-cycle recovery)
+    expect(weeks[checkpointIdx + 1]?.ph).toBe('taper');
+    expect(weeks[checkpointIdx + 2]?.ph).toBe('taper');
+    // The week after that should be base (start of cycle 2)
+    expect(weeks[checkpointIdx + 3]?.ph).toBe('base');
+  });
+
+  it('50-week plan: two cycles, single checkpoint, ends on taper, checkpoint in first half', () => {
     const weeks = computePlanPhases(50);
     expect(weeks).toHaveLength(50);
     const checkpoints = weeks.filter(w => w.checkpoint);
     expect(checkpoints).toHaveLength(1);
     // The plan ends on a taper week (race week)
     expect(weeks[weeks.length - 1].ph).toBe('taper');
-    // Taper cap
-    const counts = countByPhase(weeks);
-    expect(counts.taper).toBeLessThanOrEqual(3);
-    // Checkpoint should sit in the first half of the plan (cycle 1)
+    // Cycle 2 taper (the final segment) is capped at 3 weeks
+    const finalTaperLen = (() => {
+      let n = 0;
+      for (let i = weeks.length - 1; i >= 0 && weeks[i].ph === 'taper'; i--) n++;
+      return n;
+    })();
+    expect(finalTaperLen).toBeLessThanOrEqual(3);
+    // Checkpoint sits in the first half of the plan (cycle 1)
     const checkpointIdx = weeks.findIndex(w => w.checkpoint);
     expect(checkpointIdx).toBeLessThan(weeks.length / 2);
   });
@@ -107,6 +122,13 @@ describe('computePlanPhases', () => {
     expect(weeks[checkpointIdx + 1]?.ph).not.toBe('peak');
     // The checkpoint week itself is a peak
     expect(weeks[checkpointIdx].ph).toBe('peak');
+  });
+
+  it('50-week plan has exactly two taper segments', () => {
+    const weeks = computePlanPhases(50);
+    const seq = phaseSequence(weeks);
+    const taperSegments = seq.filter(s => s === 'taper').length;
+    expect(taperSegments).toBe(2);
   });
 
   it('every length from 4 to 52 produces totalWeeks weeks', () => {

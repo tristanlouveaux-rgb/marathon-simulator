@@ -443,6 +443,115 @@ describe('Training Horizon', () => {
         expect(resultVdot50.vdot_gain).toBeGreaterThan(resultVdot40.vdot_gain);
       });
     });
+
+    describe('dual-tau adaptation curve (audit #12)', () => {
+      // Long-plan saturation gap: with single-tau (tau=9 for intermediate
+      // marathon), week_factor was at 0.811 at 18w and 0.989 at 43w — only
+      // ~22% additional headroom for 25 extra weeks of training. Science
+      // says LT and economy continue adapting (Seiler 2010, Coyle 1984),
+      // so dual-tau extends the long-plan curve while preserving short-plan
+      // calibration. These tests pin the documented behaviour.
+
+      it('43-week plan claims meaningfully more than 18-week plan (was nearly identical)', () => {
+        const params: TrainingHorizonInput = {
+          baseline_vdot: 45,
+          target_distance: 'marathon',
+          weeks_remaining: 18,
+          sessions_per_week: 5,
+          runner_type: 'Balanced',
+          ability_band: 'intermediate',
+          taper_weeks: 3,
+          experience_level: 'intermediate',
+        };
+        const r18 = applyTrainingHorizonAdjustment(params);
+        const r43 = applyTrainingHorizonAdjustment({ ...params, weeks_remaining: 43 });
+        // Pre-dual-tau: r43.improvement_pct - r18.improvement_pct ≈ 0.2%.
+        // Post-dual-tau: ≈ 0.7-0.8% (matches Pfitzinger two-block outcomes).
+        const delta = r43.improvement_pct - r18.improvement_pct;
+        expect(delta).toBeGreaterThan(0.5);
+        expect(delta).toBeLessThan(2.0); // sanity ceiling — not over-claiming
+      });
+
+      it('diminishing returns preserved across plan lengths', () => {
+        const params: TrainingHorizonInput = {
+          baseline_vdot: 45,
+          target_distance: 'marathon',
+          weeks_remaining: 0,
+          sessions_per_week: 5,
+          runner_type: 'Balanced',
+          ability_band: 'intermediate',
+          taper_weeks: 3,
+          experience_level: 'intermediate',
+        };
+        const r18 = applyTrainingHorizonAdjustment({ ...params, weeks_remaining: 18 }).improvement_pct;
+        const r25 = applyTrainingHorizonAdjustment({ ...params, weeks_remaining: 25 }).improvement_pct;
+        const r35 = applyTrainingHorizonAdjustment({ ...params, weeks_remaining: 35 }).improvement_pct;
+        const r43 = applyTrainingHorizonAdjustment({ ...params, weeks_remaining: 43 }).improvement_pct;
+        // Each additional 7-10 week chunk should add less than the previous
+        // chunk (diminishing returns).
+        const delta18to25 = r25 - r18;
+        const delta25to35 = r35 - r25;
+        const delta35to43 = r43 - r35;
+        expect(delta25to35).toBeLessThan(delta18to25);
+        expect(delta35to43).toBeLessThan(delta25to35);
+      });
+
+      it('marathon has more long-plan headroom than 5K (LT/economy slow adaptation)', () => {
+        const longMarathon = applyTrainingHorizonAdjustment({
+          baseline_vdot: 45, target_distance: 'marathon', weeks_remaining: 18,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 3, experience_level: 'intermediate',
+        });
+        const veryLongMarathon = applyTrainingHorizonAdjustment({
+          baseline_vdot: 45, target_distance: 'marathon', weeks_remaining: 43,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 3, experience_level: 'intermediate',
+        });
+        const long5K = applyTrainingHorizonAdjustment({
+          baseline_vdot: 45, target_distance: '5k', weeks_remaining: 18,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 1, experience_level: 'intermediate',
+        });
+        const veryLong5K = applyTrainingHorizonAdjustment({
+          baseline_vdot: 45, target_distance: '5k', weeks_remaining: 43,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 1, experience_level: 'intermediate',
+        });
+        // Marathon has higher slow_weight (0.55 vs 5K's 0.30), so a longer
+        // plan should yield proportionally more additional improvement for
+        // marathon than for 5K.
+        const marathonGainRatio = (veryLongMarathon.improvement_pct - longMarathon.improvement_pct)
+                                 / longMarathon.improvement_pct;
+        const k5GainRatio = (veryLong5K.improvement_pct - long5K.improvement_pct)
+                          / long5K.improvement_pct;
+        expect(marathonGainRatio).toBeGreaterThan(k5GainRatio);
+      });
+
+      it('week_factor monotonically increases with plan length', () => {
+        const params: TrainingHorizonInput = {
+          baseline_vdot: 45, target_distance: 'marathon', weeks_remaining: 0,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 3, experience_level: 'intermediate',
+        };
+        const wfs: number[] = [];
+        for (const w of [8, 12, 18, 25, 35, 43, 52]) {
+          wfs.push(applyTrainingHorizonAdjustment({ ...params, weeks_remaining: w }).components.week_factor);
+        }
+        for (let i = 1; i < wfs.length; i++) {
+          expect(wfs[i]).toBeGreaterThan(wfs[i - 1]);
+        }
+      });
+
+      it('week_factor approaches but does not exceed 1.0', () => {
+        const veryLong = applyTrainingHorizonAdjustment({
+          baseline_vdot: 45, target_distance: 'marathon', weeks_remaining: 104,
+          sessions_per_week: 5, runner_type: 'Balanced', ability_band: 'intermediate',
+          taper_weeks: 3, experience_level: 'intermediate',
+        });
+        expect(veryLong.components.week_factor).toBeLessThan(1.0);
+        expect(veryLong.components.week_factor).toBeGreaterThan(0.95);
+      });
+    });
   });
 
   describe('calculateSkipPenalty', () => {

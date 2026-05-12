@@ -165,11 +165,16 @@ Wizard data: `name`, `raceDistance`, `trainingForEvent`, `runsPerWeek`, `gymSess
 
 `'base' | 'build' | 'peak' | 'taper'`
 
-Phase assignment is centralised in `src/workouts/phases.ts` (`computePlanPhases(totalWeeks)`). Called from `initializeWeeks` and from the persistence migration. Two strategies:
-- **Single arc (≤32 weeks)**: capped allocation — taper ≤ 3w, peak ≤ 4w, build ≤ 8w; base absorbs the remainder. Very short plans (4–7w) naturally collapse base to a sharpening block.
-- **Double periodization (≥33 weeks)**: cycle 1 (~45%) ends in a **Checkpoint** week (`wk.checkpoint = true`, `wk.ph = 'peak'`), 2-week transition, cycle 2 (~55%) carries the race.
+Phase assignment is centralised in `src/workouts/phases.ts` (`computePlanPhases(totalWeeks, config?)`). The strategy is `PhaseConfig`-driven so running, triathlon, and HYROX share the same algorithm with format-specific caps and ratios. Two strategies:
+- **Single arc**: capped allocation — base absorbs the remainder after taper/peak/build caps. Format-specific caps: running taper ≤ 3 / peak ≤ 4; tri taper ≤ 2 / peak ≤ 5; HYROX taper ≤ 2 / peak ≤ 3; build ≤ 8 for all. Very short plans (4–7w) naturally collapse base to a sharpening block.
+- **Double periodization** (threshold: 33w running, 28w tri/hyrox): cycle 1 (~45%) ends in a **Checkpoint** week (`wk.checkpoint = true`, `wk.ph = 'peak'`), 2-week inter-cycle taper (labelled `'taper'` so the workout generator's existing taper volume drop fires automatically), cycle 2 (~55%) carries the race.
 
-The legacy `s.racePhaseStart` field (which used to split plans into a 4-week block-cycle prefix + 16-week race-specific arc) is deprecated; persistence migrates affected plans on next launch.
+Entry points per format:
+- Running: `computePlanPhases(totalWeeks)` (uses `RUNNING_PHASE_CONFIG`)
+- Triathlon: `computeTriPlanPhases(distance, totalWeeks)` in `triathlon-constants.ts`
+- HYROX: `computeHyroxPlanPhases(totalWeeks)` in `hyrox-constants.ts`
+
+The legacy `s.racePhaseStart` field (running-only — used to split plans into a 4-week block-cycle prefix + 16-week race-specific arc) is deprecated; persistence migrates affected plans on next launch.
 
 ---
 

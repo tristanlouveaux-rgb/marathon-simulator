@@ -232,3 +232,94 @@ describe('computeHRCalibratedVdot — edge cases', () => {
     }
   });
 });
+
+describe('computeHRCalibratedVdot — per-segment input', () => {
+  const RHR = 50;
+  const MAX = 190;
+  const HRR_DENOM = MAX - RHR; // 140
+
+  /** Build a per-km segment with the legacy mkRun shape but tagged isSegment. */
+  function mkSeg(daysAgo: number, paceSecPerKm: number, avgHR: number): HRRunInput {
+    const ms = NOW.getTime() - daysAgo * 24 * 60 * 60 * 1000;
+    return {
+      startTime: new Date(ms).toISOString(),
+      distKm: 1.0,
+      durSec: paceSecPerKm, // 1 km at this pace
+      avgHR,
+      isSegment: true,
+    };
+  }
+
+  it('accepts segments shorter than 20 minutes (1km splits qualify)', () => {
+    // Three 1-km splits — would be rejected as runs (each ~4-5 min < 20 min)
+    // but qualify as segments (≥ 60 s).
+    const segments = [
+      mkSeg(1, 330, Math.round(RHR + 0.65 * HRR_DENOM)), // 5:30/km, 65% HRR
+      mkSeg(1, 270, Math.round(RHR + 0.82 * HRR_DENOM)), // 4:30/km, 82% HRR
+      mkSeg(1, 255, Math.round(RHR + 0.88 * HRR_DENOM)), // 4:15/km, 88% HRR
+    ];
+    const r = computeHRCalibratedVdot(segments, RHR, MAX, NOW);
+    expect(r.n).toBe(3);
+    expect(r.vdot).not.toBeNull();
+  });
+
+  it('extracts within-run HRR variation from a tempo-finish long run', () => {
+    // Simulates a 10K with progression: 5 easy km then 5 threshold km.
+    // Run-level average would be ~70% HRR; per-segment captures the 65 % and
+    // 86 % endpoints which is what the regression needs.
+    const easy = Math.round(RHR + 0.65 * HRR_DENOM);
+    const threshold = Math.round(RHR + 0.86 * HRR_DENOM);
+    const segments: HRRunInput[] = [];
+    for (let i = 0; i < 5; i++) segments.push(mkSeg(2, 330, easy));      // easy km
+    for (let i = 0; i < 5; i++) segments.push(mkSeg(2, 250, threshold)); // tempo km
+    const r = computeHRCalibratedVdot(segments, RHR, MAX, NOW);
+    expect(r.n).toBe(10);
+    expect(r.beta).toBeLessThan(0);
+    // Wide HRR span (65% → 86%) means the regression has real coverage and
+    // shouldn't need to extrapolate wildly. paceAtVO2max should be faster
+    // than the threshold km pace (250s/km) but not absurd.
+    expect(r.paceAtVO2max).not.toBeNull();
+    expect(r.paceAtVO2max!).toBeLessThan(250);
+    expect(r.paceAtVO2max!).toBeGreaterThan(150);
+  });
+
+  it('mixes run-level and segment-level inputs', () => {
+    // Legacy run-level entry alongside per-km segments. Both feed the same
+    // regression; the segment path adds points without disrupting the
+    // run-level filter.
+    const segments: HRRunInput[] = [
+      mkSeg(1, 330, Math.round(RHR + 0.65 * HRR_DENOM)),
+      mkSeg(1, 270, Math.round(RHR + 0.82 * HRR_DENOM)),
+      mkSeg(1, 255, Math.round(RHR + 0.88 * HRR_DENOM)),
+      mkRun(3, 10, 310, 150, 3),                 // run-level (≥ 20 min)
+    ];
+    const r = computeHRCalibratedVdot(segments, RHR, MAX, NOW);
+    expect(r.n).toBe(4);
+    expect(r.vdot).not.toBeNull();
+  });
+
+  it('rejects segments under 60 s', () => {
+    // 200 m at 4:00/km = 48 s (under MIN_SEGMENT_DURATION_SEC of 60 s).
+    const shortSeg: HRRunInput = {
+      startTime: new Date(NOW.getTime() - 86400000).toISOString(),
+      distKm: 0.2,
+      durSec: 48,
+      avgHR: 160,
+      isSegment: true,
+    };
+    const r = computeHRCalibratedVdot([shortSeg, shortSeg, shortSeg], RHR, MAX, NOW);
+    expect(r.reason).toBe('no-points');
+  });
+
+  it('does not apply the drift gate to segments', () => {
+    // hrDrift on a segment entry would be meaningless; we ignore it. A
+    // segment with hrDrift = 20 still qualifies (filter doesn't fire).
+    const segs: HRRunInput[] = [
+      { startTime: new Date(NOW.getTime() - 86400000).toISOString(), distKm: 1, durSec: 300, avgHR: 150, hrDrift: 20, isSegment: true },
+      { startTime: new Date(NOW.getTime() - 86400000).toISOString(), distKm: 1, durSec: 280, avgHR: 160, hrDrift: 20, isSegment: true },
+      { startTime: new Date(NOW.getTime() - 86400000).toISOString(), distKm: 1, durSec: 260, avgHR: 170, hrDrift: 20, isSegment: true },
+    ];
+    const r = computeHRCalibratedVdot(segs, RHR, MAX, NOW);
+    expect(r.n).toBe(3);
+  });
+});

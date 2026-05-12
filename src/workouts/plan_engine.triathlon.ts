@@ -2,7 +2,8 @@
  * Triathlon plan engine — top-level entry for generating a triathlon plan.
  *
  * Generation flow:
- *   1. Phase each week (base → build → peak → taper) via phaseForWeek()
+ *   1. Phase each week (base → build → peak → taper, plus checkpoint flag for
+ *      double-periodization plans ≥28w) via computeTriPlanPhases()
  *   2. Compute weekly total hours from time-available × phase multiplier
  *   3. Split total hours into per-discipline hours via triConfig.volumeSplit
  *   4. Emit sessions per discipline via swim/bike/run generators
@@ -17,7 +18,7 @@
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider } from '@/types/triathlon';
-import { phasesForLen } from '@/constants/triathlon-constants';
+import { computeTriPlanPhases } from '@/constants/triathlon-constants';
 import { generateSwimSession, pickSwimKind } from './swim';
 import { generateBikeSession, pickBikeKind } from './bike';
 import { generateBrick } from './brick';
@@ -41,15 +42,18 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
   if (!tri) return [];
 
   const totalWeeks = state.tw || 20;
+  const planPhases = computeTriPlanPhases(tri.distance, totalWeeks);
   const weeks: Week[] = [];
 
   for (let w = 1; w <= totalWeeks; w++) {
-    const phase = phaseForWeek(w, totalWeeks, tri.distance);
+    const p = planPhases[w - 1];
+    const phase = p.ph;
     const weekWorkouts = generateWeekForTriathlon(state, w, totalWeeks, phase);
 
     weeks.push({
       w,
       ph: phase,
+      ...(p.checkpoint ? { checkpoint: true } : {}),
       triWorkouts: weekWorkouts,
       rated: {},
       skip: [],
@@ -95,7 +99,9 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   if (!tri || !state.wks || weekIndex < 1 || weekIndex > state.wks.length) return null;
 
   const totalWeeks = state.tw;
-  const phase = phaseForWeek(weekIndex, totalWeeks, tri.distance);
+  const planPhases = computeTriPlanPhases(tri.distance, totalWeeks);
+  const p = planPhases[weekIndex - 1];
+  const phase = p.ph;
   const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
 
   // Apply per-discipline effort multiplier when regenerating a future week.
@@ -108,20 +114,9 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   return {
     ...existing,
     ph: phase,
+    ...(p.checkpoint ? { checkpoint: true } : { checkpoint: existing.checkpoint }),
     triWorkouts: weekWorkouts,
   };
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Phase assignment
-// ───────────────────────────────────────────────────────────────────────────
-
-function phaseForWeek(weekIndex: number, totalWeeks: number, distance: '70.3' | 'ironman'): TrainingPhase {
-  const { base, build, peak } = phasesForLen(distance, totalWeeks);
-  if (weekIndex <= base) return 'base';
-  if (weekIndex <= base + build) return 'build';
-  if (weekIndex <= base + build + peak) return 'peak';
-  return 'taper';
 }
 
 // ───────────────────────────────────────────────────────────────────────────

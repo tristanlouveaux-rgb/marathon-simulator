@@ -97,7 +97,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     // This runs every sync so stale data (e.g. old "WORKOUT" label) gets corrected when
     // the edge function returns an updated activity_type (e.g. "HIIT" via sport_type).
     let extraPatched = false;
-    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null; powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null; repData?: import('@/types').ActivityRepData | null })[]) {
+    for (const row of activityRows as (GarminActivityRow & { hrZones?: unknown; kmSplits?: number[]; kmHRSplits?: number[]; polyline?: string; hrDrift?: number | null; ambientTempC?: number | null; elevationGainM?: number | null; averageWatts?: number | null; normalizedPowerW?: number | null; maxWatts?: number | null; deviceWatts?: boolean | null; kilojoules?: number | null; powerCurve?: { p600: number | null; p1200: number | null; p1800: number | null; p3600: number | null } | null; repData?: import('@/types').ActivityRepData | null })[]) {
       // Search across ALL weeks so past-week activities also get updated labels
       for (const wk of s.wks || []) {
         if (!wk.garminMatched) continue;
@@ -130,6 +130,12 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           // Always prefer DB splits (sourced from Strava splits_metric) over client-computed ones
           const splitsChanged = !actual.kmSplits || JSON.stringify(actual.kmSplits) !== JSON.stringify(row.kmSplits);
           if (splitsChanged) { actual.kmSplits = row.kmSplits; extraPatched = true; }
+        }
+        // Parallel per-km HR. Same DB-wins policy as kmSplits — the edge fn
+        // recomputes both from Strava and is canonical.
+        if (row.kmHRSplits?.length) {
+          const hrSplitsChanged = !actual.kmHRSplits || JSON.stringify(actual.kmHRSplits) !== JSON.stringify(row.kmHRSplits);
+          if (hrSplitsChanged) { actual.kmHRSplits = row.kmHRSplits; extraPatched = true; }
         }
         if (row.hrDrift != null && actual.hrDrift == null) { actual.hrDrift = row.hrDrift; extraPatched = true; }
         if (row.ambientTempC != null && actual.ambientTempC == null) { actual.ambientTempC = row.ambientTempC; extraPatched = true; }
@@ -208,6 +214,15 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           if (matchRow.hrZones) actual.hrZones = matchRow.hrZones as { z1: number; z2: number; z3: number; z4: number; z5: number };
           if (matchRow.polyline) actual.polyline = matchRow.polyline;
           if (matchRow.kmSplits?.length) actual.kmSplits = matchRow.kmSplits;
+          if (matchRow.kmHRSplits?.length) actual.kmHRSplits = matchRow.kmHRSplits;
+          // Strip stale Garmin-webhook lap shells. The Garmin path
+          // (activitySync.ts) writes `laps[]` from Garmin webhook details,
+          // often without HR per lap. When a Strava row arrives for the same
+          // activity, Strava is canonical — but the kmHRSplits we now carry
+          // give richer per-km HR signal than Garmin's lap-level data, and
+          // leaving stale Garmin laps around creates a misleading lap-level
+          // HRR=0 contribution in any consumer that reads `actual.laps`.
+          actual.laps = undefined;
           if (matchRow.elevationGainM != null) actual.elevationGainM = matchRow.elevationGainM;
           if (matchRow.hrDrift != null) actual.hrDrift = matchRow.hrDrift;
           // Strava is canonical for power — overwrite even if Garmin row had numbers
@@ -854,7 +869,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
     const { data, error } = await supabase
       .from('garmin_activities')
       .select(
-        'garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, itrimp, hr_zones, km_splits, polyline, activity_name, elevation_gain_m, hr_drift, ambient_temp_c, average_watts, normalized_power, max_watts, device_watts, kilojoules',
+        'garmin_id, activity_type, start_time, duration_sec, distance_m, avg_pace_sec_km, avg_hr, max_hr, calories, itrimp, hr_zones, km_splits, km_hr_splits, polyline, activity_name, elevation_gain_m, hr_drift, ambient_temp_c, average_watts, normalized_power, max_watts, device_watts, kilojoules',
       )
       .eq('user_id', userId)
       .gte('start_time', sinceISO)
@@ -930,6 +945,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
         ambientTempC: r.ambient_temp_c ?? null,
         elevationGainM: r.elevation_gain_m ?? null,
         kmSplits: r.km_splits ?? null,
+        kmHRSplits: r.km_hr_splits ?? null,
         activityType: r.activity_type,
         displayName: r.activity_name ?? formatActivityType(r.activity_type),
         workoutName: r.activity_name ?? undefined,

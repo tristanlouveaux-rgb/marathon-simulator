@@ -35,6 +35,9 @@ export interface GarminActivityRow {
   ambientTempC?: number | null;
   polyline?: string | null;
   kmSplits?: number[] | null;
+  /** Average HR (bpm) per km, parallel-indexed to kmSplits. See
+   *  GarminActual.kmHRSplits for the canonical doc. */
+  kmHRSplits?: number[] | null;
   elevationGainM?: number | null;
   /** Ride power fields. Present on bike activities synced after 2026-04-24. */
   averageWatts?: number | null;

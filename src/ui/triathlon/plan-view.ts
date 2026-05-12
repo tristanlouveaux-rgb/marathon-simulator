@@ -12,6 +12,8 @@ import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { renderTriWorkoutCard } from './workout-card';
 import { openTriWorkoutDetail } from './workout-detail-modal';
+import { DISCIPLINE_COLOURS, DISCIPLINE_ICON, DISCIPLINE_LABEL, type BadgeKind } from './colours';
+import { formatKm } from '@/utils/format';
 import { renderBenchmarkTestsCard, wireBenchmarkTestsCard } from './benchmark-tests-card';
 import { openVibesScienceModal } from '../session-generator';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
@@ -55,6 +57,7 @@ export function renderTriathlonPlanView(): void {
 
   const viewWeek = _viewWeek ?? s.w;
   const isFutureWeek = viewWeek > s.w;
+  const isPastWeek = viewWeek < s.w;
   const wk = s.wks?.[viewWeek - 1];
   const workouts = wk?.triWorkouts ?? [];
   const phase = wk?.ph ? capitalize(wk.ph) : '';
@@ -81,6 +84,23 @@ export function renderTriathlonPlanView(): void {
     const d = w.discipline ?? 'run';
     if (d === 'swim' || d === 'bike' || d === 'run') minByDisc[d] += estimateMinutes(w);
   }
+
+  // Completed totals (current + past weeks only — future weeks have no actuals yet)
+  const actualsForWk: Record<string, any> = (wk as any)?.garminActuals ?? {};
+  const completedWorkouts = workouts.filter((w: any) => w.status === 'completed');
+  const completedMinFor = (w: any): number => {
+    const a = w.matchedActivityId ? actualsForWk[w.matchedActivityId] : null;
+    if (a?.durationSec && a.durationSec > 0) return Math.round(a.durationSec / 60);
+    return estimateMinutes(w);
+  };
+  const doneMin = completedWorkouts.reduce((acc: number, w: any) => acc + completedMinFor(w), 0);
+  const doneTss = completedWorkouts.reduce((acc: number, w: any) => acc + (w.aerobic ?? 0) + (w.anaerobic ?? 0), 0);
+  const doneByDisc = { swim: 0, bike: 0, run: 0 };
+  for (const w of completedWorkouts) {
+    const d = (w.discipline ?? 'run') as string;
+    if (d === 'swim' || d === 'bike' || d === 'run') doneByDisc[d] += completedMinFor(w);
+  }
+  const showProgress = !isFutureWeek;
 
   // Group by day
   const byDay: Record<number, typeof workouts> = { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] };
@@ -128,7 +148,7 @@ export function renderTriathlonPlanView(): void {
         <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
           <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${escapeHtml(raceName)}</div>
           ${phase ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:10px;letter-spacing:-0.01em">${phase}</div>` : ''}
-          ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">Week ${s.w} of ${s.tw}</div>` : ''}
+          ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`}</div>` : ''}
 
           <div style="display:flex;justify-content:center;gap:8px;margin-top:18px;flex-wrap:wrap">
             <button id="tri-coach-btn" class="m-btn-glass">Coach</button>
@@ -145,25 +165,28 @@ export function renderTriathlonPlanView(): void {
             <div style="flex:1;text-align:center">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Weekly hours</div>
               <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${fmtHours(totalMin)}</div>
+              ${showProgress ? `<div style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-top:2px">${fmtHoursZero(doneMin)} done</div>` : ''}
             </div>
             <div style="flex:1;text-align:center;border-left:1px solid rgba(0,0,0,0.06);border-right:1px solid rgba(0,0,0,0.06)">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Sessions</div>
               <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${workouts.length}</div>
+              ${showProgress ? `<div style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-top:2px">${completedWorkouts.length} done</div>` : ''}
             </div>
             <div style="flex:1;text-align:center">
               <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Week load</div>
               <div style="font-size:20px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${Math.round(totalTss)}<span style="font-size:11px;color:var(--c-faint);font-weight:500;margin-left:2px">TSS</span></div>
+              ${showProgress ? `<div style="font-size:10px;color:var(--c-faint);font-variant-numeric:tabular-nums;margin-top:2px">${Math.round(doneTss)} done</div>` : ''}
             </div>
           </div>
           <!-- Discipline mini-bars -->
           <div style="margin-top:10px;display:grid;grid-template-columns:${isCyclingOnlyMode(s) ? '1fr' : '1fr 1fr 1fr'};gap:8px">
             ${isCyclingOnlyMode(s)
-              ? renderDisciplineMini('bike', minByDisc.bike, totalMin)
-              : `${renderDisciplineMini('swim', minByDisc.swim, totalMin)}
-                 ${renderDisciplineMini('bike', minByDisc.bike, totalMin)}
-                 ${renderDisciplineMini('run', minByDisc.run, totalMin)}`}
+              ? renderDisciplineMini('bike', doneByDisc.bike, minByDisc.bike, showProgress)
+              : `${renderDisciplineMini('swim', doneByDisc.swim, minByDisc.swim, showProgress)}
+                 ${renderDisciplineMini('bike', doneByDisc.bike, minByDisc.bike, showProgress)}
+                 ${renderDisciplineMini('run', doneByDisc.run, minByDisc.run, showProgress)}`}
           </div>
-          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">Hours${isCyclingOnlyMode(s) ? '' : ' per discipline'} this week</div>
+          <div style="text-align:center;font-size:11px;color:var(--c-faint);margin-top:6px">${showProgress ? 'Completed vs planned this week' : `Hours${isCyclingOnlyMode(s) ? '' : ' per discipline'} this week`}</div>
         </div>
 
         <!-- Week navigation strip -->
@@ -180,7 +203,7 @@ export function renderTriathlonPlanView(): void {
         </div>
 
         <!-- Future-week draft banner (mirrors running plan-view) -->
-        ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Draft. Final workouts depend on the preceding week\'s performance.</div>` : ''}
+        ${isFutureWeek ? `<div style="margin:4px 20px 8px;padding:12px 15px;background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.06);border-radius:12px;font-size:13px;font-weight:500;color:#64748B;line-height:1.5">Estimated from last week\'s load. Sessions and distances adjust as you train.</div>` : ''}
 
         <!-- Injury banner + morning check (current week only) -->
         ${!isFutureWeek && injuryActive && injState ? `
@@ -214,6 +237,9 @@ export function renderTriathlonPlanView(): void {
             </div>
           </div>
         ` : ''}
+
+        <!-- Completed efforts (past weeks only) -->
+        ${isPastWeek ? buildCompletedEfforts(wk, s) : ''}
 
         <!-- Day-by-day -->
         <div class="hf" data-delay="0.18" style="padding:12px 20px">
@@ -321,6 +347,15 @@ export function renderTriathlonPlanView(): void {
       const wkRow = st.wks?.[st.w - 1];
       const found = (wkRow?.triWorkouts ?? []).find((x: any) => (x.id || x.n) === id);
       if (found) openTriWorkoutDetail(found);
+    });
+  });
+
+  // Completed effort rows → detail pop-up
+  document.querySelectorAll<HTMLElement>('.tri-completed-row').forEach((el) => {
+    el.addEventListener('click', () => {
+      const id = el.getAttribute('data-completed-id');
+      if (!id) return;
+      openCompletedEffortDetail(id, wk, s);
     });
   });
 
@@ -830,6 +865,163 @@ function renderInjuryRestCard(w: Workout, disc: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Completed efforts — past-week section + detail pop-up
+// ─────────────────────────────────────────────────────────────────────────────
+
+function fmtDurSec(sec: number): string {
+  const h = Math.floor(sec / 3600);
+  const m = Math.round((sec % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m} min`;
+}
+
+interface EffortSignal { label: string; color: string; }
+function effortSignal(actual: any, discipline: string): EffortSignal | null {
+  let score: number | null = null;
+  const isSwim = discipline === 'swim';
+  if (discipline === 'bike') score = actual?.powerAdherence ?? actual?.hrEffortScore ?? null;
+  else if (isSwim) score = actual?.paceAdherence ?? null;
+  else score = actual?.hrEffortScore ?? null;
+  if (score == null) return null;
+  // Swim: score > 1.0 = slower than target. Bike/run: score > 1.0 = harder than planned.
+  if (score > 1.12) return { label: isSwim ? 'Off pace'      : 'Hard effort',    color: '#EF4444' };
+  if (score > 1.07) return { label: isSwim ? 'Slightly slow' : 'Above target',   color: '#F59E0B' };
+  if (score >= 0.93) return { label: 'On target',                                 color: '#22C55E' };
+  if (score >= 0.87) return { label: isSwim ? 'Ahead of pace' : 'Below target',  color: '#94A3B8' };
+  return              { label: isSwim ? 'Well ahead'    : 'Well below target',   color: '#94A3B8' };
+}
+
+function buildCompletedEfforts(wk: any, s: any): string {
+  const completed = (wk?.triWorkouts ?? []).filter((w: any) => w.status === 'completed');
+  if (completed.length === 0) return '';
+  const actuals = wk?.garminActuals ?? {};
+  const rated   = wk?.rated ?? {};
+
+  const rows = completed.map((w: any) => {
+    const actual  = w.matchedActivityId ? actuals[w.matchedActivityId] : null;
+    const disc    = (w.discipline ?? 'run') as BadgeKind;
+    const c       = DISCIPLINE_COLOURS[disc] ?? DISCIPLINE_COLOURS.run;
+    const icon    = DISCIPLINE_ICON[disc]    ?? '';
+    const label   = DISCIPLINE_LABEL[disc]   ?? disc;
+    const rpe     = typeof rated[w.id ?? w.n] === 'number' ? (rated[w.id ?? w.n] as number) : null;
+    const signal  = actual ? effortSignal(actual, disc) : null;
+    const actualDur = actual?.durationSec ? fmtDurSec(actual.durationSec) : null;
+    const meta    = [w.dayName, actualDur].filter(Boolean).join(' · ');
+
+    const right = signal
+      ? `<span style="font-size:11px;font-weight:600;color:${signal.color}">${signal.label}</span>`
+      : rpe != null
+      ? `<span style="font-size:11px;color:var(--c-muted)">RPE ${rpe}</span>`
+      : '';
+
+    return `
+      <div class="tri-completed-row" data-completed-id="${escapeHtml(w.id ?? w.n)}"
+        style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(0,0,0,0.05);cursor:pointer">
+        <span style="display:inline-flex;align-items:center;gap:4px;background:${c.badge};color:${c.badgeText};font-size:9px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:3px 7px;border-radius:100px;flex-shrink:0">
+          ${icon} ${label}
+        </span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#0F172A;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(w.n)}</div>
+          ${meta ? `<div style="font-size:11px;color:var(--c-muted)">${meta}</div>` : ''}
+        </div>
+        <div style="flex-shrink:0">${right}</div>
+        <svg style="flex-shrink:0;color:var(--c-faint)" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      </div>`;
+  }).join('');
+
+  return `
+    <div style="margin:0 20px 12px;background:#fff;border-radius:16px;padding:14px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:2px">Completed</div>
+      ${rows}
+    </div>`;
+}
+
+function openCompletedEffortDetail(workoutId: string, wk: any, s: any): void {
+  document.getElementById('tri-completed-detail-overlay')?.remove();
+  const w = (wk?.triWorkouts ?? []).find((x: any) => (x.id ?? x.n) === workoutId);
+  if (!w) return;
+
+  const actual    = w.matchedActivityId ? (wk?.garminActuals ?? {})[w.matchedActivityId] : null;
+  const rated     = wk?.rated ?? {};
+  const rpe       = typeof rated[w.id ?? w.n] === 'number' ? (rated[w.id ?? w.n] as number) : null;
+  const disc      = (w.discipline ?? 'run') as BadgeKind;
+  const c         = DISCIPLINE_COLOURS[disc] ?? DISCIPLINE_COLOURS.run;
+  const icon      = DISCIPLINE_ICON[disc]    ?? '';
+  const label     = DISCIPLINE_LABEL[disc]   ?? disc;
+  const plannedMin = estimateMinutes(w);
+  const actualDur = actual?.durationSec ? fmtDurSec(actual.durationSec) : null;
+  const actualDist = actual?.distanceKm  ? formatKm(actual.distanceKm, s.unitPref ?? 'km') : null;
+  const avgHR     = actual?.avgHR        ? `${Math.round(actual.avgHR)} bpm` : null;
+  const signal    = actual ? effortSignal(actual, disc) : null;
+
+  // Signal plain-language detail
+  let signalDetail = '';
+  if (actual) {
+    if (disc === 'bike' && actual.powerAdherence != null) {
+      const pct = Math.round(actual.powerAdherence * 100);
+      signalDetail = `Power output was ${pct}% of target.`;
+    } else if (disc === 'swim' && actual.paceAdherence != null) {
+      const pct = Math.round(actual.paceAdherence * 100);
+      signalDetail = pct <= 100
+        ? `Swam ${100 - pct}% faster than target pace.`
+        : `Swam ${pct - 100}% slower than target pace.`;
+    } else if (actual.hrEffortScore != null) {
+      const pct = Math.round(actual.hrEffortScore * 100);
+      signalDetail = pct <= 100
+        ? `Heart rate was ${100 - pct}% below the expected zone.`
+        : `Heart rate was ${pct - 100}% above the expected zone.`;
+    }
+  }
+
+  const row = (label: string, value: string) =>
+    `<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.04)">
+      <span style="font-size:13px;color:var(--c-muted)">${label}</span>
+      <span style="font-size:13px;font-weight:600;color:#0F172A">${value}</span>
+    </div>`;
+
+  const statsRows = [
+    plannedMin > 0 ? row('Planned', `${plannedMin} min`) : '',
+    actualDur       ? row('Actual duration', actualDur) : '',
+    actualDist      ? row('Distance', actualDist) : '',
+    avgHR           ? row('Avg HR', avgHR) : '',
+    rpe != null     ? row('RPE rated', `${rpe} / 10`) : '',
+  ].join('');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'tri-completed-detail-overlay';
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  overlay.innerHTML = `
+    <div style="background:#FAF9F6;width:100%;max-width:420px;border-radius:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);overflow:hidden">
+      <div style="background:linear-gradient(180deg,${c.bg},rgba(255,255,255,0));padding:20px 22px 16px;border-bottom:1px solid rgba(0,0,0,0.05)">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span style="display:inline-flex;align-items:center;gap:5px;background:${c.badge};color:${c.badgeText};font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;padding:3px 9px;border-radius:100px">${icon} ${label}</span>
+          <button id="tri-completed-close" style="width:30px;height:30px;background:rgba(0,0,0,0.05);border:none;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--c-muted)" aria-label="Close">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div style="font-size:22px;font-weight:700;color:#0F172A;letter-spacing:-0.02em">${escapeHtml(w.n)}</div>
+        ${w.dayName ? `<div style="font-size:12px;color:var(--c-muted);margin-top:3px">${w.dayName}</div>` : ''}
+      </div>
+      <div style="padding:16px 22px 20px">
+        ${statsRows}
+        ${signal ? `
+          <div style="margin-top:14px;padding:12px 14px;background:rgba(0,0,0,0.03);border-radius:10px">
+            <div style="font-size:12px;font-weight:600;color:${signal.color};margin-bottom:3px">${signal.label}</div>
+            ${signalDetail ? `<div style="font-size:12px;color:var(--c-muted);line-height:1.5">${signalDetail}</div>` : ''}
+          </div>` : ''}
+        <button id="tri-completed-done" style="margin-top:16px;width:100%;padding:13px;background:#0F172A;color:#FAF9F6;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  overlay.querySelector('#tri-completed-close')?.addEventListener('click', close);
+  overlay.querySelector('#tri-completed-done')?.addEventListener('click', close);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Small helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -876,15 +1068,25 @@ function renderDay(d: number, list: Array<any>, benchmarkCtx: { cssSecPer100m: n
   `;
 }
 
-function renderDisciplineMini(d: 'swim' | 'bike' | 'run', mins: number, totalMin: number): string {
+function renderDisciplineMini(
+  d: 'swim' | 'bike' | 'run',
+  doneMin: number,
+  plannedMin: number,
+  showProgress: boolean,
+): string {
   const colour = d === 'swim' ? '#5b8a8a' : d === 'bike' ? '#c08460' : '#7a845c';
   const label = d === 'swim' ? 'Swim' : d === 'bike' ? 'Bike' : 'Run';
-  const pct = totalMin > 0 ? Math.round((mins / totalMin) * 100) : 0;
+  const pct = showProgress && plannedMin > 0
+    ? Math.min(100, Math.round((doneMin / plannedMin) * 100))
+    : 0;
+  const rightLabel = showProgress
+    ? `${fmtHoursZero(doneMin)} / ${fmtHours(plannedMin)}`
+    : fmtHours(plannedMin);
   return `
     <div style="background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 2px rgba(0,0,0,0.04)">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
         <span style="font-size:10px;font-weight:600;color:${colour};letter-spacing:0.04em;text-transform:uppercase">${label}</span>
-        <span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">${fmtHours(mins)}</span>
+        <span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums">${rightLabel}</span>
       </div>
       <div style="height:3px;background:rgba(0,0,0,0.05);border-radius:2px;overflow:hidden">
         <div style="height:100%;width:${pct}%;background:${colour};transition:width 0.3s"></div>
@@ -902,6 +1104,13 @@ function fmtHours(mins: number): string {
   if (h > 0 && m > 0) return `${h}h ${m}m`;
   if (h > 0) return `${h}h`;
   return `${m}m`;
+}
+
+/** Like fmtHours but renders "0h" instead of an em-dash so the "done" caption
+ *  shows a real number early in the week. */
+function fmtHoursZero(mins: number): string {
+  if (mins <= 0) return '0h';
+  return fmtHours(mins);
 }
 
 function estimateMinutes(w: any): number {

@@ -309,6 +309,14 @@ export interface GarminActual {
   hrZones?: { z1: number; z2: number; z3: number; z4: number; z5: number } | null;
   /** Pace (sec/km) for each completed km — runs only */
   kmSplits?: number[] | null;
+  /** Average HR (bpm) for each completed km, parallel-indexed to kmSplits.
+   *  Runs only, populated when Strava's splits_metric or the HR stream had
+   *  per-km HR data. Drives the per-km point input to the VO2 HR-calibrated
+   *  regression — within-run variation (e.g. a tempo finish on a long run)
+   *  becomes multiple regression points instead of one diluted (avgPace,
+   *  avgHR) point. Same indexing as kmSplits; readers should pair index-by-
+   *  index and skip entries where either value is missing/zero. */
+  kmHRSplits?: number[] | null;
   /** Encoded polyline from Strava (Google polyline format) for map rendering */
   polyline?: string | null;
   /** Raw activity type from Garmin/Strava (e.g. 'RUNNING', 'CYCLING', 'WALKING').
@@ -521,6 +529,27 @@ export const TRIATHLON_FIELDS_VERSION = 3;
  * estimated VDOT). */
 export const VO2_DEVICE_ONLY_VERSION = 4;
 
+/**
+ * Single running race outcome — predicted vs actual logged after a target race.
+ * Mirrors `TriRaceLogEntry` for running mode. Idempotent on `dateISO`.
+ */
+export interface RunRaceLogEntry {
+  /** ISO date the race ran (YYYY-MM-DD). */
+  dateISO: string;
+  /** Race distance at the time of the race. */
+  distance: RaceDistance;
+  /** Cached blended prediction at the moment the race was detected (seconds). */
+  predictedTotalSec: number;
+  /** Sum of actual race-day running activity duration in seconds. */
+  actualTotalSec: number;
+  /** Distance of the matched race-day run (km) — for context, not used in calibration. */
+  actualDistanceKm?: number;
+  /** `state.v` (VDOT) at log time — for retrospective accuracy analysis. */
+  predictionVdotSnapshot?: number;
+  /** Race name from `selectedMarathon`, if available. */
+  raceName?: string;
+}
+
 /** Main simulator state */
 export interface SimulatorState {
   // Schema version (for migrations)
@@ -685,6 +714,14 @@ export interface SimulatorState {
 
   // Selected event (locked from onboarding)
   selectedMarathon?: Marathon;
+
+  /**
+   * Running race-outcome log — predicted vs actual after a target race.
+   * Idempotent per `dateISO`. Mirrors `triConfig.raceLog` in triathlon mode.
+   * Append-only; consumed by post-race retrospective surfaces. Optional so
+   * existing state objects keep working without migration.
+   */
+  runRaceLog?: RunRaceLogEntry[];
 
   // Athlete tier (for ACWR thresholds and plan ramp rate)
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';

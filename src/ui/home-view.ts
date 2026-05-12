@@ -1910,7 +1910,8 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   // below, so repeating it here is double messaging. Plan view keeps the full
   // sentence because it doesn't show the readiness sentence on the same page.
   const coachMod = coach && !alreadyRated ? coach.workoutMod : 'none';
-  const coachNote = coachMod === 'downgrade'
+  const workoutIsAlreadyEasy = (todayW as any).t === 'easy' || ((todayW as any).rpe != null && (todayW as any).rpe <= 3);
+  const coachNote = coachMod === 'downgrade' && !workoutIsAlreadyEasy
     ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Go easier today.</div>`
     : coachMod === 'skip'
       ? `<div style="margin:-8px 16px 14px;padding:10px 14px;border:1px solid var(--c-border);border-radius:12px;font-size:12px;color:var(--c-black);font-weight:600;line-height:1.45">Consider rest today.</div>`
@@ -2718,7 +2719,7 @@ function getHomeHTML(s: SimulatorState): string {
       <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 10px">
         <div style="font-size:48px;font-weight:700;color:#0F172A;letter-spacing:-0.03em;line-height:1">${planTitle}</div>
         ${phaseLabel ? `<div style="font-size:17px;font-weight:700;color:#0F172A;margin-top:10px;letter-spacing:-0.01em">${phaseLabel}</div>` : ''}
-        ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">Week ${s.w} of ${s.tw}</div>` : ''}
+        ${s.w && s.tw ? `<div style="font-size:14px;font-weight:500;color:#64748B;margin-top:4px">${s.w > s.tw ? 'Plan complete' : `Week ${s.w} of ${s.tw}`}</div>` : ''}
         ${hasRaceCountdown && raceName ? `<div style="font-size:13px;font-weight:500;color:#94A3B8;margin-top:4px">${raceName}</div>` : ''}
 
         <!-- Action buttons -->
@@ -2735,7 +2736,6 @@ function getHomeHTML(s: SimulatorState): string {
       ${buildGuestAccountBanner(s)}
       ${s.eventType === 'triathlon' ? buildTriCarryBanner(s) : ''}
       ${s.eventType === 'hyrox' ? buildTodayWorkoutHyrox(s) : s.eventType === 'triathlon' ? buildTodayWorkoutTriathlon(s) : buildTodayWorkout(s, coach)}
-      ${s.eventType === 'triathlon' || s.eventType === 'hyrox' ? '' : buildRaceForecastCard(s)}
       ${buildReadinessRing(s)}
       ${buildSyncActions(s)}
       ${buildRecentActivity(s)}

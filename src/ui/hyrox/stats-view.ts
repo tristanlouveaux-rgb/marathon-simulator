@@ -19,6 +19,7 @@ import type { HyroxStation } from '@/types/triathlon';
 import { getFinishTimePercentile, percentileLabel, percentileHeadline } from '@/calculations/hyrox-population';
 import { predictHyroxRace } from '@/calculations/race-prediction.hyrox';
 import { latestTestAgeMonths } from '@/calculations/hyrox-station-history';
+import { deriveHyroxRunPace } from '@/calculations/hyrox-run-pace';
 import type { SimulatorState } from '@/types/state';
 
 function navigateTab(tab: TabId): void {
@@ -81,6 +82,12 @@ export function renderHyroxStatsView(): void {
     ? getFinishTimePercentile(predTimeSec, hx.format ?? 'open_singles')
     : null;
 
+  // Run-pace derivation chain (for the Critical Pace card). Surfaces the
+  // VDOT → threshold → CP → HYROX pace wiring so the user can see how their
+  // 1km run pace was computed and what's anchoring it.
+  const runPaceResult = deriveHyroxRunPace(s);
+  const cpComponents = runPaceResult.components ?? null;
+
   container.innerHTML = `
     <style>
       @keyframes hxStatsFloat {
@@ -112,7 +119,7 @@ export function renderHyroxStatsView(): void {
             <div style="display:flex;justify-content:space-between;align-items:flex-start">
               <div>
                 <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Plan progress</div>
-                <div style="font-size:22px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">Week ${s.w ?? '—'}<span style="font-size:14px;color:var(--c-muted);font-weight:400"> of ${s.tw ?? '—'}</span></div>
+                <div style="font-size:22px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${(s.w != null && s.tw != null && s.w > s.tw) ? 'Plan complete' : `Week ${s.w ?? '—'}<span style="font-size:14px;color:var(--c-muted);font-weight:400"> of ${s.tw ?? '—'}</span>`}</div>
                 ${phase ? `<div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-transform:capitalize">${phase} phase</div>` : ''}
               </div>
               ${raceDays != null ? `
@@ -191,6 +198,51 @@ export function renderHyroxStatsView(): void {
           </div>
         </div>
 
+        <!-- Critical Pace derivation card -->
+        ${cpComponents ? (() => {
+          const fmtPaceLocal = (secKm: number) => {
+            if (!Number.isFinite(secKm) || secKm <= 0) return '—';
+            const m = Math.floor(secKm / 60);
+            const ss = String(Math.round(secKm % 60)).padStart(2, '0');
+            return `${m}:${ss}`;
+          };
+          const v = s.v;
+          const cpSec = Math.round(cpComponents.criticalPaceSecKm);
+          const thresholdSec = Math.round(cpComponents.thresholdSecKm);
+          const finalPaceSec = runPaceResult.paceSecKm;
+          const cpRatio = cpComponents.cpRatio;
+          const formatFactor = cpComponents.formatFactor;
+          const personalOffset = cpComponents.personalOffsetSec;
+          const isDoubles = formatFactor < 1.0;
+          const offsetLabel = personalOffset === 0
+            ? 'no race history yet'
+            : `${personalOffset > 0 ? '+' : ''}${personalOffset} s/km from your race history`;
+          return `
+            <div class="hxsf" style="padding:12px 20px 0;animation-delay:0.16s">
+              <div id="hx-stats-cp-card" style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);cursor:pointer">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
+                  <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint)">Critical pace</div>
+                  <div style="font-size:11px;color:var(--c-muted)">VDOT ${v?.toFixed(0) ?? '—'}</div>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:12px">
+                  <div>
+                    <span style="font-size:24px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtPaceLocal(cpSec)}</span>
+                    <span style="font-size:13px;color:var(--c-muted);margin-left:4px">/km</span>
+                  </div>
+                  <div style="text-align:right">
+                    <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.06em">HYROX pace</div>
+                    <div style="font-size:16px;font-weight:500;color:#0F172A;font-variant-numeric:tabular-nums">${fmtPaceLocal(finalPaceSec)}/km</div>
+                  </div>
+                </div>
+                <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
+                  Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles factor ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
+                </div>
+                <div style="font-size:10px;color:var(--c-faint);padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);margin-top:10px">${offsetLabel} · tap for the science</div>
+              </div>
+            </div>
+          `;
+        })() : ''}
+
         <!-- Benchmarks card: run pace + stations -->
         <div class="hxsf" style="padding:12px 20px 0;animation-delay:0.18s">
           <div style="background:#fff;border-radius:16px;padding:16px 18px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)">
@@ -223,6 +275,11 @@ export function renderHyroxStatsView(): void {
 
   document.getElementById('hx-stats-mtl-card')?.addEventListener('click', () => {
     import('../mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderHyroxStatsView()));
+  });
+
+  // CP card tap → modal explainer covering the derivation chain + science.
+  document.getElementById('hx-stats-cp-card')?.addEventListener('click', () => {
+    openCriticalPaceExplainer();
   });
 
   // Pro weights toggle — flips hyroxConfig.benchmarksAtProWeights and re-renders.
@@ -350,4 +407,43 @@ function daysUntil(isoDate: string): number {
   const target = new Date(isoDate).getTime();
   const now = new Date().setHours(0, 0, 0, 0);
   return Math.max(0, Math.round((target - now) / 86400000));
+}
+
+/** Modal explainer for the Critical Pace card. Spells out the derivation
+ *  chain (VDOT → threshold → CP → format → personalisation → HYROX pace)
+ *  and the scientific anchor. Per UX_PATTERNS overlays must be vertically
+ *  centered (`items-center justify-center`).
+ */
+function openCriticalPaceExplainer(): void {
+  const overlay = document.createElement('div');
+  overlay.style.cssText =
+    'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.45);' +
+    'display:flex;align-items:center;justify-content:center;padding:20px;' +
+    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:18px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.3);position:relative">
+      <button id="hx-cp-modal-close" style="position:absolute;top:14px;right:14px;width:28px;height:28px;border-radius:14px;border:none;background:rgba(0,0,0,0.05);font-size:14px;cursor:pointer;line-height:1;color:var(--c-muted)">×</button>
+      <div style="font-size:18px;font-weight:600;color:#0F172A;margin-bottom:14px;letter-spacing:-0.01em">How your HYROX pace is computed</div>
+      <div style="font-size:13px;color:var(--c-black);line-height:1.6;margin-bottom:14px">
+        Step by step, from physiology to prediction:
+      </div>
+      <ol style="font-size:13px;color:var(--c-black);line-height:1.6;padding-left:20px;margin:0 0 16px">
+        <li style="margin-bottom:8px"><strong>Threshold pace</strong> from your VDOT and lactate threshold (LT pace). The pace you can hold for 60 min straight.</li>
+        <li style="margin-bottom:8px"><strong>CP ratio</strong> at your VDOT. Continuously interpolated — no more discrete band buckets. Trained athletes can pace HYROX at or faster than threshold because stations are recovery between 1km legs.</li>
+        <li style="margin-bottom:8px"><strong>Critical Pace</strong> = threshold × CP ratio. This is your sustainable HYROX run pace for the singles format.</li>
+        <li style="margin-bottom:8px"><strong>Format factor</strong> adjusts for doubles (partner-rest reduces leg fatigue) or stays at 1.0 for singles.</li>
+        <li style="margin-bottom:8px"><strong>Personal offset</strong> applies a residual from your logged HYROX races. Decays linearly to zero over 12 months without fresh evidence.</li>
+      </ol>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
+        <strong>The science.</strong> Critical Pace is the asymptote of the velocity-time relationship (Hill 1923; Monod &amp; Scherrer 1965; Jones et al. 2010). For trained runners CP sits between 5k pace and threshold pace, and aligns with maximum lactate steady state within ~3–5% (Galbraith et al. 2014). HYROX's interval structure (8 × 1km separated by ~3–7 min of station work) matches CP-zone physiology better than continuous threshold.
+      </div>
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;padding-top:10px">
+        <strong>Why the prediction gets more accurate over time.</strong> When you log a HYROX race the model compares observed run pace to its prediction at that race's format, blends the residual into a personal offset, and uses that to bias all future predictions. The more races logged, the tighter the fit.
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.querySelector('#hx-cp-modal-close')?.addEventListener('click', close);
 }
