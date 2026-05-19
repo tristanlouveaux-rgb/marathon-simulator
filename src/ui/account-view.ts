@@ -11,6 +11,7 @@ import { vt } from '@/calculations/vdot';
 import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
 import { renderAuthView } from './auth-view';
+import { showSimpleToast } from './toast';
 import { isSimulatorMode } from '@/main';
 import { getPhysiologySource, hasPhysiologySource } from '@/data/sources';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
@@ -227,11 +228,13 @@ function getAccountHTML(): string {
         ${renderPreferencesGroup()}
 
         ${sectionLabel('AI Coach')}
-        ${renderAICoachGroup()}
+        ${renderCoachGroup()}
 
         ${(s.stravaConnected || s.stravaHistoryFetched || s.appleHistoryFetched) ? sectionLabel('Training History') + renderTrainingHistoryGroup() : ''}
 
         ${renderRecurringActivitiesRow(s)}
+
+        ${renderCommuteRow(s)}
 
         ${sectionLabel('Plan')}
         ${groupCard(`
@@ -279,6 +282,41 @@ function getAccountHTML(): string {
         `)}
 
         <div id="garmin-error" style="font-size:12px;color:var(--c-warn);margin-top:8px;display:none;padding:0 4px"></div>
+
+        ${sim ? '' : `
+        ${sectionLabel('Legal & data')}
+        ${groupCard(`
+          <a id="lnk-privacy" href="https://mosaicrunning.run/privacy.html" target="_blank" rel="noopener" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;text-decoration:none;color:inherit">
+            <span style="font-size:15px;color:var(--c-black)">Privacy policy</span>
+            ${chevron()}
+          </a>
+          ${rowDivider()}
+          <a id="lnk-terms" href="https://mosaicrunning.run/terms.html" target="_blank" rel="noopener" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;text-decoration:none;color:inherit">
+            <span style="font-size:15px;color:var(--c-black)">Terms of use</span>
+            ${chevron()}
+          </a>
+          ${rowDivider()}
+          <button id="btn-export-data" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+            <div>
+              <div style="font-size:15px;color:var(--c-black);text-align:left">Download my data</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Export everything Mosaic holds about you as JSON</div>
+            </div>
+            ${chevron()}
+          </button>
+          ${rowDivider()}
+          <button id="btn-delete-account" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+            <div>
+              <div style="font-size:15px;color:#dc2626;text-align:left">Delete account</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">30-day grace period. Sign back in to cancel.</div>
+            </div>
+            ${chevron()}
+          </button>
+        `)}
+
+        <p style="font-size:11px;line-height:1.55;color:var(--c-faint);margin-top:14px;padding:0 4px">
+          Mosaic is not a medical device. Consult a physician before starting any training programme. Mosaic's recommendations are informational; you are responsible for your own training decisions.
+        </p>
+        `}
 
         <!-- Sign Out -->
         <div style="margin-top:28px">
@@ -924,41 +962,43 @@ function renderPreferencesGroup(): string {
   `);
 }
 
-// ─── AI Coach Group ────────────────────────────────────────────────────────────
+// ─── Coach Group ───────────────────────────────────────────────────────────────
 
-function renderAICoachGroup(): string {
+function renderCoachGroup(): string {
   const s = getState();
-  const keyStored = s.anthropicApiKeyStored ?? false;
+  const p = s.coachPriorities;
+  const priorityLabel: Record<string, string> = { time: 'Hit the time', finish: 'Just finish', healthy: 'Stay healthy', fun: 'Have fun' };
+  const constraintLabel: Record<string, string> = { time: 'Time available', energy: 'Energy / recovery', injury: 'Injury history', none: 'Nothing right now' };
+
+  // Restore Purchases is required by App Store guidelines for any IAP. Shown
+  // only on native iOS — the row is a no-op on web/Android where RevenueCat
+  // doesn't run.
+  const isIOS = typeof window !== 'undefined'
+    && (window as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor?.isNativePlatform?.()
+    && (window as { Capacitor?: { getPlatform?: () => string } }).Capacitor?.getPlatform?.() === 'ios';
+
   return groupCard(`
-    <div style="padding:14px 16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-        <span style="font-size:14px;color:var(--c-black);font-weight:500">Anthropic API key</span>
-        ${keyStored
-          ? `<div style="display:flex;align-items:center;gap:8px">
-               <span id="ai-coach-status" style="font-size:12px;color:var(--c-ok)">Connected</span>
-               <button id="btn-ai-coach-clear" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Clear</button>
-             </div>`
-          : `<button id="btn-ai-coach-test" style="display:none;font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0">Test</button>`
-        }
+    <div style="padding:13px 16px;display:flex;align-items:center;justify-content:space-between;gap:16px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;color:var(--c-black);font-weight:500">Coach priorities</div>
+        <div style="font-size:11px;color:var(--c-faint);margin-top:2px;line-height:1.4">
+          ${p
+            ? `${priorityLabel[p.priority] ?? p.priority} · ${constraintLabel[p.constraint] ?? p.constraint}`
+            : 'Not set. Tap edit to tell the coach what matters.'}
+        </div>
       </div>
-      ${keyStored
-        ? `<div style="font-size:13px;color:var(--c-muted)">●●●●●●●●●●●●●●●●</div>`
-        : `<input id="input-anthropic-key" type="password" placeholder="sk-ant-…"
-             style="width:100%;padding:8px 10px;border:1px solid var(--c-border);border-radius:8px;font-size:13px;background:transparent;color:var(--c-black);box-sizing:border-box;margin-top:4px"
-             autocomplete="off" autocorrect="off" spellcheck="false"/>`
-      }
-      ${!keyStored ? `
-        <button id="btn-ai-coach-save" style="margin-top:10px;width:100%;padding:9px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;background:var(--c-black);color:#fff;border:none">
-          Save key
-        </button>` : ''}
-      <div id="ai-coach-msg" style="font-size:12px;color:var(--c-muted);margin-top:4px;min-height:16px"></div>
+      <button id="btn-edit-coach-priorities" style="font-size:12px;color:var(--c-black);background:transparent;border:1px solid var(--c-border);padding:6px 14px;border-radius:100px;cursor:pointer;flex-shrink:0">Edit</button>
     </div>
-    ${rowDivider()}
-    <div style="padding:12px 16px">
-      <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
-        Your API key is stored on this device only. When the AI coach is active, recent training data (pacing, HR, readiness scores) is sent to Anthropic to generate coaching. Anthropic does not train on API data.
-      </div>
-    </div>
+    ${isIOS ? `
+      ${rowDivider()}
+      <button id="btn-restore-purchases" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left">
+        <div>
+          <div style="font-size:15px;color:var(--c-black);text-align:left">Restore Purchases</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:2px;text-align:left">Reactivate AI Coach after reinstall or new device.</div>
+        </div>
+        ${chevron()}
+      </button>
+    ` : ''}
   `);
 }
 
@@ -1080,6 +1120,203 @@ function showRecurringActivitiesModal(): void {
   document.body.appendChild(overlay);
 }
 
+/**
+ * Render the Run-to-work row on the Account page. Always shown (even when
+ * disabled) so users who weren't asked at onboarding can turn it on later.
+ * Tap opens a modal mirroring the wizard step.
+ */
+function renderCommuteRow(s: ReturnType<typeof getState>): string {
+  const cfg = s.commuteConfig;
+  let detail: string;
+  if (cfg?.enabled && cfg.distanceKm > 0) {
+    const perDay = cfg.isBidirectional ? cfg.distanceKm * 2 : cfg.distanceKm;
+    const weekly = perDay * cfg.commuteDaysPerWeek;
+    const pack = cfg.backpackKg && cfg.backpackKg > 0 ? `, ${cfg.backpackKg}kg pack` : '';
+    detail = `~${weekly.toFixed(0)} km/week${pack}`;
+  } else {
+    detail = 'Add commute mileage to your plan';
+  }
+  return groupCard(`
+    <button id="btn-commute-config" style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:15px 16px;background:none;border:none;cursor:pointer;text-align:left;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;color:var(--c-black)">Run to work</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${detail}</div>
+      </div>
+      ${chevron()}
+    </button>
+  `);
+}
+
+/**
+ * Modal for editing commute config from the Account page. Mirrors the
+ * onboarding step's data model — writes the same `s.commuteConfig` shape.
+ */
+function showCommuteModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  overlay.style.background = 'rgba(0,0,0,0.45)';
+
+  function render(): void {
+    const s = getState();
+    const cfg = s.commuteConfig;
+    const enabled = cfg?.enabled ?? false;
+    const distance = cfg?.distanceKm ?? '';
+    const bidirectional = cfg?.isBidirectional ?? true;
+    const days = cfg?.commuteDaysPerWeek ?? 3;
+    const backpackKg = cfg?.backpackKg ?? '';
+
+    overlay.innerHTML = `
+      <div class="w-full max-w-sm rounded-2xl p-5" style="background:var(--c-surface)">
+        <div style="font-size:17px;font-weight:600;color:var(--c-black);margin-bottom:4px">Run to work</div>
+        <div style="font-size:12px;color:var(--c-muted);margin-bottom:16px;line-height:1.4">Commute mileage counts as easy aerobic volume. The plan asks for less easy filler when it knows you're already running it.</div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--c-border)">
+          <div style="font-size:14px;color:var(--c-black)">I run to work</div>
+          <button id="cm-acct-toggle" style="width:42px;height:24px;background:${enabled ? 'var(--c-black)' : 'rgba(0,0,0,0.12)'};border-radius:12px;border:none;cursor:pointer;position:relative">
+            <div style="position:absolute;top:2px;left:${enabled ? '20px' : '2px'};width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.18);transition:left 0.16s ease"></div>
+          </button>
+        </div>
+
+        <div id="cm-acct-fields" style="display:${enabled ? 'block' : 'none'}">
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--c-border)">
+            <div>
+              <div style="font-size:14px;color:var(--c-black)">One-way distance</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Home to work, in km.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input id="cm-acct-dist" type="number" inputmode="decimal" min="1" max="30" step="0.5" placeholder="—" value="${distance}" style="width:80px;padding:8px 10px;border:1px solid var(--c-border);border-radius:9px;background:#fff;color:var(--c-black);font-size:14px;font-variant-numeric:tabular-nums">
+              <span style="font-size:13px;color:var(--c-muted)">km</span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--c-border)">
+            <div>
+              <div style="font-size:14px;color:var(--c-black)">Run both ways</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:2px">To and from, or just one direction.</div>
+            </div>
+            <button id="cm-acct-bidir" style="width:42px;height:24px;background:${bidirectional ? 'var(--c-black)' : 'rgba(0,0,0,0.12)'};border-radius:12px;border:none;cursor:pointer;position:relative">
+              <div style="position:absolute;top:2px;left:${bidirectional ? '20px' : '2px'};width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.18);transition:left 0.16s ease"></div>
+            </button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--c-border)">
+            <div>
+              <div style="font-size:14px;color:var(--c-black)">Days per week</div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:2px">How often you commute by running.</div>
+            </div>
+            <div style="display:flex;gap:4px">
+              ${[1, 2, 3, 4, 5].map(d => `<button class="cm-acct-day" data-days="${d}" style="width:32px;height:32px;border-radius:8px;border:1px solid ${days === d ? 'var(--c-black)' : 'var(--c-border)'};background:${days === d ? 'var(--c-black)' : '#fff'};color:${days === d ? 'var(--c-surface)' : 'var(--c-black)'};font-size:13px;cursor:pointer">${d}</button>`).join('')}
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:12px 0">
+            <div>
+              <div style="font-size:14px;color:var(--c-black)">Backpack <span style="color:var(--c-faint);font-weight:400">(optional)</span></div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:2px">Default load on commute runs.</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input id="cm-acct-pack" type="number" inputmode="decimal" min="0" max="25" step="0.5" placeholder="0" value="${backpackKg}" style="width:80px;padding:8px 10px;border:1px solid var(--c-border);border-radius:9px;background:#fff;color:var(--c-black);font-size:14px;font-variant-numeric:tabular-nums">
+              <span style="font-size:13px;color:var(--c-muted)">kg</span>
+            </div>
+          </div>
+        </div>
+
+        <button id="cm-acct-done" style="width:100%;margin-top:18px;padding:12px;border-radius:12px;border:none;background:var(--c-black);color:var(--c-surface);font-size:14px;font-weight:600;cursor:pointer;font-family:var(--f)">Done</button>
+      </div>
+    `;
+
+    wireModalHandlers();
+  }
+
+  /**
+   * Write the modal's input-field values back to state. The toggle and
+   * day-pill handlers update state inline (they re-render), so this only
+   * captures the free-text fields: distance and backpack. Bidirectional is
+   * read from state, not the DOM.
+   */
+  function persist(): void {
+    const ms = getMutableState();
+    if (!ms.commuteConfig?.enabled) return;
+
+    const distInput = overlay.querySelector('#cm-acct-dist') as HTMLInputElement | null;
+    const packInput = overlay.querySelector('#cm-acct-pack') as HTMLInputElement | null;
+    const dist = distInput ? Number(distInput.value) : NaN;
+    const distance = Number.isFinite(dist) && dist > 0 ? dist : 0;
+    const packRaw = packInput ? Number(packInput.value) : NaN;
+    const backpackKg = Number.isFinite(packRaw) && packRaw > 0 ? packRaw : undefined;
+
+    const cfg = {
+      ...ms.commuteConfig,
+      distanceKm: distance,
+      enabled: distance > 0,
+      ...(backpackKg ? { backpackKg } : { backpackKg: undefined }),
+    };
+    ms.commuteConfig = cfg;
+    if (ms.onboarding) ms.onboarding.commuteConfig = cfg;
+    saveState();
+  }
+
+  function wireModalHandlers(): void {
+    overlay.querySelector('#cm-acct-toggle')?.addEventListener('click', () => {
+      const ms = getMutableState();
+      const cur = ms.commuteConfig?.enabled === true;
+      if (cur) {
+        ms.commuteConfig = undefined;
+        if (ms.onboarding) { ms.onboarding.commuteConfig = null; ms.onboarding.runsToWork = false; }
+      } else {
+        const cfg = { enabled: true, distanceKm: ms.commuteConfig?.distanceKm ?? 5, isBidirectional: ms.commuteConfig?.isBidirectional ?? true, commuteDaysPerWeek: ms.commuteConfig?.commuteDaysPerWeek ?? 3, ...(ms.commuteConfig?.backpackKg ? { backpackKg: ms.commuteConfig.backpackKg } : {}) };
+        ms.commuteConfig = cfg;
+        if (ms.onboarding) { ms.onboarding.commuteConfig = cfg; ms.onboarding.runsToWork = true; }
+      }
+      saveState();
+      render();
+    });
+
+    overlay.querySelector('#cm-acct-dist')?.addEventListener('input', persist);
+    overlay.querySelector('#cm-acct-pack')?.addEventListener('input', persist);
+
+    overlay.querySelector('#cm-acct-bidir')?.addEventListener('click', () => {
+      const ms = getMutableState();
+      if (!ms.commuteConfig) return;
+      ms.commuteConfig = { ...ms.commuteConfig, isBidirectional: !ms.commuteConfig.isBidirectional };
+      if (ms.onboarding) ms.onboarding.commuteConfig = ms.commuteConfig;
+      saveState();
+      render();
+    });
+
+    overlay.querySelectorAll<HTMLButtonElement>('.cm-acct-day').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const value = Number(btn.dataset.days);
+        if (!Number.isFinite(value)) return;
+        const ms = getMutableState();
+        const existing = ms.commuteConfig ?? { enabled: true, distanceKm: 5, isBidirectional: true, commuteDaysPerWeek: value };
+        ms.commuteConfig = { ...existing, commuteDaysPerWeek: value };
+        if (ms.onboarding) ms.onboarding.commuteConfig = ms.commuteConfig;
+        saveState();
+        render();
+      });
+    });
+
+    overlay.querySelector('#cm-acct-done')?.addEventListener('click', () => {
+      persist();
+      overlay.remove();
+      const container = document.getElementById('app-root');
+      if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+    });
+  }
+
+  render();
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      persist();
+      overlay.remove();
+      const container = document.getElementById('app-root');
+      if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); }
+    }
+  });
+  document.body.appendChild(overlay);
+}
+
 function showSwitchToTrackOnlyConfirm(): void {
   const overlay = document.createElement('div');
   overlay.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
@@ -1192,52 +1429,35 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
-  // ── AI Coach key management ──────────────────────────────────────────────
-  const setAiMsg = (msg: string, color = 'var(--c-muted)') => {
-    const el = document.getElementById('ai-coach-msg');
-    if (el) { el.textContent = msg; el.style.color = color; }
-  };
-
-  document.getElementById('btn-ai-coach-save')?.addEventListener('click', async () => {
-    const input = document.getElementById('input-anthropic-key') as HTMLInputElement | null;
-    const key = input?.value.trim() ?? '';
-    if (!key.startsWith('sk-ant-')) {
-      setAiMsg('Key must start with sk-ant-', 'var(--c-danger)');
-      return;
-    }
-    const btn = document.getElementById('btn-ai-coach-save') as HTMLButtonElement;
-    btn.disabled = true;
-    btn.textContent = 'Testing…';
-    setAiMsg('');
-    try {
-      const { storeApiKey } = await import('@/coach/api-key-store');
-      const { testApiKey } = await import('@/coach/coach-chat-client');
-      await storeApiKey(key);
-      const result = await testApiKey(key);
-      if (!result.ok) {
-        setAiMsg(result.error ?? 'Connection failed. Check your key.', 'var(--c-danger)');
-        btn.disabled = false;
-        btn.textContent = 'Save key';
-        return;
-      }
-      const ms = getMutableState();
-      ms.anthropicApiKeyStored = true;
-      saveState();
-      rerender();
-    } catch (err) {
-      setAiMsg('Error saving key.', 'var(--c-danger)');
-      btn.disabled = false;
-      btn.textContent = 'Save key';
-    }
+  // Legal & data — App Store compliance flows.
+  document.getElementById('btn-delete-account')?.addEventListener('click', async () => {
+    const { openDeleteAccountModal } = await import('./account-legal');
+    openDeleteAccountModal();
   });
 
-  document.getElementById('btn-ai-coach-clear')?.addEventListener('click', async () => {
-    const { clearApiKey } = await import('@/coach/api-key-store');
-    await clearApiKey();
-    const ms = getMutableState();
-    ms.anthropicApiKeyStored = false;
-    saveState();
-    rerender();
+  document.getElementById('btn-export-data')?.addEventListener('click', async () => {
+    const { triggerDataExport } = await import('./account-legal');
+    await triggerDataExport('btn-export-data');
+  });
+
+  // Coach priorities edit — opens the same one-time modal the Coach uses on first launch.
+  document.getElementById('btn-edit-coach-priorities')?.addEventListener('click', async () => {
+    const { openCoachPrioritiesModal } = await import('./coach-view');
+    openCoachPrioritiesModal(() => rerender());
+  });
+
+  // Restore Purchases (iOS IAP). Re-syncs entitlements from Apple receipts.
+  document.getElementById('btn-restore-purchases')?.addEventListener('click', async () => {
+    const { restoreCoachPurchases } = await import('@/coach/revenuecat-client');
+    const { resetEntitlementCache } = await import('@/coach/entitlement');
+    const { showSimpleToast } = await import('./toast');
+    const result = await restoreCoachPurchases();
+    resetEntitlementCache();
+    if (result.restored) {
+      showSimpleToast('Subscription restored. AI Coach is active.');
+    } else {
+      showSimpleToast('No active subscription found on this Apple ID.');
+    }
   });
 
   // Guest-account upgrade — opens auth view in upgrade mode (signUp uses
@@ -1342,7 +1562,7 @@ function wireAccountHandlers(): void {
   document.getElementById('btn-sleep-target-save')?.addEventListener('click', () => {
     const h = parseInt((document.getElementById('input-sleep-h') as HTMLInputElement)?.value ?? '', 10);
     const m = parseInt((document.getElementById('input-sleep-m') as HTMLInputElement)?.value ?? '0', 10);
-    if (isNaN(h) || h < 4 || h > 12) { alert('Sleep target must be between 4 and 12 hours'); return; }
+    if (isNaN(h) || h < 4 || h > 12) { showSimpleToast('Sleep target must be between 4 and 12 hours.', 'error'); return; }
     const mins = isNaN(m) ? 0 : Math.round(m / 15) * 15; // snap to 15-min steps
     getMutableState().sleepTargetSec = h * 3600 + Math.min(mins, 45) * 60;
     saveState();
@@ -1372,8 +1592,8 @@ function wireAccountHandlers(): void {
     const restingHRInput = (document.getElementById('input-resting-hr') as HTMLInputElement)?.value;
     const maxHR = maxHRInput ? +maxHRInput : null;
     const restingHR = restingHRInput ? +restingHRInput : null;
-    if (maxHR !== null && (maxHR < 100 || maxHR > 240)) { alert('Max HR must be between 100 and 240'); return; }
-    if (restingHR !== null && (restingHR < 30 || restingHR > 100)) { alert('Resting HR must be between 30 and 100'); return; }
+    if (maxHR !== null && (maxHR < 100 || maxHR > 240)) { showSimpleToast('Max HR must be between 100 and 240.', 'error'); return; }
+    if (restingHR !== null && (restingHR < 30 || restingHR > 100)) { showSimpleToast('Resting HR must be between 30 and 100.', 'error'); return; }
     const s = getMutableState();
     if (maxHR !== null) s.maxHR = maxHR;
     if (restingHR !== null) s.restingHR = restingHR;
@@ -1518,6 +1738,10 @@ function wireAccountHandlers(): void {
     showRecurringActivitiesModal();
   });
 
+  document.getElementById('btn-commute-config')?.addEventListener('click', () => {
+    showCommuteModal();
+  });
+
   document.getElementById('btn-create-plan')?.addEventListener('click', () => {
     import('./wizard/controller').then(({ upgradeFromTrackOnly }) => upgradeFromTrackOnly());
   });
@@ -1584,7 +1808,7 @@ function wireAccountHandlers(): void {
   document.getElementById('btn-rebuild-plan')?.addEventListener('click', () => {
     const s = getState();
     if (!s.onboarding) {
-      alert('Onboarding data not found. Cannot rebuild plan.');
+      showSimpleToast('Onboarding data not found. Cannot rebuild plan.', 'error');
       return;
     }
 
@@ -1613,7 +1837,7 @@ function wireAccountHandlers(): void {
 
     const result = initializeSimulator(s.onboarding);
     if (!result.success) {
-      alert(`Rebuild failed: ${result.error || 'unknown error'}`);
+      showSimpleToast(`Rebuild failed: ${result.error || 'unknown error'}`, 'error');
       return;
     }
 
@@ -1867,8 +2091,23 @@ function wireAccountHandlers(): void {
   });
 
   // Strava: Connect (shared by both standalone and enrich cards)
+  //
+  // Defensive UX (ISSUE-227 follow-up): the previous handler silently swallowed
+  // every error path — if Supabase was unreachable on a reviewer device the
+  // button gave no feedback, which reads as a broken integration. Now it
+  // disables the button during the round-trip, surfaces a toast on any failure,
+  // and re-enables the button so the user can retry.
   document.getElementById('btn-connect-strava')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-connect-strava') as HTMLButtonElement | null;
+    if (!btn) return;
+    const originalText = btn.textContent;
+    const fail = (reason: string) => {
+      btn.disabled = false;
+      if (originalText != null) btn.textContent = originalText;
+      showSimpleToast(reason, 'error');
+    };
     try {
+      btn.disabled = true;
       const token = await getAccessToken();
       const res = await fetch(`${SUPABASE_FUNCTIONS_BASE}/strava-auth-start`, {
         method: 'POST',
@@ -1880,15 +2119,19 @@ function wireAccountHandlers(): void {
         body: JSON.stringify({ appOrigin: window.location.origin }),
       });
       if (!res.ok) {
-        console.error('Strava auth start failed', res.status);
+        console.error('[Strava] auth start failed', res.status);
+        fail('Could not start Strava connect. Try again in a moment.');
         return;
       }
       const data = await res.json();
-      if (data.url) {
+      if (data?.url) {
         window.location.href = data.url;
+      } else {
+        fail('Could not start Strava connect. Try again in a moment.');
       }
     } catch (err) {
-      console.error('Strava connect error', err);
+      console.error('[Strava] connect error', err);
+      fail('Could not start Strava connect. Check your connection and try again.');
     }
   });
 
@@ -2095,7 +2338,7 @@ function applyRunnerTypeChange(newType: string): void {
       window.location.reload();
     } else {
       spinner.remove();
-      alert('Failed to recalculate: ' + (result.error || 'Unknown error'));
+      showSimpleToast('Failed to recalculate: ' + (result.error || 'Unknown error'), 'error');
     }
   }, 1000);
 }

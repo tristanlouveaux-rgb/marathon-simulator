@@ -25,16 +25,21 @@ import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSy
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
 import { getActivitySource, hasPhysiologySource } from '@/data/sources';
 import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnostic';
+import { initRevenueCat, identifyRevenueCatUser } from '@/coach/revenuecat-client';
 import '@/ui/strava-detail';
 
 // Console-callable VO2max diagnostic: run `diagnoseVO2()` in the browser console
 // to see every available VO2max signal computed from the current state, plus
 // the HR-regression's internal points and HRR distribution. Read-only.
-(window as any).diagnoseVO2 = (): unknown => {
-  const d = runVO2Diagnostic();
-  printVO2Diagnostic(d);
-  return d;
-};
+// Dev-only — never attached in production builds so it's not discoverable via
+// Safari Web Inspector on the shipped iOS bundle.
+if (import.meta.env.DEV) {
+  (window as any).diagnoseVO2 = (): unknown => {
+    const d = runVO2Diagnostic();
+    printVO2Diagnostic(d);
+    return d;
+  };
+}
 
 /** True when running in local simulator mode (no auth required) */
 export function isSimulatorMode(): boolean {
@@ -179,8 +184,14 @@ async function bootstrap(): Promise<void> {
     // Users can upgrade to a real account later from Account settings.
     const { data, error } = await supabase.auth.signInAnonymously();
     if (error || !data.session) {
-      console.error('[auth] Anonymous sign-in failed, falling back to auth view', error);
-      renderAuthView();
+      // ISSUE-228: do NOT dump the user to an auth screen on auth failure.
+      // Apple's review network is famously flaky; a reviewer on poor Wi-Fi
+      // would see a blank/unrecoverable auth view. Instead, launch the app
+      // in offline-bootstrap mode: localStorage drives the wizard + UI; sync
+      // is deferred until the network returns and the retry below succeeds.
+      console.warn('[auth] Anonymous sign-in failed — launching in offline mode, will retry on reconnect', error);
+      await launchApp();
+      scheduleOfflineAuthRetry();
       setupAuthListener();
       return;
     }
@@ -191,7 +202,47 @@ async function bootstrap(): Promise<void> {
   await launchApp();
   const { data: { user: launchedUser } } = await supabase.auth.getUser();
   launchedUserId = launchedUser?.id ?? null;
+  // RevenueCat IAP — no-op on web/Android and when SDK key isn't pasted yet.
+  // Identifies the user so webhook events arrive with the Supabase user_id.
+  void initRevenueCat(launchedUserId);
   setupAuthListener();
+}
+
+/**
+ * Retry anonymous sign-in when network connectivity is restored after the
+ * initial bootstrap failed. Wired by ISSUE-228 — the offline fallback path.
+ * Idempotent and self-cleaning: once sign-in succeeds the listener is removed
+ * and the auth-state-change subscription takes over.
+ */
+function scheduleOfflineAuthRetry(): void {
+  let retryInFlight = false;
+  const attempt = async (): Promise<void> => {
+    if (retryInFlight) return;
+    retryInFlight = true;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        window.removeEventListener('online', onOnline);
+        return;
+      }
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (!error && data.session) {
+        console.log('[auth] Offline retry succeeded — anonymous session created');
+        window.removeEventListener('online', onOnline);
+      } else {
+        console.warn('[auth] Offline retry failed, will try again on next online event', error);
+      }
+    } catch (err) {
+      console.warn('[auth] Offline retry threw', err);
+    } finally {
+      retryInFlight = false;
+    }
+  };
+  const onOnline = (): void => { void attempt(); };
+  window.addEventListener('online', onOnline);
+  // Also attempt once after a short delay in case the original failure was
+  // transient (DNS hiccup) rather than a hard offline state.
+  setTimeout(() => { void attempt(); }, 5000);
 }
 
 /**
@@ -236,9 +287,11 @@ function setupAuthListener(): void {
         await restorePlanFromSupabase();
         await launchApp();
         launchedUserId = newUserId ?? null;
+        void identifyRevenueCatUser(newUserId ?? null);
       })();
     } else if (event === 'SIGNED_OUT') {
       launchedUserId = null;
+      void identifyRevenueCatUser(null);
       renderAuthView();
     }
   });
@@ -275,6 +328,15 @@ async function launchApp(): Promise<void> {
       if (wasGuest && !ms.isGuestAccount) ms.guestBannerDismissed = false;
       if (hasState) saveState();
     } catch { /* swallow — banner just won't fire if we can't read auth */ }
+
+    // Pending account-deletion check. If the user previously triggered
+    // self-serve deletion (Account view → Delete account) and signed back
+    // in within the 30-day grace window, surface a banner with the cancel
+    // path. Non-blocking — read via edge fn since the SELECT policy on
+    // user_plan_settings hides soft-deleted rows from the user.
+    void import('@/ui/pending-deletion-banner').then(({ checkAndShowPendingDeletion }) => {
+      void checkAndShowPendingDeletion();
+    });
   }
 
   // Self-heal stravaConnected flag. Users who connected Strava from the tri
@@ -988,6 +1050,27 @@ async function launchApp(): Promise<void> {
     }
     recordAppOpen();
 
+    // Evaluate proactive coach triggers (HRV crash, marker bump, race week) and
+    // append any newly fireable insights to the queue. Pure state logic — no
+    // LLM call is made here; the call only happens if the user taps the Home
+    // insight card. Wrapped in try/catch so a detector bug never blocks launch.
+    try {
+      const { evaluateCoachTriggers } = await import('@/coach/coach-triggers');
+      const ms2 = getMutableState();
+      const newInsights = evaluateCoachTriggers(ms2);
+      if (newInsights.length > 0) {
+        if (!ms2.coachInsightQueue) ms2.coachInsightQueue = [];
+        ms2.coachInsightQueue.push(...newInsights);
+        // Cap the queue at 5 — overflow means a trigger bug, drop the oldest.
+        if (ms2.coachInsightQueue.length > 5) {
+          ms2.coachInsightQueue.splice(0, ms2.coachInsightQueue.length - 5);
+        }
+        saveState();
+      }
+    } catch (err) {
+      console.warn('[coach-triggers] evaluation failed:', err);
+    }
+
     // Check if holiday ended while the app was closed — show welcome-back before home
     if (checkHolidayEnd()) {
       showHolidayWelcomeBack(() => {
@@ -1009,6 +1092,12 @@ async function launchApp(): Promise<void> {
         fireDebriefIfReady(pendingDebrief);
       });
     }
+
+    // Health disclaimer — App Store §1.4. One-time acknowledgement for existing users.
+    // New users hit this after wizard completes via the same call inside initWizard.
+    import('@/ui/health-disclaimer').then(({ maybeShowHealthDisclaimer }) => {
+      void maybeShowHealthDisclaimer();
+    });
   } else {
     // Show onboarding wizard
     initWizard();
