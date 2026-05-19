@@ -9,6 +9,7 @@ import type { SimulatorState } from '@/types/state';
 import { saveState } from '@/state/persistence';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from '@/ui/page-flair';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '@/ui/tab-bar';
+import { buildHyroxTrademarkFooter } from './trademark-footer';
 import { predictHyroxRace, type HyroxStationLine, type HyroxRunLeg, type HyroxProjectionMarkers, type HyroxPrediction, type HyroxStationProjection } from '@/calculations/race-prediction.hyrox';
 import { buildHyroxProjection } from '@/calculations/race-projection.hyrox';
 import { STATION_DISPLAY, STATION_SEED_TIMES_SEC } from '@/constants/hyrox-benchmarks';
@@ -66,6 +67,32 @@ function daysUntil(isoDate: string): number {
  * It mirrors the headline `byDiscipline.run` improvement, just allocated
  * across legs.
  */
+/**
+ * "Last race" retro card. Renders above the body when the most recent
+ * HyroxRaceLogEntry has a `targetTotalSec` and the actual beat it by ≥60s.
+ * Mirrors the tri pattern in `triathlon/forecast-view.ts:42`. HYROX has no
+ * cached prediction — the "target" slot is what we compare against.
+ */
+function renderHyroxRaceOutcomeRetroCard(s: SimulatorState): string {
+  const log = s.hyroxConfig?.raceLog;
+  if (!log || log.length === 0) return '';
+  const latest = log[log.length - 1];
+  if (latest.targetTotalSec == null) return '';
+  const gap = latest.targetTotalSec - latest.actualTotalSec;
+  if (gap < 60) return '';
+
+  const gapMin = Math.floor(gap / 60);
+  const gapTxt = gapMin === 1 ? '1 min' : `${gapMin} min`;
+
+  return `
+    <div style="background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px;margin-bottom:14px">
+      <div style="font-size:11px;font-weight:600;color:#5a8050;margin-bottom:6px">Last race</div>
+      <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your target by ${gapTxt}</div>
+      <div style="font-size:12px;color:#64748B;line-height:1.5">Target ${fmtMmSs(latest.targetTotalSec)}, actual ${fmtMmSs(latest.actualTotalSec)}.</div>
+    </div>
+  `;
+}
+
 function renderRunLegsTable(legs: HyroxRunLeg[], currentRunSec: number, projectedRunSec?: number): string {
   const fastest = Math.min(...legs.map(l => l.paceSecKm));
   const maxSlip = Math.max(...legs.map(l => l.paceSecKm - fastest));
@@ -719,7 +746,12 @@ export function renderHyroxForecastView(): void {
           <button id="hx-forecast-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
         <div style="font-size:24px;font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 16px">Forecast</div>
+        ${renderHyroxRaceOutcomeRetroCard(s)}
         ${body}
+        <div style="padding:10px 0 4px;text-align:center">
+          <button id="hx-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+        </div>
+        ${buildHyroxTrademarkFooter()}
       </div>
     </div>
   `;
@@ -727,6 +759,11 @@ export function renderHyroxForecastView(): void {
   // Account button → navigate to account view.
   document.getElementById('hx-forecast-account-btn')?.addEventListener('click', () => {
     import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
+  });
+
+  document.getElementById('hx-methodology-btn')?.addEventListener('click', () => {
+    import('@/ui/methodology-view').then(({ renderMethodologyHyrox }) =>
+      renderMethodologyHyrox(() => renderHyroxForecastView()));
   });
 
   // Confidence badge: toggle the explanation panel.

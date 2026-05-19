@@ -17,10 +17,11 @@ import { tv, rdKm } from '@/calculations/vdot';
 import { ft } from '@/utils/format';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
+import { renderMarathonPopulationCard } from './marathon-population-card';
+import { renderForecastFingerprint } from './race-forecast-fingerprint';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
-const PAGE_BG = '#FAF9F6';
 const TEXT_M  = '#0F172A';
 const TEXT_S  = '#64748B';
 const TEXT_L  = '#94A3B8';
@@ -28,15 +29,6 @@ const TEXT_L  = '#94A3B8';
 const CHART_STROKE = '#64748B';
 const GOAL_STROKE  = '#C48A3A'; // warm amber — distinct from the grey projection line
 const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
-
-const RING_GREEN_A = '#7BB37D';
-const RING_GREEN_B = '#4F8A52';
-const RING_AMBER_A = '#E8B154';
-const RING_AMBER_B = '#C4884E';
-const RING_RED_A   = '#D6726B';
-const RING_RED_B   = '#A14B47';
-const RING_R       = 46;
-const RING_CIRC    = +(2 * Math.PI * RING_R).toFixed(2);
 
 const RACE_DIST_LABEL: Record<string, string> = {
   '5k': '5K',
@@ -47,12 +39,31 @@ const RACE_DIST_LABEL: Record<string, string> = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtShortDelta(sec: number): string {
-  const abs = Math.abs(sec);
-  if (abs < 60) return `${Math.round(abs)}s`;
-  const m = Math.floor(abs / 60);
-  const s = Math.round(abs - m * 60);
-  return s === 0 ? `${m}m` : `${m}m ${s}s`;
+/**
+ * "Last race" retro card. Renders above the hero when the most recent
+ * RunRaceLogEntry shows the user finished at least 60s faster than the
+ * blended prediction at race-detection time. Mirrors the tri pattern in
+ * `triathlon/forecast-view.ts:42`.
+ */
+function buildRunRaceOutcomeRetroCard(s: SimulatorState): string {
+  const log = s.runRaceLog;
+  if (!log || log.length === 0) return '';
+  const latest = log[log.length - 1];
+  const gap = latest.predictedTotalSec - latest.actualTotalSec;
+  if (gap < 60) return '';
+
+  const gapMin = Math.floor(gap / 60);
+  const gapTxt = gapMin === 1 ? '1 min' : `${gapMin} min`;
+
+  return `
+    <div class="rfc-fade" style="animation-delay:0.02s;padding:0 16px;margin-bottom:14px">
+      <div style="background:#E8F2E5;border:1px solid #B8D6AE;border-radius:14px;padding:16px">
+        <div style="font-size:11px;font-weight:600;color:#5a8050;margin-bottom:6px">Last race</div>
+        <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px">You beat your prediction by ${gapTxt}</div>
+        <div style="font-size:12px;color:#64748B;line-height:1.5">Predicted ${ft(latest.predictedTotalSec)}, actual ${ft(latest.actualTotalSec)}.</div>
+      </div>
+    </div>
+  `;
 }
 
 function buildCourseFactorsPanel(
@@ -109,15 +120,6 @@ function buildCourseFactorsPanel(
   `;
 }
 
-
-function deltaString(forecastSec: number, goalSec: number): { text: string; tone: 'on'|'slow'|'fast' } {
-  const d = Math.round(forecastSec - goalSec);
-  if (Math.abs(d) < 60) return { text: 'On pace', tone: 'on' };
-  const m = Math.round(Math.abs(d) / 60);
-  return d > 0
-    ? { text: `+${m} min`, tone: 'slow' }
-    : { text: `\u2212${m} min`, tone: 'fast' };
-}
 
 function fmtWeekLabel(week: number, tw: number): string {
   if (week <= 1) return 'Wk 1';
@@ -263,6 +265,14 @@ function getRaceForecastHTML(s: SimulatorState): string {
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
 
+  // Header chrome — initials avatar + race-name subtitle. Mirrors tri/hyrox tabs.
+  const initials = (s.onboarding?.name || 'You')
+    .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+  const raceName = s.selectedMarathon?.name;
+  const raceNameLine = raceName
+    ? (s.onboarding?.name ? `${s.onboarding.name}'s ${raceName}` : raceName)
+    : `Your ${distLabel}`;
+
   // Build actual history points from vdotHistory. One point per plan week,
   // latest entry wins. Drop entries beyond the current week.
   const vh = s.vdotHistory ?? [];
@@ -289,21 +299,6 @@ function getRaceForecastHTML(s: SimulatorState): string {
   if (rawForecastSec > 0 && currentWeek < totalWeeks) {
     projection.push({ week: totalWeeks, timeSec: rawForecastSec, kind: 'projection' });
   }
-
-  // Hero ring: amber by default (warm palette), red when seriously off-track.
-  const delta = deltaString(forecastSec, goalSec);
-  const slowSec = Math.max(0, forecastSec - goalSec);
-  let ringA = RING_AMBER_A, ringB = RING_AMBER_B;
-  if (slowSec > 900) { ringA = RING_RED_A; ringB = RING_RED_B; }
-
-  // Ring fill: completion toward race day. (Visual progress, not delta encoding —
-  // delta lives in the ring colour and the central numerals.)
-  const progressPct = totalWeeks > 1 ? ((currentWeek - 1) / (totalWeeks - 1)) * 100 : 100;
-  const ringOffset = +(RING_CIRC * (1 - Math.min(100, Math.max(0, progressPct)) / 100)).toFixed(2);
-
-  const deltaColor = delta.tone === 'on' ? TEXT_M
-    : delta.tone === 'fast' ? '#1F7A3D'
-    : (slowSec > 900 ? '#A33A33' : '#9A6A20');
 
   const chart = buildForecastChart(nowSec, goalSec, history, projection, totalWeeks);
   const courseFactorsPanel = buildCourseFactorsPanel(
@@ -338,26 +333,6 @@ function getRaceForecastHTML(s: SimulatorState): string {
     </div>
   ` : '';
 
-  // Stat row: Target · Current · Forecast
-  const statRow = `
-    <div class="rfc-fade" style="animation-delay:0.10s;padding:0 16px;margin-bottom:14px">
-      <div style="${CARD};padding:18px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div style="flex:1;min-width:0">
-          <div style="font-size:11px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Target</div>
-          <div style="font-size:18px;font-weight:600;color:${TEXT_M};letter-spacing:-0.01em;line-height:1">${ft(goalSec)}</div>
-        </div>
-        <div style="flex:1;min-width:0;border-left:1px solid rgba(0,0,0,0.06);padding-left:12px">
-          <div style="font-size:11px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Current</div>
-          <div style="font-size:18px;font-weight:600;color:${TEXT_M};letter-spacing:-0.01em;line-height:1">${ft(nowSec)}</div>
-        </div>
-        <div style="flex:1;min-width:0;border-left:1px solid rgba(0,0,0,0.06);padding-left:12px">
-          <div style="font-size:11px;color:${TEXT_S};font-weight:500;margin-bottom:4px">Forecast</div>
-          <div style="font-size:18px;font-weight:600;color:${TEXT_M};letter-spacing:-0.01em;line-height:1">${ft(forecastSec)}</div>
-        </div>
-      </div>
-    </div>
-  `;
-
   return `
     <style>
       #rfc-view { box-sizing:border-box; }
@@ -377,63 +352,21 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
-        <!-- Header -->
-        <div style="
-          padding:56px 20px 12px;
-          display:flex;align-items:center;justify-content:space-between;
-          position:sticky;top:0;z-index:50;
-        ">
-          <button id="rfc-back-btn" style="
-            width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;
-            background:rgba(255,255,255,0.8);backdrop-filter:blur(8px);
-            box-shadow:0 1px 4px rgba(0,0,0,0.08);
-            display:flex;align-items:center;justify-content:center;color:${TEXT_M};
-          ">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-
-          <div style="text-align:center">
-            <div style="font-size:20px;font-weight:700;color:${TEXT_M}">${distLabel} forecast</div>
-            <div style="font-size:12px;color:${TEXT_S};margin-top:3px;font-weight:500">Week ${currentWeek} of ${totalWeeks}</div>
-          </div>
-
-          <div style="width:36px"></div>
+        <!-- Header: tab-style (no back-button — Forecast is now a tab destination) -->
+        <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px">
+          <button id="rfc-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
 
-        <!-- Hero ring -->
-        <div class="rfc-fade" style="animation-delay:0.04s;display:flex;justify-content:center;margin:12px 0 28px">
-          <div style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center">
-            <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">
-              <defs>
-                <linearGradient id="rfcRingGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stop-color="${ringA}"/>
-                  <stop offset="100%" stop-color="${ringB}"/>
-                </linearGradient>
-              </defs>
-              <circle cx="50" cy="50" r="${RING_R}" fill="rgba(255,255,255,0.85)" stroke="rgba(241,245,249,0.5)" stroke-width="8"/>
-              <circle id="rfc-ring-circle" cx="50" cy="50" r="${RING_R}" fill="none"
-                stroke="url(#rfcRingGrad)"
-                stroke-width="8" stroke-linecap="round"
-                stroke-dasharray="${RING_CIRC}"
-                stroke-dashoffset="${RING_CIRC}"
-                style="transition:stroke-dashoffset 1.4s cubic-bezier(0.2,0.8,0.2,1);transform-origin:50% 50%"
-              />
-            </svg>
-            <div style="
-              position:absolute;width:180px;height:180px;border-radius:50%;
-              background:rgba(255,255,255,0.75);backdrop-filter:blur(12px);
-              box-shadow:inset 0 0 12px rgba(255,255,255,0.5);
-              display:flex;flex-direction:column;align-items:center;justify-content:center;
-              top:50%;left:50%;transform:translate(-50%,-50%);padding-top:4px;
-            ">
-              <div style="font-size:40px;letter-spacing:-0.03em;line-height:1;font-weight:700;color:${TEXT_M}">${ft(forecastSec)}</div>
-              <div style="color:${TEXT_S};font-size:12px;font-weight:500;margin-top:6px">Predicted finish</div>
-              <div style="color:${deltaColor};font-size:13px;font-weight:600;margin-top:4px">${delta.text}<span style="color:${TEXT_S};font-weight:400"> vs target ${ft(goalSec)}</span></div>
-            </div>
-          </div>
+        <div style="text-align:center;padding:20px 20px 12px">
+          <div style="font-size:32px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${distLabel} forecast</div>
+          <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine} — Week ${currentWeek} of ${totalWeeks}</div>
         </div>
 
-        ${statRow}
+        ${buildRunRaceOutcomeRetroCard(s)}
+
+        ${renderForecastFingerprint(s)}
+
+        ${renderMarathonPopulationCard(s)}
 
         ${courseFactorsPanel}
 
@@ -463,9 +396,13 @@ function getRaceForecastHTML(s: SimulatorState): string {
           </div>
         </div>
 
+        <div class="rfc-fade" style="animation-delay:0.26s;padding:10px 22px 24px;text-align:center">
+          <button id="rfc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+        </div>
+
       </div>
     </div>
-    ${renderTabBar('home')}
+    ${renderTabBar('forecast')}
   `;
 }
 
@@ -476,6 +413,8 @@ function navigateTab(tab: TabId): void {
   else if (tab === 'plan') import('./main-view').then(m => m.renderMainView());
   else if (tab === 'record') import('./record-view').then(m => m.renderRecordView());
   else if (tab === 'stats') import('./stats-view').then(m => m.renderStatsView());
+  else if (tab === 'forecast') { /* already here */ }
+  else if (tab === 'account') import('./account-view').then(m => m.renderAccountView());
 }
 
 // ── Event wiring ─────────────────────────────────────────────────────────────
@@ -493,18 +432,18 @@ function animateChartDrawOn(): void {
   });
 }
 
-function wireRaceForecastHandlers(ringOffset: number): void {
+function wireRaceForecastHandlers(): void {
   wireTabBarHandlers(navigateTab);
-
-  setTimeout(() => {
-    const circle = document.getElementById('rfc-ring-circle') as SVGCircleElement | null;
-    if (circle) circle.style.strokeDashoffset = String(ringOffset.toFixed(2));
-  }, 50);
 
   animateChartDrawOn();
 
-  document.getElementById('rfc-back-btn')?.addEventListener('click', () => {
-    import('./home-view').then(({ renderHomeView }) => renderHomeView());
+  document.getElementById('rfc-account-btn')?.addEventListener('click', () => {
+    import('./account-view').then(({ renderAccountView }) => renderAccountView());
+  });
+
+  document.getElementById('rfc-methodology-btn')?.addEventListener('click', () => {
+    import('./methodology-view').then(({ renderMethodologyRunning }) =>
+      renderMethodologyRunning(() => renderRaceForecastView()));
   });
 
   document.getElementById('rfc-add-session')?.addEventListener('click', () => {
@@ -534,11 +473,5 @@ export function renderRaceForecastView(): void {
   }
 
   container.innerHTML = getRaceForecastHTML(s);
-
-  const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
-  const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
-  const progressPct = totalWeeks > 1 ? ((currentWeek - 1) / (totalWeeks - 1)) * 100 : 100;
-  const ringOffset = +(RING_CIRC * (1 - Math.min(100, Math.max(0, progressPct)) / 100)).toFixed(2);
-
-  wireRaceForecastHandlers(ringOffset);
+  wireRaceForecastHandlers();
 }

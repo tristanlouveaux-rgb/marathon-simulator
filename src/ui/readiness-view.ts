@@ -521,12 +521,13 @@ function getReadinessHTML(s: SimulatorState): string {
       : label === 'Manage Load' ? 'Manage'
       : label === 'On Track' ? 'Clear'
       : 'Primed';
-    // No bar can show a better label than the overall ring — avoids "Clear" bars
-    // alongside an "Ease Back" ring, which would imply permission to push.
-    const capLabel = (discLabel: string) =>
-      LABEL_RANK[discLabel] >= LABEL_RANK[triReadiness.overall] ? discLabel : triReadiness.overall;
+    // Per-discipline bars show their honest label. The overall sentence and ring
+    // convey aggregate state; the bars exist to break down that aggregate. Capping
+    // them to the overall label made a fresh discipline read as "Manage" alongside
+    // a sentence saying it was fine — contradicting itself. A caption beneath the
+    // bars handles the "fresh in isolation, tired overall" framing.
     const makeBar = (discName: string, result: { score: number; label: string }, last = false) => {
-      const label = capLabel(result.label);
+      const label = result.label;
       const col = readinessColor(label as any);
       return `<div style="${last ? '' : 'margin-bottom:14px'}">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
@@ -558,10 +559,21 @@ function getReadinessHTML(s: SimulatorState): string {
       ? makeBar('Cross-training', triReadiness.crossTraining, true)
       : '';
     const bars = discs.map(d => makeBar(d.name, d.result)).join('');
+
+    // Divergence caption — only render when a discipline's own label is better than
+    // the overall verdict (i.e. the bar would have been capped before). Tells the
+    // user "fresh for this discipline" doesn't mean "ready to smash a hard session".
+    const overallRank = LABEL_RANK[triReadiness.overall];
+    const divergent = discs.some(d => LABEL_RANK[d.result.label] < overallRank);
+    const note = divergent
+      ? `<div style="margin-top:14px;font-size:11px;color:${TEXT_S};line-height:1.5">Disciplines marked clear are fresh on their own. Legs may carry fatigue from overall training load.</div>`
+      : '';
+
     return card(`
       <div style="font-size:11px;color:${TEXT_S};margin-bottom:14px;font-weight:500">Discipline Readiness</div>
       ${bars}
       ${crossTrainingBar ? `<div style="margin-top:14px">${crossTrainingBar}</div>` : ''}
+      ${note}
     `, 'rdn-card-disciplines');
   })();
 
@@ -730,6 +742,10 @@ function getReadinessHTML(s: SimulatorState): string {
           ${legLoadCard}
         </div>
 
+        <div style="padding:8px 22px 24px;text-align:center">
+          <button id="rdn-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+        </div>
+
       </div>
     </div>
     ${renderTabBar('home')}
@@ -797,6 +813,11 @@ function wireReadinessHandlers(): void {
 
   document.getElementById('rdn-card-mtl')?.addEventListener('click', () => {
     import('./mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderReadinessView()));
+  });
+
+  document.getElementById('rdn-methodology-btn')?.addEventListener('click', () => {
+    import('./methodology-view').then(({ renderMethodologyReadiness }) =>
+      renderMethodologyReadiness(() => renderReadinessView()));
   });
 
   document.getElementById('rdn-card-sleep-history')?.addEventListener('click', () => {

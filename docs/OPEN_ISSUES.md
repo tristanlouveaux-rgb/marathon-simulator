@@ -8,7 +8,306 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+## 🚀 App Store Submission Audit (2026-05-18)
+
+Audit run 2026-05-18 by 4 parallel agents (Apple guidelines, privacy/legal/IP, monetisation/IAP, reviewer experience). Tristan confirmed: log all severities (P0+P1+P2), work in priority order. Marketing URL is **optional** in App Store Connect — mosaicrunning.run product-landing rebuild is logged as P2, not a submission blocker. Apple mandatory URLs are Privacy + Support only, both already live on mosaicrunning.run.
+
+**Work order**: P0 first (will reject) → P1 (likely reject) → P2 (polish). Mark each `✅ FIXED` per CLAUDE.md workflow.
+
+### ISSUE-225: AI Coach "coming soon" cards visible to reviewers *(P0, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`src/ui/coach-view.ts:356-359` and `src/ui/account-view.ts:976` render "coming soon" cards with a "Join the waitlist" CTA. Apple guideline 2.3.1 explicitly forbids placeholder/future features in shipping builds. Reviewers are non-allowlisted (`src/coach/allowlist.ts:23` hardcodes Tristan's UID), so these cards are *all they will see of the headline AI Coach feature pitched in `docs/APP_STORE_ASSETS.md:31`*.
+
+**Fix**: Removed the `comingSoonCard()` render from the classic Coach view and deleted both the card and its `wireComingSoonCard()` handler entirely. Stripped the "AI Coach / Coming soon / Subscription pricing announced soon" header block from the account-view group, leaving the (still-functional) Coach priorities row alone. The classic Coach screen now shows: hero → why → recovery → today's workout → feeling prompt → export-snapshot button. No placeholder copy anywhere. Marketing-side "coming soon" framing stays on the website only (per Tristan).
+
+### ISSUE-226: No app-target `PrivacyInfo.xcprivacy` manifest *(P0, 2026-05-18)* ✅ FIXED 2026-05-18
+
+Mandatory since May 2024. `find ios/App/App -name "PrivacyInfo*"` returns only vendored framework manifests, no app-level one. Capacitor/WKWebView/Supabase call Required Reason APIs (UserDefaults, file timestamps, disk space, system boot time) that must be declared.
+
+**Fix**: Created `ios/App/App/PrivacyInfo.xcprivacy` declaring four API categories with required reasons: `NSPrivacyAccessedAPICategoryUserDefaults` (CA92.1 — app access to its own UserDefaults via Capacitor Preferences plugin), `NSPrivacyAccessedAPICategoryFileTimestamp` (C617.1 — file ops via WKWebView cache), `NSPrivacyAccessedAPICategoryDiskSpace` (E174.1 — Supabase/WKWebView capacity checks), `NSPrivacyAccessedAPICategorySystemBootTime` (35F9.1 — Capacitor timestamp util). `NSPrivacyTracking` set to false, `NSPrivacyCollectedDataTypes` empty (data flows live in the App Store Connect Privacy Nutrition entry, not the manifest).
+
+**Deploy 2026-05-19**: `npx cap copy ios` run — manifests now live in `ios/App/App/public` ready for the next Xcode archive.
+
+### ISSUE-227: Dead "Strava sync coming soon" toast on home header *(P0, 2026-05-18)* ✅ FIXED 2026-05-19 (original audit was wrong — see below)
+
+The most prominent orange CTA on Home (`src/ui/main-view.ts:567`) fires `src/ui/main-view.ts:2715-2718` showing `showAdaptToast('Strava sync coming soon!...')`. Strava OAuth actually works (`src/ui/wizard/steps/connect-strava.ts:135-136` for first-run; `src/ui/account-view.ts:2072` for post-onboarding). A reviewer taps the orange Strava pill, sees "coming soon", concludes the integration is unimplemented. Guideline 2.3.1 / 4.0 false-advertising risk.
+
+**Audit correction (cross-flow agent, 2026-05-19)**: The original audit was wrong about the file. `getMainViewHTML()` (which renders `renderStravaButton`) is dead code — `renderMainView()` now delegates entirely to `renderTriathlonPlanView` / `renderHyroxPlanView` / `renderPlanView`. The "coming soon" toast at `main-view.ts:2718` could never fire because the button that triggered it never renders. The actual user-visible Strava Connect button lives in `src/ui/account-view.ts:404/428` with the handler at `:2063`, and that handler had no error UX — it silently swallowed every failure, which on a reviewer device with flaky network reads as a broken integration.
+
+**Fix**: Two changes.
+1. The dead-code path in `main-view.ts:2716` was still updated to call the real `strava-auth-start` edge function (defensive — if `getMainViewHTML` ever gets re-wired back into the render path, the button works).
+2. The live handler at `account-view.ts:2063` was hardened: disables the button during the round-trip, surfaces a `showSimpleToast` on every failure path (HTTP error, missing redirect URL, thrown exception), re-enables the button so the user can retry. Reviewer with poor Wi-Fi now sees "Could not start Strava connect. Check your connection and try again." instead of nothing happening.
+
+### ISSUE-228: Bootstrap fully gated on Supabase reachability *(P0, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`src/main.ts:160-188` — any failure on `supabase.auth.getSession()` / `signInAnonymously()` dumps the user to `renderAuthView()` with no offline path. Apple's review network is famously flaky; a reviewer on poor Wi-Fi sees a blank/error auth screen they cannot bypass. Guideline 2.1.
+
+**Fix**: Replaced the `renderAuthView()` fallback with an offline-bootstrap path. On `signInAnonymously()` failure, `launchApp()` runs anyway — localStorage drives the wizard + UI. A new `scheduleOfflineAuthRetry()` helper attaches a `window.online` listener and a 5-second timeout retry; once anonymous sign-in succeeds, the listener self-removes and the regular `setupAuthListener()` SIGNED_IN handler takes over. Net: a reviewer on poor Wi-Fi sees the wizard/home instead of a dead auth screen, and the app silently catches up when connectivity returns.
+
+### ISSUE-229: iPad declared in build target but no iPad layouts *(P0, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`ios/App/App.xcodeproj/project.pbxproj:313,335` sets `TARGETED_DEVICE_FAMILY = "1,2"` (iPhone + iPad). All views are portrait iPhone layouts only. Reviewer testing on iPad Pro sees stretched UI. Guideline 2.5.1 ("works on all advertised devices").
+
+**Fix**: Changed `TARGETED_DEVICE_FAMILY = "1,2";` → `TARGETED_DEVICE_FAMILY = "1";` in both Debug and Release configs (`project.pbxproj` lines 313 + 335). iPhone-only. Needs Xcode re-open to confirm the change loads cleanly in the project settings UI before archiving.
+
+### ISSUE-230: Reviewer demo account is placeholder text *(P0, 2026-05-18)*
+
+`docs/APP_STORE_ASSETS.md:124` has literal `<email> / <password>` placeholders for App Store Connect sign-in info. The app is empty without 16w of Strava history, so reviewers without working credentials + pre-seeded data cannot evaluate any meaningful surface.
+
+**Fix decision (Tristan, 2026-05-18)**: Tristan creates `reviewer@mosaicrunning.run` account → logs in → connects a Strava account with ≥16 weeks of activities (his own or a dedicated reviewer Strava) → lets the data sync. Then pastes email + password + the note "This account has Strava pre-connected — allow 30 seconds after sign-in for activities to load" into App Store Connect review notes. Manual task for Tristan, not a code change.
+
+### ISSUE-231: `AI_STRATEGY.md` Stripe path is 3.1.1-fatal if shipped to iOS *(P1, 2026-05-18)* ✅ DECIDED 2026-05-19 — Option A in flight via parallel paywall agent; v1 ships with allowlist as de facto gate
+
+Today's binary is clean (no Stripe SDK, no payment surface). But the planned Tier 2 flow at `docs/AI_STRATEGY.md:79-84,149` — Stripe Checkout on web flips a Supabase row that unlocks the in-app coach — is the textbook example Apple rejects. The strategy doc's footnote at `:157` claiming "compliant as long as no in-app link" is wrong: the bar is "in-app digital unlocks require IAP", not "no in-app link to payment".
+
+**Decision (Tristan, 2026-05-19)**: Option A — hybrid IAP via RevenueCat. A separate parallel agent is building the IAP integration in a feature branch; details in the dispatch prompt Tristan kept. Out-of-scope for v1 submission. **v1 ship plan**: the existing allowlist gate (`src/coach/allowlist.ts` + edge function `ALLOWED_USER_IDS` env var) stays as the de facto access control. Reviewers see the classic Coach view (ISSUE-225 fix). When the paywall agent's branch is ready it replaces the allowlist with a RevenueCat entitlement check — that ships as v1.1.
+
+For v1: rate limit tightened from 30 → 10 calls/user/day in `supabase/functions/coach-chat/index.ts` to keep Anthropic spend bounded while only Tristan + manual allowlist additions can hit the endpoint. ⚠️ Edge function needs `supabase functions deploy coach-chat` for the cap to take effect.
+
+**Paywall compliance hardening 2026-05-19**: Code review of `src/ui/coach-paywall.ts` (commit 8e6131d) flagged two Apple 3.1.3 blockers + two warnings — the legal disclosure paragraph was static and missing the subscription title, length, and price, and used "within 24 hours of the end" instead of the canonical "within 24 hours prior to the end". Fixed by deriving the disclosure block from the selected `PurchasesPackage` at every render (so switching between Monthly/Annual updates it) and correcting the renewal wording. Anti-steering check (3.1.3(a)) was already clean: no Stripe / web-checkout references on the paywall surface. Not a v1 blocker (allowlist still in force) but de-risks v1.1 review.
+
+### ISSUE-232: HYROX trademark used without disclaimer *(P1, 2026-05-18)* ✅ FIXED 2026-05-18 (in-app + marketing); ⚠️ App Store description copy outstanding for Tristan
+
+"HYROX" appears as a sport name across `src/ui/home-view.ts:2238`, `src/ui/hyrox/plan-view.ts:120` (48px heavy display), `marketing/carousel-hyrox.html`. HYROX is a registered trademark of HYROX GmbH. Nominative fair use is OK if disclaimer present; risk grows with marketing assets ("Training for HYROX" reads as a product promise).
+
+**Fix**: Created `src/ui/hyrox/trademark-footer.ts` exporting `buildHyroxTrademarkFooter()` — single canonical disclaimer line ("HYROX is a registered trademark of HYROX GmbH. Mosaic is not affiliated with or endorsed by HYROX."). Mounted at the bottom of all three HYROX tab views (`plan-view`, `forecast-view`, `stats-view`) above the tab bar. Marketing carousel `marketing/carousel-hyrox.html` got the same disclaimer added to the CTA slide footer. Tristan still needs to add the same disclaimer line to the App Store Connect description copy when filling that field at submission.
+
+### ISSUE-233: Health-claim methodology not surfaced (1.4.1) *(P1, 2026-05-18)* ✅ Code + deploy shipped 2026-05-19, awaiting on-device verification before final close
+
+Description bullets at `docs/APP_STORE_ASSETS.md:30-32` claim "Race time prediction from VDOT, FTP, CSS", "Daily readiness from HRV, sleep, training stress balance, and ACWR". Apple 1.4.1 requires methodology disclosure for health-measurement accuracy claims. Health disclaimer modal exists but methodology citation is not surfaced in-app or in listing.
+
+**Fix**:
+- Created `public/methodology.html` — single-page methodology surface modelled on `public/privacy.html`. Sections: training load (TSS / Banister CTL-ATL-TSB / ACWR), race prediction (VDOT / FTP+CP / CSS / course factors), readiness (composite signal + z-score against personal baseline), limitations, full bibliography (Banister, Coggan, Daniels, Gabbett, Hulin, Manzi, Monod-Scherrer, Wakayoshi). Includes a "not a medical device" disclaimer at the top.
+- **In-app drill-down (2026-05-19)**: replaced the external `target="_blank"` links with an in-app methodology view (`src/ui/methodology-view.ts`) mirroring the `buildCTLLearnMorePage` pattern. Four per-surface entry points wire from `race-forecast-view.ts`, `readiness-view.ts`, `triathlon/forecast-view.ts`, `hyrox/forecast-view.ts`. Each opens with sections relevant to that surface only (running predictor shows VDOT + course factors; tri shows FTP/CSS too; etc.) and returns to the opener on back-button.
+- **Marketing site deployed (2026-05-19)**: pushed `methodology.html`, `privacy.html`, `support.html`, `terms.html` from `public/` to the `~/Documents/mosaic-landing` repo (commit `c4e5d1d`) and ran `vercel --prod`. All four URLs now return 200 (previously 404 — the audit memory was wrong about privacy/support already being live). External page kept because privacy and terms are still linked from `coach-paywall.ts`, `account-view.ts`, `coach-view.ts`, and Apple reviewer flow uses the public URL.
+- Added the App Store description sentence "Built on published exercise-physiology models (Banister impulse-response, Daniels VDOT, Coggan TSS)." to `docs/APP_STORE_ASSETS.md` so Tristan can paste it into App Store Connect at submission.
+
+### ISSUE-234: Illness modal medical language *(P1, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`src/ui/illness-modal.ts:138` reads "Below-neck (chest, fever, body aches) needs rest." `src/coach/coach-chat-client.ts:225` references "myocarditis risk". The neck-check is standard sports-med folk wisdom; naming myocarditis crosses into clinical territory.
+
+**Fix**: Three user-facing strings rewritten to non-clinical wording.
+- `illness-modal.ts:138` header copy → "Mosaic recommends rest until symptoms clear. Consult a clinician for chest symptoms or fever."
+- `illness-modal.ts:582` rest-window override prompt → drops "below-neck illness" + "viral myocarditis", now reads "raises the risk of relapse, particularly with chest involvement or fever … consult a clinician if you are unsure."
+- `coach-chat-client.ts:225` system-prompt line → drops "myocarditis", now defers to a clinician for chest symptoms or fever instead of offering training guidance.
+Internal source-code comments (`illness-modal.ts:12` doc comment, `illness-rules.ts` model commentary citing Schwellnus 2016) kept intact — App Review only sees user-facing strings, and the internal terminology is load-bearing for the model.
+
+### ISSUE-235: `UIBackgroundModes` audio is justifiable but undisclosed in listing *(P1, 2026-05-18)* ✅ FIXED 2026-05-18 in `APP_STORE_ASSETS.md` (Tristan to paste into App Store Connect at submission)
+
+`ios/App/App/Info.plist:60-64` declares `audio` background mode for the `@mosaic/guided-voice` plugin (`guided/voice.ts:146` uses `AVAudioSession(.playback)` for voice playback while screen-locked). Justifiable but reviewers scrutinise `audio` mode heavily.
+
+**Fix**: Added to `docs/APP_STORE_ASSETS.md` description block — new bullet "Guided audio runs with voice cues that play while your screen is locked". Added to App Review notes — new line "Audio background mode: used by the guided-audio runs feature to play voice training cues while the screen is locked or the app is in the background." Tristan to paste both into the App Store Connect description + review-notes fields at submission.
+
+### ISSUE-236: Strava token revocation on account-delete is async-only *(P1, 2026-05-18)* ✅ FIXED 2026-05-18 (needs `supabase functions deploy delete-account`)
+
+`docs/PRESUBMISSION_TEST.md:86` says Strava revocation is checked manually with a 30-day cron fallback. `supabase/functions/delete-account/index.ts` does not call Strava's `/oauth/deauthorize` synchronously on user-triggered deletion. Apple 5.1.1(v) expects clean revocation of third-party access on account deletion.
+
+**Fix**: Refactored `revokeStravaToken` in `supabase/functions/delete-account/index.ts` to:
+- Wrap the `fetch` in an `AbortController` with a 5-second timeout (Apple's review network is not a place to hang on a slow Strava response).
+- Return a structured result (`success` / `no_token` / `failed` with reason: `timeout` / `network_error` / `http_error` + status code).
+- Caller logs the outcome with the userId and adds `strava_revoke` to the response body so support can debug post-hoc and the client knows what happened.
+- Token row is already marked `deleted_at = now()` before the revoke fires, so a failed revoke does not block the deletion — the 30-day purge cron remains the safety net.
+
+⚠️ **Edge function must be re-deployed** for the fix to take effect — Tristan needs to run `supabase functions deploy delete-account` (or merge to main and let the deploy pipeline pick it up).
+
+### ISSUE-237: Custom Capacitor plugins likely missing `PrivacyInfo.xcprivacy` *(P1, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`@mosaic/guided-voice` (audio category) and `@mosaic/health-extras` (health category) are Tristan's own plugins. Both fall under Apple's "commonly used third-party SDK" list that requires per-plugin privacy manifests. `@transistorsoft/capacitor-background-geolocation` already ships one (verified).
+
+**Fix**: Created `PrivacyInfo.xcprivacy` inside each plugin's source folder:
+- `ios-plugins/guided-voice/ios/Sources/GuidedVoicePlugin/PrivacyInfo.xcprivacy`
+- `ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/PrivacyInfo.xcprivacy`
+
+Both declare `NSPrivacyTracking=false`, empty `NSPrivacyCollectedDataTypes`, empty `NSPrivacyAccessedAPITypes`. Source inspection of `GuidedVoicePlugin.swift` confirmed it only uses `AVSpeechSynthesizer` + `AVAudioSession` (neither is a Required Reason API); `HealthExtrasPlugin` reads from HealthKit which is declared at the host-app level via `NSHealthShareUsageDescription` (no privacy-manifest implication for the plugin itself). Updated both `Package.swift` files to register the manifest via `resources: [.process("PrivacyInfo.xcprivacy")]` so SPM bundles it with the target.
+
+### ISSUE-238: Privacy policy overclaims Anthropic data retention *(P1, 2026-05-18)* ✅ FIXED 2026-05-19
+
+`public/privacy.html:75` states Anthropic data is "not used to train... not retained beyond operational period". This requires a Zero Data Retention (ZDR) agreement; Anthropic's standard Commercial Terms have 30-day default retention.
+
+**Fix**: Tristan confirmed 2026-05-19 — no ZDR agreement with Anthropic. Path (b) taken plus a reframe to match v1 reality (AI Coach is allowlist-gated in this release per ISSUE-231 decision). Rewrote the entire `public/privacy.html` AI Coach section:
+- Section heading renamed "AI Coach (private beta in this release)".
+- New opening paragraph states the feature is on a limited internal access list while the subscription path is being built, and that users not on the list have no data flowing to Anthropic at all.
+- Retention paragraph rewritten honestly: "Anthropic retains messages for up to 30 days under their Commercial Terms, after which they are deleted. Anthropic does not use these messages to train their models." Links to both the Anthropic Privacy Policy and Commercial Terms preserved.
+- Final-paragraph copy adjusted from "first time you open the AI Coach" to "when the AI Coach becomes generally available you will be asked to consent" — accurate for the v1 state.
+
+Deployed 2026-05-19 alongside methodology/support/terms — `https://www.mosaicrunning.run/privacy.html` returns 200 with the rewritten copy. Commit `c4e5d1d` in `~/Documents/mosaic-landing`.
+
+### ISSUE-239: `Info.plist` declares landscape orientations, no landscape layouts exist *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`ios/App/App/Info.plist:35-40` lists `UISupportedInterfaceOrientations` including landscape. The app is portrait-only by design.
+
+**Fix**: Stripped the landscape entries from `UISupportedInterfaceOrientations`, leaving only `UIInterfaceOrientationPortrait`. Removed the `UISupportedInterfaceOrientations~ipad` key entirely (no iPad target per ISSUE-229).
+
+### ISSUE-240: `NSHealthUpdateUsageDescription` borderline wording *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`Info.plist:58-59` reads "Mosaic does not write data to Apple Health. (Required by HealthKit.)". Apple has rejected apps for usage strings that explain *why* a permission key is present rather than *what the app does with it*. Borderline acceptable, safer to remove.
+
+**Fix**: Removed both the `NSHealthUpdateUsageDescription` key and its value from `Info.plist`. Only `NSHealthShareUsageDescription` remains (which is honest — Mosaic reads from Apple Health, never writes). `docs/LEGAL_CHECKLIST.md` HealthKit row updated to reflect the change.
+
+### ISSUE-241: `window.alert()` calls across the app *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+Spans `src/ui/account-view.ts:1543,1573,1574,1789,1818,2300`, `src/ui/pending-deletion-banner.ts:94`, `src/ui/account-legal.ts:144`, `src/ui/renderer.ts:78`, `src/ui/main-view.ts:1543`. Native iOS WKWebView renders `window.alert()` with the app's URL in the title — reviewer-noticeable web-app smell. Functional but unpolished; Apple 4.2 minimum-functionality concern.
+
+**Fix**: Added a generic `showSimpleToast(message, kind?)` helper in `src/ui/toast.ts` (info / error variants, auto-dismiss 5s/7s, tap to dismiss, multi-line on `\n`, same Apple shadow + border treatment as the existing assignment toast). Swept the codebase and replaced every `alert()` call with it.
+- `src/ui/events.ts` — 13 calls (PB sanity messages, plan-not-initialised, RPE/duration validation, training-plan completed, race-prediction failure). Sentence-case copy with full stops per UI Copy rules.
+- `src/ui/account-view.ts` — 6 calls (sleep target, max HR, resting HR validation; rebuild-plan onboarding-missing, rebuild-plan failure, recalculate failure).
+- `src/ui/renderer.ts` — Garmin-cleared confirmation now shows the toast then reloads after 600ms.
+- `src/ui/pending-deletion-banner.ts` — cancel-deletion failure.
+- `src/ui/account-legal.ts` — data-export failure.
+- `src/state/persistence.ts` — load-state failure toast deferred with `setTimeout(1500)` + dynamic import to avoid an early-render no-op and a circular UI import from a persistence module.
+
+The audit listed 5 files; sweep found 16 calls across 5 files plus `events.ts` and `persistence.ts`. All replaced. Zero `alert(` calls remain in `src/` outside tests.
+
+`confirm()` calls (e.g. `account-view.ts:1791` rebuild-plan destructive op) NOT touched — would need a custom confirm modal, out of scope for this submission pass. Logged as **follow-up**: replace `confirm()` calls with an in-app confirm-modal pattern.
+
+### ISSUE-242: `window.diagnoseVO2` attached in production builds *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`src/main.ts:33` attaches a debug global. Discoverable via Safari Web Inspector. Not a hard reject vector but signals "unfinished".
+
+**Fix**: Wrapped the `(window as any).diagnoseVO2 = ...` assignment in `if (import.meta.env.DEV) { ... }`. Vite strips the block in production builds, so the global is gone from the shipped iOS bundle. Comment updated to call out the gate.
+
+### ISSUE-243: `PRIVACY_NUTRITION_LABEL.md` has "Product Interaction = TBD" *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`docs/PRIVACY_NUTRITION_LABEL.md:116` is unresolved. Audit confirms no PostHog/Mixpanel/Sentry/Firebase/Amplitude SDKs in `package.json` — the answer is **No**. Resolve before App Store Connect entry to avoid Apple's automated mismatch check.
+
+**Fix**: Set Product Interaction = **No (not collected)**. Note rewritten to clarify analytics are NOT wired in the submission binary and to remind the next dev that any future analytics SDK addition must re-submit the Privacy Nutrition entry in App Store Connect before that build goes live.
+
+### ISSUE-244: Apex-to-www 307 redirect on privacy URL *(P2, 2026-05-18)* ✅ FIXED 2026-05-18
+
+`mosaicrunning.run/privacy.html` returns 307 → `www.mosaicrunning.run/privacy.html`. Works, but some App Review reviewers have flagged redirects on the privacy URL field in App Store Connect.
+
+**Fix**: Added a "Submission-time URL note" callout to `docs/LEGAL_CHECKLIST.md` under Public Pages: when entering Privacy / Terms / Support URLs in App Store Connect, use the `www.` prefix directly (`https://www.mosaicrunning.run/privacy.html`, etc.) to avoid the apex 307. Submission-time instruction only — no code change required.
+
+### ISSUE-245: Rebuild `mosaicrunning.run` as a real product landing *(P2, 2026-05-18, OPTIONAL)*
+
+Currently a "Coming Soon" sign-up page. Apple's Marketing URL field is **optional** in App Store Connect — leaving it blank just removes the "Developer Website" link from the listing. Rebuild is a credibility/conversion improvement, not a submission requirement.
+
+**Fix decision (Tristan, 2026-05-18)**: Logged but not a submission blocker. Treat as post-launch work unless Tristan wants to bundle it. Estimated ~1 hour of work for a single-page landing (headline + 3 screenshots + App Store badge) keeping privacy/terms/support endpoints intact.
+
+### ISSUE-246: Anti-steering compliance when IAP ships *(P2, 2026-05-18, FUTURE)*
+
+When ISSUE-231 (Tier 2 monetisation) resolves with any IAP path: NO "subscribe on web" copy in-app, NO Stripe portal deep-link from Account view, NO price comparisons between in-app and web pricing. Apple 3.1.3 intro paragraph. Not actionable until ISSUE-231 is decided.
+
+**Fix decision**: Deferred — depends on ISSUE-231 outcome.
+
+---
+
 ## 🔴 TOP PRIORITY — Next session
+
+### ISSUE-224: Cycling-only mode lacks race-outcome retro card *(P3, 2026-05-18)*
+
+`isCyclingOnlyMode(state)` paths render `renderRaceOutcomeRetroCard(s)` at `src/ui/triathlon/forecast-view.ts:108`, but `triConfig.raceLog` is only populated by `tri-race-outcome.ts` for full triathlon events — never for cycling-only events. So a user who finishes their cycling-only event never sees a retro card. Fix needs a `cyclingRaceLog` field on triConfig (new optional state) populated by a new `cycling-race-outcome.ts` detector wired into `detectRaceOutcomeAfterSync` in `main.ts`, plus a `renderCyclingRaceOutcomeRetroCard` mirroring the existing pattern. Predicted slot = cached `predictCyclingEvent` output from race-day; actual = sum of activity duration in the race window.
+
+### ISSUE-223: HYROX station-level retro detail *(P3, 2026-05-18)*
+
+`renderHyroxRaceOutcomeRetroCard` shipped in 2026-05-18 with a single-discipline "you beat your target by X" line. The `HyroxRaceLogEntry` shape doesn't currently carry per-station actuals, so we can't surface "Sled push 12s faster than predicted" without first extending `hyrox-race-outcome.ts` to capture station splits from the race-day activity. Worth doing when we have a HYROX-tracked race in the wild to validate the parsing path. Files: `src/types/triathlon.ts` (HyroxRaceLogEntry extension), `src/calculations/hyrox-race-outcome.ts`, `src/ui/hyrox/forecast-view.ts`.
+
+### ✅ ISSUE-222: Audit all hardcoded `iTrimp * 100 / 15000` call sites *(P2, 2026-05-18, FIXED 2026-05-18)*
+
+Display paths across `activity-detail.ts`, `home-view.ts`, `main-view.ts`, `plan-view.ts` (running), `renderer.ts`, `sport-picker-modal.ts`, `activity-review.ts`, `excess-load-card.ts` (including a local `ITRIMP_NORMALIZER` constant), `workout-insight.ts`, `sleep-insights.ts`, `cross-training/timing-check.ts`, and `cross-training/universalLoad.ts` were converting iTRIMP→TSS with a hardcoded `15000` divisor, diverging from the daily-load chart / rolling-load ring / weekly TSS chart for any athlete with a computed normalizer.
+
+**Fix**: `normalizeiTrimp` exported from `fitness-model.ts` and called from every display path. `runSpec` multipliers preserved. Storage paths (`data/stravaSync.ts` calibration thresholds, `data/appleHealthSync.ts` historic baseline) intentionally NOT touched — they run at sync time when the normalizer may not yet be initialized, and their `tssPerHour` bounds were tuned against the fixed divisor.
+
+### ✅ ISSUE-221: Triathlon past-week "Completed" list still keys on `status === 'completed'` *(P2, 2026-05-18, FIXED 2026-05-18)*
+
+`buildCompletedEfforts` in `src/ui/triathlon/plan-view.ts` filtered `triWorkouts` by `status === 'completed'` and went empty when the matcher hadn't run.
+
+**Fix**: replaced the past-week-only Completed card with a new `buildDoneActivitiesList` that renders on current + past weeks, iterates `wk.garminActuals` directly (no matcher dependency), and shows discipline · name · day · duration · TSS-done-of-planned · effort signal per row. Tapping a row routes to the existing `renderActivityDetail` page so the full HR zone / split / route breakdown is one tap away.
+
+### ISSUE-220: i18n — coach copy + error messages are English-only *(P3, 2026-05-17, DEFERRED)*
+
+Coach system prompt, toast copy ("Back tomorrow", "this week"), and chip-reply rules all hard-code English. Mosaic has no i18n pattern in the codebase yet. Deferred until there's a concrete non-English user requirement.
+
+### ✅ ISSUE-219: Coach system prompt now built server-side (was tamperable) *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+The system prompt was constructed client-side and sent in the POST body as `system_prompt`. A non-allowlisted (future paid) user could replace it with anything under 16K chars on the wire — rewriting refusal rules, scope guardrails, or eliciting arbitrary output. Tolerable at single-user alpha but a real security issue once the allowlist opens.
+
+**Fix**: edge function now builds the prompt server-side from a `coach_context` JSON payload via `buildSystemPromptServer`. Any client-supplied `system_prompt` is logged and ignored. Client `buildSystemPrompt` stays for the "Export training snapshot" feature only, with a doc comment noting the canonical lives in the edge fn and the two must be kept in sync manually.
+
+### ✅ ISSUE-218: Token-budget guard on coach context *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+`buildCoachContext` could emit a payload that hit Anthropic's input-token ceiling on long programs with 16+ weeks of skeleton + adaptation log + memory + 4 weeks of activities. Cost risk grew with context size.
+
+**Fix**: `applyTokenBudget(ctx, currentWeek)` trims in order of decreasing essentialness when the JSON exceeds 40,000 chars (~10K tokens):
+1. Drop `adaptation_log`
+2. Trim `plan_skeleton` to current week ± 2
+3. Drop oldest `recent_activities` (down to 5 most recent)
+
+Console-warns when triggered.
+
+### ✅ ISSUE-217: Running `reduce_workout` description didn't scale at render *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+Running workouts regenerate fresh each render, so the AI reduce-mod (which leaves `newDistance` empty) couldn't pre-bake the scaled description like the in-place tri/hyrox path does. Result: the workout card showed "Coach: Reduced 30%" but the description still read the full volume.
+
+**Fix**: both mod-application loops in `plan-view.ts` now call `scaleWorkoutDescription` at render when `mod.aiModifiedAt && mod.autoReduceNote && mod.status === 'reduced'`. The pct is parsed out of the autoReduceNote. Workout name gets a `(reduced X%)` suffix if not already present.
+
+### ✅ ISSUE-216: Coach payload could exceed the edge function's 32 KB cap *(P1, 2026-05-17, FIXED 2026-05-17)*
+
+Long chat sessions could approach 32 KB (7K system prompt + ~17K context + history). Edge fn would 413 and the UI showed a generic error.
+
+**Fix**: `streamCoachChat` now pre-flights the body size and trims oldest message pairs (preserving the first turn + recent context) until under 30 KB. If a `payload_too_large` ever escapes, the client surfaces "This conversation got too long. Tap ↻ to start a fresh session."
+
+### ✅ ISSUE-215: `force_tool_use` over-eager on bare affirmatives *(P1, 2026-05-17, FIXED 2026-05-17)*
+
+"yes" / "ok" / "do it" was forcing `tool_choice: any`, producing spurious tool calls when the user was answering an information question rather than confirming a proposed change.
+
+**Fix**: `isClearDirective` now takes the prior assistant turn as a second arg. Bare affirmatives only count as a directive when the prior turn contained tool-intent phrasing ("Want me to…", "I'll reduce…", "Cutting Tuesday's swim…"). New unit-test cases cover both branches.
+
+### ✅ ISSUE-214: `lastToolDropReason` module-level race on parallel tool streams *(P1, 2026-05-17, FIXED 2026-05-17)*
+
+If Anthropic emits two tool_use blocks back-to-back in a stream, the singleton `lastToolDropReason` from `coach-tools.ts` could be clobbered.
+
+**Fix**: new `validateToolCall(toolName, input)` returns `{ change }` or `{ dropReason }` inline. Chat-stream consumer uses the new API; back-compat shim left in place for legacy callers.
+
+### ✅ ISSUE-213: HRV trigger headline doubly-negated *(P1, 2026-05-17, FIXED 2026-05-17)*
+
+`"HRV is -20% below baseline"` reads as "negative twenty below" — minus sign and "below" both encode direction. Fix: `coach-triggers.ts` uses `Math.abs(pctRounded)` for headline + primer copy.
+
+### ✅ ISSUE-212: Vacuously-passing running adjust_intensity test *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+`coach-tools.test.ts` wrapped its assertion in `if (change) { ... }` so a silent breakage of the validator would let the test pass.
+
+**Fix**: test now builds a `PendingChange` directly (skipping the generator-dependent validator) and unconditionally asserts the apply path produces a workoutMod with `aiModifiedAt`, `zoneCap=2`, `status='reduced'`, `newType='easy'`, `newRpe=2`.
+
+### ✅ ISSUE-211: Coach `cardTitle` + `classicHero` stance badge violated Visual Constraints *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+Two surfaces used `text-transform:uppercase` + `letter-spacing`, banned by `UX_PATTERNS.md → Visual Constraints`. Fix: both rendered as sentence-case, no transform/spacing.
+
+### ✅ ISSUE-210: Consent modal lacked `shownThisSession` guard *(P2, 2026-05-17, FIXED 2026-05-17)*
+
+Per CLAUDE.md reveal-popup rules, all gating modals should have both a persisted flag AND a module-level `shownThisSession` boolean. Intro and priorities had it; consent did not.
+
+**Fix**: added a `consentShownThisSession` module-level flag flipped before the modal mounts. Mirrors the `coach-intro-overlay` id-guard pattern.
+
+### ✅ ISSUE-209: `buildPlanSkeleton` missed HYROX — coach saw bare running skeleton *(P0, 2026-05-16, FIXED 2026-05-16)*
+
+`coach-context-builder.ts:buildPlanSkeleton` branched on `eventType === 'triathlon'` only, so HYROX users fell through to the bare running branch (no swim/bike/run counts, no planned_tss, no planned_hours, no key_sessions). HYROX coach lost its full-program awareness.
+
+**Fix**: condition broadened to `(triathlon || hyrox) && wk.triWorkouts`, matching the pattern already applied in `applyPendingChange` (ISSUE-205). Regression test `buildPlanSkeleton — HYROX uses the structured per-week shape` covers it.
+
+### ✅ ISSUE-208: AI Coach `scaleWorkoutDescription` scaled interval rep distances *(P0, 2026-05-16, FIXED 2026-05-16)*
+
+When a user accepted a `reduce_workout` Apply, the description scaling regex was catching interval rep distances inside patterns like `8x100m`, `4x400m`, `6×200m` — destroying the interval prescription. A 30% reduce turned `4x400m threshold` into `4x300m threshold`. The unit-test fixture used `75m` reps so it never triggered the bug; real triathlon swim sets and running track work would silently break.
+
+**Fix**: regex now captures an optional `\d+\s*[x×]\s*` multiplier prefix; matches with a multiplier are returned unchanged. Four regression tests added covering `8x100m`, `4x400m`, `6 x 200m`, `8×200m`, plus a "still scales total volumes" guard.
+
+### ✅ ISSUE-207: AI Coach `adjust_intensity` zoneCap was a silent no-op in running mode *(P1, 2026-05-14, FIXED 2026-05-14)*
+
+Running adjust_intensity built a `WorkoutMod` with `zoneCap` set, but the mod-application loop at `plan-view.ts:2325` only read `mod.newRpe` — never `zoneCap`. The cap was invisible to render and to future coach context.
+
+**Fix**: both mod-application loops in `plan-view.ts` now propagate `aiModifiedAt`, `autoReduceNote`, and `zoneCap` onto the workout. `Workout.zoneCap?: 2 | 3` added to types. Coach context emits an `ai_modifications` array so the coach can read its own past calls.
+
+### ✅ ISSUE-206: AI Coach gate chain could lock user out on inconsistent state *(P2, 2026-05-14, FIXED 2026-05-14)*
+
+If `coachPrioritiesSeen=true` but `coachPriorities` was absent (rare edge case from a partial state wipe), the priorities gate would skip forever and users couldn't re-enter the flow.
+
+**Fix**: gate condition now also fires when `coachPrioritiesSeen && !coachPriorities`. The Account view's "Edit priorities" row was already a manual escape hatch.
+
+### ✅ ISSUE-205: AI Coach silently corrupted state for HYROX users *(P0, 2026-05-14, FIXED 2026-05-14)*
+
+`applyPendingChange` branched on `state.eventType === 'triathlon'` and fell through to the running branch for HYROX. HYROX sessions live in `wk.triWorkouts` (same schema as tri), so the running branch pushed a `WorkoutMod` to `wk.workoutMods` — the wrong array. HYROX user tapped Apply, the toast confirmed, the plan card didn't change, and a stale mod hung around polluting future render passes.
+
+**Fix**: branch reads `(triathlon || hyrox) && triWorkouts`. Same fix in `undoPendingChange`. New `buildHyroxCoachContext` in `coach-context-builder.ts` so HYROX users get a proper context payload (was falling through to the running builder, which doesn't read `triWorkouts`). HYROX workout card now renders the "Coach" badge when `aiModifiedAt` is set. Covered by regression test `applyPendingChange — HYROX mutates triWorkouts (P0 regression)`.
 
 ### ✅ ISSUE-185: HYROX previous-race format silently mis-classified doubles as singles *(P1, 2026-05-09, FIXED 2026-05-11)*
 
@@ -1348,10 +1647,8 @@ Stats Recovery and Progress cards now have position bars with zone labels (Fresh
 **Fix sketch**: When `runRaceLog` / `hyroxConfig.raceLog` / `triConfig.raceLog` gets a new entry for `dateISO === today − 1`, surface a "Race recovery" banner that shows a longer-than-usual recovery window (e.g. 2× normal for marathon, 3× for IM). Don't double-count TSS — this is a UX overlay, not a model change.
 **Files**: `src/ui/recovery-view.ts`, possibly a new `race-recovery-banner.ts`.
 
-### ISSUE-204: Running + HYROX race-outcome retro UI surface not built *(P3, 2026-05-12)*
-**Status**: detection + logging modules shipped 2026-05-12 (`run-race-outcome.ts`, `hyrox-race-outcome.ts`). Entries land on `state.runRaceLog[]` and `state.hyroxConfig.raceLog[]` after race day, but no UI surface reads them yet. Triathlon already has `getRaceOutcomeRetro()` wired into `tri-week-debrief.ts:161`.
-**Fix sketch**: Mirror the tri pattern — a small retro card on stats / forecast surfaces when the latest entry beat the prediction by ≥ threshold (60s for running, TBD for HYROX). Surfacing tier-1 calibration for running is a separate follow-up (no `run-calibration.ts` analogue yet).
-**Files**: new `src/calculations/run-race-outcome.ts` (already shipped — extend the export surface); new `src/ui/running/race-outcome-card.ts` (or inline in stats-view).
+### ISSUE-204: Running + HYROX race-outcome retro UI surface not built *(P3, 2026-05-12)* ✅ FIXED 2026-05-18
+**Fix shipped**: `buildRunRaceOutcomeRetroCard` added to `src/ui/race-forecast-view.ts` (above hero ring), `renderHyroxRaceOutcomeRetroCard` added to `src/ui/hyrox/forecast-view.ts` (above forecast body). Both mirror tri's `renderRaceOutcomeRetroCard` pattern — green-tinted card, "You beat your prediction/target by X" headline, predicted/target vs actual sub-line, ≥60s gate. Running compares against `runRaceLog[i].predictedTotalSec`; HYROX compares against `hyroxConfig.raceLog[i].targetTotalSec` (HYROX has no cached prediction, so the target is the comparison anchor). Cycling-only retro deferred as ISSUE-224. HYROX station-level retro deferred as ISSUE-223. Pending Tristan verification on device.
 
 ---
 
@@ -2261,7 +2558,15 @@ These are not bugs or features — they are design decisions to revisit as the p
 
 ---
 
-### ISSUE-199: vo2-sources test pollution when run in full suite *(P2, 2026-05-12)*
+### ISSUE-199: vo2-sources test pollution when run in full suite *(P2, 2026-05-12)* ✅ MOOT 2026-05-19
+
+`src/calculations/vo2-sources.ts` and its test file were deleted when the "Sources disagree" banner on the VO2max detail page was removed (banner was redundant with the per-sport bars + Source toggle on the same surface). No more module, no more test pollution surface.
+
+Original report kept below for reference.
+
+---
+
+### ISSUE-199 (original report): vo2-sources test pollution when run in full suite *(P2, 2026-05-12)*
 
 **Symptom**: In a 2026-05-12 session, 3 tests in `src/calculations/vo2-sources.test.ts` failed only in the full suite (not in isolation):
 - "returns no conflict when fewer than 2 sources available"

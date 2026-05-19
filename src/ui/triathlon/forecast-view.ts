@@ -112,6 +112,9 @@ export function renderTriathlonForecastView(): void {
           <div class="hf" data-delay="0.10">
             ${isCyclingOnlyMode(s) ? renderCyclingFinishCard(s) : renderRaceForecastCard(s)}
           </div>
+          <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
+            <button id="tri-fc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
+          </div>
         </div>
       </div>
 
@@ -121,6 +124,10 @@ export function renderTriathlonForecastView(): void {
 
   wireTabBarHandlers(navigateTab);
   document.getElementById('tri-fc-account-btn')?.addEventListener('click', () => navigateTab('account'));
+  document.getElementById('tri-fc-methodology-btn')?.addEventListener('click', () => {
+    import('@/ui/methodology-view').then(({ renderMethodologyTriathlon }) =>
+      renderMethodologyTriathlon(() => renderTriathlonForecastView()));
+  });
   document.getElementById('race-readiness-detail-trigger')?.addEventListener('click', () => {
     import('./race-readiness-detail').then(({ renderRaceReadinessDetailView }) => {
       renderRaceReadinessDetailView();

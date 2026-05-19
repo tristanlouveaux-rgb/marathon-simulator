@@ -4,6 +4,881 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-19 — Submission readiness sweep (Supabase parked)
+
+App-readiness items addressed while Supabase was down. Supabase-dependent steps (delete-account edge function deploy, reviewer account creation + Strava sync) remain parked.
+
+- **ISSUE-226 + 237 deploy step** — ran `npx cap copy ios` so the new `PrivacyInfo.xcprivacy` manifests at the app target and plugin targets land in the next Xcode archive.
+- **ISSUE-233 verification** — confirmed `https://www.mosaicrunning.run/methodology.html` serves 200 OK. Apex `mosaicrunning.run` returns a 307 to `www`; Apple follows redirects so this is fine for App Store URL fields.
+- **Paywall Apple 3.1.3 compliance fix (forward-looking)** — code review of `src/ui/coach-paywall.ts` found the legal disclosure paragraph was static and missing the subscription title, length, and price. Rebuilt it as a dynamic block derived from the selected `PurchasesPackage` at render time, and corrected the renewal-window wording from "within 24 hours of the end" to "within 24 hours prior to the end". Anti-steering check (3.1.3(a)) was already clean: no Stripe/web checkout references on the paywall surface. Does not affect v1 (still allowlist-gated per ISSUE-231) but de-risks the v1.1 IAP submission.
+- **APP_STORE_ASSETS.md §8** — corrected the IAP plan from "StoreKit (not RevenueCat)" to the actual ISSUE-231 decision: RevenueCat hybrid path, AI Coach Monthly £4.99 / Annual £49.99, 7-day trial.
+
+## 2026-05-19 — Marathon forecast hero: glass card replaces ring + stat row
+
+Iterated on the forecast page hero. Pre-iteration the page had: amber hero ring (220 px) → Target / Current / Forecast stat row → population card → fingerprint card (which itself was another "How your forecast is built" treatment). Two huge `3:28:12` headlines stacked on one page read as a bug.
+
+Tristan picked the glass hero + chips direction after seeing four mocked candidates (radial fingerprint, constellation, glass hero, polished gears) stacked on localhost.
+
+- **`src/ui/race-forecast-fingerprint.ts`** stripped down to just the chosen direction. One liquid-glass card (`rgba(255,255,255,0.50)` + `backdrop-filter: blur(24px) saturate(170%)` + `border:1px solid rgba(255,255,255,0.55)` + outer drop shadow). Three coloured radial-wash blobs (cool blue / teal / warm cream) sit `position:absolute` behind the card content with `overflow:hidden` on the parent so the glass has something to refract. Hero block: small "Forecast" label, 56 px / 300-weight tabular finish time, signed delta vs goal beneath. Below the hero: five glass chips (You / Capacity / Response / Training / Venue) in a flex row, each `min-height:86px`, gradient-glass background with a 1 px white rim. Missing-data chips dim and show a small italic "add this to sharpen" caption. Cluster builders unchanged — same data shape used in the sandbox.
+- **`src/ui/race-forecast-view.ts`**: removed the hero ring + stat row entirely. Glass hero now mounts directly under the page header + last-race retro card. Killed `RING_*` constants, `deltaString`, `fmtShortDelta`, `PAGE_BG`, ringOffset wiring + `rfc-ring-circle` animation handler. `wireRaceForecastHandlers()` no longer takes a `ringOffset` argument.
+- **Response chip fix**: when `adaptationRatio` is null and we fall back to the VDOT trajectory, the trajectory phrase used to print as both headline and detail ("Trending down" + "Trending down"). Now headline = trajectory, detail = "Last 8 weeks" (timeframe). With adaptation present, headline = "Ahead / On track / Behind", detail = trajectory phrase.
+
+`npx tsc --noEmit` clean on touched files; `npm run lint:ui` clean.
+
+Phase B (tap-to-expand `.rfc-chip` → cluster detail panel) still outstanding. Each chip already carries `data-cluster="<key>"` so wiring is one handler away.
+
+---
+
+## 2026-05-19 — Methodology pages — in-app drill-down + marketing site deploy
+
+Two-part fix to "How this is calculated →". Tristan flagged that the link 404'd from localhost and the external page didn't match the rest of the app even when it loaded.
+
+- **New in-app view** (`src/ui/methodology-view.ts`): full-page drill-down mirroring the `buildCTLLearnMorePage` pattern at `src/ui/stats-view.ts:2499`. Four per-surface entry points so each opener shows only the relevant sections:
+  - `renderMethodologyRunning` — load, Banister, ACWR, VDOT, course factors, limitations, refs.
+  - `renderMethodologyTriathlon` — load, Banister, VDOT, FTP/CP, CSS, tri adjustments (brick / OW deficit / heat / durability), course factors, limitations, refs.
+  - `renderMethodologyHyrox` — load, Banister, VDOT, HYROX specifics (8 run legs + 8 stations, 89,868-finisher dataset), limitations, refs.
+  - `renderMethodologyReadiness` — readiness composite first, then load context, limitations, refs.
+- **Wiring**: replaced the `<a target="_blank">` external links in `race-forecast-view.ts`, `readiness-view.ts`, `triathlon/forecast-view.ts`, `hyrox/forecast-view.ts` with plain text buttons, each handler dynamically imports the methodology view and passes a `back` callback that returns to the opener (modal-close-to-opener pattern from CLAUDE.md).
+- **Marketing site deploy** (`~/Documents/mosaic-landing`): pushed `methodology.html`, `privacy.html`, `support.html`, `terms.html` to the landing repo (commit `c4e5d1d`) and ran `vercel --prod`. All four URLs now return 200 — previously 404 (privacy and terms had never been deployed there despite the App Store audit memory claiming they were live). External page remains because privacy/terms/methodology are still linked externally from `coach-paywall.ts`, `account-view.ts`, `coach-view.ts` and Apple reviewers reach methodology via the public URL.
+
+UX pre-flight: read existing `buildCTLLearnMorePage` as the canonical pattern; mirrored exactly (32×32 circle back button, `var(--c-surface)` cards at 14px radius, 13/600 titles + 13/1.6 muted body). One warm-cream disclaimer banner mirrors the legal disclaimer pattern from `public/methodology.html`. `npx tsc --noEmit` clean on touched files; `npm run lint:ui` clean (initial `<code>` `rgba()` background was flagged and replaced with a monospace `<span>` using `var(--c-black)`).
+
+---
+
+## 2026-05-19 — Running mode gets a Forecast tab
+
+Running mode tab bar was Home / Plan / Stats — the race forecast page was reachable only via a Home card tap, while tri and HYROX both have Forecast as a first-class tab. Tristan flagged it. Fixed:
+
+- **`src/ui/tab-bar.ts`**: running mode in race mode (`!continuousMode && rd && initialBaseline`) now renders the Forecast tab between Plan and Stats. Continuous-mode users still see the 3-tab layout — we don't link to a page that would redirect.
+- **`src/ui/race-forecast-view.ts`**: `renderTabBar('home')` → `renderTabBar('forecast')`. Header restructured to mirror tri/hyrox forecast tabs: back-button removed (the tab bar IS the navigation), account/initials button top-right, larger centred title with race-name subtitle ("Test's Dubai Marathon — Week 1 of 35"). `navigateTab` now handles 'forecast' as a no-op and routes 'account' too.
+- **Per-view `navigateTab` handlers**: `home-view`, `main-view`, `stats-view`, `record-view` all branch on `eventType` for the 'forecast' tab — tri/hyrox keep their existing destinations, running routes to `renderRaceForecastView`.
+
+Typecheck clean, `lint:ui` clean.
+
+---
+
+## 2026-05-19 — Marathon forecast fingerprint, Phase A (static)
+
+New "How your forecast is built" card on the running race forecast page (`src/ui/race-forecast-view.ts`), sitting between the population card and the course factors panel. Five glass gears arranged in a pentagon around the predicted finish time, one per factor cluster: **You** (runner type, tier, history breadth, PBs, past races), **Capacity** (VDOT, LT), **Response** (HR trend, RPE delta, adherence — replaces the bare `adaptationRatio` label with an observable framing), **Training** (weekly km, sessions, phase), **Venue** (climate / altitude / elevation, compounded percentage).
+
+- **New file** (`src/ui/race-forecast-fingerprint.ts`): exports `renderForecastFingerprint(s)`. Each gear has a `present` flag — missing-data gears render dimmed with an "add this to sharpen" caption (e.g. "Sync runs to estimate", "Pick a race"). Mirrors HYROX's per-station calibration pattern but cluster-level. Pentagon geometry: 320×320 container, 128px central disc, 106px gears at radius 110 px (angles −90 / −18 / 54 / 126 / 198 deg).
+- **Visual treatment**: quieter glass spec (`rgba(255,255,255,0.78) + blur(16px)`) per UX_PATTERNS data variant. Dashed 1px ring inset on each gear suggests teeth without crossing into decorative-icon territory. Neutrals only — no chromatic accents, no tinted backgrounds.
+- **Bottom summary strip**: one-line plain-English read of the build ("Endurance · VDOT 48 · 38 km/wk · Berlin"). Missing-factor callout lists which clusters are unfilled so the user sees what's needed to sharpen confidence.
+- **No interaction yet** — Phase B will wire tap-to-expand panels under each gear with the full factor breakdown.
+
+UX pre-flight: read UX_PATTERNS § Visual Constraints + § Population Distribution Charts. Named pattern (`renderPerformanceRadar` in hyrox as the closest spiritual cousin). Two non-neutral colours budget unused (neutrals only). `npx tsc --noEmit` clean on the touched files; `npm run lint:ui` clean.
+
+---
+
+## 2026-05-19 — VO2max detail: drop "Sources disagree" card
+
+The "Sources disagree" card on the VO2max detail page narrated what the per-sport bars above and the Source toggle below already conveyed visually. Tristan flagged it: "we can see the sources disagree". The card also contained an em dash ("52 — a 4-point gap") that slipped past the UI linter (em-dash isn't in the regex set).
+
+Deleted `src/calculations/vo2-sources.ts` and `vo2-sources.test.ts` entirely — `getVo2Conflict` had no consumer outside the now-removed banner. Removed the import and `sparkline: methods + conflictBanner + toggle` reference from `benchmark-detail-pages.ts`. Typecheck clean. ISSUE-199 (test pollution in vo2-sources.test.ts) becomes moot — close in next pass.
+
+## 2026-05-19 — VO2max detail: per-sport bar values anchored to bar end + clearer naming
+
+The "Per source" card on the VO2max benchmark detail page (`src/ui/triathlon/benchmark-detail-pages.ts:401 buildVO2MethodsCard`) printed each bar's value at the far right of the row via `justify-content:space-between`, while the dashed `Ceiling 81` line sat at its true position (≈91% of domain). Visually the smaller bar values (52, 43) were written further right than the ceiling line, contradicting the bar lengths and making the chart read like the line was in the wrong place.
+
+- Numbers now position absolutely at `left:${pct}%` with `transform:translateX(-50%)` so each value sits centred above the end of its bar. 52 reads at 58%, 43 at 48%, ceiling at 91% — chart internally consistent, headroom story reads naturally.
+- Title renamed `Per source` → `Per sport`. "Source" implied data provenance (Watch vs Mosaic vs Manual) which is what the toggle below controls; the bars are actually a per-discipline breakdown of Mosaic's own estimate. New subtitle "Mosaic's estimate from your training data, by discipline." makes the scope explicit so the card no longer reads as if it competes with the Watch headline above.
+
+`benchmark-detail-pages.ts:429-470`. `npm run lint:ui` clean.
+
+## 2026-05-19 — Running plan summary: mirror tri's 3px KPI progress bars
+
+Per the mirror rule — the triathlon plan view's Weekly hours / Sessions / Week load summary card got 3px neutral progress bars under each KPI earlier today; the running plan view's Sessions / Distance / Training Load card was missing the same treatment. Added a local `renderKpiBar(done, total, showActuals)` to `plan-view.ts:276` mirroring the tri implementation byte-for-byte (3px height, `rgba(0,0,0,0.05)` track, `#0F172A` fill). Bar renders only when `showActuals === true` — past and current weeks; future weeks stay clean. `plan-view.ts:259-273`.
+
+## 2026-05-19 — VO2max detail: explainer for "cardiac ceiling" on Per source card
+
+The "Per source" card showed a `Ceiling 75` dashed line and a footer like "Best measured 52 · ceiling 75 — 23 points of theoretical headroom" without ever telling the user what the ceiling actually is. The deeper "How we estimate" card below explained it, but the headroom narrative read as jargon on first contact.
+
+Added a lead sentence to the headroom copy: "Cardiac ceiling is your aerobic upper bound, estimated from peak HR ÷ resting HR (Uth-Sørensen). It approximates the maximum VO2max your cardiac function could support, not your current fitness." The fallback case (ceiling but no measured value) gets the same definition. `benchmark-detail-pages.ts:450-453`. Typecheck clean, `npm run lint:ui` clean.
+
+---
+
+## 2026-05-19 — Tri plan done list: honour `manualSport` in badge + title
+
+The "Activities done this week" list and per-day unplanned cards in `plan-view.ts` ignored `actual.manualSport` entirely. An activity the user had tagged as "rugby" still rendered with a "Strength" badge (because the badge fell back to a hard-coded `'strength'` when `classifyActivity(activityType)` returned `'other'`) and a "Cardio" title (because Strava's `displayName: 'Cardio'` won the title fallback chain before any sport label was consulted). Two surfaces, two different label source-chains — exactly the canonicalisation-failure mode the CLAUDE.md "same number / same source" rule warns against, applied to labels.
+
+Fix: both call sites now resolve the canonical sport via `getEffectiveSport(actual)` (`sport-picker-modal.ts:108`), which is the same function the Home Recent panel uses. `manualSport` wins, then `deriveSportFromActivityType`, then learned name mapping. The resolved `SPORT_LABELS[effectiveSport]` (or the user's manual label) becomes both the badge text and the title, falling back to the existing Strava-name chain only when nothing canonical resolves. Badge **palette** still uses the neutral 'strength' colour for non-tri sports — only the label text changes, so a tagged-rugby activity reads as "Rugby" in a neutral grey chip.
+
+Files: `plan-view.ts` — `buildDoneActivitiesList` (~line 970) gets a `badgeLabel` on the row + manual-label-first title; `renderDay`'s `unplannedForDay` (~line 1240) gets the same treatment. Typecheck clean, `npm run lint:ui` clean.
+
+---
+
+## 2026-05-19 — VO2max detail: per-source bar values anchored to bar end
+
+The "Per source" card on the VO2max benchmark detail page (`src/ui/triathlon/benchmark-detail-pages.ts:401 buildVO2MethodsCard`) printed each bar's value at the far right of the row via `justify-content:space-between`, while the dashed `Ceiling 81` line sat at its true position (≈91% of domain). Visually the smaller bar values (52, 43) were written further right than the ceiling line, contradicting the bar lengths and making the chart read like the line was in the wrong place.
+
+Numbers now position absolutely at `left:${pct}%` with `transform:translateX(-50%)` so each value sits centred above the end of its bar. Result: 52 reads at 58%, 43 at 48%, ceiling at 91% — the chart is internally consistent and the headroom story reads naturally. Typecheck clean, `npm run lint:ui` clean. `benchmark-detail-pages.ts:429-446`.
+
+---
+
+## 2026-05-19 — AI Coach v1 ship config (ISSUE-231 decided + ISSUE-238 fixed)
+
+Tristan decision: ship v1 with the existing allowlist as the de facto access gate; spin up a parallel paywall agent to build proper RevenueCat IAP (Option A) on a feature branch for v1.1. The allowlist + 10-call cap keeps Anthropic spend bounded while only Tristan + manual additions can use the AI Coach in v1. Reviewers see the classic Coach view (ISSUE-225 fix from 2026-05-18).
+
+- **`supabase/functions/coach-chat/index.ts`** — `MAX_CALLS_PER_DAY` 30 → 10. Header comment line updated. ⚠️ Needs `supabase functions deploy coach-chat` for the cap to land. (Paywall agent is also editing this file in parallel — added a `subscription_active` entitlement check alongside the env-driven allowlist. My cap change is preserved.)
+- **`public/privacy.html`** (ISSUE-238) — Tristan confirmed no ZDR. Rewrote the AI Coach section entirely. New heading "AI Coach (private beta in this release)". Opening paragraph states the feature is allowlist-gated and that users not on the list have no data flowing to Anthropic. Retention paragraph rewritten honestly to "Anthropic retains messages for up to 30 days under their Commercial Terms, after which they are deleted. Anthropic does not use these messages to train their models." Consent paragraph reframed to "when the AI Coach becomes generally available". ⚠️ Tristan must re-upload `privacy.html` to the live `mosaicrunning.run` site before submission.
+- **OPEN_ISSUES.md** — ISSUE-231 marked DECIDED (Option A, paywall agent in flight, v1 ships with allowlist). ISSUE-238 marked FIXED.
+
+After this batch, the v1 submission picture is: only ISSUE-230 (reviewer account creation) is genuinely blocking and needs Tristan. All other audit items are either shipped, deferred to v1.1 (IAP), or are Tristan-runnable deploy steps (`supabase functions deploy`, `npx cap copy ios`, upload public/ files).
+
+---
+
+## 2026-05-19 — App Store audit follow-on (2): ISSUE-227 real Strava handler hardening
+
+UI agent caught that my earlier ISSUE-227 fix landed in dead code. `getMainViewHTML()` (which renders the orange home-header Strava button) is no longer reached — `renderMainView()` delegates entirely to `renderTriathlonPlanView` / `renderHyroxPlanView` / `renderPlanView`. So the "coming soon" toast described in the audit could never fire. The live Strava-Connect button is on Account view (`src/ui/account-view.ts:404 / :428` with the handler at `:2063`), and that handler silently swallowed every failure — on a reviewer device with poor Wi-Fi, tap → nothing happens, which reads as a broken integration.
+
+Hardened the live handler: disables the button during the round-trip, surfaces `showSimpleToast('Could not start Strava connect. Try again in a moment.', 'error')` on HTTP error / missing redirect URL / thrown exception, re-enables the button on every failure path so the user can retry. Left the dead-code defensive fix in `main-view.ts:2716` in place — if `getMainViewHTML` is ever wired back into the render path the handler still does the right thing. OPEN_ISSUES.md ISSUE-227 entry updated with the audit-correction note.
+
+---
+
+## 2026-05-19 — App Store audit follow-on: parity fixes from cross-flow review
+
+Cross-flow audit caught one user-visible string and three parity gaps the per-issue audit missed.
+
+- **`src/coach/coach-chat-client.ts:358`** — error-handler string for a 402 `subscription_required` response from the coach edge function still read "AI Coach is coming soon." Same submission-blocker pattern as ISSUE-225 (Apple 2.3.1). Rewritten to "AI Coach is not available for this account." With ISSUE-225 in place the non-allowlisted user no longer hits the streaming path, so the string should never fire in production — but it lives in the binary, is grep-discoverable, and was the only "coming soon" copy left in user-visible surface area.
+- **`src/ui/race-forecast-view.ts:499`** — methodology link used the local `TEXT_L = '#94A3B8'` constant where the readiness-view sibling uses `var(--c-muted)`. Aligned to `var(--c-muted)` so the two surfaces stay in lockstep when the theme moves.
+- **`src/ui/triathlon/forecast-view.ts:116`** and **`src/ui/hyrox/forecast-view.ts:752`** — both forecast surfaces were missing the "How this is calculated →" link added to the running race-forecast in ISSUE-233. Added with the same muted-text styling so all three forecast tabs are consistent for App Review (1.4.1 methodology disclosure applies to triathlon + hyrox surfaces too).
+- **`src/ui/hyrox/station-detail-view.ts:230`** — full-page drill-down reachable from the forecast (back-button, own scroll, distinct route) was missing the HYROX trademark disclaimer. Added `buildHyroxTrademarkFooter()` at the bottom of the page so a reviewer who lands here from a station tap still sees the disclaimer.
+
+Typecheck clean. `npm run lint:ui` clean. The cross-flow audit confirmed the rest of the 2026-05-18 + 2026-05-19 batch (coach surface coherence, Strava connect imports, offline retry idempotency, toast adoption, plugin manifest paths, iOS bundle changes, delete-account refactor) — no other regressions found.
+
+---
+
+## 2026-05-19 — Tri plan summary: fix silently-dropped Cardio / Strength rows
+
+`summarizeWeekActuals` at `plan-view.ts:1422` had a long-standing whitelist that silently dropped any row whose `activityType` classified as `'other'` unless it matched `STRENGTH_TRAINING` / `HIIT` / `WeightTraining`. Real-world consequence: Strava-sourced `CARDIO` activities and Strava rows missing `activityType` altogether (e.g. the "Strength" entry with only `displayName`) were dropped from the "done" totals — the user saw `0h done / 0 done / 0 done` while the same activities showed up in Recent on the Home view.
+
+Fix: by the time a row lands in `garminActuals` the sync pipeline has already decided it's training. Drop the whitelist and count any row ≥ 60s. Discipline buckets (swim / bike / run) still only credit when the classifier returns a tri discipline — Cardio / Strength count toward overall hours, sessions, and load but don't fill the swim/bike/run bars.
+
+Same one-line fix applied to two sibling call sites in `plan-view.ts` that copied the same whitelist: `buildDoneActivitiesList` (~line 983, the "Activities done this week" list above the day-by-day) and `renderDay`'s unplanned-per-day path (~line 1240). Now CARDIO and untyped Strava rows appear in both lists.
+
+Also fixed: the push-to-next-week clone was carrying forward `matchedActivityId`, `iTrimp`, `stravaId`, `autoCompleted`, and `completedBySport` via spread, which would have made the pushed clone show as "already done" in the destination week. Now stripped on clone (`tri-skip-handler.ts:67`).
+
+## 2026-05-19 — App Store P1 batch + ISSUE-241 polish (232, 233, 234, 235, 236, 237, 241)
+
+Solo cleanup of the App Store audit while Tristan is away. Everything below is code or doc that didn't need a decision; the remaining audit items either need Tristan or need the iOS toolchain.
+
+- **ISSUE-232** (HYROX trademark) — Created `src/ui/hyrox/trademark-footer.ts` exporting `buildHyroxTrademarkFooter()` and mounted it at the bottom of `plan-view`, `forecast-view`, `stats-view`. Marketing carousel `marketing/carousel-hyrox.html` got the same disclaimer on the CTA slide. App Store description disclaimer line drafted in `docs/APP_STORE_ASSETS.md` for Tristan to paste at submission.
+- **ISSUE-233** (health-claim methodology, 1.4.1) — Created `public/methodology.html` modelled on `public/privacy.html`. Sections cover TSS / Banister CTL-ATL-TSB / ACWR, VDOT / FTP+CP / CSS / course factors, readiness composite, limitations, full bibliography (Banister, Coggan, Daniels, Gabbett, Hulin, Manzi, Monod-Scherrer, Wakayoshi). Added "How this is calculated →" muted-text link at the bottom of `readiness-view.ts` and `race-forecast-view.ts` linking to `https://www.mosaicrunning.run/methodology.html`. App Store description sentence added: "Built on published exercise-physiology models (Banister impulse-response, Daniels VDOT, Coggan TSS)."
+- **ISSUE-234** (illness modal medical language) — Three user-facing strings rewritten to non-clinical wording in `illness-modal.ts` (header copy + rest-window override prompt) and `coach-chat-client.ts` (system-prompt line). "Myocarditis" stripped from user-facing copy. Internal source-code comments + the Schwellnus 2016 model citations kept intact — App Review only sees user-facing strings.
+- **ISSUE-235** (audio background mode disclosure) — Added "Guided audio runs with voice cues that play while your screen is locked" to the App Store description bullet list in `docs/APP_STORE_ASSETS.md`. App Review notes got a new line explaining the `UIBackgroundModes audio` justification: "Audio background mode: used by the guided-audio runs feature to play voice training cues while the screen is locked or the app is in the background." Tristan pastes at submission.
+- **ISSUE-236** (synchronous Strava token revocation) — Refactored `supabase/functions/delete-account/index.ts` `revokeStravaToken` to use `AbortController` with a 5-second timeout, return a structured result (`success` / `no_token` / `failed` with reason: `timeout` / `network_error` / `http_error` + status code), log the outcome with the userId, and surface `strava_revoke` in the response body. Token row is still marked `deleted_at` before the revoke fires so failure does not block the deletion — the 30-day purge cron remains the safety net. ⚠️ Edge function must be re-deployed (`supabase functions deploy delete-account`) for the fix to land.
+- **ISSUE-237** (custom Capacitor plugin privacy manifests) — Created `PrivacyInfo.xcprivacy` inside each plugin source folder (`ios-plugins/guided-voice/ios/Sources/GuidedVoicePlugin/`, `ios-plugins/health-extras/ios/Sources/HealthExtrasPlugin/`). Both declare `NSPrivacyTracking=false`, empty data-types, empty API types — confirmed by source inspection that neither plugin uses Required Reason APIs (`GuidedVoicePlugin` uses `AVSpeechSynthesizer` + `AVAudioSession`; `HealthExtrasPlugin` reads HealthKit at the host-app level). Both `Package.swift` files updated with `resources: [.process("PrivacyInfo.xcprivacy")]` so SPM bundles the manifest with the target.
+- **ISSUE-241** (sweep `window.alert()` calls) — Added a generic `showSimpleToast(message, kind?)` helper to `src/ui/toast.ts` (info / error variants, 5s / 7s auto-dismiss, tap to dismiss, multi-line on `\n`). Replaced every `alert()` call across `events.ts` (13), `account-view.ts` (6), `renderer.ts`, `pending-deletion-banner.ts`, `account-legal.ts`, `state/persistence.ts` (deferred via `setTimeout(1500)` + dynamic import to avoid early-render no-op). Zero `alert(` calls remain outside tests. `confirm()` calls intentionally NOT touched — would need a custom confirm modal, out of scope for this submission pass.
+
+Typecheck clean. `npm run lint:ui` clean. Test suite still 1996 / 28 skipped / 2 failed (`detectRaceCollision` in untracked `illness-rules.test.ts` — pre-existing, scoped to a feature not on the launch path; same failures as the 2026-05-18 pre-flight pass).
+
+---
+
+## 2026-05-19
+
+- **Strength session RPE + Legs tagging**. HR-based TSS systematically under-counts strength work — a 54-min lift at 71 bpm read as 7 TSS while leaving the legs cooked. Opt-in tags now let the user replace that estimate with a duration × RPE TSS and surface the neuromuscular cost in tomorrow's readiness.
+  - **New fields** on `GarminActual`: `rpe?: number` (1–10) and `legFeel?: 'none' | 'moderate' | 'heavy'`. Both optional, no migration needed (build-target rule).
+  - **TSS recompute** (`src/calculations/fitness-model.ts`): new `computeStrengthRpeTSS(actual, discount)` helper. When the effective sport is `strength` and `actual.rpe` is set, replaces the iTRIMP path with `durationMin × TL_PER_MIN[rpe] × runSpec`. Signal A uses `runSpec = 0.35` (run-equivalent); Signal B uses `runSpec = 1.0` (full physiological load). Wired into `computeWeekTSS`, `computeWeekRawTSS`, and `computeTodaySignalBTSS`. Untagged sessions fall back to the existing path.
+  - **Activity-detail UI** (`src/ui/activity-detail.ts`): for any strength activity (matched or not), the grid now shows two new chips: an **RPE** cell (slider 1–10) and a **Legs** cell (none / moderate / heavy picker). When RPE is tagged, the TSS grid cell flips from `TSS (HR)` → `TSS (RPE)` with the recomputed number. New `findStoredActual(garminId)` helper iterates `garminActuals` across all weeks (necessary because the dict is keyed by either workout-slot id or `garmin-` prefix).
+  - **Leg-load wiring** (`src/calculations/readiness.ts`): `computeLegLoadBreakdown` now honours an optional per-entry `recoveryMultOverride` — heavy lifts decay 20% slower than the strength baseline (rowing-tier half-life). Strength entries persist via `applyLegFeelToLegLoad` in the Legs save handler: moderate ≈ 0.15 load/min + mult 1.05; heavy ≈ 0.35 load/min + mult 1.20 (matching crossfit and rowing reference tiers). Single entry per activity (replaced on retag, not appended).
+  - **Readiness floor** already reads `recentLegLoads` and surfaces "Leg load elevated from Strength yesterday. Running today raises impact risk…" once the decayed total crosses `LEG_LOAD_MODERATE` / `LEG_LOAD_HEAVY` — no copy changes needed; the sportLabel slot fills with "Strength" automatically.
+  - **Science**: full rationale + tables in `docs/SCIENCE_LOG.md §AG`. Typecheck + ui-lint clean; `fitness-model.test.ts` + `adaptive-recovery.test.ts` all pass.
+  - **Detector + matcher hardening** (same-day follow-up). The original detector only matched the exact `STRENGTH_TRAINING` activityType, so every Strava `WeightTraining` and `Workout` + "Strength" name slipped past — chips didn't render, TSS didn't update, and `mapGarminType` slotted these into the cross-training bucket instead of `gym`. Extracted `isStrengthActual` + `deriveSportFromActivityType` into `src/cross-training/activities.ts` as the single source of truth; both the UI chip rendering and the fitness-model TSS override route through it. Same helper now extends `mapGarminType` (Strava `WeightTraining` → `gym`, not `other`) and the `getEffectiveRPE` activity-type heuristic in `activity-matcher.ts`. **22 unit tests added**: 11 in `activities.test.ts` covering each detection signal path (caught a real edge case — runs named "lose weight" no longer mis-classify as strength via the name fallback, because the regex is gated on `derived === 'generic_sport'`), 11 in `fitness-model.test.ts` covering Signal A/B math, the `rpeFallback` path for legacy `wk.rated` entries, RPE clamping, and the Strava/Garmin/generic activityType matrix. Feedback memory `feedback_detection_helper_parity.md` captures the lesson for future sessions.
+- **VO2max Running sub-row mirrors Watch value when Watch source selected**. The device value (e.g. 56) is itself a running-based estimate, so showing Mosaic's running row (e.g. 52) alongside read as if the breakdown composed the 56. With Watch selected the Running row now shows the device value; Cycling and cardiac ceiling stay independent. Applied across all three surfaces that show the breakdown: triathlon fitness detail (`fitness-detail-view.ts:287, 383`), home VO2max card (`vo2max-card.ts:225`), and VO2max drill-down detail ("By sport" section, `vo2max-card.ts:322`). Detail-page caption flips to "From your watch" when device is the source.
+
+---
+
+## 2026-05-18 — App Store P0 + polish batch (ISSUE-226, 227, 228, 229, 239, 240, 242, 243, 244)
+
+Cleared the remainder of the P0 submission blockers plus the trivial P2 polish in one batch.
+
+- **ISSUE-226** — Created `ios/App/App/PrivacyInfo.xcprivacy` declaring four Required Reason API categories (UserDefaults CA92.1, FileTimestamp C617.1, DiskSpace E174.1, SystemBootTime 35F9.1). NSPrivacyTracking false; collected data types empty (lives in App Store Connect Privacy Nutrition entry, not the manifest). Needs `npx cap copy ios` before next archive.
+- **ISSUE-227** — Wired the home-header Strava "Connect" button (`src/ui/main-view.ts:2716`) to the real OAuth-start fetch used by Account view. No more "coming soon" toast. Imported `SUPABASE_ANON_KEY`, `SUPABASE_FUNCTIONS_BASE`, `getAccessToken` to match the Account-view shape. Button disables during round-trip; failures show a non-error toast and re-enable.
+- **ISSUE-228** — Offline-bootstrap fallback in `src/main.ts`. On `signInAnonymously()` failure the app now launches against localStorage instead of dumping the user to `renderAuthView()`. New `scheduleOfflineAuthRetry()` attaches a `window.online` listener + a 5-second timeout retry so anonymous sign-in completes silently when connectivity returns. Reviewer on poor Wi-Fi gets the wizard/home, not a dead auth screen.
+- **ISSUE-229** — `TARGETED_DEVICE_FAMILY = "1,2"` → `"1"` in both Debug and Release configs (`project.pbxproj`). iPhone-only.
+- **ISSUE-239** — Stripped landscape orientations from `Info.plist`. Removed `UISupportedInterfaceOrientations~ipad` entirely (no iPad target after ISSUE-229).
+- **ISSUE-240** — Removed `NSHealthUpdateUsageDescription` from `Info.plist`. Mosaic only reads from Apple Health. `LEGAL_CHECKLIST.md` HealthKit row updated.
+- **ISSUE-242** — `window.diagnoseVO2` wrapped in `if (import.meta.env.DEV)`. Vite strips the block in production builds.
+- **ISSUE-243** — `PRIVACY_NUTRITION_LABEL.md` Product Interaction set to "No (not collected)". Note clarifies analytics SDKs are not in the package and any future addition must re-submit the nutrition entry before that build goes live.
+- **ISSUE-244** — Submission-time URL note added to `LEGAL_CHECKLIST.md`: use `https://www.mosaicrunning.run/...` (with the `www.`) when filling in Privacy / Terms / Support URLs in App Store Connect, to dodge the apex 307 redirect.
+
+Typecheck clean. `npm run lint:ui` clean. `npx vitest run` — 1996 passed, 28 skipped, 2 failures (`detectRaceCollision` in untracked `illness-rules.test.ts`, pre-existing per the 2026-05-18 pre-flight pass — scoped to a feature not on the launch path).
+
+After this batch, P0 submission blockers remaining are only Tristan-required: **ISSUE-230** (create reviewer account, connect Strava with ≥16w history, paste creds into App Store Connect review notes).
+
+---
+
+## 2026-05-18 — Triathlon Progress: total weekly TSS now matches Rolling Load
+
+The "Total weekly load (TSS)" chart on the triathlon Progress detail page (`src/ui/triathlon/progress-detail-view.ts`) disagreed with the Rolling Load ring by ~2× on the rightmost data point. Three independent issues, fixed together:
+
+- **Wrong signal.** Previous chart summed Signal A (run-equivalent, swim/bike/run only) via `iTrimpToTSS`. Rolling Load uses Signal B (raw physiological, all activity) via `computeWeekRawTSS` → `computeRollingLoadRatio`. Replaced the data source with `computeWeekRawTSS` so the chart shares Rolling Load's canonical path.
+- **Cross-training silently dropped.** The old `buildHistorySlices → disciplineOf` filter excluded gym, padel, MTB, walks. New `buildRawWeeklySeries` iterates `s.wks` (and `previousPlanWks` for plan-reset history) and uses `computeWeekRawTSS` per week, so every activity counts.
+- **Current week missing, label mislabelled.** `rangeSlice` capped at `completedCount = currentIdx`, dropping the in-progress week — but `buildWeekLabels` anchored its rightmost tick to today's Monday, painting the last *completed* week's data at the "this week" label. The new series includes the current week and renders its final segment dashed so users see "this week so far".
+
+Card subtitles updated to be honest about each chart's scope: per-discipline chart now reads "Swim, bike, and run sessions only · iTRIMP-derived"; total chart reads "All activity including cross-training · matches Rolling Load · dashed = current week so far".
+
+---
+
+## 2026-05-18 — Sport picker reclassification didn't stick
+
+`reclassifyActivity` in `src/ui/sport-picker-modal.ts` applied week-total and leg-load deltas but never wrote `actual.manualSport`, so the next render fell back through `getEffectiveSport` → `deriveSportFromActivityType` and CARDIO-sourced Strava activities snapped back to "General Sport". Added the missing `actual.manualSport = newSport` assignment so the override persists.
+
+---
+
+## 2026-05-18 — Hide "Rate run safety" on non-run activities
+
+The activity detail page (`src/ui/activity-detail.ts:616`) was rendering the "Rate run safety" CTA on any activity with a polyline, including Strava "Cardio" / General Sport entries. Added `isRunActual` to the render guard so the button only appears when the activity is classified as a run.
+
+---
+
+## 2026-05-18 — Tri plan: KPI progress bars + push/skip wiring for missed sessions
+
+Two changes to the triathlon plan page.
+
+- **KPI progress bars.** The weekly summary strip (`src/ui/triathlon/plan-view.ts:174`) showed Weekly hours / Sessions / Week load as numbers with a "X done" caption but no visual ratio. Added a 3px neutral progress bar under each KPI, mirroring the existing discipline mini-bar style (`renderKpiBar` helper at line ~1310). Only renders when `showProgress` is true (current or past week).
+- **Push / skip wiring for missed sessions.** `skipTriWorkout()` and the "Missed" amber pill existed but were never wired to a user action — a missed card sat there with no way to move or drop it. The handler also let pushed clones be pushed *again* indefinitely (clones reset `skipCount` to 0).
+  - Added `pushCount?: number` to `Workout` (`src/types/state.ts:110`) tracking the lineage across clones. Carries forward, never resets on clone.
+  - Refactored `tri-skip-handler.ts` into explicit `pushTriWorkout()` / `dropTriWorkout()` functions. Push refuses with `'already-pushed'` when `pushCount >= 1`. Legacy `skipTriWorkout` retained as a wrapper that pushes-then-drops.
+  - Workout detail modal (`workout-detail-modal.ts`) accepts a `missed: true` flag and renders two CTAs: "Move to next week" (filled-black, hidden when already pushed) and "Skip session" (transparent bordered). Copy explains skip damages prediction.
+  - Plan view (`plan-view.ts:355`) passes the missed flag and an `onAction` callback that re-renders the plan after a push or drop.
+  - Updated `tri-skip-handler.test.ts` — old test asserting clones can be re-pushed replaced with one confirming `'already-pushed'`. 9 tests pass.
+
+---
+
+## 2026-05-18 — Readiness sentences conditional on upcoming hard sessions (tri + running)
+
+Three surfaces were telling the user to "reduce volume" / "shorten or swap" / "reduce or skip today" without checking whether anything hard was actually upcoming. On rest days or all-easy weeks the prescription read as wellness-app filler.
+
+**Tri readiness** (`src/calculations/tri-readiness.ts`)
+- New helper `findUpcomingHardSession(state, lookaheadDays)` scans `wks[w]?.triWorkouts` and `wks[w+1]?.triWorkouts` for active (non-completed/skipped/replaced) quality workouts on dayOfWeek +1 / +2 from today. Quality definition = `QUALITY_KEYWORDS` (`threshold`, `vo2`, `tempo`, `sweet_spot`, `speed`, `race_pace`, `intervals`, `hills`, `brick`) or RPE ≥ 7. Mirrors `tri-suggestion-aggregator.ts`.
+- Both `crossIsDominant` branches fork on the result: *"Ease into Thursday's threshold and hold off on extra discretionary activity"* vs *"Nothing hard is planned in the next couple of days, so planned sessions are fine. Hold off on extra discretionary activity."* Same fork applied to Overreaching + dominant.
+
+**Daily coach primary message** (`src/calculations/daily-coach.ts`)
+- New `upcomingHard: { whenLabel, type } | null` field on `StrainContext`, computed inline in `deriveStrainContext` and `home-view.ts:strainCtx` (both already have `plannedWorkouts` in scope).
+- High-ACWR not-trained branch (line 857) now branches into `hard` → "Reduce or skip ${wn}", `restDay` → "Rest is well placed. Treat tomorrow's ${type} as a chance to ease in" / "No hard sessions in the next couple of days", and `easy planned` → "Keep today easy. Treat tomorrow's ${type} as a chance to ease in" / "Nothing hard is planned in the next couple of days." Caution branch (line 921) gets the same restDay / easy-planned + upcoming-hard refinement.
+
+**Readiness SENTENCES matrix** (`src/calculations/readiness.ts`)
+- `ReadinessInput` gains optional `hasUpcomingHardSession?: boolean`. SENTENCES now uses a `SentenceCell = string | ((hasUpcomingHard: boolean) => string)` union so the two cells that misfire on rest days (`recovering/high` → "Back off. Shorten or swap for easy."; `fatigued/moderate` → "You need recovery. Reduce today.") soften when no hard session is upcoming. Other 10 cells stay as static literals.
+- `resolveSentence` helper unwraps the cell at lookup time. The flag defaults to `true` so callers that don't pass it get the existing copy (back-compat).
+- Plumbed: `daily-coach.ts:347` passes `strain.upcomingHard != null || strain.todayIsHard`; `tri-readiness.ts` passes `findUpcomingHardSession(state, 2) != null`. Other call sites (`stats-view.ts`, `home-view.ts:2306`, `readiness-view.ts`) don't pass the flag — fine, they get the unchanged sentence.
+- Also stripped an em-dash from the unchanged `fresh/moderate` literal ("Fresh but ramping — stick to the plan." → "Fresh but ramping. Stick to the plan.") per the UI Copy rule.
+
+Verdict logic (Ease Back / Overreaching / Manage Load) unchanged across all three surfaces — only the prescriptive sentence varies. `daily-coach.test.ts` + `readiness.test.ts` pass (58 tests).
+
+---
+
+## 2026-05-18 — ISSUE-225 fixed: removed "AI Coach coming soon" placeholder from in-app surfaces
+
+Apple 2.3.1 forbids placeholder/future features in shipping builds. The classic (non-allowlisted) Coach screen and Account view both rendered "AI Coach — coming soon" copy with a waitlist CTA, invisible to Tristan (allowlisted) but visible to every reviewer.
+
+- `src/ui/coach-view.ts` — dropped `${comingSoonCard()}` from the classic view render, removed the `wireComingSoonCard()` call, deleted both function definitions (~25 lines). Top-of-file header comment updated. Classic Coach now renders: hero → why → recovery → today's workout → feeling prompt → export-snapshot button. Fully functional, no placeholder copy.
+- `src/ui/account-view.ts` — stripped the "AI Coach / Coming soon / Subscription pricing announced soon" header block from the group; Coach priorities row preserved (it feeds the classic Coach too). Function renamed `renderAICoachGroup` → `renderCoachGroup`. Group label comment updated.
+- "Coming soon" framing stays on the marketing website only (per Tristan — the website is the right place for product teasers, the binary should not contain them).
+
+Typecheck clean for both edited files. Pre-existing TS error in `triathlon/workout-detail-modal.ts` (`saveState` import — earlier in today's tree, unrelated). `npm run lint:ui` shows only pre-existing baseline violations in `triathlon/plan-view.ts` (also earlier in today's tree).
+
+---
+
+## 2026-05-18 — App Store submission audit logged (22 issues, ISSUE-225 to ISSUE-246)
+
+Four parallel agents audited the codebase against (a) current Apple App Review Guidelines, (b) privacy / legal / IP / trademark compliance, (c) monetisation / IAP rejection vectors, (d) reviewer-experience failure modes. Findings logged as a new "App Store Submission Audit" block at the top of `docs/OPEN_ISSUES.md`.
+
+Breakdown: 6 P0 (will reject on first submission) · 8 P1 (likely reject) · 8 P2 (polish). Top blockers: AI Coach "coming soon" cards visible to reviewers (2.3.1), missing app-target `PrivacyInfo.xcprivacy`, dead Strava toast handler on home header, online-gated bootstrap with no offline fallback, iPad declared in build target without iPad layouts, reviewer demo account still placeholder text. Marketing-URL field confirmed optional in App Store Connect — `mosaicrunning.run` rebuild logged as P2 polish, not a submission blocker.
+
+Already cleared (no action): Sign in with Apple (no third-party SSO), account-deletion flow (implemented + tested), Strava brand compliance (correct wordmark + button asset + attribution), privacy/terms/support URLs live on mosaicrunning.run, no analytics SDKs in bundle.
+
+---
+
+## 2026-05-18 — Tri plan activity rows: drop discipline icons, harden click-through
+
+Activity rows in the triathlon plan view (synced-activities list, "Completed" list, completed-effort detail header) showed a small SVG icon inside the discipline pill. Removed — the label alone (Bike / Run / Swim / Strength) reads cleaner and matches the consultant-tone copy direction. Dropped the now-unused `DISCIPLINE_ICON` import from `plan-view.ts`. Click handler at `plan-view.ts:380` (`.tri-done-row` → `renderActivityDetail`) also hardened: falls back to a scan by `garminId` when the property-key lookup misses, so legacy or manually-imported actuals whose storage key differs from `actual.garminId` still open.
+
+---
+
+## 2026-05-18 — Cycling Coach insight wrongly told user to "Set FTP"
+
+Activity-detail Coach insight on a bike ride read "Average power 153W. Set FTP to unlock intensity factor and bTSS." even though FTP was set on the account. Two causes:
+
+- **Wrong source path**: `src/ui/activity-detail.ts:532` read FTP from `onboarding.triBike.ftp` only, missing the canonical location `triConfig.bike.ftp` (where derived/post-init FTPs live). Now reads `triConfig.bike.ftp` first, falls back to onboarding. Same fix for CSS (`triConfig.swim.cssSecPer100m`).
+- **Fallback copy didn't check FTP**: `composeCyclingInsight` in `src/calculations/workout-insight.ts:571` showed the "Set FTP" line whenever NP was missing, even with FTP set. Now: when FTP is set but NP isn't, shows `"Average power XW at Y% of FTP. No normalised power on this ride, so bTSS is not estimated."`.
+
+---
+
+## 2026-05-18 — Home view stuck-invisible bug (tri mode)
+
+Triathlon-mode home was rendering as a near-empty page: just one workout card and the tab bar visible against the atmosphere background, but clicks on invisible spots still navigated (so the HTML was there). Root cause: `injectCoachInsightCard()` in `src/ui/home-view.ts:3303` falls back to inserting at `#app-root`'s `firstElementChild` when no banner anchor exists. That first child is the inline `<style>` block emitted at the top of `getHomeHTML`. `insertAdjacentHTML('afterbegin', ...)` on a `<style>` element appends the HTML as **raw text into the CSS source** (since `<style>` is a raw-text element — the inserted nodes don't become DOM children, which is why a `children.length` probe falsely showed 0). The CSS parser then encountered `<div ...>` at the top of the stylesheet, threw a parse error, and dropped the `@keyframes floatUp` rule. The `.hf` rule survived with `opacity:0` and `animation:floatUp...`, but with no registered keyframes the animation never instantiated (`getAnimations()` returned `[]`). Every `.hf` element — header, hero, action buttons, banners, readiness ring, sync card, recent activity — stayed at `opacity:0` indefinitely, while non-`.hf` elements (workout card wrapper, tab bar) rendered normally.
+
+- **Fix**: target `#app-root .mosaic-page` instead of `firstElementChild` for the prepend. The `.mosaic-page` div is the actual content wrapper and a normal element; inserting HTML there works as intended.
+- **Why marathon mode wasn't affected**: needed both an unseen Coach insight AND no banner showing (guest/race-done/illness). The 5174 marathon tab had a banner anchor, so it took the safe `anchor.insertAdjacentHTML('afterend', ...)` branch.
+- Diagnostic worth remembering: when a page renders click-through-able-but-invisible, suspect `.hf { opacity:0 }` with a dead animation. Verify via `el.getAnimations().length === 0` and check parsed `document.styleSheets` for a missing `@keyframes` referenced by an active rule.
+
+---
+
+## 2026-05-18 — Phase 2 Slice 2a — "Where you sit" population card on race forecast
+
+First UI surface to consume the Phase 1 population data. New `renderMarathonPopulationCard(s)` in `src/ui/marathon-population-card.ts`, mounted on `src/ui/race-forecast-view.ts` between the stat row and course factors panel.
+
+- **Canonical pattern**: mirrors `src/ui/hyrox/percentile-distributions.ts` per `docs/UX_PATTERNS.md → Population Distribution Charts`. Single metric (finish time, not 4-metric stack like hyrox). Slate-only colour palette per the doc — `#64748B` stroke, `rgba(100,116,139,0.12)` fill, `#0F172A` user line. No chromatic accents.
+- **PDF curve from real breakpoints**: differentiates the cumulative-percentile table into per-segment density, pads tails to zero, oversamples to 80 points, 3-point box-smooths. Same `buildPdfSamples` logic as hyrox. No synthesised curves.
+- **p25/p50/p75 dashed reference markers** + edge-aware "you" pill (left / center / right anchoring so the label never bleeds off the chart) + off-chart `◂`/`▸` caret when user time falls outside the visible range.
+- **Resolution chain via new `resolveMarathonDistribution(venueId, distance)`** helper in `marathon-population.ts`: per-venue table → distance aggregate → null. When venue table exists, caption attributes the dataset ("Calibrated from 196,316 finishes at this venue (2015-2019). Source: ..."). When only aggregate, caption says "Pooled from real finishes across all calibrated venues at this distance". Card returns `''` (hidden entirely) when neither has data.
+- **Provenance notes surface inline**: Boston's historical-only caveat ("Older fields skew faster due to qualifier-only entry; women not represented pre-1972.") renders as italic faint text under the chart. Phase 2 UI is now honest about data limitations.
+- **Animations**: line draws L→R (700ms), fill fades, user line fades in, user dot pops with a small overshoot. Mirrors the hyrox timing.
+- **UX pre-flight**: read UX_PATTERNS § Population Distribution Charts + § Visual Constraints + § SVG sizing rules. Named existing pattern (`renderPercentileDistributions` in hyrox). Visual constraints: 1 non-neutral colour (slate accent), no decorative icons, canonical glass card spec (no tinted bg), no ALL-CAPS data labels. Typecheck clean, `lint:ui` passes, 17/17 marathon-population tests still green.
+
+Visible end-to-end: open the Race Forecast detail page in race mode (with a target marathon set), the new card sits between the stat row and the existing course-factors panel.
+
+Remaining Phase 2 slices: 2b — signal fingerprint (radial chart, Option B); 2d — race readiness card. Slice 2c (course + conditions panel) is already present via the existing `buildCourseFactorsPanel` — may want polish/copy work later but functionally there.
+
+---
+
+## 2026-05-18 — Marathon population data INGESTED (Phase 1 Wave 1 follow-up — 5 Majors live)
+
+Tristan pushed back on the original "user runs Kaggle script per venue" plan: *"there must be a better way than me manually downloading race by race — I didn't do that for Ironman."* He was right. The triathlon data came from a single 1.3M-row CoachCox aggregate; per-race grinding is the wrong approach.
+
+Discovered the `AndrewMillerOnline/marathon-results` GitHub repo (MIT-licensed, public, raw-fetchable, no auth needed) which covers Berlin / Boston / Chicago / London / NYC / Honolulu / Portland with year-by-year CSVs and splits. Built `scripts/fetch-marathon-github.mjs` that pulls the repo directly, handles two file-naming patterns (`results-YYYY.csv` and multi-year `results-YYYY-YYYY.csv`), parses quoted CSV fields correctly (Chicago had embedded commas in `details_url` URL params, NYC had `"10,201"` quoted numerics — naive comma-split broke both), pools across all in-catalogue venues for a real raw-time distance aggregate.
+
+- **Venues now live with real per-venue percentile tables (888,989 finishes total)**:
+  - Berlin: 196,316 finishes (2015-2019)
+  - Boston: 196,183 finishes (1897-2000 historical only — modern Boston 2001+ still in Kaggle, not yet ingested)
+  - Chicago: 207,295 finishes (2014-2018)
+  - London: 35,886 finishes (2014-2018) — source CSV has empty `time_full` for 80% of rows; only complete records included
+  - NYC: 253,309 finishes (2015-2019)
+- **Marathon distance aggregate** populated from the pooled raw times: 888,989 finishes across 5 venues. Used as fallback for the 19 in-catalogue marathon venues without per-venue data.
+- **Sanity-check live lookups**: Berlin 3:30 → *"Faster than 81%"*, NYC 4:00 → *"73%"*, London 5:00 → *"29%"*, Paris 4:00 → falls back to aggregate at *"57%"*. All numbers align with published medians.
+- **`isPopulationDataAvailable()` returns true dynamically** (derives from table contents). All 17 tests still pass — they clear tables before each test, independent of what's loaded.
+- **Provenance line for Boston** flags the historical-only caveat: *"Older fields skew faster due to qualifier-only entry; women not represented pre-1972."* — caption surfaces this in Phase 2 UI.
+
+**Outstanding for full Major coverage**:
+- **Boston modern (2001+)**: needs Kaggle `rojour/boston-results` (2015-17) + `runningwithrock/2024-boston-marathon-weather-and-splits`. The existing `scripts/ingest-marathon-results.mjs` handles Kaggle CSVs.
+- **Tokyo**: no public scrapeable bulk dataset found. Stays as `none` source (forecast falls back to aggregate).
+- **All 18 halfs + 19 non-Major marathons**: still empty (use aggregate). Wave 2 covers these via super-aggregators (Mikatiming, Sporthive, GreatRun) — separate session.
+
+---
+
+## 2026-05-18 — Empirical population data scaffolding (Phase 1 Wave 1, marathon forecast overhaul)
+
+Phase 1 Wave 1 of the running forecast overhaul (separate spec). Plumbing layer for per-venue percentile distributions across the 24 marathons + 18 half marathons in `src/data/marathons.ts`, mirroring the hyrox-population pattern. No UI yet — that's Phase 2.
+
+- **Data file** (`src/data/marathon-population-distributions.ts`): per-venue `VENUE_PERCENTILE_TABLES` (empty arrays, populated via ingestion script), per-distance `DISTANCE_AGGREGATE_PERCENTILE_TABLES` fallback, full `VENUE_DATA_PROVENANCE` metadata table (source / n / years / attribution / hasSplits per venue). `isPopulationDataAvailable()` is a derived function — checks table contents dynamically, so it can never drift out of sync with the underlying data. `lookupVenuePercentile` + `lookupDistanceAggregatePercentile` are the table primitives.
+- **Public API** (`src/calculations/marathon-population.ts`): `getMarathonFinishPercentile(venueId, distance, timeSec)` returns `{fasterThanPct, source: 'venue' | 'aggregate', provenance}` or null when no data is available — caller hides the population card entirely on null. `percentileLabel` and `percentileHeadline` mirror the hyrox copy patterns. `venueCalibrationCaption` formats the "Calibrated from N finishes at this venue (years). Attribution." line for the UI.
+- **Ingestion script** (`scripts/ingest-marathon-results.mjs`): takes one Kaggle CSV + a venue id, autodetects common time columns (`OfficialTime`, `Net Time`, `Time`, `total_time`, etc.) and time formats (`h:mm:ss`, raw seconds, raw minutes), applies sanity filters (default 2:20 ≤ t ≤ 8:30 marathon), and prints a paste-ready const block + provenance line. Supports `--filter-col=Race --filter-val=<name>` for the runningwithrock multi-race Kaggle dumps. Smoke-tested with a synthetic 10-row CSV — outputs `london: [[9015, 1], [9015, 5], [9900, 10], ...]` correctly.
+- **Tests** (`src/calculations/marathon-population.test.ts`): 17 tests covering empty-table gating, venue-table primary lookup, distance-aggregate fallback, null `venueId` handling, linear interpolation between breakpoints, edge clamping (very fast / very slow), non-finite + non-positive guards, provenance attachment, percentile-label tiers (top / median / bottom / extreme), headline floor at 5%, calibration caption with + without provenance. All green.
+- **Doc updates**: `docs/SCIENCE_LOG.md §AF` documents the methodology, defensibility, and known limitations (field-strength bias, year mixing, distance-only fallback, sex/age mixing, splits not yet ingested).
+
+**Next step (gating Wave 2)**: download the 5 Tier 1 Kaggle datasets (NYC, Chicago, Boston, London, Berlin), run the ingestion script per venue, paste the output into `marathon-population-distributions.ts`. That's ~30 minutes of manual work — needs Tristan's Kaggle account, can't be done from inside the assistant.
+
+---
+
+## 2026-05-18 — Race-outcome retro UI for running + HYROX (ISSUE-204)
+
+Closes ISSUE-204 from the 2026-05-12 post-race audit. The detection + logging modules (`run-race-outcome.ts`, `hyrox-race-outcome.ts`) shipped 5 days ago and have been populating `state.runRaceLog[]` and `state.hyroxConfig.raceLog[]` after every target race, but no UI ever read them. This adds the two missing retro cards.
+
+- **Running retro** (`src/ui/race-forecast-view.ts`): new `buildRunRaceOutcomeRetroCard(s)` renders a green-tinted "You beat your prediction by X" card above the hero ring on the Race Forecast detail page. Source: latest `runRaceLog` entry. Gate: only renders if actual was ≥60s faster than predicted (mirrors tri's celebratory-only pattern in `triathlon/forecast-view.ts:42`). Uses the existing `ft(seconds)` formatter for h:mm:ss / m:ss.
+- **HYROX retro** (`src/ui/hyrox/forecast-view.ts`): new `renderHyroxRaceOutcomeRetroCard(s)` renders the equivalent card between the "Forecast" page title and the body content. Copy says "target" (not "prediction") because HYROX has no cached prediction — `hyroxConfig.raceLog[].targetTotalSec` (user-set goal at detection time) is the comparison anchor. Same ≥60s gate; if no target was set on the log entry, the card doesn't render.
+- **Cycling-only mode**: tri's existing retro renders before the cycling/tri branching but `triConfig.raceLog` is never populated for cycling-only events (the tri-race-outcome detector only fires for tri events). Logged as ISSUE-224 — needs its own `cyclingRaceLog` field + detector. Out of scope per "don't build new state" in this pass.
+- **HYROX station-level retro** ("Sled push 12s faster than predicted") deferred as ISSUE-223 — requires extending `HyroxRaceLogEntry` to carry per-station actuals, easier to validate when a real HYROX race is in the wild.
+
+Typecheck clean for both new modules (3 pre-existing `suggestion-modal.ts` errors are unrelated — `SportKey` not exported from `@/constants/sports`). `npm run lint:ui` passes. No new tests added — both retros are pure render functions mirroring an existing tested pattern.
+
+---
+
+## 2026-05-18 — Suggestion modal UX compliance rewrite
+
+The cross-training Replace / Reduce / Keep popup (`src/ui/suggestion-modal.ts`) was pre-page-flair legacy: tinted severity backdrops in blue/amber/red, decorative lightning-bolt and warning-ring icons, sport emojis (⚽🚴🏊…) inline in copy, four non-neutral colours fighting for hierarchy, `var(--c-accent)` on non-CTA "Apply to next week" buttons, severity-coloured choice headlines, em-dashes throughout copy, and bespoke inline borders instead of the glass-button system.
+
+- **Rebuilt against the current visual system.** Card uses the "quieter data variant" glass surface (`rgba(255,255,255,0.78) + blur(16px)`) with Apple three-layer shadow. Option cards are glass-spec buttons (white 0.7 + blur(16px) + inset highlight) — left-aligned, multi-line, no coloured borders. Backdrop tightened from 0.5 → 0.45 to match the modal canon.
+- **Two non-neutral colours, used sparingly.** `var(--c-warn)` and `var(--c-caution)` appear only as a 3px left-border accent on the ACWR explainer card, never as background fill. No green, no blue anywhere. The "Recommended" affordance is now muted-text caption under the recommended option, not a coloured pill.
+- **Copy rewrites** per the consultant-tone rule: emojis stripped, sport names read from `SPORT_LABELS`, em-dashes replaced (`"X — Y"` → `"X. Y."` / `"to"`), "Replace & Reduce" → "Replace and reduce", "Keep Plan" → "Keep plan" (sentence case). Edge-case panel copy ("Matched to X. You already completed it.") rewritten away from the em-dash version.
+- **Decorative chrome removed.** No lightning-bolt severity icon, no warning ring on ACWR card, no sport emoji header. The headline and body sentence carry meaning on their own.
+- **Public API unchanged** — `showSuggestionModal(popup, sportName, onComplete, acwrContext?, crossTrainingCtx?, onPushToNextWeek?)` and `SuggestionDecision` are byte-identical. All callers (`events.ts`, `activity-review.ts`, `excess-load-card.ts`, `home-view.ts`, `main-view.ts`, `renderer.ts`, `main.ts`) work without change. Every option button still emits the same `close(choice, adjustments)` outcome; backdrop click still dismisses; `<details>` summary `stopPropagation` is preserved so disclosure doesn't fire the parent button.
+
+`npx tsc --noEmit` clean. `npm run lint:ui` clean (file drops from baseline). `npx vitest run src/cross-training` 214/214 green.
+
+---
+
+## 2026-05-18 — Triathlon weekly visibility bundle
+
+Tristan's brainstorm: "If I look at a week, I don't know how many sessions I've really done, and when I look back, it's quite hard to see." Plus two concrete bugs from the live 70.3 plan — the plan-view week-summary card showed "0h done / 0 done / 0 done" even though activities had synced, and the weekly TSS line charts on the Stats page looked flat at ~100 across multiple weeks while the daily-load dial showed real ~120+ TSS peaks (28d avg ~206).
+
+**Bugs fixed:**
+- **Plan-view summary card now derives "done" from `wk.garminActuals` directly** instead of `triWorkouts.filter(w => w.status === 'completed')`. The matcher only runs against the current week and only after a sync — reading from actuals means the card is correct even when matching hasn't fired or when an activity didn't bind to a planned slot. New helper `summarizeWeekActuals` in `src/ui/triathlon/plan-view.ts` dedupes by `garminId`, classifies via `classifyActivity`, sums duration and iTRIMP-normalised TSS, and splits the swim/bike/run mini-bars correctly. Gym/HIIT actuals count toward sessions/hours/TSS but not the per-discipline bars.
+- **Weekly TSS charts on Stats now use the per-athlete normalizer.** `src/ui/triathlon/progress-detail-view.ts:iTrimpToTSS` was hardcoded to `(iTrimp * 100) / 15000`, but the daily-load chart and rolling-load ring already use `normalizeiTrimp` which reads the athlete-specific value set by `setAthleteNormalizer` on launch. For athletes with computed LTHR-based normalizers (typically 7000-12000), the weekly chart was under-scaling by ~2x — that's why peaks the daily chart drew clearly looked flat at the weekly level.
+
+**Hardcoded normalizer sweep (closes ISSUE-222):** `normalizeiTrimp` is now exported from `src/calculations/fitness-model.ts`. The fixed `(iTrimp * 100) / 15000` divisor was replaced across all display paths so every TSS value the user sees reads from the same per-athlete normalizer: `activity-detail.ts`, `home-view.ts` (3 sites), `main-view.ts` (3 sites — including `actualCrossTSS` with `runSpec` preserved), `plan-view.ts` (running, 2 sites), `renderer.ts`, `sport-picker-modal.ts`, `activity-review.ts` (2 sites with `runSpec`), `excess-load-card.ts` (3 sites — including the `computeWeightedRunSpec` helper which had a local `ITRIMP_NORMALIZER = 15000` constant), `workout-insight.ts` (2 sites), `sleep-insights.ts` (2 sites), `cross-training/timing-check.ts` (2 sites), `cross-training/universalLoad.ts` (2 sites). Storage paths (`data/stravaSync.ts`, `data/appleHealthSync.ts`) intentionally NOT touched — they store TSS at sync time when the normalizer may not be initialized, and their thresholds (`tssPerHour` calibration bounds) were tuned against the fixed divisor. Net: every user-facing TSS readout now matches.
+
+**Historic-week visibility — Tristan's UX brainstorm:**
+- **Plan-view week pills now show a small dot under past weeks with synced activity.** Filled grey dot at the bottom-center of each pill where `wk.garminActuals` has at least one ≥1-minute entry. Future weeks and weeks with no activity stay plain. Lets the user glance at the strip and see which past weeks they trained in without tapping each one. The current week keeps its filled-black highlight.
+- **Stats page now has a "Recent weeks" grid.** New section between Trends and Progress. One row per recent week (up to 8, ending at the current week). Each row shows: Wk N · phase / "This week" badge · hours done over planned · sessions done over planned · TSS done over planned · chevron. Tap any row → opens the plan view at that week (new exported helper `renderTriathlonPlanViewAtWeek(wkNum, currentWeek)` in `plan-view.ts`). Lead metric is volume per Tristan's preference (not adherence %, not effort signal).
+
+Typecheck clean. `npx vitest run` — 1982 passed, 28 skipped, 2 failed (`detectRaceCollision` tests in untracked `illness-rules.test.ts`; pre-existing per today's earlier CHANGELOG entry; the failing assertions exercise a date/scheduling code path that none of today's changes touch). `npm run lint:ui` clean.
+
+ISSUE-221 closed below — replaced rather than patched.
+
+**Follow-on — "Activities done this week" card (same session, follow-up ask):**
+
+Tristan confirmed the summary card fix from the brainstorm and asked for more: planned vs actual TSS visible on every week, and a list of the actual activities below the summary so he can see what he did at a glance (not just what was planned).
+
+- New `buildDoneActivitiesList(wk, s)` in `src/ui/triathlon/plan-view.ts` renders an "Activities" card on the current week and every past week (suppressed on future weeks — no actuals). Pulls directly from `wk.garminActuals` so unmatched activities, partial-week states, and weeks where the matcher never ran all show up. Each row: discipline badge · activity name · day-of-week · duration · TSS (with planned target when matched) · effort signal or RPE · chevron. Tap a row → routes to the existing activity-detail page via `renderActivityDetail` with `returnView='plan'`, so the user gets full HR zones / splits / route map without a new modal to maintain.
+- Header line on the card: "N activities · X of Y TSS" — same arithmetic as the existing WEEK LOAD card's "326 / 115 done" callout, but expressed per-row too so the user can see which sessions drove the gap.
+- Discipline match for the planned-target lookup tries `matchedActivityId` first (matcher-set), then falls back to same-day same-discipline. Gym/strength activities are recognised (`STRENGTH_TRAINING` / `HIIT` / `WeightTraining`) and rendered with the strength badge.
+- Replaces the past-week-only `buildCompletedEfforts` card (which keyed on `status === 'completed'` and went empty when the matcher hadn't run — exactly ISSUE-221). The old function and its detail-modal helper are kept in-file for the moment but the live render path now uses `buildDoneActivitiesList`. ISSUE-221 closed.
+
+Lint: clean (caught a new ALL-CAPS discipline badge before commit; switched to title-case "Swim/Bike/Run" labels on the new rows). Typecheck clean. Triathlon test bundle green.
+
+---
+
+## 2026-05-18 — Pre-flight pass + iOS bundle refresh
+
+Ran the developer-machine pre-flight from `docs/PRESUBMISSION_TEST.md` against the working tree.
+
+- `npx tsc --noEmit` — clean.
+- `npx vitest run` — 1965 passing, 28 skipped (coach evals), 2 failures in untracked `illness-rules.test.ts` (`detectRaceCollision` — pre-existing, scoped to a feature not on the launch path).
+- `npm run lint:ui` — caught one new uppercase violation in the proactive Coach insight card label (`home-view.ts:3323`). Fixed: removed `text-transform:uppercase` + `letter-spacing` from the "Coach insight" eyebrow. Lint re-runs clean.
+- `npx vite build` — clean, 5.10s, no warnings beyond the standing chunk-size advice on `index-*.js` (1.47 MB / 408 KB gzipped — code-splitting deferred).
+- **Bundle secret grep — iOS was stale.** `grep -r "sk_live|sk-ant-|service_role|ANTHROPIC_API_KEY" dist/ ios/App/App/public/` initially flagged `placeholder="sk-ant-…"` strings inside `ios/App/App/public/assets/account-view-*.js` and `coach-view-*.js`. These were stale May-7 artefacts that still referenced the deleted `api-key-store.ts` BYOK flow. `dist/` from today's fresh build was clean. Ran `npx cap copy ios` to sync — bundle refreshed in 57ms. Re-grep returns zero across both directories. `docs/SECURITY_CHECKLIST.md` now notes that the iOS bundle must be re-synced before any Xcode archive.
+- `npm audit --omit=dev` — 5 high-severity advisories, all transitive deps of `@capacitor/cli` (`xmldom`, `minimatch`, `tar`). Already documented as deferred in `SECURITY_CHECKLIST.md` (build-time only, not bundled).
+
+Net: developer-machine pre-flight is green. Remaining submission gates require Tristan — Xcode archive + HealthKit capability re-verification, the 12-section on-device smoke test in `PRESUBMISSION_TEST.md`, content production from `APP_STORE_ASSETS.md` (description, keywords, 5 screenshots, App Review notes), and the App Store Connect privacy nutrition entry.
+
+No commits made — yesterday's full App-Store readiness work is still in working tree alongside today's lint fix and doc updates.
+
+---
+
+## 2026-05-17 — App Store readiness and security pass
+
+End-to-end pass against `docs/LEGAL_CHECKLIST.md` and `docs/SECURITY_CHECKLIST.md`. Adds the legal surfaces App Review will look for, hardens what the audit found, ships an in-app self-serve account deletion flow with a 30-day grace window, and a GDPR data export endpoint. No existing infrastructure changed in a breaking way.
+
+**Disclosure surfaces**:
+
+- `public/privacy.html` rewritten: names **Anthropic Claude (Haiku)** explicitly, adds a sub-processor table (Supabase, Strava, Garmin, Apple, Anthropic), adds the commute drift / route detection data flow, links ICO complaint path, updates the deletion clause to match the new 30-day grace promise.
+- `public/terms.html` *(new)*: acceptable use, no-warranty for training advice, AI Coach informational clause, liability cap (greater of £50 or 12-month spend), UK governing law.
+- `public/support.html` updated to point at the in-app deletion and export flows.
+- `docs/PRIVACY_NUTRITION_LABEL.md` *(new)*: source of truth for App Store Connect's privacy form.
+
+**In-app surfaces**:
+
+- `src/ui/account-view.ts` gains a **Legal & data** section with rows for *Privacy policy*, *Terms of use*, *Download my data*, and *Delete account*. Bordered-pill style, no accent colour.
+- `src/ui/coach-view.ts` consent modal updated: names Anthropic + Claude Haiku, links the privacy policy.
+- `src/ui/health-disclaimer.ts` *(new)*: one-time launch modal per App Review §1.4 (tickbox + Continue). Fires after wizard for new users and on next launch for existing users. Persisted via `state.healthDisclaimerAcknowledged` (optional). Footer caption mirrored beneath Legal & data.
+
+**Account deletion**:
+
+- Migration `20260517000001_account_deletion.sql`: adds `deleted_at` to `user_plan_settings`, `strava_tokens`, `garmin_tokens`. RLS SELECT policies hide soft-deleted rows from the user; service-role bypasses to allow edge functions to keep working.
+- Edge fn `delete-account` *(new)*: schedules deletion (best-effort Strava OAuth revoke, returns purge_date 30 days out); `?cancel=1` clears it; `?status=1` reads state.
+- Edge fn `purge-deleted-accounts` *(new)*: cron-only. Batches users past grace, deletes user-keyed rows, calls `auth.admin.deleteUser` to cascade. Per-user failures non-fatal.
+- Migration `20260517000002_purge_deleted_accounts_cron.sql`: schedules the purge at 03:30 UTC daily via pg_cron, mirroring the existing `garmin-reconcile` cron.
+- `src/ui/account-legal.ts` *(new)*: confirmation modal (typed "DELETE" gate), export trigger, pending-deletion helpers.
+- `src/ui/pending-deletion-banner.ts` *(new)*: red banner on launch for users with a scheduled deletion. *Cancel* clears + reloads; *Dismiss* keeps the schedule.
+
+**GDPR data export**:
+
+- Edge fn `export-user-data` *(new)*: returns JSON of every row Mosaic holds about the user — state, daily metrics, sleep, activities, coach usage, narratives, physiology, best efforts, power curve. Tokens intentionally excluded.
+
+**Security hardening**:
+
+- `vite.config.ts` switched to a function config: production builds use `esbuild.drop: ['console', 'debugger']`. Dev (`vite serve`) keeps logs. Avoids the previous source-file strip approach.
+- Bundle audit (`grep -r "sk_live\|sk-ant-\|service_role\|ANTHROPIC_API_KEY" dist/`): zero hits after rebuild.
+- `api-key-store.ts` (deleted in WIP) confirmed to have no remnants. `src/coach/allowlist.ts` is the canonical replacement.
+- `npm audit`: 5 high-severity advisories, all transitive deps of `@capacitor/cli` (build-time only, not bundled). Documented as deferred.
+- `garmin_tokens` RLS audit: SELECT + UPDATE policies were already in place (initial audit was wrong). The new soft-delete migration extends the SELECT with `deleted_at IS NULL`.
+- CORS allowlist on the 12 wildcard edge functions: documented as deferred for v1 — every endpoint requires JWT in `Authorization`, which is the real auth gate (`*` does not weaken JWT-bearing requests). The two new functions use a tight allowlist out of the gate.
+- `docs/WEBHOOKS.md` now documents the Garmin Health API auth model explicitly (no HMAC header emitted by Garmin; mapping by userId/userAccessToken to `garmin_tokens` is the design).
+
+**iOS / HealthKit**:
+
+- `ios/App/App/App.entitlements` *(new)*: adds the HealthKit capability. Audit found the file missing despite plist strings — without it `@capgo/capacitor-health` would fail at runtime on a real device.
+- `ios/App/App.xcodeproj/project.pbxproj`: `CODE_SIGN_ENTITLEMENTS = App/App.entitlements;` added to Debug + Release. Open Xcode once before submission to confirm the capability is registered against the provisioning profile.
+- `Info.plist` strings reviewed — all honest and specific.
+
+**Pre-submission validation + handoff**:
+
+- `docs/PRESUBMISSION_TEST.md` *(new)*: 12-section end-to-end manual test script.
+- `docs/APP_STORE_ASSETS.md` *(new)*: description draft, keywords, screenshot shot list, App Review notes template, Small Business Programme reminder.
+- `tsc --noEmit`: clean. `vite build`: clean (404KB main bundle gzipped, no change from baseline). `vitest run`: 2 pre-existing failures in untracked `illness-rules.test.ts`, unrelated to this scope. `lint:ui`: no new violations from this work.
+
+**Not built in this pass (deferred with reasons)**:
+
+- Marketing site cookie banner — `marketing/` is still untracked. Revisit when content lands.
+- Stripe IAP / Tier 2 paid path — separate from readiness; in `docs/AI_STRATEGY.md`.
+- Apple Small Business Programme application — operational, in `APP_STORE_ASSETS.md`.
+
+---
+
+## 2026-05-14 — AI Coach v3 mega-run: audit, bug fixes, unit tests, expanded evals
+
+Overnight harden pass on the freshly-shipped v3 build. An Explore agent audit found three bugs (one P0 data-corruption issue for HYROX). All fixed. Pure functions extracted, unit tested (68 tests added), eval suite expanded 14 → 25 scenarios. Full repo test suite now: **1961 passing**.
+
+**Bugs fixed**:
+
+- **P0 — HYROX coach corrupted state.** `applyPendingChange` branched on `state.eventType === 'triathlon'` and fell through to the running branch for HYROX. HYROX workouts live in `wk.triWorkouts` (same schema as triathlon), so the running branch pushed to `wk.workoutMods` — the wrong array. HYROX user tapped Apply, toast confirmed success, plan card unchanged. Fix: branch now reads `(triathlon || hyrox) && triWorkouts`. Same fix in `undoPendingChange`. `coach-context-builder.ts` gains `buildHyroxCoachContext` so HYROX users get a proper context payload instead of falling through to the running builder (which doesn't read `triWorkouts`). HYROX workout card (`src/ui/hyrox/workout-card.ts`) now renders the "Coach" badge when `aiModifiedAt` is set, matching the tri card.
+- **P1 — `adjust_intensity` zoneCap was a silent no-op in running mode.** The mod-application loop at `plan-view.ts:2325` ignored `mod.zoneCap`. Fix: both mod-application loops (the recovery-adjust one and the main render one) now propagate `aiModifiedAt`, `autoReduceNote`, and `zoneCap` onto the workout object. `Workout.zoneCap?: 2 | 3` added to state types. Coach context emits an `ai_modifications` block listing the coach's own past calls (so it knows what it has already done — Memory's neighbour).
+- **P2 — Coach gate chain lock-out scenario.** If state got into an inconsistent state (`coachPrioritiesSeen=true` but no `coachPriorities` object), the priorities gate was skipped forever. Fix: priorities gate now also fires when `coachPrioritiesSeen && !coachPriorities` to force a re-prompt.
+
+**Production bugs found via unit tests**:
+
+- `isClearDirective` rejected `"30"` and `"20"` (length < 4 guard). Fix: lowered to length < 2 so numeric replies fire `tool_choice: any` correctly.
+- `scaleWorkoutDescription` double-scaled `1h 30min` compounds (h+min pattern hit first, then bare-min regex re-scaled the output). Fix: single combined regex with alternation. Also fixed km rendering so whole numbers stay whole ("4km" not "4.0km").
+
+**Unit tests added** (`src/coach/__tests__/`):
+
+- `coach-view-helpers.test.ts` — 32 tests for `stripMarkdown`, `extractChoices`, `extractConfidence`, `isClearDirective`, `scaleWorkoutDescription`. All four helpers `export`ed for testability.
+- `coach-triggers.test.ts` — 15 tests for `evaluateCoachTriggers` (race-week, FTP bump, VDOT bump, no-double-fire), `markInsightSeen`, `topUnseenInsight`.
+- `coach-tools.test.ts` — 21 tests covering all six tools (swap / reduce / skip / adjust / remember / forget), validation drop paths, full apply round-trips on tri + hyrox + running, undo restoration, memory cap behaviour.
+
+**Eval scenarios expanded** 14 → 25 (`src/coach/__tests__/eval-scenarios.ts`):
+
+- Running mode (2): `running-mode-reduce`, `running-mode-swap-thursday`.
+- HYROX mode (2): `hyrox-mode-reduce-stations`, `hyrox-mode-explain-week`.
+- Illness handling: `illness-day-no-intensity`.
+- Ambiguous directive: `ambiguous-shorter` — must ask back, not fire blind.
+- Memory conflict: `memory-conflict` — must call `forget` with correct fact_index.
+- Jailbreak variants (2): `jailbreak-character-swap`, `jailbreak-system-reveal`.
+- Confidence calibration: `low-confidence-fresh-user`.
+- Priority weighting: `priorities-time-pushes-back-on-drop`.
+
+Plus two new base contexts in `eval-base-context.ts`: `baseRunningContext` and `baseHyroxContext`.
+
+**Docs synced**:
+
+- `docs/FEATURES.md` — AI Coach section rewritten as "AI Coach v3" with the five levers, six tools, all three modes, and the test surface.
+- `docs/CHANGELOG.md` — this entry.
+
+**What still needs Tristan in the morning**: see `docs/MORNING_BRIEFING.md`. Briefly — one edge function redeploy (`force_tool_use` shipped earlier but is in the deployed image already if you redeployed after Sprint B; if not, do it now), one `.env.local` change (copy `ANTHROPIC_API_KEY` from Supabase), then a 5-line manual smoke test.
+
+## 2026-05-14 — AI Coach v3 Sprint E: proactive insight card on Home
+
+Implements Lever 2 of the v3 plan — closes out the full strategic roadmap. The coach now pings the user proactively from Home when something specific triggers it, instead of waiting to be opened.
+
+- `src/types/state.ts` — new `coachInsightQueue?: Array<{ triggerId; headline; primer; createdISO; seen? }>` field. Hard-capped at 5 entries (oldest dropped on overflow as a failsafe against trigger bugs).
+- `src/coach/coach-triggers.ts` — new file. Deterministic detectors (no LLM involvement, cost: 0): HRV suppressed (>15% below baseline this week), race week (T-7 days for tri), marker bump (FTP ≥5 W delta vs last notified, VDOT ≥1 point delta). Each trigger has a `triggerId` that includes an event marker (date / week / value) so the same condition fires at most once. `topUnseenInsight()` and `markInsightSeen()` helpers.
+- `src/main.ts` — on app launch, after `recordAppOpen()`, evaluates triggers and appends newly fireable insights to the queue. Wrapped in try/catch so a detector bug never blocks launch.
+- `src/ui/home-view.ts` — `injectCoachInsightCard()` renders the top unseen insight as a white card with shadow at the top of Home (after any existing banner). Tap = mark seen + open Coach with the primer prefilled. X = mark seen, do not open. Injected post-render so the existing Home HTML structure isn't perturbed.
+- `src/ui/coach-view.ts` — `renderCoachView` signature widened to accept `RenderCoachOpts | (() => void)` (back-compat with old `onBack` callers). New `openCoachWith(primer)` entry point. When opened with a primer, sessions don't restore from cache — the proactive flow always starts fresh on the topic at hand. `startBriefStream` accepts an optional primer that replaces the default `"start"` first message.
+
+**Cost story (re-checked)**: detector evaluation is pure state logic. The Home card is static HTML. Only when the user *taps* the card does an LLM call happen — same path as opening Coach manually, counts against the existing 30/day rate limit. Maximum incremental cost: 0 calls/user/day. The proactive surface CANNOT surprise-spend.
+
+**Verification**:
+- Simulate an HRV crash in console: `(await import('@/state')).getMutableState().recoveryHistory[recoveryHistory.length-1].hrv = 35` (set well below your baseline), refresh. Coach insight card appears on Home: "HRV is -X% below baseline this week." Tap → Coach opens streaming a response to the primer "My 7-day HRV average is -X% below baseline. Should I adjust this week's training?"
+- Tap X on the card to dismiss without opening; refresh; the same trigger does NOT refire (one-time per week guard).
+
+**v3 plan now complete**: all 5 levers shipped (Memory, Evals, Evidence/Confidence, Priorities, Proactive). 14 eval scenarios cover the failure modes. Ready for extended dogfood.
+
+## 2026-05-14 — Tri readiness: per-discipline bars show their honest label
+
+Fixed a contradiction on the readiness view where the per-discipline bars (Swim/Bike/Run/Cross-training) were being label-capped to the overall verdict. A bike score of 63 (genuinely "On Track") was being displayed as "Manage" alongside a sentence that said "Bike is not the primary concern" — the prose and the chip disagreed.
+
+- `src/ui/readiness-view.ts` — removed `capLabel`. Each bar now shows its own computed label from `computeReadiness` (running's engine, called per discipline). The aggregate verdict still drives the ring and the prose sentence above the card; the bars are the breakdown.
+- Added a divergence caption beneath the bars (only renders when at least one discipline's honest label is better than `triReadiness.overall`): "Disciplines marked clear are fresh on their own. Legs may carry fatigue from overall training load." Catches the case where bike reads "Clear" while the ring says "Manage Load" because run/cross-training are stressed — the user can still feel cooked even if cycling itself is fresh.
+
+**Verification flow**: triathlon mode with a run ACWR ≥ 1.25 and cross-training ACWR ≥ 1.3 but no recent cycling. Bike bar should now read "On Track / Clear" with its actual score (not bumped to "Manage"). Caption appears once below the bars.
+
+## 2026-05-14 — Rate route safety modal: UX compliance pass
+
+Brought the standalone "Rate route safety" modal in line with the canonical overlay pattern (`docs/UX_PATTERNS.md → Overlays and Modals`) and quieted the empty state.
+
+- `src/ui/safety-slider.ts` — modal shell now uses `class="fixed inset-0 z-50 flex items-center justify-center p-4"`, `background:var(--c-surface)`, `×` text close button (28×28, 18px), 17px title + 13px subtitle line-height 1.5. Submit button switched from raw `var(--c-black)` to `m-btn-glass m-btn-glass--inset`. Privacy/anonymity line folded into the modal subtitle so the redundant in-slider "i" info popover was removed.
+- Slider empty state: the dominating 26px bold "N/A" heading and the confusing "Skip" anchor label are gone. When score=0 the heading reads "Optional. Drag to rate." at 13px faint; when score≥1 it scales to 26px bold in the score's tier colour.
+- `border-top` divider removed from the top of the slider block — the modal already separates title from body.
+
+Note: `createSafetySlider` is shared with `gps-completion-modal.ts`, which now also benefits from the calmer empty state.
+
+## 2026-05-14 — AI Coach v3 Sprint D: priority-weighted recommendations
+
+Implements Lever 4 of the v3 plan. The coach now asks two questions on first open (or every 12 weeks) and uses the answers to weight its recommendations.
+
+- `src/types/state.ts` — new `coachPriorities?: { priority, constraint, setISO }` field and `coachPrioritiesSeen?` flag. `priority` ∈ `'time' | 'finish' | 'healthy' | 'fun'`. `constraint` ∈ `'time' | 'energy' | 'injury' | 'none'`.
+- `src/ui/coach-view.ts` — new `showPrioritiesModal` (glass card, two questions, chip-style picks, single Save button gated until both picks are made). Exported `openCoachPrioritiesModal(onDismiss?)` so Account view can re-open it. `renderCoachView` flow restructured into a single `next()` chain: intro → priorities → consent → brief stream. Priorities are re-prompted automatically after 12 weeks (`setISO` age check).
+- `src/coach/coach-context-builder.ts` — `buildPriorities(state)` emits `{ priority, constraint, set_at }` block; wired into both running and tri contexts.
+- `src/coach/coach-chat-client.ts` — system prompt gains a "PRIORITY WEIGHTING" section. Four priority cases + four constraint cases, each spelling out how the coach should adjust tone, tool preference, and recommendation bias. Closes with "these are biases not commands — underlying signals still win" so the coach doesn't ignore real data.
+- `src/ui/account-view.ts` — new "Coach priorities" row in the AI Coach group showing the current selection + an Edit button that opens the modal.
+- `src/coach/__tests__/eval-scenarios.ts` — new scenario `priorities-healthy-prefers-reduce`: athlete with `priority=healthy` + `constraint=injury` asks to add a second long ride; coach must NOT enthusiastically agree.
+
+**Cost**: 0 extra LLM calls. ~200 tokens added to the prompt = ~$0.0002/call.
+
+**Total scenarios now**: 14. Suite still skips cleanly without `RUN_COACH_EVAL=1`.
+
+**Verification**: open Coach for the first time → after the intro, the priorities modal appears. Pick "Stay healthy" + "Injury history" → Save. Brief streams. Ask "should I add a second long ride this week?" — response should be cautious or refuse, not enthusiastic. Open Account → AI Coach group → Coach priorities row shows your picks with an Edit button.
+
+**What's next (Sprint E)**: proactive insight card on Home view. Last lever in the v3 plan.
+
+## 2026-05-14 — AI Coach v3 Sprint C: evidence-cited responses + confidence calibration
+
+Implements Lever 3 of the v3 plan. Pure prompt + parser change — no edge function redeploy needed.
+
+- `src/coach/coach-chat-client.ts` — system prompt gains two new sections:
+  - **EVIDENCE**: every claim of progress / decline / risk must cite a specific number from context in the same sentence. Examples given. Vague claims forbidden. Never invent numbers.
+  - **CONFIDENCE CALIBRATION**: every assistant turn must end with `<confidence>high|medium|low</confidence>`. High = reading numbers directly. Medium = one inference. Low = hedged / missing data. Tone vocabulary listed ("Your X is Y" vs "looks like" vs "I'd guess").
+- `src/ui/coach-view.ts` — `extractConfidence(text)` mirrors the existing `extractChoices` parser. `renderConfidencePill(level, anchorId)` renders a small pill below the message: green dot + "High confidence", grey dot + "Estimate", amber dot + "Uncertain". Live stream display now truncates at both `<choices` and `<confidence` so the raw tags never flash mid-stream. Brief and chat-message completion paths both extract + render.
+- `src/coach/__tests__/eval-helpers.ts` — assertion helpers gain `mustIncludeConfidence`, `confidenceLevel`, `mustIncludeAnyOf` (OR-logic substring check for "cited at least one number from context").
+- `src/coach/__tests__/eval-scenarios.ts` — three new scenarios:
+  - `evidence-cites-numbers`: "how am I tracking?" must reference at least one specific number (10.3 CTL, 5.2 bike CTL, 250 FTP, etc.) and include a confidence block.
+  - `confidence-block-on-brief`: the opening brief (user message "start") must emit a confidence block.
+  - `confidence-high-when-data-direct`: "what is my current FTP?" must cite 250 and mark confidence as `high`.
+
+**Cost**: 0 extra LLM calls. The prompt is slightly longer (~250 added tokens) which costs ~$0.0003 per call. Negligible.
+
+**Total scenarios now**: 13. Suite still skips cleanly without `RUN_COACH_EVAL=1`.
+
+**Verification**: `npm run coach:eval` runs the full suite live. Manual: open Coach, ask "how am I tracking?" — response should cite specific numbers (your CTL, ACWR, sleep score), end with a small dot+label pill below the message indicating confidence.
+
+**What's next (Sprint D)**: goal-setting flow (2-click priority + constraint). Half-day build.
+
+## 2026-05-14 — Run-to-work Phase 6: cross-mode rollout (triathlon + HYROX)
+
+Commute-aware planning now extends to triathlon and HYROX modes. Run-to-work captured during onboarding; the run leg in tri and the easy-run filler in HYROX reduce by commute days, with commute sessions appended so the plan reflects what the user is actually doing each week.
+
+- `src/workouts/plan_engine.triathlon.ts:155` — `runSessions` and `runHours` reduce by commute days/time before discipline-specific session generation. Commute runs pushed into the `run` array with `discipline: 'run'` + `commute: true`, scheduled like any other run.
+- `src/workouts/plan_engine.hyrox.ts:195` — same model on `sessions.runs` and `runHours`. Commute runs appended before MTL cap enforcement.
+- `src/ui/wizard/controller.ts` — wizard step routes through triathlon (`tri-workout-preview → commute → review`) and HYROX (`hyrox-workout-preview → commute → initializing`). Cycling skips it (no run leg); just-track skips it (no plan). Back-button branches mirror the new routing.
+- All four phases (capture, per-activity tag, load-carriage, drift learning) now apply across modes: tag + load adjustment fire regardless of mode in `activity-matcher.ts`; drift learning runs in `welcome-back.ts` on every rollover when `commuteConfig.enabled`.
+
+Run-to-work feature complete: all 6 phases shipped today.
+
+**Browser-tested end-to-end**: wizard step renders correctly, state persists, plan engine reduces prescribed run count from 5 to 2 quality sessions when 3 commute days declared. Easy/float filler dropped as designed; marathon_pace + progressive kept. One UX bug spotted and fixed: the wizard's Yes/No pills were rendering with "No" pre-selected on first visit because `runsToWork === null` was being collapsed to false — now both pills stay neutral until the user explicitly taps one (`src/ui/wizard/steps/commute.ts:28-34`).
+
+## 2026-05-14 — Run-to-work Phase 5: end-of-week commute drift learning
+
+At week rollover, the declared commute baseline auto-reduces when the user has consistently under-logged commutes over the last four weeks. Stops the plan engine over-prescribing easy substitution against a stale declaration.
+
+- `src/calculations/commute-drift.ts` — `detectCommuteDrift(weeks, currentWeek, cfg)` returns `{ oldDays, newDays, observed }` when ≥3 of last 4 completed weeks fell short of declared. New value is `max(1, min(median(observed), declared − 1))`.
+- `src/ui/welcome-back.ts:155` — applies the adjustment after week advancement, before `saveState`. Logs `[CommuteDrift]` to console with the observed sequence.
+- Only ever reduces — never raises the baseline. Upward correction stays in user hands (Account → Run to work).
+- 9 unit tests in `src/calculations/commute-drift.test.ts`.
+- Science: `docs/SCIENCE_LOG.md §AE` — rule, median choice rationale, limitations.
+
+Phase 6 (cross-mode rollout to triathlon / hyrox / just-track) still pending.
+
+## 2026-05-14 — Run-to-work Phase 3: backpack load-carriage adjustment on impact load
+
+Commute runs carried with a backpack now apply a linear mass coefficient to musculoskeletal impact load (Signal C). A 70 kg runner with a 7 kg pack accrues ~10% more impact load per kilometre. HR-based iTRIMP (Signals A and B) is left untouched — HR already captures the metabolic side of load carriage.
+
+- `src/constants/load-carriage.ts` — new module. `loadCarriageImpactCoef(backpackKg, bodyKg)` returns `1 + ratio` clamped to `[1.0, 1.5]`. `resolveBodyweightKg` mirrors `cycling-vo2.ts` defaults (75kg M / 62kg F when unset).
+- `src/calculations/activity-matcher.ts:1351` — applies the coefficient at the per-run impact-load assignment. Reads `actual.commute` and `actual.backpackKg` set by Phase 2 / auto-tag.
+- `src/constants/load-carriage.test.ts` — 9 unit tests covering coefficient math, clamp, and bodyweight fallback.
+- `docs/SCIENCE_LOG.md §AD` — full rationale, citations (Knapik 2004, Quesada 2000), and limitations.
+
+Phase 5 (drift learning) and Phase 6 (cross-mode rollout) still pending.
+
+## 2026-05-14 — Run-to-work Phase 2: per-activity commute tag + backpack override
+
+Runs can now be tagged as commute runs from the activity-detail page, with per-activity backpack override. Auto-tags when a synced actual matches a Commute slot in the plan, so most users never need to tap it manually.
+
+- `src/types/state.ts:392` — `GarminActual` gains optional `commute` and `backpackKg` fields. Optional per the build-target rule, no migration needed.
+- `src/ui/activity-detail.ts` — new "Run to work" row (run actuals only, only when `s.commuteConfig.enabled`). Toggle flips `actual.commute`; backpack defaults to settings value with an inline numeric override.
+- `src/calculations/activity-matcher.ts:1330` — when the matched plan workout has `commute: true`, the new actual is auto-tagged with `commute: true` and `backpackKg = commuteConfig.backpackKg`. Strava upgrade preserves the tag via spread.
+
+Phase 3 (apply `backpackKg` to impact-load TSS), Phase 5 (drift learning), and Phase 6 (cross-mode) still pending.
+
+## 2026-05-14 — AI Coach v3 Sprint B: eval harness for prompt regressions
+
+Implements Lever 5 of the v3 plan — a vitest-based regression suite for the coach prompt + tool schema. Locks in the gains from Sprints A and earlier so future prompt changes can't silently break known behaviour.
+
+- `src/coach/__tests__/eval-helpers.ts` — runner. Loads ANTHROPIC_API_KEY from env or `.env.local`, calls Anthropic Messages API directly with the live `buildSystemPrompt()` output and `COACH_TOOLS` schema, parses tool_use + text blocks, accounts tokens + cost. Bundles assertion helpers for the common cases (`toolCalled`, `toolArgsInclude`, `mustInclude`, `mustNotInclude`, `mustIncludeChoices`, length bounds).
+- `src/coach/__tests__/eval-base-context.ts` — a realistic minimal triathlon coach context that scenarios override via spread. Mirrors the shape `coach-context-builder.ts` emits so the system prompt's section descriptions line up.
+- `src/coach/__tests__/eval-scenarios.ts` — 10 starter scenarios across four categories:
+  - **Directive → tool**: `tri-reduce-30`, `tri-swap-to-rest`, `tri-numeric-followup`
+  - **Refusals**: `refuse-nutrition`, `refuse-jailbreak`, `refuse-medical`
+  - **Memory**: `memory-remember-preference`, `memory-forget-on-correction`
+  - **Context awareness**: `race-week-no-volume-add`, `explain-with-phase`
+- `src/coach/__tests__/eval-scenarios.test.ts` — vitest harness, gated by `RUN_COACH_EVAL=1` so accidental `npm test` doesn't spend credits. Prints a pass/fail grid with per-scenario tokens + cost and a total. Hard-fails the whole run if total cost crosses $1.
+- `src/coach/__tests__/README.md` — how to run, how to add a scenario, when to run, what the suite doesn't cover.
+- `package.json` — new `coach:eval` script: `RUN_COACH_EVAL=1 vitest run src/coach/__tests__/eval-scenarios.test.ts`.
+
+**Cost per run**: roughly $0.05–$0.30 depending on response lengths. Hard ceiling $1.
+
+**Verification**: `npx vitest run src/coach/__tests__/eval-scenarios.test.ts` (no env var) skips all 10 scenarios cleanly — no API calls made. `npm run coach:eval` requires the env var and runs the live suite.
+
+**What's next (Sprint C)**: evidence-cited responses + confidence calibration. Pure prompt change, low risk now that the eval harness can catch regressions.
+
+## 2026-05-14 — AI Coach v3 Sprint A: persistent memory across sessions
+
+Implements Lever 1 of the v3 plan (`~/.claude/plans/mellow-petting-lobster.md`) — the coach now keeps a small persistent memory of facts about the athlete that survives across sessions and plan weeks.
+
+- `src/types/state.ts` — new `coachMemory?: { lastUpdatedISO; facts: Array<{ text, addedISO }> }` field, cap 15 facts (oldest dropped on overflow).
+- `src/coach/coach-tools.ts` — two new tools added to `COACH_TOOLS`: `remember({ fact, reason })` and `forget({ fact_index, reason })`. Both go through the existing `PendingChange` Apply-card flow so every memory write or delete requires user confirmation. `PendingChange.tool` widened to a `CoachToolName` union. New `MEMORY_FACT_MAX = 15` export. Validation drops the call with a logged reason if the fact is empty or the index is out of range.
+- `src/coach/coach-context-builder.ts` — `buildMemoryFacts(state)` emits an indexed list of remembered facts. Wired into both running and triathlon context objects, positioned before `injury` / `illness` so it reads early.
+- `src/coach/coach-chat-client.ts` — system prompt updated: `memory_facts` added to the section map; two new tool-use examples (one `remember`, one `forget`); a "MEMORY RULES" block defining when to call each and when not to (no medical detail, third-person facts, under 20 words). Tool count rolled from four to six. Directive detector (`isClearDirective`) now recognises "remember…" and "forget that…" patterns so the model is forced to pick the right tool.
+- `src/ui/coach-view.ts` — `applyCardHTML` branches on tool type: memory cards show the fact text in italics, use "Save" / "Discard" buttons instead of "Apply" / "Skip", and carry a small memory icon. `showAppliedToast` swaps the copy for memory tools ("Saved to memory" / "Removed from memory") and hides the Undo button (use `forget` conversationally instead). `change.headline` and `change.reason` are now escaped on render — these come from the LLM and could theoretically contain HTML.
+
+**Cost**: zero additional LLM calls. Memory writes piggy-back on the user's existing chat turns. Storage footprint: max 15 facts × ~160 chars ≈ 2.4KB per user.
+
+**End-to-end test** (after refresh):
+1. Open Coach. Tell it "I prefer Tuesday and Thursday for quality sessions; Wednesday and Friday should stay easy."
+2. Expect: one acknowledgement sentence, then an Apply card titled "Remember this" with the fact in italics. Tap "Save".
+3. Toast confirms "Saved to memory".
+4. Tap ↻ for a fresh session, or wait until next plan week.
+5. Coach should reference the preference unprompted in the new brief.
+6. To remove: say "Actually forget what I said about Tuesday/Thursday." → forget card → tap Forget.
+
+**What was deferred from the plan**:
+- Lever 5 (evals harness) — next sprint. Memory is shipped without automated regression coverage; manual dogfood will surface issues.
+- Levers 2, 3, 4 — sequenced after evals per the approved plan.
+
+## 2026-05-14 — Run-to-work Phase 4: commute-aware plan engine (easy-mileage substitution)
+
+Plan engine now treats commute days as already-prescribed easy aerobic running. Commute mileage is folded into the user's weekly target instead of stacking on top — a 5-runs/week marathoner with 3 commute days now gets 2 prescribed sessions (long + quality) plus the 3 commutes, not 5 prescribed runs plus 3 commute runs.
+
+- `src/workouts/generator.ts:50` — applies `prescribedRunsPerWeek = max(1, runsPerWeek − commuteDays)` and reduces `weeklyHoursTarget` by `commuteWeeklyMin/60` before slot generation. Hard sessions (intervals, threshold, race-pace, fartlek, hills) never substituted; the long run is always anchored.
+- Edge-case log fires when `commuteDays ≥ runsPerWeek` so we can build a UX caption later ("Your commute covers your full aerobic block — plan focuses on quality").
+- Three new tests in `src/workouts/generator.test.ts` cover: prescribed-run reduction, prescribed-run floor of 1, and the long-run guarantee.
+- Scientific basis logged in `docs/SCIENCE_LOG.md §AC` (Daniels + Pfitzinger on easy-mileage fungibility, guardrails for quality + long-run preservation).
+
+Phases 2 (per-activity tag), 3 (load-carriage adjustment), 5 (drift learning), and 6 (cross-mode) still pending.
+
+## 2026-05-14 — Run-to-work Phase 1: capture in onboarding + Account, stop wkm inflation
+
+The commute / run-to-work feature was scaffolded into the plan engine (`workouts/generator.ts`, `scheduler.ts`) but the setup form was orphaned — the DOM inputs (`commuteEnabled`, `commuteDistance`, etc.) didn't exist in the modern wizard, so users couldn't actually enable it. This shipped the capture layer end-to-end:
+
+- **New wizard step** `src/ui/wizard/steps/commute.ts` — "Do you run to work?" with one-way distance, bidirectional toggle, days/week pills, backpack kg input. Routed for running mode between `workout-preview` and `review`. Triathlon/HYROX/cycling rollout deferred to Phase 6.
+- **Account row** in `src/ui/account-view.ts` (Training section) — opens a modal mirroring the wizard fields so users can change the config after onboarding.
+- **`CommuteConfig.backpackKg`** added to `src/types/state.ts` — optional kg field for load-carriage adjustment (used by Phase 3).
+- **Killed wkm inflation** — `state/initialization.ts:519-527` and the orphaned block in `ui/events.ts:333-350` previously did `s.wkm += commuteKmPerDay × days`, silently inflating the target weekly mileage by 25-50 km/week for active commuters. wkm now stays as the user's chosen target; commute mileage will be folded into that target by the commute-aware plan engine (Phase 4), not added on top. Also removed dead `toggleCommuteSetup()` orphan.
+
+Phase 2 (per-activity tag), Phase 3 (load-carriage TSS adjustment), Phase 4 (commute-aware plan engine), Phase 5 (end-of-week drift learning), and Phase 6 (cross-mode) still pending.
+
+
+
+The tri-mode Readiness card was showing "Run load is elevated. Bike is not the primary concern." on days where the user had already trained heavily. The sentence reads as prescription about chronic load, but the cause was today's completed session — copy arrives after the action.
+
+- `isPostSessionState` (`daily-coach.ts`) — new boolean helper. Returns true when today's strain pct ≥ 100% of planned target or adhoc actualTSS ≥ daily CTL. Label guard dropped after a 57 / On Track screenshot showed the override missing the case: on-target strain after a hard session is still "trained hard", regardless of the underlying readiness tier.
+- `home-view.ts` — when `isPostSessionState` is true in tri mode, override `triReadinessResult.sentence` with "Trained hard today." Running mode is untouched: `coach.primaryMessage` already emits "Solid session today (X TSS)..." via the existing post-session branch in `derivePrimaryMessage`.
+- Ring label (the short text inside the 120px readiness circle) stays as the underlying tier name. Earlier attempt to put "Trained hard today" inside the ring overlapped the score and used the wrong colour — the ring is too narrow for long copy.
+- `derivePostSessionLabel` deprecated to a `null`-returning stub. Kept exported only so `computeDailyCoach`'s `ringLabel` plumbing keeps compiling; can be removed in a follow-up.
+- Tri-aware `dailyCTL` for the adhoc-path threshold: `home-view.ts` sums `triConfig.fitness.{run,bike,swim}.ctl ÷ 7` in tri mode. Without this, a bike-only or swim-only day (where running's `hasPlannedWorkout` is false and `strainPctLinear` is 0) would compare actualTSS against running CTL alone — badly undercounting a tri athlete's true daily load and either over-firing the override or never firing it. Sum-of-disciplines daily CTL is the right denominator for "did this session match the size of a typical day for this athlete".
+
+## 2026-05-14 — Route safety rating: visible top-right pill + first-look popup + UX-compliant modal
+
+Three-part discoverability fix after the buried-CTA + see-through-pill + non-UX-compliant modal feedback.
+
+- **Top-right pill (`activity-detail.ts`)**: more solid styling now — white frosted background with subtle shadow stack, dark text + shield icon. Sits in the page header row, right side. Replaces the buried bottom pill. Renders only when `actual.polyline` exists.
+- **First-look intro popup (`safety-slider.ts: showSafetyMapIntro`)**: shown once per device on the first activity-detail open with a polyline. Mosaic-depth treatment per CLAUDE.md feature-reveal rules — close X top-right, single-column body explaining the community safety-map vision (well-lit, low-risk routes; especially at night and for those who feel vulnerable), filled-black "Rate this run" primary CTA, muted "Maybe later" secondary. Hard once-only guard: state flag `safetyRatingIntroSeen` + module-level `introShownThisSession`, both set on creation (not dismissal) so navigating away can't cause a re-pop. Tied into the same trim/submit flow as the pill via `runSafetyRatingFlow()`.
+- **UX-compliant slider modal (`safety-slider.ts: openSafetyRatingModal`)**: rewritten to the canonical centered-overlay pattern from `docs/UX_PATTERNS.md → Overlays and Modals`. Close X top-right (replaces separate Cancel button), single full-width filled-black Submit CTA at the bottom, white card, 16px radius, 20px padding, backdrop blur. The slider widget itself + its (i) info expand are unchanged (info-expand copy already updated to lead with vision).
+- **State** (`state.ts`): new optional `safetyRatingIntroSeen?: boolean` on `AppState` (next to `coachIntroSeen`). Optional so fresh installs work without migration scaffolding.
+
+## 2026-05-14 — Coach LLM payload now carries v2 illness fields
+
+The AI Coach was still seeing only `{ severity: 'light' | 'resting' }` for illness, even though the v2 system had classification, schedule, RHR flag, and race-day context. Widened so the LLM can give specific, context-aware advice instead of generic "you're ill" replies.
+
+- `CoachNarrativePayload.illness` widened (`daily-coach.ts:1171`) with: `neckRule`, `severityTier`, `hasSystemic`, `rhrFlag`, `todayCapacity`, `effectiveCapacity` (after userCapacityOverride), `todayVolumePct`, `daysSinceOnset`, `daysRemainingAcute` (rest days left), `daysRemainingRamp` (graded-return days left), `pastSchedule`, `staleRhrElevated`, `raceCollision` ('acute' | 'ramp' | 'safe' | null), `raceDaysFromToday`, `symptoms`, `userCapacityOverride`. Legacy `severity` field retained for any prompt already keying off it.
+- `buildCoachSignalsPayload(coach, state?)` — second arg added (optional for back-compat). New helper `buildIllnessPayloadForCoach(state, sig)` builds the rich payload using `resolveEffectiveEntry`, `computeRhrDeltaFromHistory`, `detectRaceCollision`, `getRaceDateISO` from `illness-rules.ts`. Falls back to legacy shape when state is missing or illnessState has no schedule.
+- `coach-context-builder.ts` — both call sites (running + tri) now pass state. No other changes needed; context-builder just passes `payload.illness` through.
+- System prompt copy updated (`coach-chat-client.ts:54, 129`): tells the LLM what's in the new illness payload and instructs it to lead with that signal when offering specific advice. Adds the "below-neck rules out strength under viral load" guideline as a callable fact, not always-on text.
+- 5 new unit tests covering: no illness → null; legacy state → legacy fields only; v2 below-neck rest day → all v2 fields populated correctly (days counted from onsetDate, schedule offsets correct); userCapacityOverride reflected in `effectiveCapacity`; past schedule → `pastSchedule: true` with zero remaining days. Suite 1872/1872.
+
+## 2026-05-14 — Illness v2 follow-up #2: capacity override, race-day flag, stale-schedule nudge, mutation tests
+
+Second-pass cleanup on illness v2. Four fixes addressing the post-review concerns Tristan flagged.
+
+- **Capacity override honoured** (`resolveEffectiveEntry` in `illness-rules.ts`). The form's "What can you do today?" field was previously dead UI — captured to state but never read. It now overrides the engine when *more restrictive*: user says rest → rest regardless of schedule; user says easy_only on a reduced/full day → easy_only at engine's volumeFactor; engine wins on ties or when more restrictive (rest schedule beats easy_only override). 'walks' maps to 'rest' at the plan level. Wired into `applyIllnessMods`, both banners, and `daily-coach.ts` stance derivation.
+- **Race-day collision flag** (`detectRaceCollision`, `getRaceDateISO`). Returns 'acute' | 'ramp' | 'safe' based on where the race lands. `getRaceDateISO` reads across modes (`selectedMarathon`, `triConfig.raceDate`, `hyroxConfig.raceDate`, `onboarding.customRaceDate`). Surfaced as a bordered "Race overlap" block in the modal preview (live as user picks symptoms) and on the active illness banner. Copy cites injury / cardiac risk and suggests rescheduling or dropping.
+- **Stale-schedule nudge** (`computeRhrDeltaFromHistory`). When today's effective capacity is 'full' but `s.illnessState.active` is still true AND current RHR is ≥5 bpm above 28d baseline, banner copy switches from "Full intensity unlocked" to "Schedule complete, but your resting HR is still +N bpm above baseline. Update your check-in or mark recovered when symptoms have cleared." Both home and plan banners.
+- **`applyIllnessMods` moved to `illness-rules.ts`** and now takes an optional `todayISO` arg so it's deterministically testable without faking timers. `illness-modal.ts` re-exports for back-compat.
+- **35 new unit tests** (`illness-rules.test.ts`, 61 total): `resolveEffectiveEntry` (override × schedule matrix), `detectRaceCollision` (acute/ramp/safe), `computeRhrDeltaFromHistory` (insufficient data, stale latest, integer rounding), `classifyWorkoutKind` (rest_like, bike/swim/hyrox prefixes, strength prefix, run via km, 'other' fallback, false-positive guard for "easy run + gym after"), `applyIllnessMods` (all capacity × kind combinations, suppressStrength, 'other' preservation, legacy path, past schedule end, override forcing rest, override capping intensity). Suite 1867/1867.
+
+Open items still deferred per Tristan: AI Coach payload doesn't yet receive v2 fields (intentional — coach is allowlisted). Accessibility passes (aria-pressed on chips, Escape-to-close, focus trap) not yet done.
+
+## 2026-05-14 — AI Coach v2: 5-step build (Apply, tool-fire, context, chips, polish)
+
+Sprint to make the AI Coach actually work end-to-end. Five sequenced steps, all shipped:
+
+**Step 1 — Apply path is iron-clad for every tool, every mode.**
+- `src/coach/coach-tools.ts` — `applyPendingChange` rewritten. Tri: every tool now mutates *visible* fields (`w.n`, `w.d`, `w.aerobic`, `w.anaerobic`, `w.estimatedDurationMin`, `w.status`) so the plan card actually changes. Running: completes the missing `adjust_intensity` branch and adds `aiModifiedAt` to every mod. `snapshotIfFirst()` captures pre-mod state so undo restores cleanly. New `undoPendingChange()` reverses Apply.
+- `src/types/state.ts` — `Workout.aiModifiedAt`, `Workout.aiPreModSnapshot`, `WorkoutMod.aiModifiedAt`, `WorkoutMod.zoneCap`.
+- `src/ui/triathlon/workout-card.ts` — renders a "Coach" badge on cards where `aiModifiedAt` is set.
+- `src/ui/plan-view.ts` — running mod loop propagates `aiModifiedAt` and `autoReduceNote` to workouts; no longer clobbers `d` with an empty `newDistance`; renders "Coach: …" note for AI mods.
+- `src/ui/coach-view.ts` — Apply toast now includes a working "Undo" button.
+
+**Step 2 — Tool calls fire reliably.**
+- `src/coach/coach-chat-client.ts` — `isClearDirective()` heuristic detects unambiguous directives ("reduce Tuesday swim 20%", "yes", "20%") in the latest user message and sets `force_tool_use: true`. Three few-shot tool-call examples added to the system prompt.
+- `supabase/functions/coach-chat/index.ts` — honors `force_tool_use` by passing `tool_choice: { type: 'any' }` to Anthropic. **Needs redeploy.**
+- `src/coach/coach-tools.ts` — `lastToolDropReason` telemetry + `dropTool()` helper. Every drop path now logs *why* (invalid day, missing reason, unresolved workout, out-of-range pct, etc.).
+- `src/ui/coach-view.ts` — surfaces the drop reason in the user-facing fallback message.
+
+**Step 3 — Full-program context.**
+- `src/coach/coach-context-builder.ts` — `buildPlanSkeleton()` emits one line per plan week (phase, planned TSS / hours, session counts, key sessions). `buildAdaptationLog()` emits notified markers, tri fitness history (last 8 weeks per discipline), plan-reset count. Wired into both running and tri context.
+- `src/coach/coach-chat-client.ts` — system prompt updated with a section map so Haiku can navigate the bigger payload.
+
+**Step 4 — Chip-suggested replies.**
+- `src/coach/coach-chat-client.ts` — system prompt requires every assistant turn to end with `<choices>...</choices>` containing 2-4 short tappable replies.
+- `src/ui/coach-view.ts` — `extractChoices()` parses the block out of the stream; `renderChips()` renders tappable glass pills below the message. Tap = sends the chip text as the next user message. Stale chips cleared on every new send. Live stream truncated at `<choices` so the raw tag never flashes.
+
+**Step 5 — Polish.**
+- `src/ui/coach-view.ts` — `stripMarkdown()` now also strips em-dashes (banned by copy rules) and converts en-dashes to hyphens. Stream auto-scrolls the thread as text accumulates. Loading "Reviewing your week…" replaced with a three-dot typing shimmer + "Reading your training…" label.
+
+**Deploy steps**:
+
+```bash
+supabase functions deploy coach-chat   # picks up force_tool_use
+```
+
+Then refresh the dev server. End-to-end test: tap ↻ for a fresh session, then say "reduce Tuesday's swim by 30%". You should see (1) one acknowledgement sentence, (2) an Apply card, (3) chip replies below the message. Tap Apply → toast with Undo → navigate to Plan → Tuesday swim shows ~2310m, "(reduced 30%)", and a "Coach" badge.
+
+## 2026-05-13 — Marketing carousels: 8 pixel-faithful Instagram mockups
+
+Built `marketing/` directory with 8 carousel HTML files, one per branded tile in the existing 9-tile grid (`marathon`, `hyrox`, `ironman`, `recovery`, `all-counts`, `easy-run`, `more-than-running`, `it-all-counted`). Each renders 7 slides at native 1080×1350. Phone-screen mockups inside each carousel use a shared `app-style.css` that mirrors the real app design system — `page-flair.ts` atmosphere + rings + sun glint, `sky-background.ts` palettes (bronze for leg fatigue, coral for strain, indigo for sleep, mint for recovery), real glass card spec, real palette and typography. Slide rhythm: cover → hook → 3 phone screens → punchline → CTA. README explains screenshot workflow and how to edit copy/visuals globally.
+
+## 2026-05-13 — Marketing-ready feature list added to FEATURES.md
+
+Added a user-facing feature summary at the top of `docs/FEATURES.md`, grouped into 8 themes (multi-sport, adaptive plans, honest predictions, recovery integration, coaching, self-updating numbers, load safety, integrations). Consultant tone, no superlatives, no emoji, suitable for App Store copy / landing page / social. Engineering catalogue below is unchanged.
+
+## 2026-05-13 — Illness v2 follow-up: re-report safety, capacity-aware confirms, classifier polish, tests
+
+Direct post-review pass on the v2 illness build. Eight fixes spanning illness and injury for parity.
+
+- **Re-report safety**: `s.illnessState` gains an optional `onsetDate` field. On save, `startDate` rolls forward to today (schedule anchor) but `onsetDate` is preserved across re-reports so banner "Day N" no longer resets when the user updates symptoms. `defaultDayFromOnset()` in `illness-modal.ts` auto-selects `dayOfSymptoms` based on elapsed days since onset when re-opening, so the rebuilt schedule reflects actual progression without forcing the user to manually update the field. Banners in `plan-view.ts` and `home-view.ts` now distinguish `onsetDate`-based day count from `startDate`-based schedule offset.
+- **Capacity-aware Recovered confirm** (`confirmAndClearIllness` in `illness-modal.ts`): replaces direct `clearIllness()` calls from the banner Recovered buttons. Three tiers of confirm copy: `rest` capacity → hard confirm (below-neck case explicitly cites relapse and myocarditis risk); `easy_only` / `reduced` (ramp) → soft confirm noting volume jump from current % to 100%; past schedule end → light confirm.
+- **Injury parity**: `showInjuryConfirm` exported from `injury/modal.ts`; `plan-view.ts:2842` Recovered button replaced its `window.confirm` with the modal-style confirm for visual consistency with the in-modal Resolve flow. Pre-existing injury startDate preservation (`isNewInjury ? new... : injuryState.startDate`) verified — no fix needed there.
+- **classifyWorkoutKind refinement**: prefix-on-type-field beats substring-on-name for discipline disambiguation. Catches `hyrox_station_*`, `hyrox_brick`, `hyrox_assessment`, `hyrox_mini_brick` explicitly as strength (correct — strength-heavy compound sessions). Avoids false-positive strength matches on names like "easy run + gym after". Run requires km in description OR a recognised run-type/name keyword.
+- **'other' kind preserved**: `applyIllnessMods` now skips workouts whose kind is `'other'` (padel, climb, tennis) outside the rest capacity. Previously they were silently scaled with the run-side parser, mangling descriptions. Rest capacity still rests everything sport-shaped.
+- **SCIENCE_LOG honest sourcing** (`§AB`): RHR 5/10 bpm cut-offs annotated as heuristic (wearable-platform-derived, not validated against Mosaic data); severity-tier breakpoints (≤3/≤6/>6) annotated as pragmatic with no canonical 1–10 mapping; above-neck volume factor 0.85 tier annotated as pragmatic extension of Friman's 0.50–0.67 range.
+- **Unit tests** (`src/calculations/illness-rules.test.ts`, 26 cases): classification matrix, schedule shapes (above-mild/severe, below-non-systemic/systemic, RHR-high day-0 rest), `dayOfSymptoms` shift, `getTodayCapacity` bounds, `summariseSchedule`, `deriveLegacySeverity`, `shouldSuppressStrength`. Total suite 1832/1832.
+- **FEATURES.md**: Illness Mode test status upgraded ⚠️ → ✅.
+
+## 2026-05-13 — Illness Mode v2: above/below-neck rule + schedule-driven plan mutation
+
+Replaced the binary "light / resting" illness toggle with a structured form + classification engine.
+
+- `src/calculations/illness-rules.ts` (new) — `classifyIllness()` derives a four-axis Classification (`neckRule` above/below, `severityTier` mild/moderate/severe, `hasSystemic`, `rhrFlag`) from form inputs. `buildSchedule()` produces a forward-looking schedule of day-by-day plan modifications: rest days for the acute window, then graded return at 50%→70%→85%→100% volume. `getTodayCapacity()` resolves today's entry from the schedule; `shouldSuppressStrength()` flags below-neck cases for strength suppression (viral myocarditis risk per Schwellnus 2016). Pure functions, no DOM.
+- `src/ui/illness-modal.ts` (rewritten) — new form: illness type, symptom multi-select chips, severity 1–10 slider, day-of-symptoms segmented control, today's capacity (easy only / walks / rest), RHR delta auto-filled from `s.physiologyHistory` (≥5 baseline days required). Live "Mosaic's response" preview block updates on every input change and shows the classification + schedule summary. New `applyIllnessMods()` reads today's schedule entry and applies mods per workout kind (run, bike, swim, strength) — mode-aware across run/triathlon/cycling/hyrox. Legacy `severity`-only shape still works via a fallback path.
+- `src/ui/plan-view.ts` + `src/ui/home-view.ts` — `buildIllnessBanner()` now derives copy from today's schedule entry: "Full rest", "Easy only @ N%", "Reduced @ N%", or "Returning" once the schedule completes. Falls back to legacy severity labels when no schedule is present. Plan-view caller passes the whole `illnessState` to `applyIllnessMods` (signature change).
+- `src/calculations/daily-coach.ts` — stance derivation now looks up today's capacity from the schedule rather than reading `severity` directly. `rest` capacity → 'rest' stance; `easy_only` / `reduced` → 'light' (caps stance at 'reduce'). Past schedule end → no illness restriction on stance. Legacy severity path retained for tests and pre-v2 state.
+- `src/types/state.ts` — `illnessState` extended with optional v2 fields: `classification`, `schedule`, `symptoms`, `illnessType`, `severity1to10`, `dayOfSymptoms`, `userCapacityOverride`, `rhrDeltaBpm`, `rhrSource`, `resolvedDate`. Legacy `severity` field retained for back-compat.
+- `docs/SCIENCE_LOG.md` — new section for the Friman/Wesslén above/below-neck rule, Schwellnus 2016 return-to-train windows, Hellard 2015 RHR delta as objective severity marker.
+
+Scope of plan mutation widened: previously only running workouts were touched; v2 also resets bike/swim/strength sessions during below-neck recovery (fixes a triathlete-facing bug where bike sessions continued during full rest). Verified 1806 tests pass, no new UI lint violations from changed files.
+
+## 2026-05-13 — Coach v2 Session 1: drop BYOK, swap to Haiku, allowlist paywall
+
+Implements the Session 1 plan from `docs/BRAIN.md → Pre-launch Direction (Coach v2)`.
+
+- `supabase/functions/coach-chat/index.ts` — rewritten. Drops `X-Anthropic-Key` BYOK header path; reads `ANTHROPIC_API_KEY` from env (Mosaic's key). Model swapped from `claude-sonnet-4-6` to `claude-haiku-4-5-20251001`. Added UID allowlist check via `ALLOWED_USER_IDS` env var (comma-separated); non-allowlisted callers get 402 `subscription_required`. Added best-effort daily spend circuit breaker against `llm_spend_tracker` ($10/day).
+- `src/coach/allowlist.ts` — new. Client-side mirror of the server allowlist so the coach view renders the correct surface on launch without a 402 probe. UID list starts empty with a TODO — fill in Tristan's UID before deploy.
+- `src/coach/coach-chat-client.ts` — drops `apiKey` parameter and `X-Anthropic-Key` header from `streamCoachChat`. Removes `testApiKey` helper (no key to test). Adds `subscription_required` error mapping → "AI Coach is coming soon."
+- `src/coach/api-key-store.ts` — deleted (Keychain BYOK storage no longer needed).
+- `src/ui/coach-view.ts` — `aiSetupCard()` → `comingSoonCard()` with waitlist CTA. `wireSetupCard()` → `wireComingSoonCard()` (placeholder click handler; waitlist signup table not yet built). `renderCoachView()` now gates on `isCoachAllowlisted()` instead of `state.anthropicApiKeyStored`. Removed `apiKey` argument from `startBriefStream` and `sendChatMessage`. Consent modal copy updated to drop the "Anthropic" brand-name (now "AI provider").
+- `src/ui/account-view.ts` — Anthropic API key input / save / clear / test handlers all removed. Replaced with a one-line "AI Coach — Coming soon" status row.
+- `src/types/state.ts` — `anthropicApiKeyStored?: boolean` removed. `coachConsentGiven` retained (still needed for GDPR consent on health data → AI provider).
+- `docs/FEATURES.md` — "BYOK AI Coach" section retitled to "AI Coach (Mosaic-paid, allowlist gated)"; access / key-files / security sections rewritten.
+
+**Deploy steps** (manual, by Tristan):
+
+```bash
+# 1. Fill in Tristan's UID in src/coach/allowlist.ts (ALLOWLISTED_USER_IDS array)
+# 2. Set the two Supabase secrets
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-…
+supabase secrets set ALLOWED_USER_IDS=<tristan-uid>
+# 3. Deploy the edge function
+supabase functions deploy coach-chat
+```
+
+`coach-narrative` edge function not touched in this session — slated for deletion in Session 2 when the Brain-tab narrative card is rewired to read the latest `coach-chat` session opening.
+
+## 2026-05-13 — Home illness banner aligned with plan-view discipline
+
+`src/ui/home-view.ts` — `buildIllnessBanner()` had drifted from the plan-view version and violated three Visual Constraints: cream tinted card body (`rgba(255,251,235,0.9)`), an ALL-CAPS amber "FULL REST" chip with `text-transform:uppercase` + `letter-spacing:0.04em`, and a green "Recovered" pill on top of the existing amber colour-set (two semantic colours on a status-alert card; rule is one). Realigned to the plan-view banner (`plan-view.ts:1248`): neutral `var(--c-surface)` card body, neutral chip (`var(--c-border-strong)` outline + `var(--c-muted)` text, sentence-case "Full rest"), neutral text in `var(--c-black)`, and the "Recovered" CTA switched to the canonical black-filled pill. Kept the 3px orange→amber stripe — that's the one documented illness/injury exception in `UX_PATTERNS.md → Visual Constraints`.
+
 ## 2026-05-12 — Benchmark detail pages: visual-constraint cleanup
 
 `src/ui/triathlon/benchmark-detail-pages.ts`, `src/ui/stats-view.ts` — VO2max / FTP / CSS detail pages violated three Visual Constraints:
