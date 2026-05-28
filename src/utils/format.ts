@@ -1,4 +1,18 @@
 /**
+ * Format a probability percentage for display. Caps at the boundaries so we
+ * never render `0%` (reads as impossible) or `100%` (reads as guaranteed) for
+ * a Monte Carlo estimate. Accepts either a fraction (0..1) or a percent
+ * (0..100).
+ */
+export function fmtProbPct(value: number, opts?: { isFraction?: boolean }): string {
+  if (!Number.isFinite(value)) return '--';
+  const pct = opts?.isFraction === false ? value : (value <= 1 ? value * 100 : value);
+  if (pct < 5)  return '<5%';
+  if (pct > 95) return '>95%';
+  return `${Math.round(pct)}%`;
+}
+
+/**
  * Format seconds as time string (h:mm:ss or mm:ss)
  * @param seconds - Time in seconds
  * @returns Formatted time string

@@ -4,6 +4,13 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-28 — Goal overlay rebuilt as slider + probability display caps
+
+Recovery follow-up. The previous version of `goal-time-overlay.ts` (committed earlier in the day) used a text input. The pre-regression build had a glass slider with a live chance-of-beating readout that updated on every drag — restored to match.
+
+- **`src/ui/triathlon/goal-time-overlay.ts`** — replaced text input with a native HTML range slider styled with custom thumb/track. Bounds derived as `[prediction * 0.8, prediction * 1.8]` snapped to 5 min (yields ~4:00–9:00 for a 5:03 70.3 prediction). On every `input` event, throttled to `requestAnimationFrame`, the seeded `runTriForecastSim` is re-run with the new goal — same trials, only `goalProbability` changes, so the live % stays stable while dragging. Tone-coloured qualitative label ("Aggressive" / "Ambitious" / "Honest stretch" / "Realistic" / "Looks light") uses the same threshold ladder as the cone card. Glass dialog: backdrop blur on the dim overlay AND on the card.
+- **`src/utils/format.ts`** — new `fmtProbPct(value, { isFraction? })`. Caps at the boundaries so we never render `0%` or `100%` for a Monte Carlo estimate; surfaces `<5%` and `>95%` instead. Applied to the cone card's chance bar and the slider's live readout. Project-wide convention going forward.
+
 ## 2026-05-28 — Recovery: triathlon forecast cone wrapper restored
 
 Parallel-agent activity earlier in the day overwrote uncommitted in-flight UX work, including the wiring that put the Monte Carlo cone chart on the triathlon Forecast tab. The phone build from 11:47 (preserved at `/tmp/dist.phone-build-11h47/`) confirmed the UX shape; the underlying engines (`runTriForecastSim`, `buildForecastCone`) and the `targetFinishTimeSec` state field were all intact in committed source.

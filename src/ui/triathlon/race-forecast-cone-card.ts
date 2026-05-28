@@ -20,7 +20,7 @@
 import type { SimulatorState } from '@/types/state';
 import { runTriForecastSim } from '@/calculations/race-forecast-simulation.triathlon';
 import { buildForecastCone, type ConeHistoryPoint } from '@/ui/forecast-cone';
-import { ft } from '@/utils/format';
+import { ft, fmtProbPct } from '@/utils/format';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 
@@ -116,13 +116,13 @@ export function renderTriConeCard(s: SimulatorState): string {
   // Chance bar OR set-goal CTA
   let goalBlock = '';
   if (goalSec && sim.goalProbability != null) {
-    const probPct = Math.round(sim.goalProbability * 100);
+    const probPct = sim.goalProbability * 100;
     const caption = goalCaption(probPct, medianSec, goalSec);
     goalBlock = `
       <div style="background:rgba(148,163,184,0.10);border-radius:12px;padding:14px;margin-top:18px">
         <div style="font-size:13px;color:${TEXT_M};margin-bottom:6px">Chance of beating your goal of ${ft(goalSec)}</div>
         <div style="display:flex;align-items:flex-start;gap:14px">
-          <div style="font-size:28px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${probPct}%</div>
+          <div style="font-size:28px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;font-variant-numeric:tabular-nums;line-height:1">${fmtProbPct(probPct)}</div>
           <div style="font-size:12px;color:${TEXT_S};line-height:1.5;flex:1">${caption}</div>
         </div>
         <button id="tri-cone-edit-goal" type="button" style="margin-top:12px;font-size:12px;color:${TEXT_S};background:none;border:none;cursor:pointer;padding:0;font:inherit;text-decoration:underline">Edit goal time</button>
