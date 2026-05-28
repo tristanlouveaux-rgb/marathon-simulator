@@ -19,6 +19,13 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm")
             ],
-            path: "ios/Sources/HealthExtrasPlugin")
+            path: "ios/Sources/HealthExtrasPlugin",
+            resources: [
+                // ISSUE-237 — App-target Privacy Manifest. Plugin reads from
+                // HealthKit only (declared via NSHealthShareUsageDescription
+                // in the host app's Info.plist), no data collection beyond
+                // what is surfaced to the host, no Required Reason API access.
+                .process("PrivacyInfo.xcprivacy")
+            ])
     ]
 )

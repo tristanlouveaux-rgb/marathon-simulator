@@ -817,9 +817,13 @@ function getSportLabel(actType: string): string {
   if (t.includes("SOCCER") || t.includes("FOOTBALL")) return "soccer";
   if (t.includes("RUGBY")) return "rugby";
   if (t.includes("ROWING")) return "rowing";
-  if (t.includes("YOGA")) return "yoga";
-  if (t.includes("TENNIS") || t.includes("SQUASH")) return "tennis";
+  if (t.includes("YOGA") || t.includes("PILATES")) return "yoga";
+  if (t.includes("TENNIS") || t.includes("SQUASH") || t.includes("PICKLEBALL")) return "tennis";
   if (t.includes("BOXING") || t.includes("HIIT")) return "hiit";
+  if (t.includes("CLIMB")) return "climbing";
+  if (t.includes("PADDLE") || t === "KAYAKING" || t === "CANOEING") return "paddle";
+  if (t === "GOLF") return "golf";
+  if (t.includes("CARDIO")) return "cardio";
   return "other";
 }
 

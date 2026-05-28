@@ -19,6 +19,12 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm")
             ],
-            path: "ios/Sources/GuidedVoicePlugin")
+            path: "ios/Sources/GuidedVoicePlugin",
+            resources: [
+                // ISSUE-237 — App-target Privacy Manifest. Plugin declares no
+                // tracking, no data collection, and no Required Reason API
+                // access (uses AVSpeechSynthesizer + AVAudioSession only).
+                .process("PrivacyInfo.xcprivacy")
+            ])
     ]
 )

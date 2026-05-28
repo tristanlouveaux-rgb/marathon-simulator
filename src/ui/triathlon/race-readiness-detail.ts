@@ -74,10 +74,10 @@ function coachingLine(d: DisciplineReadiness): string {
     const targetH = d.longestSessionRequiredHours;
     const targetLabel = targetH < 1 ? `${Math.round(targetH * 60)} min` :
       targetH === Math.floor(targetH) ? `${targetH}h` : `${Math.floor(targetH)}h ${Math.round((targetH - Math.floor(targetH)) * 60)}m`;
-    return `Add a longer single session — work toward ${targetLabel}. Weekly volume is closer to target than peak sessions.`;
+    return `Add a longer single session. Work toward ${targetLabel}. Weekly volume is closer to target than peak sessions.`;
   }
   // Both low
-  return 'Both weekly volume and peak single sessions are below race target. The plan ramps both — by race day this will be in the green.';
+  return 'Both weekly volume and peak single sessions are below race target. The plan ramps both, by race day this will be in the green.';
 }
 
 /**
@@ -97,7 +97,7 @@ function renderDisciplinePanel(d: DisciplineReadiness): string {
     } else if (d.discipline === 'run') {
       const years = Math.round(d.pbAgeDays / 365);
       if (years >= 2) {
-        pbLine = `<div style="font-size:11px;color:${TEXT_S};margin-top:8px">Marathon PB is ${years}+ years old — no recency boost. Recent race results would lighten the penalty.</div>`;
+        pbLine = `<div style="font-size:11px;color:${TEXT_S};margin-top:8px">Marathon PB is ${years}+ years old. No recency boost. Recent race results would lighten the penalty.</div>`;
       }
     }
   }
@@ -174,7 +174,7 @@ export function renderRaceReadinessDetailView(): void {
           <div style="font-size:28px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Race readiness</div>
           <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">Overall ${readiness.overallScore} · ${readiness.overallLabel}</div>
           <div style="font-size:12px;color:${TEXT_XS};margin-top:8px;max-width:440px;margin-left:auto;margin-right:auto;line-height:1.55">
-            How well your recent training matches what the race distance demands. The plan ramps each discipline toward its target — by race day, scores climb to the green band.
+            How well your recent training matches what the race distance demands. The plan ramps each discipline toward its target: by race day, scores climb to the green band.
           </div>
         </div>
 

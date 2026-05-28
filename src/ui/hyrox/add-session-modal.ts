@@ -50,7 +50,7 @@ const OPTIONS: SessionOption[] = [
   { kind: 'station_technique',label: 'Station technique', caption: 'Skill + form, lower intensity.',         defaultMin: 50, minMin: 35, maxMin: 75 },
   { kind: 'station_density',  label: 'Station density',   caption: 'AMRAP-style higher-volume work.',        defaultMin: 45, minMin: 30, maxMin: 65 },
   { kind: 'brick',            label: 'Brick',             caption: 'Run + station rounds, race-specific.',   defaultMin: 60, minMin: 45, maxMin: 100 },
-  { kind: 'mini_brick',       label: 'Mini brick',        caption: 'Shorter brick — 500m + erg, beginner.',  defaultMin: 35, minMin: 25, maxMin: 50 },
+  { kind: 'mini_brick',       label: 'Mini brick',        caption: 'Shorter brick, 500m + erg, beginner.',  defaultMin: 35, minMin: 25, maxMin: 50 },
 ];
 
 /** Generate a draft workout for a session kind to read its real MTL.

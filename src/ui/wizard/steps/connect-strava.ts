@@ -106,7 +106,7 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
             </div>
             <div class="cs-row-text">
               <p class="cs-row-label">Personal bests</p>
-              <p class="cs-row-sub">5K, 10K, half, marathon — pulled from your fastest efforts.</p>
+              <p class="cs-row-sub">5K, 10K, half, marathon. Pulled from your fastest efforts.</p>
             </div>
           </div>
           <div class="cs-row">
@@ -143,7 +143,7 @@ export function renderConnectStrava(container: HTMLElement, state: OnboardingSta
         </div>
 
         <!-- Secondary providers: Garmin (OAuth, web + iOS) and Apple Health (iOS native).
-             These deliver physiology that Strava can't: resting HR, HRV, sleep — needed for
+             These deliver physiology that Strava can't: resting HR, HRV, sleep. Needed for
              HR-calibrated VDOT and recovery scoring. Apple block hides on non-iOS. -->
         <div class="cs-rise" style="width:100%;max-width:460px;margin-top:18px;animation-delay:0.24s">
           <p style="font-size:11.5px;color:var(--c-faint);text-align:center;margin:0 0 10px;letter-spacing:0.04em;text-transform:uppercase">Plus your watch (optional)</p>
@@ -294,7 +294,7 @@ function wireGarminHandler(): void {
       }
       revealContinueButton();
     }
-  }).catch(() => { /* offline / edge fn down — leave button as Connect */ });
+  }).catch(() => { /* offline / edge fn down. Leave button as Connect */ });
 
   btn.addEventListener('click', async () => {
     if (btn.disabled) return;
@@ -371,7 +371,7 @@ function wireAppleHandler(): void {
     btn.disabled = true;
     btn.style.opacity = '0.55';
     btn.style.cursor = 'default';
-    label.textContent = 'Apple Watch — iOS app only';
+    label.textContent = 'Apple Watch, iOS app only';
     if (status) {
       status.textContent = 'Sleep, HRV, resting HR, and 16w of workouts. Available in the Mosaic iOS app.';
       status.style.display = 'block';

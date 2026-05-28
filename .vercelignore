@@ -10,7 +10,9 @@ ios-plugins/
 
 # Bulk validation datasets (CSVs of triathlon race results used by the
 # offline validation harness). Not consumed at runtime.
-validation/
+# Anchored to repo root — without the leading slash this would also strip
+# src/validation/, which IS consumed at runtime.
+/validation/
 
 # Research artefacts and scratch tooling — not needed at deploy time.
 Research/

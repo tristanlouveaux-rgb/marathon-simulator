@@ -131,7 +131,13 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
       <!-- Session body -->
       ${renderSessionBody(workout, components, c.accent, disc)}
 
-      <div style="height:14px"></div>
+      <!-- Guided session entry -->
+      <div style="padding:0 22px 16px;display:flex;flex-direction:column;gap:10px">
+        <button id="hx-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
+        <button id="hx-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+      </div>
+
+      <div style="height:6px"></div>
     </div>
   `;
 
@@ -140,6 +146,19 @@ export function openHyroxWorkoutDetail(workout: Workout): void {
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#hx-detail-close')?.addEventListener('click', close);
+
+  // Guided strength / station session. Same overlay the tri side uses; the
+  // adapter (parseHyroxSession) walks hyroxComponents one at a time.
+  overlay.querySelector('#hx-detail-strength-start')?.addEventListener('click', () => {
+    close();
+    import('@/ui/guided-strength-overlay').then(({ openGuidedStrength }) => openGuidedStrength(workout));
+  });
+  overlay.querySelector('#hx-detail-strength-done')?.addEventListener('click', () => {
+    import('@/guided/strength-complete').then(({ completeStrengthSession }) => {
+      completeStrengthSession(workout);
+      close();
+    });
+  });
 
   // Per-station "I don't have this" / "Swap back" buttons
   overlay.querySelectorAll<HTMLButtonElement>('.hx-station-swap').forEach(btn => {
@@ -282,7 +301,7 @@ function renderSessionBody(workout: Workout, components: HyroxComponent[] | unde
         ${runFinishMin ? `
           <div style="padding:12px 14px;border-radius:10px;background:rgba(122,132,92,0.07);border:1px solid rgba(122,132,92,0.15);margin-top:14px">
             <div style="font-size:12px;font-weight:600;color:#4f5a3b">Easy run to finish</div>
-            <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${runFinishMin} min${runFinishKm ? ` · ~${runFinishKm} km` : ''} — practise the station-to-run transition at easy effort</div>
+            <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${runFinishMin} min${runFinishKm ? ` · ~${runFinishKm} km` : ''}. Practise the station-to-run transition at easy effort</div>
           </div>
         ` : ''}
       </div>

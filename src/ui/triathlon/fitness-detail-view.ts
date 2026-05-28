@@ -565,16 +565,16 @@ export function renderTriFitnessDetailView(): void {
 
         <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Mosaic</div>
         <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
-          Computed from your training data. Running uses pace-vs-HR regression (Daniels VDOT). Cycling uses the ACSM power formula: <span style="font-variant-numeric:tabular-nums">10.8 × W/kg + 7</span>, derived from your FTP. Cardiac ceiling is your aerobic upper bound (peak HR ÷ resting HR, Uth-Sørensen) — a theoretical ceiling, not current fitness. Cross-training, when shown, is sustained-HR aerobic capacity from non-run, non-bike sport. The headline shows your highest measured value, falling back to cardiac ceiling only when no measured signal exists.
+          Computed from your training data. Running uses pace-vs-HR regression (Daniels VDOT). Cycling uses the ACSM power formula: <span style="font-variant-numeric:tabular-nums">10.8 × W/kg + 7</span>, derived from your FTP. Cardiac ceiling is your aerobic upper bound (peak HR ÷ resting HR, Uth-Sørensen): a theoretical ceiling, not current fitness. Cross-training, when shown, is sustained-HR aerobic capacity from non-run, non-bike sport. The headline shows your highest measured value, falling back to cardiac ceiling only when no measured signal exists.
         </div>
 
         <div style="font-size:13px;font-weight:600;color:var(--c-black);margin-bottom:4px">Watch</div>
         <div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
-          Read directly from your device. Garmin and Apple Watch use their own proprietary algorithms — typically HR variability during GPS activities. Updates automatically when your device syncs. May differ from Mosaic; neither is ground truth.
+          Read directly from your device. Garmin and Apple Watch use their own proprietary algorithms. Typically HR variability during GPS activities. Updates automatically when your device syncs. May differ from Mosaic; neither is ground truth.
         </div>
 
         <div style="font-size:12px;color:var(--c-faint);line-height:1.5;padding-top:12px;border-top:1px solid var(--c-border)">
-          Running, cycling, and cardiac are shown separately because each measures a different aspect of aerobic fitness. A strong cyclist may score higher in cycling than running — both are real.
+          Running, cycling, and cardiac are shown separately because each measures a different aspect of aerobic fitness. A strong cyclist may score higher in cycling than running. Both are real.
         </div>
 
         <button id="vo2-info-close" style="margin-top:16px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--c-border);background:transparent;font-size:14px;font-weight:500;color:var(--c-black);cursor:pointer;font-family:var(--f)">Close</button>

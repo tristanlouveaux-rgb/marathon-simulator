@@ -447,7 +447,7 @@ function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string 
         <span id="rec-phase-badge" class="ml-auto shrink-0 px-2 py-0.5 rounded-full text-xs font-semibold" style="${badge.style}">${badge.text}</span>
       </div>
 
-      <!-- Current segment — prominent, ABOVE the list -->
+      <!-- Current segment: prominent, ABOVE the list -->
       <div class="m-card mx-4 px-4 py-3 mb-3">
         <div class="flex items-baseline justify-between gap-2">
           <p class="text-sm truncate" style="color:var(--c-muted)">${currentSeg?.label ?? 'Complete'}</p>
@@ -458,7 +458,7 @@ function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string 
           : `<p class="text-xs mt-0.5" style="color:var(--c-faint)">Walk or light jog</p>`}
       </div>
 
-      <!-- Full segment list — fills remaining space, always visible -->
+      <!-- Full segment list: fills remaining space, always visible -->
       <div id="rec-segment-list" class="mx-4 overflow-y-auto flex-1 min-h-0 mb-3 rounded-xl px-1 py-1" style="background:var(--c-bg)">
         ${buildSegmentListHTML(data, scheme, unitPref)}
       </div>

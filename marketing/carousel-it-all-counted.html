@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mosaic — It All Counted (carousel)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+
+<!-- ============================== SLIDE 1 — COVER ============================== -->
+<div class="slide cover cover-dark">
+  <div class="slide-label">Slide 1 — Cover</div>
+  <div class="content">
+    <div>
+      <div class="cover-headline">It all<br>counted.</div>
+      <div class="cover-subtag">FOOTBALL. PADEL. SWIMMING.<br>RECOVERY DAYS. EARLY MORNINGS.<br>LONG RUNS. REST DAYS.<br>GOOD DAYS. HARD DAYS.<br><br>EVERYTHING<br>LED HERE.</div>
+    </div>
+    <div class="cover-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 2 — HOOK ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 2 — Hook</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">Every run.<br>Every rest day.<br><span class="warm">It compounds.</span></div>
+    <div class="text-sub">A year of training is a single curve. Mosaic stores every session, every recovery score, every benchmark — then shows you the shape of the work.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 3 — YEAR CTL CHART ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 3 — Year fitness chart</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">52 weeks.<br>One <span class="accent">curve.</span></div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Year in fitness</div>
+                <div class="app-h-meta" style="margin-top:4px;">52 weeks · all sports · CTL</div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+                <div>
+                  <div class="card-label">Fitness now</div>
+                  <div style="font-size:46px;font-weight:700;letter-spacing:-2px;line-height:1;color:var(--c-black);margin-top:4px;">68</div>
+                  <div style="font-size:13px;color:var(--c-ok-text);font-weight:700;margin-top:4px;">↑ +24 from this time last year</div>
+                </div>
+                <div style="text-align:right;">
+                  <div style="font-size:11px;color:var(--c-muted);text-transform:uppercase;letter-spacing:1px;font-weight:600;">All-time peak</div>
+                  <div style="font-size:18px;color:var(--c-black);font-weight:700;margin-top:4px;letter-spacing:-0.5px;">72 · Apr</div>
+                </div>
+              </div>
+
+              <div class="chart-wrap" style="margin-top:14px;">
+                <svg viewBox="0 0 320 160" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="yG" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#4E9FE5" stop-opacity="0.4"/>
+                      <stop offset="100%" stop-color="#4E9FE5" stop-opacity="0"/>
+                    </linearGradient>
+                    <linearGradient id="yATL" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stop-color="#F59E0B" stop-opacity="0.18"/>
+                      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <!-- baseline grid -->
+                  <line x1="0" y1="50" x2="320" y2="50" stroke="rgba(0,0,0,0.06)" stroke-width="1" stroke-dasharray="2,3"/>
+                  <line x1="0" y1="100" x2="320" y2="100" stroke="rgba(0,0,0,0.06)" stroke-width="1" stroke-dasharray="2,3"/>
+                  <!-- ATL (acute) area, behind CTL -->
+                  <path d="M0,140 L20,130 L40,118 L60,100 L80,82 L100,72 L120,80 L140,62 L160,40 L180,38 L200,34 L220,32 L240,46 L260,40 L280,28 L300,30 L320,34 L320,160 L0,160 Z" fill="url(#yATL)"/>
+                  <path d="M0,140 L20,130 L40,118 L60,100 L80,82 L100,72 L120,80 L140,62 L160,40 L180,38 L200,34 L220,32 L240,46 L260,40 L280,28 L300,30 L320,34" stroke="#F59E0B" stroke-width="1.5" fill="none" stroke-linecap="round" opacity="0.55"/>
+                  <!-- CTL (chronic) area -->
+                  <path d="M0,148 L20,140 L40,128 L60,114 L80,98 L100,86 L120,82 L140,72 L160,58 L180,52 L200,46 L220,42 L240,44 L260,40 L280,36 L300,36 L320,38 L320,160 L0,160 Z" fill="url(#yG)"/>
+                  <path d="M0,148 L20,140 L40,128 L60,114 L80,98 L100,86 L120,82 L140,72 L160,58 L180,52 L200,46 L220,42 L240,44 L260,40 L280,36 L300,36 L320,38" stroke="#2E7EC4" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+                  <!-- race date markers -->
+                  <line x1="160" y1="0" x2="160" y2="160" stroke="rgba(34,197,94,0.4)" stroke-width="1" stroke-dasharray="2,3"/>
+                  <circle cx="160" cy="58" r="4" fill="#22C55E"/>
+                  <text x="164" y="14" style="font-family:Inter;font-size:8px;fill:#15803D;font-weight:700;letter-spacing:0.5px;">MARATHON</text>
+                  <line x1="280" y1="0" x2="280" y2="160" stroke="rgba(34,197,94,0.4)" stroke-width="1" stroke-dasharray="2,3"/>
+                  <circle cx="280" cy="36" r="4" fill="#22C55E"/>
+                  <text x="218" y="14" style="font-family:Inter;font-size:8px;fill:#15803D;font-weight:700;letter-spacing:0.5px;">70.3</text>
+                  <circle cx="320" cy="38" r="4" fill="#2E7EC4"/>
+                </svg>
+                <div class="chart-axis-lbl"><span>Jan</span><span>Apr</span><span>Jul</span><span>Oct</span><span>Now</span></div>
+              </div>
+
+              <div style="display:flex;gap:14px;font-size:11px;margin-top:8px;color:var(--c-muted);">
+                <span><span style="color:#2E7EC4;font-weight:700;">━</span> Fitness (CTL)</span>
+                <span><span style="color:#F59E0B;font-weight:700;">━</span> Fatigue (ATL)</span>
+                <span><span style="color:#22C55E;font-weight:700;">●</span> Race</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 4 — WEEK ADHERENCE GRID ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 4 — Adherence grid</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">252 sessions.<br><span class="ok">97% logged.</span></div>
+    <div class="phone-sub">Every workout, every cross-train, every rest day. Every week visible at a glance.</div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Consistency</div>
+                <div class="app-h-meta" style="margin-top:4px;">52-week heatmap</div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="stat-row">
+                <div class="stat-tile">
+                  <div class="stat-num">252</div>
+                  <div class="stat-lbl">Sessions</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-num">2,142</div>
+                  <div class="stat-lbl">Km</div>
+                </div>
+                <div class="stat-tile">
+                  <div class="stat-num">18,420</div>
+                  <div class="stat-lbl">TSS</div>
+                </div>
+              </div>
+
+              <div style="margin-top:16px;">
+                <div class="card-label" style="margin-bottom:8px;">Weekly volume · 52 weeks</div>
+                <div id="heat" style="display:grid;grid-template-columns:repeat(13,1fr);grid-template-rows:repeat(4,12px);gap:3px;">
+                  <!-- 52 cells. Pattern: build to peak then sustain -->
+                  <!-- low: rgba(78,159,229,0.18) | med: rgba(78,159,229,0.45) | high: rgba(78,159,229,0.85) | very high: #2E7EC4 -->
+                  <div style="background:rgba(0,0,0,0.06);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.18);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.18);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.18);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.85);border-radius:2px;"></div>
+                  <div style="background:#92400E;border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(245,158,11,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.45);border-radius:2px;"></div>
+                  <div style="background:rgba(78,159,229,0.85);border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;"></div>
+                  <div style="background:#2E7EC4;border-radius:2px;border:1.5px solid #0F172A;"></div>
+                  <div style="background:rgba(0,0,0,0.06);border-radius:2px;border:1px dashed rgba(0,0,0,0.18);"></div>
+                  <div style="background:rgba(0,0,0,0.06);border-radius:2px;border:1px dashed rgba(0,0,0,0.18);"></div>
+                  <div style="background:rgba(0,0,0,0.06);border-radius:2px;border:1px dashed rgba(0,0,0,0.18);"></div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--c-muted);margin-top:8px;font-weight:600;letter-spacing:0.5px;">
+                  <span>JAN</span><span>APR</span><span>JUL</span><span>OCT</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;">
+                <span style="color:var(--c-muted);">Longest streak</span>
+                <span style="font-weight:700;color:var(--c-black);">42 consecutive days</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Most active month</span>
+                <span style="font-weight:700;color:var(--c-black);">August · 28 sessions</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Total time</span>
+                <span style="font-weight:700;color:var(--c-black);">218 hours</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 5 — RACE OUTCOME ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 5 — Race outcome (predicted vs actual)</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">Predicted 3:14:22.<br><span class="ok">Ran 3:14:08.</span></div>
+    <div class="phone-sub">The forecast got it within 14 seconds. Then fed the result back to sharpen the next prediction.</div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos-mint"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Race result</div>
+                <div class="app-h-meta" style="margin-top:4px;">Berlin Marathon · 28 Sep</div>
+              </div>
+            </div>
+
+            <div class="g-card" style="text-align:center;padding:24px 18px 18px;">
+              <div class="card-label">Actual finish</div>
+              <div style="font-family:var(--f-body);font-weight:300;font-size:72px;letter-spacing:-3px;line-height:1;color:var(--c-ok-text);margin-top:4px;">3:14:08</div>
+              <div style="font-size:14px;color:var(--c-muted);margin-top:8px;font-weight:600;">14s under prediction</div>
+              <div style="display:inline-flex;align-items:center;gap:6px;margin-top:14px;padding:6px 12px;border-radius:14px;background:var(--c-ok-bg);">
+                <span style="color:var(--c-ok-text);font-weight:700;font-size:12px;">PB · −4m 22s</span>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">Forecast vs actual</div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Predicted</span>
+                <span style="font-weight:700;color:var(--c-black);">3:14:22 · 4:36 /km</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Actual</span>
+                <span style="font-weight:700;color:var(--c-ok-text);">3:14:08 · 4:36 /km</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:13px;">
+                <span style="color:var(--c-muted);">Pacing</span>
+                <span style="font-weight:700;color:var(--c-black);">Negative split · ↓ 12s second half</span>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">What the model learned</div>
+              <div style="font-size:13px;color:var(--c-black);line-height:1.5;margin-top:6px;">
+                Predictions calibrated <b>+0.4%</b>. Your durability cap honoured. Heat adjustment held. Future forecasts at this distance carry a +0.4% offset for 6 months.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 6 — PUNCHLINE ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 6 — Punchline</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">The work<br><span class="warm">compounds.</span></div>
+    <div class="text-sub">Every session sits on top of the last. Every prediction sharpens the next. The system remembers what you've done so it can tell you what you can do.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 7 — CTA ============================== -->
+<div class="slide cta-slide">
+  <div class="slide-label">Slide 7 — CTA</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="cta-headline">Launching<br>soon.</div>
+    <div class="cta-sub">YOUR PLAN. YOUR SPORTS. ONE SYSTEM.</div>
+    <div class="cta-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+</body>
+</html>

@@ -352,14 +352,14 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:48px">
 
-        <!-- Header: tab-style (no back-button — Forecast is now a tab destination) -->
+        <!-- Header: tab-style (no back-button. Forecast is now a tab destination) -->
         <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px">
           <button id="rfc-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
 
         <div style="text-align:center;padding:20px 20px 12px">
           <div style="font-size:32px;font-weight:700;color:${TEXT_M};letter-spacing:-0.02em;line-height:1">${distLabel} forecast</div>
-          <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine} — Week ${currentWeek} of ${totalWeeks}</div>
+          <div style="font-size:13px;color:${TEXT_S};margin-top:6px;font-weight:500">${raceNameLine}. Week ${currentWeek} of ${totalWeeks}</div>
         </div>
 
         ${buildRunRaceOutcomeRetroCard(s)}

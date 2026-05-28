@@ -66,6 +66,7 @@ export function applyCourseFactors(
   profile: CourseProfile | undefined,
   baseSec: { swimSec: number; bikeSec: number; runSec: number },
   runDistKm: number,
+  heatStrainRatio: number = 1.0,
 ): CourseFactorOutput {
   const factors: CourseFactor[] = [];
   let swimMult = 1.0;
@@ -78,7 +79,13 @@ export function applyCourseFactors(
 
   // ── Climate (run + bike) ────────────────────────────────────────────────
   if (profile.climate && profile.climate !== 'cool') {
-    const runFactor = CLIMATE_RUN_MULTIPLIER[profile.climate];
+    // Run climate penalty scales by body-size heat strain (heatStrainRatio).
+    // At the default 1.0 (reference build / no anthropometrics), runFactor ===
+    // the literature multiplier, so this is identical to the original. Bike is
+    // left unscaled — convective cooling at 30+ km/h dominates body-size
+    // effects on the bike leg.
+    const baseRunFactor = CLIMATE_RUN_MULTIPLIER[profile.climate];
+    const runFactor = 1 + (baseRunFactor - 1) * heatStrainRatio;
     const bikeFactor = CLIMATE_BIKE_MULTIPLIER[profile.climate];
     if (runFactor !== 1.0) {
       runMult *= runFactor;

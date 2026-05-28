@@ -12,7 +12,9 @@ import { calculateZones, computeHREffortScore, type HRProfile } from './heart-ra
 import type { Workout, Week, GarminActual, GarminPendingItem, UnspentLoadItem, ActivityRepData } from '@/types';
 import { log } from '@/ui/renderer';
 import { TL_PER_MIN, IMPACT_PER_KM } from '@/constants';
+import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { getEffectiveVdot } from './effective-vdot';
+import { isStrengthActual } from '@/cross-training/activities';
 
 /** Row shape returned by the sync-activities Edge Function */
 export interface GarminActivityRow {
@@ -59,8 +61,12 @@ export interface GarminActivityRow {
   activity_name?: string | null;
 }
 
-/** Map Garmin activity type to app activity type */
-function mapGarminType(garminType: string): ExternalActivity['type'] {
+/** Map Garmin/Strava activity type to app activity type.
+ *  `activityName` is consulted as a fallback when the type itself is ambiguous
+ *  (e.g. Strava `Workout` with a user-provided name like "Strength"). Without
+ *  this, those activities would slot into the cross-training bucket and never
+ *  match a planned gym workout. See `isStrengthActual` for the detection rules. */
+function mapGarminType(garminType: string, activityName?: string | null): ExternalActivity['type'] {
   switch (garminType) {
     // Running
     case 'RUNNING':
@@ -133,6 +139,12 @@ function mapGarminType(garminType: string): ExternalActivity['type'] {
       return 'walk';
 
     default:
+      // Strength fallback: Strava `WeightTraining` and `Workout` + "Strength" name
+      // both miss the explicit case above. Catch them here so they route to 'gym'
+      // and become eligible for planned gym-slot matching.
+      if (isStrengthActual({ activityType: garminType, workoutName: activityName ?? undefined })) {
+        return 'gym';
+      }
       return 'other';
   }
 }
@@ -281,8 +293,11 @@ export function deriveRPE(
   const type = row.activity_type;
   if (type === 'WALKING') return 3;
   if (type === 'HIKING') return 4;
-  if (type === 'STRENGTH_TRAINING' || type === 'INDOOR_CARDIO') return 6;
+  if (type === 'INDOOR_CARDIO') return 6;
   if (type === 'INDOOR_CYCLING') return 6;
+  // Use the canonical strength detector so Strava `WeightTraining` and the
+  // `Workout` + "Strength" name fallback both get the strength heuristic.
+  if (isStrengthActual({ activityType: type, workoutName: row.activity_name ?? undefined })) return 6;
 
   // 5. Default: use planned RPE or sensible default
   return Math.max(1, Math.min(10, plannedRPE || 5));
@@ -384,8 +399,13 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
 /**
  * Determine which 1-based plan week index a given date falls in.
  * Returns null if the date is before the plan start or beyond the plan length.
+ *
+ * Exported so the launch-time anchor consistency check
+ * (`assertPlanAnchorConsistent` in welcome-back.ts) can mirror the matcher's
+ * exact routing logic — anything that diverges here would file activities
+ * differently from what the check would assert against.
  */
-function weekIndexForDate(date: Date, s: ReturnType<typeof getMutableState>): number | null {
+export function weekIndexForDate(date: Date, s: ReturnType<typeof getMutableState>): number | null {
   if (!s.planStartDate) return null;
   const planStart = new Date(s.planStartDate);
   // Compare at day granularity in UTC to avoid timezone drift
@@ -501,6 +521,42 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
       dedupChanged = true;
       console.log(`[dedup] Removed Garmin adhoc ${wid} (${oldGarminId}) — Strava entry exists`);
+    }
+  }
+
+  // Apple-over-Garmin dedup: an Apple Health row (apple-) carries the HR stream,
+  // zones, route and km splits that a Garmin webhook summary (garmin-) lacks.
+  // When both exist for the same activity (start ±4h + duration within 15%, or
+  // ±10 min when duration is unknown), keep Apple and drop the Garmin summary.
+  // Strava still wins over both — the pass above already removed any non-Strava
+  // row colliding with a Strava row, so by here a surviving apple- row has no
+  // Strava counterpart. Mirrors the Strava-over-Garmin pass exactly.
+  for (const week of s.wks) {
+    if (!week.garminActuals) continue;
+    const appleEntries = Object.values(week.garminActuals)
+      .filter(a => a.garminId.startsWith('apple-') && a.startTime);
+    if (appleEntries.length === 0) continue;
+    for (const [wid, actual] of Object.entries(week.garminActuals)) {
+      const gid = actual.garminId;
+      // Only drop Garmin webhook summaries. Never touch strava- or apple- rows.
+      if (gid.startsWith('strava-') || gid.startsWith('apple-')) continue;
+      if (!actual.startTime) continue;
+      const startMs = new Date(actual.startTime).getTime();
+      const hasAppleDup = appleEntries.some(ae => {
+        const timeDiff = Math.abs(startMs - new Date(ae.startTime!).getTime());
+        if (timeDiff > 4 * 60 * 60 * 1000) return false;
+        if (actual.durationSec > 0 && ae.durationSec > 0) {
+          const durRatio = Math.abs(actual.durationSec - ae.durationSec) / Math.max(actual.durationSec, ae.durationSec);
+          return durRatio < 0.15;
+        }
+        return timeDiff < 10 * 60 * 1000;
+      });
+      if (!hasAppleDup) continue;
+      delete week.garminActuals[wid];
+      if (week.garminMatched?.[gid] === wid) delete week.garminMatched[gid];
+      if (week.adhocWorkouts) week.adhocWorkouts = week.adhocWorkouts.filter(w => w.id !== wid);
+      dedupChanged = true;
+      console.log(`[dedup] Removed Garmin summary ${wid} (${gid}) — richer Apple Health entry exists`);
     }
   }
 
@@ -891,7 +947,8 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         const rawId = w.id.slice('garmin-'.length);
         const matched = wk.garminMatched?.[rawId];
         if (matched && matched !== '__pending__') return false;
-        return rowIds.has(rawId) && mapGarminType(rows.find(r => r.garmin_id === rawId)?.activity_type ?? '') !== 'run';
+        const matchRow = rows.find(r => r.garmin_id === rawId);
+        return rowIds.has(rawId) && mapGarminType(matchRow?.activity_type ?? '', matchRow?.activity_name) !== 'run';
       });
       for (const adhoc of stale) {
         const rawId = adhoc.id!.slice('garmin-'.length);
@@ -921,7 +978,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       const existingMatch = wk.garminMatched![row.garmin_id];
       if (existingMatch && existingMatch !== '__pending__') continue;
 
-      const appType = mapGarminType(row.activity_type);
+      const appType = mapGarminType(row.activity_type, row.activity_name);
 
       // HYROX mode: only reclassify activities as planned station/brick work
       // when the signal is reasonably specific. Previously this matched any of
@@ -1328,6 +1385,16 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           plannedDistanceKm: match.matchedWorkout?.d ? (parseDistanceKm(match.matchedWorkout.d) || null) : null,
           elevationGainM: row.elevationGainM ?? null,
         };
+        // Auto-tag as commute when the matched plan slot is a commute slot.
+        // Pre-fills `backpackKg` from the user's commute settings so the
+        // load-carriage adjustment (Phase 3) has a value to read without
+        // needing the user to open the activity-detail first. User can
+        // override or untag via the activity-detail chip.
+        if (match.matchedWorkout?.commute === true) {
+          actual.commute = true;
+          const def = s.commuteConfig?.backpackKg;
+          if (def && def > 0) actual.backpackKg = def;
+        }
         wk.garminActuals[match.workoutId] = actual;
 
         // Compute TSS-calibrated Training Load for this matched run
@@ -1337,8 +1404,16 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           : (actual.durationSec / 60) * (TL_PER_MIN[Math.round(rpe)] ?? 0.92);
         wk.actualTSS = (wk.actualTSS ?? 0) + runTL;
 
-        // Musculoskeletal impact load (km-based for running)
-        const runImpact = actual.distanceKm * (IMPACT_PER_KM[match.matchedWorkout.t] ?? 1.0);
+        // Musculoskeletal impact load (km-based for running). For commute
+        // runs carried with a backpack, ground reaction force scales linearly
+        // with total mass — bump impact by `(body + pack) / body`. HR-based
+        // iTRIMP already captures the metabolic side, so we only adjust the
+        // structural-stress (Signal C) signal. See SCIENCE_LOG §AD.
+        const baseImpactPerKm = IMPACT_PER_KM[match.matchedWorkout.t] ?? 1.0;
+        const carriageCoef = actual.commute && actual.backpackKg && actual.backpackKg > 0
+          ? loadCarriageImpactCoef(actual.backpackKg, resolveBodyweightKg(s.bodyWeightKg, s.biologicalSex))
+          : 1.0;
+        const runImpact = actual.distanceKm * baseImpactPerKm * carriageCoef;
         wk.actualImpactLoad = (wk.actualImpactLoad ?? 0) + runImpact;
 
         // Keep extraRunLoad for backward compat

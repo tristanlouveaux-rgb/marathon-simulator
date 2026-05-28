@@ -103,7 +103,7 @@ export function renderHyroxPlanView(): void {
 
       <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
 
-        <!-- Header — race countdown + avatar only (action buttons live in pill row) -->
+        <!-- Header. Race countdown + avatar only (action buttons live in pill row) -->
         <div style="padding:56px 20px 0;display:flex;align-items:center;justify-content:flex-end;gap:8px" class="hxf">
           ${raceDays > 0 ? `
             <div style="display:flex;align-items:baseline;gap:4px;padding:4px 14px;border-radius:100px;background:rgba(255,255,255,0.7);backdrop-filter:blur(8px);box-shadow:0 1px 4px rgba(0,0,0,0.06)">

@@ -159,9 +159,9 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 Pro Doubles<span style="display:block;font-size:11px;opacity:0.65;margin-top:2px">Pro 2-person</span>
               </button>
             </div>
-            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You each run all 8 legs. Stations are split — training covers all 8 for flexibility, but at half the weekly station volume.</p>
+            <p id="hx-doubles-note" class="hx-hint" style="margin-top:10px;display:${(format === 'open_doubles' || format === 'pro_doubles') ? 'block' : 'none'}">You each run all 8 legs. Stations are split: training covers all 8 for flexibility, but at half the weekly station volume.</p>
             <p id="hx-pro-note" class="hx-hint" style="margin-top:4px;display:${(format === 'pro_singles' || format === 'pro_doubles') ? 'block' : 'none'}">Pro division uses heavier weights: sled push 202 kg, sandbag 30 kg, wall balls 9 kg.</p>
-            <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional — base first, race-specific second.</p>
+            <p class="hx-hint" style="margin-top:10px">Your plan starts mostly aerobic and ramps into tempo + intervals through the build phase. Variety is intentional: base first, race-specific second.</p>
           </div>
 
           <!-- Race event picker -->
@@ -171,7 +171,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
               <option value="">Select a HYROX event</option>
               ${getFutureHyroxEvents(new Date().toISOString().slice(0, 10)).map(ev => {
                 const d = new Date(ev.date);
-                const label = `${d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} — ${ev.city}`;
+                const label = `${d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}, ${ev.city}`;
                 const selected = state.hyroxRaceEventId === ev.id ? 'selected' : '';
                 return `<option value="${ev.id}" ${selected}>${label}</option>`;
               }).join('')}
@@ -186,7 +186,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
               <select id="hx-manual-venue" class="hx-input" style="font-size:13px">
                 <option value="">No venue selected</option>
                 ${HYROX_VENUES.slice().sort((a, b) => a.city.localeCompare(b.city)).map(v =>
-                  `<option value="${v.id}" ${state.hyroxVenueId === v.id ? 'selected' : ''}>${v.city} — ${v.name}</option>`
+                  `<option value="${v.id}" ${state.hyroxVenueId === v.id ? 'selected' : ''}>${v.city}: ${v.name}</option>`
                 ).join('')}
               </select>
             </div>
@@ -198,7 +198,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
             <input type="text" id="hx-prev-time" class="hx-input" placeholder="e.g. 1:12:30" value="${prevTimeStr}" autocomplete="off">
             <p class="hx-hint" style="margin-bottom:12px">Enter as h:mm:ss or mm:ss. Used to calibrate your training load and pace targets.</p>
             <div id="hx-prev-time-format-row" style="display:${prevTimeSec != null ? 'block' : 'none'}">
-              <div style="font-size:12px;color:${prevTimeFormat ? 'var(--c-muted)' : '#b45309'};margin-bottom:6px">${prevTimeFormat ? 'Which format was that time in?' : 'Pick the format your time was set in. Doubles times scale differently to singles — getting this right matters.'}</div>
+              <div style="font-size:12px;color:${prevTimeFormat ? 'var(--c-muted)' : '#b45309'};margin-bottom:6px">${prevTimeFormat ? 'Which format was that time in?' : 'Pick the format your time was set in. Doubles times scale differently to singles. Getting this right matters.'}</div>
               <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
                 <button class="hx-toggle ${prevTimeFormat === 'open_singles' ? 'active' : ''}" data-prev-format="open_singles" style="font-size:12px;padding:7px 8px">Open Singles</button>
                 <button class="hx-toggle ${prevTimeFormat === 'open_doubles' ? 'active' : ''}" data-prev-format="open_doubles" style="font-size:12px;padding:7px 8px">Open Doubles</button>
@@ -210,7 +210,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 <option value="" disabled ${!prevTimeRaceId && !state.hyroxPreviousRaceDate ? 'selected' : ''}>Select your race…</option>
                 ${pastEvents.map(ev => {
                   const d = new Date(ev.date);
-                  const label = `${d.toLocaleString('en-US', { month: 'short', year: 'numeric' })} — ${ev.city}`;
+                  const label = `${d.toLocaleString('en-US', { month: 'short', year: 'numeric' })}, ${ev.city}`;
                   return `<option value="${ev.id}" ${prevTimeRaceId === ev.id ? 'selected' : ''}>${label}</option>`;
                 }).join('')}
                 <option value="other" ${!prevTimeRaceId && state.hyroxPreviousRaceDate ? 'selected' : ''}>Other / not listed</option>
@@ -233,7 +233,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 <span id="hx-splits-chevron" style="font-size:12px;color:var(--c-faint);transition:transform 0.2s">▼</span>
               </div>
               <div id="hx-splits-body" style="display:none;margin-top:12px">
-                <p class="hx-hint" style="margin:0 0 10px">Paste your results text from hyrox.com — go to your result page, select all (Cmd+A / Ctrl+A), copy, and paste below. We accept either format: simple "Station name + time" lines, or the cumulative "Station In / Station Out" splits from the timing-system export. Or enter times manually below.</p>
+                <p class="hx-hint" style="margin:0 0 10px">Paste your results text from hyrox.com: go to your result page, select all (Cmd+A / Ctrl+A), copy, and paste below. We accept either format: simple "Station name + time" lines, or the cumulative "Station In / Station Out" splits from the timing-system export. Or enter times manually below.</p>
                 <textarea id="hx-paste-results" class="hx-input" rows="3" placeholder="Paste hyrox.com results here…" style="resize:vertical;font-size:12px;line-height:1.4;margin-bottom:10px"></textarea>
                 <button id="hx-parse-btn" style="width:100%;padding:9px;border:1px solid rgba(0,0,0,0.12);border-radius:10px;background:rgba(0,0,0,0.04);font-size:13px;font-weight:500;cursor:pointer;color:var(--c-black);margin-bottom:14px">Parse splits from text</button>
                 <div id="hx-parse-status" style="font-size:11px;color:var(--c-faint);margin-bottom:10px;display:none"></div>
@@ -254,7 +254,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
                 <div style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,0.06);display:flex;align-items:center;gap:10px">
                   <div style="flex:1">
                     <div style="font-size:13px;color:var(--c-black)">Average split (optional)</div>
-                    <div style="font-size:11px;color:var(--c-faint)">Don't remember each one? Enter your average — we'll seed any blank stations above.</div>
+                    <div style="font-size:11px;color:var(--c-faint)">Don't remember each one? Enter your average. We'll seed any blank stations above.</div>
                   </div>
                   <input type="text" id="hx-avg-split" class="hx-input" placeholder="mm:ss" style="width:80px;text-align:center;flex-shrink:0" autocomplete="off">
                 </div>
@@ -516,7 +516,7 @@ function wireEventHandlers(): void {
     display.style.color = 'var(--c-black)';
     hint.textContent = values.length < 8
       ? `Sum of ${values.length} of 8 station splits.`
-      : 'Sum of all 8 station splits (work time only — excludes runs and roxzone).';
+      : 'Sum of all 8 station splits (work time only, excludes runs and roxzone).';
   }
 
   function setRaceTotalDisplay(sec: number): void {
@@ -526,7 +526,7 @@ function wireEventHandlers(): void {
     totalDisplayMode = 'race-total';
     display.textContent = fmtMmSs(sec);
     display.style.color = 'var(--c-black)';
-    hint.textContent = 'Total race time — parsed from your results.';
+    hint.textContent = 'Total race time, parsed from your results.';
   }
 
   document.querySelectorAll<HTMLInputElement>('.hx-split-input').forEach(input => {
@@ -561,13 +561,13 @@ function wireEventHandlers(): void {
       if (!isNaN(sec) && sec > 0 && sec < minSec) {
         // Parsed but below physical minimum.
         input.value = '';
-        showSplitInputError(input, `That's below the minimum realistic time for this station (${Math.floor(minSec / 60)}:${String(minSec % 60).padStart(2, '0')}). Use mm:ss — e.g. 4:22.`);
+        showSplitInputError(input, `That's below the minimum realistic time for this station (${Math.floor(minSec / 60)}:${String(minSec % 60).padStart(2, '0')}). Use mm:ss. E.g. 4:22.`);
         return;
       }
 
       // NaN — bare digits, garbled text, etc.
       input.value = '';
-      showSplitInputError(input, 'Use mm:ss format — e.g. 4:22 for 4 min 22 sec.');
+      showSplitInputError(input, 'Use mm:ss format. E.g. 4:22 for 4 min 22 sec.');
     });
   });
 
@@ -614,8 +614,8 @@ function wireEventHandlers(): void {
     if (result.runPaceSecKm != null) patch.hyroxRunPaceSecKm = result.runPaceSecKm;
 
     // Auto-fill the previous finish time field if the parser found a race
-    // total. Only overwrite an existing value when the parsed total clearly
     // disagrees — typed-then-pasted should respect the paste.
+    // disagrees. Typed-then-pasted should respect the paste.
     if (result.totalRaceSec != null) {
       patch.previousHyroxTimeSec = result.totalRaceSec;
       const prevTimeEl = document.getElementById('hx-prev-time') as HTMLInputElement | null;
@@ -627,8 +627,8 @@ function wireEventHandlers(): void {
         prevTimeEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
       setRaceTotalDisplay(result.totalRaceSec);
-    } else {
       // No parsed race total — show sum of the stations we just filled in.
+      // No parsed race total. Show sum of the stations we just filled in.
       totalDisplayMode = 'stations-sum';
     }
 
@@ -641,8 +641,8 @@ function wireEventHandlers(): void {
     status.style.display = 'block';
     status.textContent = `Found: ${parts.join(', ')}.`;
   });
-
   // Race event picker — also controls visibility of the manual venue fallback.
+  // Race event picker. Also controls visibility of the manual venue fallback.
   const raceEventSelect = document.getElementById('hx-race-event') as HTMLSelectElement | null;
   const raceDateInput = document.getElementById('hx-race-date') as HTMLInputElement | null;
   const venueFallback = document.getElementById('hx-venue-fallback') as HTMLDivElement | null;
@@ -681,8 +681,8 @@ function wireEventHandlers(): void {
   });
 
   // Continue gate: a race date is required so course factors and the training
-  // horizon know which race they're aiming at. If a previous time is entered,
   // the format must also be picked — silently defaulting it to the target
+  // the format must also be picked. Silently defaulting it to the target
   // format mis-classifies doubles times as singles (and vice versa).
   function syncContinueGate(): void {
     const cta = document.getElementById('hx-continue') as HTMLButtonElement | null;
@@ -702,14 +702,14 @@ function wireEventHandlers(): void {
       : '';
   }
   syncContinueGate();
-  // Re-evaluate the gate whenever the user picks a previous-format pill or
   // edits the previous-time input — both can flip the gate state.
+  // edits the previous-time input. Both can flip the gate state.
   document.querySelectorAll<HTMLButtonElement>('[data-prev-format]').forEach(btn => {
     btn.addEventListener('click', () => syncContinueGate());
   });
   document.getElementById('hx-prev-time')?.addEventListener('input', () => syncContinueGate());
-
   // Average split fallback — fills any blank station inputs with the entered
+  // Average split fallback. Fills any blank station inputs with the entered
   // value and writes to onboarding. Per-station inputs the user already filled
   // are preserved.
   const avgSplitInput = document.getElementById('hx-avg-split') as HTMLInputElement | null;

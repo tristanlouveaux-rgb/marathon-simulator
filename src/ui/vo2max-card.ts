@@ -88,7 +88,7 @@ const SOURCE_DOT: Record<'running' | 'cycling' | 'cardiac' | 'crossTraining', st
   running: '#7B9E89',  // sage green (run accent)
   cycling: '#C58D6A',  // warm clay (bike accent)
   cardiac: '#D97757',  // accent
-  crossTraining: '#9C8FB5',  // muted lavender — distinct from run/bike/cardiac
+  crossTraining: '#9C8FB5',  // muted lavender. Distinct from run/bike/cardiac
 };
 
 function tierLabel(vo2: number, isFemale: boolean): string {
@@ -311,7 +311,7 @@ export function buildVO2MaxDetailHTML(s: SimulatorState): string {
 
       <div style="background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:18px;margin-bottom:14px">
         <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">By sport</div>
-        <div style="font-size:11px;color:var(--c-muted);margin-bottom:14px;line-height:1.4">Running and cycling are <strong style="color:var(--c-black)">measured</strong> from your training data. Cardiac ceiling is your <strong style="color:var(--c-black)">aerobic upper bound</strong> from peak HR ÷ resting HR — a theoretical ceiling, not current fitness. Cross-training, when shown, is the sustained-aerobic capacity you've demonstrated in non-run, non-bike sport.</div>
+        <div style="font-size:11px;color:var(--c-muted);margin-bottom:14px;line-height:1.4">Running and cycling are <strong style="color:var(--c-black)">measured</strong> from your training data. Cardiac ceiling is your <strong style="color:var(--c-black)">aerobic upper bound</strong> from peak HR ÷ resting HR: a theoretical ceiling, not current fitness. Cross-training, when shown, is the sustained-aerobic capacity you've demonstrated in non-run, non-bike sport.</div>
 
         ${isCyclingOnlyMode(s) ? '' : `
         <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--c-border)">
@@ -338,7 +338,7 @@ export function buildVO2MaxDetailHTML(s: SimulatorState): string {
           const pct = ceiling != null && bestSport != null ? Math.round((bestSport / ceiling) * 100) : null;
           const gap = ceiling != null && bestSport != null ? Math.round(ceiling - bestSport) : null;
           const implication = pct != null && gap != null
-            ? `Your best measured sport sits at ${pct}% of this ceiling. The ${gap}-point gap is theoretical headroom — what your cardiac function could support if economy and sport-specific fitness improved. Not a target to chase.`
+            ? `Your best measured sport sits at ${pct}% of this ceiling. The ${gap}-point gap is theoretical headroom. What your cardiac function could support if economy and sport-specific fitness improved. Not a target to chase.`
             : '';
           const showCT = est.crossTraining.value != null;
           return `
@@ -357,7 +357,7 @@ export function buildVO2MaxDetailHTML(s: SimulatorState): string {
             <div style="font-size:14px;font-weight:600;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtVO2(est.crossTraining.value)}</div>
           </div>
           <div style="font-size:11px;color:var(--c-muted);margin-top:3px">${sourceCaption(est.crossTraining)}</div>
-          <div style="font-size:11px;color:var(--c-black);margin-top:5px;line-height:1.4">Aerobic capacity demonstrated in non-run, non-bike sport. Independent of running and cycling — does not lift them.</div>
+          <div style="font-size:11px;color:var(--c-black);margin-top:5px;line-height:1.4">Aerobic capacity demonstrated in non-run, non-bike sport. Independent of running and cycling. Does not lift them.</div>
         </div>` : ''}`;
         })()}
       </div>
@@ -367,7 +367,7 @@ export function buildVO2MaxDetailHTML(s: SimulatorState): string {
         <div style="font-size:12px;color:var(--c-muted);line-height:1.7">
           <strong style="color:var(--c-black)">Running</strong>: pace and HR from recent steady runs, regressed against %VO2 reserve (Swain-Daniels). Falls back to race-distance PBs when HR data is sparse.<br>
           <strong style="color:var(--c-black)">Cycling</strong>: FTP divided by bodyweight via the ACSM ergometry equation.<br>
-          <strong style="color:var(--c-black)">Cardiac ceiling</strong>: peak HR ÷ resting HR (Uth-Sørensen 2004, r = 0.82 vs lab tests). An aerobic upper bound — the maximum VO2max your cardiac function could support if you trained perfectly. Not a measure of current fitness; not an empirical VO2max.<br>
+          <strong style="color:var(--c-black)">Cardiac ceiling</strong>: peak HR ÷ resting HR (Uth-Sørensen 2004, r = 0.82 vs lab tests). An aerobic upper bound. The maximum VO2max your cardiac function could support if you trained perfectly. Not a measure of current fitness; not an empirical VO2max.<br>
           <strong style="color:var(--c-black)">Cross-training</strong>: sustained-HR fraction (%HRR ≈ %VO2R, Swain &amp; Leutholtz 1997) anchored to your cardiac ceiling, across sessions ≥ 20 min at ≥ 75% HRmax. Hidden until at least 3 qualifying sessions.
         </div>
       </div>

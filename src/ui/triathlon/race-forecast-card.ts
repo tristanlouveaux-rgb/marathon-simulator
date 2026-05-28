@@ -97,7 +97,7 @@ export function renderRaceForecastCard(state: SimulatorState): string {
         </div>
 
         <!-- Transitions: tap to open the override overlay (also surfaces the
-             empirical lookup provenance — average at this race × your level). -->
+             empirical lookup provenance. Average at this race × your level). -->
         <button id="tri-fc-transitions-btn" type="button" style="display:flex;align-items:center;gap:14px;width:100%;background:transparent;border:none;padding:8px 0;margin-top:8px;cursor:pointer;text-align:left;font-family:var(--f);-webkit-tap-highlight-color:transparent">
           <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">T1: ${fmtShort(p.t1Sec)}</span>
           <span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">T2: ${fmtShort(p.t2Sec)}</span>
@@ -112,7 +112,7 @@ export function renderRaceForecastCard(state: SimulatorState): string {
           COURSE_PROFILES[state.onboarding?.selectedTriathlonId ?? ''] ?? null,
         )}
 
-        <!-- Calibration caption — honest about which source generated this prediction's course factors -->
+        <!-- Calibration caption. Honest about which source generated this prediction's course factors -->
         ${(() => {
           const isEmpirical = isEmpiricalFactors(p.courseFactors ?? []);
           const caption = isEmpirical
@@ -297,7 +297,7 @@ function renderGapCallout(p: TriRacePrediction): string {
         .map(x => `${x.d.toLowerCase()} ${x.v > 0 ? '+' : ''}${x.v.toFixed(0)}%`)
         .join(', ');
       lines.push(
-        `<div style="font-size:11px;color:var(--c-muted);margin-top:6px">Fitness responding ${phrase} vs expected — projection adjusted.</div>`,
+        `<div style="font-size:11px;color:var(--c-muted);margin-top:6px">Fitness responding ${phrase} vs expected. Projection adjusted.</div>`,
       );
     }
   }

@@ -7,6 +7,7 @@
 
 import type { PhysiologyDayEntry } from '@/types/state';
 import { TL_PER_MIN } from '@/constants';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 export interface SleepInsightInput {
   /** Physiology history, chronological oldest-first. */
@@ -405,7 +406,7 @@ export function buildDailySignalBTSS(
       if (!a.startTime) continue;
       const date = (a.startTime as string).split('T')[0];
       const tss = (a.iTrimp != null && a.iTrimp > 0)
-        ? (a.iTrimp * 100) / 15000
+        ? normalizeiTrimp(a.iTrimp as number)
         : 0;
       if (tss > 0) byDate[date] = (byDate[date] ?? 0) + tss;
     }
@@ -419,7 +420,7 @@ export function buildDailySignalBTSS(
       const date: string | null = wo.garminTimestamp ? (wo.garminTimestamp as string).split('T')[0] : null;
       if (!date) continue;
       const tss = (wo.iTrimp != null && wo.iTrimp > 0)
-        ? (wo.iTrimp * 100) / 15000
+        ? normalizeiTrimp(wo.iTrimp as number)
         : (wo.garminDurationMin != null && wo.rpe != null)
           ? (wo.garminDurationMin as number) * (TL_PER_MIN[Math.round(wo.rpe as number)] ?? 1.15)
           : 0;

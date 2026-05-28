@@ -158,7 +158,7 @@ export function renderHyroxStatsView(): void {
               <div style="font-size:10px;color:var(--c-faint)">Slowest</div>
               <div style="font-size:10px;color:var(--c-faint)">Fastest</div>
             </div>
-            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. Calibrated against 89,868 real HYROX finishers (Seasons 4–6) — all global ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro' : 'Open'} division.</div>
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px">Based on ${prediction != null ? 'predicted finish time' : 'previous time'}. Calibrated against 89,868 real HYROX finishers (Seasons 4–6): all global ${(hx.format === 'pro_singles' || hx.format === 'pro_doubles') ? 'Pro' : 'Open'} division.</div>
           </div>
         </div>
         ` : ''}
@@ -256,7 +256,7 @@ export function renderHyroxStatsView(): void {
               <div style="border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;padding:10px 0 0;display:flex;justify-content:space-between;align-items:center;gap:12px">
                 <div>
                   <div style="font-size:13px;color:var(--c-black)">Calibrated at Pro weights</div>
-                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your benchmarks were set at Pro-division weights. Default off — we'll add the heavier-weight slowdown on top of your times.</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">Toggle on if your benchmarks were set at Pro-division weights. Default off. We'll add the heavier-weight slowdown on top of your times.</div>
                 </div>
                 <button id="hx-pro-weights-toggle" data-on="${hx.benchmarksAtProWeights ? 'true' : 'false'}" style="flex-shrink:0;padding:7px 12px;border-radius:100px;border:1px solid ${hx.benchmarksAtProWeights ? 'var(--c-black)' : 'rgba(0,0,0,0.18)'};background:${hx.benchmarksAtProWeights ? 'var(--c-black)' : '#fff'};color:${hx.benchmarksAtProWeights ? '#FDFCF7' : 'var(--c-black)'};font-size:12px;cursor:pointer">${hx.benchmarksAtProWeights ? 'On' : 'Off'}</button>
               </div>
@@ -331,7 +331,7 @@ function renderRunPaceRow(
 
   const hasUser = userSecKm != null;
   const sourceCaption =
-    source === 'derived' ? 'Updated from your runs — beat your last test.' :
+    source === 'derived' ? 'Updated from your runs. Beat your last test.' :
     source === 'user'    ? 'Set manually.' :
                            'From splits';
   return `
@@ -429,7 +429,7 @@ function openCriticalPaceExplainer(): void {
       </div>
       <ol style="font-size:13px;color:var(--c-black);line-height:1.6;padding-left:20px;margin:0 0 16px">
         <li style="margin-bottom:8px"><strong>Threshold pace</strong> from your VDOT and lactate threshold (LT pace). The pace you can hold for 60 min straight.</li>
-        <li style="margin-bottom:8px"><strong>CP ratio</strong> at your VDOT. Continuously interpolated — no more discrete band buckets. Trained athletes can pace HYROX at or faster than threshold because stations are recovery between 1km legs.</li>
+        <li style="margin-bottom:8px"><strong>CP ratio</strong> at your VDOT. Continuously interpolated. No more discrete band buckets. Trained athletes can pace HYROX at or faster than threshold because stations are recovery between 1km legs.</li>
         <li style="margin-bottom:8px"><strong>Critical Pace</strong> = threshold × CP ratio. This is your sustainable HYROX run pace for the singles format.</li>
         <li style="margin-bottom:8px"><strong>Format factor</strong> adjusts for doubles (partner-rest reduces leg fatigue) or stays at 1.0 for singles.</li>
         <li style="margin-bottom:8px"><strong>Personal offset</strong> applies a residual from your logged HYROX races. Decays linearly to zero over 12 months without fresh evidence.</li>

@@ -18,7 +18,14 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
     '5k': { beginner: 10.0, novice: 8.0, intermediate: 6.5, advanced: 4.5, elite: 2.5 },
     '10k': { beginner: 11.0, novice: 9.0, intermediate: 7.5, advanced: 5.5, elite: 3.0 },
     'half': { beginner: 12.0, novice: 10.0, intermediate: 8.5, advanced: 6.5, elite: 3.5 },
-    'marathon': { beginner: 9.0, novice: 7.5, intermediate: 7.0, advanced: 5.5, elite: 3.5 }
+    // Marathon intermediate/novice bumped 2026-05-19. Previous values (7.0 /
+    // 7.5) were anchored to Pfitzinger 18-week intermediate-plan high-end
+    // outcomes, which under-promised vs published cohort data for athletes
+    // on structured longer (24-35w) builds. New ceilings sit at the upper-mid
+    // of Pfitzinger Advanced Marathoning + Daniels 2014 + Lake Placid 24-wk
+    // cohort outcomes. Marathon 'half' was already 8.5 — this brings marathon
+    // into line. See SCIENCE_LOG entry 2026-05-19.
+    'marathon': { beginner: 9.0, novice: 8.5, intermediate: 8.5, advanced: 5.5, elite: 3.5 }
   },
 
   // Legacy single-tau (retained for migration; new code paths use dual-tau).

@@ -40,7 +40,7 @@ const RUN_WORKOUTS_FOUNDATION: WorkoutCard[] = [
     category: 'Foundation',
     oneLine: 'Aerobic base at conversational effort.',
     example: '40–60 min at Z2 HR. Full sentences throughout.',
-    science: 'Aerobic base — Seiler 80/20 low-intensity volume.',
+    science: 'Aerobic base, Seiler 80/20 low-intensity volume.',
     locked: true,
   },
   {
@@ -49,7 +49,7 @@ const RUN_WORKOUTS_FOUNDATION: WorkoutCard[] = [
     category: 'Foundation',
     oneLine: 'Weekly long effort. Builds fat oxidation and durability.',
     example: '60–150 min at easy-to-moderate effort. Steady throughout.',
-    science: 'Peripheral adaptation — Coyle 1988; fat oxidation — Holloszy & Coyle 1984.',
+    science: 'Peripheral adaptation, Coyle 1988; fat oxidation, Holloszy & Coyle 1984.',
     locked: true, // may be overridden to false for 5k/10k
   },
 ];
@@ -61,7 +61,7 @@ const RUN_WORKOUTS_QUALITY: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'Raises lactate threshold directly.',
     example: '15 min WU · 3×8 min @ LT pace, 2 min jog · 10 min CD.',
-    science: 'Z4 lactate threshold — Daniels 2005, Pfitzinger & Douglas 2009.',
+    science: 'Z4 lactate threshold, Daniels 2005, Pfitzinger & Douglas 2009.',
   },
   {
     kind: 'vo2',
@@ -69,7 +69,7 @@ const RUN_WORKOUTS_QUALITY: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'Accumulates time at VO2max for aerobic ceiling gains.',
     example: '20 min WU · 5×3 min @ 5K effort, 2 min jog · 10 min CD.',
-    science: 'Time at VO2max — Billat 2001; Ronnestad & Mujika 2014.',
+    science: 'Time at VO2max, Billat 2001; Ronnestad & Mujika 2014.',
   },
   {
     kind: 'float',
@@ -77,7 +77,7 @@ const RUN_WORKOUTS_QUALITY: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'Moderate-effort recovery forces lactate clearance adaptation.',
     example: '20 min WU · 6×3 min hard / 2 min float (MP effort) · 10 min CD.',
-    science: 'MCT1/MCT4 lactate transport — Brooks 2009; Hudson & Fitzgerald 2008.',
+    science: 'MCT1/MCT4 lactate transport, Brooks 2009; Hudson & Fitzgerald 2008.',
   },
 ];
 
@@ -88,7 +88,7 @@ const RUN_WORKOUTS_RACE_SPECIFIC: WorkoutCard[] = [
     category: 'Race-specific',
     oneLine: 'Sustained running at goal race pace. Metabolic specificity.',
     example: '15 min WU · 16–24 km @ goal marathon pace · 5 min CD.',
-    science: 'Race-pace metabolic specificity — Coyle 2007; Daniels 2005 Ch.9.',
+    science: 'Race-pace metabolic specificity. Coyle 2007; Daniels 2005 Ch.9.',
   },
 ];
 
@@ -101,7 +101,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Endurance',
     oneLine: 'Steady aerobic work below tempo.',
     example: '2h @ 65% FTP / Z2 HR. Conversational throughout.',
-    science: 'Aerobic base — Coggan & Allen Z2.',
+    science: 'Aerobic base, Coggan & Allen Z2.',
   },
   {
     kind: 'tempo',
@@ -109,7 +109,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Endurance',
     oneLine: 'Sustained sub-threshold load.',
     example: '15 min WU · 3×10 min @ 85% FTP, 3 min easy · 5 min CD.',
-    science: 'Z3 — economy and fat oxidation.',
+    science: 'Z3, economy and fat oxidation.',
   },
   {
     kind: 'sweet_spot',
@@ -117,7 +117,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'High stimulus, manageable fatigue.',
     example: '15 min WU · 2×20 min @ 88% FTP, 5 min recovery · 10 min CD.',
-    science: '88–95% FTP — Seiler-adjacent SST band.',
+    science: '88–95% FTP, Seiler-adjacent SST band.',
   },
   {
     kind: 'threshold',
@@ -125,7 +125,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'Lifts FTP directly.',
     example: '15 min WU · 2×15 min @ 98% FTP, 5 min recovery · 10 min CD.',
-    science: 'Z4 — Coggan & Allen Ch.7.',
+    science: 'Z4. Coggan & Allen Ch.7.',
   },
   {
     kind: 'vo2',
@@ -133,7 +133,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Quality',
     oneLine: 'Long reps above FTP for aerobic ceiling.',
     example: '20 min WU · 5×3 min @ 115% FTP, 3 min recovery · 10 min CD.',
-    science: 'Z5 — accumulates time at VO2max.',
+    science: 'Z5, accumulates time at VO2max.',
   },
   {
     kind: 'hills',
@@ -165,7 +165,7 @@ const BIKE_WORKOUTS: WorkoutCard[] = [
     category: 'Pro-grade',
     oneLine: 'Peak power and rate of force development.',
     example: '20 min WU · 8×10s max @ 160%+ FTP, 3 min recovery · 10 min CD.',
-    science: 'PCr/glycolytic — Gastin 2001.',
+    science: 'PCr/glycolytic, Gastin 2001.',
   },
 ];
 
@@ -254,7 +254,7 @@ function renderCyclingWorkoutPreview(container: HTMLElement, state: OnboardingSt
   container.innerHTML = buildPreviewHTML({
     title: 'What your training looks like',
     intro: 'The kinds of bike sessions your plan draws from, anchored to the literature elite coaches prescribe.',
-    tapHint: 'Tap any card to opt out — your plan will skip that type.',
+    tapHint: 'Tap any card to opt out, your plan will skip that type.',
     categories,
     excluded,
     stepNum: 6,
@@ -381,7 +381,7 @@ function buildCardHTML(w: WorkoutCard, excluded: Set<string>): string {
     <div class="${classes}" data-kind="${w.kind}" data-locked="${isLocked}"
       role="${isLocked ? 'presentation' : 'checkbox'}"
       aria-checked="${isLocked ? undefined : String(!isExcluded)}"
-      aria-label="${w.name} — ${isLocked ? 'required' : isExcluded ? 'excluded' : 'included'} in plan">
+      aria-label="${w.name}. ${isLocked ? 'required' : isExcluded ? 'excluded' : 'included'} in plan">
       <div class="wp-card-name">${w.name}${isLocked ? '<span style="font-size:10px;font-weight:500;color:var(--c-faint);margin-left:8px;letter-spacing:0.06em;text-transform:uppercase;vertical-align:middle">Required</span>' : ''}</div>
       <div class="wp-card-oneline">${w.oneLine}</div>
       <div class="wp-card-example">${w.example}</div>

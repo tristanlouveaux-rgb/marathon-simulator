@@ -337,16 +337,23 @@ export function calculateForecast(
   state: OnboardingState,
   runnerType: RunnerType,
   blendedAnchorSec?: number,
+  rampCtx?: { baselineKm?: number; archetype?: import('./athlete-archetype').Archetype },
 ): ForecastResult {
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
   const abilityBand = getAbilityBand(baselineVdot);
 
   // Plan-prescribed mean weekly km — sessions × ref-km × build-phase factor.
   // Represents what the periodised plan WILL deliver across its build phase,
-  // not the user's pre-plan maintenance volume. See getPlanPrescribedMeanWeeklyKm
-  // for the calibration. When unavailable (sessions unknown / unsupported
-  // distance), fall through to the hours-based fallback inside the horizon model.
-  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, targetDistStr);
+  // not the user's pre-plan maintenance volume. When the caller threads
+  // baseline + archetype through `rampCtx`, the function integrates over the
+  // archetype-gated ramp instead of using the flat formula — see
+  // getPlanPrescribedMeanWeeklyKm for the dual-mode logic.
+  const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, targetDistStr, {
+    baselineKm: rampCtx?.baselineKm,
+    archetype: rampCtx?.archetype,
+    totalWeeks: state.planDurationWeeks,
+    taperWeeks: targetDistStr === 'marathon' ? 3 : 2,
+  });
 
   const horizon = applyTrainingHorizonAdjustment({
     baseline_vdot: baselineVdot,

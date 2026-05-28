@@ -41,7 +41,21 @@ export type InjuryType =
   | 'general';
 
 /** Body part location for injury */
-export type InjuryLocation = 'foot' | 'knee' | 'calf' | 'hamstring' | 'hip' | 'back' | 'other';
+export type InjuryLocation =
+  | 'foot'
+  | 'knee'
+  | 'calf'
+  | 'hamstring'
+  | 'hip'
+  | 'back'
+  | 'shoulder'
+  | 'upper_arm'
+  | 'elbow'
+  | 'forearm'
+  | 'wrist'
+  | 'neck'
+  | 'chest_ribs'
+  | 'other';
 
 /** Training context mode */
 export type TrainingContext = 'training' | 'rehab' | 'recovery';
@@ -58,13 +72,24 @@ export type InjuryPhase =
   | 'graduated_return' // Phase 5: Normal workouts with reduced hard sessions, 2-week check-in
   | 'resolved';       // Fully recovered, normal training
 
-/** Capacity test types for test_capacity phase */
+/** Capacity test types for test_capacity phase. The applicable subset for a
+ *  given injury is determined by location (see `getRequiredCapacityTests` in
+ *  src/injury/engine.ts) — leg-only tests apply to lower-body injuries,
+ *  upper-body / neck / chest injuries get tests appropriate to their region. */
 export type CapacityTestType =
-  | 'single_leg_hop'      // 10x single leg hop pain-free
-  | 'pain_free_walk'      // 30min walk pain-free
-  | 'isometric_hold'      // Pain-free isometric contraction
-  | 'stair_test'          // Up/down stairs pain-free
-  | 'squat_test';         // Bodyweight squat pain-free
+  // Lower-body
+  | 'single_leg_hop'        // 10x single leg hop pain-free
+  | 'pain_free_walk'        // 30min walk pain-free
+  | 'stair_test'            // Up/down stairs pain-free
+  | 'squat_test'            // Bodyweight squat pain-free
+  // Generic / multi-region
+  | 'isometric_hold'        // Pain-free isometric contraction (any muscle)
+  // Upper-body
+  | 'shoulder_rotation'     // Pain-free shoulder rotation through full ROM
+  | 'grip_strength'         // Pain-free grip squeeze (e.g., 30s firm grip)
+  // Axial
+  | 'pain_free_rotation'    // Pain-free neck / torso rotation
+  | 'deep_breath';          // Pain-free deep breath (chest / ribs)
 
 /** Capacity test result */
 export interface CapacityTestResult {
@@ -147,6 +172,28 @@ export interface InjuryState {
   morningPainYesterday: number | null;       // Pain level yesterday morning (for latency check)
   canRun: 'yes' | 'limited' | 'no';         // Self-reported running ability
 
+  // Per-discipline gates (legacy 3-tier enum, retained for state migration
+  // and existing tests. New code should read capacity instead via
+  // `getDisciplineCapacity` in src/injury/engine.ts).
+  canBike?: 'yes' | 'limited' | 'no';        // Triathlon and cycling modes
+  canSwim?: 'yes' | 'limited' | 'no';        // Triathlon mode
+  canUpperLoad?: 'yes' | 'limited' | 'no';   // HYROX upper-load (carries, wall ball, sandbag, burpee)
+  canLowerLoad?: 'yes' | 'limited' | 'no';   // HYROX lower-load (sled push/pull, lunges)
+
+  // Per-discipline capacity 0–100, set by the modal sliders. The plan engine
+  // scales each session's `estimatedDurationMin` by `capacity / 100`:
+  //   0   → discipline dropped entirely
+  //   100 → no change
+  //   in-between → linear duration scale (intensity untouched; user self-
+  //   regulates RPE in the moment). No intensity cap because that would
+  //   require an invented breakpoint; the slider is purely about volume.
+  // Undefined = no constraint, falls back to legacy enum via `getDisciplineCapacity`.
+  runCapacity?:       number;
+  bikeCapacity?:      number;
+  swimCapacity?:      number;
+  upperLoadCapacity?: number;
+  lowerLoadCapacity?: number;
+
   // Response-gated return-to-run fields
   returnToRunLevel: number;                  // Current protocol level (1-8), default 1
   severityClass: SeverityClass;              // Derived from peak pain
@@ -161,6 +208,44 @@ export interface InjuryState {
 
   // Graduated return phase tracking
   graduatedReturnWeeksLeft: number;          // Weeks remaining in graduated return (default 2)
+
+  // Per-discipline return-ramp tracking (tri/HYROX/cycling).
+  //
+  // When a discipline gate transitions from 'no' or 'limited' to 'yes' (the
+  // user is healed enough to fully resume that discipline), we ramp the
+  // re-introduction over the same window the running-mode graduated_return
+  // phase uses (2 weeks). Each entry is the weeks-left counter for that
+  // discipline; the plan engine downmixes the discipline's workouts while
+  // the counter is > 0 and the counter decrements on every week advance.
+  //
+  // 'stations' covers HYROX station + brick components — they share the
+  // same ramp counter because canUpperLoad and canLowerLoad both gate
+  // stations coarsely.
+  //
+  // Undefined / empty map = no active ramp; the discipline trains at full
+  // volume immediately. Existing running-mode return_to_run / graduated_return
+  // phases are NOT modified — they use their own counter at `graduated-
+  // ReturnWeeksLeft`.
+  returnRampWeeksLeft?: Partial<Record<'run' | 'bike' | 'swim' | 'stations', number>>;
+
+  // Per-discipline expected recovery window (weeks from injury report until the
+  // discipline returns to full capacity). Captured by the injury modal, seeded
+  // from the protocol's `typicalRecoveryWeeks` midpoint, user-adjustable per
+  // sport. Only the disciplines the user has currently restricted (capacity <
+  // 100) get an entry; an unrestricted discipline has no recovery window.
+  //
+  // Consumed by:
+  //   - the plan engine (`applyTriInjuryGates`): a discipline is restored to
+  //     full once the week being generated is at or beyond its resume week, so
+  //     a 2-week swim restriction does not zero swim for the whole macrocycle.
+  //   - the race predictor: each discipline loses only its own recovery weeks
+  //     of effective build time; the projected dose is sampled from the weeks
+  //     after every restricted discipline has returned.
+  //
+  // Keyed by `DisciplineKey` ('run' | 'bike' | 'swim' | 'upperLoad' |
+  // 'lowerLoad'). Undefined = no captured timeline (legacy state) → the plan
+  // engine keeps the conservative freeze-current-capacity behaviour.
+  resumeWeeksByDiscipline?: Partial<Record<'run' | 'bike' | 'swim' | 'upperLoad' | 'lowerLoad', number>>;
 }
 
 /** Test run (diagnostic run) workout definition */

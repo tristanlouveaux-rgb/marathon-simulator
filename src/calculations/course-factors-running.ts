@@ -6,8 +6,8 @@
  * Inputs come from `MARATHON_COURSE_PROFILES` attached to the `Marathon`
  * object via `getMarathonById`. Multipliers and the science behind them live
  * in `src/constants/triathlon-course-factors.ts` (despite the file name, the
- * literature — Minetti, Ely, Bassett — is sport-generic). `SCIENCE_LOG.md` §G
- * is the narrative record.
+ * literature — Minetti, Ely, Bonetti and Hopkins — is sport-generic).
+ * `SCIENCE_LOG.md` §G is the narrative record.
  *
  * **Side of the line**: tracking. Pure function, no state mutation.
  */
@@ -16,13 +16,16 @@ import type { CourseProfile } from '@/types/onboarding';
 import {
   CLIMATE_RUN_MULTIPLIER,
   CLIMATE_ANCHOR_TEMP_C,
+  WIND_EXPOSURE_RUN_MULTIPLIER,
+  RUN_HEAT_ACCLIM_MAX_DISCOUNT,
+  RUN_HEAT_ACCLIM_RAMP_GAP_C,
   altitudeRunMultiplier,
   runElevationMultiplier,
   MAX_REASONABLE_LEG_PENALTY,
 } from '@/constants/triathlon-course-factors';
 import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 
-export type RunningCourseFactorKind = 'climate' | 'altitude' | 'run-elevation';
+export type RunningCourseFactorKind = 'climate' | 'altitude' | 'run-elevation' | 'wind' | 'heat-acclim';
 
 export interface RunningCourseFactor {
   kind: RunningCourseFactorKind;
@@ -47,17 +50,29 @@ export interface RunningCourseFactorOutput {
   factors: RunningCourseFactor[];
 }
 
+/** Optional context for course-factor calculation. Both fields are required for
+ *  the heat-acclimatisation discount to fire (training temp without race
+ *  climate has nothing to compare against, and vice versa). */
+export interface RunningCourseFactorOpts {
+  /** Average outdoor training temperature over the last 4 weeks (°C). Computed
+   *  from `ambientTempC` on synced activities. Null/undefined → no acclim. */
+  trainingTempC?: number | null;
+}
+
 /**
- * Apply climate, altitude, and elevation factors to a raw running prediction.
+ * Apply climate, altitude, elevation, wind, and heat-acclimatisation factors
+ * to a raw running prediction.
  *
  * @param rawSec      Raw predicted finish time (from VDOT/blendPredictions).
  * @param profile     Race course profile. Undefined → identity (no adjustment).
  * @param distanceKm  Race distance in km. Required for elevation grade calc.
+ * @param opts        Optional context (training temp for heat acclim).
  */
 export function applyRunningCourseFactors(
   rawSec: number,
   profile: CourseProfile | undefined,
   distanceKm: number,
+  opts?: RunningCourseFactorOpts,
 ): RunningCourseFactorOutput {
   const factors: RunningCourseFactor[] = [];
   let mult = 1.0;
@@ -67,9 +82,13 @@ export function applyRunningCourseFactors(
   }
 
   // ── Climate ─────────────────────────────────────────────────────────────
+  // Captured here so the heat-acclim factor below can compute its discount
+  // against the climate penalty without re-deriving it.
+  let climatePenaltyFraction = 0; // > 0 means race climate is hotter than cool
   if (profile.climate && profile.climate !== 'cool') {
     const factor = CLIMATE_RUN_MULTIPLIER[profile.climate];
     if (factor !== 1.0) {
+      climatePenaltyFraction = factor - 1;
       mult *= factor;
       factors.push({
         kind: 'climate',
@@ -115,6 +134,54 @@ export function applyRunningCourseFactors(
     }
   }
 
+  // ── Wind exposure ───────────────────────────────────────────────────────
+  // Headwind/tailwind asymmetry — exposed courses average to a small net
+  // slow-down for running (~1-2%, much smaller than cycling's 2-5%).
+  if (profile.windExposure && profile.windExposure !== 'sheltered') {
+    const factor = WIND_EXPOSURE_RUN_MULTIPLIER[profile.windExposure];
+    if (factor !== 1.0) {
+      mult *= factor;
+      factors.push({
+        kind: 'wind',
+        label: 'Wind',
+        value: profile.windExposure.charAt(0).toUpperCase() + profile.windExposure.slice(1),
+        deltaSec: rawSec * (factor - 1),
+        multiplier: factor,
+      });
+    }
+  }
+
+  // ── Heat acclimatisation discount ───────────────────────────────────────
+  // Only fires when the climate penalty is positive AND we have a recent
+  // training temperature. Discounts up to RUN_HEAT_ACCLIM_MAX_DISCOUNT (50%)
+  // of the climate penalty when training temp is within RAMP_GAP_C (15°C)
+  // of the race climate anchor.
+  if (climatePenaltyFraction > 0 && opts?.trainingTempC != null && profile.climate) {
+    const raceAnchorTemp = CLIMATE_ANCHOR_TEMP_C[profile.climate];
+    const tempGap = raceAnchorTemp - opts.trainingTempC; // positive = training cooler
+    if (tempGap < RUN_HEAT_ACCLIM_RAMP_GAP_C) {
+      const discountFraction = Math.max(
+        0,
+        RUN_HEAT_ACCLIM_MAX_DISCOUNT * (1 - Math.max(0, tempGap) / RUN_HEAT_ACCLIM_RAMP_GAP_C),
+      );
+      if (discountFraction > 0) {
+        // The discount is applied as a sub-1.0 factor against the already-
+        // applied climate penalty. Effective net climate penalty becomes:
+        //   (1 + climatePenaltyFraction) * acclimFactor
+        // where acclimFactor < 1 reduces but does not erase the climate hit.
+        const acclimFactor = 1 - climatePenaltyFraction * discountFraction;
+        mult *= acclimFactor;
+        factors.push({
+          kind: 'heat-acclim',
+          label: 'Heat acclimatisation',
+          value: `Training ${Math.round(opts.trainingTempC)}°C vs race ${Math.round(raceAnchorTemp)}°C (−${(discountFraction * 100).toFixed(0)}% of climate)`,
+          deltaSec: rawSec * (acclimFactor - 1),
+          multiplier: acclimFactor,
+        });
+      }
+    }
+  }
+
   if (mult > MAX_REASONABLE_LEG_PENALTY) {
     console.warn(
       `[course-factors-running] compounded penalty exceeds ${MAX_REASONABLE_LEG_PENALTY}: ${mult.toFixed(2)}`
@@ -130,6 +197,44 @@ export function applyRunningCourseFactors(
 }
 
 /**
+ * Average outdoor training temperature over the last 4 weeks (°C). Reads
+ * `ambientTempC` from synced run activities (populated by Open-Meteo for
+ * outdoor runs with a GPS start location). Returns null when fewer than 4
+ * activities in the window have temperature data — below that the mean is
+ * too noisy to feed an acclimatisation discount.
+ *
+ * Mirrors `computeTrainingTempC` in race-prediction.triathlon (run-specific
+ * here: filters to RUNNING activity types only).
+ */
+interface AmbientAware {
+  startTime?: string | null;
+  activityType?: string | null;
+  ambientTempC?: number | null;
+}
+
+export function computeRunTrainingTempC(
+  state: { wks?: ReadonlyArray<{ garminActuals?: Record<string, AmbientAware> }> | null },
+): number | null {
+  const nowMs = Date.now();
+  const lookbackMs = 4 * 7 * 24 * 3600 * 1000;
+  const temps: number[] = [];
+
+  for (const wk of state.wks ?? []) {
+    if (!wk?.garminActuals) continue;
+    for (const a of Object.values(wk.garminActuals)) {
+      if (a?.ambientTempC == null || !a.startTime || !a.activityType) continue;
+      const t = a.activityType.toUpperCase();
+      if (t !== 'RUNNING' && !t.includes('RUN')) continue;
+      if (nowMs - Date.parse(a.startTime) > lookbackMs) continue;
+      temps.push(a.ambientTempC);
+    }
+  }
+
+  if (temps.length < 4) return null;
+  return temps.reduce((a, b) => a + b, 0) / temps.length;
+}
+
+/**
  * Apply course factors to `s.forecastTime` and write the adjusted finish +
  * itemised factors into state. Idempotent — safe to call after every forecast
  * recalculation. Clears the adjusted fields if the user has no selected race
@@ -142,6 +247,7 @@ export function refreshForecastCourseFactors(
     selectedMarathon?: { id?: string; profile?: CourseProfile } | null;
     forecastTimeAdjusted?: number;
     forecastCourseFactors?: RunningCourseFactor[];
+    wks?: ReadonlyArray<{ garminActuals?: Record<string, AmbientAware> }> | null;
   },
 ): void {
   // Self-heal: state persisted before profiles were added carries no `profile`
@@ -162,7 +268,8 @@ export function refreshForecastCourseFactors(
     s.rd === '10k' ? 10 :
     s.rd === 'half' ? 21.0975 :
     /* marathon */ 42.195;
-  const adj = applyRunningCourseFactors(rawSec, profile, distKm);
+  const trainingTempC = computeRunTrainingTempC(s);
+  const adj = applyRunningCourseFactors(rawSec, profile, distKm, { trainingTempC });
   if (adj.factors.length === 0) {
     delete s.forecastTimeAdjusted;
     delete s.forecastCourseFactors;

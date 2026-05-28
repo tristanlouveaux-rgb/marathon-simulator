@@ -1,6 +1,7 @@
 import type { Workout, TrainingPhase } from '@/types';
 import type { InjuryState } from '@/types/injury';
 import { isDeloadWeek, abilityBandFromVdot } from './plan_engine';
+import { injuryStrengthDecision } from './injury-strength';
 import type { AbilityBand } from '@/types';
 
 /**
@@ -24,28 +25,16 @@ export function generateGymWorkouts(
 ): Workout[] {
   if (gymSessionsPerWeek <= 0) return [];
 
-  // ---- Injury filtering ----
-  if (injuryState && injuryState.active) {
-    const ip = injuryState.injuryPhase;
-    if (ip === 'acute' || ip === 'rehab' || ip === 'test_capacity') return [];
-    if (ip === 'return_to_run') {
-      if (injuryState.returnToRunLevel < 5) return [];
-      // Levels 5-8: one light return session
-      return [{
-        t: 'gym',
-        n: 'Return Strength',
-        d: [
-          '2x10 Bodyweight Squat (Slow and controlled — no pain) (60s rest)',
-          '2x10 Glute Bridge (Light activation) (30s rest)',
-          '2x12 Calf Raises (Easy — full range) (30s rest)',
-          'Stretch between sets: focus on injured area',
-        ].join('\n'),
-        r: 3,
-        rpe: 3,
-      }];
-    }
-    // 'resolved' or other — fall through to normal generation
-  }
+  // ---- Injury adaptation (region-aware, shared with triathlon/HYROX) ----
+  // A leg injury keeps upper-body + core strength; a shoulder injury keeps
+  // lower-body + core; the acute phase or a trunk injury pauses loaded
+  // strength. Replaces the previous "drop everything in early phases" rule so
+  // an injured runner maintains the unaffected regions (relative rest +
+  // regional load substitution). See src/workouts/injury-strength.ts.
+  const strength = injuryStrengthDecision(injuryState);
+  if (strength.kind === 'none') return [];
+  if (strength.kind === 'adapted') return [strength.workout];
+  // kind === 'normal' (not injured / resolved) → fall through to normal templates.
 
   // ---- Ability band ----
   const ability: AbilityBand = vdot

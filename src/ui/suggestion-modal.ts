@@ -113,7 +113,7 @@ export function showSuggestionModal(
                         : adj.newType === 'threshold' ? 'threshold pace'
                         : 'lower intensity';
         detail = origKm > 0
-          ? `Keep ${formatKm(origKm, unitPref)} — drop to ${paceLabel}`
+          ? `Keep ${formatKm(origKm, unitPref)}, drop to ${paceLabel}`
           : `Drop to ${paceLabel}`;
       } else {
         actionLabel = 'Reduce';
@@ -333,7 +333,7 @@ export function showSuggestionModal(
         </div>
         <div style="margin-top:14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <span style="display:inline-flex;align-items:center;padding:6px 12px;border-radius:20px;${sv.badgeStyle};font-size:13px;font-weight:500">
-            ${popup.durationMin} min ${popup.sportName} — ${popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate'} load
+            ${popup.durationMin} min ${popup.sportName}. ${popup.severity === 'extreme' ? 'Very high' : popup.severity === 'heavy' ? 'High' : 'Moderate'} load
           </span>
           ${equivKm ? `<span style="font-size:12px;color:var(--c-faint)">${equivKm}</span>` : ''}
           ${popup.warnings.length > 0 ? `<span style="font-size:12px;color:var(--c-caution)">${popup.warnings[0]}</span>` : ''}
@@ -359,7 +359,7 @@ export function showSuggestionModal(
       <div style="padding:16px 20px 0">
         <div style="background:rgba(37,99,235,0.05);border:1px solid rgba(37,99,235,0.2);border-radius:10px;padding:14px 16px">
           <div style="font-size:13px;color:var(--c-black);font-weight:500;margin-bottom:6px">
-            Matched to: ${popup.alreadyCompletedMatch.runName} — but you already completed it
+            Matched to: ${popup.alreadyCompletedMatch.runName}. But you already completed it
           </div>
           <p style="font-size:12px;color:var(--c-muted);line-height:1.6;margin-bottom:10px">
             Your session contributes to your weekly load (ACWR updated). Apply the load credit to next week's ${popup.alreadyCompletedMatch.runType.replace(/_/g,' ')} run instead?

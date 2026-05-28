@@ -117,25 +117,35 @@ export function assignDefaultDays(
   }
 
   // ---- 2. Assign commute runs to free weekdays ----
+  // Spacing strategy: prefer alternating days so commutes are spread across
+  // the week, not bundled. Morning + evening of the same commute day stack
+  // on the same day (paired by name prefix). The number of unique commute
+  // days is taken from distinct base names ("Commute 1" / "Commute 1 (morning)"
+  // / "Commute 1 (evening)" all map to base "Commute 1").
   const hardDaySet = new Set<number>();
   workouts.forEach(w => {
     if (w.dayOfWeek !== undefined) hardDaySet.add(w.dayOfWeek);
   });
 
-  const commuteDayOptions = [0, 1, 2, 3, 4].filter(d => !hardDaySet.has(d));
-  let commuteIdx = 0;
+  const commuteBaseName = (n: string): string => n.replace(/\s*\((?:morning|evening)\)\s*$/i, '');
+  const commuteGroups = new Map<string, typeof commute>();
   commute.forEach(w => {
-    if (commuteIdx < commuteDayOptions.length) {
-      w.dayOfWeek = commuteDayOptions[commuteIdx];
-      w.dayName = DAY_NAMES[commuteDayOptions[commuteIdx]];
-    } else if (commuteDayOptions.length > 0) {
-      // Stack on first available weekday (only when all weekdays taken)
-      const day = commuteDayOptions[commuteIdx % commuteDayOptions.length];
+    const key = commuteBaseName(w.n);
+    if (!commuteGroups.has(key)) commuteGroups.set(key, []);
+    commuteGroups.get(key)!.push(w);
+  });
+
+  const commuteDayCount = commuteGroups.size;
+  const preferredDays = preferredCommuteDays(commuteDayCount, hardDaySet);
+  let dayIdx = 0;
+  for (const [, group] of commuteGroups) {
+    const day = preferredDays[dayIdx % preferredDays.length] ?? 0;
+    group.forEach(w => {
       w.dayOfWeek = day;
       w.dayName = DAY_NAMES[day];
-    }
-    commuteIdx++;
-  });
+    });
+    dayIdx++;
+  }
 
   // ---- 3. Assign easy runs to remaining free days ----
   const runDays = new Set<number>();
@@ -223,6 +233,43 @@ export function assignDefaultDays(
 /** Day indices: 0–4 = Mon–Fri, 5–6 = Sat–Sun. */
 const WEEKDAY_DAYS = [0, 1, 2, 3, 4];
 const WEEKEND_DAYS = [5, 6];
+
+/**
+ * Preferred weekday positions for N commute days. Picks alternating-day
+ * patterns to spread commutes across the week (Mon/Wed/Fri for 3 days,
+ * Tue/Thu for 2, etc.). When a preferred day is already occupied by a hard
+ * session, falls back to the next-best free weekday.
+ */
+function preferredCommuteDays(count: number, hardDaySet: Set<number>): number[] {
+  const patterns: Record<number, number[]> = {
+    1: [2],            // Wed
+    2: [1, 3],         // Tue, Thu
+    3: [0, 2, 4],      // Mon, Wed, Fri
+    4: [0, 1, 3, 4],   // Mon, Tue, Thu, Fri (skip Wed)
+    5: [0, 1, 2, 3, 4] // all weekdays
+  };
+  const preferred = patterns[count] ?? [0, 1, 2, 3, 4];
+  const result: number[] = [];
+  const usedFallback = new Set<number>();
+  for (const day of preferred) {
+    if (!hardDaySet.has(day)) {
+      result.push(day);
+      continue;
+    }
+    // Hard day collision — pick the next free weekday not already taken
+    const fallback = [0, 1, 2, 3, 4].find(d =>
+      !hardDaySet.has(d) && !result.includes(d) && !usedFallback.has(d)
+    );
+    if (fallback !== undefined) {
+      result.push(fallback);
+      usedFallback.add(fallback);
+    } else {
+      // No free weekdays left — stack on the hard-day collision
+      result.push(day);
+    }
+  }
+  return result;
+}
 
 function durationOf(w: Workout): number {
   return (w as any).estimatedDurationMin ?? 0;

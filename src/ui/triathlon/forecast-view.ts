@@ -100,7 +100,7 @@ export function renderTriathlonForecastView(): void {
 
         <div class="hf" data-delay="0.06" style="text-align:center;padding:20px 20px 12px">
           <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Forecast</div>
-          <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${escapeHtml(raceName)} — Week ${s.w} of ${s.tw}</div>
+          <div style="font-size:13px;font-weight:500;color:#64748B;margin-top:6px">${escapeHtml(raceName)}. Week ${s.w} of ${s.tw}</div>
         </div>
         ${renderCalibrationCaption(tri)}
 

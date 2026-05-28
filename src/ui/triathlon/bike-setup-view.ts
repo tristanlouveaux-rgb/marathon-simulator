@@ -39,8 +39,8 @@ import { computeTriRaceReadiness } from '@/calculations/race-readiness';
 const OVERLAY_ID = 'bike-setup-overlay';
 
 const POSITION_LABEL: Record<BikePosition, string> = {
-  hoods: 'Road bike — hoods',
-  drops: 'Road bike — drops',
+  hoods: 'Road bike, hoods',
+  drops: 'Road bike, drops',
   'clip-ons': 'Road bike + clip-on aerobars',
   'tt-bike': 'TT / triathlon bike',
 };
@@ -73,7 +73,7 @@ function courseOptionLabel(
   raceMatch: { course: BikeCourseProfile; raceName: string } | null,
 ): string {
   if (raceMatch && raceMatch.course === bucket) {
-    return `${COURSE_HEADWORD[bucket]} — ${raceMatch.raceName}`;
+    return `${COURSE_HEADWORD[bucket]}: ${raceMatch.raceName}`;
   }
   return COURSE_LABEL[bucket];
 }
@@ -531,8 +531,7 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
 
       <!-- Live prediction strip -->
       <!-- This split is the IM-paced bike time WITH race-day course factors
-           applied. Modal exists for tuning fit/CdA against the actual race —
-           bare physics without conditions would be misleading because the
+           applied. Modal exists for tuning fit/CdA against the actual race. Bare physics without conditions would be misleading because the
            user can't change conditions, only their setup. Should match the
            headline forecast's bike leg. -->
       <div style="padding:14px 20px;background:rgba(0,0,0,0.02);border-bottom:1px solid var(--c-border);display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
@@ -562,13 +561,13 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
         ${section('Riding position',
           select('position', form.position, ALL_POSITIONS.map(p => ({ value: p, label: POSITION_LABEL[p] }))) +
           `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.45">CdA preset: ${CDA_PRESET[form.position].toFixed(2)} m².${infoButton('bike-setup-cda-info')}${form.cdaSource === 'calibrated' ? ' Override active from your calibration.' : ''}</div>` +
-          (form.showCdaInfo ? infoBox(`<strong>CdA</strong> = drag coefficient × frontal area (m²). One number capturing how aero you are: body position, helmet, clothing, bike, wheels. Lower is faster — wind drag scales with speed cubed, so at race speeds (35+ kph) it accounts for 70–80% of total resistive power. The presets here are mid-range published values: 0.36 hoods, 0.32 drops, 0.28 with clip-ons, 0.24 on a TT bike with aero helmet. The calibration panel below inverts the equation from a known ride to estimate yours specifically.`) : '')
+          (form.showCdaInfo ? infoBox(`<strong>CdA</strong> = drag coefficient × frontal area (m²). One number capturing how aero you are: body position, helmet, clothing, bike, wheels. Lower is faster: wind drag scales with speed cubed, so at race speeds (35+ kph) it accounts for 70–80% of total resistive power. The presets here are mid-range published values: 0.36 hoods, 0.32 drops, 0.28 with clip-ons, 0.24 on a TT bike with aero helmet. The calibration panel below inverts the equation from a known ride to estimate yours specifically.`) : '')
         )}
 
         ${section('Tires',
           select('tire', form.tire, (Object.keys(TIRE_LABEL) as BikeTire[]).map(t => ({ value: t, label: TIRE_LABEL[t] }))) +
           `<div style="font-size:11px;color:var(--c-muted);margin-top:6px;line-height:1.45">Crr: ${CRR_PRESET[form.tire].toFixed(4)}${infoButton('bike-setup-crr-info')}</div>` +
-          (form.showCrrInfo ? infoBox(`<strong>Crr</strong> = coefficient of rolling resistance, dimensionless. The friction your tires lose to the road. Lower is faster, but the gap is small at race speed — about 30 W between race tubeless (0.0035) and training tires (0.0050) at 40 kph for a 75 kg rider. Values come from drum-tested lab data (bicyclerollingresistance.com) adjusted ~10% down to match real-road conditions.`) : '')
+          (form.showCrrInfo ? infoBox(`<strong>Crr</strong> = coefficient of rolling resistance, dimensionless. The friction your tires lose to the road. Lower is faster, but the gap is small at race speed. About 30 W between race tubeless (0.0035) and training tires (0.0050) at 40 kph for a 75 kg rider. Values come from drum-tested lab data (bicyclerollingresistance.com) adjusted ~10% down to match real-road conditions.`) : '')
         )}
 
         ${section('Course profile',

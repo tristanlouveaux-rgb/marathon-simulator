@@ -1,15 +1,18 @@
 /**
- * Triathlon skip handler — push to next week, drop on second skip.
+ * Triathlon push / drop handler — explicit user actions on a missed workout.
  *
- * Mirrors the established race-mode running rule: a missed workout slides to
- * next week on the first skip; a second skip drops the workout permanently
- * and the prediction reflects it via `tri-adherence.ts`'s adherence penalty.
+ * Mirrors the established race-mode running rule: a missed workout may be
+ * moved forward by one week, or dropped permanently. A workout cannot be
+ * pushed twice — once a clone exists in next week, the only remaining
+ * action is to drop. Adherence-penalised by `tri-adherence.ts` when the
+ * status is `'skipped'`.
  *
  * **Side of the line**: planning. Mutates `state.wks[*].triWorkouts`.
  *
  * Usage:
- *   import { skipTriWorkout } from '@/calculations/tri-skip-handler';
- *   skipTriWorkout(state, workoutId);
+ *   import { pushTriWorkout, dropTriWorkout } from '@/calculations/tri-skip-handler';
+ *   pushTriWorkout(state, workoutId);
+ *   dropTriWorkout(state, workoutId);
  *
  * Caller is responsible for `saveState()` after.
  */
@@ -17,13 +20,17 @@
 import type { SimulatorState, Workout } from '@/types/state';
 
 export interface SkipResult {
-  outcome: 'pushed' | 'dropped' | 'not-found';
+  outcome: 'pushed' | 'dropped' | 'not-found' | 'already-pushed';
   workoutId: string;
   /** When `pushed`, the index of the destination week. */
   pushedToWeek?: number;
 }
 
-export function skipTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
+/**
+ * Push a missed workout to next week. Allowed once per lineage —
+ * `pushCount >= 1` returns `'already-pushed'` and the caller must drop instead.
+ */
+export function pushTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const wk = wks[currentWeek];
@@ -34,37 +41,91 @@ export function skipTriWorkout(state: SimulatorState, workoutId: string): SkipRe
   if (idx < 0) return { outcome: 'not-found', workoutId };
 
   const workout = workouts[idx];
-  const priorSkipCount = workout.skipCount ?? 0;
-  const newSkipCount = priorSkipCount + 1;
+  const priorPushCount = workout.pushCount ?? 0;
 
-  // Mark as skipped regardless of outcome — adherence penalty picks this up.
-  workout.status = 'skipped';
-  workout.skipCount = newSkipCount;
-
-  if (newSkipCount === 1) {
-    // First skip: push a clone to next week.
-    const nextWk = wks[currentWeek + 1];
-    if (!nextWk) {
-      // No next week available (e.g. race week or last plan week) — drop.
-      return { outcome: 'dropped', workoutId };
-    }
-    if (!nextWk.triWorkouts) nextWk.triWorkouts = [];
-
-    const clone: Workout = {
-      ...workout,
-      id: `${workout.id}__push${newSkipCount}`,
-      status: 'planned',
-      skipCount: 0,                  // Reset for next week's tracking
-      originalName: workout.originalName ?? workout.n,
-      dayOfWeek: pickFreeDayOfWeek(workout.dayOfWeek, nextWk.triWorkouts),
-    };
-    nextWk.triWorkouts.push(clone);
-
-    return { outcome: 'pushed', workoutId, pushedToWeek: currentWeek + 1 };
+  // Once pushed already, the only remaining action is drop.
+  if (priorPushCount >= 1) {
+    return { outcome: 'already-pushed', workoutId };
   }
 
-  // Second or later skip: drop. Already marked `'skipped'` above.
+  const nextWk = wks[currentWeek + 1];
+  if (!nextWk) {
+    // No next week available (e.g. race week) — fall back to drop semantics.
+    workout.status = 'skipped';
+    workout.skipCount = (workout.skipCount ?? 0) + 1;
+    return { outcome: 'dropped', workoutId };
+  }
+  if (!nextWk.triWorkouts) nextWk.triWorkouts = [];
+
+  // Mark original as skipped — but pushCount stays on original AND propagates
+  // to the clone so the lineage can't be pushed again.
+  const newPushCount = priorPushCount + 1;
+  workout.status = 'skipped';
+  workout.skipCount = (workout.skipCount ?? 0) + 1;
+  workout.pushCount = newPushCount;
+
+  // Strip execution-specific fields so the clone is treated as a fresh planned
+  // workout in the destination week (not auto-marked done via a stale match).
+  const {
+    matchedActivityId: _m,
+    iTrimp: _i,
+    stravaId: _s,
+    autoCompleted: _ac,
+    completedBySport: _cb,
+    ...rest
+  } = workout;
+  const clone: Workout = {
+    ...rest,
+    id: `${workout.id}__push${newPushCount}`,
+    status: 'planned',
+    skipCount: 0,                  // Reset per-week skip tracking
+    pushCount: newPushCount,       // Carry lineage forward — clone can't be pushed again
+    originalName: workout.originalName ?? workout.n,
+    dayOfWeek: pickFreeDayOfWeek(workout.dayOfWeek, nextWk.triWorkouts),
+  };
+  nextWk.triWorkouts.push(clone);
+
+  return { outcome: 'pushed', workoutId, pushedToWeek: currentWeek + 1 };
+}
+
+/**
+ * Drop a workout permanently. Marks it as `'skipped'` so the adherence
+ * model picks it up as a missed session.
+ */
+export function dropTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
+  const wks = state.wks ?? [];
+  const currentWeek = state.w ?? 0;
+  const wk = wks[currentWeek];
+  const workouts = wk?.triWorkouts;
+  if (!workouts) return { outcome: 'not-found', workoutId };
+
+  const idx = workouts.findIndex(w => w.id === workoutId);
+  if (idx < 0) return { outcome: 'not-found', workoutId };
+
+  const workout = workouts[idx];
+  workout.status = 'skipped';
+  workout.skipCount = (workout.skipCount ?? 0) + 1;
   return { outcome: 'dropped', workoutId };
+}
+
+/**
+ * @deprecated Kept for backwards compatibility with any older callers — prefer
+ * the explicit `pushTriWorkout` / `dropTriWorkout` pair. First call pushes,
+ * subsequent calls on the same lineage drop.
+ */
+export function skipTriWorkout(state: SimulatorState, workoutId: string): SkipResult {
+  const wks = state.wks ?? [];
+  const currentWeek = state.w ?? 0;
+  const workouts = wks[currentWeek]?.triWorkouts;
+  if (!workouts) return { outcome: 'not-found', workoutId };
+  const workout = workouts.find(w => w.id === workoutId);
+  if (!workout) return { outcome: 'not-found', workoutId };
+
+  const priorPushCount = workout.pushCount ?? 0;
+  if (priorPushCount >= 1) return dropTriWorkout(state, workoutId);
+  const result = pushTriWorkout(state, workoutId);
+  if (result.outcome === 'already-pushed') return dropTriWorkout(state, workoutId);
+  return result;
 }
 
 /**
@@ -75,10 +136,8 @@ export function skipTriWorkout(state: SimulatorState, workoutId: string): SkipRe
 function pickFreeDayOfWeek(preferredDow: number | undefined, existing: Workout[]): number {
   const usedDays = new Set(existing.map(w => w.dayOfWeek).filter((d): d is number => d != null));
   if (preferredDow != null && !usedDays.has(preferredDow)) return preferredDow;
-  // Fallback: first free day in 0..6 order.
   for (let d = 0; d < 7; d++) {
     if (!usedDays.has(d)) return d;
   }
-  // All slots taken — keep preferred (caller may need to merge).
   return preferredDow ?? 0;
 }

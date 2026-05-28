@@ -34,17 +34,19 @@
 <body>
   <div class="card">
     <h1>Privacy Policy</h1>
-    <p class="meta">Mosaic — Last updated May 2026</p>
+    <p class="meta">Mosaic — Last updated 17 May 2026</p>
 
-    <p>Mosaic ("we", "us") is a personal training plan application for iOS. This policy explains what data we collect, how we use it, and your rights over it. Mosaic is operated by Tristan Louveaux.</p>
+    <p>Mosaic ("we", "us") is a personal training plan application for iOS. This policy explains what data we collect, how we use it, who we share it with, and your rights over it. Mosaic is operated by Tristan Louveaux, based in the United Kingdom.</p>
 
     <h2>Data we collect</h2>
     <p>Mosaic collects data from the following sources, only with your explicit authorisation:</p>
     <ul>
       <li><strong>Strava</strong> — activity history (type, distance, duration, heart rate, pace, power, GPS route, elevation), race best efforts, and athlete profile (name, gender, measurement preference). Access is granted via Strava OAuth and can be revoked at any time.</li>
-      <li><strong>Garmin Connect</strong> — activity summaries, daily resting heart rate, HRV status, and sleep data, delivered via Garmin webhook integrations where enabled.</li>
-      <li><strong>Apple Health</strong> — resting heart rate, heart rate variability, and sleep analysis, read on-device where you grant permission in iOS Settings.</li>
-      <li><strong>Account data</strong> — your email address, used to create and authenticate your Mosaic account via Supabase.</li>
+      <li><strong>Garmin Connect</strong> — activity summaries, daily resting heart rate, HRV status, and sleep data, delivered via Garmin's official webhook integration where enabled. Access is granted via Garmin OAuth and can be revoked at any time.</li>
+      <li><strong>Apple Health</strong> — resting heart rate, heart rate variability, VO2 max, sleep analysis, and (where you grant access) workout routes. Read on-device only; permissions are controlled in iOS Settings.</li>
+      <li><strong>You (manual entry)</strong> — age, biological sex, body weight, race goals, personal bests, training availability, injuries, illness, and check-in responses. You enter this during onboarding and can edit it at any time.</li>
+      <li><strong>Run-to-work routes (optional)</strong> — if you enable commuting by run, Mosaic stores the start and end points of your declared commute and may detect drift between the declared and actual routes from your synced Strava activities. Full route geometry stays in Strava; only summary points and pattern flags are stored on Mosaic's servers.</li>
+      <li><strong>Account data</strong> — your email address (only if you create an account; anonymous use is supported), used to authenticate via Supabase.</li>
     </ul>
 
     <h2>How we use your data</h2>
@@ -53,43 +55,72 @@
       <li>Activity history is used to calibrate fitness benchmarks (VDOT, FTP, CSS) and compute training load.</li>
       <li>Heart rate and HRV data inform readiness and recovery scores.</li>
       <li>Sleep data contributes to daily readiness calculations.</li>
-      <li>No data is used to train AI or machine learning models.</li>
+      <li>Race goals and personal bests shape your weekly training plan.</li>
+      <li>No data is used to train AI or machine learning models, by us or by our processors.</li>
       <li>No data is shared with other users or sold to third parties.</li>
       <li>No data is used for advertising or profiling.</li>
     </ul>
 
-    <h2>Data storage</h2>
-    <p>Your activity data is stored in a secured Supabase database hosted on AWS infrastructure in the EU. Data is encrypted in transit (HTTPS) and at rest. Apple Health data is processed on-device and is not transmitted to our servers.</p>
+    <h2>AI Coach (private beta in this release)</h2>
+    <p>Mosaic includes code for an optional AI Coach feature. In this release the AI Coach is available only to a limited set of users on an internal access list while the subscription path is being built. If you are not on the access list, no AI Coach data flows to any third party from your device.</p>
+    <p>When the AI Coach is enabled for your account, the following is sent each session to <a href="https://www.anthropic.com/" target="_blank" rel="noopener">Anthropic</a>'s Claude API (the Haiku model) for the sole purpose of generating coaching responses:</p>
+    <ul>
+      <li>A summary of your last four weeks of training activity (type, distance, duration, heart rate aggregates, pace, power) — no raw GPS routes are sent.</li>
+      <li>Your current readiness signals (recent HRV, resting heart rate, sleep, training stress balance).</li>
+      <li>This week's planned workouts.</li>
+      <li>Your current fitness benchmarks (VDOT, FTP, CSS).</li>
+      <li>Optional injury/illness flags you have entered.</li>
+      <li>Your message to the coach.</li>
+    </ul>
+    <p>The following is <strong>never</strong> sent to Anthropic: your name, email, GPS coordinates, raw routes, Strava or Garmin credentials, payment information.</p>
+    <p>Anthropic retains messages for up to 30 days under their <a href="https://www.anthropic.com/legal/commercial-terms" target="_blank" rel="noopener">Commercial Terms</a>, after which they are deleted. Anthropic does not use these messages to train their models. See the <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Anthropic Privacy Policy</a> for full detail.</p>
+    <p>When the AI Coach becomes generally available you will be asked to consent to this data flow the first time you open the feature. You can decline at any time, and you can use the rest of Mosaic without the AI Coach enabled.</p>
+
+    <h2>Data storage and security</h2>
+    <p>Your activity data is stored in a secured Supabase database hosted on AWS infrastructure in the EU. Data is encrypted in transit (HTTPS) and at rest. Row-level security policies enforce that you can only read and write your own data. Apple Health data is processed on-device and is not transmitted to our servers unless you also have the same metric synced via Strava or Garmin.</p>
+
+    <h2>Sub-processors</h2>
+    <p>Mosaic uses the following third-party services to operate. Each is contracted as a data processor and is governed by their own privacy policy.</p>
+    <ul>
+      <li><strong>Supabase</strong> — database, authentication, and serverless edge functions. Hosted on AWS in the EU. <a href="https://supabase.com/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      <li><strong>Strava</strong> — source of your activity history, where you authorise it. <a href="https://www.strava.com/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      <li><strong>Garmin</strong> — source of activity, sleep, and physiology data, where you authorise it. <a href="https://www.garmin.com/en-GB/privacy/connect/" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      <li><strong>Apple</strong> — operates the App Store and Apple Health framework. Data read from Apple Health stays on-device. <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Privacy policy</a>.</li>
+      <li><strong>Anthropic</strong> — provider of the Claude AI model used by the optional AI Coach. Data sent is limited to the fields listed above. <a href="https://www.anthropic.com/legal/privacy" target="_blank" rel="noopener">Privacy policy</a>.</li>
+    </ul>
 
     <h2>Data retention</h2>
-    <p>We retain your data for as long as your account is active. If you revoke Strava access, all Strava-sourced data is deleted within 48 hours. If you request full account deletion, all data is deleted within 30 days.</p>
+    <p>We retain your data for as long as your account is active. If you revoke Strava access, all Strava-sourced data is deleted within 48 hours. If you delete your account from inside the app, your data is marked for deletion immediately and permanently purged within 30 days. The 30-day window lets you sign back in and cancel the deletion if you change your mind.</p>
 
     <h2>Your rights</h2>
-    <p>Under GDPR and applicable data protection law, you have the right to:</p>
+    <p>Under the UK GDPR, the EU GDPR, and applicable data protection law, you have the right to:</p>
     <ul>
-      <li>Access the data we hold about you</li>
-      <li>Request correction of inaccurate data</li>
-      <li>Request deletion of your data</li>
-      <li>Withdraw consent and disconnect any data source at any time</li>
-      <li>Lodge a complaint with your national data protection authority</li>
+      <li>Access the data we hold about you (in-app data export, JSON format).</li>
+      <li>Request correction of inaccurate data.</li>
+      <li>Request deletion of your data (in-app account deletion, or by email).</li>
+      <li>Withdraw consent and disconnect any data source at any time.</li>
+      <li>Lodge a complaint with your national data protection authority. In the UK that is the <a href="https://ico.org.uk/" target="_blank" rel="noopener">Information Commissioner's Office</a>.</li>
     </ul>
-    <p>To exercise any of these rights, email <a href="mailto:tristan@mosaicrunning.run">tristan@mosaicrunning.run</a>.</p>
+    <p>To exercise any right that is not available in-app, email <a href="mailto:tristan@mosaicrunning.run">tristan@mosaicrunning.run</a>.</p>
 
-    <h2>Revoking access</h2>
-    <p>To disconnect Strava, go to your <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener">Strava app settings</a> and revoke Mosaic's access. To disconnect Apple Health, go to iOS Settings, Health, Apps, and remove Mosaic's permissions.</p>
+    <h2>Revoking access and deleting data</h2>
+    <p>To disconnect Strava, open Mosaic, go to Account, and tap Disconnect on the Strava row. You can also revoke from your <a href="https://www.strava.com/settings/apps" target="_blank" rel="noopener">Strava app settings</a> directly.</p>
+    <p>To disconnect Garmin, open Mosaic, go to Account, and tap Disconnect on the Garmin row.</p>
+    <p>To disconnect Apple Health, open iOS Settings, Health, Apps, Mosaic, and turn off the relevant permissions.</p>
+    <p>To delete your account and all data Mosaic holds about you, open Mosaic, go to Account, and tap Delete account. You can also email <a href="mailto:tristan@mosaicrunning.run">tristan@mosaicrunning.run</a> with the subject "Delete my data".</p>
 
-    <h2>Third-party services</h2>
-    <p>Mosaic uses the following third-party services, each governed by their own privacy policies:</p>
-    <ul>
-      <li><a href="https://www.strava.com/legal/privacy" target="_blank" rel="noopener">Strava Privacy Policy</a></li>
-      <li><a href="https://supabase.com/privacy" target="_blank" rel="noopener">Supabase Privacy Policy</a></li>
-      <li><a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Apple Privacy Policy</a></li>
-    </ul>
+    <h2>Children</h2>
+    <p>Mosaic is not directed to children under 13 (or 16 in the EU). We do not knowingly collect data from children. If you believe a child has provided us with personal data, email us and we will delete it.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>Material changes will be flagged in-app and noted at the top of this page. The "Last updated" date above always reflects the most recent revision.</p>
 
     <h2>Contact</h2>
     <p>Questions about this policy: <a href="mailto:tristan@mosaicrunning.run">tristan@mosaicrunning.run</a></p>
 
     <hr class="divider" />
+
+    <p style="font-size:0.85rem;color:#666;"><a href="/terms.html">Terms of Use</a> · <a href="/support.html">Support</a></p>
 
     <a class="back" href="/support.html">← Back to Support</a>
   </div>

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mosaic — Training for an Ironman (carousel)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+
+<!-- ============================== SLIDE 1 — COVER ============================== -->
+<div class="slide cover cover-warm">
+  <div class="slide-label">Slide 1 — Cover</div>
+  <div class="content">
+    <div>
+      <div class="cover-headline">Training<br>for an<br>Ironman.</div>
+      <div class="cover-subtag">YOUR PLAN.<br>YOUR SPORTS.<br>ONE SYSTEM.</div>
+    </div>
+    <div class="cover-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 2 — HOOK ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 2 — Hook</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">Three sports.<br><span class="accent">One adaptive<br>plan.</span></div>
+    <div class="text-sub">Swim, bike, and run fitness tracked separately. A hard bike week doesn't accidentally cost you the next run block. The system balances all three for you.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 3 — TRI PLAN VIEW ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 3 — Triathlon plan view</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">A plan that<br>balances <span class="accent">all three.</span></div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Plan</div>
+                <div class="app-h-meta" style="margin-top:4px;">70.3 Lanzarote · 14 wks out · Build</div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">Discipline volume this week</div>
+              <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px;">
+                    <span style="color:var(--c-black);">Swim · 4.2 km</span>
+                    <span style="color:var(--c-muted);font-weight:500;">1h 32m · 3 sessions</span>
+                  </div>
+                  <div class="h-bar-track"><div class="h-bar-fill" style="width:36%;background:#06B6D4;"></div></div>
+                </div>
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px;">
+                    <span style="color:var(--c-black);">Bike · 168 km</span>
+                    <span style="color:var(--c-muted);font-weight:500;">5h 48m · 3 sessions</span>
+                  </div>
+                  <div class="h-bar-track"><div class="h-bar-fill" style="width:78%;background:#F59E0B;"></div></div>
+                </div>
+                <div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px;">
+                    <span style="color:var(--c-black);">Run · 38 km</span>
+                    <span style="color:var(--c-muted);font-weight:500;">3h 12m · 3 sessions</span>
+                  </div>
+                  <div class="h-bar-track"><div class="h-bar-fill" style="width:48%;background:#4E9FE5;"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="w-card">
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Tue</div>
+                  <div class="plan-name">Threshold swim · 8 × 200m</div>
+                  <div class="plan-meta">1:42 / 100m · 30s rest · CSS pace</div>
+                </div>
+                <span class="pill" style="background:rgba(6,182,212,0.14);color:#0E7490;">Swim</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Wed</div>
+                  <div class="plan-name">Sweet spot · 3 × 12 min</div>
+                  <div class="plan-meta">235 W · 88% FTP · 4 min recovery</div>
+                </div>
+                <span class="pill pill-caution">Bike</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Thu</div>
+                  <div class="plan-name">Tempo run · 4 × 8 min</div>
+                  <div class="plan-meta">4:14/km · 2 min recovery</div>
+                </div>
+                <span class="pill pill-accent">Run</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Sat</div>
+                  <div class="plan-name">Brick: 90 km bike + 8 km run</div>
+                  <div class="plan-meta">Z2 ride · run @ 70.3 race pace</div>
+                </div>
+                <span class="pill pill-purple">Brick</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Sun</div>
+                  <div class="plan-name">Long run 18 km</div>
+                  <div class="plan-meta">1h 32m · steady aerobic · last 4 km MP</div>
+                </div>
+                <span class="pill pill-accent">Run</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 4 — PER-DISCIPLINE FITNESS ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 4 — Per-discipline fitness</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">Three sports.<br>Three <span class="accent">numbers.</span></div>
+    <div class="phone-sub">Each discipline carries its own fitness, fatigue and form. The system never confuses bike load for run load.</div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Fitness</div>
+                <div class="app-h-meta" style="margin-top:4px;">Per discipline · 42 day CTL</div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div style="display:flex;justify-content:space-around;padding:8px 0;">
+                <div style="text-align:center;flex:1;">
+                  <svg viewBox="0 0 100 100" width="110" height="110">
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="#06B6D4" stroke-width="8" stroke-linecap="round"
+                      stroke-dasharray="289.53" stroke-dashoffset="124"
+                      transform="rotate(-90 50 50)"/>
+                    <text x="50" y="56" text-anchor="middle" style="font-family:Inter;font-size:22px;font-weight:700;fill:var(--c-black);letter-spacing:-1px;">42</text>
+                  </svg>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0E7490;margin-top:4px;">Swim</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:2px;">+3 this wk</div>
+                </div>
+                <div style="text-align:center;flex:1;">
+                  <svg viewBox="0 0 100 100" width="110" height="110">
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="#F59E0B" stroke-width="8" stroke-linecap="round"
+                      stroke-dasharray="289.53" stroke-dashoffset="58"
+                      transform="rotate(-90 50 50)"/>
+                    <text x="50" y="56" text-anchor="middle" style="font-family:Inter;font-size:22px;font-weight:700;fill:var(--c-black);letter-spacing:-1px;">78</text>
+                  </svg>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#92400E;margin-top:4px;">Bike</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:2px;">+6 this wk</div>
+                </div>
+                <div style="text-align:center;flex:1;">
+                  <svg viewBox="0 0 100 100" width="110" height="110">
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(0,0,0,0.07)" stroke-width="8"/>
+                    <circle cx="50" cy="50" r="46" fill="none" stroke="#4E9FE5" stroke-width="8" stroke-linecap="round"
+                      stroke-dasharray="289.53" stroke-dashoffset="100"
+                      transform="rotate(-90 50 50)"/>
+                    <text x="50" y="56" text-anchor="middle" style="font-family:Inter;font-size:22px;font-weight:700;fill:var(--c-black);letter-spacing:-1px;">52</text>
+                  </svg>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#2E7EC4;margin-top:4px;">Run</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:2px;">+2 this wk</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">Auto-updated benchmarks</div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">FTP</span>
+                <span style="font-weight:700;color:var(--c-black);">268 W <span style="color:var(--c-ok-text);font-weight:600;font-size:11px;">↑ +8</span></span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">CSS (swim)</span>
+                <span style="font-weight:700;color:var(--c-black);">1:38 /100m <span style="color:var(--c-ok-text);font-weight:600;font-size:11px;">↓ −2s</span></span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:13px;">
+                <span style="color:var(--c-muted);">Run threshold</span>
+                <span style="font-weight:700;color:var(--c-black);">4:08 /km <span style="color:var(--c-ok-text);font-weight:600;font-size:11px;">↓ −4s</span></span>
+              </div>
+              <div style="font-size:11px;color:var(--c-muted);margin-top:10px;line-height:1.4;">
+                Updated from your rides, swims, and runs — beat your last test.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 5 — RACE FORECAST WITH COURSE FACTORS ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 5 — Race forecast + course factors</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">Race day,<br><span class="accent">modelled.</span></div>
+    <div class="phone-sub">Open water deficit, course profile, expected temperature. All applied to the prediction.</div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Forecast</div>
+                <div class="app-h-meta" style="margin-top:4px;">70.3 Lanzarote · 22 Mar</div>
+              </div>
+            </div>
+
+            <div class="g-card" style="text-align:center;padding:22px 16px 16px;">
+              <div class="card-label">Predicted finish</div>
+              <div style="font-family:var(--f-body);font-weight:300;font-size:72px;letter-spacing:-3px;line-height:1;color:var(--c-black);margin-top:2px;">4:38:14</div>
+              <div style="display:flex;justify-content:space-around;margin-top:16px;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06);">
+                <div>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#0E7490;">Swim</div>
+                  <div style="font-size:18px;font-weight:700;color:var(--c-black);margin-top:4px;letter-spacing:-0.5px;">32:18</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;">1:43 /100m</div>
+                </div>
+                <div>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#92400E;">Bike</div>
+                  <div style="font-size:18px;font-weight:700;color:var(--c-black);margin-top:4px;letter-spacing:-0.5px;">2:32:48</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;">35.3 km/h</div>
+                </div>
+                <div>
+                  <div style="font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:#2E7EC4;">Run</div>
+                  <div style="font-size:18px;font-weight:700;color:var(--c-black);margin-top:4px;letter-spacing:-0.5px;">1:28:42</div>
+                  <div style="font-size:11px;color:var(--c-muted);margin-top:1px;">4:12 /km</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">Course factors applied</div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:13px;">
+                <span style="color:var(--c-muted);">Open water swim</span>
+                <span style="font-weight:700;color:var(--c-caution-text);">+1:42 vs pool</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Bike elevation · 1,184 m</span>
+                <span style="font-weight:700;color:var(--c-caution-text);">+4:28</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Expected temperature · 26 °C</span>
+                <span style="font-weight:700;color:var(--c-caution-text);">+3:14</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Wetsuit allowed</span>
+                <span style="font-weight:700;color:var(--c-ok-text);">−1:08</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:7px 0;border-top:1px solid rgba(0,0,0,0.05);font-size:13px;">
+                <span style="color:var(--c-muted);">Durability cap (run)</span>
+                <span style="font-weight:700;color:var(--c-caution-text);">+2:34</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 6 — PUNCHLINE ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 6 — Punchline</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">Three sports.<br>Tracked<br>separately.<br><span class="accent">Combined<br>when it<br>matters.</span></div>
+    <div class="text-sub">Most apps mash all your training into one number. Mosaic carries swim, bike, and run as three independent signals and only fuses them on race day.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 7 — CTA ============================== -->
+<div class="slide cta-slide">
+  <div class="slide-label">Slide 7 — CTA</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="cta-headline">Launching<br>soon.</div>
+    <div class="cta-sub">YOUR PLAN. YOUR SPORTS. ONE SYSTEM.</div>
+    <div class="cta-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+</body>
+</html>

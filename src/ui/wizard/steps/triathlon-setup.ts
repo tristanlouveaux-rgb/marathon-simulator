@@ -609,7 +609,7 @@ function hoursCommentary(distance: TriathlonDistance, hours: number): string {
   const base = `This is your peak-week target. Early and recovery weeks will be lighter.`;
   if (distance === '70.3') {
     if (hours < 5) return `${base}<br><span style="color:#c06a50">Minimum viable. At 4h/week the plan is completion-only with no margin for missed sessions. 8–12h/week at peak is the typical competitive range.</span>`;
-    if (hours < 7) return `${base}<br><span style="color:#c06a50">Aggressive for 70.3 — this is a "just finish" plan. 8–12h/week at peak is the typical competitive range.</span>`;
+    if (hours < 7) return `${base}<br><span style="color:#c06a50">Aggressive for 70.3. This is a "just finish" plan. 8–12h/week at peak is the typical competitive range.</span>`;
     if (hours < 10) return `${base}<br>Realistic for a first 70.3 or a time-constrained athlete.`;
     if (hours < 14) return `${base}<br>Competitive intermediate range. Good balance of volume and recovery.`;
     return `${base}<br>Advanced / podium-target volume. Make sure recovery is matched.`;

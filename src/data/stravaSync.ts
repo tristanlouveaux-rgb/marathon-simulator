@@ -15,6 +15,7 @@ import { render } from '@/ui/renderer';
 import { getMutableState, saveState } from '@/state';
 import { processPendingCrossTraining, resetPendingModalGuard } from './activitySync';
 import { mergeTimingMods } from '@/cross-training/timing-check';
+import { detectArchetype } from '@/calculations/athlete-archetype';
 
 /**
  * Derive athlete tier from weekly-scale CTL baseline plus a performance floor.
@@ -480,6 +481,12 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       ftpWatts: s.onboarding?.triBike?.ftp,
     });
 
+    // Athlete archetype — re-classify whenever history is freshly aggregated.
+    // Drives plan-engine ramp slope and predictor confidence band. Cached on
+    // state with computedAt timestamp.
+    s.athleteArchetype = detectArchetype(s);
+    console.log(`[StravaHistory] archetype=${s.athleteArchetype.archetype} (${s.athleteArchetype.confidence}) — currentWk=${s.athleteArchetype.evidence.currentWeeklyKm}km peak52=${s.athleteArchetype.evidence.peakWeeklyKmPast52}km longest=${s.athleteArchetype.evidence.longestRunPast12moKm}km`);
+
     saveState();
     console.log(`[StravaHistory] ${rows.length} weeks loaded — CTL baseline ${s.ctlBaseline} (Signal A), Signal B baseline ${s.signalBBaseline}, avg km ${s.detectedWeeklyKm}`);
     for (const r of rows) {
@@ -723,7 +730,7 @@ export interface BackfillResult {
  * After backfill completes, runs fetchStravaHistory() to refresh state.
  * Safe to call multiple times — already-cached activities are skipped.
  */
-export async function backfillStravaHistory(weeks = 16): Promise<BackfillResult> {
+export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult> {
   console.log(`[StravaBackfill] Starting ${weeks}-week backfill…`);
   try {
     const s = getMutableState();

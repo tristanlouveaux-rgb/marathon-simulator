@@ -151,6 +151,44 @@ export const WIND_EXPOSURE_BIKE_MULTIPLIER: Record<WindExposureCategory, number>
   exposed:   1.05,
 };
 
+// Running wind multiplier — lower magnitude than bike because aerodynamic
+// resistance is a much smaller share of running's energy cost (~2-3% vs
+// ~80% at race speed for cycling). Net effect of a windy course is asymmetric
+// (headwind slows ~3%, tailwind helps ~1%) so a mixed/exposed average
+// out to a small net penalty.
+//
+// Source: Pugh LGCE (1971) "The influence of wind resistance in running and
+// walking and the mechanical efficiency of work against horizontal or vertical
+// forces" J Physiol 213:255–276. Davies CTM (1980) "Effects of wind assistance
+// and resistance on the forward motion of a runner" J Appl Physiol 48:702–709.
+// Confidence: medium (model-derived from headwind/tailwind studies; field
+// validation per-marathon is thin).
+export const WIND_EXPOSURE_RUN_MULTIPLIER: Record<WindExposureCategory, number> = {
+  sheltered: 1.00,
+  mixed:     1.01,
+  exposed:   1.02,
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Heat acclimatisation discount (run)
+// Source: Lorenzo S & Cheuvront SN (2010) "Heat acclimation improves
+// exercise performance" J Appl Physiol 109:1140–1147 — 10–14 days of heat
+// acclimatisation preserves ~3–5% performance vs unacclimatised matched
+// athletes. Karlsen A et al. (2015) "Heat acclimatization does not improve
+// VO2max" Scand J Med Sci Sports 25 Suppl 1:269–276 confirms the effect
+// is performance-side, not VO2-side.
+//
+// Model: discount the climate penalty by up to MAX_DISCOUNT (50%) when
+// training temperature is within RAMP_GAP_C (15°C) of the race anchor.
+// Linear ramp from 0% discount at gap=15°C to MAX_DISCOUNT at gap≤0°C.
+// Mirrors `computeHeatAcclimatisationDiscounts` in race-prediction.triathlon.
+// Confidence: medium (literature supports the magnitude; the linear ramp is
+// a pragmatic simplification of a more complex physiological curve).
+// ───────────────────────────────────────────────────────────────────────────
+
+export const RUN_HEAT_ACCLIM_MAX_DISCOUNT = 0.50; // 50% of the climate penalty
+export const RUN_HEAT_ACCLIM_RAMP_GAP_C = 15;    // °C — gap that fully cancels the discount
+
 // ───────────────────────────────────────────────────────────────────────────
 // Swim type
 // Sources:
@@ -218,6 +256,49 @@ export const SWIM_TYPE_MULTIPLIER: Record<SwimTypeCategory, number> = {
   ocean:                     1.05,  // +5% chop, sighting; salinity buoyancy partially offsets
   'ocean-current-assisted':  0.97,  // -3% (e.g. Roth canal, Kona favourable years)
   river:                     1.00,  // Direction-dependent; neutral default
+};
+
+// ───────────────────────────────────────────────────────────────────────────
+// Source attribution — surfaced on the Venue forecast card
+// One primary citation per running factor kind. Keep titles short enough to
+// fit on one line; long-form discussion lives in docs/SCIENCE_LOG.md §G.
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface FactorSource {
+  /** Short citation, e.g. "Ely et al. 2007". */
+  citation: string;
+  /** One-line description of what the paper contributes. */
+  title: string;
+  /** Journal + page reference. */
+  journal: string;
+}
+
+export const RUNNING_FACTOR_SOURCES: Record<'climate' | 'altitude' | 'run-elevation' | 'wind' | 'heat-acclim', FactorSource> = {
+  climate: {
+    citation: 'Ely et al. 2007',
+    title: 'Impact of weather on marathon-running performance',
+    journal: 'Med Sci Sports Exerc 39:487–493',
+  },
+  altitude: {
+    citation: 'Bonetti and Hopkins 2009',
+    title: 'Sea-level exercise performance following adaptation to hypoxia',
+    journal: 'Sports Med 39:107–127',
+  },
+  'run-elevation': {
+    citation: 'Minetti et al. 2002',
+    title: 'Energy cost of walking and running at extreme uphill and downhill slopes',
+    journal: 'J Appl Physiol 93:1039–1046',
+  },
+  wind: {
+    citation: 'Pugh 1971; Davies 1980',
+    title: 'Wind resistance in running — headwind / tailwind asymmetry',
+    journal: 'J Physiol 213:255–276; J Appl Physiol 48:702–709',
+  },
+  'heat-acclim': {
+    citation: 'Lorenzo & Cheuvront 2010',
+    title: 'Heat acclimation improves exercise performance',
+    journal: 'J Appl Physiol 109:1140–1147',
+  },
 };
 
 // ───────────────────────────────────────────────────────────────────────────

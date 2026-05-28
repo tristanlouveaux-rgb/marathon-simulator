@@ -3,7 +3,7 @@ import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderWelcome } from './steps/welcome';
 import { renderGoals } from './steps/goals';
-import { renderConnectStrava } from './steps/connect-strava';
+import { renderConnectData } from './steps/connect-data';
 import { renderManualEntry } from './steps/manual-entry';
 import { renderAboutYou } from './steps/about-you';
 import { renderReview } from './steps/review';
@@ -50,8 +50,8 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
       renderGoals(container, state);
       break;
 
-    case 'connect-strava':
-      renderConnectStrava(container, state);
+    case 'connect-data':
+      renderConnectData(container, state);
       break;
 
     case 'manual-entry':

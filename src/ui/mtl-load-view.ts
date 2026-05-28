@@ -263,10 +263,10 @@ function getMtlLoadHTML(): string {
   const explainerCard = card(`
     <div style="font-size:11px;color:${TEXT_S};margin-bottom:8px;font-weight:500">How it works</div>
     <div style="font-size:13px;color:${TEXT_S};line-height:1.55">
-      <p style="margin:0 0 10px">MusculoTendon Load (MTL) tracks eccentric and mechanical strain across every session in your Hyrox plan: runs, stations, and bricks. It is a separate currency to aerobic TSS — a sled push and a tempo run can have similar TSS but very different tissue cost.</p>
-      <p style="margin:0 0 10px">Per session: <code style="font-family:var(--f-mono,monospace);font-size:12px">duration × RPE × modality × impact × (1 + external load)</code>. Stations carry heavier per-minute coefficients than runs, but runs accumulate more weekly minutes — so runs often dominate chronic load even though stations dominate acute spikes.</p>
-      <p style="margin:0 0 10px">Chronic (42-day EMA) tracks your absorbed mechanical base from <strong>completed</strong> work — only sessions matched to a Strava or Garmin activity contribute. Acute (7-day EMA) tracks the last week of completed work. Until you match activities, both are zero. The ratio of acute to chronic is the ramp rate — above 1.3× caps readiness at Manage Load, above 1.5× at Ease Back.</p>
-      <p style="margin:0;color:${TEXT_L}">Weekly cap (${cap > 0 ? Math.round(cap) : '—'}) is set from your ability band and refines as benchmark tests calibrate. Independent of TSB and HRV — eccentric tissue recovers slower than cardiovascular load.</p>
+      <p style="margin:0 0 10px">MusculoTendon Load (MTL) tracks eccentric and mechanical strain across every session in your Hyrox plan: runs, stations, and bricks. It is a separate currency to aerobic TSS. A sled push and a tempo run can have similar TSS but very different tissue cost.</p>
+      <p style="margin:0 0 10px">Per session: <code style="font-family:var(--f-mono,monospace);font-size:12px">duration × RPE × modality × impact × (1 + external load)</code>. Stations carry heavier per-minute coefficients than runs, but runs accumulate more weekly minutes. So runs often dominate chronic load even though stations dominate acute spikes.</p>
+      <p style="margin:0 0 10px">Chronic (42-day EMA) tracks your absorbed mechanical base from <strong>completed</strong> work. Only sessions matched to a Strava or Garmin activity contribute. Acute (7-day EMA) tracks the last week of completed work. Until you match activities, both are zero. The ratio of acute to chronic is the ramp rate. Above 1.3× caps readiness at Manage Load, above 1.5× at Ease Back.</p>
+      <p style="margin:0;color:${TEXT_L}">Weekly cap (${cap > 0 ? Math.round(cap) : '—'}) is set from your ability band and refines as benchmark tests calibrate. Independent of TSB and HRV. Eccentric tissue recovers slower than cardiovascular load.</p>
     </div>
   `);
 

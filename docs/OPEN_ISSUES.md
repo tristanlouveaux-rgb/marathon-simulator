@@ -8,6 +8,70 @@ Note: we have had a persistence problem of open issues not being correctly logge
 
 ---
 
+### ISSUE-251: Reuse the guided-session shape for running interval workouts *(P3, 2026-05-28)* — idea, not started
+
+**Idea (Tristan, end of guided-strength session)**: "Using this format for people doing tempo runs on their phone, they can click log run at the end if they're doing 4×400m sprints and stuff like that." The guided-strength flow (tap to complete, log time per segment, auto-advance, finish summary) maps cleanly onto interval running done on the phone without a watch.
+
+**Reuse path**: the existing GPS-driven `GuideController` (`src/guided/controller.ts`) handles paced runs. The strength flow's `StrengthGuideController` + overlay handles tap-driven sessions. A "phone-only intervals" mode would be the strength flow re-skinned for run reps — `parseRunIntervalSession(workout)` that turns the timeline's work/rec steps into `GuidedSet`s with `setCount=1`, the existing overlay walks them, the existing per-set time records capture each rep's measured time. No GPS, no pace target — just elapsed.
+
+**Out of scope until requested**: the actual build, scope of which workouts qualify (just intervals, or also tempo / strides?), and whether to expose the choice as a toggle vs auto-pick when no GPS recording is active.
+
+### ISSUE-250: Re-apply guided strength entry points after parallel-agent rollback *(P1, 2026-05-28)* — tri + HYROX modal entries re-applied; running gym card + tri compact card UX still need re-apply
+
+**Symptom**: during the guided-strength build session, parallel agents rewrote `src/ui/triathlon/workout-card.ts`, `src/ui/triathlon/workout-detail-modal.ts`, and `src/ui/hyrox/workout-detail-modal.ts`, wiping the entry points to the guided overlay. The full core (controller, model, overlay, completion, HYROX adapter, rings, rest timer, countdown, station benchmark history) is intact — only the buttons that launched it were gone.
+
+**Already re-applied (this session)**:
+- Tri detail modal — `Start session` + `Mark as done` buttons added back when discipline is strength (`src/ui/triathlon/workout-detail-modal.ts`).
+- HYROX detail modal — `Start session` + `Mark as done` buttons added back (`src/ui/hyrox/workout-detail-modal.ts`).
+
+**Still needed (follow-up)**:
+- **Running plan-view gym card**: the inline `Start session` button on `t === 'gym'` workouts (above `Mark as done`) was removed. `plan-view.ts:~638` block + the click handler near `:~3460` need re-adding. The handler decodes `workoutDescEnc` and calls `openGuidedStrength`.
+- **Tri compact strength card**: the "N exercises · tap to view" replacement for the full description wall in `src/ui/triathlon/workout-card.ts` is gone. Card now shows the full `\n`-joined description again. Re-add the `isStrength` branch + `countExercises` helper.
+
+**Why it matters**: the guided session works end-to-end on the test surfaces I re-applied. Running mode users currently can't launch the guided flow from a gym card without re-adding the entry. The card-UX regression is a polish issue, not a functional one (the description is still readable, just verbose).
+
+### ISSUE-249: Strength session ignores injury mode (still shows 45-min full-body) *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
+
+**Symptom (Tristan, production)**: "Despite being on injury mode, I'm still seeing strength come through. That's 45 minutes full body strength. Same as in coach. That shouldn't happen if I'm injured. The strength plan should also adjust." Desired behaviour: physio-led — shoulder injury → lower body only, leg injury → upper body only.
+
+**Root cause (triathlon)**: `applyTriInjuryGates` (`plan_engine.triathlon.ts`) dropped the strength session only when `upperLoadCapacity <= 0`. But the injury modal only shows the upper/lower-load sliders in HYROX mode (`modal.ts:getRequiredCapacityFields`); a triathlete only sets run/bike/swim. So `upperLoadCapacity` stayed undefined → `getDisciplineCapacity` returned 100 → the full-body session never dropped. The session was gated on a control the athlete could not reach. The AI coach reads the same `wk.triWorkouts`, so it showed the identical session. **Running** had the mirror gap: the injury-aware gym generator was capable but ~27 display call sites passed `null` for injury state.
+
+**Fix (this session)**: Region-aware, physio-led strength shared across modes.
+- New `src/workouts/injury-strength.ts:injuryStrengthDecision` — phase-gated + region-aware. Drives off the injury `location` via `bodyRegionLoadability` (canonical `LOCATION_CAPACITY_DEFAULTS`, lifted from the UI modal into `src/injury/engine.ts`). Knee/hamstring/hip → upper-body + core; shoulder/wrist/elbow → lower-body + core; back/neck/chest → core dropped (trunk contraindicated); back / acute → strength paused. Loads submaximal (RPE ≤ 5), pain-gated, normalise once resolved.
+- Triathlon (`applyTriInjuryGates`) + running (`gym.ts`) both call it; triathlon scales each retained session's `aerobic`/`anaerobic` by the adapted duration. 27 `generateWeekWorkouts` call sites now pass `s.injuryState` so plan + coach match the canonical regen.
+- HYROX unchanged — stations already scale/drop by `min(upper, lower)`; per-component substitution within a fixed station stays future work.
+- Science in `SCIENCE_LOG.md → §AN`. Tests: `injury-strength.test.ts` (11) + rewritten `gym.test.ts` injury block. Full suite 2264 pass; `tsc`/`lint:ui` clean for all touched files.
+
+**Why still open**: device confirmation pending — set an active injury (e.g. a leg injury) in triathlon mode and confirm the plan + coach now show an upper-body/core session (or paused), not the 45-min full-body session.
+
+### ISSUE-248: Updating an injury auto-advances/completes the current week *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
+
+**Symptom (Tristan, production)**: "I just updated my injury for the new build and it's kicked me forward a week again." Recurring. Any edit to an active injury silently completed the current week.
+
+**Root cause**: `handleSaveInjury` (`src/ui/injury/modal.ts`) called `events.ts:next()` unconditionally whenever the injury was already active. `next()` is the full complete-week-and-advance flow; the modal had just set `wk.injuryCheckedIn = true`, so `next()` passed the injury check-in gate and advanced `s.w`. The `next()` call existed only to trigger running-mode plan regen — but running mode regenerates on every `render()` via `generateWeekWorkouts` (`applyInjuryAdaptations` runs inside it), so it was never needed.
+
+**Fix**: `openInjuryModal` now takes an opt-in `{ advanceWeekAfterSave }`. Only the weekly check-in caller (`events.ts:next()`, acute/rehab/test_capacity phases, where the check-in IS the week-advance trigger) passes `true`. All banner / button entry points open a plain status edit that re-renders in place. The dedicated "Confirm & Advance Week" gate modals (return-to-run, graduated-return) are unchanged. `tsc` + `lint:ui` clean, 2248 tests pass.
+
+**Why still open**: device confirmation pending — open the injury modal on an active injury, change a capacity / resume week, save, and confirm the week does NOT advance.
+
+### ISSUE-247: Injured triathlon forecast projects almost no improvement *(P1, 2026-05-27)* — fixed in code, ⚠️ awaiting device verification
+
+**Symptom (Tristan, production)**: Ironman 70.3, week 5 of 20, injured (can only bike). The race forecast showed only −6 min improvement. A 47:51 swim (~151 s/100m) is a genuine beginner-band swim sitting on the headroom shelf — it should be one of the *biggest* projected gains, not zero.
+
+**Root cause**: `applyTriInjuryGates` (`plan_engine.triathlon.ts`) applied the current injury capacity uniformly to *every* current-and-future week (the per-week ramp had been deliberately removed — "the slider is the gradient"), so setting swim/run capacity to 0 today zeroed them for all 15 remaining weeks. The predictor (`predictTriathlonRace`) faithfully read that suppressed plan and extrapolated the next-4-week dose across the whole horizon. Neither the plan engine nor the predictor consulted any recovery duration — `expectedDurationWeeks` existed on the type but was never captured (always 0). Net: a 2-week injury was modelled as a 15-week one; only the bike leg moved the prediction.
+
+**Fix (this session)**: Per-discipline recovery windows, captured + propagated.
+- Capture: injury modal adds a "Back to full in N weeks" field per restricted discipline, seeded from the protocol's `typicalRecoveryWeeks` midpoint, user-adjustable. Stored on `InjuryState.resumeWeeksByDiscipline`.
+- Plan: `applyTriInjuryGates` restores a discipline at its own resume week (binary cutoff; slider still sets magnitude inside the window). Legacy injuries with no captured window keep the conservative freeze.
+- Forecast: `predictTriathlonRace` debits each discipline only its own recovery weeks of build time and samples the recovered dose from after the window; bike (unrestricted) keeps the full horizon. Plan and forecast share one source (`resumeWeeksByDiscipline`).
+- Caption on the forecast card explains the result. Science: `SCIENCE_LOG.md → §AM`. Tests: gates restore-after-window, predictor monotonic recovery, volume offset. Full suite 2248 pass; `tsc` + `lint:ui` clean.
+
+**Decisions captured (Tristan, this session)**: fix reaches *both* plan and forecast (not forecast-only); recovery duration is *asked* (pre-filled from protocol), not silent; granularity is *per-sport*, not a single number; forecast gets an explanatory caption.
+
+**Why still open**: per CLAUDE.md, an issue is not marked FIXED until Tristan confirms on device. Verify with the real injured 70.3 state — set swim/run out ~2 weeks and confirm the forecast now shows meaningful swim/run gains and the Plan page restores swim/run after the window.
+
+---
+
 ## 🚀 App Store Submission Audit (2026-05-18)
 
 Audit run 2026-05-18 by 4 parallel agents (Apple guidelines, privacy/legal/IP, monetisation/IAP, reviewer experience). Tristan confirmed: log all severities (P0+P1+P2), work in priority order. Marketing URL is **optional** in App Store Connect — mosaicrunning.run product-landing rebuild is logged as P2, not a submission blocker. Apple mandatory URLs are Privacy + Support only, both already live on mosaicrunning.run.

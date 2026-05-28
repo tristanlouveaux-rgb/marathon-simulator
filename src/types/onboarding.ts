@@ -15,12 +15,13 @@ export type RunnerExperience =
 export type OnboardingStep =
   | 'welcome'
   | 'goals'
-  | 'connect-strava'
+  | 'connect-data'
   | 'manual-entry'
   | 'about-you'
   | 'review'
   | 'race-target'
   | 'schedule'
+  | 'commute'
   | 'plan-preview-v2'
   | 'initializing'
   | 'runner-type'
@@ -160,6 +161,9 @@ export interface OnboardingState {
   bodyWeightKg?: number;          // Bodyweight in kg. Used for FTP→W/kg cycling tier
                                   // and load refinements. Optional; falls back to
                                   // sex-based default (75kg male / 62kg female).
+  heightCm?: number;              // Height in cm. Optional. With bodyWeightKg, drives
+                                  // body-surface-area heat personalisation. Absent →
+                                  // no heat-size adjustment.
 
 
   // Step 2: Training Goal
@@ -220,8 +224,13 @@ export interface OnboardingState {
   // Continuous training (non-event)
   continuousMode?: boolean;       // True when user is not training for a specific event
 
-  // Step 3: Connect Strava
-  skippedStrava?: boolean;         // True if user chose "Enter manually" on the Connect Strava step
+  // Step 3: Connect Data (formerly "Connect Strava")
+  /** True if the user chose "Enter manually" on the connect-data step. Name retained for
+   * back-compat with persisted state and downstream branches. */
+  skippedStrava?: boolean;
+  /** Which watch the user said they wear. Routes the connect-data step:
+   *  'apple' → auto-prompt HealthKit; 'garmin' / 'other' → reveal export-upload panel. */
+  chosenWatch?: 'apple' | 'garmin' | 'other';
 
   // Step 5 (fitness path): "Just track" — activity tracking only, no plan generated
   trackOnly?: boolean;

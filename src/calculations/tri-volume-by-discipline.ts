@@ -96,14 +96,20 @@ export function sessionsPerWeekByDiscipline(
  * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) are
  * skipped; if fewer than 4 future weeks remain (race week, taper) we average
  * over what's available.
+ *
+ * `startOffset` skips that many weeks ahead of the current week before
+ * sampling. The injury-aware predictor uses it to sample the **recovered**
+ * dose (past every restricted discipline's resume week) rather than the
+ * injured transition weeks, which would understate the steady-state plan.
  */
 export function plannedSessionsPerWeekByDiscipline(
   state: SimulatorState,
   weeks: number = 4,
+  startOffset: number = 0,
 ): VolumePerDiscipline {
   const counts: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
   let weeksCovered = 0;
   for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
     const wk = wks[w];
@@ -130,14 +136,16 @@ export function plannedSessionsPerWeekByDiscipline(
  * volume). Falls back to 0 for weeks with no `triWorkouts` entries.
  *
  * Defaults to a 4-week look-ahead window (matches `plannedSessionsPerWeekByDiscipline`).
+ * `startOffset` behaves identically — skips ahead to sample the recovered dose.
  */
 export function plannedHoursPerWeekByDiscipline(
   state: SimulatorState,
   weeks: number = 4,
+  startOffset: number = 0,
 ): VolumePerDiscipline {
   const totals: VolumePerDiscipline = { swim: 0, bike: 0, run: 0 };
   const wks = state.wks ?? [];
-  const currentWeek = state.w ?? 0;
+  const currentWeek = (state.w ?? 0) + Math.max(0, Math.floor(startOffset));
   let weeksCovered = 0;
   for (let w = currentWeek; w < wks.length && weeksCovered < weeks; w++) {
     const wk = wks[w];

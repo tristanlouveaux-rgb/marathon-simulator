@@ -11,7 +11,7 @@
  * type on iOS 16 silently drops it from the request rather than throwing.
  */
 
-import { registerPlugin } from '@capacitor/core';
+import { registerPlugin, type PluginListenerHandle } from '@capacitor/core';
 
 export type HealthExtrasDataType =
   // iOS 11+
@@ -95,6 +95,27 @@ interface HealthExtrasPlugin {
     startDate?: string;
     endDate?: string;
   }): Promise<{ routes: WorkoutRoute[] }>;
+
+  startWorkoutObserver(): Promise<{
+    started: boolean;
+    alreadyRunning: boolean;
+    primed?: boolean;
+  }>;
+
+  stopWorkoutObserver(): Promise<{ stopped: boolean }>;
+
+  addListener(
+    eventName: 'workoutDidArrive',
+    callback: (event: WorkoutDidArriveEvent) => void,
+  ): Promise<PluginListenerHandle>;
+
+  removeAllListeners(): Promise<void>;
+}
+
+export interface WorkoutDidArriveEvent {
+  /** Number of new HKWorkout samples written to HealthKit since the last
+   *  observer fire. Always ≥ 1 — the plugin suppresses zero-sample fires. */
+  count: number;
 }
 
 /** Underlying plugin handle. On non-iOS, Capacitor's web shim throws when
@@ -102,9 +123,11 @@ interface HealthExtrasPlugin {
 const HealthExtras = registerPlugin<HealthExtrasPlugin>('HealthExtras');
 
 /** Returns true on native iOS, false on web/Android. Mirrors `isNativeiOS()`
- *  in appleHealthSync.ts so consumers can guard before calling. */
+ *  in appleHealthSync.ts so consumers can guard before calling. Uses
+ *  `Capacitor.getPlatform()` because the legacy `.platform` property was
+ *  removed in Capacitor ≥ 5 and returns undefined on device. */
 export function isHealthExtrasAvailable(): boolean {
-  return (window as any)?.Capacitor?.platform === 'ios';
+  return (window as any)?.Capacitor?.getPlatform?.() === 'ios';
 }
 
 /**
@@ -209,4 +232,57 @@ export async function readWorkoutRouteLocations(opts: {
     console.warn('[HealthExtras] readWorkoutRouteLocations failed', err);
     return [];
   }
+}
+
+/**
+ * Register an HKObserverQuery for HKWorkoutType and enable background
+ * delivery. Once registered, iOS wakes the app whenever a new workout is
+ * written to HealthKit (Apple Watch, Strava-to-Health, Garmin Connect-to-
+ * Health, etc.) and emits a `workoutDidArrive` event.
+ *
+ * Idempotent — safe to call on every launch; the Swift plugin no-ops if
+ * already registered. The first ever call primes an HKQueryAnchor so the
+ * existing workout history is not treated as "new".
+ *
+ * No-op on web/Android.
+ */
+export async function startWorkoutObserver(): Promise<{
+  started: boolean;
+  alreadyRunning: boolean;
+  primed?: boolean;
+}> {
+  if (!isHealthExtrasAvailable()) {
+    return { started: false, alreadyRunning: false };
+  }
+  try {
+    return await HealthExtras.startWorkoutObserver();
+  } catch (err) {
+    console.warn('[HealthExtras] startWorkoutObserver failed', err);
+    return { started: false, alreadyRunning: false };
+  }
+}
+
+export async function stopWorkoutObserver(): Promise<void> {
+  if (!isHealthExtrasAvailable()) return;
+  try {
+    await HealthExtras.stopWorkoutObserver();
+  } catch (err) {
+    console.warn('[HealthExtras] stopWorkoutObserver failed', err);
+  }
+}
+
+/**
+ * Subscribe to the `workoutDidArrive` event. Returns a PluginListenerHandle
+ * the caller can use to detach. Detaching is rarely needed — the plugin's
+ * listener registry is cleared on app cold start anyway.
+ *
+ * No-op on web/Android (returns a no-op handle).
+ */
+export async function addWorkoutObserverListener(
+  callback: (event: WorkoutDidArriveEvent) => void,
+): Promise<PluginListenerHandle> {
+  if (!isHealthExtrasAvailable()) {
+    return { remove: async () => undefined };
+  }
+  return HealthExtras.addListener('workoutDidArrive', callback);
 }

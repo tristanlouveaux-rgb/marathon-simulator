@@ -175,7 +175,7 @@ export function renderTriPastRace(container: HTMLElement, state: OnboardingState
             <div class="tri-card t-rise" style="animation-delay:0.30s">
               <label class="tri-toggle" style="margin-bottom:0">
                 <input type="checkbox" id="tpr-has-legs" ${existing?.perLeg ? 'checked' : ''}>
-                I have per-leg splits (optional — but very useful)
+                I have per-leg splits (optional. But very useful)
               </label>
               <div id="tpr-legs" style="display:${existing?.perLeg ? 'block' : 'none'};margin-top:14px">
                 <p class="tri-hint" style="margin-bottom:12px">Swim and run splits calibrate CSS and running pace directly. Check your Garmin Connect or Strava activity for leg times.</p>
@@ -347,7 +347,7 @@ async function scanStravaForRaces(): Promise<RaceCandidate[]> {
     const bikeSec = (legs.bike.duration_sec as number) ?? 0;
     const runSec  = (legs.run.duration_sec  as number) ?? 0;
     const totalSec = swimSec + bikeSec + runSec;
-    if (totalSec < 60 * 60) continue;  // < 1h combined — not a tri
+    if (totalSec < 60 * 60) continue;  // < 1h combined. Not a tri
     const swimM = (legs.swim.distance_m as number) ?? 0;
     candidates.push({
       stravaId: null,
@@ -504,7 +504,7 @@ function renderCandidates(candidates: RaceCandidate[]): void {
     const loadBtn = c.source === 'multisport' && c.stravaId
       ? `<button class="tpr-load-btn" data-strava-id="${c.stravaId}" data-cand-idx="${idx}">Load splits from Strava</button>`
       : c.source === 'multisport' && !c.stravaId
-      ? `<div style="font-size:10px;color:var(--c-faint);margin-top:6px">Garmin-only — enter splits manually</div>`
+      ? `<div style="font-size:10px;color:var(--c-faint);margin-top:6px">Garmin-only, enter splits manually</div>`
       : '';  // separate: splits already populated
 
     return `
@@ -547,7 +547,7 @@ function renderCandidates(candidates: RaceCandidate[]): void {
 
       const laps = await fetchTriLaps(stravaId);
       if (!laps) {
-        btn.textContent = 'Failed — enter splits manually';
+        btn.textContent = 'Failed, enter splits manually';
         btn.disabled = false;
         return;
       }
@@ -630,7 +630,7 @@ function wireHandlers(): void {
         renderCandidates(candidates);
       }
     } catch {
-      if (scanHint) scanHint.textContent = 'Scan failed — enter details manually below.';
+      if (scanHint) scanHint.textContent = 'Scan failed, enter details manually below.';
       stravaBtn.textContent = 'Retry scan';
       stravaBtn.disabled = false;
     }

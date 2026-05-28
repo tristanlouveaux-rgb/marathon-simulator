@@ -9,7 +9,7 @@ import { restorePlanFromSupabase, getLocalStateOwner, setLocalStateOwner } from 
 import { initWizard } from '@/ui/wizard/controller';
 import { renderMainView } from '@/ui/main-view';
 import { renderHomeView } from '@/ui/home-view';
-import { advanceWeekToToday, recordAppOpen, isWeekPendingDebrief } from '@/ui/welcome-back';
+import { advanceWeekToToday, assertPlanAnchorConsistent, recordAppOpen, isWeekPendingDebrief } from '@/ui/welcome-back';
 import { checkHolidayEnd, showHolidayWelcomeBack } from '@/ui/holiday-modal';
 import { renderAdminPanel, toggleAdminMode } from '@/ui/admin/master-overview';
 import { syncPhysiologySnapshot, buildRecoveryEntryFromPhysio, syncTodaySteps } from '@/data/physiologySync';
@@ -19,13 +19,15 @@ import { syncActivities, processPendingCrossTraining } from '@/data/activitySync
 import { healMissingITrimp } from '@/calculations/activity-matcher';
 import { setAthleteNormalizer, calibrateTssPerActiveMinute } from '@/calculations/fitness-model';
 import { syncStravaActivities, fetchStravaHistory, backfillStravaHistory, deriveAthleteTier, fetchEarliestActivityDate, restoreHistoryFromServer, cleanupDbDuplicates } from '@/data/stravaSync';
+import { STRAVA_ENABLED } from '@/constants/feature-flags';
 import { supabase, isGarminConnected, isStravaConnected, resetStravaCache, triggerGarminBackfill, refreshRecentSleepScores, resetGarminBackfillGuard, resetGarminCache } from '@/data/supabaseClient';
 import { renderAuthView } from '@/ui/auth-view';
-import { syncAppleHealth, syncAppleHealthPhysiology } from '@/data/appleHealthSync';
+import { syncAppleHealth, syncAppleHealthPhysiology, subscribeToWorkoutObserver, subscribeToForegroundResume } from '@/data/appleHealthSync';
 import { startSleepPollerIfNeeded } from '@/data/sleepPoller';
 import { getActivitySource, hasPhysiologySource } from '@/data/sources';
 import { runVO2Diagnostic, printVO2Diagnostic } from '@/calculations/vo2-diagnostic';
 import { initRevenueCat, identifyRevenueCatUser } from '@/coach/revenuecat-client';
+import { isNative } from '@/utils/platform';
 import '@/ui/strava-detail';
 
 // Console-callable VO2max diagnostic: run `diagnoseVO2()` in the browser console
@@ -142,7 +144,28 @@ installGlobalErrorSafetyNet();
 /**
  * Initialize application on DOM ready
  */
+/**
+ * Pinch-zoom policy. The static viewport meta in index.html locks scaling off
+ * (`maximum-scale=1.0, user-scalable=no`) — correct for the native iOS app,
+ * where a zoomable web-view feels broken and inputs jump on focus. On the
+ * web/desktop build there's no such expectation and zoom is an accessibility
+ * baseline, so relax the meta at runtime for non-native platforms only. Native
+ * keeps the locked behaviour untouched.
+ */
+function applyWebViewportPolicy(): void {
+  if (isNative()) return;
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  meta.setAttribute('content', 'width=device-width, initial-scale=1.0, viewport-fit=cover');
+}
+
 async function bootstrap(): Promise<void> {
+  applyWebViewportPolicy();
+
+  // Dev: install window.__debugForecast() for prediction-stack diagnostics.
+  const { installDebugForecast } = await import('@/dev/debug-forecast');
+  installDebugForecast();
+
   // After Garmin re-auth, the callback redirects back with ?garmin=connected.
   // Clear the backfill throttle guard so the next launch pulls fresh data
   // instead of sitting on a stale 12h skip from the broken-auth period.
@@ -344,7 +367,7 @@ async function launchApp(): Promise<void> {
   // tokens in strava_tokens but the state flag is false — which gates the
   // auto-backfill and leaves their rides without power data. Fix by
   // asking the DB directly and flipping the flag on when tokens exist.
-  if (!isSimulatorMode() && hasState && !state.stravaConnected) {
+  if (STRAVA_ENABLED && !isSimulatorMode() && hasState && !state.stravaConnected) {
     try {
       const tokensExist = await isStravaConnected();
       if (tokensExist) {
@@ -443,11 +466,11 @@ async function launchApp(): Promise<void> {
       // before deriving — otherwise new tri users would see CTL 0 until
       // they manually press sync.
       if (activityLog.length === 0 && !isSimulatorMode()) {
-        const stravaOk = await isStravaConnected();
+        const stravaOk = STRAVA_ENABLED && await isStravaConnected();
         if (stravaOk) {
-          console.log('[tri] DB empty + Strava connected — triggering backfill (16w)');
+          console.log('[tri] DB empty + Strava connected — triggering backfill (52w)');
           try {
-            await backfillStravaHistory(16);
+            await backfillStravaHistory(52);
             activityLog = await loadActivitiesFromDB(500);
             console.log(`[tri] Post-backfill: ${activityLog.length} activities loaded`);
           } catch (err) {
@@ -851,6 +874,7 @@ async function launchApp(): Promise<void> {
   if (hasState && state.hasCompletedOnboarding) {
     // Record app open (used for debrief timing), then go straight to home
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
+    assertPlanAnchorConsistent(); // tripwire: warn loudly if s.w and planStartDate disagree
 
     // Boot-time migration: refresh blended VDOT so existing users (who have
     // wkGain deprecated) see current fitness, not Week-1 baseline.
@@ -1145,7 +1169,7 @@ async function launchApp(): Promise<void> {
     // Mid-wizard: toast shows and wizard continues.
   }
 
-  if (params.get('strava') === 'connected') {
+  if (STRAVA_ENABLED && params.get('strava') === 'connected') {
     window.history.replaceState({}, '', window.location.pathname);
     import('@/state').then(({ updateState, saveState }) => {
       updateState({ stravaConnected: true });
@@ -1166,21 +1190,31 @@ async function launchApp(): Promise<void> {
   // Sync wearable data on launch (skip in simulator mode — no auth)
   if (!isSimulatorMode()) {
     const activitySrc = getActivitySource(state);
+    const hasGarminPhysio = hasPhysiologySource(state, 'garmin');
+    // Apple Health is a SUPPLEMENTARY source — it can run alongside a Garmin/Strava
+    // primary, not just as the sole source. `appleHealthConnected` is the device-local
+    // "HealthKit authorized here" flag; the legacy check covers users whose physiology
+    // primary is already Apple.
+    const appleConnected = !!state.appleHealthConnected || hasPhysiologySource(state, 'apple');
 
+    // ── ACTIVITIES ────────────────────────────────────────────────────────────
     if (activitySrc === 'apple') {
-      // Apple Watch: activities via HealthKit (iOS only — no-op on web)
-      syncAppleHealth().catch(() => {});
-      // Physiology: sleep, HRV, resting HR, steps from HealthKit
-      syncAppleHealthPhysiology(28).then((updated) => {
-        if (updated) {
-          const ps = getState();
-          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
-          scheduleHomeRefresh();
-        }
-      }).catch(() => {});
-    } else if (state.stravaConnected) {
+      // Apple Watch primary: activities via HealthKit (iOS only — no-op on web)
+      syncAppleHealth()
+        .then(() => {
+          // Register the HealthKit observer + background delivery so any
+          // workout that lands in HealthKit after this point (Apple Watch,
+          // Strava-to-Health, Garmin-Connect-to-Health) wakes the app and
+          // triggers an incremental sync without requiring a manual launch.
+          subscribeToWorkoutObserver().catch(() => {});
+        })
+        .catch(() => {});
+      // Belt-and-braces: re-sync on foreground if the observer dropped a
+      // background push while the app was suspended. Registers a listener once;
+      // throttled to once per 5 min via appleHistoryLastRefreshedAt.
+      subscribeToForegroundResume();
+    } else if (STRAVA_ENABLED && state.stravaConnected) {
       // Strava is the activity source for any user who has it connected.
-      // Garmin wearable users also get a biometric sync (VO2max, LT, HRV, sleep).
       isStravaConnected().then((stravaOk) => {
         if (!stravaOk) return;
         syncStravaActivities().then(() => {
@@ -1192,101 +1226,102 @@ async function launchApp(): Promise<void> {
           // Re-render home view if it's still active so TSS reflects post-sync state
           scheduleHomeRefresh();
           // Triathlon prediction refresh — runs only when in triathlon mode.
-          // One-time earliest-activity fetch drives years-of-training in the
-          // confidence range. Recomputing the live prediction picks up any new
-          // volume/long-session data from this sync.
           refreshTriPredictionAfterSync().catch(() => {});
           // Running + HYROX race-outcome detection. Mirrors the tri logger
           // above so post-race results are captured across all three modes.
           detectRaceOutcomeAfterSync().catch(() => {});
         }).catch(() => {});
-        if (hasPhysiologySource(state, 'apple')) {
-          // Apple Watch physiology: sleep, HRV, resting HR, steps from HealthKit
-          syncAppleHealthPhysiology(90).then((updated) => {
-            if (updated) {
-              const ps = getState();
-              setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
-              scheduleHomeRefresh();
-            }
-          }).catch(() => {});
-        } else if (hasPhysiologySource(state, 'garmin')) {
-          isGarminConnected().then((garminOk) => {
-            if (garminOk) {
-              // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-              triggerGarminBackfill(8).catch(() => {}).finally(() => {
-                // Fetch today's steps immediately (fast — single epoch window)
-                syncTodaySteps().then(() => {
-                  scheduleHomeRefresh();
-                }).catch(() => {});
-
-                syncPhysiologySnapshot(90).then(() => {
-                  // Re-set normalizer in case physiology sync updated HR profile
-                  const ps = getState();
-                  setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
-                  refreshVO2Estimates();
-                  // Close out + refit k_user against the freshly-synced physiology.
-                  refreshAdaptiveRecovery();
-                  // Re-render home view so sleep/HRV cards update without requiring
-                  // manual navigation — physiology data lands in state after the view
-                  // was first rendered, so we need an explicit refresh.
-                  scheduleHomeRefresh();
-                  // If today's sleep score is still missing, re-fetch — Garmin computes
-                  // scores 1–4h after waking so the webhook may fire before it's ready.
-                  const todayStr = new Date().toISOString().split('T')[0];
-                  const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
-                  if (!todaySleep?.sleepScore) {
-                    refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
-                      scheduleHomeRefresh();
-                    }).catch(() => {});
-                  }
-                  // Background poll: keep checking until Garmin pushes today's sleep
-                  startSleepPollerIfNeeded();
-                }).catch(() => {});
-              });
-            }
-          }).catch(() => {});
-        }
       }).catch(() => {});
     } else {
-      // Garmin-only: activities + biometrics from Garmin webhook
+      // Garmin-only: activities from Garmin webhook
       isGarminConnected().then((connected) => {
         if (!connected) return;
         syncActivities().then(() => {
           scheduleHomeRefresh();
         }).catch(() => {});
         processPendingCrossTraining();
-        // Backfill first (idempotent), then sync physiology so state reflects fresh DB data
-        triggerGarminBackfill(8).catch(() => {}).finally(() => {
-          // Fetch today's steps immediately (fast — single epoch window)
-          syncTodaySteps().then(() => {
-            scheduleHomeRefresh();
-          }).catch(() => {});
-
-          syncPhysiologySnapshot(90).then(() => {
-            const ps2 = getState();
-            setAthleteNormalizer(ps2.ltHR, ps2.restingHR, ps2.maxHR);
-            refreshVO2Estimates();
-            refreshAdaptiveRecovery();
-            scheduleHomeRefresh();
-            const todayStr = new Date().toISOString().split('T')[0];
-            const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
-            if (!todaySleep?.sleepScore) {
-              refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).then(() => {
-                scheduleHomeRefresh();
-              }).catch(() => {});
-            }
-            // Background poll: keep checking until Garmin pushes today's sleep
-            startSleepPollerIfNeeded();
-          }).catch(() => {});
-        });
       }).catch(() => {});
     }
+
+    // Supplementary Apple Health activity source. A Garmin/Strava user who has
+    // also connected Apple Health gets their workouts pulled from HealthKit too,
+    // carrying the HR stream, zones, route and km splits the Garmin webhook
+    // summary lacks. For users with no Strava/Garmin API access this is the only
+    // automatic activity path. Runs IN ADDITION to the primary source above;
+    // matchAndAutoComplete dedups so Strava > Apple Health > Garmin-webhook-summary
+    // for the same activity. Gated on Apple Health being authorized on this device
+    // so we never surprise-prompt a user who hasn't opted in.
+    if (activitySrc !== 'apple' && appleConnected) {
+      syncAppleHealth()
+        .then(() => { subscribeToWorkoutObserver().catch(() => {}); })
+        .catch(() => {});
+      subscribeToForegroundResume();
+    }
+
+    // ── PHYSIOLOGY (additive: Garmin primary, Apple fills the gaps) ─────────────
+    // Both providers can contribute. Order is load-bearing: Garmin's
+    // syncPhysiologySnapshot OVERWRITES physiologyHistory wholesale, while the
+    // Apple sync MERGES and prefers existing (Garmin) values. So Garmin must land
+    // first, then Apple gap-fills any night Garmin missed. Running Apple before (or
+    // racing) Garmin would let a late Garmin write clobber the Apple fill.
+    // syncAppleHealthPhysiology is a no-op on web, so this is safe on localhost.
+    const syncAllPhysiology = async (): Promise<void> => {
+      if (hasGarminPhysio) {
+        const garminOk = await isGarminConnected().catch(() => false);
+        if (garminOk) {
+          // Backfill first (idempotent), then snapshot so state reflects fresh DB data.
+          await triggerGarminBackfill(8).catch(() => {});
+          // Fetch today's steps immediately (fast — single epoch window).
+          syncTodaySteps().then(() => scheduleHomeRefresh()).catch(() => {});
+          await syncPhysiologySnapshot(90).catch(() => {});
+          const ps = getState();
+          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+          refreshVO2Estimates();
+          // Close out + refit k_user against the freshly-synced physiology.
+          refreshAdaptiveRecovery();
+          scheduleHomeRefresh();
+          // If today's sleep score is still missing, re-fetch — Garmin computes
+          // scores 1–4h after waking so the webhook may fire before it's ready.
+          const todayStr = new Date().toISOString().split('T')[0];
+          const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
+          if (!todaySleep?.sleepScore) {
+            await refreshRecentSleepScores().then(() => syncPhysiologySnapshot(7)).catch(() => {});
+            scheduleHomeRefresh();
+          }
+          // Background poll: keep checking until Garmin pushes today's sleep.
+          startSleepPollerIfNeeded();
+        }
+      }
+
+      // Apple Health gap-fill runs LAST so its merge sits on top of fresh Garmin
+      // data. Fills any night Garmin lacks; never overwrites a Garmin sleep score.
+      if (appleConnected) {
+        const updated = await syncAppleHealthPhysiology(90).catch(() => false);
+        if (updated) {
+          const ps = getState();
+          setAthleteNormalizer(ps.ltHR, ps.restingHR, ps.maxHR);
+          scheduleHomeRefresh();
+        }
+      }
+
+      // Diagnostic: surfaces in the Xcode console on launch so a device build can
+      // be told apart from localhost at a glance.
+      const hist = getState().physiologyHistory ?? [];
+      const todayStr = new Date().toISOString().split('T')[0];
+      const todayHasSleep = !!hist.find(d => d.date === todayStr)?.sleepScore;
+      console.log(`[Startup] physiology: ${hist.length} days, todaySleep=${todayHasSleep} (activity=${activitySrc}, garminPhysio=${hasGarminPhysio}, appleConnected=${appleConnected})`);
+    };
+    void syncAllPhysiology();
   }
 
   // Backfill Strava history: run if never fetched, fewer than 8 weeks cached,
   // or last refresh > 7 days old (so historicWeeklyTSS / signalBBaseline /
   // ctlBaseline track recent training instead of freezing at first-sync values).
-  // Extended history (16w) is populated by backfillStravaHistory so the stats "16w" tab works.
+  // Extended history (52w) is populated by backfillStravaHistory so the stats
+  // "16w" tab works AND so the athlete-archetype classifier can detect
+  // "detrained-with-history" (current 18 km/wk but ran 50 km/wk last summer).
+  // Repeat-run cost is bounded by the DB cache skip-list — only NEW activities
+  // since last sync get re-processed.
   // Also triggers once post-migration to heal the new ambient_temp_c column on historical rows.
   const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
   const needsTempHeal = !state.ambientTempHealDone;
@@ -1295,15 +1330,27 @@ async function launchApp(): Promise<void> {
     : 0;
   const ageDays = lastRefreshMs > 0 ? (Date.now() - lastRefreshMs) / 86400000 : Infinity;
   const baselineStale = ageDays > 7;
-  if (!isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory || needsTempHeal || baselineStale)) {
+  if (STRAVA_ENABLED && !isSimulatorMode() && state.stravaConnected && (!state.stravaHistoryFetched || thinHistory || needsTempHeal || baselineStale)) {
     console.log(`[Startup] Triggering Strava backfill (historyFetched=${state.stravaHistoryFetched}, weeks=${state.historicWeeklyTSS?.length ?? 0}, needsTempHeal=${needsTempHeal}, baselineAgeDays=${ageDays === Infinity ? 'never' : ageDays.toFixed(1)})`);
     // Tracked so `awaitStartupSyncs()` (e.g. the onboarding review pipeline)
     // can wait for this DB write to land before reading.
-    trackStartupTask(backfillStravaHistory(16).then(() => {
+    trackStartupTask(backfillStravaHistory(52).then(() => {
       const mut = getMutableState();
       mut.ambientTempHealDone = true;
       saveState();
     }).catch(() => {}));
+  } else if (!state.athleteArchetype && (state.historicWeeklyKm?.length ?? 0) > 0) {
+    // Backfill was skipped (recent enough), but athleteArchetype was added in
+    // a later release and isn't on existing state. Detect it from the cached
+    // history so the ramp + plan-view caption show without forcing a full
+    // Strava resync. One-shot — once `athleteArchetype` exists, the regular
+    // weekly refresh keeps it updated.
+    import('@/calculations/athlete-archetype').then(({ detectArchetype }) => {
+      const mut = getMutableState();
+      mut.athleteArchetype = detectArchetype(mut);
+      saveState();
+      console.log(`[Startup] Archetype back-fill: ${mut.athleteArchetype.archetype} (${mut.athleteArchetype.confidence}) — currentWk=${mut.athleteArchetype.evidence.currentWeeklyKm}km peak52=${mut.athleteArchetype.evidence.peakWeeklyKmPast52}km longest=${mut.athleteArchetype.evidence.longestRunPast12moKm}km`);
+    });
   }
 
   // DB duplicate cleanup: scan `garmin_activities` for rows that share the same
@@ -1334,7 +1381,7 @@ async function launchApp(): Promise<void> {
   // or state validation wipes the local cache. Strava is the source of truth;
   // `s.previousPlanWks` is a derived hot cache. 24h idempotency guard so this
   // doesn't fire on every tab refocus, only once per day.
-  if (!isSimulatorMode() && (state as any).stravaConnected) {
+  if (STRAVA_ENABLED && !isSimulatorMode() && (state as any).stravaConnected) {
     // Boot-time migration: if any archive has weeks that overlap the live plan
     // window, truncate them. Catches users whose previous-plan continuousMode
     // tail was archived before today's truncate-on-redistribute fix shipped —

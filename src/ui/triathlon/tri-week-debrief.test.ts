@@ -17,7 +17,7 @@ function workout(id: string, discipline: 'swim' | 'bike' | 'run', plannedRpe: nu
   };
 }
 
-describe('tri week-debrief — data layer', () => {
+describe('tri week-debrief, data layer', () => {
   it('effort multiplier reflects easy ratings → next week longer', () => {
     const s = {
       eventType: 'triathlon',

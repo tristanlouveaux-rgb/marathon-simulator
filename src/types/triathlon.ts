@@ -566,6 +566,20 @@ export interface TriRacePrediction {
    * "Specific endurance penalty + race-readiness surface 2026-05-06".
    */
   raceReadiness?: import('@/calculations/race-readiness').RaceReadinessResult;
+
+  /**
+   * Present when a current injury debited the projection. Per discipline: weeks
+   * until it returns to full (`resumeWeeks`) and its current capacity (0 =
+   * blocked, 1–99 = reduced, 100 = full). The predictor credits each discipline
+   * only the build it can actually do (blocked → loses the whole window;
+   * reduced → loses the fraction it can't train) and samples the dose from after
+   * recovery. Drives the forecast caption explaining the recovery assumption.
+   */
+  injuryRecovery?: {
+    swim: { resumeWeeks: number; capacity: number };
+    bike: { resumeWeeks: number; capacity: number };
+    run:  { resumeWeeks: number; capacity: number };
+  };
 }
 
 /**
@@ -623,6 +637,12 @@ export interface TriConfig {
   // Race plan configuration
   raceDate?: string;   // ISO YYYY-MM-DD
   weeksToRace?: number;
+  /** User-set race-day goal time in seconds. Optional — when populated the
+   *  forecast surface renders the "Goal" reference line on the cone and the
+   *  "Chance of beating goal" callout. Distinct from `prediction.totalSec`
+   *  (the model's projected finish). Mirrors `HyroxConfig.targetFinishTimeSec`
+   *  and the running `state.raceGoalTimeSec`. */
+  targetFinishTimeSec?: number;
 
   // Per-discipline fitness state (Phase 4)
   fitness?: {

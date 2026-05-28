@@ -107,7 +107,7 @@ export function stripMarkdown(s: string): string {
     .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g, '$1')   // italic
     .replace(/`([^`\n]+?)`/g, '$1')                        // inline code
     .replace(/^\s*[-*]\s+/gm, '')                          // bullet markers
-    .replace(/—/g, ', ')                                    // em dashes (banned by copy rules)
+    .replace(/, /g, ', ')                                    // em dashes (banned by copy rules)
     .replace(/–/g, '-');                                    // en dashes → hyphen
 }
 
@@ -975,7 +975,7 @@ function getAICoachHTML(): string {
       <!-- Apply cards from brief -->
       <div id="coach-apply-cards" style="position:relative;z-index:10;flex-shrink:0"></div>
 
-      <!-- Chat thread — scrollable -->
+      <!-- Chat thread. Scrollable -->
       <div id="coach-thread" style="position:relative;z-index:10;flex:1;overflow-y:auto;padding:8px 0 16px;min-height:80px"></div>
 
       <!-- Input -->

@@ -289,7 +289,7 @@ export function render(): void {
     currentVDOT, // vdot for plan engine (includes RPE and training gains)
     s.gs,  // gym sessions per week
     trailingEffort, // effort score for adaptive scaling
-    (acwrForRender.status === 'unknown' || acwrForRender.status === 'low') ? undefined : acwrForRender.status, // acwrStatus — reduces quality sessions when elevated
+    (acwrForRender.status === 'unknown' || acwrForRender.status === 'low') ? undefined : acwrForRender.status, // acwrStatus. Reduces quality sessions when elevated
     undefined, // forceDeload (renderer uses wk.forceDeload at re-gen sites)
     s.onboarding?.weeklyTrainingHours,
     s.onboarding?.runningExcludedWorkouts,
@@ -617,7 +617,7 @@ export function render(): void {
     h += `<div class="border p-2 rounded mb-2 text-xs" style="${bannerStyle}">`;
     h += `<strong>LT Auto-Updated:</strong> ${fmtP(ltu.newLT)}`;
     if (ltu.previousLT) h += ` (was ${fmtP(ltu.previousLT)})`;
-    h += ` — via ${sourceLabel}, ${ltu.confidence} confidence`;
+    h += `: via ${sourceLabel}, ${ltu.confidence} confidence`;
     h += `</div>`;
   }
 
@@ -955,7 +955,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       if (w.t === 'easy' && w.n?.includes('(was')) {
         // Downgraded makeup: friendly green banner
         h += `<div class="mb-2 p-1.5 border rounded text-xs font-bold" style="background:rgba(34,197,94,0.06);border-color:rgba(34,197,94,0.35);color:var(--c-ok)">`;
-        h += 'MAKEUP — Downgraded to easy to protect recovery';
+        h += 'MAKEUP: Downgraded to easy to protect recovery';
         h += `</div>`;
       } else {
         const skipStyleAttr = (w.skipCount || 0) === 1
@@ -1062,7 +1062,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           }
           h += `</div>`;
           if (!hasHR) {
-            h += `<div class="text-[10px] mb-1" style="color:rgba(202,138,4,0.4)">Zone split estimated — HR stream data unavailable.</div>`;
+            h += `<div class="text-[10px] mb-1" style="color:rgba(202,138,4,0.4)">Zone split estimated. HR stream data unavailable.</div>`;
           }
         }
         // Garmin Training Effect aerobic/anaerobic split (0-5 scale, separate from TL)

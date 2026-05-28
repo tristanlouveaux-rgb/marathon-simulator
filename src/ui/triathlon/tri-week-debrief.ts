@@ -240,10 +240,10 @@ function renderStep1HTML(weekNum: number, summary: WeekSummary, state: Simulator
                   padding:24px 20px 20px;box-shadow:0 8px 40px rgba(0,0,0,0.18);
                   max-height:85vh;overflow-y:auto">
 
-        <!-- Header — mirrors running's debrief header exactly -->
+        <!-- Header. Mirrors running's debrief header exactly -->
         <div style="position:relative;text-align:center;margin-bottom:18px">
           <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">
-            ${phaseLabel} Phase — Week ${weekNum}
+            ${phaseLabel} Phase. Week ${weekNum}
           </span>
           <button id="tri-debrief-cancel"
             style="position:absolute;right:0;top:50%;transform:translateY(-50%);
@@ -477,7 +477,7 @@ function _showTriPlanPreview(weekNum: number): void {
   card.innerHTML = `
     <div style="position:relative;text-align:center;margin-bottom:18px">
       <span style="font-size:17px;font-weight:700;letter-spacing:-0.02em;color:var(--c-black)">
-        ${PHASE_LABEL[nextPhase] ?? nextPhase} — Week ${weekNum + 1}
+        ${PHASE_LABEL[nextPhase] ?? nextPhase}. Week ${weekNum + 1}
       </span>
       <button id="tri-debrief-cancel"
         style="position:absolute;right:0;top:50%;transform:translateY(-50%);width:28px;height:28px;

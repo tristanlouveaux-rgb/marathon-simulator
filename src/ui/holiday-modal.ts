@@ -548,14 +548,14 @@ export function applyHolidayMods(workouts: any[], canRun: 'yes' | 'maybe' | 'no'
     w.modReason = 'Holiday';
 
     if (canRun === 'no') {
-      w.n = 'Holiday — rest day';
+      w.n = 'Holiday, rest day';
       w.d = 'On holiday. No running planned.';
       w.t = 'easy'; // keep as easy so it renders as a card, not a plain "Rest" row
       w.r = 0;
       w.km = 0;
       w.dur = 0;
     } else if (canRun === 'maybe') {
-      w.n = 'Holiday — optional run';
+      w.n = 'Holiday, optional run';
       w.d = 'Easy run if opportunity arises';
       w.t = 'easy';
       w.r = 2;

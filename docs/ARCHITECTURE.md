@@ -347,6 +347,15 @@ Voice/haptic coaching and on-screen split cues share a single parser so the two 
 - `buildSplitScheme(workoutDesc, paces)` in `src/gps/split-scheme.ts` is a **thin adapter over `buildTimeline`**. It maps each step to one or more `SplitSegment`s: reps become a single paced segment, recoveries become untimed segments with `durationSeconds`, warm-up/cool-down become a single paced segment at easy pace, and single-block distances (e.g. `20km @ MP`, `8km`) are expanded into per-km splits.
 - Adding a new workout format means extending `parseMainSet` in `timeline.ts`; `split-scheme.ts` picks it up automatically via the adapter. Never add a parallel regex path in split-scheme.
 
+### Guided Strength Session (`src/guided/strength-*.ts`, `src/ui/guided-strength-overlay.ts`)
+
+Strength is a separate flow from guided runs — wall-clock + tap driven, no GPS / paces. Reuses `VoiceCoach`, `keep-awake`, and the completion path (`rate()` with `expected === rpe` to avoid VDOT shift), but its own model + controller + overlay.
+
+- `parseStrengthSession(workout)` in `strength-model.ts` is the **single source of truth** for interpreting a strength `workout.d` (newline-separated `"{sets}x{reps} {Name} ({cue}) ({rest})"` lines). Expands each line into a flat `GuidedSet[]`; the closing stretch line is captured separately.
+- `StrengthGuideController` in `strength-controller.ts` is the wall-clock state machine (`idle → active → resting → … → done`). Distinct from `GuideController` (GPS-tick). Timer is injectable so the logic is unit-tested.
+- `completeStrengthSession(workout, opts)` in `strength-complete.ts` is the **single completion write** — wraps `rate()` to set `wk.rated[id] = rpe` mode-agnostically.
+- `openGuidedStrength(workout)` in `guided-strength-overlay.ts` mounts the overlay and owns the lifecycle (controller, voice, keep-awake). Entry points live on each mode's strength surface (`workout-detail-modal.ts`, `plan-view.ts`).
+
 ### iOS Native (`ios/`, `ios-plugins/guided-voice/`, adapter swap points in `src/guided/`)
 
 Capacitor 8 + Swift Package Manager. App id `com.mosaic.training`, iOS 15 minimum, bundle name "Mosaic".
@@ -430,6 +439,7 @@ Fire-and-forget on boot. Two separate concerns are handled independently:
 - **Garmin**: `syncPhysiologySnapshot(28)` → `sync-physiology-snapshot` Edge Function → merges `daily_metrics`, `sleep_summaries`, `physiology_snapshots` (all written by Garmin webhook).
 - **Apple Watch**: `syncAppleHealthPhysiology(28)` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. On-device, no server. Sleep score computed from stage durations.
 - **Source routing**: `connectedSources.physiology` field on state, with legacy `wearable` fallback. Accessor functions in `src/data/sources.ts` centralise all branching.
+- **Additive Apple Health gap-fill** (2026-05-27): `getPhysiologySource(s)` names ONE labelled primary, but Apple Health can run as a *supplementary* physiology source alongside a Garmin/Strava primary, gated on the device-local `s.appleHealthConnected` flag (set by `connectAppleHealth()`, which no longer demotes an existing Garmin primary). On launch `syncAllPhysiology()` in `main.ts` runs both providers in a load-bearing order: Garmin first (`syncPhysiologySnapshot` **overwrites** `physiologyHistory` wholesale), then `syncAppleHealthPhysiology` last (it **merges** and prefers existing Garmin values, so it only fills nights Garmin missed). Reversing the order would let a late Garmin write clobber the Apple fill. Apple sync is a no-op on web, so localhost stays on the Garmin/Supabase path. Entry point for Garmin/Strava users to authorise Apple Health post-onboarding: the Apple Health row in Account → Connected Apps (`renderAppleEnrichRow`, iOS-only).
 
 **Garmin data pipeline** (webhook push model):
 - **Live delivery**: Garmin pushes dailies / sleeps / HRV / userMetrics to `supabase/functions/garmin-webhook` as events happen. The handler writes to `daily_metrics`, `sleep_summaries`, `physiology_snapshots`.
@@ -477,6 +487,20 @@ Non-event users. 4-week block cycling: base → build → intensify → deload. 
 **Display states**: Planned (default) / Replaced (cyan, struck-through description) / Reduced (sky, shows before+after) / Completed (green, RPE badge) / Skipped (amber/red).
 
 **Modification labels**: When `w.status === 'replaced'` or `'reduced'` and `w.modReason` is set, the detail card shows a human-readable banner: "Replaced by HIIT" or "Reduced — Tennis (45min)". The "Garmin: " prefix is stripped from `modReason` before display. An Undo button calls `window.openActivityReReview()`. The calendar compact card shows the activity name as "→ HIIT" appended to the workout name.
+
+### Screenshot Activity Import (`src/data/screenshotImport.ts`, `src/data/screenshotCapture.ts`, `src/data/screenshotOcr.ts`)
+
+Hybrid OCR → AI vision pipeline for users who can only share a screenshot of their run summary. Two engines converge on the same `ParsedScreenshotActivity` contract; `screenshotActivityToRow()` then produces a `GarminActivityRow` (no polyline, no per-second streams) that flows through the standard `matchAndAutoComplete` → `applyPBsFromRows` → `refreshBlendedFitness` → `healMissingITrimp` tail — i.e. screenshot runs drive the plan exactly like file imports, minus GPS-only signals.
+
+**Engines**:
+- **On-device Apple Vision** (`@mosaic/screenshot-ocr` plugin, `src/data/screenshotOcr.ts`). iOS-only, free, runs first. `VNRecognizeTextRequest` at `.accurate` with `usesLanguageCorrection` off; row-grouped output reconstructs splits-table lines.
+- **Cloud Claude vision fallback** (`supabase/functions/screenshot-vision`). JWT-auth, per-user 25/day, $10/day global cap. Used when OCR confidence is low / fields missing, and unconditionally on web (no native engine).
+
+**Orchestration**: `runHybridParse(imageBase64, { ocr, aiFallback, aiImage })` in `screenshotCapture.ts` — engines injected so the decision logic is unit-testable. `decideNeedsAI(parsed)` + `pickBetterParse(ocr, ai)` are pure helpers. AI is skipped when OCR is already high-confidence (cost path: $0 when possible). Client downscales screenshots to 1280px JPEG @ q=0.6 via canvas before the AI call to keep payload and cost bounded.
+
+**Optional HR-chart path**: the edge function gained a `mode: 'summary' | 'hr_chart'` field. In `hr_chart` mode Claude is prompted to read the chart's time + HR axes and sample the curve at ~minute intervals, returning `{ hrSeries: [{tSec, hr}] }`. The series is folded into the parsed activity at commit. `commitScreenshotActivity` then builds a `ScreenshotEnrichmentContext` (RHR / max HR / zones / sex from state) so `screenshotActivityToRow` can run the canonical `computeHREnrichment` from `activityEnrichment.ts` — the same helper FIT imports use. Net: screenshot-sourced runs reach real iTRIMP + maxHR + HR-zone breakdown, not the heal-pass avgHR-only estimate.
+
+**UI**: `openScreenshotImportModal()` (`src/ui/screenshot-import-modal.ts`) — three-step glass overlay (pick → read → confirm). The confirm step lets the user edit date / distance / duration / avg HR and exposes the optional "Add HR chart for per-minute detail" picker (skippable). Mirrors `openImportActivityModal`'s `onComplete` contract so onboarding can reveal Continue + the guest-sync nudge.
 
 ### Garmin Activity Review Pipeline (`src/ui/activity-review.ts`)
 

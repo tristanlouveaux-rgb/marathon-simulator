@@ -123,33 +123,59 @@ describe('generateGymWorkouts — ability tiers', () => {
 // Injury filtering
 // ---------------------------------------------------------------------------
 
-describe('generateGymWorkouts — injury filtering', () => {
-  it('returns empty during acute phase', () => {
+describe('generateGymWorkouts — injury adaptation (region-aware)', () => {
+  const gen = (injury: InjuryState) =>
+    generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury);
+
+  it('loads the unaffected region even in the acute phase (knee → upper-body + core)', () => {
     const injury = makeInjuryState({ injuryPhase: 'acute' });
-    expect(generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury)).toHaveLength(0);
-  });
-
-  it('returns empty during rehab phase', () => {
-    const injury = makeInjuryState({ injuryPhase: 'rehab' });
-    expect(generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury)).toHaveLength(0);
-  });
-
-  it('returns empty during test_capacity phase', () => {
-    const injury = makeInjuryState({ injuryPhase: 'test_capacity' });
-    expect(generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury)).toHaveLength(0);
-  });
-
-  it('returns empty in return_to_run when level < 5', () => {
-    const injury = makeInjuryState({ injuryPhase: 'return_to_run', returnToRunLevel: 4 });
-    expect(generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury)).toHaveLength(0);
-  });
-
-  it('returns a Return Strength session in return_to_run at level >= 5', () => {
-    const injury = makeInjuryState({ injuryPhase: 'return_to_run', returnToRunLevel: 5 });
-    const result = generateGymWorkouts('base', 2, 'intermediate', undefined, undefined, undefined, injury);
+    const result = gen(injury);
     expect(result).toHaveLength(1);
-    expect(result[0].n).toBe('Return Strength');
-    expect(result[0].r).toBeLessThanOrEqual(4); // Light session
+    expect(result[0].n.toLowerCase()).toContain('upper-body');
+  });
+
+  it('pauses strength entirely for a both-regions-blocked injury (back, acute)', () => {
+    const injury = makeInjuryState({ injuryPhase: 'acute', location: 'back' });
+    expect(gen(injury)).toHaveLength(0);
+  });
+
+  it('keeps upper-body + core for a knee injury in rehab (lower-body paused)', () => {
+    // Default factory location is 'knee' → lower-load 0, upper-load 100.
+    const injury = makeInjuryState({ injuryPhase: 'rehab' });
+    const result = gen(injury);
+    expect(result).toHaveLength(1);
+    expect(result[0].n.toLowerCase()).toContain('upper-body');
+    expect(result[0].n.toLowerCase()).not.toContain('lower-body');
+    expect(result[0].r ?? 99).toBeLessThanOrEqual(5); // submaximal
+  });
+
+  it('keeps lower-body + core for a shoulder injury (upper-body paused)', () => {
+    // shoulder → upper-load 0, lower-load 100.
+    const injury = makeInjuryState({ injuryPhase: 'rehab', location: 'shoulder' });
+    const result = gen(injury);
+    expect(result).toHaveLength(1);
+    expect(result[0].n.toLowerCase()).toContain('lower-body');
+    expect(result[0].n.toLowerCase()).not.toContain('upper-body');
+  });
+
+  it('pauses loaded strength for a back injury (both regions blocked)', () => {
+    // back → upper 0, lower 0.
+    const injury = makeInjuryState({ injuryPhase: 'rehab', location: 'back' });
+    expect(gen(injury)).toHaveLength(0);
+  });
+
+  it('adapts (does not drop) during test_capacity and return_to_run regardless of level', () => {
+    const tc = makeInjuryState({ injuryPhase: 'test_capacity' });
+    expect(gen(tc)).toHaveLength(1);
+    const rtr = makeInjuryState({ injuryPhase: 'return_to_run', returnToRunLevel: 2 });
+    expect(gen(rtr)).toHaveLength(1);
+  });
+
+  it('returns normal templates once resolved', () => {
+    const injury = makeInjuryState({ injuryPhase: 'resolved', active: false });
+    const result = gen(injury);
+    expect(result.length).toBeGreaterThan(0);
+    expect(result[0].n.toLowerCase()).not.toContain('& core');
   });
 });
 

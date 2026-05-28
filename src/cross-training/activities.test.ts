@@ -9,7 +9,9 @@ import {
   canTouchWorkout,
   createActivity,
   getWeeklyLoad,
-  aggregateActivitiesWithDecay
+  aggregateActivitiesWithDecay,
+  deriveSportFromActivityType,
+  isStrengthActual,
 } from './activities';
 import type { CrossActivity } from '@/types';
 
@@ -381,6 +383,66 @@ describe('Cross-Training Activities', () => {
 
       expect(current.length).toBe(0);
       expect(previous.length).toBe(0);
+    });
+  });
+
+  describe('deriveSportFromActivityType', () => {
+    it('returns generic_sport for null / empty', () => {
+      expect(deriveSportFromActivityType(null)).toBe('generic_sport');
+      expect(deriveSportFromActivityType(undefined)).toBe('generic_sport');
+      expect(deriveSportFromActivityType('')).toBe('generic_sport');
+    });
+
+    it('matches Garmin canonical strength type', () => {
+      expect(deriveSportFromActivityType('STRENGTH_TRAINING')).toBe('strength');
+    });
+
+    it('matches Strava WeightTraining camelCase', () => {
+      expect(deriveSportFromActivityType('WeightTraining')).toBe('strength');
+    });
+
+    it('matches loose strength keywords (weight, gym)', () => {
+      expect(deriveSportFromActivityType('weight_lifting')).toBe('strength');
+      expect(deriveSportFromActivityType('GYM')).toBe('strength');
+    });
+
+    it('derives cycling from common Strava/Garmin variants', () => {
+      expect(deriveSportFromActivityType('VirtualRide')).toBe('cycling');
+      expect(deriveSportFromActivityType('MOUNTAIN_BIKING')).toBe('cycling');
+    });
+
+    it('falls through to generic_sport when nothing matches', () => {
+      expect(deriveSportFromActivityType('Workout')).toBe('generic_sport');
+      expect(deriveSportFromActivityType('UnknownThing')).toBe('generic_sport');
+    });
+  });
+
+  describe('isStrengthActual', () => {
+    it('honours manualSport override above all else', () => {
+      expect(isStrengthActual({ manualSport: 'strength', activityType: 'RUNNING' })).toBe(true);
+    });
+
+    it('detects via activityType when manualSport is absent', () => {
+      expect(isStrengthActual({ activityType: 'STRENGTH_TRAINING' })).toBe(true);
+      expect(isStrengthActual({ activityType: 'WeightTraining' })).toBe(true);
+    });
+
+    it('falls back to name when activityType is generic (the Workout + Strength bug)', () => {
+      expect(isStrengthActual({ activityType: 'Workout', workoutName: 'Strength' })).toBe(true);
+      expect(isStrengthActual({ activityType: null, displayName: 'Heavy Squat Day' })).toBe(true);
+      expect(isStrengthActual({ activityType: 'CARDIO', workoutName: 'Deadlift session' })).toBe(true);
+    });
+
+    it('returns false for unrelated activities', () => {
+      expect(isStrengthActual({ activityType: 'RUNNING' })).toBe(false);
+      expect(isStrengthActual({ activityType: 'CYCLING', workoutName: 'Morning ride' })).toBe(false);
+      expect(isStrengthActual({})).toBe(false);
+    });
+
+    it('does not misfire on running activities mentioning weight in the name', () => {
+      // Edge case: a run named "Easy run to lose weight" should not classify as strength
+      // because activityType derives to extra_run before name fallback fires.
+      expect(isStrengthActual({ activityType: 'RUNNING', workoutName: 'Easy run to lose weight' })).toBe(false);
     });
   });
 });

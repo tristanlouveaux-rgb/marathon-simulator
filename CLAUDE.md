@@ -14,6 +14,7 @@ Adaptive marathon training plan simulator (TypeScript + Vite + Tailwind + Capaci
 | `docs/WEBHOOKS.md` | Garmin webhook reference — every payload type, DB targets, production verification requirements, debugging checklist |
 | `docs/FTP.md` | Bike FTP troubleshooting runbook — recurring problem classes, diagnostic procedure, standard fixes, regression history. Read this before debugging any FTP issue. |
 | `docs/AI_STRATEGY.md` | AI Coach monetisation strategy — tier model (Free / BYOK / subscription / full app), economics, pending decisions for Tier 2 paywall build, Stripe/IAP notes. Read before any AI Coach or payment work. |
+| `docs/RUNBOOK.md` | Diagnostic runbooks — background snapshots / recovery, console snippet patterns, multi-tab state divergence, Supabase dashboard AI workflow. Read on-demand when the situation matches. |
 
 ## Issue Tracking Workflow
 
@@ -45,35 +46,13 @@ Do **not** wait to be asked. Keeping these docs current is part of every task.
 - **`/mode-audit [mode|all]`** — structured audit of one or all 5 modes (running, triathlon, cycling, hyrox, just-track). Checks: mode bleed (wrong data in wrong mode), broken math (NaN/null crashes), dead navigation, UX compliance violations, empty-state coverage, copy coherence, state field safety. Produces a prioritised punch list (P0–P3) with `file:line` references. Run after any significant feature addition or when adding a new mode. Defined in `.claude/commands/mode-audit.md`.
 - **`/persona-qa [persona-id|group|all]`** — experiential stress-test across 25 user personas. Finds bugs that grep-based audits miss: number inconsistency across views, incoherent coaching advice, broken flows for specific state combinations, silent failures for edge-case users. Groups: `sport` (5 baseline mode personas), `feature-cross` (6 cross-cutting feature × mode tests — holiday/injury/illness/week-rollover in non-obvious modes), `behaviour` (7 archetypes: ghost, skipper, dismisser, overachiever, underachiever, non-tech, check-in-ignorer), `setup` (7 data/config edge cases). Run before App Store submissions or after large feature builds. Defined in `.claude/commands/persona-qa.md`.
 
-## Multiple dev tabs do not share state
-
-When `npx vite` is running on more than one port (e.g. localhost:5173 and localhost:5175), each tab is a separate browser origin with its own `localStorage`, its own Garmin/Apple physiology sync state, and its own `s.vo2` / `s.maxHR` / `s.pbs`. The same code can produce different LT / VDOT / pace numbers across two tabs simply because one has physio synced and the other hasn't. Don't chase this as a code bug. When debugging cross-tab divergence, first confirm which physiology fields are populated in each tab — the diagnostic logs in `review.ts` and `stats-view.ts` print these.
-
 ## Test Failure Policy
 
 Never declare a test failure "pre-existing" without explaining in one sentence exactly why it is safe to ignore. If you cannot explain it in one sentence, investigate it — pre-existing failures are often real model regressions, stale test expectations from an undocumented code change, or tests you broke yourself without realising. "It was already failing" is not an explanation.
 
-## Console snippets: grep before you guess, chain `?.` after parse
+## Diagnostic runbooks
 
-When suggesting a one-liner for the browser console (to inspect state, localStorage, IndexedDB, etc.), two failure modes cost a round-trip every time:
-
-1. **Wrong key name.** Don't guess. The localStorage key is `marathonSimulatorState` (defined as `STATE_KEY` in `src/state/persistence.ts`). If a future snippet needs a different key/constant, grep for the literal in the codebase first — `localStorage.setItem` / `localStorage.getItem` / DB names — rather than picking something that "sounds right". Saves a "Cannot read properties of null" round-trip every time.
-
-2. **`JSON.parse(null)` returns `null`, not throws.** `localStorage.getItem` on a missing key returns `null`; piping that through `JSON.parse` returns `null`; then `.onboarding` on null throws and looks like a real bug. Always parenthesise the parse and chain `?.` afterwards so a wrong key prints `undefined` instead of crashing:
-
-   ```js
-   // Bad — throws if the key is missing or wrong
-   JSON.parse(localStorage.getItem('foo')).onboarding?.x
-
-   // Good — prints undefined and tells you the key/path was wrong
-   JSON.parse(localStorage.getItem('foo') ?? 'null')?.onboarding?.x
-   ```
-
-The same applies to `sessionStorage`, `IDBDatabase` lookups, and any chain that starts from a possibly-null source.
-
-## Supabase dashboard has a built-in AI
-
-When asking the user to diagnose edge function / DB issues, remember the Supabase dashboard offers an AI assistant that can read logs, traces and schema directly. It needs an `execution_id` to pull the stack trace for a specific 500 — so guide the user to click the failing invocation row first, grab the execution_id, and paste it into the Supabase AI prompt. Faster than asking the user to transcribe stack traces manually.
+When the situation matches, read `docs/RUNBOOK.md` — covers: multi-tab dev-server state divergence, console snippets (grep for the right key, parse with `?? 'null'` then `?.`), Supabase dashboard AI for edge-function 500s (paste the `execution_id`), background snapshots / recovery procedure, and **backgrounds stuttering / flashing / flickering** (filter+transform re-raster vs backdrop-filter-over-motion — two distinct causes, two distinct fixes).
 
 ## Strava is the Canonical Activity Source
 
@@ -106,9 +85,12 @@ Rules for every benchmark with a `*Source: 'user' | 'derived'` provenance field:
 
 `main.ts` is the canonical place for this refresh on launch. Add the same pattern wherever a new auto-derived benchmark gets wired up.
 
-## Build target — single-user dev → broader iOS ship
+## Build target — single-user dev → broader iOS **and web** ship
 
-Mosaic is currently single-user (Tristan) but the goal is to ship as an iOS app to broader users. State migrations are not required yet because the user base resets cleanly, but **new state fields should always be optional (`?:`)** so fresh installs work without migration scaffolding. Schema-version bumps in `state.ts` (`STATE_SCHEMA_VERSION`) are reserved for genuine breaking changes.
+Mosaic ships as **both an iOS app (Capacitor / WKWebView) and a web app (desktop + mobile browsers)** — not iOS-only. Treat both as first-class targets:
+
+- **Verify rendering and perf on both engines.** WKWebView and Chromium/desktop Safari behave differently; a bug can show on either. The 2026-05-27 background stutter + Readiness flicker reproduced in a *desktop browser*, not just on device. Don't assume an issue is "iOS-only" (or "web-only") without checking — and don't dismiss a perf/rendering rule because it's filed under "iOS". See `docs/RUNBOOK.md → Backgrounds stuttering / flashing / flickering` and `UX_PATTERNS.md → Rendering performance`.
+- It's currently single-user (Tristan). State migrations are not required yet because the user base resets cleanly, but **new state fields should always be optional (`?:`)** so fresh installs work without migration scaffolding. Schema-version bumps in `state.ts` (`STATE_SCHEMA_VERSION`) are reserved for genuine breaking changes.
 
 ## Mirror rule — running and triathlon mode parity
 
@@ -150,21 +132,7 @@ When the system makes a non-trivial change to the plan or the prediction, **the 
 
 ## Feature reveals — show users the cool things we built
 
-Mosaic does a lot of work users would never know about — environment normalisation, course factors, durability caps, sleep-debt models, etc. When we ship a non-trivial piece of work that materially changes a number the user sees, **make it discoverable** — but not via a popup unless the popup carries real visual depth.
-
-**Order of preference for surfacing a reveal:**
-1. **Capture at onboarding.** If the work introduces a user-facing setting (an environment tag, a default, a toggle), add a row to the relevant wizard step so the user configures it once during setup. New users naturally encounter it; existing users edit from settings. This is the default — most reveals belong here.
-2. **Settings entry-point.** Pair the onboarding step with a row on the account/profile page so the user can change the setting later. Use the same chip selector / modal so behaviour is identical in both places.
-3. **Inline caption next to the number.** For changes the user can passively read (e.g. "Updated from your rides — beat your last test."), a one-line caption on the existing surface is sufficient. No popup needed.
-4. **Reveal popup.** Last resort. Only when the work changes a user-facing number AND has no natural setting AND can't be conveyed via inline caption. If you take this route, the popup must pass the bar below.
-
-**Reveal popup bar** (hard requirements — if you can't meet all four, use one of the options above):
-- **Visual depth**: close X in top-right, primary CTA as a filled-black pill ("Save" / "Done" / "Got it"), optional secondary as a transparent "Cancel" link. Single-column content layout (no 2-column orphan grids). 14–16 px border-radius. Glass spec from `docs/UX_PATTERNS.md → Overlays and Modals`. Mirror `transitions-overlay.ts`.
-- **Hard once-only guard**: gate on BOTH a persisted boolean (`triConfig.notifiedMarkers.<feature>Seen` or equivalent) AND a module-level `shownThisSession` boolean. Set both as soon as the modal is created (not on dismiss) so navigating away can't cause a re-pop. Real incident, 2026-05-11: a popup that only set the flag on dismiss kept reappearing because the overlay attached to `document.body` survived navigation, and saveState races caused multiple triggers.
-- **Educational, not promotional**: plain-English summary of what the model does and why it makes the number more honest. No emoji, no "Did you know?", no exclamation marks — consultant tone (see "UI Copy" sections).
-- **Trigger on the surface where the work matters**: not on app launch. The user must be in the relevant context to find it useful.
-
-**State flag pattern** (when you do build a popup): add a boolean to `triConfig.notifiedMarkers` (e.g. `swimNormalisationSeen`, `durabilityCapSeen`). Optional field (`?:`) per the build-target rule.
+When a non-trivial piece of work materially changes a number the user sees, make it discoverable. Order of preference: (1) capture at onboarding wizard + settings entry, (2) inline caption next to the number, (3) reveal popup only as last resort. Full decision tree + popup bar (visual depth, once-only guard, educational tone, trigger surface) in `docs/UX_PATTERNS.md → Feature reveals`.
 
 ## No Made-Up Numbers or Logic
 
@@ -217,33 +185,7 @@ Before building any new chart, bar, or data visualisation: **read `docs/UX_PATTE
 
 ## Mosaic Visual System (the "page-flair" world)
 
-**Default for all new UI work**: build with the page-flair visual system unless there's a specific reason not to. The system has four building blocks, all in `src/ui/page-flair.ts`:
-
-1. **`buildAtmosphereBase(palette?)`** — soft cool radial gradient base layer. Replaces flat `var(--c-bg)` warm-cream so other layers have somewhere to live. Palettes: `'blue'` (default) or `'teal'` (race-prediction / "green moments").
-2. **`buildRingBackground(prefix, opts)`** — concentric SVG rings with light-source gradient strokes (white upper-left → mid → dark lower-right) plus depth via SVG filters (atmospheric blur on far rings, drop shadow on near rings). Five variants: `centered` / `sweep` / `focused` / `asymmetric` / `whisper`. Optional `pulse` (finite cycles, default 6 then settles). Optional `palette: 'blue' | 'teal'`. Optional `entrance: 'large' | 'small' | 'none'`.
-3. **`buildSunGlint(intensity)`** — warm cream radial-gradient at upper-left of every page. **The universal brand mark** — appears on every page in the app regardless of other treatments. Intensities: `low` (data pages, detail pages) / `mid` (wizard) / `high` (hero only).
-4. **Glassy cards** — `rgba(255,255,255,0.58) + backdrop-filter:blur(24px)` is the canonical onboarding spec (locked, see memory). Quieter data variant: `rgba(255,255,255,0.78) + blur(16px)` for cards inside data-heavy contexts.
-
-**Animation system**:
-- First-ever ring appearance per device (gated by `isFirstRingExperience()`): large water-droplet entrance + a single light Capacitor haptic. Then `markRingExperienceSeen()`.
-- All subsequent appearances: small "settle" entrance (~0.55s, scale 0.85→1) — designed to be near-invisible on rapid form toggles.
-- Pulse: opt-in, finite (default 6 cycles ≈ 54s) then freezes.
-- Wave pulse: triggered manually via `triggerRingWave(prefix)` for persistent-ring contexts (slide transitions). Brief opacity+scale flicker propagating inner→outer.
-
-**Layering order** on any page using the system: atmosphere → rings → sun glint → content (z-index 1).
-
-**Exclusivity rule**:
-- Rings: wizard / hero / arrival contexts (NOT data-heavy pages)
-- Mountains (`buildSkyBackground` from `sky-background.ts`): detail pages only (recovery, readiness, sleep, strain, etc.)
-- Sun glint: universal — every page
-
-**iOS performance notes** (Capacitor target):
-- **`backdrop-filter: blur(24px)`** is heavy on older iPhones. Stacking multiple glassy cards on the same page is a perf risk. Watch fps when implementing new glassy surfaces. Quieter variant (`blur(16px)`) is preferred for surfaces nested inside other glass.
-- **`feGaussianBlur` + animation** on the same SVG element is a perf cliff. The page-flair pulse is opacity-only on a `<g>` containing already-static rings — never combine pulse with filter on the same element.
-- **`safe-area-inset-top`**: the sun glint origins at viewport `top:0,left:0`. On notched iPhones it sits behind the notch; ensure no critical content (skip buttons, headers) is positioned where the glint's brightest centre would interfere with readability. Use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome.
-- **Haptics**: only fire on the very first ring appearance per device (the localStorage-gated large entrance). Never haptic on every navigation — annoying.
-
-When extending this system to a new surface, decide *which combination* of the four building blocks fits, then ship. Don't invent new background patterns ad-hoc — extend `page-flair.ts` so future surfaces share the DNA.
+Default for all new UI work: build with the page-flair visual system. Four building blocks in `src/ui/page-flair.ts` (atmosphere base, ring background, sun glint, glassy cards), an animation system, exclusivity rules (rings vs mountains vs sun glint), and iOS performance constraints. Full spec — including the canonical glass numbers, the layering order, and the perf cliffs to avoid — in `docs/UX_PATTERNS.md → Mosaic Visual System`. Read it before adding any new background, atmosphere, or glassy surface.
 
 ## Git Safety — Protecting Uncommitted Work
 

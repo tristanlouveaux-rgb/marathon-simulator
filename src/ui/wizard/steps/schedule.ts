@@ -451,7 +451,7 @@ function renderActiveRow(a: RecurringActivity, idx: number): string {
   const label = SPORT_LABELS[a.sport as keyof typeof SPORT_LABELS] ?? a.sport;
   return `
     <div class="sc-active shadow-ap" data-idx="${idx}" style="flex-direction:column;align-items:stretch;gap:12px;padding:14px 14px 16px;position:relative">
-      <!-- Title row — X icon top-right for Remove. -->
+      <!-- Title row. X icon top-right for Remove. -->
       <div style="display:flex;align-items:center;gap:12px">
         <p class="sc-active-title" style="flex:1">${label}</p>
         <button class="sc-remove-x" data-remove="${idx}" aria-label="Remove ${label}">

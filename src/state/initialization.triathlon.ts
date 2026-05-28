@@ -19,6 +19,7 @@ import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
+import { clearStaleGatesForMode } from '@/injury/engine';
 import {
   DEFAULT_VOLUME_SPLIT,
   PLAN_WEEKS_DEFAULT,
@@ -155,6 +156,11 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // Clear stale hyroxConfig so a hyrox → triathlon switch doesn't leave
     // hyroxConfig.raceDate driving home banners or plan previews.
     s.hyroxConfig = undefined;
+    // Clear stale hyrox injury gates so canUpperLoad/canLowerLoad answers
+    // from a prior HYROX mode don't linger as silent no-ops.
+    if (s.injuryState?.active) {
+      s.injuryState = clearStaleGatesForMode(s.injuryState, 'triathlon');
+    }
     s.trackOnly = false;
     s.continuousMode = false;
     s.w = 1;
@@ -183,6 +189,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // Personal physiology for iTRIMP, max-HR estimates, FTP/kg tier derivation.
     if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
+    if (state.heightCm) s.heightCm = state.heightCm;
     s.onboarding = state;
 
     // Clear running-mode race selection so tri views don't show stale

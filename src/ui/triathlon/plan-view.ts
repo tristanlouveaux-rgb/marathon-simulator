@@ -751,7 +751,7 @@ function buildTriInjuryBanner(inj: InjuryState): string {
   const displayName = protocol?.displayName || inj.type;
 
   const phaseLabels: Record<string, string> = {
-    acute: 'Acute — Rest',
+    acute: 'Acute, Rest',
     rehab: 'Rehabilitation',
     test_capacity: 'Capacity Testing',
     return_to_run: 'Return to Run',
@@ -843,7 +843,7 @@ function handleTriMorningPainResponse(response: 'worse' | 'same' | 'better'): vo
   saveState();
   const card = document.getElementById('tri-morning-pain-check');
   if (card) {
-    card.innerHTML = `<div style="font-size:13px;color:var(--c-muted);padding:4px 0;font-weight:500">Noted — ${response === 'better' ? 'good to hear.' : response === 'worse' ? 'take it easy today.' : 'maintaining the plan.'}</div>`;
+    card.innerHTML = `<div style="font-size:13px;color:var(--c-muted);padding:4px 0;font-weight:500">Noted. ${response === 'better' ? 'good to hear.' : response === 'worse' ? 'take it easy today.' : 'maintaining the plan.'}</div>`;
   }
 }
 
@@ -856,7 +856,7 @@ function renderInjuryRestCard(w: Workout, disc: string): string {
       box-shadow:0 1px 2px rgba(0,0,0,0.04);opacity:0.55;cursor:default;
     ">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:100px;background:rgba(0,0,0,0.06);color:#94A3B8;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase">${discLabel} — Paused</span>
+        <span style="display:inline-flex;align-items:center;padding:3px 8px;border-radius:100px;background:rgba(0,0,0,0.06);color:#94A3B8;font-size:10px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase">${discLabel}. Paused</span>
       </div>
       <div style="font-size:15px;font-weight:600;color:#94A3B8;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
       <div style="font-size:12px;color:#94A3B8;line-height:1.5">${discLabel} training paused during injury recovery.</div>
@@ -1157,7 +1157,7 @@ function detectConsecutiveHighRpeBike(state: ReturnType<typeof getState>): numbe
     if (!wk?.triWorkouts || !wk.rated) break;
     const bikeWorkouts = wk.triWorkouts.filter(w => (w.discipline ?? 'run') === 'bike' && w.id);
     const ratedBike = bikeWorkouts.filter(w => typeof wk.rated![w.id!] === 'number');
-    if (ratedBike.length === 0) break; // week had no rated bike workouts — stop
+    if (ratedBike.length === 0) break; // week had no rated bike workouts. Stop
     const allHigh = ratedBike.every(w => (wk.rated![w.id!] as number) >= 8);
     if (!allHigh) break;
     consecutiveCount++;

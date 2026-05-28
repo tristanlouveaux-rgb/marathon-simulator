@@ -36,28 +36,28 @@ const SWIM_CARDS: TriWorkoutCard[] = [
     name: 'Swim technique',
     oneLine: 'Drills and short reps. Body position, catch, breathing.',
     example: '200m WU · 4×50m catch-up + 4×50m fingertip drag · 4×150m easy · 200m CD.',
-    science: 'Stroke economy — Toussaint & Truijens 2005.',
+    science: 'Stroke economy, Toussaint & Truijens 2005.',
   },
   {
     kind: 'swim_endurance',
     name: 'Endurance swim',
     oneLine: 'Sustained aerobic volume below CSS.',
     example: '200m WU · 4×400m steady, 30s rest · 200m CD.',
-    science: 'Aerobic base — Maglischo 2003.',
+    science: 'Aerobic base, Maglischo 2003.',
   },
   {
     kind: 'swim_threshold',
     name: 'CSS intervals',
     oneLine: 'Critical Swim Speed work. Lifts threshold pace directly.',
     example: '200m WU · 10×100m @ CSS, 15s rest · 200m CD.',
-    science: 'Critical speed — Wakayoshi 1992.',
+    science: 'Critical speed, Wakayoshi 1992.',
   },
   {
     kind: 'swim_speed',
     name: 'Swim speed',
     oneLine: 'Short sharp work above CSS for top-end.',
     example: '200m WU · 12×50m fast (CSS −5s/100m), 30s rest · 200m CD.',
-    science: 'Anaerobic capacity — Pyne et al. 2001.',
+    science: 'Anaerobic capacity. Pyne et al. 2001.',
   },
 ];
 
@@ -67,35 +67,35 @@ const BIKE_CARDS: TriWorkoutCard[] = [
     name: 'Endurance ride',
     oneLine: 'Steady aerobic work below tempo.',
     example: '2h @ 65% FTP / Z2 HR. Conversational throughout.',
-    science: 'Aerobic base — Coggan & Allen Z2.',
+    science: 'Aerobic base, Coggan & Allen Z2.',
   },
   {
     kind: 'bike_tempo',
     name: 'Tempo ride',
     oneLine: 'Sustained sub-threshold load.',
     example: '15 min WU · 3×10 min @ 85% FTP, 3 min easy · 5 min CD.',
-    science: 'Z3 — economy and fat oxidation.',
+    science: 'Z3, economy and fat oxidation.',
   },
   {
     kind: 'bike_sweet_spot',
     name: 'Sweet spot',
     oneLine: 'High stimulus, manageable fatigue.',
     example: '15 min WU · 2×20 min @ 88% FTP, 5 min recovery · 10 min CD.',
-    science: '88–95% FTP — Seiler-adjacent SST band.',
+    science: '88–95% FTP, Seiler-adjacent SST band.',
   },
   {
     kind: 'bike_threshold',
     name: 'Threshold intervals',
     oneLine: 'Lifts FTP directly.',
     example: '15 min WU · 2×15 min @ 98% FTP, 5 min recovery · 10 min CD.',
-    science: 'Z4 — Coggan & Allen Ch.7.',
+    science: 'Z4. Coggan & Allen Ch.7.',
   },
   {
     kind: 'bike_vo2',
     name: 'VO2 intervals',
     oneLine: 'Long reps above FTP for aerobic ceiling.',
     example: '20 min WU · 5×3 min @ 115% FTP, 3 min recovery · 10 min CD.',
-    science: 'Z5 — accumulates time at VO2max.',
+    science: 'Z5, accumulates time at VO2max.',
   },
   {
     kind: 'bike_hills',
@@ -123,7 +123,7 @@ const BIKE_CARDS: TriWorkoutCard[] = [
     name: 'Neuromuscular sprints',
     oneLine: 'Peak power and rate of force development.',
     example: '20 min WU · 8×10s max @ 160%+ FTP, 3 min recovery · 10 min CD.',
-    science: 'PCr/glycolytic — Gastin 2001.',
+    science: 'PCr/glycolytic, Gastin 2001.',
   },
 ];
 
@@ -133,31 +133,31 @@ const RUN_CARDS: TriWorkoutCard[] = [
     name: 'Easy run',
     oneLine: 'Aerobic base at conversational effort.',
     example: '40–60 min at Z2 HR. Full sentences throughout.',
-    science: 'Aerobic base — Seiler 80/20 low-intensity volume.',
+    science: 'Aerobic base, Seiler 80/20 low-intensity volume.',
   },
   {
     kind: 'run_long',
     name: 'Long run',
     oneLine: 'Weekly long effort. Builds fat oxidation and durability.',
     example: '60–120 min at easy-to-moderate effort. Steady throughout.',
-    science: 'Peripheral adaptation — Coyle 1988; fat oxidation — Holloszy & Coyle 1984.',
+    science: 'Peripheral adaptation, Coyle 1988; fat oxidation, Holloszy & Coyle 1984.',
   },
   {
     kind: 'run_threshold',
     name: 'Threshold intervals',
     oneLine: 'Raises lactate threshold directly.',
     example: '15 min WU · 3×8 min @ LT pace, 2 min jog · 10 min CD.',
-    science: 'Z4 lactate threshold — Daniels 2005, Pfitzinger & Douglas 2009.',
+    science: 'Z4 lactate threshold, Daniels 2005, Pfitzinger & Douglas 2009.',
   },
 ];
 
 const BRICK_CARDS: TriWorkoutCard[] = [
   {
     kind: 'brick',
-    name: 'Brick — bike + run',
+    name: 'Brick, bike + run',
     oneLine: 'Run off the bike. Trains transition mechanics and pacing discipline.',
     example: 'BIKE 45 min @ 78% FTP (endurance Z2), straight into RUN 20 min @ steady Z2. Transition under 2 min.',
-    science: 'Run-off-the-bike specificity — Millet & Vleck 2000; Bernard 2003.',
+    science: 'Run-off-the-bike specificity, Millet & Vleck 2000; Bernard 2003.',
   },
 ];
 

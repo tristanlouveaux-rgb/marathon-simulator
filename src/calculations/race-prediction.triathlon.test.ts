@@ -24,6 +24,7 @@ import {
 } from '@/constants/triathlon-course-factors';
 import { applyCourseFactors } from './course-factors';
 import type { SimulatorState } from '@/types/state';
+import { createDefaultInjuryState } from '@/types/injury';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Test fixtures
@@ -356,5 +357,88 @@ describe('predictTriathlonRace — end to end', () => {
     const noviceWidth = novice!.totalRangeSec[1] - novice!.totalRangeSec[0];
     const veteranWidth = veteran!.totalRangeSec[1] - veteran!.totalRangeSec[0];
     expect(noviceWidth).toBeGreaterThan(veteranWidth);
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Injury-aware projection (ISSUE: injured 70.3 showed only −6 min because
+  // swim/run were treated as zeroed for the entire horizon). The fix debits
+  // each discipline only its own recovery weeks, then credits post-recovery
+  // build. This locks the behaviour: shorter recovery → faster projection, and
+  // a recovering injury projects far closer to healthy than a never-recovers
+  // (frozen) injury.
+  // ─────────────────────────────────────────────────────────────────────────
+  function injuryPlanState(
+    resume?: { swim?: number; bike?: number; run?: number },
+    caps?: { swim?: number; bike?: number; run?: number },
+  ): SimulatorState {
+    const state = baseState();
+    state.w = 0;
+    state.wks = [];
+    // 18 planned weeks of full swim/bike/run so the recovered-dose sampling
+    // window always lands on weeks with sessions, isolating the weeks-debit.
+    for (let w = 0; w < 18; w++) {
+      state.wks!.push({
+        triWorkouts: [
+          { id: `ps${w}a`, n: 'Swim', d: '60min', r: 5, t: 'swim_endurance', discipline: 'swim', dayOfWeek: 0 },
+          { id: `ps${w}b`, n: 'Swim', d: '45min', r: 5, t: 'swim_threshold', discipline: 'swim', dayOfWeek: 2 },
+          { id: `ps${w}c`, n: 'Swim', d: '60min', r: 5, t: 'swim_endurance', discipline: 'swim', dayOfWeek: 4 },
+          { id: `pb${w}a`, n: 'Bike', d: '90min', r: 5, t: 'bike_endurance', discipline: 'bike', dayOfWeek: 1 },
+          { id: `pb${w}b`, n: 'Bike', d: '60min', r: 6, t: 'bike_threshold', discipline: 'bike', dayOfWeek: 3 },
+          { id: `pb${w}c`, n: 'Bike', d: '4h', r: 5, t: 'bike_endurance', discipline: 'bike', dayOfWeek: 5 },
+          { id: `pr${w}a`, n: 'Run',  d: '60min', r: 5, t: 'easy', discipline: 'run', dayOfWeek: 1 },
+          { id: `pr${w}b`, n: 'Run',  d: '45min', r: 7, t: 'threshold', discipline: 'run', dayOfWeek: 3 },
+          { id: `pr${w}c`, n: 'Run',  d: '2h', r: 5, t: 'long', discipline: 'run', dayOfWeek: 6 },
+        ],
+      } as any);
+    }
+    if (resume) {
+      // Restricted disciplines default to blocked (capacity 0); pass `caps` to
+      // model a reduced-but-trainable discipline (e.g. bike at 50%).
+      // Unrestricted disciplines are explicitly 100 so the legacy-enum fallback
+      // in getDisciplineCapacity (createDefaultInjuryState sets canRun='no')
+      // doesn't accidentally block them.
+      (state as any).injuryState = {
+        ...createDefaultInjuryState(),
+        active: true,
+        resumeWeeksByDiscipline: resume,
+        swimCapacity: resume.swim != null ? (caps?.swim ?? 0) : 100,
+        bikeCapacity: resume.bike != null ? (caps?.bike ?? 0) : 100,
+        runCapacity:  resume.run  != null ? (caps?.run  ?? 0) : 100,
+      };
+    }
+    return state;
+  }
+
+  it('injury-aware projection: shorter recovery → faster race day, recovery is credited', () => {
+    const healthy = predictTriathlonRace(injuryPlanState())!;
+    const short   = predictTriathlonRace(injuryPlanState({ swim: 2,  run: 2  }))!;
+    const long    = predictTriathlonRace(injuryPlanState({ swim: 8,  run: 8  }))!;
+    const frozen  = predictTriathlonRace(injuryPlanState({ swim: 20, run: 20 }))!;
+
+    // Healthy carries no injury debit; injured states surface the window.
+    expect(healthy.injuryRecovery).toBeUndefined();
+    expect(short.injuryRecovery).toBeDefined();
+    expect(short.injuryRecovery!.swim.resumeWeeks).toBe(2);
+    expect(short.injuryRecovery!.bike.resumeWeeks).toBe(0);  // bike never restricted
+
+    // Monotonic: more weeks lost → slower race-day projection.
+    expect(short.totalSec).toBeGreaterThanOrEqual(healthy.totalSec);
+    expect(long.totalSec).toBeGreaterThan(short.totalSec);
+    expect(frozen.totalSec).toBeGreaterThan(long.totalSec);
+
+    // The fix's point: a 2-week injury projects far closer to healthy than a
+    // never-recovers injury (the old freeze-for-the-whole-horizon behaviour).
+    expect(short.totalSec - healthy.totalSec).toBeLessThan(frozen.totalSec - healthy.totalSec);
+  });
+
+  it('partial capacity earns partial build credit: reduced bike beats blocked bike', () => {
+    const blocked = predictTriathlonRace(injuryPlanState({ bike: 6 }, { bike: 0 }))!;
+    const reduced = predictTriathlonRace(injuryPlanState({ bike: 6 }, { bike: 50 }))!;
+    // Capacity is surfaced for the caption's blocked-vs-reduced wording.
+    expect(blocked.injuryRecovery!.bike.capacity).toBe(0);
+    expect(reduced.injuryRecovery!.bike.capacity).toBe(50);
+    // A bike still ridden at half volume banks more build than a fully-blocked
+    // bike (debit 3wk vs 6wk), so its race-day projection is faster.
+    expect(reduced.totalSec).toBeLessThan(blocked.totalSec);
   });
 });

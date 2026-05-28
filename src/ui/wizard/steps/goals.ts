@@ -52,7 +52,7 @@ const MODE_TILES: ModeTile[] = [
   {
     id: 'triathlon',
     label: 'Triathlon',
-    sub: 'Swim, bike, run — 70.3 or Ironman',
+    sub: 'Swim, bike, run: 70.3 or Ironman',
     icon: ICON_TRI,
     placeholderBg: 'linear-gradient(135deg, #1d1d1d 0%, #2b2b2b 55%, #171717 100%)',
     imageUrl: triathlonImgUrl,

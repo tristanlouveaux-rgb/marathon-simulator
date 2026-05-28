@@ -21,6 +21,7 @@ import type {
   InjuryPhase,
   CapacityTestType,
   CapacityTestResult,
+  InjuryLocation,
   PhaseTransition,
   SeverityClass,
   GateDecision,
@@ -39,6 +40,78 @@ import {
 // ============================================================================
 // MODULE 1: Smarter Data Model & Trends
 // ============================================================================
+
+/**
+ * Clear discipline gates that the new event mode does not ask about, so
+ * stale answers from a prior mode do not silently re-engage when the user
+ * later switches back to that mode with the injury still active. `canRun`
+ * is always preserved — it is a required field on InjuryState and asked in
+ * every non-cycling-only mode.
+ *
+ * Call from each `initialization.*.ts` right after the eventType is assigned.
+ */
+export function clearStaleGatesForMode(
+  state: InjuryState,
+  eventType: 'running' | 'triathlon' | 'hyrox',
+  isCyclingOnly: boolean = false
+): InjuryState {
+  const cleared = { ...state };
+  // Clear stored capacity values (new slider model) for disciplines the new
+  // mode does not ask about. Also clears legacy enum gates for the same set,
+  // so old stored state migrates cleanly when the user switches modes.
+  // `returnRampWeeksLeft` is legacy and ignored by all engines now (slider
+  // is the gradient); we still scrub it for state cleanliness.
+  const ramps = cleared.returnRampWeeksLeft ? { ...cleared.returnRampWeeksLeft } : undefined;
+  const clearRampKey = (k: 'run' | 'bike' | 'swim' | 'stations') => {
+    if (ramps && k in ramps) delete ramps[k];
+  };
+  if (isCyclingOnly) {
+    cleared.canSwim = undefined;
+    cleared.canUpperLoad = undefined;
+    cleared.canLowerLoad = undefined;
+    cleared.swimCapacity = undefined;
+    cleared.upperLoadCapacity = undefined;
+    cleared.lowerLoadCapacity = undefined;
+    clearRampKey('swim');
+    clearRampKey('run');
+    clearRampKey('stations');
+  } else {
+    switch (eventType) {
+      case 'running':
+        cleared.canBike = undefined;
+        cleared.canSwim = undefined;
+        cleared.canUpperLoad = undefined;
+        cleared.canLowerLoad = undefined;
+        cleared.bikeCapacity = undefined;
+        cleared.swimCapacity = undefined;
+        cleared.upperLoadCapacity = undefined;
+        cleared.lowerLoadCapacity = undefined;
+        clearRampKey('bike');
+        clearRampKey('swim');
+        clearRampKey('stations');
+        break;
+      case 'triathlon':
+        cleared.canUpperLoad = undefined;
+        cleared.canLowerLoad = undefined;
+        cleared.upperLoadCapacity = undefined;
+        cleared.lowerLoadCapacity = undefined;
+        clearRampKey('stations');
+        break;
+      case 'hyrox':
+        cleared.canBike = undefined;
+        cleared.canSwim = undefined;
+        cleared.bikeCapacity = undefined;
+        cleared.swimCapacity = undefined;
+        clearRampKey('bike');
+        clearRampKey('swim');
+        break;
+    }
+  }
+  if (ramps) {
+    cleared.returnRampWeeksLeft = Object.keys(ramps).length > 0 ? ramps : undefined;
+  }
+  return cleared;
+}
 
 /**
  * Record a new pain level in the injury history
@@ -461,8 +534,162 @@ const PHASE_ORDER: InjuryPhase[] = ['acute', 'rehab', 'test_capacity', 'return_t
 /** Minimum hours in acute phase */
 const ACUTE_PHASE_MIN_HOURS = 72;
 
-/** Required capacity tests to progress from test_capacity phase */
-const REQUIRED_CAPACITY_TESTS: CapacityTestType[] = ['pain_free_walk', 'single_leg_hop'];
+/**
+ * Required capacity tests to progress from test_capacity phase, keyed by
+ * injury location. Without location-awareness, the legacy `pain_free_walk` +
+ * `single_leg_hop` pair would block upper-body / neck / chest injuries from
+ * ever progressing through capacity testing — a shoulder injury can't be
+ * cleared by a single-leg hop.
+ *
+ * Choices are clinically idiomatic: shoulder/upper-arm get ROM + isometric
+ * (rotator-cuff staples), elbow/forearm/wrist get grip + isometric (tennis-
+ * elbow / wrist-strain return), neck gets pain-free rotation + isometric,
+ * chest/ribs get deep breath + rotation. Lower-body remains the original
+ * pair. 'other' falls back to pain_free_walk only.
+ */
+const CAPACITY_TESTS_BY_LOCATION: Record<InjuryLocation, CapacityTestType[]> = {
+  // Lower-body — original pair
+  foot:       ['pain_free_walk', 'single_leg_hop'],
+  knee:       ['pain_free_walk', 'single_leg_hop'],
+  calf:       ['pain_free_walk', 'single_leg_hop'],
+  hamstring:  ['pain_free_walk', 'single_leg_hop'],
+  hip:        ['pain_free_walk', 'single_leg_hop'],
+  // Back — walk + isometric (avoid hop impact)
+  back:       ['pain_free_walk', 'isometric_hold'],
+  // Upper-body
+  shoulder:   ['shoulder_rotation', 'isometric_hold'],
+  upper_arm:  ['shoulder_rotation', 'isometric_hold'],
+  elbow:      ['grip_strength', 'isometric_hold'],
+  forearm:    ['grip_strength', 'isometric_hold'],
+  wrist:      ['grip_strength', 'isometric_hold'],
+  // Axial
+  neck:       ['pain_free_rotation', 'isometric_hold'],
+  chest_ribs: ['deep_breath', 'pain_free_rotation'],
+  // Default
+  other:      ['pain_free_walk'],
+};
+
+/** Returns the required capacity tests for an injury based on its location. */
+export function getRequiredCapacityTests(location: InjuryLocation): CapacityTestType[] {
+  return CAPACITY_TESTS_BY_LOCATION[location] ?? CAPACITY_TESTS_BY_LOCATION.other;
+}
+
+/** Discipline keys read by the plan engines and the modal. */
+export type DisciplineKey = 'run' | 'bike' | 'swim' | 'upperLoad' | 'lowerLoad';
+
+/**
+ * Get the user's self-reported capacity (0–100) for a discipline. Reads the
+ * new `<discipline>Capacity` slider field; falls back to translating the
+ * legacy 3-tier enum so existing stored state (or tests that still use the
+ * enum form) keeps working: `yes` → 100, `limited` → 50, `no` → 0.
+ *
+ * Returns 100 (no constraint) when neither the new field nor the legacy enum
+ * is set — that matches the existing engine semantic where undefined gates
+ * are treated as "no restriction".
+ */
+export function getDisciplineCapacity(
+  state: InjuryState | undefined,
+  discipline: DisciplineKey,
+): number {
+  if (!state) return 100;
+  const newFieldMap: Record<DisciplineKey, number | undefined> = {
+    run:       state.runCapacity,
+    bike:      state.bikeCapacity,
+    swim:      state.swimCapacity,
+    upperLoad: state.upperLoadCapacity,
+    lowerLoad: state.lowerLoadCapacity,
+  };
+  const direct = newFieldMap[discipline];
+  if (typeof direct === 'number') return clampCapacity(direct);
+
+  const legacyMap: Record<DisciplineKey, 'yes' | 'limited' | 'no' | undefined> = {
+    run:       state.canRun,
+    bike:      state.canBike,
+    swim:      state.canSwim,
+    upperLoad: state.canUpperLoad,
+    lowerLoad: state.canLowerLoad,
+  };
+  const legacy = legacyMap[discipline];
+  if (legacy === 'no')      return 0;
+  if (legacy === 'limited') return 50;
+  if (legacy === 'yes')     return 100;
+  return 100;
+}
+
+function clampCapacity(v: number): number {
+  if (!Number.isFinite(v)) return 100;
+  if (v < 0) return 0;
+  if (v > 100) return 100;
+  return Math.round(v);
+}
+
+/** Capacity-field keys, one per trainable discipline/region. Names match the
+ *  `*Capacity` fields on InjuryState so a single key drives both the modal
+ *  slider and the state write. */
+export type CapacityKey =
+  | 'runCapacity'
+  | 'bikeCapacity'
+  | 'swimCapacity'
+  | 'upperLoadCapacity'
+  | 'lowerLoadCapacity';
+
+/**
+ * Heuristic default capacity (0–100) per injury location. Pre-selected on a
+ * fresh injury so the user does not have to drag every slider — a shoulder
+ * defaults swim → 0, bike → 50 (one-handed riding), run → 100. The injury
+ * modal lets the user override any slider before saving. The 50/100 anchor
+ * values mirror the prior LOCATION_GATE_DEFAULTS 3-tier table (`yes`→100,
+ * `limited`→50, `no`→0).
+ *
+ * This is the canonical physio map for body-region loadability. It lives in
+ * the engine (not the UI modal) so the plan engines can derive which regions
+ * are safe to load for strength prescription even in modes whose modal never
+ * shows the upper/lower-load sliders (running, triathlon). The injury
+ * `location` is always set, so the upper/lower columns always resolve.
+ */
+export const LOCATION_CAPACITY_DEFAULTS: Record<InjuryLocation, Record<CapacityKey, number>> = {
+  foot:       { runCapacity: 0,   bikeCapacity: 100, swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 50  },
+  knee:       { runCapacity: 0,   bikeCapacity: 50,  swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 0   },
+  calf:       { runCapacity: 0,   bikeCapacity: 50,  swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 50  },
+  hamstring:  { runCapacity: 0,   bikeCapacity: 50,  swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 0   },
+  hip:        { runCapacity: 0,   bikeCapacity: 50,  swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 0   },
+  back:       { runCapacity: 50,  bikeCapacity: 50,  swimCapacity: 50,  upperLoadCapacity: 0,   lowerLoadCapacity: 0   },
+  shoulder:   { runCapacity: 100, bikeCapacity: 50,  swimCapacity: 0,   upperLoadCapacity: 0,   lowerLoadCapacity: 100 },
+  upper_arm:  { runCapacity: 100, bikeCapacity: 50,  swimCapacity: 0,   upperLoadCapacity: 0,   lowerLoadCapacity: 100 },
+  elbow:      { runCapacity: 100, bikeCapacity: 50,  swimCapacity: 50,  upperLoadCapacity: 0,   lowerLoadCapacity: 50  },
+  forearm:    { runCapacity: 100, bikeCapacity: 50,  swimCapacity: 50,  upperLoadCapacity: 0,   lowerLoadCapacity: 100 },
+  wrist:      { runCapacity: 100, bikeCapacity: 50,  swimCapacity: 50,  upperLoadCapacity: 0,   lowerLoadCapacity: 100 },
+  neck:       { runCapacity: 50,  bikeCapacity: 50,  swimCapacity: 0,   upperLoadCapacity: 50,  lowerLoadCapacity: 100 },
+  chest_ribs: { runCapacity: 50,  bikeCapacity: 50,  swimCapacity: 0,   upperLoadCapacity: 0,   lowerLoadCapacity: 50  },
+  other:      { runCapacity: 0,   bikeCapacity: 100, swimCapacity: 100, upperLoadCapacity: 100, lowerLoadCapacity: 100 },
+};
+
+/**
+ * Body-region loadability (0–100) for strength prescription during injury.
+ *
+ * Reads the user's explicit upper/lower-load sliders when set (HYROX users set
+ * these directly in the injury modal). Otherwise falls back to the per-location
+ * physio defaults above — every injury has a location, so this always resolves
+ * even when the active mode's modal never showed the upper/lower sliders.
+ *
+ * 0   → region must not be loaded (e.g. lower-body for a knee injury)
+ * 100 → region fully loadable
+ * 1–99 → loadable at reduced volume
+ */
+export function bodyRegionLoadability(
+  injuryState: InjuryState | undefined,
+): { upper: number; lower: number } {
+  if (!injuryState) return { upper: 100, lower: 100 };
+  const loc = injuryState.location || 'other';
+  const def = LOCATION_CAPACITY_DEFAULTS[loc] ?? LOCATION_CAPACITY_DEFAULTS.other;
+  const upper = typeof injuryState.upperLoadCapacity === 'number'
+    ? clampCapacity(injuryState.upperLoadCapacity)
+    : def.upperLoadCapacity;
+  const lower = typeof injuryState.lowerLoadCapacity === 'number'
+    ? clampCapacity(injuryState.lowerLoadCapacity)
+    : def.lowerLoadCapacity;
+  return { upper, lower };
+}
 
 /**
  * Get the previous phase (for regression)
@@ -577,9 +804,8 @@ export function canProgressFromAcute(state: InjuryState): boolean {
  * Check if all required capacity tests are passed
  */
 export function hasPassedRequiredCapacityTests(state: InjuryState): boolean {
-  return REQUIRED_CAPACITY_TESTS.every(test =>
-    state.capacityTestsPassed.includes(test)
-  );
+  const required = getRequiredCapacityTests(state.location);
+  return required.every(test => state.capacityTestsPassed.includes(test));
 }
 
 /**
@@ -711,16 +937,24 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
       }
       break;
 
-    case 'test_capacity':
-      // Fast-track: can run pain-free → auto-pass capacity tests
-      if (state.canRun === 'yes' && state.currentPain <= 1) {
-        newState.capacityTestsPassed = [...REQUIRED_CAPACITY_TESTS];
+    case 'test_capacity': {
+      // Fast-track: can run pain-free is meaningful proof of recovery for
+      // a lower-body injury (the affected region is now functional under
+      // load). For upper-body / neck / chest injuries the user must pass
+      // the actual region-relevant tests; "can run" tells us nothing about
+      // a shoulder's rotator-cuff state.
+      const isLowerBody = state.location === 'foot' || state.location === 'knee'
+        || state.location === 'calf' || state.location === 'hamstring' || state.location === 'hip';
+      const required = getRequiredCapacityTests(state.location);
+      if (isLowerBody && state.canRun === 'yes' && state.currentPain <= 1) {
+        newState.capacityTestsPassed = [...required];
         return applyPhaseProgression(newState, 'Can run pain-free — capacity tests auto-passed');
       }
       if (hasPassedRequiredCapacityTests(state)) {
         return applyPhaseProgression(newState, 'All required capacity tests passed');
       }
       break;
+    }
 
     case 'return_to_run':
       // Response-gated: only resolve when returnToRunLevel > 8 (set by gate function)
@@ -811,24 +1045,33 @@ export function generateRehabPhaseWorkouts(injuryState?: InjuryState): Workout[]
  * Generate capacity test session for test_capacity phase
  */
 export function generateCapacityTestSession(state: InjuryState): Workout[] {
-  const remainingTests = REQUIRED_CAPACITY_TESTS.filter(
+  const required = getRequiredCapacityTests(state.location);
+  const remainingTests = required.filter(
     test => !state.capacityTestsPassed.includes(test)
   );
 
   const testNames: Record<CapacityTestType, string> = {
-    single_leg_hop: 'Single Leg Hop Test',
-    pain_free_walk: '30-Minute Walk Test',
-    isometric_hold: 'Isometric Hold Test',
-    stair_test: 'Stair Test',
-    squat_test: 'Squat Test',
+    single_leg_hop:     'Single Leg Hop Test',
+    pain_free_walk:     '30-Minute Walk Test',
+    isometric_hold:     'Isometric Hold Test',
+    stair_test:         'Stair Test',
+    squat_test:         'Squat Test',
+    shoulder_rotation:  'Shoulder ROM Test',
+    grip_strength:      'Grip Strength Test',
+    pain_free_rotation: 'Rotation Test',
+    deep_breath:        'Deep Breath Test',
   };
 
   const testDescriptions: Record<CapacityTestType, string> = {
-    single_leg_hop: '10x single leg hops on affected side (pain-free)',
-    pain_free_walk: '30 minutes continuous walking (pain-free)',
-    isometric_hold: '30-second isometric contraction (pain-free)',
-    stair_test: '2 flights up/down stairs (pain-free)',
-    squat_test: '10x bodyweight squats (pain-free)',
+    single_leg_hop:     '10x single leg hops on affected side (pain-free)',
+    pain_free_walk:     '30 minutes continuous walking (pain-free)',
+    isometric_hold:     '30-second isometric contraction (pain-free)',
+    stair_test:         '2 flights up/down stairs (pain-free)',
+    squat_test:         '10x bodyweight squats (pain-free)',
+    shoulder_rotation:  'Slow shoulder rotation through full range — internal, external, overhead (pain-free)',
+    grip_strength:      'Firm grip squeeze held for 30s (pain-free)',
+    pain_free_rotation: 'Slow rotation through full available range — neck or torso (pain-free)',
+    deep_breath:        '3-5 slow deep breaths to maximal comfortable depth (pain-free)',
   };
 
   return remainingTests.map(testType => ({

@@ -94,6 +94,7 @@ import {
 } from './tri-volume-by-discipline';
 import { computeTriAdherence } from './tri-adherence';
 import { applyCourseFactors } from './course-factors';
+import { heatStrainRatioForState } from './body-mass-adaptations';
 import { lookupEmpiricalCourseFactors, pickCourseFactors } from './empirical-course-factors';
 import {
   lookupEmpiricalTransitions,
@@ -113,10 +114,53 @@ import {
   CLIMATE_BIKE_MULTIPLIER,
   type ClimateCategory,
 } from '@/constants/triathlon-course-factors';
+import type { InjuryState } from '@/types/injury';
+import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Top-level entry point
 // ───────────────────────────────────────────────────────────────────────────
+
+/** Per-discipline recovery state read off a current injury. */
+interface DisciplineRecovery {
+  /** Weeks until the discipline returns to full, clamped to the race horizon.
+   *  0 = unrestricted or no captured window (legacy state). */
+  resumeWeeks: number;
+  /** Current capacity 0–100. 0 = blocked, 1–99 = reduced, 100 = full. */
+  capacity: number;
+}
+
+/**
+ * Per-discipline recovery info owed to a current injury. The resume week drives
+ * the dose-sampling offset and the forecast caption; capacity scales the
+ * build-time debit so a discipline you can still partly train (e.g. bike at
+ * 50%) loses only a fraction of its build weeks, not all of them.
+ */
+function computeInjuryRecoveryWeeks(
+  state: SimulatorState,
+  weeksRemaining: number,
+): { swim: DisciplineRecovery; bike: DisciplineRecovery; run: DisciplineRecovery } {
+  const inj = (state as any).injuryState as InjuryState | undefined;
+  const none: DisciplineRecovery = { resumeWeeks: 0, capacity: 100 };
+  const allNone = { swim: none, bike: none, run: none };
+  if (!inj?.active || !inj.resumeWeeksByDiscipline) return allNone;
+  const resume = inj.resumeWeeksByDiscipline;
+  const build = (w: number | undefined, disc: DisciplineKey): DisciplineRecovery => ({
+    resumeWeeks: typeof w === 'number' && w > 0 ? Math.min(w, weeksRemaining) : 0,
+    capacity: getDisciplineCapacity(inj, disc),
+  });
+  return {
+    swim: build(resume.swim, 'swim'),
+    bike: build(resume.bike, 'bike'),
+    run:  build(resume.run,  'run'),
+  };
+}
+
+/** Build-time debit (weeks) for a discipline: full window when blocked,
+ *  fractional when still trainable at reduced capacity. */
+function recoveryDebitWeeks(r: DisciplineRecovery): number {
+  return r.resumeWeeks * (1 - Math.max(0, Math.min(100, r.capacity)) / 100);
+}
 
 export function predictTriathlonRace(state: SimulatorState): TriRacePrediction | null {
   const tri = state.triConfig;
@@ -137,12 +181,39 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
 
   // ── Live projection inputs ───────────────────────────────────────────────
   const weeksRemaining = computeWeeksRemaining(state);
+
+  // ── Injury-aware recovery debit (per discipline) ─────────────────────────
+  // A current injury costs the athlete only the disciplines they have
+  // restricted, and only until each one's captured resume week. We debit each
+  // discipline its own recovery weeks of effective build time, then sample the
+  // projected dose from the weeks AFTER every restricted discipline has
+  // returned — so a 2-week swim/run injury on a 15-week 70.3 plan projects ~13
+  // weeks of swim/run build at the recovered dose, not zero. See SCIENCE_LOG
+  // "Injury-aware triathlon projection".
+  const recoveryWeeks = computeInjuryRecoveryWeeks(state, weeksRemaining);
+  const maxRecovery = Math.max(
+    recoveryWeeks.swim.resumeWeeks, recoveryWeeks.bike.resumeWeeks, recoveryWeeks.run.resumeWeeks,
+  );
+  // Sample the recovered dose: skip ahead past the longest restriction so the
+  // plan weeks we read have every discipline restored. Clamp so at least one
+  // week before the race is still sampled.
+  const doseOffset = Math.min(maxRecovery, Math.max(0, weeksRemaining - 1));
+  // Per-discipline effective build weeks: each discipline loses only the build
+  // it actually misses. A blocked discipline (capacity 0) loses its whole
+  // window; a reduced one (e.g. bike at 50%) loses only the fraction it can't
+  // train, so it still banks partial build. Bike unrestricted = full horizon.
+  const effectiveWeeks = {
+    swim: Math.max(0, weeksRemaining - recoveryDebitWeeks(recoveryWeeks.swim)),
+    bike: Math.max(0, weeksRemaining - recoveryDebitWeeks(recoveryWeeks.bike)),
+    run:  Math.max(0, weeksRemaining - recoveryDebitWeeks(recoveryWeeks.run)),
+  };
+
   // Use PLANNED upcoming sessions, not historical actuals — the projection
   // answers "if you stick with the plan, here's race day". For week 1 of a
   // fresh plan with no logged sessions yet, historical would read 0/wk and
   // hit the undertraining penalty, making the projection slower than current.
-  const sessions = plannedSessionsPerWeekByDiscipline(state, 4);
-  const plannedHours = plannedHoursPerWeekByDiscipline(state, 4);
+  const sessions = plannedSessionsPerWeekByDiscipline(state, 4, doseOffset);
+  const plannedHours = plannedHoursPerWeekByDiscipline(state, 4, doseOffset);
   const adherence = computeTriAdherence(state, 4);
   const longestSession = longestSessionByDiscipline(state, 12);
   const yearsTraining = computeYearsOfTraining(state);
@@ -168,6 +239,10 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
     currentVdot,
     cssSource: tri.swim?.cssSource,
     weeksRemaining,
+    // Per-discipline build weeks after the injury debit. Each discipline gains
+    // fitness only over the weeks it can actually train; bike (unrestricted)
+    // keeps the full horizon.
+    weeksRemainingByDiscipline: effectiveWeeks,
     sessions,
     adherence,
     experienceLevel,
@@ -247,20 +322,23 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
   const swimRefHours = targets.swim.byBand.intermediate.weeklyVolume;
   const bikeRefHours = targets.bike.byBand.intermediate.weeklyVolume;
 
+  // Per-discipline effective build weeks feed the closure math too: a
+  // discipline lost to injury for part of the horizon has less time to close
+  // its endurance gap, so its residual race-day penalty is larger.
   const swimPenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining, plannedSessions: sessions.swim, refSessions: swimRef,
+    weeksRemaining: effectiveWeeks.swim, plannedSessions: sessions.swim, refSessions: swimRef,
     closureWeeks, taperWeeks: swimTaper,
     plannedHours: plannedHours.swim, refHours: swimRefHours,
     currentScore: raceReadiness.swim.score,
   });
   const bikePenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining, plannedSessions: sessions.bike, refSessions: bikeRef,
+    weeksRemaining: effectiveWeeks.bike, plannedSessions: sessions.bike, refSessions: bikeRef,
     closureWeeks, taperWeeks: bikeTaper,
     plannedHours: plannedHours.bike, refHours: bikeRefHours,
     currentScore: raceReadiness.bike.score,
   });
   const runPenaltyShare = computeProjectionPenaltyShare({
-    weeksRemaining, plannedSessions: sessions.run, refSessions: runRef,
+    weeksRemaining: effectiveWeeks.run, plannedSessions: sessions.run, refSessions: runRef,
     closureWeeks, taperWeeks: runTaper,
     currentScore: raceReadiness.run.score,
     // Run target is km/wk not hours; pass undefined to fall back to
@@ -430,6 +508,16 @@ export function predictTriathlonRace(state: SimulatorState): TriRacePrediction |
       bike: projected.bikeSec,
       run:  projected.runSec,
     },
+    // Only attach when an injury actually debited a discipline, so the UI can
+    // show the explanatory caption. maxRecovery > 0 ⟺ at least one restricted
+    // discipline with a captured resume week.
+    ...(maxRecovery > 0 ? {
+      injuryRecovery: {
+        swim: recoveryWeeks.swim,
+        bike: recoveryWeeks.bike,
+        run:  recoveryWeeks.run,
+      },
+    } : {}),
     computedAtISO: new Date().toISOString(),
   };
 }
@@ -478,6 +566,9 @@ function buildProjection(args: {
    * recent swim activity is sparse. Skips the detraining inflation below. */
   cssSource: 'user' | 'derived' | undefined;
   weeksRemaining: number;
+  /** Per-discipline build weeks after any injury debit. Falls back to the
+   *  scalar `weeksRemaining` per discipline when absent (no injury). */
+  weeksRemainingByDiscipline?: { swim: number; bike: number; run: number };
   sessions: { swim: number; bike: number; run: number };
   adherence: ReturnType<typeof computeTriAdherence>;
   experienceLevel: string;
@@ -496,6 +587,13 @@ function buildProjection(args: {
     ftp: args.currentFtp,
     vdot: args.currentVdot,
   };
+
+  // Per-discipline build weeks (injury debit applied upstream). Each discipline
+  // builds only over the weeks it can train; absent an injury these all equal
+  // the scalar horizon.
+  const swimWeeks = args.weeksRemainingByDiscipline?.swim ?? args.weeksRemaining;
+  const bikeWeeks = args.weeksRemainingByDiscipline?.bike ?? args.weeksRemaining;
+  const runWeeks  = args.weeksRemainingByDiscipline?.run  ?? args.weeksRemaining;
 
   // Swim — CSS goes down as ability goes up. Ability-band approximated from CSS:
   // <90 = elite, <100 = advanced, <115 = intermediate, <140 = novice, else beginner.
@@ -540,7 +638,7 @@ function buildProjection(args: {
     const swimBand = demoteBandByVolume(rawSwimBand, swimWeeksActive);
     const result = applyTriHorizonSwim({
       baseline: effectiveCssBaseline,
-      weeks_remaining: args.weeksRemaining,
+      weeks_remaining: swimWeeks,
       sessions_per_week: args.sessions.swim,
       ability_band: swimBand,
       taper_weeks: defaultTaperWeeks('swim', args.distance),
@@ -558,7 +656,7 @@ function buildProjection(args: {
     const bikeBand = demoteBandByVolume(rawBikeBand, args.disciplineConfidence.bike.weeksActive);
     const result = applyTriHorizonBike({
       baseline: args.currentFtp,
-      weeks_remaining: args.weeksRemaining,
+      weeks_remaining: bikeWeeks,
       sessions_per_week: args.sessions.bike,
       ability_band: bikeBand,
       taper_weeks: defaultTaperWeeks('bike', args.distance),
@@ -575,7 +673,7 @@ function buildProjection(args: {
     const runBand = demoteBandByVolume(rawRunBand, args.disciplineConfidence.run.weeksActive);
     const result = applyTriHorizonRun({
       baseline: args.currentVdot,
-      weeks_remaining: args.weeksRemaining,
+      weeks_remaining: runWeeks,
       sessions_per_week: args.sessions.run,
       ability_band: runBand,
       taper_weeks: defaultTaperWeeks('run', args.distance),
@@ -735,7 +833,7 @@ function computeRaceTime(args: ComputeRaceTimeArgs): ComputeRaceTimeResult {
   // of the athlete-specific OW skill adjustment (ISSUE-186).
   const baseSec = { swimSec: owAdjustedSwimSec, bikeSec: baseBikeSec, runSec: baseRunSec };
   const empirical = lookupEmpiricalCourseFactors(args.raceName, args.distance, baseSec);
-  const physical  = applyCourseFactors(args.raceProfile, baseSec, args.legs.runKm);
+  const physical  = applyCourseFactors(args.raceProfile, baseSec, args.legs.runKm, heatStrainRatioForState(args.state));
   const picked    = pickCourseFactors(empirical, physical);
   const cf        = picked.output;
 

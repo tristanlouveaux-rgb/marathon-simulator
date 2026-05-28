@@ -34,6 +34,8 @@ import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
+import { buildInjuryCaption } from './injury/modal';
+import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyHaloBackground, floweyHaloAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
 // Suppress unused warnings — keeping legacy sky imports for safety
@@ -286,6 +288,10 @@ function getReadinessHTML(s: SimulatorState): string {
     if (systemicNote) return `${discSentence} ${systemicNote}`;
     return discSentence;
   })();
+  // Injury state is the dominant constraint when active. Lead with it so the
+  // user reads "blocked / capped" before the systemic readiness commentary.
+  const injuryCaption = buildInjuryCaption(s);
+  const captionWithInjury = injuryCaption ? `${injuryCaption} ${coachMessage}` : coachMessage;
   const sessionNote = _coach.sessionNote;
   const activeStrainPct = todaySignalBTSS > 0 ? strainPct : 0;
 
@@ -526,24 +532,32 @@ function getReadinessHTML(s: SimulatorState): string {
     // them to the overall label made a fresh discipline read as "Manage" alongside
     // a sentence saying it was fine — contradicting itself. A caption beneath the
     // bars handles the "fresh in isolation, tired overall" framing.
-    const makeBar = (discName: string, result: { score: number; label: string }, last = false) => {
+    // Injury-aware bar: a blocked discipline (capacity=0) overrides the readiness
+    // number with a "Blocked" treatment — showing "52 Manage" for a discipline the
+    // user can't train is misleading. A reduced discipline (0<cap<100) keeps its
+    // readiness score but appends the cap so the constraint is visible at a glance.
+    const makeBar = (discName: string, result: { score: number; label: string }, capacity = 100, last = false) => {
+      const blocked = capacity === 0;
+      const capped = capacity > 0 && capacity < 100;
       const label = result.label;
-      const col = readinessColor(label as any);
+      const col = blocked ? 'var(--c-warn)' : readinessColor(label as any);
+      const statusText = blocked ? 'Blocked' : shortStatus(label);
+      const capTag = capped ? ` · capped ${capacity}%` : '';
       return `<div style="${last ? '' : 'margin-bottom:14px'}">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
           <div style="font-size:12px;font-weight:600;color:${TEXT_M}">${discName}</div>
           <div style="display:flex;align-items:baseline;gap:6px">
-            <div style="font-size:14px;font-weight:600;color:${col}">${result.score}</div>
-            <div style="font-size:11px;color:${TEXT_S}">${shortStatus(label)}</div>
+            ${blocked ? '' : `<div style="font-size:14px;font-weight:600;color:${col}">${result.score}</div>`}
+            <div style="font-size:11px;color:${blocked ? 'var(--c-warn)' : TEXT_S};font-weight:${blocked ? '600' : '400'}">${statusText}${capTag}</div>
           </div>
         </div>
         <div style="position:relative;height:8px;border-radius:4px;background:rgba(0,0,0,0.07);overflow:hidden">
-          <div style="position:absolute;left:0;top:0;height:100%;width:${result.score}%;background:${col};border-radius:4px;transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
+          <div style="position:absolute;left:0;top:0;height:100%;width:${blocked ? 100 : result.score}%;background:${col};border-radius:4px;${blocked ? 'opacity:0.45;' : ''}transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
         </div>
       </div>`;
     };
     const fit = s.triConfig?.fitness;
-    type DiscEntry = { name: string; key: 'swim' | 'bike' | 'run'; result: typeof triReadiness.swim };
+    type DiscEntry = { name: string; key: DisciplineKey; result: typeof triReadiness.swim };
     const allDiscs: DiscEntry[] = [
       { name: 'Swim', key: 'swim', result: triReadiness.swim },
       { name: 'Bike', key: 'bike', result: triReadiness.bike },
@@ -552,13 +566,14 @@ function getReadinessHTML(s: SimulatorState): string {
     // Require both meaningful training volume (CTL ≥ 1) and at least one direct
     // activity — a single ghost swim from months ago decays to ~0.1 CTL and
     // shouldn't surface the discipline in readiness bars.
-    const discs = allDiscs.filter(d => (fit?.[d.key]?.directCount ?? 0) > 0 && (fit?.[d.key]?.ctl ?? 0) >= 1);
+    const discs = allDiscs.filter(d => (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.directCount ?? 0) > 0 && (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.ctl ?? 0) >= 1);
 
     if (discs.length === 0) return '';
     const crossTrainingBar = triReadiness.crossTraining
-      ? makeBar('Cross-training', triReadiness.crossTraining, true)
+      ? makeBar('Cross-training', triReadiness.crossTraining, 100, true)
       : '';
-    const bars = discs.map(d => makeBar(d.name, d.result)).join('');
+    const injState = (s as any).injuryState as import('@/types/injury').InjuryState | undefined;
+    const bars = discs.map(d => makeBar(d.name, d.result, getDisciplineCapacity(injState, d.key))).join('');
 
     // Divergence caption — only render when a discipline's own label is better than
     // the overall verdict (i.e. the bar would have been capped before). Tells the
@@ -676,7 +691,7 @@ function getReadinessHTML(s: SimulatorState): string {
               <div style="font-size:12px;font-weight:600;color:${TEXT_M};margin-top:4px">${ringLabel}</div>
             </div>
           </div>
-          <div style="font-size:13px;color:${TEXT_S};margin-top:16px;text-align:center;padding:0 32px;line-height:1.45">${coachMessage}</div>
+          <div style="font-size:13px;color:${TEXT_S};margin-top:16px;text-align:center;padding:0 32px;line-height:1.45">${captionWithInjury}</div>
           ${sessionNote ? `<div style="font-size:13px;color:${TEXT_S};margin-top:10px;text-align:center;padding:0 32px;line-height:1.45;border-top:1px solid var(--c-border);padding-top:10px">${sessionNote}</div>` : ''}
           ${readiness.hardFloor === 'acwr' ? `<div style="margin-top:12px;padding:8px 16px;border-radius:12px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.15)">
             <div style="font-size:12px;color:var(--c-warn);font-weight:600;line-height:1.45">Load ratio (${acwrRatioStr}) is the primary constraint. 7-day load ${acwr.status === 'high' ? 'significantly exceeds' : 'exceeds'} 28-day average.</div>

@@ -12,9 +12,41 @@
  */
 
 import type { SimulatorState } from '@/types/state';
+import type { Workout } from '@/types/state';
 import type { ReadinessLabel, ReadinessResult } from './readiness';
 import { computeReadiness } from './readiness';
 import { buildDailySignalBTSS, computeSleepDebtOutlook, deriveSleepTarget } from './sleep-insights';
+
+const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const QUALITY_KEYWORDS = ['threshold', 'vo2', 'tempo', 'sweet_spot', 'sweetspot', 'speed', 'race_pace', 'intervals', 'hills', 'brick'];
+
+function isQuality(w: Workout): boolean {
+  const t = (w.t ?? '').toLowerCase();
+  return QUALITY_KEYWORDS.some(k => t.includes(k)) || (w.rpe ?? w.r ?? 0) >= 7;
+}
+
+/**
+ * Returns the next hard session (quality workout or RPE≥7) scheduled in the
+ * upcoming `lookaheadDays` window, looking across the current and next week's
+ * `triWorkouts`. Excludes completed/skipped/replaced workouts.
+ */
+function findUpcomingHardSession(state: SimulatorState, lookaheadDays: number): { dayLabel: string; workout: Workout } | null {
+  const wks = state.wks ?? [];
+  const curIdx = state.w ?? 0;
+  const cur = wks[curIdx]?.triWorkouts ?? [];
+  const next = wks[curIdx + 1]?.triWorkouts ?? [];
+  const todayDow = (new Date().getDay() + 6) % 7;
+  const isActive = (w: Workout) => w.status !== 'completed' && w.status !== 'skipped' && w.status !== 'replaced';
+
+  for (let offset = 1; offset <= lookaheadDays; offset++) {
+    const targetDow = (todayDow + offset) % 7;
+    const wrapsToNextWeek = todayDow + offset > 6;
+    const pool = wrapsToNextWeek ? next : cur;
+    const hit = pool.find(w => w.dayOfWeek === targetDow && isActive(w) && isQuality(w));
+    if (hit) return { dayLabel: DAY_NAMES[targetDow], workout: hit };
+  }
+  return null;
+}
 
 export interface TriReadinessResult {
   swim: ReadinessResult;
@@ -58,6 +90,9 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     ? debtOutlook.debtSec - debtOutlook.typicalDebtSec
     : null;
 
+  const upcomingHardSession = findUpcomingHardSession(state, 2);
+  const upcomingHardForInput = upcomingHardSession != null;
+
   // CTL is stored as weekly EMA; for the readiness engine's "ctlNow" we pass
   // daily-equivalent (÷7) since the running side uses daily CTL.
   const buildInput = (f: { ctl: number; atl: number; tsb: number }) => ({
@@ -72,6 +107,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     hrvPersonalAvg: hrv28d,
     sleepDebtExcessSec,
     weeksOfHistory: state.triConfig?.fitnessHistory?.length ?? 0,
+    hasUpcomingHardSession: upcomingHardForInput,
   });
 
   const swim = computeReadiness(buildInput(fit.swim));
@@ -82,13 +118,27 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   // sentence. Require directCount > 0 AND CTL ≥ 1 — a single ghost swim from
   // months ago decays to ~0.1 CTL and shouldn't appear in the overall verdict
   // or the coaching sentence.
+  //
+  // Also exclude disciplines the user has explicitly gated as 'no' on the
+  // active injury. Without this, a tri user who blocked swim for weeks would
+  // see their decayed swim CTL drag the overall verdict toward "Ease Back"
+  // even though their bike + run training is on track. The verdict should
+  // reflect only what the athlete can actually do.
+  const inj = state.injuryState;
+  const isGatedOut = (disc: 'swim' | 'bike' | 'run'): boolean => {
+    if (!inj?.active) return false;
+    if (disc === 'swim') return inj.canSwim === 'no';
+    if (disc === 'bike') return inj.canBike === 'no';
+    if (disc === 'run')  return inj.canRun === 'no';
+    return false;
+  };
   const candidates = (
     [
       { disc: 'bike' as const, result: bike, ctl: fit.bike.ctl, directCount: fit.bike.directCount ?? 0 },
       { disc: 'run'  as const, result: run,  ctl: fit.run.ctl,  directCount: fit.run.directCount  ?? 0 },
       { disc: 'swim' as const, result: swim, ctl: fit.swim.ctl, directCount: fit.swim.directCount ?? 0 },
     ] as const
-  ).filter(d => d.directCount > 0 && d.ctl >= 1);
+  ).filter(d => d.directCount > 0 && d.ctl >= 1 && !isGatedOut(d.disc));
 
   const overall = candidates.length > 0
     ? candidates.reduce<ReadinessLabel>((worst, d) =>
@@ -107,13 +157,37 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     ? computeReadiness(buildInput({ ctl: crossTrainingCtl, atl: crossTrainingAtl, tsb: crossTrainingCtl - crossTrainingAtl }))
     : null;
 
+  // Which disciplines are restricted by an active injury? Used to suppress
+  // misleading "X is not the primary concern" clauses (which would imply X is
+  // available) and to reframe the load story when the flagged discipline is
+  // itself the one being rehabbed. The injury chip on the Readiness card
+  // already tells the user injury is active, so the sentence no longer needs
+  // an "Injury is active …" appendix.
+  const injuryRestricted = (() => {
+    if (!inj?.active) return new Set<'run' | 'bike' | 'swim'>();
+    const set = new Set<'run' | 'bike' | 'swim'>();
+    const restricted = (
+      cap: 'yes' | 'limited' | 'no' | undefined,
+      capacity: number | undefined,
+    ): boolean =>
+      cap === 'no' || cap === 'limited'
+      || (typeof capacity === 'number' && capacity < 100);
+    if (restricted(inj.canRun,  (inj as any).runCapacity))  set.add('run');
+    if (restricted(inj.canBike, (inj as any).bikeCapacity)) set.add('bike');
+    if (restricted(inj.canSwim, (inj as any).swimCapacity)) set.add('swim');
+    return set;
+  })();
+
   const sentence = (() => {
     if (!worstCandidate || overall === 'On Track' || overall === 'Primed') {
       return worstCandidate?.result.sentence ?? 'All disciplines are clear.';
     }
     const cap = (d: string) => d.charAt(0).toUpperCase() + d.slice(1);
+    // Exclude injury-restricted others from "not the primary concern" — that
+    // phrasing implies they are otherwise available, which contradicts the
+    // injury context the chip is already showing.
     const others = candidates
-      .filter(d => d.disc !== worstCandidate.disc)
+      .filter(d => d.disc !== worstCandidate.disc && !injuryRestricted.has(d.disc))
       .map(d => cap(d.disc)).join(' and ');
     // "clear" would contradict the UI cap — say "not the primary concern" instead.
     const othersClause = others
@@ -136,22 +210,36 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     const crossIsDominant = crossTrainingAtl > 0 && crossTrainingAtl > maxDisciplineAtl && crossIsStressed;
     const crossIsSignificant = crossTrainingAtl > 0 && crossTrainingAtl > maxDisciplineAtl * 0.5 && crossIsStressed;
 
+    const upcomingHard = upcomingHardSession;
+    const worstDisc = worstCandidate.disc;
+    const worstIsInjured = injuryRestricted.has(worstDisc);
+
     if (overall === 'Overreaching') {
       if (crossIsDominant) {
-        return `Cross-training has pushed your load above baseline. Planned sessions can continue. Reduce discretionary activities this week.`;
+        return upcomingHard
+          ? `Cross-training has pushed your load above baseline. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.t.replace(/_/g, ' ')} and cut discretionary activity this week.`
+          : `Cross-training has pushed your load above baseline. Nothing hard is planned in the next couple of days, so planned sessions are fine. Cut discretionary activity this week.`;
       }
       if (crossIsSignificant) {
-        return `${cap(worstCandidate.disc)} load is elevated relative to your baseline, with cross-training adding to the total. Reduce ${worstCandidate.disc} volume and limit extra activities this week.`;
+        return `${cap(worstDisc)} load is elevated relative to your baseline, with cross-training adding to the total. Reduce ${worstDisc} volume and limit extra activities this week.`;
       }
-      return `${cap(worstCandidate.disc)} load is high relative to your baseline. Reduce ${worstCandidate.disc} volume this week.${othersClause}`;
+      // Injured worst: the user is already at a reduced capacity cap (shown by
+      // the injury chip), so "Reduce" reads oddly — "Hold" is more accurate.
+      // The chip carries the rehab framing, so the sentence stays terse.
+      return worstIsInjured
+        ? `${cap(worstDisc)} load is climbing fast for an injury phase. Hold ${worstDisc} volume this week.${othersClause}`
+        : `${cap(worstDisc)} load is high relative to your baseline. Reduce ${worstDisc} volume this week.${othersClause}`;
     }
     if (overall === 'Ease Back') {
       if (crossIsDominant) {
-        return `Cross-training has added significant load this week. Reduce volume across all activities.`;
+        return upcomingHard
+          ? `Cross-training has added significant load this week. Ease into ${upcomingHard.dayLabel}'s ${upcomingHard.workout.t.replace(/_/g, ' ')} and hold off on extra discretionary activity.`
+          : `Cross-training has added significant load this week. Nothing hard is planned in the next couple of days, so planned sessions are fine. Hold off on extra discretionary activity.`;
       }
-      return `${cap(worstCandidate.disc)} needs more recovery.${others ? ` ${others} ${others.includes(' and ') ? 'are' : 'is'} fine today.` : ''}`;
+      const tail = others ? ` ${others} ${others.includes(' and ') ? 'are' : 'is'} fine today.` : '';
+      return `${cap(worstDisc)} needs more recovery.${tail}`;
     }
-    return `${cap(worstCandidate.disc)} load is elevated.${othersClause}`;
+    return `${cap(worstDisc)} load is elevated.${othersClause}`;
   })();
 
   return { swim, bike, run, crossTraining, overall, sentence };

@@ -56,16 +56,112 @@ describe('buildHyroxProjection', () => {
     expect(fitnessFactor!.deltaSec).toBeGreaterThan(0);
   });
 
-  it('applies a taper bonus when race is within taper window', () => {
+  it('applies a taper bonus via the horizon models when race is within taper window', () => {
     const tomorrow7d = new Date();
     tomorrow7d.setDate(tomorrow7d.getDate() + 7);
     const raceDate = tomorrow7d.toISOString().slice(0, 10);
-    const s = buildState({ raceDate });
+    // Planned sessions need to be in `wks` for `plannedHyroxSessionsPerWeek`
+    // to return >0 — without them, the horizon's undertraining penalty
+    // cancels the taper bonus.
+    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
+    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
+    const s = buildState({ raceDate }, { wks } as unknown as Partial<SimulatorState>);
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
-    const taperFactor = proj.factors.find(f => f.name === 'Taper bonus');
-    expect(taperFactor).toBeDefined();
-    expect(taperFactor!.deltaSec).toBeLessThan(0); // bonus = faster
+    // Taper is owned by the per-discipline horizon models — no separate
+    // "Taper bonus" factor. The stations + roxzone horizons apply their
+    // per-class taper bonus when inside the window, so the headline
+    // projection is faster than today.
+    expect(proj.improvementSec).toBeLessThan(0);
+    expect(proj.factors.find(f => f.name === 'Taper bonus')).toBeUndefined();
+    const stationsTraj = proj.factors.find(f => f.name === 'Stations fitness trajectory');
+    expect(stationsTraj).toBeDefined();
+    expect(stationsTraj!.deltaSec).toBeLessThan(0);
+  });
+
+  it('attributes a running-fitness gain to the run discipline via VDOT horizon', () => {
+    const eightWeeks = new Date();
+    eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
+    const raceDate = eightWeeks.toISOString().slice(0, 10);
+    const s = buildState({ raceDate }, { v: 50, wkm: 50, typ: 'Balanced' } as Partial<SimulatorState>);
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    // Run portion should project faster than today.
+    expect(proj.byDiscipline.run.projectedSec).toBeLessThan(p.runSec);
+    // A "Running fitness trajectory" factor should appear in the breakdown.
+    const runTraj = proj.factors.find(f => f.name === 'Running fitness trajectory');
+    expect(runTraj).toBeDefined();
+    expect(runTraj!.deltaSec).toBeLessThan(0);
+  });
+
+  it('does not project a run-fitness gain when the race has already passed', () => {
+    const s = buildState({}, { v: 50, wkm: 50 } as Partial<SimulatorState>);  // no raceDate
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    expect(proj.byDiscipline.run.deltaSec).toBe(0);
+    expect(proj.factors.find(f => f.name === 'Running fitness trajectory')).toBeUndefined();
+  });
+
+  it('reconciles: projectedTotalSec equals sum of byDiscipline projections', () => {
+    // Race in 8 weeks, planned sessions present, VDOT set → all three
+    // horizons fire and the factor model has work to do.
+    const eightWeeks = new Date();
+    eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
+    const raceDate = eightWeeks.toISOString().slice(0, 10);
+    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
+    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
+    const s = buildState(
+      { raceDate, mtlCTL: 200 },
+      { v: 50, wkm: 50, typ: 'Balanced', wks } as unknown as Partial<SimulatorState>,
+    );
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    const sumOfDisciplines =
+      proj.byDiscipline.run.projectedSec +
+      proj.byDiscipline.stations.projectedSec +
+      proj.byDiscipline.roxzone.projectedSec;
+    expect(proj.projectedTotalSec).toBe(sumOfDisciplines);
+  });
+
+  it('reconciles: byDiscipline.stations roughly matches the per-station horizon sum', () => {
+    // Without any factor modulator firing, byDiscipline.stations equals the
+    // raw horizon sum exactly. With modulators, they differ by `factorPct ×
+    // stationsHorizon`. Either way, the per-station rows the UI shows must
+    // be the same series fed into byDiscipline.stations.
+    const eightWeeks = new Date();
+    eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
+    const raceDate = eightWeeks.toISOString().slice(0, 10);
+    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
+    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
+    const s = buildState({ raceDate }, { wks } as unknown as Partial<SimulatorState>);
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    expect(p.projection).toBeDefined();
+    const perStationSum = p.projection!.stations.reduce((sum, st) => sum + st.projectedSec, 0);
+    // No MTL CTL, default sessions, perfect adherence, taper at 8w-out is
+    // fully outside the readiness window → factorPct ≈ 0. byDiscipline.
+    // stations should equal perStationSum within ±2s rounding tolerance.
+    expect(Math.abs(proj.byDiscipline.stations.projectedSec - perStationSum)).toBeLessThanOrEqual(2);
+  });
+
+  it('reconciles: sum of factors[].deltaSec equals improvementSec', () => {
+    // Transparency contract — the factor breakdown the UI shows must sum to
+    // the headline delta. With MTL above anchor, run horizon, and station
+    // horizon all firing, the breakdown should still close.
+    const eightWeeks = new Date();
+    eightWeeks.setDate(eightWeeks.getDate() + 8 * 7);
+    const raceDate = eightWeeks.toISOString().slice(0, 10);
+    const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
+    const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
+    const s = buildState(
+      { raceDate, mtlCTL: 200 },
+      { v: 50, wkm: 50, typ: 'Balanced', wks } as unknown as Partial<SimulatorState>,
+    );
+    const p = predictHyroxRace(s)!;
+    const proj = buildHyroxProjection(s, p);
+    const factorSum = proj.factors.reduce((s, f) => s + f.deltaSec, 0);
+    // Multiple Math.round calls per factor row → tolerance of ±factor count.
+    expect(Math.abs(factorSum - proj.improvementSec)).toBeLessThanOrEqual(proj.factors.length);
   });
 
   it('confidence range widens for far-out races and low confidence', () => {

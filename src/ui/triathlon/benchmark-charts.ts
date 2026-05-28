@@ -20,7 +20,7 @@ export function buildBenchmarkTrendChart(
   inverted = false,
 ): string {
   if (samples.length < 2) {
-    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far — needs 2+');
+    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far, needs 2+');
   }
 
   const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
@@ -87,7 +87,7 @@ function fmtCssPace(secPer100m: number): string {
 /** CSS-specific wrapper that pace-formats the headline and delta. */
 export function buildCssTrendChart(samples: BenchmarkSample[]): string {
   if (samples.length < 2) {
-    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far — needs 2+');
+    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far, needs 2+');
   }
   const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
   const latest = sorted[sorted.length - 1].value;
@@ -113,7 +113,7 @@ function fmtLtPace(secPerKm: number): string {
 /** LT-specific wrapper that pace-formats the headline and delta. */
 export function buildLtTrendChart(samples: BenchmarkSample[]): string {
   if (samples.length < 2) {
-    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far — needs 2+');
+    return chartEmptyState(55, 'Fills as your tests accrue', samples.length === 0 ? 'No samples yet' : '1 sample so far, needs 2+');
   }
   const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
   const latest = sorted[sorted.length - 1].value;

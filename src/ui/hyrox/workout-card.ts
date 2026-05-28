@@ -44,7 +44,7 @@ function renderComponents(components: HyroxComponent[]): string {
     const display = STATION_DISPLAY[c.type as HyroxStation];
     if (!display) return '';
     const dist = c.reps ? `${c.reps} reps` : display.distance;
-    return `<li style="margin-bottom:2px">${display.name} — ${dist}</li>`;
+    return `<li style="margin-bottom:2px">${display.name}, ${dist}</li>`;
   });
 
   return `
@@ -114,7 +114,7 @@ export function renderHyroxWorkoutCard(
       <!-- Taper eccentric warning -->
       ${showTaperWarning ? `
         <div style="margin-top:8px;padding:6px 10px;border-radius:8px;background:rgba(184,116,44,0.07);border:1px solid rgba(184,116,44,0.2);font-size:11px;color:#8a5820;line-height:1.4">
-          Race in ${daysToRace} day${daysToRace === 1 ? '' : 's'} — technique pace only for eccentric stations.
+          Race in ${daysToRace} day${daysToRace === 1 ? '' : 's'}. Technique pace only for eccentric stations.
         </div>
       ` : ''}
       <!-- Tap CTA -->

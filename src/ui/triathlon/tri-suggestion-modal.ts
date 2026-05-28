@@ -277,7 +277,7 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
     ${belowFloorWarning}
     <details open style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
       <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
-        Reduce — ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
+        Reduce. ${reduceMods.length} change${reduceMods.length === 1 ? '' : 's'}
       </summary>
       <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
         ${reduceList}
@@ -286,7 +286,7 @@ function renderOverloadBody(opts: CrossTrainingOverloadResult, selected: Discipl
     ${replaceMods.length > 0 ? `
       <details style="border:1px solid var(--c-border);border-radius:10px;padding:10px 12px;margin-top:6px">
         <summary style="font-size:12px;color:#0F172A;font-weight:500;cursor:pointer;list-style:none">
-          Replace &amp; Reduce — ${replaceMods.length} change${replaceMods.length === 1 ? '' : 's'}
+          Replace &amp; Reduce. ${replaceMods.length} change${replaceMods.length === 1 ? '' : 's'}
         </summary>
         <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px">
           ${replaceMods.map(renderModLine).join('')}

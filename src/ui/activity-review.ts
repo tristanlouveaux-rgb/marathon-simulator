@@ -233,7 +233,7 @@ export function showActivityReview(
   } catch (err) {
     // If building the matching screen throws, tear down the overlay so the user
     // isn't left staring at a blank full-screen backdrop. Log so we can diagnose.
-    console.error('[activity-review] showMatchingEntryScreen crashed — removing overlay', err);
+    console.error('[activity-review] showMatchingEntryScreen crashed, removing overlay', err);
     overlay.remove();
     throw err;
   }
@@ -971,7 +971,7 @@ function showRpePrompt(
         // a guess; the user's rating is the only intensity signal we have, so it should
         // drive the load that feeds ACWR (Signal A/B), recovery countdown, and tri overload.
         const adhoc = wk.adhocWorkouts?.find(w => w.id === wid);
-        if (!adhoc) return; // Not an adhoc — planned workout, leave plan-prescribed load alone.
+        if (!adhoc) return; // Not an adhoc: planned workout, leave plan-prescribed load alone.
         const actual = wk.garminActuals?.[wid];
         const hasHrSignal =
           (actual?.iTrimp != null && actual.iTrimp > 0) ||
@@ -1297,7 +1297,7 @@ function applyReview(
       addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
     }
     wk.garminMatched[item.garminId] = adhocId;
-    log(`Garmin ${formatActivityType(item.activityType)}: no gym slot — logged as extra adhoc`);
+    log(`Garmin ${formatActivityType(item.activityType)}: no gym slot, logged as extra adhoc`);
     matchedRunsForRpe.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
 

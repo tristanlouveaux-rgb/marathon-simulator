@@ -25,7 +25,7 @@ export function renderRunnerType(container: HTMLElement, state: OnboardingState)
   const pbs = state.pbs ?? {};
   const pbCount = [pbs.k5, pbs.k10, pbs.h, pbs.m].filter(v => v != null && v > 0).length;
   if (pbCount < 2) {
-    console.log(`[runner-type] Only ${pbCount} PB(s) on file — skipping classification screen.`);
+    console.log(`[runner-type] Only ${pbCount} PB(s) on file, skipping classification screen.`);
     nextStep();
     return;
   }

@@ -521,7 +521,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     <div class="ad-fade" style="animation-delay:0.46s;margin-bottom:16px">
       <div id="ad-ftp-prompt-card" style="${CARD};padding:14px 16px">
         <div style="font-size:13px;font-weight:600;color:${TEXT_M};margin-bottom:8px">Was this an FTP test?</div>
-        ${ftpSignal.best20MinW ? `<div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:12px">Best 20-min power: ${Math.round(ftpSignal.best20MinW)}W. FTP estimate ${ftpSignal.estimatedFtp}W (×0.95, Coggan).</div>` : `<div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:12px">Average power: ${Math.round(actual.averageWatts ?? 0)}W — FTP estimate ${Math.round((actual.averageWatts ?? 0) * 0.95)}W (×0.95).</div>`}
+        ${ftpSignal.best20MinW ? `<div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:12px">Best 20-min power: ${Math.round(ftpSignal.best20MinW)}W. FTP estimate ${ftpSignal.estimatedFtp}W (×0.95, Coggan).</div>` : `<div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-bottom:12px">Average power: ${Math.round(actual.averageWatts ?? 0)}W. FTP estimate ${Math.round((actual.averageWatts ?? 0) * 0.95)}W (×0.95).</div>`}
         <button id="ad-ftp-toggle" data-active="false"
           data-ftp="${ftpSignal.estimatedFtp ?? Math.round((actual.averageWatts ?? 0) * 0.95)}"
           data-twenty-min="${ftpSignal.best20MinW ?? actual.averageWatts ?? 0}"
@@ -545,7 +545,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
       position:relative;min-height:100vh;background:${PAGE_BG};
       font-family:var(--f);overflow-x:hidden;
     ">
-      <!-- Scroll atmosphere — mint palette, halo upper-centre. Reads as "session reflection". -->
+      <!-- Scroll atmosphere: mint palette, halo upper-centre. Reads as "session reflection". -->
       ${buildScrollAtmosphereBackground('adv', 'mint', { haloCenter: { cx: 200, cy: 280 } })}
       ${buildSunGlint('low')}
       <div style="position:relative;z-index:10;max-width:480px;margin:0 auto;padding-bottom:48px">

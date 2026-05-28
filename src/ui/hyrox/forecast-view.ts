@@ -332,7 +332,7 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
   const sessionsLabel = sessions > 0
     ? `${sessions.toFixed(1)} session${sessions >= 1.5 ? 's' : ''}/wk`
     : 'no planned sessions yet';
-  return `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:8px;line-height:1.5">${sessionsLabel} for ${proj.weeksRemaining.toFixed(1)} weeks. Gain rates anchored on rowing, local muscular endurance, and HIFT adaptation literature; per-class differences applied (cardio, strength-endurance, grip-carry). Taper is gradiented (Mujika 2002) — gains shrink toward race day.</div>`;
+  return `<div style="font-size:11px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:8px;line-height:1.5">${sessionsLabel} for ${proj.weeksRemaining.toFixed(1)} weeks. Gain rates anchored on rowing, local muscular endurance, and HIFT adaptation literature; per-class differences applied (cardio, strength-endurance, grip-carry). Taper is gradiented (Mujika 2002): gains shrink toward race day.</div>`;
 }
 
 /**
@@ -503,11 +503,11 @@ export function renderHyroxForecastView(): void {
             ? `Based on ${prediction.calibratedCount}/${prediction.stations.length} calibrated benchmarks${venue ? ` and venue factors` : ''}.`
           : prediction.confidence === 'medium'
             ? `${prediction.calibratedCount}/${prediction.stations.length} stations calibrated. Calibrate more to sharpen the prediction.`
-            : `Mostly seed data — only ${prediction.calibratedCount}/${prediction.stations.length} stations calibrated. Best treated as a rough benchmark.`;
+            : `Mostly seed data. Only ${prediction.calibratedCount}/${prediction.stations.length} stations calibrated. Best treated as a rough benchmark.`;
         const conversionNote = prediction.crossFormatConversion === 'doubles_to_singles'
-          ? `Forecast based on seed times — your benchmarks are from a doubles race. Add singles splits to calibrate.`
+          ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
           : prediction.crossFormatConversion === 'singles_to_doubles'
-          ? `Forecast based on seed times — your benchmarks are from a singles race. Add doubles splits to calibrate.`
+          ? `Forecast based on seed times. Your benchmarks are from a singles race. Add doubles splits to calibrate.`
           : '';
 
         // Previous-time race-equivalent line: if user logged a previous race at a different
@@ -659,7 +659,7 @@ export function renderHyroxForecastView(): void {
                   </div>
                 ` : ''}
                 ${factorRows}
-                <div style="font-size:10px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;line-height:1.4">Factor weights are heuristic — anchored on running and triathlon prediction models, not yet validated against HYROX outcome data. Treat the projection as directional, not precise.</div>
+                <div style="font-size:10px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;line-height:1.4">Factor weights are heuristic: anchored on running and triathlon prediction models, not yet validated against HYROX outcome data. Treat the projection as directional, not precise.</div>
               </div>
             `;
           })()}
@@ -688,7 +688,7 @@ export function renderHyroxForecastView(): void {
             return `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
               <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Race order</div>
-              <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">Run, station, run, station — your race in sequence. Times show today → race day projection where the horizon model expects gain.</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">Run, station, run, station. Your race in sequence. Times show today → race day projection where the horizon model expects gain.</div>
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid rgba(0,0,0,0.05);border-bottom:1px solid rgba(0,0,0,0.05);margin-bottom:2px">
                 <div style="display:flex;flex-direction:column;gap:2px">
                   <span style="font-size:12px;color:var(--c-black);font-weight:500">Average run pace</span>

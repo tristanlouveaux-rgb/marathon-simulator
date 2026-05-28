@@ -19,6 +19,8 @@ import { computePredictionInputs, type RunActivityInput } from './prediction-inp
 import { computeHRCalibratedVdot } from './effort-calibrated-vdot';
 import { cv } from './vdot';
 import { recomputeLT } from '@/data/ltSync';
+import { computeRunCalibration, applyRunCalibrationBias } from './run-calibration';
+import { getLongestRunSec, applyLongRunCap, type RunDurabilityResult } from './run-durability';
 
 const DIST_M: Record<RaceDistance, number> = {
   '5k': 5000,
@@ -153,8 +155,25 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
 
   if (!blended || blended <= 0 || !isFinite(blended)) return false;
 
-  s.blendedRaceTimeSec = blended;
-  s.blendedEffectiveVdot = cv(targetDistM, blended);
+  // Apply per-user calibration bias (tier 1: per-distance additive bias from
+  // ≥2 logged races at the same distance). Computed fresh on every refresh
+  // so newly logged races take effect immediately. Capped at ±8% of median
+  // predicted to keep one outlier from skewing future predictions.
+  const calibration = computeRunCalibration(s.runRaceLog);
+  s.runCalibration = calibration;
+  const calibratedBlend = applyRunCalibrationBias(blended, s.rd, calibration);
+
+  // Long-run durability cap. Applies a multiplicative penalty when the
+  // longest recent run is below the distance-specific threshold (orthogonal
+  // to the volume-based marathon-specificity penalty inside blendPredictions
+  // — both can fire). Stored on state for the Durability chip drill-down.
+  const longestRunSec = getLongestRunSec(s, 12);
+  const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd);
+  s.runDurability = durability;
+  const durabilityAdjustedBlend = calibratedBlend * durability.multiplier;
+
+  s.blendedRaceTimeSec = durabilityAdjustedBlend;
+  s.blendedEffectiveVdot = cv(targetDistM, durabilityAdjustedBlend);
   s.blendedLastRefreshedISO = new Date().toISOString();
 
   // Push the blended VDOT into s.v so plan generation and pace derivation
@@ -180,8 +199,21 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   const weeksRemaining = Math.max(1, (s.tw ?? 0) - ((s.w ?? 1) - 1));
   if (s.rd && s.typ && weeksRemaining > 0) {
     try {
-      const sessionsForHorizon = s.epw ?? s.rw ?? 3;
-      const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd);
+      // Include commute days so the live forecast matches what the
+      // Training chip on the forecast page displays. `s.epw` is built
+      // from structured running + cross-training; commute runs are real
+      // running stimulus and are added here per the chip-mirror rule.
+      const baseSessions = s.epw ?? s.rw ?? 3;
+      const commuteSessions = s.commuteConfig?.enabled
+        ? (s.commuteConfig.commuteDaysPerWeek ?? 0)
+        : 0;
+      const sessionsForHorizon = baseSessions + commuteSessions;
+      const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsForHorizon, s.rd, {
+        baselineKm: s.detectedWeeklyKm,
+        archetype: s.athleteArchetype?.archetype,
+        totalWeeks: s.tw,
+        taperWeeks: s.rd === 'marathon' ? 3 : 2,
+      });
       const { forecastVdot, forecastTime } = calculateLiveForecast({
         currentVdot: s.v,
         targetDistance: s.rd,
@@ -197,7 +229,12 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
         blendedAnchorSec: blended,
       });
       s.expectedFinal = forecastVdot;
-      s.forecastTime = forecastTime;
+      // Calibration bias applies to the projection (systematic prediction
+      // error doesn't disappear by race day). Durability cap does NOT —
+      // the forecast represents end-of-plan fitness, which assumes the
+      // plan delivers the required long runs before race day. Mirrors the
+      // tri engine's "execution factor" treatment (race-prediction.triathlon).
+      s.forecastTime = applyRunCalibrationBias(forecastTime, s.rd, calibration);
     } catch {
       // Leave expectedFinal untouched on any forecast failure.
     }

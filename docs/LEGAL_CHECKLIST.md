@@ -8,25 +8,27 @@ Cross-reference to launch strategy Phase 0 blockers: see `project_launch_strateg
 
 ## Public Pages (live before App Store submission)
 
-- [x] **Privacy policy** — `public/privacy.html` exists. Verify it covers: data collected, third-party processors (Supabase, Strava, Garmin, Apple HealthKit, PostHog, OpenAI/Anthropic for coach), retention, deletion rights, contact email.
-- [x] **Support page** — `public/support.html` exists.
-- [ ] **Terms of Use** — `public/terms.html` is missing. Draft via Termly. Must cover: acceptable use, liability limits, no-warranty disclaimer for training advice, account termination, governing law.
-- [ ] **Health disclaimer** — surface in onboarding *and* in the app footer. Required language pattern: "Mosaic is not a medical device. Consult a physician before starting any training programme."
+- [x] **Privacy policy** — `public/privacy.html` updated 2026-05-17. Names Anthropic + Claude Haiku, lists sub-processors (Supabase, Strava, Garmin, Apple, Anthropic), covers commute drift / route detection, GDPR rights, in-app deletion path. ICO complaint link added.
+- [x] **Support page** — `public/support.html` updated 2026-05-17 with in-app deletion + export pointers.
+- [x] **Terms of Use** — `public/terms.html` drafted 2026-05-17. Acceptable use, no-warranty for training advice, liability cap (£50 or 12-month spend, whichever greater), AI Coach informational clause, UK governing law. Linked from privacy policy and in-app Account view.
+- [x] **Health disclaimer** — App Store §1.4. Surfaced two places: (1) one-time launch modal that fires for new users post-wizard and for existing users on the next launch (`src/ui/health-disclaimer.ts`), persisted via `state.healthDisclaimerAcknowledged`; (2) quiet footer caption beneath the Legal & data section in Account view. Copy: "Mosaic is not a medical device. Consult a physician before starting any training programme. Mosaic's recommendations are informational; you are responsible for your own training decisions."
+
+> **Submission-time URL note (ISSUE-244)**: When entering URLs in App Store Connect (Privacy Policy, Terms, Support), use the `www.` prefix — `https://www.mosaicrunning.run/privacy.html`, `/terms.html`, `/support.html`. The apex (`mosaicrunning.run`) 307-redirects to the `www.` subdomain, which has tripped previous App Review checks. Apex resolves fine in browsers but the review tooling has occasionally flagged it.
 
 ## App Store Submission
 
-- [ ] **Privacy nutrition label** — declare every category of data collected. Categories Mosaic touches: Health & Fitness (HRV, sleep, HR), Identifiers (user ID), Usage Data (analytics), Diagnostics (crash logs).
-- [ ] **HealthKit plist entries** — `NSHealthShareUsageDescription` and `NSHealthUpdateUsageDescription` strings in `Info.plist` per launch_strategy Phase 0.
+- [x] **Privacy nutrition label** — declared in `docs/PRIVACY_NUTRITION_LABEL.md` (entered into App Store Connect at submission). Categories: Email, Health & Fitness (Health + Fitness), Location (precise), User Content (AI Coach messages + support email + notes), Identifiers (user ID), Diagnostics (crash + performance). No tracking.
+- [x] **HealthKit plist entries** — only `NSHealthShareUsageDescription` is present in `ios/App/App/Info.plist` (ISSUE-240, 2026-05-18: `NSHealthUpdateUsageDescription` removed because Mosaic never writes to Apple Health — keeping a usage string explaining why a key exists is a known App Review trigger). HealthKit entitlement file at `ios/App/App/App.entitlements`; `CODE_SIGN_ENTITLEMENTS = App/App.entitlements;` set on both Debug and Release configs in `project.pbxproj`. Open Xcode once before submission to confirm the HealthKit capability is registered against the provisioning profile.
 - [ ] **Strava data use compliance** — confirm Mosaic's use of Strava data complies with Strava's API agreement (no resale, no public display of other users' data).
 - [ ] **Garmin data use compliance** — same for Garmin Connect Developer Program terms.
 - [ ] **App Store Review Guidelines** — particularly §1.4 (Safety – Physical Harm), §3.1 (In-App Purchase), §5.1 (Privacy).
 
 ## GDPR & UK GDPR (required for EU/UK users)
 
-- [ ] **Cookie / consent banner** on the marketing site if any non-essential analytics fire pre-consent.
-- [ ] **Right to deletion** — in-app "Delete my account" flow that purges Supabase user data and tokens.
-- [ ] **Data export** — user can request a JSON export of their data on demand.
-- [ ] **Data Processing Agreements** — confirm Supabase, Strava, Garmin, OpenAI/Anthropic DPAs are in place (most are auto-signed at signup).
+- [ ] **Cookie / consent banner** on the marketing site if any non-essential analytics fire pre-consent. (Marketing site `marketing/` is currently untracked; revisit after content lands.)
+- [x] **Right to deletion** — in-app `Delete account` row in Account view (2026-05-17). Self-serve confirmation modal (typed "DELETE") → `delete-account` edge function → marks `deleted_at = now()` with 30-day grace period (matches `privacy.html` promise). Daily `purge-deleted-accounts` cron hard-deletes user rows and the `auth.users` record after the grace window. Edge functions ship as a follow-up commit (Phase 3 plan).
+- [x] **Data export** — in-app `Download my data` row in Account view (2026-05-17). Calls `export-user-data` edge function which returns a JSON file aggregating user rows (with tokens stripped). Edge function ships as a follow-up commit (Phase 6 plan).
+- [ ] **Data Processing Agreements** — confirm Supabase, Strava, Garmin, Anthropic DPAs are in place (most are auto-signed at signup).
 - [ ] **Cookies on marketing site** — disclose any cookies (PostHog, etc.) and gate non-essential ones behind consent.
 
 ## IP

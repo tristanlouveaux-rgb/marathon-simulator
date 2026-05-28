@@ -30,21 +30,21 @@ const RUN_CARDS: HyroxWorkoutCard[] = [
     name: 'Easy run',
     oneLine: 'Zone 2 aerobic running. Builds the engine that 8 × 1km demands.',
     example: '45 min conversational pace. RPE 4. ~6.5 km at intermediate pace.',
-    science: 'Aerobic base — Bompa & Haff 2009; Stöggl & Sperlich 2014.',
+    science: 'Aerobic base. Bompa & Haff 2009; Stöggl & Sperlich 2014.',
   },
   {
     kind: 'run_tempo',
     name: 'Tempo run',
     oneLine: 'Sustained sub-threshold work. Lifts your race pace ceiling.',
     example: '10 min WU · 20 min @ 85% HRmax · 5 min CD. RPE 6.',
-    science: 'Threshold velocity — Faude et al. 2009.',
+    science: 'Threshold velocity. Faude et al. 2009.',
   },
   {
     kind: 'run_intervals',
     name: 'Interval run',
     oneLine: 'VO2-max repeats. Top-end aerobic capacity for race surges.',
     example: '15 min WU · 6 × 800m @ 5km pace, 90s recovery · 10 min CD. RPE 8.',
-    science: 'VO2max protocol — Billat 2001; Buchheit & Laursen 2013.',
+    science: 'VO2max protocol, Billat 2001; Buchheit & Laursen 2013.',
   },
 ];
 
@@ -54,14 +54,14 @@ const STATION_CARDS: HyroxWorkoutCard[] = [
     name: 'Station technique',
     oneLine: 'Skill-focused circuits at controlled effort. Form first.',
     example: '3 rounds: 4 stations × race distance, 60s between stations, 3 min between rounds. RPE 5.',
-    science: 'Motor pattern stability — Schmidt & Lee 2014.',
+    science: 'Motor pattern stability, Schmidt & Lee 2014.',
   },
   {
     kind: 'station_density',
     name: 'Station density',
     oneLine: 'AMRAP-style higher-volume station work. Race specificity.',
     example: '2 rounds at race pace, 30s between stations, 2 min between rounds. RPE 7.',
-    science: 'Specificity + lactate clearance — Sparkes & Behm 2010.',
+    science: 'Specificity + lactate clearance, Sparkes & Behm 2010.',
   },
 ];
 
@@ -71,14 +71,14 @@ const BRICK_CARDS: HyroxWorkoutCard[] = [
     name: 'Brick session',
     oneLine: 'Run + station rounds in race order. The signature HYROX session.',
     example: '4 × (1 km run + 1 station). Builds the run-to-station transition that decides finish times.',
-    science: 'Compound conditioning — Coffey & Hawley 2017.',
+    science: 'Compound conditioning, Coffey & Hawley 2017.',
   },
   {
     kind: 'mini_brick',
     name: 'Mini brick',
     oneLine: 'Shorter brick for early phases or beginner athletes.',
     example: '4 × (500m run + erg). Half the volume, same transition stimulus.',
-    science: 'Progressive overload — Issurin 2010.',
+    science: 'Progressive overload, Issurin 2010.',
   },
 ];
 
@@ -124,7 +124,7 @@ export function renderHyroxWorkoutPreview(container: HTMLElement, _state: Onboar
           <h2 style="font-size:clamp(1.5rem,5vw,1.9rem);font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 6px;line-height:1.15">
             What your training looks like
           </h2>
-          <p class="hwp-intro">Seven session types. Each one earns its place. Variety ramps as your base develops — base phase leans aerobic, build phase adds tempo and density, peak phase gets race-specific bricks.</p>
+          <p class="hwp-intro">Seven session types. Each one earns its place. Variety ramps as your base develops: base phase leans aerobic, build phase adds tempo and density, peak phase gets race-specific bricks.</p>
         </div>
 
         <div style="width:100%;max-width:720px">

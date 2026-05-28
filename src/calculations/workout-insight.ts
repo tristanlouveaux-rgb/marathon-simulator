@@ -8,6 +8,7 @@
 
 import type { GarminActual } from '@/types';
 import { getHREffort } from '@/calculations/activity-matcher';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 
 export interface HRProfileForInsight {
   maxHR?: number | null;
@@ -164,7 +165,7 @@ function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, u
 
   const durMin = a.durationSec > 0 ? a.durationSec / 60 : 0;
   const tssActual = a.iTrimp != null && a.iTrimp > 0
-    ? Math.round((a.iTrimp * 100) / 15000)
+    ? Math.round(normalizeiTrimp(a.iTrimp))
     : durMin > 0 ? Math.round(durMin * 0.92) : null;
   let tssExpected: number | null = null;
   if (a.plannedDistanceKm != null && a.plannedDistanceKm > 0) {
@@ -206,7 +207,7 @@ function gatherSignals(a: GarminActual, prev: GarminActual | null | undefined, u
     const tssFor = (act: GarminActual): number | null => {
       const durMin = act.durationSec > 0 ? act.durationSec / 60 : 0;
       return act.iTrimp != null && act.iTrimp > 0
-        ? Math.round((act.iTrimp * 100) / 15000)
+        ? Math.round(normalizeiTrimp(act.iTrimp))
         : durMin > 0 ? Math.round(durMin * 0.92) : null;
     };
     const priorHigherTSS = opts.allActuals
@@ -568,7 +569,13 @@ function composeCyclingInsight(a: GarminActual, opts?: InsightOptions): string |
       if (viDesc) sentences.push(`Variability index ${vi.toFixed(2)}. ${capitalize(viDesc)}.`);
     }
   } else if (avg != null && avg > 0) {
-    sentences.push(`Average power ${Math.round(avg)}W. Set FTP to unlock intensity factor and bTSS.`);
+    if (ftp != null && ftp > 0) {
+      const intensity = avg / ftp;
+      const intensityPct = Math.round(intensity * 100);
+      sentences.push(`Average power ${Math.round(avg)}W at ${intensityPct}% of FTP. No normalised power on this ride, so bTSS is not estimated.`);
+    } else {
+      sentences.push(`Average power ${Math.round(avg)}W. Set FTP to unlock intensity factor and bTSS.`);
+    }
   }
 
   // HR drift on long steady rides is a useful aerobic durability signal

@@ -498,7 +498,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
           <p style="font-size:12px;color:#64748B;margin:0;line-height:1.45">Open the Garmin Connect app and sync your device to pull in last night's data.</p>
         </div>` : ''}
 
-        <!-- Stale banner — only when viewing today, not historic dates -->
+        <!-- Stale banner: only when viewing today, not historic dates -->
         ${isStale && displayDate === today ? `
         <div class="sl-fade" style="animation-delay:0.14s;margin:0 16px 10px;padding:10px 14px;border-radius:12px;border:1px solid rgba(255,149,0,0.25);background:white">
           <p style="font-size:12px;color:#FF9500;margin:0;line-height:1.4">Last synced ${latestFmt ?? ''}. Open Garmin Connect to update.</p>

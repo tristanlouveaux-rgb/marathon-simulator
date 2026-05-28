@@ -41,6 +41,16 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-family: var(--f);
+  /* iOS WKWebView rubber-band overscroll reveals the html backing behind the
+     body. Without a background it shows bare white, which reads as a jolty
+     white flash at the top/bottom of every page. Match the page colour so the
+     bounce dissolves into the off-white edge of every atmosphere gradient. */
+  background-color: var(--c-bg);
+  /* Lock text scale — stop iOS auto-inflating text in landscape/large-text mode,
+     which silently widens layouts. Pinch-zoom itself is disabled via the
+     viewport meta (user-scalable=no) so the WebView reads as a native app. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {

@@ -291,7 +291,7 @@ function getInjuryRiskHTML(s: SimulatorState): string {
       if (f.atl === 0 && f.ctl < 2) {
         sentences.push(`No ${name.toLowerCase()} activity this week.`);
       } else if (ratio > 1.5) {
-        sentences.push(`${name} is at ${ratio.toFixed(1)}x its own baseline — a discipline spike carries injury risk in that sport independent of the combined number.`);
+        sentences.push(`${name} is at ${ratio.toFixed(1)}x its own baseline. A discipline spike carries injury risk in that sport independent of the combined number.`);
       } else if (ratio > 1.3) {
         sentences.push(`${name} is slightly elevated at ${ratio.toFixed(2)}x baseline.`);
       } else if (ratio > 0 && ratio < 0.8) {

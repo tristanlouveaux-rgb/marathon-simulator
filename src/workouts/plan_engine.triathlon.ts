@@ -18,13 +18,17 @@
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { TrainingPhase } from '@/types/training';
 import type { TriSkillSlider } from '@/types/triathlon';
+import type { InjuryState } from '@/types/injury';
 import { computeTriPlanPhases } from '@/constants/triathlon-constants';
 import { generateSwimSession, pickSwimKind } from './swim';
 import { generateBikeSession, pickBikeKind } from './bike';
 import { generateBrick } from './brick';
 import { scheduleTriathlonWeek } from './scheduler.triathlon';
 import { applyTriEffortMultipliers } from '@/calculations/effort-multiplier.triathlon';
+import { crossTrainingSwapFraction } from '@/calculations/body-mass-adaptations';
 import { gp } from '@/calculations/paces';
+import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
+import { injuryStrengthDecision } from './injury-strength';
 
 /**
  * Bump this when the generator output changes in a way that should invalidate
@@ -32,7 +36,7 @@ import { gp } from '@/calculations/paces';
  * new variants, etc). `main.ts` checks this on load and regenerates tri
  * workouts if the stored version is lower.
  */
-export const TRI_GENERATOR_VERSION = 11;
+export const TRI_GENERATOR_VERSION = 17;
 
 /**
  * Generate a full triathlon plan for the current state.
@@ -129,6 +133,19 @@ function generateWeekForTriathlon(
   totalWeeks: number,
   phase: TrainingPhase
 ): Workout[] {
+  // Note (2026-05-26): the running-engine's clinical phase replacement
+  // (acute → "Complete Rest", rehab → cross-train) is NOT applied here.
+  // For tri/HYROX, the discipline gates are the correct mechanism: a
+  // shoulder injury at acute pain doesn't blanket-stop all training, it
+  // drops swim while keeping bike + run. The Session 1 "B1" wiring that
+  // routed phase workouts through tri was a misread of the running
+  // engine — phase replacement is run-only because running is single-
+  // discipline. If the user has every gate set to 'no', the gate
+  // downmix below correctly produces an empty week and the empty-state
+  // card surfaces "Plan paused this week". The clinical "acute = 72h
+  // complete rest" prescription belongs in the user's hands via the
+  // discipline gates, not in the plan engine globally.
+
   const tri = state.triConfig!;
   const timeAvailable = tri.timeAvailableHoursPerWeek ?? 10;
   const split = tri.volumeSplit ?? { swim: 0.175, bike: 0.475, run: 0.35 };
@@ -153,7 +170,7 @@ function generateWeekForTriathlon(
   // Per-discipline hours
   const swimHours = weekHours * split.swim;
   const bikeHours = weekHours * split.bike;
-  const runHours  = weekHours * split.run;
+  let runHours    = weekHours * split.run;
 
   // Session counts by phase. Disciplines that aren't active produce zero
   // sessions so subsequent loops short-circuit to empty arrays. In single-
@@ -162,7 +179,15 @@ function generateWeekForTriathlon(
   const isCyclingOnly = disciplines.length === 1 && hasBike;
   const swimSessions = hasSwim ? countSessions(swimHours, 0.75, 3) : 0;
   const bikeSessions = hasBike ? countSessions(bikeHours, 1.3, isCyclingOnly ? 5 : 3) : 0;
-  const runSessions  = hasRun  ? countSessions(runHours,  0.9,  3) : 0;
+  let   runSessions  = hasRun  ? countSessions(runHours,  0.9,  3) : 0;
+
+  // Commute runs are appended on top of the prescribed tri run sessions,
+  // not substituted for them (revised 2026-05-20 — see SCIENCE_LOG §AK).
+  // We still read commuteDays so the slot generator further down can emit
+  // the commute slots themselves.
+  const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
+    ? state.commuteConfig.commuteDaysPerWeek
+    : 0;
 
   // Generate swim sessions
   const swim: Workout[] = [];
@@ -207,11 +232,18 @@ function generateWeekForTriathlon(
   // all zones when available. Without ltPace, gp() falls back to VDOT-only
   // which diverges from the LT-anchored paces shown elsewhere in the UI.
   const easyPaceSecPerKm = state.v ? gp(state.v, state.lt ?? null).e : undefined;
+  // Body-mass cross-training swap (opt-in, mirrors running): heavier triathletes
+  // get gentler EASY aerobic runs. Same shared fraction as running mode; applied
+  // to minutes here because tri runs are time-based (running's are km-based).
+  // 0 when at/below the population reference or the user turned it off.
+  const easyVolumeKeep = state.bodyMassSwapEnabled === false
+    ? 1
+    : 1 - crossTrainingSwapFraction(state.bodyWeightKg, state.biologicalSex);
   const run: Workout[] = [];
   for (let i = 0; i < runSessions; i++) {
     const share = i === runSessions - 1 ? 0.45 : (0.55 / Math.max(1, runSessions - 1));
     const minutes = Math.max(30, Math.round(runHours * 60 * share));
-    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, easyPaceSecPerKm));
+    run.push(generateRunSessionForTri(phase, i, runSessions, minutes, rating.run as TriSkillSlider, weekIndex, easyPaceSecPerKm, easyVolumeKeep));
   }
 
   // Brick (phase: build or peak, weekly in those phases). Requires both bike
@@ -229,6 +261,47 @@ function generateWeekForTriathlon(
         ftp: tri.bike?.ftp,
         hasPowerMeter: tri.bike?.hasPowerMeter,
       });
+    }
+  }
+
+  // Commute runs. Appended to the run array on top of prescribed sessions
+  // (model revised 2026-05-20). Bidirectional commutes emit two slots per
+  // day (morning + evening) at the one-way distance. Tagged `commute: true`
+  // so the matcher prefers commute actuals against these slots.
+  if (commuteDays > 0 && hasRun && state.commuteConfig) {
+    const oneWayKm = state.commuteConfig.distanceKm;
+    const bi = state.commuteConfig.isBidirectional;
+    for (let i = 0; i < commuteDays; i++) {
+      if (bi) {
+        run.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (morning)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+        run.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (evening)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+      } else {
+        run.push({
+          t: 'easy',
+          n: `Commute ${i + 1}`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+      }
     }
   }
 
@@ -266,7 +339,143 @@ function generateWeekForTriathlon(
     5: weekendCap, 6: weekendCap,
   };
 
-  return scheduleTriathlonWeek(swim, bike, run, brick, phase, gym, minutesCapByDay);
+  // Apply discipline-gate filtering when an injury is active. 'no' drops the
+  // discipline entirely; 'limited' collapses it to a single easy recovery
+  // session that maintains the modality without aggravating the injury. The
+  // brick is dropped whenever either leg is gated, since it is a stacked
+  // intensity session that compounds risk on whichever side is compromised.
+  //
+  // weeksFromCurrent is passed so per-week ramp logic can decide if the ramp
+  // window covers THIS specific future week — without it, a 2-week ramp set
+  // at week 5 would incorrectly downmix every week 5–16 in a 16-week plan.
+  //
+  // Past weeks are skipped entirely: a current injury cannot retroactively
+  // rewrite what was prescribed in the past. This matters because main.ts's
+  // version-bump regen calls this for every week 1..tw.
+  const injuryState = (state as any).injuryState as InjuryState | undefined;
+  const isPastWeek = weekIndex < (state.w ?? 1);
+  const weeksFromCurrent = Math.max(0, weekIndex - (state.w ?? 1));
+  const adapted = isPastWeek
+    ? { swim, bike, run, brick, gym }
+    : applyTriInjuryGates(swim, bike, run, brick, gym, injuryState, weeksFromCurrent);
+
+  return scheduleTriathlonWeek(
+    adapted.swim,
+    adapted.bike,
+    adapted.run,
+    adapted.brick,
+    phase,
+    adapted.gym,
+    minutesCapByDay
+  );
+}
+
+/**
+ * Apply per-discipline capacity scaling to the generated workouts. The slider
+ * model (0–100 per discipline) replaces the prior 3-tier enum: 0 drops the
+ * discipline, 100 leaves it untouched, in-between scales each session's
+ * duration linearly. Intensity is intentionally NOT capped — the user chose
+ * volume-only scaling and self-regulates RPE in the moment. Reads via
+ * `getDisciplineCapacity` so legacy enum state still works during migration.
+ *
+ * The brick is dropped whenever EITHER leg's capacity is less than 100. A
+ * brick is a stacked-intensity session; any restriction on either leg risks
+ * aggravation when the legs are chained.
+ *
+ * `weeksFromCurrent` resolves each discipline's per-week recovery horizon.
+ * The slider sets the *magnitude* of the restriction; `resumeWeeksByDiscipline`
+ * sets *when it ends*. Once the week being generated is at or beyond a
+ * discipline's resume week, that discipline is restored to full capacity — so
+ * a 2-week swim restriction does not zero swim for the entire macrocycle.
+ * Without a captured resume week (legacy state), the discipline keeps the
+ * conservative freeze-current-capacity behaviour for all future weeks.
+ */
+function applyTriInjuryGates(
+  swim: Workout[],
+  bike: Workout[],
+  run: Workout[],
+  brick: Workout | null,
+  gym: Workout[],
+  injuryState: InjuryState | undefined,
+  weeksFromCurrent: number = 0
+): { swim: Workout[]; bike: Workout[]; run: Workout[]; brick: Workout | null; gym: Workout[] } {
+  if (!injuryState?.active) {
+    return { swim, bike, run, brick, gym };
+  }
+
+  // A discipline is fully recovered for THIS week once we are at or past its
+  // captured resume week. Returns the un-restricted capacity (100) in that
+  // case, otherwise the user's reported capacity for the discipline.
+  const effectiveCap = (disc: DisciplineKey, baseCap: number): number => {
+    const resume = injuryState.resumeWeeksByDiscipline?.[disc];
+    if (typeof resume === 'number' && weeksFromCurrent >= resume) return 100;
+    return baseCap;
+  };
+
+  const scaleByCapacity = (arr: Workout[], cap: number, label: string): Workout[] => {
+    if (!arr.length) return arr;
+    if (cap >= 100) return arr;
+    if (cap <= 0) return [];
+    const factor = cap / 100;
+    return arr.map(w => {
+      const a = w as any;
+      const scaled: Workout = {
+        ...w,
+        modReason: `Capacity ${cap}% — ${label} duration scaled to match your reported ability`,
+      } as Workout;
+      const scaledAny = scaled as any;
+      if (typeof a.estimatedDurationMin === 'number') {
+        scaledAny.estimatedDurationMin = Math.max(1, Math.round(a.estimatedDurationMin * factor));
+      }
+      // TSS = intensity × duration; intensity unchanged, so TSS scales with
+      // duration. Without this scaling, ACWR / weekly TSS / ATL would over-
+      // count the load and produce a false "overload" reading.
+      if (typeof a.aerobic === 'number')   scaledAny.aerobic   = Math.round(a.aerobic   * factor);
+      if (typeof a.anaerobic === 'number') scaledAny.anaerobic = Math.round(a.anaerobic * factor);
+      return scaled;
+    });
+  };
+
+  const runCap   = effectiveCap('run',  getDisciplineCapacity(injuryState, 'run'));
+  const bikeCap  = effectiveCap('bike', getDisciplineCapacity(injuryState, 'bike'));
+  const swimCap  = effectiveCap('swim', getDisciplineCapacity(injuryState, 'swim'));
+
+  const newSwim = scaleByCapacity(swim, swimCap, 'swim');
+  const newBike = scaleByCapacity(bike, bikeCap, 'bike');
+  const newRun  = scaleByCapacity(run,  runCap,  'run');
+
+  // Brick = stacked intensity. Drop whenever either leg is restricted at all.
+  const brickSafe = brick && bikeCap >= 100 && runCap >= 100;
+  const newBrick = brickSafe ? brick : null;
+
+  // Strength: region-aware. The full-body session loads the lower body (run/
+  // bike durability + hip stability) and an upper-body pull for swim, so it is
+  // gated on the *injured region* (derived from injury location), not just the
+  // upper-load slider the tri modal never shows. A leg injury keeps upper-body
+  // + core; a shoulder injury keeps lower-body + core; a trunk injury or the
+  // acute phase pauses loaded strength. Each retained session keeps its load
+  // ratio scaled to the adapted (shorter) duration.
+  const strength = injuryStrengthDecision(injuryState);
+  let newGym: Workout[];
+  if (strength.kind === 'none') {
+    newGym = [];
+  } else if (strength.kind === 'adapted') {
+    const adaptedDur = (strength.workout as any).estimatedDurationMin ?? 45;
+    newGym = gym.map(orig => {
+      const o = orig as any;
+      const origDur = typeof o.estimatedDurationMin === 'number' && o.estimatedDurationMin > 0
+        ? o.estimatedDurationMin : 45;
+      const factor = adaptedDur / origDur;
+      const w: any = { ...strength.workout };
+      if (typeof o.aerobic === 'number')   w.aerobic   = Math.round(o.aerobic   * factor);
+      if (typeof o.anaerobic === 'number') w.anaerobic = Math.round(o.anaerobic * factor);
+      return w as Workout;
+    });
+  } else {
+    newGym = gym;
+  }
+
+  return { swim: newSwim, bike: newBike, run: newRun, brick: newBrick, gym: newGym };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -365,6 +574,7 @@ function generateRunSessionForTri(
   skill: TriSkillSlider,
   weekIndex: number,
   easyPaceSec?: number,
+  easyVolumeKeep: number = 1,  // body-mass swap: <1 shortens EASY runs only (1 = no change)
 ): Workout {
   void totalSlots;  // kept for signature clarity; slot position already drives isLong/isQuality
   const isLong = slotIndex === totalSlots - 1;
@@ -385,6 +595,7 @@ function generateRunSessionForTri(
   let rpe: number;
   let aerobic: number;
   let anaerobic: number;
+  let durMin = minutes;  // effective duration; reduced only for easy runs (body-mass swap)
 
   // Variant rotation keys off (weekIndex + slotIndex × 2) so two easy runs
   // in the same week land on different variants rather than cloning.
@@ -409,7 +620,8 @@ function generateRunSessionForTri(
     aerobic = Math.round(minutes * 1.2);
     anaerobic = Math.round(minutes * 0.35);
   } else {
-    const r = roundMin(minutes);
+    durMin = minutes * easyVolumeKeep;  // body-mass swap trims easy aerobic volume only
+    const r = roundMin(durMin);
     const idx = rotKey % EASY_RUN_VARIANTS.length;
     name = 'Easy run';
     desc = EASY_RUN_VARIANTS[idx](fmtMin(r), easyLabel);
@@ -428,6 +640,6 @@ function generateRunSessionForTri(
     rpe,
     aerobic,
     anaerobic,
-    estimatedDurationMin: Math.max(20, roundMin(minutes)),
+    estimatedDurationMin: Math.max(20, roundMin(durMin)),
   };
 }

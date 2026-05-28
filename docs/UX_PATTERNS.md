@@ -739,7 +739,9 @@ The default visual system for new UI work. Lives in `src/ui/page-flair.ts`. Thre
 
 ### Depth recipe (why rings feel layered, not flat)
 
-Three gradient tiers (outer / mid / inner) with progressive opacity envelopes — the same DNA, different intensities so inner rings pop and outer rings recede. Plus SVG filters: `feGaussianBlur` (atmospheric perspective on far rings) + drop-shadow on near rings (lift off page).
+Three gradient tiers (outer / mid / inner) with progressive opacity envelopes — the same DNA, different intensities so inner rings pop and outer rings recede. Depth reads entirely from the **gradient stroke + the opacity tiers** (far ≈ 0.12 → near = 1.0).
+
+**No SVG filters on the rings.** Earlier versions blurred the far rings (`feGaussianBlur`) and drop-shadowed the near rings. Both were removed (2026-05-27): every ring animates its transform (entrance bloom, drift, pulse, halo breathe), and a transform animating *through* a filter forces the browser to re-rasterize the filtered region every frame — measured at ~30fps with multi-100ms stalls (the "skip" / "stutter" on Stats & Readiness). Crisp rings hold a solid 61fps with zero dropped frames and are visually indistinguishable at rest (the far-blur was imperceptible; the near drop-shadow was a subtle lift). The same applies to CSS `filter: blur()` (even worse — re-rasterizes on every scale step) and to the flowey wave/halo layers. Never re-add a filter to anything that animates its transform.
 
 ### Sun glint intensities
 
@@ -764,12 +766,14 @@ Three gradient tiers (outer / mid / inner) with progressive opacity envelopes �
 
 Do NOT paint rings behind a mountain page or vice versa.
 
-### iOS Performance
+### Rendering performance (web *and* iOS)
 
-- `backdrop-filter: blur(24px)` is heavy on older iPhones. Stacking multiple glassy cards on the same page is a perf risk — use the quieter `blur(16px)` for nested-glass surfaces.
-- `feGaussianBlur` + animation on the same element is a perf cliff. The page-flair pulse is opacity-only on a `<g>` containing static rings — never combine pulse with filter.
-- Sun glint sits at viewport `top:0,left:0`. On notched iPhones use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome (skip buttons, headers) so it doesn't clash with the notch area.
-- Haptics: only fire on the very first ring entrance (gated by localStorage). Never on every navigation.
+Mosaic ships to both web (desktop + mobile browsers) and iOS (Capacitor / WKWebView). The first two rules below were diagnosed on **desktop browser**, not just on device — do not file them as iOS-only and dismiss them when web-testing. WKWebView amplifies the same costs (often worse), but the underlying mechanism is identical across engines.
+
+- **`feGaussianBlur` / CSS `filter` + transform animation on the same element is a perf cliff (every engine).** The filtered region re-rasterizes every frame (~30fps, multi-100ms stalls — measured 2026-05-27). Ring/halo/wave backgrounds are filter-free for this reason (see Depth recipe above). The page-flair pulse is opacity-only. Never combine any filter with a transform animation.
+- **`backdrop-filter` glass must not sit over *animating* content (every engine).** The backdrop re-samples whatever moves behind it every frame, and the glass element + all its children flicker (real bug 2026-05-27 on desktop Chrome: the Readiness hero score ring + the "53" flickered because the halo breathed behind its `backdrop-filter:blur` disc; made worse once the rings were crisp). Fix: keep the background **static** wherever glass overlays it. The Readiness halo is intentionally static for this reason; do not re-add `floweyHaloAnimationCSS` there. If you need motion behind glass, either drop the `backdrop-filter` on that element (use a higher-opacity solid backing) or ensure the animation settles before the glass renders.
+- **`backdrop-filter: blur(24px)` stacking** — heavy on older iPhones *and* low-end browsers; use the quieter `blur(16px)` for nested-glass surfaces. Stacking many glassy cards on the same page is a perf risk on both engines.
+- **iOS-specific**: sun glint sits at viewport `top:0,left:0` — on notched iPhones use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome (skip buttons, headers) so it doesn't clash with the notch area. Haptics fire only on the very first ring entrance (gated by localStorage), never on every navigation, and silently no-op on web.
 
 ### When to use vs when not
 
@@ -815,3 +819,55 @@ All detail pages use `buildSkyBackground(prefix, palette)` from `src/ui/sky-back
 ### Reference implementation
 
 See `src/ui/sky-background.ts` for the canonical pattern: `buildSkyBackground(prefix, palette)` generates SVG with defs (gradients + turbulence filters), layered mountain paths, clouds, mist, and bottom fade. `skyAnimationCSS(prefix)` generates 3 drift keyframes for parallax wave movement (12s, 15s, 18s).
+
+---
+
+## Mosaic Visual System (the "page-flair" world)
+
+**Default for all new UI work**: build with the page-flair visual system unless there's a specific reason not to. The system has four building blocks, all in `src/ui/page-flair.ts`:
+
+1. **`buildAtmosphereBase(palette?)`** — soft cool radial gradient base layer. Replaces flat `var(--c-bg)` warm-cream so other layers have somewhere to live. Palettes: `'blue'` (default) or `'teal'` (race-prediction / "green moments").
+2. **`buildRingBackground(prefix, opts)`** — concentric SVG rings with light-source gradient strokes (white upper-left → mid → dark lower-right) plus depth via SVG filters (atmospheric blur on far rings, drop shadow on near rings). Five variants: `centered` / `sweep` / `focused` / `asymmetric` / `whisper`. Optional `pulse` (finite cycles, default 6 then settles). Optional `palette: 'blue' | 'teal'`. Optional `entrance: 'large' | 'small' | 'none'`.
+3. **`buildSunGlint(intensity)`** — warm cream radial-gradient at upper-left of every page. **The universal brand mark** — appears on every page in the app regardless of other treatments. Intensities: `low` (data pages, detail pages) / `mid` (wizard) / `high` (hero only).
+4. **Glassy cards** — `rgba(255,255,255,0.58) + backdrop-filter:blur(24px)` is the canonical onboarding spec (locked, see memory). Quieter data variant: `rgba(255,255,255,0.78) + blur(16px)` for cards inside data-heavy contexts.
+
+**Animation system**:
+- First-ever ring appearance per device (gated by `isFirstRingExperience()`): large water-droplet entrance + a single light Capacitor haptic. Then `markRingExperienceSeen()`.
+- All subsequent appearances: small "settle" entrance (~0.55s, scale 0.85→1) — designed to be near-invisible on rapid form toggles.
+- Pulse: opt-in, finite (default 6 cycles ≈ 54s) then freezes.
+- Wave pulse: triggered manually via `triggerRingWave(prefix)` for persistent-ring contexts (slide transitions). Brief opacity+scale flicker propagating inner→outer.
+
+**Layering order** on any page using the system: atmosphere → rings → sun glint → content (z-index 1).
+
+**Exclusivity rule**:
+- Rings: wizard / hero / arrival contexts (NOT data-heavy pages)
+- Mountains (`buildSkyBackground` from `sky-background.ts`): detail pages only (recovery, readiness, sleep, strain, etc.)
+- Sun glint: universal — every page
+
+**iOS performance notes** (Capacitor target):
+- **`backdrop-filter: blur(24px)`** is heavy on older iPhones. Stacking multiple glassy cards on the same page is a perf risk. Watch fps when implementing new glassy surfaces. Quieter variant (`blur(16px)`) is preferred for surfaces nested inside other glass.
+- **`feGaussianBlur` + animation** on the same SVG element is a perf cliff. The page-flair pulse is opacity-only on a `<g>` containing already-static rings — never combine pulse with filter on the same element.
+- **`safe-area-inset-top`**: the sun glint origins at viewport `top:0,left:0`. On notched iPhones it sits behind the notch; ensure no critical content (skip buttons, headers) is positioned where the glint's brightest centre would interfere with readability. Use `top: max(20px, env(safe-area-inset-top, 20px))` on top-positioned chrome.
+- **Haptics**: only fire on the very first ring appearance per device (the localStorage-gated large entrance). Never haptic on every navigation — annoying.
+
+When extending this system to a new surface, decide *which combination* of the four building blocks fits, then ship. Don't invent new background patterns ad-hoc — extend `page-flair.ts` so future surfaces share the DNA.
+
+---
+
+## Feature reveals — show users the cool things we built
+
+Mosaic does a lot of work users would never know about — environment normalisation, course factors, durability caps, sleep-debt models, etc. When we ship a non-trivial piece of work that materially changes a number the user sees, **make it discoverable** — but not via a popup unless the popup carries real visual depth.
+
+**Order of preference for surfacing a reveal:**
+1. **Capture at onboarding.** If the work introduces a user-facing setting (an environment tag, a default, a toggle), add a row to the relevant wizard step so the user configures it once during setup. New users naturally encounter it; existing users edit from settings. This is the default — most reveals belong here.
+2. **Settings entry-point.** Pair the onboarding step with a row on the account/profile page so the user can change the setting later. Use the same chip selector / modal so behaviour is identical in both places.
+3. **Inline caption next to the number.** For changes the user can passively read (e.g. "Updated from your rides — beat your last test."), a one-line caption on the existing surface is sufficient. No popup needed.
+4. **Reveal popup.** Last resort. Only when the work changes a user-facing number AND has no natural setting AND can't be conveyed via inline caption. If you take this route, the popup must pass the bar below.
+
+**Reveal popup bar** (hard requirements — if you can't meet all four, use one of the options above):
+- **Visual depth**: close X in top-right, primary CTA as a filled-black pill ("Save" / "Done" / "Got it"), optional secondary as a transparent "Cancel" link. Single-column content layout (no 2-column orphan grids). 14–16 px border-radius. Glass spec from "Overlays and Modals" section above. Mirror `transitions-overlay.ts`.
+- **Hard once-only guard**: gate on BOTH a persisted boolean (`triConfig.notifiedMarkers.<feature>Seen` or equivalent) AND a module-level `shownThisSession` boolean. Set both as soon as the modal is created (not on dismiss) so navigating away can't cause a re-pop. Real incident, 2026-05-11: a popup that only set the flag on dismiss kept reappearing because the overlay attached to `document.body` survived navigation, and saveState races caused multiple triggers.
+- **Educational, not promotional**: plain-English summary of what the model does and why it makes the number more honest. No emoji, no "Did you know?", no exclamation marks — consultant tone (see CLAUDE.md "UI Copy" sections).
+- **Trigger on the surface where the work matters**: not on app launch. The user must be in the relevant context to find it useful.
+
+**State flag pattern** (when you do build a popup): add a boolean to `triConfig.notifiedMarkers` (e.g. `swimNormalisationSeen`, `durabilityCapSeen`). Optional field (`?:`) per CLAUDE.md's build-target rule.

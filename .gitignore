@@ -42,3 +42,6 @@ validation/data/
 # Swift package build caches for the iOS plugins — regenerable artifacts,
 # rebuilt by Xcode/SwiftPM. Were bloating git status with ~1700 files.
 ios-plugins/*/.build/
+
+# Per-user Xcode scheme state — managed by SwiftPM, not source.
+ios-plugins/*/.swiftpm/

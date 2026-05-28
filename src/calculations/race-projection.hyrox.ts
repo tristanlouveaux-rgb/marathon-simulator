@@ -19,12 +19,25 @@
 
 import type { SimulatorState, PhysiologyDayEntry } from '@/types/state';
 import type { AbilityBand } from '@/types/triathlon';
+import type { AbilityBand as RunAbilityBand } from '@/types/training';
 import type { HyroxPrediction } from './race-prediction.hyrox';
+
+/** Map triathlon-domain AbilityBand to the running-horizon band space.
+ *  `total_beginner` collapses to `beginner`; `competitive` collapses to `elite`. */
+function toRunAbilityBand(b: AbilityBand): RunAbilityBand {
+  switch (b) {
+    case 'total_beginner': return 'beginner';
+    case 'competitive':    return 'elite';
+    default:               return b;
+  }
+}
 import {
   HYROX_WEEKLY_SESSIONS,
   HYROX_TAPER_DAYS,
   HYROX_MTL_CAP,
 } from '@/constants/hyrox-constants';
+import { applyTrainingHorizonAdjustment } from './training-horizon';
+import { bandFromVdot } from './hyrox-staleness';
 
 export interface HyroxProjectionFactor {
   /** Display name. */
@@ -158,24 +171,114 @@ function computeAdherence(state: SimulatorState, lookbackWeeks: number = 3): num
 /**
  * Build a race-day projection from the current prediction.
  *
- * The projection adjusts the current finish time by stacked percentage factors:
- *   - **MTL fitness gap**: actual mtlCTL vs band-expected anchor
- *   - **Sessions per week**: configured volume vs band default
- *   - **Plan adherence**: completed vs planned over last 3 weeks
- *   - **Taper readiness**: ~1-2% bonus when within taper window
+ * Unified model (2026-05-20): the per-discipline horizon projections from
+ * `predictHyroxRace` (`prediction.projection`) are the source of truth for
+ * what training does to each component. The factor model below adds reality-
+ * vs-declared-plan adjustments (MTL trajectory, plan adherence, taper
+ * readiness, recovery signals) as a single uniform percentage modifier on
+ * top of the horizon-projected sum.
  *
- * Each factor is bounded so the combined projection multiplier stays in [0.93, 1.07].
+ *   disciplineHorizonTotal
+ *     = runHorizonProjectedSec        (VDOT horizon on the 8 km run portion)
+ *     + stationsHorizonProjectedSec   (Σ per-station `applyHyroxStationHorizon`)
+ *     + roxzoneHorizonProjectedSec    (`applyHyroxRoxzoneHorizon`)
+ *
+ *   projectedTotalSec = disciplineHorizonTotal × (1 + factorPct)
+ *
+ * Per-discipline `byDiscipline.{run,stations,roxzone}.projectedSec` apply the
+ * same multiplier, so the headline equals the sum of the three. That fixes
+ * the prior divergence where per-station rows promised a stations gain that
+ * the proportionally-allocated factor model could not reflect.
+ *
+ * Factor list semantics: each factor's `deltaSec` is its individual
+ * contribution to `improvementSec`. Sum of `factors[].deltaSec` equals
+ * `improvementSec` (modulo rounding). Horizon factors (run/stations/roxzone
+ * fitness trajectory) are emitted alongside the modulator factors (training
+ * fitness, weekly volume, adherence, taper bonus, race-day readiness) for
+ * full transparency.
  */
 export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPrediction): HyroxProjection {
   const hx = state.hyroxConfig!;
   const band = hx.athleteBand;
   const factors: HyroxProjectionFactor[] = [];
   const currentTotalSec = prediction.totalSec;
+  const weeksRemaining = computeWeeksRemaining(state);
 
-  // ── Factor 1: MTL CTL fitness vs band anchor ────────────────────────────
-  // Prefer per-discipline split CTL when available; fall back to overall mtlCTL.
-  // Discipline splits let us attribute fitness gains specifically to run vs stations
-  // rather than as a single global factor.
+  // ── Step 1: per-discipline horizon projections ─────────────────────────
+  // Stations + roxzone come straight from `prediction.projection` (computed
+  // inside `predictHyroxRace` via `buildStationProjection`). Run uses the
+  // VDOT horizon: there's no station-class curve for "running an 8 km race
+  // portion", so we map to a 10k VDOT projection.
+  let runHorizonProjectedSec = prediction.runSec;
+  let runHorizonImprovementPct = 0;
+  let runSessions = 0;
+  if (weeksRemaining > 0 && state.v > 0) {
+    const runVdotBand = toRunAbilityBand(bandFromVdot(state.v) ?? band);
+    runSessions = (hx.runsPerWeek ?? 0) + 0.5 * (hx.bricksPerWeek ?? 0);
+    const runHorizon = applyTrainingHorizonAdjustment({
+      baseline_vdot: state.v,
+      target_distance: '10k',
+      weeks_remaining: weeksRemaining,
+      sessions_per_week: runSessions,
+      runner_type: state.typ ?? 'Balanced',
+      ability_band: runVdotBand,
+      // Use default HYROX_TAPER_WEEKS so the run portion gets the same
+      // per-discipline taper handling that the per-station and roxzone
+      // horizons already apply internally. Taper lives in the horizon
+      // models — the factor model below handles reality adjustments only.
+      weekly_volume_km: state.wkm,
+    });
+    runHorizonImprovementPct = runHorizon.improvement_pct;
+    runHorizonProjectedSec = prediction.runSec * (1 - runHorizonImprovementPct / 100);
+  }
+
+  const stationsHorizonProjectedSec = prediction.projection
+    ? prediction.projection.stations.reduce((s, st) => s + st.projectedSec, 0)
+    : prediction.stationsSec;
+  const roxzoneHorizonProjectedSec = prediction.projection
+    ? prediction.projection.roxzone.projectedSec
+    : prediction.roxzoneSec;
+
+  const disciplineHorizonTotal =
+    runHorizonProjectedSec + stationsHorizonProjectedSec + roxzoneHorizonProjectedSec;
+
+  // Surface each horizon contribution as a factor row so the breakdown sums
+  // back to improvementSec. Skip when |delta| < 1s.
+  const runHorizonDelta      = runHorizonProjectedSec      - prediction.runSec;
+  const stationsHorizonDelta = stationsHorizonProjectedSec - prediction.stationsSec;
+  const roxzoneHorizonDelta  = roxzoneHorizonProjectedSec  - prediction.roxzoneSec;
+  if (Math.abs(runHorizonDelta) >= 1) {
+    factors.push({
+      name: 'Running fitness trajectory',
+      deltaSec: Math.round(runHorizonDelta),
+      explanation: `Projected VDOT gain over ${weeksRemaining.toFixed(1)} weeks at ${runSessions.toFixed(1)} run sessions/wk (counting bricks at 0.5). Applied to the 8 km run portion.`,
+    });
+  }
+  if (Math.abs(stationsHorizonDelta) >= 1 && prediction.projection) {
+    const sessions = prediction.projection.plannedSessionsPerWeek;
+    factors.push({
+      name: 'Stations fitness trajectory',
+      deltaSec: Math.round(stationsHorizonDelta),
+      explanation: `Per-station horizon at ${sessions.toFixed(1)} HYROX sessions/wk for ${weeksRemaining.toFixed(1)} weeks. Sum of the per-class projections shown in the Station-order view.`,
+    });
+  }
+  if (Math.abs(roxzoneHorizonDelta) >= 1) {
+    factors.push({
+      name: 'Roxzone trajectory',
+      deltaSec: Math.round(roxzoneHorizonDelta),
+      explanation: `Transition-economy gain over ${weeksRemaining.toFixed(1)} weeks. Roxzone benefits from race-pace familiarity and transition rehearsal.`,
+    });
+  }
+
+  // ── Step 2: factor model (uniform percentage modifier) ─────────────────
+  // These are reality-vs-plan adjustments — not training-effect estimates.
+  // Each contribution is a bounded percentage; their signed sum is the
+  // multiplier applied to `disciplineHorizonTotal`. Express each factor's
+  // own deltaSec against `disciplineHorizonTotal` so the factor list sums
+  // back to `improvementSec`.
+  let factorPct = 0;
+
+  // Factor: MTL CTL fitness vs band anchor.
   const expected = expectedMtlCtl(band);
   const runCtl     = hx.runMtlCTL     ?? 0;
   const stationCtl = hx.stationMtlCTL ?? 0;
@@ -183,23 +286,23 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   const splitTotalCtl = runCtl + stationCtl + brickCtl;
   const actualCtl = splitTotalCtl > 0 ? splitTotalCtl : (hx.mtlCTL ?? 0);
   if (expected > 0 && actualCtl > 0) {
-    const ratio = actualCtl / expected;  // 1.0 = on band, >1 = above, <1 = below
-    // Convert to ±5% bound. Tanh-style soft saturation keeps extreme ratios from blowing up.
-    const ctlPct = Math.max(-0.05, Math.min(0.05, (ratio - 1) * 0.10));
-    const ctlSec = -ctlPct * currentTotalSec;  // negative pct = faster
+    const ratio = actualCtl / expected;
+    // ratio > 1 = trained above band = expected to be faster → negative pct.
+    const ctlPct = -Math.max(-0.05, Math.min(0.05, (ratio - 1) * 0.10));
+    factorPct += ctlPct;
     const splitNote = splitTotalCtl > 0
       ? ` Run ${runCtl.toFixed(1)} · stations ${stationCtl.toFixed(1)} · brick ${brickCtl.toFixed(1)}.`
       : '';
     factors.push({
       name: 'Training fitness',
-      deltaSec: Math.round(ctlSec),
+      deltaSec: Math.round(ctlPct * disciplineHorizonTotal),
       explanation: (ratio >= 1.0
         ? `MTL chronic load (${actualCtl.toFixed(1)}) is above the ${band} band anchor (${expected.toFixed(1)}). Training above your declared level.`
         : `MTL chronic load (${actualCtl.toFixed(1)}) is below the ${band} band anchor (${expected.toFixed(1)}). Currently undertrained for your target.`) + splitNote,
     });
   }
 
-  // ── Factor 2: Sessions per week vs band default ────────────────────────
+  // Factor: sessions per week vs band default.
   const defaults = HYROX_WEEKLY_SESSIONS[band];
   const expectedSessions = defaults.runs + defaults.stations + defaults.bricks;
   const actualSessions = (hx.runsPerWeek ?? defaults.runs)
@@ -207,9 +310,11 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
                         + (hx.bricksPerWeek ?? defaults.bricks);
   if (expectedSessions > 0) {
     const sessionRatio = actualSessions / expectedSessions;
-    const sessionPct = Math.max(-0.03, Math.min(0.03, (sessionRatio - 1) * 0.06));
-    const sessionSec = -sessionPct * currentTotalSec;
+    // ratio > 1 = more sessions = faster → negative pct.
+    const sessionPct = -Math.max(-0.03, Math.min(0.03, (sessionRatio - 1) * 0.06));
+    const sessionSec = sessionPct * disciplineHorizonTotal;
     if (Math.abs(sessionSec) >= 5) {
+      factorPct += sessionPct;
       factors.push({
         name: 'Weekly volume',
         deltaSec: Math.round(sessionSec),
@@ -218,44 +323,31 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
     }
   }
 
-  // ── Factor 3: Plan adherence ───────────────────────────────────────────
+  // Factor: plan adherence.
   const adherence = computeAdherence(state);
   if (adherence < 0.95) {
-    // Penalise: missed sessions cost up to 4% slowdown.
     const adherencePct = (1 - adherence) * 0.04;  // 0..4% slowdown
-    const adherenceSec = adherencePct * currentTotalSec;
+    factorPct += adherencePct;
     factors.push({
       name: 'Plan adherence',
-      deltaSec: Math.round(adherenceSec),
+      deltaSec: Math.round(adherencePct * disciplineHorizonTotal),
       explanation: `Completed ${Math.round(adherence * 100)}% of planned sessions in the last 3 weeks.`,
     });
   }
 
-  // ── Factor 4: Taper readiness ──────────────────────────────────────────
-  const weeksRemaining = computeWeeksRemaining(state);
-  const taperWindowWeeks = HYROX_TAPER_DAYS[band] / 7;
-  if (weeksRemaining > 0 && weeksRemaining <= taperWindowWeeks * 1.5) {
-    // 1.5–2% taper bonus — fitness consolidates, fatigue clears.
-    // Scale by how much taper time remains within the window.
-    const taperFraction = Math.min(1, (taperWindowWeeks - Math.max(0, weeksRemaining - taperWindowWeeks)) / taperWindowWeeks);
-    const taperPct = -0.015 * taperFraction;
-    const taperSec = taperPct * currentTotalSec;
-    factors.push({
-      name: 'Taper bonus',
-      deltaSec: Math.round(taperSec),
-      explanation: `Race in ~${weeksRemaining.toFixed(1)} weeks. Taper consolidates fitness — typical 1-2% improvement.`,
-    });
-  }
+  // Taper is owned by the horizon models (per-class for stations, distance-
+  // appropriate for run, generic for roxzone). No separate "Taper bonus"
+  // factor — that would double-count what the horizon models already include.
 
-  // ── Factor 5: Race-day readiness (HRV / sleep / RHR) ───────────────────
-  // Only meaningful close to the race. Fires within taper window only.
+  // Factor: race-day readiness (HRV / sleep / RHR) — taper window only.
+  const taperWindowWeeks = HYROX_TAPER_DAYS[band] / 7;
   if (weeksRemaining > 0 && weeksRemaining <= taperWindowWeeks * 1.5) {
     const readinessScore = computeReadinessScore(state.physiologyHistory);
     if (readinessScore != null) {
-      // Score 0.5 = neutral. Range −2% (poor) to +2% (great).
-      const readinessPct = (0.5 - readinessScore) * 0.04;  // poor readiness → +2% (slower)
-      const readinessSec = readinessPct * currentTotalSec;
+      const readinessPct = (0.5 - readinessScore) * 0.04;  // poor readiness → slower
+      const readinessSec = readinessPct * disciplineHorizonTotal;
       if (Math.abs(readinessSec) >= 5) {
+        factorPct += readinessPct;
         const readinessLabel = readinessScore >= 0.7 ? 'high' : readinessScore <= 0.35 ? 'low' : 'moderate';
         factors.push({
           name: 'Race-day readiness',
@@ -266,24 +358,20 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
     }
   }
 
-  // ── Combine ────────────────────────────────────────────────────────────
-  const totalDeltaSec = factors.reduce((s, f) => s + f.deltaSec, 0);
-  const projectedTotalSec = currentTotalSec + totalDeltaSec;
+  // ── Step 3: apply uniform multiplier per discipline ────────────────────
+  // The same factorPct multiplies each discipline's horizon-projected value,
+  // so the headline equals the sum of byDiscipline.X.projectedSec.
+  const multiplier = 1 + factorPct;
+  const runProjectedSec      = Math.round(runHorizonProjectedSec      * multiplier);
+  const stationsProjectedSec = Math.round(stationsHorizonProjectedSec * multiplier);
+  const roxzoneProjectedSec  = Math.round(roxzoneHorizonProjectedSec  * multiplier);
 
-  // ── Per-discipline allocation ──────────────────────────────────────────
-  // Apportion the total improvement proportionally to each component's share
-  // of current total. Run + stations get the projection delta; roxzone is
-  // mostly a transition fudge and stays static.
-  const runShare      = prediction.runSec / Math.max(1, currentTotalSec);
-  const stationsShare = prediction.stationsSec / Math.max(1, currentTotalSec);
-  const runDelta      = Math.round(totalDeltaSec * runShare);
-  const stationsDelta = Math.round(totalDeltaSec * stationsShare);
-  // Roxzone gets the remainder (small, near zero) — keeps the breakdown summing to total.
-  const roxzoneDelta  = totalDeltaSec - runDelta - stationsDelta;
+  const projectedTotalSec = runProjectedSec + stationsProjectedSec + roxzoneProjectedSec;
+
   const byDiscipline = {
-    run:      { currentSec: prediction.runSec,      projectedSec: prediction.runSec + runDelta,           deltaSec: runDelta },
-    stations: { currentSec: prediction.stationsSec, projectedSec: prediction.stationsSec + stationsDelta, deltaSec: stationsDelta },
-    roxzone:  { currentSec: prediction.roxzoneSec,  projectedSec: prediction.roxzoneSec + roxzoneDelta,   deltaSec: roxzoneDelta },
+    run:      { currentSec: prediction.runSec,      projectedSec: runProjectedSec,      deltaSec: runProjectedSec      - prediction.runSec },
+    stations: { currentSec: prediction.stationsSec, projectedSec: stationsProjectedSec, deltaSec: stationsProjectedSec - prediction.stationsSec },
+    roxzone:  { currentSec: prediction.roxzoneSec,  projectedSec: roxzoneProjectedSec,  deltaSec: roxzoneProjectedSec  - prediction.roxzoneSec },
   };
 
   // ── Confidence range ───────────────────────────────────────────────────

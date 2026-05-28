@@ -709,7 +709,7 @@ function getStrainHTML(s: SimulatorState, displayDate: string, todayReadinessLab
           <div style="display:flex;gap:6px;width:max-content;padding-bottom:2px">${datePills}</div>
         </div>
 
-        <!-- Ring — identical pattern to readiness/freshness: rotate(-90deg), circle elements, dashoffset JS -->
+        <!-- Ring: identical pattern to readiness/freshness: rotate(-90deg), circle elements, dashoffset JS -->
         <div class="s-fade" style="animation-delay:0.08s;display:flex;justify-content:center;margin:12px 0 28px">
           <div class="strain-ring-wrap" style="position:relative;width:220px;height:220px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.55);backdrop-filter:blur(16px);border-radius:50%;border:1px solid rgba(255,255,255,0.6);box-shadow:0 6px 40px -8px rgba(0,0,0,0.15)">
             <svg style="position:absolute;width:100%;height:100%;transform:rotate(-90deg)" viewBox="0 0 100 100">

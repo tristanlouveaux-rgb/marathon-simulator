@@ -557,7 +557,7 @@ export function openSessionGenerator(): void {
 
     modal.innerHTML = `
       ${modalShellOpen()}
-        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${opt.label} — pick a structure</div>
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${opt.label}. Pick a structure</div>
         <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px;line-height:1.5">All target the same intensity. Pick the rep shape you prefer.</div>
         ${variantTiles}
         <button id="sg-swim-variant-back" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">
@@ -599,7 +599,7 @@ export function openSessionGenerator(): void {
         ` : ''}
 
         <div style="font-size:11px;color:var(--c-muted);padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.55;margin-bottom:16px">
-          Allow 24–48 hours of easy training afterwards. Best done fresh — not after a hard bike or run day.
+          Allow 24–48 hours of easy training afterwards. Best done fresh. Not after a hard bike or run day.
         </div>
 
         <button id="sg-swim-tt-confirm" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">
@@ -813,7 +813,7 @@ export function openSessionGenerator(): void {
 
     modal.innerHTML = `
       ${modalShellOpen()}
-        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${opt.label} — pick a structure</div>
+        <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${opt.label}. Pick a structure</div>
         <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px;line-height:1.5">All target the same intensity. Pick the rep shape you prefer.</div>
         ${variantTiles}
         <button id="sg-bike-variant-back" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-top:10px">
@@ -845,7 +845,7 @@ export function openSessionGenerator(): void {
 
         <div style="margin-bottom:14px;padding:12px 14px;background:rgba(0,0,0,0.03);border-radius:12px">
           <div style="font-size:10px;font-weight:600;color:var(--c-muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:6px">Protocol</div>
-          <div style="font-size:13px;color:var(--c-black);line-height:1.55">20min Warm up. 3×1min @ 100rpm fast spin, 1min easy. 5min all-out. 10min easy. <strong>20min all-out</strong> — pace evenly. 10min Cool down.</div>
+          <div style="font-size:13px;color:var(--c-black);line-height:1.55">20min Warm up. 3×1min @ 100rpm fast spin, 1min easy. 5min all-out. 10min easy. <strong>20min all-out</strong>: pace evenly. 10min Cool down.</div>
         </div>
 
         ${ftp ? `
@@ -855,7 +855,7 @@ export function openSessionGenerator(): void {
         ` : ''}
 
         <div style="font-size:11px;color:var(--c-muted);padding:10px 12px;background:rgba(0,0,0,0.03);border-radius:10px;line-height:1.55;margin-bottom:16px">
-          Allow 48 hours of easy training afterwards. Best done fresh — not after a hard run or another bike day.
+          Allow 48 hours of easy training afterwards. Best done fresh. Not after a hard run or another bike day.
         </div>
 
         <button id="sg-bike-tt-confirm" class="m-btn-glass m-btn-glass--inset" style="width:100%;margin-bottom:8px">

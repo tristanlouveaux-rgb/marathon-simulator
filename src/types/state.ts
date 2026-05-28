@@ -66,6 +66,9 @@ export interface CommuteConfig {
   distanceKm: number;           // One-way distance
   isBidirectional: boolean;     // true = to+from work
   commuteDaysPerWeek: number;   // 1-5 commute days per week
+  /** Default backpack mass carried on commute runs, in kg. Used by the load-carriage
+   *  adjustment in the fitness model (Phase 3). 0 or undefined = no pack. */
+  backpackKg?: number;
 }
 
 /** Cross-training summary for week */
@@ -104,6 +107,7 @@ export interface Workout extends WorkoutDefinition {
   anaerobic?: number;           // Anaerobic load
   skipped?: boolean;            // Was this skipped from previous week
   skipCount?: number;           // Number of times skipped
+  pushCount?: number;           // Times the lineage has been pushed to a later week (carried across clones; gates second-push)
   originalName?: string;        // Original name if renamed
   status?: 'planned' | 'reduced' | 'replaced' | 'skipped' | 'completed';
   modReason?: string;           // Modification reason
@@ -146,6 +150,19 @@ export interface Workout extends WorkoutDefinition {
   /** HYROX mode: snapshot of the original component MTL values before any swaps,
    *  keyed by HyroxStation. Used to revert correctly when a swap is undone. */
   hyroxOriginalMtls?: Record<string, number>;
+  /** ISO timestamp set when the AI coach mutated this workout via an Apply card.
+   *  Used by the plan-view card to render a "Coach" badge. Distinct from
+   *  modReason so we can tell AI-driven mods apart from engine auto-reductions. */
+  aiModifiedAt?: string;
+  /** Heart-rate zone cap set by the AI coach's `adjust_intensity` tool. The
+   *  workout card displays "Z2 cap" / "Z3 cap" chip when this is set. The plan
+   *  engine doesn't enforce the cap directly — RPE is downgraded server-side
+   *  by setting `rpe`. This field is the visible signal and the coach's
+   *  memory of its own past cap calls. */
+  zoneCap?: 2 | 3;
+  /** Snapshot of pre-mod fields so an Undo can restore the workout cleanly.
+   *  Set on the first AI mod; subsequent mods do not overwrite it. */
+  aiPreModSnapshot?: { n: string; d: string; t: string; aerobic?: number; anaerobic?: number; estimatedDurationMin?: number; status?: Workout['status'] };
 }
 
 /** Skipped workout record */
@@ -168,6 +185,11 @@ export interface WorkoutMod {
   newType?: string;    // New workout type if downgraded (e.g., 'easy')
   newRpe?: number;     // New RPE to match downgraded type
   autoReduceNote?: string; // Set when mod was silently applied by Tier 1 auto-reduce
+  /** ISO timestamp when the AI coach created this mod. Used to render a
+   *  "Coach" badge in the plan view. */
+  aiModifiedAt?: string;
+  /** When the AI capped intensity (adjust_intensity), this is the zone cap. */
+  zoneCap?: 2 | 3;
 }
 
 /** Simple cross-training record (old format) */
@@ -375,6 +397,26 @@ export interface GarminActual {
    *  `triConfig.swim.defaultOwSwimEnvironment` (set once during onboarding).
    *  See `SWIM_TYPE_MULTIPLIER` in triathlon-course-factors.ts. */
   swimEnvironment?: import('../constants/triathlon-course-factors').AthleteSwimEnvironment;
+  /** True when the user has tagged this activity as a commute run (to or
+   *  from work). Drives matching toward Commute plan slots and is consumed
+   *  by the load-carriage adjustment when paired with `backpackKg`. Auto-
+   *  defaulted on by the matcher when an activity lands on a configured
+   *  commute slot; user can confirm or untag via the activity-review chip. */
+  commute?: boolean;
+  /** Backpack mass (kg) carried on this commute run. Defaults to the user's
+   *  `commuteConfig.backpackKg`; user can override on a per-activity basis
+   *  via the activity-review numeric field. Undefined or 0 = no pack. */
+  backpackKg?: number;
+  /** User-set RPE (1–10) for this activity. Currently exposed on the activity-
+   *  detail page for strength sessions, where HR-based TSS systematically
+   *  under-counts neuromuscular load. When set on a strength activity, replaces
+   *  the iTRIMP-derived TSS with `durationMin × TL_PER_MIN[rpe] × runSpec`. */
+  rpe?: number;
+  /** User-set leg-feel tag for strength sessions. Drives a leg-load entry that
+   *  feeds the readiness leg-load floor and slows the leg-load decay half-life:
+   *  `moderate` → 0.15 load/min, half-life ×1.05; `heavy` → 0.35 load/min,
+   *  half-life ×1.20. `none` writes no entry. */
+  legFeel?: 'none' | 'moderate' | 'heavy';
 }
 
 /** Per-lap split from Garmin activity details */
@@ -627,15 +669,19 @@ export interface SimulatorState {
   restingHR?: number;         // Resting Heart Rate
 
   // Race time tracking
-  initialBaseline: number | null;   // Initial race time prediction
+  initialBaseline: number | null;   // Initial race time PREDICTION at plan generation (NOT a user-set goal — see raceGoalTimeSec)
   currentFitness: number | null;    // Current race time estimate
   forecastTime: number | null;      // Forecast race time after training (raw VDOT)
+  /** User-set race-day goal (seconds). Null/undefined = no goal set. Only when this
+   *  is populated do we render the "Goal" reference line + "Chance of beating goal"
+   *  callout. Distinct from `initialBaseline` (the model's initial prediction). */
+  raceGoalTimeSec?: number;
   /** Forecast race time after applying course factors (climate/altitude/elevation).
    * Populated only when `selectedMarathon.profile` exists. Falls back to `forecastTime`. */
   forecastTimeAdjusted?: number;
   /** Itemised course factors backing `forecastTimeAdjusted` for UI display. */
   forecastCourseFactors?: Array<{
-    kind: 'climate' | 'altitude' | 'run-elevation';
+    kind: 'climate' | 'altitude' | 'run-elevation' | 'wind' | 'heat-acclim';
     label: string;
     value: string;
     deltaSec: number;
@@ -708,6 +754,8 @@ export interface SimulatorState {
   // Physiology / accuracy
   biologicalSex?: 'male' | 'female' | 'prefer_not_to_say';  // Used for iTRIMP β coefficient (unset → male default)
   bodyWeightKg?: number;  // Bodyweight in kg. FTP→W/kg, load refinements. Falls back to 75kg M / 62kg F when unset.
+  heightCm?: number;      // Height in cm. With bodyWeightKg → body surface area for heat personalisation. Optional; absent → no heat-size adjustment.
+  bodyMassSwapEnabled?: boolean;  // Cross-training swap opt-in. undefined = undecided (default-on for heavy users, onboarding popup pending); true = kept; false = user turned it off.
 
   // Plan start date (ISO YYYY-MM-DD) — anchor for all week date ranges
   planStartDate?: string;
@@ -722,6 +770,24 @@ export interface SimulatorState {
    * existing state objects keep working without migration.
    */
   runRaceLog?: RunRaceLogEntry[];
+
+  /**
+   * Per-user prediction calibration for running mode (tier 1: per-distance
+   * additive bias once ≥2 races at the same distance are logged). Computed
+   * from `runRaceLog` and applied to `blendedRaceTimeSec` + `forecastTime` so
+   * the user-facing prediction learns from their own race history. See
+   * `src/calculations/run-calibration.ts`.
+   */
+  runCalibration?: import('@/calculations/run-calibration').RunCalibration;
+
+  /**
+   * Long-run durability result. Multiplier applied to `blendedRaceTimeSec`
+   * (today's prediction) when the user's longest recent run falls below the
+   * distance-specific threshold. NOT applied to `forecastTime` — the
+   * projection assumes the plan delivers long runs before race day. See
+   * `src/calculations/run-durability.ts`.
+   */
+  runDurability?: import('@/calculations/run-durability').RunDurabilityResult;
 
   // Athlete tier (for ACWR thresholds and plan ramp rate)
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
@@ -815,6 +881,12 @@ export interface SimulatorState {
   firstStravaActivityISO?: string | null;
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
   stravaHistoryAccepted?: boolean;          // True when user clicked "Use this" in the history summary wizard step
+  /** True when the user has explicitly provided or accepted their weekly volume
+   * from a non-Strava source (typed it in manual entry, or it was derived from
+   * an import). Source-agnostic companion to `stravaHistoryAccepted`; either
+   * flag lets `detectedWeeklyKm` seed the plan's starting `s.wkm`. We only seed
+   * plan volume from a number the user gave or accepted, never a silent derive. */
+  weeklyVolumeConfirmed?: boolean;
   /** True once the 16-week Apple Health backfill has run at least once.
    * Subsequent launches use a 14-day incremental window. Same role as
    * `stravaHistoryFetched` for the Apple-only path. */
@@ -823,6 +895,18 @@ export interface SimulatorState {
    * Mirrors `historicLastRefreshedAt` for the Apple path; used to decide
    * whether to refresh weekly baselines on launch. */
   appleHistoryLastRefreshedAt?: string;
+  /** True once the deep (multi-year) Apple Health history pull has run at
+   * least once. Separate from `appleHistoryFetched` (which covers the
+   * 52-week HR-enriched window) — this flag tracks the older, lighter
+   * pull whose only purpose is surfacing historic races and PBs. */
+  appleDeepHistoryFetched?: boolean;
+  /** Device-local flag: the user has authorized Apple HealthKit on THIS device
+   * (the permission sheet was presented and granted). Set by `connectAppleHealth()`.
+   * Distinct from `connectedSources.physiology` (the single labelled primary):
+   * Apple Health can run as a SUPPLEMENTARY physiology + activity source alongside
+   * a Garmin/Strava primary. Launch reads this to additively run the Apple sync
+   * (gap-fills physiology, prefers Garmin) without demoting the primary source. */
+  appleHealthConnected?: boolean;
   ambientTempHealDone?: boolean;            // True once the post-column backfill heal has fetched ambient_temp_c for historical runs
   /** ISO timestamp of the most recent successful backfillStravaHistory completion.
    * Drives the weekly refresh of historicWeeklyTSS / signalBBaseline / ctlBaseline:
@@ -849,6 +933,11 @@ export interface SimulatorState {
   extendedHistoryKm?: number[];
   extendedHistoryZones?: { base: number; threshold: number; intensity: number }[];
 
+  // Athlete archetype — re-detected at onboarding and on the 7-day refresh.
+  // Drives plan-engine ramp slope and predictor confidence band. See
+  // src/calculations/athlete-archetype.ts for the classifier.
+  athleteArchetype?: import('@/calculations/athlete-archetype').ArchetypeResult;
+
   // Injury recovery tracking
   rehabWeeksDone?: number;        // Weeks completed during injury (plan pointer frozen)
   lastMorningPainDate?: string;   // ISO date string of last morning pain check
@@ -856,9 +945,38 @@ export interface SimulatorState {
 
   // Illness tracking
   illnessState?: {
-    startDate: string;              // ISO date when illness was reported
-    severity: 'light' | 'resting'; // light = still running reduced; resting = full rest
+    startDate: string;              // ISO date when the CURRENT schedule was built (rolls forward on re-report)
+    onsetDate?: string;              // ISO date of original first report; preserved across re-reports for "Day N" display
+    severity: 'light' | 'resting'; // legacy tier — derived from schedule[0] when v2 fields present
     active: boolean;                // false once user marks recovered
+
+    // ─── v2 fields (optional, additive) ──────────────────────────────────────
+    // Classification derived from symptom inputs (Friman/Schwellnus rule).
+    classification?: {
+      neckRule: 'above' | 'below';
+      severityTier: 'mild' | 'moderate' | 'severe';
+      hasSystemic: boolean;          // fever | body aches override → below-neck regardless
+      rhrFlag: 'normal' | 'elevated' | 'high';
+    };
+
+    // Day-by-day plan modification schedule. Indexed by days since startDate.
+    // Beyond schedule end → no modification (user is back to full).
+    schedule?: Array<{
+      dateOffsetDays: number;        // 0 = startDate, 1 = +1 day, ...
+      capacity: 'rest' | 'easy_only' | 'reduced' | 'full';
+      volumeFactor: number;          // 0–1, applied to planned distance/duration
+      intensityCeiling: 'rest' | 'easy' | 'steady' | 'full';
+    }>;
+
+    // Raw form inputs (kept for transparency / future LLM context).
+    symptoms?: Array<'fever' | 'body_aches' | 'cough' | 'runny_nose' | 'sore_throat' | 'gi' | 'headache' | 'fatigue'>;
+    illnessType?: 'flu_chest' | 'head_cold' | 'gi' | 'other';
+    severity1to10?: number;
+    dayOfSymptoms?: '1-2' | '3-5' | '6+';
+    userCapacityOverride?: 'easy_only' | 'walks' | 'rest';
+    rhrDeltaBpm?: number;            // signed delta vs 28d baseline (positive = elevated)
+    rhrSource?: 'auto' | 'manual';   // auto = from physioHistory, manual = user entered
+    resolvedDate?: string;            // ISO when user marked recovered (return-to-train ramp starts)
   };
 
   // Holiday tracking
@@ -914,8 +1032,11 @@ export interface SimulatorState {
   // historical backfill on first launch.
   sessionImpactLog?: SessionImpactEntry[];
 
-  // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal
-  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; garminId?: string; rbeProtected?: boolean }>;
+  // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal.
+  // `recoveryMultOverride` lets a per-entry tag (e.g. strength session with heavy leg-feel)
+  // override the sport's default recoveryMult for the half-life calc, so a heavy squat day
+  // decays slower than the strength baseline.
+  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; garminId?: string; rbeProtected?: boolean; recoveryMultOverride?: number }>;
 
   // Persistent mapping from normalized activity name → user-chosen sport. When an activity with
   // the same name is synced in future, it auto-applies the mapped sport. Populated when user
@@ -972,9 +1093,50 @@ export interface SimulatorState {
    */
   lastHistoryAutoRestoreISO?: string;
 
-  // AI Coach (BYOK)
-  anthropicApiKeyStored?: boolean;  // flag only — actual key lives in Keychain / localStorage
-  coachConsentGiven?: boolean;      // one-time Anthropic data disclosure accepted
+  /** One-time health-disclaimer acknowledgement. Surfaced as a launch modal
+   *  for any user (new or existing) until ticked. App Store §1.4 requires
+   *  this disclosure for any health/fitness-recommendation app. */
+  healthDisclaimerAcknowledged?: boolean;
+  healthDisclaimerAcknowledgedISO?: string;
+
+  // AI Coach
+  coachConsentGiven?: boolean;      // one-time AI-data-disclosure accepted
+  coachIntroSeen?: boolean;         // one-time "what the coach can do" overlay dismissed
+  /** Persistent memory the coach maintains about the athlete across sessions.
+   *  Each fact is a short statement (preference, constraint, motivation). Capped
+   *  at 15 — when full, oldest is dropped on the next remember. Written via the
+   *  `remember` tool's Apply card so the user confirms each memory write. */
+  coachMemory?: {
+    lastUpdatedISO: string;
+    facts: Array<{ text: string; addedISO: string }>;
+  };
+  /** What the athlete cares most about in this training block, captured by a
+   *  one-time 2-click flow the first time they open Coach. Used by the coach to
+   *  weight recommendations — "healthy" + "injury" leans toward reductions;
+   *  "time" + "none" leans toward pushing. Re-prompt every 12 weeks via setISO. */
+  coachPriorities?: {
+    priority: 'time' | 'finish' | 'healthy' | 'fun';
+    constraint: 'time' | 'energy' | 'injury' | 'none';
+    setISO: string;
+  };
+  coachPrioritiesSeen?: boolean;
+  /** Queue of proactive insights the deterministic trigger detector has surfaced.
+   *  Home view renders the top unseen entry. Tapping marks `seen` true and opens
+   *  Coach with the primer prefilled. Tapping the X dismisses without opening. */
+  coachInsightQueue?: Array<{
+    /** Trigger id — also used as the one-time guard so the same condition
+     *  fires at most once per event ('hrv_crash_2026-05-14', etc.). */
+    triggerId: string;
+    /** Short headline rendered on the Home card. */
+    headline: string;
+    /** Primer text sent as the user's first message when Coach opens. */
+    primer: string;
+    createdISO: string;
+    seen?: boolean;
+  }>;
+
+  // Route safety map
+  safetyRatingIntroSeen?: boolean;  // one-time first-look popup on activity detail dismissed
 }
 
 /** Summary of a completed training plan, stored permanently for plan-history view in Stats. */

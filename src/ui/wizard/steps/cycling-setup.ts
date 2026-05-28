@@ -312,14 +312,14 @@ function hoursCommentary(distance: CyclingDistance, hours: number): string {
   const base = `Peak-week target. Early and recovery weeks will be lighter.`;
   if (distance === '50km') {
     if (hours < 4) return `${base}<br>Light volume. Plenty for a confident 50km finish.`;
-    if (hours < 7) return `${base}<br>Strong base for a fast 50km — comfortable margin.`;
-    return `${base}<br>Advanced volume — well above what 50km demands.`;
+    if (hours < 7) return `${base}<br>Strong base for a fast 50km, comfortable margin.`;
+    return `${base}<br>Advanced volume, well above what 50km demands.`;
   }
   if (distance === '100km') {
     if (hours < 5) return `${base}<br><span style="color:#c06a50">Aggressive minimum. 6–10h/week at peak is the typical range for a confident 100km finisher.</span>`;
     if (hours < 8) return `${base}<br>Realistic for a first 100km or time-constrained rider.`;
     if (hours < 12) return `${base}<br>Strong intermediate range. Good balance of volume and recovery.`;
-    return `${base}<br>Advanced volume — well above what most amateurs need for 100km.`;
+    return `${base}<br>Advanced volume. Well above what most amateurs need for 100km.`;
   }
   if (distance === '160km') {
     if (hours < 7) return `${base}<br><span style="color:#c06a50">Tight for 160km. Most first-timers need 9–12h+ at peak to ride the back half strong.</span>`;

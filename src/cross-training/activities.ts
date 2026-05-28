@@ -13,6 +13,74 @@ export function normalizeSport(name: string): SportKey {
 }
 
 /**
+ * Best-guess sport from a raw Garmin/Strava activityType string. Handles the
+ * common synonyms ("WeightTraining" → strength, "VirtualRide" → cycling, etc.).
+ * Returns `'generic_sport'` when nothing matches.
+ *
+ * Single source of truth for activityType → SportKey derivation; both the
+ * sport-picker UI and the fitness-model TSS helpers import from here so a
+ * "strength" classification is consistent across surfaces.
+ */
+export function deriveSportFromActivityType(activityType: string | null | undefined): SportKey {
+  if (!activityType) return 'generic_sport';
+  const raw = activityType.toLowerCase().trim();
+  if (raw in SPORTS_DB) return raw as SportKey;
+  if (raw in SPORT_ALIASES) return SPORT_ALIASES[raw];
+  if (raw.includes('run')) return 'extra_run';
+  if (raw.includes('swim')) return 'swimming';
+  if (raw.includes('cycl') || raw.includes('bike') || raw.includes('ride') || raw.includes('mountain_bik')) return 'cycling';
+  if (raw.includes('walk')) return 'walking';
+  if (raw.includes('hik')) return 'hiking';
+  if (raw.includes('ski') && raw.includes('board')) return 'snowboarding';
+  if (raw.includes('ski')) return 'skiing';
+  if (raw.includes('yoga')) return 'yoga';
+  if (raw.includes('row')) return 'rowing';
+  if (raw.includes('climb')) return 'climbing';
+  if (raw.includes('strength') || raw.includes('weight') || raw.includes('gym')) return 'strength';
+  if (raw.includes('kite')) return 'kitesurfing';
+  if (raw.includes('surf')) return 'surfing';
+  if (raw.includes('sail')) return 'sailing';
+  if (raw.includes('kayak') || raw.includes('canoe')) return 'kayaking';
+  if (raw.includes('paddle') || raw === 'sup') return 'paddleboard';
+  if (raw.includes('wake')) return 'wakeboarding';
+  return 'generic_sport';
+}
+
+/**
+ * Robust "is this a strength session?" detector. Combines three signals so the
+ * detection survives Strava's generic activityType (often `Workout`) when the
+ * only "strength" cue is in the user-provided activity name.
+ *
+ * Order:
+ *   1. Manual user override (`manualSport === 'strength'`).
+ *   2. activityType derivation (handles `WeightTraining`, `STRENGTH_TRAINING`,
+ *      `gym`, `weights`).
+ *   3. Substring match on `workoutName` / `displayName` for strength keywords.
+ *
+ * Shared single source of truth — both the fitness-model TSS override and the
+ * activity-detail UI chips import this so a session detected as strength on
+ * one surface is detected on the other.
+ */
+const STRENGTH_NAME_RE = /strength|weight|lift|barbell|squat|deadlift|bench|powerlift/i;
+export function isStrengthActual(actual: {
+  activityType?: string | null;
+  manualSport?: string;
+  workoutName?: string;
+  displayName?: string;
+}): boolean {
+  if (actual.manualSport === 'strength') return true;
+  const derived = deriveSportFromActivityType(actual.activityType);
+  if (derived === 'strength') return true;
+  // Name fallback only fires when activityType was ambiguous (generic_sport).
+  // Otherwise a run named "Easy run to lose weight" would mis-classify as
+  // strength via the `weight` keyword — mirrors getEffectiveSport's rule that
+  // name mappings only apply when the type derives to generic_sport.
+  if (derived !== 'generic_sport') return false;
+  const name = `${actual.workoutName ?? ''} ${actual.displayName ?? ''}`;
+  return STRENGTH_NAME_RE.test(name);
+}
+
+/**
  * Get RPE multiplier for load calculation
  * @param rpe - RPE value (1-10)
  * @returns Multiplier

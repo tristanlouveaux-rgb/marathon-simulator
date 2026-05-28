@@ -109,7 +109,7 @@ export function applyIllnessMods(workouts: any[], severity: 'light' | 'resting')
       w.illnessMod = true;
       w.illnessSeverity = 'resting';
       w.originalDistance = origKm > 0 ? `${origKm}km` : (w.d || w.n);
-      w.d = 'Rest — illness';
+      w.d = 'Rest, illness';
     } else {
       // light: downgrade quality, reduce all distances
       const isQuality = QUALITY_TYPES.some(t => type.includes(t) || name.includes(t));

@@ -14,6 +14,7 @@
  */
 
 import { getState, getMutableState, saveState } from '@/state';
+import { weekIndexForDate } from '@/calculations/activity-matcher';
 
 const GAP_SEEN_KEY = 'mosaic_gap_seen';
 const LAST_OPENED_KEY = 'mosaic_last_opened_at';
@@ -250,25 +251,25 @@ export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): 
     titleText = isDataFirst ? `Back after ${weeksLabel}` : 'Welcome back!';
     bodyText = isDataFirst
       ? 'One week off means minimal detraining. Aerobic base is intact.'
-      : "You've missed one week. Your aerobic base is still solid — let's pick right back up.";
-    bullets.push('Light detraining — your fitness is largely preserved.');
+      : "You've missed one week. Your aerobic base is still solid, let's pick right back up.";
+    bullets.push('Light detraining, your fitness is largely preserved.');
     bullets.push('Your plan continues from today, no changes needed.');
   } else if (weeksGap === 2) {
-    titleText = isDataFirst ? `Back after ${weeksLabel}` : `Welcome back — ${weeksLabel} away`;
+    titleText = isDataFirst ? `Back after ${weeksLabel}` : `Welcome back, ${weeksLabel} away`;
     bodyText = isDataFirst
       ? 'Two weeks off: moderate detraining, aerobic base is reducing.'
-      : "You've been away for 2 weeks — aerobic base is starting to reduce but is still strong.";
+      : "You've been away for 2 weeks. Aerobic base is starting to reduce but is still strong.";
     bullets.push('Moderate detraining detected.');
     bullets.push('Keep early sessions comfortable to ease back in.');
     bullets.push('Your plan jumps to today\'s week.');
   } else {
     titleText = isDataFirst
-      ? `Return after ${weeksLabel} — ease-in week active`
-      : `Good to have you back — ${weeksLabel} away`;
+      ? `Return after ${weeksLabel}, ease-in week active`
+      : `Good to have you back, ${weeksLabel} away`;
     bodyText = isDataFirst
       ? `Significant detraining over ${weeksLabel}. This week is set to Base phase (reduced volume) to minimise injury risk.`
-      : `You\'ve been away for ${weeksLabel}. We\'ll ease you back in with a lighter week — prioritise consistency over pace.`;
-    bullets.push('Your aerobic base has reduced — intensity targets are just guides.');
+      : `You\'ve been away for ${weeksLabel}. We\'ll ease you back in with a lighter week, prioritise consistency over pace.`;
+    bullets.push('Your aerobic base has reduced, intensity targets are just guides.');
     bullets.push('This week is a return week with reduced volume.');
     bullets.push('Run by feel, don\'t chase pace targets.');
   }

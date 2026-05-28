@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { computeDailyCoach, getTodayFeeling, type StrainContext } from './daily-coach';
+import { computeDailyCoach, getTodayFeeling, buildCoachSignalsPayload, type StrainContext } from './daily-coach';
 import type { SimulatorState, Week } from '@/types';
 
 // ─── Minimal state factory ───────────────────────────────────────────────────
@@ -66,6 +66,7 @@ const REST_STRAIN: StrainContext = {
   isRestDayOverreaching: false,
   trainedToday: false,
   todayIsHard: false,
+  upcomingHard: null,
   recentCrossTraining: null,
   actualTSS: 0,
 };
@@ -256,5 +257,107 @@ describe('getTodayFeeling', () => {
   it('returns null when todayFeeling is null', () => {
     const s = makeState({ todayFeeling: null });
     expect(getTodayFeeling(s)).toBeNull();
+  });
+});
+
+describe('buildCoachSignalsPayload — illness widening', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-14T12:00:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('no illness → null', () => {
+    const s = makeState();
+    const c = computeDailyCoach(s, REST_STRAIN);
+    const payload = buildCoachSignalsPayload(c, s);
+    expect(payload.illness).toBeNull();
+  });
+
+  it('legacy illnessState (no schedule) → returns only legacy severity (plus partial classification fields)', () => {
+    const s = makeState({
+      illnessState: { active: true, severity: 'light', startDate: '2026-05-13' } as any,
+    });
+    const c = computeDailyCoach(s, REST_STRAIN);
+    const payload = buildCoachSignalsPayload(c, s);
+    expect(payload.illness?.severity).toBe('light');
+    expect(payload.illness?.todayCapacity).toBeUndefined();
+    expect(payload.illness?.daysSinceOnset).toBeUndefined();
+  });
+
+  it('v2 below-neck illness on rest day → payload reports all v2 fields', () => {
+    const s = makeState({
+      illnessState: {
+        active: true,
+        severity: 'resting',
+        startDate: '2026-05-14',
+        onsetDate: '2026-05-13',
+        classification: { neckRule: 'below', severityTier: 'severe', hasSystemic: true, rhrFlag: 'high' },
+        schedule: [
+          { dateOffsetDays: 0, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest' },
+          { dateOffsetDays: 1, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest' },
+          { dateOffsetDays: 2, capacity: 'reduced', volumeFactor: 0.5, intensityCeiling: 'easy' },
+          { dateOffsetDays: 3, capacity: 'reduced', volumeFactor: 0.7, intensityCeiling: 'easy' },
+          { dateOffsetDays: 4, capacity: 'full', volumeFactor: 1, intensityCeiling: 'full' },
+        ],
+        symptoms: ['fever', 'cough', 'body_aches'],
+        severity1to10: 8,
+        dayOfSymptoms: '1-2',
+      } as any,
+    });
+    const c = computeDailyCoach(s, REST_STRAIN);
+    const payload = buildCoachSignalsPayload(c, s);
+    expect(payload.illness?.severity).toBe('resting');
+    expect(payload.illness?.neckRule).toBe('below');
+    expect(payload.illness?.hasSystemic).toBe(true);
+    expect(payload.illness?.rhrFlag).toBe('high');
+    expect(payload.illness?.todayCapacity).toBe('rest');
+    expect(payload.illness?.effectiveCapacity).toBe('rest');
+    expect(payload.illness?.todayVolumePct).toBe(0);
+    expect(payload.illness?.daysSinceOnset).toBe(1);                 // onset 2026-05-13, today 2026-05-14
+    expect(payload.illness?.daysRemainingAcute).toBe(1);             // offset 1 still rests
+    expect(payload.illness?.daysRemainingRamp).toBe(2);              // offsets 2,3 are reduced
+    expect(payload.illness?.pastSchedule).toBe(false);
+    expect(payload.illness?.symptoms).toEqual(['fever', 'cough', 'body_aches']);
+  });
+
+  it('userCapacityOverride=rest reflected in effectiveCapacity', () => {
+    const s = makeState({
+      illnessState: {
+        active: true,
+        severity: 'light',
+        startDate: '2026-05-14',
+        classification: { neckRule: 'above', severityTier: 'mild', hasSystemic: false, rhrFlag: 'normal' },
+        schedule: [{ dateOffsetDays: 0, capacity: 'easy_only', volumeFactor: 0.85, intensityCeiling: 'easy' }],
+        userCapacityOverride: 'rest',
+      } as any,
+    });
+    const c = computeDailyCoach(s, REST_STRAIN);
+    const payload = buildCoachSignalsPayload(c, s);
+    expect(payload.illness?.todayCapacity).toBe('easy_only');         // engine view
+    expect(payload.illness?.effectiveCapacity).toBe('rest');           // override-applied view
+    expect(payload.illness?.userCapacityOverride).toBe('rest');
+  });
+
+  it('past schedule → pastSchedule=true; no acute/ramp days remaining', () => {
+    const s = makeState({
+      illnessState: {
+        active: true,
+        severity: 'light',
+        startDate: '2026-05-10',                                       // 4 days ago
+        onsetDate: '2026-05-10',
+        classification: { neckRule: 'above', severityTier: 'mild', hasSystemic: false, rhrFlag: 'normal' },
+        schedule: [
+          { dateOffsetDays: 0, capacity: 'easy_only', volumeFactor: 0.85, intensityCeiling: 'easy' },
+          { dateOffsetDays: 1, capacity: 'reduced', volumeFactor: 0.95, intensityCeiling: 'full' },
+        ],
+      } as any,
+    });
+    const c = computeDailyCoach(s, REST_STRAIN);
+    const payload = buildCoachSignalsPayload(c, s);
+    expect(payload.illness?.pastSchedule).toBe(true);
+    expect(payload.illness?.daysRemainingAcute).toBe(0);
+    expect(payload.illness?.daysRemainingRamp).toBe(0);
+    expect(payload.illness?.effectiveCapacity).toBe('full');
   });
 });

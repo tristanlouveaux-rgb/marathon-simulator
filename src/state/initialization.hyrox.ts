@@ -26,6 +26,7 @@ import {
   computeDoublesCap,
 } from '@/constants/hyrox-constants';
 import { generateHyroxPlan, HYROX_GENERATOR_VERSION } from '@/workouts/plan_engine.hyrox';
+import { clearStaleGatesForMode } from '@/injury/engine';
 import { getVenueIdForEvent, getHyroxEventById } from '@/data/hyrox-events';
 import { computeHyroxStaleness, bandFromVdot } from '@/calculations/hyrox-staleness';
 import { HYROX_STATION_ORDER, SEED_ROXZONE_SEC } from '@/constants/hyrox-benchmarks';
@@ -308,6 +309,11 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     s.eventType = 'hyrox';
     s.hyroxConfig = hyroxConfig;
     s.triConfig = undefined;
+    // Clear stale tri injury gates so canSwim/canBike from a prior tri mode
+    // don't linger as silent no-ops on the new HYROX plan.
+    if (s.injuryState?.active) {
+      s.injuryState = clearStaleGatesForMode(s.injuryState, 'hyrox');
+    }
     s.trackOnly = false;
     s.continuousMode = false;
     s.w = 1;

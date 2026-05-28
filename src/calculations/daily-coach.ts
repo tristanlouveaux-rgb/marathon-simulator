@@ -22,10 +22,15 @@ import {
   REST_DAY_OVERREACH_RATIO,
 } from '@/calculations/fitness-model';
 import { computeReadiness, computeRecoveryScore, type ReadinessResult } from '@/calculations/readiness';
+import { heatStrainRatioForState } from '@/calculations/body-mass-adaptations';
 import { computeWeekSignals, type WeekSignals } from '@/calculations/coach-insight';
 import { getSleepInsight, getSleepBank, deriveSleepTarget, computeSleepDebt, fmtSleepDebt, buildDailySignalBTSS } from '@/calculations/sleep-insights';
 import { generateWeekWorkouts } from '@/workouts';
 import { isHardWorkout } from '@/workouts/scheduler';
+import {
+  computeRhrDeltaFromHistory, detectRaceCollision, getRaceDateISO,
+  resolveEffectiveEntry,
+} from './illness-rules';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -106,6 +111,9 @@ export interface StrainContext {
   trainedToday: boolean;
   /** Today's planned workout is a quality/hard session. */
   todayIsHard: boolean;
+  /** First hard session in the next 1-2 days (excluding today). Null when nothing hard is upcoming.
+   *  Day labels are 'tomorrow' / 'the day after' so copy reads naturally without absolute weekday. */
+  upcomingHard: { whenLabel: string; type: string } | null;
   /** Recent cross-training label + TSS in last 48h (null if none > 25 TSS). */
   recentCrossTraining: { label: string; tss: number } | null;
   /** Today's raw Signal B TSS (0 if nothing logged). Used to judge session weight on adhoc days. */
@@ -133,10 +141,9 @@ export interface CoachState {
   /** Pre-session context note (e.g. long-run drift warning). Null when not applicable. */
   sessionNote: string | null;
   /**
-   * UI ring label. Same as `readiness.label` by default, but swaps to
-   * "Recovery" / "Recovering" when the low readiness is purely driven by a
-   * completed session (covers both planned and adhoc/rest-day sessions).
-   * See `derivePostSessionLabel()`.
+   * UI ring label — always the underlying `readiness.label`. The post-session
+   * "Trained hard today" wording lives in the sentence below the ring (see
+   * `isPostSessionState`), since the ring is too narrow for long copy.
    */
   ringLabel: string;
   /**
@@ -169,7 +176,7 @@ export function getTodayFeeling(s: SimulatorState): 'struggling' | 'ok' | 'good'
 
 function deriveStrainContext(s: SimulatorState): StrainContext {
   const wk = (s.wks ?? [])[s.w - 1];
-  if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, recentCrossTraining: null, actualTSS: 0 };
+  if (!wk) return { strainPct: 0, isRestDay: true, isRestDayOverreaching: false, trainedToday: false, todayIsHard: false, upcomingHard: null, recentCrossTraining: null, actualTSS: 0 };
 
   const today = new Date().toISOString().split('T')[0];
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
@@ -182,7 +189,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   // isRestDay / matchedActivityToday drive the ring label off real actuals.
   const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
-    null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
+    s.injuryState, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
     s.w, s.tw, s.v, s.gs, getTrailingEffortScore(s.wks, s.w), wk.scheduledAcwrStatus,
   );
   if (wk.workoutMoves) {
@@ -240,12 +247,29 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
     void rpe;
   }
 
+  // Look ahead 1-2 days for the next quality/hard session. Used by primary-message
+  // copy so prescriptive advice ("ease into…", "back off") names what's coming
+  // rather than firing generically on rest days.
+  let upcomingHard: StrainContext['upcomingHard'] = null;
+  for (let offset = 1; offset <= 2; offset++) {
+    const targetDow = (todayDayOfWeek + offset) % 7;
+    if (targetDow < todayDayOfWeek) break; // wraps to next week — current plannedWorkouts only covers this week
+    const hit = plannedWorkouts.find((w: any) =>
+      w.dayOfWeek === targetDow && w.status !== 'skip' && w.status !== 'replaced' && isHardWorkout(w.t),
+    );
+    if (hit) {
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: (hit as any).t };
+      break;
+    }
+  }
+
   return {
     strainPct,
     isRestDay,
     isRestDayOverreaching,
     trainedToday: todayTSS > 0,
     todayIsHard,
+    upcomingHard,
     recentCrossTraining: null,
     actualTSS: todayTSS,
     todayPlannedWorkout,
@@ -335,6 +359,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     precomputedRecoveryScore: recoveryResult.hasData ? recoveryResult.score : null,
     strainPct: strain?.trainedToday ? strain.strainPct : null,
     acwrSafeUpper: acwr.safeUpper,
+    hasUpcomingHardSession: strain?.upcomingHard != null || (strain?.todayIsHard ?? false),
   });
 
   // ── Week signals ──────────────────────────────────────────────────────────
@@ -354,7 +379,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 
   const actuals = isEmptyTrackOnlyWeek ? [] : Object.values(wk?.garminActuals ?? {});
   const hrDriftVals = actuals
-    .map(a => typeof a.hrDrift === 'number' && !isNaN(a.hrDrift) ? heatAdjust(a.hrDrift, a.ambientTempC) : null)
+    .map(a => typeof a.hrDrift === 'number' && !isNaN(a.hrDrift) ? heatAdjust(a.hrDrift, a.ambientTempC, heatStrainRatioForState(s)) : null)
     .filter((v): v is number => v != null);
   const avgHrDrift = hrDriftVals.length > 0
     ? hrDriftVals.reduce((a, b) => a + b, 0) / hrDriftVals.length
@@ -386,7 +411,23 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   const injuryActive = !!(s.injuryState?.active);
   const injuryLocation = s.injuryState?.location ?? null;
   const illnessActive = !!(s.illnessState?.active);
-  const illnessSeverity = s.illnessState?.severity ?? null;
+  // Today's effective capacity = max(schedule capacity, user override). Used to
+  // derive coach stance: 'rest' → full rest, 'easy_only' / 'reduced' → reduce.
+  // Legacy severity is the fallback for pre-v2 state.
+  const illnessSeverity: 'light' | 'resting' | null = (() => {
+    const illness = s.illnessState;
+    if (!illness?.active) return null;
+    if (illness.schedule && illness.schedule.length > 0) {
+      const todayMs = new Date(new Date().toISOString().split('T')[0] + 'T12:00:00').getTime();
+      const startMs = new Date(illness.startDate + 'T12:00:00').getTime();
+      const offset = Math.round((todayMs - startMs) / 86400000);
+      const scheduleEntry = illness.schedule.find(e => e.dateOffsetDays === offset) ?? null;
+      const entry = resolveEffectiveEntry(scheduleEntry, illness.userCapacityOverride);
+      if (!entry || entry.capacity === 'full') return null;
+      return entry.capacity === 'rest' ? 'resting' : 'light';
+    }
+    return illness.severity ?? null;
+  })();
 
   // ── Today's workout ───────────────────────────────────────────────────────
   // Sourced from the strain-context lookup (which already calls generateWeekWorkouts).
@@ -410,7 +451,37 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   // Illness tiering: 'resting' → full rest; 'light' → at most 'reduce' (applied below).
   let stance: CoachStance;
   if (blockers.includes('injury')) {
-    stance = 'rest';
+    // Stance depends on whether the injury actually blocks all training.
+    // - acute phase → always 'rest' (clinical 72h+ window)
+    // - no gates set → 'rest' (conservative legacy default; preserves
+    //   behaviour for injuries created before the discipline-gate system)
+    // - any explicit gate allows training → 'reduce' (partial restriction)
+    // - every relevant gate says 'no' → 'rest'
+    const inj = s.injuryState;
+    const eventType: 'running' | 'triathlon' | 'hyrox' = (s as any).eventType || 'running';
+    const isCyclingOnly = !!((s as any).onboarding?.trainingMode === 'cycling');
+    const anyGateSet = !!(inj && (
+      inj.canBike !== undefined || inj.canSwim !== undefined
+      || inj.canUpperLoad !== undefined || inj.canLowerLoad !== undefined
+    ));
+    if (inj?.injuryPhase === 'acute') {
+      stance = 'rest';
+    } else if (!anyGateSet) {
+      stance = 'rest';
+    } else {
+      const allows = (g: 'yes' | 'limited' | 'no' | undefined) => g === 'yes' || g === 'limited';
+      let anyDisciplineAllowed = false;
+      if (isCyclingOnly) {
+        anyDisciplineAllowed = allows(inj?.canBike);
+      } else if (eventType === 'triathlon') {
+        anyDisciplineAllowed = allows(inj?.canRun) || allows(inj?.canBike) || allows(inj?.canSwim);
+      } else if (eventType === 'hyrox') {
+        anyDisciplineAllowed = allows(inj?.canRun) || allows(inj?.canUpperLoad) || allows(inj?.canLowerLoad);
+      } else {
+        anyDisciplineAllowed = allows(inj?.canRun);
+      }
+      stance = anyDisciplineAllowed ? 'reduce' : 'rest';
+    }
   } else if (blockers.includes('illness') && illnessSeverity === 'resting') {
     stance = 'rest';
   } else if (blockers.includes('overload')) {
@@ -515,7 +586,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
     todayFeeling: getTodayFeeling(s),
   };
 
-  const primaryMessage = derivePrimaryMessage(signals, readiness, blockers, strain ?? null);
+  const primaryMessage = derivePrimaryMessage(signals, readiness, blockers, strain ?? null, stance);
   const sessionNote = computeLongRunDriftNote(s, todayWorkouts[0]?.t ?? null);
 
   const postSessionLabel = derivePostSessionLabel(readiness, strain ?? null, signals.ctlNow);
@@ -538,34 +609,44 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
 }
 
 /**
- * Returns "Recovery" / "Recovering" when low readiness is session-driven,
- * otherwise null (caller keeps the underlying readiness label).
+ * Returns true when today's session has hit at least 100% of planned strain
+ * (or actualTSS ≥ daily CTL on adhoc / rest-day sessions). Used to override
+ * the tri-mode chronic-load sentence with descriptive copy that reflects
+ * what just happened. Mirrors the running-mode `derivePrimaryMessage`
+ * "Solid session today…" branch — fires on strain alone, regardless of the
+ * underlying readiness tier.
  *
  * Handles two cases:
  *   1. Planned session completed → uses `strainCtx.strainPct` (actual vs plan)
  *   2. Adhoc / rest-day session  → uses `actualTSS / dailyCTL` (actual vs chronic)
- *      so a big kitesurf on an unplanned day still flips the label.
- *
- * Guarded against ACWR / legLoad hard floors — those mean the athlete *does*
- * need to manage load beyond the single session, so the warning label stays.
  */
-export function derivePostSessionLabel(
-  readiness: ReadinessResult,
+export function isPostSessionState(
+  _readiness: ReadinessResult,
   strainCtx: StrainContext | null,
   dailyCTL: number,
-): 'Recovery' | 'Recovering' | null {
-  if (!strainCtx) return null;
-  if (readiness.hardFloor === 'acwr' || readiness.hardFloor === 'legLoad') return null;
+): boolean {
+  if (!strainCtx) return false;
 
   let pct = Math.round(strainCtx.strainPct);
 
-  // Adhoc/rest-day path: no planned target, but an actual session landed.
   if (pct <= 0 && strainCtx.actualTSS > 0 && dailyCTL > 0) {
     pct = Math.round((strainCtx.actualTSS / dailyCTL) * 100);
   }
 
-  if (pct >= 130) return 'Recovering';
-  if (pct >= 100) return 'Recovery';
+  return pct >= 100;
+}
+
+/**
+ * Legacy wrapper kept for the existing `coach.ringLabel` plumbing. Returns
+ * null in all cases now — the underlying readiness label stays in the ring
+ * (it has to fit a narrow circle), and post-session copy is surfaced in
+ * the sentence below the ring instead.
+ */
+export function derivePostSessionLabel(
+  _readiness: ReadinessResult,
+  _strainCtx: StrainContext | null,
+  _dailyCTL: number,
+): null {
   return null;
 }
 
@@ -590,7 +671,7 @@ function computeLongRunDriftNote(s: SimulatorState, todayType: string | null): s
     if (!wk?.garminActuals) continue;
     for (const actual of Object.values(wk.garminActuals)) {
       if (actual.plannedType === 'long' && typeof actual.hrDrift === 'number' && !isNaN(actual.hrDrift)) {
-        longRunDrifts.push(heatAdjust(actual.hrDrift, actual.ambientTempC));
+        longRunDrifts.push(heatAdjust(actual.hrDrift, actual.ambientTempC, heatStrainRatioForState(s)));
       }
     }
   }
@@ -636,9 +717,15 @@ function computeLongRunDriftNote(s: SimulatorState, todayType: string | null): s
 
 // Heat correction — literature-approximate 0.15%/°C rise in HR drift above
 // 15°C neutral. Used across durability detection and coach commentary.
-export function heatAdjust(drift: number, tempC: number | null | undefined): number {
+//
+// `heatStrainRatio` scales the correction by body size (larger athletes store
+// heat faster, so more of their hot-day drift is heat-driven). Defaults to 1.0
+// = the reference build, which reproduces the original formula EXACTLY — so any
+// caller that omits the argument is unchanged (regression-locked in
+// daily-coach.heatAdjust.test.ts). Ratio comes from heatStrainRatioForState().
+export function heatAdjust(drift: number, tempC: number | null | undefined, heatStrainRatio: number = 1.0): number {
   if (tempC == null) return drift;
-  return drift - 0.15 * Math.max(0, tempC - 15);
+  return drift - 0.15 * heatStrainRatio * Math.max(0, tempC - 15);
 }
 
 export interface DriftBaseline {
@@ -663,7 +750,7 @@ export function computeDriftBaselines(s: SimulatorState): {
     if (!wk?.garminActuals) continue;
     for (const actual of Object.values(wk.garminActuals)) {
       if (typeof actual.hrDrift !== 'number' || isNaN(actual.hrDrift)) continue;
-      const adj = heatAdjust(actual.hrDrift, actual.ambientTempC);
+      const adj = heatAdjust(actual.hrDrift, actual.ambientTempC, heatStrainRatioForState(s));
       if (actual.plannedType === 'easy') easyAdj.push(adj);
       else if (actual.plannedType === 'long') longAdj.push(adj);
     }
@@ -701,7 +788,7 @@ export function detectDurabilityFlag(s: SimulatorState): DurabilityFlag | null {
     if (!wk?.garminActuals) continue;
     for (const actual of Object.values(wk.garminActuals)) {
       if (typeof actual.hrDrift !== 'number' || isNaN(actual.hrDrift)) continue;
-      const adj = heatAdjust(actual.hrDrift, actual.ambientTempC);
+      const adj = heatAdjust(actual.hrDrift, actual.ambientTempC, heatStrainRatioForState(s));
       if (actual.plannedType === 'easy') easyAdj.push(adj);
       else if (actual.plannedType === 'long') longAdj.push(adj);
     }
@@ -778,6 +865,7 @@ function derivePrimaryMessage(
   readiness: ReadinessResult,
   blockers: CoachBlocker[],
   strain: StrainContext | null,
+  stance: CoachStance,
 ): string {
   const wn = sig.todayWorkoutName || 'the session';
   const hard = strain?.todayIsHard ?? (sig.todayWorkoutType ? isHardType(sig.todayWorkoutType) : false);
@@ -797,8 +885,16 @@ function derivePrimaryMessage(
     : null;
 
   // ── Tier 0: Hard blockers ───────────────────────────────────────────────
-  if (blockers.includes('injury'))
-    return 'Injury is active. Training is paused until cleared.';
+  if (blockers.includes('injury')) {
+    // Tailor the message to whether the user actually has training options.
+    // Full-stop message only when the stance routed to 'rest' above; for
+    // partially-restricted injuries (e.g. tri user with shoulder injury still
+    // running and biking), surface a "reduce" message instead of "paused".
+    if (stance === 'rest') {
+      return 'Injury is active. Training is paused until cleared.';
+    }
+    return 'Injury is active. Train only the disciplines you marked as available, at reduced intensity.';
+  }
   if (blockers.includes('illness'))
     return 'Illness flag is set. Rest until symptoms resolve.';
 
@@ -825,7 +921,15 @@ function derivePrimaryMessage(
       return sessionHeavy
         ? `Load spike (${sig.acwr}x). Heavy session compounds the risk. Rest tomorrow.`
         : `Load spike (${sig.acwr}x). Light session was the right call.`;
-    return `Load spike (${sig.acwr}x). Reduce or skip today.`;
+    if (hard)
+      return `Load spike (${sig.acwr}x). Reduce or skip ${wn}.`;
+    if (restDay)
+      return strain?.upcomingHard
+        ? `Load spike (${sig.acwr}x). Rest is well placed. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+        : `Load spike (${sig.acwr}x). Rest is well placed. No hard sessions in the next couple of days.`;
+    return strain?.upcomingHard
+      ? `Load spike (${sig.acwr}x). Keep today easy. Treat ${strain.upcomingHard.whenLabel}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} as a chance to ease in.`
+      : `Load spike (${sig.acwr}x). Keep today easy. Nothing hard is planned in the next couple of days.`;
   }
 
   // Combined sleep + HRV suppression
@@ -894,8 +998,14 @@ function derivePrimaryMessage(
       return sessionHeavy
         ? `Training load spiking (${sig.acwr}x). Heavy session adds to the spike. Ease off tomorrow.`
         : `Training load spiking (${sig.acwr}x). Light session today was the right call.`;
-    return hard
-      ? `Training load spiking (${sig.acwr}x). Keep ${wn} controlled.`
+    if (hard)
+      return `Training load spiking (${sig.acwr}x). Keep ${wn} controlled.`;
+    if (restDay)
+      return strain?.upcomingHard
+        ? `Training load spiking (${sig.acwr}x). Rest is well placed. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
+        : `Training load spiking (${sig.acwr}x). Rest is well placed.`;
+    return strain?.upcomingHard
+      ? `Training load spiking (${sig.acwr}x). Easy session is well placed today. ${strain.upcomingHard.whenLabel.charAt(0).toUpperCase() + strain.upcomingHard.whenLabel.slice(1)}'s ${strain.upcomingHard.type.replace(/_/g, ' ')} is the next thing to watch.`
       : `Training load spiking (${sig.acwr}x). Easy session is well placed today.`;
   }
 
@@ -1151,8 +1261,56 @@ export interface CoachNarrativePayload {
   weekTss: number | null;
   weekTssPlan: number | null;
   weekTssPct: number | null;
-  injury: { bodyPart: string; severity: string } | null;
-  illness: { severity: string } | null;
+  /**
+   * Active injury signal. Includes the discipline gates so the LLM can
+   * suggest concrete swaps ("you can still bike — let's move today's run to
+   * a bike at zone 2"). `phase` lets the coach acknowledge clinical stage.
+   */
+  injury: {
+    bodyPart: string;
+    severity: string;
+    phase?: string;
+    pain?: number;
+    canRun?: 'yes' | 'limited' | 'no';
+    canBike?: 'yes' | 'limited' | 'no';
+    canSwim?: 'yes' | 'limited' | 'no';
+    canUpperLoad?: 'yes' | 'limited' | 'no';
+    canLowerLoad?: 'yes' | 'limited' | 'no';
+    /**
+     * Return-ramp counters per discipline. When a gate transitions from
+     * 'no'/'limited' back to 'yes', that discipline gets 2 weeks of downmix
+     * before resuming full volume. The LLM should reference this so it can
+     * say "you are 1 week into a swim return — keep it easy" instead of
+     * recommending full intensity.
+     */
+    returnRampWeeksLeft?: Partial<Record<'run' | 'bike' | 'swim' | 'stations', number>>;
+  } | null;
+  /**
+   * Active illness signal. `severity` is the legacy two-tier field, retained
+   * for prompts that already key off it. The v2 fields (set when the user has
+   * gone through the new illness form) give the LLM enough context to give
+   * specific advice — "Day 3 of below-neck recovery, two rest days remaining"
+   * rather than just "you're ill".
+   */
+  illness: {
+    severity: 'light' | 'resting';                    // legacy tier
+    neckRule?: 'above' | 'below';
+    severityTier?: 'mild' | 'moderate' | 'severe';
+    hasSystemic?: boolean;
+    rhrFlag?: 'normal' | 'elevated' | 'high';
+    todayCapacity?: 'rest' | 'easy_only' | 'reduced' | 'full';
+    effectiveCapacity?: 'rest' | 'easy_only' | 'reduced' | 'full';
+    todayVolumePct?: number | null;                   // 0–100, null when capacity = full
+    daysSinceOnset?: number;
+    daysRemainingAcute?: number;                      // remaining rest days in schedule
+    daysRemainingRamp?: number;                       // remaining graded-return days
+    pastSchedule?: boolean;                            // true if today is beyond schedule end
+    staleRhrElevated?: boolean;                        // past schedule AND RHR still +5 bpm
+    raceCollision?: 'acute' | 'ramp' | 'safe' | null;
+    raceDaysFromToday?: number | null;
+    symptoms?: Array<'fever' | 'body_aches' | 'cough' | 'runny_nose' | 'sore_throat' | 'gi' | 'headache' | 'fatigue'>;
+    userCapacityOverride?: 'easy_only' | 'walks' | 'rest';
+  } | null;
   todayFeeling: 'struggling' | 'ok' | 'good' | 'great' | null;
   todayWorkout: {
     title: string;
@@ -1164,7 +1322,94 @@ export interface CoachNarrativePayload {
   primaryMessageFallback: string;
 }
 
-export function buildCoachSignalsPayload(coach: CoachState): CoachNarrativePayload {
+/**
+ * Build the v2 illness payload that the LLM sees. Returns null when illness
+ * isn't active. Falls back to the legacy `{ severity }` shape when state is
+ * missing (callers without state argument) or when the user is on a pre-v2
+ * illnessState that has no classification or schedule.
+ *
+ * Why this lives here and not in illness-rules.ts: it depends on `sig`
+ * (CoachSignals) for the legacy severity passthrough, which is already
+ * computed in this module.
+ */
+function buildIllnessPayloadForCoach(
+  state: SimulatorState | undefined,
+  sig: CoachSignals,
+): CoachNarrativePayload['illness'] {
+  if (!sig.illnessActive) return null;
+  const legacy = (sig.illnessSeverity === 'resting' ? 'resting' : 'light') as 'resting' | 'light';
+
+  if (!state) return { severity: legacy };
+  const illness = state.illnessState;
+  if (!illness?.active) return { severity: legacy };
+
+  // No v2 fields → return legacy shape only.
+  if (!illness.schedule || illness.schedule.length === 0) {
+    return {
+      severity: legacy,
+      neckRule: illness.classification?.neckRule,
+      severityTier: illness.classification?.severityTier,
+      hasSystemic: illness.classification?.hasSystemic,
+      rhrFlag: illness.classification?.rhrFlag,
+      symptoms: illness.symptoms,
+      userCapacityOverride: illness.userCapacityOverride,
+    };
+  }
+
+  // Date math (noon-UTC, same trick used elsewhere).
+  const todayISO = new Date().toISOString().split('T')[0];
+  const todayMs = new Date(todayISO + 'T12:00:00').getTime();
+  const startMs = new Date(illness.startDate + 'T12:00:00').getTime();
+  const onsetISO = illness.onsetDate ?? illness.startDate;
+  const onsetMs = new Date(onsetISO + 'T12:00:00').getTime();
+
+  const scheduleOffset = Math.max(0, Math.round((todayMs - startMs) / 86400000));
+  const daysSinceOnset = Math.max(0, Math.round((todayMs - onsetMs) / 86400000));
+
+  const scheduleEntry = illness.schedule.find(e => e.dateOffsetDays === scheduleOffset) ?? null;
+  const effective = resolveEffectiveEntry(scheduleEntry, illness.userCapacityOverride);
+  const maxOffset = Math.max(...illness.schedule.map(e => e.dateOffsetDays));
+  const pastSchedule = scheduleOffset > maxOffset;
+
+  // Remaining rest and ramp days are counted from offsets *after* today,
+  // so the LLM can say "two more rest days" accurately.
+  let daysRemainingAcute = 0;
+  let daysRemainingRamp = 0;
+  for (const e of illness.schedule) {
+    if (e.dateOffsetDays <= scheduleOffset) continue;
+    if (e.capacity === 'rest') daysRemainingAcute++;
+    else if (e.capacity === 'reduced' || e.capacity === 'easy_only') daysRemainingRamp++;
+  }
+
+  const rhrDelta = computeRhrDeltaFromHistory(state.physiologyHistory);
+  const staleRhrElevated = pastSchedule && rhrDelta != null && rhrDelta >= 5;
+
+  const raceISO = getRaceDateISO(state);
+  const collision = detectRaceCollision(raceISO, illness.startDate, illness.schedule);
+
+  return {
+    severity: legacy,
+    neckRule: illness.classification?.neckRule,
+    severityTier: illness.classification?.severityTier,
+    hasSystemic: illness.classification?.hasSystemic,
+    rhrFlag: illness.classification?.rhrFlag,
+    todayCapacity: scheduleEntry?.capacity,
+    effectiveCapacity: effective?.capacity ?? 'full',
+    todayVolumePct: effective && effective.capacity !== 'full'
+      ? Math.round(effective.volumeFactor * 100) : null,
+    daysSinceOnset,
+    daysRemainingAcute,
+    daysRemainingRamp,
+    pastSchedule,
+    staleRhrElevated,
+    raceCollision: collision?.phase ?? null,
+    raceDaysFromToday: collision?.daysFromToday ?? null,
+    symptoms: illness.symptoms,
+    userCapacityOverride: illness.userCapacityOverride,
+  };
+}
+
+export function buildCoachSignalsPayload(coach: CoachState, state?: SimulatorState): CoachNarrativePayload {
   const sig = coach.signals;
 
   const hrvPct = (sig.hrv != null && sig.hrvBaseline != null && sig.hrvBaseline > 0)
@@ -1175,16 +1420,26 @@ export function buildCoachSignalsPayload(coach: CoachState): CoachNarrativePaylo
     ? Math.round((sig.weekTSS / sig.plannedTSS) * 100)
     : null;
 
+  // Surface gates + phase so the LLM can recommend discipline swaps instead
+  // of a generic "rest" response (e.g. tri user with shoulder injury can
+  // still bike + run — the coach should propose those, not blanket rest).
+  const injuryState = state?.injuryState;
   const injury = sig.injuryActive
     ? {
         bodyPart: (sig.injuryLocation ?? 'unspecified').slice(0, 40),
         severity: 'active',
+        phase: injuryState?.injuryPhase,
+        pain: injuryState?.currentPain,
+        canRun: injuryState?.canRun,
+        canBike: injuryState?.canBike,
+        canSwim: injuryState?.canSwim,
+        canUpperLoad: injuryState?.canUpperLoad,
+        canLowerLoad: injuryState?.canLowerLoad,
+        returnRampWeeksLeft: injuryState?.returnRampWeeksLeft,
       }
     : null;
 
-  const illness = sig.illnessActive
-    ? { severity: (sig.illnessSeverity === 'resting' ? 'resting' : 'light') as 'resting' | 'light' }
-    : null;
+  const illness = buildIllnessPayloadForCoach(state, sig);
 
   const todayWorkout = (sig.todayWorkoutName && sig.todayWorkoutType)
     ? {

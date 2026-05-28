@@ -9,6 +9,8 @@ import { applyInjuryAdaptations } from '@/injury/engine';
 import { generateOrderedRunSlots, type SlotType } from './rules_engine';
 import { planWeekSessions } from './plan_engine';
 import { intentToWorkout } from './intent_to_workout';
+import { getState } from '@/state';
+import { swapFractionForState } from '@/calculations/body-mass-adaptations';
 import { calculateZones, getWorkoutHRTarget, type HRProfile } from '@/calculations/heart-rate';
 import { generateGymWorkouts } from './gym';
 import { computePlanPhases } from './phases';
@@ -50,9 +52,27 @@ export function generateWeekWorkouts(
   // Injury handling is fully delegated to applyInjuryAdaptations (phase-aware engine)
   // at the end of this function. No early return here.
 
+  // Commute-aware planning. `runsPerWeek` is the user's count of DEDICATED
+  // (non-commute) runs. Commute runs are appended on top as extra easy
+  // aerobic volume. Body doesn't distinguish "training run" from "transport
+  // run" — both contribute to aerobic stimulus and impact load — but
+  // commutes are user-driven habit, not part of the prescribed plan shape.
+  // Previously (Phase 4, 2026-05-14) commutes substituted for prescribed
+  // easy runs; user-facing model proved confusing (2 dedicated + 3 commutes
+  // looked like only 1 long + 3 commutes because the substitution silently
+  // ate both easy slots). 2026-05-20 reverted to "extra on top".
+
   const workouts: Workout[] = [];
 
   if (weekIndex != null && totalWeeks != null) {
+    // Read archetype + baseline from state — drives the ramp budget inside
+    // planWeekSessions so week 1 starts near the user's current km rather than
+    // jumping straight to the ability-driven peak. Falls back to legacy
+    // behaviour when state is empty (no Strava history yet).
+    const sNow = getState();
+    const baselineKm = sNow.detectedWeeklyKm;
+    const archetype = sNow.athleteArchetype?.archetype;
+
     // New plan engine path: time-based sessions with progression & deload
     const intents = planWeekSessions({
       runsPerWeek,
@@ -68,6 +88,9 @@ export function generateWeekWorkouts(
       forceDeload,
       weeklyHoursTarget,
       excludedSlots,
+      baselineKm,
+      archetype,
+      easyPaceSecPerKm,
     });
     for (const intent of intents) {
       workouts.push(intentToWorkout(intent, raceDistance, runnerType, easyPaceSecPerKm));
@@ -139,6 +162,43 @@ export function generateWeekWorkouts(
     }
   }
 
+  // ── Body-mass cross-training swap (opt-in) ─────────────────────────────
+  // Heavier runners (above the GENERAL-POPULATION reference): gently shorten
+  // freshly-prescribed EASY running by swapFraction (≤15%); the freed volume is
+  // prescribed as low-impact cross-training. Manages cumulative joint load
+  // without cutting the aerobic target.
+  //
+  // Opt-in: applies unless the user explicitly turned it off
+  // (`bodyMassSwapEnabled === false`). Default-on for heavy users until they
+  // decide via the onboarding popup. swapFraction is 0 for anyone at/below the
+  // population reference — see body-mass-adaptations.test.ts.
+  //
+  // Scope is deliberately narrow: runs BEFORE makeup/commute/gym/recurring are
+  // appended, and only touches `t:'easy'` with a clean "<n>km" description, so
+  // commute runs, makeup runs, and cross-training are never altered. Each
+  // generation rebuilds easy runs at full length, so the swap never compounds.
+  let bodyMassSwapFraction = 0;
+  try {
+    const sNow2 = getState();
+    if (sNow2.bodyMassSwapEnabled !== false) bodyMassSwapFraction = swapFractionForState(sNow2);
+  } catch { bodyMassSwapFraction = 0; }
+  if (bodyMassSwapFraction > 0) {
+    const keep = 1 - bodyMassSwapFraction;
+    for (const w of workouts) {
+      if (w.t !== 'easy') continue;
+      const m = /^(\d+(?:\.\d+)?)km$/.exec(w.d ?? '');
+      if (!m) continue;
+      const km = parseFloat(m[1]);
+      const reduced = Math.max(3, Math.round(km * keep));
+      if (reduced < km) {
+        w.d = `${reduced}km`;
+        if (typeof w.estimatedDurationMin === 'number') {
+          w.estimatedDurationMin = Math.round(w.estimatedDurationMin * (reduced / km));
+        }
+      }
+    }
+  }
+
   // Add skipped workouts from previous week (prefix name to avoid collisions)
   for (const skip of previousSkips) {
     workouts.push({
@@ -150,20 +210,40 @@ export function generateWeekWorkouts(
     });
   }
 
-  // Add commute runs if configured
+  // Add commute runs if configured. Bidirectional commutes emit two slots
+  // per day (morning + evening) at the one-way distance — matches how the
+  // user actually runs them and gives the scheduler a chance to surface
+  // both trips. Unidirectional commutes emit one slot per day.
   if (commuteConfig?.enabled && commuteConfig.commuteDaysPerWeek > 0) {
-    const commuteDistance = commuteConfig.isBidirectional
-      ? commuteConfig.distanceKm * 2
-      : commuteConfig.distanceKm;
+    const oneWayKm = commuteConfig.distanceKm;
     for (let i = 0; i < commuteConfig.commuteDaysPerWeek; i++) {
-      workouts.push({
-        t: 'easy',
-        n: `Commute ${i + 1}`,
-        d: `${commuteDistance}km`,
-        rpe: 3,
-        r: 3,
-        commute: true,
-      });
+      if (commuteConfig.isBidirectional) {
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (morning)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          commute: true,
+        });
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (evening)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          commute: true,
+        });
+      } else {
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1}`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          commute: true,
+        });
+      }
     }
   }
 

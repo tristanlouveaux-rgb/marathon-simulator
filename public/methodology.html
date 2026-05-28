@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mosaic — How the numbers are calculated</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f9f9f7;
+      color: #1a1a1a;
+      padding: 2rem;
+    }
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      padding: 3rem;
+      max-width: 680px;
+      margin: 0 auto;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; }
+    .meta { color: #999; font-size: 0.85rem; margin-bottom: 2rem; }
+    h2 { font-size: 1rem; font-weight: 600; margin: 2rem 0 0.5rem; }
+    h3 { font-size: 0.95rem; font-weight: 600; margin: 1.25rem 0 0.5rem; color: #444; }
+    p { font-size: 0.95rem; line-height: 1.7; color: #333; margin-bottom: 0.75rem; }
+    ul { padding-left: 1.25rem; margin-bottom: 0.75rem; }
+    ul li { font-size: 0.95rem; line-height: 1.7; color: #333; }
+    a { color: #1a1a1a; }
+    code { background: #f0ede5; padding: 1px 5px; border-radius: 4px; font-size: 0.85rem; }
+    .divider { border: none; border-top: 1px solid #eee; margin: 2rem 0; }
+    .disclaimer { background: #f4f1ea; border-left: 3px solid #b08e3a; padding: 1rem 1.25rem; border-radius: 6px; margin: 1.5rem 0; }
+    .disclaimer p { margin-bottom: 0; }
+    .back { display: block; margin-top: 2rem; font-size: 0.9rem; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>How the numbers are calculated</h1>
+    <p class="meta">Mosaic — Last updated 18 May 2026</p>
+
+    <p>Mosaic produces estimates of fitness, recovery, and race performance from your training history. This page explains the models and constants behind those estimates, so you can judge how much weight to give them. None of the numbers Mosaic surfaces are medical measurements.</p>
+
+    <div class="disclaimer">
+      <p><strong>Mosaic is not a medical device.</strong> Predictions, readiness scores, and load metrics are informational and based on published exercise-physiology models applied to your training data. Always consult a physician before starting or modifying a training programme, and follow professional medical advice for any health condition.</p>
+    </div>
+
+    <h2>Training load</h2>
+
+    <h3>TSS (Training Stress Score)</h3>
+    <p>Per-session load uses Andrew Coggan's TSS model: <code>TSS = (duration_seconds × NP × IF) / (FTP × 3600) × 100</code> for cycling. For running we derive an equivalent load via <code>iTRIMP</code> (heart-rate-weighted exercise intensity, per Manzi 2009) and normalise to a TSS-equivalent scale calibrated against the athlete's own training history. Cross-training (swim, strength, hike) is converted to a run-equivalent stimulus via a per-sport discount factor.</p>
+
+    <h3>CTL, ATL, TSB (Banister impulse-response model)</h3>
+    <p>Fitness, fatigue, and form are modelled as exponentially-weighted moving averages of daily TSS:</p>
+    <ul>
+      <li><strong>CTL (Chronic Training Load)</strong> — 42-day EMA, approximates aerobic fitness</li>
+      <li><strong>ATL (Acute Training Load)</strong> — 7-day EMA, approximates fatigue</li>
+      <li><strong>TSB (Training Stress Balance, "form")</strong> — CTL minus ATL</li>
+    </ul>
+    <p>This is the Banister impulse-response framework (Banister 1991), as operationalised by TrainingPeaks. The 42/7 day decay constants follow that convention.</p>
+
+    <h3>ACWR (Acute:Chronic Workload Ratio)</h3>
+    <p>Ratio of 7-day to 28-day rolling load. Mosaic flags values outside roughly 0.8–1.5 as carrying elevated injury risk (Gabbett 2016, Hulin 2014). This is one signal among several in the readiness model; it is not deterministic.</p>
+
+    <h2>Race time prediction</h2>
+
+    <h3>VDOT (running)</h3>
+    <p>Jack Daniels' VDOT model converts race performances into a VO2max-proxy fitness number, then back into predicted times at other distances. Mosaic derives VDOT from your fastest recent race-effort runs across distances, weights by recency, and projects to your target race using fatigue-resistance and course-specific factors.</p>
+
+    <h3>FTP / Critical Power (cycling)</h3>
+    <p>FTP (Functional Threshold Power) is estimated from your strongest 20-minute power efforts (using Coggan's 0.95 factor) or from the critical-power asymptote of multiple maximal-effort durations (Monod &amp; Scherrer 1965). Bike race time prediction uses the Coggan model with a duration-dependent power decay.</p>
+
+    <h3>CSS (swimming)</h3>
+    <p>CSS (Critical Swim Speed) is computed from 200m + 400m time-trial pairs (Wakayoshi 1992). Open-water swims apply a deficit relative to pool times where the data warrants it.</p>
+
+    <h3>Course factors and durability</h3>
+    <p>Course-specific factors (elevation, surface, expected temperature) adjust the baseline race-day prediction. Durability — your ability to hold pace late in a race — is modelled from how much your pace decays in the final third of long efforts in your training history.</p>
+
+    <h2>Readiness</h2>
+    <p>Daily readiness blends signals from heart rate variability (HRV), resting heart rate, last night's sleep duration, training stress balance, and recent acute load. Each component is z-scored against the athlete's own rolling baseline (typically 28 days) so the score reflects your personal trend, not a population norm. HRV and resting heart rate are read from Apple Health or Garmin where available; if neither is connected, the score uses TSB and ACWR alone.</p>
+
+    <h2>Limitations</h2>
+    <ul>
+      <li>Predictions improve as your training history grows. With less than four weeks of data the confidence band is wide.</li>
+      <li>The TSS and iTRIMP models reduce highly different physiological stresses to a single number. They are useful for tracking trends, not for ranking sessions one against the other.</li>
+      <li>VDOT, FTP and CSS are population-fit models. Individuals can have meaningful differences between predicted and actual race times; Mosaic surfaces a confidence band, not a point.</li>
+      <li>Course factors and durability are calibrated where data exists, otherwise default to neutral.</li>
+      <li>HRV and resting heart rate are sensitive to non-training factors — illness, sleep debt, stress, caffeine, alcohol. Use the trend, not any single day.</li>
+    </ul>
+
+    <h2>References</h2>
+    <ul>
+      <li>Banister EW. (1991) Modeling Elite Athletic Performance. <em>Physiological Testing of Elite Athletes.</em></li>
+      <li>Coggan A, Allen H. (2019) <em>Training and Racing with a Power Meter</em>, 3rd ed.</li>
+      <li>Daniels J. (2013) <em>Daniels' Running Formula</em>, 3rd ed.</li>
+      <li>Gabbett TJ. (2016) The training-injury prevention paradox. <em>Br J Sports Med</em>.</li>
+      <li>Hulin BT et al. (2014) Spikes in acute workload are associated with increased injury risk in elite cricket fast bowlers. <em>Br J Sports Med</em>.</li>
+      <li>Manzi V et al. (2009) Dose-response relationship of autonomic nervous system responses to individualized training impulse in marathon runners. <em>Am J Physiol Heart Circ Physiol</em>.</li>
+      <li>Monod H, Scherrer J. (1965) The work capacity of a synergic muscular group. <em>Ergonomics</em>.</li>
+      <li>Wakayoshi K et al. (1992) A simple method for determining critical speed as swimming fatigue threshold. <em>Int J Sports Med</em>.</li>
+    </ul>
+
+    <p style="margin-top:2rem;font-size:0.85rem;color:#888">Full per-formula derivations, justifications and limitations are maintained in the project's internal <code>SCIENCE_LOG.md</code>, available on request.</p>
+
+    <a class="back" href="/">← Back to Mosaic</a>
+  </div>
+</body>
+</html>

@@ -5,7 +5,7 @@
  * are safe, banned, or recommended for each injury type.
  */
 
-import type { InjuryProtocol, InjuryType } from '@/types/injury';
+import type { InjuryProtocol, InjuryState, InjuryType } from '@/types/injury';
 import type { SportKey } from '@/types';
 
 /**
@@ -176,6 +176,39 @@ export function getPriorityActivities(injuryType: InjuryType): SportKey[] {
 export function getReplacementActivity(injuryType: InjuryType): SportKey | null {
   const priorities = getPriorityActivities(injuryType);
   return priorities.length > 0 ? priorities[0] : null;
+}
+
+/**
+ * Block-level for a given activity, combining the injury-type protocol with
+ * the user's explicit per-discipline gate answers. Plan engines should use this
+ * (not isActivityAllowed alone) so an upper-body injury can block swim even
+ * when the injury type is "general".
+ *
+ * - 'block': do not schedule
+ * - 'limit': schedule at reduced intensity / downmix to easy
+ * - 'allow': schedule normally
+ */
+export function getActivityGateLevel(
+  injuryState: InjuryState,
+  activity: SportKey
+): 'block' | 'limit' | 'allow' {
+  // Protocol-level ban wins unconditionally.
+  if (!isActivityAllowed(injuryState.type, activity)) return 'block';
+
+  // Layer the per-discipline user answers on top.
+  const gateMap: Partial<Record<SportKey, 'yes' | 'limited' | 'no' | undefined>> = {
+    swimming: injuryState.canSwim,
+    cycling: injuryState.canBike,
+  };
+  const userGate = gateMap[activity];
+  if (userGate === 'no') return 'block';
+  if (userGate === 'limited') return 'limit';
+  return 'allow';
+}
+
+/** Convenience: true iff activity is fully allowed (not blocked, not limited). */
+export function isActivityAllowedForUser(injuryState: InjuryState, activity: SportKey): boolean {
+  return getActivityGateLevel(injuryState, activity) !== 'block';
 }
 
 /**

@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mosaic — All Fitness Counts (carousel)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="app-style.css">
+</head>
+<body>
+
+<!-- ============================== SLIDE 1 — COVER ============================== -->
+<div class="slide cover cover-gym">
+  <div class="slide-label">Slide 1 — Cover</div>
+  <div class="content">
+    <div>
+      <div class="cover-headline">All<br>fitness<br>counts.</div>
+      <div class="cover-subtag">YOUR PLAN.<br>YOUR SPORTS.<br>ONE SYSTEM.</div>
+    </div>
+    <div class="cover-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 2 — HOOK ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 2 — Hook</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">Every<br>session<br><span class="warm">counts.</span></div>
+    <div class="text-sub">Other apps ignore the sports they don't understand. Mosaic measures the load from football, padel, climbing, skiing, boxing. All of it. Then plans around it.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 3 — ACTIVITY LOG ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 3 — Multi-sport activity log</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">Padel is <span class="warm">38 TSS</span>.<br>So is skiing.</div>
+    <div class="phone-sub">iTRIMP-based load model. Heart rate translates to training stress, regardless of sport.</div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">This week</div>
+                <div class="app-h-meta" style="margin-top:4px;">All activities · Mon–Sun</div>
+              </div>
+            </div>
+
+            <div class="w-card">
+              <div class="act-row">
+                <div class="act-icon padel">🎾</div>
+                <div class="act-info">
+                  <div class="act-name">Padel</div>
+                  <div class="act-meta">Tue · 47 min · avg HR 142</div>
+                </div>
+                <div class="act-load"><div class="act-load-num">38</div><div class="act-load-lbl">TSS</div></div>
+              </div>
+              <div class="act-row">
+                <div class="act-icon run">🏃</div>
+                <div class="act-info">
+                  <div class="act-name">Easy run</div>
+                  <div class="act-meta">Wed · 8 km · 5:24 /km · 40 min</div>
+                </div>
+                <div class="act-load"><div class="act-load-num">54</div><div class="act-load-lbl">TSS</div></div>
+              </div>
+              <div class="act-row">
+                <div class="act-icon boxing">🥊</div>
+                <div class="act-info">
+                  <div class="act-name">Boxing</div>
+                  <div class="act-meta">Thu · 60 min · HIIT · avg HR 156</div>
+                </div>
+                <div class="act-load"><div class="act-load-num">72</div><div class="act-load-lbl">TSS</div></div>
+              </div>
+              <div class="act-row">
+                <div class="act-icon ski">⛷</div>
+                <div class="act-info">
+                  <div class="act-name">Backcountry ski</div>
+                  <div class="act-meta">Sat · 2h 14m · 850 m climb · 12.4 km</div>
+                </div>
+                <div class="act-load"><div class="act-load-num">96</div><div class="act-load-lbl">TSS</div></div>
+              </div>
+              <div class="act-row">
+                <div class="act-icon swim">🏊</div>
+                <div class="act-info">
+                  <div class="act-name">Pool swim</div>
+                  <div class="act-meta">Sun · 1.5 km · CSS test · 1:38 /100m</div>
+                </div>
+                <div class="act-load"><div class="act-load-num">42</div><div class="act-load-lbl">TSS</div></div>
+              </div>
+            </div>
+
+            <div class="g-card" style="background:rgba(220,252,231,0.45);border-color:rgba(34,197,94,0.18);">
+              <div style="font-size:13px;color:var(--c-ok-text);font-weight:600;line-height:1.5;">
+                Every activity matched to a sport-specific decay model. Strava is canonical when both Garmin and Strava report the same session.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 4 — LOAD APPLIED ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 4 — Weekly load with sport split</div>
+  <div class="bg-cool"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">Counted toward<br>your <span class="accent">week.</span></div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Load</div>
+                <div class="app-h-meta" style="margin-top:4px;">Week 6 of 16</div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div style="display:flex;justify-content:space-between;align-items:flex-end;">
+                <div>
+                  <div class="card-label" style="margin-bottom:6px;">Total load</div>
+                  <div style="font-size:46px;font-weight:700;letter-spacing:-2px;line-height:1;color:var(--c-black);">302</div>
+                  <div style="font-size:13px;color:var(--c-muted);margin-top:4px;">TSS · target 285</div>
+                </div>
+                <div style="text-align:right;">
+                  <span class="pill pill-ok">On track</span>
+                  <div style="font-size:12px;color:var(--c-muted);margin-top:6px;">ACWR 1.12</div>
+                </div>
+              </div>
+
+              <div class="week-grid" style="margin-top:18px;">
+                <div class="wd"><div class="wd-lbl">Mon</div><div class="wd-bar"></div><div class="wd-num">0</div></div>
+                <div class="wd"><div class="wd-lbl">Tue</div><div class="wd-bar"><div class="wd-fill cross" style="height:32%;"></div></div><div class="wd-num">38</div></div>
+                <div class="wd"><div class="wd-lbl">Wed</div><div class="wd-bar"><div class="wd-fill run" style="height:46%;"></div></div><div class="wd-num">54</div></div>
+                <div class="wd"><div class="wd-lbl">Thu</div><div class="wd-bar"><div class="wd-fill cross" style="height:62%;"></div></div><div class="wd-num">72</div></div>
+                <div class="wd"><div class="wd-lbl">Fri</div><div class="wd-bar"></div><div class="wd-num">0</div></div>
+                <div class="wd"><div class="wd-lbl">Sat</div><div class="wd-bar"><div class="wd-fill cross" style="height:82%;"></div></div><div class="wd-num">96</div></div>
+                <div class="wd"><div class="wd-lbl">Sun</div><div class="wd-bar"><div class="wd-fill swim" style="height:36%;"></div></div><div class="wd-num">42</div></div>
+              </div>
+            </div>
+
+            <div class="g-card">
+              <div class="card-label">Sport split</div>
+              <div class="h-bar" style="margin-top:8px;">
+                <div style="width:18%;background:#4E9FE5;"></div>
+                <div style="width:32%;background:#C49E6E;"></div>
+                <div style="width:24%;background:#E47B5C;"></div>
+                <div style="width:14%;background:#F59E0B;"></div>
+                <div style="width:12%;background:#06B6D4;"></div>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px 14px;font-size:12px;margin-top:10px;color:var(--c-muted);">
+                <span><span style="color:#4E9FE5;font-weight:700;">●</span> Run 54</span>
+                <span><span style="color:#C49E6E;font-weight:700;">●</span> Ski 96</span>
+                <span><span style="color:#E47B5C;font-weight:700;">●</span> Boxing 72</span>
+                <span><span style="color:#F59E0B;font-weight:700;">●</span> Padel 38</span>
+                <span><span style="color:#06B6D4;font-weight:700;">●</span> Swim 42</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 5 — PLAN ADAPTS ============================== -->
+<div class="slide phone-slide">
+  <div class="slide-label">Slide 5 — Plan adjusts to cross-training load</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="content">
+    <div class="phone-caption">So your run plan<br><span class="accent">adapts.</span></div>
+    <div class="phone">
+      <div class="phone-screen">
+        <div class="app-screen">
+          <div class="app-atmos"></div>
+          <div class="app-rings">
+            <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+              <g class="ring-stroke-bg">
+                <circle r="60"/><circle r="100"/><circle r="148"/><circle r="200"/>
+              </g>
+            </svg>
+          </div>
+          <div class="status-bar"><span>9:41</span><span class="right">96</span></div>
+          <div class="app-content">
+            <div class="app-header">
+              <div>
+                <div class="app-h-title">Plan</div>
+                <div class="app-h-meta" style="margin-top:4px;">Week ahead · adjusted</div>
+              </div>
+            </div>
+
+            <div class="g-card" style="background:rgba(220,252,231,0.55);border-color:rgba(34,197,94,0.2);">
+              <div style="display:flex;gap:10px;align-items:flex-start;">
+                <div style="width:6px;height:6px;border-radius:50%;background:var(--c-ok);margin-top:8px;flex-shrink:0;"></div>
+                <div>
+                  <div style="font-size:12px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:var(--c-ok-text);">Plan adjusted</div>
+                  <div style="font-size:14px;color:var(--c-black);line-height:1.5;margin-top:6px;font-weight:500;">
+                    Saturday's ski added 96 TSS to the week. Sunday's long run reduced from 18 km to 12 km easy. Threshold session held on Wednesday.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="w-card">
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Mon</div>
+                  <div class="plan-name">Rest</div>
+                </div>
+                <span class="pill pill-neutral">Recovery</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Tue</div>
+                  <div class="plan-name">Easy 8 km</div>
+                  <div class="plan-meta">40 min · Zone 2 · RPE 3</div>
+                </div>
+                <span class="pill pill-ok">Easy</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Wed</div>
+                  <div class="plan-name">8 × 800m @ threshold</div>
+                  <div class="plan-meta">60 min · RPE 7</div>
+                </div>
+                <span class="pill pill-caution">Quality</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Sat</div>
+                  <div class="plan-name">Backcountry ski · counted</div>
+                  <div class="plan-meta">96 TSS auto-imported · Strava</div>
+                </div>
+                <span class="pill" style="background:rgba(196,158,110,0.18);color:#7A5230;">Cross</span>
+              </div>
+              <div class="plan-row">
+                <div class="plan-info">
+                  <div class="plan-day">Sun</div>
+                  <div class="plan-name">Long run 12 km <span style="font-size:12px;color:var(--c-caution-text);font-weight:600;">(was 18)</span></div>
+                  <div class="plan-meta">65 min · Zone 2 · easy</div>
+                </div>
+                <span class="pill pill-caution">Adjusted</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== SLIDE 6 — PUNCHLINE ============================== -->
+<div class="slide text-slide">
+  <div class="slide-label">Slide 6 — Punchline</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="text-headline">Football.<br>Padel.<br>Skiing.<br><span class="warm">It all counted.</span></div>
+    <div class="text-sub">Train for one sport without giving up the others. Mosaic reads every activity, classifies the load, and rebalances the plan accordingly.</div>
+  </div>
+  <div class="text-footer-wordmark">Mosaic.</div>
+</div>
+
+<!-- ============================== SLIDE 7 — CTA ============================== -->
+<div class="slide cta-slide">
+  <div class="slide-label">Slide 7 — CTA</div>
+  <div class="bg-warm"></div>
+  <div class="sun-glint"></div>
+  <div class="rings-centered">
+    <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet">
+      <g class="ring-stroke-bg">
+        <circle r="80"/><circle r="148"/><circle r="225"/><circle r="310"/><circle r="395"/>
+      </g>
+    </svg>
+  </div>
+  <div class="content">
+    <div class="cta-headline">Launching<br>soon.</div>
+    <div class="cta-sub">YOUR PLAN. YOUR SPORTS. ONE SYSTEM.</div>
+    <div class="cta-wordmark">Mosaic.</div>
+  </div>
+</div>
+
+</body>
+</html>

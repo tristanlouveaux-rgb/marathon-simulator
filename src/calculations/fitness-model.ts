@@ -16,9 +16,10 @@
 import type { Week, Workout, PhysiologyDayEntry } from '@/types';
 import type { ReadinessLabel } from '@/calculations/readiness';
 import { TL_PER_MIN, SPORTS_DB } from '@/constants';
-import { normalizeSport } from '@/cross-training/activities';
+import { normalizeSport, isStrengthActual } from '@/cross-training/activities';
 import { computeRecoveryScore } from '@/calculations/readiness';
 import { getEffectiveKUser, getEffectiveSafeUpper } from '@/calculations/adaptive-recovery';
+import { computeWeekDoubleDayBonus, computeTodayDoubleDayBonus } from '@/calculations/double-day';
 
 /**
  * Passive strain: TSS per minute of non-workout active time.
@@ -287,7 +288,7 @@ export function setAthleteNormalizer(ltHR?: number, restingHR?: number, maxHR?: 
 }
 
 /** Normalise iTRIMP to a TSS-equivalent TL value. 1 hour at LTHR = 100 TSS. */
-function normalizeiTrimp(itrimp: number, normalizer?: number): number {
+export function normalizeiTrimp(itrimp: number, normalizer?: number): number {
   return (itrimp * 100) / (normalizer ?? _athleteNorm);
 }
 
@@ -295,6 +296,46 @@ function normalizeiTrimp(itrimp: number, normalizer?: number): number {
 function parseDurMinFromDesc(d: string): number {
   const m = d.match(/(\d+)min/);
   return m ? parseInt(m[1]) : 30;
+}
+
+/**
+ * RPE-based TSS override for strength sessions.
+ *
+ * HR-derived TSS systematically under-counts neuromuscular load on strength work
+ * (a 60-min squat session at 70 bpm reads as ~7 TSS but the legs are toast).
+ * When the user tags an RPE on a strength activity, replace the iTRIMP path with
+ * `durationMin × TL_PER_MIN[rpe] × runSpec`.
+ *
+ * `discount` controls whether the runSpec discount applies:
+ *   - Signal A (computeWeekTSS) → true → SPORTS_DB.strength.runSpec (0.35)
+ *   - Signal B (computeWeekRawTSS) → false → full physiological load
+ *
+ * Returns null when the activity is not a strength session or has no RPE tag.
+ */
+export function computeStrengthRpeTSS(
+  actual: {
+    activityType?: string | null;
+    manualSport?: string;
+    workoutName?: string;
+    displayName?: string;
+    durationSec: number;
+    rpe?: number;
+  },
+  discount: boolean,
+  rpeFallback?: number | null,
+): number | null {
+  if (!isStrengthActual(actual)) return null;
+  // Effective RPE: per-activity tag wins, then fall back to the matched
+  // workout's wk.rated entry. This means a session already tagged via the
+  // generic RPE chip (writes to wk.rated) still gets the strength override.
+  const effRpe = actual.rpe ?? (rpeFallback != null ? rpeFallback : null);
+  if (effRpe == null) return null;
+  const durMin = actual.durationSec > 0 ? actual.durationSec / 60 : 0;
+  if (durMin <= 0) return null;
+  const rpe = Math.max(1, Math.min(10, Math.round(effRpe)));
+  const tlPerMin = TL_PER_MIN[rpe] ?? 1.15;
+  const runSpec = discount ? (SPORTS_DB.strength.runSpec ?? 0.35) : 1.0;
+  return durMin * tlPerMin * runSpec;
 }
 
 /**
@@ -328,7 +369,16 @@ export function computeWeekTSS(
       seenGarminIds.add(actual.garminId);
     }
     const ratedVal = ratedMap[workoutId];
-    const rpe = (typeof ratedVal === 'number') ? ratedVal : 5;
+    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
+    // Strength override: when the user has tagged RPE on a strength session
+    // (per-activity OR via the legacy wk.rated chip), HR-based TSS is wrong
+    // (low cardiovascular load ≠ low neuromuscular load).
+    const strengthOverride = computeStrengthRpeTSS(actual, true, ratedRpe);
+    if (strengthOverride != null) {
+      tl += strengthOverride;
+      continue;
+    }
+    const rpe = ratedRpe ?? 5;
     if (actual.iTrimp != null && actual.iTrimp > 0) {
       tl += normalizeiTrimp(actual.iTrimp);
     } else {
@@ -427,7 +477,14 @@ export function computeWeekRawTSS(
       seenGarminIds.add(actual.garminId);
     }
     const ratedVal = ratedMap[workoutId];
-    const rpe = (typeof ratedVal === 'number') ? ratedVal : 5;
+    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
+    // Strength override: Signal B uses no runSpec discount (full physiological load).
+    const strengthOverride = computeStrengthRpeTSS(actual, false, ratedRpe);
+    if (strengthOverride != null) {
+      tl += strengthOverride;
+      continue;
+    }
+    const rpe = ratedRpe ?? 5;
     if (actual.iTrimp != null && actual.iTrimp > 0) {
       tl += normalizeiTrimp(actual.iTrimp);
     } else {
@@ -481,6 +538,11 @@ export function computeWeekRawTSS(
     tl += item.durationMin * (TL_PER_MIN[5] ?? 1.15); // no runSpec discount
   }
 
+  // Double-day compounding bonus: ≥2 same-day sessions (≥20 min each, planned
+  // bricks excluded) carry more physiological cost than pure additive TSS.
+  // See src/calculations/double-day.ts + docs/SCIENCE_LOG.md.
+  tl += computeWeekDoubleDayBonus(wk, planStartDate, norm);
+
   return Math.round(tl);
 }
 
@@ -509,7 +571,7 @@ export function computeTodaySignalBTSS(
   const ourDay = (d.getDay() + 6) % 7;
 
   // garminActuals — filter to today by startTime
-  for (const [, actual] of Object.entries(wk.garminActuals ?? {})) {
+  for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (!actual.startTime?.startsWith(today)) continue;
     if (actual.garminId) {
       if (seenGarminIds.has(actual.garminId)) continue;
@@ -517,6 +579,14 @@ export function computeTodaySignalBTSS(
     }
     const actDurMin = actual.durationSec > 0 ? actual.durationSec / 60 : actual.distanceKm * 6;
     workoutMinutes += actDurMin;
+    // Strength override: Signal B uses full physiological load (no runSpec discount).
+    const ratedVal = wk.rated?.[workoutId];
+    const ratedRpe = (typeof ratedVal === 'number') ? ratedVal : null;
+    const strengthOverride = computeStrengthRpeTSS(actual, false, ratedRpe);
+    if (strengthOverride != null) {
+      tl += strengthOverride;
+      continue;
+    }
     if (actual.iTrimp != null && actual.iTrimp > 0) {
       tl += normalizeiTrimp(actual.iTrimp);
     } else {
@@ -575,6 +645,9 @@ export function computeTodaySignalBTSS(
     const passiveActiveMin = Math.max(0, passiveActivity.activeMinutes - workoutMinutes);
     tl += passiveActiveMin * PASSIVE_TSS_PER_ACTIVE_MIN;
   }
+
+  // Double-day compounding bonus for today specifically.
+  tl += computeTodayDoubleDayBonus(wk, today, undefined, norm);
 
   return Math.round(tl);
 }

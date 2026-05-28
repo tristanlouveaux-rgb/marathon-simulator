@@ -23,6 +23,7 @@ import type {
 } from './universal-load-types';
 import { SPORTS_DB } from '@/constants';
 import { normalizeSport } from './activities';
+import { normalizeiTrimp } from '@/calculations/fitness-model';
 import {
   TAU,
   CREDIT_MAX,
@@ -110,7 +111,7 @@ function computeTierAPlus(
   runSpec: number,
   explanations: string[]
 ): { aerobic: number; anaerobic: number; confidence: number } {
-  const tssEquivalent = (iTrimp * 100) / 15000;
+  const tssEquivalent = normalizeiTrimp(iTrimp);
   const baseLoad = tssEquivalent * sportMult;
 
   // Split aerobic/anaerobic: use a fixed 85/15 split as iTRIMP doesn't
@@ -500,7 +501,7 @@ export function classifyByITrimp(
   durationMin: number,
   thresholds?: IntensityThresholds
 ): { type: 'easy' | 'threshold' | 'vo2'; tss: number; tssPerHour: number } {
-  const tss = (iTrimp * 100) / 15000;
+  const tss = normalizeiTrimp(iTrimp);
   const tssPerHour = durationMin > 0 ? tss * (60 / durationMin) : 0;
   const easyUpper = thresholds?.easy ?? 70;
   const tempoUpper = thresholds?.tempo ?? 95;

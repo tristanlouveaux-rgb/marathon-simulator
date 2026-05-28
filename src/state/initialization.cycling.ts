@@ -17,6 +17,7 @@ import { STATE_SCHEMA_VERSION } from '@/types/state';
 import { getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { generateTriathlonPlan, TRI_GENERATOR_VERSION } from '@/workouts/plan_engine.triathlon';
+import { clearStaleGatesForMode } from '@/injury/engine';
 import { deriveTriBenchmarksFromHistory } from '@/calculations/tri-benchmarks-from-history';
 import { appendFtpSample } from '@/calculations/tri-benchmark-history';
 import type { GarminActual } from '@/types/state';
@@ -110,6 +111,12 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     s.eventType = 'triathlon';
     s.triConfig = triConfig;
     s.trackOnly = false;
+    // Cycling-only mode: only canBike is relevant. Clear canSwim, canRun
+    // helpers, and HYROX gates so they don't silently affect the cycling plan
+    // (the tri engine reads canBike/canSwim/canRun; we keep canBike only).
+    if (s.injuryState?.active) {
+      s.injuryState = clearStaleGatesForMode(s.injuryState, 'triathlon', /*isCyclingOnly=*/ true);
+    }
     s.continuousMode = false;
     s.w = 1;
     s.tw = weeks;
@@ -130,6 +137,7 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
 
     if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
+    if (state.heightCm) s.heightCm = state.heightCm;
     s.onboarding = state;
 
     s.selectedMarathon = undefined;

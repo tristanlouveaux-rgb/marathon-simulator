@@ -9,6 +9,8 @@
 
 import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
+import { openGuidedStrength } from '@/ui/guided-strength-overlay';
+import { completeStrengthSession } from '@/guided/strength-complete';
 
 export function openTriWorkoutDetail(workout: Workout): void {
   const existing = document.getElementById('tri-workout-detail-overlay');
@@ -79,15 +81,22 @@ export function openTriWorkoutDetail(workout: Workout): void {
           : `<div style="padding:4px 0 12px;font-size:14px;color:#0F172A;line-height:1.6">${escapeHtml(blocks[0]?.body || workout.d)}</div>`}
       </div>
 
-      <div style="padding:8px 24px 24px;display:flex;justify-content:flex-end">
-        <button id="tri-detail-done" style="
-          padding:13px 22px;
-          background:#0F172A;color:#FAF9F6;
-          border:none;border-radius:10px;
-          font-size:14px;font-weight:600;
-          cursor:pointer;
-        ">Done</button>
-      </div>
+      ${discipline === 'strength' ? `
+        <div style="padding:6px 24px 18px;display:flex;flex-direction:column;gap:10px">
+          <button id="tri-detail-strength-start" style="width:100%;padding:14px;background:#0F172A;color:#FAF9F6;border:none;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--f)">Start session</button>
+          <button id="tri-detail-strength-done" style="width:100%;padding:11px;background:transparent;color:#0F172A;border:1px solid var(--c-border);border-radius:10px;font-size:13px;font-weight:500;cursor:pointer;font-family:var(--f)">Mark as done</button>
+        </div>
+      ` : `
+        <div style="padding:8px 24px 24px;display:flex;justify-content:flex-end">
+          <button id="tri-detail-done" style="
+            padding:13px 22px;
+            background:#0F172A;color:#FAF9F6;
+            border:none;border-radius:10px;
+            font-size:14px;font-weight:600;
+            cursor:pointer;
+          ">Done</button>
+        </div>
+      `}
     </div>
   `;
 
@@ -97,6 +106,14 @@ export function openTriWorkoutDetail(workout: Workout): void {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   overlay.querySelector('#tri-detail-close')?.addEventListener('click', close);
   overlay.querySelector('#tri-detail-done')?.addEventListener('click', close);
+  overlay.querySelector('#tri-detail-strength-start')?.addEventListener('click', () => {
+    close();
+    openGuidedStrength(workout);
+  });
+  overlay.querySelector('#tri-detail-strength-done')?.addEventListener('click', () => {
+    completeStrengthSession(workout);
+    close();
+  });
 }
 
 /**

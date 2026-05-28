@@ -129,7 +129,7 @@ export interface LegLoadBreakdown {
 }
 
 export function computeLegLoadBreakdown(
-  entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>,
+  entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; recoveryMultOverride?: number }>,
   nowMs: number,
 ): LegLoadBreakdown {
   const sevenDaysMs = 7 * 24 * 3_600_000;
@@ -147,7 +147,9 @@ export function computeLegLoadBreakdown(
     const e = recent[i];
     const hoursAgo = (nowMs - e.timestampMs) / 3_600_000;
     const sportConfig = SPORTS_DB[e.sport as keyof typeof SPORTS_DB];
-    const recovMult = sportConfig?.recoveryMult ?? 1.0;
+    // Per-entry override wins when present (e.g. strength session tagged
+    // "heavy" legs decays slower than the strength sport baseline of 1.0).
+    const recovMult = e.recoveryMultOverride ?? sportConfig?.recoveryMult ?? 1.0;
     const halfLife = LEG_LOAD_BASE_HALFLIFE_H * recovMult;
 
     // RBE-protected entries are discounted at write-time; `e.load` is already the
@@ -174,7 +176,7 @@ export function computeLegLoadBreakdown(
 }
 
 function computeDecayedLegLoad(
-  entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>,
+  entries: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; recoveryMultOverride?: number }>,
   nowMs: number,
 ): { total: number; topEntry: { sportLabel: string; timestampMs: number } | null } {
   const b = computeLegLoadBreakdown(entries, nowMs);
@@ -248,7 +250,7 @@ export interface ReadinessInput {
    * Each entry has raw load score, sport label, and timestamp.
    * Decayed with 36-hour half-life and summed to produce a current leg fatigue signal.
    */
-  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number }>;
+  recentLegLoads?: Array<{ load: number; sport: string; sportLabel: string; timestampMs: number; recoveryMultOverride?: number }>;
   /**
    * Tier-adjusted ACWR safe upper bound from TIER_ACWR_CONFIG.
    * Used for the ACWR hard floor so it matches the Load Ratio card thresholds.
@@ -263,6 +265,13 @@ export interface ReadinessInput {
    * Null or absent = no MTL data, no floor applied.
    */
   mtlAcwr?: number | null;
+  /**
+   * True when at least one hard/quality session is scheduled in the next 1-2 days
+   * (excluding today). Used by the decision-matrix fallback sentences so prescriptive
+   * verbs ("shorten or swap", "reduce today") don't fire on rest days with nothing
+   * hard upcoming. Optional — when omitted, falls back to the legacy unconditional copy.
+   */
+  hasUpcomingHardSession?: boolean;
 }
 
 export interface ReadinessResult {
@@ -300,20 +309,32 @@ export interface ReadinessResult {
 type TsbZone = 'fresh' | 'recovering' | 'fatigued' | 'overtrained';
 type AcwrZone = 'safe' | 'moderate' | 'high';
 
-const SENTENCES: Record<TsbZone, Record<AcwrZone, string>> = {
+/**
+ * Decision-matrix sentences. Most cells are static literals. A few cells (the ones
+ * that prescribe shortening / reducing / swapping a session) take the
+ * `hasUpcomingHardSession` flag so they don't fire prescriptive verbs on rest days
+ * with nothing hard upcoming.
+ */
+type SentenceCell = string | ((hasUpcomingHard: boolean) => string);
+
+const SENTENCES: Record<TsbZone, Record<AcwrZone, SentenceCell>> = {
   fresh: {
     safe:     "You're rested and safe. Full session.",
-    moderate: "Fresh but ramping — stick to the plan.",
+    moderate: "Fresh but ramping. Stick to the plan.",
     high:     "Sudden spike. Go easy despite feeling fresh.",
   },
   recovering: {
     safe:     "Good balance. Session as planned.",
     moderate: "Training hard. Prioritise sleep tonight.",
-    high:     "Back off. Shorten or swap for easy.",
+    high:     (hasUpcomingHard) => hasUpcomingHard
+      ? "Back off. Shorten or swap for easy."
+      : "Back off. Keep planned easy work as-is.",
   },
   fatigued: {
     safe:     "Tired but adapted. Easy effort today.",
-    moderate: "You need recovery. Reduce today.",
+    moderate: (hasUpcomingHard) => hasUpcomingHard
+      ? "You need recovery. Reduce today."
+      : "You need recovery. Keep planned easy work as-is.",
     high:     "Skip or active recovery only.",
   },
   overtrained: {
@@ -322,6 +343,10 @@ const SENTENCES: Record<TsbZone, Record<AcwrZone, string>> = {
     high:     "Rest. Stop until recovered.",
   },
 };
+
+function resolveSentence(cell: SentenceCell, hasUpcomingHard: boolean): string {
+  return typeof cell === 'function' ? cell(hasUpcomingHard) : cell;
+}
 
 // ─── Main export ─────────────────────────────────────────────────────────────
 
@@ -667,7 +692,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     : acwr <= cautionUpper ? 'moderate'
     :                        'high';
 
-  const sentence = SENTENCES[tsbZone][acwrZone];
+  const sentence = resolveSentence(SENTENCES[tsbZone][acwrZone], input.hasUpcomingHardSession ?? true);
 
   const suppressStreak = (hardFloor === 'sleep' || hardFloor === 'sleepBank') && sleepStreak >= 2
     ? sleepStreak

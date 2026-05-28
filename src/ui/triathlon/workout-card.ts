@@ -25,7 +25,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
   const durLabel = computeDurationLabel(w, discipline);
 
   const brickFootnote = isBrick
-    ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.08);font-size:11px;color:var(--c-faint)">Brick — bike ${fmtMinPretty(w.brickSegments![0].durationMin ?? 0)} + run ${fmtMinPretty(w.brickSegments![1].durationMin ?? 0)}</div>`
+    ? `<div style="margin-top:10px;padding-top:10px;border-top:1px dashed rgba(0,0,0,0.08);font-size:11px;color:var(--c-faint)">Brick. Bike ${fmtMinPretty(w.brickSegments![0].durationMin ?? 0)} + run ${fmtMinPretty(w.brickSegments![1].durationMin ?? 0)}</div>`
     : '';
 
   return `
@@ -54,7 +54,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
       <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
       <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escapeHtml(expandedDesc)}</div>
       ${brickFootnote}
-      ${opts.injuryEasy ? `<div style="margin-top:8px;padding:5px 10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:11px;color:#92400E;font-weight:500">Easy intensity only — injury management</div>` : ''}
+      ${opts.injuryEasy ? `<div style="margin-top:8px;padding:5px 10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:11px;color:#92400E;font-weight:500">Easy intensity only. Injury management</div>` : ''}
     </div>
   `;
 }

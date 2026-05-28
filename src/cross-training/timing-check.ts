@@ -24,7 +24,7 @@
 import type { Week, WorkoutMod } from '@/types/state';
 import type { SimulatorState } from '@/types/state';
 import { generateWeekWorkouts } from '@/workouts';
-import { getTrailingEffortScore } from '@/calculations/fitness-model';
+import { getTrailingEffortScore, normalizeiTrimp } from '@/calculations/fitness-model';
 
 const QUALITY_TYPES = new Set(['threshold', 'vo2', 'long']);
 const SIGNAL_B_TRIGGER = 50;       // TSS: minimum to show any suggestion
@@ -86,12 +86,12 @@ const TSS_PER_MIN: Record<number, number> = {
 };
 
 function actSignalBTSS(iTrimp: number | null | undefined, durationSec: number): number {
-  if (iTrimp != null && iTrimp > 0) return (iTrimp * 100) / 15000;
+  if (iTrimp != null && iTrimp > 0) return normalizeiTrimp(iTrimp);
   return (durationSec / 60) * 0.92;
 }
 
 function adhocSignalBTSS(iTrimp: number | null | undefined, durationMin: number, rpe: number): number {
-  if (iTrimp != null && iTrimp > 0) return (iTrimp * 100) / 15000;
+  if (iTrimp != null && iTrimp > 0) return normalizeiTrimp(iTrimp);
   return durationMin * (TSS_PER_MIN[Math.round(rpe)] ?? 0.92);
 }
 
@@ -233,7 +233,7 @@ export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {
 
   const workouts = generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [],
-    s.commuteConfig || undefined, null,
+    s.commuteConfig || undefined, s.injuryState,
     s.recurringActivities,
     s.onboarding?.experienceLevel, undefined, s.pac?.e,
     wk.w, s.tw, s.v, s.gs,

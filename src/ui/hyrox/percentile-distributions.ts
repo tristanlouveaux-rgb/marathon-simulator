@@ -326,7 +326,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
         HYROX_TOTAL_PERCENTILE_TABLES, prediction.totalSec, totalByBand,
         getFinishTimePercentile(prediction.totalSec, fmt),
       ),
-      accent: '#F472B6',                           // pink-400 — the headline summary
+      accent: '#F472B6',                           // pink-400. The headline summary
       fill:   'rgba(244,114,182,0.10)',
     },
     {
@@ -335,7 +335,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
       realTable: realTableFor(HYROX_RUN_PERCENTILE_TABLES),
       syntheticBands: runByBand,
       fasterThanPct: fasterThanFromTable(HYROX_RUN_PERCENTILE_TABLES, prediction.runSec, runByBand),
-      accent: '#14B8A6',                           // teal-500 — mirrors canonical Run LT
+      accent: '#14B8A6',                           // teal-500. Mirrors canonical Run LT
       fill:   'rgba(20,184,166,0.10)',
     },
     {
@@ -347,7 +347,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
         HYROX_STATIONS_PERCENTILE_TABLES, prediction.stationsSec,
         stationsByBand.map(v => v * doublesScale),
       ),
-      accent: '#FB923C',                           // orange-400 — HYROX's signature workout
+      accent: '#FB923C',                           // orange-400. HYROX's signature workout
       fill:   'rgba(251,146,60,0.10)',
     },
     {
@@ -359,7 +359,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
         HYROX_ROXZONE_PERCENTILE_TABLES, prediction.roxzoneSec,
         roxzoneByBand.map(v => v * doublesScale),
       ),
-      accent: '#8B5CF6',                             // violet-500 — distinct from the orange above; transitions read as the "connective tissue" of the race
+      accent: '#8B5CF6',                             // violet-500. Distinct from the orange above; transitions read as the "connective tissue" of the race
       fill:   'rgba(139,92,246,0.10)',
     },
   ];

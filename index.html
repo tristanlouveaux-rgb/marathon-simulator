@@ -2,8 +2,10 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Mosaic - Intelligent Training</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Mosaic</title>
+    <meta name="description" content="A training app for triathletes and marathon runners. Plans built from your real activity, sleep, and recovery, rebuilt every week.">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -17,12 +19,66 @@
         .animate-spin-slow {
             animation: spin-slow 3s linear infinite;
         }
+        /* Launch splash — shown until the first renderHomeView()/wizard renders.
+           Cleared automatically when #app-root.innerHTML is overwritten. */
+        #launch-splash {
+            position: fixed;
+            inset: 0;
+            background: #FAF9F6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: #1A1A1A;
+        }
+        #launch-splash .sun-glint {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 60%;
+            height: 60%;
+            background: radial-gradient(circle at top left, rgba(255, 240, 210, 0.55), transparent 60%);
+            pointer-events: none;
+        }
+        #launch-splash svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.55;
+            animation: splash-fade 2.4s ease-in-out infinite;
+        }
+        #launch-splash .mark {
+            position: relative;
+            font-size: 22px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+        @keyframes splash-fade {
+            0%, 100% { opacity: 0.45; }
+            50%      { opacity: 0.75; }
+        }
     </style>
 </head>
 <body>
 
-<!-- App Root - Wizard or Main View rendered here -->
-<div id="app-root"></div>
+<!-- App Root - Wizard or Main View rendered here.
+     Contains a static splash that is replaced on first render. -->
+<div id="app-root">
+    <div id="launch-splash">
+        <div class="sun-glint"></div>
+        <svg viewBox="-200 -200 400 400" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <g fill="none" stroke="#1A1A1A" stroke-width="1.2">
+                <circle cx="0" cy="0" r="60" opacity="0.35"/>
+                <circle cx="0" cy="0" r="110" opacity="0.22"/>
+                <circle cx="0" cy="0" r="170" opacity="0.13"/>
+                <circle cx="0" cy="0" r="240" opacity="0.07"/>
+            </g>
+        </svg>
+        <div class="mark">Mosaic.</div>
+    </div>
+</div>
 
 <!-- Admin Panel (rendered conditionally) -->
 <div id="admin-panel"></div>

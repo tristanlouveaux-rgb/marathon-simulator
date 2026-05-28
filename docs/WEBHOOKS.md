@@ -27,7 +27,7 @@ Content-Type: application/json
 }
 ```
 
-- **Auth**: none. Garmin does not send a JWT. The function is deployed with `--no-verify-jwt` and `config.toml` sets `verify_jwt = false` for this function. See `docs/GARMIN.md → 2026-03-12` for the incident where this was misconfigured and all pushes got 401'd silently.
+- **Auth**: none. Garmin does not send a JWT and the Garmin Health API does not emit a webhook HMAC signature (confirmed against the Health API spec as of 2026-05-17). The function is deployed with `--no-verify-jwt` and `config.toml` sets `verify_jwt = false` for this function. See `docs/GARMIN.md → 2026-03-12` for the incident where this was misconfigured and all pushes got 401'd silently. The security model is: the webhook URL acts as a shared secret, every payload item carries a `userId` / `userAccessToken` that is server-side mapped to our `garmin_tokens` table (unknown values are silently dropped), the function always returns HTTP 200 to avoid leaking information through differential timing, and rows are always upserted under the resolved Mosaic `user_id` so a forged payload for an unknown ID has nowhere to land. Tightening to an HMAC signature is a Garmin-side capability we can adopt the moment they publish one.
 - **User resolution**: every payload item carries either `userId` (stable Garmin user ID, preferred) or `userAccessToken` (OAuth token, fallback). `resolveUserId()` looks up `garmin_tokens` by both.
 - **Response contract**: always return **HTTP 200**, even on internal errors. Non-200 responses cause Garmin to retry, which amplifies any downstream problem. We log and swallow.
 

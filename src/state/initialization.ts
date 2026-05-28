@@ -3,6 +3,7 @@ import type { RunnerType, RaceDistance } from '@/types/training';
 import { STATE_SCHEMA_VERSION, type GarminActual } from '@/types/state';
 import { matchAndAutoComplete, type GarminActivityRow } from '@/calculations/activity-matcher';
 import { getMutableState } from '@/state/store';
+import { clearStaleGatesForMode } from '@/injury/engine';
 import { saveState, getMondayOf } from '@/state/persistence';
 import {
   cv, rd, rdKm, calculateFatigueExponent, getRunnerType,
@@ -328,12 +329,13 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       if (state.maxHR) s.maxHR = state.maxHR;
       if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
       if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
+      if (state.heightCm) s.heightCm = state.heightCm;
       if (state.recurringActivities?.length) s.recurringActivities = [...state.recurringActivities];
 
       // Seed volume from detected Strava history if available (same rule as
       // the full plan path). Used by stats / weekly summary, not by
       // plan-generation (there is none).
-      if (s.stravaHistoryAccepted && s.detectedWeeklyKm != null) {
+      if (s.detectedWeeklyKm != null && (s.stravaHistoryAccepted || s.weeklyVolumeConfirmed)) {
         s.wkm = Math.round(s.detectedWeeklyKm);
       }
 
@@ -459,6 +461,11 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // hyrox → running don't leave hyroxConfig.raceDate driving home banners
     // and plan previews. Same incident class as the triConfig clear above.
     s.hyroxConfig = undefined;
+    // Clear stale tri/hyrox injury gates so prior-mode "canSwim='no'" answers
+    // don't silently re-engage on a later mode switch back to that mode.
+    if (s.injuryState?.active) {
+      s.injuryState = clearStaleGatesForMode(s.injuryState, 'running');
+    }
     s.w = 1;
     s.tw = state.planDurationWeeks;
     s.v = curr;
@@ -515,23 +522,21 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.recurringActivities = [...state.recurringActivities];
     }
 
-    // Commute config
+    // Commute config — transfer from onboarding to state. wkm stays as the
+    // user's chosen target weekly mileage; commute mileage is folded into
+    // that target by the commute-aware plan engine (Phase 4), not added on
+    // top. Adding it on top silently inflates volume and produces ACWR risk.
     if (state.runsToWork && state.commuteConfig) {
       s.commuteConfig = state.commuteConfig;
-      const commuteKmPerDay = state.commuteConfig.isBidirectional
-        ? state.commuteConfig.distanceKm * 2
-        : state.commuteConfig.distanceKm;
-      s.wkm += commuteKmPerDay * state.commuteConfig.commuteDaysPerWeek;
     } else {
       s.commuteConfig = undefined;
     }
 
-    // Phase C3: if user accepted Strava history and we have a detected weekly km,
+    // Phase C3: if the user accepted Strava history OR explicitly provided/accepted
+    // their weekly volume (manual entry, import), and we have a detected weekly km,
     // use it as the plan starting volume (overrides the runs-per-week lookup above).
-    // Commute km has already been added — we override the base but keep commute on top.
-    if (s.stravaHistoryAccepted && s.detectedWeeklyKm != null) {
-      const commuteExtra = s.wkm - (runsPerWeek <= 3 ? runsPerWeek * 10 : runsPerWeek === 4 ? 40 : runsPerWeek === 5 ? 50 : runsPerWeek === 6 ? 60 : 70);
-      s.wkm = Math.round(s.detectedWeeklyKm) + Math.max(0, commuteExtra);
+    if (s.detectedWeeklyKm != null && (s.stravaHistoryAccepted || s.weeklyVolumeConfirmed)) {
+      s.wkm = Math.round(s.detectedWeeklyKm);
     }
 
     // Store initial physiology
@@ -547,13 +552,20 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // Store biological sex for iTRIMP β coefficient + bodyweight for FTP/kg
     if (state.biologicalSex) s.biologicalSex = state.biologicalSex;
     if (state.bodyWeightKg) s.bodyWeightKg = state.bodyWeightKg;
+    if (state.heightCm) s.heightCm = state.heightCm;
 
     // Calculate expected final via shared forecast function. Anchor to the
     // blended race-time so the projected end-of-plan finish stays on the same
     // scale as the live "Current Race Estimate" surfaces (single canonical
-    // prediction model — see calculateForecast).
+    // prediction model — see calculateForecast). Commute days are folded in
+    // here so the onboarding forecast matches the Training chip displayed on
+    // the forecast page (see race-forecast-fingerprint.ts:123 for the mirror).
+    const commuteSessions = state.runsToWork && state.commuteConfig?.enabled
+      ? (state.commuteConfig.commuteDaysPerWeek ?? 0)
+      : 0;
     const forecast = calculateForecast(
-      curr, runsPerWeek + effectiveCrossSessions, state, runnerType, blendedTime,
+      curr, runsPerWeek + effectiveCrossSessions + commuteSessions, state, runnerType, blendedTime,
+      { baselineKm: s.detectedWeeklyKm, archetype: s.athleteArchetype?.archetype },
     );
     s.expectedFinal = forecast.forecastVdot;
     s.forecastTime = forecast.forecastTime;

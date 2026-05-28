@@ -130,7 +130,7 @@ function statusClassName(status: string, accuracy?: number | null): string {
       } else if (accuracy <= 30) {
         colorStyle = 'color:var(--c-caution)'; // Good enough
       } else if (accuracy <= 50) {
-        colorStyle = 'color:#F97316'; // Poor — orange
+        colorStyle = 'color:#F97316'; // Poor. Orange
       } else {
         colorStyle = 'color:var(--c-warn)'; // Very poor
       }
@@ -207,7 +207,7 @@ export function refreshRecordings(): void {
 function renderRecordingsList(recordings: GpsRecording[], week: number): string {
   const unitPref = getState().unitPref ?? 'km';
   let h = `<details class="text-xs">`;
-  h += `<summary class="cursor-pointer font-medium mb-1" style="color:var(--c-muted)">Recorded Runs — Week ${week} (${recordings.length})</summary>`;
+  h += `<summary class="cursor-pointer font-medium mb-1" style="color:var(--c-muted)">Recorded Runs. Week ${week} (${recordings.length})</summary>`;
   h += `<div class="space-y-1">`;
 
   for (const rec of recordings) {
@@ -219,7 +219,7 @@ function renderRecordingsList(recordings: GpsRecording[], week: number): string 
     h += `<div class="flex items-center justify-between rounded p-1.5" style="background:var(--c-bg);border:1px solid var(--c-border)">`;
     h += `<div class="flex-1">`;
     h += `<div class="font-medium" style="color:var(--c-black)">${escapeHtml(rec.workoutName)}</div>`;
-    h += `<div style="color:var(--c-muted)">${date} — ${distKm} — ${paceStr} — ${formatWorkoutTime(rec.totalElapsed)}</div>`;
+    h += `<div style="color:var(--c-muted)">${date}, ${distKm}, ${paceStr}. ${formatWorkoutTime(rec.totalElapsed)}</div>`;
     if (rec.splits.length > 0) {
       h += `<div style="color:var(--c-faint)">${rec.splits.length} split${rec.splits.length !== 1 ? 's' : ''}</div>`;
     }

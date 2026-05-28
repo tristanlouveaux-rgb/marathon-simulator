@@ -144,6 +144,38 @@ function hrAtPowerAdjustment(state: SimulatorState): number | null {
 // Signal 4 — Pa:Hr decoupling (bike + run)
 // ───────────────────────────────────────────────────────────────────────────
 
+/** Friel EF (efficiency-factor) decoupling for a single run, from parallel
+ *  per-km pace + HR splits.
+ *
+ *  Per km: EF_i = (1 / paceSecKm_i) / hr_i  (proportional to speed / HR).
+ *  Decoupling% = (firstHalfMeanEF − secondHalfMeanEF) / firstHalfMeanEF × 100.
+ *  Positive = decoupling (efficiency fell over the run, bad).
+ *  Negative = coupling (efficiency improved, good).
+ *
+ *  Returns null when fewer than 4 valid (paceSecKm > 0, hr > 0) kms exist.
+ *  Friel/Uphill Athlete benchmark: <5% = aerobic steady state. */
+export function efDecouplingPct(
+  kmSplits: number[] | null | undefined,
+  kmHRSplits: number[] | null | undefined,
+): number | null {
+  if (!kmSplits || !kmHRSplits) return null;
+  const n = Math.min(kmSplits.length, kmHRSplits.length);
+  const efs: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const pace = kmSplits[i];
+    const hr = kmHRSplits[i];
+    if (!pace || pace <= 0) continue;
+    if (!hr || hr <= 0) continue;
+    efs.push((1 / pace) / hr);
+  }
+  if (efs.length < 4) return null;
+  const half = Math.floor(efs.length / 2);
+  const firstEF = mean(efs.slice(0, half));
+  const secondEF = mean(efs.slice(half));
+  if (firstEF <= 0) return null;
+  return ((firstEF - secondEF) / firstEF) * 100;
+}
+
 function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): number | null {
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
@@ -157,10 +189,17 @@ function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): numb
     for (const actual of Object.values(wk.garminActuals)) {
       if (classifyActivity(actual.activityType) !== discipline) continue;
       if (actual.durationSec < 45 * 60) continue;
-      // We use existing `hrDrift` (HR-only first/second half) as a proxy for Pa:Hr.
-      // True Pa:Hr requires per-km splits + HR splits; deferred until kmSplits include HR.
-      if (actual.hrDrift == null) continue;
-      decoups.push(actual.hrDrift);  // Already a percentage (e.g. 5.2 = 5.2%)
+
+      // Prefer true Pa:Hr from per-km pace + HR splits (runs only — Strava
+      // splits_metric / HR stream populate kmHRSplits in the ingest path).
+      // Fall back to hrDrift (HR-only first/second half) when per-km HR is
+      // not available — bike actuals and pre-ingest-upgrade runs.
+      const efDecoup = discipline === 'run'
+        ? efDecouplingPct(actual.kmSplits, actual.kmHRSplits)
+        : null;
+      const decoup = efDecoup ?? actual.hrDrift;
+      if (decoup == null) continue;
+      decoups.push(decoup);
     }
     if (decoups.length > 0) perWeek.push({ week: w, meanDecoup: mean(decoups) });
   }

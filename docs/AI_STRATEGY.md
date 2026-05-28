@@ -1,5 +1,13 @@
 # Mosaic AI Strategy
 
+## Update — 2026-05-28
+
+Two material changes have landed since the original strategy below was written. The sections further down still capture the reasoning, but the live state is:
+
+1. **Payment is RevenueCat IAP, not Stripe web.** Tier 2 ships as Apple In-App Purchase via RevenueCat. Web/Android users get entitlement via the `subscription_active` Supabase row that the RevenueCat webhook writes. The Stripe-web sections below are historical context, not current truth.
+2. **Live pricing**: £4.99/month, £49.99/year. Annual SKU exists.
+3. **Brain-generated workouts (On-Demand mode)** are a new Tier 2 capability. See `## Brain-Generated Workouts (Tier 2)` below for design and economics.
+
 ## Current State (May 2026)
 
 BYOK (Bring Your Own Key) AI Coach is live. Users provide their own Anthropic API key, stored in iOS Keychain. Mosaic pays $0. The coach reads 4 weeks of pacing, HR, readiness, and plan data, streams a coaching brief, and can propose workout changes (swap / reduce / skip / intensity cap) via Apply cards. Chat follow-up is supported. Session persists within the same plan week.
@@ -90,6 +98,24 @@ The edge function reads this on every request (service role, no RLS). If `tier =
 
 ### 5. Model for Tier 2
 Change the edge function for subscription mode to use `claude-haiku-4-5-20251001` (not Sonnet). BYOK users keep Sonnet — it's their key.
+
+---
+
+## Brain-Generated Workouts (Tier 2)
+
+Premium capability shipped 2026-05-28 alongside the On-Demand mode rename. Sits next to the free rule-based "Generate" button on the On-Demand home and plan tab as a second CTA: "Generate with Coach".
+
+**What it does**: reads recent training context (CTL, TSB, ACWR, readiness, last 10 sessions, week-vs-typical TSS, VDOT, phase) plus a free-text intent ("50 min on hills", "feeling tired"), an optional injury note, and a time budget. Returns a structured workout via Anthropic tool_use, plus a 2–3 sentence narrative grounded in real signals. User can Accept, regenerate with tweaked intent, or cancel.
+
+**Why behind the paywall**: differentiates from the rule-based generator (which stays free and unchanged) by adding context awareness and natural-language intent. The free path remains the default; Coach is the upgrade for users who want their training context taken into account.
+
+**Pipeline**: client → edge function (`supabase/functions/coach-generate-workout/`) → Anthropic Haiku `claude-haiku-4-5-20251001` with forced `propose_workout` tool call → structured JSON → client renders proposal → on Accept, materialise as `Workout` and push to `wk.adhocWorkouts`.
+
+**Economics**: same Haiku pricing as coach-narrative. Per-call cost ~$0.005 (slightly higher than narrative because tool_use adds tokens). Per-user cap 5/day = $0.025/day max = $0.75/month at ceiling. Shares the global `llm_spend_tracker` $10/day cap.
+
+**Scope limit (V1)**: running sessions only. Slots match the existing `SESSION_TYPES` in `src/ui/session-generator.ts` (easy / long / threshold / vo2 / marathon_pace / progressive / vibes). Strength sessions excluded — the strength-detail schema is owned by a parallel workstream; extend the tool definition when that lands.
+
+**Future**: when the brain prompt + contract are validated on On-Demand, the same engine can be wired into (a) the race-plan workout-tweak flow (brain proposes an adjustment to a prescribed session) and (b) cross-training suggestions inside the suggestion modal. Both are separate sessions of work.
 
 ---
 

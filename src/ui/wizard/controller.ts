@@ -4,21 +4,21 @@ import { getState, updateState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderStep } from './renderer';
 
-/** Consolidated wizard (re-ordered 2026-04-27): welcome → connect-strava → goals →
+/** Consolidated wizard (re-ordered 2026-04-27): welcome → connect-data → goals →
  *  race-target → schedule → review → initializing → plan-preview-v2 → main-view.
  *
  *  Connect first so backfill + physio sync can run in the background while the
  *  user picks goal/volume; the merged "Athlete Profile" review then displays
  *  what we know once the data has settled (with a wait spinner if not).
  *
- *  `manual-entry` is a branch off connect-strava when the user skips Strava.
+ *  `manual-entry` is a branch off connect-data when the user skips Strava.
  *  `triathlon-setup` is a branch off goals, replacing race-target + schedule
  *  for triathlon users.
  *  `runner-type` was merged into `review` — no longer a separate step. */
 const STEP_ORDER: OnboardingStep[] = [
   'welcome',
   'goals',
-  'connect-strava',
+  'connect-data',
   'about-you',
   'race-target',
   'schedule',
@@ -43,12 +43,25 @@ export function initWizard(): void {
   }
 
   // After soft reset: skip welcome if name already exists. The returning user
-  // lands on goals (the post-restructure entry point — connect-strava now sits
+  // lands on goals (the post-restructure entry point — connect-data now sits
   // after goals so triathletes see Strava+watch connect once they've picked
   // their mode).
   if (s.onboarding?.name && s.onboarding.currentStep === 'welcome') {
     updateState({
       onboarding: { ...s.onboarding, currentStep: 'goals' },
+    });
+    saveState();
+  }
+
+  // Migration: 'connect-strava' was renamed to 'connect-data' (2026-05-28) when
+  // the step became a watch-first router. Persisted state from before the rename
+  // points at the legacy id — silently bump it to the new id so returning users
+  // land on the right page rather than getting kicked back to 'goals' by the
+  // generic catch-all below.
+  const beforeMigration = getState().onboarding;
+  if (beforeMigration && (beforeMigration.currentStep as string) === 'connect-strava') {
+    updateState({
+      onboarding: { ...beforeMigration, currentStep: 'connect-data' },
     });
     saveState();
   }
@@ -120,10 +133,10 @@ export function nextStep(): void {
   // athletes still see the unified Athlete Profile reveal.
   if (s.onboarding.trainingMode === 'triathlon') {
     if (s.onboarding.currentStep === 'goals') {
-      goToStep('connect-strava');
+      goToStep('connect-data');
       return;
     }
-    if (s.onboarding.currentStep === 'connect-strava') {
+    if (s.onboarding.currentStep === 'connect-data') {
       goToStep('about-you');
       return;
     }
@@ -150,17 +163,17 @@ export function nextStep(): void {
     }
   }
 
-  // Branch: HYROX users route from goals → connect-strava → about-you →
+  // Branch: HYROX users route from goals → connect-data → about-you →
   // hyrox-setup → hyrox-workout-preview → initializing → main-view.
   // The previous review step was killed because for HYROX users it duplicated
   // the setup screen; the workout preview now shows the prescribed session
   // library so users see plan depth before committing.
   if (s.onboarding.trainingMode === 'hyrox') {
     if (s.onboarding.currentStep === 'goals') {
-      goToStep('connect-strava');
+      goToStep('connect-data');
       return;
     }
-    if (s.onboarding.currentStep === 'connect-strava') {
+    if (s.onboarding.currentStep === 'connect-data') {
       goToStep('about-you');
       return;
     }
@@ -185,16 +198,16 @@ export function nextStep(): void {
     }
   }
 
-  // Branch: cycling users route from goals → connect-strava → about-you →
+  // Branch: cycling users route from goals → connect-data → about-you →
   // cycling-setup → workout-preview → review → initializing → main-view.
   // workout-preview is the "research showcase" step that lists the bike
   // workout library before plan generation.
   if (s.onboarding.trainingMode === 'cycling') {
     if (s.onboarding.currentStep === 'goals') {
-      goToStep('connect-strava');
+      goToStep('connect-data');
       return;
     }
-    if (s.onboarding.currentStep === 'connect-strava') {
+    if (s.onboarding.currentStep === 'connect-data') {
       goToStep('about-you');
       return;
     }
@@ -217,10 +230,10 @@ export function nextStep(): void {
     }
   }
 
-  // Branch: if leaving connect-strava with skippedStrava, route to manual-entry
+  // Branch: if leaving connect-data with skippedStrava, route to manual-entry
   // (where the user enters PBs by hand). Otherwise the linear order takes us to
   // 'goals' next.
-  if (s.onboarding.currentStep === 'connect-strava' && s.onboarding.skippedStrava) {
+  if (s.onboarding.currentStep === 'connect-data' && s.onboarding.skippedStrava) {
     goToStep('manual-entry');
     return;
   }
@@ -348,10 +361,10 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: about-you back → connect-strava (covers all modes; manual-entry
+  // Branch: about-you back → connect-data (covers all modes; manual-entry
   // detour is handled by its own back branch below).
   if (s.onboarding.currentStep === 'about-you') {
-    goToStep('connect-strava');
+    goToStep('connect-data');
     return;
   }
 
@@ -362,12 +375,12 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: manual-entry back → connect-strava. The user landed here by tapping
+  // Branch: manual-entry back → connect-data. The user landed here by tapping
   // "Enter manually" on the connect step; clear skippedStrava so they can try
   // OAuth again if they changed their mind.
   if (s.onboarding.currentStep === 'manual-entry') {
     updateState({
-      onboarding: { ...s.onboarding, skippedStrava: false, currentStep: 'connect-strava' },
+      onboarding: { ...s.onboarding, skippedStrava: false, currentStep: 'connect-data' },
     });
     saveState();
     renderCurrentStep();
@@ -402,7 +415,7 @@ export function previousStep(): void {
   }
 
   // Branch: goals back → welcome (immediately-preceding step in the new
-  // post-restructure order — connect-strava now sits after goals).
+  // post-restructure order — connect-data now sits after goals).
   if (s.onboarding.currentStep === 'goals') {
     goToStep('welcome');
     return;

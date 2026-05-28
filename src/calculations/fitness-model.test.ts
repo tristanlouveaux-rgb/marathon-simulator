@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSameSignalTSB, CTL_DECAY, ATL_DECAY, computePlannedWeekTSS } from './fitness-model';
+import { computeSameSignalTSB, CTL_DECAY, ATL_DECAY, computePlannedWeekTSS, computeStrengthRpeTSS } from './fitness-model';
 import type { Week } from '@/types';
 
 // Minimal Week factory — only fields needed for computeWeekRawTSS
@@ -137,4 +137,111 @@ describe('computePlannedWeekTSS', () => {
     expect(highVol).toBeGreaterThan(beginner);
   });
 
+});
+
+describe('computeStrengthRpeTSS', () => {
+  // TL_PER_MIN[7] = 1.78 (verified in sports.ts).
+  // runSpec for strength = 0.35 (Signal A).
+  // 60 min × 1.78 × 0.35 = 37.38
+
+  it('returns null when not a strength activity', () => {
+    expect(computeStrengthRpeTSS(
+      { activityType: 'RUNNING', durationSec: 3600, rpe: 7 },
+      true,
+    )).toBeNull();
+  });
+
+  it('returns null when neither rpe nor rpeFallback is set', () => {
+    expect(computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600 },
+      true,
+    )).toBeNull();
+  });
+
+  it('applies the runSpec discount in Signal A (discount=true)', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600, rpe: 7 },
+      true,
+    );
+    expect(tss).not.toBeNull();
+    expect(tss!).toBeCloseTo(60 * 1.78 * 0.35, 2);
+  });
+
+  it('skips the runSpec discount in Signal B (discount=false)', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600, rpe: 7 },
+      false,
+    );
+    expect(tss).not.toBeNull();
+    expect(tss!).toBeCloseTo(60 * 1.78 * 1.0, 2);
+  });
+
+  it('detects strength via Strava WeightTraining activityType', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'WeightTraining', durationSec: 3600, rpe: 6 },
+      true,
+    );
+    expect(tss).not.toBeNull();
+    // TL_PER_MIN[6] = 1.45 → 60 × 1.45 × 0.35 = 30.45
+    expect(tss!).toBeCloseTo(30.45, 2);
+  });
+
+  it('falls back to the name when activityType is generic Workout', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'Workout', workoutName: 'Strength', durationSec: 3600, rpe: 7 },
+      true,
+    );
+    expect(tss).not.toBeNull();
+    expect(tss!).toBeGreaterThan(0);
+  });
+
+  it('honours manualSport override', () => {
+    const tss = computeStrengthRpeTSS(
+      { manualSport: 'strength', activityType: 'CARDIO', durationSec: 3600, rpe: 7 },
+      true,
+    );
+    expect(tss).not.toBeNull();
+    expect(tss!).toBeGreaterThan(0);
+  });
+
+  it('uses rpeFallback when actual.rpe is missing (legacy wk.rated path)', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600 },
+      true,
+      7,
+    );
+    expect(tss).not.toBeNull();
+    expect(tss!).toBeCloseTo(60 * 1.78 * 0.35, 2);
+  });
+
+  it('prefers actual.rpe over rpeFallback when both are set', () => {
+    const tss = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600, rpe: 8 },
+      true,
+      4,
+    );
+    expect(tss).not.toBeNull();
+    // Should reflect RPE 8 (2.22), not RPE 4 (0.92)
+    expect(tss!).toBeCloseTo(60 * 2.22 * 0.35, 2);
+  });
+
+  it('clamps RPE to [1, 10]', () => {
+    const high = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600, rpe: 15 },
+      true,
+    );
+    const low = computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 3600, rpe: 0 },
+      true,
+    );
+    expect(high).toBeCloseTo(60 * 3.00 * 0.35, 2);
+    expect(low).toBeCloseTo(60 * 0.30 * 0.35, 2);
+  });
+
+  it('returns null for zero-duration activities', () => {
+    expect(computeStrengthRpeTSS(
+      { activityType: 'STRENGTH_TRAINING', durationSec: 0, rpe: 7 },
+      true,
+    )).toBeNull();
+  });
 });

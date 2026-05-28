@@ -101,7 +101,7 @@ export function buildCSSDetailPage(s: SimulatorState): string {
 
   const headline = css != null ? fmtCss(css) : '—';
   const provenance = css == null
-    ? 'No CSS yet — set one below or do a 400m + 200m TT.'
+    ? 'No CSS yet, set one below or do a 400m + 200m TT.'
     : isUser
       ? 'Manually set by you'
       : `Auto-derived from your swim history${swim?.pbs?.m400 && swim?.pbs?.m200 ? ' + 400m/200m PBs' : ''}`;
@@ -204,7 +204,7 @@ export function buildFTPDetailPage(s: SimulatorState): string {
   const wkg = ftp != null && s.bodyWeightKg ? (ftp / s.bodyWeightKg).toFixed(2) : null;
   const subline = wkg != null ? `${wkg} W/kg` : null;
   const provenance = ftp == null
-    ? 'No FTP yet — set one below or do a 20-min FTP test.'
+    ? 'No FTP yet, set one below or do a 20-min FTP test.'
     : isUser
       ? (bike?.twentyMinW ? `Test result: 95% of your ${Math.round(bike.twentyMinW)}W 20-min effort` : 'Manually set by you')
       : `Auto-derived from your power data (${conf ?? 'medium'} confidence)`;
@@ -322,7 +322,7 @@ export function buildVO2DetailPage(s: SimulatorState): string {
     provenance = `Best demonstrated in ${sportLabel}`;
   } else {
     displayVal = null;
-    provenance = 'No VO2max data yet — set one below or sync activity history.';
+    provenance = 'No VO2max data yet, set one below or sync activity history.';
   }
 
   const headline = displayVal != null ? `${Math.round(displayVal)}` : '—';
@@ -445,8 +445,8 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
   // Best measured value drives the headroom narrative.
   const bestMeasured = bestValue;
   const headroomCopy = (ceiling != null && bestMeasured != null)
-    ? `Best measured ${Math.round(bestMeasured)} · ceiling ${Math.round(ceiling)} — ${Math.round(ceiling - bestMeasured)} points of theoretical headroom. Not a target to chase; the ceiling rises naturally as your underlying fitness builds.`
-    : (ceiling != null ? `Cardiac ceiling ${Math.round(ceiling)} — your aerobic upper bound from peak HR ÷ resting HR. Not a measure of current fitness.` : '');
+    ? `Best measured ${Math.round(bestMeasured)} · ceiling ${Math.round(ceiling)}. ${Math.round(ceiling - bestMeasured)} points of theoretical headroom. Not a target to chase; the ceiling rises naturally as your underlying fitness builds.`
+    : (ceiling != null ? `Cardiac ceiling ${Math.round(ceiling)}. Your aerobic upper bound from peak HR ÷ resting HR. Not a measure of current fitness.` : '');
 
   // Ceiling line: dashed vertical line spanning the chart area at the
   // ceiling's x-position, with a small label above. Pure HTML/CSS so we

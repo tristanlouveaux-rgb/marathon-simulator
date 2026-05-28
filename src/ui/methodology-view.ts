@@ -47,39 +47,39 @@ const loadSection = (): string => card('Training load', `
 const banisterSection = (): string => card('Fitness, fatigue and form', `
   ${para('Fitness, fatigue and form are exponentially-weighted moving averages of daily TSS, following the Banister impulse-response framework (Banister 1991) operationalised by TrainingPeaks.')}
   ${bullets([
-    '<strong>CTL</strong> (Chronic Training Load) — 42-day EMA, approximates aerobic fitness.',
-    '<strong>ATL</strong> (Acute Training Load) — 7-day EMA, approximates fatigue.',
-    '<strong>TSB</strong> (Training Stress Balance, "form") — CTL minus ATL.',
+    '<strong>CTL</strong> (Chronic Training Load): 42-day EMA, approximates aerobic fitness.',
+    '<strong>ATL</strong> (Acute Training Load): 7-day EMA, approximates fatigue.',
+    '<strong>TSB</strong> (Training Stress Balance, "form"): CTL minus ATL.',
   ])}
 `);
 
 const acwrSection = (): string => card('Injury risk (ACWR)', `
-  ${paraLast('Acute:Chronic Workload Ratio is the 7-day rolling load divided by the 28-day rolling load. Values outside roughly 0.8 to 1.5 carry elevated injury risk (Gabbett 2016, Hulin 2014). One signal among several in the readiness model — not deterministic.')}
+  ${paraLast('Acute:Chronic Workload Ratio is the 7-day rolling load divided by the 28-day rolling load. Values outside roughly 0.8 to 1.5 carry elevated injury risk (Gabbett 2016, Hulin 2014). One signal among several in the readiness model. Not deterministic.')}
 `);
 
-const vdotSection = (): string => card('Race time prediction — running (VDOT)', `
+const vdotSection = (): string => card('Race time prediction, running (VDOT)', `
   ${paraLast('Jack Daniels\' VDOT model converts race performances into a VO2max-proxy fitness number, then back into predicted times at other distances. Mosaic derives VDOT from your fastest recent race-effort runs across distances, weights by recency, and projects to the target race using fatigue-resistance and course-specific factors.')}
 `);
 
-const ftpSection = (): string => card('Race time prediction — cycling (FTP / Critical Power)', `
+const ftpSection = (): string => card('Race time prediction, cycling (FTP / Critical Power)', `
   ${paraLast('FTP is estimated from your strongest 20-minute power efforts (Coggan\'s 0.95 factor) or from the critical-power asymptote of multiple maximal-effort durations (Monod and Scherrer 1965). Bike race time uses the Coggan model with a duration-dependent power decay.')}
 `);
 
-const cssSection = (): string => card('Race time prediction — swimming (CSS)', `
+const cssSection = (): string => card('Race time prediction, swimming (CSS)', `
   ${paraLast('Critical Swim Speed is computed from 200m and 400m time-trial pairs (Wakayoshi 1992). Open-water swims apply a deficit relative to pool times where the data warrants it.')}
 `);
 
 const triExtrasSection = (): string => card('Triathlon adjustments', `
   ${bullets([
-    '<strong>Brick adaptation</strong> — the run leg includes a pace deficit relative to a standalone marathon, calibrated from your bike-to-run sessions.',
-    '<strong>Open-water swim deficit</strong> — pool times scaled to expected open-water performance where pool data is the primary input.',
-    '<strong>Heat acclimatisation</strong> — pace and heart rate adjusted for expected race-day temperature, blended with your recent heat exposure history.',
-    '<strong>Durability cap</strong> — late-race pace decay modelled from how much your pace falls in the final third of long sessions.',
+    '<strong>Brick adaptation</strong>: the run leg includes a pace deficit relative to a standalone marathon, calibrated from your bike-to-run sessions.',
+    '<strong>Open-water swim deficit</strong>: pool times scaled to expected open-water performance where pool data is the primary input.',
+    '<strong>Heat acclimatisation</strong>: pace and heart rate adjusted for expected race-day temperature, blended with your recent heat exposure history.',
+    '<strong>Durability cap</strong>: late-race pace decay modelled from how much your pace falls in the final third of long sessions.',
   ])}
 `);
 
 const courseFactorsSection = (): string => card('Course factors', `
-  ${paraLast('Elevation, surface and expected temperature adjust the baseline race-day prediction. Durability — your ability to hold pace late in a race — is modelled from how much your pace decays in the final third of long efforts in your training history.')}
+  ${paraLast('Elevation, surface and expected temperature adjust the baseline race-day prediction. Durability, your ability to hold pace late in a race, is modelled from how much your pace decays in the final third of long efforts in your training history.')}
 `);
 
 const readinessSection = (): string => card('Readiness', `
@@ -98,7 +98,7 @@ const limitationsSection = (): string => card('Limitations', `
     'TSS and iTRIMP reduce different physiological stresses to a single number. Useful for tracking trends, not for ranking individual sessions.',
     'VDOT, FTP and CSS are population-fit models. Individuals can vary meaningfully from population means; Mosaic surfaces a confidence band, not a point.',
     'Course factors and durability are calibrated where data exists, otherwise default to neutral.',
-    'HRV and resting heart rate are sensitive to non-training factors — illness, sleep debt, stress, caffeine, alcohol. Use the trend, not any single day.',
+    'HRV and resting heart rate are sensitive to non-training factors: illness, sleep debt, stress, caffeine, alcohol. Use the trend, not any single day.',
   ])}
 `);
 

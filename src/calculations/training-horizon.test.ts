@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyTrainingHorizonAdjustment, calculateSkipPenalty } from './training-horizon';
+import { applyTrainingHorizonAdjustment, calculateSkipPenalty, getPlanPrescribedMeanWeeklyKm } from './training-horizon';
 import type { TrainingHorizonInput } from '@/types';
 
 describe('Training Horizon', () => {
@@ -654,5 +654,75 @@ describe('Training Horizon', () => {
         }
       });
     });
+  });
+});
+
+describe('getPlanPrescribedMeanWeeklyKm — ramp integration', () => {
+  // Marathon, 6 sessions: legacy formula = 6 × 11 × 1.2 = 79.2 km
+  const SESSIONS = 6;
+  const MARATHON = 'marathon' as const;
+  const LEGACY_PEAK = 79.2;
+
+  it('legacy mode: returns formula value when no rampCtx', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(SESSIONS, MARATHON);
+    expect(km).toBeCloseTo(LEGACY_PEAK, 1);
+  });
+
+  it('legacy mode: returns formula when archetype missing', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(SESSIONS, MARATHON, {
+      baselineKm: 18, totalWeeks: 35,
+    });
+    expect(km).toBeCloseTo(LEGACY_PEAK, 1);
+  });
+
+  it('consistent runner at peak baseline: unchanged from legacy (no regression)', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(SESSIONS, MARATHON, {
+      baselineKm: 80,  // already at peak
+      archetype: 'consistent-runner',
+      totalWeeks: 35,
+    });
+    expect(km).toBeCloseTo(LEGACY_PEAK, 1);
+  });
+
+  it('detrained-with-history (18 km/wk now, 35-week marathon): mean drops below legacy', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(SESSIONS, MARATHON, {
+      baselineKm: 18,
+      archetype: 'detrained-with-history',
+      totalWeeks: 35,
+    });
+    // The 18→80 ramp at 10%/wk hits peak around week ~17, after which it's flat.
+    // Mean across 32 build weeks comes out comfortably below 79.2.
+    expect(km).toBeLessThan(LEGACY_PEAK);
+    expect(km).toBeGreaterThan(40);
+    expect(km).toBeLessThan(75);
+  });
+
+  it('sedentary novice (5 km/wk now): mean far below legacy', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(SESSIONS, MARATHON, {
+      baselineKm: 5,
+      archetype: 'sedentary-novice',
+      totalWeeks: 35,
+    });
+    // Novice starts at 10 km floor with 5%/wk ramp — wouldn't reach 79 over 32 weeks
+    // (10 × 1.05^31 ≈ 44 km), so mean is much lower than legacy.
+    expect(km).toBeLessThan(40);
+  });
+
+  it('half marathon: uses half-distance taper (2 weeks)', () => {
+    const km = getPlanPrescribedMeanWeeklyKm(4, 'half', {
+      baselineKm: 30,
+      archetype: 'consistent-runner',
+      totalWeeks: 12,
+    });
+    // Legacy for 4 sessions × 10 ref × 1.2 = 48 km. Consistent at 30 ramping 7%/wk
+    // → mean should be between 30 and 48.
+    expect(km).toBeGreaterThan(30);
+    expect(km).toBeLessThan(48);
+  });
+
+  it('returns null when sessions invalid', () => {
+    expect(getPlanPrescribedMeanWeeklyKm(0, MARATHON)).toBeNull();
+    expect(getPlanPrescribedMeanWeeklyKm(null, MARATHON)).toBeNull();
+    expect(getPlanPrescribedMeanWeeklyKm(undefined, MARATHON)).toBeNull();
   });
 });

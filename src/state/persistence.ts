@@ -502,7 +502,14 @@ export function loadState(): boolean {
     console.error('Error loading state:', e);
     localStorage.removeItem(STATE_KEY);
     localStorage.removeItem(CROSS_KEY);
-    alert('Error loading saved data. Please re-initialize your plan.');
+    // Defer the toast — at this point in the launch path the DOM may not be
+    // ready. setTimeout + dynamic import avoids both an early-render no-op and
+    // a circular UI import from persistence.
+    setTimeout(() => {
+      void import('@/ui/toast').then(({ showSimpleToast }) => {
+        showSimpleToast('Could not load your saved data. Re-initialise your plan to continue.', 'error');
+      }).catch(() => { /* worst case: silent reset, console.error above suffices */ });
+    }, 1500);
     return false;
   }
 }

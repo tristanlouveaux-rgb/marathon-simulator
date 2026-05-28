@@ -137,7 +137,7 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
         ${buildSunGlint('mid')}
       </div>
 
-      <!-- Skip — top right -->
+      <!-- Skip. Top right -->
       <div style="position:absolute;top:max(20px,env(safe-area-inset-top,20px));right:20px;z-index:10">
         <button id="isl-skip"
           style="font-size:12px;font-weight:500;color:rgba(0,0,0,0.32);
@@ -197,7 +197,7 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
   };
 
   document.getElementById('isl-skip')?.addEventListener('click', onDone);
-  updateSlide(false); // Initial render — entrance animation already covers it
+  updateSlide(false); // Initial render. Entrance animation already covers it
 }
 
 // ── Name input ────────────────────────────────────────────────────────────────
@@ -212,7 +212,7 @@ export function renderWelcome(container: HTMLElement): void {
     <div class="flex flex-col" style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden">
 
       <!-- First-page family treatment: atmosphere → whisper rings → low glint.
-           Whisper variant is barely visible — MOSAIC wordmark stays the hero,
+           Whisper variant is barely visible: MOSAIC wordmark stays the hero,
            but the same world shows through so the slides feel like a continuation. -->
       <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
         ${buildAtmosphereBase()}

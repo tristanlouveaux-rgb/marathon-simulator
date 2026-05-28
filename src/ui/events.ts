@@ -321,7 +321,7 @@ export function init(): void {
   s.lt = ltTotalSec;
   s.ltPace = ltTotalSec;
   s.vo2 = vo2;
-  s.vo2UpdatedAt = undefined; // user/wizard source — preserve "no timestamp = fresh" policy
+  s.vo2UpdatedAt = undefined; // user/wizard source. Preserve "no timestamp = fresh" policy
   s.typ = typ.charAt(0).toUpperCase() + typ.slice(1) as any;
   s.b = b;
   s.pac = pac;
@@ -641,11 +641,11 @@ function handleCapacityTestResult(testType: any, passed: boolean): void {
   // Check if all required tests are now passed
   if (passed && hasPassedRequiredCapacityTests(injuryState)) {
     injuryState = applyPhaseProgression(injuryState, 'All capacity tests passed');
-    log('All capacity tests passed — transitioning to Return-to-Run.');
+    log('All capacity tests passed, transitioning to Return-to-Run.');
   } else if (passed) {
     log(`${testType} passed! Complete remaining tests to progress.`);
   } else {
-    log(`${testType} failed — continue rehab exercises and retry when pain-free.`);
+    log(`${testType} failed. Continue rehab exercises and retry when pain-free.`);
   }
 
   (s as any).injuryState = injuryState;
@@ -909,7 +909,7 @@ export async function next(): Promise<void> {
     wk.wkGain = Math.max(0, perWeekGain * adherence);
   }
   // When injured, wk.wkGain was already set to the phase-aware detraining value above
-  const gainLabel = isInjured ? 'Injured — detraining' : isIll ? 'Ill — adherence excused' : Math.round(adherence * 100) + '% adherence';
+  const gainLabel = isInjured ? 'Injured, detraining' : isIll ? 'Ill, adherence excused' : Math.round(adherence * 100) + '% adherence';
   log(`Week ${s.w}: ${wk.wkGain >= 0 ? '+' : ''}${wk.wkGain.toFixed(3)} VDOT (${gainLabel})`);
 
   // Store completed km for this week before advancing
@@ -1136,7 +1136,7 @@ export async function next(): Promise<void> {
     const weekExcess = getWeeklyExcess(wk, plannedB, s.planStartDate);
     if (weekExcess <= 0 && wk.unspentLoadItems?.length) {
       wk.unspentLoadItems = [];
-      log(`Week ${s.w}: under planned load (${Math.round(weekExcess)} TSS excess) — unspentLoadItems cleared at advance`);
+      log(`Week ${s.w}: under planned load (${Math.round(weekExcess)} TSS excess): unspentLoadItems cleared at advance`);
     }
   }
 
@@ -1153,10 +1153,10 @@ export async function next(): Promise<void> {
     const nextWk = s.wks[s.w - 1];
     if (nextWk) {
       if (acwr.status === 'high') {
-        nextWk.weekAdjustmentReason = `Load spike detected (${acwr.ratio.toFixed(2)}× baseline) — intensity reduced for safety`;
+        nextWk.weekAdjustmentReason = `Load spike detected (${acwr.ratio.toFixed(2)}× baseline): intensity reduced for safety`;
         nextWk.scheduledAcwrStatus = 'high';
       } else if (acwr.status === 'caution') {
-        nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline) — one quality session replaced`;
+        nextWk.weekAdjustmentReason = `Load rising quickly (${acwr.ratio.toFixed(2)}× baseline): one quality session replaced`;
         nextWk.scheduledAcwrStatus = 'caution';
       } else {
         delete nextWk.weekAdjustmentReason;
@@ -1179,7 +1179,7 @@ export async function next(): Promise<void> {
             m => m.status === 'reduced' || m.status === 'replaced'
           );
           nextWk.kmNudge = { floorKm, hasReductions };
-          log(`Week ${s.w}: km nudge — floor ${floorKm.toFixed(1)}km, reductions: ${hasReductions}`);
+          log(`Week ${s.w}: km nudge. Floor ${floorKm.toFixed(1)}km, reductions: ${hasReductions}`);
         }
       }
     }
@@ -1708,7 +1708,7 @@ export function logActivity(): void {
     durInput.value = '';
     rpeInput.value = '';
     saveState();
-    log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe} (logged — tri mode)`);
+    log(`${normalizeSport(sport)}: ${dur}min, RPE${rpe} (logged, tri mode)`);
     void (async () => {
       const { collectTriSuggestions } = await import('@/calculations/tri-suggestion-aggregator');
       const bundle = collectTriSuggestions(getState());
@@ -1888,7 +1888,7 @@ export function logActivity(): void {
           for (const adj of decision.adjustments) {
             const modified = modifiedWorkouts.find(w => w.n === adj.workoutId && w.dayOfWeek === adj.dayIndex);
             if (!modified) {
-              console.warn(`[CrossTraining] APPLY MISS: adj="${adj.workoutId}" day=${adj.dayIndex} action=${adj.action} — no match in workouts:`, workouts.map(w => `${w.n} day=${w.dayOfWeek}`));
+              console.warn(`[CrossTraining] APPLY MISS: adj="${adj.workoutId}" day=${adj.dayIndex} action=${adj.action}, no match in workouts:`, workouts.map(w => `${w.n} day=${w.dayOfWeek}`));
               continue;
             }
             console.log(`[CrossTraining] APPLY HIT: ${adj.workoutId} day=${adj.dayIndex} → ${adj.action} (${modified.d})`);
@@ -1912,7 +1912,7 @@ export function logActivity(): void {
         render();
       });
     } else {
-      log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${reason}, ${excessMin}min excess — no run adjustments needed)`);
+      log(`${sportNorm}: ${dur}min, RPE${rpe}, Load: ${weeklyLoad.toFixed(0)} (${reason}, ${excessMin}min excess, no run adjustments needed)`);
       saveState();
       render();
     }
@@ -2205,7 +2205,7 @@ export function findGarminRunForWeek(week: number): import('@/types/activities')
 const BENCHMARK_OPTIONS: Record<import('@/types/state').BenchmarkType, { label: string; description: string }> = {
   easy_checkin: {
     label: 'Easy Check-in',
-    description: 'A steady 30-min run. We\'ll track if your pace improves at the same effort — low stress.',
+    description: 'A steady 30-min run. We\'ll track if your pace improves at the same effort, low stress.',
   },
   threshold_check: {
     label: 'Threshold Check',
@@ -2213,11 +2213,11 @@ const BENCHMARK_OPTIONS: Record<import('@/types/state').BenchmarkType, { label: 
   },
   speed_check: {
     label: 'Speed Check',
-    description: 'Short and sharp — 12-minute test. Run as far as you can; we\'ll estimate VO2.',
+    description: 'Short and sharp. 12-Minute test. Run as far as you can; we\'ll estimate VO2.',
   },
   race_simulation: {
     label: 'Race Simulation',
-    description: 'A 5k time trial. Highest accuracy, highest fatigue — only if you\'re fresh and keen.',
+    description: 'A 5k time trial. Highest accuracy, highest fatigue, only if you\'re fresh and keen.',
   },
 };
 
@@ -2385,7 +2385,7 @@ export function skipBenchmark(): void {
     timestamp: new Date().toISOString(),
   });
 
-  log('Benchmark skipped — no penalty');
+  log('Benchmark skipped, no penalty');
   saveState();
   render();
 }
@@ -2479,7 +2479,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
       newType: todayRun.t,
       newRpe: Math.max(2, (todayRun.rpe || todayRun.r || 5) - 2),
     });
-    log(`Recovery: ${todayRun.n} — run by feel, no pace pressure`);
+    log(`Recovery: ${todayRun.n}, run by feel, no pace pressure`);
   } else {
     // Reduce by 20%, min 3km
     const newKm = Math.max(3, Math.round(currentKm * 0.8 * 10) / 10);

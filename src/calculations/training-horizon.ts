@@ -2,6 +2,7 @@ import type { TrainingHorizonInput, TrainingHorizonResult, RaceDistance, Ability
 import { TRAINING_HORIZON_PARAMS, TAPER_NOMINAL, EXPECTED_GAINS } from '@/constants';
 import { REF_KM_PER_SESSION, HOURS_TO_KM_RATE } from '@/constants/training-params';
 import { inferLevel } from './fatigue';
+import { weekVolumeBudgetKm, type Archetype } from './athlete-archetype';
 
 /**
  * Build-phase volume factor: empirical average ratio of `mean weekly km across
@@ -25,10 +26,23 @@ const PLAN_BUILD_PHASE_FACTOR = 1.2;
  * Used as the dose input to the horizon model — represents what the plan
  * WILL deliver if the user follows it, not what they're currently doing.
  *
- * Formula: `sessions × REF_KM_PER_SESSION[distance] × PLAN_BUILD_PHASE_FACTOR`.
- * `REF_KM_PER_SESSION` is calibrated to Daniels/Pfitzinger intermediate plans
- * (marathon=11 km, half=10, 10K=9, 5K=8). The build-phase factor lifts the
- * reference to match periodised mean.
+ * Two modes:
+ *
+ *  1. **Ramp-integral mode** (preferred — when `baselineKm`, `archetype`, and
+ *     `totalWeeks` are provided): forward-simulates the archetype-gated ramp
+ *     starting from baseline, summing weekly km across non-taper weeks and
+ *     dividing by week count. Captures the truth that a ramping athlete (18
+ *     km/wk now, building toward 70 km peak) does NOT average the formula
+ *     value across the build phase — they average lower because early weeks
+ *     start near baseline. This is the dose Tanda should see.
+ *
+ *  2. **Legacy formula** (fallback when ramp inputs missing): `sessions ×
+ *     REF_KM_PER_SESSION[distance] × PLAN_BUILD_PHASE_FACTOR`. `REF_KM_PER_SESSION`
+ *     is calibrated to Daniels/Pfitzinger intermediate plans (marathon=11 km,
+ *     half=10, 10K=9, 5K=8). PLAN_BUILD_PHASE_FACTOR lifts the reference to
+ *     match periodised mean. For consistent runners at baseline ≥ peak, the
+ *     ramp clamps and both modes converge — no regression to existing
+ *     prediction calibration.
  *
  * Returns null when sessions are unknown — caller should fall back to the
  * legacy `s.wkm` heuristic in that case.
@@ -36,11 +50,42 @@ const PLAN_BUILD_PHASE_FACTOR = 1.2;
 export function getPlanPrescribedMeanWeeklyKm(
   sessionsPerWeek: number | null | undefined,
   targetDistance: RaceDistance,
+  rampCtx?: {
+    baselineKm?: number;
+    archetype?: Archetype;
+    totalWeeks?: number;
+    taperWeeks?: number;
+  },
 ): number | null {
   if (sessionsPerWeek == null || sessionsPerWeek <= 0) return null;
   const ref = REF_KM_PER_SESSION[targetDistance];
   if (!ref) return null;
-  return sessionsPerWeek * ref * PLAN_BUILD_PHASE_FACTOR;
+
+  // Peak weekly km the plan ramps toward. Mirrors the legacy formula so an
+  // athlete already at peak baseline sees no change.
+  const peakKm = sessionsPerWeek * ref * PLAN_BUILD_PHASE_FACTOR;
+
+  // Legacy fallback when ramp inputs are missing or the athlete is already at peak.
+  if (
+    !rampCtx
+    || rampCtx.baselineKm == null
+    || rampCtx.baselineKm <= 0
+    || rampCtx.archetype == null
+    || rampCtx.totalWeeks == null
+    || rampCtx.totalWeeks <= 0
+    || rampCtx.baselineKm >= peakKm
+  ) {
+    return peakKm;
+  }
+
+  // Ramp-integral: forward-simulate weeks 1..(totalWeeks − taperWeeks).
+  const taperWeeks = rampCtx.taperWeeks ?? TAPER_NOMINAL[targetDistance] ?? 2;
+  const buildWeeks = Math.max(1, rampCtx.totalWeeks - taperWeeks);
+  let sum = 0;
+  for (let w = 1; w <= buildWeeks; w++) {
+    sum += weekVolumeBudgetKm(w, rampCtx.baselineKm, peakKm, rampCtx.archetype);
+  }
+  return sum / buildWeeks;
 }
 
 /**

@@ -5,6 +5,71 @@ Update the status column after running `npx vitest run`.
 
 ---
 
+## Marketing-ready feature list
+
+Short, user-facing descriptions for App Store copy, landing pages, social. Consultant tone, no superlatives. Engineering catalogue starts below the next divider.
+
+### One app, every endurance goal
+- Marathon, triathlon, cycling, and heavy-load sports in a single plan engine.
+- On-Demand mode for athletes who don't want a fixed plan: generate a session whenever you want one, or let Coach build a context-aware workout for premium subscribers.
+- Mode switching preserves history. Train for a marathon this year, a 70.3 next year, without resetting.
+
+### Plans that adapt to what you actually did
+- Every week is regenerated from the sessions you completed, skipped, or pushed.
+- Skipped sessions get pushed forward once, then drop with the prediction adjusted honestly.
+- Holiday, illness, and injury modes reshape the plan around real life, not around the plan.
+- Replace-and-reduce: swap a hard session for an easier one in two taps and the rest of the week rebalances.
+
+### Plans that start where you actually are
+- Week 1 volume is anchored to your current weekly km — no cold-start jump from 18 km/wk to 50 km/wk.
+- The plan recognises seven athlete types: returning runner, consistent runner, cyclist learning to run, court-sport crossover, sedentary novice, and others. Each gets its own ramp slope.
+- Bone and tendon adapt slower than cardio, so non-impact crossovers (cyclists, swimmers) ramp at 5%/week. Detrained runners with marathon history ramp at 10%/week to reflect muscle memory.
+- The forecast reflects the actual ramp. A plan that takes 12 weeks to reach peak gets a smaller predicted improvement than one that's already there — honest about what you can deliver.
+- Athletes heavier than the general-population average can opt into a size-tuned plan: some easy running is gently swapped for low-impact cross-training (bike, swim, elliptical) to keep cumulative joint load manageable without losing aerobic fitness. Opt-in at onboarding, off any time, framed as physics rather than a verdict on body type. From there the app adapts to you live from your HR and pace.
+
+### Honest race predictions
+- Marathon, triathlon, and HYROX finish times update weekly from your training.
+- Triathlon predictions account for course profile, water type, expected temperature, and altitude.
+- Heat penalty scales with body size. Larger athletes store heat faster, so their hot-weather forecast and hot-day training analysis account for the added strain (needs weight and height).
+- HYROX predictions are anchored against 89,000 real finishers and your own station test results.
+- Race-day outcomes feed back into the model so future predictions get sharper.
+
+### Reads your recovery, not just your training
+- Sleep quality, HRV, resting HR, and sleep debt all feed today's readiness score.
+- Personal baselines, not population averages. Your "low HRV" is judged against your own 28-day norm.
+- Leg fatigue tracked separately from cardiovascular load. Heavy eccentric days are flagged before they break you.
+- Cumulative sleep debt is modelled with exponential decay, capped surplus credit, and a forward outlook.
+
+### Built-in coaching
+- AI Coach answers questions about your plan, your recovery, and what to do today.
+- A rules-based coach picks a stance every morning (Ready to Push, On Track, Manage Load, Ease Back) with a one-line explanation.
+- Workout notes after every session: what went well, what was off, and what it means for the week.
+
+### Numbers that update themselves
+- FTP, CSS, VDOT, and threshold pace auto-update from your training when the evidence is strong enough.
+- Manually entered values yield to better numbers, so the system never holds you to an old test.
+- Per-station HYROX benchmarks and personal pace offsets calibrate from every race and every test.
+
+### Real data, real safety
+- Acute-to-chronic workload ratio enforced with continuous gradients, not arbitrary caps.
+- Quality sessions are downgraded automatically when load climbs too fast.
+- Triathlon adds per-discipline fitness, fatigue, and form so a hard bike week doesn't sabotage a run block.
+
+### Works with what you already use
+- Strava, Garmin, and Apple Watch sync automatically. Strava is treated as canonical when both report the same activity.
+- Built-in GPS tracker for users who'd rather record in the app directly. Includes guided runs and live splits.
+- Activity matching writes back to the plan, so a recorded session counts toward your week without manual logging.
+- File upload (.fit, .gpx, .tcx) and full export (.zip) for users without live sync — your data, your portability right.
+- Add a run from a screenshot: snap a summary from any run app, the on-device reader (iOS) or cloud reader (web) pulls out distance, time, splits, and HR.
+
+---
+
+## Engineering catalogue
+
+The rest of this document is internal: every shipped feature with file paths, key functions, and test status.
+
+---
+
 ## HYROX Mode (Phase 0 — foundation + wizard, behind `eventType === 'hyrox'`)
 
 HYROX is a fully-separate mode for the hybrid run+functional-station racing format. Selected at onboarding (goals tile now active). Phase 0 delivers the complete onboarding wizard flow and state foundation; Phase 1 delivers the plan engine; Phase 2 delivers the full UI.
@@ -75,7 +140,7 @@ HYROX is a fully-separate mode for the hybrid run+functional-station racing form
 
 **Home view** (`src/ui/home-view.ts`): `buildTodayWorkoutHyrox()` reads today's `wk.triWorkouts` by day. `buildHyroxHeroCard()` renders Run/Station/Brick colour-coded card with MTL chip. Race forecast card suppressed in HYROX mode. `getHomePlanName()` returns `'HYROX {Band}'`. Hero card taps navigate to plan view.
 
-**Forecast view** (`src/ui/hyrox/forecast-view.ts`): Full race-time prediction (fully built). Hero card shows predicted finish time + split summary (Run / Stations / RoxZone). Course-factors panel (floor surface, run loop, temperature, altitude) from `hyrox-venues.ts`. **Race Order card** (singles): 16 interleaved rows in actual race sequence — R1 → SkiErg → R2 → Sled Push → R3 → Sled Pull → R4 → Burpee BBJ → R5 → Row Erg → R6 → Farmer Carry → R7 → Sandbag Lunges → R8 → Wall Balls. Each row shows `current → projected` time with a `−Ns` race-day delta sourced from `HyroxProjectionMarkers.stations[]` (per-station horizon model) for stations and the run-discipline ratio for legs. Run rows keep the fatigue bar (green/amber/red by slip %); station rows preserve the PR badge and "Tested N mo ago" caption when stale (≥4 mo). No percentile chips — comparison would be apples-to-oranges (benchmarks are max-effort fresh, population data is mid-race fatigued). Tappable station rows open the per-station detail sub-page. Footer: "X.X sessions/wk for N.N weeks. Gain rates anchored on rowing, LME, and HIFT adaptation literature. Taper is gradiented (Mujika 2002) — gains shrink toward race day." **Doubles format** still uses the legacy split layout (separate Run Legs + Your Stations cards) because the athlete only does 4 of 8 stations. Empty state when no time or benchmarks set. Venue is prescribed from the race event picked in onboarding.
+**Forecast view** (`src/ui/hyrox/forecast-view.ts`): Full race-time prediction (fully built). **Marathon-style glass hero** — centred "HYROX forecast" title with "{Name}'s {City} HYROX — Week X of Y" sub-line, then a single glass card carrying: predicted finish time (54 px light weight), race-day delta beneath ("On pace vs target" / "+X min vs target" when target set, otherwise "Projected −X min by race day" when projection has ≥60 s gain), "Set a target finish ›" CTA (or "Target · Edit ›" when set), five HYROX-native factor chips (**You** / **Run pace** / **Stations** / **Training** / **Venue**), each tappable to a dedicated sub-page via `renderHyroxChipDetail(key)` (mirrors marathon mode via the parallel `src/ui/hyrox/forecast-chip-detail-view.ts`). Each sub-page leads with the headline number, follows with breakdown (band thresholds + prev race / VDOT + pace source / per-station list with status / phase + sessions bar chart + MTL / per-factor course-factor breakdown), and closes with a science caption. Stations and Venue pages carry their own CTAs (Test stations → plan view; Change format → forecast modal), a "Missing: X, Y — fewer factors means lower confidence" caption when any chip is absent, and a previous-race + format-change link under the chips when prior time exists. Confidence badge top-right of the card toggles a detail panel with calibration / staleness / cross-format / VDOT-source / venue-equivalent notes. Legacy "Sharpen this forecast" CTA banner, "Race-day projection" card, and "Course factors" card all removed — their signals fold into the Calibration chip, the hero delta line, and the Venue chip detail respectively. **Race Order card** (singles): bordered-pill segment control with two views, each doing one thing. **Race order** = passive pacing clock: 16 rows in actual race sequence (R1 → SkiErg → R2 → … → R8 → Wall Balls), each row shows the current split plus a cumulative **Total time** that builds top-to-bottom. No projection arrows, no slip delta column, no click-through on station rows (drill-down lives on the other tab). Run rows keep the in-race fatigue bar (green/amber/red by slip %) as a passive visual signal. **Station order** = where you'll gain: all 8 stations grouped first, then all 8 runs grouped, every row (station OR run) shows `now → race day` with race-day gain delta sourced from `HyroxProjectionMarkers.stations[]` (per-station horizon model) for stations and the run-discipline ratio for legs. Unified column meaning across the whole view — no in-race fatigue bar on runs, no +slip delta. No cumulative total (ordering is by discipline). Station rows here remain tappable for the per-station detail sub-page; preserve the PR badge and "Tested N mo ago" caption when stale (≥4 mo). Per-event roxzone+venue overhead distributed uniformly across all 16 events so the Race-order cumulative aligns with the headline projected finish. No percentile chips — comparison would be apples-to-oranges (benchmarks are max-effort fresh, population data is mid-race fatigued). Footer: "X.X sessions/wk for N.N weeks. Gain rates anchored on rowing, LME, and HIFT adaptation literature; **run rows are driven by the running VDOT horizon** (`applyTrainingHorizonAdjustment` at `target_distance: '10k'`, run sessions/wk + bricks at 0.5, taper handled by HYROX factor model — see SCIENCE_LOG §AH). Taper is gradiented (Mujika 2002) — gains shrink toward race day." **Doubles format** still uses the legacy split layout (separate Run Legs + Your Stations cards) because the athlete only does 4 of 8 stations. Empty state when no time or benchmarks set. Venue is prescribed from the race event picked in onboarding.
 
 **Home view updates**: `getHomePlanName()` returns `'HYROX {Format} · {Month Year}'` (e.g. "HYROX Open · Jun 2026"). MTL ACWR suppressed when MTL CTL < 1.0 to prevent Week 1 infinite ratio.
 
@@ -162,7 +227,9 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 
 **Prediction calibration loop (added 2026-05-11)**: per-user systematic bias correction derived from `triConfig.raceLog`. Three-tier ladder: tier 0 (< 2 races) = no change; tier 1 (2+ races) = per-leg additive bias (median actual − predicted, ±8% cap); tier 2 (4+ races with `predictedRawPerLeg`) = Bayesian-shrunk readiness maxPenalty scale per leg; tier 3 (6+ races spanning 3+ distances) = dormant until sprint/olympic logging is added. Calibration updates after each logged race and backfills on first launch when raceLog exists without calibration. Forecast view shows a faint caption when tier ≥ 1. First tier-up surfaced once in the week-debrief plan-preview step. **Key file**: `src/calculations/tri-calibration.ts` ✅ 14 tests.
 
-**Race-outcome logging across modes (added 2026-05-12)**: parity pass to mirror tri's race outcome logger into running and HYROX (CLAUDE.md mirror rule). Running stores entries on `state.runRaceLog[]` with predicted from `state.blendedRaceTimeSec`; HYROX stores on `hyroxConfig.raceLog[]` using `targetFinishTimeSec` as the "predicted" slot since HYROX has no continuously cached prediction. Both detectors run idempotently after Strava sync via a new `detectRaceOutcomeAfterSync()` dispatcher in `main.ts`. **Key files**: `src/calculations/run-race-outcome.ts`, `src/calculations/hyrox-race-outcome.ts`. **Retro UI surface for running/HYROX is deferred** — telemetry-first; v1 logs, doesn't display. Running calibration loop (analogue of `tri-calibration.ts`) also deferred.
+**Race-outcome logging across modes (added 2026-05-12)**: parity pass to mirror tri's race outcome logger into running and HYROX (CLAUDE.md mirror rule). Running stores entries on `state.runRaceLog[]` with predicted from `state.blendedRaceTimeSec`; HYROX stores on `hyroxConfig.raceLog[]` using `targetFinishTimeSec` as the "predicted" slot since HYROX has no continuously cached prediction. Both detectors run idempotently after Strava sync via a new `detectRaceOutcomeAfterSync()` dispatcher in `main.ts`. **Key files**: `src/calculations/run-race-outcome.ts`, `src/calculations/hyrox-race-outcome.ts`.
+
+**Race-outcome retro UI (added 2026-05-18)**: small green-tinted "you beat your prediction/target by X" card on the Race Forecast page in running mode (`buildRunRaceOutcomeRetroCard` in `src/ui/race-forecast-view.ts`, above the hero ring) and on the Forecast tab in HYROX mode (`renderHyroxRaceOutcomeRetroCard` in `src/ui/hyrox/forecast-view.ts`, between page title and body). Mirrors tri's `renderRaceOutcomeRetroCard` pattern (`triathlon/forecast-view.ts:42`). Renders only when actual was ≥60s faster than predicted (running) or target (HYROX) — celebratory-only, same gate as tri. **Cycling-only retro** deferred as ISSUE-224 (needs its own `cyclingRaceLog` field). **HYROX station-level retro** deferred as ISSUE-223 (needs `HyroxRaceLogEntry` extension to capture per-station actuals). Running calibration loop (analogue of `tri-calibration.ts`) also still deferred.
 
 ### T7. Discipline-aware Activity Matcher + Brick Detection
 **What it does**: Matches synced swim / bike / run activities to planned `triWorkouts` — discipline first, then same-day, then nearest duration. Brick detector flags bike → run pairs where the run starts within 30 min of bike end (§18.1). After matching, each workout stores `matchedActivityId` so the effort multiplier can look up objective signals on the matched actual.
@@ -184,8 +251,13 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 **Tests**: `src/calculations/brick-detector.test.ts` — ✅ Passing (5 tests). Matcher ⚠️ not yet covered.
 
 ### T8. Triathlon UI (Plan / Home / Stats)
-**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage), and supports drag-and-drop reorder within the week — drop a card on another card to swap days, drop on the day-header strip to stack onto that day, or drop on an empty rest row to move there. Bricks are atomic single workouts so they always move as one. The weekly summary strip at the top of the Plan view shows Weekly hours / Sessions / Week load with a small muted "X done" caption beneath each headline on the current and past weeks; the swim/bike/run pills underneath act as progress bars (fill = completed minutes ÷ planned minutes, right-side label `Xh / Yh`). Future weeks render planned-only. Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats mirrors the running stats summary → drill-down pattern: marquee race forecast card at the top (full per-leg breakdown + course factors + bike & aero entry), then a compact **Fitness summary card** (three rows showing Swim CSS · Bike FTP · Run LT pace with their tier label, tap → Fitness detail), then a **More stats →** link that opens the Progress detail page. Fitness detail (`src/ui/triathlon/fitness-detail-view.ts`) holds the "Your Numbers" zone-position bars for CSS / FTP / LT pace with per-discipline adaptation captions above each bar, three benchmark trend sparklines, and a Current Race Estimates card (Sprint / Olympic / target distance). Progress detail (`src/ui/triathlon/progress-detail-view.ts`) holds the per-discipline stat list (distance, sessions, longest, plan adherence, time, total TSS), Phase Timeline, per-discipline CTL chart, weekly volume charts, and weekly TSS chart.
+**What it does**: Three views with a dedicated minimal tab bar. Plan shows day-by-day cards with discipline-coloured stripes (swim teal, bike clay, run sage), and supports drag-and-drop reorder within the week — drop a card on another card to swap days, drop on the day-header strip to stack onto that day, or drop on an empty rest row to move there. Bricks are atomic single workouts so they always move as one. The weekly summary strip at the top of the Plan view shows Weekly hours / Sessions / Week load with a small muted "X done" caption beneath each headline on the current and past weeks; each KPI now carries a 3px neutral progress bar (`renderKpiBar` in `plan-view.ts`) showing completed ÷ planned at a glance. The swim/bike/run pills underneath act as progress bars (fill = completed minutes ÷ planned minutes, right-side label `Xh / Yh`). **Missed sessions** on the current week (past day, not completed, no matched activity) show an amber "Missed" pill and, when tapped, open a detail modal with two CTAs: "Move to next week" (filled-black) and "Skip session" (transparent bordered). Move clones the workout to next week and marks the original `'skipped'`; Skip drops it with adherence penalty. A clone's `pushCount` carries forward so a lineage can be pushed at most once — after that only Skip is available. Future weeks render planned-only. Home shows today's workouts, per-discipline fitness bars with CTL/ATL readout, race forecast, and upcoming sessions. Stats mirrors the running stats summary → drill-down pattern: marquee race forecast card at the top (full per-leg breakdown + course factors + bike & aero entry), then a compact **Fitness summary card** (three rows showing Swim CSS · Bike FTP · Run LT pace with their tier label, tap → Fitness detail), then a **More stats →** link that opens the Progress detail page. Fitness detail (`src/ui/triathlon/fitness-detail-view.ts`) holds the "Your Numbers" zone-position bars for CSS / FTP / LT pace with per-discipline adaptation captions above each bar, three benchmark trend sparklines, and a Current Race Estimates card (Sprint / Olympic / target distance). Progress detail (`src/ui/triathlon/progress-detail-view.ts`) holds the per-discipline stat list (distance, sessions, longest, plan adherence, time, total TSS), Phase Timeline, per-discipline CTL chart, and a unified Weekly load (TSS) chart with Total + Swim/Bike/Run lines. Both charts walk archived `previousPlanWks` so the x-axis aligns. Per-discipline weekly km charts were removed as redundant (TSS already covers load); the Recent weeks drill-down keeps a per-week list of done vs planned hours / sessions / TSS.
 **Key files**: `src/ui/triathlon/plan-view.ts`, `src/ui/triathlon/home-view.ts`, `src/ui/triathlon/stats-view.ts`, `src/ui/triathlon/fitness-detail-view.ts`, `src/ui/triathlon/progress-detail-view.ts`, `src/ui/triathlon/benchmark-charts.ts`, `src/ui/triathlon/tab-bar.ts`, `src/ui/triathlon/workout-card.ts`, `src/ui/triathlon/race-forecast-card.ts`, `src/ui/triathlon/colours.ts`, `src/calculations/plan-adherence.triathlon.ts`
+**Tests**: — (UI) ⚠️ Manual test only
+
+### T8a. Triathlon forecast fingerprint (chip-based factor view)
+**What it does**: Six factor chips beneath the predicted finish time on the triathlon forecast page — parity with running's `forecast-fingerprint`. Chips: **You** (tier + PBs across swim/bike/run + race history), **Capacity** (current CSS · FTP · VDOT; race-day projection lives in drill-down), **Response** (per-discipline adaptation ratios + race-readiness scores + signals feeding the model), **Training** (planned sessions/hours per discipline + per-discipline confidence), **Venue** (course factors aggregated per leg with factor bars and source caption), **Race-day** (transitions, durability vs threshold per discipline, OW swim count). Tap any chip to open a full-page drill-down with per-discipline rows, sparklines for CSS/FTP/VDOT history, factor breakdown bars, and a "missing factors lower confidence" caption when not enough data is present. Per-leg breakdown (swim/bike/run gaps vs today) stays on the main card; projected-fitness-markers and course-factors panels have moved off the main card into their respective drill-downs.
+**Key files**: `src/ui/triathlon/race-forecast-fingerprint.ts` (chip builders + wire), `src/ui/triathlon/forecast-chip-detail-view.ts` (6 drill-down pages), wired from `src/ui/triathlon/race-forecast-card.ts` + `src/ui/triathlon/forecast-view.ts`
 **Tests**: — (UI) ⚠️ Manual test only
 
 ### T9. Benchmark test prompts + confidence-tiered estimators + auto-detection
@@ -248,10 +320,12 @@ The blended prediction (`refreshBlendedFitness`) combines Tanda (2011) marathon 
 
 **Course-factor adjustment** (added 2026-05-05): when the user has selected a known race, the predictor layers race-specific factors on top of the raw VDOT prediction — climate (Ely 2007), altitude (Bonetti 2009), and elevation gain (Minetti 2002). The adjusted finish becomes the headline number; the raw fitness pace and per-factor delta are shown beneath. Pre-loaded course profiles cover Berlin, Boston, NYC, Chicago, London, Tokyo, Paris and 18+ other major marathons / 17 halfs (`src/data/marathon-course-profiles.ts`). `s.forecastTimeAdjusted` and `s.forecastCourseFactors` populate alongside `s.forecastTime`.
 
-Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode only): distance label, predicted finish time (course-adjusted when applicable), target time, and signed delta vs target. Tap opens the full-page forecast view. (2) **Race forecast full-page** (`src/ui/race-forecast-view.ts`): hero ring, Started/Now/Forecast stat row, course-factors panel with itemised breakdown (Berlin → "Climate cool: −0s, Elevation +60m: +12s"), line chart of race-time progression with dashed projection. (3) **Plan race-prediction row** shows Initial · Forecast with the signed delta subline. (4) **Stats race-estimate table** repeats the signed delta inline.
+Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode only): distance label, predicted finish time (course-adjusted when applicable), target time, and signed delta vs target. Tap opens the full-page forecast view. (2) **Race forecast full-page** (`src/ui/race-forecast-view.ts`): hero ring, Started/Now/Forecast stat row, "Where you sit" population card, **forecast fingerprint card** — 5 glass chips in a row (You / Capacity / Response / Training / Venue) showing how each factor cluster feeds the prediction. Training chip uses real `garminActuals` km (4-week trailing average) with `detectedWeeklyKm` as pre-plan fallback — never the runs-per-week lookup. Response chip is gated on ≥ 4 vdotHistory samples and shows "Building signal" below that. **Every chip is tappable and opens a full detail page** (`src/ui/forecast-chip-detail-view.ts`, added 2026-05-19) — tab-style chrome with back button, sky atmosphere, sun glint, and a visual-first body (VDOT sparkline on Capacity, VDOT history chart + adaptation bar on Response, 8-week km bar chart on Training, per-factor bars on Venue, PB list on You). Below the fingerprint: course-factors panel with itemised breakdown (Berlin → "Climate cool: −0s, Elevation +60m: +12s"), line chart of race-time progression with dashed projection. (3) **Plan race-prediction row** shows Initial · Forecast with the signed delta subline. (4) **Stats race-estimate table** repeats the signed delta inline.
 
-**Key files**: `src/calculations/predictions.ts`, `src/calculations/course-factors-running.ts`, `src/data/marathon-course-profiles.ts`, `src/calculations/blended-fitness.ts`, `src/calculations/effective-vdot.ts`, `src/ui/race-forecast-view.ts`, `src/ui/home-view.ts` (`buildRaceForecastCard`)
+**Key files**: `src/calculations/predictions.ts`, `src/calculations/course-factors-running.ts`, `src/data/marathon-course-profiles.ts`, `src/calculations/blended-fitness.ts`, `src/calculations/effective-vdot.ts`, `src/ui/race-forecast-view.ts`, `src/ui/race-forecast-fingerprint.ts`, `src/ui/forecast-chip-detail-view.ts`, `src/ui/marathon-population-card.ts`, `src/ui/home-view.ts` (`buildRaceForecastCard`)
 **Tests**: `src/calculations/predictions.test.ts`, `src/calculations/debug-prediction.test.ts`, `src/calculations/forecast-profiles.test.ts` — ✅ Passing (course-factors integration ⚠️ no unit tests yet)
+
+**Empirical population distributions (scaffolding added 2026-05-18, Phase 1 Wave 1)**: per-venue percentile tables for all 24 marathons + 18 halfs in the catalogue, plus per-distance aggregate fallback. Lookup helpers (`getMarathonFinishPercentile`) return `{fasterThanPct, source, provenance}` so the future UI surface (Phase 2) can render a "faster than X% of finishers at this venue" card with honest dataset attribution. Tables currently empty — populated via `node scripts/ingest-marathon-results.mjs <csv> <venue-id>` per Kaggle dataset; `isPopulationDataAvailable()` auto-derives from table contents. **Key files**: `src/data/marathon-population-distributions.ts`, `src/calculations/marathon-population.ts`, `scripts/ingest-marathon-results.mjs`. **Tests**: `src/calculations/marathon-population.test.ts` (17 tests, ✅). **Methodology**: `docs/SCIENCE_LOG.md §AF`.
 
 ---
 
@@ -332,6 +406,7 @@ Three surfaces expose the prediction. (1) **Home race-forecast card** (race mode
 - **Easy-pace commentary** (`daily-coach.ts → detectEasyDriftPattern`): when easy runs over the last 3 weeks drift >5% on average, the week debrief adds a note that easy pace may be too close to aerobic threshold.
 - **Aerobic Durability chart** (`stats-view.ts → buildDurabilityChart`): Stats → Progress card showing drift over last 12 weeks (easy/long only) with 4-session rolling mean and threshold bands.
 - **Marathon fade-risk badge** (`stats-view.ts → computeMarathonFadeRisk`): Race Estimates card pill on the Marathon row — Low/Moderate/High based on long-run drift at goal MP.
+- **Running Stats page** (2026-05-20 rebuild, `stats-view.ts → buildStatsSummary`): mirrors triathlon's pattern. **Your numbers card**: VDOT / LT pace / Threshold HR (as %max HR) / Cardiac ceiling as position bars with tap-through (`buildYourNumbersCard_Running`). **Training Paces 2×2 grid** below it. **Progress section**: Recent weeks aggregate card (8w km/sessions/time/TSS, taps to detail), range toggle (8w/16w/All/Forecast) driving inline CTL / weekly TSS / weekly km line charts, phase timeline. Race-estimates card removed (lives on Forecast). ✅ Tested.
 
 **Tone**: Direct, coaching voice. Not robotic, not sycophantic. Praises good execution, flags issues with actionable context ("consider starting more conservatively"), explains how the plan adapts.
 
@@ -498,11 +573,20 @@ Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014
 
 ---
 
-### 13. Commute Runs
-**What it does**: Lets you log daily commute runs or cycles. These count toward your weekly load so the plan doesn't overload you on days when you're already moving.
+### 13. Run to Work (Commute)
+**What it does**: A complete end-to-end commute model. Captured at onboarding (running, triathlon, HYROX) and editable from Account → Run to work. Drives the plan engine, the load model, and a self-tuning baseline.
 
-**Key file**: `src/workouts/generator.ts` (commute section)
-**Tests**: `src/workouts/commute.test.ts` — ✅ Passing
+- **Capture**: one-way distance, bidirectional?, days/week, optional backpack kg.
+- **Additive planning**: commute runs are appended on top of `runsPerWeek`, not substituted (revised 2026-05-20, see SCIENCE_LOG §AM). A user with 2 runs/week + 3 commutes gets the full prescribed plan (long + easy) plus 3 commute days. Mirrored across running, triathlon run leg, and HYROX easy-run filler.
+- **Bidirectional commutes emit two slots/day**: a 3 km × 2 round-trip day shows as `Commute 1 (morning)` and `Commute 1 (evening)`, both 3 km, both on the same weekday. Unidirectional commutes emit one slot per day.
+- **Alternating-day spacing**: scheduler prefers Mon/Wed/Fri for 3 commute days (Tue/Thu for 2, Mon/Tue/Thu/Fri for 4). Falls back to nearest free weekday if hard sessions collide.
+- **Per-activity tag**: a "Run to work" toggle on the activity-detail page lets users mark a synced run as a commute with a per-activity backpack override. Auto-tags when a synced actual matches a Commute plan slot.
+- **Load-carriage adjustment**: commute runs with a backpack apply a linear mass coefficient to musculoskeletal impact load (Signal C). Aerobic load (HR-based iTRIMP) is left alone since HR already captures the metabolic side. Coefficient: `(body + pack) / body`, clamped at 1.5.
+- **End-of-week drift learning**: at week rollover, if the user logs fewer commutes than declared for ≥3 of the last 4 weeks, the baseline auto-reduces to the median observed count.
+
+**Key files**: `src/ui/wizard/steps/commute.ts` (capture), `src/ui/account-view.ts` (Account row), `src/ui/activity-detail.ts` (per-activity tag), `src/workouts/generator.ts` (running, additive model), `src/workouts/plan_engine.triathlon.ts` (triathlon), `src/workouts/plan_engine.hyrox.ts` (HYROX), `src/workouts/scheduler.ts:preferredCommuteDays` (alternating-day spacing), `src/constants/load-carriage.ts` (backpack coefficient), `src/calculations/commute-drift.ts` (drift learning), `src/calculations/activity-matcher.ts:1351` (impact-load application + auto-tag), `src/types/state.ts:64` (CommuteConfig).
+**Science**: `docs/SCIENCE_LOG.md §AM` (current additive + bidirectional split model), `§AC` (superseded substitution model), `§AD` (load-carriage, Knapik + Quesada), `§AE` (drift learning rule).
+**Tests**: `src/workouts/commute.test.ts` (3) + `src/workouts/generator.test.ts` commute block (7) + `src/constants/load-carriage.test.ts` (9) + `src/calculations/commute-drift.test.ts` (9) = 28 tests. — ✅ Passing. Wizard step + Account row + activity-detail toggle not yet unit-tested.
 
 ---
 
@@ -529,7 +613,46 @@ Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014
 ### 15. Injury System
 **What it does**: A six-phase clinical recovery system. When you report an injury, the plan shifts to: Acute (complete rest) → Rehab (cross-training only) → Capacity Test (assess readiness) → Return to Run (graduated running) → Graduated Return (2-week bridge) → Resolved (back to full plan). Pain levels you report drive phase transitions — high pain regresses you back.
 
-**Key file**: `src/injury/engine.ts`
+**Mode-aware capture (2026-05-26)**: The "Report injury" modal asks discipline-gate questions based on the active event mode:
+- **Running** → "Can you run?" only (existing behaviour)
+- **Triathlon** → "Can you run?" + "Can you bike?" + "Can you swim?"
+- **HYROX** → "Can you run?" + "Upper-body load?" (wall ball / sandbag / carries / burpees) + "Lower-body load?" (sled / lunges)
+- **Cycling-only** → "Can you bike?"
+Each gate is tri-state (Yes / With pain / No). The body-part picker now includes upper-body locations (shoulder, upper arm, elbow, forearm, wrist, neck, chest/ribs). Defaults for every gate are computed from the selected body part (heuristic table in `src/ui/injury/modal.ts:LOCATION_GATE_DEFAULTS`) so a shoulder injury pre-selects `canSwim='no'` and `canBike='limited'` without forcing the user to opt-out of every discipline manually. The "Preferred rehab activity" dropdown hides any discipline the user just said `no` to.
+
+**Continuous capacity sliders (2026-05-27, supersedes the tri-state gates above)**: each discipline now captures a 0–100 capacity instead of three buckets, so "light swimming OK" and "no swimming" are distinct rather than both reading as `limited`. `InjuryState` carries optional `runCapacity` / `bikeCapacity` / `swimCapacity` / `upperLoadCapacity` / `lowerLoadCapacity` numbers; the modal renders a slider per relevant discipline with a plain-language caption (`Cannot run` / `Very limited` / `Reduced` / `Slightly reduced` / `Full`, `src/ui/injury/modal.ts:capacityCaption`). `LOCATION_CAPACITY_DEFAULTS` (`src/injury/engine.ts`, the canonical physio map shared with the plan engines) seeds values per body part. `getDisciplineCapacity(injuryState, key)` (`src/injury/engine.ts`) is the single read path and maps the legacy enum gates (`no→0`, `limited→50`, `yes→100`) so older state still works. Plan downmix is continuous (`duration × cap/100`).
+
+**Plan adaptation per capacity**: Triathlon and HYROX plan engines read `getDisciplineCapacity` per discipline (`plan_engine.triathlon.ts:424`, `plan_engine.hyrox.ts:406`):
+- Triathlon (`src/workouts/plan_engine.triathlon.ts:applyTriInjuryGates`) — `no` drops the discipline entirely; `limited` collapses it to one easy/recovery session that preserves the modality; brick is dropped whenever either leg is gated.
+- HYROX (`src/workouts/plan_engine.hyrox.ts:applyHyroxInjuryGates`) — classifies workouts by `t` prefix; `canRun` gates runs and commute runs, `canUpperLoad`/`canLowerLoad` gate stations (coarse since stations are mixed — per-component station gating is future work), `canRun` + upper + lower together gate bricks. Generator versions bumped (`TRI_GENERATOR_VERSION = 12`, `HYROX_GENERATOR_VERSION = 10`) so existing plans regenerate on launch.
+
+**Region-aware strength during injury (2026-05-27, ISSUE-249)**: the strength session now adapts to the *injured body part*, not just whichever capacity slider the mode happens to show. Shared decision in `src/workouts/injury-strength.ts:injuryStrengthDecision`, driven by `bodyRegionLoadability` over the canonical location map:
+- **Leg injury** (knee / hamstring / hip / foot / calf) → upper-body + core strength; lower-body loading paused.
+- **Upper-body injury** (shoulder / arm / wrist / elbow) → lower-body + core strength; upper-body loading paused.
+- **Trunk injury** (back / neck / chest-ribs) → core anti-rotation/plank work dropped (contraindicated); a both-regions-blocked location (back) pauses loaded strength entirely.
+- **Relative rest is region-specific**: every active phase (including acute) loads the unaffected region — only the injured region is withheld. The acute phase is kept lightest (RPE 3); a shoulder injury keeps legs training from day one (PEACE & LOVE, Dubois & Esculier 2020). Loads stay submaximal (RPE ≤ 5) and pain-gated, normalising once resolved.
+- **Exercise-level tailoring**: each exercise is tagged with the body areas it loads, and any exercise touching the injured area is excluded (`LOCATION_AVOID`). A shoulder injury keeps shoulder-free leg work (bodyweight squat, lunge, step-up) and shoulder-free core (dead bug, hollow hold), and drops planks, side planks, pallof press, goblet squats and glute bridges. A wrist injury drops loaded grip and weight-bearing-hand moves.
+- **Card UX (tri)**: strength cards show the session name + "N exercises · tap to view"; the per-exercise breakdown renders as clean rows (sets + name, then cue/rest) in the tap detail modal, modeled on the HYROX workout card. Running mode keeps its existing expand-chevron card (follow-up).
+This fixes a bug where an injured **triathlete** still saw the full 45-min full-body session in the plan and the coach (it was gated only on `upperLoadCapacity <= 0`, a slider the tri modal never shows). **Running** uses the same shared builder (replacing the old "drop everything in acute/rehab" rule), and ~27 `generateWeekWorkouts` display call sites now pass `s.injuryState` so the plan view and AI coach match the load engine. Science in `SCIENCE_LOG.md → §AN`. Tests: `injury-strength.test.ts`, `gym.test.ts`. **Status: ⚠️ not device-verified.**
+
+**Per-discipline recovery windows + injury-aware projection (2026-05-27, ISSUE-247)**: each restricted discipline (capacity < 100) captures a "Back to full in N weeks" estimate in the injury modal, seeded from the protocol's `typicalRecoveryWeeks` midpoint (real clinical ranges) and adjustable per sport. Stored on `InjuryState.resumeWeeksByDiscipline`. This fixes a bug where an injured 70.3 forecast showed only ~6 min of improvement: the plan engine had zeroed swim/run for the *entire* macrocycle and the predictor extrapolated that, modelling a 2-week injury as a 15-week one. Now:
+- **Plan** (`applyTriInjuryGates`): a discipline returns to full once the generated week reaches its resume week. Legacy injuries with no captured window keep the conservative freeze.
+- **Forecast** (`predictTriathlonRace`): each discipline loses only its own recovery weeks of build time; the projected dose is sampled from after recovery. Bike (unrestricted) is unaffected. A caption on the forecast card explains the result ("Injury factored in. Swim and run resume in 2 weeks…"). Science in `SCIENCE_LOG.md → §AM`. **Status: ⚠️ not device-verified.**
+
+**Per-discipline return ramps (2026-05-26, Session 2)**: when a previously-blocked discipline (`canSwim`/`canBike`/`canRun`/`canUpperLoad`/`canLowerLoad`) transitions from `no` or `limited` to `yes`, the plan engine applies a 2-week downmix to that discipline before resuming full volume:
+- Hard sessions (intervals / threshold / vo2 / sweet-spot etc.) become easy with RPE capped at 4; TSS load fields (aerobic / anaerobic) stripped so weekly TSS and ACWR math respect the ramp.
+- Bricks are dropped while any constituent discipline is ramping.
+- Sport-prefix preserved on downmixed types (`bike_threshold` → `bike_endurance`) so matcher / UI continue to classify the sport correctly.
+- HYROX coarse: any `canUpperLoad` or `canLowerLoad` transition triggers a single `stations` ramp that suppresses `hyrox_station_density` → `hyrox_station_technique`.
+- Week-aware: `weeksFromCurrent` parameter on `applyTriInjuryGates` / `applyHyroxInjuryGates` checks the ramp window per future week. A 2-week ramp at week 5 affects weeks 5–6 only.
+- Counter decrements on every week-advance (in `welcome-back.ts:advanceWeekToToday` and `events.ts:next()`); cleared on `markAsRecovered`, fresh-injury reset, and mode switch via `clearStaleGatesForMode`.
+- Banner surfaces "Returning: bike (2w left)"; LLM coach payload includes `returnRampWeeksLeft` so the agent can suggest discipline-appropriate effort caps.
+
+**Injury surfacing on Home + Readiness (2026-05-28, supersedes the earlier note/chip)**: the standalone injury chip/banner is removed from both Home and Readiness. Injury context is now folded into the readiness caption itself via `buildInjuryCaption(s)` (`src/ui/injury/modal.ts`, exported), which returns a one-sentence summary like "Running and swimming blocked by injury. Cycling capped at 40%." prepended to whatever readiness sentence the surface would have shown. Same caption on both surfaces, so the user reads the dominant constraint before any systemic commentary (HRV, sleep, load). Mode-aware via the shared `DisciplineKey` lookup (HYROX run/upper-body work/lower-body work, tri/running run/bike/swim). The full management banner (phase, pain, Update/Recovered buttons) still lives only on the Plan tab.
+
+**Discipline Readiness flags blocked state (2026-05-28)**: the tri-mode Discipline Readiness card's `makeBar` (`src/ui/readiness-view.ts:535`) now takes a capacity argument. Blocked disciplines (cap=0) hide the numeric score, render "Blocked" in `var(--c-warn)`, and fill the bar full-width at 45% opacity — a hard-stop signal rather than a recovery state. Reduced disciplines (0<cap<100) keep their score + readiness label but append "· capped X%" so the constraint is visible inline. Fixes the case where Run showed "52 Manage" alongside an injury that blocked running.
+
+**Key files**: `src/injury/engine.ts` (`getDisciplineCapacity`), `src/ui/injury/modal.ts` (`capacityCaption`, `LOCATION_CAPACITY_DEFAULTS`, `buildInjuryCaption`), `src/types/injury.ts` (added `runCapacity`/`bikeCapacity`/`swimCapacity`/`upperLoadCapacity`/`lowerLoadCapacity`/`canBike`/`canSwim`/`canUpperLoad`/`canLowerLoad`/`returnRampWeeksLeft` optional fields), `src/constants/injury-protocols.ts` (`getActivityGateLevel`/`isActivityAllowedForUser`)
 **Tests**: `src/injury/engine.test.ts` — ✅ Passing
 
 **Plan tab UI** (in `src/ui/plan-view.ts`):
@@ -540,12 +663,22 @@ Science basis: Bompa & Buzzichelli 2018, Pfitzinger & Douglas 2009, Daniels 2014
 
 ---
 
-### 15b. Illness Mode
-**What it does**: When the user reports illness via the check-in overlay, an `illnessState` is saved to state. An amber banner appears on both the Home and Plan tabs showing day count, severity ("Still running" / "Full rest"), and reassurance that skipped workouts won't count against adherence. The plan itself is not mutated — the user continues to drag/skip workouts as normal. Illness clears when the user taps "Mark as recovered" / "Recovered". During an active illness week, the VDOT week-advance adherence multiplier is bypassed (treated as 100%) so skipped runs don't compound with reduced training load.
+### 15b. Illness Mode (v2 — schedule-driven, 2026-05-13)
+**What it does**: When the user opens the Ill modal from the check-in overlay, a structured form captures: illness type (flu/chest, head cold, GI, other), symptoms (multi-select), severity 1–10, day of symptoms (1–2 / 3–5 / 6+), today's capacity (easy only / walks / rest), and RHR delta vs 28d baseline (auto-filled from `s.physiologyHistory` when ≥5 baseline days exist; manual override available). Inputs feed `classifyIllness()` which derives a four-axis Classification (neckRule above/below, severityTier mild/moderate/severe, hasSystemic, rhrFlag normal/elevated/high) per the Friman/Schwellnus above-below neck rule. `buildSchedule()` then produces a forward-looking schedule of day-by-day plan modifications:
+- **Below-neck**: full rest for the acute window (7 days standard, 10 with systemic symptoms: fever or body aches), then graded return at 50%→70%→85%→100% volume.
+- **Above-neck**: easy effort only at reduced volume (85% mild, 70% moderate, 60% severe) for the acute window; RHR ≥+10 bpm forces day 0 to rest.
+- Day-of-symptoms shifts the schedule forward (a user reporting on day 4 doesn't get day-0 mods).
 
-**Key files**: `src/ui/illness-modal.ts` (modal + clearIllness), `src/ui/plan-view.ts` (buildIllnessBanner), `src/ui/home-view.ts` (buildIllnessBanner), `src/ui/checkin-overlay.ts` (wires Ill button), `src/ui/events.ts` (adherence gate), `src/types/state.ts` (illnessState field)
-**State**: `illnessState: { startDate, severity: 'light'|'resting', active: boolean }`
-**Tests**: ❌ None yet
+`applyIllnessMods` reads today's schedule entry and applies modifications: `rest` capacity replaces all sport workouts (run, bike, swim, strength) with rest; `easy_only` downgrades quality runs to easy and scales volume; `reduced` scales volume with an intensity ceiling. Below-neck classification suppresses strength sessions across the schedule (viral myocarditis risk). Mode-aware: same schedule applies across run/triathlon/cycling/hyrox, with workout kind classification (`run | bike | swim | strength | rest_like | other`) controlling per-discipline behaviour.
+
+The banner on Home and Plan shows today's capacity ("Full rest", "Easy only", "Reduced", "Returning") with volume %, day number, and the "Recovered" CTA. A live "Mosaic's response" preview in the modal shows the classification + schedule summary before the user confirms. VDOT week-advance adherence multiplier is bypassed (treated as 100%) while `illnessState.active` is true.
+
+Legacy `illnessState` shapes (just `severity: 'light'|'resting'`) continue to work via a fallback path in `applyIllnessMods`.
+
+**Key files**: `src/calculations/illness-rules.ts` (classifyIllness, buildSchedule, getTodayCapacity, summariseSchedule, shouldSuppressStrength), `src/ui/illness-modal.ts` (form + applyIllnessMods + clearIllness), `src/ui/plan-view.ts` + `src/ui/home-view.ts` (capacity-aware banners), `src/calculations/daily-coach.ts` (stance derived from today's capacity), `src/types/state.ts` (illnessState v2 fields)
+**State (v2)**: `illnessState: { startDate, onsetDate?, severity, active, classification?, schedule?, symptoms?, illnessType?, severity1to10?, dayOfSymptoms?, userCapacityOverride?, rhrDeltaBpm?, rhrSource?, resolvedDate? }` — `startDate` is the current schedule anchor (rolls forward on re-report); `onsetDate` is the original first-report date (preserved across re-reports for "Day N" display).
+**Science**: Friman & Wesslén — above/below neck rule. Schwellnus 2016 — return-to-train after viral illness. Hellard 2015 — RHR delta as objective severity marker. Full rationale + honest sourcing in `docs/SCIENCE_LOG.md §AB`.
+**Tests**: ✅ `src/calculations/illness-rules.test.ts` — 26 cases covering classification (above/below neck derivation, systemic override, RHR flags, severity tiers), schedule shapes per branch, `dayOfSymptoms` shift, `getTodayCapacity` bounds, `summariseSchedule`, helpers. ✅ `daily-coach.test.ts` legacy + v2 paths.
 
 ---
 
@@ -671,6 +804,34 @@ The model fits one parameter: `k_user × TSS / ctlDaily × recoveryMult × recov
 
 ---
 
+### 17a. Double-Day Compounding (2026-05-19) ✅
+
+**What it does**: When the athlete logs two or more activities on the same calendar day (each ≥20 min), the day-level Signal B aggregate gets a gap-scaled compounding bonus on the 2nd+ session's raw TSS. Two same-day sessions cost more recovery than the same total TSS spread across two days, so the day total reflects that.
+
+**Multiplier bands** (`src/calculations/double-day.ts:doubleDayGapMultiplier`):
+- <2h gap → ×1.20 on 2nd+ session
+- 2–6h → ×1.15
+- 6–12h → ×1.10
+- ≥12h → ×1.05
+
+**Gating**:
+- Sessions <20 min ignored (filters short accessory work).
+- Planned bricks (`brick`, `hyrox_brick`, `hyrox_mini_brick` on the same day) suppress the bonus — these have their own science.
+- Unplanned bike→run within 30 min collapses to a single virtual session via `brick-detector`, so a transition run doesn't double-penalise.
+
+**Where it applies**:
+- `computeWeekRawTSS` — feeds ACWR, weekly raw TSS charts, fitness curves.
+- `computeTodaySignalBTSS` — feeds the live Strain Score on Home.
+- Per-activity TSS in Activity Review stays raw. The bonus is a *day-level recovery debt*, not a per-session intensity adjustment.
+
+**UI surface** (running, triathlon, and HYROX plan-views):
+- "Double day · +N TSS" pill on the day separator (bordered, no fill, muted text).
+- "2nd session today. Day load adjusted." caption under the secondary activity's match row (running) or unplanned card (tri/hyrox).
+
+**Tests**: 16 unit tests in `src/calculations/double-day.test.ts` covering gap bands, ≥20 min gate, brick suppression, unplanned brick collapse, and multi-day weekly sums.
+
+**Science**: full rationale + literature in `docs/SCIENCE_LOG.md §AJ`.
+
 ### 17. Universal Load Model
 **What it does**: Converts any cross-training activity (swimming, cycling, rugby, padel, etc.) into a "load" number comparable to running load. Four tiers of accuracy:
 - **Tier A+** (iTRIMP, 0.95 confidence): Second-by-second HR stream via Strava API. Uses Individual TRIMP — Banister/Morton model with Heart Rate Reserve fraction and sex-specific β coefficient.
@@ -700,7 +861,7 @@ The model fits one parameter: `k_user × TSS / ctlDaily × recoveryMult × recov
 
 **Zone-profile matching (Phase B v3)**: `buildCandidates()` now uses `classifyWorkoutType()` to improve candidate ranking by intensity zone profile. A football session classified as "threshold" will rank your threshold run as a better candidate than your easy run, even if raw load similarity is similar. Scoring: +0.20 for zone profile match, −0.10 for opposite ends (e.g. vo2 activity vs easy run). Falls back to load-only ranking when no iTRIMP or HR data is available.
 
-**Load modal**: Shows runner-type context, equivalent easy km badge, data tier badge ("HR Stream" / "Garmin" / "HR Zones" / "Estimated"), aerobic/anaerobic percentage split, and leg impact label (No / Low / Moderate / High).
+**Load modal (rewritten 2026-05-18)**: Quieter glass surface (white 0.78 + blur(16px)), no severity-coloured backdrop, no decorative icons, no sport emoji. Two non-neutral colours total — `var(--c-warn)` and `var(--c-caution)` appear only as a 3px left-accent on the ACWR explainer when relevant. Stacked glass option buttons (Replace and reduce / Reduce / Push to next week / Keep plan) with a muted "Recommended for this week." caption under whichever the model suggests, instead of coloured pill badges. Edge-case panel (already-completed match, no matching run) uses the same glass treatment. Sport label sourced from `SPORT_LABELS`. Optional ACWR context block surfaces the 5-rule plain-language advice (cross-training cause / km spike / consecutive intensity weeks) with a "See details" disclosure for the raw ratio numbers.
 
 **How to test manually**: Log a high-intensity cross-training activity (e.g. 60min interval cycling with HR data). In the suggestion popup, check that the quality run (threshold/VO2) is ranked above easy runs in the candidate list. Console shows `[CrossTraining] Zone classification: ...` and the candidate similarity scores.
 
@@ -847,6 +1008,16 @@ distance reduction formula; Load Budget integration tests (per LOAD_BUDGET_SPEC 
 
 ---
 
+### 20b. Guided Strength Session (mode-agnostic)
+**What it does**: Tap "Start session" on any strength workout (tri or running, gym-type) to launch a full-screen guided flow. Walks you exercise by exercise: big elapsed timer, current exercise with `sets×reps` and the feel cue, an "Up next" list, and a "Complete set" button. Tap it → auto rest countdown starts (skip or +30s), then auto-advances to the next set. Voice + haptic cues by default ("Next: Band Pull-Apart", buzz at rest-end), mute toggle in-session. Finish → duration summary + 1-tap RPE (1–10) → logs the session done (`wk.rated[id] = rpe`), clears "Missed".
+
+**Key files**: `src/guided/strength-model.ts` (parser), `src/guided/strength-controller.ts` (wall-clock state machine), `src/guided/strength-complete.ts` (mode-agnostic completion), `src/ui/guided-strength-overlay.ts` (overlay UI). Entry: `src/ui/triathlon/workout-detail-modal.ts` (tri), `src/ui/plan-view.ts` (running).
+**Tests**: `src/guided/strength-model.test.ts` (9), `src/guided/strength-controller.test.ts` (10) — ✅ Passing.
+
+Reuses the existing `VoiceCoach` and `keep-awake` primitives so cues and screen-on behave the same as for guided runs. Wall-clock + tap driven, not GPS-tick driven (strength has no pace/distance). Live BLE heart rate is out of scope; HR attaches post-hoc when a wearable strength activity syncs.
+
+**HYROX support (2026-05-28)**: the same overlay powers HYROX station and brick workouts via an adapter (`parseHyroxSession`) that maps each `hyroxComponent` (station or run) to one `GuidedSet` with `setCount=1`. 8 HYROX stations render as 8 rings each filling 1/1 when done; restless between components (HYROX is continuous in a race). Station names + race-standard targets come from `STATION_DISPLAY` (e.g. "Wall Balls · 100 reps"); run components show their distance ("1 km"). The position counter switches to "Station X of Y" when every step is a one-shot. Entry from `src/ui/hyrox/workout-detail-modal.ts`. GPS-driven guided run *during* HYROX run components (reusing the run-guidance engine for sub-segments) and per-rep counters / per-station benchmark comparisons remain follow-ups.
+
 ### 20a. Guided Runs (phone coaching)
 **What it does**: Voice and haptic coaching during a tracked structured run. Parses the workout into a step timeline (warm-up, work reps, recovery, cool-down), drives it forward from tracker ticks, and speaks cues: "Go. Threshold rep 1 of 5. 3 minutes at 4:15 per kilometre." Per-km splits are announced on paced work ("Kilometre 3. 4:15. On pace." / "… 7 seconds fast. Ease this one." / "… 7 seconds behind target."). A vertically centred rest overlay shows a big countdown, the next rep preview, and +30s / Skip rest buttons. Off by default; toggled in Account → Preferences.
 
@@ -924,9 +1095,13 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **Garmin-only path** (`!s.stravaConnected`, physiology source `'garmin'`): `syncActivities()` → `sync-activities` Edge Function (28-day lookback). Activities arrive via Garmin Health API webhook → Supabase `garmin_activities` table.
 
-**Apple Watch activity path** ✅: `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` on-device (iOS native only; no-op on web). Workout IDs namespaced as `"apple-…"` to prevent dedup collisions. **First connection runs a 16-week backfill** (`appleHistoryFetched` flag-gated; subsequent launches use a 14-day incremental window). Per-workout HR-stream enrichment (`Health.readSamples({ dataType: 'heartRate' })` inside each workout's window) computes `avg_hr`, `max_hr`, iTRIMP, and zone seconds — concurrency capped at 4, sample limit 6000. maxHR resolves via `s.maxHR > Tanaka(208 − 0.7×age) > null`. Weekly aggregation mirrors `fetchStravaHistory`: writes `historicWeeklyTSS`, `historicWeeklyRawTSS`, `historicWeeklyKm`, `historicWeeklyZones`, `ctlBaseline`, `signalBBaseline`, `detectedWeeklyKm`, and `athleteTier` so the plan engine, ACWR baseline, and athlete tier all work for an Apple-only user. Heavy backfill is **deferred to the review wizard step** so it runs after the user's age has been entered in about-you (otherwise iTRIMP integration has no maxHR fallback). Plugin limitations not addressable: no GPS polyline, no per-km splits, no `best_efforts` for PB auto-fill (manual entry path used instead).
+**Apple Watch activity path** ✅: `syncAppleHealth()` → `@capgo/capacitor-health` → `Health.queryWorkouts()` on-device (iOS native only; no-op on web). Workout IDs namespaced as `"apple-…"` to prevent dedup collisions. **First connection runs a 52-week HR-enriched backfill** (`appleHistoryFetched` flag-gated; subsequent launches use a 14-day incremental window). After the standard backfill, `syncAppleHealthDeepHistory()` runs once per install to walk HealthKit back in 1-year chunks to a 5-year cap (no HR enrichment — metadata only for PB surfacing), guarded by `appleDeepHistoryFetched`. Per-workout HR-stream enrichment (`Health.readSamples({ dataType: 'heartRate' })` inside each workout's window) computes `avg_hr`, `max_hr`, iTRIMP, and zone seconds — concurrency capped at 4, sample limit 6000. maxHR resolves via `s.maxHR > Tanaka(208 − 0.7×age) > null`. Weekly aggregation mirrors `fetchStravaHistory`: writes `historicWeeklyTSS`, `historicWeeklyRawTSS`, `historicWeeklyKm`, `historicWeeklyZones`, `ctlBaseline`, `signalBBaseline`, `detectedWeeklyKm`, and `athleteTier` so the plan engine, ACWR baseline, and athlete tier all work for an Apple-only user. Heavy backfill is **deferred to the review wizard step** so it runs after the user's age has been entered in about-you (otherwise iTRIMP integration has no maxHR fallback). Plugin limitations not addressable: no GPS polyline, no per-km splits, no `best_efforts` for PB auto-fill (manual entry path used instead).
+
+**Apple Watch live sync** ✅: `subscribeToWorkoutObserver()` → `HealthExtras.startWorkoutObserver()` registers an `HKObserverQuery` for `HKWorkoutType` and calls `enableBackgroundDelivery(.workoutType, .immediate)`. When any app (Apple Watch, Strava-to-Health, Garmin Connect-to-Health, Nike Run Club, etc.) writes an HKWorkout to HealthKit, iOS wakes Mosaic (even when force-quit). The Swift handler uses an `HKAnchoredObjectQuery` against a persisted `HKQueryAnchor` (in `UserDefaults`) to fetch only the new samples, then emits a `workoutDidArrive` event. JS subscriber debounces 5s and triggers `syncAppleHealth()` — workout is matched and the plan adapts before the user opens the app. Requires `com.apple.developer.healthkit.background-delivery` entitlement.
 
 **Apple Watch physiology path** ✅: `syncAppleHealthPhysiology()` → `@capgo/capacitor-health` → `Health.readSamples()` for sleep stages, HRV (SDNN), resting HR, steps. Converts to `PhysiologyDayEntry[]` and stores in `s.physiologyHistory`. Sleep score computed from stage breakdown (duration 55%, deep 25%, REM 20%). Runs on launch for Apple Watch users (both Apple-only and Strava+Apple Watch).
+
+**Apple Health as a supplementary physiology source** ✅ (2026-05-27): a Garmin user can additionally connect Apple Health so it gap-fills any night Garmin missed, without losing Garmin's native sleep score. `connectAppleHealth()` sets the device-local `s.appleHealthConnected` flag and only claims the labelled primary if nothing else holds it, so connecting never demotes Garmin. On launch `syncAllPhysiology()` (`main.ts`) runs Garmin first (wholesale write) then Apple last (merge that prefers existing Garmin values). Post-onboarding entry point: Account → Connected Apps → Apple Health row (iOS-only, mirrors the Strava-enrich row); triggers the HealthKit permission sheet and shows a Settings-path hint if the user denies the sleep/HR scopes. Garmin gives a validated sleep score; Apple's is reconstructed from stage durations, so Garmin stays primary by design.
 
 **Week filtering**: Only activities within the current plan week (`planStartDate + (w-1)*7` to `+7`) are presented. Cross-week bleed from re-syncs is suppressed.
 
@@ -951,6 +1126,56 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **Key files**: `src/data/activitySync.ts`, `src/data/stravaSync.ts`, `src/data/supabaseClient.ts`, `src/calculations/activity-matcher.ts`, `src/ui/activity-review.ts`, `src/ui/matching-screen.ts`, `src/ui/excess-load-card.ts`, `src/ui/toast.ts`, `supabase/functions/garmin-refresh-token/index.ts`
 **Tests**: `src/calculations/activity-matcher.test.ts` — ✅ Passing
+
+---
+
+### 23a. Single-file FIT / GPX / TCX Activity Import (STRAVALESS_PLAN.md §4)
+
+**What it does**: User exports a run or ride from Garmin Connect (or any device) as a FIT, GPX, or TCX file and imports it via Account > Advanced > "Import activity file". The file is parsed in-browser and flows through the exact same enrichment pipeline as Apple Health and Strava activities.
+
+**What it produces**: A fully enriched `GarminActivityRow` — iTRIMP, HR zones, polyline, km splits, best-efforts (for PB extraction), average/max watts, normalised power, mean-max power curve for cycling FTP estimation. The row is passed to `matchAndAutoComplete()` and assigned to plan slots like any other synced activity.
+
+**Parser coverage**:
+- **FIT** (binary): `fit-file-parser` npm package decodes records. Session message provides sport type, distance, and HR summary. Semicircle position fields converted to decimal degrees.
+- **GPX** (XML): pure-regex extractor, no DOMParser, works in Node + browser. Handles `<gpxtpx:hr>`, `<ns3:hr>`, `<hr>`, `<power>`, `<ns3:Watts>` namespace variants. Distance computed via haversine chain.
+- **TCX** (XML): same regex approach. Handles `<HeartRateBpm><Value>`, cumulative `<DistanceMeters>`, `<ns3:Watts>` power extension, `<Position>` lat/lng. Sport from `<Activity Sport="...">` attribute.
+
+**Enrichment shared module**: `src/data/activityEnrichment.ts` — canonical implementations of `computeHREnrichment`, `computePowerStats`, `computeNPAndPowerCurve`, `resolveMaxHR`. Both `fitImport.ts` and the future Garmin activityDetails parser (item A) must import from here so there is one implementation of these computations in the codebase.
+
+**ID prefix**: `import-` — distinct from `apple-`, `strava-`, `garmin-` so dedup keys never collide.
+
+**UI**: Two entry points, both via the shared `openImportActivityModal()` (`src/ui/import-activity-modal.ts`): Account > Advanced ("Import activity file"), and the onboarding data-source step ("Upload your runs", added 2026-05-28). The modal's `<input>` accepts `.fit,.gpx,.tcx,.zip` — a `.zip` routes to `importActivityArchive()` (full Strava/Garmin export) with live "Reading archive… 12/340" progress; a single file routes to `importActivityFile()`. On success the status line and a toast show the summary. No navigation away; view stays in place. An optional `onComplete` callback lets onboarding reveal Continue and surface the guest-sync nudge after an import.
+
+**Onboarding wiring (2026-05-28, updated same day)**: the data-source step ("Bring in your training history", `connect-strava.ts`) now opens with a watch-picker chip row — Apple Watch / Garmin / Coros / Polar+Suunto / Phone only / Other — and the lower section swaps to that watch's path. Apple Watch on iOS surfaces a one-tap `Connect Apple Health` (5y backfill silently); on web it shows an "iOS app only" note and an upload fallback. Garmin / Coros / Polar+Suunto each get a 3-step export guide with a hero screenshot slot (`/images/onboarding/{watch}-export.png`, silently hidden if missing) and the upload CTA. Phone-only shows "we'll track from here" + immediate Continue. Other keeps the screenshot + upload pair and houses the gated Strava CTA. Garmin OAuth (`GARMIN_CONNECT_ENABLED`) is a "Recovery data (optional)" sub-CTA inside the Garmin path. Default chip: Apple Watch on `isNativeiOS()`, Garmin elsewhere.
+
+**Reuse targets**: The `streamsToActivityRow()` function in `fitImport.ts` is the canonical mapping layer. Item A (Garmin activityDetails JSON parser) and item D (Strava archive ZIP) should produce `{ summary, records }` and call it directly.
+
+**Key files**: `src/data/fitImport.ts`, `src/data/activityEnrichment.ts`, `src/ui/import-activity-modal.ts`, `src/ui/account-view.ts`, `src/ui/wizard/steps/connect-strava.ts`
+**Tests**: `src/data/fitImport.test.ts` — ✅ 28/28 passing (mapFitSport, GPX parse, TCX parse, streamsToActivityRow mapping)
+
+---
+
+### 23b. Screenshot Activity Import (hybrid OCR → AI vision + optional HR chart)
+**What it does**: User screenshots a run summary from any activity app (Strava, Garmin Connect, Nike Run Club, Apple Fitness, Coros, etc.) and Mosaic reads the numbers off it. Distance, time, average pace, average / max HR, and per-km splits feed the same import pipeline as a FIT file (match + PBs + fitness refresh), minus the GPS track and per-second streams. An optional **second screenshot of the HR-over-time chart** adds per-minute HR — sampled by Claude vision and run through the same `computeHREnrichment` helper file imports use, so the run lands with real iTRIMP + HR zones rather than the coarse avgHR-only estimate.
+
+**Two-engine summary pipeline** — the verified parser core is `src/data/screenshotImport.ts` (`parseScreenshotText`, `parsedFromAIJson`, `parsedHrSeriesFromAIJson`, `screenshotActivityToRow`, `commitScreenshotActivity`). It is fed by two engines that converge on the same `ParsedScreenshotActivity` contract:
+1. **On-device Apple Vision OCR** (`ios-plugins/screenshot-ocr` Swift plugin, JS bridge `src/data/screenshotOcr.ts`). iOS-only, free, private. `VNRecognizeTextRequest` at `.accurate` with `usesLanguageCorrection` off. Observations are grouped into visual rows so splits-table cells reconstruct into parseable lines.
+2. **Cloud AI vision fallback** (`supabase/functions/screenshot-vision`, Claude `haiku-4-5` vision). Fires when OCR confidence is low, fields are missing, or there is no on-device engine (web). Returns the `ParsedScreenshotActivity` JSON shape. Hardened the same way as the coach edge functions: JWT auth, per-user daily cap (25/day, `screenshot_vision_usage` table + RPC), global $10/day spend cap (shared `llm_spend_tracker`), 2 MB payload cap, media_type allowlist (jpeg / png / webp / gif), restricted CORS, 20s timeout.
+
+**HR-chart mode** — the edge function gained a `mode: 'summary' | 'hr_chart'` field. The `hr_chart` system prompt asks Claude to read the HR-over-time chart's time + HR axes, sample the curve at roughly minute intervals, and return `{ hrSeries: [{tSec, hr}] }`. Output token budget bumped to 1500 (a 2-hour run can emit 120 points). The result feeds `screenshotActivityToRow` via an optional `ScreenshotEnrichmentContext` (resting HR / max HR / zones / sex from state), which runs the canonical `computeHREnrichment` — same helper used by FIT imports. Net effect: screenshot-sourced runs now compute load math at the same fidelity as file imports, just without the route map.
+
+**Hybrid orchestration**: `src/data/screenshotCapture.ts` runs OCR first; if `decideNeedsAI(parsed)` (confidence < high), it calls the AI fallback. `pickBetterParse` chooses the result with fewer missing fields, then higher confidence, then more splits — ties go to AI. Engines are injected so the orchestration is unit-testable without a device or a network. Cost-conscious: the AI call is skipped entirely when on-device OCR is sufficient; the client downscales screenshots to ~1280 px JPEG @ q=0.6 before sending so even degraded calls land in the cents-per-call range.
+
+**UI**: `openScreenshotImportModal()` (`src/ui/screenshot-import-modal.ts`) — three-step glass overlay modelled on `openImportActivityModal`. Step 1: image picker + two how-to collapsibles. Step 2: "Reading the screenshot…" while the hybrid runs. Step 3: confirm/edit screen showing the read-back summary (distance · time · pace · avg HR) plus editable fields (date, distance in km/mi per `unitPref`, duration mm:ss, avg HR). The confirm step also exposes an **optional "Add HR chart for per-minute detail" panel** with its own image picker — selecting a chart screenshot triggers the `hr_chart` edge-function call; the sampled series is stored in `activeHrSeries` and folded into the parsed activity at commit. Splits, max HR, and any avgPace the parser derived ride along unchanged. On confirm, runs `commitScreenshotActivity` and fires the optional `onComplete` callback (used by onboarding to reveal Continue + the guest-sync nudge).
+
+**Entry points**: Account > Advanced ("Add from screenshot", `#btn-import-screenshot`), and the onboarding data-source step (`#cs-screenshot`, promoted in 2026-05-28 to the primary CTA above Upload).
+
+**Limitations** — surfaced honestly on the modal: a screenshot carries no GPS track and no second-by-second HR/pace data, so the route map and detailed traces will not appear for the imported run. The HR-chart sample is approximate (Claude reads a chart visually, not at sensor fidelity), but iTRIMP integration is robust to small per-point error. The cloud reader requires a signed-in account (auth gate on the edge function); guests on web fall through to a blank confirm form they can fill manually.
+
+**Manual deploy steps**: (a) Xcode — `npx cap sync ios` then archive to pull in the new `MosaicScreenshotOCR` plugin. (b) Supabase — `supabase migration up` to apply `20260528000001_screenshot_vision_usage.sql`, then `supabase functions deploy screenshot-vision`.
+
+**Key files**: `src/data/screenshotImport.ts` (verified core, built 2026-05-27), `src/data/screenshotCapture.ts` (hybrid orchestration), `src/data/screenshotOcr.ts` (JS bridge), `ios-plugins/screenshot-ocr/` (native plugin), `supabase/functions/screenshot-vision/index.ts` (AI fallback), `supabase/migrations/20260528000001_screenshot_vision_usage.sql`, `src/ui/screenshot-import-modal.ts`, `src/ui/account-view.ts`, `src/ui/wizard/steps/connect-strava.ts`
+**Tests**: `src/data/screenshotImport.test.ts` — ✅ 21/21 passing (parser core + 4 `parsedHrSeriesFromAIJson` coercion tests + 3 `screenshotActivityToRow` enrichment-path tests covering hrSeries → computeHREnrichment, no-context fallback, too-short-series fallback); `src/data/screenshotCapture.test.ts` — ✅ 11/11 passing (decideNeedsAI, pickBetterParse, runHybridParse — high-conf skip / poor-OCR AI promotion / AI-fail retains OCR / empty-OCR web path / downscaled-image plumbing)
 
 ---
 
@@ -1169,6 +1394,7 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 - Sleep < 45 → score ≤ 59; Sleep < 60 → score ≤ 74
 - **Leg load >= 20** → score ≤ 54 (Manage Load — moderate eccentric/impact damage)
 - **Leg load >= 60** → score ≤ 34 (Ease Back — heavy EIMD, 72-96h recovery window)
+- **Strength sessions** contribute to leg load when the user taps the **Legs** chip on the activity-detail page (`none/moderate/heavy`). Moderate ≈ crossfit tier (0.15 load/min); heavy ≈ rowing tier (0.35 load/min) with a 1.20× half-life multiplier so a heavy squat day decays slower than the strength baseline. Untagged strength contributes 0 — the user is opt-in. Same surface lets the user tap an RPE chip to replace the (under-counting) HR-based strength TSS with a `durationMin × TL_PER_MIN[rpe] × runSpec` estimate. See `docs/SCIENCE_LOG.md §AG`.
 
 **Continuous penalties** (no step-jumps — score reflects degree, not threshold crossings):
 - **Strain 50–100%** → floor descends linearly 100→54 (approaching target)
@@ -1199,11 +1425,13 @@ Three trigger paths: user taps "Wrap up week" in the plan page, auto-trigger on 
 
 **Home layout (triangle)**: Readiness ring top-centre (120px, larger), Sleep + Strain rings side by side below (100px each). Tapping Readiness ring opens `readiness-view.ts`. Tapping Sleep opens `sleep-view.ts`. Tapping Strain opens `strain-view.ts`. The Freshness/Load Ratio/Recovery pill row has been moved off the home page into `readiness-view.ts`.
 
+**Drill-down affordance (added 2026-05-27)**: the whole readiness box carries a muted `›` chevron top-right and is itself tappable, landing on the Readiness detail page. The Sleep / Strain / Physiology sub-rings keep their own destinations (they `stopPropagation`); the box-level handler bails on the sub-rings, the Adjust button, and `#manual-sleep-card` so logging sleep never navigates away. The affordance mirrors the canonical drill-down chevron at `stats-view.ts:467`.
+
 **Adjust button**: Shown below the sentence when readiness ≤ 59 **and** the click handler has something to do. For most driving signals: ACWR caution/high, unspent cross-training load, or at least one unrated run anywhere in the remaining week (the future-week check is needed because plan-engine moves can slide a hard session into today). For `legLoad` specifically: the remaining-run check tightens to an unrated *hard* session (`isHardWorkout(w.t)`) so the button only shows when there's a real impact target to defer or downgrade — otherwise "Protect the legs" has nothing to act on. Hidden when no target. Text varies by driving signal (Adjust plan / Reduce session load / Take it lighter today / Protect the legs / Keep consistency).
 
 **Coach advisory note**: rendered when `coach.workoutMod === 'downgrade'` or `'skip'`. Strict advisory copy — no claim that a change has been made to the plan, since the workout description is unchanged. `'downgrade'` → *"Go easier today."*; `'skip'` → *"Consider rest today."*. On the Plan today-row the lead clause is followed by `coach.primaryMessage`. On the Home today card only the lead clause renders, because the readiness-ring card directly below already carries the full `primaryMessage` as its sentence — repeating it would be double messaging.
 
-**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active, including a leg-fatigue callout linking to the detail page when `hardFloor === 'legLoad'`), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home.
+**Readiness detail page** (`src/ui/readiness-view.ts`): Opens from the Readiness ring. Sky-gradient design (same as recovery-view). Shows composite ring at top (animated, dynamic colour), readiness sentence, driving factor callout (when a hard floor is active, including a leg-fatigue callout linking to the detail page when `hardFloor === 'legLoad'`), and sub-signal cards: Freshness (TSB daily-equivalent + zone + "to baseline" hours pill using stacked session recovery), Load Ratio (ACWR ratio + status + acute/chronic TSS breakdown, highlighted when driving), Recovery (score/100 + explanation + "View detail" link to recovery-view). Back button returns to home. **Drill-down affordance (added 2026-05-27)**: the `card()` builder takes a `drillable = true` flag — every navigable card (Strain, Freshness, Leg Fatigue, Load Ratio, Physiology, Sleep History) renders a muted `›` chevron top-right; the display-only Cross-Training Load card passes `drillable = false` (no chevron, no `cursor:pointer`).
 
 **Leg Fatigue** (card on Rolling Load, detail page): The mechanical/localised load signal, distinct from cardiovascular TSS. Cap and soft taper applied directly in `computeReadiness()`: `>= 60` → cap 34 (Ease Back), `>= 20` → cap 54 (Manage Load), linear soft taper across 10–20 so the threshold isn't a cliff. Always-visible card at the top of Rolling Load shows current decayed total, status (Fresh / Light / Moderate / Heavy), and a one-line interpretation. Tap opens the detail page.
 
@@ -1335,27 +1563,37 @@ Surfaces in the cumulative-debt card as two lines under the headline:
 
 ---
 
-## BYOK AI Coach
+## AI Coach v3 (Mosaic-paid, allowlist gated)
 
-**What it does**: Replaces the rules-based coach view with a Claude-powered coaching surface. On opening the Coach view, Claude reads 4 weeks of pacing history, readiness signals, and the current plan, then streams a 4-6 sentence coaching brief. Claude may propose concrete workout changes (swap/reduce/skip/intensity cap) that appear as Apply cards — the user must confirm before any state mutation. A chat input below allows follow-up questions within the session.
+**What it does**: A Haiku-powered coaching surface that reads the *full* training program (every plan week, this-week detail, 4 weeks of activity history, adaptation log, athlete priorities, persistent memory) and streams a 4–6 sentence coaching brief. The coach proposes concrete workout changes via six tools — `swap_workout`, `reduce_workout`, `skip_workout`, `adjust_intensity`, plus `remember` and `forget` for persistent memory. Every tool call renders an Apply card requiring user confirmation. The coach also surfaces proactive insights on the Home view when state-detected triggers fire (HRV crash, marker bump, race week).
 
-Users without an Anthropic API key see an improved rules-based brief ("classic mode") — not a degraded experience. API key setup is in Settings → AI Coach. Key is stored in iOS Keychain via @capacitor/preferences; never touches our servers beyond transit through the coach-chat edge function.
+**Access (pre-launch)**: Server-side UID allowlist via the `ALLOWED_USER_IDS` env var on the edge function. The client mirrors the allowlist (`src/coach/allowlist.ts`) so the right surface renders on launch without an extra round-trip. Non-allowlisted users see a rules-based brief plus an "AI Coach — coming soon" card. The allowlist is a placeholder for the Stripe `subscription_active` check that will replace it.
 
-**Modes**: Running mode and triathlon mode both supported. Tri context includes FTP/CSS/per-discipline CTL/ATL/TSB and race prediction. Running context includes VDOT/LT pace/8-week TSS/km splits.
+**Modes**: Running, triathlon, and HYROX all supported. Tri uses `triConfig` (FTP / CSS / per-discipline CTL). HYROX uses `hyroxConfig` + MTL (musculo-tendon load). Running uses VDOT / LT pace / 8-week TSS. All three modes converge on the same six-tool surface and shared memory.
 
-**Security**: Prompt sanitizer strips injection patterns from all user strings. Tool calls validated against plan state before Apply card renders. Key stored in Keychain; 20-message session cap; 30 calls/day rate limit.
+**Five v3 levers**:
+
+1. **Persistent memory** (`coachMemory.facts[]`, cap 15). The coach calls `remember` when the athlete states a preference / constraint / training history fact. `forget` removes facts. Memory persists across sessions and plan weeks.
+2. **Evals harness** (`src/coach/__tests__/eval-scenarios.test.ts`, 25 scenarios). Gated by `RUN_COACH_EVAL=1`; runs against live Haiku and asserts tool calls, refusals, evidence citation, confidence levels. Hard $1 cost ceiling.
+3. **Evidence + confidence**. Every claim must cite a number from context. Every assistant turn ends with `<confidence>high|medium|low</confidence>`, rendered as a small dot+label pill below the message.
+4. **Priorities weighting** (`coachPriorities`). Two-click flow on first open: priority (Hit the time / Just finish / Stay healthy / Have fun) × constraint (Time / Energy / Injury / None). Coach weights recommendations accordingly.
+5. **Proactive insight card** (`coachInsightQueue`). State-driven triggers (HRV crash, FTP bump >=5W, VDOT bump >=1pt, race week T-7) surface a tappable card on Home. Tap → Coach opens with the primer prefilled.
+
+**Security**: JWT auth on every call. Allowlist check before any Anthropic touch. Prompt sanitizer strips injection patterns from user strings. Tool calls validated against plan state before the Apply card renders. System prompt has hard refusal rules for medical/nutrition/technique/equipment/jailbreak. 30 calls/day per-user rate limit; $10/day global spend circuit breaker.
 
 **Key files**:
-- `src/coach/api-key-store.ts` — Keychain wrapper
+- `src/coach/allowlist.ts` — client-side UID allowlist (keep in sync with server env)
 - `src/coach/prompt-sanitizer.ts` — injection defence
-- `src/coach/coach-context-builder.ts` — state serialization for both modes
-- `src/coach/coach-tools.ts` — tool definitions, validation, state mutation
-- `src/coach/coach-chat-client.ts` — streaming SSE client
-- `supabase/functions/coach-chat/index.ts` — BYOK edge function (Sonnet 4.6)
-- `src/ui/coach-view.ts` — AI + classic mode views
-- `src/ui/account-view.ts` — AI Coach settings section
+- `src/coach/coach-context-builder.ts` — state serialization for running / tri / hyrox
+- `src/coach/coach-tools.ts` — six tool definitions, validation, state mutation, undo
+- `src/coach/coach-triggers.ts` — deterministic proactive trigger detector
+- `src/coach/coach-chat-client.ts` — streaming SSE client + system prompt builder
+- `supabase/functions/coach-chat/index.ts` — Mosaic-paid edge function (Haiku 4.5) with `force_tool_use` support
+- `src/ui/coach-view.ts` — AI mode UI: brief stream, chat thread, Apply cards, chip replies, intro overlay, priorities modal, confidence pill
+- `src/ui/home-view.ts` — `injectCoachInsightCard()` for proactive Home insight
+- `src/ui/triathlon/workout-card.ts` + `src/ui/hyrox/workout-card.ts` — "Coach" badge when `aiModifiedAt` set
 
-**Tests**: ⚠️ No automated tests (UI + network feature)
+**Tests**: ✅ 68 unit tests (`src/coach/__tests__/coach-tools.test.ts`, `coach-triggers.test.ts`, `coach-view-helpers.test.ts`). ✅ 25 live-API eval scenarios (gated). Run unit tests with `npm test`; run live evals with `npm run coach:eval`.
 
 ---
 
@@ -1365,7 +1603,7 @@ Collects anonymous safety scores from runners after each GPS-tracked run, to pow
 
 **What it does**:
 - After finishing a GPS-recorded outdoor run (>= 1km), the completion modal shows an optional safety slider (1–10, default N/A). RPE stays required; safety is skippable.
-- Imported Strava/Garmin runs show a "Rate this route's safety" pill on the activity detail page.
+- Imported Strava/Garmin runs show a subtle "Rate run safety" pill in the top-right of the activity-detail page header. Tap opens the same slider modal; an in-modal info expand explains the community safety map vision before the privacy note.
 - Routes are trimmed ~300m from start and end before storage to protect home/work locations.
 - Ratings (score, trimmed polyline, bounds, gender of rater, source) land in Supabase `route_safety_ratings`. RLS: user-own rows only.
 

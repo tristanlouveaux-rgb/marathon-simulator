@@ -1,5 +1,6 @@
 import type { RaceDistance, RunnerType, TrainingPhase, AbilityBand } from '@/types';
 import type { SessionIntent, SlotType } from './intent_to_workout';
+import { weekVolumeBudgetKm, type Archetype } from '@/calculations/athlete-archetype';
 
 export interface PlanContext {
   runsPerWeek: number;
@@ -20,6 +21,19 @@ export interface PlanContext {
   /** Slot types the user opted out of on the workout-preview step. Filtered from
    *  the quality priority list before slot allocation. */
   excludedSlots?: string[];
+  /** Current baseline weekly running km (s.detectedWeeklyKm). When present together
+   *  with `archetype`, week-1 volume is anchored to baseline and ramps toward
+   *  ability-driven peak per the archetype-specific slope. Omit to keep legacy
+   *  ability-driven behaviour (consistent runner at race-target volume). */
+  baselineKm?: number;
+  /** Athlete archetype (s.athleteArchetype.archetype). Gates the ramp slope —
+   *  detrained-with-history ramps faster than cross-trained-no-impact. Required
+   *  alongside `baselineKm` for the ramp to fire. */
+  archetype?: Archetype;
+  /** Easy pace in seconds per km, used to convert the km budget into a minute
+   *  budget. Falls back to 360 s/km (6:00/km) when omitted — matches
+   *  intent_to_workout.minutesToKm. */
+  easyPaceSecPerKm?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +475,23 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     slotsRemaining--;
   }
 
+  // Apply archetype-gated ramp budget BEFORE the hours budget. The km budget
+  // anchors week 1 at the user's current baseline and ramps geometrically toward
+  // the ability-driven peak (the same peak today's plan tries to deliver
+  // immediately, which is the bug). Quality minutes are preserved; easy and
+  // long are scaled via the same applyHoursBudget mechanism used for the
+  // weekly-hours target.
+  //
+  // Skipped when baselineKm or archetype is missing — preserves legacy
+  // behaviour for users without Strava/Apple history.
+  if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
+    const peakKm = computePeakWeeklyKm(ctx);
+    const weekKm = weekVolumeBudgetKm(weekIndex, ctx.baselineKm, peakKm, ctx.archetype);
+    const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
+    const weekMinutesBudget = Math.round((weekKm * easyPaceSecPerKm) / 60);
+    applyHoursBudget(intents, weekMinutesBudget);
+  }
+
   // Apply weekly hours budget: scale easy sessions first, then long if still over.
   // Quality session durations are never shortened — their training stimulus depends
   // on work interval duration (Seiler 2010, Billat 2001).
@@ -469,6 +500,37 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   }
 
   return intents;
+}
+
+/**
+ * Peak weekly km the plan is ramping toward — derived from the ability-driven
+ * minute budgets and easy pace. Matches the volume an established consistent
+ * runner would see today (which is why their plan generation looks the same:
+ * baseline ≥ peak → ramp clamps at peak from week 1).
+ *
+ * Mirrors the shape of `getPlanPrescribedMeanWeeklyKm` but at the peak point
+ * of the plan rather than the build-phase mean.
+ */
+function computePeakWeeklyKm(ctx: PlanContext): number {
+  const ability = abilityBandFromVdot(ctx.vdot, ctx.fitnessLevel);
+  const easyPaceSecPerKm = ctx.easyPaceSecPerKm ?? 360;
+  // Long-run peak: ability cap (intermediate marathon = 120 min, etc.)
+  const longCap: Record<AbilityBand, number> = {
+    beginner: 90, novice: 100, intermediate: 120, advanced: 150, elite: 180,
+  };
+  const longMin = longCap[ability];
+  const easyMin = easyRunMinutes(ability, ctx.raceDistance, 'peak');
+  // Quality minutes (rough estimate, used as a constant): threshold + vo2 + mp.
+  const qualityMin = thresholdWorkMinutes(ability, 'peak', ctx.totalWeeks, ctx.totalWeeks)
+    + 20 // continuous threshold has warm/cool 20m baked in
+    + vo2WorkMinutes(ability, 'peak') + 15
+    + mpWorkMinutes(ctx.raceDistance, ability, 'peak') + 20;
+  const easyCount = Math.max(0, ctx.runsPerWeek - 2 - (ctx.raceDistance === 'marathon' || ctx.raceDistance === 'half' ? 1 : 0));
+  const totalMin = longMin + qualityMin + easyMin * easyCount;
+  // km at easy pace (quality reps cover less ground per minute, but the integral
+  // assumption is close enough for a budget heuristic — the goal here is a
+  // realistic peak that an intermediate marathoner trains at, ~70-80 km).
+  return (totalMin * 60) / easyPaceSecPerKm;
 }
 
 /**

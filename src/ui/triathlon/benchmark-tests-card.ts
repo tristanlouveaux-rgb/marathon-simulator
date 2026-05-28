@@ -78,7 +78,7 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
         const t200 = parseMMSS(v.t200);
         if (!t400 || !t200) return 'Both times are required.';
         const css = computeCSSFromPair(t400, t200);
-        if (css == null) return 'Times look off — 400m must be slower than 200m and within reasonable range.';
+        if (css == null) return 'Times look off. 400M must be slower than 200m and within reasonable range.';
         const triCfg = st.triConfig;
         if (!triCfg) return 'Triathlon config missing.';
         triCfg.swim = {
@@ -107,7 +107,7 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
     out.push({
       id: 'ftp-20min',
       label: 'FTP 20-min test',
-      why: 'Sets the anchor for every bike target — endurance, sweet-spot, threshold, VO2. Race-day pacing depends on this number being right.',
+      why: 'Sets the anchor for every bike target: endurance, sweet-spot, threshold, VO2. Race-day pacing depends on this number being right.',
       protocol: '20-min warm-up with 3×1-min openers. 5 min easy. 20 min all-out at the highest sustainable power. Cool-down 10 min easy. Your FTP ≈ avg power over the 20 min × 0.95.',
       inputs: [
         { id: 'avg20', label: '20-min average power (W)', placeholder: 'e.g. 245' },
@@ -167,7 +167,7 @@ function renderTestRow(t: PendingTest): string {
         <summary style="font-size:12px;color:#0F172A;cursor:pointer;font-weight:500">How to do this test</summary>
         <div style="font-size:12px;color:var(--c-muted);margin:6px 0 0;line-height:1.55;padding-left:8px;border-left:2px solid rgba(0,0,0,0.06)">${t.protocol}</div>
       </details>
-      <button class="bench-open" data-id="${t.id}" style="margin-top:10px;width:100%;padding:9px;background:#0F172A;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer">I've done this test — enter my time</button>
+      <button class="bench-open" data-id="${t.id}" style="margin-top:10px;width:100%;padding:9px;background:#0F172A;color:#fff;border:none;border-radius:10px;font-size:13px;font-weight:500;cursor:pointer">I've done this test. Enter my time</button>
     </div>
   `;
 }

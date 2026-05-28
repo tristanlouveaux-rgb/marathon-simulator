@@ -244,7 +244,7 @@ function rangeSlice(s: SimulatorState, range: ProgressRange): RangedSeries {
     const fh = s.triConfig?.fitnessHistory ?? [];
     const fhSliced = sliceCount ? fh.slice(-sliceCount) : fh;
     const hasHistoryKm = fhSliced.some(h => (h.swimKm ?? 0) > 0 || (h.bikeKm ?? 0) > 0 || (h.runKm ?? 0) > 0);
-    console.log(`[tri:rangeSlice] plan actuals insufficient (${trimmed.length}w) — fh entries: ${fhSliced.length}, hasHistoryKm: ${hasHistoryKm}`);
+    console.log(`[tri:rangeSlice] plan actuals insufficient (${trimmed.length}w): fh entries: ${fhSliced.length}, hasHistoryKm: ${hasHistoryKm}`);
     if (fhSliced.length >= 2 && hasHistoryKm) {
       const fhSlices: WeekDisciplineSlice[] = fhSliced.map(h => ({
         km:  { swim: h.swimKm ?? 0, bike: h.bikeKm ?? 0, run: h.runKm ?? 0 },
@@ -793,7 +793,7 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
     ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Swim</span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Swim</span>
       </div>
       ${buildDisciplineKmChart(series, 'swim', unitPref)}
     </div>`}
@@ -801,7 +801,7 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Bike</span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Bike</span>
       </div>
       ${buildDisciplineKmChart(series, 'bike', unitPref)}
     </div>
@@ -809,7 +809,7 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
     ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
         <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
-        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Run</span>
+        <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Run</span>
       </div>
       ${buildDisciplineKmChart(series, 'run', unitPref)}
     </div>`}
@@ -856,7 +856,7 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           <div style="font-size:10px;color:var(--c-faint);max-width:60%;text-align:right;line-height:1.4">${rangeNote}</div>
         </div>
 
-        <!-- Stat list — per-discipline aggregates + adherence + time + total TSS -->
+        <!-- Stat list. Per-discipline aggregates + adherence + time + total TSS -->
         ${buildStatListCard(s, unitPref, range)}
 
         <!-- Phase Timeline -->
@@ -870,29 +870,29 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           ${buildPerDisciplineCTLChart(s, range)}
         </div>
 
-        <!-- Weekly km — Swim -->
+        <!-- Weekly km. Swim -->
         ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.swim.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Swim</span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Swim</span>
           </div>
           ${buildDisciplineKmChart(series, 'swim', unitPref)}
         </div>`}
 
-        <!-- Weekly km — Bike -->
+        <!-- Weekly km. Bike -->
         <div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.bike.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Bike</span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Bike</span>
           </div>
           ${buildDisciplineKmChart(series, 'bike', unitPref)}
         </div>
 
-        <!-- Weekly km — Run -->
+        <!-- Weekly km. Run -->
         ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
             <span style="width:8px;height:8px;border-radius:2px;background:${DISC_CHART.run.stroke}"></span>
-            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume — Run</span>
+            <span style="font-size:12px;font-weight:600;color:var(--c-black)">Weekly volume. Run</span>
           </div>
           ${buildDisciplineKmChart(series, 'run', unitPref)}
         </div>`}

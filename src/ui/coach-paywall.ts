@@ -218,7 +218,7 @@ export async function renderCoachPaywall(opts: { onBack?: () => void } = {}): Pr
   wirePaywallHandlers();
 
   if (_packages.length === 0) {
-    console.warn(`[paywall] no packages available — RevenueCat offering '${COACH_OFFERING_ID}' is empty or unreachable`);
+    console.warn(`[paywall] no packages available. RevenueCat offering '${COACH_OFFERING_ID}' is empty or unreachable`);
   }
 }
 

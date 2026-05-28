@@ -17,6 +17,7 @@
 
 import type { SimulatorState, Week, Workout } from '@/types/state';
 import type { AbilityBand, HyroxStation } from '@/types/triathlon';
+import type { InjuryState } from '@/types/injury';
 import {
   HYROX_WEEKLY_SESSIONS,
   HYROX_TIME_SPLIT,
@@ -29,12 +30,13 @@ import {
 } from '@/constants/hyrox-constants';
 import { generateHyroxRun, generateHyroxStation, generateHyroxBrick, generateHyroxAssessment } from './hyrox-generators';
 import { scheduleHyroxWeek } from './scheduler.hyrox';
+import { getDisciplineCapacity } from '@/injury/engine';
 
 /**
  * Bump when plan output changes in a way that should invalidate cached plans.
  * main.ts checks this on launch and regenerates if stored version is lower.
  */
-export const HYROX_GENERATOR_VERSION = 9;
+export const HYROX_GENERATOR_VERSION = 13;
 
 // ─── Phase assignment ─────────────────────────────────────────────────────────
 // Phase assignment is delegated to `computeHyroxPlanPhases(totalWeeks)` from
@@ -187,6 +189,11 @@ function generateWeekSessions(
   totalWeeks: number,
   phase: 'base' | 'build' | 'peak' | 'taper'
 ): Workout[] {
+  // Note (2026-05-26): clinical phase replacement removed for the same
+  // reason as in plan_engine.triathlon.ts — the discipline gates are
+  // the right mechanism for HYROX, not blanket "Complete Rest" cards
+  // that ignore which components the user can still do.
+
   const hx = state.hyroxConfig!;
   const band = hx.athleteBand;
   // Use per-athlete session counts from hyroxConfig (set at init from onboarding slider),
@@ -204,9 +211,16 @@ function generateWeekSessions(
   const effectiveHours = hx.weeklyHoursAvailable * mult * (deload ? HYROX_DELOAD_FACTOR : 1);
 
   // Distribute hours
-  const runHours     = effectiveHours * HYROX_TIME_SPLIT.runs;
+  let runHours       = effectiveHours * HYROX_TIME_SPLIT.runs;
   const stationHours = effectiveHours * HYROX_TIME_SPLIT.stations;
   const brickHours   = effectiveHours * HYROX_TIME_SPLIT.bricks;
+
+  // Commute runs are appended on top of the prescribed HYROX run sessions,
+  // not substituted for them (revised 2026-05-20 — see SCIENCE_LOG §AK).
+  // Commute-slot emission happens after the prescribed sessions are built.
+  const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
+    ? state.commuteConfig.commuteDaysPerWeek
+    : 0;
 
   // Clamp session duration to per-type caps (minimum 35 min for station sessions).
   function clampDur(kind: string, raw: number): number {
@@ -283,10 +297,185 @@ function generateWeekSessions(
     }
   }
 
+  // Add commute runs. Appended on top of prescribed HYROX sessions (model
+  // revised 2026-05-20). Bidirectional commutes emit two slots per day
+  // (morning + evening) at one-way distance. Marked with `discipline: 'run'`
+  // so the scheduler treats them like other run sessions, and
+  // `commute: true` so matching can prefer commute actuals.
+  if (commuteDays > 0 && state.commuteConfig) {
+    const oneWayKm = state.commuteConfig.distanceKm;
+    const bi = state.commuteConfig.isBidirectional;
+    for (let i = 0; i < commuteDays; i++) {
+      if (bi) {
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (morning)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1} (evening)`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+      } else {
+        workouts.push({
+          t: 'easy',
+          n: `Commute ${i + 1}`,
+          d: `${oneWayKm}km`,
+          rpe: 3,
+          r: 3,
+          discipline: 'run',
+          commute: true,
+        });
+      }
+    }
+  }
+
+  // Injury-mode discipline gating. Runs are gated by canRun; stations and
+  // bricks are gated by canUpperLoad / canLowerLoad (HYROX stations mix
+  // upper-body load — wall ball, sandbag, carries, burpee — with lower-body
+  // load — sled, lunges — so if either side is blocked the whole station is
+  // dropped at this coarse level). Per-component station gating is future
+  // work.
+  // Past weeks are skipped: a current injury cannot retroactively rewrite
+  // a week the user has already trained through. main.ts's version-bump
+  // regen calls this for every week 1..tw, so without this guard past
+  // triWorkouts get rewritten with current-injury gate downmixes.
+  const injuryState = (state as any).injuryState as InjuryState | undefined;
+  const isPastWeek = weekIndex < (state.w ?? 1);
+  const weeksFromCurrent = Math.max(0, weekIndex - (state.w ?? 1));
+  const gated = isPastWeek
+    ? workouts
+    : applyHyroxInjuryGates(workouts, injuryState, weeksFromCurrent);
+
   // Enforce MTL cap
-  const capped = enforceMTLCap(workouts, hx.mtlCap);
+  const capped = enforceMTLCap(gated, hx.mtlCap);
 
   return scheduleHyroxWeek(capped, band);
+}
+
+/**
+ * Apply per-discipline capacity scaling to a HYROX week. The slider model
+ * (0–100 per discipline) replaces the prior 3-tier enum:
+ * - Run capacity 0 drops all run workouts (including commute runs); 100
+ *   leaves them; in-between scales each run's duration linearly.
+ * - Station capacity = MIN(upperLoad, lowerLoad) since HYROX stations are
+ *   mixed-modality (any restriction on either side limits the whole
+ *   station). 0 drops stations + assessment, 100 leaves them, in-between
+ *   scales duration linearly.
+ * - Brick = stations + runs stacked → dropped whenever either input
+ *   capacity is below 100 (any restriction risks aggravation under
+ *   stacked-intensity).
+ *
+ * Intensity is intentionally NOT capped — the slider is volume-only; the
+ * user self-regulates RPE in the moment.
+ *
+ * `weeksFromCurrent` retained for API compatibility; slider is the
+ * gradient so no separate ramp-window logic.
+ */
+function applyHyroxInjuryGates(
+  workouts: Workout[],
+  injuryState: InjuryState | undefined,
+  _weeksFromCurrent: number = 0
+): Workout[] {
+  if (!injuryState?.active) return workouts;
+
+  const isRun = (w: Workout): boolean => {
+    const t = (w.t || '') as string;
+    if (t.startsWith('hyrox_run_')) return true;
+    if (t === 'easy' && (w as any).commute === true) return true;
+    return false;
+  };
+  const isStation = (w: Workout): boolean => {
+    const t = (w.t || '') as string;
+    return t.startsWith('hyrox_station_') || t === 'hyrox_assessment';
+  };
+  const isBrick = (w: Workout): boolean => {
+    const t = (w.t || '') as string;
+    return t === 'hyrox_brick' || t === 'hyrox_mini_brick';
+  };
+
+  const runCap   = getDisciplineCapacity(injuryState, 'run');
+  const upperCap = getDisciplineCapacity(injuryState, 'upperLoad');
+  const lowerCap = getDisciplineCapacity(injuryState, 'lowerLoad');
+  // Stations mix both halves — the more restrictive side wins.
+  const stationCap = Math.min(upperCap, lowerCap);
+  // Brick stacks stations + runs; ANY restriction drops it.
+  const brickSafe = runCap >= 100 && stationCap >= 100;
+
+  const scaleWorkout = (w: Workout, cap: number, label: string): Workout => {
+    const factor = cap / 100;
+    const a = w as any;
+    const scaled: any = {
+      ...w,
+      modReason: `Capacity ${cap}% — ${label} duration scaled to match your reported ability`,
+    };
+    if (typeof a.estimatedDurationMin === 'number') {
+      scaled.estimatedDurationMin = Math.max(1, Math.round(a.estimatedDurationMin * factor));
+    }
+    if (typeof a.aerobic === 'number')   scaled.aerobic   = Math.round(a.aerobic   * factor);
+    if (typeof a.anaerobic === 'number') scaled.anaerobic = Math.round(a.anaerobic * factor);
+    if (typeof a.musculoTendonLoad === 'number') {
+      scaled.musculoTendonLoad = Math.round(a.musculoTendonLoad * factor);
+    }
+    return scaled as Workout;
+  };
+
+  const out: Workout[] = [];
+  for (const w of workouts) {
+    if (isRun(w)) {
+      if (runCap <= 0) continue;
+      if (runCap >= 100) { out.push(w); continue; }
+      out.push(scaleWorkout(w, runCap, 'run'));
+      continue;
+    }
+    if (isStation(w)) {
+      if (stationCap <= 0) continue;
+      if (stationCap >= 100) { out.push(w); continue; }
+      out.push(scaleWorkout(w, stationCap, 'stations'));
+      continue;
+    }
+    if (isBrick(w)) {
+      if (!brickSafe) continue;
+      out.push(w);
+      continue;
+    }
+    out.push(w);
+  }
+  return out;
+}
+
+// ─── Single-week regenerator (used by injury-gate updates) ───────────────────
+
+/**
+ * Regenerate a single HYROX week in-place — preserves the existing Week's
+ * actuals / rated / skip arrays, replaces triWorkouts. Mirrors the tri
+ * regenerator and is called after an injury gate change so the plan reflects
+ * the new gates immediately (the version-bump path in main.ts only fires
+ * when storedVersion < HYROX_GENERATOR_VERSION).
+ */
+export function regenerateHyroxWeek(state: SimulatorState, weekIndex: number): Week | null {
+  if (!state.hyroxConfig || !state.wks || weekIndex < 1 || weekIndex > state.wks.length) return null;
+  const totalWeeks = state.tw || 16;
+  const planPhases = computeHyroxPlanPhases(totalWeeks);
+  const p = planPhases[weekIndex - 1];
+  if (!p) return null;
+  const workouts = generateWeekSessions(state, weekIndex, totalWeeks, p.ph);
+  const existing = state.wks[weekIndex - 1];
+  return {
+    ...existing,
+    ph: p.ph as any,
+    ...(p.checkpoint ? { checkpoint: true } : { checkpoint: existing.checkpoint }),
+    triWorkouts: workouts,
+  };
 }
 
 // ─── Top-level plan generator ─────────────────────────────────────────────────

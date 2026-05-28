@@ -2,12 +2,17 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 
-export default defineConfig({
+// Strip console.* and debugger statements from the production bundle. Source
+// files are untouched and dev (vite serve) keeps logs for debugging. Errors
+// still surface via uncaught exceptions and Apple App Store Connect crash
+// reporting; explicit boundary logging can be added via guarded checks.
+export default defineConfig(({ command }) => ({
   resolve: {
     alias: {
       '@': resolve(__dirname, 'src'),
     },
   },
+  esbuild: command === 'build' ? { drop: ['console', 'debugger'] } : {},
   build: {
     target: 'ES2020',
   },
@@ -22,4 +27,4 @@ export default defineConfig({
       exclude: ['src/**/*.test.ts', 'src/main.ts', 'src/ui/**'],
     },
   },
-});
+}));

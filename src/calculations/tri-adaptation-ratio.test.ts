@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { computeTriAdaptationRatios } from './tri-adaptation-ratio';
+import { computeTriAdaptationRatios, efDecouplingPct } from './tri-adaptation-ratio';
 import {
   ADAPT_RATIO_MIN, ADAPT_RATIO_MAX,
   ADAPT_WEIGHTS_SWIM, ADAPT_WEIGHTS_BIKE, ADAPT_WEIGHTS_RUN,
@@ -210,6 +210,127 @@ describe('Pa:Hr decoupling signal', () => {
     expect(r.signals.pahrRun).not.toBeNull();
     expect(r.signals.pahrRun!).toBeGreaterThan(0);
     expect(r.run).toBeGreaterThan(1.0);
+  });
+
+  it('real EF decoupling from kmSplits + kmHRSplits is preferred over hrDrift', () => {
+    const s = emptyState();
+    s.w = 6;
+    const wks: any[] = [];
+    // EF decoupling shrinks 8% → 2% over the window, while hrDrift is flat at
+    // 20%. If EF is used, slope is negative (improving) and adjustment > 0.
+    // If hrDrift were used, slope would be ~0 and adjustment ~0.
+    for (let w = 0; w < 6; w++) {
+      const wk: any = { garminActuals: {} };
+      // Build 10-km run (50 min, above 45-min filter) with pace constant at
+      // 300 s/km but HR rising in the 2nd half by `(8 - w)`% — gives an EF
+      // decoupling close to `(8 - w)`%.
+      const kmSplits = Array(10).fill(300);
+      const baseHr = 150;
+      const liftPct = (8 - w) / 100;  // 8% → 3%
+      const liftedHr = Math.round(baseHr * (1 + liftPct));
+      const kmHRSplits = [
+        baseHr, baseHr, baseHr, baseHr, baseHr,
+        liftedHr, liftedHr, liftedHr, liftedHr, liftedHr,
+      ];
+      wk.garminActuals[`r${w}`] = {
+        garminId: `r${w}`,
+        distanceKm: 10,
+        durationSec: 10 * 300,
+        avgPaceSecKm: 300,
+        avgHR: 158,
+        maxHR: null,
+        calories: null,
+        activityType: 'RUNNING',
+        hrDrift: 20,  // flat — would give ~0 slope if used
+        kmSplits,
+        kmHRSplits,
+      };
+      wks.push(wk);
+    }
+    s.wks = wks;
+    const r = computeTriAdaptationRatios(s);
+    expect(r.signals.pahrRun).not.toBeNull();
+    expect(r.signals.pahrRun!).toBeGreaterThan(0);
+  });
+
+  it('falls back to hrDrift when kmHRSplits is missing', () => {
+    const s = emptyState();
+    s.w = 6;
+    const wks: any[] = [];
+    // Same shape as the canonical test but without kmHRSplits — must still
+    // produce a positive signal via the hrDrift fallback.
+    for (let w = 0; w < 6; w++) {
+      const wk: any = { garminActuals: {} };
+      wk.garminActuals[`r${w}`] = {
+        garminId: `r${w}`,
+        distanceKm: 15,
+        durationSec: 3600,
+        avgPaceSecKm: 240,
+        avgHR: 150,
+        maxHR: null,
+        calories: null,
+        activityType: 'RUNNING',
+        hrDrift: 10 - w,
+        kmSplits: [240, 240, 240, 240, 240, 240, 240, 240],
+        // kmHRSplits intentionally absent
+      };
+      wks.push(wk);
+    }
+    s.wks = wks;
+    const r = computeTriAdaptationRatios(s);
+    expect(r.signals.pahrRun).not.toBeNull();
+    expect(r.signals.pahrRun!).toBeGreaterThan(0);
+  });
+});
+
+describe('efDecouplingPct helper', () => {
+  it('returns null for fewer than 4 valid kms', () => {
+    expect(efDecouplingPct([300, 300, 300], [150, 150, 150])).toBeNull();
+    expect(efDecouplingPct(null, null)).toBeNull();
+    expect(efDecouplingPct([300, 300, 300, 300], [150, 0, 150, 150])).toBeNull();
+  });
+
+  it('flat HR + flat pace → ~0% decoupling', () => {
+    const result = efDecouplingPct(
+      [300, 300, 300, 300, 300, 300, 300, 300],
+      [150, 150, 150, 150, 150, 150, 150, 150],
+    );
+    expect(result).not.toBeNull();
+    expect(Math.abs(result!)).toBeLessThan(0.01);
+  });
+
+  it('HR rises in second half → positive decoupling', () => {
+    // EF_1st ≈ (1/300)/150, EF_2nd ≈ (1/300)/165 — drops ~9.1%.
+    const result = efDecouplingPct(
+      [300, 300, 300, 300, 300, 300, 300, 300],
+      [150, 150, 150, 150, 165, 165, 165, 165],
+    );
+    expect(result).not.toBeNull();
+    expect(result!).toBeGreaterThan(8);
+    expect(result!).toBeLessThan(10);
+  });
+
+  it('pace slows in second half at same HR → positive decoupling', () => {
+    // EF_1st = (1/300)/150, EF_2nd = (1/330)/150 → drops ~9.1%.
+    const result = efDecouplingPct(
+      [300, 300, 300, 300, 330, 330, 330, 330],
+      [150, 150, 150, 150, 150, 150, 150, 150],
+    );
+    expect(result).not.toBeNull();
+    expect(result!).toBeGreaterThan(8);
+    expect(result!).toBeLessThan(10);
+  });
+
+  it('mismatched array lengths use the shorter', () => {
+    // 6 kmSplits, 4 kmHRSplits → only 4 paired kms, half-split = 2 + 2.
+    // First half EF ≈ (1/300)/150, second half EF ≈ (1/300)/165 → ~9% drop.
+    const r = efDecouplingPct(
+      [300, 300, 300, 300, 999, 999],
+      [150, 150, 165, 165],
+    );
+    expect(r).not.toBeNull();
+    expect(r!).toBeGreaterThan(8);
+    expect(r!).toBeLessThan(10);
   });
 });
 

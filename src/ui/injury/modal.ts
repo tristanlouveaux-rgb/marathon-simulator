@@ -21,7 +21,8 @@ const LOCATION_LABELS: Record<InjuryLocation, string> = {
   other: 'Other',
 };
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';
-import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity, evaluatePhaseTransition } from '@/injury/engine';
+import { recordPainLevel, recordCapacityTest, applyPhaseProgression, hasPassedRequiredCapacityTests, evaluateReturnToRunGate, applyGateDecision, getReturnToRunLevelLabel, classifySeverity, evaluatePhaseTransition, getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
+import type { SimulatorState } from '@/types/state';
 import { getState, getMutableState } from '@/state/store';
 import { render } from '@/ui/renderer';
 import { saveState } from '@/state';
@@ -169,7 +170,7 @@ function getModalHTML(injuryState: InjuryState): string {
           </select>
         </div>
 
-        <!-- 4. Can you run? — segmented pill -->
+        <!-- 4. Can you run?. Segmented pill -->
         <div>
           <label style="${LABEL_STYLE}">Can you run?</label>
           <div id="can-run-segment" role="radiogroup">
@@ -416,6 +417,66 @@ export function getInjuryStateForDisplay(): InjuryState {
   return getInjuryState();
 }
 
+/**
+ * Plain-text sentence describing the current injury's effect on training,
+ * suitable to prepend to the readiness caption on Home and Readiness.
+ * Returns '' when no injury is active or every discipline is at full capacity.
+ *
+ * Examples:
+ *   "Running and swimming blocked by injury. Cycling capped at 40%."
+ *   "Running blocked by injury."
+ *   "Cycling capped at 60%."
+ */
+export function buildInjuryCaption(s: SimulatorState): string {
+  if (!isInjuryActive()) return '';
+  const inj = getInjuryState();
+
+  const eventType = (s as any).eventType as 'running' | 'triathlon' | 'hyrox' | undefined;
+  const isHyrox = eventType === 'hyrox';
+  const fields: Array<{ disc: DisciplineKey; label: string }> = isHyrox
+    ? [
+        { disc: 'run',       label: 'running' },
+        { disc: 'upperLoad', label: 'upper-body work' },
+        { disc: 'lowerLoad', label: 'lower-body work' },
+      ]
+    : [
+        { disc: 'run',  label: 'running' },
+        { disc: 'bike', label: 'cycling' },
+        { disc: 'swim', label: 'swimming' },
+      ];
+
+  const blocked: string[] = [];
+  const reduced: Array<{ label: string; pct: number }> = [];
+  for (const { disc, label } of fields) {
+    const cap = getDisciplineCapacity(inj, disc);
+    if (cap === 0) blocked.push(label);
+    else if (cap < 100) reduced.push({ label, pct: cap });
+  }
+  if (blocked.length === 0 && reduced.length === 0) return '';
+
+  const joinAnd = (items: string[]): string => {
+    if (items.length === 1) return items[0];
+    if (items.length === 2) return `${items[0]} and ${items[1]}`;
+    return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+  };
+  const sentenceCap = (str: string) => str.charAt(0).toUpperCase() + str.slice(1);
+
+  const parts: string[] = [];
+  if (blocked.length) {
+    parts.push(`${sentenceCap(joinAnd(blocked))} blocked by injury.`);
+  }
+  if (reduced.length === 1) {
+    const r = reduced[0];
+    parts.push(`${sentenceCap(r.label)} capped at ${r.pct}%.`);
+  } else if (reduced.length > 1) {
+    const phrase = reduced
+      .map((r, i) => i === 0 ? `${sentenceCap(r.label)} capped at ${r.pct}%` : `${r.label} at ${r.pct}%`)
+      .join(', ');
+    parts.push(`${phrase}.`);
+  }
+  return parts.join(' ');
+}
+
 /** Phase display labels */
 const PHASE_LABELS: Record<string, { label: string; style: string }> = {
   acute:            { label: 'Acute (Rest)',         style: `color:var(--c-warn)` },
@@ -446,8 +507,7 @@ export function renderInjuryBanner(): string {
         <div class="flex-1">
           <p class="text-sm font-medium" style="color:var(--c-warn)">Injury Mode Active</p>
           <p class="text-xs" style="color:var(--c-muted)">
-            ${displayName} — Pain: ${injuryState.currentPain}/10 —
-            <span class="font-medium" style="${phaseInfo.style}">${phaseInfo.label}</span>
+            ${displayName}. Pain: ${injuryState.currentPain}/10. <Span class="font-medium" style="${phaseInfo.style}">${phaseInfo.label}</span>
           </p>
         </div>
         <button id="btn-injury-details" class="text-xs px-2 py-1 rounded" style="background:rgba(239,68,68,0.1);color:var(--c-warn);border:1px solid rgba(239,68,68,0.25)">
@@ -786,7 +846,7 @@ export function openGraduatedReturnCheckIn(): void {
       if (remaining <= 0) {
         previewEl.innerHTML = `
           <div class="text-sm font-semibold mb-1" style="color:var(--c-ok)">Fully Resolved!</div>
-          <div class="text-xs" style="color:var(--c-muted)">2 clean weeks complete — returning to normal training</div>
+          <div class="text-xs" style="color:var(--c-muted)">2 clean weeks complete. Returning to normal training</div>
         `;
       } else {
         previewEl.innerHTML = `
@@ -799,14 +859,14 @@ export function openGraduatedReturnCheckIn(): void {
       previewEl.style.borderColor = 'rgba(245,158,11,0.3)';
       previewEl.innerHTML = `
         <div class="text-sm font-semibold mb-1" style="color:var(--c-caution-text)">Holding</div>
-        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10 — staying at current level, week does not count</div>
+        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10: staying at current level, week does not count</div>
       `;
     } else {
       previewEl.style.background = 'rgba(239,68,68,0.08)';
       previewEl.style.borderColor = 'rgba(239,68,68,0.3)';
       previewEl.innerHTML = `
         <div class="text-sm font-semibold mb-1" style="color:var(--c-warn)">Stepping Back</div>
-        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10 — returning to return-to-run protocol</div>
+        <div class="text-xs" style="color:var(--c-muted)">Pain ${painVal}/10. Returning to return-to-run protocol</div>
       `;
     }
   };
@@ -837,14 +897,14 @@ export function openGraduatedReturnCheckIn(): void {
 
     if (painVal >= 4) {
       state = { ...state, injuryPhase: 'return_to_run' as const, graduatedReturnWeeksLeft: 2 };
-      showInjuryToast('Pain spike — returning to return-to-run protocol', 'amber');
+      showInjuryToast('Pain spike: returning to return-to-run protocol', 'amber');
     } else if (painVal >= 2) {
-      showInjuryToast('Holding at current level — week does not count', 'amber');
+      showInjuryToast('Holding at current level: week does not count', 'amber');
     } else {
       state.graduatedReturnWeeksLeft = Math.max(0, (state.graduatedReturnWeeksLeft || 2) - 1);
       if (state.graduatedReturnWeeksLeft <= 0) {
-        state = applyPhaseProgression(state, 'Completed graduated return — 2 clean weeks');
-        showInjuryToast('Graduated return complete — back to full training!', 'emerald');
+        state = applyPhaseProgression(state, 'Completed graduated return. 2 Clean weeks');
+        showInjuryToast('Graduated return complete: back to full training!', 'emerald');
       }
     }
 

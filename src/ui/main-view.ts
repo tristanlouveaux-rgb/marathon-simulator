@@ -410,7 +410,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                 </div>
                 ${s.onboarding?.hasSmartwatch ? `
                 <div>
-                  <!-- Training Load (TSS) — split bar: running (blue) + cross-training (purple) -->
+                  <!-- Training Load (TSS): split bar: running (blue) + cross-training (purple) -->
                   <div class="flex items-baseline justify-between mb-1.5">
                     <div class="flex items-center gap-1">
                       <span class="text-xs" style="color:var(--c-faint)">Training Load</span>
@@ -421,7 +421,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                       <span class="text-xs" style="color:var(--c-faint)">/ <span id="stat-load-planned">—</span> TSS planned</span>
                     </div>
                   </div>
-                  <!-- Training Load — zoned bar -->
+                  <!-- Training Load. Zoned bar -->
                   <!-- Parent background = danger zone colour; zone bands draw on top from left -->
                   <div class="relative h-3 rounded-full overflow-hidden mb-1" style="background:rgba(239,68,68,0.10)">
                     <!-- Zone bands (updated by updateLoadChart) -->
@@ -449,7 +449,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                       <span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full inline-block" style="background:#A855F7"></span>Cross</span>
                     </div>
                   </div>
-                  <!-- Running Volume — zoned bar -->
+                  <!-- Running Volume. Zoned bar -->
                   <div id="home-km-vol-row" class="mt-2 pt-2 border-t" style="border-color:var(--c-border);cursor:pointer">
                     <div class="flex items-center justify-between mb-1">
                       <span class="text-[10px]" style="color:var(--c-faint)">Running Volume</span>
@@ -517,7 +517,7 @@ function getMainViewHTML(s: any, maxViewableWeek: number): string {
                       <!-- Populated by updateACWRBar() -->
                       <p class="text-[10px]" style="color:var(--c-faint)">Building baseline…</p>
                     </div>
-                    <!-- Escalating injury risk label — populated by updateACWRBar() -->
+                    <!-- Escalating injury risk label. Populated by updateACWRBar() -->
                     <div id="acwr-risk-label" class="hidden mt-1.5"></div>
                     <div class="flex gap-2 mt-2">
                       <button id="acwr-reduce-btn"
@@ -862,7 +862,7 @@ function renderRecoveryPill(s: any): string {
     return `
       <button id="btn-recovery-adjust" class="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full text-xs font-medium transition-colors" style="${colorStyle[level]}">
         <span class="w-2 h-2 rounded-full" style="${dotStyle[level]}"></span>
-        Feeling rough — tap to adjust
+        Feeling rough. Tap to adjust
       </button>
     `;
   }
@@ -2296,7 +2296,7 @@ export function triggerACWRReduction(): void {
         }, 0);
       const projectedTotal = currentTSS + (carried ?? 0) + remainingRunTSS;
       if (projectedTotal <= plannedB) {
-        console.log(`[ACWRReduction] Skipping — projected ${Math.round(projectedTotal)} TSS ≤ target ${Math.round(plannedB)}. Remaining runs won't exceed target.`);
+        console.log(`[ACWRReduction] Skipping. Projected ${Math.round(projectedTotal)} TSS ≤ target ${Math.round(plannedB)}. Remaining runs won't exceed target.`);
         return;
       }
       overshootTSS = projectedTotal - plannedB;
@@ -2636,7 +2636,7 @@ function wireEventHandlers(): void {
         completeBtn.disabled = true;
         completeBtn.className = 'w-full font-medium py-2 rounded text-sm cursor-not-allowed';
         completeBtn.style.cssText = 'background:rgba(0,0,0,0.05);color:var(--c-faint)';
-        completeBtn.textContent = 'Viewing — Return to current week';
+        completeBtn.textContent = 'Viewing, Return to current week';
       } else {
         completeBtn.disabled = false;
         completeBtn.className = 'w-full font-medium py-2 rounded text-sm transition-colors';

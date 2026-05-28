@@ -65,7 +65,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
           <button id="tri-load-back-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">←</button>
           <div style="text-align:center;flex:1">
             <div style="font-size:24px;font-weight:700;color:#0F172A;letter-spacing:-0.02em">Load</div>
-            <div style="font-size:13px;color:#64748B;margin-top:2px">${tri.distance === 'ironman' ? 'Ironman' : '70.3'} — Week ${s.w} of ${s.tw}</div>
+            <div style="font-size:13px;color:#64748B;margin-top:2px">${tri.distance === 'ironman' ? 'Ironman' : '70.3'}. Week ${s.w} of ${s.tw}</div>
           </div>
           <div style="width:36px"></div>
         </div>
@@ -76,7 +76,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
           <div class="tri-load-card hf" data-delay="0.06">
             <div class="tri-load-label">Total load</div>
             <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
-              Combined fitness, fatigue, and form across all three disciplines. This is your overall training picture — captures the cardiovascular fitness that transfers between sports.
+              Combined fitness, fatigue, and form across all three disciplines. This is your overall training picture. Captures the cardiovascular fitness that transfers between sports.
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
               ${cell('Fitness', totalCtl.toFixed(1), '#0F172A')}
@@ -89,7 +89,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
           <div class="tri-load-card hf" data-delay="0.10">
             <div class="tri-load-label">By discipline</div>
             <div style="font-size:11px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
-              ${cycling ? 'Bike training load — chronic fitness, acute fatigue, and form.' : 'Direct activity in each sport — what you actually swam / cycled / ran. Cross-training transfer is captured in the total above; here we show the work itself.'}
+              ${cycling ? 'Bike training load: chronic fitness, acute fatigue, and form.' : 'Direct activity in each sport. What you actually swam / cycled / ran. Cross-training transfer is captured in the total above; here we show the work itself.'}
             </div>
             ${disciplines.map((d) => {
               const f = fitness[d];
@@ -172,7 +172,7 @@ function captionFor(d: 'swim' | 'bike' | 'run', conf: { weeksActive: number; ses
   } else if (conf.confidence === 'medium') {
     caption = `Based on ${conf.weeksActive} weeks of ${sport} training (${conf.sessions} ${sessionsWord}). Stabilises with more weeks.`;
   } else if (conf.confidence === 'low') {
-    caption = `Limited ${sport} history — ${conf.sessions} ${sessionsWord} in ${conf.weeksActive} week${conf.weeksActive === 1 ? '' : 's'}.`;
+    caption = `Limited ${sport} history. ${conf.sessions} ${sessionsWord} in ${conf.weeksActive} week${conf.weeksActive === 1 ? '' : 's'}.`;
     colour = '#a89060';
   } else {
     caption = `No ${sport} activity logged in the last 12 weeks.`;

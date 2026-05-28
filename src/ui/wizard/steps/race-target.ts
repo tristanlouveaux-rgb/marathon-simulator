@@ -143,7 +143,7 @@ export function renderRaceTarget(container: HTMLElement, state: OnboardingState)
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <!-- Glint only — race photos own the visual space. Atmosphere base ties it to the family. -->
+      <!-- Glint only. Race photos own the visual space. Atmosphere base ties it to the family. -->
       <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
         ${buildAtmosphereBase()}
         ${buildSunGlint('low')}
