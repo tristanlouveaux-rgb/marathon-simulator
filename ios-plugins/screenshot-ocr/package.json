@@ -1,0 +1,28 @@
+{
+  "name": "@mosaic/screenshot-ocr",
+  "version": "1.0.0",
+  "description": "On-device Apple Vision OCR for run-summary screenshots. Returns recognised text lines for the hybrid screenshot-import path.",
+  "private": true,
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "files": [
+    "ios/Sources",
+    "Package.swift",
+    "dist/"
+  ],
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "ios",
+    "vision",
+    "ocr"
+  ],
+  "license": "UNLICENSED"
+}

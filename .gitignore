@@ -5,6 +5,15 @@ coverage/
 ios/
 android/
 .capacitor/
+
+# Exceptions: Capacitor plugin sources live under ios-plugins/*/ios/ and
+# ios-plugins/*/dist/. The broad rules above would otherwise drop the Swift
+# implementations + compiled JS bridges, leaving plugins unbuildable from a
+# fresh clone.
+!ios-plugins/*/ios/
+!ios-plugins/*/ios/**
+!ios-plugins/*/dist/
+!ios-plugins/*/dist/**
 .DS_Store
 .claude/
 .cursor/
