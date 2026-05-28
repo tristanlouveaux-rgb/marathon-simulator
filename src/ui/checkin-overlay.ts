@@ -5,7 +5,7 @@
  * Each routes to its respective modal.
  */
 
-import { openInjuryModal } from './injury/modal';
+import { openInjuryModal, isInjuryActive } from './injury/modal';
 import { openIllnessModal } from './illness-modal';
 import { openHolidayModal } from './holiday-modal';
 
@@ -16,6 +16,12 @@ import { openHolidayModal } from './holiday-modal';
 export function openCheckinOverlay(): void {
   const existing = document.getElementById('checkin-overlay');
   if (existing) existing.remove();
+
+  const injuryActive = isInjuryActive();
+  const injuryLabel = injuryActive ? 'Update injury' : 'Injured';
+  const injurySub = injuryActive
+    ? 'Update or clear the active injury.'
+    : 'Report pain or injury. Adjust the plan.';
 
   const overlay = document.createElement('div');
   overlay.id = 'checkin-overlay';
@@ -31,8 +37,8 @@ export function openCheckinOverlay(): void {
         style="width:100%;display:flex;align-items:center;padding:11px 14px;border-radius:12px;
                border:1px solid var(--c-border);background:transparent;cursor:pointer;margin-bottom:6px;text-align:left">
         <div>
-          <div style="font-size:14px;font-weight:600;color:var(--c-black)">Injured</div>
-          <div style="font-size:12px;color:var(--c-muted);margin-top:1px">Report pain or injury. Adjust the plan.</div>
+          <div style="font-size:14px;font-weight:600;color:var(--c-black)">${injuryLabel}</div>
+          <div style="font-size:12px;color:var(--c-muted);margin-top:1px">${injurySub}</div>
         </div>
         <svg style="margin-left:auto;flex-shrink:0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--c-faint)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
       </button>

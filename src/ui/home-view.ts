@@ -1244,9 +1244,19 @@ function buildReadinessRing(s: SimulatorState): string {
     rhrCaption = `RHR: ${latestPhysio.restingHR}bpm${arrow} · `;
   }
 
+  const injuryActive = isInjuryActive();
+
   return `
     <div style="padding:0 16px;margin-bottom:10px" class="hf" data-delay="0.18">
-      <div id="home-readiness-card" style="background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
+      <div id="home-readiness-card" style="position:relative;background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);overflow:hidden">
+
+        ${injuryActive ? `
+        <!-- Injury corner badge -->
+        <div style="position:absolute;top:10px;right:10px;display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;background:#fef2f2;border:1px solid #fecaca;font-size:10px;font-weight:600;letter-spacing:0.04em;color:#b91c1c;z-index:1">
+          <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#dc2626"></span>
+          Injured
+        </div>
+        ` : ''}
 
         <!-- Readiness hero ring. Top centre -->
         <div style="display:flex;justify-content:center;padding:20px 8px 10px">
