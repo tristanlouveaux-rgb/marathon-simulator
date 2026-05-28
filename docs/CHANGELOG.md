@@ -4,6 +4,14 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-28 — Post-crash recovery checkpoint + stripMarkdown em-dash regex restore
+
+After a memory-wall crash interrupted the post-em-dash-sweep restore session, took a safety checkpoint of the 403 uncommitted modified files (mostly em-dash → period sweep across JSDoc/comments, plus uncommitted slivers of today's recovery work) so nothing is lost to a future crash. Working-tree patch dumped to `/tmp/mosaic-recovery-20260528-1813.patch` before staging. Typecheck clean; 2365/2366 tests pass.
+
+One real regression caught by the test suite: `stripMarkdown` in `src/ui/coach-view.ts:110` had its own em-dash eaten by the sweep, leaving the regex as a no-op (`/, /g` → `', '`) instead of the original `/ — /g` → `', '`. The defensive layer that strips em-dashes from coach LLM output before rendering was silent. Restored. All 37 coach-view-helpers tests now pass.
+
+Diligence sweep: grepped for `.replace(/,/g)` patterns across `src/`; the only two hits are legitimate (parseInt comma-stripping in `triathlon/workout-card.ts`). No other em-dash regexes corrupted.
+
 ## 2026-05-28 — Recovery: running forecast cone + goal overlay (mirror of tri)
 
 Mirror of the triathlon cone rebuild, per CLAUDE.md mirror rule. The running forecast view was using a simple actual-line + projection chart (private `buildForecastChart` in `race-forecast-view.ts`) instead of the Monte Carlo cone. Outcome tiles, chance bar, and goal edit were all absent. Side-effect of restoring this: `s.raceGoalTimeSec` (declared in state but unreferenced anywhere) now has a real read/write path.

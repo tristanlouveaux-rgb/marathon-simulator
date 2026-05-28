@@ -107,7 +107,7 @@ export function stripMarkdown(s: string): string {
     .replace(/(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)/g, '$1')   // italic
     .replace(/`([^`\n]+?)`/g, '$1')                        // inline code
     .replace(/^\s*[-*]\s+/gm, '')                          // bullet markers
-    .replace(/, /g, ', ')                                    // em dashes (banned by copy rules)
+    .replace(/ — /g, ', ')                                   // em dashes (banned by copy rules)
     .replace(/–/g, '-');                                    // en dashes → hyphen
 }
 
