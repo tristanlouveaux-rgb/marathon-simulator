@@ -7,7 +7,7 @@
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { renderCyclingFinishCard } from './race-forecast-card';
+import { renderCyclingFinishCard, renderRaceForecastCard } from './race-forecast-card';
 import { renderTriForecastFingerprint, wireTriForecastChips } from './race-forecast-fingerprint';
 import { renderTriConeCard, wireTriConeCard } from './race-forecast-cone-card';
 import { getCyclingEventLabel, isCyclingOnlyMode } from '@/calculations/cycling-mode';
@@ -107,10 +107,13 @@ export function renderTriathlonForecastView(): void {
 
         <div style="padding:0 20px">
           ${renderRaceOutcomeRetroCard(s)}
-          <div class="hf" data-delay="0.10">
-            ${isCyclingOnlyMode(s) ? renderCyclingFinishCard(s) : renderTriForecastFingerprint(s, tri?.prediction ?? null)}
-          </div>
-          ${isCyclingOnlyMode(s) ? '' : renderTriConeCard(s)}
+          ${isCyclingOnlyMode(s) ? `
+            <div class="hf" data-delay="0.10">${renderCyclingFinishCard(s)}</div>
+          ` : `
+            <div class="hf" data-delay="0.10">${renderRaceForecastCard(s)}</div>
+            ${renderTriConeCard(s)}
+            <div class="hf" data-delay="0.16">${renderTriForecastFingerprint(s, tri?.prediction ?? null)}</div>
+          `}
           <div class="hf" data-delay="0.14" style="padding:10px 0 8px;text-align:center">
             <button id="tri-fc-methodology-btn" type="button" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:0;font:inherit">How this is calculated →</button>
           </div>
