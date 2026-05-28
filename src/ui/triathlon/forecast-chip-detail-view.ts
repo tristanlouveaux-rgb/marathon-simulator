@@ -1129,6 +1129,10 @@ function pageFor(key: TriChipKey, s: SimulatorState, p: TriRacePrediction | null
     case 'heat':        return pageHeat(s);
     case 'marathon':    return pageMarathonDepth(s);
     case 'calibration': return pageCalibration(s);
+    // 'bike-setup' is intercepted in wireTriForecastChips and routed to the
+    // bike-setup overlay; it never reaches this detail view, but the union
+    // makes TS demand an exhaustive switch.
+    case 'bike-setup':  return { title: 'Bike & aero', subhead: '', body: '' };
   }
 }
 

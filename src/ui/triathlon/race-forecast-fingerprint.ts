@@ -34,6 +34,7 @@ import { CLIMATE_ANCHOR_TEMP_C } from '@/constants/triathlon-course-factors';
 export type TriChipKey =
   | 'you' | 'capacity' | 'adaptation' | 'training' | 'endurance'
   | 'durability' | 'bricks' | 'openwater' | 'venue' | 'transitions'
+  | 'bike-setup'
   | 'heat' | 'marathon' | 'calibration';
 
 interface TriChip {
@@ -320,6 +321,32 @@ function buildTransitions(_s: SimulatorState, p: TriRacePrediction | null): TriC
   };
 }
 
+function buildBikeSetup(s: SimulatorState): TriChip {
+  const profile = s.triConfig?.bike?.aeroProfiles?.[0];
+  if (!profile) {
+    return {
+      key: 'bike-setup',
+      label: 'Bike & aero',
+      headline: 'Not set',
+      detail: 'Default fit',
+      present: false,
+      addCta: 'Set up',
+    };
+  }
+  const POSITION_LABEL: Record<typeof profile.position, string> = {
+    'hoods':    'Hoods',
+    'drops':    'Drops',
+    'clip-ons': 'Clip-ons',
+    'tt-bike':  'TT bike',
+  };
+  const headline = POSITION_LABEL[profile.position] ?? 'Custom';
+  const calibrated = profile.cdaSource === 'calibrated';
+  const detail = calibrated
+    ? `Calibrated · CdA ${profile.cda.toFixed(2)}`
+    : `CdA ${profile.cda.toFixed(2)} m²`;
+  return { key: 'bike-setup', label: 'Bike & aero', headline, detail, present: true };
+}
+
 function buildHeat(s: SimulatorState, _p: TriRacePrediction | null): TriChip | null {
   const raceId = s.onboarding?.selectedTriathlonId;
   const race = raceId ? getTriathlonById(raceId) : null;
@@ -406,6 +433,7 @@ export function renderTriForecastFingerprint(
     buildOpenWater(s),
     buildVenue(s, p),
     buildTransitions(s, p),
+    buildBikeSetup(s),
   ];
   const conditional: TriChip[] = [
     buildHeat(s, p),
@@ -480,6 +508,10 @@ export function wireTriForecastChips(): void {
     const open = () => {
       const key = el.dataset.cluster as TriChipKey | undefined;
       if (!key) return;
+      if (key === 'bike-setup') {
+        import('./bike-setup-view').then(m => m.openBikeSetupOverlay());
+        return;
+      }
       import('./forecast-chip-detail-view').then(m => m.renderTriForecastChipDetail(key));
     };
     el.addEventListener('click', open);
