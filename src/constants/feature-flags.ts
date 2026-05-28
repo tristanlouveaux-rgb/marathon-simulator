@@ -43,7 +43,7 @@ export const STRAVA_ENABLED: boolean = false;
  * Garmin button is hidden outright or repurposed into an "upload your Garmin runs"
  * affordance is decision D5.
  *
- * Wired into `src/ui/wizard/steps/connect-strava.ts` (onboarding data-source step).
+ * Wired into `src/ui/wizard/steps/connect-data.ts` (onboarding data-source step).
  * Flipped to `false` on 2026-05-28 to pause the OAuth surface in onboarding until
  * Garmin approves the webhook for production — the button was promising
  * sleep/HRV/RHR data that does not arrive for non-dev accounts. The Account-view

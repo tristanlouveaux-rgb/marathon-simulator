@@ -35,7 +35,7 @@ import { poweredByStrava } from '@/ui/strava-brand';
 /**
  * Page 4 — "Here's what we found" magic-moment review.
  *
- * Renders after connect-strava on the Strava path. Shows the four pieces of
+ * Renders after connect-data on the Strava path. Shows the four pieces of
  * data we infer from the sync (weekly volume, 10K/Half/Marathon PBs, VDOT,
  * runner type) as a single scrollable column of editable rows. Tap a row to
  * inline-edit in place; no modal, no bottom sheet.
@@ -241,7 +241,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     //   (1) Apple Health: a 16-week activity backfill seeded with the user's
     //       age (collected in about-you, the step before this one) so iTRIMP
     //       integration can resolve a Tanaka-derived maxHR. We defer the
-    //       backfill until here — running it at connect-strava time would
+    //       backfill until here — running it at connect-data time would
     //       store 16w of activities with null iTRIMP and a duration-heuristic
     //       CTL baseline. By the time the user lands on review, age is set.
     //   (2) `refreshBlendedFitness` to compute `s.hrCalibratedVdot` from the

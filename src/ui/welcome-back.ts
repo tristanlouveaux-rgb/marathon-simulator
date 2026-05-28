@@ -209,6 +209,28 @@ export function recordAppOpen(): void {
   localStorage.setItem(LAST_OPENED_KEY, new Date().toISOString());
 }
 
+/**
+ * Launch-time tripwire. Warn loudly when `s.w` and `planStartDate` disagree on
+ * which plan week today falls in. A real 2026-05-28 incident saw the injury
+ * modal over-advance `s.w` while `planStartDate` drifted, which silently
+ * mis-filed activities into the wrong cycle. Silent for fresh installs, before
+ * onboarding, before plan start, or past plan end.
+ */
+export function assertPlanAnchorConsistent(): void {
+  const s = getMutableState();
+  if (!s.hasCompletedOnboarding) return;
+  if (!s.planStartDate) return;
+  const today = new Date();
+  const computed = weekIndexForDate(today, s);
+  if (computed == null) return;
+  if (computed === s.w) return;
+  const drift = s.w - computed;
+  const sign = drift > 0 ? '+' : '';
+  console.warn(
+    `[plan-anchor] DRIFT: s.w=${s.w} weekIndexForDate(today)=${computed} drift=${sign}${drift}w (planStartDate=${s.planStartDate})`,
+  );
+}
+
 export function showWelcomeBackModal(weeksGap: number, onComplete: () => void): void {
   const now = new Date();
   const today = now.toISOString().slice(0, 10);

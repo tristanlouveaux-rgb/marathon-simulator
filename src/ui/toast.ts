@@ -61,6 +61,37 @@ function escHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// ─── Simple toast ───────────────────────────────────────────────────────────
+
+const SIMPLE_TOAST_ID = 'mosaic-simple-toast';
+
+export function showSimpleToast(message: string, level: 'info' | 'error' = 'info'): void {
+  if (typeof document === 'undefined') return;
+  document.getElementById(SIMPLE_TOAST_ID)?.remove();
+
+  const toast = document.createElement('div');
+  toast.id = SIMPLE_TOAST_ID;
+  toast.className = [
+    'fixed left-4 right-4 z-[200]',
+    'rounded-xl shadow-xl',
+    'px-4 py-3',
+    'animate-fade-in',
+  ].join(' ');
+  toast.style.background = 'var(--c-surface)';
+  toast.style.border = `1px solid ${level === 'error' ? 'var(--c-caution)' : 'var(--c-border-strong)'}`;
+  toast.style.bottom = 'calc(56px + env(safe-area-inset-bottom, 0px) + 8px)';
+  toast.style.color = level === 'error' ? 'var(--c-caution)' : 'var(--c-black)';
+  toast.style.fontSize = '13px';
+  toast.textContent = message;
+
+  document.body.appendChild(toast);
+  const timer = window.setTimeout(() => toast.remove(), 5000);
+  toast.addEventListener('click', () => {
+    clearTimeout(timer);
+    toast.remove();
+  });
+}
+
 // ─── Marker-bump toast ──────────────────────────────────────────────────────
 
 const MARKER_TOAST_ID = 'mosaic-marker-bump-toast';

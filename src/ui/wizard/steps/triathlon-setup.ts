@@ -91,7 +91,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
     </style>
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;display:flex;flex-direction:column">
-      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirrors connect-strava. -->
+      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirrors connect-data. -->
       <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
         ${buildAtmosphereBase()}
         ${buildRingBackground('tri', { variant: 'asymmetric', side: 'right' })}

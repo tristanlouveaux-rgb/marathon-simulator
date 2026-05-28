@@ -36,7 +36,7 @@ export function renderAboutYou(container: HTMLElement, state: OnboardingState): 
       .ay-pill { padding:8px 14px; border-radius:9px; border:1px solid rgba(0,0,0,0.08); background:rgba(255,255,255,0.85); font-size:13px; color:var(--c-black); cursor:pointer; text-align:center; transition: all 0.12s ease; }
       .ay-pill.active { border-color:var(--c-black); background:var(--c-black); color:#FDFCF7; }
 
-      /* Continue CTA — same shape as cs-secondary on connect-strava so the
+      /* Continue CTA — same shape as cd-cta-primary on connect-data so the
          progression reads as a single visual family. */
       .ay-cta { width:100%; max-width:460px; height:52px; border-radius:26px; background:var(--c-black); color:#FFFFFF; border:none; font-size:15px; font-weight:600; letter-spacing:0.01em; cursor:pointer; box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.20), 0 9px 22px -8px rgba(0,0,0,0.30), 0 3px 8px -2px rgba(0,0,0,0.08); transition: transform 0.12s ease, box-shadow 0.2s ease; display:flex; align-items:center; justify-content:center; }
       .ay-cta:active:not(:disabled) { transform: translateY(1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.18), 0 3px 8px -2px rgba(0,0,0,0.12); }

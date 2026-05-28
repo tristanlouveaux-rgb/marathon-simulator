@@ -130,7 +130,7 @@ export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not
 
     // The 16-week activity backfill is still deferred to the review step —
     // it needs `onboarding.age` to resolve a maxHR fallback for iTRIMP, and
-    // age is collected in the about-you step *after* connect-strava.
+    // age is collected in the about-you step *after* connect-data.
     return { ok: true };
   } catch (err) {
     console.warn('[AppleHealthSync] connect failed', err);

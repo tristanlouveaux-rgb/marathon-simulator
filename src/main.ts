@@ -1183,7 +1183,7 @@ async function launchApp(): Promise<void> {
     if (onMainView) {
       import('@/ui/account-view').then(({ renderAccountView }) => renderAccountView());
     }
-    // Mid-wizard: sync fires in the background; connect-strava auto-advances;
+    // Mid-wizard: sync fires in the background; connect-data auto-advances;
     // review page waits on the DB fetch and then decides.
   }
 

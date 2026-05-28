@@ -114,7 +114,7 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
 
     <div style="min-height:100vh;background:var(--c-bg);position:relative;overflow:hidden;display:flex;flex-direction:column">
 
-      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirror of connect-strava (alternate path). -->
+      <!-- Background: atmosphere → asymmetric (right) rings → mid glint. Mirror of connect-data (alternate path). -->
       <div aria-hidden="true" style="position:absolute;inset:0;overflow:hidden;pointer-events:none;z-index:0">
         ${buildAtmosphereBase()}
         ${buildRingBackground('me', { variant: 'asymmetric', side: 'right' })}
