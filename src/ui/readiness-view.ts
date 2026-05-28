@@ -34,7 +34,7 @@ import { computeTriReadiness } from '@/calculations/tri-readiness';
 import { classifyActivity } from '@/calculations/tri-benchmarks-from-history';
 import { CTL_TAU_DAYS, ATL_TAU_DAYS } from '@/constants/triathlon-constants';
 import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
-import { buildInjuryCaption } from './injury/modal';
+import { buildInjuryCaption, isInjuryActive } from './injury/modal';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyHaloBackground, floweyHaloAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
@@ -254,8 +254,11 @@ function getReadinessHTML(s: SimulatorState): string {
 
   // Use the central daily-coach for the sentence (auto-derives strain context)
   const _coach = computeDailyCoach(s);
+  // Lead with the same sentence the home Readiness card surfaces so both
+  // surfaces read in sync (per CLAUDE.md "same number, same source" rule).
+  // Daily-coach context is preserved below as sessionNote.
   const coachMessage = (() => {
-    if (!isTri || !triReadiness) return _coach.primaryMessage;
+    if (!isTri || !triReadiness) return readiness.sentence;
 
     // Determine the most important systemic signal (sleep, HRV, load). May override
     // or augment the discipline sentence depending on severity.
@@ -540,19 +543,19 @@ function getReadinessHTML(s: SimulatorState): string {
       const blocked = capacity === 0;
       const capped = capacity > 0 && capacity < 100;
       const label = result.label;
-      const col = blocked ? 'var(--c-warn)' : readinessColor(label as any);
+      const col = blocked ? '#94A3B8' : readinessColor(label as any);
       const statusText = blocked ? 'Blocked' : shortStatus(label);
       const capTag = capped ? ` · capped ${capacity}%` : '';
-      return `<div style="${last ? '' : 'margin-bottom:14px'}">
+      return `<div style="${last ? '' : 'margin-bottom:14px'}${blocked ? ';opacity:0.7' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
           <div style="font-size:12px;font-weight:600;color:${TEXT_M}">${discName}</div>
           <div style="display:flex;align-items:baseline;gap:6px">
             ${blocked ? '' : `<div style="font-size:14px;font-weight:600;color:${col}">${result.score}</div>`}
-            <div style="font-size:11px;color:${blocked ? 'var(--c-warn)' : TEXT_S};font-weight:${blocked ? '600' : '400'}">${statusText}${capTag}</div>
+            <div style="font-size:11px;color:${TEXT_S};font-weight:${blocked ? '600' : '400'}">${statusText}${capTag}</div>
           </div>
         </div>
         <div style="position:relative;height:8px;border-radius:4px;background:rgba(0,0,0,0.07);overflow:hidden">
-          <div style="position:absolute;left:0;top:0;height:100%;width:${blocked ? 100 : result.score}%;background:${col};border-radius:4px;${blocked ? 'opacity:0.45;' : ''}transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
+          <div style="position:absolute;left:0;top:0;height:100%;width:${blocked ? 100 : result.score}%;background:${col};border-radius:4px;${blocked ? 'opacity:0.55;' : ''}transition:width 0.8s cubic-bezier(0.2,0.8,0.2,1)"></div>
         </div>
       </div>`;
     };
@@ -563,16 +566,23 @@ function getReadinessHTML(s: SimulatorState): string {
       { name: 'Bike', key: 'bike', result: triReadiness.bike },
       { name: 'Run',  key: 'run',  result: triReadiness.run  },
     ];
-    // Require both meaningful training volume (CTL ≥ 1) and at least one direct
-    // activity. A single ghost swim from months ago decays to ~0.1 CTL and
-    // shouldn't surface the discipline in readiness bars.
-    const discs = allDiscs.filter(d => (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.directCount ?? 0) > 0 && (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.ctl ?? 0) >= 1);
+    // Require either meaningful training volume (CTL ≥ 1 with at least one direct
+    // activity) OR an active injury that blocks the discipline. The injury
+    // constraint is independent of training data — a blocked swim should appear
+    // even if the athlete has never swum, so the user sees the full picture of
+    // what's available.
+    const injState = (s as any).injuryState as import('@/types/injury').InjuryState | undefined;
+    const discs = allDiscs.filter(d => {
+      const hasData = (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.directCount ?? 0) > 0
+        && (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.ctl ?? 0) >= 1;
+      const blockedByInjury = getDisciplineCapacity(injState, d.key) === 0;
+      return hasData || blockedByInjury;
+    });
 
     if (discs.length === 0) return '';
     const crossTrainingBar = triReadiness.crossTraining
       ? makeBar('Cross-training', triReadiness.crossTraining, 100, true)
       : '';
-    const injState = (s as any).injuryState as import('@/types/injury').InjuryState | undefined;
     const bars = discs.map(d => makeBar(d.name, d.result, getDisciplineCapacity(injState, d.key))).join('');
 
     // Divergence caption. Only render when a discipline's own label is better than
@@ -654,7 +664,12 @@ function getReadinessHTML(s: SimulatorState): string {
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
           <div style="font-size:20px;font-weight:700;color:${TEXT_M};letter-spacing:-0.01em">Readiness</div>
-          <div style="width:36px"></div>
+          ${isInjuryActive() ? `
+            <div style="display:flex;align-items:center;gap:5px;padding:4px 8px;border-radius:999px;background:#fef2f2;border:1px solid #fecaca;font-size:10px;font-weight:600;letter-spacing:0.04em;color:#b91c1c;height:24px">
+              <span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#dc2626"></span>
+              Injured
+            </div>
+          ` : `<div style="width:36px"></div>`}
         </div>
 
         <!-- Ring -->
