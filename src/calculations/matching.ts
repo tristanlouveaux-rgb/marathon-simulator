@@ -1,5 +1,5 @@
 /**
- * Smart Sync — Workout Matching Logic
+ * Smart Sync. Workout Matching Logic
  *
  * Matches incoming external activities (e.g. from Strava/Garmin) against the
  * current week's planned workouts using day, distance, and type heuristics.
@@ -39,7 +39,7 @@ const RUN_WORKOUT_TYPES = new Set([
  * Try to match an external activity to a planned workout.
  *
  * Heuristic layers:
- *  1. Same day (or +/-1 day) — relaxed: different-day matches still score but lower
+ *  1. Same day (or +/-1 day). Relaxed: different-day matches still score but lower
  *  2. Distance within +/-15%
  *  3. Activity type roughly matches workout type
  *
@@ -83,7 +83,7 @@ export function findMatchingWorkout(
         reasons.push('adjacent day');
         differentDay = true;
       } else {
-        // Different day — still allow matching but flag it
+        // Different day. Still allow matching but flag it
         differentDay = true;
         reasons.push('different day');
       }

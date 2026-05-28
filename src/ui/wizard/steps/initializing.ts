@@ -15,7 +15,7 @@ export type { CalculationResult } from '@/state/initialization';
 /**
  * Render the initialization animation.
  * Glassy card with a central glass-circle filling indicator. Updates in-place
- * via setStepLabel + setProgress as the pipeline advances — no full re-render.
+ * via setStepLabel + setProgress as the pipeline advances. No full re-render.
  */
 const INIT_RADIUS = 44;
 const INIT_CIRCUMFERENCE = 2 * Math.PI * INIT_RADIUS; // ~276.5
@@ -125,7 +125,7 @@ function setInitLabel(title: string, status?: string): void {
 }
 
 async function runInitialization(state: OnboardingState): Promise<void> {
-  // Mid-plan: user arrived via "Edit Settings". Keep existing plan — just advance.
+  // Mid-plan: user arrived via "Edit Settings". Keep existing plan. Just advance.
   // Exception: if the user just flipped modes (plan ↔ trackOnly), the runtime
   // `s.trackOnly` still reflects the old mode but `onboarding.trackOnly` is the
   // new intent. Run the full init so state is rewritten cleanly.
@@ -178,7 +178,7 @@ async function runInitialization(state: OnboardingState): Promise<void> {
       : 'half')
     : state.raceDistance;
   const runningSettingsChanged = state.trainingMode === 'running' && (
-    // Event Y/N flipped — s.continuousMode is the runtime echo of trainingForEvent===false.
+    // Event Y/N flipped. S.continuousMode is the runtime echo of trainingForEvent===false.
     (state.trainingForEvent === false) !== !!rt.continuousMode ||
     // Target distance drifted (running event → different distance, or focus flip in no-event).
     (expectedRd ?? null) !== (rt.rd ?? null)
@@ -290,6 +290,6 @@ function distMeters(dist: string): number {
  */
 function checkVolumeRecommendation(_state: OnboardingState): Promise<void> {
   // Milestone nudging is handled on the assessment page via plan comparison cards.
-  // No popup needed here — the user sees both plans with times and can choose.
+  // No popup needed here. The user sees both plans with times and can choose.
   return Promise.resolve();
 }

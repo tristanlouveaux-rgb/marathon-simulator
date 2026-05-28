@@ -32,7 +32,7 @@
 import type { FinishRecord, Distance } from './dataset-loader';
 
 // ───────────────────────────────────────────────────────────────────────────
-// Bin definitions — match the split-distribution table so a "level" means
+// Bin definitions. Match the split-distribution table so a "level" means
 // the same thing across both calibrations.
 // ───────────────────────────────────────────────────────────────────────────
 

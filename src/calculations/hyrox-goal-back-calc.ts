@@ -14,10 +14,10 @@
  *      redistribute the excess to remaining components.
  *   5. If total headroom can't cover the gain, flag as 'unrealistic'.
  *
- * No new constants — `STATION_SEED_TIMES_SEC['competitive']` and
+ * No new constants. `STATION_SEED_TIMES_SEC['competitive']` and
  * `HYROX_RUN_PACE_MIN_SEC_KM` are reused as practical floors.
  *
- * Roxzone is held constant — it's a small slice (~3 min on a 75-min total)
+ * Roxzone is held constant. It's a small slice (~3 min on a 75-min total)
  * and not really trainable in isolation.
  */
 
@@ -76,7 +76,7 @@ export function computeGoalBackCalc(
   // Floor for run pace = 8 legs at the band-elite minimum.
   const runFloorSec = HYROX_RUN_PACE_MIN_SEC_KM * 8;
 
-  // Component slots — each row gets a `currentSec` and a `floorSec`. We
+  // Component slots. Each row gets a `currentSec` and a `floorSec`. We
   // distribute the gain proportionally to headroom across these.
   const slots: ComponentSlot[] = [
     { kind: 'run', currentSec: currentRunSec, floorSec: runFloorSec },
@@ -90,7 +90,7 @@ export function computeGoalBackCalc(
 
   const gainNeeded = prediction.totalSec - targetTotalSec;
 
-  // Already on pace — no work needed.
+  // Already on pace. No work needed.
   if (gainNeeded <= 0) {
     return {
       feasibility: 'already_on_pace',
@@ -116,7 +116,7 @@ export function computeGoalBackCalc(
   }
 
   // Compute headroom per slot. Negative headroom (current already at/below
-  // floor) clamps to zero — that slot can't contribute.
+  // floor) clamps to zero. That slot can't contribute.
   const headrooms = slots.map(s => Math.max(0, s.currentSec - s.floorSec));
   const totalHeadroom = headrooms.reduce((sum, h) => sum + h, 0);
 
@@ -127,7 +127,7 @@ export function computeGoalBackCalc(
   let remainingGain = Math.min(gainNeeded, totalHeadroom);
   const capped = new Array<boolean>(slots.length).fill(false);
 
-  // Bounded loop — each iteration either fully allocates or caps at least
+  // Bounded loop. Each iteration either fully allocates or caps at least
   // one slot. Max iterations = slot count.
   for (let iter = 0; iter < slots.length + 1 && remainingGain > 0.5; iter += 1) {
     const remainingHeadroom = headrooms.reduce(
@@ -161,7 +161,7 @@ export function computeGoalBackCalc(
       }
     }
     remainingGain -= consumedThisIter;
-    if (!cappedThisRound) break; // converged — no overshoot to redistribute
+    if (!cappedThisRound) break; // converged. No overshoot to redistribute
   }
 
   // Build per-component targets.

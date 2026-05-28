@@ -80,7 +80,7 @@ describe('Predictions', () => {
       const predictedLowB = predictFromPB(5000, pbsK10, 1.04);
       const predictedHighB = predictFromPB(5000, pbsK10, 1.10);
       // For shorter target than anchor, higher b means more aggressive
-      // speed-up — but the floor doesn't activate either way. Just verify
+      // speed-up. But the floor doesn't activate either way. Just verify
       // they're not equal (i.e. floor isn't masking the b parameter).
       expect(predictedHighB).not.toBe(predictedLowB);
     });

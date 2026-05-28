@@ -1,15 +1,15 @@
 /**
- * Per-discipline volume helpers — feed the live race-day projection.
+ * Per-discipline volume helpers. Feed the live race-day projection.
  *
  * **Side of the line**: tracking. These functions look at completed swim/bike/
  * run activities and produce numbers consumed by `calculateTriLiveForecast`
  * and `applyDurabilityCap`. Pure functions; no state mutation.
  *
  * Three primary outputs:
- *   - `recentHoursByDiscipline(state, weeks)` — weekly avg hours per discipline.
+ *   - `recentHoursByDiscipline(state, weeks)`. Weekly avg hours per discipline.
  *     Drives the horizon adjuster's `sessions_per_week` scaling.
- *   - `sessionsPerWeekByDiscipline(state, weeks)` — average session count.
- *   - `longestSessionByDiscipline(state, weeks)` — max single-session duration
+ *   - `sessionsPerWeekByDiscipline(state, weeks)`. Average session count.
+ *   - `longestSessionByDiscipline(state, weeks)`. Max single-session duration
  *     per discipline. Drives the run-leg durability cap.
  *
  * The default window is 12 weeks. Tristan confirmed (2026-04-28 plan): long
@@ -91,7 +91,7 @@ export function sessionsPerWeekByDiscipline(
  * Average sessions/week per discipline from the **planned** upcoming weeks
  * (`triWorkouts`), not historical activity. Used by the projection's horizon
  * adjuster: "if you stick with the plan, here's how many sessions you'll be
- * doing per week" — which is the right input for projecting race-day fitness.
+ * doing per week". Which is the right input for projecting race-day fitness.
  *
  * Defaults to a 4-week look-ahead window. Past weeks (`w < state.w`) are
  * skipped; if fewer than 4 future weeks remain (race week, taper) we average
@@ -131,12 +131,12 @@ export function plannedSessionsPerWeekByDiscipline(
 /**
  * Average weekly hours per discipline from the **planned** upcoming weeks
  * (`triWorkouts`), summing each workout's `durationMin` per discipline.
- * Drives the race-readiness "dose" signal — captures that 5 short bike
+ * Drives the race-readiness "dose" signal. Captures that 5 short bike
  * sessions/wk ≠ 5 long bike sessions/wk (same session count, very different
  * volume). Falls back to 0 for weeks with no `triWorkouts` entries.
  *
  * Defaults to a 4-week look-ahead window (matches `plannedSessionsPerWeekByDiscipline`).
- * `startOffset` behaves identically — skips ahead to sample the recovered dose.
+ * `startOffset` behaves identically. Skips ahead to sample the recovered dose.
  */
 export function plannedHoursPerWeekByDiscipline(
   state: SimulatorState,

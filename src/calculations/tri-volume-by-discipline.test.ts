@@ -4,8 +4,8 @@ import type { SimulatorState } from '@/types/state';
 
 /**
  * The `startOffset` argument lets the injury-aware predictor sample the
- * *recovered* dose — the plan weeks after every restricted discipline has
- * returned — instead of the injured transition weeks that would understate the
+ * *recovered* dose. The plan weeks after every restricted discipline has
+ * returned. Instead of the injured transition weeks that would understate the
  * steady-state plan.
  */
 function stateWith(weeks: Array<{ swim: number; bike: number; run: number }>): SimulatorState {

@@ -11,7 +11,7 @@ import { getAbilityBand } from '@/calculations/fatigue';
 import { buildRingBackground, ringAnimationCSS, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
- * Page 7 — Plan Preview (v2).
+ * Page 7. Plan Preview (v2).
  *
  * Visual-consistency rewrite of legacy `plan-preview.ts`. Structure is preserved:
  *  - Recalculate forecast via `calculateLiveForecast` (single source of truth)
@@ -133,7 +133,7 @@ export function renderPlanPreviewV2(container: HTMLElement, state: OnboardingSta
 
   // Feasibility gate: only surface a milestone popup if adding one session/week
   // would actually bring the forecast to or below the milestone time, AND there
-  // is real room to bump (rw < 7 and epw < 10 — same caps the accept handler uses).
+  // is real room to bump (rw < 7 and epw < 10. Same caps the accept handler uses).
   // Otherwise we'd promise a goal the plan engine can't deliver.
   const canBumpSessions = (s.rw ?? 0) < 7 && (s.epw ?? 0) < 10;
   let milestone: MilestoneTarget | null = null;

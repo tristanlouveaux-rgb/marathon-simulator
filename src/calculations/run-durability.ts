@@ -20,7 +20,7 @@
  *     Olympic Marathon Trials" Int J Sports Physiol Perform 2:72–92 —
  *     qualifiers averaged 32 km longest run in marathon build; weekly km
  *     varied widely.
- *   - Daniels J (2014) "Daniels' Running Formula" 3rd ed — marathon-specific
+ *   - Daniels J (2014) "Daniels' Running Formula" 3rd ed. Marathon-specific
  *     long-run prescription scales with goal pace; absolute minimum 25 km
  *     for finish-focused marathoners, 30+ km for time-goal marathoners.
  *   - Pfitzinger P & Douglas S (2009) "Advanced Marathoning" 2nd ed —
@@ -55,10 +55,10 @@ export interface RunDurabilityResult {
  * literature (Karp 2007; Daniels 2014; Pfitzinger 2009).
  */
 export const LONG_RUN_THRESHOLD_SEC: Record<RaceDistance, number> = {
-  '5k':       35 * 60,    // 35 min easy — a 5K racer who can't run 35 min has economy issues
+  '5k':       35 * 60,    // 35 min easy. A 5K racer who can't run 35 min has economy issues
   '10k':      75 * 60,    // 75 min easy
-  'half':    105 * 60,    // 1h45 — typical half-marathon build long run
-  'marathon': 165 * 60,   // 2h45 (≈ 30 km easy) — Daniels minimum for time-goal marathoners
+  'half':    105 * 60,    // 1h45. Typical half-marathon build long run
+  'marathon': 165 * 60,   // 2h45 (≈ 30 km easy). Daniels minimum for time-goal marathoners
 };
 
 /**
@@ -85,7 +85,7 @@ export function applyLongRunCap(
   const maxPenalty = LONG_RUN_MAX_PENALTY[distance];
 
   if (longestRunSec <= 0) {
-    // No long runs found — apply maximum penalty (matches the volume-zero case).
+    // No long runs found. Apply maximum penalty (matches the volume-zero case).
     return {
       longestRunSec: 0,
       thresholdSec,

@@ -117,7 +117,7 @@ function computeDurationLabel(w: Workout, discipline: BadgeKind): string {
     return '';
   }
 
-  // run — show distance + time when we can estimate distance
+  // run. Show distance + time when we can estimate distance
   if (mins > 0) return fmtMinPretty(mins);
   return '';
 }
@@ -146,7 +146,7 @@ function extractPrimaryMetres(w: Workout): number {
 
 /**
  * Pretty-print minutes. Rounds to nearest 5 min for sessions ≥ 30 min so
- * we never show "147 min" — it becomes "2h 25min".
+ * we never show "147 min". It becomes "2h 25min".
  */
 function fmtMinPretty(mins: number): string {
   if (!Number.isFinite(mins) || mins <= 0) return '';

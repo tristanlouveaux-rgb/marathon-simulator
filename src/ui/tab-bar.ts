@@ -3,7 +3,7 @@
  * Running/cycling: Home | Plan | Stats (3 tabs)
  * Triathlon:       Home | Plan | Forecast | Stats (4 tabs)
  *
- * Mode is auto-detected from state — no call-site changes needed.
+ * Mode is auto-detected from state. No call-site changes needed.
  */
 
 import { getState } from '@/state/store';
@@ -61,7 +61,7 @@ export function renderTabBar(activeTab: TabId, _isSimulator?: boolean): string {
   `;
 }
 
-// Single live callback — replaced each time a view mounts. Never stacks.
+// Single live callback. Replaced each time a view mounts. Never stacks.
 let _tabHandler: ((tab: TabId) => void) | null = null;
 
 // One permanent delegated listener on document. Set up once, never re-added.
@@ -80,7 +80,7 @@ if (typeof document !== 'undefined') {
 
 /**
  * Register the navigation callback for tab bar clicks.
- * Replaces the previous callback — no listener accumulation.
+ * Replaces the previous callback. No listener accumulation.
  */
 export function wireTabBarHandlers(onChange: (tab: TabId) => void): void {
   _tabHandler = onChange;

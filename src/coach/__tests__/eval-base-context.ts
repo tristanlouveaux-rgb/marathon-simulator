@@ -4,9 +4,9 @@
  * `coach-context-builder.ts` so the system prompt's section descriptions line up.
  *
  * Exports:
- * - baseTriContext — triathlon mode (default for most scenarios)
- * - baseRunningContext — marathon plan mode
- * - baseHyroxContext — HYROX race prep mode
+ * - baseTriContext. Triathlon mode (default for most scenarios)
+ * - baseRunningContext. Marathon plan mode
+ * - baseHyroxContext. HYROX race prep mode
  */
 
 export const baseTriContext = {

@@ -1,9 +1,9 @@
 /**
- * HYROX training-horizon parameters — per station-class non-linear improvement
+ * HYROX training-horizon parameters. Per station-class non-linear improvement
  * model. Mirrors the structural shape of `triathlon-horizon-params.ts`
  * (week-factor exponential, session-factor sigmoid, undertrain penalty, taper
- * bonus, hard cap) but uses three station classes — A (cardio erg), B
- * (strength-endurance), C (grip/carry) — plus a RoxZone curve.
+ * bonus, hard cap) but uses three station classes. A (cardio erg), B
+ * (strength-endurance), C (grip/carry). Plus a RoxZone curve.
  *
  * Why classes, not per-station: Hyrox sessions hit multiple stations in one
  * workout, and the empirical literature provides class-level adaptation rates,
@@ -30,20 +30,20 @@ export type HyroxStationClass = 'cardio_erg' | 'strength_endurance' | 'grip_carr
 /**
  * Maps each station to its adaptation class.
  *
- *   Class A (cardio_erg)        — SkiErg, RowErg. Aerobic ergometer; physiology
+ *   Class A (cardio_erg). SkiErg, RowErg. Aerobic ergometer; physiology
  *                                 ≈ cycling FTP. ~3-4 min efforts at 1km, more
  *                                 anaerobic than steady-state FTP work but the
  *                                 underlying adaptation curves match closely
  *                                 (Mikulic 2008, Lawton 2011, Coggan 2019).
  *
- *   Class B (strength_endurance) — Sled Push, Sled Pull, Burpee Broad Jumps,
+ *   Class B (strength_endurance). Sled Push, Sled Pull, Burpee Broad Jumps,
  *                                 Sandbag Lunges, Wall Balls. Lactate
  *                                 tolerance + local muscular endurance.
  *                                 Largest novice gains, hard plateau in
  *                                 advanced (Bompa & Buzzichelli 2018, ACSM
  *                                 position stand 2009).
  *
- *   Class C (grip_carry)        — Farmer Carry. Grip + posterior chain
+ *   Class C (grip_carry). Farmer Carry. Grip + posterior chain
  *                                 endurance. Narrow trainability without
  *                                 specific work; conservative gain rates
  *                                 (Winwood et al. 2014 strongman literature,
@@ -61,7 +61,7 @@ export const STATION_CLASS: Record<HyroxStation, HyroxStationClass> = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Shared shape — mirrors DisciplineHorizonParams in triathlon-horizon-params.
+// Shared shape. Mirrors DisciplineHorizonParams in triathlon-horizon-params.
 // Uses the 6-level AbilityBand (total_beginner..competitive), not the 5-level
 // swim/bike/run progression.
 // ───────────────────────────────────────────────────────────────────────────
@@ -79,20 +79,20 @@ export interface HyroxHorizonParams {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Class A — Cardio erg (SkiErg, RowErg)
+// Class A. Cardio erg (SkiErg, RowErg)
 // Sources:
 //   - Mikulic P & Ružić L (2008) "Predicting the 1000-m rowing ergometer
-//     performance" — well-trained rowers improve 5-10% in 12wk structured
+//     performance". Well-trained rowers improve 5-10% in 12wk structured
 //     blocks; novices 10-15%.
 //   - Lawton TW, Cronin JB, McGuigan MR (2011) "Strength testing and training
-//     of rowers: a review" Sports Med 41:413-432 — 2k erg gains track with
+//     of rowers: a review" Sports Med 41:413-432. 2k erg gains track with
 //     anaerobic threshold improvements; 8-12 wk programs typical.
-//   - Concept2 published 12-week structured plan empirical data — 3-7%
+//   - Concept2 published 12-week structured plan empirical data. 3-7%
 //     improvement on 2k time at intermediate level.
 //   - Coggan A & Allen H (2019) "Training and Racing with a Power Meter" 3rd
-//     ed. Ch. 7 — FTP gain rates serve as the cycling analogue (rowing/skiing
+//     ed. Ch. 7. FTP gain rates serve as the cycling analogue (rowing/skiing
 //     adaptation curves are mechanistically similar).
-//   - Crawford & Drake (2020) HIFT 6-wk intervention — 8-15% VO2max gains in
+//   - Crawford & Drake (2020) HIFT 6-wk intervention. 8-15% VO2max gains in
 //     mixed cohorts; supports beginner-end calibration.
 // Confidence: medium-high. Direct rowing-erg longitudinal data (Mikulic 2008,
 // Concept2) is well-established. SkiErg-specific data is sparser but
@@ -138,9 +138,9 @@ export const CARDIO_ERG_HORIZON_PARAMS: HyroxHorizonParams = {
     advanced:       3.0,
     competitive:    3.0,
   },
-  // Moderate — cardio adapts faster to volume than strength endurance.
+  // Moderate. Cardio adapts faster to volume than strength endurance.
   undertrain_penalty_pct: 2.0,
-  // Mujika 2002 + Bosquet 2007 — 2-3% taper bonus typical for ergometer/aerobic.
+  // Mujika 2002 + Bosquet 2007. 2-3% taper bonus typical for ergometer/aerobic.
   taper_bonus_pct: {
     total_beginner: 2.0,
     beginner:       2.0,
@@ -154,25 +154,25 @@ export const CARDIO_ERG_HORIZON_PARAMS: HyroxHorizonParams = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Class B — Strength-endurance (Sled Push, Sled Pull, Burpee Broad Jumps,
+// Class B. Strength-endurance (Sled Push, Sled Pull, Burpee Broad Jumps,
 // Sandbag Lunges, Wall Balls)
 // Sources:
 //   - Bompa T & Buzzichelli C (2018) "Periodization Training for Sports" 4th
-//     ed. — local muscular endurance training drives 10-25% improvements in
+//     ed.. Local muscular endurance training drives 10-25% improvements in
 //     6-12 week programs; saturates rapidly in trained populations.
 //   - ACSM Position Stand (2009) "Progression Models in Resistance Training"
-//     MSSE 41:687-708 — high-rep strength-endurance protocols deliver 10-20%
+//     MSSE 41:687-708. High-rep strength-endurance protocols deliver 10-20%
 //     gains in untrained, 3-6% in advanced.
 //   - Schoenfeld BJ et al. (2021) "Loading Recommendations for Local
-//     Endurance" Sports 9:32 — 15+ rep schemes maximise local muscular
+//     Endurance" Sports 9:32. 15+ rep schemes maximise local muscular
 //     endurance; gain rates calibrated against 1RM-percentage thresholds.
-//   - Brandt & Ebel (2025) Frontiers — Hyrox sled push completed fastest
+//   - Brandt & Ebel (2025) Frontiers. Hyrox sled push completed fastest
 //     despite heaviest load → power-endurance not max-strength limits
 //     performance; supports treating these as strength-endurance not strength.
-//   - Mountain Tactical Institute mini-study — sled push intervals delivered
+//   - Mountain Tactical Institute mini-study. Sled push intervals delivered
 //     7-12% gains in 3-min Prone-to-Sprint over 8 wk; supports Class B
 //     improvement magnitude.
-//   - Kliszczewicz et al. (2014, 2019) — CrossFit metabolic-conditioning data
+//   - Kliszczewicz et al. (2014, 2019). CrossFit metabolic-conditioning data
 //     for burpee-style efforts; supports 8-12 wk adaptation timeline.
 // Confidence: medium. Direct Hyrox-station longitudinal data does not exist;
 // numbers anchored to LME literature plus the few sled-push studies that
@@ -195,7 +195,7 @@ export const STRENGTH_ENDURANCE_HORIZON_PARAMS: HyroxHorizonParams = {
     advanced:        5.0,
     competitive:     3.0,  // ACSM 2009 advanced ceiling
   },
-  // Slower than cardio erg — neuromuscular + metabolic adaptation compounded.
+  // Slower than cardio erg. Neuromuscular + metabolic adaptation compounded.
   tau_weeks: {
     total_beginner:  8,
     beginner:        9,
@@ -221,10 +221,10 @@ export const STRENGTH_ENDURANCE_HORIZON_PARAMS: HyroxHorizonParams = {
     advanced:       3.0,
     competitive:    3.0,
   },
-  // Slightly higher than cardio — strength-endurance is more session-frequency
+  // Slightly higher than cardio. Strength-endurance is more session-frequency
   // dependent (specific overload required to drive the local adaptation).
   undertrain_penalty_pct: 2.5,
-  // Smaller taper bonus than cardio — strength-endurance benefits less from
+  // Smaller taper bonus than cardio. Strength-endurance benefits less from
   // freshness; the limiting factor is movement quality under fatigue, not
   // restored glycogen / fluid balance (Mujika 2010 review).
   taper_bonus_pct: {
@@ -240,16 +240,16 @@ export const STRENGTH_ENDURANCE_HORIZON_PARAMS: HyroxHorizonParams = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Class C — Grip/Carry (Farmer Carry)
+// Class C. Grip/Carry (Farmer Carry)
 // Sources:
 //   - Winwood PW et al. (2014) "The strength and conditioning practices of
-//     strongman athletes" J Strength Cond Res 28:3678-3686 — loaded carries
+//     strongman athletes" J Strength Cond Res 28:3678-3686. Loaded carries
 //     respond well to specific work; cross-discipline transfer is limited.
-//   - Hindle BR et al. (2019) "Loaded carries — a review" Strength & Cond J
-//     41:69-75 — 6-12 wk specific programs deliver 10-20% gains; without
+//   - Hindle BR et al. (2019) "Loaded carries. A review" Strength & Cond J
+//     41:69-75. 6-12 wk specific programs deliver 10-20% gains; without
 //     specific work, gains from general training plateau quickly.
 //   - McGill SM (2010) "Core training: evidence translating to better
-//     performance and injury prevention" — trunk endurance + grip endurance
+//     performance and injury prevention". Trunk endurance + grip endurance
 //     adapt slowly without targeted dose.
 // Confidence: low-medium. Farmers carry research is sparse; numbers
 // extrapolated from strongman + general carry literature. Conservative
@@ -259,7 +259,7 @@ export const STRENGTH_ENDURANCE_HORIZON_PARAMS: HyroxHorizonParams = {
 // ───────────────────────────────────────────────────────────────────────────
 
 export const GRIP_CARRY_HORIZON_PARAMS: HyroxHorizonParams = {
-  // Conservative — the literature shows big gains with specific work, but
+  // Conservative. The literature shows big gains with specific work, but
   // typical Hyrox plans don't include dedicated carry drills, so the
   // realistic ceiling is below class B.
   max_gain_pct: {
@@ -308,13 +308,13 @@ export const GRIP_CARRY_HORIZON_PARAMS: HyroxHorizonParams = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// RoxZone — transitions between stations and runs
+// RoxZone. Transitions between stations and runs
 // Sources:
-//   - roxlyfe.com elite vs average analysis — elite transition total 2:54,
+//   - roxlyfe.com elite vs average analysis. Elite transition total 2:54,
 //     average 6:58 (a 4-minute gap; one of the largest skill discriminators).
-//   - HyroxDataLab target-split table — 6:30 transitions at intermediate,
+//   - HyroxDataLab target-split table. 6:30 transitions at intermediate,
 //     12:00 at total_beginner.
-//   - Brandt & Ebel (2025) — pacing and transition management as a primary
+//   - Brandt & Ebel (2025). Pacing and transition management as a primary
 //     race-day differentiator.
 // Adaptation rate: technique- and experience-driven; race-specificity practice
 // drives most of the gain. Caps low because the floor (sub-3-minute total) is
@@ -334,7 +334,7 @@ export const ROXZONE_HORIZON_PARAMS: HyroxHorizonParams = {
     advanced:        3.0,
     competitive:     2.0,
   },
-  // Experience accumulates fast — 2-3 race simulations per block typically
+  // Experience accumulates fast. 2-3 race simulations per block typically
   // halves transition losses for novice athletes.
   tau_weeks: {
     total_beginner:  4,
@@ -361,7 +361,7 @@ export const ROXZONE_HORIZON_PARAMS: HyroxHorizonParams = {
     competitive:    3.0,
   },
   undertrain_penalty_pct: 1.5,
-  // Minimal taper effect — RoxZone is technique, not freshness.
+  // Minimal taper effect. RoxZone is technique, not freshness.
   taper_bonus_pct: {
     total_beginner: 1.0,
     beginner:       1.0,
@@ -376,7 +376,7 @@ export const ROXZONE_HORIZON_PARAMS: HyroxHorizonParams = {
 
 /**
  * Logistic steepness for the session-factor sigmoid. Mirrors `TRI_K_SESSIONS
- * = 0.7` from the triathlon side — same dose-response shape applies (the
+ * = 0.7` from the triathlon side. Same dose-response shape applies (the
  * recalibration that softened from k=1.0 to k=0.7 reflects that plans below
  * the ref centre still deliver real gain, not the ~13% k=1.0 implied).
  */
@@ -391,7 +391,7 @@ export const HYROX_K_SESSIONS = 0.7;
 export const HYROX_TAPER_WEEKS = 1.5;
 
 /**
- * Lookup helper — returns the horizon params for a given station class.
+ * Lookup helper. Returns the horizon params for a given station class.
  */
 export function getStationClassHorizonParams(cls: HyroxStationClass): HyroxHorizonParams {
   switch (cls) {

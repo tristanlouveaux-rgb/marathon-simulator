@@ -1,19 +1,19 @@
 /**
  * trimp.ts
  * ========
- * Individual TRIMP (iTRIMP) — Banister/Morton model using Heart Rate Reserve fraction.
+ * Individual TRIMP (iTRIMP). Banister/Morton model using Heart Rate Reserve fraction.
  *
  * Formula per sample i:
  *   HRR_i = (HR_i - HR_rest) / (HR_max - HR_rest)
  *   TRIMP += Δt_sec × HRR_i × e^(β × HRR_i)
  *
- * β = 1.92 (male or unknown — conservative default)
+ * β = 1.92 (male or unknown. Conservative default)
  * β = 1.67 (female)
  *
  * Three calculation tiers (highest accuracy first):
- *   1. calculateITrimp         — 1-second HR stream (primary)
- *   2. calculateITrimpFromLaps — per-lap avgHR + duration (fallback)
- *   3. calculateITrimpFromSummary — single avgHR + total duration (last resort)
+ *   1. calculateITrimp. 1-second HR stream (primary)
+ *   2. calculateITrimpFromLaps. Per-lap avgHR + duration (fallback)
+ *   3. calculateITrimpFromSummary. Single avgHR + total duration (last resort)
  */
 
 /** Sex for β coefficient selection */
@@ -30,7 +30,7 @@ function getBeta(sex?: BiologicalSex): number {
  * @param timeSamples Elapsed seconds from activity start, same length as hrSamples
  * @param restingHR   Resting heart rate (bpm)
  * @param maxHR       Maximum heart rate (bpm)
- * @param sex         Biological sex — determines β coefficient
+ * @param sex         Biological sex. Determines β coefficient
  * @returns iTRIMP value (dimensionless training impulse)
  */
 export function calculateITrimp(
@@ -64,7 +64,7 @@ export function calculateITrimp(
  * @param laps        Array of lap data with avgHR (bpm) and durationSec
  * @param restingHR   Resting heart rate (bpm)
  * @param maxHR       Maximum heart rate (bpm)
- * @param sex         Biological sex — determines β coefficient
+ * @param sex         Biological sex. Determines β coefficient
  * @returns iTRIMP value
  */
 export function calculateITrimpFromLaps(
@@ -93,7 +93,7 @@ export function calculateITrimpFromLaps(
  * @param durationSec Total session duration in seconds
  * @param restingHR   Resting heart rate (bpm)
  * @param maxHR       Maximum heart rate (bpm)
- * @param sex         Biological sex — determines β coefficient
+ * @param sex         Biological sex. Determines β coefficient
  * @returns iTRIMP value
  */
 export function calculateITrimpFromSummary(

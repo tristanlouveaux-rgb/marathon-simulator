@@ -209,7 +209,7 @@ describe('applyPhaseProgression', () => {
 });
 
 // ---------------------------------------------------------------------------
-// evaluatePhaseTransition — pain regression rules
+// evaluatePhaseTransition. Pain regression rules
 // ---------------------------------------------------------------------------
 
 describe('evaluatePhaseTransition — pain regression', () => {
@@ -275,7 +275,7 @@ describe('evaluatePhaseTransition — pain regression', () => {
       phaseTransitions: [],
     });
     const next = evaluatePhaseTransition(state);
-    // Should not regress — pain is low
+    // Should not regress. Pain is low
     expect(['test_capacity', 'return_to_run']).toContain(next.injuryPhase);
   });
 });

@@ -33,7 +33,7 @@ import '@/ui/strava-detail';
 // Console-callable VO2max diagnostic: run `diagnoseVO2()` in the browser console
 // to see every available VO2max signal computed from the current state, plus
 // the HR-regression's internal points and HRR distribution. Read-only.
-// Dev-only — never attached in production builds so it's not discoverable via
+// Dev-only. Never attached in production builds so it's not discoverable via
 // Safari Web Inspector on the shipped iOS bundle.
 if (import.meta.env.DEV) {
   (window as any).diagnoseVO2 = (): unknown => {
@@ -55,8 +55,8 @@ let launchedUserId: string | null = null;
 /**
  * Startup-sync coordination. `launchApp` fires several fire-and-forget
  * background tasks (Strava backfill, history restore, DB cleanup, etc.) that
- * write to the activity DB. Some surfaces — most importantly the onboarding
- * review screen's `loadActivitiesFromDB` query — read that DB and need to
+ * write to the activity DB. Some surfaces. Most importantly the onboarding
+ * review screen's `loadActivitiesFromDB` query. Read that DB and need to
  * see settled data, otherwise their derived values (FTP, CSS, weekly volume)
  * come and go between reloads as the syncs race the read.
  *
@@ -80,10 +80,10 @@ function trackStartupTask<T>(p: Promise<T>): Promise<T> {
 
 /**
  * Wait until all background startup tasks (registered via `trackStartupTask`
- * in `launchApp`) have settled, or until `timeoutMs` elapses — whichever
+ * in `launchApp`) have settled, or until `timeoutMs` elapses. Whichever
  * comes first. Resolves regardless; never rejects.
  *
- * Defaults to 20 s — plenty of time for a typical first-run Strava backfill,
+ * Defaults to 20 s. Plenty of time for a typical first-run Strava backfill,
  * but capped so a stuck task can't lock the wizard indefinitely.
  */
 export async function awaitStartupSyncs(timeoutMs: number = 20000): Promise<void> {
@@ -116,11 +116,11 @@ function scheduleHomeRefresh(): void {
  * happens after launch, tear down any full-screen overlays so the user is
  * never left staring at a blank backdrop. This is a defence-in-depth measure
  * for the class of bug where a sync routine opens an overlay and then crashes
- * mid-render — the silent .catch() handlers in fire-and-forget syncs would
+ * mid-render. The silent .catch() handlers in fire-and-forget syncs would
  * otherwise hide the failure entirely.
  *
  * IDs listed here are full-viewport overlays that, if orphaned, would obscure
- * the home view. The list is intentionally narrow — modals like check-in or
+ * the home view. The list is intentionally narrow. Modals like check-in or
  * coach are user-initiated and should not be force-closed.
  */
 const FULLSCREEN_OVERLAY_IDS = ['activity-review-overlay'];
@@ -146,7 +146,7 @@ installGlobalErrorSafetyNet();
  */
 /**
  * Pinch-zoom policy. The static viewport meta in index.html locks scaling off
- * (`maximum-scale=1.0, user-scalable=no`) — correct for the native iOS app,
+ * (`maximum-scale=1.0, user-scalable=no`). Correct for the native iOS app,
  * where a zoomable web-view feels broken and inputs jump on focus. On the
  * web/desktop build there's no such expectation and zoom is an accessibility
  * baseline, so relax the meta at runtime for non-native platforms only. Native
@@ -203,7 +203,7 @@ async function bootstrap(): Promise<void> {
   }
 
   if (!session) {
-    // No session — silently create an anonymous user. No auth UI during onboarding.
+    // No session. Silently create an anonymous user. No auth UI during onboarding.
     // Users can upgrade to a real account later from Account settings.
     const { data, error } = await supabase.auth.signInAnonymously();
     if (error || !data.session) {
@@ -221,11 +221,11 @@ async function bootstrap(): Promise<void> {
     session = data.session;
   }
 
-  // Authenticated (anon or real) — proceed with app
+  // Authenticated (anon or real). Proceed with app
   await launchApp();
   const { data: { user: launchedUser } } = await supabase.auth.getUser();
   launchedUserId = launchedUser?.id ?? null;
-  // RevenueCat IAP — no-op on web/Android and when SDK key isn't pasted yet.
+  // RevenueCat IAP. No-op on web/Android and when SDK key isn't pasted yet.
   // Identifies the user so webhook events arrive with the Supabase user_id.
   void initRevenueCat(launchedUserId);
   setupAuthListener();
@@ -233,7 +233,7 @@ async function bootstrap(): Promise<void> {
 
 /**
  * Retry anonymous sign-in when network connectivity is restored after the
- * initial bootstrap failed. Wired by ISSUE-228 — the offline fallback path.
+ * initial bootstrap failed. Wired by ISSUE-228. The offline fallback path.
  * Idempotent and self-cleaning: once sign-in succeeds the listener is removed
  * and the auth-state-change subscription takes over.
  */
@@ -274,7 +274,7 @@ function scheduleOfflineAuthRetry(): void {
  * SIGNED_IN here only fires on explicit sign-in via the auth form (the
  * anonymous bootstrap sign-in happens before this listener is attached, so
  * its event is missed by design). On explicit sign-in, the user expects
- * their account's plan to load — but launchApp's default path checks
+ * their account's plan to load. But launchApp's default path checks
  * localStorage first and skips restore-from-Supabase if anything is there.
  * That left users seeing the previous (anon / signed-out) session's state.
  *
@@ -297,11 +297,11 @@ function setupAuthListener(): void {
         if (newUserId && newUserId === launchedUserId) return;
         // On explicit sign-in, the user expects their account's plan. The
         // localStorage state may belong to a previous (anonymous or
-        // signed-out) session — owner_id stamped by save/restore tells us
+        // signed-out) session. Owner_id stamped by save/restore tells us
         // whose data is on disk. If owner mismatches the new user, wipe it
         // before restore so we never show one user another's plan.
         // If restore returns false (no cloud backup), launchApp falls
-        // through to the wizard — the right outcome for a fresh account.
+        // through to the wizard. The right outcome for a fresh account.
         const owner = getLocalStateOwner();
         if (newUserId && owner && owner !== newUserId) {
           clearState();
@@ -338,7 +338,7 @@ async function launchApp(): Promise<void> {
 
   // Refresh isGuestAccount from the live session. is_anonymous is true for users
   // auto-created via signInAnonymously above. Long-term anonymous users are at
-  // risk of data loss on app reinstall / device change — the home banner and
+  // risk of data loss on app reinstall / device change. The home banner and
   // Account view surface a "Save your account" prompt off this flag.
   if (!isSimulatorMode()) {
     try {
@@ -355,7 +355,7 @@ async function launchApp(): Promise<void> {
     // Pending account-deletion check. If the user previously triggered
     // self-serve deletion (Account view → Delete account) and signed back
     // in within the 30-day grace window, surface a banner with the cancel
-    // path. Non-blocking — read via edge fn since the SELECT policy on
+    // path. Non-blocking. Read via edge fn since the SELECT policy on
     // user_plan_settings hides soft-deleted rows from the user.
     void import('@/ui/pending-deletion-banner').then(({ checkAndShowPendingDeletion }) => {
       void checkAndShowPendingDeletion();
@@ -364,7 +364,7 @@ async function launchApp(): Promise<void> {
 
   // Self-heal stravaConnected flag. Users who connected Strava from the tri
   // setup page (or via any path that didn't land on ?strava=connected) have
-  // tokens in strava_tokens but the state flag is false — which gates the
+  // tokens in strava_tokens but the state flag is false. Which gates the
   // auto-backfill and leaves their rides without power data. Fix by
   // asking the DB directly and flipping the flag on when tokens exist.
   if (STRAVA_ENABLED && !isSimulatorMode() && hasState && !state.stravaConnected) {
@@ -406,7 +406,7 @@ async function launchApp(): Promise<void> {
   // Set per-athlete iTRIMP normalizer (LTHR-based, Coggan hrTSS standard)
   setAthleteNormalizer(state.ltHR, state.restingHR, state.maxHR);
 
-  // Cross-modal VO2max — refresh per-discipline estimates + cardiac ceiling
+  // Cross-modal VO2max. Refresh per-discipline estimates + cardiac ceiling
   // from the last 8 weeks of activity. Cheap (~2ms), pure local computation.
   //
   // Tri mode skips this launch-top call: the canonical activity log lives in
@@ -415,7 +415,7 @@ async function launchApp(): Promise<void> {
   // hundred ms later (different HRmax sample, different point count). Firing
   // once here and once after benchmarks made the headline visibly flap
   // between two values within a single launch. Tri mode runs it once after
-  // `loadActivitiesFromDB` resolves — see line ~530.
+  // `loadActivitiesFromDB` resolves. See line ~530.
   if (state.eventType !== 'triathlon') {
     refreshVO2Estimates();
   }
@@ -431,7 +431,7 @@ async function launchApp(): Promise<void> {
   // Triathlon: regenerate the plan if the generator version has bumped since
   // the plan was last built, AND refresh benchmarks (CSS / FTP / per-
   // discipline CTL) from the latest activity history so predictions track
-  // fitness as it evolves. Never overwrites user-entered CSS/FTP — only
+  // fitness as it evolves. Never overwrites user-entered CSS/FTP. Only
   // fills blanks.
   if (hasState && state.eventType === 'triathlon' && state.triConfig) {
     try {
@@ -463,7 +463,7 @@ async function launchApp(): Promise<void> {
 
       // Tri onboarding skips the Strava connection step. If the DB is
       // empty but the user has Strava tokens, pull a 16-week backfill
-      // before deriving — otherwise new tri users would see CTL 0 until
+      // before deriving. Otherwise new tri users would see CTL 0 until
       // they manually press sync.
       if (activityLog.length === 0 && !isSimulatorMode()) {
         const stravaOk = STRAVA_ENABLED && await isStravaConnected();
@@ -493,7 +493,7 @@ async function launchApp(): Promise<void> {
       const { estimateDirectPerDisciplineCTLFromActivities } = await import('@/calculations/tri-benchmarks-from-history');
       const directFitness = estimateDirectPerDisciplineCTLFromActivities(activityLog);
 
-      // Diagnostic — once-per-launch so we can see why Training Load might be
+      // Diagnostic. Once-per-launch so we can see why Training Load might be
       // zero. Activity count, derived fitness per discipline, and how many
       // historical weeks have non-zero CTL.
       const { classifyActivity } = await import('@/calculations/tri-benchmarks-from-history');
@@ -560,7 +560,7 @@ async function launchApp(): Promise<void> {
           };
           appendCssSample(mutable.triConfig.swim, derivedCss, 'derived', derived.css.confidence);
         } else if (swimSrc === 'user' && swim?.cssSecPer100m) {
-          // User-set CSS — confidence is 'high' if they did the paired-TT test
+          // User-set CSS. Confidence is 'high' if they did the paired-TT test
           // (both m400 and m200 PBs present), 'medium' if they typed a single
           // value without backing test data. Refresh on every launch so users
           // who later complete the paired test see their tier upgrade.
@@ -589,7 +589,7 @@ async function launchApp(): Promise<void> {
           (ftpConf === 'high' || ftpConf === 'medium');
         // Derived → derived: ratchet up only. A saved derived FTP should
         // never be replaced by a *lower* derived value within the same
-        // session — that's the regression class where a curve-based 295W
+        // session. That's the regression class where a curve-based 295W
         // gets clobbered by a fallback 193W when the curve temporarily
         // disappears (Strava re-processed, etc). The correct "FTP went
         // down" path is the user manually entering a lower value, which
@@ -597,7 +597,7 @@ async function launchApp(): Promise<void> {
         //
         // Exception: if the new derivation has *higher* confidence (e.g.
         // we previously had 'low' fallback and now have 'high' curve),
-        // accept it even if the value is slightly lower — better data
+        // accept it even if the value is slightly lower. Better data
         // wins over a stale higher number.
         const confRank = (c: typeof ftpConf | undefined): number =>
           c === 'high' ? 3 : c === 'medium' ? 2 : c === 'low' ? 1 : 0;
@@ -631,7 +631,7 @@ async function launchApp(): Promise<void> {
           // so future "why didn't FTP update?" is one log line away.
           console.log(`[tri] FTP held: derived path returned ${derivedFtp}W (${ftpConf}) but saved is ${currentFtp}W (${currentConf}) — ratchet-up rule, will not regress.`);
         } else if (bikeSrc === 'user' && bike?.ftp) {
-          // User-set FTP — 'high' if they actually ran the 20-min test,
+          // User-set FTP. 'high' if they actually ran the 20-min test,
           // 'medium' otherwise. Refresh every launch so completing the test
           // later upgrades the tier.
           mutable.triConfig.bike = {
@@ -661,7 +661,7 @@ async function launchApp(): Promise<void> {
       // Re-run the cross-modal VO2 orchestrator with the DB activity log so:
       //  (a) cycling estimator picks up fresh FTP this launch
       //  (b) running HR-regression sees ALL activities, not just those that
-      //      ended up in `wks[].garminActuals` — closing the gap with running
+      //      ended up in `wks[].garminActuals`. Closing the gap with running
       //      mode where the same activities are co-located in wks.
       const orchestratorActivities = activityLog.map(a => ({
         startTime: a.startTime ?? null,
@@ -730,7 +730,7 @@ async function launchApp(): Promise<void> {
       // 3. Doubles-in-singles repair: pre-fix init logic keyed slot off the
       //    target format. Users who entered doubles splits got them stored in
       //    the Singles slot. Detection condition is sharp (prev fmt = doubles
-      //    AND singles populated AND doubles empty) — idempotent on already-
+      //    AND singles populated AND doubles empty). Idempotent on already-
       //    correct state.
       const prevFmt = hx.hyroxPreviousTimeFormat;
       const prevIsDoubles = prevFmt === 'open_doubles' || prevFmt === 'pro_doubles';
@@ -784,7 +784,7 @@ async function launchApp(): Promise<void> {
 
     // Plan regeneration when the HYROX generator version bumps. Mirrors the
     // triathlon path at the top of this file. Without this, every bump of
-    // HYROX_GENERATOR_VERSION was a silent no-op for existing users — the
+    // HYROX_GENERATOR_VERSION was a silent no-op for existing users. The
     // header comment claimed regen-on-launch but the wiring was never built.
     try {
       const { generateHyroxPlan, HYROX_GENERATOR_VERSION } = await import('@/workouts/plan_engine.hyrox');
@@ -844,7 +844,7 @@ async function launchApp(): Promise<void> {
       // from current state and gates on `result.source === 'derived'`. If apply
       // ran first, it would have already written derived→hyroxRunPaceSecKm,
       // making the next derive call see userVal === derived and return
-      // source='user' — bump never fires. See hyrox-marker-bumps.test.ts.
+      // source='user'. Bump never fires. See hyrox-marker-bumps.test.ts.
       const bumps = detectHyroxMarkerBumps(mutable);
       const wrote = applyHyroxRunPaceDerivation(mutable);
       for (const b of bumps) {
@@ -916,7 +916,7 @@ async function launchApp(): Promise<void> {
         _ms._debriefGateV3 = true;
         saveState();
       }
-      // Triathlon users are exempt from the debrief gate — no plan-preview debrief exists.
+      // Triathlon users are exempt from the debrief gate. No plan-preview debrief exists.
       const lastComplete = _ms.lastCompleteDebriefWeek ?? 0;
       if (_ms.eventType !== 'triathlon' && _ms.w > lastComplete + 1) {
         _ms.w = lastComplete + 1;
@@ -934,7 +934,7 @@ async function launchApp(): Promise<void> {
       if (reconcileRecentLegLoads()) saveState();
     }
 
-    // Recompute athleteTier from current ctlBaseline — state may be stale from
+    // Recompute athleteTier from current ctlBaseline. State may be stale from
     // an earlier CTL value (e.g. pre-fix readings) and the tier only updates
     // when fetchStravaHistory runs, which is cache-skipped on most launches.
     {
@@ -995,7 +995,7 @@ async function launchApp(): Promise<void> {
         const last = hh[hh.length - 1];
         const daysActive = Math.round((new Date(last.endDate + 'T12:00:00').getTime() - new Date(last.startDate + 'T12:00:00').getTime()) / 86400000) + 1;
         if (daysActive < 3) {
-          // This was a trivially short holiday — undo VDOT loss (add back ~0.6)
+          // This was a trivially short holiday. Undo VDOT loss (add back ~0.6)
           // and clear any bridge mods it wrote
           if (ms.v) ms.v = Math.round((ms.v + 0.6) * 10) / 10;
           for (const wk of (ms.wks || [])) {
@@ -1075,7 +1075,7 @@ async function launchApp(): Promise<void> {
     recordAppOpen();
 
     // Evaluate proactive coach triggers (HRV crash, marker bump, race week) and
-    // append any newly fireable insights to the queue. Pure state logic — no
+    // append any newly fireable insights to the queue. Pure state logic. No
     // LLM call is made here; the call only happens if the user taps the Home
     // insight card. Wrapped in try/catch so a detector bug never blocks launch.
     try {
@@ -1085,7 +1085,7 @@ async function launchApp(): Promise<void> {
       if (newInsights.length > 0) {
         if (!ms2.coachInsightQueue) ms2.coachInsightQueue = [];
         ms2.coachInsightQueue.push(...newInsights);
-        // Cap the queue at 5 — overflow means a trigger bug, drop the oldest.
+        // Cap the queue at 5. Overflow means a trigger bug, drop the oldest.
         if (ms2.coachInsightQueue.length > 5) {
           ms2.coachInsightQueue.splice(0, ms2.coachInsightQueue.length - 5);
         }
@@ -1095,7 +1095,7 @@ async function launchApp(): Promise<void> {
       console.warn('[coach-triggers] evaluation failed:', err);
     }
 
-    // Check if holiday ended while the app was closed — show welcome-back before home
+    // Check if holiday ended while the app was closed. Show welcome-back before home
     if (checkHolidayEnd()) {
       showHolidayWelcomeBack(() => {
         renderHomeView();
@@ -1110,14 +1110,14 @@ async function launchApp(): Promise<void> {
       // If calendar is ahead of s.w (advance was held pending debrief), show in 'complete' mode
       // so the user gets the full flow: summary → animation → plan preview → advance.
       // fireDebriefIfReady defers when a matching screen is open or activities are still
-      // unassigned — the retry fires from activitySync.ts after the user saves matching.
+      // unassigned. The retry fires from activitySync.ts after the user saves matching.
       const pendingDebrief = isWeekPendingDebrief();
       import('@/ui/week-debrief').then(({ fireDebriefIfReady }) => {
         fireDebriefIfReady(pendingDebrief);
       });
     }
 
-    // Health disclaimer — App Store §1.4. One-time acknowledgement for existing users.
+    // Health disclaimer. App Store §1.4. One-time acknowledgement for existing users.
     // New users hit this after wizard completes via the same call inside initWizard.
     import('@/ui/health-disclaimer').then(({ maybeShowHealthDisclaimer }) => {
       void maybeShowHealthDisclaimer();
@@ -1145,7 +1145,7 @@ async function launchApp(): Promise<void> {
   // Handle OAuth redirects.
   // Only route to account-view when the user is actually on main-view. A user
   // mid-wizard (e.g. editing goals after having completed onboarding once) has
-  // hasCompletedOnboarding=true but a non-main-view currentStep — routing them
+  // hasCompletedOnboarding=true but a non-main-view currentStep. Routing them
   // to account-view drops them out of the wizard flow.
   const params = new URLSearchParams(window.location.search);
   const onMainView = hasState && state.hasCompletedOnboarding
@@ -1177,7 +1177,7 @@ async function launchApp(): Promise<void> {
     });
     resetStravaCache();
     showStravaConnectedToast();
-    // Always kick off the sync after OAuth — the wizard's review step reads from
+    // Always kick off the sync after OAuth. The wizard's review step reads from
     // the DB and needs activities there before it can decide to show vs divert.
     setTimeout(() => syncStravaActivities().catch(() => {}), 500);
     if (onMainView) {
@@ -1187,11 +1187,11 @@ async function launchApp(): Promise<void> {
     // review page waits on the DB fetch and then decides.
   }
 
-  // Sync wearable data on launch (skip in simulator mode — no auth)
+  // Sync wearable data on launch (skip in simulator mode. No auth)
   if (!isSimulatorMode()) {
     const activitySrc = getActivitySource(state);
     const hasGarminPhysio = hasPhysiologySource(state, 'garmin');
-    // Apple Health is a SUPPLEMENTARY source — it can run alongside a Garmin/Strava
+    // Apple Health is a SUPPLEMENTARY source. It can run alongside a Garmin/Strava
     // primary, not just as the sole source. `appleHealthConnected` is the device-local
     // "HealthKit authorized here" flag; the legacy check covers users whose physiology
     // primary is already Apple.
@@ -1199,7 +1199,7 @@ async function launchApp(): Promise<void> {
 
     // ── ACTIVITIES ────────────────────────────────────────────────────────────
     if (activitySrc === 'apple') {
-      // Apple Watch primary: activities via HealthKit (iOS only — no-op on web)
+      // Apple Watch primary: activities via HealthKit (iOS only. No-op on web)
       syncAppleHealth()
         .then(() => {
           // Register the HealthKit observer + background delivery so any
@@ -1225,7 +1225,7 @@ async function launchApp(): Promise<void> {
           syncActivities().catch(() => {});
           // Re-render home view if it's still active so TSS reflects post-sync state
           scheduleHomeRefresh();
-          // Triathlon prediction refresh — runs only when in triathlon mode.
+          // Triathlon prediction refresh. Runs only when in triathlon mode.
           refreshTriPredictionAfterSync().catch(() => {});
           // Running + HYROX race-outcome detection. Mirrors the tri logger
           // above so post-race results are captured across all three modes.
@@ -1271,7 +1271,7 @@ async function launchApp(): Promise<void> {
         if (garminOk) {
           // Backfill first (idempotent), then snapshot so state reflects fresh DB data.
           await triggerGarminBackfill(8).catch(() => {});
-          // Fetch today's steps immediately (fast — single epoch window).
+          // Fetch today's steps immediately (fast. Single epoch window).
           syncTodaySteps().then(() => scheduleHomeRefresh()).catch(() => {});
           await syncPhysiologySnapshot(90).catch(() => {});
           const ps = getState();
@@ -1280,7 +1280,7 @@ async function launchApp(): Promise<void> {
           // Close out + refit k_user against the freshly-synced physiology.
           refreshAdaptiveRecovery();
           scheduleHomeRefresh();
-          // If today's sleep score is still missing, re-fetch — Garmin computes
+          // If today's sleep score is still missing, re-fetch. Garmin computes
           // scores 1–4h after waking so the webhook may fire before it's ready.
           const todayStr = new Date().toISOString().split('T')[0];
           const todaySleep = getState().physiologyHistory?.find(d => d.date === todayStr);
@@ -1320,7 +1320,7 @@ async function launchApp(): Promise<void> {
   // Extended history (52w) is populated by backfillStravaHistory so the stats
   // "16w" tab works AND so the athlete-archetype classifier can detect
   // "detrained-with-history" (current 18 km/wk but ran 50 km/wk last summer).
-  // Repeat-run cost is bounded by the DB cache skip-list — only NEW activities
+  // Repeat-run cost is bounded by the DB cache skip-list. Only NEW activities
   // since last sync get re-processed.
   // Also triggers once post-migration to heal the new ambient_temp_c column on historical rows.
   const thinHistory = (state.historicWeeklyTSS?.length ?? 0) < 8;
@@ -1343,7 +1343,7 @@ async function launchApp(): Promise<void> {
     // Backfill was skipped (recent enough), but athleteArchetype was added in
     // a later release and isn't on existing state. Detect it from the cached
     // history so the ramp + plan-view caption show without forcing a full
-    // Strava resync. One-shot — once `athleteArchetype` exists, the regular
+    // Strava resync. One-shot. Once `athleteArchetype` exists, the regular
     // weekly refresh keeps it updated.
     import('@/calculations/athlete-archetype').then(({ detectArchetype }) => {
       const mut = getMutableState();
@@ -1360,7 +1360,7 @@ async function launchApp(): Promise<void> {
   // matcher's in-state dedup don't keep poisoning baselines.
   //
   // Not gated on Strava: the dedup logic groups any rows within ±10 min and ranks
-  // them — it works equally well for Garmin-only users whose webhook fired twice
+  // them. It works equally well for Garmin-only users whose webhook fired twice
   // for the same activity. Strava-vs-Garmin shadowing is just one of the cases
   // it cleans up.
   if (!isSimulatorMode()) {
@@ -1370,7 +1370,7 @@ async function launchApp(): Promise<void> {
     const dedupAgeDays = dedupAt > 0 ? (Date.now() - dedupAt) / 86400000 : Infinity;
     if (dedupAgeDays > 30) {
       // Tracked so the review pipeline waits for the dedup to land before
-      // reading — otherwise `loadActivitiesFromDB` could see duplicates
+      // reading. Otherwise `loadActivitiesFromDB` could see duplicates
       // mid-deletion.
       trackStartupTask(cleanupDbDuplicates(90).catch(() => {}));
     }
@@ -1423,7 +1423,7 @@ async function launchApp(): Promise<void> {
     // Schema sniff: archive entries built before today's fix stripped kmSplits
     // and hrZones to save space. The activity-detail popup needs both, so
     // detecting an archived activity that has iTrimp data but no zone/split
-    // info means we're holding a legacy archive — force a re-fetch.
+    // info means we're holding a legacy archive. Force a re-fetch.
     const hasLegacyStrippedSchema = archives.some(arc =>
       (arc.weeks ?? []).some((wk: any) =>
         Object.values(wk?.garminActuals ?? {}).some((a: any) =>
@@ -1436,7 +1436,7 @@ async function launchApp(): Promise<void> {
     if (archiveEmpty || stale || hasLegacyStrippedSchema) {
       console.log(`[Startup] Auto-restoring activity history from server (archives=${archives.length}, stale=${stale}, empty=${archiveEmpty}, legacy=${hasLegacyStrippedSchema})`);
       // 180 days covers ~2 plans of typical history. Bigger windows risk
-      // localStorage quota — quota fail surfaces as a saveState exception.
+      // localStorage quota. Quota fail surfaces as a saveState exception.
       // Tracked so `awaitStartupSyncs()` waits for this archive write.
       trackStartupTask(restoreHistoryFromServer(180).catch((err) => {
         console.warn('[Startup] Auto-restore failed:', err);
@@ -1446,7 +1446,7 @@ async function launchApp(): Promise<void> {
 
   console.log('Mosaic Training Simulator initialized');
   // Signal that launchApp's task-collection phase is complete. Any caller
-  // awaiting `awaitStartupSyncs()` was blocked on this — now they can
+  // awaiting `awaitStartupSyncs()` was blocked on this. Now they can
   // proceed to wait for the tracked tasks themselves to settle.
   _launchAppResolve?.();
 }
@@ -1488,7 +1488,7 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
     scheduleHomeRefresh();
   }
 
-  // Race-outcome logging — runs once per race when the race date passes and
+  // Race-outcome logging. Runs once per race when the race date passes and
   // race-day activities have synced. Idempotent.
   try {
     const { detectAndLogRaceOutcome } = await import('@/calculations/tri-race-outcome');
@@ -1519,7 +1519,7 @@ async function refreshTriPredictionAfterSync(): Promise<void> {
     console.warn('[tri:race-outcome] detection failed', e);
   }
 
-  // Marker bumps — surface a small toast when CSS / FTP / VDOT crossed the
+  // Marker bumps. Surface a small toast when CSS / FTP / VDOT crossed the
   // meaningful-improvement threshold since the last notification. CLAUDE.md
   // → Adaptation transparency rule.
   await maybeShowMarkerBumpToast();
@@ -1574,7 +1574,7 @@ async function detectRaceOutcomeAfterSync(): Promise<void> {
  * Refresh adaptive recovery state: close out any session impact entries whose
  * 96h observation window has elapsed, then refit `k_user` from all closed
  * evidence. Cheap (bounded by the 90-day rolling log) so it can run on every
- * launch after physiology sync — no need to gate on week rollover.
+ * launch after physiology sync. No need to gate on week rollover.
  *
  * Surfaces a one-line console note when confidence first crosses medium/high
  * so we have a paper trail of when the personalisation kicked in.
@@ -1609,7 +1609,7 @@ async function maybeShowMarkerBumpToast(): Promise<void> {
     showMarkerBumpToast(bumps.map(b => b.toastText));
   }
 
-  // Always snapshot — even when no bumps fired — so first-launch baseline
+  // Always snapshot. Even when no bumps fired. So first-launch baseline
   // gets seeded silently and subsequent comparisons are against fresh values.
   snapshotNotifiedMarkers(s);
   saveState();
@@ -1678,7 +1678,7 @@ async function runTriActivityMatching(): Promise<void> {
     }
   }
 
-  // Brick detection — pair bike→run within 30 min so the run leg of a brick
+  // Brick detection. Pair bike→run within 30 min so the run leg of a brick
   // workout gets `status='completed'` even when matched alone. Activity-side.
   const actualsForBrick = Object.values(wk.garminActuals)
     .filter(a => a.startTime)
@@ -1771,7 +1771,7 @@ async function checkRecoveryAndPrompt(s: ReturnType<typeof import('@/state').get
   const todayPhysio = physioHistory.find(p => p.date === today);
 
   if (!todayPhysio) {
-    // No Garmin data for today — silently skip (ISSUE-82: don't auto-prompt)
+    // No Garmin data for today. Silently skip (ISSUE-82: don't auto-prompt)
     return;
   }
 
@@ -1851,7 +1851,7 @@ document.addEventListener('visibilitychange', () => {
       scheduleHomeRefresh();
     }).catch(() => {});
   } else if (hasPhysiologySource(s, 'apple')) {
-    // HealthKit is local — re-read on every foreground resume so new sleep/HRV
+    // HealthKit is local. Re-read on every foreground resume so new sleep/HRV
     // data that arrived while the app was backgrounded gets picked up immediately.
     syncAppleHealthPhysiology(7).then((updated) => {
       if (updated) scheduleHomeRefresh();

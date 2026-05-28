@@ -7,7 +7,7 @@
  *   - fitImport.ts (single-file FIT / GPX / TCX import)
  *   - (future) Garmin activityDetails parser (item A of STRAVALESS_PLAN.md)
  *
- * All functions are pure — they take plain data arrays and return plain
+ * All functions are pure. They take plain data arrays and return plain
  * objects. No HealthKit, no Capacitor, no state reads.
  */
 
@@ -166,7 +166,7 @@ export function computePowerStats(
  *
  * Algorithm:
  *   1. Resample stream to uniform 1 Hz via linear interpolation.
- *   2. NP = (mean(rolling30s^4))^(1/4) — Coggan's normalised power formula.
+ *   2. NP = (mean(rolling30s^4))^(1/4). Coggan's normalised power formula.
  *   3. powerCurve.pW = max W mean over all sliding windows of that size.
  */
 export function computeNPAndPowerCurve(
@@ -275,7 +275,7 @@ export interface SpeedSample {
 /**
  * Compute per-kilometre split times (seconds per km) from a speed sample
  * stream, without any GPS route. This is the fallback for sources that write a
- * speed series to HealthKit but NOT a `HKWorkoutRoute` — notably Garmin Connect
+ * speed series to HealthKit but NOT a `HKWorkoutRoute`. Notably Garmin Connect
  * via the Apple Health bridge, which drops the GPS route but may still write
  * `runningSpeed` / `cyclingSpeed` samples.
  *

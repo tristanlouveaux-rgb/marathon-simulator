@@ -6,12 +6,12 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { getState } from '@/state/store';
 
 /**
- * Commute step — "Do you run to work?"
+ * Commute step. "Do you run to work?"
  *
  * Captures the user's commute pattern so the plan engine can fold the easy
  * mileage they're already doing into the prescribed weekly volume. A 5km
  * bidirectional commute three days a week is 30km of easy aerobic stimulus
- * before any prescribed running — the plan should know that and prioritise
+ * before any prescribed running. The plan should know that and prioritise
  * quality + long-run sessions instead of bolting more easy filler on top.
  *
  * The backpack field captures load-carriage. A 7kg pack on a 70kg runner adds
@@ -28,7 +28,7 @@ export function renderCommute(container: HTMLElement, state: OnboardingState): v
   const cfg = state.commuteConfig;
   // Tri-state: true (Yes chosen), false (No chosen), null (no choice yet).
   // Pre-selecting No on the initial render would imply the user already
-  // answered — keep both pills neutral until the user picks one explicitly.
+  // answered. Keep both pills neutral until the user picks one explicitly.
   const choseYes = state.runsToWork === true || (cfg?.enabled === true);
   const choseNo = state.runsToWork === false && !cfg?.enabled;
   const runsToWork = choseYes; // controls whether the details panel is shown

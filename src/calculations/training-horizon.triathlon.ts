@@ -12,7 +12,7 @@
  *
  * **Adaptation ratio**: scales the projected gain up or down based on observed
  * training response (HR-at-power drift, HRV trend, decoupling). Phase 1 ships
- * with `adaptationRatio = 1.0` defaults — the architecture supports live
+ * with `adaptationRatio = 1.0` defaults. The architecture supports live
  * signals being wired in Phase 2 without API changes.
  *
  * **Adherence penalty**: subtracted from `improvement_pct` per discipline
@@ -36,7 +36,7 @@ import type { TriathlonDistance } from '@/types/triathlon';
 // Shared shape (mirrors `TrainingHorizonInput`/`TrainingHorizonResult`)
 // ───────────────────────────────────────────────────────────────────────────
 
-// `returning` raised 1.15 → 1.35 (recalibration 2026-05-06) — see
+// `returning` raised 1.15 → 1.35 (recalibration 2026-05-06). See
 // `training-horizon.ts` EXP_FACTORS for the science. Kept in lockstep across
 // running and triathlon since the underlying physiology (re-adaptation
 // advantage) is modality-agnostic.
@@ -75,7 +75,7 @@ export interface TriHorizonResult {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Generic core — used by swim and bike. Run uses the marathon function.
+// Generic core. Used by swim and bike. Run uses the marathon function.
 // ───────────────────────────────────────────────────────────────────────────
 
 function computeImprovementPct(
@@ -119,12 +119,12 @@ function computeImprovementPct(
     undertrainPenalty = params.undertrain_penalty_pct * (minSess - input.sessions_per_week) / Math.max(1, minSess);
   }
 
-  // Taper bonus — scales by how much of the planned taper duration the
+  // Taper bonus. Scales by how much of the planned taper duration the
   // athlete actually has time for. For races with a full taper window
   // available (weeks_remaining ≥ planned taper) → full bonus. Race tomorrow
   // (weeks_remaining = 0) → zero bonus. Previously the formula always
   // returned the full bonus when taper_eff > 0 (Math.min(1, x/max(1,x)) is
-  // always 1 for x > 0) — predicted "full taper benefit" even with no time
+  // always 1 for x > 0). Predicted "full taper benefit" even with no time
   // to taper. Now taperRatio is the meaningful share.
   const plannedTaperWeeks = input.taper_weeks ?? 0;
   const actualTaperWeeks = Math.max(0, Math.min(plannedTaperWeeks, input.weeks_remaining));
@@ -134,7 +134,7 @@ function computeImprovementPct(
   improvementPct = improvementPct + taperBonus - undertrainPenalty - adherencePen;
   improvementPct *= adaptation;
 
-  // Bounds. Clamp at 0 minimum (not max_slowdown_pct) — a *training* projection
+  // Bounds. Clamp at 0 minimum (not max_slowdown_pct). A *training* projection
   // should never predict fitness LOSS. The negative-floor was hiding a
   // degenerate case where weeksRemaining ≈ 0 + zero planned sessions made
   // taper_bonus 0 and undertrain_penalty large, producing negative improvement
@@ -161,7 +161,7 @@ function computeImprovementPct(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Swim — CSS (lower = faster, improvement_pct is a REDUCTION)
+// Swim. CSS (lower = faster, improvement_pct is a REDUCTION)
 // ───────────────────────────────────────────────────────────────────────────
 
 export function applyTriHorizonSwim(input: TriHorizonInput): TriHorizonResult {
@@ -172,7 +172,7 @@ export function applyTriHorizonSwim(input: TriHorizonInput): TriHorizonResult {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Bike — FTP (higher = faster, improvement_pct is a GAIN)
+// Bike. FTP (higher = faster, improvement_pct is a GAIN)
 // ───────────────────────────────────────────────────────────────────────────
 
 export function applyTriHorizonBike(input: TriHorizonInput): TriHorizonResult {
@@ -183,13 +183,13 @@ export function applyTriHorizonBike(input: TriHorizonInput): TriHorizonResult {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Run — delegate to existing marathon function. VDOT (higher = faster).
+// Run. Delegate to existing marathon function. VDOT (higher = faster).
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface TriHorizonRunInput extends TriHorizonInput {
   triathlon_distance: TriathlonDistance;
   // runner_type and hm_pb_seconds are accepted for call-site compatibility
-  // but unused — triathlon run uses per-discipline params not the marathon
+  // but unused. Triathlon run uses per-discipline params not the marathon
   // guardrails.
   runner_type?: string;
   hm_pb_seconds?: number;
@@ -199,7 +199,7 @@ export interface TriHorizonRunInput extends TriHorizonInput {
 export function applyTriHorizonRun(input: TriHorizonRunInput): TriHorizonResult {
   // Use triathlon-calibrated run params (ref_sessions 3/wk for 70.3, 3.5/wk
   // for IM) rather than marathon params (ref 5/wk). A triathlete doing 3
-  // focused runs/week alongside swim + bike is training optimally — the
+  // focused runs/week alongside swim + bike is training optimally. The
   // marathon model would wrongly penalise them as undertrained.
   const params = input.triathlon_distance === 'ironman'
     ? RUN_HORIZON_PARAMS_IM

@@ -16,7 +16,7 @@ import type { Triathlon } from '@/types/onboarding';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
- * Triathlon setup — the single consolidated step that replaces
+ * Triathlon setup. The single consolidated step that replaces
  * race-target + schedule + runner-type for triathlon users.
  *
  * Collects everything the triathlon plan engine needs (§18.9):
@@ -24,7 +24,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
  *   - race date (optional)
  *   - weekly time available
  *   - volume split across swim/bike/run
- *   - (legacy) self-rating slider per discipline — removed in favour of
+ *   - (legacy) self-rating slider per discipline. Removed in favour of
  *     benchmark-derived tier (CSS / FTP+W/kg / VDOT). The state field
  *     `triSkillRating` remains as a fallback only.
  *   - bike FTP + has-power-meter flag
@@ -195,7 +195,7 @@ export function renderTriathlonSetup(container: HTMLElement, state: OnboardingSt
 }
 
 /**
- * Triathlon plan generation requires a target date — without it the engine has
+ * Triathlon plan generation requires a target date. Without it the engine has
  * nothing to schedule against. Disable the CTA until the user has either
  * picked a race or entered a custom date. Re-runs after every state change
  * that could affect either field.
@@ -283,7 +283,7 @@ function renderSplitCells(split: TriVolumeSplit, totalHours: number): string {
 // ──────────────────────────────────────────────────────────────────────────
 
 function wireEventHandlers(): void {
-  // Distance pills — toggle + refresh every dependent field
+  // Distance pills. Toggle + refresh every dependent field
   document.querySelectorAll<HTMLButtonElement>('[data-distance]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const value = btn.getAttribute('data-distance') as TriathlonDistance;
@@ -296,7 +296,7 @@ function wireEventHandlers(): void {
       const planLenHint = document.getElementById('tri-plan-length-hint');
       if (planLenHint) planLenHint.textContent = `Default plan length: ${PLAN_WEEKS_DEFAULT[value]} weeks`;
 
-      // Distance changed — clear any selected race that's now in the wrong category and re-render the picker.
+      // Distance changed. Clear any selected race that's now in the wrong category and re-render the picker.
       const current = getCurrentOnboarding();
       if (current.selectedTriathlonId) {
         const sel = getTriathlonById(current.selectedTriathlonId);
@@ -362,7 +362,7 @@ function wireEventHandlers(): void {
     updateOnboarding({ triWeekdayHoursPerWeek: wd });
   });
 
-  // Split bar — drag the swim|bike and bike|run dividers
+  // Split bar. Drag the swim|bike and bike|run dividers
   wireSplitBarHandlers();
 
   // Gym sessions slider
@@ -458,7 +458,7 @@ function wireRaceCardHandlers(): void {
       // Was on list → switch to custom (clear selection, keep any picked date as starting value)
       const keptDate = current.selectedTriathlonId ? current.customRaceDate : null;
       updateOnboarding({ selectedTriathlonId: null, customRaceDate: keptDate });
-      // Force custom mode by setting a non-null sentinel only if user has nothing — handled by render.
+      // Force custom mode by setting a non-null sentinel only if user has nothing. Handled by render.
     }
     // If switching to custom and nothing prior, show empty input. The render checks for selection
     // first; without selection and without a date, it shows the list. Force custom view explicitly:
@@ -503,7 +503,7 @@ function rerenderRaceCardForceMode(mode: 'list' | 'custom'): void {
 void _forceMode;
 
 // Hard limits for each leg's share of weekly volume. Same bounds as the
-// previous slider min/max — they keep the user from picking a split that the
+// previous slider min/max. They keep the user from picking a split that the
 // plan engine can't honour (e.g. 70% swim).
 const SPLIT_BOUNDS = {
   swim: { min: 5, max: 40 },

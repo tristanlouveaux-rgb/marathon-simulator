@@ -1,5 +1,5 @@
 /**
- * Welcome Back — gap detection and skip-cascade flow.
+ * Welcome Back. Gap detection and skip-cascade flow.
  *
  * Called on every app launch (after state is loaded) for users who have
  * completed onboarding. If the calendar has moved past their current
@@ -36,7 +36,7 @@ export function detectMissedWeeks(): number {
   today.setHours(0, 0, 0, 0);
 
   // End of the current training week (exclusive upper bound).
-  // Parse as local midnight — see weekStartDate() in plan-view.ts for the rationale.
+  // Parse as local midnight. See weekStartDate() in plan-view.ts for the rationale.
   const [_y, _m, _d] = s.planStartDate.split('-').map(Number);
   const weekStart = new Date(_y, _m - 1, _d);
   weekStart.setDate(weekStart.getDate() + (s.w - 1) * 7);
@@ -51,7 +51,7 @@ export function detectMissedWeeks(): number {
 
 /**
  * Silently advance s.w to the correct calendar week and apply proportional
- * VDOT detraining. Called on every launch — replaces the modal trigger now
+ * VDOT detraining. Called on every launch. Replaces the modal trigger now
  * that the welcome-back modal is removed (ISSUE-81).
  *
  * Safe to call when gap = 0 (no-op) or repeatedly (idempotent within a day).
@@ -73,7 +73,7 @@ export function advanceWeekToToday(): void {
 
   const s = getMutableState();
 
-  // Advance week pointer — never exceed wks array length
+  // Advance week pointer. Never exceed wks array length
   const targetWeek = computeCurrentCalendarWeek(s);
   const maxWeek = (s.tw && s.tw > 0) ? s.tw : (s.wks?.length ?? s.w);
 
@@ -138,7 +138,7 @@ export function advanceWeekToToday(): void {
 
   // Apply VDOT detraining only for weeks actually advanced (not the full
   // calendar gap). When s.w is clamped (plan ended), actualAdvance = 0
-  // and no detraining is applied — prevents compounding on every launch.
+  // and no detraining is applied. Prevents compounding on every launch.
   const actualAdvance = s.w - oldW;
   if (s.v && actualAdvance > 0) {
     const loss = computeVdotLoss(s.v, actualAdvance);

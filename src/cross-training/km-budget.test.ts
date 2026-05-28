@@ -125,7 +125,7 @@ describe('Load Budget Enforcement', () => {
   /**
    * REGRESSION TEST: reduceOutcome load budget consistency
    *
-   * BUG: reduceOutcome previously had inconsistent budgeting — display showed km
+   * BUG: reduceOutcome previously had inconsistent budgeting. Display showed km
    * equivalence but reductions exceeded it.
    *
    * FIX: Both buildReduceAdjustments and buildReplaceAdjustments now use load-based
@@ -154,7 +154,7 @@ describe('Load Budget Enforcement', () => {
       const budget = popup.runReplacementCredit;
 
       // Budget may be exceeded by the first adjustment only: a quality downgrade
-      // (or easy → recovery) is all-or-nothing — we prefer one controlled overshoot
+      // (or easy → recovery) is all-or-nothing. We prefer one controlled overshoot
       // to silently hiding the Reduce option when the budget is tightly capped.
       // Bound the allowed overshoot by the largest single adjustment's loadReduction.
       const largest = popup.reduceOutcome.adjustments
@@ -222,7 +222,7 @@ describe('Load Budget Enforcement', () => {
         raceGoal: 'marathon',
         plannedRunsPerWeek: 4,
         injuryMode: false,
-        floorKm: 40,       // Floor at 40km — only 6km of slack
+        floorKm: 40,       // Floor at 40km. Only 6km of slack
         acwrStatus: 'safe',
       },
       plannedRuns,
@@ -302,7 +302,7 @@ describe('Load Budget Enforcement', () => {
     const popup = buildCrossTrainingPopup(
       {
         raceGoal: 'marathon', plannedRunsPerWeek: 2, injuryMode: false,
-        floorKm: 24, // floor = 24, total = 26km — only 2km slack, not enough to drop the 8km run
+        floorKm: 24, // floor = 24, total = 26km. Only 2km slack, not enough to drop the 8km run
         acwrStatus: 'safe',
       },
       plannedRuns, activity,

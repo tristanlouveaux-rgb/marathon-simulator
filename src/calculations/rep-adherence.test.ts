@@ -57,7 +57,7 @@ describe('parseRepPrescription', () => {
 describe('resolveRunTargetPace', () => {
   it('returns interval pace for vo2 type', () => {
     const pace = resolveRunTargetPace('vo2', 50, null);
-    // Sanity range — actual depends on the gp() VDOT-derived 5K time.
+    // Sanity range. Actual depends on the gp() VDOT-derived 5K time.
     expect(pace).toBeGreaterThan(200);
     expect(pace).toBeLessThan(360);
   });
@@ -113,9 +113,9 @@ function makeActual(reps: ActivityRep[]): GarminActual {
 }
 
 // Use threshold workouts with explicit ltPace so targets are deterministic.
-// (vo2 target via VDOT depends on the curve shape — fragile for unit tests.)
+// (vo2 target via VDOT depends on the curve shape. Fragile for unit tests.)
 const T_WORKOUT: Workout = { n: 'Threshold 8×400', d: '8×400m @ threshold', t: 'threshold', r: 8 };
-const LT_PACE = 240; // sec/km — threshold target = 240
+const LT_PACE = 240; // sec/km. Threshold target = 240
 
 describe('scoreRepAdherence — running', () => {
   it('scores all reps in band when paces hit target', () => {

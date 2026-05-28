@@ -1,5 +1,5 @@
 /**
- * HYROX volume helpers — feed the per-station horizon model.
+ * HYROX volume helpers. Feed the per-station horizon model.
  *
  * **Side of the line**: tracking. Pure functions; no state mutation.
  *
@@ -16,7 +16,7 @@ import type { SimulatorState } from '@/types/state';
 
 /**
  * Average planned Hyrox sessions per week over the next `weeks` weeks of the
- * plan. Counts every `wk.triWorkouts` entry in the look-ahead window — Hyrox
+ * plan. Counts every `wk.triWorkouts` entry in the look-ahead window. Hyrox
  * mode stores all session types (run, station, brick) under the same field as
  * triathlon mode does.
  *

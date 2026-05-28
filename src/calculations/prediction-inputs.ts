@@ -1,5 +1,5 @@
 /**
- * Prediction inputs — source-agnostic helper for building the training-volume
+ * Prediction inputs. Source-agnostic helper for building the training-volume
  * and training-pace signals that feed `blendPredictions` (and Tanda 2011).
  *
  * Used by both the live stats view (garminActuals) and onboarding (Strava
@@ -60,15 +60,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const WINDOW_WEEKS = 8;
 const STALE_DAYS = 28;
 const MIN_DIST_KM = 3;
-const MIN_PACE = 180;   // 3:00 /km — faster = sprint interval, treat as suspect
-const MAX_PACE = 480;   // 8:00 /km — slower = walk / hike / treadmill drift
+const MIN_PACE = 180;   // 3:00 /km. Faster = sprint interval, treat as suspect
+const MAX_PACE = 480;   // 8:00 /km. Slower = walk / hike / treadmill drift
 const RACE_FILTER_RATIO = 0.85; // faster than 85% of median = race effort
 /** Activity-name patterns that signal non-training data even if the pace passes
  *  the band check. Treadmill GPS drift can produce plausible paces; walks
  *  often log as "Walk" while still hitting the run-pace floor. Drop on name. */
 const NON_TRAINING_NAME_RE = /treadmill|walk/i;
 /** After all the hard filters above, drop the slowest 10% of the remaining
- *  set. Pure noise filter — the slowest tail tends to be aborted runs, mid-run
+ *  set. Pure noise filter. The slowest tail tends to be aborted runs, mid-run
  *  walk breaks logged as separate activities, or warm-down jogs without GPS. */
 const SLOW_TAIL_DROP_FRACTION = 0.10;
 
@@ -93,7 +93,7 @@ function median(xs: number[]): number {
 
 /**
  * Compute prediction inputs from an arbitrary list of run activities.
- * Pure function — no state dependency, fully testable.
+ * Pure function. No state dependency, fully testable.
  *
  * @param runs  All running activities available. Non-runs, walks, and paces
  *              outside 3:00–7:30 /km are filtered out.
@@ -181,7 +181,7 @@ export function computePredictionInputs(
   // ── K: weekly km ─────────────────────────────────────────────────────────
   // Sum km per week-offset (0 = week of latest run, 1 = week prior, etc.),
   // then mean across the effective window. Zero-running weeks inside the
-  // window count as 0 — they're real information about volume — but we cap
+  // window count as 0. They're real information about volume. But we cap
   // the window at the actual training history available, so a brand-new user
   // with 2 weeks of Strava data doesn't get their K divided by 8.
   const weekKm = new Map<number, number>();
@@ -206,7 +206,7 @@ export function computePredictionInputs(
 
   // ── P: unweighted mean of training paces (race-filtered) ─────────────────
   // Tanda's paper uses unweighted mean across training sessions. We filter
-  // race efforts by detecting runs meaningfully faster than median — those
+  // race efforts by detecting runs meaningfully faster than median. Those
   // are not "training pace" and would skew P fast.
   const paces = inWindow.map(q => q.paceSecPerKm);
   const medianPace = median(paces);

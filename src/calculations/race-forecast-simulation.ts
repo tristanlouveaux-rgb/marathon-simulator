@@ -1,17 +1,17 @@
 /**
- * Monte Carlo forecast simulator — running race mode.
+ * Monte Carlo forecast simulator. Running race mode.
  *
  * Runs N trials of the next training block, varying three sources of
  * uncertainty around the deterministic training-horizon mean:
  *
- *   1. VDOT improvement     — sampled around horizon's `improvement_pct`
+ *   1. VDOT improvement. Sampled around horizon's `improvement_pct`
  *                              with relative sigma 0.35 (training response
  *                              is inherently noisy; Joyner & Coyle 2008,
  *                              Bouchard 2011 individual variance).
- *   2. Adherence            — clipped normal on [0.5, 1.0], mean 0.92,
+ *   2. Adherence. Clipped normal on [0.5, 1.0], mean 0.92,
  *                              sigma 0.10. Caps how much of the predicted
  *                              gain the athlete actually realises.
- *   3. Race-day form factor — N(1.0, 0.025) on pace, clipped to ±7%.
+ *   3. Race-day form factor. N(1.0, 0.025) on pace, clipped to ±7%.
  *                              Weather, fuelling, gut, taper landing.
  *
  * Each trial produces a per-week race-time projection plus a race-day
@@ -85,7 +85,7 @@ function smoothstep(p: number): number {
  * @param goalSec  Optional user-set goal time in seconds. When provided,
  *                 `goalProbability` is computed as P(race-day trial ≤ goalSec).
  *                 When null/0, `goalProbability` is null in the result.
- *                 NOTE: never derive this from `s.initialBaseline` — that's the
+ *                 NOTE: never derive this from `s.initialBaseline`. That's the
  *                 model's initial prediction, not a user-set goal.
  */
 export function runMarathonForecastSim(
@@ -108,7 +108,7 @@ export function runMarathonForecastSim(
   // plan-prescribed dose. Previously this read raw `s.epw ?? s.rw` (which
   // excludes commute) and `s.wkm` (a stale heuristic from onboarding's
   // runsPerWeek), so the math ran on fewer sessions and less volume than
-  // the chip displayed — producing systematically pessimistic forecasts
+  // the chip displayed. Producing systematically pessimistic forecasts
   // for commute-aware athletes.
   const baseSessions = s.epw ?? s.rw ?? 3;
   const commuteSessions = s.commuteConfig?.enabled
@@ -152,7 +152,7 @@ export function runMarathonForecastSim(
   const meanAdherence = 0.90;
   const sigmaAdherence = 0.12;
 
-  // Race-day form factor — pace multiplier. ±2.5% σ, clipped ±7%.
+  // Race-day form factor. Pace multiplier. ±2.5% σ, clipped ±7%.
   const meanForm = 1.0;
   const sigmaForm = 0.025;
 
@@ -179,14 +179,14 @@ export function runMarathonForecastSim(
   //   variance widening as the cone moves toward race day.
   // - Form factor is symmetric around 1.0 so median × 1.0 = headline.
   // - Calibration / durability / course factors are all baked into the
-  //   headline trajectory once — no need to apply them per trial.
+  //   headline trajectory once. No need to apply them per trial.
 
   const headlineTodaySec = s.blendedRaceTimeSec ?? 0;
   const headlineRaceDaySec = s.forecastTimeAdjusted ?? s.forecastTime ?? 0;
   const haveHeadlineAnchor = headlineTodaySec > 0 && headlineRaceDaySec > 0;
 
   const bareTodaySec = vt(distKm, currentVdot);
-  // Deterministic median trajectory — what the cone collapses to in the
+  // Deterministic median trajectory. What the cone collapses to in the
   // absence of any sampled variance. Used as the reference for per-trial
   // deviation.
   const medianFinalVdot = currentVdot * (1 + meanImprovementPct / 100);
@@ -215,13 +215,13 @@ export function runMarathonForecastSim(
       const p = steps > 0 ? w / steps : 1;
       const shapedP = smoothstep(p);
 
-      // Trial and median trajectories in bare-VDOT seconds — the difference
+      // Trial and median trajectories in bare-VDOT seconds. The difference
       // is the trial's deviation from the median trial at this week.
       const bareTrialWeekSec = bareTodaySec + (bareTrialFinalSec - bareTodaySec) * shapedP;
       const bareMedianWeekSec = bareTodaySec + (bareMedianFinalSec - bareTodaySec) * shapedP;
       const deviationSec = bareTrialWeekSec - bareMedianWeekSec;
 
-      // Headline trajectory — interpolated today → race-day in headline space.
+      // Headline trajectory. Interpolated today → race-day in headline space.
       // Falls back to bare-VDOT when no headline is available (cold-start).
       const headlineWeekSec = haveHeadlineAnchor
         ? headlineTodaySec + (headlineRaceDaySec - headlineTodaySec) * shapedP

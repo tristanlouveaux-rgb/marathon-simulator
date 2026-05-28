@@ -26,12 +26,12 @@ export function calculateFatigueExponent(pbs: PBs): number {
     den += Math.pow(lnD[i] - meanLnD, 2);
   }
 
-  if (den === 0) return 1.06; // Identical distances — can't compute slope
+  if (den === 0) return 1.06; // Identical distances. Can't compute slope
   return num / den;
 }
 
 /**
- * Legacy alias for calculateFatigueExponent — now delegates to the canonical version
+ * Legacy alias for calculateFatigueExponent. Now delegates to the canonical version
  * @param p - Personal bests object
  * @returns Fatigue exponent (b)
  */

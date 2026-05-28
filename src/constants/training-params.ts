@@ -7,7 +7,7 @@ import type { TrainingHorizonParams, WorkoutImportance, TimeImpact, ExpectedGain
  * proper build/peak/taper). Ceilings now match Pfitzinger 2009 / Daniels 2014
  * empirical outcomes for athletes following such plans, not the flat-volume
  * maintenance averages the previous calibration assumed. Marathon intermediate
- * was the most-affected band — bumped from 5.5 to 7.0 to match Pfitzinger
+ * was the most-affected band. Bumped from 5.5 to 7.0 to match Pfitzinger
  * intermediate-plan high-end outcomes.
  */
 export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
@@ -23,7 +23,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
     // outcomes, which under-promised vs published cohort data for athletes
     // on structured longer (24-35w) builds. New ceilings sit at the upper-mid
     // of Pfitzinger Advanced Marathoning + Daniels 2014 + Lake Placid 24-wk
-    // cohort outcomes. Marathon 'half' was already 8.5 — this brings marathon
+    // cohort outcomes. Marathon 'half' was already 8.5. This brings marathon
     // into line. See SCIENCE_LOG entry 2026-05-19.
     'marathon': { beginner: 9.0, novice: 8.5, intermediate: 8.5, advanced: 5.5, elite: 3.5 }
   },
@@ -50,7 +50,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
   // **Slow component (LT + fractional utilization + economy)**: Seiler
   // (2010), Coyle (1984), Moore (2016) show LT and economy continue
   // adapting for 24-52+ weeks. We use tau_slow ≈ 20-32 weeks (95% reached
-  // at 60-96 weeks — long-tail plateau).
+  // at 60-96 weeks. Long-tail plateau).
   //
   // **Ability scaling**: more-trained athletes plateau slightly faster
   // (less headroom for both fast and slow adaptations). Beginner → elite
@@ -75,7 +75,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
   },
 
   // Per-distance slow-component weight. Marathon performance is dominated
-  // by fractional utilization and economy (Joyner & Coyle 2008) — both slow
+  // by fractional utilization and economy (Joyner & Coyle 2008). Both slow
   // adaptations. 5K is more VO2max-driven (fast adaptation).
   slow_weight: {
     '5k':       0.30,
@@ -115,7 +115,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
 };
 
 /**
- * Reference km per session at intermediate volume — derived from
+ * Reference km per session at intermediate volume. Derived from
  * `ref_sessions[distance][intermediate]` × the canonical weekly mileage in
  * Daniels (2005) and Pfitzinger (2009) intermediate plans.
  *
@@ -127,7 +127,7 @@ export const TRAINING_HORIZON_PARAMS: TrainingHorizonParams = {
  * Used to convert weekly-volume into a "dose multiplier" that scales
  * `effective_sessions_per_week` in the horizon adjustment. A 4×30-min
  * marathon plan and a 4×80-min marathon plan should not predict the same
- * gain — the dose differs by 2.5×.
+ * gain. The dose differs by 2.5×.
  */
 export const REF_KM_PER_SESSION: Record<string, number> = {
   '5k': 8,

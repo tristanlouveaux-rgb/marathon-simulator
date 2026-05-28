@@ -31,7 +31,7 @@ import { createDefaultInjuryState } from '@/types/injury';
 // ───────────────────────────────────────────────────────────────────────────
 
 function baseState(overrides: Partial<SimulatorState> = {}): SimulatorState {
-  // Minimum viable state for the predictor — VDOT, FTP, CSS, race date,
+  // Minimum viable state for the predictor. VDOT, FTP, CSS, race date,
   // selected race id (for course-profile lookup).
   return {
     eventType: 'triathlon',
@@ -290,7 +290,7 @@ describe('predictTriathlonRace — end to end', () => {
       wk.garminActuals[`r${w}c`] = { garminId: `r${w}c`, distanceKm: 35, durationSec: 75 * 60, avgPaceSecKm: null, avgHR: null, maxHR: null, calories: null, activityType: 'CYCLING' };
       state.wks!.push(wk);
     }
-    // Upcoming 4 planned weeks — 3 swims / 3 bikes / 3 runs per week.
+    // Upcoming 4 planned weeks. 3 swims / 3 bikes / 3 runs per week.
     for (let w = 0; w < 4; w++) {
       state.wks!.push({
         triWorkouts: [
@@ -342,7 +342,7 @@ describe('predictTriathlonRace — end to end', () => {
     });
     const p = predictTriathlonRace(state);
     expect(p).not.toBeNull();
-    // Per-leg parity within ±30s (tight tolerance — penalty share = 1.0 in
+    // Per-leg parity within ±30s (tight tolerance. Penalty share = 1.0 in
     // taper, baselines aligned, durability cap input identical).
     expect(Math.abs(p!.swimSec - p!.currentSwimSec!)).toBeLessThan(30);
     expect(Math.abs(p!.bikeSec - p!.currentBikeSec!)).toBeLessThan(30);

@@ -1,12 +1,12 @@
 /**
- * HealthExtras — typed bridge to MosaicHealthExtras Capacitor plugin.
+ * HealthExtras. Typed bridge to MosaicHealthExtras Capacitor plugin.
  *
  * Exposes HealthKit fields that @capgo/capacitor-health doesn't surface:
  * VO2max, running power, cycling power & FTP, GPS workout routes, running
  * form metrics (stride length, ground contact time, vertical oscillation,
  * running speed), wrist temperature, walking HR average.
  *
- * iOS-only — methods return null/empty arrays on web/Android. Native iOS
+ * iOS-only. Methods return null/empty arrays on web/Android. Native iOS
  * version gating happens inside the Swift plugin, so requesting an iOS-17+
  * type on iOS 16 silently drops it from the request rather than throwing.
  */
@@ -114,12 +114,12 @@ interface HealthExtrasPlugin {
 
 export interface WorkoutDidArriveEvent {
   /** Number of new HKWorkout samples written to HealthKit since the last
-   *  observer fire. Always ≥ 1 — the plugin suppresses zero-sample fires. */
+   *  observer fire. Always ≥ 1. The plugin suppresses zero-sample fires. */
   count: number;
 }
 
 /** Underlying plugin handle. On non-iOS, Capacitor's web shim throws when
- *  methods are called — wrappers below catch and return empty results. */
+ *  methods are called. Wrappers below catch and return empty results. */
 const HealthExtras = registerPlugin<HealthExtrasPlugin>('HealthExtras');
 
 /** Returns true on native iOS, false on web/Android. Mirrors `isNativeiOS()`
@@ -193,7 +193,7 @@ export async function readQuantitySamples(opts: {
 }
 
 /** Most recent value of a quantity type. Returns { value: null, asOf: null }
- *  when nothing exists or on permission denial — caller can detect via the
+ *  when nothing exists or on permission denial. Caller can detect via the
  *  null sentinel and fall back to a derived value. */
 export async function readLatestQuantity(opts: {
   dataType: HealthExtrasDataType;
@@ -240,7 +240,7 @@ export async function readWorkoutRouteLocations(opts: {
  * written to HealthKit (Apple Watch, Strava-to-Health, Garmin Connect-to-
  * Health, etc.) and emits a `workoutDidArrive` event.
  *
- * Idempotent — safe to call on every launch; the Swift plugin no-ops if
+ * Idempotent. Safe to call on every launch; the Swift plugin no-ops if
  * already registered. The first ever call primes an HKQueryAnchor so the
  * existing workout history is not treated as "new".
  *
@@ -273,7 +273,7 @@ export async function stopWorkoutObserver(): Promise<void> {
 
 /**
  * Subscribe to the `workoutDidArrive` event. Returns a PluginListenerHandle
- * the caller can use to detach. Detaching is rarely needed — the plugin's
+ * the caller can use to detach. Detaching is rarely needed. The plugin's
  * listener registry is cleared on app cold start anyway.
  *
  * No-op on web/Android (returns a no-op handle).

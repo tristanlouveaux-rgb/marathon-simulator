@@ -8,7 +8,7 @@
  * touching state.
  *
  * Security: all input parameters are validated against actual plan state before
- * a PendingChange is created. Invalid calls are silently dropped — no Apply card.
+ * a PendingChange is created. Invalid calls are silently dropped. No Apply card.
  */
 
 import { getMutableState } from '@/state/store';
@@ -37,7 +37,7 @@ export interface PendingChange {
   tool: CoachToolName;
   headline: string;      // e.g. "Skip Thursday tempo"
   reason: string;        // Claude's sanitized reason
-  // Internal mutation params — workout-mod tools use _weekIdx + _workoutIdx;
+  // Internal mutation params. Workout-mod tools use _weekIdx + _workoutIdx;
   // memory tools (remember / forget) leave both at -1 and put everything in _params.
   _weekIdx: number;
   _workoutIdx: number;
@@ -154,7 +154,7 @@ function resolveWorkout(
   const nameNorm = (workoutName ?? '').trim().toLowerCase();
 
   // Triathlon AND HYROX both store sessions in `wk.triWorkouts` (the field is
-  // historical — HYROX added later and reused the schema). Running uses generated
+  // historical. HYROX added later and reused the schema). Running uses generated
   // workouts that aren't on state. Only the running branch needs the regenerator.
   if (state.eventType === 'triathlon' || state.eventType === 'hyrox') {
     const workouts = wk.triWorkouts ?? [];
@@ -245,7 +245,7 @@ export function validateAndBuildPendingChange(
   const state = getMutableState();
   lastToolDropReason = null;
 
-  // ── Memory tools (no day / workout — handled before the workout-mod path) ──
+  // ── Memory tools (no day / workout. Handled before the workout-mod path) ──
   if (toolName === 'remember') {
     const fact = sanitizeField(String(input.fact ?? ''), MEMORY_FACT_MAX_LEN);
     if (!fact) return dropTool('remember: empty fact');
@@ -355,7 +355,7 @@ export function validateAndBuildPendingChange(
 
 /** Scale primary distance + duration tokens in a workout description by `factor`.
  *  Handles "3300m", "3.3km", "60 min", "1h 15min". Leaves pace/zone tokens alone
- *  (those are intensity, not volume). Pragmatic — known to mis-scale exotic
+ *  (those are intensity, not volume). Pragmatic. Known to mis-scale exotic
  *  descriptions; the plan-engine remains the source of truth for fresh weeks. */
 export function scaleWorkoutDescription(desc: string, factor: number): string {
   if (!desc || factor === 1) return desc;
@@ -372,11 +372,11 @@ export function scaleWorkoutDescription(desc: string, factor: number): string {
   desc = desc.replace(/(\d+\s*[x×]\s*)?(?<![\/\d])(\d{2,5})\s*m\b/g, (full, multiplier: string | undefined, n: string) => {
     if (multiplier) return full;
     const v = parseInt(n, 10);
-    if (!isFinite(v) || v < 100) return `${n}m`; // skip tiny tokens — likely pace
+    if (!isFinite(v) || v < 100) return `${n}m`; // skip tiny tokens. Likely pace
     return `${round50(v * factor)}m`;
   });
 
-  // kilometres: "3.3km" or "10 km" — whole numbers stay whole, fractional get .1
+  // kilometres: "3.3km" or "10 km". Whole numbers stay whole, fractional get .1
   desc = desc.replace(/(\d+(?:\.\d+)?)\s*km\b/g, (_m, n: string) => {
     const v = parseFloat(n);
     if (!isFinite(v)) return _m;
@@ -387,7 +387,7 @@ export function scaleWorkoutDescription(desc: string, factor: number): string {
     return `${display}km`;
   });
 
-  // Minutes — single combined pass so h+min compounds aren't re-scaled by the
+  // Minutes. Single combined pass so h+min compounds aren't re-scaled by the
   // bare-min pattern. Alternation order matters: h+min first, then bare min.
   desc = desc.replace(
     /(\d+)\s*h\s*(\d+)\s*min\b|\b(\d+)\s*min\b/gi,
@@ -433,7 +433,7 @@ function defaultDescriptionForSwap(newType: WorkoutSwapType, originalDurationMin
 }
 
 /** Snapshot pre-mod fields once (so subsequent mods don't overwrite the
- *  original snapshot — first mod is what Undo should restore). */
+ *  original snapshot. First mod is what Undo should restore). */
 function snapshotIfFirst(w: import('@/types/state').Workout): void {
   if (w.aiPreModSnapshot) return;
   w.aiPreModSnapshot = {
@@ -458,7 +458,7 @@ export function applyPendingChange(change: PendingChange): void {
     if (!fact) return;
     if (!state.coachMemory) state.coachMemory = { lastUpdatedISO: nowISO, facts: [] };
     state.coachMemory.facts.push({ text: fact, addedISO: nowISO });
-    // Cap at MEMORY_FACT_MAX — drop oldest.
+    // Cap at MEMORY_FACT_MAX. Drop oldest.
     if (state.coachMemory.facts.length > MEMORY_FACT_MAX) {
       state.coachMemory.facts.splice(0, state.coachMemory.facts.length - MEMORY_FACT_MAX);
     }
@@ -500,7 +500,7 @@ export function applyPendingChange(change: PendingChange): void {
       w.status = newType === 'rest' ? 'skipped' : 'replaced';
       w.modReason = change.reason;
       w.aiModifiedAt = nowISO;
-      // Easy / rest swaps blunt intensity — zero anaerobic, halve aerobic for easy variants.
+      // Easy / rest swaps blunt intensity. Zero anaerobic, halve aerobic for easy variants.
       if (newType === 'rest') {
         w.aerobic = 0;
         w.anaerobic = 0;
@@ -519,7 +519,7 @@ export function applyPendingChange(change: PendingChange): void {
       if (!/\(reduced /i.test(w.n)) {
         w.n = `${w.n} (reduced ${pct}%)`;
       }
-      // Scale both load components — keeps weekly TSS chip honest.
+      // Scale both load components. Keeps weekly TSS chip honest.
       w.aerobic = Math.round((w.aerobic ?? 0) * factor);
       w.anaerobic = Math.round((w.anaerobic ?? 0) * factor);
       w.status = 'reduced';

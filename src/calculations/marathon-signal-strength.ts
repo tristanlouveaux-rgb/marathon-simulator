@@ -1,5 +1,5 @@
 /**
- * Marathon prediction signal strength — derives 0..1 quality scores for each
+ * Marathon prediction signal strength. Derives 0..1 quality scores for each
  * of the six blended predictors used by `blendPredictions`.
  *
  * Powers the "signal fingerprint" radial chart on the race-forecast page.
@@ -13,7 +13,7 @@
  *   - 0.66 = signal present at medium confidence
  *   - 1.00 = signal present and fresh/high-confidence
  *
- * Heuristics are deliberately simple — the goal is a visually meaningful
+ * Heuristics are deliberately simple. The goal is a visually meaningful
  * fingerprint, not a calibration of the blend itself (which already lives
  * in `blendPredictions`).
  */

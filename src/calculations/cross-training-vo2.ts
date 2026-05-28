@@ -1,5 +1,5 @@
 /**
- * Cross-Training VO2max — sustained-HR aerobic capacity from non-run, non-bike sport.
+ * Cross-Training VO2max. Sustained-HR aerobic capacity from non-run, non-bike sport.
  *
  * The cardiac ceiling (Uth-Sørensen) tells us how high the heart *can* go —
  * peak HR / resting HR. It does not tell us how much aerobic work the athlete
@@ -32,7 +32,7 @@
  *    where durationFactor = min(1, durationMin / 30) credits sustain. A
  *    20-minute session counts at 0.67×; a 30+ minute session at 1.0×. This
  *    captures the physiological reality that *holding* a high HR fraction
- *    is what demonstrates capacity — short HR spikes at the same %HRR are
+ *    is what demonstrates capacity. Short HR spikes at the same %HRR are
  *    largely anaerobic and inform cardiac ceiling, not sustained aerobic
  *    capacity.
  *
@@ -41,7 +41,7 @@
  *    occasional low-effort sessions that pass the gate.
  *
  * Why this is additive over cardiac ceiling:
- *   - Cardiac ceiling = `15.3 × HRmax/HRrest` — one-shot peak ratio.
+ *   - Cardiac ceiling = `15.3 × HRmax/HRrest`. One-shot peak ratio.
  *   - Cross-training = sustained fraction × ceiling × duration credit —
  *     captures the *aerobic* dimension cardiac ceiling cannot see.
  *
@@ -60,9 +60,9 @@
  *   - Mode-of-effort matters: a session with intervals above LT plus easy
  *     recovery averages to a moderate %HRR even though the actual aerobic
  *     stress is far higher than the average suggests. We accept this for
- *     v1 — it under-credits intervals, which is the safer error.
+ *     v1. It under-credits intervals, which is the safer error.
  *
- * Pure — no state dependency, fully testable.
+ * Pure. No state dependency, fully testable.
  */
 
 export interface CrossTrainingActivitySample {
@@ -108,7 +108,7 @@ const MIN_PCT_HRMAX = 0.75;
 const MIN_SESSIONS = 3;
 /** Duration at which a session earns full credit. Linear ramp from 20→30 min.
  *  Beyond 30 min, no further credit (a 60-min session does not count more
- *  than a 30-min one — sustain is sustain, longer doesn't make VO2max bigger). */
+ *  than a 30-min one. Sustain is sustain, longer doesn't make VO2max bigger). */
 const FULL_CREDIT_MIN = 30;
 /** Sports that are NOT cross-training in this estimator's view. Running and
  *  cycling have their own dedicated estimators (effort-calibrated VDOT and
@@ -123,11 +123,11 @@ const EXCLUDED_SPORTS = new Set([
  * non-run, non-bike activities.
  *
  * @param activities       Recent aerobic sessions across all sports. Filter
- *                         is applied internally — caller doesn't need to
+ *                         is applied internally. Caller doesn't need to
  *                         pre-screen.
  * @param restingHR        Resting heart rate, bpm.
  * @param maxHR            Athlete's max HR, bpm.
- * @param cardiacCeiling   Anchor — the athlete's modality-agnostic VO2max
+ * @param cardiacCeiling   Anchor. The athlete's modality-agnostic VO2max
  *                         upper bound from `computeCardiacCeiling`. Without
  *                         it, we cannot convert sustained intensity to
  *                         absolute VO2 demand.
@@ -170,7 +170,7 @@ export function computeCrossTrainingVO2(
     if (!a.durationSec || a.durationSec < MIN_DURATION_SEC) continue;
     if (a.avgHR < minHRForAerobic) continue;
 
-    // Exclude run/bike — they have dedicated estimators.
+    // Exclude run/bike. They have dedicated estimators.
     const sport = (a.sport ?? '').toLowerCase();
     if (!sport) continue;  // need a sport to know it isn't a run/bike
     if (EXCLUDED_SPORTS.has(sport)) continue;
@@ -202,13 +202,13 @@ export function computeCrossTrainingVO2(
   const kept = sorted.slice(trimCount);
   const aggregate = kept.reduce((s, v) => s + v, 0) / kept.length;
 
-  // Cap at cardiac ceiling — by construction sessionVO2 ≤ cardiacCeiling, but
+  // Cap at cardiac ceiling. By construction sessionVO2 ≤ cardiacCeiling, but
   // be defensive in case durationFactor logic changes and to make the
   // invariant explicit.
   const vo2 = Math.min(aggregate, cardiacCeiling);
 
   // Confidence model:
-  //   high   = ≥ 8 sessions AND ≥ 2 distinct sports — well-sampled, diverse
+  //   high   = ≥ 8 sessions AND ≥ 2 distinct sports. Well-sampled, diverse
   //   medium = ≥ 5 sessions
   //   low    = ≥ 3 sessions
   // Sport diversity matters because a single sport's HR profile is

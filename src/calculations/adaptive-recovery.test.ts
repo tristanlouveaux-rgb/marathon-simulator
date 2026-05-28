@@ -50,7 +50,7 @@ function buildPhysiology(
       restingHR: 50 + (i % 3 - 1),    // 49..51 cycling
     });
   }
-  // Session day itself — irrelevant to baseline (baseline excludes T)
+  // Session day itself. Irrelevant to baseline (baseline excludes T)
   history.push({ date: sessionDate, hrvRmssd: 55, restingHR: 52 });
   // Post-session trajectory (T+1..T+4)
   for (let i = 0; i < postTrajectory.length; i++) {
@@ -170,7 +170,7 @@ describe('composeRecoveryZ', () => {
 describe('findObservedRecoveryHours', () => {
   it('reports 24h when day-after physiology already at baseline', () => {
     const history = buildPhysiology('2026-04-20', [
-      { hrv: 60, rhr: 50 },  // T+1 — at baseline
+      { hrv: 60, rhr: 50 },  // T+1. At baseline
       { hrv: 60, rhr: 50 },
       { hrv: 60, rhr: 50 },
       { hrv: 60, rhr: 50 },
@@ -182,9 +182,9 @@ describe('findObservedRecoveryHours', () => {
   });
   it('reports 72h when recovery shows up on T+3', () => {
     const history = buildPhysiology('2026-04-20', [
-      { hrv: 50, rhr: 56 },   // T+1 — depressed
-      { hrv: 53, rhr: 54 },   // T+2 — still depressed
-      { hrv: 60, rhr: 50 },   // T+3 — back to baseline
+      { hrv: 50, rhr: 56 },   // T+1. Depressed
+      { hrv: 53, rhr: 54 },   // T+2. Still depressed
+      { hrv: 60, rhr: 50 },   // T+3. Back to baseline
       { hrv: 60, rhr: 50 },
     ]);
     const result = findObservedRecoveryHours(history, '2026-04-20');
@@ -240,7 +240,7 @@ describe('logSessionImpact', () => {
 
 describe('closeOutObservedRecovery', () => {
   it('only closes entries past the 96h observation cap', () => {
-    const sessionDate = isoOffset(-2);  // only 2 days ago — too soon
+    const sessionDate = isoOffset(-2);  // only 2 days ago. Too soon
     const s: Pick<SimulatorState, 'sessionImpactLog' | 'physiologyHistory'> = {
       physiologyHistory: buildPhysiology(sessionDate, [
         { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 }, { hrv: 60, rhr: 50 },
@@ -317,7 +317,7 @@ describe('fitKUser', () => {
         garminId: `S${i}`,
         date: isoOffset(-i, today),
         predictedHours: 10,
-        observedHours: 0.5,  // ratio 0.05 — would push k far below 1
+        observedHours: 0.5,  // ratio 0.05. Would push k far below 1
       }));
     }
     const ar = fitKUser(s, { now: today });

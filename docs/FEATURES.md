@@ -77,7 +77,7 @@ HYROX is a fully-separate mode for the hybrid run+functional-station racing form
 ### H0. HYROX Foundation (Phase 0)
 **What it ships**: Types (`AbilityBand`, `HyroxStation`, `HyroxConfig`, `HyroxSessionKind`), `EventType: 'hyrox'`, `Workout.musculoTendonLoad`, `SimulatorState.hyroxConfig`. Constants file (`hyrox-constants.ts`): MTL caps by band, time-to-band thresholds, station MTL factors (modality × impact), 3D load profiles, weekly session targets, plan duration table, eccentric-heavy station list. Mode detection helper (`isHyroxMode()`). MTL calculator (`computeComponentMTL`, `computeEffectiveMTL`).
 
-**Onboarding wizard flow**: goals → connect-strava → hyrox-setup → review → initializing → main-view. `hyrox-setup.ts` collects: competition format (Open/Pro), previous HYROX finish time (shows live ability band), race event (required — picked from `HYROX_WORLD_SERIES`; venue is derived from event id), weekly hours, sled/SkiErg/RowErg access. Picking an event sets `hyroxRaceEventId` + `customRaceDate` + `hyroxVenueId` together; the manual-date fallback shows a separate venue picker.
+**Onboarding wizard flow**: goals → connect-data → hyrox-setup → review → initializing → main-view. `hyrox-setup.ts` collects: competition format (Open/Pro), previous HYROX finish time (shows live ability band), race event (required — picked from `HYROX_WORLD_SERIES`; venue is derived from event id), weekly hours, sled/SkiErg/RowErg access. Picking an event sets `hyroxRaceEventId` + `customRaceDate` + `hyroxVenueId` together; the manual-date fallback shows a separate venue picker.
 
 **Ability band derivation**: previous HYROX time maps to band via thresholds (sub-1h=competitive, 1–1:20=advanced, 1:20–1:40=intermediate, 1:40–2h=novice, 2h+=beginner). Falls back to experience level slider when no time given.
 
@@ -187,7 +187,7 @@ The bike library covers nine session kinds: endurance, tempo, sweet-spot, thresh
 **Tests**: `src/workouts/plan_engine.triathlon.test.ts` — ✅ Passing (8 tests); `src/workouts/bike.test.ts` — ✅ Passing (10 tests)
 
 ### T2b. Cycling-only mode (V1)
-**What it does**: Standalone cycling plan path alongside running and triathlon. Goals screen has a four-tile mode picker; cycling users go through `connect-strava → cycling-setup → workout-preview → review → initializing`. Cycling setup collects event distance (50/100/160/200/300 km Gran Fondo class), target date, weekly hours, and strength sessions. Workout-preview renders the 9 bike kinds with literature anchors as a research showcase before plan generation. Plan engine reuses `generateTriathlonPlan` with `triConfig.disciplines = ['bike']`; swim/run/brick generation is gated. Bike session cap lifts from 3 to 5 in single-discipline mode.
+**What it does**: Standalone cycling plan path alongside running and triathlon. Goals screen has a four-tile mode picker; cycling users go through `connect-data → cycling-setup → workout-preview → review → initializing`. Cycling setup collects event distance (50/100/160/200/300 km Gran Fondo class), target date, weekly hours, and strength sessions. Workout-preview renders the 9 bike kinds with literature anchors as a research showcase before plan generation. Plan engine reuses `generateTriathlonPlan` with `triConfig.disciplines = ['bike']`; swim/run/brick generation is gated. Bike session cap lifts from 3 to 5 in single-discipline mode.
 
 **Cycling finish-time prediction**: `predictCyclingEvent` (`src/calculations/race-prediction.cycling.ts`) computes finish time using FTP × distance-keyed intensity factor (IF from Allen & Coggan 2010: 50 km→0.88, 100 km→0.80, 160 km→0.74, 200 km→0.68, 300 km→0.62) and the Martin et al. 1998 bike physics engine. Uses full physics when aero profile + masses are set; falls back to a linear watts→kph approximation otherwise. Confidence range ±10% >4 weeks out, ±6% within 4 weeks. Card shown in Forecast tab via `renderCyclingFinishCard`.
 
@@ -454,7 +454,7 @@ Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTra
 
 **Week debrief**: auto-triggers on Sunday / Monday as usual, but shows `showTrackOnlyRetrospective` — compact this-vs-last-week deltas on distance, sessions, TSS, CTL, recovery average. No plan-adherence language.
 
-**Wizard flow**: welcome → goals (pick "Just track" tile directly) → connect-strava → review → initializing (short-circuits, skips race-target / schedule / physiology / runner-type / plan-preview) → main-view. The "Just track" tile sets `onboarding.trackOnly=true` and `initializeSimulator` takes the trackOnly branch.
+**Wizard flow**: welcome → goals (pick "Just track" tile directly) → connect-data → review → initializing (short-circuits, skips race-target / schedule / physiology / runner-type / plan-preview) → main-view. The "Just track" tile sets `onboarding.trackOnly=true` and `initializeSimulator` takes the trackOnly branch.
 
 **Readiness + strain detail views**: opening the readiness ring or strain breakdown on track-only home renders without the plan-comparison section (`generateWeekWorkouts` gated on `!s.trackOnly`, and `coachingText` / status labels in strain-view adapt for trackOnly). The HRV / sleep / RHR composite still computes; `plannedDayTSS` stays 0.
 
@@ -482,7 +482,7 @@ Upgrading to a plan later is a one-tap action from Home or Plan: `upgradeFromTra
 
 **Plan-view budget banner** (`src/ui/plan-view.ts` `buildBudgetBanner`): when this week's rendered plan exceeds the user's stated weekly hours by > 5 min, a notice card surfaces above the workout list with two CTAs — Accept shorter sessions (records dismissal at current hours value) or Increase to N h/week (auto-bumps the target and clears the dismissal). Banner re-arms whenever `weeklyTrainingHours` changes.
 
-**Flow**: `goals → connect-strava → race-target → schedule → workout-preview → review` (running). Cycling unchanged.
+**Flow**: `goals → connect-data → race-target → schedule → workout-preview → review` (running). Cycling unchanged.
 
 **Key files**: `src/ui/wizard/steps/schedule.ts`, `src/ui/wizard/steps/workout-preview.ts`, `src/ui/wizard/controller.ts`, `src/workouts/plan_engine.ts` (`applyHoursBudget`), `src/workouts/intent_to_workout.ts` (populates `estimatedDurationMin`), `src/ui/plan-view.ts` (`buildBudgetBanner`), `src/workouts/generator.ts`, `src/types/onboarding.ts`
 **Tests**: ✅ All 1375 passing — 7 new soft-floor tests in `src/workouts/plan_engine.budget.test.ts`
@@ -733,8 +733,10 @@ Ad-hoc workout generation from plan view. Mode-aware modal — running/fitness u
 
 - Excluded from TSS calculations (suggestions, not completed activity)
 
-**Key files**: `src/ui/session-generator.ts` (entrypoint + run/swim/bike sub-flows + tri save), `src/ui/triathlon/plan-view.ts` (header button), `src/ui/hyrox/plan-view.ts` (header button), `src/ui/plan-view.ts` (running header button), `src/workouts/swim.ts`, `src/workouts/bike.ts`
-**Tests**: ❌ None yet
+**Readiness caption (2026-05-28)**: a one-line caption above the type / discipline picker reflects today's state — readiness composite score, the matrix sentence from `computeReadiness` (same one driving the home ring), and the injury caption if any blocked/capped disciplines apply. Caption-only: picker still accepts any choice. Built by `buildSessionRecommendation(state)` in `src/calculations/session-recommendation.ts`, which lifts the lean context payload from `src/ui/coach-workout-modal.ts` (the premium variant) and applies it deterministically — no LLM call. Slot heuristic: score < 45 → easy, ≥ 75 → hard, else steady; injury forces hard → steady.
+
+**Key files**: `src/ui/session-generator.ts` (entrypoint + run/swim/bike sub-flows + tri save), `src/calculations/session-recommendation.ts` (caption + slot heuristic), `src/ui/triathlon/plan-view.ts` (header button), `src/ui/hyrox/plan-view.ts` (header button), `src/ui/plan-view.ts` (running header button), `src/workouts/swim.ts`, `src/workouts/bike.ts`
+**Tests**: `src/calculations/session-recommendation.test.ts` (9 tests) — ✅ Passing. Session-generator UI itself: no tests yet.
 
 ---
 
@@ -1016,7 +1018,9 @@ distance reduction formula; Load Budget integration tests (per LOAD_BUDGET_SPEC 
 
 Reuses the existing `VoiceCoach` and `keep-awake` primitives so cues and screen-on behave the same as for guided runs. Wall-clock + tap driven, not GPS-tick driven (strength has no pace/distance). Live BLE heart rate is out of scope; HR attaches post-hoc when a wearable strength activity syncs.
 
-**HYROX support (2026-05-28)**: the same overlay powers HYROX station and brick workouts via an adapter (`parseHyroxSession`) that maps each `hyroxComponent` (station or run) to one `GuidedSet` with `setCount=1`. 8 HYROX stations render as 8 rings each filling 1/1 when done; restless between components (HYROX is continuous in a race). Station names + race-standard targets come from `STATION_DISPLAY` (e.g. "Wall Balls · 100 reps"); run components show their distance ("1 km"). The position counter switches to "Station X of Y" when every step is a one-shot. Entry from `src/ui/hyrox/workout-detail-modal.ts`. GPS-driven guided run *during* HYROX run components (reusing the run-guidance engine for sub-segments) and per-rep counters / per-station benchmark comparisons remain follow-ups.
+**HYROX support (2026-05-28)**: the same overlay powers HYROX station and brick workouts via an adapter (`parseHyroxSession`) that maps each `hyroxComponent` (station or run) to one `GuidedSet` with `setCount=1`. 8 HYROX stations render as 8 rings each filling 1/1 when done; restless between components (HYROX is continuous in a race). Station names + race-standard targets come from `STATION_DISPLAY` (e.g. "Wall Balls · 100 reps"); run components show their distance ("1 km"). The position counter switches to "Station X of Y" when every step is a one-shot. Entry from `src/ui/hyrox/workout-detail-modal.ts`.
+
+**HYROX GPS auto-advance (2026-05-28)**: when the workout has at least one run component, the overlay spins up a standalone `GpsTracker` for the duration of the session. While a run set is active, a small block above the Complete-set button shows current distance / target and rolling pace; once `totalDistance - baseline` reaches the prescribed `distanceM`, `controller.completeSet()` fires automatically (same path the user's manual tap takes). Stations stay tap-to-end. Permission denials / no-lock / indoor scenarios fall through to the existing manual-tap flow with a hint line so the user knows what's happening. Per-rep counters and per-station benchmark comparisons remain follow-ups.
 
 ### 20a. Guided Runs (phone coaching)
 **What it does**: Voice and haptic coaching during a tracked structured run. Parses the workout into a step timeline (warm-up, work reps, recovery, cool-down), drives it forward from tracker ticks, and speaks cues: "Go. Threshold rep 1 of 5. 3 minutes at 4:15 per kilometre." Per-km splits are announced on paced work ("Kilometre 3. 4:15. On pace." / "… 7 seconds fast. Ease this one." / "… 7 seconds behind target."). A vertically centred rest overlay shows a big countdown, the next rep preview, and +30s / Skip rest buttons. Off by default; toggled in Account → Preferences.
@@ -1050,13 +1054,13 @@ After a guided run, a "Pace adherence" summary card in the completion modal show
 **What it does**: The Record tab is the purpose-built live running screen. Any "Track Run" button (plan workout cards, Just Run, Record tab Start Run) navigates to this tab and shows a real-time UI that updates every second without full re-renders.
 
 Two layouts based on workout type:
-- **Simple** (easy / long / unstructured): large elapsed time, 2×2 grid with distance, current pace, avg pace. Pause + Stop buttons.
-- **Structured** (intervals / threshold / progressive): segment flow strip showing ✓ completed, ● current segment with km remaining + target pace, · upcoming. Elapsed, distance, and pace row below. Pause + Stop.
+- **Simple** (easy / long / unstructured / Just-Track): large elapsed time, 2×2 grid with distance, current pace, avg pace. **Lap + Pause + Stop** buttons. The Lap button (added 2026-05-28, no scheme active only) calls `GpsTracker.captureLap()` to push a free-form `Lap N` split at the current position, fires a 60ms haptic for tactile confirmation, and patches a "Last lap: m:ss · meters" readout above the control row. Lap reset segment counters so successive laps measure only their own ground.
+- **Structured** (intervals / threshold / progressive): segment flow strip showing ✓ completed, ● current segment with km remaining + target pace, · upcoming. Elapsed, distance, and pace row below. Pause + Stop. **No Lap button** — splits are scheme-driven and a manual lap would conflict with the segment-advance contract.
 
 Navigation away from the Record tab (via tab bar) deregisters the tick handler so there are no stale DOM updates.
 
-**Key files**: `src/ui/record-view.ts`, `src/ui/gps-events.ts`
-**Tests**: ❌ None (UI-only)
+**Key files**: `src/ui/record-view.ts`, `src/ui/gps-events.ts`, `src/gps/tracker.ts` (`captureLap`)
+**Tests**: `src/gps/tracker.test.ts` includes 7 `captureLap` tests (null-paths, distance/elapsed/pace, sequential numbering, segment-counter reset, listener notification). Record-view UI itself: no tests.
 
 ---
 
@@ -1146,11 +1150,11 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **UI**: Two entry points, both via the shared `openImportActivityModal()` (`src/ui/import-activity-modal.ts`): Account > Advanced ("Import activity file"), and the onboarding data-source step ("Upload your runs", added 2026-05-28). The modal's `<input>` accepts `.fit,.gpx,.tcx,.zip` — a `.zip` routes to `importActivityArchive()` (full Strava/Garmin export) with live "Reading archive… 12/340" progress; a single file routes to `importActivityFile()`. On success the status line and a toast show the summary. No navigation away; view stays in place. An optional `onComplete` callback lets onboarding reveal Continue and surface the guest-sync nudge after an import.
 
-**Onboarding wiring (2026-05-28, updated same day)**: the data-source step ("Bring in your training history", `connect-strava.ts`) now opens with a watch-picker chip row — Apple Watch / Garmin / Coros / Polar+Suunto / Phone only / Other — and the lower section swaps to that watch's path. Apple Watch on iOS surfaces a one-tap `Connect Apple Health` (5y backfill silently); on web it shows an "iOS app only" note and an upload fallback. Garmin / Coros / Polar+Suunto each get a 3-step export guide with a hero screenshot slot (`/images/onboarding/{watch}-export.png`, silently hidden if missing) and the upload CTA. Phone-only shows "we'll track from here" + immediate Continue. Other keeps the screenshot + upload pair and houses the gated Strava CTA. Garmin OAuth (`GARMIN_CONNECT_ENABLED`) is a "Recovery data (optional)" sub-CTA inside the Garmin path. Default chip: Apple Watch on `isNativeiOS()`, Garmin elsewhere.
+**Onboarding wiring (2026-05-28, restructured + same-day refinement)**: the data-source step (`connect-data.ts`, renamed from `connect-strava.ts`) is now a watch-first router with two picker tiles. Headline: "Show us where you're at" / "Mosaic learns from your training history. The more we see, the sharper your plan and race predictions get." Phase 1 shows two tiles — **Apple Watch** ("Sleep, HRV, resting HR, and runs sync through Apple Health. One tap.") and **Garmin, Coros, Polar, or other** ("Garmin doesn't yet let us pull this automatically. Upload an export and we'll pull in your runs and heart rate."). Why-we-ask caption below the picker: "Heart rate calibrates your load. Sleep and HRV calibrate your recovery. Apple Health is the only path that delivers both automatically right now." The earlier 3-tile picker (Apple / Garmin / Other) was collapsed to 2 because Garmin and Other routed to the same screen — only Apple Health delivers physiology automatically, so it stands alone. Picking Apple Watch immediately calls `connectAppleHealth()` on iOS; on web it shows a strong iOS-install push with an inline "upload an export here" fallback. Picking Other reveals Phase 2 — a "Build your training history" panel with three uniform upload options (Strava .zip primary, Garmin .zip secondary, single .fit/.gpx/.tcx tertiary) all wired to `openImportActivityModal()`. **Continue is always visible at the bottom** with state-dependent styling: pre-action it's bordered with the caption "Your plan will start from PBs only. Less accurate, but you can add data anytime from Account."; post-action it morphs into the dark primary CTA with no caption. The "Enter manually" link was removed — users read it as a downgrade; the same path is now Continue-without-uploading with an explicit consequence caption. `onboarding.chosenWatch` persists as `'apple' | 'other'` (legacy `'garmin'` is collapsed at render). Strava OAuth and Garmin OAuth remain deliberately absent because both APIs are dev-only at our current approval tier (Strava 1-user cap, Garmin single approved account); Strava OAuth still works for whitelisted accounts via Account view.
 
 **Reuse targets**: The `streamsToActivityRow()` function in `fitImport.ts` is the canonical mapping layer. Item A (Garmin activityDetails JSON parser) and item D (Strava archive ZIP) should produce `{ summary, records }` and call it directly.
 
-**Key files**: `src/data/fitImport.ts`, `src/data/activityEnrichment.ts`, `src/ui/import-activity-modal.ts`, `src/ui/account-view.ts`, `src/ui/wizard/steps/connect-strava.ts`
+**Key files**: `src/data/fitImport.ts`, `src/data/activityEnrichment.ts`, `src/ui/import-activity-modal.ts`, `src/ui/account-view.ts`, `src/ui/wizard/steps/connect-data.ts`
 **Tests**: `src/data/fitImport.test.ts` — ✅ 28/28 passing (mapFitSport, GPX parse, TCX parse, streamsToActivityRow mapping)
 
 ---
@@ -1168,13 +1172,13 @@ Navigation away from the Record tab (via tab bar) deregisters the tick handler s
 
 **UI**: `openScreenshotImportModal()` (`src/ui/screenshot-import-modal.ts`) — three-step glass overlay modelled on `openImportActivityModal`. Step 1: image picker + two how-to collapsibles. Step 2: "Reading the screenshot…" while the hybrid runs. Step 3: confirm/edit screen showing the read-back summary (distance · time · pace · avg HR) plus editable fields (date, distance in km/mi per `unitPref`, duration mm:ss, avg HR). The confirm step also exposes an **optional "Add HR chart for per-minute detail" panel** with its own image picker — selecting a chart screenshot triggers the `hr_chart` edge-function call; the sampled series is stored in `activeHrSeries` and folded into the parsed activity at commit. Splits, max HR, and any avgPace the parser derived ride along unchanged. On confirm, runs `commitScreenshotActivity` and fires the optional `onComplete` callback (used by onboarding to reveal Continue + the guest-sync nudge).
 
-**Entry points**: Account > Advanced ("Add from screenshot", `#btn-import-screenshot`), and the onboarding data-source step (`#cs-screenshot`, promoted in 2026-05-28 to the primary CTA above Upload).
+**Entry points**: Account > Advanced ("Add from screenshot", `#btn-import-screenshot`). The onboarding screenshot CTA was removed on 2026-05-28 when the data-source step was restructured around a 3-option watch picker — screenshot import is still available post-onboarding via Account.
 
 **Limitations** — surfaced honestly on the modal: a screenshot carries no GPS track and no second-by-second HR/pace data, so the route map and detailed traces will not appear for the imported run. The HR-chart sample is approximate (Claude reads a chart visually, not at sensor fidelity), but iTRIMP integration is robust to small per-point error. The cloud reader requires a signed-in account (auth gate on the edge function); guests on web fall through to a blank confirm form they can fill manually.
 
 **Manual deploy steps**: (a) Xcode — `npx cap sync ios` then archive to pull in the new `MosaicScreenshotOCR` plugin. (b) Supabase — `supabase migration up` to apply `20260528000001_screenshot_vision_usage.sql`, then `supabase functions deploy screenshot-vision`.
 
-**Key files**: `src/data/screenshotImport.ts` (verified core, built 2026-05-27), `src/data/screenshotCapture.ts` (hybrid orchestration), `src/data/screenshotOcr.ts` (JS bridge), `ios-plugins/screenshot-ocr/` (native plugin), `supabase/functions/screenshot-vision/index.ts` (AI fallback), `supabase/migrations/20260528000001_screenshot_vision_usage.sql`, `src/ui/screenshot-import-modal.ts`, `src/ui/account-view.ts`, `src/ui/wizard/steps/connect-strava.ts`
+**Key files**: `src/data/screenshotImport.ts` (verified core, built 2026-05-27), `src/data/screenshotCapture.ts` (hybrid orchestration), `src/data/screenshotOcr.ts` (JS bridge), `ios-plugins/screenshot-ocr/` (native plugin), `supabase/functions/screenshot-vision/index.ts` (AI fallback), `supabase/migrations/20260528000001_screenshot_vision_usage.sql`, `src/ui/screenshot-import-modal.ts`, `src/ui/account-view.ts`
 **Tests**: `src/data/screenshotImport.test.ts` — ✅ 21/21 passing (parser core + 4 `parsedHrSeriesFromAIJson` coercion tests + 3 `screenshotActivityToRow` enrichment-path tests covering hrSeries → computeHREnrichment, no-context fallback, too-short-series fallback); `src/data/screenshotCapture.test.ts` — ✅ 11/11 passing (decideNeedsAI, pickBetterParse, runHybridParse — high-conf skip / poor-OCR AI promotion / AI-fail retains OCR / empty-OCR web path / downscaled-image plumbing)
 
 ---

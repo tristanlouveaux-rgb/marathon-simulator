@@ -1,7 +1,7 @@
 /**
  * Triathlon-specific Training Stress Score (TSS) calculators.
  *
- * Swim uses cubed IF (water drag ∝ v³ per Toussaint & Beek 1992 — §18.2).
+ * Swim uses cubed IF (water drag ∝ v³ per Toussaint & Beek 1992. §18.2).
  * Bike uses squared IF (Coggan's NP/IF/TSS formulation).
  * Run keeps the existing running-TSS pipeline (not touched here).
  *
@@ -16,7 +16,7 @@ import {
 } from '@/constants/triathlon-constants';
 
 // ───────────────────────────────────────────────────────────────────────────
-// Swim TSS — cubed IF
+// Swim TSS. Cubed IF
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -40,7 +40,7 @@ export function computeSwimTss(params: {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Bike TSS — squared IF (power-based) with HR fallback
+// Bike TSS. Squared IF (power-based) with HR fallback
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -86,7 +86,7 @@ export function computeBikeTssFromHr(params: {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Helpers — rough IF estimation from pace when NP not supplied
+// Helpers. Rough IF estimation from pace when NP not supplied
 // ───────────────────────────────────────────────────────────────────────────
 
 /**

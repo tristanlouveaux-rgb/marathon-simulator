@@ -1,8 +1,8 @@
 /**
- * Triathlon plan adherence — % of planned tri sessions completed across
+ * Triathlon plan adherence. % of planned tri sessions completed across
  * past training weeks. Mirrors the running adherence helper but is much
  * simpler because tri workouts aren't matched 1:1 to a single activity
- * (no `workoutName`/`plannedDistanceKm` shape) — we compare planned
+ * (no `workoutName`/`plannedDistanceKm` shape). We compare planned
  * session counts vs synced session counts per week instead.
  *
  * **Tracking, not planning** (per CLAUDE.md): describes adherence to date.

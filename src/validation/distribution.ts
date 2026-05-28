@@ -4,7 +4,7 @@
  * For each total-time bin (15-min bins for 70.3, 30-min for IM), compute the
  * mean and SD of each leg's *fraction* of total finish time. This gives us
  * an empirical bound on what realistic splits look like at any given total
- * finish — useful for sanity-checking a model prediction without needing to
+ * finish. Useful for sanity-checking a model prediction without needing to
  * know the athlete's training history.
  *
  * **Why fractions, not absolute times.** A 5:00 70.3 always has roughly the
@@ -13,7 +13,7 @@
  * absolute times means one table covers the full range of finishers without
  * needing per-pace-tier sub-tables.
  *
- * Output: `validation/output/split-distributions.json` — checked in,
+ * Output: `validation/output/split-distributions.json`. Checked in,
  * consumed at runtime by the prediction-validator.
  */
 
@@ -111,7 +111,7 @@ export function buildDistribution(
     const swimMean = a.swimSum / a.n;
     const bikeMean = a.bikeSum / a.n;
     const runMean  = a.runSum  / a.n;
-    // Bessel-corrected sample variance — n-1 denominator.
+    // Bessel-corrected sample variance. N-1 denominator.
     const swimVar = (a.swimSumSq - a.n * swimMean * swimMean) / Math.max(1, a.n - 1);
     const bikeVar = (a.bikeSumSq - a.n * bikeMean * bikeMean) / Math.max(1, a.n - 1);
     const runVar  = (a.runSumSq  - a.n * runMean  * runMean ) / Math.max(1, a.n - 1);

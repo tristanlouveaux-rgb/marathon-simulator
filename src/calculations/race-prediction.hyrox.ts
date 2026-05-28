@@ -20,7 +20,7 @@
  *     venue-neutral and `courseFactors` is empty.
  *
  * Confidence: medium-low. Station seed times are well-anchored (HyroxDataLab,
- * roxlyfe.com); venue multipliers are coarse heuristics — see
+ * roxlyfe.com); venue multipliers are coarse heuristics. See
  * `src/data/hyrox-venues.ts` header for the rationale.
  */
 
@@ -79,7 +79,7 @@ export interface HyroxRunLeg {
 /**
  * Per-station "current → projected" marker for the live forecast.
  *
- * `currentSec` IS the same `baseSec` shown in `stations[].baseSec` — the
+ * `currentSec` IS the same `baseSec` shown in `stations[].baseSec`. The
  * value the user already sees on the benchmark card and forecast view.
  * Anchoring both surfaces to the same number is deliberate (mirrors the
  * triathlon LT-pace lesson where two views showed different "current"
@@ -87,7 +87,7 @@ export interface HyroxRunLeg {
  *
  * `projectedSec` is the race-day estimate from the per-class horizon model
  * (`applyHyroxStationHorizon` in `training-horizon.hyrox.ts`). NO venue
- * factors are applied — this is "test pace today → test pace race day".
+ * factors are applied. This is "test pace today → test pace race day".
  * Venue adjustments live in the existing course-factors panel.
  */
 export interface HyroxStationProjection {
@@ -142,7 +142,7 @@ export interface HyroxPrediction {
     physiologyMitigation: number;
   };
   /**
-   * Per-station + roxzone "current → projected" markers — research-grounded
+   * Per-station + roxzone "current → projected" markers. Research-grounded
    * trajectory at current training dose. Independent of `buildHyroxProjection`
    * (which projects the AGGREGATE finish from MTL/adherence/taper signals).
    * This field projects each STATION'S test pace on race day.
@@ -188,7 +188,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
       userBenchmarks = hx.stationBenchmarksSingles!;
     } else if (hasDoubles) {
       // Doubles per-station times include partner-rest and only cover 4 of 8
-      // stations — neither maps reliably to fresh singles capacity. Fall back
+      // stations. Neither maps reliably to fresh singles capacity. Fall back
       // to seeds for the target format; UI drops confidence to 'low'.
       userBenchmarks = {};
       crossFormatConversion = 'doubles_to_singles';
@@ -244,7 +244,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   // race implied or the per-station splits derived from it. `bandWeight` and
   // `splitsWeight` (computed in hyrox-staleness.ts) are physiology-mitigated
   // decay factors in [0,1]. Strong current VDOT/MTL/Strava CTL pulls them back
-  // toward 1.0 — an athlete who clearly held fitness escapes the penalty.
+  // toward 1.0. An athlete who clearly held fitness escapes the penalty.
   // Splits weight decays slower than band weight because skill components
   // (sled push, sandbag carry, wall ball cadence) persist longer than VO2max.
   const stale = computeHyroxStaleness(state);
@@ -341,7 +341,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
     runTempMult = HYROX_TEMP_RUN_MULTIPLIER[venue.tempTendency];
     runAltMult = altitudeRunMultiplier(venue.altitudeM);
     stationTempMult = HYROX_TEMP_STATION_MULTIPLIER[venue.tempTendency];
-    // Reuse run-altitude curve for endurance-station altitude effect — the
+    // Reuse run-altitude curve for endurance-station altitude effect. The
     // physiological mechanism (reduced O2 availability) is the same.
     stationAltMult = altitudeRunMultiplier(venue.altitudeM);
     sledFloorDeltaSec = HYROX_FLOOR_SLED_DELTA_SEC[venue.floorSurface];
@@ -370,7 +370,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
 
   // ── Itemise course-factor rows for UI ─────────────────────────────────────
   // When a venue is set, always emit all four rows (even with zero delta) so
-  // the UI shows what was actually modelled at this race — users can see "Lap:
+  // the UI shows what was actually modelled at this race. Users can see "Lap:
   // standard, +0.0%" rather than the row silently disappearing.
   if (venue) {
     const floorDelta =
@@ -444,7 +444,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   else if (stale.confidenceCap === 'medium' && confidence === 'high') confidence = 'medium';
 
   // ── Per-station "current → projected" trajectory ──────────────────────────
-  // Independent from `buildHyroxProjection` — that one projects the AGGREGATE
+  // Independent from `buildHyroxProjection`. That one projects the AGGREGATE
   // finish from MTL / adherence / taper / readiness signals. This one
   // projects EACH station's test pace from the per-class horizon model
   // (research-grounded gain rates calibrated to weeks remaining + planned
@@ -452,7 +452,7 @@ export function predictHyroxRace(state: SimulatorState): HyroxPrediction | null 
   // - Anchor `currentSec` to the same `baseSec` shown elsewhere (lesson from
   //   the triathlon LT-pace bug: two surfaces showing different "current"
   //   values for the same metric).
-  // - No venue factors here — projection is "test pace today → test pace
+  // - No venue factors here. Projection is "test pace today → test pace
   //   race day". Venue adjustments stay in the course-factors panel.
   const projection = buildStationProjection(state, stationLines, roxzoneSeed, band);
 

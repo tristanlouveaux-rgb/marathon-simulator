@@ -1,10 +1,10 @@
 /**
- * Triathlon Stats — single scrollable page.
+ * Triathlon Stats. Single scrollable page.
  *
  * Sections (top to bottom):
- *   1. Your Numbers — CSS / FTP / LT / VO2max zone bars
- *   2. Trends — benchmark sparklines (CSS, FTP, LT, VO2max)
- *   3. Progress — range toggle, stat list, phase timeline, CTL + volume charts
+ *   1. Your Numbers. CSS / FTP / LT / VO2max zone bars
+ *   2. Trends. Benchmark sparklines (CSS, FTP, LT, VO2max)
+ *   3. Progress. Range toggle, stat list, phase timeline, CTL + volume charts
  *
  * Race estimates live on the Forecast tab.
  */

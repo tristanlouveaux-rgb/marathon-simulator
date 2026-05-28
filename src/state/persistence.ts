@@ -136,7 +136,7 @@ function migrateState(loaded: SimulatorState): SimulatorState {
   // Pre-v4, `s.vo2` and `physiologyHistory[].vo2max` could be sourced from
   // `daily_metrics.vo2max`, which is Garmin's generic cardio estimate and can
   // include cycling-derived values that diverge from the watch's "Running VO2
-  // Max" screen. Clear them — physiology sync will repopulate strictly from
+  // Max" screen. Clear them. Physiology sync will repopulate strictly from
   // `physiology_snapshots.vo2_max_running` on next launch, or leave null and
   // fall through to estimated VDOT in the UI.
   if (currentVersion < VO2_DEVICE_ONLY_VERSION) {
@@ -179,7 +179,7 @@ function validateState(loaded: SimulatorState): boolean {
     (loaded.v && (loaded.v < 10 || loaded.v > 90)) || // VDOT out of human range
     (loaded.b && (isNaN(loaded.b) || loaded.b < 0.8 || loaded.b > 1.5)) || // Fatigue exponent out of range
     (loaded.w && loaded.tw && loaded.w > loaded.tw + 1) || // Week beyond plan length
-    // Week array length mismatch — only flag once a plan has been generated.
+    // Week array length mismatch. Only flag once a plan has been generated.
     // An empty `wks` simply means onboarding hasn't built the plan yet, not corruption.
     (loaded.wks && loaded.wks.length > 0 && loaded.tw && loaded.wks.length !== loaded.tw);
 
@@ -319,7 +319,7 @@ export function loadState(): boolean {
       }
     }
 
-    // Always ensure planStartDate is set — independent of schema version,
+    // Always ensure planStartDate is set. Independent of schema version,
     // because it was added after the v2 migration and existing v2 users
     // would have skipped the derivation via the early-return in migrateState.
     if (!migrated.planStartDate && migrated.w && migrated.w >= 1) {
@@ -359,7 +359,7 @@ export function loadState(): boolean {
     // Retroactively fix completedKm for past weeks using garminActuals (runs only).
     // Old code stored planned km parsed from workout descriptions; actual Garmin distances
     // are already persisted in garminActuals and should take precedence.
-    // Only sum run-type slots — exclude cross-training, gym, rest, etc. by key name.
+    // Only sum run-type slots. Exclude cross-training, gym, rest, etc. by key name.
     {
       const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk'];
       const isRunKey = (k: string, activityType?: string | null) => {
@@ -428,7 +428,7 @@ export function loadState(): boolean {
         const prevExcess = prevWk ? getWeeklyExcess(prevWk, prevPlannedB, migrated.planStartDate) : 0;
 
         // Retroactive cleanup: if currWk already has hasCarriedLoad but prev week
-        // was actually under target, strip the items — they were already absorbed.
+        // was actually under target, strip the items. They were already absorbed.
         if (currWk?.hasCarriedLoad && prevExcess <= 0) {
           currWk.hasCarriedLoad = false;
           currWk.unspentLoadItems = [];
@@ -502,7 +502,7 @@ export function loadState(): boolean {
     console.error('Error loading state:', e);
     localStorage.removeItem(STATE_KEY);
     localStorage.removeItem(CROSS_KEY);
-    // Defer the toast — at this point in the launch path the DOM may not be
+    // Defer the toast. At this point in the launch path the DOM may not be
     // ready. setTimeout + dynamic import avoids both an early-render no-op and
     // a circular UI import from persistence.
     setTimeout(() => {
@@ -525,7 +525,7 @@ export function saveState(): void {
     localStorage.setItem(STATE_KEY, JSON.stringify(state));
     localStorage.setItem(CROSS_KEY, JSON.stringify(crossActivities));
 
-    // Fire-and-forget Supabase backup — only runs if user is authenticated
+    // Fire-and-forget Supabase backup. Only runs if user is authenticated
     savePlanSettings();
   } catch (e) {
     console.error('Error saving state:', e);
@@ -572,7 +572,7 @@ export function softResetState(): void {
 
   // Atomic write: build a COMPLETE fresh state (defaults + preserved onboarding).
   // Writing a partial blob here used to wipe `wks`, `v`, `pbs`, `lt`, etc. on
-  // the next launch — loadState() does setState(migrated), which replaces the
+  // the next launch. LoadState() does setState(migrated), which replaces the
   // in-memory state outright. The wizard then crashed at `rt.wks.length`.
   const freshState: SimulatorState = {
     ...getDefaultState(),

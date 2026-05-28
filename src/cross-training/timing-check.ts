@@ -12,12 +12,12 @@
  *   100–124 TSS → 2 steps down + 15% shorter
  *   125+ TSS   → 2 steps down + 25% shorter
  *
- * Floor: max(3 km, reduced distance) — approx. 20 min minimum.
+ * Floor: max(3 km, reduced distance). Approx. 20 min minimum.
  *
  * Intensity ladder (ascending): easy → marathon → threshold → vo2
  * Long run: long → marathon (1 step), long → easy (2 steps)
  *
- * Mods are suggestions only — workout unchanged until user accepts.
+ * Mods are suggestions only. Workout unchanged until user accepts.
  * Recomputed fresh each sync, so they clear on reschedule.
  */
 
@@ -100,7 +100,7 @@ function dayOfWeekFromISO(isoTimestamp: string, weekStartISO: string): number {
   const weekStart = new Date(weekStartISO);
   const diff = Math.floor((actDate.getTime() - weekStart.getTime()) / 86400000);
   if (diff < 0 || diff >= 7) return -1;
-  // Remap to scheduler convention (0=Monday) — weekStartISO may not be a Monday
+  // Remap to scheduler convention (0=Monday). WeekStartISO may not be a Monday
   const weekStartJsDay = weekStart.getUTCDay(); // JS: 0=Sun
   const offset = (weekStartJsDay + 6) % 7;      // Convert to 0=Mon
   return (diff + offset) % 7;
@@ -118,7 +118,7 @@ function buildDayTSSMap(wk: Week, weekStartISO: string): Map<number, number> {
     if (day >= 0) map.set(day, Math.max(map.get(day) ?? 0, tss));
   };
 
-  // Strava/Garmin matched actuals (garminId may be 'strava-XXXX' — both sources land here)
+  // Strava/Garmin matched actuals (garminId may be 'strava-XXXX'. Both sources land here)
   for (const actual of Object.values(wk.garminActuals ?? {})) {
     if (!actual.startTime) continue;
     add(dayOfWeekFromISO(actual.startTime, weekStartISO), actSignalBTSS(actual.iTrimp, actual.durationSec));
@@ -137,7 +137,7 @@ function buildDayTSSMap(wk: Week, weekStartISO: string): Map<number, number> {
 
 /**
  * Compute timing suggestion mods for the given workout list.
- * Pure function — no state mutation.
+ * Pure function. No state mutation.
  */
 export function applyTimingDowngradesFromWorkouts(
   wk: Week,
@@ -194,14 +194,14 @@ export function applyTimingDowngradesFromWorkouts(
     mods.push({
       name: workout.n,
       dayOfWeek: sessionDay,
-      status: 'planned',     // suggestion only — not applied until user accepts
+      status: 'planned',     // suggestion only. Not applied until user accepts
       modReason: `${TIMING_MOD_PREFIX} hard session day before`,
       confidence: 'medium',
       originalDistance: workout.d ?? '',
       newDistance,           // stored for accept action
       newType,
       newRpe,
-      // Store suggestion label in confidence field — repurposed as display hint
+      // Store suggestion label in confidence field. Repurposed as display hint
       // (avoids adding a new field to WorkoutMod)
     } as WorkoutMod & { suggestionLabel?: string });
 
@@ -223,7 +223,7 @@ function weekStartISO(planStartDate: string, weekNum: number): string {
 
 /**
  * Recompute timing mods for the current week and merge into wk.workoutMods,
- * replacing any previous Timing: mods. Does NOT save state — caller must save.
+ * replacing any previous Timing: mods. Does NOT save state. Caller must save.
  * Returns true if anything changed.
  */
 export function mergeTimingMods(s: SimulatorState, wk: Week): boolean {

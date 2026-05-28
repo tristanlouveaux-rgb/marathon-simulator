@@ -89,7 +89,7 @@ function getSportConfig(sportKey: SportKey | string) {
 }
 
 // ---------------------------------------------------------------------------
-// TIER A+: iTRIMP (Individual TRIMP from HR stream — highest accuracy)
+// TIER A+: iTRIMP (Individual TRIMP from HR stream. Highest accuracy)
 // ---------------------------------------------------------------------------
 
 /**
@@ -99,7 +99,7 @@ function getSportConfig(sportKey: SportKey | string) {
  * (Σ Δt_sec × HRR × e^(β·HRR)) so a 1-hour session lands at iTRIMP ≈ 5000–10000.
  * Every other consumer in the codebase converts this to TSS-equivalent units
  * via `iTrimp × 100 / 15000` (1 hour at threshold ≈ 15000 iTRIMP ≈ 100 TSS).
- * We do the same here BEFORE applying sport multiplier — without it, baseLoad
+ * We do the same here BEFORE applying sport multiplier. Without it, baseLoad
  * is ~150× too large, blowing up FCL/RRC, slamming `equivalentEasyKm` into its
  * 25 km cap, and falsely flagging any HR-tracked cross-training session as
  * "Very heavy training load". See `tri-benchmarks-from-history.ts` for the
@@ -115,7 +115,7 @@ function computeTierAPlus(
   const baseLoad = tssEquivalent * sportMult;
 
   // Split aerobic/anaerobic: use a fixed 85/15 split as iTRIMP doesn't
-  // distinguish zones — it is purely a cardiovascular load signal.
+  // distinguish zones. It is purely a cardiovascular load signal.
   const aerobicFrac = 0.85;
   const aerobic = baseLoad * aerobicFrac;
   const anaerobic = baseLoad * (1 - aerobicFrac);
@@ -279,7 +279,7 @@ export function computeUniversalLoad(
   let confidence: number;
   let tier: DataTier;
 
-  // TIER A+: iTRIMP available (second-by-second HR stream — highest accuracy)
+  // TIER A+: iTRIMP available (second-by-second HR stream. Highest accuracy)
   if (input.iTrimp != null && input.iTrimp > 0) {
     const tierAPlus = computeTierAPlus(
       input.iTrimp,
@@ -544,7 +544,7 @@ export function classifyByZones(hrZones: HRZoneData): {
  * Decision tree (spec §6.2):
  * 1. Use iTRIMP when: sport is intermittent, OR high-HR proportion > 15%, OR < 20min zone data
  * 2. Use zone distribution for steady-state sports with ≥ 20min HR data
- * 3. Profile fallback — defaults to easy
+ * 3. Profile fallback. Defaults to easy
  */
 export function classifyWorkoutType(input: {
   sport: SportKey | string;
@@ -589,7 +589,7 @@ export function classifyWorkoutType(input: {
     tss = input.durationMin * intensityFactor;
     method = 'zones';
   } else {
-    // No HR data — safe default
+    // No HR data. Safe default
     type = 'easy';
     tss = input.durationMin * 0.55;
     method = 'profile';

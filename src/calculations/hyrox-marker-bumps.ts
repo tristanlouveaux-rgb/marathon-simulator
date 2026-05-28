@@ -1,8 +1,8 @@
 /**
- * HYROX marker-bump detector — mirrors the triathlon pattern in
+ * HYROX marker-bump detector. Mirrors the triathlon pattern in
  * `tri-marker-bumps.ts`. Currently only the run pace is auto-derived from
  * physiology (VDOT); future work could add station benchmarks once a
- * training-side training-data signal is built (see plan ticket — out of
+ * training-side training-data signal is built (see plan ticket. Out of
  * scope for the current bug fix chain).
  *
  * **Side**: tracking. Pure-function detector + a separate state mutation
@@ -56,7 +56,7 @@ export function detectHyroxMarkerBumps(state: SimulatorState): HyroxMarkerBump[]
 }
 
 /** Apply the derived run pace to state and flip provenance. Mutates. Caller
- *  must `saveState()`. Idempotent — running on already-derived state is fine.
+ *  must `saveState()`. Idempotent. Running on already-derived state is fine.
  *  Returns true when a write happened. */
 export function applyHyroxRunPaceDerivation(state: SimulatorState): boolean {
   const hx = state.hyroxConfig;

@@ -4,13 +4,13 @@
  * Deterministic detector for proactive coach insights. Runs on app launch
  * (called from main.ts) and appends unseen insights to `state.coachInsightQueue`.
  *
- * The detector is pure state-logic — NO LLM calls. Cost: 0. Only when the user
+ * The detector is pure state-logic. NO LLM calls. Cost: 0. Only when the user
  * taps the resulting Home card does an LLM call happen (same path as opening
  * Coach manually, counts against the daily rate limit).
  *
  * Guard pattern: each trigger has a `triggerId` that includes an event marker
  * (date, week number, marker value). Once an insight with that id has been
- * appended, the trigger won't fire again — `notifiedMarkers`-style discipline.
+ * appended, the trigger won't fire again. `notifiedMarkers`-style discipline.
  */
 
 import type { SimulatorState } from '@/types/state';
@@ -56,7 +56,7 @@ export function evaluateCoachTriggers(state: SimulatorState): CoachInsight[] {
     }
   } catch { /* daily-coach can throw on partially hydrated state; skip the trigger */ }
 
-  // ─── Race week — T-7 days out ───────────────────────────────────────────────
+  // ─── Race week. T-7 days out ───────────────────────────────────────────────
   // Tri race date
   const triRaceDateStr = state.triConfig?.raceDate;
   if (triRaceDateStr) {

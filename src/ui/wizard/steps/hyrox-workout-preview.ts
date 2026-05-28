@@ -4,7 +4,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
- * HYROX workout preview — the "research showcase" step for HYROX athletes.
+ * HYROX workout preview. The "research showcase" step for HYROX athletes.
  *
  * Replaces the earlier review-page recap. Mirrors the running and triathlon
  * preview pattern: a non-interactive card grid showing every session type the
@@ -12,7 +12,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
  *
  * Card content is sourced from `src/workouts/hyrox-generators.ts` and
  * `src/constants/hyrox-constants.ts`. The intent is to show users that the
- * plan isn't a wall of easy runs — variety is intentional and ramps with the
+ * plan isn't a wall of easy runs. Variety is intentional and ramps with the
  * phase.
  */
 

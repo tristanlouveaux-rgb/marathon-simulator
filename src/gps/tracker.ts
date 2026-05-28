@@ -132,7 +132,7 @@ export class GpsTracker {
       return false;
     }
 
-    // Start elapsed timer immediately — don't wait for GPS lock
+    // Start elapsed timer immediately. Don't wait for GPS lock
     this.startTime = Date.now();
 
     this.provider.startWatching(
@@ -222,9 +222,50 @@ export class GpsTracker {
   }
 
   /**
+   * Capture a manual lap split at the current position. Free-form: doesn't
+   * advance a scheme segment, doesn't interact with `currentSegmentIdx`.
+   * Intended for Just-Track / unstructured runs where the athlete wants to
+   * mark an interval boundary (e.g. press lap on a 400m). When a structured
+   * split scheme is active this is a no-op so manual laps can't desync the
+   * scheme-managed `segmentDistance` / `segmentStartMs` counters.
+   *
+   * Returns the captured split, or null if tracking hasn't started, GPS lock
+   * hasn't been acquired, or no measurable distance / time has accumulated
+   * since the last lap (or session start).
+   */
+  captureLap(): GpsSplit | null {
+    if (this.splitScheme) return null;
+    if (this.status === 'idle' || this.status === 'stopped' || this.status === 'acquiring') return null;
+    if (this.points.length === 0) return null;
+
+    const lastPoint = this.points[this.points.length - 1];
+    const now = lastPoint.timestamp;
+    const lapElapsed = Math.max(0, (now - this.segmentStartMs - this.segmentPauseMs) / 1000);
+    const lapDistance = this.segmentDistance;
+    if (lapElapsed <= 0 && lapDistance <= 0) return null;
+
+    const split: GpsSplit = {
+      index: this.completedSplits.length,
+      label: `Lap ${this.completedSplits.length + 1}`,
+      distance: lapDistance,
+      elapsed: lapElapsed,
+      pace: calculatePace(lapDistance, lapElapsed),
+      targetPace: null,
+    };
+    this.completedSplits.push(split);
+    this.segmentDistance = 0;
+    this.segmentStartMs = now;
+    this.segmentPauseMs = 0;
+
+    for (const cb of this.splitListeners) cb(split, false);
+    this.notify();
+    return split;
+  }
+
+  /**
    * Extend the current segment's target by `sec` seconds (time-based segments only).
    * Returns the new total duration, or null if the current segment is distance-based
-   * or there is no active scheme. Mutates the scheme in place — the scheme is a
+   * or there is no active scheme. Mutates the scheme in place. The scheme is a
    * per-run copy passed to the constructor, so this does not leak to the plan.
    */
   extendSegment(sec: number): number | null {
@@ -303,7 +344,7 @@ export class GpsTracker {
    */
   public tick(): void {
     // Tick fires every second. Evaluate auto-pause even when no GPS point has
-    // arrived recently (e.g. indoors with a weak signal — a stationary user
+    // arrived recently (e.g. indoors with a weak signal. A stationary user
     // still needs to be detected as stopped).
     if (this.autoPauseEnabled &&
         (this.status === 'tracking' || (this.status === 'paused' && this.autoPausedFlag))) {

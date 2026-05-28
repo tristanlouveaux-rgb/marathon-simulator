@@ -1,11 +1,11 @@
 /**
- * Coach Insight — Week signals + copy for Week Overview and debrief.
+ * Coach Insight. Week signals + copy for Week Overview and debrief.
  *
  * Signals computed from real data: RPE (effortScore), Load (tssPct),
  * Fitness direction (ctlDelta), Aerobic efficiency (HR drift).
  *
  * Coach copy: decision tree on RPE × Load with secondary modifiers.
- * Novel combinations or insufficient data return null — UI shows nothing.
+ * Novel combinations or insufficient data return null. UI shows nothing.
  */
 
 export interface WeekSignals {
@@ -76,7 +76,7 @@ export function computeWeekSignals(
 export function getSignalPills(signals: WeekSignals): SignalPill[] {
   const pills: SignalPill[] = [];
 
-  // Perceived effort — from user RPE ratings vs expected
+  // Perceived effort. From user RPE ratings vs expected
   if (signals.rpe != null) {
     const map = {
       hard: { value: 'Harder than expected', color: 'red' },
@@ -88,7 +88,7 @@ export function getSignalPills(signals: WeekSignals): SignalPill[] {
     pills.push({ label: 'Perceived effort', value: '—', color: 'neutral' });
   }
 
-  // HR effort — objective effort from heart rate data
+  // HR effort. Objective effort from heart rate data
   if (signals.hrEffort != null) {
     const map = {
       overcooked: { value: 'Above target zone', color: 'red' },
@@ -100,7 +100,7 @@ export function getSignalPills(signals: WeekSignals): SignalPill[] {
     pills.push({ label: 'Heart rate effort', value: '—', color: 'neutral' });
   }
 
-  // Training volume — TSS vs plan
+  // Training volume. TSS vs plan
   if (signals.load != null) {
     const map = {
       'high-over': { value: 'Well above plan', color: 'red' },
@@ -113,7 +113,7 @@ export function getSignalPills(signals: WeekSignals): SignalPill[] {
     pills.push({ label: 'Training volume', value: '—', color: 'neutral' });
   }
 
-  // Running load — CTL delta week-over-week
+  // Running load. CTL delta week-over-week
   if (signals.fitness != null) {
     const map = {
       up: { value: 'Improving', color: 'green' },
@@ -125,7 +125,7 @@ export function getSignalPills(signals: WeekSignals): SignalPill[] {
     pills.push({ label: 'Running load', value: '—', color: 'neutral' });
   }
 
-  // HR during sessions — average HR drift across runs
+  // HR during sessions. Average HR drift across runs
   if (signals.hrDrift != null) {
     const map = {
       efficient: { value: 'Stable', color: 'green' },
@@ -198,7 +198,7 @@ export function getCoachCopy(signals: WeekSignals, phase?: string): string | nul
     additions.push("Combined with the effort score, a recovery week may be due soon.");
   }
 
-  // RPE vs HR divergence — a meaningful coaching signal
+  // RPE vs HR divergence. A meaningful coaching signal
   if (rpe === 'hard' && hrEffort === 'on-target') {
     additions.push("Runs felt hard but HR stayed in zone. Possible fatigue, stress, or heat, not a fitness issue.");
   } else if (rpe === 'easy' && hrEffort === 'overcooked') {

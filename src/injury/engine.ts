@@ -45,7 +45,7 @@ import {
  * Clear discipline gates that the new event mode does not ask about, so
  * stale answers from a prior mode do not silently re-engage when the user
  * later switches back to that mode with the injury still active. `canRun`
- * is always preserved — it is a required field on InjuryState and asked in
+ * is always preserved. It is a required field on InjuryState and asked in
  * every non-cycling-only mode.
  *
  * Call from each `initialization.*.ts` right after the eventType is assigned.
@@ -316,10 +316,10 @@ function estimateWorkoutDurationMin(desc: string | undefined): number {
   // Reps × minutes
   const repMinMatch = desc.match(/(\d+)\s*[×x]\s*(\d+)\s*min/i);
   if (repMinMatch) return parseInt(repMinMatch[1]) * parseInt(repMinMatch[2]);
-  // Distance in km — estimate at ~6 min/km
+  // Distance in km. Estimate at ~6 min/km
   const kmMatch = desc.match(/(\d+)\s*km/i);
   if (kmMatch) return Math.round(parseInt(kmMatch[1]) * 6);
-  // Reps × meters — estimate total distance then apply pace
+  // Reps × meters. Estimate total distance then apply pace
   const repMMatch = desc.match(/(\d+)\s*[×x]\s*(\d+)\s*m?\b/i);
   if (repMMatch) {
     const reps = parseInt(repMMatch[1]);
@@ -538,7 +538,7 @@ const ACUTE_PHASE_MIN_HOURS = 72;
  * Required capacity tests to progress from test_capacity phase, keyed by
  * injury location. Without location-awareness, the legacy `pain_free_walk` +
  * `single_leg_hop` pair would block upper-body / neck / chest injuries from
- * ever progressing through capacity testing — a shoulder injury can't be
+ * ever progressing through capacity testing. A shoulder injury can't be
  * cleared by a single-leg hop.
  *
  * Choices are clinically idiomatic: shoulder/upper-arm get ROM + isometric
@@ -548,13 +548,13 @@ const ACUTE_PHASE_MIN_HOURS = 72;
  * pair. 'other' falls back to pain_free_walk only.
  */
 const CAPACITY_TESTS_BY_LOCATION: Record<InjuryLocation, CapacityTestType[]> = {
-  // Lower-body — original pair
+  // Lower-body. Original pair
   foot:       ['pain_free_walk', 'single_leg_hop'],
   knee:       ['pain_free_walk', 'single_leg_hop'],
   calf:       ['pain_free_walk', 'single_leg_hop'],
   hamstring:  ['pain_free_walk', 'single_leg_hop'],
   hip:        ['pain_free_walk', 'single_leg_hop'],
-  // Back — walk + isometric (avoid hop impact)
+  // Back. Walk + isometric (avoid hop impact)
   back:       ['pain_free_walk', 'isometric_hold'],
   // Upper-body
   shoulder:   ['shoulder_rotation', 'isometric_hold'],
@@ -584,7 +584,7 @@ export type DisciplineKey = 'run' | 'bike' | 'swim' | 'upperLoad' | 'lowerLoad';
  * enum form) keeps working: `yes` → 100, `limited` → 50, `no` → 0.
  *
  * Returns 100 (no constraint) when neither the new field nor the legacy enum
- * is set — that matches the existing engine semantic where undefined gates
+ * is set. That matches the existing engine semantic where undefined gates
  * are treated as "no restriction".
  */
 export function getDisciplineCapacity(
@@ -635,7 +635,7 @@ export type CapacityKey =
 
 /**
  * Heuristic default capacity (0–100) per injury location. Pre-selected on a
- * fresh injury so the user does not have to drag every slider — a shoulder
+ * fresh injury so the user does not have to drag every slider. A shoulder
  * defaults swim → 0, bike → 50 (one-handed riding), run → 100. The injury
  * modal lets the user override any slider before saving. The 50/100 anchor
  * values mirror the prior LOCATION_GATE_DEFAULTS 3-tier table (`yes`→100,
@@ -669,7 +669,7 @@ export const LOCATION_CAPACITY_DEFAULTS: Record<InjuryLocation, Record<CapacityK
  *
  * Reads the user's explicit upper/lower-load sliders when set (HYROX users set
  * these directly in the injury modal). Otherwise falls back to the per-location
- * physio defaults above — every injury has a location, so this always resolves
+ * physio defaults above. Every injury has a location, so this always resolves
  * even when the active mode's modal never showed the upper/lower sliders.
  *
  * 0   → region must not be loaded (e.g. lower-body for a knee injury)
@@ -866,13 +866,13 @@ export function recordMorningPain(state: InjuryState, pain: number): InjuryState
 export function evaluatePhaseTransition(state: InjuryState): InjuryState {
   let newState = { ...state };
 
-  // General pain regression — applies to ALL non-acute phases
+  // General pain regression. Applies to ALL non-acute phases
   if (state.injuryPhase !== 'acute') {
     // Severe pain (≥7): straight back to acute regardless of current phase
     if (state.currentPain >= 7) {
       newState.injuryPhase = 'acute';
       newState.acutePhaseStartDate = new Date().toISOString();
-      // Full reset — must go through all gates again
+      // Full reset. Must go through all gates again
       newState.capacityTestsPassed = [];
       newState.returnToRunLevel = 1;
       newState.zeroPainWeeks = 0;
@@ -958,7 +958,7 @@ export function evaluatePhaseTransition(state: InjuryState): InjuryState {
 
     case 'return_to_run':
       // Response-gated: only resolve when returnToRunLevel > 8 (set by gate function)
-      // No automatic time-based progression — weekly gate controls advancement
+      // No automatic time-based progression. Weekly gate controls advancement
       if ((state.returnToRunLevel || 1) > 8) {
         return applyPhaseProgression(newState, 'Completed return-to-run protocol (Level 8)');
       }

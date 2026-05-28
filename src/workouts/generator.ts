@@ -55,7 +55,7 @@ export function generateWeekWorkouts(
   // Commute-aware planning. `runsPerWeek` is the user's count of DEDICATED
   // (non-commute) runs. Commute runs are appended on top as extra easy
   // aerobic volume. Body doesn't distinguish "training run" from "transport
-  // run" — both contribute to aerobic stimulus and impact load — but
+  // run". Both contribute to aerobic stimulus and impact load. But
   // commutes are user-driven habit, not part of the prescribed plan shape.
   // Previously (Phase 4, 2026-05-14) commutes substituted for prescribed
   // easy runs; user-facing model proved confusing (2 dedicated + 3 commutes
@@ -65,7 +65,7 @@ export function generateWeekWorkouts(
   const workouts: Workout[] = [];
 
   if (weekIndex != null && totalWeeks != null) {
-    // Read archetype + baseline from state — drives the ramp budget inside
+    // Read archetype + baseline from state. Drives the ramp budget inside
     // planWeekSessions so week 1 starts near the user's current km rather than
     // jumping straight to the ability-driven peak. Falls back to legacy
     // behaviour when state is empty (no Strava history yet).
@@ -171,7 +171,7 @@ export function generateWeekWorkouts(
   // Opt-in: applies unless the user explicitly turned it off
   // (`bodyMassSwapEnabled === false`). Default-on for heavy users until they
   // decide via the onboarding popup. swapFraction is 0 for anyone at/below the
-  // population reference — see body-mass-adaptations.test.ts.
+  // population reference. See body-mass-adaptations.test.ts.
   //
   // Scope is deliberately narrow: runs BEFORE makeup/commute/gym/recurring are
   // appended, and only touches `t:'easy'` with a clean "<n>km" description, so
@@ -211,7 +211,7 @@ export function generateWeekWorkouts(
   }
 
   // Add commute runs if configured. Bidirectional commutes emit two slots
-  // per day (morning + evening) at the one-way distance — matches how the
+  // per day (morning + evening) at the one-way distance. Matches how the
   // user actually runs them and gives the scheduler a chance to surface
   // both trips. Unidirectional commutes emit one slot per day.
   if (commuteConfig?.enabled && commuteConfig.commuteDaysPerWeek > 0) {
@@ -307,7 +307,7 @@ export function generateWeekWorkouts(
     }
   }
 
-  // Assign days of week — pass weekday/weekend minute budgets when both
+  // Assign days of week. Pass weekday/weekend minute budgets when both
   // weeklyHoursTarget and weekdayHoursTarget are set, so the scheduler can
   // honour the user's Mon–Fri / Sat–Sun split (hard constraint).
   let weekdayBudgetMin: number | undefined;

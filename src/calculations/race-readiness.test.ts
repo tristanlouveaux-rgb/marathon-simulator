@@ -5,7 +5,7 @@
  *   - PB-recency factor for run discipline (regression of marathon-specificity)
  *   - Score → label / tone mapping
  *
- * Uses minimal SimulatorState shapes — only the fields the readiness math
+ * Uses minimal SimulatorState shapes. Only the fields the readiness math
  * actually reads (state.wks[].garminActuals, state.onboarding?.pbDates).
  */
 
@@ -38,7 +38,7 @@ function makeState(opts: {
   const wks: any[] = [];
   // Split each week's volume across 3 short sessions per discipline so the
   // "longest" injection (placed in the most recent week) is genuinely the
-  // longest single session — otherwise the weekly volume sessions outweigh it.
+  // longest single session. Otherwise the weekly volume sessions outweigh it.
   const SESSIONS_PER_WK = 3;
   for (let w = 0; w < weeks; w++) {
     const garminActuals: any = {};
@@ -192,7 +192,7 @@ describe('computeDisciplineReadiness — score + penalty', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Geometric mean property — asymmetric weakness correctly punished
+// Geometric mean property. Asymmetric weakness correctly punished
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('geometric mean composition', () => {
@@ -201,7 +201,7 @@ describe('geometric mean composition', () => {
     // Longest session = 3hr (regular weekly session) = 67% of 4.5h IM target.
     // sqrt(1.0 × 0.667) = 0.816 → score ~82
     // Arithmetic mean would give (1.0 + 0.667) / 2 = 0.833 → score 83
-    // Geometric is slightly more punishing — scientific intent of the model.
+    // Geometric is slightly more punishing. Scientific intent of the model.
     const state = makeState({
       bikeHoursPerWeek: 9,          // 100% of IM target
     });
@@ -220,7 +220,7 @@ describe('geometric mean composition', () => {
     // setting bikeHoursPerWeek = 9 (100%) split into 3 sessions of 3hr each
     // = longest 3hr = 67% of target. Then add a SMALLER long session that
     // won't change the longest. Hard to model "100% vol + 25% peak" with
-    // current fixture — instead test the property directly via known inputs:
+    // current fixture. Instead test the property directly via known inputs:
     // see the 100%×67% case above which already demonstrates the geometric
     // mean behaviour. Skip this one.
     expect(true).toBe(true);
@@ -371,7 +371,7 @@ describe('computeTriRaceReadiness — full triathlon shape', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// Projection penalty share — per-discipline closure scaling
+// Projection penalty share. Per-discipline closure scaling
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('computeProjectionPenaltyShare', () => {
@@ -412,7 +412,7 @@ describe('computeProjectionPenaltyShare', () => {
     // 6w full-dose: time 0.78, dose 1.0 → closure 0.78 → share 0.22 (better)
     // 12w half-dose: time 0.95, dose 0.5 → closure 0.48 → share 0.52 (worse)
     // High commitment in less time delivers more closure than half commitment
-    // over twice the time. This is empirically correct — total dose matters
+    // over twice the time. This is empirically correct. Total dose matters
     // but volume-per-week is what triggers adaptation.
     const sixWkFull   = computeProjectionPenaltyShare(6,  5,   5);
     const twelveWkHalf = computeProjectionPenaltyShare(12, 2.5, 5);

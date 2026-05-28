@@ -27,7 +27,7 @@ function live(elapsed: number, dist: number): GpsLiveData {
 
 describe('GuideController', () => {
   beforeEach(() => {
-    // jsdom has no speechSynthesis — stub it so VoiceCoach.speak is a no-op.
+    // jsdom has no speechSynthesis. Stub it so VoiceCoach.speak is a no-op.
     (globalThis as any).window = (globalThis as any).window ?? {};
     (globalThis as any).window.speechSynthesis = {
       speak: vi.fn(),

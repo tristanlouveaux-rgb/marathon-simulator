@@ -20,7 +20,7 @@ import { BIKE_ADHERENCE_BAND } from '@/constants/triathlon-constants';
 // ─── Prescription parsing ───────────────────────────────────────────────────
 
 /**
- * What a single rep is supposed to look like — the prescribed shape parsed
+ * What a single rep is supposed to look like. The prescribed shape parsed
  * from the workout description. Either distance- or duration-based;
  * exactly one of `distanceM` / `durationSec` is set.
  */
@@ -108,7 +108,7 @@ export function resolveRunTargetPace(
   if (!workoutType || !vdot) return null;
   const paces = gp(vdot, ltPaceSecKm);
   const pace = getPaceForZone(workoutType, paces);
-  // `getPaceForZone` falls back to easy when type is unknown — guard against
+  // `getPaceForZone` falls back to easy when type is unknown. Guard against
   // returning easy as an "interval target" when the workout type isn't
   // actually an interval.
   const intervalTypes = ['vo2', 'intervals', 'i', '5k', '5K', 'threshold', 'tempo', 't', 'r'];
@@ -147,7 +147,7 @@ export function resolveBikeTargetWatts(
 /**
  * Per-rep band tolerance.
  *   - Running pace: ±5% of target (≈ ±9 sec/km on a 3:00/km interval).
- *   - Bike watts: same band as session-level adherence — see BIKE_ADHERENCE_BAND.
+ *   - Bike watts: same band as session-level adherence. See BIKE_ADHERENCE_BAND.
  *
  * Inside the band → in-target (counts toward `inBand` aggregate).
  */
@@ -221,7 +221,7 @@ export function scoreRepAdherence(input: RepAdherenceInputs): ScoredRepData | nu
   if (target == null) return null;
 
   // Try to parse rep prescription from workout description for `parsedFrom`
-  // — purely for transparency in the UI ("Parsed: 8×400m").
+  //. Purely for transparency in the UI ("Parsed: 8×400m").
   const description = workout?.d;
   const parsed = parseRepPrescription(description);
   if (parsed) parsedFrom = parsed.parsedFrom;
@@ -294,9 +294,9 @@ export function repAdherenceToEffortDev(scored: ScoredRepData): number | null {
 /**
  * Generate a one-line commentary string for the activity-detail page.
  * Examples:
- *   - "8/8 reps in band, no fade — strong execution."
+ *   - "8/8 reps in band, no fade. Strong execution."
  *   - "First 4 reps in band, last 4 faded 6%."
- *   - "All 5 reps under target — undercooked set."
+ *   - "All 5 reps under target. Undercooked set."
  */
 export function repCommentary(scored: ScoredRepData, discipline: 'run' | 'bike'): string {
   const { score, perRep } = scored;
@@ -336,7 +336,7 @@ export function repCommentary(scored: ScoredRepData, discipline: 'run' | 'bike')
     }
   }
 
-  // Mixed pattern — describe the fade.
+  // Mixed pattern. Describe the fade.
   const half = Math.floor(total / 2);
   const firstInBand = perRep.slice(0, half).filter(r => r.inBand).length;
   const lastInBand = perRep.slice(total - half).filter(r => r.inBand).length;

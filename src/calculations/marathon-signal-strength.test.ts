@@ -3,7 +3,7 @@ import { getMarathonSignalStrengths, activeSignalCount } from './marathon-signal
 import type { SimulatorState } from '@/types/state';
 
 function makeState(overrides: Partial<SimulatorState> = {}): SimulatorState {
-  // Minimal state — only the fields the strength fns touch matter.
+  // Minimal state. Only the fields the strength fns touch matter.
   return {
     pbs: {},
     rec: null,

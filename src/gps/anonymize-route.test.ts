@@ -31,7 +31,7 @@ describe('trimRouteEnds', () => {
   });
 
   it('returns null when route is too short to trim both ends', () => {
-    // 5 points spaced 100m apart = 400m total — not enough to trim 300m from both ends
+    // 5 points spaced 100m apart = 400m total. Not enough to trim 300m from both ends
     const pts = makeLine(5, 100);
     const result = trimRouteEnds(pts, 300);
     expect(result).toBeNull();

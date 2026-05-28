@@ -10,7 +10,7 @@ import type { Week, Workout } from '@/types/state';
 
 // All fixture workouts are treated as completed (matched to an activity) so
 // the EMA functions credit them. The discipline-split CTL/ATL was switched to
-// read actuals only (2026-05-11) — see SCIENCE_LOG / CHANGELOG.
+// read actuals only (2026-05-11). See SCIENCE_LOG / CHANGELOG.
 function workout(discipline: 'run' | 'station' | 'brick', mtl: number): Workout {
   return {
     id: `w-${Math.random()}`,
@@ -73,7 +73,7 @@ describe('computeMTLFitnessFatigueByDiscipline', () => {
     ];
     const r = computeMTLFitnessFatigueByDiscipline(weeks, 3);
     // After 4 identical weeks the EMA should approach steady state.
-    // Daily-equivalent values (÷7) — exact values depend on EMA decay.
+    // Daily-equivalent values (÷7). Exact values depend on EMA decay.
     expect(r.runMtlCTL).toBeGreaterThan(0);
     expect(r.stationMtlCTL).toBeGreaterThan(r.runMtlCTL);  // 500 > 100
     expect(r.brickMtlCTL).toBe(0);  // no brick workouts

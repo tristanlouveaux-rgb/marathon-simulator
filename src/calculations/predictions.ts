@@ -61,7 +61,7 @@ export function predictFromPB(targetDist: number, pbs: PBs, b: number): number |
   avail.sort((a, c) => Math.abs(a.d - targetDist) - Math.abs(c.d - targetDist));
   const anchor = avail[0];
 
-  // Cap extreme fatigue exponents at 1.15 (ceiling — prevents over-penalising
+  // Cap extreme fatigue exponents at 1.15 (ceiling. Prevents over-penalising
   // extreme endurance profiles).
   //
   // 2026-05-12 audit: add a floor of 1.10 when extrapolating from a short
@@ -163,7 +163,7 @@ export function predictFromLT(
   // 2026-05-12 audit: speed-column multipliers raised by 0.02 across performance
   // and trained tiers. The original calibration was based on runners with
   // demonstrated marathon fitness; for speed-profile runners with no marathon
-  // history the LT→marathon pace ratio is wider (Billat et al. 2003 — speed
+  // history the LT→marathon pace ratio is wider (Billat et al. 2003. Speed
   // runners sustain 3-5% less of LT pace at marathon distance than endurance
   // runners at equivalent aerobic capacity). See SCIENCE_LOG.md audit #11.
   const marathonMult: Record<string, Record<string, number>> = {
@@ -230,7 +230,7 @@ export function predictFromLT(
 }
 
 /**
- * HR-calibrated predictor — turns an effort-calibrated VDOT (from the Swain
+ * HR-calibrated predictor. Turns an effort-calibrated VDOT (from the Swain
  * regression across the last 8 weeks of HR-tagged runs) into a race-time
  * prediction at the target distance via Daniels' VDOT → time inversion.
  *
@@ -284,7 +284,7 @@ export function predictFromVO2(targetDist: number, targetVDOT: number | null): n
  * Ref: Tanda G (2011) "Prediction of marathon performance time on the basis
  * of training indices." J Human Sport & Exercise 6(3).
  *
- * Marathon only — not applicable to 5K/10K/HM.
+ * Marathon only. Not applicable to 5K/10K/HM.
  * Returns null when volume is below 4 km/wk (out-of-sample; formula breaks down
  * at truly zero running) or above 120 km/wk (saturation region, untested).
  */
@@ -299,7 +299,7 @@ export function predictFromVolume(
   if (avgPaceSecPerKm < 180 || avgPaceSecPerKm > 480) return null;
 
   // Clamp K to Tanda's training sample range (roughly 30–100 km/wk). Below 30
-  // the formula extrapolates — still physiologically sensible (more volume =
+  // the formula extrapolates. Still physiologically sensible (more volume =
   // faster) but less calibrated. We allow down to 4 km/wk but flag the extrapolation
   // via a small conservatism: soft-clamp K at 10 on the low end so the exponential
   // term doesn't dominate unrealistically.
@@ -327,7 +327,7 @@ export interface ForecastResult {
  *
  * `blendedAnchorSec` (optional): when supplied, the forecast is anchored to the
  * blended race-prediction time and the horizon model's gain is applied as a
- * delta on top — keeps the projected end-of-plan time on the same scale as the
+ * delta on top. Keeps the projected end-of-plan time on the same scale as the
  * live "Current Race Estimate" surfaces. See `calculateLiveForecast` for the
  * full rationale.
  */
@@ -342,11 +342,11 @@ export function calculateForecast(
   const targetDistStr = (state.raceDistance || 'half') as RaceDistance;
   const abilityBand = getAbilityBand(baselineVdot);
 
-  // Plan-prescribed mean weekly km — sessions × ref-km × build-phase factor.
+  // Plan-prescribed mean weekly km. Sessions × ref-km × build-phase factor.
   // Represents what the periodised plan WILL deliver across its build phase,
   // not the user's pre-plan maintenance volume. When the caller threads
   // baseline + archetype through `rampCtx`, the function integrates over the
-  // archetype-gated ramp instead of using the flat formula — see
+  // archetype-gated ramp instead of using the flat formula. See
   // getPlanPrescribedMeanWeeklyKm for the dual-mode logic.
   const planMeanKm = getPlanPrescribedMeanWeeklyKm(sessionsPerWeek, targetDistStr, {
     baselineKm: rampCtx?.baselineKm,
@@ -404,7 +404,7 @@ export interface LiveForecastParams {
    * When supplied, the forecast is anchored to this time and the horizon model's
    * gain is applied as a delta on top, keeping the forecast on the same scale as
    * the "Current Race Estimate" surfaces. When omitted, the forecast falls back
-   * to bare `tv(currentVdot+gain, dist)` (legacy behaviour) — only safe when the
+   * to bare `tv(currentVdot+gain, dist)` (legacy behaviour). Only safe when the
    * caller knows `currentVdot` is already the blended-equivalent VDOT and the
    * downstream display does not compare against a blended baseline.
    */
@@ -540,7 +540,7 @@ export function blendPredictions(
   // HR-calibrated VDOT (Swain regression across 8w of HR-tagged runs).
   // Treated as a separate predictor alongside LT/VO2 because it uses a
   // different physiological signal (steady-state effort response) and is
-  // thus a valuable independent input in the weighted mean — not a
+  // thus a valuable independent input in the weighted mean. Not a
   // replacement for either LT or VO2. See docs/SCIENCE_LOG.md.
   const hasHR = hrVdot && hrVdot.vdot != null && hrVdot.confidence !== 'none';
 
@@ -636,7 +636,7 @@ export function blendPredictions(
   }
 
   // If Tanda unavailable (missing inputs, out-of-range, or non-marathon),
-  // redistribute its weight onto LT — the next-best fitness-ceiling predictor.
+  // redistribute its weight onto LT. The next-best fitness-ceiling predictor.
   if (w.tanda != null && tTanda == null) {
     w.lt = w.lt + w.tanda;
     w.tanda = 0;
@@ -697,11 +697,11 @@ export function blendPredictions(
   // Both are scientifically valid; they answer different coaching questions.
   // The unified framework is currently used by triathlon predictions only.
   // A future refactor could merge them, but that's a calibration call (not
-  // a clean replacement) — would require choosing which conceptual basis
+  // a clean replacement). Would require choosing which conceptual basis
   // wins, and may shift existing marathon predictions. Out of scope for
   // the 2026-05-06 unified-framework work.
   let marathonSpecificityPenalty = 1.0;
-  // Only fire when we have an explicit volume signal — `weeklyRunKm == null`
+  // Only fire when we have an explicit volume signal. `weeklyRunKm == null`
   // means "no signal" (don't change behaviour), `weeklyRunKm === 0` means
   // "explicitly zero recent training" (penalty fires at max). Callers must
   // pass the actual zero rather than converting it to undefined.
@@ -716,13 +716,13 @@ export function blendPredictions(
     // PB-recency scaling: a recent marathon PB is demonstrated current
     // capability, so the staleness assumption baked into the penalty (Coyle
     // 1984's full-detraining curves) over-corrects. Scale the penalty's
-    // *excess* (the part above 1.0) by a recency factor — this keeps the
+    // *excess* (the part above 1.0) by a recency factor. This keeps the
     // direction right while reducing magnitude for athletes who have proven
     // recent capability. Step bands at 1y / 2y boundaries.
     let recencyFactor = 1.0;
     if (marathonSpecificityPenalty > 1.0 && marathonPbAgeDays != null) {
-      if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year — demonstrated current capability
-      else if (marathonPbAgeDays < 730) recencyFactor = 0.75;  // PB 1-2 years — partial demonstration
+      if (marathonPbAgeDays < 365)      recencyFactor = 0.5;   // PB within last year. Demonstrated current capability
+      else if (marathonPbAgeDays < 730) recencyFactor = 0.75;  // PB 1-2 years. Partial demonstration
       // >2 years: full penalty (recencyFactor stays at 1.0)
     }
     if (recencyFactor < 1.0) {
@@ -746,7 +746,7 @@ export function blendPredictions(
   // (1991) document the same pattern for speed-dominant athletes specifically.
   //
   // This penalty is multiplicative on the final blended prediction. It is
-  // INDEPENDENT of `marathonSpecificityPenalty` above — the two penalties fire
+  // INDEPENDENT of `marathonSpecificityPenalty` above. The two penalties fire
   // on disjoint conditions:
   //   - marathonSpecificityPenalty: weeklyRunKm signal exists AND volume is low
   //   - this penalty: no long-race PB exists (cold-start / first marathoner)

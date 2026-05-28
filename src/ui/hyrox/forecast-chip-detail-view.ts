@@ -5,7 +5,7 @@
  * HYROX forecast hero navigates here. Each page leads with the headline
  * number, follows with the breakdown that drives it, then a short caption
  * explaining the science. Mirrors `forecast-chip-detail-view.ts` (marathon
- * mode) for visual and structural parity — the only thing that changes is
+ * mode) for visual and structural parity. The only thing that changes is
  * the HYROX-specific data each page reads.
  *
  * Back button returns to the HYROX forecast view.

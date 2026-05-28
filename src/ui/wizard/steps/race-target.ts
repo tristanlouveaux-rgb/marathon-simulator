@@ -6,14 +6,14 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
- * Page 5 — Race / Target (mode-branched).
+ * Page 5. Race / Target (mode-branched).
  *
  * Running path: race picker (5K/10K/half/marathon) + scrollable event list (half/marathon)
  * or plan-duration stepper (5K/10K) + optional custom date.
  *
  * Fitness path: focus picker (speed / balanced / endurance) + optional target date.
  *
- * Hyrox/Triathlon: auto-skip. No screen yet — those modes go to the next step silently.
+ * Hyrox/Triathlon: auto-skip. No screen yet. Those modes go to the next step silently.
  *
  * Aesthetic clone of `goals.ts` / `review.ts`:
  * - Apple 3-layer shadow (`.shadow-ap`)
@@ -407,11 +407,11 @@ function renderFitnessBlock(state: OnboardingState): string {
 
 /**
  * Fitness path duration picker. Segmented Ongoing / Set duration.
- * - Ongoing: `continuousMode: true` — no target date, plan regenerates rolling.
+ * - Ongoing: `continuousMode: true`. No target date, plan regenerates rolling.
  * - Set duration: weeks stepper reusing the 5K/10K stepper handlers.
  *
  * Locked 2026-04-22: replaces the previous optional target-date block because
- * "fitness with a target date" was confusing — if the user has a date, they're
+ * "fitness with a target date" was confusing. If the user has a date, they're
  * in running mode. Fitness mode is goal-less by definition.
  */
 function renderFitnessDurationBlock(state: OnboardingState): string {
@@ -448,7 +448,7 @@ function canContinue(mode: TrainingMode | null, state: OnboardingState): boolean
     if (state.raceDistance === 'half' || state.raceDistance === 'marathon') {
       return !!(state.selectedRace || state.customRaceDate);
     }
-    // 5K / 10K — needs a plan duration (always set by default, so just confirm > 0).
+    // 5K / 10K. Needs a plan duration (always set by default, so just confirm > 0).
     return state.planDurationWeeks >= minWeeksFor(state.raceDistance);
   }
   if (mode === 'fitness') return !!state.trainingFocus;
@@ -576,7 +576,7 @@ function wireHandlers(state: OnboardingState, mode: TrainingMode | null): void {
       plus.disabled = weeks >= MAX_PLAN_WEEKS;
       plus.style.opacity = weeks >= MAX_PLAN_WEEKS ? '0.3' : '1';
     }
-    // Re-enable / disable Continue — it depends on weeks ≥ min for 5K/10K.
+    // Re-enable / disable Continue. It depends on weeks ≥ min for 5K/10K.
     const cta = document.getElementById('rt-continue') as HTMLButtonElement | null;
     if (cta) cta.disabled = !canContinue(mode, { ...state, planDurationWeeks: weeks });
   };

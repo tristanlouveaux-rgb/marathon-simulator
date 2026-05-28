@@ -1,5 +1,5 @@
 /**
- * window.__debugForecast() — recomputes the live race forecast for the current
+ * window.__debugForecast(). Recomputes the live race forecast for the current
  * state and prints all inputs, the horizon-model components, and the final
  * times. Use to verify that the displayed forecast matches what the model
  * actually produces from current state (catches stale forecasts and silent

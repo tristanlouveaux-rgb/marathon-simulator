@@ -17,7 +17,7 @@
  *  - Multi-mod by severity (heavy → 1–2; extreme → 2–3).
  *  - Saturation curve borrowed from running (`saturateCredit`) caps how much
  *    a single cross-training session can credit toward reductions.
- *  - Per-discipline floor (`computeTriDisciplineFloorTSS`) — the user can
+ *  - Per-discipline floor (`computeTriDisciplineFloorTSS`). The user can
  *    override the recommendation onto any discipline but reductions are
  *    bounded by the floor (suspended in taper or when ramp is hot).
  *
@@ -179,7 +179,7 @@ export function detectCrossTrainingOverload(
   const summary = computeCrossTrainingTSS(wk);
   // Decayed carry from prior weeks (push-to-next-week mechanism). Adds to
   // this week's cross-training stimulus so a deferred load doesn't disappear
-  // — it just spreads out exponentially. Attributed to run-affinity since
+  //. It just spreads out exponentially. Attributed to run-affinity since
   // the carry is sport-agnostic by the time it lands here, and run-anchor is
   // our default recommendation.
   const carriedTSS = computeDecayedTriCarry(state, weekIdx);
@@ -223,7 +223,7 @@ export function detectCrossTrainingOverload(
 }
 
 /**
- * Recommendation logic — anchored to RUN by default.
+ * Recommendation logic. Anchored to RUN by default.
  *
  * Most cross-training is leg-impact-loaded (tennis, padel, gym, hiking, soccer)
  * and substitutes for running stress more directly than for swim or bike.
@@ -272,7 +272,7 @@ interface CrossTrainingSummary {
 
 function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
   // Membership filter: a session is cross-training if its id is NOT in
-  // `wk.triWorkouts`. Per "anything in your plan is in your plan" — a
+  // `wk.triWorkouts`. Per "anything in your plan is in your plan". A
   // planned `cross`/`gym` session in triWorkouts is plan, not overload.
   const planIds = new Set(
     (wk.triWorkouts ?? []).map(w => w.id).filter((id): id is string => !!id),
@@ -286,7 +286,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     byAffinity[affinity] += tss;
   };
 
-  // Pass 1: adhocWorkouts — manual entries land here exclusively; synced
+  // Pass 1: adhocWorkouts. Manual entries land here exclusively; synced
   // entries land here AND in garminActuals at the same id (we dedupe in pass 2).
   for (const adhoc of wk.adhocWorkouts ?? []) {
     if (adhoc.id && planIds.has(adhoc.id)) continue; // in-plan: skip
@@ -299,7 +299,7 @@ function computeCrossTrainingTSS(wk: Week): CrossTrainingSummary {
     credit(tss, affinity);
   }
 
-  // Pass 2: garminActuals — only count entries we haven't already attributed
+  // Pass 2: garminActuals. Only count entries we haven't already attributed
   // to an adhoc, and skip entries matched to a tri-plan workout.
   for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (countedIds.has(workoutId)) continue;
@@ -319,7 +319,7 @@ function tssOfWorkout(w: Workout): number {
 }
 
 /** When an adhoc has a twin in garminActuals, read the activityType from there
- *  for affinity classification — it's the canonical raw sport string. */
+ *  for affinity classification. It's the canonical raw sport string. */
 function adhocActivityType(wk: Week, adhocId: string | undefined): string | null {
   if (!adhocId) return null;
   const twin: GarminActual | undefined = wk.garminActuals?.[adhocId];
@@ -354,7 +354,7 @@ function buildDisciplineOption(
   const replaceMods = buildReplaceMods(candidates, maxMods, reductionCredit);
 
   // belowFloor = the proposed Reduce mods would drop remaining below floor.
-  // We don't block — the modal warns and lets the user override.
+  // We don't block. The modal warns and lets the user override.
   const totalReduceTSS = reduceMods.reduce((acc, m) => acc + m.tssReduction, 0);
   const belowFloor = floorTSS > 0 && (remainingTSS - totalReduceTSS) < floorTSS;
 
@@ -390,7 +390,7 @@ function isQualityWorkout(w: Workout): boolean {
  * Reduce-only: downgrade nearest upcoming quality, trim endurance volume.
  * No workouts are removed from the plan; sessions just get easier or shorter.
  *
- * Mods are NOT silently capped by the floor — if the resulting remaining-TSS
+ * Mods are NOT silently capped by the floor. If the resulting remaining-TSS
  * would breach the floor, the option's `belowFloor` flag fires and the modal
  * warns the user before commit. This matches running's behaviour where the
  * floor is suspended rather than silently enforced.
@@ -485,7 +485,7 @@ function buildReplaceMods(
 
 /**
  * Sort by day ascending (nearest first), then quality before endurance within
- * the same day. Mirrors how a coach would walk the week — touch tomorrow's
+ * the same day. Mirrors how a coach would walk the week. Touch tomorrow's
  * quality before next week's, and quality before endurance because quality is
  * higher-cost-per-minute.
  */

@@ -1,5 +1,5 @@
 /**
- * Session generator — standalone modal for creating ad-hoc workouts.
+ * Session generator. Standalone modal for creating ad-hoc workouts.
  *
  * Used from plan view (general) and holiday banner.
  * Two-step flow: pick session type → set distance or time → generates structured workout.
@@ -16,6 +16,7 @@ import { formatKm, formatPace } from '@/utils/format';
 import type { UnitPref } from '@/utils/format';
 import { computeReadinessACWR } from '@/calculations/fitness-model';
 import { blendPredictions } from '@/calculations/predictions';
+import { buildSessionRecommendation } from '@/calculations/session-recommendation';
 import type { TrainingPhase } from '@/types/training';
 
 const MODAL_ID = 'session-generator-modal';
@@ -45,7 +46,7 @@ function formatSwimPace(secPer100m: number): string {
 
 /**
  * Inline styles for a picker tile (discipline / kind cards). Mirrors the
- * wizard `.tri-card` aesthetic — white surface, soft elevation, inset
+ * wizard `.tri-card` aesthetic. White surface, soft elevation, inset
  * highlight, full-width tap target.
  */
 function tilePickerStyle(): string {
@@ -57,7 +58,7 @@ function tilePickerStyle(): string {
 
 /**
  * Discipline-aware recovery line. Reads per-discipline TSB from
- * `triConfig.fitness` rather than the global ACWR — so a bike modal reflects
+ * `triConfig.fitness` rather than the global ACWR. So a bike modal reflects
  * bike fatigue, not combined load. Returns a one-line factual string.
  *
  * Thresholds: TSB ≤ -10 = high fatigue, ≤ -5 = elevated, > 5 = fresh,
@@ -216,7 +217,7 @@ export function openSessionGenerator(): void {
   type TriDiscipline = 'swim' | 'bike' | 'run';
   let selectedDiscipline: TriDiscipline | null = null;
 
-  // Recovery signal for effort recommendation
+  // Recovery signal for effort recommendation (vibes / Run by Feel step only).
   const acwr = computeReadinessACWR(s);
   let recoveryLine: string;
   let recommendedEffort: EffortKey;
@@ -230,6 +231,12 @@ export function openSessionGenerator(): void {
     recoveryLine = 'Load is balanced. Any effort is appropriate.';
     recommendedEffort = 'steady';
   }
+
+  // Suggestion caption shown above the type / discipline picker. Reads the
+  // same composite the home Readiness ring uses (readiness, injury, HRV,
+  // sleep, freshness) so the picker reflects what the rest of the app knows
+  // about today. Caption-only — picker still accepts any choice.
+  const sessionRec = buildSessionRecommendation(s);
 
   // step 0 = tri discipline picker (tri only)
   // step 1 = type picker (run-types or swim/bike kind)
@@ -264,10 +271,30 @@ export function openSessionGenerator(): void {
       else if (isTri && selectedDiscipline === 'bike') renderBikeDuration();
       else renderStep2();
     } else {
-      // step 3 — variant drill-down
+      // step 3. Variant drill-down
       if (isTri && selectedDiscipline === 'swim') renderSwimVariantList();
       else if (isTri && selectedDiscipline === 'bike') renderBikeVariantList();
     }
+  }
+
+  /**
+   * Render the recommendation caption. Returns empty string when there's
+   * nothing to say (no injury and no readiness signal yet — e.g. fresh user
+   * with no physiology / load history). Single-line, no decorative icons,
+   * no colour — matches the project's consultant-tone copy rules.
+   */
+  function renderRecommendationCaption(): string {
+    if (!sessionRec.caption) return '';
+    // Caption text is assembled from enum-driven helpers (computeReadiness
+    // sentence + buildInjuryCaption). No user-input strings flow through it,
+    // so a light escape on the four meta characters is enough.
+    const safe = String(sessionRec.caption)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    return `
+      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:14px">
+        ${safe}
+      </div>`;
   }
 
   // ── Step 1: Pick session type ──────────────────────────────────────────────
@@ -299,7 +326,8 @@ export function openSessionGenerator(): void {
       </style>
       ${modalShellOpen()}
         <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">${title}</div>
-        <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px;line-height:1.5">${subtitle}</div>
+        <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">${subtitle}</div>
+        ${renderRecommendationCaption()}
 
         ${availableTypes.map((opt, i) => {
           const isVibes = opt.slot === 'vibes';
@@ -332,7 +360,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Discipline picker (Step 0) ──────────────────────────────────
+  // ── Tri mode. Discipline picker (Step 0) ──────────────────────────────────
 
   function renderTriDiscipline() {
     modal.innerHTML = `
@@ -342,7 +370,8 @@ export function openSessionGenerator(): void {
 
         <div style="position:relative;padding:22px 22px 18px;overflow-y:auto">
           <div style="font-size:18px;font-weight:700;color:var(--c-black);letter-spacing:-0.01em;margin-bottom:4px">Add session</div>
-          <div style="font-size:13px;color:var(--c-muted);margin-bottom:18px;line-height:1.5">Pick a discipline.</div>
+          <div style="font-size:13px;color:var(--c-muted);margin-bottom:14px;line-height:1.5">Pick a discipline.</div>
+          ${renderRecommendationCaption()}
 
           <button class="sg-disc-btn" data-disc="swim" style="${tilePickerStyle()}">
             <div style="font-size:14px;font-weight:600;color:var(--c-black);margin-bottom:3px">Swim</div>
@@ -375,7 +404,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Swim kind picker ────────────────────────────────────────────
+  // ── Tri mode. Swim kind picker ────────────────────────────────────────────
 
   type SwimKindKey = SwimSessionKind | 'time_trial';
   const SWIM_OPTIONS: Array<{ kind: SwimKindKey; label: string; subtitle: string; cssOffsetSec: number; bandSec: number; minMin: number; maxMin: number; defaultMin: number }> = [
@@ -419,7 +448,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Swim duration picker ────────────────────────────────────────
+  // ── Tri mode. Swim duration picker ────────────────────────────────────────
 
   function renderSwimDuration() {
     if (!selectedSwimKind) return;
@@ -442,7 +471,7 @@ export function openSessionGenerator(): void {
     function previewText(): string {
       const totalM = estimateDistanceMetres(timeMin, skill as 1|2|3|4|5, cssSecPer100m);
       const v = selectedSwimVariant ?? defaultVariantIdx;
-      // Strip leading "{m}m total. " — the duration row already shows minutes; metres adds noise.
+      // Strip leading "{m}m total. ". The duration row already shows minutes; metres adds noise.
       return describeSwimSession(sKind, totalM, cssSecPer100m, skill as 1|2|3|4|5, s.w ?? 1, 0, v)
         .replace(/^\d+m total\.\s*/, '');
     }
@@ -510,7 +539,7 @@ export function openSessionGenerator(): void {
 
       document.getElementById('sg-swim-variants')?.addEventListener('click', () => { step = 3; render(); });
       document.getElementById('sg-swim-back2')?.addEventListener('click', () => {
-        // Going back to kind picker — clear any explicit variant so the next kind starts fresh.
+        // Going back to kind picker. Clear any explicit variant so the next kind starts fresh.
         selectedSwimVariant = null;
         step = 1;
         render();
@@ -530,7 +559,7 @@ export function openSessionGenerator(): void {
     renderContent();
   }
 
-  // ── Tri mode — Swim variant drill-down ────────────────────────────────────
+  // ── Tri mode. Swim variant drill-down ────────────────────────────────────
 
   function renderSwimVariantList() {
     if (!selectedSwimKind || selectedSwimKind === 'time_trial') return;
@@ -576,7 +605,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Swim CSS test (Time Trial) ─────────────────────────────────
+  // ── Tri mode. Swim CSS test (Time Trial) ─────────────────────────────────
 
   function renderSwimTT() {
     const tri = s.triConfig;
@@ -627,7 +656,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Bike kind picker ────────────────────────────────────────────
+  // ── Tri mode. Bike kind picker ────────────────────────────────────────────
 
   type BikeKindKey = BikeSessionKind | 'time_trial';
   const BIKE_OPTIONS: Array<{ kind: BikeKindKey; label: string; subtitle: string; pct: number; bandKey: string; minMin: number; maxMin: number; defaultMin: number; stepMin: number }> = [
@@ -674,7 +703,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Bike duration picker ────────────────────────────────────────
+  // ── Tri mode. Bike duration picker ────────────────────────────────────────
 
   function renderBikeDuration() {
     if (!selectedBikeKind) return;
@@ -789,7 +818,7 @@ export function openSessionGenerator(): void {
     renderContent();
   }
 
-  // ── Tri mode — Bike variant drill-down ────────────────────────────────────
+  // ── Tri mode. Bike variant drill-down ────────────────────────────────────
 
   function renderBikeVariantList() {
     if (!selectedBikeKind || selectedBikeKind === 'time_trial') return;
@@ -832,7 +861,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Bike FTP test (Time Trial) ─────────────────────────────────
+  // ── Tri mode. Bike FTP test (Time Trial) ─────────────────────────────────
 
   function renderBikeTT() {
     const tri = s.triConfig;
@@ -883,7 +912,7 @@ export function openSessionGenerator(): void {
     });
   }
 
-  // ── Tri mode — Save adhoc workout into triWorkouts ────────────────────────
+  // ── Tri mode. Save adhoc workout into triWorkouts ────────────────────────
 
   async function saveTriAdhoc(wo: Workout, discipline: TriDiscipline): Promise<void> {
     const { DAY_NAMES } = await import('@/workouts/scheduler.triathlon');
@@ -927,7 +956,7 @@ export function openSessionGenerator(): void {
     // Effort picker applies to open-ended sessions. Structured sessions have a fixed target pace.
     const hasEffortPicker = selectedType.slot === 'easy' || selectedType.slot === 'long';
 
-    // Long runs cap at Steady — threshold pace for 20+ km is race simulation, not training.
+    // Long runs cap at Steady. Threshold pace for 20+ km is race simulation, not training.
     const EFFORT_OPTIONS: Array<{ key: EffortKey; label: string; pace: number; desc: string }> = selectedType.slot === 'long'
       ? [
           { key: 'easy',   label: 'Zone 2', pace: s.pac.e, desc: 'Aerobic base' },
@@ -962,7 +991,7 @@ export function openSessionGenerator(): void {
       const estMinutes = isDistance ? Math.round(distanceKm * paceForEst / 60) : timeMin;
       const estKm = isDistance ? distanceKm : Math.round(timeMin * 60 / paceForEst);
 
-      // Structured sessions already show target pace above the slider — don't repeat it here.
+      // Structured sessions already show target pace above the slider. Don't repeat it here.
       const secondaryInfo = hasEffortPicker
         ? (isDistance ? `~${estMinutes} min at ${formatPace(effortPace, up)}` : `~${formatKm(estKm, up)} at ${formatPace(effortPace, up)}`)
         : (isDistance ? `~${estMinutes} min` : `~${formatKm(estKm, up)}`);

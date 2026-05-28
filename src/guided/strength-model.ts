@@ -8,7 +8,7 @@
  *   "{sets}x{reps} {Name} ({cue}) ({rest period})"
  *   last line may be a "Stretch ..." note (not a set).
  *
- * Rest periods are read from the description (existing data) — never invented.
+ * Rest periods are read from the description (existing data). Never invented.
  */
 
 import type { Workout } from '@/types';
@@ -33,7 +33,7 @@ export interface StrengthSession {
   stretch: string | null;  // closing stretch/mobility note, if present
   /** When true, the guided overlay surfaces a "Take your time" pause between
    *  sets (no countdown) and the user manually advances. HYROX training / test
-   *  sessions set this — rest between stations is athlete-paced. */
+   *  sessions set this. Rest between stations is athlete-paced. */
   manualAdvance?: boolean;
 }
 
@@ -59,7 +59,7 @@ function parseSetCount(main: string): number {
 
 /** Split "3x10 each leg Reverse Lunge" into reps ("10 each leg") and name. */
 function parseRepsAndName(main: string): { reps: string; name: string } {
-  // "{sets}x{reps}{ each X?} {Name}" — reps is the token after the x, plus an
+  // "{sets}x{reps}{ each X?} {Name}". Reps is the token after the x, plus an
   // optional "each leg/side/arm" qualifier; the remainder is the exercise name.
   const m = main.match(/^\s*\d+\s*[x×]\s*(\S+(?:\s+each\s+\w+)?)\s+(.+)$/i);
   if (m) return { reps: m[1].trim(), name: m[2].trim() };

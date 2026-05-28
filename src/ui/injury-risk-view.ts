@@ -1,5 +1,5 @@
 /**
- * Load Ratio detail page — same design language as freshness-view / recovery-view.
+ * Load Ratio detail page. Same design language as freshness-view / recovery-view.
  * Sky-blue watercolour background, amber/red palette for risk.
  * Shows ACWR ratio, acute vs chronic load, weekly trend, zone reference, science backing.
  */
@@ -122,7 +122,7 @@ function acwrBarChart(entries: WeekAcwrEntry[], safeUpper: number): string {
   const maxRatio = Math.max(2.0, ...recent.map(e => e.ratio));
   const barAreaH = 120;
 
-  // Safe zone band — must use same scale as bars (barAreaH - 8 usable, anchored to bottom)
+  // Safe zone band. Must use same scale as bars (barAreaH - 8 usable, anchored to bottom)
   const usableH = barAreaH - 8;
   const safeBotPx = (0.8 / maxRatio) * usableH;
   const safeTopPx = (safeUpper / maxRatio) * usableH;
@@ -252,7 +252,7 @@ function howItWorksCard(): string {
 // ── Main HTML ─────────────────────────────────────────────────────────────────
 
 function getInjuryRiskHTML(s: SimulatorState): string {
-  // Single source of truth — must match the Load Ratio card on Readiness.
+  // Single source of truth. Must match the Load Ratio card on Readiness.
   // computeReadinessACWR already feeds rolling 7d/28d into atl/ctl when planStartDate exists,
   // so the bars below display the same numbers as the ratio.
   const acwr = computeReadinessACWR(s);
@@ -297,7 +297,7 @@ function getInjuryRiskHTML(s: SimulatorState): string {
       } else if (ratio > 0 && ratio < 0.8) {
         sentences.push(`${name} volume is reduced this week (${ratio.toFixed(2)}x).`);
       }
-      // Optimal range: no news is good news — stay silent
+      // Optimal range: no news is good news. Stay silent
     }
     if (sentences.length > 0) triContext = ' ' + sentences.join(' ');
   }
@@ -441,7 +441,7 @@ export function renderInjuryRiskView(): void {
   // Render the running-side page exactly as it always was. In tri mode we ALSO
   // want per-discipline acute-vs-chronic context, but that's added inline by
   // injecting an extra card into the existing layout via DOM manipulation
-  // after first render — keeps the existing page structure intact and avoids
+  // after first render. Keeps the existing page structure intact and avoids
   // any chance of breaking running. See `injectTriPerDisciplineLoad` below.
   container.innerHTML = getInjuryRiskHTML(s);
   wireInjuryRiskHandlers();
@@ -452,7 +452,7 @@ export function renderInjuryRiskView(): void {
 
 /**
  * In tri mode, append per-discipline acute-vs-chronic cards AFTER the
- * existing combined "Acute vs Chronic Load" card. Additive — does not modify
+ * existing combined "Acute vs Chronic Load" card. Additive. Does not modify
  * any of the running-mode rendering. Form is intentionally NOT shown here:
  * it lives on the Freshness page where it belongs.
  */

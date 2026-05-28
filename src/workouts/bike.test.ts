@@ -18,11 +18,11 @@ describe('bike workout library — pro-grade kinds', () => {
       expect(w.t).toBe('bike_over_under');
       expect(w.discipline).toBe('bike');
       // Description must reference both above-FTP and below-FTP work
-      // (covers all three variants — classic over-under, criss-cross, 2:1 ratio)
+      // (covers all three variants. Classic over-under, criss-cross, 2:1 ratio)
       expect(w.d).toMatch(/W/); // power label rendered
       expect(w.aerobic).toBeGreaterThan(0);
       expect(w.anaerobic).toBeGreaterThan(0);
-      // Anaerobic share for over-unders is ~45% — sits between sweet-spot and threshold
+      // Anaerobic share for over-unders is ~45%. Sits between sweet-spot and threshold
       const total = w.aerobic! + w.anaerobic!;
       expect(w.anaerobic! / total).toBeGreaterThan(0.35);
       expect(w.anaerobic! / total).toBeLessThan(0.55);
@@ -69,7 +69,7 @@ describe('bike workout library — pro-grade kinds', () => {
       expect(w.t).toBe('bike_vlamax');
       // Sprints in 6-15s window referenced
       expect(w.d).toMatch(/6s|10s|15s|max|sprint/i);
-      // Total TSS lower than threshold/VO2 of same duration — most of the
+      // Total TSS lower than threshold/VO2 of same duration. Most of the
       // session is recovery
       expect(w.aerobic! + w.anaerobic!).toBeLessThan(80);
     });

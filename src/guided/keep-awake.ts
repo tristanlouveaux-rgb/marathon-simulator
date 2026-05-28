@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { KeepAwake } from '@capacitor-community/keep-awake';
 
 /**
- * Keep-awake adapter — prevents the screen from auto-locking during a run.
+ * Keep-awake adapter. Prevents the screen from auto-locking during a run.
  *
  * Native (Capacitor): `@capacitor-community/keep-awake` forwards to iOS
  *   `UIApplication.shared.isIdleTimerDisabled` and Android `FLAG_KEEP_SCREEN_ON`.
@@ -16,7 +16,7 @@ export async function enableScreenAwake(): Promise<void> {
       return;
     }
   } catch {
-    // Capacitor not available — fall through to browser wake lock.
+    // Capacitor not available. Fall through to browser wake lock.
   }
   if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
     try {

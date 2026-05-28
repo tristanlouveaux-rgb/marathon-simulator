@@ -2,25 +2,32 @@
  * Guided strength-session overlay. Full-screen modal driven by
  * `StrengthGuideController`: shows the current exercise, an auto rest
  * countdown between sets, the elapsed clock, voice + haptic cues, and a
- * 1-tap RPE on finish. Mode-agnostic — any strength card (running / tri /
+ * 1-tap RPE on finish. Mode-agnostic. Any strength card (running / tri /
  * HYROX) can launch it.
  *
  * Reuses the existing guided primitives: `VoiceCoach` (voice cues),
  * `enableScreenAwake` / `disableScreenAwake`, and `completeStrengthSession`
  * for the completion write. Haptics use `navigator.vibrate` with a try/catch
- * (web; native iOS no-ops gracefully — voice covers it).
+ * (web; native iOS no-ops gracefully. Voice covers it).
  *
  * UX: vertically centered per `docs/UX_PATTERNS.md → Overlays and Modals`.
  */
 
 import type { Workout } from '@/types';
+import type { HyroxComponent } from '@/types/triathlon';
 import { parseGuidedSession, type GuidedSet, type StrengthSession } from '@/guided/strength-model';
 import { StrengthGuideController, type StrengthCueEvent } from '@/guided/strength-controller';
 import { VoiceCoach } from '@/guided/voice';
 import { enableScreenAwake, disableScreenAwake } from '@/guided/keep-awake';
 import { completeStrengthSession } from '@/guided/strength-complete';
+import { GpsTracker } from '@/gps/tracker';
+import { createGpsProvider } from '@/gps/providers';
+import { formatKm, formatPace } from '@/utils/format';
+import { getState } from '@/state/store';
 
 const OVERLAY_ID = 'guided-strength-overlay';
+
+type GpsState = 'off' | 'acquiring' | 'tracking' | 'denied';
 
 interface OverlayState {
   workout: Workout;
@@ -31,6 +38,18 @@ interface OverlayState {
   finished: boolean;
   finishRpe: number | null;
   onClose?: () => void;
+  // ── GPS bridge for HYROX run components ──
+  /** Tracker is created once per session when the workout has at least one
+   *  run component; null for strength-only sessions or when GPS init failed. */
+  gps: GpsTracker | null;
+  /** Status surfaced to the UI so the user knows whether auto-advance is live. */
+  gpsState: GpsState;
+  /** Tracker.totalDistance reading at the moment the current run set entered
+   *  `active`. We auto-advance when `totalDistance - baseline >= component.distanceM`. */
+  runDistanceBaseline: number;
+  /** The currently-active run component, or null when the active set is a
+   *  station / strength set. Cleared on every non-run setStart and on auto-fire. */
+  activeRun: HyroxComponent | null;
 }
 
 let active: OverlayState | null = null;
@@ -61,11 +80,149 @@ export function openGuidedStrength(workout: Workout, opts: { onClose?: () => voi
     finished: false,
     finishRpe: null,
     onClose: opts.onClose,
+    gps: null,
+    gpsState: 'off',
+    runDistanceBaseline: 0,
+    activeRun: null,
   };
 
   mount();
   void enableScreenAwake().catch(() => {});
+  // Spin up GPS before controller.start() so the tracker reference is in place
+  // when the synchronous setStart cue fires for the first set.
+  startGpsIfRunsPresent();
   controller.start();
+}
+
+// ─── GPS bridge for HYROX run components ─────────────────────────────────────
+
+/** True if the workout has at least one run-typed hyroxComponent. */
+function hasRunComponents(workout: Workout): boolean {
+  const components = (workout as any).hyroxComponents as HyroxComponent[] | undefined;
+  return Array.isArray(components) && components.some(c => c.type === 'run' && (c.distanceM ?? 0) > 0);
+}
+
+/** Look up the HyroxComponent that backs the currently-active set, if any. */
+function getActiveRunComponent(): HyroxComponent | null {
+  if (!active) return null;
+  const components = (active.workout as any).hyroxComponents as HyroxComponent[] | undefined;
+  if (!components) return null;
+  const cur = active.controller.currentSet();
+  if (!cur) return null;
+  const c = components[cur.exerciseIndex];
+  return (c && c.type === 'run' && (c.distanceM ?? 0) > 0) ? c : null;
+}
+
+/**
+ * Start a GPS tracker for the whole session when at least one component is a
+ * run. Errors and permission denials degrade gracefully to fully-manual mode —
+ * the controller still works exactly as before; the user just taps "Complete
+ * set" themselves when they finish each run.
+ */
+function startGpsIfRunsPresent(): void {
+  if (!active) return;
+  if (!hasRunComponents(active.workout)) return;
+  try {
+    const provider = createGpsProvider();
+    const tracker = new GpsTracker(provider);
+    active.gps = tracker;
+    active.gpsState = 'acquiring';
+    tracker.onUpdate(() => onGpsUpdate());
+    void tracker.start().then(ok => {
+      if (!active) return;
+      if (!ok) {
+        active.gps = null;
+        active.gpsState = 'denied';
+        // Re-render so the user sees the "manual mode" hint.
+        if (active.controller.phase === 'active') renderActive();
+      }
+    }).catch(() => {
+      if (!active) return;
+      active.gps = null;
+      active.gpsState = 'denied';
+      if (active.controller.phase === 'active') renderActive();
+    });
+  } catch {
+    if (active) { active.gps = null; active.gpsState = 'denied'; }
+  }
+}
+
+function stopGps(): void {
+  if (!active?.gps) return;
+  try { active.gps.stop(); } catch { /* no-op */ }
+  active.gps = null;
+}
+
+/**
+ * Called on every GPS live-data update. When the active set is a run with a
+ * prescribed distance, fire `completeSet()` once the delta from the run's
+ * baseline reaches the target. Also patches the inline distance/pace readout.
+ */
+function onGpsUpdate(): void {
+  if (!active?.gps) return;
+  const live = active.gps.getLiveData();
+  if (active.gpsState === 'acquiring' && live.status === 'tracking') {
+    active.gpsState = 'tracking';
+  }
+  if (!active.activeRun) return;
+  const target = active.activeRun.distanceM ?? 1000;
+  const delta = Math.max(0, live.totalDistance - active.runDistanceBaseline);
+  patchRunReadout(delta, target, live.currentPace ?? 0);
+  if (delta >= target) {
+    // Clear first so a redundant update can't double-fire.
+    active.activeRun = null;
+    active.controller.completeSet();
+  }
+}
+
+function patchRunReadout(delta: number, target: number, secPerKm: number): void {
+  if (!active) return;
+  const node = document.getElementById('gs-run-readout');
+  if (!node) return;
+  node.innerHTML = buildRunReadoutInner(delta, target, secPerKm);
+}
+
+/**
+ * Outer block shown in `renderActive` when the active set is a run component.
+ * Returns an empty string for stations / strength so the existing layout is
+ * unaffected. The inner readout starts at 0 / target /. And is patched on
+ * GPS updates and ticks.
+ */
+function renderRunReadoutBlock(): string {
+  if (!active?.activeRun) return '';
+  const target = active.activeRun.distanceM ?? 1000;
+  const live = active.gps?.getLiveData();
+  const delta = live ? Math.max(0, live.totalDistance - active.runDistanceBaseline) : 0;
+  const pace = live?.currentPace ?? 0;
+  const hint = active.gpsState === 'tracking'
+    ? 'Auto-advances when the distance is reached.'
+    : active.gpsState === 'acquiring'
+      ? 'GPS searching… you can tap Complete set to advance manually.'
+      : active.gpsState === 'denied'
+        ? 'GPS unavailable. Tap Complete set when you finish the run.'
+        : '';
+  return `
+    <div style="background:rgba(15,23,42,0.04);border-radius:12px;padding:12px 14px;margin-bottom:18px">
+      <div id="gs-run-readout">${buildRunReadoutInner(delta, target, pace)}</div>
+      ${hint ? `<div style="font-size:11px;color:var(--c-muted);margin-top:8px;line-height:1.4">${hint}</div>` : ''}
+    </div>`;
+}
+
+function buildRunReadoutInner(delta: number, target: number, secPerKm: number): string {
+  const unit = getState().unitPref ?? 'km';
+  const targetKm = target / 1000;
+  const deltaKm = delta / 1000;
+  const paceStr = secPerKm > 0 ? formatPace(secPerKm, unit) : '—';
+  const distStr = `${formatKm(deltaKm, unit, 2)} / ${formatKm(targetKm, unit, targetKm % 1 === 0 ? 0 : 1)}`;
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#0F172A;font-variant-numeric:tabular-nums">
+      <span style="color:var(--c-muted);font-size:11px">Distance</span>
+      <span style="font-weight:600">${distStr}</span>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:#0F172A;font-variant-numeric:tabular-nums;margin-top:4px">
+      <span style="color:var(--c-muted);font-size:11px">Pace</span>
+      <span style="font-weight:600">${paceStr}</span>
+    </div>`;
 }
 
 // ─── Cue handler (DOM updates + voice + haptics) ─────────────────────────────
@@ -74,16 +231,26 @@ function handleCue(e: StrengthCueEvent): void {
   if (!active) return;
 
   if (e.type === 'setStart' && e.set) {
+    // HYROX bridge: if this set maps to a run component, take the current GPS
+    // baseline so auto-advance fires once the prescribed distance is run.
+    // Stations / strength sets clear activeRun, so onGpsUpdate is a no-op.
+    const runC = getActiveRunComponent();
+    active.activeRun = runC;
+    if (runC && active.gps) {
+      active.runDistanceBaseline = active.gps.getLiveData().totalDistance;
+    }
     speak(`Next: ${e.set.exerciseName}`);
     renderActive();
     return;
   }
   if (e.type === 'restStart' && e.set) {
+    active.activeRun = null;
     speak(`Rest ${e.restRemainingSec ?? 0} seconds`);
     renderResting();
     return;
   }
   if (e.type === 'pauseStart') {
+    active.activeRun = null;
     pulse([80, 60, 80]);
     speak(`Station logged. Start when you're ready.`);
     renderPaused();
@@ -103,6 +270,8 @@ function handleCue(e: StrengthCueEvent): void {
     return;
   }
   if (e.type === 'complete') {
+    active.activeRun = null;
+    stopGps();
     speak('Session complete');
     pulse([120, 60, 120]);
     active.finished = true;
@@ -131,6 +300,7 @@ export function closeOverlay(): void {
   if (!active) { removeNode(); return; }
   active.controller.destroy();
   active.voice.cancel();
+  stopGps();
   void disableScreenAwake().catch(() => {});
   const onClose = active.onClose;
   active = null;
@@ -274,6 +444,7 @@ function renderActive(): void {
         <div style="font-size:24px;font-weight:700;color:#0F172A;line-height:1.2;letter-spacing:-0.01em;margin-bottom:6px">${escapeHtml(cur.exerciseName)}</div>
         ${cur.reps ? `<div style="font-size:14px;color:#0F172A;margin-bottom:8px">${escapeHtml(cur.reps)}</div>` : ''}
         ${cur.cue ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-bottom:18px">${escapeHtml(cur.cue)}</div>` : ''}
+        ${renderRunReadoutBlock()}
 
         ${upcoming.length ? `
           <div style="font-size:11px;color:var(--c-faint);margin-bottom:6px">Up next</div>
@@ -510,6 +681,14 @@ function patchClocks(): void {
   const phase = active.controller.phase;
   const el = document.getElementById('gs-elapsed');
   if (el) el.textContent = fmtElapsed(active.controller.elapsedSec);
+  // GPS readout patches on every tick too. Keeps the distance/pace fresh
+  // even when GPS updates lag (e.g. indoors with weak signal).
+  if (phase === 'active' && active.activeRun && active.gps) {
+    const live = active.gps.getLiveData();
+    const target = active.activeRun.distanceM ?? 1000;
+    const delta = Math.max(0, live.totalDistance - active.runDistanceBaseline);
+    patchRunReadout(delta, target, live.currentPace ?? 0);
+  }
   const elSmall = document.getElementById('gs-elapsed-small');
   if (elSmall) {
     const label = phase === 'paused' ? 'Total elapsed' : 'Elapsed';

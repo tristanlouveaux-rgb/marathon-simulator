@@ -77,7 +77,7 @@ describe('computeHRCalibratedVdot — filters', () => {
   });
 
   it('excludes runs with %HRR below Swain-validated range', () => {
-    // avgHR=70 with RHR=50, maxHR=190 → HRR = 20/140 = 14% — too low
+    // avgHR=70 with RHR=50, maxHR=190 → HRR = 20/140 = 14%. Too low
     const runs = [
       mkRun(1, 10, 310, 70),
       mkRun(2, 12, 320, 72),
@@ -142,7 +142,7 @@ describe('computeHRCalibratedVdot — regression', () => {
 
   it('rejects non-negative beta (inverted HR-pace curve)', () => {
     // Noisy data where slower paces happen at higher HR (e.g. heat/fatigue)
-    // — produces positive β. Should be rejected.
+    //. Produces positive β. Should be rejected.
     const runs = [
       mkRun(1, 10, 350, 175), // slow but high HR
       mkRun(3,  8, 330, 170),
@@ -172,14 +172,14 @@ describe('computeHRCalibratedVdot — outlier removal', () => {
 
   it('removes a bonked run and produces a clean estimate', () => {
     // 4 coherent runs spanning 63–81% HRR, plus one bonk: same HRR as the
-    // hardest run but 55 sec/km slower — the bonk's residual will be >>2.5σ.
+    // hardest run but 55 sec/km slower. The bonk's residual will be >>2.5σ.
     const goodRuns = [
       mkRun(2,  10, 310, 145),  // 67% HRR, 5:10/km
       mkRun(4,  12, 330, 140),  // 64% HRR, 5:30/km
       mkRun(6,  10, 295, 152),  // 72% HRR, 4:55/km
-      mkRun(10, 10, 245, 165),  // 82% HRR, 4:05/km — race effort
+      mkRun(10, 10, 245, 165),  // 82% HRR, 4:05/km. Race effort
     ];
-    const bonk = mkRun(8, 18, 302, 164, null); // 82% HRR, 5:02/km — bonked 18km
+    const bonk = mkRun(8, 18, 302, 164, null); // 82% HRR, 5:02/km. Bonked 18km
     const r = computeHRCalibratedVdot([...goodRuns, bonk], RHR, MAX, NOW);
     expect(r.vdot).not.toBeNull();
     expect(r.n).toBe(goodRuns.length); // bonk removed
@@ -199,7 +199,7 @@ describe('computeHRCalibratedVdot — outlier removal', () => {
 
 describe('computeHRCalibratedVdot — edge cases', () => {
   it('handles weighted regression correctly (duration matters)', () => {
-    // One long run + two short runs — the long run should dominate.
+    // One long run + two short runs. The long run should dominate.
     // Long run: 60 min at HR 160, pace 5:00/km = 300s/km
     // Short runs: 22 min at HR 140, pace 6:00/km = 360s/km
     const RHR = 50, MAX = 190;
@@ -251,7 +251,7 @@ describe('computeHRCalibratedVdot — per-segment input', () => {
   }
 
   it('accepts segments shorter than 20 minutes (1km splits qualify)', () => {
-    // Three 1-km splits — would be rejected as runs (each ~4-5 min < 20 min)
+    // Three 1-km splits. Would be rejected as runs (each ~4-5 min < 20 min)
     // but qualify as segments (≥ 60 s).
     const segments = [
       mkSeg(1, 330, Math.round(RHR + 0.65 * HRR_DENOM)), // 5:30/km, 65% HRR

@@ -314,7 +314,7 @@ describe('Workout Generator', () => {
           .sort((a, b) => a - b);
 
         // Default preference is Mon (0), Wed (2), Fri (4). May fall back if
-        // hard sessions collide — but should never be three consecutive days.
+        // hard sessions collide. But should never be three consecutive days.
         const hasConsecutiveTrio = commuteDays.some((d, i) =>
           i + 2 < commuteDays.length && commuteDays[i + 1] === d + 1 && commuteDays[i + 2] === d + 2
         );

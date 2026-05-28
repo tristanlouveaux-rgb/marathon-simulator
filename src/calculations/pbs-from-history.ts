@@ -10,13 +10,13 @@ import type { RaceDistance } from '@/types/training';
  *
  * Strava `best_efforts` item shape (as returned by GET /activities/{id}):
  *   { name: '5k' | '10k' | 'Half Marathon' | 'Marathon' | ...,
- *     elapsed_time: int,   // seconds — does NOT include pauses inside the split
+ *     elapsed_time: int,   // seconds. Does NOT include pauses inside the split
  *     moving_time: int,    // seconds
  *     start_date: string,
  *     distance: number,    // metres
  *     ... }
  *
- * We use `elapsed_time` — this is what Strava surfaces as the user's PB in the
+ * We use `elapsed_time`. This is what Strava surfaces as the user's PB in the
  * activity UI, and matches how chip-timed race PBs are recorded. `moving_time`
  * would ignore brief pauses and inflate the result.
  *
@@ -67,7 +67,7 @@ export interface PBWithSource {
   /** Source activity id (e.g. `strava-1234567`). */
   activityId: string;
   /** Activity start date (ISO string). Undefined when neither the best_effort
-   *  entry nor the activity row had a usable start date — callers must handle
+   *  entry nor the activity row had a usable start date. Callers must handle
    *  this (e.g. PB-recency penalty falls back to "no recency boost"). */
   startDate?: string;
   /** Activity name as shown on Strava (e.g. "Berlin Marathon"). */

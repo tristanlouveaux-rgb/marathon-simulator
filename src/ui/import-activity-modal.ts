@@ -4,7 +4,7 @@
  * A mobile-friendly walkthrough for importing a .fit / .gpx / .tcx file the
  * user exported from their watch or activity app. This is the free pathway to
  * per-km splits and full heart rate for users whose data does not bridge richly
- * through Apple Health — notably Garmin, whose GPS route and speed stream do not
+ * through Apple Health. Notably Garmin, whose GPS route and speed stream do not
  * reach Apple Health, so per-km splits can only come from the original file.
  *
  * It does NOT touch any third-party API: the user imports their own exported
@@ -29,7 +29,7 @@ let onCompleteCb: (() => void) | undefined;
 /**
  * Open the guided activity-file import modal. No-op if already open.
  *
- * `opts.onComplete` runs after a successful import — used by the onboarding
+ * `opts.onComplete` runs after a successful import. Used by the onboarding
  * data-source step to reveal its Continue button and nudge guests to save
  * their account so imported runs sync to their phone.
  */

@@ -1,5 +1,5 @@
 /**
- * Check-in overlay — shared between home-view and plan-view.
+ * Check-in overlay. Shared between home-view and plan-view.
  *
  * Opens a centered modal with three options: Injured, Ill, Holiday.
  * Each routes to its respective modal.

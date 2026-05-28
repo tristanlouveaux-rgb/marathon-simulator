@@ -1,5 +1,5 @@
 /**
- * Screen Wake Lock — keeps the device screen awake during a guided run.
+ * Screen Wake Lock. Keeps the device screen awake during a guided run.
  *
  * Web-only interim solution. The browser releases the lock automatically when
  * the tab hides or the screen locks; this module re-acquires it on the next

@@ -1,12 +1,12 @@
 /**
- * Tri benchmark history — append-only logs of FTP and CSS samples that power
+ * Tri benchmark history. Append-only logs of FTP and CSS samples that power
  * the trend charts on the tri Progress detail page (`progress-detail-view`).
  *
  * Rules:
  *  - One entry per day, latest wins (so launch-time refreshes don't pile up).
  *  - Skip the append when the value is unchanged from the most recent entry
  *    (avoids stale-source flips spamming the log).
- *  - Pure tracking — no calculation reads from these arrays.
+ *  - Pure tracking. No calculation reads from these arrays.
  *
  * Bounded at 256 entries so a launch-loop bug can't grow state unboundedly.
  */
@@ -35,10 +35,10 @@ export function appendFtpSample(
 
   const last = list[list.length - 1];
   if (last && last.date === date) {
-    // Replace today's entry — represents the latest read-out of FTP for the day.
+    // Replace today's entry. Represents the latest read-out of FTP for the day.
     list[list.length - 1] = { date, value, source, confidence };
   } else if (last && last.value === value && last.source === source) {
-    // Same value, different day, but no new test — skip to keep the chart sparse.
+    // Same value, different day, but no new test. Skip to keep the chart sparse.
     return;
   } else {
     list.push({ date, value, source, confidence });

@@ -238,7 +238,7 @@ export async function drawPolylineOnCanvas(
   }
 
   const tiles = await Promise.all(tileJobs.map(j => loadTile(j.tx, j.ty, zoom)));
-  if (!tiles.some(t => t !== null)) return; // all tiles failed — keep dark background
+  if (!tiles.some(t => t !== null)) return; // all tiles failed. Keep dark background
 
   // --- Redraw: tiles + overlay + route ---
   ctx.clearRect(0, 0, W, H);

@@ -1,5 +1,5 @@
 /**
- * Marathon + half-marathon population distributions — real outcome data.
+ * Marathon + half-marathon population distributions. Real outcome data.
  *
  * Mirrors `src/data/hyrox-population-distributions.ts` in structure.
  * One percentile table per venue (where data is available), plus a per-
@@ -10,7 +10,7 @@
  *
  * 1. Download a finisher CSV from Kaggle (`runningwithrock/*`,
  *    `kevinegan/london-marathon-results`, `aiaiaidavid/berlin-marathons-data`,
- *    `rojour/boston-results`, etc.) — see `docs/SCIENCE_LOG.md` for the
+ *    `rojour/boston-results`, etc.). See `docs/SCIENCE_LOG.md` for the
  *    full data-source survey.
  * 2. Run: `node scripts/ingest-marathon-results.mjs <csv-path> <venue-id>`
  * 3. Paste the printed const block into the appropriate table below.
@@ -101,7 +101,7 @@ export const VENUE_PERCENTILE_TABLES: Record<VenueId, PercentileTable> = {
  *  that distance during ingestion. */
 export const DISTANCE_AGGREGATE_PERCENTILE_TABLES: Record<'marathon' | 'half', PercentileTable> = {
   // Pooled from 5 venues (Berlin, Boston, Chicago, London, NYC), 888,989 raw
-  // finishes, via scripts/fetch-marathon-github.mjs — 2026-05-18.
+  // finishes, via scripts/fetch-marathon-github.mjs. 2026-05-18.
   marathon: [[9453, 1], [10553, 5], [11305, 10], [12894, 25], [15013, 50], [17575, 75], [20153, 90], [21702, 95], [24618, 99]],
   half: [],
 };

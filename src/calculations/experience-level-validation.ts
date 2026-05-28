@@ -24,12 +24,12 @@
  *   advanced:       VDOT 52-58 (dedicated, periodised training)
  *   competitive:    VDOT >= 58 (club / high performance)
  *
- *   returning:  any VDOT (rebuilding from prior fitness) — orthogonal to band
- *   hybrid:     any VDOT (cross-sport athlete, low running km) — orthogonal
+ *   returning:  any VDOT (rebuilding from prior fitness). Orthogonal to band
+ *   hybrid:     any VDOT (cross-sport athlete, low running km). Orthogonal
  *
  * The check fails when the user's selected band is **below** the band their
  * PBs demonstrate (e.g. VDOT 42 PB + "beginner" label). It does NOT fail
- * when the user selects a *higher* band than their PBs suggest — they may
+ * when the user selects a *higher* band than their PBs suggest. They may
  * have improved since their last race, or be entering aspirational status.
  * Asymmetric on purpose: under-claiming experience produces the model
  * inversion described above; over-claiming just makes forecasts more
@@ -41,7 +41,7 @@ import type { RunnerExperience } from '@/types/onboarding';
 import { cv } from './vdot';
 
 /** VDOT band cut-points. Boundaries are inclusive on the upper side
- *  (vdot < cut → that band) — matches Daniels' table semantics. */
+ *  (vdot < cut → that band). Matches Daniels' table semantics. */
 const BAND_UPPER: Array<{ level: RunnerExperience; vdotUpper: number }> = [
   { level: 'total_beginner', vdotUpper: 28 },
   { level: 'beginner',       vdotUpper: 35 },
@@ -73,7 +73,7 @@ function vdotToBand(vdot: number): RunnerExperience {
 
 /** Find the longest-distance PB available. Marathon > Half > 10K > 5K
  *  preference reflects that longer PBs are more diagnostic of training-
- *  history depth — anyone with a sub-4 marathon PB has demonstrably been
+ *  history depth. Anyone with a sub-4 marathon PB has demonstrably been
  *  training for a long time, while a fast 5K could come from speed
  *  athleticism without marathon-equivalent endurance. */
 function bestPbForVdot(pbs: PBs): { dist: number; time: number } | null {
@@ -94,7 +94,7 @@ export interface ExperienceLevelCheckResult {
   /** Why the current selection doesn't match. Empty when consistent. */
   reason?: string;
   /** Approximate VDOT computed from the best (longest) PB. Useful for UI
-   *  diagnostic copy ("Your 3:37 marathon suggests VDOT 42 — consistent
+   *  diagnostic copy ("Your 3:37 marathon suggests VDOT 42. Consistent
    *  with Intermediate or above"). */
   pbDerivedVdot?: number;
   /** The PB used to derive VDOT (distance in m + time in s). Surfaces in

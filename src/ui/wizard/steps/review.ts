@@ -33,7 +33,7 @@ import { getPhysiologicalVdot } from '@/calculations/physiological-vdot';
 import { poweredByStrava } from '@/ui/strava-brand';
 
 /**
- * Page 4 — "Here's what we found" magic-moment review.
+ * Page 4. "Here's what we found" magic-moment review.
  *
  * Renders after connect-data on the Strava path. Shows the four pieces of
  * data we infer from the sync (weekly volume, 10K/Half/Marathon PBs, VDOT,
@@ -49,7 +49,7 @@ import { poweredByStrava } from '@/ui/strava-brand';
 // screen. Strava's own "best_efforts" are only populated on running activities,
 // and the 4-week volume metric needs roughly a run per week to be meaningful;
 // below 12 runs the page reads as empty. No established constant for this in
-// the codebase — flagged for review.
+// the codebase. Flagged for review.
 // TODO(tristan): confirm 12 running activities is the right floor, or tie
 // this to `state.detectedWeeklyKm` availability alone once more users are on
 // the new flow.
@@ -66,7 +66,7 @@ const RUNNER_TYPE_LABELS: Record<RunnerType, { label: string; sub: string }> = {
 };
 
 /** Athlete-tier user-friendly labels. The internal enum is the chronic-load
- *  bucket derived from CTL — these labels keep the tier readable without
+ *  bucket derived from CTL. These labels keep the tier readable without
  *  exposing the engine vocabulary. */
 const ATHLETE_TIER_LABELS: Record<NonNullable<ReturnType<typeof getState>['athleteTier']>, { label: string; sub: string }> = {
   beginner: { label: 'Building a base', sub: 'Light, consistent training will move the needle quickly.' },
@@ -93,8 +93,8 @@ let cachedTriBenchmarks: TriBenchmarks | null = null;
 
 /** Race-distance-matched bike ride and swim from history. Among activities
  *  clearing the threshold (80 % of own race distance OR half-Ironman distance,
- *  whichever is lower), we pick the one *closest* to the race distance — not
- *  the longest — so the row reflects an effort the athlete has done over a
+ *  whichever is lower), we pick the one *closest* to the race distance. Not
+ *  the longest. So the row reflects an effort the athlete has done over a
  *  comparable distance, not the most extreme outing on file. Null when
  *  nothing qualifies. */
 type RaceDistanceEffort = { distanceKm: number; durationSec: number; name: string };
@@ -150,7 +150,7 @@ async function fetchRecentActivities(): Promise<ActivityWithBestEfforts[]> {
   try {
     const since = new Date(Date.now() - ACTIVITY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
     const token = await getAccessToken();
-    // limit=1000 — users with high activity density (10+/week) can exceed 200
+    // limit=1000. Users with high activity density (10+/week) can exceed 200
     // rows within the 3-year window, so 200 dropped older PB-bearing runs
     // before the PB extractor saw them. 1000 fits all but the most extreme
     // volumes and stays well under PostgREST's default max_rows.
@@ -206,7 +206,7 @@ function countRunningActivities(rows: ActivityWithBestEfforts[]): number {
 
 /** Fallback 4-week running km derived from the REST activity rows. Used when
  *  `s.detectedWeeklyKm` is unset because the edge function's `mode:'history'`
- *  aggregation returned empty (intermittent — see comment near line 110).
+ *  aggregation returned empty (intermittent. See comment near line 110).
  *  Without this fallback the row reads "--" even when the REST query returned
  *  hundreds of runs. 28-day-from-now window (matches bike/swim rows). */
 function weeklyKmFromActivities(rows: ActivityWithBestEfforts[]): number {
@@ -229,7 +229,7 @@ function weeklyKmFromActivities(rows: ActivityWithBestEfforts[]): number {
 
 export function renderReview(container: HTMLElement, state: OnboardingState): void {
   // Fast path: user reached review having explicitly skipped Strava (manual-entry
-  // path). Don't try to backfill — they entered PBs by hand. Render whatever the
+  // path). Don't try to backfill. They entered PBs by hand. Render whatever the
   // state has. This was previously the case where the review screen would also
   // divert to manual-entry, which under the new flow would loop back through
   // goals → race-target → schedule → review again.
@@ -241,7 +241,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     //   (1) Apple Health: a 16-week activity backfill seeded with the user's
     //       age (collected in about-you, the step before this one) so iTRIMP
     //       integration can resolve a Tanaka-derived maxHR. We defer the
-    //       backfill until here — running it at connect-data time would
+    //       backfill until here. Running it at connect-data time would
     //       store 16w of activities with null iTRIMP and a duration-heuristic
     //       CTL baseline. By the time the user lands on review, age is set.
     //   (2) `refreshBlendedFitness` to compute `s.hrCalibratedVdot` from the
@@ -268,7 +268,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         })
         .finally(finish);
     } else {
-      // Pure manual-entry user — still call refreshBlendedFitness in case
+      // Pure manual-entry user. Still call refreshBlendedFitness in case
       // a previous session left HR/PB data around that can drive the row.
       import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
         import('@/state/store').then(({ getMutableState }) => {
@@ -283,7 +283,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
   // First-mount: kick off the data chain (backfill → physiology → DB read).
   // The chain shows progressive loading messages; if it runs over LOADING_TIMEOUT_MS,
   // we swap in an apology line so the user knows we're still working. Whatever
-  // arrives gets surfaced — partial data is better than blocking the wizard.
+  // arrives gets surfaced. Partial data is better than blocking the wizard.
   if (cachedActivities === null) {
     let currentStep = 0;
     const setStep = (n: number): void => {
@@ -297,11 +297,11 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
 
     // Full 26-week history backfill so best_efforts (race PBs) are populated.
     // Order matters:
-    //   1. backfill — writes activities to DB + onboardingRunHistory.
-    //   2. triggerGarminBackfill (if linked) — pushes daily_metrics rows.
-    //   3. syncPhysiologySnapshot — pulls RHR/maxHR/sleep into state.
-    //   4. refreshBlendedFitness — re-run now that RHR + maxHR + runs are in state.
-    //   5. fetchRecentActivities — DB read for PB extraction.
+    //   1. backfill. Writes activities to DB + onboardingRunHistory.
+    //   2. triggerGarminBackfill (if linked). Pushes daily_metrics rows.
+    //   3. syncPhysiologySnapshot. Pulls RHR/maxHR/sleep into state.
+    //   4. refreshBlendedFitness. Re-run now that RHR + maxHR + runs are in state.
+    //   5. fetchRecentActivities. DB read for PB extraction.
     const lookback = Math.ceil(ACTIVITY_LOOKBACK_DAYS / 7);
     const pipelineStart = performance.now();
     const tickStep = (name: string, t0: number, ok: boolean, summary?: string): void => {
@@ -311,7 +311,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
     };
     // Wait for `main.ts` background syncs (Strava backfill, history restore,
     // DB dedup) to settle before we read the activities table. Without this,
-    // `loadActivitiesFromDB` later in the pipeline races those writes — on
+    // `loadActivitiesFromDB` later in the pipeline races those writes. On
     // some reloads the row carrying `power_curve` is in the snapshot, on
     // others it isn't, producing the "FTP comes through sometimes" symptom.
     // Bounded at 20 s by `awaitStartupSyncs` so a stuck sync can't lock the
@@ -437,7 +437,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         sm.pbs = next;
 
         // Mirror the merge into onboarding.pbs so the Continue gate sees them.
-        // Also persist PB dates onto onboarding.pbDates — `blendPredictions` uses
+        // Also persist PB dates onto onboarding.pbDates. `blendPredictions` uses
         // PB recency to scale the marathon-specificity penalty (recent PB =
         // demonstrated current capability = lighter penalty).
         // Fallback chain for the date: best_effort.start_date (per-effort) →
@@ -462,7 +462,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
           if (src?.timeSec == null) return;
           const saved = nextOnb[k];
           // Update time when src is faster (or no saved value), AND attempt to
-          // backfill the date even when time matches — earlier wizard runs may
+          // backfill the date even when time matches. Earlier wizard runs may
           // have written the time without the date (pre-pbDates code), so we
           // need to fill the gap on a fresh render even if `time < saved` is false.
           const date = src.startDate ?? findActivityStart(src.activityId);
@@ -470,7 +470,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
             nextOnb[k] = src.timeSec;
           }
           if (date && (saved == null || src.timeSec <= saved)) {
-            // Set date when src is the canonical PB (faster or equal) — equal
+            // Set date when src is the canonical PB (faster or equal). Equal
             // matters because the time is already there from a previous run.
             nextOnbDates[k] = date;
           }
@@ -484,7 +484,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
 
       // Step 4: FTP, CSS, and threshold-pace calculation. Surfacing the step
       // change here (not at pipeline end) so the user sees the spinner on
-      // this label *during* the heavy work — `loadActivitiesFromDB`,
+      // this label *during* the heavy work. `loadActivitiesFromDB`,
       // `deriveTriBenchmarksFromHistory`, the final `refreshBlendedFitness`,
       // and the LT recompute that follows in `renderContent`.
       setStep(4);
@@ -540,7 +540,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
             // user's running history. Strava records peak HR per activity, so
             // this is a reasonable approximation of HRmax until the watch /
             // physiology snapshot lands. Only writes when nothing has set
-            // s.maxHR yet — never clobbers a real physiology value.
+            // s.maxHR yet. Never clobbers a real physiology value.
             if (sm.maxHR == null) {
               const observedMax = runRows.reduce((acc, a) => {
                 const hr = a.maxHR ?? 0;
@@ -563,7 +563,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
             `ftp:${cachedTriBenchmarks.ftp.ftpWatts ?? 'null'}W(${cachedTriBenchmarks.ftp.confidence},${cachedTriBenchmarks.ftp.bikeActivityCount} rides) ` +
             `css:${cachedTriBenchmarks.css.cssSecPer100m ?? 'null'}s/100m(${cachedTriBenchmarks.css.confidence},${cachedTriBenchmarks.css.swimActivityCount} swims)`);
 
-          // FTP health summary — single line every launch so the next regression
+          // FTP health summary. Single line every launch so the next regression
           // is visible immediately without a debug round-trip. If this line
           // shows ftp=null or src=fallback when src=curve was working
           // yesterday, look here first. See ISSUE-156 / 2026-05-01 changelog
@@ -589,7 +589,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
               `picked=${pickedDate}(${pickedW}W) | bikes=${bikes.length} withCurve=${withCurve} ` +
               `withNP=${withNP} withAvgW=${withAvgW} dw(t/f)=${withDevTrue}/${withDevFalse}`
             );
-            // Loud warning when we have plenty of rides but no FTP — this is
+            // Loud warning when we have plenty of rides but no FTP. This is
             // the regression class we keep hitting (gate drift, edge fn out of
             // sync, etc). Flagging it here means the user sees it next launch.
             if (f.ftpWatts == null && bikes.length >= 5) {
@@ -664,7 +664,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
             return u === 'SWIMMING' || u.includes('SWIM');
           };
 
-          // CSS provenance — list every swim the estimator considered + the
+          // CSS provenance. List every swim the estimator considered + the
           // anchor swim that won, so the user can answer "where did this
           // 2:56/100m come from?" by reading the console rather than
           // hunting through Strava. Placed AFTER `isSwim` is defined so
@@ -723,7 +723,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
           cachedClosestBike = pickFastest(a => isBike(a.activityType), bikeMinKm);
           cachedClosestSwim = pickFastest(a => isSwim(a.activityType), swimMinKm);
 
-          // Weekly volume per discipline — last 4 calendar weeks averaged.
+          // Weekly volume per discipline. Last 4 calendar weeks averaged.
           // Pulls from `triActs` (REST-loaded) so it doesn't depend on the
           // edge-function history aggregation that's been returning empty.
           const fourWeeksAgoMs = Date.now() - 28 * 24 * 60 * 60 * 1000;
@@ -740,7 +740,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
           // filled). Don't override it here from a 28-day-from-now window —
           // the two windows disagreed on different loads and produced the
           // "5.3 one load, 0 the next" wobble.
-          // Per-week breakdown for diagnostic — shows whether the 4-week avg
+          // Per-week breakdown for diagnostic. Shows whether the 4-week avg
           // is dragged down by zero-run weeks (triathletes typically have them).
           const weeklyBuckets: Record<string, { run: number; bike: number; swim: number }> = {};
           for (let i = 0; i < 4; i++) {
@@ -771,15 +771,15 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         }
       }
 
-      // (setStep(4) already fired before the triathlon block — the user has
+      // (setStep(4) already fired before the triathlon block. The user has
       // been seeing "Calculating FTP, CSS and threshold pace" during the
       // heavy work above.)
-      // Final blend pass — refreshBlendedFitness ran early in the pipeline
+      // Final blend pass. RefreshBlendedFitness ran early in the pipeline
       // (step 4), before s.pbs / s.maxHR / s.onboardingRunHistory had been
       // seeded by the steps that follow. So `s.v` and `s.blendedEffectiveVdot`
       // were computed against an incomplete state, then re-computed ~500ms
       // later when an unrelated background trigger (ActivitySync etc.) ran
-      // refreshBlendedFitness again — producing the visible "first render
+      // refreshBlendedFitness again. Producing the visible "first render
       // shows 4:21, second render shows 4:08" flash.
       // Re-running it here, with all sources seeded, makes the first render
       // already correct. The cost is ~10ms (refresh is cheap) and downstream
@@ -793,7 +793,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
         console.warn('[Pipeline] final blend pass failed:', e);
       }
 
-      // Final summary — what the page is about to render with. If a value is
+      // Final summary. What the page is about to render with. If a value is
       // missing (vo2:null, ftp:null, weeklyKm:null), the per-step logs above
       // tell you which step couldn't produce it. If everything is null but
       // the steps say ✓, the issue is in derivation logic, not data flow.
@@ -815,7 +815,7 @@ export function renderReview(container: HTMLElement, state: OnboardingState): vo
       );
 
       window.clearTimeout(timeoutId);
-      // Re-read onboarding state from the store before rendering — the pipeline
+      // Re-read onboarding state from the store before rendering. The pipeline
       // above ran `updateOnboarding({ triBike, triSwim, ... })` to patch derived
       // FTP/CSS into state, but `updateOnboarding` creates a new onboarding
       // object via spread (controller.ts:79–89). The `state` argument captured
@@ -871,7 +871,7 @@ function loadNote(timedOut: boolean): string {
 }
 
 /**
- * Update the loading progress in-place — no re-render. Called on every step change
+ * Update the loading progress in-place. No re-render. Called on every step change
  * after the initial render. The fill ring smoothly transitions to the new % via
  * its CSS transition; the label cross-fades.
  */
@@ -900,11 +900,11 @@ function updateLoadingProgress(activeStep: number, timedOut: boolean): boolean {
 }
 
 function renderLoading(container: HTMLElement, activeStep: number, timedOut: boolean): void {
-  // Smooth in-place updates after first mount — avoids re-rendering the whole
+  // Smooth in-place updates after first mount. Avoids re-rendering the whole
   // shell on every step change (the source of the "jumpy" feel).
   if (updateLoadingProgress(activeStep, timedOut)) return;
 
-  // Initial mount — build the full glass shell.
+  // Initial mount. Build the full glass shell.
   const dashoffset = loadDashoffset(activeStep);
   const currentLabel = loadStepLabel(activeStep);
   const note = loadNote(timedOut);
@@ -1046,7 +1046,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
         `${qualifiedCount} of ${diag.length} runs qualified for empirical LT (last 120d, ≥20min)`);
       console.log(`maxHR ${s.maxHR ?? '—'} bpm · LT band 85–92% = ${s.maxHR ? Math.round(s.maxHR * 0.85) : '—'}–${s.maxHR ? Math.round(s.maxHR * 0.92) : '—'} bpm · candidates considered: ${diag.length}`);
 
-      // Raw input visibility — when the candidate pool is empty, the question
+      // Raw input visibility. When the candidate pool is empty, the question
       // is "what made it into onboardingRunHistory and wks before filtering?"
       const wks = s.wks ?? [];
       const wkActuals = wks.flatMap(w => Object.values((w as { garminActuals?: Record<string, unknown> }).garminActuals ?? {}));
@@ -1080,7 +1080,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
   const activityCount = cachedActivities ? countRunningActivities(cachedActivities) : 0;
   // Prefer the canonical Monday-aligned value from `fetchStravaHistory`; fall
   // back to a 28-day rolling sum from the REST rows when history aggregation
-  // came back empty. Both reach the user as "last 4 weeks" — different windows
+  // came back empty. Both reach the user as "last 4 weeks". Different windows
   // can disagree by a few % but that beats showing "--" alongside "153 runs".
   const detectedKm = s.detectedWeeklyKm ?? 0;
   const weeklyKm = detectedKm > 0
@@ -1090,7 +1090,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
   const pbSources: PBsWithSource = cachedPbSources ?? {};
 
   // PB-derived VDOT: compute from race times via Daniels (cv) and take the max.
-  // Don't use s.v — that's blended with current volume/intensity and drags peak
+  // Don't use s.v. That's blended with current volume/intensity and drags peak
   // PBs down. HR-calibrated value handles "what you'd run today".
   const pbVdotCandidates: number[] = [];
   if (pbs.k5 && pbs.k5 > 0) pbVdotCandidates.push(cv(5000, pbs.k5));
@@ -1262,7 +1262,7 @@ function renderContent(container: HTMLElement, state: OnboardingState): void {
  * Continue gate. Running-plan mode needs at least one PB (initialization
  * fails with "No personal bests provided" otherwise). Triathlon mode needs
  * the user's race-preference profile. Track-only has no requirements.
- * FTP and CSS are optional — the plan engine falls back to skill-rating
+ * FTP and CSS are optional. The plan engine falls back to skill-rating
  * estimates and HR/RPE-only zones until a real number lands.
  */
 function refreshContinueGate(): void {
@@ -1282,7 +1282,7 @@ function refreshContinueGate(): void {
     const runnerType = onb.confirmedRunnerType ?? onb.calculatedRunnerType ?? getState().typ ?? null;
     if (!runnerType) missing.push('Race preference');
   } else if (onb.trainingMode === 'cycling' || onb.trainingMode === 'hyrox') {
-    // Cycling and HYROX have no required benchmarks at review time — they refine
+    // Cycling and HYROX have no required benchmarks at review time. They refine
     // via in-plan test cards (FTP test / HYROX assessment). Always enabled.
   } else {
     const pbCount = Object.values(onb.pbs ?? {}).filter(v => typeof v === 'number' && v > 0).length;
@@ -1323,7 +1323,7 @@ function renderSectionLabel(text: string): string {
  * sizing on this screen. Returns empty string for `'high'` (no badge needed
  * when the value is solid) and `null`/`undefined` (don't show what we don't
  * know). Visible specifically when the user shouldn't trust the number at
- * face value — e.g. CSS derived from a 16-month-old swim, FTP from a stale
+ * face value. E.g. CSS derived from a 16-month-old swim, FTP from a stale
  * test, etc.
  */
 function renderConfidenceChip(c: 'high' | 'medium' | 'low' | 'none' | null | undefined): string {
@@ -1341,7 +1341,7 @@ function renderConfidenceChip(c: 'high' | 'medium' | 'low' | 'none' | null | und
  * Personal-bests block. In running mode this is the existing 5K/10K/HM/M
  * grid; in triathlon mode we collapse the run side to the single race-distance
  * PB (HM for 70.3, Marathon for IM) and add the longest-recorded bike ride and
- * swim — but only when something in history clears the threshold computed
+ * swim. But only when something in history clears the threshold computed
  * during derivation. If nothing qualifies, the section is omitted entirely.
  */
 function renderTriPbsSection(
@@ -1423,11 +1423,11 @@ function renderDisciplineVolumeRow(
   } else if (discipline === 'swim') {
     // Swim distances are typically a few km; show metres for legibility
     // (1.2 km/wk reads better as "1,200 m / week"). Mile-pref users still
-    // see metres — open-water swimming is uniformly metric in practice.
+    // see metres. Open-water swimming is uniformly metric in practice.
     const meters = Math.round(weeklyKm * 1000);
     valueStr = `${meters.toLocaleString()} m / week`;
   } else {
-    // 1 decimal place — at low triathlon-cycling volumes (one ride per
+    // 1 decimal place. At low triathlon-cycling volumes (one ride per
     // month giving ~14 km/wk), zero-decimal rounding can flip 14.5 to 15
     // and contradict what the user knows they did. At high volumes the
     // decimal is noise but harmless.
@@ -1466,7 +1466,7 @@ function renderVolumeRow(weeklyKm: number, unitPref: 'km' | 'mi', activityCount:
       </div>
     `;
   }
-  // 1 decimal place — same reasoning as the bike/swim rows: at the
+  // 1 decimal place. Same reasoning as the bike/swim rows: at the
   // triathlon-running volumes typical for IM training (10-30 km/wk),
   // integer rounding on .5 boundaries can flip a known number visibly.
   const value = weeklyKm > 0 ? `${formatKm(weeklyKm, unitPref, 1)} / week` : '--';
@@ -1494,7 +1494,7 @@ function renderPbRow(
 ): string {
   const editKey = key === 'k5' ? 'pb-k5' : key === 'k10' ? 'pb-k10' : key === 'h' ? 'pb-h' : 'pb-m';
   // Fastest wins. If both a saved PB and a Strava-derived PB exist, take the
-  // lower of the two — a PB is by definition the fastest time, so a stale
+  // lower of the two. A PB is by definition the fastest time, so a stale
   // slower cache must never beat a faster Strava read (or vice versa).
   const stravaSec = source?.timeSec;
   const sourceWins = stravaSec != null && (currentSec == null || stravaSec < currentSec);
@@ -1528,13 +1528,13 @@ function renderPbRow(
   if (sourceWins && source) {
     subline = source.activityName ?? 'From your Strava history';
   } else if (source && currentSec != null && stravaSec != null && currentSec === stravaSec) {
-    // Strava-sourced and we eagerly persisted it into state.pbs — the values
+    // Strava-sourced and we eagerly persisted it into state.pbs. The values
     // match, so this isn't a manual entry. Attribute correctly to Strava.
     subline = source.activityName ?? 'From your Strava history';
   } else if (displaySec != null && currentSec != null) {
     subline = 'Entered manually';
   } else if (source) {
-    // Strava found a value but currentSec is missing — display Strava's.
+    // Strava found a value but currentSec is missing. Display Strava's.
     subline = source.activityName ?? 'From your Strava history';
   }
 
@@ -1557,7 +1557,7 @@ function renderPbRow(
 }
 
 function renderVdotRow(_vdot: number | undefined): string {
-  // VDOT row — value comes from the unified `getPhysiologicalVdot` resolver
+  // VDOT row. Value comes from the unified `getPhysiologicalVdot` resolver
   // so the number on this screen always matches the VO2 stats card and the
   // VDOT input feeding the LT engine. The caption then explains which tier
   // of the priority chain produced the number, with extra context (e.g.
@@ -1607,7 +1607,7 @@ function renderVdotRow(_vdot: number | undefined): string {
       sub = 'Rough estimate from recent training. Add race times or sync HR data to refine.';
       break;
     case 'none':
-      // No usable signal yet — surface the most actionable HR-calibrated
+      // No usable signal yet. Surface the most actionable HR-calibrated
       // failure reason if known, so the user knows what to wait for.
       if (hr && hr.reason === 'no-rhr') {
         const garminLinked = hasPhysiologySource(s, 'garmin');
@@ -1654,7 +1654,7 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
   } else if (src === 'override') {
     sub = 'Set manually.';
   } else if (src) {
-    // Caption reflects which derivation method actually fired — anchored to
+    // Caption reflects which derivation method actually fired. Anchored to
     // the same `ltSource` value `deriveLT` returned in `recomputeLT`.
     const tier = conf === 'high' ? 'High confidence' : conf === 'medium' ? 'Medium confidence' : 'Rough estimate';
     let basis: string;
@@ -1746,9 +1746,9 @@ function formatShortDate(iso: string | undefined): string | null {
  * `confidence: 'none'`). Caller decides what to do in those cases.
  *
  * Tier copy:
- *   high   (≤ 4w)  — "Derived from your 20-min effort on Apr 27 (310 W)."
- *   medium (≤ 8w)  — "Derived from your last test on Mar 15. Sit a fresh one to confirm."
- *   low    (≤ 12w) — "Last test was 10 weeks ago. Estimate is getting stale."
+ *   high   (≤ 4w). "Derived from your 20-min effort on Apr 27 (310 W)."
+ *   medium (≤ 8w). "Derived from your last test on Mar 15. Sit a fresh one to confirm."
+ *   low    (≤ 12w). "Last test was 10 weeks ago. Estimate is getting stale."
  */
 function formatFtpDerivationCaption(d: import('@/calculations/tri-benchmarks-from-history').FtpEstimate | undefined): string | null {
   if (!d || d.ftpWatts == null) return null;
@@ -1766,7 +1766,7 @@ function formatFtpDerivationCaption(d: import('@/calculations/tri-benchmarks-fro
     if (date) return `Derived from your last test on ${date}. Sit a fresh one to confirm.`;
     return 'Derived from your last test. Sit a fresh one to confirm.';
   }
-  // low — stale curve estimate, OR fallback whole-ride NP
+  // low. Stale curve estimate, OR fallback whole-ride NP
   if (d.sourceWindow === 'whole-ride') {
     return 'Best guess from whole-ride power. Do a 20-min test for a tighter number.';
   }
@@ -1835,7 +1835,7 @@ function renderFtpRow(state: OnboardingState): string {
   const ftpChip = (ftp && derived?.ftpWatts === ftp)
     ? renderConfidenceChip(derived.confidence)
     : '';
-  // "Show details" link — visible whenever we have bike rides, regardless of
+  // "Show details" link. Visible whenever we have bike rides, regardless of
   // whether FTP landed or not. The most-load-bearing case is null FTP with
   // rides synced (the regression class we keep hitting), but the link is
   // also useful when confidence is low and the user wants to see why.
@@ -1881,7 +1881,7 @@ function renderCssRow(state: OnboardingState): string {
   let sub = 'Tap to enter your CSS, or run a 400 m time-trial test.';
   if (css && derived?.cssSecPer100m === css) {
     const baseSub = `Derived from ${derived.swimActivityCount} swim${derived.swimActivityCount === 1 ? '' : 's'} in your history.`;
-    // Hedge harder when the derived estimate is low/none confidence — flag
+    // Hedge harder when the derived estimate is low/none confidence. Flag
     // the value as a rough guess and nudge the paired-TT test.
     const conf = derived.confidence;
     sub = (conf === 'low' || conf === 'none')
@@ -1898,7 +1898,7 @@ function renderCssRow(state: OnboardingState): string {
       ? `Set manually. Your swims show ${formatCss(derived!.cssSecPer100m)}. We'll update on next sync.`
       : 'Set manually.';
   }
-  // Confidence chip — only shows when we wouldn't fully trust the number.
+  // Confidence chip. Only shows when we wouldn't fully trust the number.
   // Specifically the user's "16-month-old swim" case → confidence 'none',
   // chip reads "Rough estimate". The caption already explains; the chip
   // makes the caveat visible at a glance.
@@ -2086,7 +2086,7 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
     const btn = e.currentTarget as HTMLButtonElement;
     if (btn.disabled) return;
     editing = null;
-    // Persist auto-filled PBs to state.pbs. Fastest wins — if Strava found a
+    // Persist auto-filled PBs to state.pbs. Fastest wins. If Strava found a
     // faster time than what's already saved, overwrite it. A stale slower
     // cache must not beat a fresh Strava read.
     if (cachedPbSources) {
@@ -2110,7 +2110,7 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
         if (saved == null || src.timeSec < saved) {
           nextPbs[slot] = src.timeSec;
         }
-        // Backfill date when src is canonical (faster or equal) — handles the
+        // Backfill date when src is canonical (faster or equal). Handles the
         // case where time was set by an earlier wizard render but date wasn't.
         if (date && (saved == null || src.timeSec <= saved)) {
           nextPbDates[slot] = date;
@@ -2197,7 +2197,7 @@ function commitEditing(state: OnboardingState): void {
     const nextPbDates = { ...(state.pbDates ?? {}) };
     if (parsed !== null) {
       nextPbs[key] = parsed;
-      // User edited the time manually — the previously-stored date no longer
+      // User edited the time manually. The previously-stored date no longer
       // corresponds to this time. Drop it. Without a known date, the marathon
       // -specificity penalty falls back to full strength (safe default).
       delete nextPbDates[key];
@@ -2205,7 +2205,7 @@ function commitEditing(state: OnboardingState): void {
       delete nextPbs[key];
       delete nextPbDates[key];
     } else {
-      // Bad input — do not close the editor so the user can fix it.
+      // Bad input. Do not close the editor so the user can fix it.
       input.style.borderColor = 'rgba(185,28,28,0.6)';
       return;
     }
@@ -2234,7 +2234,7 @@ function openRunnerTypePicker(state: OnboardingState): void {
       const t = btn.getAttribute('data-runner-type') as RunnerType | null;
       if (!t) return;
       updateOnboarding({ confirmedRunnerType: t });
-      // Mirror to engine state — runner-type.ts does the same.
+      // Mirror to engine state. Runner-type.ts does the same.
       const s = getMutableState();
       s.typ = t;
       saveState();

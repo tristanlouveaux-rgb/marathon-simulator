@@ -15,7 +15,7 @@ function mkRunHistory(now: Date): NonNullable<SimulatorState['onboardingRunHisto
     { paceSec: 300, hr: 160 },  // ~79% HRR
     { paceSec: 290, hr: 165 },  // ~82% HRR
     { paceSec: 280, hr: 170 },  // ~86% HRR
-    { paceSec: 270, hr: 175 },  // ~89% HRR — borderline upper
+    { paceSec: 270, hr: 175 },  // ~89% HRR. Borderline upper
     { paceSec: 305, hr: 158 },
     { paceSec: 315, hr: 152 },
   ];
@@ -77,7 +77,7 @@ describe('refreshBlendedFitness — pre-guard HR-calibrated cache', () => {
   });
 
   it('does NOT overwrite s.v when confidence is low (too few qualifying runs)', () => {
-    // Only 3 runs — not enough for medium tier; with R²<0.5 should land 'low'.
+    // Only 3 runs. Not enough for medium tier; with R²<0.5 should land 'low'.
     const fewRuns = mkRunHistory(now).slice(0, 3);
     const s = baseState({ v: 45, onboardingRunHistory: fewRuns });
     refreshBlendedFitness(s);

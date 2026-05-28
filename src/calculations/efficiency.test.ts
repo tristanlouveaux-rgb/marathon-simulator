@@ -29,7 +29,7 @@ describe('RPE + HR Fusion Logic', () => {
     describe('calculateEfficiencyShift', () => {
         it('should return positive shift (Pure Efficiency) for Low RPE + Low HR', () => {
             // Expected RPE 3, actual 2 (rpeDelta = -1, felt easier)
-            // HR intensity 0.75 (clearly below center — hrDelta = -0.25)
+            // HR intensity 0.75 (clearly below center. HrDelta = -0.25)
             // Branch: rpeDelta < 0 and hrDelta < -0.2 → shift = 0.3 * rpeMag
             // rpeMag = min(1/3, 1) ≈ 0.333 → shift ≈ 0.1
             const shift = calculateEfficiencyShift(2, 3, 0.75, 'easy');
@@ -38,7 +38,7 @@ describe('RPE + HR Fusion Logic', () => {
 
         it('should return negative shift (Cardiovascular Strain) for Low RPE + High HR', () => {
             // Expected RPE 3, actual 2 (rpeDelta = -1, felt easier)
-            // HR intensity 1.4 (high — hrDelta = +0.4)
+            // HR intensity 1.4 (high. HrDelta = +0.4)
             // Branch: rpeDelta < 0 and hrDelta > 0.2 → shift = -0.25 * rpeMag
             // rpeMag ≈ 0.333 → shift ≈ -0.0833
             const shift = calculateEfficiencyShift(2, 3, 1.4, 'easy');
@@ -47,7 +47,7 @@ describe('RPE + HR Fusion Logic', () => {
 
         it('should return negative shift (Struggle) for High RPE + High HR', () => {
             // Expected RPE 3, actual 5 (rpeDelta = +2, felt harder)
-            // HR intensity 1.25 (clearly above center — hrDelta = +0.25)
+            // HR intensity 1.25 (clearly above center. HrDelta = +0.25)
             // Branch: rpeDelta > 0 and hrDelta > 0.2 → shift = -0.15 * rpeMag
             // rpeMag = min(2/3, 1) ≈ 0.667 → shift ≈ -0.1
             const shift = calculateEfficiencyShift(5, 3, 1.25, 'easy');
@@ -56,7 +56,7 @@ describe('RPE + HR Fusion Logic', () => {
 
         it('should return negative shift (Suppression) for High RPE + Low Peak HR (Intervals)', () => {
             // Interval session. Expected RPE 8, actual 9 (rpeDelta = +1)
-            // HR intensity 0.6 (very low for target — hrDelta = -0.4)
+            // HR intensity 0.6 (very low for target. HrDelta = -0.4)
             // Branch: rpeDelta > 0 and hrDelta < -0.2 and isInterval → shift = -0.35 * rpeMag
             // rpeMag ≈ 0.333 → shift ≈ -0.1167
             const shift = calculateEfficiencyShift(9, 8, 0.6, 'intervals');

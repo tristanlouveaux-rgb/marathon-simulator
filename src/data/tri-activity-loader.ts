@@ -52,7 +52,7 @@ interface GarminActivityRow {
 
 /**
  * Fetch up to `limit` activities from `garmin_activities` for the current
- * authenticated user. Default 500 — enough for a 16-week + buffer history
+ * authenticated user. Default 500. Enough for a 16-week + buffer history
  * without risking request-size limits.
  */
 export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]> {
@@ -145,13 +145,13 @@ export async function loadActivitiesFromDB(limit = 500): Promise<GarminActual[]>
  * Defensive client-side dedup. The server-side `sync-activities` edge function
  * suppresses Garmin rows within ±10 min of a Strava row at sync time, but
  * historical activities synced before that suppression logic existed (or under
- * different windows) can land in the DB twice — same ride logged via Strava
+ * different windows) can land in the DB twice. Same ride logged via Strava
  * AND via the Garmin webhook. Volume calcs and best-effort pickers downstream
  * end up double-counting.
  *
  * Two activities are treated as duplicates when they share a sport class and
  * start within ±10 minutes of each other. Of a duplicate set, the row we
- * keep is the most informative one — Strava-sourced first (richer fields:
+ * keep is the most informative one. Strava-sourced first (richer fields:
  * HR zones, kmSplits, polyline, best_efforts), then the longer activity
  * (more complete recording wins ties), then the earlier startTime.
  *
@@ -171,7 +171,7 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
     return 'other';
   };
 
-  // Score: higher = keep. Power data dominates — for triathletes, FTP
+  // Score: higher = keep. Power data dominates. For triathletes, FTP
   // estimation depends on it and the ratio of rows with real power data is
   // tiny (a handful of `power_curve`-bearing rides across 3 years for the
   // typical user). A row with power outranks anything else; we'd rather
@@ -180,7 +180,7 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
   // / polyline from the loser, so we don't lose the Strava-side richness.
   const score = (a: GarminActual): number => {
     let s = 0;
-    // Power data — heavily boosted so it always wins. The FTP estimator
+    // Power data. Heavily boosted so it always wins. The FTP estimator
     // can't do anything without these fields and they're rare in practice.
     if (a.powerCurve != null && Object.keys(a.powerCurve as object).length > 0) s += 5000;
     if (a.deviceWatts === true) s += 2000;
@@ -199,14 +199,14 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
   // missing fields from the lower-scoring row. Critical for power data —
   // Strava (+1000) almost always wins on score, but if Strava failed to
   // process the watts stream and Garmin has it, we'd lose power without
-  // this. Same for HR zones, splits, drift etc. — whichever source
+  // this. Same for HR zones, splits, drift etc.. Whichever source
   // captured a field wins for that field, regardless of which row "owns"
   // the merged result.
   //
   // A field is "missing" when it's null, 0, empty string, empty array,
   // or empty object. Empty containers matter because the edge function
   // sometimes computes `power_curve = {}` when the watts stream has no
-  // usable values — that's structurally non-null but functionally empty,
+  // usable values. That's structurally non-null but functionally empty,
   // and the FTP estimator can't do anything with it. Treating it as
   // missing lets us pull a populated power_curve from the dedup partner.
   const isMissing = (v: unknown): boolean => {
@@ -229,7 +229,7 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
 
   // O(n) scan with a short look-back; activities are already sorted desc by
   // start_time from the SQL `order=start_time.desc`. For each activity, walk
-  // back through recently-kept ones with the same sport class — if any sits
+  // back through recently-kept ones with the same sport class. If any sits
   // within the ±10 min window, this is a duplicate of the one we'd keep.
   const kept: GarminActual[] = [];
   let dupCount = 0;
@@ -240,7 +240,7 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
     const cls = sportClass(a.activityType);
     if (cls === 'other') { kept.push(a); continue; }
 
-    // Walk back at most ~30 entries — duplicates always cluster within minutes
+    // Walk back at most ~30 entries. Duplicates always cluster within minutes
     // so we'll find the partner quickly. Bounded look-back keeps this O(n).
     let dupOf = -1;
     for (let i = kept.length - 1; i >= Math.max(0, kept.length - 30); i--) {
@@ -264,7 +264,7 @@ function dedupeActivities(activities: GarminActual[]): GarminActual[] {
       // each successive duplicate merges into the running winner.
       const merged = mergeKeepingFields(winner, loser);
       kept[dupOf] = merged;
-      // Per-pair diagnostic for bike rides — load-bearing for FTP. Shows
+      // Per-pair diagnostic for bike rides. Load-bearing for FTP. Shows
       // which row won, which lost, and what the merged row looks like so a
       // future "FTP picked the wrong row" investigation has the trail. Skipped
       // for run/swim to avoid log spam (they're the common dedup case).

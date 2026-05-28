@@ -2,7 +2,7 @@
  * Discipline palette (§18.8).
  *
  * Swim muted teal, bike warm clay, run existing olive/sage. All three sit
- * in the project's nature palette — nothing here is a primary RGB.
+ * in the project's nature palette. Nothing here is a primary RGB.
  */
 
 import type { Discipline } from '@/types/triathlon';

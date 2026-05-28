@@ -1,5 +1,5 @@
 /**
- * Empirical course-factor lookup — runtime side.
+ * Empirical course-factor lookup. Runtime side.
  *
  * Reads the precomputed JSON of course factors (emitted by
  * `src/validation/run-calibration.ts`) and returns multipliers for a given
@@ -25,7 +25,7 @@ interface RawCourseFactors {
   n: number;
   confidence: RawConfidence;
   /** Set true at calibration time if any factor hit the sanity clamp. We drop
-   *  clamped entries from runtime lookup — they usually indicate a course
+   *  clamped entries from runtime lookup. They usually indicate a course
    *  shortened or weather-cancelled race (e.g., IM North Carolina 2016 bike
    *  was 0.75x normal) and serve a wrong 25% faster prediction. */
   clamped?: boolean;
@@ -74,7 +74,7 @@ function normaliseLocationKey(name: string): string {
  *  - Key   = exact race library name (e.g. from src/data/triathlons.ts)
  *  - Value = exact dataset key (Kaggle CSV eventLocation field)
  *  - Only add aliases where the dataset genuinely has the race under a
- *    different name — do not alias different courses to each other.
+ *    different name. Do not alias different courses to each other.
  */
 const RACE_NAME_ALIASES: Record<string, string> = {
   // IM full-distance ─────────────────────────────────────────────────────────
@@ -129,8 +129,8 @@ export interface EmpiricalCourseFactorsResult {
  * matching entry exists OR when the entry's confidence is 'insufficient'.
  *
  * @param raceName  Race name (e.g., "IRONMAN Lanzarote", "IRONMAN 70.3 Dublin").
- *                  Normalised internally — case and prefix don't matter.
- * @param distance  '70.3' | 'ironman' — selects the correct dataset.
+ *                  Normalised internally. Case and prefix don't matter.
+ * @param distance  '70.3' | 'ironman'. Selects the correct dataset.
  * @param baseSec   Pre-adjustment leg times in seconds. Used to compute the
  *                  delta seconds shown in the UI breakdown.
  */
@@ -145,7 +145,7 @@ export function lookupEmpiricalCourseFactors(
   const raw = NORMALISED_LOOKUP[distance].get(key);
   if (!raw) return null;
   if (raw.confidence === 'insufficient') return null;
-  // Drop clamped entries — usually course-shortened or weather-cancelled
+  // Drop clamped entries. Usually course-shortened or weather-cancelled
   // races (e.g., IM North Carolina 2016, IM Alaska's non-wetsuit swim).
   // Caller falls back to physical model.
   if (raw.clamped === true) return null;
@@ -153,7 +153,7 @@ export function lookupEmpiricalCourseFactors(
   const factors: CourseFactor[] = [];
   if (Math.abs(raw.swimFactor - 1) > 0.005) {
     factors.push({
-      kind: 'swim-type', // closest existing kind — empirical can't isolate cause
+      kind: 'swim-type', // closest existing kind. Empirical can't isolate cause
       leg: 'swim',
       label: 'Calibrated swim factor',
       value: `${raw.confidence}, n=${raw.n}`,
@@ -221,7 +221,7 @@ export function pickCourseFactors(
 }
 
 /**
- * Total finishers across both datasets — used in the user-facing caption
+ * Total finishers across both datasets. Used in the user-facing caption
  * "Calibrated against ~N million race finishes."
  */
 export function totalCalibrationSampleSize(): number {

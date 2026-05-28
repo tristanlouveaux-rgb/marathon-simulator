@@ -1,5 +1,5 @@
 /**
- * Triathlon adaptation parameters — five-signal adaptation ratio + reactivity
+ * Triathlon adaptation parameters. Five-signal adaptation ratio + reactivity
  * thresholds. Mirrors the marathon-side adaptation pattern (`predictions.ts →
  * blendPredictions`) but per-discipline.
  *
@@ -14,12 +14,12 @@
  */
 
 // ───────────────────────────────────────────────────────────────────────────
-// Phase 2A — Adaptation ratio
+// Phase 2A. Adaptation ratio
 // ───────────────────────────────────────────────────────────────────────────
 
 /** Per-signal magnitude caps (ratio adjustment cannot exceed these in either direction). */
 export const ADAPT_CAP_HRV          = 0.10;   // Plews et al. 2013, Sports Med 43:773
-export const ADAPT_CAP_RPE          = 0.15;   // Foster 2001 — perceived effort range
+export const ADAPT_CAP_RPE          = 0.15;   // Foster 2001. Perceived effort range
 export const ADAPT_CAP_HR_AT_POWER  = 0.10;   // Coggan & Allen 2019 Ch. 9
 export const ADAPT_CAP_PAHR         = 0.10;   // Friel; Maunder et al. 2021 Sports Med 51:1387
 export const ADAPT_CAP_CSS_SD       = 0.05;   // Pyne 2001 (low-confidence signal)
@@ -54,7 +54,7 @@ export const HRV_SHORT_DAYS         = 7;
 export const HRV_LONG_DAYS          = 28;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Phase 2B — Reactivity thresholds
+// Phase 2B. Reactivity thresholds
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -65,7 +65,7 @@ export const HRV_LONG_DAYS          = 28;
 export const RPE_BLOWN_DELTA = 2;
 
 /**
- * Readiness gate — at or below this score, today's quality work is suggested
+ * Readiness gate. At or below this score, today's quality work is suggested
  * for downgrade. Mirrors the running side's "Manage Load" threshold.
  * Source: ACSM 2007 sleep-deprivation guidance + Plews 2013 HRV-based readiness.
  */
@@ -79,6 +79,6 @@ export const TSB_GATE_THRESHOLD = -20;
 
 /**
  * Volume-ramp cap (Gabbett 2016). Re-exported from the existing constant for
- * convenience — keep the canonical definition in `triathlon-constants.ts`.
+ * convenience. Keep the canonical definition in `triathlon-constants.ts`.
  */
 export { WEEKLY_VOLUME_RAMP_CAP as VOLUME_RAMP_PCT } from './triathlon-constants';

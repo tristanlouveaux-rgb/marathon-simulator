@@ -2,7 +2,7 @@
  * Bike & Aero Setup overlay.
  *
  * Lets the user configure rider mass, bike mass, riding position, tires, and
- * course profile — the inputs to the cycling power-balance solver in
+ * course profile. The inputs to the cycling power-balance solver in
  * `bike-physics.ts`. Also surfaces the W/kg tier and a "What if?" comparison
  * across positions so the aerodynamic gap is concrete.
  *
@@ -66,7 +66,7 @@ const COURSE_HEADWORD: Record<BikeCourseProfile, string> = {
 
 /** Build dropdown labels. When the user's selected race maps to a course
  *  bucket, replace the generic example list on that bucket with the race
- *  name — so the selected row reads e.g. "Flat — Emilia-Romagna" rather
+ *  name. So the selected row reads e.g. "Flat. Emilia-Romagna" rather
  *  than "Flat (Kona, Roth, Texas)". */
 function courseOptionLabel(
   bucket: BikeCourseProfile,
@@ -96,7 +96,7 @@ export interface FormState {
   calibAvgPowerW: string;
   showCalib: boolean;
   /** Last auto-calibration attempt result, surfaced as a panel above the
-   *  manual fields. Lives only in memory — applied CdA is what gets saved. */
+   *  manual fields. Lives only in memory. Applied CdA is what gets saved. */
   autoCalib: AutoCalibUI | null;
   /** When the course was auto-detected from the user's selected race, the
    *  section renders as a passive readout. Click "Change" to reveal the
@@ -120,7 +120,7 @@ interface AutoCalibUI {
 }
 
 /** Map a race's published bike profile to our 3-bucket BikeCourseProfile.
- *  "mountainous" rolls up into "hilly" — the gradient/wind multipliers in
+ *  "mountainous" rolls up into "hilly". The gradient/wind multipliers in
  *  bike-physics top out there, and a 4th bucket would need new constants. */
 function bikeProfileFromRaceId(raceId: string | null | undefined): {
   course: BikeCourseProfile;
@@ -181,7 +181,7 @@ function initialFormState(): FormState {
     }
 
     // Auto-estimate CdA on open if the user is still on a generic preset.
-    // We don't override 'calibrated' or 'user' — those are intentional.
+    // We don't override 'calibrated' or 'user'. Those are intentional.
     if (BIKE_SETUP_AUTO_FILL && cdaSource === 'preset') {
       const auto = computeAutoCalibration(existing.position, existing.tire, riderKg, bikeKg);
       if (auto) {
@@ -257,7 +257,7 @@ function selectedRaceCourseMatch(): { course: BikeCourseProfile; raceName: strin
 }
 
 /** Activity types we treat as outdoor cycling for CdA inversion. Indoor and
- *  trainer rides are excluded — the drag/rolling assumptions don't apply. */
+ *  trainer rides are excluded. The drag/rolling assumptions don't apply. */
 const OUTDOOR_RIDE_TYPES = new Set(['CYCLING', 'VIRTUAL_RIDE', 'GRAVEL_CYCLING', 'ROAD_BIKING']);
 
 interface RideCandidate {
@@ -273,7 +273,7 @@ interface RideCandidate {
 
 /**
  * Scan stored activities for the best ride to invert CdA from. Filters target
- * "flat enough, long enough, has power" — but stay permissive so a typical
+ * "flat enough, long enough, has power". But stay permissive so a typical
  * urban training ride (e.g. London with bridge crossings, ≤1% mean gradient)
  * still qualifies. Confidence is downgraded by the caller when conditions are
  * softer (estimated power, gradient > 0.5%, etc.).
@@ -294,7 +294,7 @@ function pickCalibrationRide(): RideCandidate | null {
       if (!isFinite(startMs) || startMs < cutoff) continue;
       // Reject only when we KNOW the power was estimated (deviceWatts === false).
       // null/undefined commonly happens for power-meter rides where Strava
-      // didn't surface the flag — accept and downgrade confidence later.
+      // didn't surface the flag. Accept and downgrade confidence later.
       if (a.deviceWatts === false) continue;
       const power = a.averageWatts;
       if (power == null || power < 80) continue;
@@ -411,15 +411,15 @@ export function predictBikeSplit(form: FormState, distance: '70.3' | 'ironman'):
   // modal's predicted split matches what the user will see on the prediction
   // card. Three components, in the same order as race-prediction.triathlon.ts:
   //
-  //   1. Course factors — empirical (calibrated against historical finishes
+  //   1. Course factors. Empirical (calibrated against historical finishes
   //      per race location) if a high/medium confidence entry exists, else
   //      physical (climate × altitude × elevation × wind × swim-type).
-  //   2. Race-readiness penalty — captures low recent bike volume / longest
+  //   2. Race-readiness penalty. Captures low recent bike volume / longest
   //      ride relative to the race distance's endurance demands. Read from
   //      the cached prediction since readiness doesn't change with bike
   //      equipment; only volume / training history shifts it.
   //
-  // The bare-physics speed (`kph`) stays unchanged — it's the physical answer
+  // The bare-physics speed (`kph`) stays unchanged. It's the physical answer
   // for the user's setup. Conditions and readiness slow the *time*, not the
   // underlying capability.
   const s = getState();
@@ -490,7 +490,7 @@ export function openBikeSetupOverlay(): void {
     let selStart: number | null = null;
     let selEnd: number | null = null;
     if (focusedId && active instanceof HTMLInputElement && active.type !== 'number') {
-      // Number inputs don't expose selectionStart/End — rely on browser default.
+      // Number inputs don't expose selectionStart/End. Rely on browser default.
       selStart = active.selectionStart;
       selEnd = active.selectionEnd;
     }
@@ -597,7 +597,7 @@ function renderShell(form: FormState, distance: '70.3' | 'ironman'): string {
 
 function renderCourseSection(form: FormState): string {
   const raceMatch = selectedRaceCourseMatch();
-  // Cyclists quote total elevation gain, not mean gradient — 0.5% over 180km
+  // Cyclists quote total elevation gain, not mean gradient. 0.5% over 180km
   // doesn't *feel* like 0.5%, it feels like 900m of climbing. Show climb total
   // when we have race-specific data; fall back to gradient % when only the
   // course bucket is known (no race elevation in the profile).
@@ -722,7 +722,7 @@ function renderAutoCalibPanel(form: FormState): string {
   // Plausibility flag: if the calibrated CdA is a long way from the active
   // position's preset (>25%), the ride was almost certainly done in a
   // different position than the one currently selected. Common case: training
-  // on hoods, modal set to TT bike — applying that CdA would massively
+  // on hoods, modal set to TT bike. Applying that CdA would massively
   // under-state race-day aero gain. We don't block it, just flag it.
   const preset = CDA_PRESET[form.position];
   const cda = ac.cda ?? 0;
@@ -857,7 +857,7 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
     overlay.remove();
   });
 
-  // Number inputs — fire on blur, not on every keystroke. `<input type="number">`
+  // Number inputs. Fire on blur, not on every keystroke. `<input type="number">`
   // doesn't expose selectionStart/End, so a mid-typing rerender drops the
   // cursor at position 0 in Chrome and the next digit gets prepended (user
   // typing "57" sees "75"). 'change' avoids the rerender-during-typing loop
@@ -879,7 +879,7 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
   const posSelect = overlay.querySelector('#position') as HTMLSelectElement | null;
   if (posSelect) posSelect.addEventListener('change', () => {
     form.position = posSelect.value as BikePosition;
-    // Calibrated CdA is position-specific — switching position invalidates it.
+    // Calibrated CdA is position-specific. Switching position invalidates it.
     // Try to re-auto-calibrate for the new position so the prediction stays
     // realistic; fall back to the preset if no qualifying ride exists.
     const auto = BIKE_SETUP_AUTO_FILL
@@ -930,7 +930,7 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
   });
 
   // Auto-fill the manual-entry trio from a recent ride. Doesn't apply CdA
-  // directly — the user reviews the loaded values and clicks "Apply this CdA"
+  // directly. The user reviews the loaded values and clicks "Apply this CdA"
   // from the existing result panel.
   overlay.querySelector('#bike-setup-autofill-fields')?.addEventListener('click', () => {
     const ride = pickCalibrationRide();
@@ -962,7 +962,7 @@ function wireHandlers(overlay: HTMLElement, form: FormState, distance: '70.3' | 
     rerender();
   });
 
-  // Calibration trio — also 'change' (blur) for the same reason as the weight
+  // Calibration trio. Also 'change' (blur) for the same reason as the weight
   // fields. The result panel reads form.calib* and recomputes on rerender.
   const onCalibInput = (id: string, key: keyof FormState) => {
     const el = overlay.querySelector(`#${id}`) as HTMLInputElement | null;

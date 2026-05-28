@@ -1,12 +1,12 @@
 /**
- * Course-factor adjustments for running races — applied to predicted finish
+ * Course-factor adjustments for running races. Applied to predicted finish
  * time after fitness projection. Mirrors the triathlon pipeline in
  * `course-factors.ts` but scoped to a single run leg.
  *
  * Inputs come from `MARATHON_COURSE_PROFILES` attached to the `Marathon`
  * object via `getMarathonById`. Multipliers and the science behind them live
  * in `src/constants/triathlon-course-factors.ts` (despite the file name, the
- * literature — Minetti, Ely, Bonetti and Hopkins — is sport-generic).
+ * literature. Minetti, Ely, Bonetti and Hopkins. Is sport-generic).
  * `SCIENCE_LOG.md` §G is the narrative record.
  *
  * **Side of the line**: tracking. Pure function, no state mutation.
@@ -135,7 +135,7 @@ export function applyRunningCourseFactors(
   }
 
   // ── Wind exposure ───────────────────────────────────────────────────────
-  // Headwind/tailwind asymmetry — exposed courses average to a small net
+  // Headwind/tailwind asymmetry. Exposed courses average to a small net
   // slow-down for running (~1-2%, much smaller than cycling's 2-5%).
   if (profile.windExposure && profile.windExposure !== 'sheltered') {
     const factor = WIND_EXPOSURE_RUN_MULTIPLIER[profile.windExposure];
@@ -200,7 +200,7 @@ export function applyRunningCourseFactors(
  * Average outdoor training temperature over the last 4 weeks (°C). Reads
  * `ambientTempC` from synced run activities (populated by Open-Meteo for
  * outdoor runs with a GPS start location). Returns null when fewer than 4
- * activities in the window have temperature data — below that the mean is
+ * activities in the window have temperature data. Below that the mean is
  * too noisy to feed an acclimatisation discount.
  *
  * Mirrors `computeTrainingTempC` in race-prediction.triathlon (run-specific
@@ -236,7 +236,7 @@ export function computeRunTrainingTempC(
 
 /**
  * Apply course factors to `s.forecastTime` and write the adjusted finish +
- * itemised factors into state. Idempotent — safe to call after every forecast
+ * itemised factors into state. Idempotent. Safe to call after every forecast
  * recalculation. Clears the adjusted fields if the user has no selected race
  * with a profile (so stale values do not survive race deselection).
  */
@@ -251,7 +251,7 @@ export function refreshForecastCourseFactors(
   },
 ): void {
   // Self-heal: state persisted before profiles were added carries no `profile`
-  // — attach the latest from the static dataset by id.
+  //. Attach the latest from the static dataset by id.
   let profile = s.selectedMarathon?.profile;
   if (!profile && s.selectedMarathon?.id && MARATHON_COURSE_PROFILES[s.selectedMarathon.id]) {
     profile = MARATHON_COURSE_PROFILES[s.selectedMarathon.id];

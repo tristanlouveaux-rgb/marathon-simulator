@@ -49,7 +49,7 @@ export interface StrengthControllerOptions {
   onCue?: (e: StrengthCueEvent) => void;
   ticker?: Ticker;
   /** When true, completed sets enter the `paused` phase instead of a timed
-   *  rest countdown — the user must call `startNextSet()` to advance. Used by
+   *  rest countdown. The user must call `startNextSet()` to advance. Used by
    *  HYROX (and any test-style workout where rest is unbounded). */
   manualAdvance?: boolean;
 }

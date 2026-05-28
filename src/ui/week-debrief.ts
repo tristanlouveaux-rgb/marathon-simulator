@@ -1,5 +1,5 @@
 /**
- * Week-End Debrief — 3-step flow
+ * Week-End Debrief. 3-step flow
  *
  * Step 1: Week Summary (metrics, signals, coach copy)
  * Step 2: Analysis Animation (~2.5s checklist with progress bar)
@@ -28,7 +28,7 @@ import { intentToWorkout, type SessionIntent } from '@/workouts/intent_to_workou
 import { generateWeekWorkouts } from '@/workouts/generator';
 import { getHREffort } from '@/calculations/activity-matcher';
 
-// ─── Phase helpers (local — same mapping as plan-view) ────────────────────────
+// ─── Phase helpers (local. Same mapping as plan-view) ────────────────────────
 
 const PHASE_LABEL: Record<string, string> = {
   base: 'Base', build: 'Build', peak: 'Peak', taper: 'Taper',
@@ -80,7 +80,7 @@ export function shouldAutoDebrief(): boolean {
 /**
  * True when week `weekNum` still has Garmin/Strava activities awaiting the user's
  * matching decision (garminMatched[id] === '__pending__'). Auto-debrief must not
- * fire while these exist — the debrief summary would show incomplete load data
+ * fire while these exist. The debrief summary would show incomplete load data
  * and overlay the matching screen.
  */
 export function hasUnresolvedActivityAssignments(weekNum: number): boolean {
@@ -94,14 +94,14 @@ export function hasUnresolvedActivityAssignments(weekNum: number): boolean {
 /**
  * Fire the auto-debrief if safe: no matching screen is open, no debrief is
  * already mounted, and the target week has no unassigned activities. Called
- * from the launch path and from activity-review's onComplete — so the debrief
+ * from the launch path and from activity-review's onComplete. So the debrief
  * waits for the user to finish matching before popping.
  */
 export function fireDebriefIfReady(pendingDebrief: boolean): void {
   if (document.getElementById('week-debrief-modal')) return;
   if (document.getElementById('activity-review-overlay')) return;
   const s = getState() as any;
-  // Triathlon mode dispatches to its own debrief — same lastDebriefWeek
+  // Triathlon mode dispatches to its own debrief. Same lastDebriefWeek
   // guard, mirror-rule structure. Running's debrief uses run-specific TSS /
   // ACWR machinery that doesn't apply to tri.
   if (s.eventType === 'triathlon') {
@@ -117,7 +117,7 @@ export function fireDebriefIfReady(pendingDebrief: boolean): void {
   if (!pendingDebrief && targetWeek >= 1 && hasUnresolvedActivityAssignments(targetWeek)) return;
 
   // End-of-plan: if the user is on the last planned week and the final complete debrief
-  // hasn't fired yet, trigger it unconditionally — no calendar maths required.
+  // hasn't fired yet, trigger it unconditionally. No calendar maths required.
   // This catches the case where planStartDate is absent (isWeekPendingDebrief returns false)
   // and lastDebriefWeek already covers week tw-1 (shouldAutoDebrief returns false too).
   const tw = s.tw as number | undefined;
@@ -194,7 +194,7 @@ export function showWeekDebrief(
     ?? Object.values(wk.garminActuals ?? {}).reduce((sum: number, a: any) => sum + (a.distanceKm ?? 0), 0);
   const distanceKm = rawKm > 0 ? Math.round(rawKm * 10) / 10 : null;
 
-  // Compute RPE effort and HR effort separately — two distinct signals.
+  // Compute RPE effort and HR effort separately. Two distinct signals.
   // RPE effort: how hard users rated workouts vs expected (deviation scale, +/- from 0).
   // HR effort: average hrEffortScore from garminActuals (1.0 = on target, >1.0 = overcooked).
   let rpeScore: number | null = wk.rpeEffort ?? wk.effortScore ?? null; // prefer pure RPE, fall back to legacy blend
@@ -285,7 +285,7 @@ export function showWeekDebrief(
 
   // ── Render Step 1: Summary ─────────────────────────────────────────────
 
-  // Arrow colour only — used for directional indicators, not values
+  // Arrow colour only. Used for directional indicators, not values
   const tssArrowColor = tssPct == null ? 'var(--c-muted)'
     : tssPct > 10  ? 'var(--c-warn)'
     : tssPct >= -25 ? 'var(--c-ok)'
@@ -416,7 +416,7 @@ function _showAnalysisAnimation(
   const card = document.getElementById('debrief-card');
   if (!card) return;
 
-  // Build checklist HTML — circles start as light border, fill black with white tick on complete
+  // Build checklist HTML. Circles start as light border, fill black with white tick on complete
   const stepsHtml = ANALYSIS_STEPS.map((label, i) => `
     <div id="analysis-step-${i}" style="display:flex;align-items:center;gap:12px;padding:7px 0;opacity:0;transform:translateY(4px);transition:opacity 0.3s ease,transform 0.3s ease">
       <div id="analysis-check-${i}" style="width:22px;height:22px;border-radius:50%;border:1.5px solid var(--c-border);background:transparent;
@@ -497,7 +497,7 @@ function _runAnalysisAnimation(
   };
   requestAnimationFrame(tickLabel);
 
-  // Step through checklist items on a timer (visual only — ring runs independently)
+  // Step through checklist items on a timer (visual only. Ring runs independently)
   for (let i = 0; i < total; i++) {
     // Fade in + slide up
     setTimeout(() => {
@@ -508,7 +508,7 @@ function _runAnalysisAnimation(
       }
     }, i * STEP_DELAY_MS);
 
-    // Mark step complete — solid black circle, white tick
+    // Mark step complete. Solid black circle, white tick
     setTimeout(() => {
       const checkEl = document.getElementById(`analysis-check-${i}`);
       if (checkEl) {
@@ -813,7 +813,7 @@ function _renderPlanPreview(
   // Generate STANDARD plan (no effort adjustment, no ACWR reduction)
   const standardIntents = planWeekSessions({
     ...baseCtx,
-    // No effortScore, no acwrStatus — vanilla plan
+    // No effortScore, no acwrStatus. Vanilla plan
   });
 
   // Convert intents to workouts for display
@@ -821,7 +821,7 @@ function _renderPlanPreview(
   const adjustedWorkouts = adjustedIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
   const standardWorkouts = standardIntents.map(i => intentToWorkout(i, baseCtx.raceDistance, baseCtx.runnerType, easyPace));
 
-  // Build per-workout annotations first — they define what "visibly different" means
+  // Build per-workout annotations first. They define what "visibly different" means
   const easyPaceSec = easyPace ?? 360; // fallback 6:00/km
   const perWorkoutAnnotations: string[] = adjustedIntents.map((adj, i) => {
     const std = standardIntents[i];
@@ -1068,7 +1068,7 @@ function _closeAndRecord(weekNum: number, mode: 'complete' | 'review'): void {
   s.lastDebriefShownDate = new Date().toISOString().split('T')[0];
   if (mode === 'complete') {
     // Only mark week as fully debriefed (with plan preview) in complete mode.
-    // This is what gates advanceWeekToToday — review-only doesn't count.
+    // This is what gates advanceWeekToToday. Review-only doesn't count.
     s.lastCompleteDebriefWeek = weekNum;
   }
   saveState();
@@ -1120,13 +1120,13 @@ function showTrackOnlyRetrospective(weekNum: number): void {
   const lst = weekStats(prev);
 
   const ctlNow = s.ctlBaseline ?? 0;
-  // CTL delta via fitness model — last full entry minus 7 days back
+  // CTL delta via fitness model. Last full entry minus 7 days back
   const metrics = computeFitnessModel(s.wks ?? [], s.w, ctlNow, s.planStartDate, ctlNow, undefined, (s as any).previousPlanWks);
   const ctlEnd = metrics[metrics.length - 1]?.ctl ?? ctlNow;
   const ctlStart = metrics[Math.max(0, metrics.length - 8)]?.ctl ?? ctlEnd;
   const ctlDelta = Math.round((ctlEnd - ctlStart) * 10) / 10;
 
-  // Recovery average — mean sleep score across the last 7 days of physiologyHistory.
+  // Recovery average. Mean sleep score across the last 7 days of physiologyHistory.
   const recent = (s.physiologyHistory ?? []).slice(-7);
   const scores = recent.map((p: any) => p.sleepScore).filter((v: any) => typeof v === 'number');
   const recoveryAvg = scores.length ? Math.round(scores.reduce((a: number, b: number) => a + b, 0) / scores.length) : null;

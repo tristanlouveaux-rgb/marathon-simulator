@@ -11,7 +11,7 @@
  * heart trained by padel still pumps at the lower HR-for-pace observed during
  * runs. The lift was layering cardiac-via-HR on top of cardiac-already-
  * inside-pace-vs-HR, inflating numbers in a way users couldn't reconcile
- * with their watch. See SCIENCE_LOG.md → "Cross-Modal VO2max — lift removed
+ * with their watch. See SCIENCE_LOG.md → "Cross-Modal VO2max. Lift removed
  * 2026-05-02" for the full rejection rationale.
  *
  * What remains:
@@ -20,22 +20,22 @@
  *               PB-median, Tanda) when HR data is sparse
  *   - cycling:  ACSM `10.8 × W/kg + 7` from FTP and body weight
 
- *   - cardiac:  Uth-Sørensen `15.3 × HRmax/HRrest` — aerobic upper bound,
+ *   - cardiac:  Uth-Sørensen `15.3 × HRmax/HRrest`. Aerobic upper bound,
  *               not a measure of current fitness. Surfaced as a ceiling so
  *               users can see the headroom above their measured numbers.
  *               Never blended into modality values.
  *
  * Headline fallback chain (anti-decay across cross-training switches):
- *   1. max(running-direct, cycling-direct)  — measured peripheral fitness
- *   2. cardiac ceiling                       — when no per-modality signal
- *   3. `getPhysiologicalVdot()` chain        — final floor (LT/PB/Tanda)
+ *   1. max(running-direct, cycling-direct). Measured peripheral fitness
+ *   2. cardiac ceiling. When no per-modality signal
+ *   3. `getPhysiologicalVdot()` chain. Final floor (LT/PB/Tanda)
  *
  * Cross-training credit flows through the existing Signal A iTRIMP discount
  * model (rs-discounted load), which is the right place for "padel contributes
  * to your run-equivalent CTL". VO2max display has no special cross-training
- * mechanism — and doesn't need one.
+ * mechanism. And doesn't need one.
  *
- * Pure — no state mutation, fully testable.
+ * Pure. No state mutation, fully testable.
  */
 
 import type { SimulatorState, VO2Estimate, VO2Confidence } from '@/types';
@@ -85,7 +85,7 @@ export interface OrchestratorActivity {
 /** Build per-modality activity samples — flatten weeks' garminActuals
  *  (Strava-suppressed, source-of-truth) plus any extra activity rows passed
  *  in. The `extra` channel exists for tri mode, where canonical activity
- *  history lives in the DB and not in `s.wks[].garminActuals` — the LT/FTP
+ *  history lives in the DB and not in `s.wks[].garminActuals`. The LT/FTP
  *  deriver sees it via `loadActivitiesFromDB` and we want the orchestrator
  *  to see the same set so HR regression has enough points to fire.
  *
@@ -173,7 +173,7 @@ function collectActivitySamples(
       });
     }
 
-    // Cross-training feeder — needs avgHR and a sport label, and the
+    // Cross-training feeder. Needs avgHR and a sport label, and the
     // estimator itself filters out run/bike. Pass everything qualifying;
     // the calculation module handles run/bike exclusion and aerobic gate.
     if (a.avgHR != null && a.avgHR > 0) {
@@ -216,7 +216,7 @@ export function computeVO2Estimates(
 
   // ─── Direct per-modality estimates ───────────────────────────────────────
 
-  // Running — effort-calibrated VDOT (Daniels' VO2max-units output) is the
+  // Running. Effort-calibrated VDOT (Daniels' VO2max-units output) is the
   // primary path. When it can't fire (sparse HR data, missing RHR/maxHR),
   // back-fall to `getPhysiologicalVdot()` which already picks the best of
   // device VO2 / HR-calibrated / LT-back-derived / PB-median / Tanda. This
@@ -252,7 +252,7 @@ export function computeVO2Estimates(
     }
   }
 
-  // Cycling — ACSM W/kg formula. FTP comes from triConfig.bike (tri mode)
+  // Cycling. ACSM W/kg formula. FTP comes from triConfig.bike (tri mode)
   // or unset (running-only mode → no cycling estimate). Falls through cleanly.
   const ftpW = s.triConfig?.bike?.ftp ?? null;
   const ftpConfidence = s.triConfig?.bike?.ftpConfidence ?? null;
@@ -274,7 +274,7 @@ export function computeVO2Estimates(
       : undefined,
   };
 
-  // Cardiac ceiling — Uth-Sørensen across all aerobic activity. Informational
+  // Cardiac ceiling. Uth-Sørensen across all aerobic activity. Informational
   // only: surfaced as cardiovascular potential, never blended into running or
   // cycling, claims the headline only when neither direct estimate has signal.
   // Pass athlete's stored maxHR so sensor-spike readings (e.g., a 216 bpm
@@ -290,11 +290,11 @@ export function computeVO2Estimates(
       : undefined,
   };
 
-  // Cross-training VO2max — sustained-HR aerobic capacity from non-run, non-bike
+  // Cross-training VO2max. Sustained-HR aerobic capacity from non-run, non-bike
   // sport. Anchored to cardiac ceiling: the athlete's modality-agnostic VO2max
   // upper bound, scaled by the demonstrated %HRR fraction and duration sustained.
   // Hidden (value=null) when fewer than 3 qualifying sessions in the 8-week
-  // window — see SCIENCE_LOG → "Cross-Training VO2max" for rationale.
+  // window. See SCIENCE_LOG → "Cross-Training VO2max" for rationale.
   // Does NOT lift running or cycling (additive, not blended) and never claims
   // headline; the running VDOT regression already credits cardiac contribution.
   const ct = computeCrossTrainingVO2(ctSamples, s.restingHR, s.maxHR, cc.vo2, now);
@@ -310,12 +310,12 @@ export function computeVO2Estimates(
 
   // ─── Headline fallback chain ──────────────────────────────────────────────
   //
-  // Tier 1: max(running, cycling) — directly measured per-modality fitness.
+  // Tier 1: max(running, cycling). Directly measured per-modality fitness.
   //         Anti-decay because cycling carries when running drops and vice versa.
-  // Tier 2: cardiac ceiling — when neither direct estimate has signal. HR
+  // Tier 2: cardiac ceiling. When neither direct estimate has signal. HR
   //         ratios are stable physiological markers, so this doesn't decay
   //         fast even if all activity stops for weeks.
-  // Tier 3: getPhysiologicalVdot() final floor — LT-back-derived → PB-median
+  // Tier 3: getPhysiologicalVdot() final floor. LT-back-derived → PB-median
   //         → Tanda. Catches users with PBs/LT on file but no recent activity.
 
   const measuredCandidates: Array<{ key: 'running' | 'cycling'; est: VO2Estimate }> = [

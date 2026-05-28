@@ -108,7 +108,7 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
   if (readiness) {
     readinessLabel = readiness.overall;
     if (readiness.overall === 'Manage Load' || readiness.overall === 'Ease Back' || readiness.overall === 'Overreaching') {
-      // Find today's planned workout — quality only.
+      // Find today's planned workout. Quality only.
       const todayDow = (new Date().getDay() + 6) % 7;
       const wk = (state.wks ?? [])[state.w ?? 0];
       const todayWorkout = wk?.triWorkouts?.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
@@ -136,7 +136,7 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
     const recOpt = overload.options[recDiscipline];
     const firstMod = recOpt.reduceMods[0]; // placeholder fallback; modal reads overloadOptions directly
     // Map detector's severity vocabulary (heavy/extreme) to the aggregator's
-    // existing severity vocabulary (caution/warning) — the modal keys its
+    // existing severity vocabulary (caution/warning). The modal keys its
     // banner/colour styling off the latter.
     const severity: 'caution' | 'warning' = overload.severity === 'extreme' ? 'warning' : 'caution';
     mods.push({
@@ -146,7 +146,7 @@ export function collectTriSuggestions(state: SimulatorState): TriSuggestionBundl
       headline: `Cross-training added ${overload.crossTrainingTSS} TSS this week — consider easing your ${recDiscipline}`,
       body: `Your tri plan is ${overload.plannedTriTSS} TSS this week. Cross-training has added ${overload.crossTrainingTSS} TSS on top (+${overshootPct}%). ${recDiscipline.charAt(0).toUpperCase() + recDiscipline.slice(1)} has the most remaining planned load — start there, or flip to swim/run via the chip switcher.`,
       severity,
-      // Placeholder values — the modal reads `overloadOptions` and commits the
+      // Placeholder values. The modal reads `overloadOptions` and commits the
       // full per-discipline mod array, not this single workout. Kept as a
       // graceful fallback if the modal renders the generic-list layout.
       targetWorkoutId: firstMod?.workoutId,

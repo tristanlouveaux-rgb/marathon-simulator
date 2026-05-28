@@ -59,7 +59,7 @@ function makeState(overrides: Partial<SimulatorState> = {}): SimulatorState {
   } as SimulatorState;
 }
 
-// Rest-day strain context — avoids derivation reaching into workout generator.
+// Rest-day strain context. Avoids derivation reaching into workout generator.
 const REST_STRAIN: StrainContext = {
   strainPct: 0,
   isRestDay: true,
@@ -202,7 +202,7 @@ describe('computeDailyCoach — daily feeling modifier', () => {
 
     it("'great' × normal with blocker → stays normal (no promotion)", () => {
       // Use a sleep blocker: sleepScore < 55 is pushed into physiologyHistory (recent).
-      // But weeksOfHistory path uses wks.length — still < 3. Sleep blocker comes from
+      // But weeksOfHistory path uses wks.length. Still < 3. Sleep blocker comes from
       // daily-coach's own inline check on `sleepScore` pulled from physiologyHistory.
       const s = makeState({
         physiologyHistory: [
@@ -221,7 +221,7 @@ describe('computeDailyCoach — daily feeling modifier', () => {
     // path caps at 65 so we need enough weeks. Mock wks to be 3+ with a healthy load,
     // and provide healthy physiology so recovery is strong. The readiness composite is
     // complex; we instead mock computeReadiness indirectly through the real call by
-    // choosing inputs carefully. This is covered at the integration level — here we
+    // choosing inputs carefully. This is covered at the integration level. Here we
     // assert the gate by flipping the base stance directly in a companion test below.
   });
 

@@ -76,7 +76,7 @@ export interface TrainingHorizonParams {
   tau_slow_weeks?: Record<RaceDistance, Record<AbilityBand, number>>;
   /** Weight on the slow component (1 - this is the fast weight). Marathon
    *  is slow-heavy (~0.6), 5K is fast-heavy (~0.25). Per-distance only,
-   *  not per-ability-band — the *shape* of the adaptation curve doesn't
+   *  not per-ability-band. The *shape* of the adaptation curve doesn't
    *  meaningfully change with ability, only the magnitude (which `max_gain`
    *  controls). */
   slow_weight?: Record<RaceDistance, number>;

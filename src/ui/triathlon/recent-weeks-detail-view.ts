@@ -1,17 +1,17 @@
 /**
- * Recent weeks drill-down — tapped from the aggregate summary card on the
+ * Recent weeks drill-down. Tapped from the aggregate summary card on the
  * triathlon Stats page.
  *
  * Layout (top to bottom):
- *  1. Trend card — three mini bar charts (Hours / Sessions / TSS), one bar
+ *  1. Trend card. Three mini bar charts (Hours / Sessions / TSS), one bar
  *     per week, latest on the right. Uses the canonical `buildBarChart`
  *     helper so the look matches sleep / HRV / RHR charts elsewhere.
- *  2. Per-week list — done vs planned hours / sessions / TSS, one row per
+ *  2. Per-week list. Done vs planned hours / sessions / TSS, one row per
  *     week, tap a row to open that week's plan view.
  *
  * Charts (Total weekly load + per-discipline km) used to live here too, but
  * Total moved into the unified "Weekly load (TSS)" chart on the Stats page
- * and the km cards were dropped as redundant — composite TSS already covers
+ * and the km cards were dropped as redundant. Composite TSS already covers
  * load, and Recent weeks per-week rows show sessions instead of distance.
  *
  * Page-flair shell mirrors the benchmark drill-downs (CSS / FTP / VO2 / LT):

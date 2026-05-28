@@ -1,5 +1,5 @@
 /**
- * Freshness detail page — same design language as recovery-view.
+ * Freshness detail page. Same design language as recovery-view.
  * Sky-blue watercolour background, blue palette.
  * Shows TSB (Training Stress Balance), weekly trend, CTL vs ATL, zone explainer.
  */
@@ -151,7 +151,7 @@ function tsbBarChart(entries: WeekTsbEntry[], liveTsbDaily?: number): string {
     </div>`;
   }).join('');
 
-  // Trend commentary — combine direction with current zone for a single coherent message
+  // Trend commentary. Combine direction with current zone for a single coherent message
   const latest = values[values.length - 1];
   const prev = values.length >= 2 ? values[values.length - 2] : latest;
   const delta = latest - prev;
@@ -267,7 +267,7 @@ function getFreshnessHTML(s: SimulatorState): string {
   const completedWeek = Math.max(0, (s.w ?? 1) - 1);
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
 
-  // Live TSB with intra-week decay through today (shared helper — matches home + readiness).
+  // Live TSB with intra-week decay through today (shared helper. Matches home + readiness).
   const archivedPlans = (s as any).previousPlanWks ?? undefined;
   const liveTSB = computeLiveSameSignalTSB(s.wks ?? [], s.w ?? 1, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const atl = liveTSB.atl;
@@ -292,12 +292,12 @@ function getFreshnessHTML(s: SimulatorState): string {
   const targetOffset = +(RING_C * (1 - ringPct / 100)).toFixed(2);
   const ringColor = zone.color;
 
-  // ── Recovery countdown — two models ──────────────────────────────────────────
+  // ── Recovery countdown. Two models ──────────────────────────────────────────
   //
-  //  1. "To Baseline" — stacked session recovery (Garmin/Firstbeat-style).
+  //  1. "To Baseline". Stacked session recovery (Garmin/Firstbeat-style).
   //     See computeToBaseline() in fitness-model.ts.
   //
-  //  2. "To Fully Clear" — TSB-based: hours until TSB ≥ 0 (ATL decays to CTL).
+  //  2. "To Fully Clear". TSB-based: hours until TSB ≥ 0 (ATL decays to CTL).
 
   const ctlDaily = ctl / 7;
 
@@ -349,7 +349,7 @@ function getFreshnessHTML(s: SimulatorState): string {
   // Full fresh: < 24h green, 24-48h amber, 48-96h orange, > 96h red
   const freshRingColor = hoursToColor(freshHours, [24, 48, 96]);
 
-  // Status logic removed — explanations are now inline in the recovery card
+  // Status logic removed. Explanations are now inline in the recovery card
   // alongside each number (baseline implication, fresh implication, TSB explanation).
 
   // Card builder
@@ -475,7 +475,7 @@ function getFreshnessHTML(s: SimulatorState): string {
           if (weeksOfData < 3) {
             direction = 'Freshness needs at least 3 completed weeks of training data. These numbers will stabilise as more sessions are logged.';
           } else if (sessionRecoveryHours == null || sessionRecoveryHours <= 0) {
-            // At baseline — direction depends on chronic load
+            // At baseline. Direction depends on chronic load
             if (tsbDisp >= 0) {
               direction = 'All fatigue cleared. Peak performance window for a key session or race.';
             } else if (tsbDisp >= -5) {
@@ -569,7 +569,7 @@ export function renderFreshnessView(): void {
   wireFreshnessHandlers();
   // Tri mode: additively inject per-discipline Form so an athlete can see
   // whether their swim, bike, or run Form differs from the combined number.
-  // Does NOT modify any of the running-mode rendering — pure DOM append.
+  // Does NOT modify any of the running-mode rendering. Pure DOM append.
   if (s.eventType === 'triathlon' && s.triConfig?.fitness) {
     injectTriPerDisciplineForm(s);
   }

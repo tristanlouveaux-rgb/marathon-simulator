@@ -6,8 +6,8 @@
  * numbers off it via the hybrid OCR→AI pipeline (`runHybridParse`).
  *
  * Two engines feed the same parser contract:
- *   - On-device Apple Vision OCR — iOS only, free, private, runs first.
- *   - AI-vision edge function — cloud Claude vision, signed-in fallback for
+ *   - On-device Apple Vision OCR. IOS only, free, private, runs first.
+ *   - AI-vision edge function. Cloud Claude vision, signed-in fallback for
  *     low-confidence OCR or web users without a native engine.
  *
  * The confirm step shows the values we read and lets the user correct them
@@ -70,7 +70,7 @@ export function openScreenshotImportModal(opts: OpenScreenshotImportOptions = {}
 }
 
 // ---------------------------------------------------------------------------
-// Step 1 — choose a screenshot
+// Step 1. Choose a screenshot
 // ---------------------------------------------------------------------------
 
 function renderChooseStep(overlay: HTMLElement): void {

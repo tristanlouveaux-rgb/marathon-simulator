@@ -30,7 +30,7 @@ function effortMultiplierForRpe(rpe: number): number {
   if (rpe === 6) return IMPACT_PER_KM.float;         // 1.25
   if (rpe === 7) return IMPACT_PER_KM.threshold;     // 1.30
   if (rpe === 8) return IMPACT_PER_KM.race_pace;     // 1.35
-  return IMPACT_PER_KM.vo2;                          // 1.50 — RPE 9-10
+  return IMPACT_PER_KM.vo2;                          // 1.50. RPE 9-10
 }
 
 /** Detect a running activity from its activityType string. */
@@ -68,7 +68,7 @@ function deriveRunRpe(actual: GarminActual, weekRpe: number | undefined): number
 
 /**
  * Compute run leg load: distance × effort multiplier. Returns 0 if no GPS distance.
- * Hard-run RBE is the caller's responsibility — RPE >= 7 should skip RBE since
+ * Hard-run RBE is the caller's responsibility. RPE >= 7 should skip RBE since
  * maximal efforts are novel stress and protection does not transfer (Chen et al.
  * 2007: RBE attenuates when bout intensity exceeds the protective bout's).
  */
@@ -153,7 +153,7 @@ export function getEffectiveSport(actual: GarminActual): SportKey {
  *   4. generic_sport fallback
  *
  * Name mappings are intentionally LAST so that an explicit Strava sport always
- * wins over a learned name override — otherwise reclassifying one same-named
+ * wins over a learned name override. Otherwise reclassifying one same-named
  * activity would silently flip every future activity sharing that name.
  */
 export function resolveSportForActivity(
@@ -216,12 +216,12 @@ function computeLegLoad(actual: GarminActual, sport: SportKey, weekRpe?: number)
  *
  * Leg-load entries are normally pushed by the activity-review flow. Activities
  * that are auto-matched at sync time (no review modal) don't pass through that
- * path, so their leg load is silently missed — even if the auto-resolved sport
+ * path, so their leg load is silently missed. Even if the auto-resolved sport
  * (via `sportNameMappings`) correctly identifies them as leg-loading.
  *
  * This pass walks every garminActual in the last 7 days, computes the effective
  * sport's leg-load contribution, and adds a `recentLegLoads` entry for any
- * activity missing one (keyed by garminId). Idempotent — runs cheaply on each
+ * activity missing one (keyed by garminId). Idempotent. Runs cheaply on each
  * leg-load view open.
  *
  * Returns true if entries were added (caller can saveState).
@@ -250,7 +250,7 @@ export function reconcileRecentLegLoads(): boolean {
 
   // Step 2: collapse near-duplicate entries that represent the same physical
   // bout. Same sport, within 10 minutes is treated as the same activity. We
-  // keep one — preferring the entry linked to a Strava-sourced garminId
+  // keep one. Preferring the entry linked to a Strava-sourced garminId
   // (richer data) and breaking ties by higher load.
   {
     const sorted = [...existing].sort((a, b) => a.timestampMs - b.timestampMs);

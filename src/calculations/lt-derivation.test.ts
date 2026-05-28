@@ -61,7 +61,7 @@ describe('deriveLTFromCriticalSpeed', () => {
 
   it('rejects fits where D′ is physiologically implausible', () => {
     // Two efforts that would yield D′ way outside 50–500m range.
-    // Using near-identical pace for both — D′ collapses to ~0.
+    // Using near-identical pace for both. D′ collapses to ~0.
     const res = deriveLTFromCriticalSpeed(
       [
         { distanceM: 5000, elapsedSec: 1250 },
@@ -148,7 +148,7 @@ describe('deriveLTFromSustainedEfforts', () => {
     // steady 4:05/km but HR drifted because they were near the limit. Pace
     // CV is low (steady), pace decoupling is high (HR/effort drift). Under
     // the joint gate rule, steady pace alone is sufficient evidence for a
-    // short tempo — that's the LT signal, not the drift.
+    // short tempo. That's the LT signal, not the drift.
     const tempoWithDrift = {
       ...goodEffort,
       // Pace splits steady to ~3% CV but with a slight build (proxy for HR drift fallback).
@@ -171,7 +171,7 @@ describe('deriveLTFromSustainedEfforts', () => {
   });
 
   it('rejects long runs (>60min) unless both pace and HR are steady', () => {
-    // 90-min run with low HR drift but unsteady pace — one signal isn't
+    // 90-min run with low HR drift but unsteady pace. One signal isn't
     // enough at this duration. Drift confounds grow with time on feet.
     const longUnsteady = {
       ...goodEffort,

@@ -32,7 +32,7 @@ function renderStationRow(
   const showTargetCol = options.context !== 'breakdown';
   // Equipment-swap demoted to a small icon button on the right of the row.
   // When a swap is active, an inline "Swapped" badge sits beside the title and
-  // the icon flips to a revert tooltip — no more triple-stacked grey buttons.
+  // the icon flips to a revert tooltip. No more triple-stacked grey buttons.
   const swapIcon = sub
     ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M3 12a9 9 0 0 1 15.5-6.3M21 4v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.3M3 20v-5h5"/></svg>`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><path d="M7 7h10M17 7l-3-3M17 7l-3 3"/><path d="M17 17H7M7 17l3 3M7 17l3-3"/></svg>`;

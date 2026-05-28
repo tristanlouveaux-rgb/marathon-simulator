@@ -11,7 +11,7 @@ import {
   triggerRingWave,
 } from '@/ui/page-flair';
 
-// ── Slide definitions — 4 USPs ────────────────────────────────────────────────
+// ── Slide definitions. 4 USPs ────────────────────────────────────────────────
 
 interface SlideConfig {
   chip: string;
@@ -56,7 +56,7 @@ const SLIDES: SlideConfig[] = [
 // ── Slide renderer ────────────────────────────────────────────────────────────
 
 const BG_PREFIX = 'isl';
-// All slides share the same blue palette — only the review page (post-slides) gets teal.
+// All slides share the same blue palette. Only the review page (post-slides) gets teal.
 
 /** Per-slide card content. Rings + atmosphere stay persistent — only the card swaps. */
 function renderCardHTML(idx: number): string {
@@ -107,12 +107,12 @@ function renderCardHTML(idx: number): string {
 
 function renderSlides(container: HTMLElement, startIdx: number, onDone: () => void): void {
   let idx = startIdx;
-  // Slides ALWAYS get the large hero entrance — the slides are the wow moment of
+  // Slides ALWAYS get the large hero entrance. The slides are the wow moment of
   // every onboarding session, not just the first-ever device install. The haptic
   // is the only thing gated on first-ever (one tap per device, never repeated).
   const isFirstEver = isFirstRingExperience();
 
-  // Build the page shell ONCE — rings, atmosphere, glint, skip button, card container.
+  // Build the page shell ONCE. Rings, atmosphere, glint, skip button, card container.
   // Subsequent slide changes only swap the card body and toggle the atmosphere palette.
   container.innerHTML = `
     <style>
@@ -176,7 +176,7 @@ function renderSlides(container: HTMLElement, startIdx: number, onDone: () => vo
   if (!contentEl || !pageEl) return;
 
   // Update card content + wire next button. Re-runs on every slide change.
-  // The CARD BOX stays put — only the inner content fades. No "white flash".
+  // The CARD BOX stays put. Only the inner content fades. No "white flash".
   const updateSlide = (animateCardSwap: boolean) => {
     contentEl.innerHTML = renderCardHTML(idx);
     if (animateCardSwap) {
@@ -289,7 +289,7 @@ export function renderWelcome(container: HTMLElement): void {
       return;
     }
     updateOnboarding({ name });
-    // Slides come after the name — user has committed, now show what they're getting
+    // Slides come after the name. User has committed, now show what they're getting
     renderSlides(container, 0, () => nextStep());
   };
 

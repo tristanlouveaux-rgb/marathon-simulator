@@ -63,7 +63,7 @@ describe('classify', () => {
 
   it('stable low-volume runner (18 km/wk, hit 20+ last week, marathon PB) is CONSISTENT not detrained', () => {
     // Real case from production: user at 18.2 km/wk, weeksSinceConsistent=1, has marathon PB.
-    // Not a layoff — they're a stable low-volume athlete with history.
+    // Not a layoff. They're a stable low-volume athlete with history.
     expect(classify(evidence({
       currentWeeklyKm: 18.2,
       peakWeeklyKmPast52: 38.5,
@@ -241,7 +241,7 @@ describe('weekVolumeBudgetKm', () => {
   });
 
   it('caps at peakKm — never overshoots', () => {
-    // detrained-with-history ramps at 10%/wk: by week 20, 24.8 × 1.10^19 = ~155 km — peak should clamp
+    // detrained-with-history ramps at 10%/wk: by week 20, 24.8 × 1.10^19 = ~155 km. Peak should clamp
     expect(weekVolumeBudgetKm(20, 18, 70, 'detrained-with-history')).toBe(70);
   });
 
@@ -309,7 +309,7 @@ describe('gatherEvidence', () => {
       detectedWeeklyKm: 8,
     }));
     // The most recent 4 weeks are below 20km, week index 4 (0-based from end) was 22 km.
-    // Reversed: [8, 10, 12, 15, 22, ...] — first ≥20 is at index 4.
+    // Reversed: [8, 10, 12, 15, 22, ...]. First ≥20 is at index 4.
     expect(e.weeksSinceConsistent).toBe(4);
   });
 

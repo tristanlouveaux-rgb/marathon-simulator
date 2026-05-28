@@ -137,7 +137,7 @@ describe('wake-lock', () => {
 
     // Now become visible again: should re-acquire.
     fireVisibilityChange('visible');
-    // requestMock is async — wait a microtask tick.
+    // requestMock is async. Wait a microtask tick.
     await Promise.resolve();
     await Promise.resolve();
 

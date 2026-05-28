@@ -1,5 +1,5 @@
 /**
- * Recovery detail page — iPhone-native design language.
+ * Recovery detail page. IPhone-native design language.
  * Opens when tapping the Readiness ring on the Home view.
  * Sky-blue watercolour landscape header, green palette, HRV/RHR/Sleep metrics.
  */
@@ -265,7 +265,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
   const today = new Date().toISOString().split('T')[0];
   const history = s.physiologyHistory ?? [];
 
-  // Recovery score — always today's composite
+  // Recovery score. Always today's composite
   const effectiveSleepTarget = s.sleepTargetSec ?? deriveSleepTarget(history);
   const sleepBank = getSleepBank(history, effectiveSleepTarget);
   const sleepDebtForRecovery = sleepBank.bankSec < 0 ? Math.abs(sleepBank.bankSec) : 0;
@@ -287,7 +287,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
 
   // Entry may exist from step sync but lack HRV/RHR (Garmin pushes those later).
   // Fall back to the most recent entry that has the value. Do NOT fall back for
-  // sleep — sleep is date-specific and should show "—" if missing.
+  // sleep. Sleep is date-specific and should show "—" if missing.
   const todayHrv = entry?.hrvRmssd ?? [...history].reverse().find(e => e.hrvRmssd != null)?.hrvRmssd ?? null;
   const todayRhr = entry?.restingHR ?? [...history].reverse().find(e => e.restingHR != null)?.restingHR ?? null;
   // For display tiles: date-specific, show "—" if today's sleep hasn't arrived.
@@ -327,7 +327,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
     ">${fmtDateShort(d, today)}</button>`;
   }).join('');
 
-  // 7-day averages and 28-day baselines — mirrors what computeRecoveryScore uses for scoring.
+  // 7-day averages and 28-day baselines. Mirrors what computeRecoveryScore uses for scoring.
   const baseline28 = history.slice(-28);
   const hrvLast = hrv7.filter(v => v > 0);
   const hrvAvg = hrvLast.length > 0 ? hrvLast.reduce((a, b) => a + b, 0) / hrvLast.length : null;
@@ -351,7 +351,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
     ? `7-day avg ${hrvVsBaseline > 0 ? '+' : ''}${hrvVsBaseline.toFixed(0)}% vs 28-day baseline`
     : null;
 
-  // RHR tile: same pattern — chronic badge from score, context line shows 7-day avg vs 28-day baseline.
+  // RHR tile: same pattern. Chronic badge from score, context line shows 7-day avg vs 28-day baseline.
   // rhrSubScore is inverted (lower RHR = better), so score < 65 means RHR is elevated vs baseline.
   const rhrChronicBadge = rhrSubScore == null ? null
     : rhrSubScore >= 65 ? { label: 'Normal', color: GREEN_D }
@@ -625,7 +625,7 @@ function getRecoveryHTML(s: SimulatorState, displayDate: string): string {
  *   - medium  (16–29):           value with countdown-only impact line
  *   - high    (30+):             value with full impact line (countdown + ramp)
  *
- * No card when adaptiveRecovery is undefined — feature only appears once we've
+ * No card when adaptiveRecovery is undefined. Feature only appears once we've
  * actually started accumulating evidence.
  */
 function renderPersonalRecoveryCard(s: SimulatorState): string {

@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
  */
 
 // ---------------------------------------------------------------------------
-// Inline logic mirrored from renderer.ts — keep in sync with the three sites:
+// Inline logic mirrored from renderer.ts. Keep in sync with the three sites:
 //   1. Detail card modification banner  (isModified && w.modReason block)
 //   2. Calendar compact card status label (statusLabel assignment)
 //   3. Calendar compact card cyan line   (modReason display in isReplaced branch)

@@ -2,7 +2,7 @@
  * Tests for HYROX format-aware band derivation.
  *
  * The bandFromTime helper lives inside initialization.hyrox.ts as a private
- * function — we replicate its logic here so the same-athlete cross-format
+ * function. We replicate its logic here so the same-athlete cross-format
  * scaling rule has unit coverage independent of the init flow. Same-format
  * previous + target → no factor. Different-format → bidirectional factor:
  *   doubles → singles: × SAME_ATHLETE_TOTAL_DOUBLES_TO_SINGLES (1.22)

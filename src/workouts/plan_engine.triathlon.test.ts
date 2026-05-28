@@ -130,7 +130,7 @@ describe('Triathlon plan engine — generation shape', () => {
     const checkpointIdx = weeks.findIndex((w) => (w as any).checkpoint);
     expect(checkpointIdx).toBeLessThan(weeks.length / 2);
 
-    // Two taper segments — inter-cycle (after checkpoint) and race taper (end)
+    // Two taper segments. Inter-cycle (after checkpoint) and race taper (end)
     const seq: string[] = [];
     for (const w of weeks) {
       if (seq[seq.length - 1] !== w.ph) seq.push(w.ph);

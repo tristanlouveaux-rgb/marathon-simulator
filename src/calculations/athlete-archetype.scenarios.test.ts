@@ -4,7 +4,7 @@
  * These tests verify that 6 representative athlete profiles classify correctly,
  * produce sensible week-1 prescriptions, and feed sensible mean km into the
  * race-prediction stack. The goal is to catch regressions in the *interaction*
- * between classifier + ramp + predictor — unit tests cover each piece in
+ * between classifier + ramp + predictor. Unit tests cover each piece in
  * isolation; these cover the chain.
  *
  * Read as a regression matrix: if a future change shifts any of the asserted
@@ -26,7 +26,7 @@ function makeState(overrides: Partial<SimulatorState> = {}): SimulatorState {
 }
 
 // ---------------------------------------------------------------------------
-// PROFILE 1 — Stable low-volume runner with marathon history (Tristan's case)
+// PROFILE 1. Stable low-volume runner with marathon history (Tristan's case)
 // ---------------------------------------------------------------------------
 
 describe('Scenario 1 — Stable low-volume runner with marathon history', () => {
@@ -80,7 +80,7 @@ describe('Scenario 1 — Stable low-volume runner with marathon history', () => 
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 2 — Established consistent runner targeting a marathon
+// PROFILE 2. Established consistent runner targeting a marathon
 // ---------------------------------------------------------------------------
 
 describe('Scenario 2 — Established consistent runner (35 km/wk)', () => {
@@ -113,7 +113,7 @@ describe('Scenario 2 — Established consistent runner (35 km/wk)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 3 — High-mileage athlete already at peak
+// PROFILE 3. High-mileage athlete already at peak
 // ---------------------------------------------------------------------------
 
 describe('Scenario 3 — High-mileage runner (60 km/wk)', () => {
@@ -137,7 +137,7 @@ describe('Scenario 3 — High-mileage runner (60 km/wk)', () => {
   });
 
   it('Tanda mean: ramps from 60 → 79 over ~10 weeks then plateaus → ~76 km mean', () => {
-    // high-mileage isn't "already at marathon-plan peak" — 60 km/wk is general-fitness
+    // high-mileage isn't "already at marathon-plan peak". 60 km/wk is general-fitness
     // peak; race volume is still higher. The 3%/wk ramp reaches plan peak (79.2) by
     // week ~10, then plateaus. Mean across 32 build weeks is ~76 km.
     const km = getPlanPrescribedMeanWeeklyKm(6, 'marathon', {
@@ -157,14 +157,14 @@ describe('Scenario 3 — High-mileage runner (60 km/wk)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 4 — Returning runner after layoff (the canonical "comeback" case)
+// PROFILE 4. Returning runner after layoff (the canonical "comeback" case)
 // ---------------------------------------------------------------------------
 
 describe('Scenario 4 — Detrained-with-history (10 km/wk now, ran 40+ km last year)', () => {
   const s = makeState({
     stravaHistoryFetched: true,
     detectedWeeklyKm: 10,
-    // Recent 8 weeks all below 20 — clear layoff signal
+    // Recent 8 weeks all below 20. Clear layoff signal
     historicWeeklyKm: [12, 11, 10, 9, 8, 11, 10, 10],
     extendedHistoryKm: [
       45, 48, 42, 40, 38, 35, 30, 28,    // peak last year
@@ -203,7 +203,7 @@ describe('Scenario 4 — Detrained-with-history (10 km/wk now, ran 40+ km last y
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 5 — Cyclist starting marathon training (no run impact base)
+// PROFILE 5. Cyclist starting marathon training (no run impact base)
 // ---------------------------------------------------------------------------
 
 describe('Scenario 5 — Cross-trained-no-impact (cyclist, 3 km/wk running)', () => {
@@ -229,7 +229,7 @@ describe('Scenario 5 — Cross-trained-no-impact (cyclist, 3 km/wk running)', ()
   it('week 1 starts at 10 km (floor — bone-limited entry)', () => {
     // raw: max(10, 3*1.0+0)=10; baseline=3 ≤ 10, cap not applied
     expect(startingWeeklyKm(3, 'cross-trained-no-impact')).toBe(10);
-    // Absolute +7 km from baseline — significant relative but bone-stress is the
+    // Absolute +7 km from baseline. Significant relative but bone-stress is the
     // limiter and 10 km/wk is a conservative entry for someone with no impact base.
   });
 
@@ -240,12 +240,12 @@ describe('Scenario 5 — Cross-trained-no-impact (cyclist, 3 km/wk running)', ()
     expect(w1).toBe(10);
     expect(w5).toBeCloseTo(10 * Math.pow(1.05, 4), 1);
     expect(w10).toBeCloseTo(10 * Math.pow(1.05, 9), 1);
-    // Reaches peak slowly — appropriate for the bone-limited case.
+    // Reaches peak slowly. Appropriate for the bone-limited case.
   });
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 6 — Tennis player adding marathon training
+// PROFILE 6. Tennis player adding marathon training
 // ---------------------------------------------------------------------------
 
 describe('Scenario 6 — Cross-trained-impact (tennis, 5 km/wk running)', () => {
@@ -283,7 +283,7 @@ describe('Scenario 6 — Cross-trained-impact (tennis, 5 km/wk running)', () => 
 });
 
 // ---------------------------------------------------------------------------
-// PROFILE 7 — Sedentary novice (no aerobic or musculoskeletal base)
+// PROFILE 7. Sedentary novice (no aerobic or musculoskeletal base)
 // ---------------------------------------------------------------------------
 
 describe('Scenario 7 — Sedentary novice', () => {
@@ -309,7 +309,7 @@ describe('Scenario 7 — Sedentary novice', () => {
 
   it('5%/wk ramp — never overshoots even over many weeks', () => {
     // Even after 30 weeks ramping from 10 km at 5%/wk, the integral mean stays
-    // moderate. This is the user we are MOST cautious about — gradual is right.
+    // moderate. This is the user we are MOST cautious about. Gradual is right.
     const km = getPlanPrescribedMeanWeeklyKm(6, 'marathon', {
       baselineKm: 0, archetype: 'sedentary-novice', totalWeeks: 35, taperWeeks: 3,
     });
@@ -321,7 +321,7 @@ describe('Scenario 7 — Sedentary novice', () => {
 });
 
 // ---------------------------------------------------------------------------
-// REGRESSION GUARDRAILS — properties that must hold across ALL archetypes
+// REGRESSION GUARDRAILS. Properties that must hold across ALL archetypes
 // ---------------------------------------------------------------------------
 
 describe('Cross-archetype safety guardrails', () => {
@@ -343,14 +343,14 @@ describe('Cross-archetype safety guardrails', () => {
 
   it('archetypes that allow 0-km baseline have a meaningful floor', () => {
     // Cross-trained and novice archetypes can fire at baseline=0 (e.g. cyclist
-    // who never runs). They need a meaningful floor — below ~10 km/wk a
+    // who never runs). They need a meaningful floor. Below ~10 km/wk a
     // marathon plan can't deliver aerobic stimulus.
     //
     // EXCLUDED:
-    //   - high-mileage / consistent-runner — classifier requires currentWeeklyKm >= 50/20
+    //   - high-mileage / consistent-runner. Classifier requires currentWeeklyKm >= 50/20
     //     respectively, so baseline=0 is impossible. Multiplier×0 = 0 is not a bug, it's
     //     a state the classifier prevents.
-    //   - unknown — falls through to legacy formula, no ramp applied.
+    //   - unknown. Falls through to legacy formula, no ramp applied.
     const ARCHETYPES_WITH_ZERO_BASELINE: Archetype[] = [
       'detrained-with-history', 'cross-trained-impact', 'cross-trained-no-impact', 'sedentary-novice',
     ];

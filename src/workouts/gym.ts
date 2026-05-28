@@ -8,7 +8,7 @@ import type { AbilityBand } from '@/types';
  * Generate running-focused gym workouts for a given week.
  *
  * Phase-aware templates with ability scaling, deload handling, and injury adaptation.
- * Gym workouts are additive — they never replace running sessions.
+ * Gym workouts are additive. They never replace running sessions.
  *
  * Description format: exercises separated by \n, one per line.
  * Each line: "{sets}x{reps} {Exercise} {load} ({feel cue}) ({rest period})"

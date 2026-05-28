@@ -49,7 +49,7 @@ export interface PrevFormatChangeResult {
 
 /**
  * Apply a corrected previous-race format. Safe to call when nothing actually
- * changed — returns `changed: false` and is a no-op.
+ * changed. Returns `changed: false` and is a no-op.
  *
  * Important: regenerates the training plan when band changes. Call sites should
  * confirm with the user before invoking if they're mid-plan; for first-week
@@ -99,7 +99,7 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
 
   // Re-derive the band against the cross-format factor. The previous time is
   // physiologically the same effort regardless of which slot it lives in, but
-  // its banding meaning differs across formats — a 60-min doubles is a 73-min
+  // its banding meaning differs across formats. A 60-min doubles is a 73-min
   // singles. Apply the factor before banding when the previous race format
   // disagrees with the *target* format.
   let rebanded = false;
@@ -120,7 +120,7 @@ export function applyHyroxPrevFormatChange(newFormat: HyroxFormat): PrevFormatCh
     }
   }
 
-  // Regenerate the plan when band shifted — workout intensities, weekly volume,
+  // Regenerate the plan when band shifted. Workout intensities, weekly volume,
   // and progression curve all key off the band. Archive the existing wks first
   // so completed activities aren't lost; the redistributor reattaches them by
   // date.

@@ -111,7 +111,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
         ? (rawFormat as 'open_singles' | 'pro_singles' | 'open_doubles' | 'pro_doubles')
         : 'open_singles';
 
-    // Derive ability band — when previous-race format differs from the target
+    // Derive ability band. When previous-race format differs from the target
     // format, expand or compress the previous total time using a same-athlete
     // cross-format factor before banding. A 60-min doubles is ~73-min singles
     // (× 1.22); a 60-min singles is ~51-min doubles (× 0.85). See
@@ -145,7 +145,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Staleness-aware band: when the previous race is old enough that we
     // partially distrust it AND the user's current VDOT implies a different
-    // band, take the SLOWER of the two (conservative — never over-promise on
+    // band, take the SLOWER of the two (conservative. Never over-promise on
     // a stale benchmark). The staleness model is gated by physiology
     // mitigation, so a still-fit athlete keeps their stale-but-credible band.
     const stalenessProbe = computeHyroxStaleness({
@@ -180,7 +180,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
 
     // Seed station benchmarks from historic race splits (entered during onboarding).
     // Store in the slot matching the PREVIOUS-RACE format. We only seed when the
-    // user explicitly confirmed which format their splits came from — without
+    // user explicitly confirmed which format their splits came from. Without
     // that signal we'd risk filing doubles times into the singles slot (or vice
     // versa). The user can still calibrate per station from the benchmark card.
     const stationBenchmarks: Partial<Record<string, number>> = {};
@@ -193,7 +193,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     const benchmarkDoubles = hasBenchmarks && !slotIsSingles ? stationBenchmarks as any : undefined;
 
     // Persist prev format only when it's a known value. Storing `undefined` is
-    // preferable to defaulting to the target format — the forecast view nudge
+    // preferable to defaulting to the target format. The forecast view nudge
     // will detect missing-but-time-set state and ask the user to confirm.
     const prevTimeFormat = prevFormatKnown ? prevFmt : undefined;
 
@@ -282,7 +282,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
       hyroxPreviousTimeFormat: prevTimeFormat,
       hyroxPreviousTimeRaceId: state.hyroxPreviousTimeRaceId,
       // Race date: prefer the picked event's date, then a manually-entered date.
-      // Used by the staleness model — without it, we can't decay trust on
+      // Used by the staleness model. Without it, we can't decay trust on
       // a year-old benchmark vs current physiology.
       hyroxPreviousRaceDate:
         (state.hyroxPreviousTimeRaceId && getHyroxEventById(state.hyroxPreviousTimeRaceId)?.date)
@@ -325,7 +325,7 @@ export function initializeHyroxSimulator(state: OnboardingState): CalculationRes
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
 
-    s.rd = 'marathon';  // Placeholder — HYROX views ignore this.
+    s.rd = 'marathon';  // Placeholder. HYROX views ignore this.
     s.rw = sessions.runs;
     s.epw = sessions.runs + sessions.stations + sessions.bricks;
     s.gs = 0;

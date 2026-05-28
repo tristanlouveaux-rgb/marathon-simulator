@@ -8,13 +8,13 @@
  *      compute iTRIMP, HR zones, power curve, polyline, km splits.
  *   3. Build a `GarminActivityRow` with id prefix `import-` so dedup keys
  *      cannot collide with `apple-`, `strava-`, or `garmin-` prefixed rows.
- *   4. Pass the row to `matchAndAutoComplete()` — same final step as all
+ *   4. Pass the row to `matchAndAutoComplete()`. Same final step as all
  *      other activity sources.
  *
  * Reuse note (STRAVALESS_PLAN.md §A / §D):
  *   - The Garmin activityDetails parser (item A) receives per-second HR,
  *     power, GPS samples from JSON. Wire it into `streamsToActivityRow()`
- *     directly — that function is the canonical mapping layer.
+ *     directly. That function is the canonical mapping layer.
  *   - The Strava archive ZIP path (item D) produces the same stream shape
  *     from .fit files inside the archive. Call `parseFit()` + `streamsToActivityRow()`.
  *
@@ -52,7 +52,7 @@ import { refreshBlendedFitness } from '@/calculations/blended-fitness';
 // ---------------------------------------------------------------------------
 
 /**
- * A single data record from a stream — one row per second (FIT) or one
+ * A single data record from a stream. One row per second (FIT) or one
  * trackpoint per GPS recording. All fields optional; caller fills what the
  * file provides.
  */
@@ -130,7 +130,7 @@ export function mapFitSport(sport: string | undefined, subSport?: string): Garmi
   if (s === 'tennis') return 'TENNIS';
   if (s === 'basketball') return 'BASKETBALL';
   if (s === 'soccer') return 'SOCCER';
-  // Catch-all — routes to cross-training in the matcher rather than locomotion.
+  // Catch-all. Routes to cross-training in the matcher rather than locomotion.
   return 'CARDIO';
 }
 
@@ -226,7 +226,7 @@ export async function parseFit(buffer: ArrayBuffer): Promise<{ summary: Activity
 
 /**
  * Minimal regex-based XML extractor. Handles well-formed GPX/TCX files with
- * simple tags and attributes. Not a full XML parser — does not handle CDATA,
+ * simple tags and attributes. Not a full XML parser. Does not handle CDATA,
  * processing instructions, or deeply nested namespace declarations. Sufficient
  * for the fitness-file formats we target.
  *
@@ -371,7 +371,7 @@ export function parseGpx(gpxStr: string): { summary: ActivitySummary; records: S
  * Parse a TCX string into { summary, records }.
  *
  * TCX <Trackpoint> elements carry:
- *   - <Time>          — ISO-8601
+ *   - <Time>. ISO-8601
  *   - <HeartRateBpm><Value>
  *   - <DistanceMeters>
  *   - <Watts> or <ns3:Watts> for power
@@ -388,7 +388,7 @@ export function parseTcx(tcxStr: string): { summary: ActivitySummary; records: S
 
     const rec: StreamRecord = { timestamp: timeVal };
 
-    // HR — <HeartRateBpm><Value>N</Value></HeartRateBpm>
+    // HR. <HeartRateBpm><Value>N</Value></HeartRateBpm>
     const hrBpmBlock = xmlBlocks(tp, 'HeartRateBpm')[0];
     const hrVal = hrBpmBlock ? xmlText(hrBpmBlock, 'Value') : null;
     if (hrVal) {
@@ -403,7 +403,7 @@ export function parseTcx(tcxStr: string): { summary: ActivitySummary; records: S
       if (isFinite(d) && d >= 0) rec.distanceM = d;
     }
 
-    // Power — <Watts> or <ns3:Watts>
+    // Power. <Watts> or <ns3:Watts>
     const wattsStr = xmlText(tp, 'Watts');
     if (wattsStr) {
       const p = parseFloat(wattsStr);
@@ -562,7 +562,7 @@ export function streamsToActivityRow(
       lng: r.lng!,
       timestamp: r.timestamp,
       // FIT/GPX/TCX files don't always carry altitude/speed/course/accuracy.
-      // Default to 0 — these fields are used for display only and fall back
+      // Default to 0. These fields are used for display only and fall back
       // gracefully when zero (polyline encoding + km-split math uses only
       // lat/lng/timestamp).
       altitude: 0,
@@ -615,7 +615,7 @@ export function streamsToActivityRow(
     normalizedPowerW: npData.normalizedPowerW,
     powerCurve: npData.powerCurve,
     // deviceWatts=true when we have a real power stream (not estimated).
-    // FIT/TCX/GPX power fields come from physical sensors — treat as device data.
+    // FIT/TCX/GPX power fields come from physical sensors. Treat as device data.
     deviceWatts: powerStats.avg != null ? true : null,
     repData: null,
   };
@@ -716,7 +716,7 @@ export interface ArchiveImportResult {
 }
 
 /**
- * Ingest a full Strava or Garmin export archive (.zip) — the "bring all my
+ * Ingest a full Strava or Garmin export archive (.zip). The "bring all my
  * history" path. Handles both layouts we coach users toward:
  *   - Strava archive: a flat `activities/` folder of .gpx/.fit/.tcx, usually
  *     individually gzipped (`.fit.gz`, `.gpx.gz`, `.tcx.gz`).
@@ -725,7 +725,7 @@ export interface ArchiveImportResult {
  * Every activity file is parsed with the same single-file parser, batched
  * through `matchAndAutoComplete`, then the whole set is run through the shared
  * history aggregator (same path Apple Health uses) so weekly baselines, CTL,
- * archetype, detectedWeeklyKm and PBs all reflect the imported history — i.e.
+ * archetype, detectedWeeklyKm and PBs all reflect the imported history. I.e.
  * the import actually drives the plan, not just the week views.
  *
  * Synchronous unzip (fflate) keeps v1 simple; a very large Garmin export may
@@ -810,7 +810,7 @@ export function collectArchiveEntries(
   try {
     entries = unzipSync(zipBytes);
   } catch {
-    return; // not a valid zip at this level — skip
+    return; // not a valid zip at this level. Skip
   }
   for (const [name, data] of Object.entries(entries)) {
     const lower = name.toLowerCase();

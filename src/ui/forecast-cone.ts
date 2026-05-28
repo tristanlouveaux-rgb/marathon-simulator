@@ -7,7 +7,7 @@
  * reference line, and a current-week marker.
  *
  * Used by both running (`race-forecast-view.ts`) and triathlon
- * (`triathlon/forecast-view.ts`) forecast surfaces — the simulation differs
+ * (`triathlon/forecast-view.ts`) forecast surfaces. The simulation differs
  * per mode but the chart shape is identical.
  *
  * Pure function, no DOM side effects.

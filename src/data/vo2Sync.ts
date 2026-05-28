@@ -1,5 +1,5 @@
 /**
- * VO2 estimates refresh — recompute the cross-modal VO2max picture from
+ * VO2 estimates refresh. Recompute the cross-modal VO2max picture from
  * current state and persist to `s.vo2Estimates`. Cheap (≈2ms), pure local
  * computation; safe to call on every launch and after physiology sync.
  *
@@ -16,7 +16,7 @@ import { gp } from '@/calculations/paces';
  * 3-point gap is meaningful adaptation rather than algorithm jitter.
  * Comparable in spirit to LT's ≥3 s/km and FTP's ≥3 W thresholds. Pair
  * with a medium+ confidence floor on the derived value (the gap alone
- * isn't enough — we need to trust the new estimate).
+ * isn't enough. We need to trust the new estimate).
  */
 const VO2_AUTO_IMPROVE_GAP = 3;
 
@@ -48,7 +48,7 @@ export function refreshVO2Estimates(extra: OrchestratorActivity[] = []): void {
     saveState();
     // One-line diagnostic so we can verify the orchestrator ran and what it
     // produced. The `runSrc` field shows which estimator carried the running
-    // value — when HR regression doesn't fire we want to see *why* (no RHR /
+    // value. When HR regression doesn't fire we want to see *why* (no RHR /
     // no maxHR / too-few-points / bad-fit) without round-tripping.
     const hr = s.hrCalibratedVdot;
     const hrDiag = hr?.vdot != null

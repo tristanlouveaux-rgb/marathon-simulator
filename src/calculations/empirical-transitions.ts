@@ -1,15 +1,15 @@
 /**
- * Empirical transition-time lookup — runtime side.
+ * Empirical transition-time lookup. Runtime side.
  *
  * Reads the precomputed JSON of per-(race, level-bin) average transition
  * times (emitted by `src/validation/run-calibration.ts`) and returns the
  * mean T1 / T2 / T1+T2 for the user's predicted level at a specific race.
  *
  * Resolution order at the call site:
- *   1. User override on `triConfig.transitionOverride` — always wins.
- *   2. Race-specific empirical bin — when ≥ minRaceBinN finishers landed
+ *   1. User override on `triConfig.transitionOverride`. Always wins.
+ *   2. Race-specific empirical bin. When ≥ minRaceBinN finishers landed
  *      in the user's swim+bike+run band at this race.
- *   3. Global level-bin fallback — average across all races at the user's
+ *   3. Global level-bin fallback. Average across all races at the user's
  *      level band, when the race-specific cell is too sparse.
  *   4. None (caller falls back to the slider default).
  *
@@ -137,7 +137,7 @@ export function lookupEmpiricalTransitions(
 /**
  * Split a combined T1+T2 mean into asymmetric per-side values using the
  * empirical T1 share (`IM_T1_SHARE_OF_TOTAL`). Used when the dataset only
- * exposes a combined transition (Ironman) — T1 is typically longer than T2
+ * exposes a combined transition (Ironman). T1 is typically longer than T2
  * because of the wetsuit strip and longer transition-zone walks.
  */
 export function splitCombinedTransition(combinedSec: number): { t1: number; t2: number } {
@@ -151,7 +151,7 @@ export type TransitionSocks = 't1' | 't2' | 'none';
 /**
  * Apply the sock-on event to a resolved T1 / T2 pair. Socks are a single
  * one-time event; the choice decides where (or whether) that cost lands.
- * Baseline assumes 't1' (population default) — no adjustment for that.
+ * Baseline assumes 't1' (population default). No adjustment for that.
  * Floored at 60s per side so we never go negative.
  */
 export function applySockSavings(

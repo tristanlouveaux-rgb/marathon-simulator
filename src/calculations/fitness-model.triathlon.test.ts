@@ -28,7 +28,7 @@ describe('Per-discipline fitness — transfer matrix application', () => {
   });
 
   it('Combined CTL is raw EMA across ALL activities (no transfer weighting)', () => {
-    // §8 feedback: combined CTL is full fatigue — every activity counts at 1.0
+    // §8 feedback: combined CTL is full fatigue. Every activity counts at 1.0
     // regardless of sport, so padel/gym/hiking contribute at full weight too.
     const fit = computePerDisciplineFitness([
       { sport: 'run',   rawTSS: 100, dayIndex: 0 },

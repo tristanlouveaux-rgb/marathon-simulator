@@ -12,7 +12,7 @@
  *   { type: 'done' }
  *   { type: 'error', message: string }
  *
- * The caller drives the UI — accumulate text deltas, collect tool_use blocks,
+ * The caller drives the UI. Accumulate text deltas, collect tool_use blocks,
  * show Apply cards, send follow-up messages.
  */
 
@@ -35,11 +35,11 @@ export type StreamChunk =
 // ─── System prompt builder ────────────────────────────────────────────────────
 
 /**
- * NOTE — the canonical system prompt lives server-side, in
+ * NOTE. The canonical system prompt lives server-side, in
  * `supabase/functions/coach-chat/index.ts:buildSystemPromptServer`.
  *
  * This client-side copy is used ONLY for the "Export training snapshot"
- * feature (`downloadSnapshot` in coach-view.ts) — it shows the user what the
+ * feature (`downloadSnapshot` in coach-view.ts). It shows the user what the
  * coach is doing, in human-readable form. It is NOT sent to Anthropic in
  * production; the edge function builds its own canonical prompt from the
  * coach_context payload. Keep this copy roughly in sync with the server copy
@@ -251,7 +251,7 @@ function priorAssistantSignalledTool(prior: string | undefined): boolean {
  *  directive. If yes, the edge function will pass `tool_choice: { type: "any" }`
  *  to Anthropic, forcing Haiku to emit a tool_use block (not just prose).
  *
- *  `priorAssistant` (optional) is the most recent assistant turn — used to
+ *  `priorAssistant` (optional) is the most recent assistant turn. Used to
  *  decide whether a bare affirmative ("yes", "do it") should force a tool.
  *  Affirmatives without a tool-intent context get NO force, since they're
  *  often answers to information questions ("Is your race an open-water swim?").
@@ -274,7 +274,7 @@ export function isClearDirective(text: string, priorAssistant?: string): boolean
   if (/^(remember|note|don't forget|please remember)\b/.test(t)) return true;
   if (/^(forget|remove|delete that)\b.+(memory|fact|preference|note)\b/.test(t)) return true;
 
-  // Bare affirmatives ("yes do it", "go ahead", "apply", "now?") — ONLY count
+  // Bare affirmatives ("yes do it", "go ahead", "apply", "now?"). ONLY count
   // as a directive when the prior assistant turn signalled an imminent tool
   // call. Otherwise they're conversational and forcing a tool produces a
   // spurious memory/skip/reduce call.
@@ -426,7 +426,7 @@ export async function* streamCoachChat(
           }
         }
 
-        // Tool use complete — emit the parsed tool call
+        // Tool use complete. Emit the parsed tool call
         if (evType === 'content_block_stop' && inToolUse) {
           inToolUse = false;
           if (currentToolName) {

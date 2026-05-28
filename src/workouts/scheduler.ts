@@ -256,7 +256,7 @@ function preferredCommuteDays(count: number, hardDaySet: Set<number>): number[] 
       result.push(day);
       continue;
     }
-    // Hard day collision — pick the next free weekday not already taken
+    // Hard day collision. Pick the next free weekday not already taken
     const fallback = [0, 1, 2, 3, 4].find(d =>
       !hardDaySet.has(d) && !result.includes(d) && !usedFallback.has(d)
     );
@@ -264,7 +264,7 @@ function preferredCommuteDays(count: number, hardDaySet: Set<number>): number[] 
       result.push(fallback);
       usedFallback.add(fallback);
     } else {
-      // No free weekdays left — stack on the hard-day collision
+      // No free weekdays left. Stack on the hard-day collision
       result.push(day);
     }
   }
@@ -403,7 +403,7 @@ export function checkConsecutiveHardDays(workouts: Workout[]): { level: string; 
   // Check each day
   for (let day = 0; day <= 6; day++) {
     const today = byDay[day] || [];
-    // Don't wrap Sun→Mon — they're 6 days apart within the same week
+    // Don't wrap Sun→Mon. They're 6 days apart within the same week
     const tomorrow = day < 6 ? (byDay[day + 1] || []) : [];
 
     const hardToday = today.some(w => isHardWorkout(w.t));

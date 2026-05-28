@@ -11,7 +11,7 @@
  *   Z5 106-120%   VO2
  *   Z6 >120%      anaerobic / sprint
  *
- * Sweet spot is 88-95% FTP — the band between tempo and threshold that
+ * Sweet spot is 88-95% FTP. The band between tempo and threshold that
  * delivers high stimulus with manageable fatigue (Seiler-adjacent).
  */
 
@@ -27,9 +27,9 @@ export type BikeSessionKind =
   | 'threshold'
   | 'vo2'
   | 'hills'
-  | 'over_under'   // Coggan & Allen 2019 Ch.7 — alternating 105/95% FTP at threshold
-  | 'vo2_micros'   // Billat 2001 — 30s on / 30s off accumulates time at VO2max
-  | 'vlamax';      // Coggan Z6 neuromuscular — short max sprints, full recovery
+  | 'over_under'   // Coggan & Allen 2019 Ch.7. Alternating 105/95% FTP at threshold
+  | 'vo2_micros'   // Billat 2001. 30s on / 30s off accumulates time at VO2max
+  | 'vlamax';      // Coggan Z6 neuromuscular. Short max sprints, full recovery
 
 interface BikeSessionInput {
   phase: TrainingPhase;
@@ -75,7 +75,7 @@ const bikeTypeMap: Record<BikeSessionKind, TriWorkoutType> = {
  */
 function substituteExcluded(kind: BikeSessionKind, excluded: Set<string>): BikeSessionKind {
   if (!excluded.has(kind)) return kind;
-  // Substitution chain — same energetic system first, then step down a tier.
+  // Substitution chain. Same energetic system first, then step down a tier.
   const chain: Record<BikeSessionKind, BikeSessionKind[]> = {
     vlamax:     ['hills', 'vo2', 'threshold', 'sweet_spot', 'tempo', 'endurance'],
     vo2_micros: ['vo2', 'threshold', 'sweet_spot', 'tempo', 'endurance'],
@@ -85,12 +85,12 @@ function substituteExcluded(kind: BikeSessionKind, excluded: Set<string>): BikeS
     sweet_spot: ['tempo', 'endurance'],
     hills:      ['tempo', 'sweet_spot', 'endurance'],
     tempo:      ['endurance'],
-    endurance:  [],  // No substitute — endurance always wins if excluded.
+    endurance:  [],  // No substitute. Endurance always wins if excluded.
   };
   for (const candidate of chain[kind]) {
     if (!excluded.has(candidate)) return candidate;
   }
-  return kind;  // Everything excluded — ignore and keep original.
+  return kind;  // Everything excluded. Ignore and keep original.
 }
 
 export function pickBikeKind(
@@ -102,7 +102,7 @@ export function pickBikeKind(
   // Week parity used to rotate the new pro-grade kinds in alongside the
   // classic ones, so a 4-week build cycle exposes the rider to both
   // sweet-spot and over-unders at slot 0 (rather than the same kind every
-  // week). Endurance slots stay stable — recovery rides shouldn't rotate.
+  // week). Endurance slots stay stable. Recovery rides shouldn't rotate.
   const evenWeek = weekIndex % 2 === 0;
   const triWeek = weekIndex % 3 === 0;
 
@@ -120,7 +120,7 @@ export function pickBikeKind(
     // Three-way rotation across the secondary quality slot.
     else pick = triWeek ? 'vlamax' : evenWeek ? 'vo2' : 'vo2_micros';
   } else {
-    // taper — keep neuromuscular sharpness without volume
+    // taper. Keep neuromuscular sharpness without volume
     pick = slotIndex === 0 ? 'tempo' : 'endurance';
   }
   return substituteExcluded(pick, excluded);
@@ -176,7 +176,7 @@ function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: nu
   }
   // No power meter: render HR-zone label rather than "% FTP" (which is
   // meaningless when the user can't read watts on their head unit). Maps
-  // %FTP intensity bands to bike HR zones — anchored to Coggan & Allen Ch.4
+  // %FTP intensity bands to bike HR zones. Anchored to Coggan & Allen Ch.4
   // training-zone table.
   return `${pctFtpToHrZoneLabel(pct)} (≈${Math.round(pct * 100)}% FTP)`;
 }
@@ -185,7 +185,7 @@ function pwLabel(ftp: number | undefined, hasPower: boolean | undefined, pct: nu
  * Map %FTP target intensity → bike HR-zone label. Used by `pwLabel` when no
  * power meter present so workout descriptions show "Z3 tempo" instead of an
  * unreadable "82% FTP". Bike zones are 7 bpm lower than running per
- * `BIKE_LTHR_OFFSET_VS_RUN` (Millet & Vleck 2000) — the user reads them on
+ * `BIKE_LTHR_OFFSET_VS_RUN` (Millet & Vleck 2000). The user reads them on
  * their HR strap, the math accounts for the offset.
  */
 function pctFtpToHrZoneLabel(pct: number): string {
@@ -229,7 +229,7 @@ export function describeBikeSession(
   const idx = explicitVariantIndex != null
     ? explicitVariantIndex
     : Math.abs((weekIndex - 1) + slotIndex * 2);
-  // Local helper — passes the session's workout type so pwLabel can look up
+  // Local helper. Passes the session's workout type so pwLabel can look up
   // the per-kind tolerance band and render a range (e.g. "135–155W").
   const wt = bikeTypeMap[kind];
   const pw = (pct: number) => pwLabel(ftp, hasPower, pct, wt);
@@ -308,7 +308,7 @@ export function describeBikeSession(
       return variants[idx % variants.length]();
     }
     case 'vo2_micros': {
-      // Billat 2001 — 30/30s at vVO2max accumulates more time at VO2max than
+      // Billat 2001. 30/30s at vVO2max accumulates more time at VO2max than
       // longer reps, with lower lactate accumulation per minute of work.
       // Adapted to bike: 30s @ 115-120% FTP / 30s easy.
       const variants = [
@@ -350,7 +350,7 @@ function rpeForBike(kind: BikeSessionKind, phase: TrainingPhase): number {
 }
 
 function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number; anaerobic: number } {
-  // Rough TSS-per-minute values — Phase 4 replaces with real bTSS.
+  // Rough TSS-per-minute values. Phase 4 replaces with real bTSS.
   const tssPerMin: Record<BikeSessionKind, number> = {
     endurance: 0.85,
     tempo: 1.25,
@@ -358,7 +358,7 @@ function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number;
     threshold: 1.7,
     vo2: 1.9,
     hills: 1.65,
-    over_under: 1.65,  // Slightly above threshold — overshoots compound load
+    over_under: 1.65,  // Slightly above threshold. Overshoots compound load
     vo2_micros: 1.75,  // Below classic VO2 because work:rest is 1:1, not 3:3
     vlamax: 1.10,      // Total work is small (≤2min); rest dominates session
   };
@@ -370,8 +370,8 @@ function loadForBike(kind: BikeSessionKind, minutes: number): { aerobic: number;
     vo2: 0.60,
     hills: 0.45,
     over_under: 0.45,  // Lactate-shuttling at threshold + overs
-    vo2_micros: 0.55,  // Repeated VO2 spikes — high anaerobic, but rest clears partially
-    vlamax: 0.75,      // PCr/glycolytic dominant — almost entirely anaerobic
+    vo2_micros: 0.55,  // Repeated VO2 spikes. High anaerobic, but rest clears partially
+    vlamax: 0.75,      // PCr/glycolytic dominant. Almost entirely anaerobic
   };
   const total = tssPerMin[kind] * minutes;
   return {

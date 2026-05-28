@@ -1,5 +1,5 @@
 /**
- * Auth page — email/password sign in and sign up.
+ * Auth page. Email/password sign in and sign up.
  *
  * Supports a "guest upgrade" mode (renderAuthView({ upgradeGuest: true }))
  * for users currently on an anonymous Supabase session. In that mode:
@@ -240,7 +240,7 @@ function wireAuthHandlers(): void {
 
     try {
       if (isSignUp && upgradeGuest) {
-        // Convert anonymous user in place — same user_id, now linked to email/password.
+        // Convert anonymous user in place. Same user_id, now linked to email/password.
         // This is the only path that preserves guest data; signUp() would create
         // a fresh user and orphan everything attached to the anonymous one.
         const { error } = await supabase.auth.updateUser({ email, password });

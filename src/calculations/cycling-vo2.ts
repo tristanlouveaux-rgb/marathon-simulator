@@ -1,10 +1,10 @@
 /**
- * Cycling VO2max — ACSM cycle-ergometry equation.
+ * Cycling VO2max. ACSM cycle-ergometry equation.
  *
  *     VO2max ≈ 10.8 × (W / mass_kg) + 7
  *
  * From the ACSM Guidelines for Exercise Testing and Prescription (11th ed.,
- * 2022) — derived from steady-state oxygen-cost data on cycle ergometers,
+ * 2022). Derived from steady-state oxygen-cost data on cycle ergometers,
  * validated across recreational and trained populations. The 10.8 coefficient
  * captures the metabolic cost of leg cycling per W/kg, and the +7
  * constant is the resting+postural baseline.
@@ -12,17 +12,17 @@
  * Input W: prefer the user's FTP (functional threshold power, ~95% of 1-h
  * max). FTP underestimates true peak power by ~15–20%, so the equation
  * naturally yields a *cycling-specific* VO2max that's slightly conservative
- * — exactly what we want for the per-discipline display. Hawley & Noakes
+ *. Exactly what we want for the per-discipline display. Hawley & Noakes
  * 1992 (*Eur J Appl Physiol* 65:79–83) validated this conversion path
  * (peak-power → VO2max) in trained cyclists with R² > 0.9.
  *
  * Body weight handling: when `bodyWeightKg` is missing on state we fall back
  * to the same defaults used by the FTP/load engine (75 kg male, 62 kg
  * female). Physiological VO2max scales per-kg, so getting weight wrong by
- * 5 kg shifts the estimate by ~1 ml/kg/min — within the formula's stated
+ * 5 kg shifts the estimate by ~1 ml/kg/min. Within the formula's stated
  * precision (~±2 ml/kg/min).
  *
- * Pure — no state dependency.
+ * Pure. No state dependency.
  */
 
 export type CyclingVO2Confidence = 'high' | 'medium' | 'low' | 'none';

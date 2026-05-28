@@ -1,5 +1,5 @@
 /**
- * HYROX population distributions — real outcome data.
+ * HYROX population distributions. Real outcome data.
  *
  * Source: Kaggle dataset `jgug05/hyrox-results` (Seasons 4–6, ~92k finishers).
  * Ingested 2026-05-07 via `scripts/ingest-hyrox-results.mjs`.
@@ -71,7 +71,7 @@ export const HYROX_ROXZONE_PERCENTILE_TABLES: Record<Format, Array<[number, numb
 
 /**
  * Look up a percentile from a real distribution table. Returns null if no real
- * data exists for the given format — caller falls back to synthesised.
+ * data exists for the given format. Caller falls back to synthesised.
  *
  * Result is the cumulative percentile (% of finishers slower than or equal to
  * `timeSec`). Caller converts to "faster than X%" via `100 - result`.

@@ -168,7 +168,7 @@ describe('getPhysiologicalVdot — priority chain', () => {
 
   it('10. rpeAdj/physioAdj do NOT leak into the displayed VDOT', () => {
     // When the chain falls through to Tanda, the returned vdot must equal s.v
-    // exactly — adjustments are race-prediction concerns and must not affect
+    // exactly. Adjustments are race-prediction concerns and must not affect
     // the physiological number.
     const s = mkState({
       vo2: undefined,

@@ -6,7 +6,7 @@
  * view (above the tab bar) so it's discoverable without dominating any screen.
  *
  * Copy must match the App Store description disclaimer and the marketing
- * carousel disclaimer — kept in lockstep so a reviewer sees a single
+ * carousel disclaimer. Kept in lockstep so a reviewer sees a single
  * consistent statement across all surfaces.
  */
 export function buildHyroxTrademarkFooter(): string {

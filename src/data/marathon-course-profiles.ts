@@ -7,7 +7,7 @@ import type { CourseProfile } from '@/types/onboarding';
  * elevation maps from FindMyMarathon, historical race-day weather averages
  * (Weather Underground, MetOffice climate normals).
  *
- * No derived multipliers live here — only sourced facts. The course-factor
+ * No derived multipliers live here. Only sourced facts. The course-factor
  * pipeline in `src/calculations/course-factors-running.ts` consumes these.
  *
  * Categorisation rules (consistent with triathlon-course-profiles.ts):

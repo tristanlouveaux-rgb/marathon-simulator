@@ -79,7 +79,7 @@ describe('getRaceOutcomeRetro', () => {
       distance: 'ironman',
       predictedTotalSec: 13 * 3600,
       predictedPerLeg: { swim: 3600, bike: 21600, run: 18000 },
-      actualTotalSec: 13 * 3600 - 30,  // beat by 30s — below 60s threshold
+      actualTotalSec: 13 * 3600 - 30,  // beat by 30s. Below 60s threshold
       actualPerLeg: { swim: 3590, bike: 21590, run: 18000 },
     }];
     const r = getRaceOutcomeRetro(s);

@@ -1,5 +1,5 @@
 /**
- * Holiday modal — opened from the check-in overlay.
+ * Holiday modal. Opened from the check-in overlay.
  *
  * Multi-step questionnaire that sets holidayState on the simulator state.
  * During holiday: workouts replaced with advisory text, "Generate session" button available.
@@ -324,7 +324,7 @@ export function openHolidayModal(): void {
     const fmtStart = new Date(startDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const fmtEnd = new Date(endDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
-    // Short, direct summary — 2 sentences max
+    // Short, direct summary. 2 sentences max
     let summary: string;
     if (canRun === 'yes') {
       summary = 'Quality sessions paused. Easy runs available throughout.';
@@ -535,7 +535,7 @@ function computePreHolidayShifts(s: SimulatorState, startDate: string): Record<s
 export function applyHolidayMods(workouts: any[], canRun: 'yes' | 'maybe' | 'no', holidayDays?: Set<number> | null): void {
   for (const w of workouts) {
     if (isNonRun(w)) continue;
-    // Skip user-generated holiday sessions — these were deliberately created via "Generate session"
+    // Skip user-generated holiday sessions. These were deliberately created via "Generate session"
     if ((w.id || '').startsWith('holiday-')) continue;
 
     // If holidayDays is provided, only modify workouts on holiday days
@@ -823,7 +823,7 @@ export function cancelScheduledHoliday(onComplete?: () => void): void {
 const MIN_HOLIDAY_DAYS_FOR_REBUILD = 3;
 
 /**
- * End holiday — if the holiday has barely started (< 3 days), cancel silently
+ * End holiday. If the holiday has barely started (< 3 days), cancel silently
  * with no fitness penalty. Otherwise show a confirmation dialog and trigger
  * the welcome-back flow (TSS analysis + bridge weeks).
  */
@@ -912,7 +912,7 @@ export function checkHolidayEnd(): boolean {
   // Holiday ended. Check if it was long enough to matter.
   const daysActive = daysBetween(s.holidayState.startDate, s.holidayState.endDate) + 1;
   if (daysActive < MIN_HOLIDAY_DAYS_FOR_REBUILD) {
-    // Short holiday — just cancel silently, no penalty
+    // Short holiday. Just cancel silently, no penalty
     clearForceDeloadFlags(s, s.holidayState);
     cleanupHolidayAdhocWorkouts(s);
     s.holidayState.active = false;
@@ -920,7 +920,7 @@ export function checkHolidayEnd(): boolean {
     return false;
   }
 
-  // Long holiday — caller shows welcome-back modal; clean forceDeload now
+  // Long holiday. Caller shows welcome-back modal; clean forceDeload now
   clearForceDeloadFlags(s, s.holidayState);
   saveState();
   return true;
@@ -1056,7 +1056,7 @@ export function applyBridgeMods_renderTime(workouts: any[], wk: Week): void {
   for (const w of workouts) {
     if (isNonRun(w)) continue;
     if ((w as any).holidayMod) continue; // already modified by holiday mods
-    // Skip user-generated sessions — the user explicitly chose the distance/structure
+    // Skip user-generated sessions. The user explicitly chose the distance/structure
     if ((w.id || '').startsWith('adhoc-') || (w.id || '').startsWith('holiday-')) continue;
 
     const isQuality = QUALITY_TYPES.some(t => (w.t || '').toLowerCase().includes(t));

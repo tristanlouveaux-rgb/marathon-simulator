@@ -1,5 +1,5 @@
 /**
- * Triathlon workout detail modal — full session breakdown.
+ * Triathlon workout detail modal. Full session breakdown.
  *
  * Shown when a user taps a tri workout card on home or plan. Parses the
  * workout description into structured Warm up / Drills / Main set / Cool
@@ -17,7 +17,7 @@ export function openTriWorkoutDetail(workout: Workout): void {
   if (existing) existing.remove();
 
   // HYROX-only disciplines ('station', 'brick') fall back to 'run' in this
-  // triathlon card — HYROX workouts render through their own modal.
+  // triathlon card. HYROX workouts render through their own modal.
   const triDisc = (workout.discipline === 'swim' || workout.discipline === 'bike' || workout.discipline === 'run')
     ? workout.discipline : undefined;
   const discipline: BadgeKind = triDisc
@@ -118,7 +118,7 @@ export function openTriWorkoutDetail(workout: Workout): void {
 
 /**
  * A single "Session" block with no warm-up / main / cool-down split is just
- * the workout description repeated under a label — render it plainly instead.
+ * the workout description repeated under a label. Render it plainly instead.
  */
 function isStructured(blocks: WorkoutBlock[]): boolean {
   if (blocks.length === 0) return false;
@@ -162,7 +162,7 @@ function parseWorkoutBlocks(w: Workout): WorkoutBlock[] {
 }
 
 function splitIntoSegments(desc: string): string[] {
-  // Split on periods followed by space — simple heuristic for workout text
+  // Split on periods followed by space. Simple heuristic for workout text
   // Also split on obvious segment keywords.
   return desc.split(/\.\s+(?=(?:Warm up|Cool down|Drills|Main|Focus|Transition|Practice))/i);
 }
@@ -193,7 +193,7 @@ function classifySegment(seg: string): WorkoutBlock | null {
   if (/^\d+m\s+total/i.test(text)) {
     return { label: 'Total volume', body: text };
   }
-  // Fallback — put under "Session"
+  // Fallback. Put under "Session"
   return { label: 'Session', body: text };
 }
 

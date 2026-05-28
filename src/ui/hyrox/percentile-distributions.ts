@@ -9,7 +9,7 @@
  * Method: differentiate the cumulative-percentile table between adjacent
  * breakpoints to produce per-segment density (% per second), oversample with
  * linear interpolation, lightly smooth, then plot. This is the actual shape of
- * the population — no synthesised Gaussians, no fake noise. When the format
+ * the population. No synthesised Gaussians, no fake noise. When the format
  * has no real table (e.g. pro_doubles), the fallback band-anchored synthetic is
  * used and labelled honestly.
  *
@@ -59,10 +59,10 @@ const usableW = W - PAD_X * 2;
 const SAMPLE_COUNT = 80;
 
 // Each row gets its own vibrant accent so the four metrics read like the
-// canonical trend cards (Swim CSS / Bike FTP / Run LT / VO2max) — one chart,
+// canonical trend cards (Swim CSS / Bike FTP / Run LT / VO2max). One chart,
 // one colour, all distinct. See `feedback_chart_palette` memory.
 // Per-metric accents are assigned in `renderPercentileDistributions` below.
-const USER_LINE = '#0F172A';         // slate-900 — primary text token
+const USER_LINE = '#0F172A';         // slate-900. Primary text token
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -228,7 +228,7 @@ function renderDistributionRow(metric: MetricChart, rowIndex: number): string {
     `<span style="position:absolute;left:${((g.x / W) * 100).toFixed(2)}%;top:0;transform:translateX(-50%);font-size:9px;color:var(--c-faint);font-variant-numeric:tabular-nums">${g.label}</span>`
   ).join('');
 
-  // Animation timing — staggered per row so curves draw L→R in sequence and
+  // Animation timing. Staggered per row so curves draw L→R in sequence and
   // the user marker lands last with a small scale-up. Total wall time per row
   // is ~750ms; rows offset by 140ms.
   const rowDelay = rowIndex * 140;
@@ -313,7 +313,7 @@ export function renderPercentileDistributions(prediction: HyroxPrediction): stri
     return 0;
   }
 
-  // Per-metric accents — each row gets its own colour, mirroring the trend-card
+  // Per-metric accents. Each row gets its own colour, mirroring the trend-card
   // pattern (Swim CSS / Bike FTP / Run LT / VO2max each have a distinct hue).
   // Run = teal mirrors the canonical Run LT colour.
   const metrics: MetricChart[] = [

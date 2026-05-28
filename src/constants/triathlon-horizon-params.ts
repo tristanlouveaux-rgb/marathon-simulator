@@ -1,5 +1,5 @@
 /**
- * Triathlon training-horizon parameters — per-discipline non-linear improvement
+ * Triathlon training-horizon parameters. Per-discipline non-linear improvement
  * model. Mirrors `TRAINING_HORIZON_PARAMS` (run side, src/constants/training-params.ts)
  * with separate constants for swim CSS and bike FTP. Run uses the existing
  * marathon/half params unchanged.
@@ -19,21 +19,21 @@
 import type { AbilityBand } from '@/types';
 
 // ───────────────────────────────────────────────────────────────────────────
-// Swim — CSS adaptation
+// Swim. CSS adaptation
 // Sources:
 //   - Pyne, Trewin & Hopkins (2004) "Progression and variability of competitive
-//     performance of Olympic swimmers", J Sports Sci 22:613–620 — elite swimmers
+//     performance of Olympic swimmers", J Sports Sci 22:613–620. Elite swimmers
 //     improve ~0.4–1.0%/yr at peak performance.
-//   - Costa M et al. (2010) longitudinal age-grouper data — ~3–6% over a season
+//   - Costa M et al. (2010) longitudinal age-grouper data. ~3–6% over a season
 //     for sub-elite swimmers.
-//   - Stewart & Hopkins (2000) — swim adaptation rates across abilities.
+//   - Stewart & Hopkins (2000). Swim adaptation rates across abilities.
 //   - Mujika et al. (2002) "Influence of training and taper on swimming
-//     performance" MSSE 34:1486–1493 — 2.2 ± 1.5% gain in 99 swimmers, 3wk taper.
-//   - Toussaint & Hollander (1994) — propulsive efficiency explains ~80% of
+//     performance" MSSE 34:1486–1493. 2.2 ± 1.5% gain in 99 swimmers, 3wk taper.
+//   - Toussaint & Hollander (1994). Propulsive efficiency explains ~80% of
 //     inter-individual variance in swim economy. Swim is technique-limited.
-//   - Maglischo "Swimming Fastest" (2003) — coaching reference for session/week
+//   - Maglischo "Swimming Fastest" (2003). Coaching reference for session/week
 //     thresholds.
-//   - Sweetenham & Atkinson "Championship Swim Training" (2003) — 8–12wk macro
+//   - Sweetenham & Atkinson "Championship Swim Training" (2003). 8–12wk macro
 //     blocks for adaptation.
 // Confidence: high at elite end (Pyne 2004), medium below. Tau weakly supported
 // (clinical experience). Taper bonus is high-confidence (Mujika 2002, n=99).
@@ -56,7 +56,7 @@ export const SWIM_HORIZON_PARAMS: DisciplineHorizonParams = {
   // sub-elite age-groupers who already have technique. True beginners learning
   // proper stroke mechanics see 10-15% CSS gains over a 6-month block from
   // technique alone (Maglischo 2003, Toussaint & Hollander 1994). Bumped to
-  // reflect this — beginner 6.0 → 9.0, novice 4.5 → 6.5. Intermediate+ stay
+  // reflect this. Beginner 6.0 → 9.0, novice 4.5 → 6.5. Intermediate+ stay
   // (Costa data holds for athletes already past the technique-acquisition
   // phase).
   max_gain_pct: {
@@ -95,7 +95,7 @@ export const SWIM_HORIZON_PARAMS: DisciplineHorizonParams = {
   // Per session/week below min. Larger than run because skill loss compounds
   // with fitness loss in swim (Toussaint & Hollander 1994).
   undertrain_penalty_pct: 3.0,
-  // Mujika 2002 — 2.2 ± 1.5% in 99 swimmers, 3wk taper.
+  // Mujika 2002. 2.2 ± 1.5% in 99 swimmers, 3wk taper.
   taper_bonus_pct: {
     beginner:     2.0,
     novice:       2.0,
@@ -108,20 +108,20 @@ export const SWIM_HORIZON_PARAMS: DisciplineHorizonParams = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Bike — FTP adaptation
+// Bike. FTP adaptation
 // Sources:
 //   - Coggan & Allen (2019) "Training and Racing with a Power Meter" 3rd ed.
 //     Ch. 7 (FTP gain rates), Ch. 9 (HR-at-power signals for adaptation).
 //   - Pinot & Grappe (2011) "The record power profile to assess performance in
-//     elite cyclists" — pro cyclists ~1–3%/yr at top end.
-//   - Lucia A et al. (2000) — pro cyclist physiological adaptations.
+//     elite cyclists". Pro cyclists ~1–3%/yr at top end.
+//   - Lucia A et al. (2000). Pro cyclist physiological adaptations.
 //   - Coyle (1991) "Integration of the physiological factors determining
 //     endurance performance ability" Exerc Sport Sci Rev 19:307–340.
-//   - Bouchard HERITAGE family study — VO2max trainability variance for
+//   - Bouchard HERITAGE family study. VO2max trainability variance for
 //     beginner-end extrapolation.
 //   - Mujika & Padilla (2003) "Scientific bases for precompetition tapering"
-//     MSSE 35:1182–1187 — 2–6% bike performance gain from optimised taper.
-//   - Bosquet L et al. (2007) meta-analysis — 1.96% mean perf gain (CI 0.8–3.1%).
+//     MSSE 35:1182–1187. 2–6% bike performance gain from optimised taper.
+//   - Bosquet L et al. (2007) meta-analysis. 1.96% mean perf gain (CI 0.8–3.1%).
 // Confidence: high at trained end (Coggan 2019, Pinot 2011). Beginner figure
 // extrapolated from VO2max trainability. Taper bonus is high-confidence.
 // ───────────────────────────────────────────────────────────────────────────
@@ -188,17 +188,17 @@ export const BIKE_HORIZON_PARAMS: DisciplineHorizonParams = {
 // ───────────────────────────────────────────────────────────────────────────
 
 // ───────────────────────────────────────────────────────────────────────────
-// Run — VDOT adaptation (triathlon-calibrated session frequencies)
+// Run. VDOT adaptation (triathlon-calibrated session frequencies)
 // Sources:
-//   - Daniels J (2014) "Daniels' Running Formula" 3rd ed. — max_gain_pct and
+//   - Daniels J (2014) "Daniels' Running Formula" 3rd ed.. Max_gain_pct and
 //     tau_weeks mirror marathon/half values from TRAINING_HORIZON_PARAMS since
 //     run physiology is unchanged by context.
 //   - Midgley AW et al. (2006) "Training to enhance the physiological
 //     determinants of long-distance running performance" Sports Med 36:921–952 —
 //     5–8% VO2max gain in trained athletes over 8–16 week structured blocks.
-//   - Friel J (2012) "The Triathlete's Training Bible" 3rd ed. — 3 runs/week
+//   - Friel J (2012) "The Triathlete's Training Bible" 3rd ed.. 3 runs/week
 //     is the recommended frequency for 70.3; 3–4/wk for IM.
-//   - Dixon M (2015) "Fast-Track Triathlete" — quality over quantity in
+//   - Dixon M (2015) "Fast-Track Triathlete". Quality over quantity in
 //     triathlon run training; 2–3 focused sessions sufficient when swim/bike
 //     aerobic base is high.
 //   - Laursen PB & Buchheit M (2019) "Science and Application of HIIT" —
@@ -208,15 +208,15 @@ export const BIKE_HORIZON_PARAMS: DisciplineHorizonParams = {
 // Key difference from marathon model: ref_sessions reflects triathlon norms
 // (3/wk for 70.3, 3.5/wk for IM) rather than marathon norms (5/wk).
 // A triathlete doing 3 quality runs/week alongside swim and bike is training
-// optimally — the marathon model wrongly penalises them as undertrained.
+// optimally. The marathon model wrongly penalises them as undertrained.
 //
 // Confidence: max_gain_pct and tau from Daniels (high). Ref/min sessions
-// from Friel + Dixon coaching consensus (medium — no controlled trial
+// from Friel + Dixon coaching consensus (medium. No controlled trial
 // directly compares run frequencies in a concurrent triathlon context).
 // ───────────────────────────────────────────────────────────────────────────
 
 export const RUN_HORIZON_PARAMS_703: DisciplineHorizonParams = {
-  // Mirror TRAINING_HORIZON_PARAMS 'half' values — same physiology. Kept in
+  // Mirror TRAINING_HORIZON_PARAMS 'half' values. Same physiology. Kept in
   // lockstep with running half through the 2026-05-06 recalibration (8.0 → 8.5
   // intermediate, 6.0 → 6.5 advanced).
   max_gain_pct: {
@@ -267,7 +267,7 @@ export const RUN_HORIZON_PARAMS_703: DisciplineHorizonParams = {
 };
 
 export const RUN_HORIZON_PARAMS_IM: DisciplineHorizonParams = {
-  // Mirrors TRAINING_HORIZON_PARAMS 'marathon' values — kept in lockstep
+  // Mirrors TRAINING_HORIZON_PARAMS 'marathon' values. Kept in lockstep
   // with the running side. Recalibrated 2026-05-06 alongside running marathon
   // (5.5 → 7.0 intermediate) so an IM athlete's run leg projects the same
   // gain potential as a standalone marathon athlete with equivalent dose.
@@ -318,7 +318,7 @@ export const RUN_HORIZON_PARAMS_IM: DisciplineHorizonParams = {
  * Logistic steepness for the session-factor curve. Softened from 1.0 → 0.7
  * (recalibration 2026-05-06) in lockstep with running's `TRAINING_HORIZON_PARAMS.
  * k_sessions`. The k=1.0 curve over-penalised plans below the ref_sessions
- * centre — a 3-session/wk run leg in a 70.3 plan was getting ~13% credit when
+ * centre. A 3-session/wk run leg in a 70.3 plan was getting ~13% credit when
  * empirically (Friel 2012, Dixon 2015) it delivers ~30% of a 5-session plan's
  * gain. k=0.7 flattens the response to better match published triathlon-plan
  * dose-response data.
@@ -339,7 +339,7 @@ export const TRI_TAPER_WEEKS: Record<'swim' | 'bike' | 'run', { '70.3': number; 
 /**
  * Map years of endurance training to the existing `experience_level` bucket
  * used by `applyTrainingHorizonAdjustment`. Anchored to general training-age
- * literature (Joyner & Coyle 2008 — 5+ yrs for full aerobic adaptation).
+ * literature (Joyner & Coyle 2008. 5+ yrs for full aerobic adaptation).
  */
 export function yearsOfTrainingToExperienceLevel(years: number | undefined): string {
   if (years == null) return 'intermediate';

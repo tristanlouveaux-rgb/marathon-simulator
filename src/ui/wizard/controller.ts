@@ -14,7 +14,7 @@ import { renderStep } from './renderer';
  *  `manual-entry` is a branch off connect-data when the user skips Strava.
  *  `triathlon-setup` is a branch off goals, replacing race-target + schedule
  *  for triathlon users.
- *  `runner-type` was merged into `review` — no longer a separate step. */
+ *  `runner-type` was merged into `review`. No longer a separate step. */
 const STEP_ORDER: OnboardingStep[] = [
   'welcome',
   'goals',
@@ -43,7 +43,7 @@ export function initWizard(): void {
   }
 
   // After soft reset: skip welcome if name already exists. The returning user
-  // lands on goals (the post-restructure entry point — connect-data now sits
+  // lands on goals (the post-restructure entry point. Connect-data now sits
   // after goals so triathletes see Strava+watch connect once they've picked
   // their mode).
   if (s.onboarding?.name && s.onboarding.currentStep === 'welcome') {
@@ -55,7 +55,7 @@ export function initWizard(): void {
 
   // Migration: 'connect-strava' was renamed to 'connect-data' (2026-05-28) when
   // the step became a watch-first router. Persisted state from before the rename
-  // points at the legacy id — silently bump it to the new id so returning users
+  // points at the legacy id. Silently bump it to the new id so returning users
   // land on the right page rather than getting kicked back to 'goals' by the
   // generic catch-all below.
   const beforeMigration = getState().onboarding;
@@ -186,7 +186,7 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'hyrox-workout-preview') {
-      // Skip the recap review step for HYROX — the workout-preview is the
+      // Skip the recap review step for HYROX. The workout-preview is the
       // final reveal before initializing the plan.
       goToStep('initializing');
       return;
@@ -415,7 +415,7 @@ export function previousStep(): void {
   }
 
   // Branch: goals back → welcome (immediately-preceding step in the new
-  // post-restructure order — connect-data now sits after goals).
+  // post-restructure order. Connect-data now sits after goals).
   if (s.onboarding.currentStep === 'goals') {
     goToStep('welcome');
     return;
@@ -426,7 +426,7 @@ export function previousStep(): void {
 
   let prevIdx = currentIdx - 1;
 
-  // Skip 'initializing' when going back — silent auto-advance step.
+  // Skip 'initializing' when going back. Silent auto-advance step.
   while (prevIdx > 0 && STEP_ORDER[prevIdx] === 'initializing') {
     prevIdx--;
   }
@@ -476,13 +476,13 @@ export function completeOnboarding(): void {
  * initializing step's mid-plan guard (`wks.length > 0 → skip plan gen`)
  * doesn't short-circuit the upgrade. Any activities previously matched into
  * these weeks' `garminActuals` re-sync from `garmin_activities` on the next
- * poll — server-side history is the source of truth.
+ * poll. Server-side history is the source of truth.
  */
 export function upgradeFromTrackOnly(): void {
   const s = getState();
   if (!s.onboarding) return;
 
-  // Flip onboarding mode. Do NOT wipe wks/w/tw here — initializeSimulator
+  // Flip onboarding mode. Do NOT wipe wks/w/tw here. InitializeSimulator
   // replaces them when the wizard completes, and wiping early destroys all
   // historical stats (activity matches, CTL history, VDOT chart data).
   updateState({
@@ -501,7 +501,7 @@ export function upgradeFromTrackOnly(): void {
 
 /**
  * Downgrade from a generated plan to Just-Track mode. Preserves activity
- * history, CTL, PBs, physiology, and Strava connection — just flips the plan
+ * history, CTL, PBs, physiology, and Strava connection. Just flips the plan
  * off. Users typically reach this after race day, end of a continuous block,
  * or deliberately via Account → Advanced.
  *

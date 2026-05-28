@@ -1,5 +1,5 @@
 /**
- * Benchmark check-in overlay — post-deload fitness assessment.
+ * Benchmark check-in overlay. Post-deload fitness assessment.
  *
  * Shown at the start of the first week after a deload block in continuous mode.
  * Instead of manual pace entry, selecting a check-in type generates a structured
@@ -20,7 +20,7 @@ const BM_SESSION_MAP: Record<BenchmarkType, { slot: SlotType; totalMin: number; 
   easy_checkin:    { slot: 'easy',      totalMin: 30, workRatio: 1.0 },
   threshold_check: { slot: 'threshold', totalMin: 35, workRatio: 0.57 },  // 20 min work in 35 min session
   speed_check:     { slot: 'vo2',       totalMin: 25, workRatio: 0.48 },  // 12 min work in 25 min session
-  race_simulation: { slot: 'easy',      totalMin: 40, workRatio: 1.0 },   // 5k TT — easy slot, user runs hard
+  race_simulation: { slot: 'easy',      totalMin: 40, workRatio: 1.0 },   // 5k TT. Easy slot, user runs hard
 };
 
 /** Threshold variant for benchmark (always continuous 20-min tempo) */

@@ -7,7 +7,7 @@ interface GuidedVoicePlugin {
   cancel(): Promise<void>;
 }
 
-// Registered lazily — the web shim throws on speak()/cancel() so we only call it on native.
+// Registered lazily. The web shim throws on speak()/cancel() so we only call it on native.
 const NativeVoice = registerPlugin<GuidedVoicePlugin>('GuidedVoice');
 
 function isNative(): boolean {
@@ -123,7 +123,7 @@ function formatKm(meters: number | undefined): string {
 /** Format seconds → "90 seconds" / "3 minutes" / "4 minutes 30". */
 function formatSeconds(sec: number | undefined): string {
   if (sec == null) return '';
-  // Under 2 minutes, keep in seconds — more natural for short recoveries.
+  // Under 2 minutes, keep in seconds. More natural for short recoveries.
   if (sec < 120) return `${Math.round(sec)} seconds`;
   const min = Math.floor(sec / 60);
   const rem = Math.round(sec - min * 60);
@@ -144,7 +144,7 @@ function formatPace(secPerKm: number): string {
  *
  * On native iOS, `speak()`/`cancel()` delegate to the `GuidedVoice` Capacitor
  * plugin which wraps AVSpeechSynthesizer + AVAudioSession(.playback,
- * .voicePrompt, [.duckOthers, .mixWithOthers]) — music ducks and speech plays
+ * .voicePrompt, [.duckOthers, .mixWithOthers]). Music ducks and speech plays
  * over the silent switch.
  *
  * On web we fall back to the Web Speech API. Ducking isn't available on the

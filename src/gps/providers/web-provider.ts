@@ -3,7 +3,7 @@ import type { GpsProvider, GpsCallback, GpsErrorCallback } from './types';
 
 /**
  * Browser Geolocation API provider.
- * Foreground only — tracking may pause when the tab is backgrounded.
+ * Foreground only. Tracking may pause when the tab is backgrounded.
  */
 export class WebGpsProvider implements GpsProvider {
   private watchId: number | null = null;

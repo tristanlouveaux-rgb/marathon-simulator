@@ -1,5 +1,5 @@
 /**
- * HYROX setup — onboarding step.
+ * HYROX setup. Onboarding step.
  *
  * Collects:
  *   - Competition format (Open / Pro)
@@ -92,7 +92,7 @@ export function renderHyroxSetup(container: HTMLElement, state: OnboardingState)
   // Stays undefined until the user explicitly picks a previous-format pill.
   // Defaulting to `format` here silently lit up the singles pill when target
   // was singles, so a user with a doubles previous race never knew the question
-  // was unanswered — see ISSUE: doubles splits ended up in the Singles slot.
+  // was unanswered. See ISSUE: doubles splits ended up in the Singles slot.
   const prevTimeFormat = state.hyroxPreviousTimeFormat;
   const prevTimeRaceId = state.hyroxPreviousTimeRaceId ?? '';
   const today = new Date().toISOString().slice(0, 10);
@@ -467,7 +467,7 @@ function wireEventHandlers(): void {
   });
 
   // Station split inputs (manual entry with lower-bound enforcement).
-  // Both rejection paths now show a visible tooltip — previously bare digits
+  // Both rejection paths now show a visible tooltip. Previously bare digits
   // ("4") were silently cleared, leading users to believe their value was
   // saved when it wasn't.
   function showSplitInputError(input: HTMLInputElement, message: string): void {
@@ -491,8 +491,8 @@ function wireEventHandlers(): void {
   }
 
   // Total-time display below the average split. Two modes:
-  //   1. "race-total"   — set when paste-parser finds a valid total (e.g. 1:00:43)
-  //   2. "stations-sum" — sum of currently-filled station splits (always shown
+  //   1. "race-total". Set when paste-parser finds a valid total (e.g. 1:00:43)
+  //   2. "stations-sum". Sum of currently-filled station splits (always shown
   //                       when no race-total is set, even if partial)
   // We track which mode we're in so a subsequent station edit doesn't clobber
   // a parsed race-total with a partial sum.
@@ -537,7 +537,7 @@ function wireEventHandlers(): void {
       const current = (getOnboarding().hyroxPreviousStationSplits ?? {}) as Record<string, number>;
       const minSec = STATION_MIN_SEC[station] ?? 0;
 
-      // Manual edits override a parsed race-total — switch back to sum mode so
+      // Manual edits override a parsed race-total. Switch back to sum mode so
       // the total reflects what's actually in the form.
       totalDisplayMode = 'stations-sum';
 
@@ -565,7 +565,7 @@ function wireEventHandlers(): void {
         return;
       }
 
-      // NaN — bare digits, garbled text, etc.
+      // NaN. Bare digits, garbled text, etc.
       input.value = '';
       showSplitInputError(input, 'Use mm:ss format. E.g. 4:22 for 4 min 22 sec.');
     });
@@ -614,7 +614,7 @@ function wireEventHandlers(): void {
     if (result.runPaceSecKm != null) patch.hyroxRunPaceSecKm = result.runPaceSecKm;
 
     // Auto-fill the previous finish time field if the parser found a race
-    // disagrees — typed-then-pasted should respect the paste.
+    // disagrees. Typed-then-pasted should respect the paste.
     // disagrees. Typed-then-pasted should respect the paste.
     if (result.totalRaceSec != null) {
       patch.previousHyroxTimeSec = result.totalRaceSec;
@@ -627,7 +627,7 @@ function wireEventHandlers(): void {
         prevTimeEl.dispatchEvent(new Event('input', { bubbles: true }));
       }
       setRaceTotalDisplay(result.totalRaceSec);
-      // No parsed race total — show sum of the stations we just filled in.
+      // No parsed race total. Show sum of the stations we just filled in.
       // No parsed race total. Show sum of the stations we just filled in.
       totalDisplayMode = 'stations-sum';
     }
@@ -641,7 +641,7 @@ function wireEventHandlers(): void {
     status.style.display = 'block';
     status.textContent = `Found: ${parts.join(', ')}.`;
   });
-  // Race event picker — also controls visibility of the manual venue fallback.
+  // Race event picker. Also controls visibility of the manual venue fallback.
   // Race event picker. Also controls visibility of the manual venue fallback.
   const raceEventSelect = document.getElementById('hx-race-event') as HTMLSelectElement | null;
   const raceDateInput = document.getElementById('hx-race-date') as HTMLInputElement | null;
@@ -681,7 +681,7 @@ function wireEventHandlers(): void {
   });
 
   // Continue gate: a race date is required so course factors and the training
-  // the format must also be picked — silently defaulting it to the target
+  // the format must also be picked. Silently defaulting it to the target
   // the format must also be picked. Silently defaulting it to the target
   // format mis-classifies doubles times as singles (and vice versa).
   function syncContinueGate(): void {
@@ -702,13 +702,13 @@ function wireEventHandlers(): void {
       : '';
   }
   syncContinueGate();
-  // edits the previous-time input — both can flip the gate state.
+  // edits the previous-time input. Both can flip the gate state.
   // edits the previous-time input. Both can flip the gate state.
   document.querySelectorAll<HTMLButtonElement>('[data-prev-format]').forEach(btn => {
     btn.addEventListener('click', () => syncContinueGate());
   });
   document.getElementById('hx-prev-time')?.addEventListener('input', () => syncContinueGate());
-  // Average split fallback — fills any blank station inputs with the entered
+  // Average split fallback. Fills any blank station inputs with the entered
   // Average split fallback. Fills any blank station inputs with the entered
   // value and writes to onboarding. Per-station inputs the user already filled
   // are preserved.
@@ -825,7 +825,7 @@ function getOnboarding(): OnboardingState {
  * Strategy: find each station name, then grab the first mm:ss within 200 chars after it.
  * Handles variations: "SkiErg" / "Ski Erg" / "Ski-Erg", "Rowing" / "Row Erg", etc.
  */
-function parseHyroxResultsText(text: string): {
+export function parseHyroxResultsText(text: string): {
   stations: Partial<Record<HyroxStation, number>>;
   runPaceSecKm?: number;
   /** "Total time" parsed from the export, in seconds. Used for sanity-check display. */

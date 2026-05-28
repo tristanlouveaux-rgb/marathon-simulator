@@ -4,7 +4,7 @@ import { COURSE_PROFILES } from '@/data/triathlon-course-profiles';
 
 /**
  * IRONMAN-branded race calendar (full 140.6 and 70.3).
- * Dates sourced from official 2026 schedules — refresh annually.
+ * Dates sourced from official 2026 schedules. Refresh annually.
  */
 export const WORLD_TRIATHLONS: Triathlon[] = [
   // ── IRONMAN (full distance, 140.6) ────────────────────────────────────

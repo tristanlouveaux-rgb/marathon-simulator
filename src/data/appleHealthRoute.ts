@@ -1,15 +1,15 @@
 /**
- * Apple Health route helpers — converts the CLLocation arrays returned by
+ * Apple Health route helpers. Converts the CLLocation arrays returned by
  * `readWorkoutRouteLocations` (HealthExtras plugin) into the polyline /
  * km-splits / best-efforts shapes the rest of Mosaic already understands.
  *
  * Three outputs from one location array:
- *   1. encodePolyline — Google encoded polyline string (matches Strava's
+ *   1. encodePolyline. Google encoded polyline string (matches Strava's
  *      `summary_polyline` field) so the existing decoder + map renderer in
  *      `src/ui/strava-detail.ts` works unchanged on Apple workouts.
- *   2. extractKmSplits — array of seconds-per-km, one entry per completed km
+ *   2. extractKmSplits. Array of seconds-per-km, one entry per completed km
  *      (mirrors Strava's `splits_metric`).
- *   3. extractBestEfforts — fastest 5K/10K/HM/marathon segments as the same
+ *   3. extractBestEfforts. Fastest 5K/10K/HM/marathon segments as the same
  *      object shape Strava returns from `GET /activities/{id}` so
  *      `pbs-from-history.ts` can read them without modification.
  */
@@ -23,7 +23,7 @@ import type { RouteLocation } from './healthExtras';
 
 /**
  * Encode an array of [lat, lng] pairs into a Google polyline string.
- * Lossy at the 1e5 quantisation step (~1.1m at the equator) — same precision
+ * Lossy at the 1e5 quantisation step (~1.1m at the equator). Same precision
  * Strava's `summary_polyline` uses, so visually identical for run/ride GPS.
  */
 export function encodePolyline(coords: Array<[number, number]>): string {
@@ -179,7 +179,7 @@ export interface SyntheticBestEffort {
  * Complexity: O(n log n) per distance, O(n log n × 4) total. Well under 1s
  * for typical 16-week backfills (~100 runs × ~1000 points each).
  *
- * Skipped entirely for activities shorter than 5K — no PBs to find.
+ * Skipped entirely for activities shorter than 5K. No PBs to find.
  */
 export function extractBestEfforts(
   locations: RouteLocation[],
@@ -238,7 +238,7 @@ export function extractBestEfforts(
 }
 
 // ---------------------------------------------------------------------------
-// Time-window matching — pair workout rows with HKWorkoutRoute samples
+// Time-window matching. Pair workout rows with HKWorkoutRoute samples
 // ---------------------------------------------------------------------------
 
 /**
@@ -246,7 +246,7 @@ export function extractBestEfforts(
  * the route's location array (or null) so the caller can splice it onto the
  * activity row.
  *
- * Pairing tolerance is ±2 minutes — Apple Watch can record the route's start
+ * Pairing tolerance is ±2 minutes. Apple Watch can record the route's start
  * slightly before/after the workout's start (workout timer vs. GPS lock), but
  * the gap is rarely larger than a few seconds in practice.
  */

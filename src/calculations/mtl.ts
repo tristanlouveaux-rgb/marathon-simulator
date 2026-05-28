@@ -11,7 +11,7 @@
  *   effectiveMTL = cap × (1 - exp(−rawMTL / cap))  (saturation curve)
  *
  * The saturation curve prevents extremely high-load sessions from linearly
- * accumulating — real tissue tolerance asymptotes at high loads. This mirrors
+ * accumulating. Real tissue tolerance asymptotes at high loads. This mirrors
  * the Banister impulse-response saturation used in some CTL models (Busso 2003).
  *
  * Science log entry: docs/SCIENCE_LOG.md §L.
@@ -144,7 +144,7 @@ export interface DisciplineFitnessFatigue {
 }
 
 /**
- * Discipline-split CTL/ATL — separate impulse-response EMAs per
+ * Discipline-split CTL/ATL. Separate impulse-response EMAs per
  * run / station / brick. Reads **completed** workouts only (those with a
  * `matchedActivityId`), mirroring how running CTL/ATL is fed by actual TSS
  * rather than planned. Returns daily-equivalent values (÷7).
@@ -182,7 +182,7 @@ export function computeMTLFitnessFatigueByDiscipline(
  * Compute MTL CTL (chronic) and ATL (acute) from **completed** weekly MTL.
  * Only workouts with a `matchedActivityId` contribute, mirroring how running
  * CTL/ATL is fed by actual TSS rather than planned. Until the user matches
- * activities, both are zero — that is correct: a fresh user has no history
+ * activities, both are zero. That is correct: a fresh user has no history
  * to smooth.
  *
  * Uses Banister impulse-response EMA constants (same as running CTL/ATL):

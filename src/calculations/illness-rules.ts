@@ -9,7 +9,7 @@
  * Resting HR delta vs 28d baseline is used as an objective severity marker
  * (Hellard 2015): >+10 bpm shifts an above-neck case toward a rest day.
  *
- * All functions are pure. No DOM, no state mutation — UI calls these and writes
+ * All functions are pure. No DOM, no state mutation. UI calls these and writes
  * the result to s.illnessState.
  *
  * See docs/SCIENCE_LOG.md for the full rationale.
@@ -49,7 +49,7 @@ export interface ScheduleEntry {
 
 // Symptoms that always indicate below-neck involvement (chest, gut, systemic).
 const BELOW_NECK_SYMPTOMS: Symptom[] = ['fever', 'body_aches', 'cough', 'gi'];
-// Systemic symptoms — fever or body aches force the longer recovery window
+// Systemic symptoms. Fever or body aches force the longer recovery window
 // regardless of any other input (viral myocarditis risk per Schwellnus 2016).
 const SYSTEMIC_SYMPTOMS: Symptom[] = ['fever', 'body_aches'];
 
@@ -81,7 +81,7 @@ export function classifyIllness(input: ClassifyInput): Classification {
 /**
  * Convert the day-of-symptoms enum to a numeric estimate of how many days
  * the user is already into the illness when reporting. Used to shift the
- * schedule forward — a user reporting on day 4 doesn't get day-0 mods.
+ * schedule forward. A user reporting on day 4 doesn't get day-0 mods.
  */
 function daysIntoIllness(dayOfSymptoms: DayOfSymptoms): number {
   switch (dayOfSymptoms) {
@@ -123,7 +123,7 @@ export function buildSchedule(c: Classification, dayOfSymptoms: DayOfSymptoms): 
         intensityCeiling: 'rest',
       });
     }
-    // Then graded return — 4 days standard, 5 for systemic.
+    // Then graded return. 4 days standard, 5 for systemic.
     const rampDays = c.hasSystemic ? 5 : 4;
     const rampFactors = c.hasSystemic
       ? [0.50, 0.65, 0.80, 0.90, 1.00]
@@ -254,7 +254,7 @@ export function shouldSuppressStrength(c: Classification | undefined): boolean {
  *
  * Ordering (most → least restrictive): rest > walks > easy_only > reduced > full.
  * 'walks' maps to 'rest' for plan-mutation purposes (no scheduled workout, the
- * user walks instead — distinction is messaging, not engine behaviour).
+ * user walks instead. Distinction is messaging, not engine behaviour).
  */
 export function resolveEffectiveEntry(
   scheduleEntry: ScheduleEntry | null,
@@ -266,7 +266,7 @@ export function resolveEffectiveEntry(
   const scheduleCap = scheduleEntry?.capacity ?? 'full';
 
   // rest / walks → force rest. Walks collapses to rest at the plan level
-  // (we don't generate "walk" workouts as plan substitutes — the user just
+  // (we don't generate "walk" workouts as plan substitutes. The user just
   // walks instead of doing the scheduled session).
   if (override === 'rest' || override === 'walks') {
     return { dateOffsetDays: baseOffset, capacity: 'rest', volumeFactor: 0, intensityCeiling: 'rest' };
@@ -276,7 +276,7 @@ export function resolveEffectiveEntry(
   // Engine more restrictive ('rest') or equal ('easy_only') → engine wins.
   if (scheduleCap === 'rest' || scheduleCap === 'easy_only') return scheduleEntry;
 
-  // Engine says 'reduced' or 'full' — user is more restrictive. Synthesise an
+  // Engine says 'reduced' or 'full'. User is more restrictive. Synthesise an
   // easy_only entry. Inherit the engine's volumeFactor if the engine had one
   // (so a ramp day at 0.7 stays at 0.7 but capped to easy); otherwise default
   // to 0.85 (matches buildSchedule's mild above-neck factor).
@@ -295,7 +295,7 @@ export function resolveEffectiveEntry(
  *   - the latest valid entry is more than 3 days stale.
  *
  * Kept here (not in illness-modal.ts) so the banner can read the same delta the
- * modal used at save time — i.e. so "still elevated past schedule end" nudges
+ * modal used at save time. I.e. so "still elevated past schedule end" nudges
  * use a consistent calculation.
  */
 export function computeRhrDeltaFromHistory(history: Array<{ date: string; restingHR?: number }> | undefined): number | null {
@@ -338,7 +338,7 @@ export function getRaceDateISO(s: any): string | null {
  * after the schedule, and null if no race is set or schedule is empty.
  *
  * Caller is expected to surface this in the modal preview and the active
- * illness banner — silent volume scaling on a race day is the worst case we
+ * illness banner. Silent volume scaling on a race day is the worst case we
  * want to avoid.
  */
 export function detectRaceCollision(
@@ -352,7 +352,7 @@ export function detectRaceCollision(
   const race = new Date(raceDateISO + 'T12:00:00');
   const today = new Date(todayISO + 'T12:00:00');
   const daysFromToday = Math.round((race.getTime() - today.getTime()) / 86400000);
-  if (daysFromToday < 0) return null; // race already past — not our problem
+  if (daysFromToday < 0) return null; // race already past. Not our problem
 
   const raceOffset = Math.round((race.getTime() - start.getTime()) / 86400000);
   const entry = schedule.find(e => e.dateOffsetDays === raceOffset);
@@ -362,7 +362,7 @@ export function detectRaceCollision(
   return { phase: 'safe', daysFromToday };
 }
 
-// ─── Plan modification — applied at render time ──────────────────────────────
+// ─── Plan modification. Applied at render time ──────────────────────────────
 //
 // Pure-ish: takes a workouts array + illness state, mutates in place. No DOM,
 // no state-store reads. Kept here (not in illness-modal.ts) so unit tests can
@@ -433,7 +433,7 @@ function scaleAndCap(w: any, entry: ScheduleEntry, kind: 'run' | 'bike' | 'swim'
  *   swim       → type starts with swim_         OR name leads with Swim
  *   strength   → hyrox_station/assessment/brick types, OR strength/gym/lift
  *   run        → has km in description, or type/name matches known run keywords
- *   other      → fallback (padel, tennis, climb, etc.) — non-rest capacity leaves these alone
+ *   other      → fallback (padel, tennis, climb, etc.). Non-rest capacity leaves these alone
  */
 export function classifyWorkoutKind(w: any): 'run' | 'bike' | 'swim' | 'strength' | 'rest_like' | 'other' {
   const t = (w.t || '').toLowerCase();

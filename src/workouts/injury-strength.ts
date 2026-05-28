@@ -7,7 +7,7 @@
  * et al. 2012; PEACE & LOVE, Dubois & Esculier 2020). A knee injury does not
  * preclude upper-body strength; a shoulder injury does not preclude lower-body
  * strength. Relative rest is region-specific, not systemic, so the unaffected
- * region is loaded from the acute phase onward — only the injured region is
+ * region is loaded from the acute phase onward. Only the injured region is
  * ever withheld.
  *
  * Tailoring goes deeper than upper/lower: every exercise is tagged with the

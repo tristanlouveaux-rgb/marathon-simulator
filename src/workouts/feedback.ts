@@ -1,5 +1,5 @@
 /**
- * Effort Feedback Engine — "Truth Checks"
+ * Effort Feedback Engine. "Truth Checks"
  *
  * Compares actual RPE and HR against target zones to detect
  * mismatches and provide coaching feedback.

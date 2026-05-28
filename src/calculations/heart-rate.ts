@@ -2,7 +2,7 @@
  * Heart Rate Zone Engine
  *
  * Hierarchical zone calculation:
- *   Priority 1: Lactate Threshold HR (LTHR) — most accurate
+ *   Priority 1: Lactate Threshold HR (LTHR). Most accurate
  *   Priority 2: Heart Rate Reserve / Karvonen (Max + Resting HR)
  *   Priority 3: Max HR only
  *   Priority 4: Age-based estimates
@@ -127,14 +127,14 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
     case 'marathon_pace':
       return makeTarget('Z4', zones.z4, 'Threshold');
     case 'float':
-      // Hard reps at 10K effort + float recovery at MP — session average sits in Z3-4
+      // Hard reps at 10K effort + float recovery at MP. Session average sits in Z3-4
       return makeTarget('Z3-4', {
         min: zones.z3.min,
         max: zones.z4.max,
       }, 'Float (session avg)');
     case 'vo2':
     case 'intervals':
-      // Session average includes recovery jogs — target Z4 not Z5
+      // Session average includes recovery jogs. Target Z4 not Z5
       return makeTarget('Z4', zones.z4, 'VO2max (session avg)');
     case 'race_pace':
       return makeTarget('Z3-4', {
@@ -148,7 +148,7 @@ export function getWorkoutHRTarget(workoutType: string, zones: HRZones | undefin
         max: zones.z4.max,
       }, 'Mixed');
     case 'hill_repeats':
-      // Short reps with walk-back recovery — session average is lower
+      // Short reps with walk-back recovery. Session average is lower
       return makeTarget('Z3-4', {
         min: zones.z3.min,
         max: zones.z4.max,
@@ -196,9 +196,9 @@ export function calculateIntensityScore(actualBpm: number, target: HRTarget): nu
  * Compute HR effort score: how hard a workout was relative to its target HR zone.
  *
  * Returns a score where:
- *   < 0.9  = undercooked (HR well below target — session was too easy)
+ *   < 0.9  = undercooked (HR well below target. Session was too easy)
  *   0.9–1.1 = on target
- *   > 1.1  = overcooked (HR above target — session was harder than planned)
+ *   > 1.1  = overcooked (HR above target. Session was harder than planned)
  *
  * Returns null if no HR data or no applicable target zone.
  */
@@ -217,7 +217,7 @@ export function computeHREffortScore(
   if (halfRange <= 0 || midpoint <= 0) return null;
 
   // 1.0 at midpoint; scales linearly away from it.
-  // e.g. avgHR at target.max → 1.0 + halfRange/halfRange*0.5 = 1.5? No — we want gentler.
+  // e.g. avgHR at target.max → 1.0 + halfRange/halfRange*0.5 = 1.5? No. We want gentler.
   // Score = 1.0 + (avgHR - midpoint) / halfRange * 0.5
   // So at target.max: 1.5, at target.min: 0.5? Too aggressive.
   // Better: normalise so target.min → 0.8, target.max → 1.2, midpoint → 1.0
@@ -240,7 +240,7 @@ export function calculateEfficiencyShift(
   const rpeDelta = rpe - expectedRpe;
   const hrDelta = hrIntensity - 1.0; // gap from target center
   const isInterval = ['vo2', 'intervals', 'hill_repeats'].includes(workoutType);
-  const HR_THRESHOLD = 0.2; // Symmetric threshold — HR must deviate this much to matter
+  const HR_THRESHOLD = 0.2; // Symmetric threshold. HR must deviate this much to matter
 
   // Scale with RPE magnitude: bigger RPE gap = bigger HR influence
   const rpeMag = Math.min(Math.abs(rpeDelta) / 3, 1.0);
@@ -248,7 +248,7 @@ export function calculateEfficiencyShift(
   let shift = 0;
 
   if (rpeDelta === 0) {
-    // RPE matched expected — HR provides standalone signal
+    // RPE matched expected. HR provides standalone signal
     if (hrDelta < -HR_THRESHOLD) {
       shift = 0.15;   // HR below target = fitter than plan assumes
     } else if (hrDelta > HR_THRESHOLD) {
@@ -257,16 +257,16 @@ export function calculateEfficiencyShift(
   } else if (rpeDelta < 0) {
     // Felt easier than expected
     if (hrDelta < -HR_THRESHOLD) {
-      shift = 0.3 * rpeMag;    // Pure efficiency — both signals agree
+      shift = 0.3 * rpeMag;    // Pure efficiency. Both signals agree
     } else if (hrDelta > HR_THRESHOLD) {
-      shift = -0.25 * rpeMag;  // Cardio strain — felt easy but HR was high
+      shift = -0.25 * rpeMag;  // Cardio strain. Felt easy but HR was high
     }
   } else {
     // Felt harder than expected
     if (hrDelta > HR_THRESHOLD) {
-      shift = -0.15 * rpeMag;  // Legitimate struggle — both signals agree
+      shift = -0.15 * rpeMag;  // Legitimate struggle. Both signals agree
     } else if (hrDelta < -HR_THRESHOLD && isInterval) {
-      shift = -0.35 * rpeMag;  // Central fatigue — effort high but HR suppressed
+      shift = -0.35 * rpeMag;  // Central fatigue. Effort high but HR suppressed
     }
   }
 

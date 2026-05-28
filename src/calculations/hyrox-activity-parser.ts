@@ -8,7 +8,7 @@
  * race-realistic breakdown.
  *
  * Detection signal stack
- *   1. Activity name regex (`hyrox`, `mixed session`, `roxfit`) — already in
+ *   1. Activity name regex (`hyrox`, `mixed session`, `roxfit`). Already in
  *      `activity-matcher.ts`. Strongest signal.
  *   2. Lap structure: 16 alternating laps with run laps ~1km. Native HYROX
  *      modes (Garmin Q1 2026, Coros Spring 2026, Amazfit) emit this layout.
@@ -16,7 +16,7 @@
  *      → likely HYROX, even if name didn't match.
  *
  * Output is best-effort. When laps are missing/sparse we degrade to "session
- * matched, no per-station decomposition" — the caller still benefits from the
+ * matched, no per-station decomposition". The caller still benefits from the
  * MTL accumulator update.
  */
 
@@ -79,7 +79,7 @@ export function parseHyroxActivity(activityName: string | null | undefined, laps
   const empty: HyroxParsedActivity = { isHyrox: false, detectionSource: 'none', legs: [] };
   if (!laps || laps.length === 0) {
     if (activityName && HYROX_NAME_RE.test(activityName)) {
-      // Name match without lap data — treat as HYROX without decomposition.
+      // Name match without lap data. Treat as HYROX without decomposition.
       return { isHyrox: true, detectionSource: 'name', legs: [] };
     }
     return empty;

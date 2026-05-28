@@ -1,5 +1,5 @@
 /**
- * Brick detection — two sequential activities within a 30-minute gap become
+ * Brick detection. Two sequential activities within a 30-minute gap become
  * a single brick (§18.1).
  *
  * Canonical pattern: bike activity → run activity within 30 min of
@@ -15,7 +15,7 @@ import { BRICK_DETECTION_WINDOW_SEC, BRICK_FULL_ADAPT_COUNT } from '@/constants/
 
 export interface DetectionActivity {
   id: string;
-  sport: 'bike' | 'run' | 'swim' | string;  // Free-form — we pattern-match
+  sport: 'bike' | 'run' | 'swim' | string;  // Free-form. We pattern-match
   startTs: number;        // Unix seconds
   durationSec: number;
 }
@@ -44,7 +44,7 @@ export function detectBricks(activities: DetectionActivity[]): DetectedBrick[] {
 
     const aEnd = a.startTs + a.durationSec;
     const gap = b.startTs - aEnd;
-    if (gap < 0) continue;               // Overlap — not a brick
+    if (gap < 0) continue;               // Overlap. Not a brick
     if (gap > BRICK_DETECTION_WINDOW_SEC) continue;
 
     bricks.push({ bikeId: a.id, runId: b.id, gapSec: Math.round(gap) });
@@ -65,10 +65,10 @@ const BRICK_HALF_LIFE_WEEKS = 4;
  * decay so recent bricks count more than old ones (half-life = 4 weeks).
  *
  * Calibration: BRICK_FULL_ADAPT_COUNT weighted sessions = score 1.0 (fully adapted).
- * Millet & Vleck 2000 — 10–15 bricks saturate the running-economy adaptation.
+ * Millet & Vleck 2000. 10–15 bricks saturate the running-economy adaptation.
  *
  * @param detectedBricks - Output of detectBricks()
- * @param activities     - Same DetectionActivity[] passed to detectBricks() — needed for timestamps
+ * @param activities     - Same DetectionActivity[] passed to detectBricks(). Needed for timestamps
  * @param nowMs          - Current time in ms (defaults to Date.now())
  * @param lookbackWeeks  - How far back to look (default 12 weeks)
  */

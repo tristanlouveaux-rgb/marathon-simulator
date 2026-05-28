@@ -1,25 +1,25 @@
 /**
- * Triathlon race forecast fingerprint — chip set that maps 1:1 to inputs of
+ * Triathlon race forecast fingerprint. Chip set that maps 1:1 to inputs of
  * `predictTriathlonRace`. Each chip surfaces one real math factor; missing
  * data is called out via the "Missing: …" line beneath the grid.
  *
  * Always-on chips (every chip always feeds the math, even when the value is
  * a default):
- *   You          — PB blend anchor + post-race calibration bias
- *   Capacity     — current CSS · FTP · VDOT (projection in drill-down)
- *   Adaptation   — per-discipline ratios from 5 signals
- *   Training     — planned sessions + hours per discipline
- *   Readiness    — per-discipline endurance scores (replaces the standalone card above)
- *   Durability   — long-ride / long-run vs threshold → run-leg cap
- *   Bricks       — brick adaptation → reduces run-leg fatigue discount
- *   Open water   — OW adaptation → reduces swim OW penalty
- *   Venue        — empirical / physical course factors per leg
- *   Transitions  — T1/T2 clock-time addition
+ *   You. PB blend anchor + post-race calibration bias
+ *   Capacity. Current CSS · FTP · VDOT (projection in drill-down)
+ *   Adaptation. Per-discipline ratios from 5 signals
+ *   Training. Planned sessions + hours per discipline
+ *   Readiness. Per-discipline endurance scores (replaces the standalone card above)
+ *   Durability. Long-ride / long-run vs threshold → run-leg cap
+ *   Bricks. Brick adaptation → reduces run-leg fatigue discount
+ *   Open water. OW adaptation → reduces swim OW penalty
+ *   Venue. Empirical / physical course factors per leg
+ *   Transitions. T1/T2 clock-time addition
  *
  * Conditional chips (only render when the factor is actively contributing):
- *   Heat         — race climate is warm/hot/hot-humid
- *   Marathon     — IM only AND a marathon PB is logged
- *   Calibration  — ≥2 races logged
+ *   Heat. Race climate is warm/hot/hot-humid
+ *   Marathon. IM only AND a marathon PB is logged
+ *   Calibration. ≥2 races logged
  *
  * Tap a chip → `renderTriForecastChipDetail()` in `forecast-chip-detail-view.ts`.
  */
@@ -45,7 +45,7 @@ interface TriChip {
   addCta?: string;
 }
 
-// ── Chip builders — one per math factor ──────────────────────────────────────
+// ── Chip builders. One per math factor ──────────────────────────────────────
 
 function buildYou(s: SimulatorState): TriChip {
   const tri = s.triConfig;

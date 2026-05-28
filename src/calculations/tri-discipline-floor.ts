@@ -56,7 +56,7 @@ export function computeTriDisciplineFloorTSS(
 
 /**
  * Sum of (aerobic + anaerobic) over the week's tri workouts of the given
- * discipline. Includes completed/replaced/skipped — this is "what was
+ * discipline. Includes completed/replaced/skipped. This is "what was
  * originally planned" not "what's still upcoming" (the floor is a per-week
  * volume target, not a per-remaining-session constraint).
  */

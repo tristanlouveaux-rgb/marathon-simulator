@@ -1,5 +1,5 @@
 /**
- * Lookup smoke test — exercise the empirical-course-factor lookup against
+ * Lookup smoke test. Exercise the empirical-course-factor lookup against
  * canonical race names from `src/data/triathlons.ts` and report coverage.
  *
  * Run with: `npx tsx src/validation/lookup-test.ts`

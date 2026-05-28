@@ -43,7 +43,7 @@ describe('applyHoursBudget — soft-floor fallback', () => {
 
   it('drops to the soft easy floor (15m) when standard floor would still overflow', () => {
     // 1.5 hr = 90 min budget for a half-marathon plan with 4 runs and a long
-    // run > 60 min — guaranteed to overflow standard floors.
+    // run > 60 min. Guaranteed to overflow standard floors.
     const intents = planWeekSessions({ ...baseCtx, weeklyHoursTarget: 1.5 });
     const easyIntents = intents.filter(i => i.slot === 'easy');
     if (easyIntents.length > 0) {
@@ -64,13 +64,13 @@ describe('applyHoursBudget — soft-floor fallback', () => {
   });
 
   it('never scales easy below 15m or long below 30m even at impossibly low budgets', () => {
-    // 30 min budget — physically impossible for a 4-run half-marathon plan.
+    // 30 min budget. Physically impossible for a 4-run half-marathon plan.
     const intents = planWeekSessions({ ...baseCtx, weeklyHoursTarget: 0.5 });
     for (const i of intents) {
       if (i.slot === 'easy') expect(i.totalMinutes).toBeGreaterThanOrEqual(15);
       if (i.slot === 'long') expect(i.totalMinutes).toBeGreaterThanOrEqual(30);
     }
-    // Total should still overflow at this point — that's fine, the UI banner
+    // Total should still overflow at this point. That's fine, the UI banner
     // surfaces it. We just don't compress further.
     expect(totalMin(intents)).toBeGreaterThan(30);
   });
@@ -84,7 +84,7 @@ describe('applyHoursBudget — soft-floor fallback', () => {
   });
 
   it('respects the budget when it is achievable at the standard floor', () => {
-    // 5 hr = 300 min budget — achievable with mild trimming.
+    // 5 hr = 300 min budget. Achievable with mild trimming.
     const intents = planWeekSessions({ ...baseCtx, weeklyHoursTarget: 5 });
     expect(totalMin(intents)).toBeLessThanOrEqual(300);
     // Standard floor preserved.

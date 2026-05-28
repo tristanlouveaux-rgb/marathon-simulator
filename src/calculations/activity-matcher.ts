@@ -1,5 +1,5 @@
 /**
- * Garmin Activity Matcher — matches synced Garmin activities to planned workouts
+ * Garmin Activity Matcher. Matches synced Garmin activities to planned workouts
  * and auto-completes them, or logs unmatched activities as ad-hoc workouts.
  */
 
@@ -56,7 +56,7 @@ export interface GarminActivityRow {
    *  activity isn't an interval session. */
   repData?: ActivityRepData | null;
   /** Activity name as titled by the user / device (e.g. "HYROX Sim", "Mixed Session").
-   *  Used for HYROX detection when activity_type is missing — Strava and Garmin do not
+   *  Used for HYROX detection when activity_type is missing. Strava and Garmin do not
    *  yet expose a HYROX type, so name regex is the fallback signal. */
   activity_name?: string | null;
 }
@@ -76,12 +76,12 @@ function mapGarminType(garminType: string, activityName?: string | null): Extern
     case 'TRACK_RUNNING':
       return 'run';
 
-    // Gym / strength — these match planned gym sessions
+    // Gym / strength. These match planned gym sessions
     case 'STRENGTH_TRAINING':
     case 'HIIT':
       return 'gym';
 
-    // Generic fitness / sports / recreation — logged as cross-training, no gym-session matching
+    // Generic fitness / sports / recreation. Logged as cross-training, no gym-session matching
     case 'INDOOR_CARDIO':
     case 'FITNESS_EQUIPMENT':
     case 'CARDIO':
@@ -219,7 +219,7 @@ export function getPaceAdherence(
 
 /**
  * Compute HR effort score for an activity using user's HR profile from state.
- * NOTE: "Garmin" naming is historical — avgHR comes from Strava HR streams
+ * NOTE: "Garmin" naming is historical. AvgHR comes from Strava HR streams
  * (or Garmin where connected). All activity sources flow through this path.
  */
 export function getHREffort(
@@ -239,7 +239,7 @@ export function getHREffort(
 /**
  * Derive RPE from available data (priority chain).
  *
- * 1. Garmin RPE (from activityDetails enrichment — most accurate)
+ * 1. Garmin RPE (from activityDetails enrichment. Most accurate)
  * 2. HR zone mapping using Karvonen (requires HR profile; estimates max from age if needed)
  * 3. Garmin Training Effect aerobic value (0-5 scale → RPE)
  * 4. Activity type heuristic (walks are easy, strength is moderate)
@@ -252,12 +252,12 @@ export function deriveRPE(
   restingHR?: number,
   age?: number,
 ): number {
-  // 1. Garmin RPE — use directly if available and in valid range
+  // 1. Garmin RPE. Use directly if available and in valid range
   if (row.garmin_rpe != null && row.garmin_rpe >= 1 && row.garmin_rpe <= 10) {
     return row.garmin_rpe;
   }
 
-  // 2. HR zone mapping — estimate maxHR from age if not manually configured
+  // 2. HR zone mapping. Estimate maxHR from age if not manually configured
   if (row.avg_hr != null) {
     const estimatedMax = maxHR || (age ? Math.round(220 - age) : null);
     const estimatedResting = restingHR || 55; // Conservative default
@@ -310,7 +310,7 @@ export function deriveRPE(
  * @param weekIdx  1-based week index to generate for (may differ from s.w for historic weeks)
  */
 function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week, weekIdx: number): Workout[] {
-  // Track-only users have no plan — every matched activity falls through to
+  // Track-only users have no plan. Every matched activity falls through to
   // the adhoc path, and returning an empty list avoids passing stale defaults
   // into generateWeekWorkouts.
   if (s.trackOnly) return [];
@@ -402,7 +402,7 @@ function regenerateWeekWorkouts(s: ReturnType<typeof getMutableState>, wk: Week,
  *
  * Exported so the launch-time anchor consistency check
  * (`assertPlanAnchorConsistent` in welcome-back.ts) can mirror the matcher's
- * exact routing logic — anything that diverges here would file activities
+ * exact routing logic. Anything that diverges here would file activities
  * differently from what the check would assert against.
  */
 export function weekIndexForDate(date: Date, s: ReturnType<typeof getMutableState>): number | null {
@@ -421,7 +421,7 @@ export function weekIndexForDate(date: Date, s: ReturnType<typeof getMutableStat
 /**
  * Resolve iTRIMP for a Garmin activity row.
  * Uses the Strava-computed value when available (Tier 1/2); otherwise falls back
- * to the summary estimate from avg_hr + duration (Tier 3 — Banister formula).
+ * to the summary estimate from avg_hr + duration (Tier 3. Banister formula).
  * Returns null when there is insufficient HR data to compute anything meaningful.
  */
 function resolveITrimp(
@@ -442,7 +442,7 @@ function resolveITrimp(
  * 7-day rolling median of restingHR from physiologyHistory.
  * Smooths out day-to-day spikes (illness, alcohol, poor sleep) so iTRIMP isn't
  * understated on high-RHR days. Requires ≥3 readings; falls back to the raw
- * snapshot when history is sparse. Median beats mean here — a single spike
+ * snapshot when history is sparse. Median beats mean here. A single spike
  * should not drag the baseline.
  */
 export function computeRollingRestingHR(
@@ -528,7 +528,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
   // zones, route and km splits that a Garmin webhook summary (garmin-) lacks.
   // When both exist for the same activity (start ±4h + duration within 15%, or
   // ±10 min when duration is unknown), keep Apple and drop the Garmin summary.
-  // Strava still wins over both — the pass above already removed any non-Strava
+  // Strava still wins over both. The pass above already removed any non-Strava
   // row colliding with a Strava row, so by here a surviving apple- row has no
   // Strava counterpart. Mirrors the Strava-over-Garmin pass exactly.
   for (const week of s.wks) {
@@ -623,7 +623,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       const id = `garmin-${item.garminId}`;
       if (!wk.adhocWorkouts) wk.adhocWorkouts = [];
       if (wk.adhocWorkouts.some(w => w.id === id)) {
-        // Already exists as adhoc — just fix the garminMatched pointer
+        // Already exists as adhoc. Just fix the garminMatched pointer
         wk.garminMatched[item.garminId] = id;
         enrichChanged = true;
         continue;
@@ -716,13 +716,13 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
         if (actual.garminId.startsWith('strava-')) continue; // already Strava
         if (!actual.startTime) continue;
         const timeDiff = Math.abs(rowStartMs - new Date(actual.startTime).getTime());
-        if (timeDiff > 4 * 60 * 60 * 1000) continue; // > 4h apart — different activity
+        if (timeDiff > 4 * 60 * 60 * 1000) continue; // > 4h apart. Different activity
         // Within 4h: also require duration within 15% to avoid false matches
         if (actual.durationSec > 0 && row.duration_sec > 0) {
           const durRatio = Math.abs(actual.durationSec - row.duration_sec) / Math.max(actual.durationSec, row.duration_sec);
           if (durRatio > 0.15) continue;
         }
-        // Same activity — replace with Strava data, keeping plan-slot metadata
+        // Same activity. Replace with Strava data, keeping plan-slot metadata
         const oldId = actual.garminId;
         const stravaDisplayName = row.activity_type ? formatActivityType(row.activity_type) : (actual.displayName ?? undefined);
         week.garminActuals[workoutId] = {
@@ -767,10 +767,10 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
     }
     // Also upgrade garminPending items (activity not yet assigned to a slot).
     // Guard: skip if the garminActuals upgrade already assigned this strava ID to a real
-    // slot — the pending item's garminId update is cosmetic and must not overwrite the
+    // slot. The pending item's garminId update is cosmetic and must not overwrite the
     // slot mapping with '__pending__', which would break the re-enrich loop on future syncs.
     if (globalProcessed.has(row.garmin_id)) {
-      // garminActuals upgrade already handled this row — update pending item's garminId
+      // garminActuals upgrade already handled this row. Update pending item's garminId
       // for display consistency, but do NOT touch garminMatched.
       for (const week of s.wks) {
         if (!week.garminPending) continue;
@@ -974,7 +974,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
     for (const row of weekRows) {
       // Skip activities already fully processed (matched to a plan slot or logged as adhoc).
-      // '__pending__' is not a final state — those are re-tried on each sync.
+      // '__pending__' is not a final state. Those are re-tried on each sync.
       const existingMatch = wk.garminMatched![row.garmin_id];
       if (existingMatch && existingMatch !== '__pending__') continue;
 
@@ -983,7 +983,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
       // HYROX mode: only reclassify activities as planned station/brick work
       // when the signal is reasonably specific. Previously this matched any of
       // {HIIT, STRENGTH_TRAINING, CROSS_TRAINING, FUNCTIONAL_TRAINING, CARDIO,
-      // AEROBIC_TRAINING, INDOOR_CARDIO} — that buckets too aggressively and
+      // AEROBIC_TRAINING, INDOOR_CARDIO}. That buckets too aggressively and
       // mislogs a casual gym session or cardio class as completed station work.
       // New rule: name regex (hyrox/mixed session/roxfit) OR activity_type === 'HIIT'
       // (the most HYROX-shaped of the buckets). Other types fall through to
@@ -1048,7 +1048,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
             workoutName: stationMatch.n,
           };
 
-          // Accumulate ACTUAL MTL from the matched workout — weeklyMTL holds the planned target;
+          // Accumulate ACTUAL MTL from the matched workout. WeeklyMTL holds the planned target;
           // weeklyActualMTL holds completed station/brick load *this* week only. Skip the
           // accumulator for past-week matches (e.g. backfilled historical activities)
           // to avoid corrupting the current-week display.
@@ -1061,13 +1061,13 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           // imported, full Garmin laps separately), try to decompose into per-station
           // times and update calibrated benchmarks on PB. Best-effort, silent on failure.
           if (s.hyroxConfig && nameLooksLikeHyrox) {
-            // We don't yet have GarminLap[] on row — just kmSplits. Schedule a follow-up
+            // We don't yet have GarminLap[] on row. Just kmSplits. Schedule a follow-up
             // import once full lap data lands; for now use the name signal alone to flag
             // the activity for the activity-detail page to surface a "parse this" CTA.
             (wk.garminActuals[workoutId] as any).hyroxParserHint = 'name-detected';
           }
 
-          // Signal B TSS (no runSpec discount — station work is primary load in HYROX)
+          // Signal B TSS (no runSpec discount. Station work is primary load in HYROX)
           const rawITrimp = resolveITrimp(row, rhrBaseline, s.maxHR, s.biologicalSex);
           const rawTSS = (rawITrimp != null && rawITrimp > 0)
             ? (rawITrimp * 100) / 15000
@@ -1103,7 +1103,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
           continue;
         }
 
-        // No station plan match — fall through to standard non-run handling
+        // No station plan match. Fall through to standard non-run handling
         // (adhoc for past weeks, pending for current week)
         if (isPastWeek) {
           const id = `garmin-${row.garmin_id}`;
@@ -1271,7 +1271,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
       if (appType !== 'run') {
         if (isPastWeek) {
-          // Past week: log cross-training as adhoc directly — the plan for that week
+          // Past week: log cross-training as adhoc directly. The plan for that week
           // is already done, so no point queuing for modal review.
           const id = `garmin-${row.garmin_id}`;
           const rpe = deriveRPE(row, 5, s.maxHR, s.restingHR, s.onboarding?.age);
@@ -1406,7 +1406,7 @@ export function matchAndAutoComplete(rows: GarminActivityRow[]): {
 
         // Musculoskeletal impact load (km-based for running). For commute
         // runs carried with a backpack, ground reaction force scales linearly
-        // with total mass — bump impact by `(body + pack) / body`. HR-based
+        // with total mass. Bump impact by `(body + pack) / body`. HR-based
         // iTRIMP already captures the metabolic side, so we only adjust the
         // structural-stress (Signal C) signal. See SCIENCE_LOG §AD.
         const baseImpactPerKm = IMPACT_PER_KM[match.matchedWorkout.t] ?? 1.0;
@@ -1626,7 +1626,7 @@ export function mapAppTypeToSport(appType: string): string {
   }
 }
 
-// applyGarminCrossTraining() was removed — cross-training processing is now in
+// applyGarminCrossTraining() was removed. Cross-training processing is now in
 // activitySync.ts with user-facing modals. See processPendingCrossTraining().
 
 /** Add a Garmin activity as an ad-hoc workout visible in the Garmin section */
@@ -1664,7 +1664,7 @@ function addAdhocWorkout(wk: Week, row: GarminActivityRow, appType: string, id: 
 
   wk.adhocWorkouts.push(workout);
 
-  // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)
+  // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
   const rawITrimp = row.iTrimp ?? null;
   const rawTSS = (rawITrimp != null && rawITrimp > 0)
     ? (rawITrimp * 100) / 15000
@@ -1781,7 +1781,7 @@ export function addAdhocWorkoutFromPending(wk: Week, item: GarminPendingItem, id
     };
   }
 
-  // Signal B TSS (raw iTRIMP, no runSpec) — feeds ACWR / injury risk (see PRINCIPLES.md)
+  // Signal B TSS (raw iTRIMP, no runSpec). Feeds ACWR / injury risk (see PRINCIPLES.md)
   const rawITrimp = item.iTrimp ?? null;
   const rawTSS = (rawITrimp != null && rawITrimp > 0)
     ? (rawITrimp * 100) / 15000

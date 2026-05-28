@@ -1,6 +1,6 @@
 /**
  * Smoke tests for the tri week-debrief logic. Pure data assembly is exposed
- * via showTriWeekDebrief — but we don't render the DOM in tests, we just
+ * via showTriWeekDebrief. But we don't render the DOM in tests, we just
  * verify the underlying computations come out right by exercising the data
  * helpers it relies on.
  */

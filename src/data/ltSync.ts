@@ -1,15 +1,15 @@
 /**
- * LT Sync — recomputes the active lactate-threshold value from all available
+ * LT Sync. Recomputes the active lactate-threshold value from all available
  * inputs and applies it to state.
  *
  * Decision flow:
  *   1. Build derive inputs (VDOT, maxHR, PBs, sustained-running activities, optional fresh
  *      Garmin reading, optional user override) from state.
- *   2. Call `resolveLT()` — this returns the value the app *should* use given
+ *   2. Call `resolveLT()`. This returns the value the app *should* use given
  *      the priority chain (override > fresh Garmin > blended derived).
  *   3. If a fresh Garmin reading exists AND our derived value differs by
  *      >10s/km, stash a `ltSuggestion` so the LT detail page can ask the user
- *      to choose. Otherwise apply silently — `s.lt` flows into pace zones
+ *      to choose. Otherwise apply silently. `s.lt` flows into pace zones
  *      (`paces.gp`) and the LT bar.
  *
  * Pure: this module reads/writes `s.lt`/`s.ltSuggestion`/`s.ltSource` etc.
@@ -45,12 +45,12 @@ function pbsToBestEfforts(s: SimulatorState): BestEffortInput[] {
  * elevation, pace CV); we just hand it the raw runs.
  *
  * Sources merged:
- *   - `s.wks[].garminActuals` — populated post-onboarding by standalone sync.
- *   - `s.onboardingRunHistory` — seeded by the Strava backfill at onboarding,
+ *   - `s.wks[].garminActuals`. Populated post-onboarding by standalone sync.
+ *   - `s.onboardingRunHistory`. Seeded by the Strava backfill at onboarding,
  *     before plan generation builds wks. Without this the empirical LT path
  *     would be blind during the entire review screen for fresh users.
  *
- * Dedup by startTime — the same run can appear in both buckets once weeks
+ * Dedup by startTime. The same run can appear in both buckets once weeks
  * are generated and the activity gets matched.
  */
 function collectSustainedEfforts(s: SimulatorState): SustainedEffortInput[] {
@@ -65,7 +65,7 @@ function collectSustainedEfforts(s: SimulatorState): SustainedEffortInput[] {
       const aType = (a.activityType || '').toUpperCase();
       if (aType !== 'RUNNING' && !aType.includes('RUN')) continue;
       if (!a.startTime) continue;
-      if (!a.durationSec || a.durationSec < 1200) continue; // 20 min cutoff — saves work
+      if (!a.durationSec || a.durationSec < 1200) continue; // 20 min cutoff. Saves work
       if (!a.avgPaceSecKm || a.avgPaceSecKm <= 0) continue;
       seen.add(a.startTime);
       out.push({
@@ -100,7 +100,7 @@ function collectSustainedEfforts(s: SimulatorState): SustainedEffortInput[] {
       durationSec: r.durSec,
       avgPaceSecKm,
       avgHR: r.avgHR ?? null,
-      // Quality fields are optional — populated when the entry was seeded from
+      // Quality fields are optional. Populated when the entry was seeded from
       // the DB (rich shape), absent when seeded only from the edge function's
       // lightweight summary. The derivation engine treats absent fields as
       // "filter does not apply" rather than failing the run.
@@ -188,7 +188,7 @@ export function recomputeLT(
     now,
   };
 
-  // Derived-only result (ignores Garmin) — used for the conflict check.
+  // Derived-only result (ignores Garmin). Used for the conflict check.
   const derivedOnly = deriveLT({ ...inputs, garmin: null });
 
   // Resolved result (priority chain applied).
@@ -197,7 +197,7 @@ export function recomputeLT(
   // If user has overridden, normally apply it. Per CLAUDE.md "Manually-set
   // Benchmarks Yield to Improvements": auto-clear the override when the derived
   // estimate clearly beats it (faster pace, ≥3 s/km gap, derived confidence
-  // 'medium' or 'high'). The paired LTHR comes along — it's a single
+  // 'medium' or 'high'). The paired LTHR comes along. It's a single
   // physiological calibration, not a separable axis.
   if (s.ltOverride) {
     const ovrPace = s.ltOverride.ltPaceSecKm;
@@ -246,7 +246,7 @@ export function recomputeLT(
     }
   }
 
-  // No conflict (or no Garmin) — clear any stale suggestion and apply.
+  // No conflict (or no Garmin). Clear any stale suggestion and apply.
   if (s.ltSuggestion) delete s.ltSuggestion;
   if (!resolved.ltPaceSecKm) return 'none';
   applyResolved(s, resolved, now);

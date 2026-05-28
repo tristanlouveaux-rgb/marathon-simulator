@@ -35,7 +35,7 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
   let workoutId = '';
   let weekWorkouts: Workout[] = [];
 
-  // Track-only users have no planned workouts to match against — go straight
+  // Track-only users have no planned workouts to match against. Go straight
   // to the adhoc-save path. Skipping the generateWeekWorkouts call also avoids
   // passing stale defaults (s.rd='half', s.v=50) into the generator.
   if (!s.trackOnly && s.w >= 1 && s.w <= s.wks.length) {
@@ -94,7 +94,7 @@ export function handleCompletedRecording(recording: GpsRecording, workoutName: s
 /**
  * Handle an impromptu GPS run (not started from a workout card).
  * 1. Try to match to an unrated planned run by distance (± 30%) and pace type.
- *    Day-of-week is intentionally ignored — the run could have been done on any day.
+ *    Day-of-week is intentionally ignored. The run could have been done on any day.
  * 2. If match found → offer assignment to that workout.
  * 3. Otherwise → save as adhoc and run load through suggestion pipeline.
  */
@@ -120,7 +120,7 @@ function handleImpromptuRun(
     return week.rated[wid] == null && week.rated[w.n] == null;
   });
 
-  // Match by distance proximity only — day-of-week does not matter for impromptu runs.
+  // Match by distance proximity only. Day-of-week does not matter for impromptu runs.
   // Pick the planned run whose distance is closest to the recorded distance, within ±30%.
   // Optionally tiebreak by pace plausibility: if we have average pace, prefer a workout
   // type whose intensity aligns (e.g. avoid matching a slow easy-pace run to an interval session).
@@ -247,7 +247,7 @@ const QUALITY_RUN_TYPES = new Set(['threshold', 'vo2', 'intervals', 'race_pace',
 
 /**
  * Find the best planned run to match an impromptu recording.
- * Matching is by distance only (± 30%) — day-of-week is ignored.
+ * Matching is by distance only (± 30%). Day-of-week is ignored.
  * When two candidates are equidistant, prefer the one whose type
  * aligns with the observed average pace:
  *   - pace > easyPace * 0.97  →  prefer easy/long workouts
@@ -288,7 +288,7 @@ function findRunByDistance(
 }
 
 /**
- * Small confirmation dialog: "Looks like [Workout Name] — assign to it?"
+ * Small confirmation dialog: "Looks like [Workout Name]. Assign to it?"
  */
 function showMatchConfirm(matchedWorkoutName: string, distKm: number): Promise<boolean> {
   return new Promise(resolve => {

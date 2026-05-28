@@ -10,7 +10,7 @@
  *   3. Distribute effective hours across runs / stations / bricks by HYROX_TIME_SPLIT
  *   4. Determine session kind mix for the phase (e.g. base = all easy, build = adds tempo+density)
  *   5. Generate each session via hyrox-generators.ts
- *   6. Enforce weekly MTL cap — downgrade highest-MTL sessions if over cap
+ *   6. Enforce weekly MTL cap. Downgrade highest-MTL sessions if over cap
  *   7. Schedule onto days via scheduler.hyrox.ts
  *   8. Wrap into Week[]
  */
@@ -133,7 +133,7 @@ function stationKinds(
         i === stationsPerWeek - 1 ? 'station_density' : 'station_technique'
       ) as Array<'station_technique' | 'station_density'>;
     case 'peak':
-      // Majority density in peak — race specificity
+      // Majority density in peak. Race specificity
       return Array.from({ length: stationsPerWeek }, (_, i) =>
         i === 0 ? 'station_technique' : 'station_density'
       ) as Array<'station_technique' | 'station_density'>;
@@ -159,10 +159,10 @@ function brickKind(
  * If the sum of session MTLs exceeds the cap, downgrade the highest-MTL
  * station or brick session to its lower-intensity sibling:
  *   station_density → station_technique
- *   brick → mini_brick (or reduce rounds in description — here we use a simple
+ *   brick → mini_brick (or reduce rounds in description. Here we use a simple
  *           flag approach: mark the session r and rpe down by 1, halve its MTL)
  *
- * This is intentionally simple — the MTL model is still calibrating (initial estimates).
+ * This is intentionally simple. The MTL model is still calibrating (initial estimates).
  * A proportional scale-down avoids over-engineering when the caps may shift after dogfooding.
  */
 function enforceMTLCap(sessions: Workout[], cap: number): Workout[] {
@@ -190,7 +190,7 @@ function generateWeekSessions(
   phase: 'base' | 'build' | 'peak' | 'taper'
 ): Workout[] {
   // Note (2026-05-26): clinical phase replacement removed for the same
-  // reason as in plan_engine.triathlon.ts — the discipline gates are
+  // reason as in plan_engine.triathlon.ts. The discipline gates are
   // the right mechanism for HYROX, not blanket "Complete Rest" cards
   // that ignore which components the user can still do.
 
@@ -216,7 +216,7 @@ function generateWeekSessions(
   const brickHours   = effectiveHours * HYROX_TIME_SPLIT.bricks;
 
   // Commute runs are appended on top of the prescribed HYROX run sessions,
-  // not substituted for them (revised 2026-05-20 — see SCIENCE_LOG §AK).
+  // not substituted for them (revised 2026-05-20. See SCIENCE_LOG §AK).
   // Commute-slot emission happens after the prescribed sessions are built.
   const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
     ? state.commuteConfig.commuteDaysPerWeek
@@ -254,7 +254,7 @@ function generateWeekSessions(
     }));
   }
 
-  // Station sessions — Week 1, first station slot is the assessment for everyone.
+  // Station sessions. Week 1, first station slot is the assessment for everyone.
   // Users with existing benchmarks can skip/replace it like any other workout; taking
   // it again refreshes their numbers.
   const needsAssessment = weekIndex === 1;
@@ -341,8 +341,8 @@ function generateWeekSessions(
 
   // Injury-mode discipline gating. Runs are gated by canRun; stations and
   // bricks are gated by canUpperLoad / canLowerLoad (HYROX stations mix
-  // upper-body load — wall ball, sandbag, carries, burpee — with lower-body
-  // load — sled, lunges — so if either side is blocked the whole station is
+  // upper-body load. Wall ball, sandbag, carries, burpee. With lower-body
+  // load. Sled, lunges. So if either side is blocked the whole station is
   // dropped at this coarse level). Per-component station gating is future
   // work.
   // Past weeks are skipped: a current injury cannot retroactively rewrite
@@ -375,7 +375,7 @@ function generateWeekSessions(
  *   capacity is below 100 (any restriction risks aggravation under
  *   stacked-intensity).
  *
- * Intensity is intentionally NOT capped — the slider is volume-only; the
+ * Intensity is intentionally NOT capped. The slider is volume-only; the
  * user self-regulates RPE in the moment.
  *
  * `weeksFromCurrent` retained for API compatibility; slider is the
@@ -406,7 +406,7 @@ function applyHyroxInjuryGates(
   const runCap   = getDisciplineCapacity(injuryState, 'run');
   const upperCap = getDisciplineCapacity(injuryState, 'upperLoad');
   const lowerCap = getDisciplineCapacity(injuryState, 'lowerLoad');
-  // Stations mix both halves — the more restrictive side wins.
+  // Stations mix both halves. The more restrictive side wins.
   const stationCap = Math.min(upperCap, lowerCap);
   // Brick stacks stations + runs; ANY restriction drops it.
   const brickSafe = runCap >= 100 && stationCap >= 100;
@@ -456,7 +456,7 @@ function applyHyroxInjuryGates(
 // ─── Single-week regenerator (used by injury-gate updates) ───────────────────
 
 /**
- * Regenerate a single HYROX week in-place — preserves the existing Week's
+ * Regenerate a single HYROX week in-place. Preserves the existing Week's
  * actuals / rated / skip arrays, replaces triWorkouts. Mirrors the tri
  * regenerator and is called after an injury gate change so the plan reflects
  * the new gates immediately (the version-bump path in main.ts only fires

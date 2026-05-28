@@ -16,24 +16,24 @@ import { weekVolumeBudgetKm, type Archetype } from './athlete-archetype';
  * dose at the current session count": a periodised plan ramps volume above the
  * maintenance level to drive adaptation, then tapers below it for race day.
  * The horizon model already removes taper weeks from `weeks_eff`, so we feed
- * the *build-phase* mean — not peak (which would over-state the integral) and
+ * the *build-phase* mean. Not peak (which would over-state the integral) and
  * not the bare reference (which assumes flat maintenance volume).
  */
 const PLAN_BUILD_PHASE_FACTOR = 1.2;
 
 /**
  * Plan-prescribed mean weekly running volume across the build phase.
- * Used as the dose input to the horizon model — represents what the plan
+ * Used as the dose input to the horizon model. Represents what the plan
  * WILL deliver if the user follows it, not what they're currently doing.
  *
  * Two modes:
  *
- *  1. **Ramp-integral mode** (preferred — when `baselineKm`, `archetype`, and
+ *  1. **Ramp-integral mode** (preferred. When `baselineKm`, `archetype`, and
  *     `totalWeeks` are provided): forward-simulates the archetype-gated ramp
  *     starting from baseline, summing weekly km across non-taper weeks and
  *     dividing by week count. Captures the truth that a ramping athlete (18
  *     km/wk now, building toward 70 km peak) does NOT average the formula
- *     value across the build phase — they average lower because early weeks
+ *     value across the build phase. They average lower because early weeks
  *     start near baseline. This is the dose Tanda should see.
  *
  *  2. **Legacy formula** (fallback when ramp inputs missing): `sessions ×
@@ -41,10 +41,10 @@ const PLAN_BUILD_PHASE_FACTOR = 1.2;
  *     is calibrated to Daniels/Pfitzinger intermediate plans (marathon=11 km,
  *     half=10, 10K=9, 5K=8). PLAN_BUILD_PHASE_FACTOR lifts the reference to
  *     match periodised mean. For consistent runners at baseline ≥ peak, the
- *     ramp clamps and both modes converge — no regression to existing
+ *     ramp clamps and both modes converge. No regression to existing
  *     prediction calibration.
  *
- * Returns null when sessions are unknown — caller should fall back to the
+ * Returns null when sessions are unknown. Caller should fall back to the
  * legacy `s.wkm` heuristic in that case.
  */
 export function getPlanPrescribedMeanWeeklyKm(
@@ -177,7 +177,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // 5K = 0.30 slow) per Joyner & Coyle (2008) decomposition.
   //
   // Falls back to legacy single-tau if dual-tau params are missing (defensive
-  // — the constants are populated in `training-params.ts`).
+  //. The constants are populated in `training-params.ts`).
   let week_factor: number;
   if (weeks_eff <= 0) {
     week_factor = 0;
@@ -217,7 +217,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Experience factor (7 levels). `returning` raised 1.15 → 1.35 (recalibration
   // 2026-05-06): Mujika & Padilla (2003) and Coyle (1985) detraining-then-
   // retraining studies show returning athletes regain capacity 1.5-2× faster
-  // than novices reach the same level — physiological "muscle memory" via
+  // than novices reach the same level. Physiological "muscle memory" via
   // satellite cell pools, capillary density preservation, and persistent
   // mitochondrial enzyme expression. The previous 1.15 only captured a small
   // fraction of this re-adaptation advantage.
@@ -233,7 +233,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
   // Base improvement (product of all factors)
   let improvement_pct = max_gain * type_mod * week_factor * session_factor * exp_factor;
 
-  // Undertraining penalty (if effective dose too low) — using effective_sessions
+  // Undertraining penalty (if effective dose too low). Using effective_sessions
   // so a user running 4× very short sessions still trips the penalty.
   const min_sess = TRAINING_HORIZON_PARAMS.min_sessions[distance_key] || 3.0;
   let undertrain_penalty = 0;
@@ -259,7 +259,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
     Math.min(TRAINING_HORIZON_PARAMS.max_gain_cap_pct, improvement_pct)
   );
 
-  // UNIVERSAL GUARDRAILS — cap improvement if volume/experience is insufficient
+  // UNIVERSAL GUARDRAILS. Cap improvement if volume/experience is insufficient
   improvement_pct = applyGuardrails(
     baseline_vdot, improvement_pct, target_distance, params
   );
@@ -281,7 +281,7 @@ export function applyTrainingHorizonAdjustment(params: TrainingHorizonInput): Tr
 }
 
 /**
- * Universal guardrails — cap VDOT gain if volume/experience/PBs don't support the projection.
+ * Universal guardrails. Cap VDOT gain if volume/experience/PBs don't support the projection.
  * Returns the (possibly reduced) improvement_pct.
  *
  * VDOT reference points (approx):
@@ -312,7 +312,7 @@ function applyGuardrails(
 
   // Helper: cap projected VDOT just below a barrier ceiling.
   // Skip the cap if the runner's baseline is already within 2 VDOT of the
-  // ceiling — they've already demonstrated fitness at that level.
+  // ceiling. They've already demonstrated fitness at that level.
   const capAt = (ceiling: number): number => {
     if (baseline_vdot >= ceiling - 2) return improvement_pct;
     if (projVdot <= ceiling) return improvement_pct;

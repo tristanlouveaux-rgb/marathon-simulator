@@ -6,7 +6,7 @@
  * The string `TODO_PASTE_HERE` marks values Tristan swaps in after completing
  * the RevenueCat dashboard setup. See `docs/REVENUECAT_SETUP.md` for the runbook.
  *
- * Anything in this file is safe to ship — the iOS SDK key is a *publishable*
+ * Anything in this file is safe to ship. The iOS SDK key is a *publishable*
  * key. RevenueCat's threat model assumes attackers see it.
  */
 
@@ -32,8 +32,8 @@ export const COACH_OFFERING_ID = 'default';
 
 /**
  * App Store Connect product IDs (Step 3 + Step 4 of the runbook).
- * The paywall doesn't reference these directly — it goes through RevenueCat
- * packages — but they're declared here so analytics/debug logs can show the
+ * The paywall doesn't reference these directly. It goes through RevenueCat
+ * packages. But they're declared here so analytics/debug logs can show the
  * exact SKU the user bought.
  */
 export const PRODUCT_ID_MONTHLY = 'mosaic_ai_coach_monthly_v1';
@@ -41,7 +41,7 @@ export const PRODUCT_ID_ANNUAL  = 'mosaic_ai_coach_annual_v1';
 
 /**
  * True when the SDK key has been swapped in (i.e. RevenueCat dashboard is set up).
- * Other modules check this before attempting to init or query Purchases — keeps
+ * Other modules check this before attempting to init or query Purchases. Keeps
  * the app silent on dev machines where Tristan hasn't completed the runbook yet.
  */
 export function isRevenueCatConfigured(): boolean {

@@ -5,7 +5,7 @@
  *   - Long run → Sunday, long bike or brick → Saturday
  *   - Respect weekday hour cap: Mon–Fri combined must fit the user's
  *     available weekday hours (e.g. 9-to-5 users can only spare ~1h/day)
- *   - Quality sessions (threshold / VO2) spread across the week — no two
+ *   - Quality sessions (threshold / VO2) spread across the week. No two
  *     hard same-discipline sessions on consecutive days
  *   - Swim threshold mid-week (Wed) to separate from bike/run quality
  *   - Never double up the SAME discipline on the same day unless it's an
@@ -66,7 +66,7 @@ export function scheduleTriathlonWeek(
     return minutesOnDay[day] + workoutMinutes(w) <= cap + 15;  // 15 min tolerance
   };
 
-  // 1. Long session Saturday — brick replaces the long bike if present.
+  // 1. Long session Saturday. Brick replaces the long bike if present.
   if (brick) {
     place(5, brick);
   } else {
@@ -101,7 +101,7 @@ export function scheduleTriathlonWeek(
   placeByPreference(bike, BIKE_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
 
   // 6. Run sessions: quality tends to be first in the list. Tuesday easy,
-  //    Thursday quality is the template — we spread by preference.
+  //    Thursday quality is the template. We spread by preference.
   placeByPreference(run, RUN_DAYS, byDay, occupiedDisciplines, hasCapacity, place);
 
   // Flatten with dayOfWeek/dayName set
@@ -122,7 +122,7 @@ export function scheduleTriathlonWeek(
  *   1. Preferred days with capacity AND no same-discipline collision
  *   2. Weekend days (even if outside the discipline's preferred set) when
  *      weekday capacity is exhausted
- *   3. Preferred day with fewest sessions (last resort — exceeds cap)
+ *   3. Preferred day with fewest sessions (last resort. Exceeds cap)
  */
 function placeByPreference(
   workouts: Workout[],
@@ -140,7 +140,7 @@ function placeByPreference(
     if (dayIdx === undefined) {
       dayIdx = WEEKEND_INDEXES.find((d) => !occupied[d].has(disc) && hasCapacity(d, w));
     }
-    // 3. Weekend with capacity (collisions allowed — two-a-day)
+    // 3. Weekend with capacity (collisions allowed. Two-a-day)
     if (dayIdx === undefined) {
       dayIdx = WEEKEND_INDEXES.find((d) => hasCapacity(d, w));
     }

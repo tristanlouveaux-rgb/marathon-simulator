@@ -4,7 +4,7 @@ import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/page-flair';
 
 /**
- * Triathlon workout preview — the "research showcase" step for triathletes.
+ * Triathlon workout preview. The "research showcase" step for triathletes.
  *
  * Shows the swim, bike, run and brick session types the plan draws from.
  * Showcase only: no opt-out toggles. Triathlon plans interleave three

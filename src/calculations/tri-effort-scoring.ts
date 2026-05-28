@@ -9,7 +9,7 @@
  *   - Bike: power adherence vs FTP-derived target watts when power is present;
  *     HR-based fallback when no power.
  *
- * Run leg reuses the existing helpers — exported here for symmetry.
+ * Run leg reuses the existing helpers. Exported here for symmetry.
  *
  * **Side of the line**: tracking. Pure functions over a `GarminActual` and
  * the relevant benchmarks. Outputs are stored back onto `GarminActual` so the
@@ -38,18 +38,18 @@ export interface TriEffortScores {
 
 /**
  * Bike target IF (Intensity Factor = NP / FTP) by workout type. Anchors from
- * Coggan & Allen 2019 Ch. 4 — typical IF ranges per session category.
+ * Coggan & Allen 2019 Ch. 4. Typical IF ranges per session category.
  */
 const BIKE_TARGET_IF: Record<string, number> = {
   bike_endurance:   0.65,  // Z2 endurance
   bike_tempo:       0.80,  // Z3 tempo
   bike_sweet_spot:  0.88,  // SST
   bike_threshold:   0.95,  // Z4 threshold (sub-FTP intervals)
-  bike_vo2:         1.10,  // Z5 VO2max repeats — short bursts above FTP
+  bike_vo2:         1.10,  // Z5 VO2max repeats. Short bursts above FTP
   bike_hills:       0.90,  // Sustained climbs
   bike_over_under:  1.00,  // Alternating 105/95% averages threshold
   bike_vo2_micros:  1.05,  // 30s on / 30s off averages between threshold and VO2 over the set
-  bike_vlamax:      0.85,  // Short max sprints with full recovery — set IF stays moderate
+  bike_vlamax:      0.85,  // Short max sprints with full recovery. Set IF stays moderate
 };
 
 /**
@@ -68,7 +68,7 @@ const SWIM_TARGET_CSS_FRACTION: Record<string, number> = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// HR effort scoring — shared math (Karvonen-style HR reserve vs target zone)
+// HR effort scoring. Shared math (Karvonen-style HR reserve vs target zone)
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -91,7 +91,7 @@ function scoreHrEffort(
   const reserve = maxHrBpm - restingHrBpm;
   const lthrReserve = (ltHrBpm - restingHrBpm) / reserve;
   const hrReserve = (avgHr - restingHrBpm) / reserve;
-  // Target HR-reserve = lthrReserve × targetIf (linear scaling — accurate at
+  // Target HR-reserve = lthrReserve × targetIf (linear scaling. Accurate at
   // sub-threshold and around threshold; deviates at supra-threshold but those
   // sessions are short so error doesn't compound).
   const targetReserve = Math.max(0.01, lthrReserve * targetIf);
@@ -122,7 +122,7 @@ export function scoreBikeEffort(
     if (targetIf != null) {
       const rawAdherence = intensityFactor / targetIf;
       // Soft gradient: attenuation is maximum (50%) at centre, zero at band
-      // edge — continuously differentiable so there is no signal jump when
+      // edge. Continuously differentiable so there is no signal jump when
       // crossing the boundary (1 watt over the edge ≠ 3× stronger signal).
       // Outside the band: full raw deviation passes through.
       const bandHalf = BIKE_ADHERENCE_BAND[workout?.t ?? ''] ?? 0.07;
@@ -173,7 +173,7 @@ export function scoreSwimEffort(
 ): TriEffortScores {
   let paceAdherence: number | null = null;
 
-  // Swim pace from distance + duration — sec/100m
+  // Swim pace from distance + duration. Sec/100m
   if (actual.distanceKm != null && actual.durationSec != null && actual.distanceKm > 0) {
     const actualPaceSecPer100m = actual.durationSec / (actual.distanceKm * 10);
     if (cssSecPer100m != null && cssSecPer100m > 0 && workout) {

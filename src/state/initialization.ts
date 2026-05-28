@@ -36,7 +36,7 @@ export const MAX_ARCHIVED_PLANS = 12;
 /**
  * Strip storage-heavy display-only fields from a wks array before archival,
  * so a long-term user with 10+ plans doesn't run into localStorage quota
- * limits. Only `polyline` (multi-KB encoded GPS string) is dropped — that's
+ * limits. Only `polyline` (multi-KB encoded GPS string) is dropped. That's
  * 90%+ of the per-activity payload. kmSplits (one int per km) and hrZones
  * (5 ints) stay so the activity-detail popup still renders pace/zone charts
  * for archived activities. Map view loses the route trace; everything else
@@ -63,7 +63,7 @@ function _stripHeavyFieldsForArchive(weeks: any[]): any[] {
  * path replaces it with fresh plan scaffolding. Without this, every plan reset
  * (running plan generation, triathlon plan generation, downgrade-to-track-only,
  * legacy recalc paths) destroys 10+ weeks of garminActuals / adhocWorkouts /
- * RPE ratings — the data that drives the rolling-load chart, ACWR, freshness
+ * RPE ratings. The data that drives the rolling-load chart, ACWR, freshness
  * TSB history, sleep debt, and coach signals.
  *
  * Idempotent: skips when there's nothing worth archiving (no planStartDate, no
@@ -101,12 +101,12 @@ export function archiveCurrentWksIfPopulated(): void {
  * any activities from `s.previousPlanWks` whose start_time falls inside the new
  * plan window and re-feed them through `matchAndAutoComplete` so they land in
  * the correct new wk. Without this, regenerating a plan mid-week strands the
- * current week's activities in the archive — they never re-attach to the new
+ * current week's activities in the archive. They never re-attach to the new
  * plan unless the user manually triggers a Strava sync that re-fetches them.
  *
  * - Runs are matched to planned workouts (auto-complete on high-confidence).
  * - Cross-training is queued into `wk.garminPending` (current week) or logged
- *   as adhoc (past week) — exactly the same path as a live sync.
+ *   as adhoc (past week). Exactly the same path as a live sync.
  * - Dedup: garminId set tracks across all archives so an activity that exists
  *   in two archive entries is only re-fed once.
  *
@@ -172,7 +172,7 @@ export function redistributeArchivedActivitiesToNewPlan(): void {
   matchAndAutoComplete(rows);
 
   // Remove the redistributed activities from the archive so they don't appear
-  // twice — once in the live plan (where matchAndAutoComplete just put them)
+  // twice. Once in the live plan (where matchAndAutoComplete just put them)
   // and again in the past-plan view rendered off `previousPlanWks`.
   const redistributedIds = new Set(rows.map(r => r.garmin_id));
   for (const archive of archives) {
@@ -248,7 +248,7 @@ export function computeEffectiveRunnerType(
 }
 
 /**
- * Shared initialization logic — populates SimulatorState from OnboardingState.
+ * Shared initialization logic. Populates SimulatorState from OnboardingState.
  * Used by: wizard initializing step, demo button, dashboard re-calc.
  */
 export function initializeSimulator(state: OnboardingState): CalculationResult {
@@ -275,7 +275,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     }
 
     // Just-Track mode: no plan is generated, but the state scaffolding is the
-    // same as any non-event continuous user — a rolling week bucket so that
+    // same as any non-event continuous user. A rolling week bucket so that
     // activity sync, GPS recordings, readiness, CTL, and ACWR all work
     // unchanged. The only visible differences are: (1) no prescribed workouts
     // inside each week, (2) views hide prescription UI (today-workout,
@@ -286,7 +286,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.trackOnly = true;
       s.continuousMode = true;         // reuse non-event calendar extension path
       s.w = 1;
-      s.tw = 1;                        // rolling — advanceWeekToToday extends as calendar moves
+      s.tw = 1;                        // rolling. AdvanceWeekToToday extends as calendar moves
       s.wks = [{
         w: 1,
         ph: 'base',                    // harmless label; views hide phase for trackOnly
@@ -481,7 +481,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     s.lt = ltPace;
     s.ltPace = ltPace;
     s.vo2 = vo2max;
-    s.vo2UpdatedAt = undefined; // wizard source — preserve "no timestamp = fresh" policy
+    s.vo2UpdatedAt = undefined; // wizard source. Preserve "no timestamp = fresh" policy
     s.typ = effectiveRunnerType;           // Effective type used by engine
     s.calculatedRunnerType = calculatedRunnerType; // Physics-derived type
     s.b = b;
@@ -522,7 +522,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
       s.recurringActivities = [...state.recurringActivities];
     }
 
-    // Commute config — transfer from onboarding to state. wkm stays as the
+    // Commute config. Transfer from onboarding to state. wkm stays as the
     // user's chosen target weekly mileage; commute mileage is folded into
     // that target by the commute-aware plan engine (Phase 4), not added on
     // top. Adding it on top silently inflates volume and produces ACWR risk.
@@ -557,7 +557,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
     // Calculate expected final via shared forecast function. Anchor to the
     // blended race-time so the projected end-of-plan finish stays on the same
     // scale as the live "Current Race Estimate" surfaces (single canonical
-    // prediction model — see calculateForecast). Commute days are folded in
+    // prediction model. See calculateForecast). Commute days are folded in
     // here so the onboarding forecast matches the Training chip displayed on
     // the forecast page (see race-forecast-fingerprint.ts:123 for the mirror).
     const commuteSessions = state.runsToWork && state.commuteConfig?.enabled
@@ -582,7 +582,7 @@ export function initializeSimulator(state: OnboardingState): CalculationResult {
 
     // Store onboarding reference
     s.onboarding = state;
-    // Clear any stale Just-Track flag — this branch builds a real plan.
+    // Clear any stale Just-Track flag. This branch builds a real plan.
     s.trackOnly = false;
 
     // Continuous mode for non-event users (trainingForEvent is the authoritative flag)

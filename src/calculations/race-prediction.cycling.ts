@@ -3,7 +3,7 @@
  *
  * **Side of the line**: tracking. Produces a single-discipline finish time
  * for Gran Fondo / sportive / audax targets in cycling-only mode. Not used
- * by the triathlon predictor — that path goes through race-prediction.triathlon.ts.
+ * by the triathlon predictor. That path goes through race-prediction.triathlon.ts.
  *
  * Model: same physics engine as the triathlon bike leg (Martin et al. 1998,
  * `bike-physics.ts`). Intensity factor is duration-dependent per Allen &
@@ -94,7 +94,7 @@ export function predictCyclingEvent(state: SimulatorState): CyclingPrediction | 
   let avgKph: number;
 
   if (aero && hasMasses) {
-    // Full physics path — same as tri bike leg.
+    // Full physics path. Same as tri bike leg.
     const params = paramsFromProfile(aero, state.bodyWeightKg!, tri.bike!.bikeWeightKg!, course);
     const v = solveSpeed(raceWatts, params);
     avgKph = v > 0 ? msToKph(v) : fallbackKph(ftp, course);
@@ -150,7 +150,7 @@ export function predictCyclingEvent(state: SimulatorState): CyclingPrediction | 
 
   totalSec = Math.round(totalSec);
 
-  // Confidence range — narrows as race day approaches.
+  // Confidence range. Narrows as race day approaches.
   const weeksToRace = computeWeeksToRace(state);
   const rangeFrac = weeksToRace > 4 ? CYCLING_PREDICTION_RANGE_FAR : CYCLING_PREDICTION_RANGE_NEAR;
   const totalRangeSec: [number, number] = [

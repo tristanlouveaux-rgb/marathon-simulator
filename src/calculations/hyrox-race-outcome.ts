@@ -1,5 +1,5 @@
 /**
- * HYROX race-outcome logging — capture actual race-day finish time.
+ * HYROX race-outcome logging. Capture actual race-day finish time.
  * Mirrors `tri-race-outcome.ts` and `run-race-outcome.ts` for cross-mode
  * parity per the CLAUDE.md mirror rule.
  *
@@ -54,7 +54,7 @@ export function detectAndLogHyroxRaceOutcome(state: SimulatorState): HyroxRaceLo
   const existing = (hx.raceLog ?? []).find(e => e.dateISO === hx.raceDate);
   if (existing) return null;
 
-  // Window: 6h before midnight to 12h after — HYROX races are bounded.
+  // Window: 6h before midnight to 12h after. HYROX races are bounded.
   const winStart = raceTs - 6 * 3600 * 1000;
   const winEnd = raceTs + 12 * 3600 * 1000;
 

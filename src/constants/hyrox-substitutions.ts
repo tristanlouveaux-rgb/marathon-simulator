@@ -3,7 +3,7 @@
  *
  * Per-station bodyweight or low-equipment swaps for users who don't have
  * access to a specific piece of equipment. Each option preserves approximate
- * MTL — the substitute targets a similar muscle group at a similar load
+ * MTL. The substitute targets a similar muscle group at a similar load
  * (see Damas et al. 2016 on equivalent eccentric stimulus across modalities).
  *
  * Used by the workout detail modal's per-station "I don't have this" picker.

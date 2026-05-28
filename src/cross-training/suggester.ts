@@ -240,7 +240,7 @@ function defaultRpe(rpe: number | undefined | null): number {
 
 /**
  * @deprecated Use computeUniversalLoad from ./universalLoad instead.
- * Kept for reference only — no longer called by buildCrossTrainingPopup.
+ * Kept for reference only. No longer called by buildCrossTrainingPopup.
  */
 function resolveActivityLoad(
   act: CrossActivity,
@@ -434,7 +434,7 @@ function buildCandidates(
     const protect = workoutPriorityForRace(ctx, run.workoutType);
     sim -= 0.02 * protect;
 
-    // Already-downgraded penalty — push to bottom of candidate list
+    // Already-downgraded penalty. Push to bottom of candidate list
     if (run.alreadyDowngraded) sim -= 0.50;
 
     // Zone-profile matching: iTRIMP/zone classifier overrides raw load similarity for ranking
@@ -442,9 +442,9 @@ function buildCandidates(
       const runZone = workoutTypeToZone(run.workoutType);
       const zoneDiff = Math.abs(zoneOrder[actClassification.type] - zoneOrder[runZone]);
       if (zoneDiff === 0) {
-        sim += ZONE_MATCH_BONUS; // same intensity profile — strong match
+        sim += ZONE_MATCH_BONUS; // same intensity profile. Strong match
       } else if (zoneDiff === 2) {
-        sim -= ZONE_MISMATCH_PENALTY; // opposite ends (easy vs vo2) — penalise
+        sim -= ZONE_MISMATCH_PENALTY; // opposite ends (easy vs vo2). Penalise
       }
     }
 
@@ -496,7 +496,7 @@ function buildReduceAdjustments(
 
   // ── Km floor constraint ──────────────────────────────────────────────────
   // When ACWR is safe or low, don't reduce total planned running below the floor.
-  // When ACWR is caution or high, injury prevention wins — floor is ignored.
+  // When ACWR is caution or high, injury prevention wins. Floor is ignored.
   const floorActive = ctx.floorKm != null && ctx.floorKm > 0 &&
     (ctx.acwrStatus === 'safe' || ctx.acwrStatus === 'low' || ctx.acwrStatus == null);
   const totalPlannedKm = allPlannedKm ?? candidates.reduce((sum, c) => sum + c.run.plannedDistanceKm, 0);
@@ -535,7 +535,7 @@ function buildReduceAdjustments(
       if (adjustments.length > 0 && remainingLoad <= minLoadThreshold) break;
 
       // Quality workout downgrade (keeps distance, reduces intensity)
-      // Downgrades don't remove km — they're always allowed regardless of floor.
+      // Downgrades don't remove km. They're always allowed regardless of floor.
       if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
@@ -548,7 +548,7 @@ function buildReduceAdjustments(
 
         if (loadReduction <= minLoadThreshold) continue;
 
-        // Quality downgrade is all-or-nothing — we change the workout type, we
+        // Quality downgrade is all-or-nothing. We change the workout type, we
         // don't partially shrink it. Record the true loadReduction even if it
         // exceeds remainingLoad; the controlled overshoot is preferable to
         // suppressing the only viable Reduce option.
@@ -659,7 +659,7 @@ function buildReduceAdjustments(
         let maxReductionKm = Math.min(budgetKm, runKm * 0.25);
 
         // Floor constraint on long runs: protect at least 85% of the original distance
-        // when floor is active — long runs are critical for structural adaptation.
+        // when floor is active. Long runs are critical for structural adaptation.
         const longRunFloor = floorActive ? Math.max(MIN_LONG_KM, runKm * 0.85) : MIN_LONG_KM;
         // Also respect the weekly km floor
         const slack = floorSlack();
@@ -698,7 +698,7 @@ function buildReduceAdjustments(
   tryReduce(fresh, true);
   // Pass 2: Already-downgraded easy runs (distance reduction only, no quality downgrade)
   if (remainingLoad > minLoadThreshold) tryReduce(downgraded, false);
-  // Pass 3: Last resort — double-downgrade already-downgraded quality → easy
+  // Pass 3: Last resort. Double-downgrade already-downgraded quality → easy
   if (remainingLoad > minLoadThreshold) tryReduce(downgraded, true);
 
   return adjustments;
@@ -745,7 +745,7 @@ function buildReplaceAdjustments(
   const freshCandidates = candidates.filter(c => !c.run.alreadyDowngraded);
   const downgradedCandidates = candidates.filter(c => c.run.alreadyDowngraded);
 
-  // Sort replaceable candidates by cost (cheapest first — easy runs before quality)
+  // Sort replaceable candidates by cost (cheapest first. Easy runs before quality)
   // Fresh workouts first, then downgraded
   const freshReplacePool = freshCandidates
     .filter(c => canReplaceWorkout(sport, c.run.workoutType, ctx) && c.run.workoutType !== 'long')
@@ -766,7 +766,7 @@ function buildReplaceAdjustments(
 
       const runKm = run.plannedDistanceKm;
 
-      // Quality downgrade (keeps km — no floor impact)
+      // Quality downgrade (keeps km. No floor impact)
       if (isQualityWorkout(run.workoutType) && allowQualityDowngrade) {
         const newType = run.alreadyDowngraded ? ('easy' as WorkoutType) : downgradeType(run.workoutType);
         const rpe = run.workoutType === 'vo2' || run.workoutType === 'intervals' ? 8
@@ -853,7 +853,7 @@ function buildReplaceAdjustments(
     let madeProgress = false;
 
     // Try to replace one workout (fresh first, then downgraded)
-    // Replace removes all km — check floor before allowing it
+    // Replace removes all km. Check floor before allowing it
     while (replaceIdx < replacePool.length) {
       const { run, runLoad } = replacePool[replaceIdx];
       replaceIdx++;
@@ -998,7 +998,7 @@ export function buildCrossTrainingPopup(
   // Build candidate list (zone-profile classification improves ranking)
   const candidates = buildCandidates(weekRuns, aerobic, anaerobic, activity.dayOfWeek, ctx, actClassification);
 
-  // Build adjustments for each choice (load-based budgeting — total reduction ≤ RRC)
+  // Build adjustments for each choice (load-based budgeting. Total reduction ≤ RRC)
   // DEBUG: log load currency values
   console.log('[CrossTraining] === Load Currency Debug ===');
   console.log(`[CrossTraining] Activity: ${activity.duration_min}min ${sportKey} RPE ${defaultRpe(activity.rpe)}`);
@@ -1016,7 +1016,7 @@ export function buildCrossTrainingPopup(
     console.log(`  ${c.run.workoutId} (${c.run.workoutType}) ${c.run.plannedDistanceKm}km — stored: A${c.run.plannedAerobic} An${c.run.plannedAnaerobic} wl=${storedWL.toFixed(1)} | recalc wl=${recalcWL.toFixed(1)} | sim=${c.similarity.toFixed(3)}`);
   }
 
-  // §6.5 — detect edge cases before building adjustments
+  // §6.5. Detect edge cases before building adjustments
   // "Already completed": candidates empty but there ARE rated runs that would have matched
   const NON_RUN_TYPES = new Set(['gym', 'cross', 'strength', 'rest', 'swim', 'bike'] as const);
   const allRuns = weekRuns.filter(r => !NON_RUN_TYPES.has(r.workoutType as any));
@@ -1040,11 +1040,11 @@ export function buildCrossTrainingPopup(
 
   // Apply recovery multiplier to the reduction budget.
   // Cap the additional recovery contribution at 20 TSS equivalent (spec §6 guardrail).
-  // Recovery modulates reduction aggressiveness — doesn't dominate it.
+  // Recovery modulates reduction aggressiveness. Doesn't dominate it.
   const recoveryExtra = runReplacementCredit * (recoveryMultiplier - 1.0);
   let effectiveRRC = runReplacementCredit + Math.min(recoveryExtra, 20 * 15); // 20 TSS × 15 (load units per TSS approx)
 
-  // Cap budget to only the overshoot amount — don't reduce more than needed to hit target.
+  // Cap budget to only the overshoot amount. Don't reduce more than needed to hit target.
   // Use equivalentEasyKm to derive TSS capacity of full RRC, then scale proportionally.
   // Also dampen adjustment severity: small overshoot shouldn't touch many workouts.
   let adjustmentSeverity = severity; // may be dampened; severity stays for headline
@@ -1066,7 +1066,7 @@ export function buildCrossTrainingPopup(
     }
   }
 
-  // Hard cap on number of adjustments — overrides severity when caller requires a
+  // Hard cap on number of adjustments. Overrides severity when caller requires a
   // specific, small change (e.g. ACWR barely above ceiling → single easy-run trim).
   if (maxAdjustments != null) {
     if (maxAdjustments <= 1) {
@@ -1083,11 +1083,11 @@ export function buildCrossTrainingPopup(
     candidates, effectiveRRC, adjustmentSeverity, ctx, preserveMin, plannedCount, allPlannedKm
   );
 
-  // When budget is capped to overshoot, don't offer replacements — only reduce/downgrade.
+  // When budget is capped to overshoot, don't offer replacements. Only reduce/downgrade.
   // Replacing an entire run is disproportionate when the overshoot is small.
   const budgetWasCapped = (maxReductionTSS != null || maxAdjustments != null) && adjustmentSeverity !== severity;
   const replaceAdjustments = budgetWasCapped
-    ? reduceAdjustments // reuse reduce adjustments — no replacements
+    ? reduceAdjustments // reuse reduce adjustments. No replacements
     : buildReplaceAdjustments(
         candidates, effectiveRRC, adjustmentSeverity, ctx, sport, preserveMin, plannedCount, allPlannedKm
       );

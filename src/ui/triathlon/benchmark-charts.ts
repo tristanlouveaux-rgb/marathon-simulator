@@ -145,7 +145,7 @@ export function chartEmptyState(height = 65, msg = 'Not enough data yet', sub = 
 
 /**
  * Animate every `path.chart-draw` SVG path on the page from invisible to
- * fully drawn over 1.2 s. Idempotent — calls itself inside requestAnimationFrame.
+ * fully drawn over 1.2 s. Idempotent. Calls itself inside requestAnimationFrame.
  */
 export function animateChartDrawOn(): void {
   requestAnimationFrame(() => {

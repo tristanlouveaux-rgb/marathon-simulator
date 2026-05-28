@@ -24,13 +24,13 @@ export async function getValidSession() {
     }
   }
 
-  // Token missing or about to expire — refresh
+  // Token missing or about to expire. Refresh
   const { data: refreshed, error } = await supabase.auth.refreshSession();
   if (!error && refreshed.session) {
     return refreshed.session;
   }
 
-  // Refresh failed — last resort, sign in anonymously so the user isn't stranded.
+  // Refresh failed. Last resort, sign in anonymously so the user isn't stranded.
   console.warn('[auth] Session refresh failed, attempting anonymous sign-in', error);
   await supabase.auth.signOut().catch(() => {});
   const { data: anon, error: anonError } = await supabase.auth.signInAnonymously();
@@ -126,7 +126,7 @@ export function resetGarminCache(): void {
  * Backfill now uses Garmin's webhook push model: the edge function POSTs to
  * /backfill/{type} endpoints and Garmin delivers data asynchronously via the
  * garmin-webhook function. That means calling this function doesn't return
- * data synchronously — it queues requests. New data lands in DB minutes later
+ * data synchronously. It queues requests. New data lands in DB minutes later
  * and is read by syncPhysiologySnapshot on the next launch.
  *
  * Throttling rules:
@@ -194,7 +194,7 @@ export async function triggerGarminBackfill(weeks = 8): Promise<void> {
       localStorage.setItem(LAST_RUN_KEY, String(Date.now()));
       localStorage.setItem(MIGRATION_KEY, CURRENT_MIGRATION);
     } else {
-      // Any request failed — do NOT lock in the migration guard. A later launch
+      // Any request failed. Do NOT lock in the migration guard. A later launch
       // will retry (after cooldown, if rate-limited).
       console.warn(`[garmin-backfill] Partial failure — ${reqStr}${result.rateLimited ? ' (rate-limited, backing off)' : ''}`);
       const eb = result.errorBodies ?? {};
@@ -218,7 +218,7 @@ export function resetGarminBackfillGuard(): void {
 }
 
 /**
- * Manual user-triggered reconcile — asks Garmin to re-push the last N days of
+ * Manual user-triggered reconcile. Asks Garmin to re-push the last N days of
  * data for THIS user only. Used by the "Sync" button in Account settings so
  * users can pull missing days on demand without waiting for the nightly cron.
  *
@@ -257,7 +257,7 @@ export async function triggerGarminReconcile(lookbackDays = 3): Promise<{ ok: bo
 
 /**
  * Re-fetch the last 2 days of Garmin sleep/biometric data.
- * Bypasses the backfill guard — safe to call daily to pick up today's sleep
+ * Bypasses the backfill guard. Safe to call daily to pick up today's sleep
  * score after Garmin's server-side processing completes (usually 1–4h post-wake).
  *
  * Respects the shared Garmin cooldown. Called on every launch when today's

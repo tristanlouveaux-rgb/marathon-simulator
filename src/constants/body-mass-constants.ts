@@ -1,5 +1,5 @@
 /**
- * Body-mass adaptation constants — drive two athlete-size adjustments:
+ * Body-mass adaptation constants. Drive two athlete-size adjustments:
  *   1. Cross-training swap: heavier runners substitute a fraction of easy
  *      running volume with low-impact aerobic work to manage cumulative joint
  *      and connective-tissue load.
@@ -19,7 +19,7 @@
  */
 
 // ───────────────────────────────────────────────────────────────────────────
-// Reference anthropometrics — TWO references, deliberately different.
+// Reference anthropometrics. TWO references, deliberately different.
 //
 // SWAP reference (when to flag a runner as "heavy"): the GENERAL-POPULATION
 // adult average, NOT a runner average. Anchoring on lean-runner weight (75 kg)
@@ -32,7 +32,7 @@
 //
 // HEAT reference (the build at which the climate penalty is exactly right):
 // stays at marathon-finisher weight (~75/62), because CLIMATE_RUN_MULTIPLIER
-// was calibrated on marathon fields (leaner than the public — Ely 2007, El
+// was calibrated on marathon fields (leaner than the public. Ely 2007, El
 // Helou 2012). Using the general-pop anchor here would systematically under-
 // penalise typical runners for heat. Heights anchor the reference BSA only.
 // Confidence: medium (population means; individual frames vary).
@@ -63,15 +63,15 @@ export const REF_HEIGHT_CM = { male: 178, female: 165 } as const;
 // It is OPT-IN: a one-time onboarding popup explains it and lets the user turn
 // it off (state `bodyMassSwapEnabled`; default-on for heavy users until they
 // decide). After that the app's normal live adaptation (HR/pace → effort,
-// VDOT, ramp) evolves the plan — no weight logic fights it, no auto-retire.
+// VDOT, ramp) evolves the plan. No weight logic fights it, no auto-retire.
 //
 // Sources:
 //   - Nilsson J & Thorstensson A (1989) "Ground reaction forces at different
 //     speeds of human walking and running" Acta Physiol Scand 136:217–227 —
 //     peak vertical GRF ≈ 2.5–2.8× BW across running speeds.
 //   - di Prampero PE (1986) "The energy cost of human locomotion on land and
-//     in water" Int J Sports Med 7:55–72 — cost of running ≈ constant per kg.
-//   - Foster C et al. (1995) / Mutton DL et al. (1993) — aerobic fitness is
+//     in water" Int J Sports Med 7:55–72. Cost of running ≈ constant per kg.
+//   - Foster C et al. (1995) / Mutton DL et al. (1993). Aerobic fitness is
 //     largely maintained when ≤~30–50% of run volume is replaced by cycling.
 // Confidence: medium. GRF→injury is confounded and non-linear; this is framed
 // as cumulative joint-load management, not stress-fracture prevention.
@@ -82,14 +82,14 @@ export const REF_HEIGHT_CM = { male: 178, female: 165 } as const;
 export const CROSS_TRAINING_SWAP_CAP = 0.15;
 
 /**
- * Engagement floor — the swap and the opt-in popup do NOTHING below this weight,
+ * Engagement floor. The swap and the opt-in popup do NOTHING below this weight,
  * even though the curve (anchored at the population average above) would compute
  * a small trim. This is deliberate: being a few kg above average is not "heavy",
  * and an 88 kg man should never be flagged. Set by Tristan (2026-05-26) after an
  * 88 kg test user (only 3 kg above the 85 kg average) saw the popup.
  *
  * Because the trim is measured from the 85/72 average but only ENGAGES at 95/80,
- * it engages already-meaningful (~10%), not at a trivial 1-2% — no tiny-trim-near-
+ * it engages already-meaningful (~10%), not at a trivial 1-2%. No tiny-trim-near-
  * threshold. At/above the floor: trim = clamp(1 − swapRef/mass, 0, 0.15).
  */
 export const SWAP_ENGAGE_MIN_KG = { male: 95, female: 80 } as const;
@@ -109,11 +109,11 @@ export const SWAP_ENGAGE_MIN_KG = { male: 95, female: 80 } as const;
 // is a physical quantity (no invented exponent); the clamp is the only knob.
 //
 // Sources:
-//   - Du Bois D & Du Bois EF (1916) Arch Intern Med 17:863–871 — BSA formula.
+//   - Du Bois D & Du Bois EF (1916) Arch Intern Med 17:863–871. BSA formula.
 //   - Cramer MN et al. (2023) "Relation of body surface area-to-mass ratio to
-//     risk of exertional heat stroke" J Appl Physiol 135:1265–1274 — larger
+//     risk of exertional heat stroke" J Appl Physiol 135:1265–1274. Larger
 //     mass-to-BSA raises thermoregulatory strain.
-//   - Marino FE et al. (2000) Pflugers Arch 441:359–367 — larger runners
+//   - Marino FE et al. (2000) Pflugers Arch 441:359–367. Larger runners
 //     accumulate ~0.5–1.0 °C more core-temp rise in warm conditions.
 // Confidence: high for the direction and the BSA scaling; medium for the linear
 // application to the existing categorical climate multipliers.
@@ -127,7 +127,7 @@ export const HEAT_STRAIN_RATIO_MIN = 0.85;
 export const HEAT_STRAIN_RATIO_MAX = 1.25;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Plausibility bounds — inputs outside these are treated as "no data" so a
+// Plausibility bounds. Inputs outside these are treated as "no data" so a
 // typo (e.g. weight in lb, height in m) can never drive an adjustment.
 // ───────────────────────────────────────────────────────────────────────────
 

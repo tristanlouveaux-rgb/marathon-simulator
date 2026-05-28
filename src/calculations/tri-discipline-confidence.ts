@@ -1,19 +1,19 @@
 /**
- * Per-discipline data confidence — drives the captions under each
+ * Per-discipline data confidence. Drives the captions under each
  * Fitness/Fatigue/Form row so users know what's behind the number.
  *
  * **Side of the line**: tracking. Pure function over `state.wks`.
  *
  * Returns, per discipline:
- *   - `weeksActive` — number of distinct weeks (in last 12) with at least one
+ *   - `weeksActive`. Number of distinct weeks (in last 12) with at least one
  *     activity of that discipline.
- *   - `sessions`    — total session count of that discipline in the same window.
- *   - `confidence`  — 'high' (≥6 weeks active), 'medium' (3–5), 'low' (1–2),
+ *   - `sessions`. Total session count of that discipline in the same window.
+ *   - `confidence`. 'high' (≥6 weeks active), 'medium' (3–5), 'low' (1–2),
  *                     'none' (0).
  *
- * The CTL/ATL/TSB values themselves are always real — but their *interpretation*
+ * The CTL/ATL/TSB values themselves are always real. But their *interpretation*
  * depends on how much data backs them. Show a low-confidence athlete a muted
- * caption like "Limited swim history — build a few more weeks for a stable
+ * caption like "Limited swim history. Build a few more weeks for a stable
  * baseline"; show a high-confidence athlete the proud caption "Based on 11
  * weeks of bike training (38 rides)".
  */
@@ -73,7 +73,7 @@ export function computeTriDisciplineConfidence(
     return out;
   }
 
-  // Fallback: no fitnessHistory yet — count from state.wks directly.
+  // Fallback: no fitnessHistory yet. Count from state.wks directly.
   const wks = state.wks ?? [];
   const currentWeek = state.w ?? 0;
   const startWeek = Math.max(0, currentWeek - weeks + 1);

@@ -3,7 +3,7 @@
  * Same wave/mountain shapes, parameterised by colour palette.
  * Includes subtle CSS drift animation on wave layers.
  *
- * Reference: recovery-view.ts skyBackground() — the canonical pattern.
+ * Reference: recovery-view.ts skyBackground(). The canonical pattern.
  */
 
 const PAGE_BG = '#FAF9F6';

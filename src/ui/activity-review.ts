@@ -48,7 +48,7 @@ import { computeACWR, getWeeklyExcess, getTrailingEffortScore, computeDecayedCar
 import { applyRbeDiscount } from '@/calculations/readiness';
 import { formatKm } from '@/utils/format';
 
-// Intro screen removed — flow goes directly to matching screen
+// Intro screen removed. Flow goes directly to matching screen
 
 // ---------------------------------------------------------------------------
 // Leg load helper
@@ -74,7 +74,7 @@ function getWeekWorkoutsForReview() {
   const s = getMutableState();
   const wk = s.wks?.[s.w - 1];
   if (!wk) return [];
-  // Triathlon mode: the running plan-engine isn't the source of truth — the
+  // Triathlon mode: the running plan-engine isn't the source of truth. The
   // tri plan engine populates `wk.triWorkouts[]` directly. The running modal
   // path won't fire in tri mode (see redirectToTriSuggestionFlow) but other
   // running-mode auto-match flows still call this helper, so return the tri
@@ -83,7 +83,7 @@ function getWeekWorkoutsForReview() {
     return wk.triWorkouts ?? [];
   }
   // CRITICAL: must use IDENTICAL parameters to getPlanHTML's generateWeekWorkouts call
-  // so that workout IDs (w.id || w.n) match exactly — matching breaks if they differ.
+  // so that workout IDs (w.id || w.n) match exactly. Matching breaks if they differ.
   return generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities,
@@ -103,13 +103,13 @@ function getWeekWorkoutsForReview() {
  * `wk.triWorkouts`).
  *
  * In tri mode we instead:
- *   1. Persist each cross-training item as an adhoc workout — this also
+ *   1. Persist each cross-training item as an adhoc workout. This also
  *      writes to `wk.garminActuals` and increments `wk.actualTSS` (see
  *      `addAdhocWorkoutFromPending`).
  *   2. Run the tri suggestion aggregator. The `detectCrossTrainingOverload`
  *      detector reads `wk.adhocWorkouts` + `wk.garminActuals` and proposes
  *      per-discipline mods if the week is meaningfully over plan.
- *   3. Show the tri suggestion modal (`tri-suggestion-modal.ts`) — same modal
+ *   3. Show the tri suggestion modal (`tri-suggestion-modal.ts`). Same modal
  *      used for volume-ramp / RPE-blown / readiness triggers.
  *   4. Call `onComplete()` so the review flow can resolve.
  *
@@ -256,7 +256,7 @@ export function openActivityReReview(onDone?: () => void, weekNum?: number): voi
   // so we open the full UI for wkIdx === s.w - 2 as well.
   const isStalePreviousWeek = wkIdx < s.w - 2;
 
-  // Stale previous week: plan slots have passed — silently log all still-pending items as adhoc
+  // Stale previous week: plan slots have passed. Silently log all still-pending items as adhoc
   // rather than showing the full review UI for a week the user can no longer affect.
   if (isStalePreviousWeek) {
     if (!wk.garminMatched) wk.garminMatched = {};
@@ -622,7 +622,7 @@ function showReviewScreen(
   overlay.querySelector('#ar-apply')?.addEventListener('click', () => {
     const integrateCount = Object.values(choices).filter(c => c === 'integrate').length;
     if (integrateCount >= 2) {
-      // Batch — show the tap-to-assign Matching Screen
+      // Batch. Show the tap-to-assign Matching Screen
       const pairings  = proposeMatchings(pending, choices, matchCache, allWorkouts);
       const unrated   = allWorkouts.filter(w => wk?.rated[w.id || w.n] === undefined);
       const sWS = getMutableState();
@@ -645,7 +645,7 @@ function showReviewScreen(
         (confirmedMatchings, reductionItems, logonlyItems) => {
           // Save ORIGINAL integrate/log choices to garminReviewChoices BEFORE modification.
           // This preserves the user's intent (e.g. 'integrate') for items that become excess
-          // load — so re-review shows them as 'integrate', not 'log'.
+          // load. So re-review shows them as 'integrate', not 'log'.
           const sOrig = getMutableState();
           const wkOrig = sOrig.wks?.[sOrig.w - 1];
           if (wkOrig) {
@@ -830,7 +830,7 @@ function buildAssignmentLines(
     const original = originalChoices[item.garminId];
 
     if (original === 'log' && updated === 'log') {
-      // Was always log-only (from review screen choice) — skip, not interesting
+      // Was always log-only (from review screen choice). Skip, not interesting
       continue;
     }
 
@@ -854,7 +854,7 @@ function buildAssignmentLines(
 }
 
 // ---------------------------------------------------------------------------
-// RPE rating prompt — shown after Strava activities are matched to planned workouts
+// RPE rating prompt. Shown after Strava activities are matched to planned workouts
 
 interface MatchedRunInfo {
   workoutId: string;
@@ -964,7 +964,7 @@ function showRpePrompt(
         const val = parseInt(slider.value, 10);
         wk.rated[wid] = val;
 
-        // Refresh adhoc load from the rated RPE — but ONLY when no HR signal exists.
+        // Refresh adhoc load from the rated RPE. But ONLY when no HR signal exists.
         // HR users (most): the iTrimp/aerobicEffect from Garmin/Strava is more reliable
         // than self-rated RPE for steady-state activities, so we never overwrite it.
         // No-HR users (manual entries, watches without HR): the auto-derived RPE was
@@ -1048,7 +1048,7 @@ function applyReview(
     // auto-matched by matchAndAutoComplete (and openActivityReReview didn't un-rate them).
     const existingMatch = wk.garminMatched[item.garminId];
     if (existingMatch && existingMatch !== '__pending__' && !existingMatch.startsWith('garmin-')) {
-      // Already matched to a plan slot — mark it as used and skip
+      // Already matched to a plan slot. Mark it as used and skip
       usedWorkoutIds.add(existingMatch);
       continue;
     }
@@ -1160,7 +1160,7 @@ function applyReview(
       wk.rated[matchId] = rpe;
       wk.garminMatched[item.garminId] = matchId;
 
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[matchId] = {
         garminId: item.garminId,
@@ -1204,7 +1204,7 @@ function applyReview(
       wk.rated[matchId] = rpe;
       wk.garminMatched[item.garminId] = matchId;
 
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[matchId] = {
         garminId: item.garminId,
@@ -1229,12 +1229,12 @@ function applyReview(
 
   // ── Step 3b. Generic cross slot matching ──────────────────────────────────
   // Any remaining unmatched sport activities try to fill planned cross slots
-  // by day proximity — no sport-name requirement. Only activities that can't
+  // by day proximity. No sport-name requirement. Only activities that can't
   // fill any slot proceed to the load calc modal.
   //
   // When confirmedMatchings is provided, the user already saw and approved all
   // pairings in the Matching Confirmation screen. Anything still unmatched is
-  // genuine overflow — skip the day-proximity heuristic so we don't silently
+  // genuine overflow. Skip the day-proximity heuristic so we don't silently
   // re-assign slots the user explicitly left empty.
   const genericCrossSlots = confirmedMatchings
     ? []
@@ -1264,7 +1264,7 @@ function applyReview(
       wk.rated[slotId] = rpe;
       wk.garminMatched[item.garminId] = slotId;
 
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[slotId] = {
         garminId: item.garminId,
@@ -1288,7 +1288,7 @@ function applyReview(
     }
   }
 
-  // Gym overflow: log as extra adhoc — must NOT trigger run-reduction modal.
+  // Gym overflow: log as extra adhoc. Must NOT trigger run-reduction modal.
   // Gym/strength sessions have no run-equivalent load; reducing runs for them is wrong.
   for (const item of gymOverflow) {
     const adhocId = `garmin-${item.garminId}`;
@@ -1351,7 +1351,7 @@ function applyReview(
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {
-      // User dismissed — re-open review with still-pending items (no intro)
+      // User dismissed. Re-open review with still-pending items (no intro)
       const sD  = getMutableState();
       const wkD = sD.wks?.[sD.w - 1];
       const stillPending = (wkD?.garminPending || []).filter(
@@ -1437,7 +1437,7 @@ function applyReview(
 }
 
 // ---------------------------------------------------------------------------
-// Matching Confirmation screen (Phase 3 — batch path only)
+// Matching Confirmation screen (Phase 3. Batch path only)
 // ---------------------------------------------------------------------------
 
 /** Short day names for the confirmation screen dropdowns. */
@@ -1470,7 +1470,7 @@ function workoutTypeShort(t: string): string {
 
 
 /**
- * Dry-run of applyReview's matching steps — returns proposed pairings
+ * Dry-run of applyReview's matching steps. Returns proposed pairings
  * WITHOUT mutating any state.
  */
 function proposeMatchings(
@@ -1667,7 +1667,7 @@ function showMatchingConfirmation(
 }
 
 // ---------------------------------------------------------------------------
-// Auto-process path (flowing week — single or same-day activities)
+// Auto-process path (flowing week. Single or same-day activities)
 // ---------------------------------------------------------------------------
 
 /**
@@ -1753,7 +1753,7 @@ export function autoProcessActivities(
       usedWorkoutIds.add(match.workoutId);
       wk.rated[match.workoutId] = rpe;
       wk.garminMatched[item.garminId] = match.workoutId;
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[match.workoutId] = {
         garminId: item.garminId,
@@ -1779,7 +1779,7 @@ export function autoProcessActivities(
     }
   }
 
-  // Gym overflow: log as extra adhoc — must NOT trigger run-reduction modal
+  // Gym overflow: log as extra adhoc. Must NOT trigger run-reduction modal
   for (const item of gymOverflowAuto) {
     const adhocId = `garmin-${item.garminId}`;
     const rpe = deriveItemRPE(item, s);
@@ -1803,7 +1803,7 @@ export function autoProcessActivities(
       usedWorkoutIds.add(namedMatch.workoutId);
       wk.rated[namedMatch.workoutId] = rpe;
       wk.garminMatched[item.garminId] = namedMatch.workoutId;
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[namedMatch.workoutId] = {
         garminId: item.garminId,
@@ -1825,7 +1825,7 @@ export function autoProcessActivities(
       autoMatchedRuns.push(buildRpeRow(namedMatch.workoutId, namedMatch.workoutName, rpe, nmW, item));
       continue;
     }
-    // Generic cross slot — closest by day
+    // Generic cross slot. Closest by day
     const jsDay  = new Date(item.startTime).getDay();
     const actDay = jsDay === 0 ? 6 : jsDay - 1;
     let bestSlot: typeof genericCrossSlots[0] | null = null;
@@ -1843,7 +1843,7 @@ export function autoProcessActivities(
       usedWorkoutIds.add(slotId);
       wk.rated[slotId] = rpe;
       wk.garminMatched[item.garminId] = slotId;
-      // Store garminActuals so the slot card shows the activity name — no duplicate adhoc
+      // Store garminActuals so the slot card shows the activity name. No duplicate adhoc
       if (!wk.garminActuals) wk.garminActuals = {};
       wk.garminActuals[slotId] = {
         garminId: item.garminId,
@@ -1887,7 +1887,7 @@ export function autoProcessActivities(
       addAdhocWorkoutFromPending(wk, item, adhocId, rpe);
     }
     wk.garminMatched[item.garminId] = adhocId;
-    // Every excess activity (run, gym, cross-training) gets an RPE prompt — adhoc
+    // Every excess activity (run, gym, cross-training) gets an RPE prompt. Adhoc
     // load is later refreshed from the rated RPE when no HR signal exists.
     autoMatchedRuns.push(buildRpeRow(adhocId, formatActivityType(item.activityType), rpe, null, item));
   }
@@ -1970,12 +1970,12 @@ export function autoProcessActivities(
     ? formatActivityType(overflow[0].activityType)
     : `${overflow.length} cross-training activities`;
 
-  // Tri-mode redirect — see ISSUE-151 / redirectToTriSuggestionFlow comment.
+  // Tri-mode redirect. See ISSUE-151 / redirectToTriSuggestionFlow comment.
   if (redirectToTriSuggestionFlow(overflow, onComplete)) return;
 
   showSuggestionModal(popup, sportLabel, (decision) => {
     if (!decision) {
-      // User dismissed modal — keep unspentLoadItems (excess load card shows on training tab)
+      // User dismissed modal. Keep unspentLoadItems (excess load card shows on training tab)
       showAssignmentToast(autoAssignLines);
       render();
       showRpePrompt(autoMatchedRuns, onComplete);
@@ -2016,7 +2016,7 @@ export function autoProcessActivities(
       wk3.garminMatched[item.garminId] = adhocId;
     }
 
-    // Plan adjusted — clear unspent items for these overflow activities
+    // Plan adjusted. Clear unspent items for these overflow activities
     if (wk3.unspentLoadItems) {
       const overflowIds = new Set(overflow.map(i => i.garminId));
       wk3.unspentLoadItems = wk3.unspentLoadItems.filter(u => !overflowIds.has(u.garminId));

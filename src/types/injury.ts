@@ -74,7 +74,7 @@ export type InjuryPhase =
 
 /** Capacity test types for test_capacity phase. The applicable subset for a
  *  given injury is determined by location (see `getRequiredCapacityTests` in
- *  src/injury/engine.ts) — leg-only tests apply to lower-body injuries,
+ *  src/injury/engine.ts). Leg-only tests apply to lower-body injuries,
  *  upper-body / neck / chest injuries get tests appropriate to their region. */
 export type CapacityTestType =
   // Lower-body
@@ -218,13 +218,13 @@ export interface InjuryState {
   // discipline; the plan engine downmixes the discipline's workouts while
   // the counter is > 0 and the counter decrements on every week advance.
   //
-  // 'stations' covers HYROX station + brick components — they share the
+  // 'stations' covers HYROX station + brick components. They share the
   // same ramp counter because canUpperLoad and canLowerLoad both gate
   // stations coarsely.
   //
   // Undefined / empty map = no active ramp; the discipline trains at full
   // volume immediately. Existing running-mode return_to_run / graduated_return
-  // phases are NOT modified — they use their own counter at `graduated-
+  // phases are NOT modified. They use their own counter at `graduated-
   // ReturnWeeksLeft`.
   returnRampWeeksLeft?: Partial<Record<'run' | 'bike' | 'swim' | 'stations', number>>;
 

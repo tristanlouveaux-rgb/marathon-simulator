@@ -4,7 +4,7 @@ import type { CourseProfile } from '@/types/onboarding';
  * Per-race published course-profile facts. Sourced from official IRONMAN athlete
  * guides, Slowtwitch course writeups, and race websites. Refresh annually.
  *
- * No derived multipliers live here — only sourced facts. The race-prediction
+ * No derived multipliers live here. Only sourced facts. The race-prediction
  * agent consumes these to produce per-leg time deltas vs an IM-typical course.
  *
  * Categorisation rules (applied consistently when populating from elevation):

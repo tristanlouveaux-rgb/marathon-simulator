@@ -1,5 +1,5 @@
 /**
- * HYROX run-pace personalisation — Bayesian update from logged races.
+ * HYROX run-pace personalisation. Bayesian update from logged races.
  *
  * **Principle**: the population model (`derivePopulationRunPace`) starts
  * with a conservative prior based on VDOT + band + format. As the athlete
@@ -11,11 +11,11 @@
  *   posterior_pace = population_prior + personal_offset × confidence_weight
  *
  * **Decay**: the offset decays linearly to zero over 12 months without new
- * race evidence — without recent data we revert to the population prior.
+ * race evidence. Without recent data we revert to the population prior.
  *
  * **Why offset rather than full replacement**: it stays informative when a
  * single race was unusual (heat, illness) and survives format changes
- * (singles ↔ doubles) gracefully — the offset is in sec/km of pace, which
+ * (singles ↔ doubles) gracefully. The offset is in sec/km of pace, which
  * is comparable across formats once the format factor is applied.
  *
  * **Back-computation caveat**: deriving observed run pace from a race finish
@@ -45,7 +45,7 @@ const MAX_OFFSET_MAGNITUDE_SEC = 60;
 export interface HyroxRaceObservation {
   finishSec: number;
   /** Sum of all 8 stations' active seconds (team total, not per-athlete in
-   *  doubles — total station time elapsed on the clock). */
+   *  doubles. Total station time elapsed on the clock). */
   stationsTotalSec: number;
   /** Roxzone transitions total. */
   roxzoneSec: number;

@@ -1,5 +1,5 @@
 /**
- * Matching Screen — tap-to-assign activity → workout slot UI.
+ * Matching Screen. Tap-to-assign activity → workout slot UI.
  *
  * UX rules:
  *  - Slot cards ordered by day of week (Mon first); show actual date ("Mon 23 Feb")
@@ -401,7 +401,7 @@ function renderScreen(
     card.addEventListener('click', () => {
       const wid  = card.getAttribute('data-workout-id')!;
       if (!state.selectedGarminId) {
-        // Nothing selected — if slot is occupied, deassign back to tray
+        // Nothing selected. If slot is occupied, deassign back to tray
         const already = [...state.assignments.entries()].find(([, v]) => v === wid);
         if (already) {
           state.assignments.set(already[0], null);

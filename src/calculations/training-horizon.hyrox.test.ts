@@ -14,7 +14,7 @@ import {
 } from '@/constants/hyrox-horizon-params';
 
 const baseInput = (overrides: Partial<HyroxHorizonInput> = {}): HyroxHorizonInput => ({
-  baseline: 300,                     // 5:00 — generic
+  baseline: 300,                     // 5:00. Generic
   weeks_remaining: 12,
   sessions_per_week: 3.5,
   ability_band: 'intermediate',
@@ -112,7 +112,7 @@ describe('applyHyroxStationHorizon — taper bonus', () => {
   // The user-facing invariant: setting a plan one week out should not promise a
   // big race-day movement. Inside the taper window the build-phase fitness
   // contribution (week_factor) collapses to zero, so any remaining gain is
-  // the taper bonus alone — fitness coming forward as fatigue clears, not new
+  // the taper bonus alone. Fitness coming forward as fatigue clears, not new
   // adaptation. Mujika 2002: real performance gains during a 1–3 week taper
   // come from fatigue removal, not new training.
   //
@@ -131,7 +131,7 @@ describe('applyHyroxStationHorizon — taper bonus', () => {
     // Build-phase gain comprises full week_factor + full taper bonus; taper
     // race only the taper bonus. Build must be at least 40% larger.
     expect(buildRace.improvement_pct).toBeGreaterThan(taperRace.improvement_pct * 1.4);
-    // Taper race gain must not exceed full taper bonus — bounds the residual.
+    // Taper race gain must not exceed full taper bonus. Bounds the residual.
     expect(taperRace.improvement_pct).toBeLessThanOrEqual(
       CARDIO_ERG_HORIZON_PARAMS.taper_bonus_pct.intermediate + 0.01,
     );

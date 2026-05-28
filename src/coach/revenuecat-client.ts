@@ -5,14 +5,14 @@
  * here so the rest of the codebase can stay platform-agnostic.
  *
  * Lifecycle:
- *   - `initRevenueCat(userId)` — called once after the user is authenticated
+ *   - `initRevenueCat(userId)`. Called once after the user is authenticated
  *     (from `main.ts`/`launchApp`). Configures the SDK and identifies the user
  *     so webhook events carry the right Supabase user_id.
- *   - `hasActiveCoachEntitlement()` — reads CustomerInfo, returns true if the
+ *   - `hasActiveCoachEntitlement()`. Reads CustomerInfo, returns true if the
  *     `ai_coach` entitlement is currently active.
- *   - `getCoachOfferings()` — fetches the current offering for the paywall.
- *   - `purchaseCoachPackage(pkg)` — runs the StoreKit purchase flow.
- *   - `restoreCoachPurchases()` — re-syncs entitlements from Apple receipts.
+ *   - `getCoachOfferings()`. Fetches the current offering for the paywall.
+ *   - `purchaseCoachPackage(pkg)`. Runs the StoreKit purchase flow.
+ *   - `restoreCoachPurchases()`. Re-syncs entitlements from Apple receipts.
  *
  * All functions no-op on non-iOS platforms (return safe defaults) so callers
  * don't need to wrap every call in a Capacitor platform check.
@@ -42,7 +42,7 @@ function isIOS(): boolean {
 
 /**
  * Configure RevenueCat with the public SDK key and identify the user.
- * Safe to call multiple times — only the first call actually initialises.
+ * Safe to call multiple times. Only the first call actually initialises.
  *
  * `userId` is the Supabase auth user UUID. RevenueCat treats it as the
  * "App User ID", which means webhook events arrive with that UUID in the
@@ -137,7 +137,7 @@ export async function purchaseCoachPackage(pkg: PurchasesPackage): Promise<Custo
 
 /**
  * Re-sync entitlements from Apple's receipt server. Required by App Store
- * guidelines for any IAP — surface this on the Account view.
+ * guidelines for any IAP. Surface this on the Account view.
  */
 export async function restoreCoachPurchases(): Promise<{ restored: boolean; customerInfo: CustomerInfo | null }> {
   if (!isIOS() || !_initialized) {

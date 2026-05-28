@@ -37,7 +37,7 @@ describe('isHardWorkout', () => {
 });
 
 // ---------------------------------------------------------------------------
-// assignDefaultDays — standard case
+// assignDefaultDays. Standard case
 // ---------------------------------------------------------------------------
 
 describe('assignDefaultDays — standard scheduling', () => {
@@ -144,7 +144,7 @@ describe('assignDefaultDays — standard scheduling', () => {
 });
 
 // ---------------------------------------------------------------------------
-// assignDefaultDays — weekday/weekend split (hard constraint)
+// assignDefaultDays. Weekday/weekend split (hard constraint)
 // ---------------------------------------------------------------------------
 
 describe('assignDefaultDays — weekday/weekend split', () => {
@@ -182,7 +182,7 @@ describe('assignDefaultDays — weekday/weekend split', () => {
       makeWorkout({ t: 'threshold', n: 'Threshold', estimatedDurationMin: 60 } as any),
       makeWorkout({ t: 'easy', n: 'Easy', estimatedDurationMin: 45 } as any),
     ];
-    // Generous budgets — should leave default placement (long on Sunday)
+    // Generous budgets. Should leave default placement (long on Sunday)
     assignDefaultDays(workouts, 600, 600);
     expect(workouts.find(w => w.t === 'long')!.dayOfWeek).toBe(6);
   });
@@ -193,7 +193,7 @@ describe('assignDefaultDays — weekday/weekend split', () => {
       makeWorkout({ t: 'easy', n: 'Easy', estimatedDurationMin: 60 } as any),
       makeWorkout({ t: 'cross', n: 'Cross', estimatedDurationMin: 60 } as any),
     ];
-    // Tight weekday: 60 min — only one session can stay; easy/cross should
+    // Tight weekday: 60 min. Only one session can stay; easy/cross should
     // move first, threshold should remain on weekday.
     assignDefaultDays(workouts, 60, 600);
     const threshold = workouts.find(w => w.t === 'threshold')!;

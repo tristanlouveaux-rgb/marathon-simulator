@@ -89,7 +89,7 @@ export interface Marathon {
 /**
  * Per-leg published facts about an IRONMAN course. The prediction engine
  * (separate agent) consumes these to produce time deltas vs an IM-typical
- * course. We do NOT store derived multipliers here — only sourced facts.
+ * course. We do NOT store derived multipliers here. Only sourced facts.
  */
 export interface CourseProfile {
   /** Total bike elevation gain in metres (published in athlete guide). */
@@ -184,7 +184,7 @@ export interface OnboardingState {
   // Step 5: Training Frequency
   runsPerWeek: number;
   gymSessionsPerWeek: number;  // 0-3 running-focused gym sessions
-  sportsPerWeek: number;  // Legacy — derived from recurringActivities
+  sportsPerWeek: number;  // Legacy. Derived from recurringActivities
   experienceLevel: RunnerExperience;
 
   // Step 5b: Active Lifestyle & Recurring Activities
@@ -198,7 +198,7 @@ export interface OnboardingState {
    * `blendPredictions` to scale the marathon-specificity penalty: a recent
    * marathon PB is *demonstrated current capability*, so the penalty (which
    * assumes PB might be stale and over-state current marathon-specific
-   * fitness) should be reduced when the PB is fresh. Optional — when absent,
+   * fitness) should be reduced when the PB is fresh. Optional. When absent,
    * the penalty applies at full strength (legacy behaviour).
    */
   pbDates?: { k5?: string; k10?: string; h?: string; m?: string };
@@ -229,15 +229,16 @@ export interface OnboardingState {
    * back-compat with persisted state and downstream branches. */
   skippedStrava?: boolean;
   /** Which watch the user said they wear. Routes the connect-data step:
-   *  'apple' → auto-prompt HealthKit; 'garmin' / 'other' → reveal export-upload panel. */
-  chosenWatch?: 'apple' | 'garmin' | 'other';
+   *  'apple' → auto-prompt HealthKit; 'other' → reveal export-upload panel.
+   *  Legacy 'garmin' from an earlier 3-tile picker is migrated to 'other' at render. */
+  chosenWatch?: 'apple' | 'other';
 
-  // Step 5 (fitness path): "Just track" — activity tracking only, no plan generated
+  // Step 5 (fitness path): "Just track". Activity tracking only, no plan generated
   trackOnly?: boolean;
 
   // ─────────────────────────────────────────────────────────────────────
   // Triathlon-specific onboarding fields (active when trainingMode === 'triathlon').
-  // All optional — the wizard populates them via the triathlon fork (§18.9).
+  // All optional. The wizard populates them via the triathlon fork (§18.9).
   // ─────────────────────────────────────────────────────────────────────
 
   /** 70.3 or Ironman. Present only for triathlon mode. */

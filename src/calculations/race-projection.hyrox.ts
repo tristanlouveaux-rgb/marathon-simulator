@@ -4,13 +4,13 @@
  * **Side of the line**: tracking. Projects current prediction forward to race
  * day, factoring in training volume, sessions/week, plan adherence to date,
  * MTL CTL trend, and taper proximity. Mirrors the triathlon `buildProjection`
- * approach — see `race-prediction.triathlon.ts:340` for the parent pattern.
+ * approach. See `race-prediction.triathlon.ts:340` for the parent pattern.
  *
  * The current `predictHyroxRace()` answers "if you raced today". This module
  * projects that forward via percentage adjustments, returning:
- *   - `projectedTotalSec` — race-day estimated finish
- *   - `factors` — itemised contributions for transparency
- *   - `confidenceRangeSec` — symmetric ±band around the projection
+ *   - `projectedTotalSec`. Race-day estimated finish
+ *   - `factors`. Itemised contributions for transparency
+ *   - `confidenceRangeSec`. Symmetric ±band around the projection
  *
  * Confidence: medium-low. The factor weights are heuristic (anchored on
  * running/triathlon horizon-model parameters, with HYROX-specific scaling
@@ -225,7 +225,7 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
       // Use default HYROX_TAPER_WEEKS so the run portion gets the same
       // per-discipline taper handling that the per-station and roxzone
       // horizons already apply internally. Taper lives in the horizon
-      // models — the factor model below handles reality adjustments only.
+      // models. The factor model below handles reality adjustments only.
       weekly_volume_km: state.wkm,
     });
     runHorizonImprovementPct = runHorizon.improvement_pct;
@@ -271,7 +271,7 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   }
 
   // ── Step 2: factor model (uniform percentage modifier) ─────────────────
-  // These are reality-vs-plan adjustments — not training-effect estimates.
+  // These are reality-vs-plan adjustments. Not training-effect estimates.
   // Each contribution is a bounded percentage; their signed sum is the
   // multiplier applied to `disciplineHorizonTotal`. Express each factor's
   // own deltaSec against `disciplineHorizonTotal` so the factor list sums
@@ -337,9 +337,9 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
 
   // Taper is owned by the horizon models (per-class for stations, distance-
   // appropriate for run, generic for roxzone). No separate "Taper bonus"
-  // factor — that would double-count what the horizon models already include.
+  // factor. That would double-count what the horizon models already include.
 
-  // Factor: race-day readiness (HRV / sleep / RHR) — taper window only.
+  // Factor: race-day readiness (HRV / sleep / RHR). Taper window only.
   const taperWindowWeeks = HYROX_TAPER_DAYS[band] / 7;
   if (weeksRemaining > 0 && weeksRemaining <= taperWindowWeeks * 1.5) {
     const readinessScore = computeReadinessScore(state.physiologyHistory);

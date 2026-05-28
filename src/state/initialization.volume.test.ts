@@ -3,7 +3,7 @@
  *
  * The plan's starting weekly volume (s.wkm) normally comes from a runs-per-week
  * lookup. A *detected* weekly km (from Strava history, manual entry, or an
- * import) should override that lookup — but only when the user has explicitly
+ * import) should override that lookup. But only when the user has explicitly
  * provided or accepted it, never from a silent derive. Pre-fix the gate keyed
  * solely on `stravaHistoryAccepted`, so a manual-entry user's typed volume was
  * read by prediction/archetype but never seeded the plan. This generalises the

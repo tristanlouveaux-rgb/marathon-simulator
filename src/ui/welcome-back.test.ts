@@ -1,5 +1,5 @@
 /**
- * Tests for `assertPlanAnchorConsistent` — the launch-time tripwire that
+ * Tests for `assertPlanAnchorConsistent`. The launch-time tripwire that
  * surfaces drift between `s.w` and `planStartDate` before activities silently
  * mis-file.
  *
@@ -115,7 +115,7 @@ describe('assertPlanAnchorConsistent', () => {
     vi.setSystemTime(new Date('2026-08-01T12:00:00Z'));
     setState(buildState({ planStartDate: '2026-04-27', w: 12 }));
     assertPlanAnchorConsistent();
-    // weekIndexForDate returns null when idx > wks.length — no warn.
+    // weekIndexForDate returns null when idx > wks.length. No warn.
     expect(warnSpy).not.toHaveBeenCalled();
   });
 });

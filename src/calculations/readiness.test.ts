@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { computeReadiness, type ReadinessInput } from './readiness';
 
-// Base "healthy athlete" input — override per test
+// Base "healthy athlete" input. Override per test
 const BASE: ReadinessInput = {
   tsb: 4,          // Fresh
   acwr: 1.1,       // Safe
@@ -25,7 +25,7 @@ describe('computeReadiness — edge cases', () => {
 
   it('computes normally for weeksOfHistory = 3', () => {
     const r = computeReadiness({ ...BASE, weeksOfHistory: 3 });
-    // Real computation — score should NOT be the fixed default of 65
+    // Real computation. Score should NOT be the fixed default of 65
     expect(r.score).not.toBe(65);
   });
 
@@ -88,7 +88,7 @@ describe('computeReadiness — safety floor (recalibrated for non-linear)', () =
   });
 
   it('ACWR exactly at safeUpper does NOT apply floor', () => {
-    // At acwr=1.3 (default safeUpper), no floor — score from formula only
+    // At acwr=1.3 (default safeUpper), no floor. Score from formula only
     const r = computeReadiness({ ...BASE, tsb: 8, acwr: 1.3, ctlNow: 65 });
     expect(r.hardFloor).toBeNull();
   });

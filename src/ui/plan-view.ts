@@ -1,5 +1,5 @@
 /**
- * Plan tab — weekly calendar strip + Vergia-style workout card list.
+ * Plan tab. Weekly calendar strip + Vergia-style workout card list.
  * Week navigation with < > buttons (keyboard arrow keys on web, swipe on iOS Phase 3).
  * Complex interactions (rating, Garmin matching) delegate to renderMainView() for now.
  */
@@ -46,7 +46,7 @@ let _viewWeek: number | null = null; // null = current week
 let _viewArchiveIdx: number | null = null;
 let _workoutLookup: Map<string, { n: string; d: string }> = new Map();
 
-// ─── Recovery undo — module-level delegated handler (set once, survives re-renders) ──
+// ─── Recovery undo. Module-level delegated handler (set once, survives re-renders) ──
 // Must be outside wirePlanHandlers so it works regardless of render path.
 document.addEventListener('click', (e) => {
   const btn = (e.target as Element).closest<HTMLElement>('.plan-recovery-undo-btn');
@@ -80,7 +80,7 @@ document.addEventListener('click', (e) => {
     const s2 = getMutableState();
     const wk2 = s2.wks?.[weekNum - 1];
     if (!wk2) return;
-    // Match by name only — dayOfWeek is optional on WorkoutMod and may differ
+    // Match by name only. DayOfWeek is optional on WorkoutMod and may differ
     // from the rendered workout (e.g. after drag-reorder). Remove all non-auto
     // mods for this workout name so double-applications are also cleared.
     wk2.workoutMods = (wk2.workoutMods ?? []).filter(
@@ -89,7 +89,7 @@ document.addEventListener('click', (e) => {
     saveState();
     import('./plan-view').then(({ renderPlanView }) => renderPlanView());
   });
-}, true); // capture phase — fires before card-header bubble handler
+}, true); // capture phase. Fires before card-header bubble handler
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
@@ -121,7 +121,7 @@ function ourDay(): number {
 /** "Mon 17 Feb" from planStartDate + week offset + day offset */
 function weekStartDate(planStartDate: string, weekNum: number): Date {
   // Parse YYYY-MM-DD as local midnight. `new Date("YYYY-MM-DD")` parses as UTC
-  // midnight, which is 01:00–02:00 local in positive-UTC zones — comparing
+  // midnight, which is 01:00–02:00 local in positive-UTC zones. Comparing
   // against local-midnight `now` then puts today *before* week 1 start and
   // marks every day Missed. Component construction gives local midnight
   // directly, matching the comparison side of every same-day check.
@@ -194,7 +194,7 @@ function escapeHtmlPlan(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Count completed sessions in a week — mirrors the dedup logic in
+// Count completed sessions in a week. Mirrors the dedup logic in
 // home-view.buildProgressBars so both surfaces report the same number.
 // A "done" session is either a synced activity (Garmin/Strava) matched to a
 // slot, or an unsynced manual workout that has been rated (non-skip).
@@ -411,7 +411,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       html += `<button class="plan-remove-garmin" data-garmin-id="${escapeHtml(garminActual.garminId)}" style="font-size:19px;color:var(--c-faint);background:none;border:none;cursor:pointer;padding:0;line-height:1;flex-shrink:0">×</button>`;
     }
     html += `</div>`;
-    // Don't pass plannedTSS for cross-training — activity-detail planned bar is
+    // Don't pass plannedTSS for cross-training. Activity-detail planned bar is
     // meaningless when RPE-assumed HR ≠ actual HR for non-running sports.
     const detailPlannedTSS = (w.t === 'cross' || w.t === 'gym') ? 0 : plannedTSS;
     html += `<button class="plan-act-open m-btn-link" data-workout-key="${escapeHtml(id)}" data-week-num="${viewWeek}" data-planned-tss="${detailPlannedTSS}" style="font-size:12px;display:flex;align-items:center;gap:4px;margin-bottom:10px;padding:4px 0">View full activity <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>`;
@@ -478,7 +478,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     html += `</div>`;
   }
 
-  // Description is now always visible in the card body — not repeated here.
+  // Description is now always visible in the card body. Not repeated here.
 
   // ── Planned vs Actual load ────────────────────────────────────────────────
   if (w.t && w.t !== 'rest') {
@@ -495,7 +495,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
     const isCrossTraining = w.t === 'cross' || w.t === 'gym';
 
     if (garminActual && actualTSSForBars != null && plannedTSS > 0 && !isCrossTraining) {
-      // Show planned vs actual comparison (running sessions only — cross-training
+      // Show planned vs actual comparison (running sessions only. Cross-training
       // intensity varies too much vs RPE assumptions to make this meaningful)
       const maxTSS = Math.max(plannedTSS, actualTSSForBars, 1);
       const plannedPct = Math.round((plannedTSS / maxTSS) * 100);
@@ -519,7 +519,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       html += `</div>`;
       html += `</div></div>`;
     } else if (plannedTSS > 0) {
-      // No actual data — show planned TSS + HR target if available
+      // No actual data. Show planned TSS + HR target if available
       html += `<div style="margin-bottom:14px">`;
       html += `<div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--c-faint);margin-bottom:4px">Planned Load</div>`;
       html += `<div style="font-size:13px;color:var(--c-text)">~${plannedTSS} TSS</div>`;
@@ -548,7 +548,7 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
   } else {
     const testType = (w as any).testType as string | undefined;
     if (!isDone && !isSkipped && testType) {
-      // Capacity test workout — different button set
+      // Capacity test workout. Different button set
       const safeTestType = escapeHtml(testType);
       html += `
       <div style="margin-bottom:8px">
@@ -589,11 +589,11 @@ function buildWorkoutExpandedDetail(w: any, wk: Week | undefined, viewWeek: numb
       const safeDesc = escapeHtml((w.d || '').replace(/\n/g, ' '));
       const isRunType = w.t && w.t !== 'gym' && w.t !== 'cross' && w.t !== 'rest';
       if (isRunType) {
-        // Start Workout — primary CTA for running workouts
+        // Start Workout. Primary CTA for running workouts
         html += `<button class="plan-detail-start-btn m-btn-primary" data-workout-id="${safeId}" data-week-num="${viewWeek}" style="width:100%;margin-bottom:8px;font-size:13px;padding:10px 0;text-align:center;justify-content:center;display:flex;align-items:center;gap:6px">
             <span style="width:10px;height:10px;background:white;clip-path:polygon(0 0,100% 50%,0 100%);display:inline-block;flex-shrink:0"></span>
             Start Workout</button>`;
-        // Mark as Done + Skip — demoted to inline text links
+        // Mark as Done + Skip. Demoted to inline text links
         html += `<div style="display:flex;gap:12px;justify-content:center;margin-top:4px">`;
         html += `<button class="plan-action-mark-done" data-workout-id="${safeId}" data-name="${escapeHtml(w.n || '')}" data-rpe="${rpe}" data-type="${w.t}" data-week-num="${viewWeek}" style="font-size:12px;color:var(--c-muted);background:none;border:none;cursor:pointer;padding:4px 0">Mark as Done</button>`;
         html += `<span style="color:var(--c-border)">·</span>`;
@@ -696,7 +696,7 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
 
   // garminActuals entries: plan-slot matches show "Matched", orphaned garmin-* entries
   // (adhoc was removed via ×) show "Logged". Skip garmin-* entries that still have
-  // a corresponding adhocWorkout — the adhoc loop renders those with correct Logged/Excess badge.
+  // a corresponding adhocWorkout. The adhoc loop renders those with correct Logged/Excess badge.
   for (const [workoutId, a] of Object.entries(actuals)) {
     if (workoutId.startsWith('garmin-') && adhocGarminIds.has(workoutId)) continue;
     const actual = a as any;
@@ -737,7 +737,7 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     logEntries.push({ sortTime, html: row });
   }
 
-  // Adhoc garmin/strava activities — logged only or excess load
+  // Adhoc garmin/strava activities. Logged only or excess load
   for (const w of adhocGarmin) {
     const wAny = w as any;
     const rawId = (w.id || '').slice('garmin-'.length);
@@ -778,7 +778,7 @@ function buildActivityLog(wk: Week | undefined, viewWeek: number, currentWeek: n
     logEntries.push({ sortTime, html: row });
   }
 
-  // Pending items as individual rows — ensures unassigned / not-yet-reviewed activities
+  // Pending items as individual rows. Ensures unassigned / not-yet-reviewed activities
   // are always visible in the log (not just as an aggregate banner count).
   for (const p of pendingItems) {
     const dur = Math.round(p.durationSec / 60);
@@ -860,7 +860,7 @@ function buildWorkoutCards(
   }
 
   // Compute coach once per render so the indicator can attach to today's row only.
-  // Skipped outside the current-week-and-in-range view — the modifier only makes sense for today.
+  // Skipped outside the current-week-and-in-range view. The modifier only makes sense for today.
   const coach = isCurrentWeek && todayInRange ? computeDailyCoach(s) : null;
   const todayMod = coach ? coach.workoutMod : 'none';
 
@@ -897,8 +897,8 @@ function buildWorkoutCards(
     });
 
     if (dayWorkouts.length === 0) {
-      // Rest day — same row shape as triathlon Plan: day label + horizontal
-      // line + "Rest" tag. No outer card, no border-top — the day is just
+      // Rest day. Same row shape as triathlon Plan: day label + horizontal
+      // line + "Rest" tag. No outer card, no border-top. The day is just
       // a header strip, matching the rhythm of workout days.
       dayFirstCardEmitted.add(dayIdx);
       cards.push(`
@@ -944,7 +944,7 @@ function buildWorkoutCards(
         continue;
       }
 
-      // Garmin actual — direct lookup by workout slot ID (needed for isDone)
+      // Garmin actual. Direct lookup by workout slot ID (needed for isDone)
       const garminAct: any = (wk?.garminActuals as any)?.[id] || null;
       const isDone = (typeof ratingVal === 'number' && ratingVal > 0) || !!garminAct;
       const isSkipped = ratingVal === 'skip';
@@ -955,7 +955,7 @@ function buildWorkoutCards(
       // Cross-training sport swap: planned slot was one sport, the matched activity is another.
       // The day-proximity fallback in activity-review.ts can attach a tennis activity to a wakeboarding
       // slot, etc. When that happens the heading shows the actual sport and the planned description is
-      // misleading — replace it with a "Planned: <slot name>" caption.
+      // misleading. Replace it with a "Planned: <slot name>" caption.
       const planNameLower = (w.n || '').toLowerCase().trim();
       const actNameLower = (garminAct?.displayName || '').toLowerCase().trim();
       const isSportSwap = !!garminAct && (w.t === 'cross' || w.t === 'gym')
@@ -969,7 +969,7 @@ function buildWorkoutCards(
       let valueStr = distKm ? (typeof distKm === 'number' ? formatKm(distKm, s.unitPref ?? 'km') : formatKm(parseFloat(distKm), s.unitPref ?? 'km'))
         : durationMin ? `${Math.round(durationMin)} min`
           : '';
-      // For reduced workouts, parse new distance from w.d ("5.2km (was 8km)") — w.km is not updated by mods
+      // For reduced workouts, parse new distance from w.d ("5.2km (was 8km)"). W.km is not updated by mods
       if (isReduced && (w as any).d) {
         const reducedKm = parseFloat((w as any).d);
         if (!isNaN(reducedKm)) valueStr = formatKm(reducedKm, s.unitPref ?? 'km');
@@ -981,7 +981,7 @@ function buildWorkoutCards(
         ? (wk?.adhocWorkouts || []).find((a: any) => a.dayOfWeek === w.dayOfWeek && !(a.id || '').startsWith('garmin-'))
         : null;
 
-      // Status label (neutral text — colour reserved for Today only)
+      // Status label (neutral text. Colour reserved for Today only)
       let statusLabel: string;
       if (isDone) statusLabel = garminAct ? 'Logged' : 'Done';
       else if (isReplaced) statusLabel = 'Replaced';
@@ -1045,7 +1045,7 @@ function buildWorkoutCards(
             style="padding:7px 10px;font-size:11px;border-radius:8px;border:1px solid var(--c-border);
                    background:transparent;color:var(--c-muted);cursor:pointer;font-family:var(--f)">Remove</button>`
         : '';
-      // Value and expand arrows are now in the badge row / bottom chevron — rightContent
+      // Value and expand arrows are now in the badge row / bottom chevron. RightContent
       // only carries the Start button (today) and the Undo-adjustment link (reduced workouts).
       const rightContent = showHeaderStart
         ? `<div style="display:flex;gap:6px;align-items:center">${deleteBtn}<button class="plan-start-btn m-btn-primary" data-workout-id="${id}" data-week-num="${viewWeek}" style="padding:7px 14px;font-size:12px">
@@ -1056,7 +1056,7 @@ function buildWorkoutCards(
           ? `<div style="display:flex;align-items:center">${undoAdjBtn}</div>`
           : '';
 
-      // Day separator — emitted once before the first workout card of each day
+      // Day separator. Emitted once before the first workout card of each day
       const isFirstInDay = !dayFirstCardEmitted.has(dayIdx);
       if (isFirstInDay) {
         const sepAnchorId = `id="plan-day-${dayIdx}" `;
@@ -1098,7 +1098,7 @@ function buildWorkoutCards(
           </div>`
         : '';
 
-      // Coach workout modifier note — rendered only on today's row, only when the session
+      // Coach workout modifier note. Rendered only on today's row, only when the session
       // isn't done, and only when stance maps to downgrade or skip. Informational only.
       const showCoachNote = isToday && !isDone && !isSkipped && !isReplaced && todayMod !== 'none' && !!coach;
       const coachNoteRow = showCoachNote
@@ -1116,7 +1116,7 @@ function buildWorkoutCards(
           ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:4px">${escapeHtml(descText).replace(/\n/g, '<br>')}</div>`
           : '');
 
-      // Status chip (right side of badge row — only show non-trivial states)
+      // Status chip (right side of badge row. Only show non-trivial states)
       const showStatusChip = statusLabel !== 'Upcoming';
       const statusChip = showStatusChip
         ? `<span style="font-size:10px;font-weight:600;color:${statusLabelColor}">${statusLabel}</span>`
@@ -1216,7 +1216,7 @@ function buildWrapUpWeekBtn(s: SimulatorState, workouts: any[], viewWeek: number
 // ─── Injury UI ───────────────────────────────────────────────────────────────
 
 /**
- * Header button — "Check-in" when healthy, "In Recovery" pill when injured.
+ * Header button. "Check-in" when healthy, "In Recovery" pill when injured.
  * Only shown on the current week.
  */
 function buildInjuryHeaderBtn(injured: boolean, isCurrentWeek: boolean): string {
@@ -1271,16 +1271,16 @@ function buildIllnessBanner(): string {
 }
 
 /**
- * Goal-feasibility banner — flags when the end-of-plan forecast is materially
+ * Goal-feasibility banner. Flags when the end-of-plan forecast is materially
  * slower than the user's frozen goal (s.initialBaseline). 20-min threshold is a
  * pragmatic cut-off: smaller deltas fall inside normal race-day variance (weather,
  * fuelling, pacing) and shouldn't alarm the user. Larger deltas mean the current
- * plan + fitness trajectory won't get them there — surface the gap and offer to
+ * plan + fitness trajectory won't get them there. Surface the gap and offer to
  * add a quality session (same lever as the milestone accept flow).
  */
 function buildGoalFeasibilityBanner(s: SimulatorState): string {
   if (s.continuousMode || !s.initialBaseline || !s.forecastTime) return '';
-  // Suppress once we hit taper/deload — no time to add stimulus, and the
+  // Suppress once we hit taper/deload. No time to add stimulus, and the
   // CTA would be misleading with only 2-3 low-volume weeks left to work with.
   const currentWeek = s.wks?.[(s.w ?? 1) - 1];
   if (currentWeek?.ph === 'taper') return '';
@@ -1303,7 +1303,7 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
 }
 
 /**
- * Time-budget banner — fires when the rendered plan total exceeds the user's
+ * Time-budget banner. Fires when the rendered plan total exceeds the user's
  * stated weekly hours by more than a small slack. Two CTAs: accept the shorter
  * sessions (plan engine has already used soft floors), or bump the hours target
  * to make it fit. Dismissal is tracked against the current `weeklyTrainingHours`
@@ -1314,7 +1314,7 @@ function buildGoalFeasibilityBanner(s: SimulatorState): string {
  * the residual overflow. The banner is the user-facing surface for that residual.
  */
 function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number): string {
-  // Only show on current and future weeks — past weeks are immutable.
+  // Only show on current and future weeks. Past weeks are immutable.
   if (viewWeek < s.w) return '';
   const target = s.onboarding?.weeklyTrainingHours;
   if (target == null || target <= 0) return '';
@@ -1343,7 +1343,7 @@ function buildBudgetBanner(s: SimulatorState, workouts: any[], viewWeek: number)
 }
 
 /**
- * Full injury status card — shown at the top of the plan card list when injury is active.
+ * Full injury status card. Shown at the top of the plan card list when injury is active.
  */
 function buildInjuryBanner(): string {
   if (!isInjuryActive()) return '';
@@ -1352,7 +1352,7 @@ function buildInjuryBanner(): string {
   const protocol = INJURY_PROTOCOLS[inj.type];
   const displayName = protocol?.displayName || inj.type;
 
-  // Phase label (text only — no colour)
+  // Phase label (text only. No colour)
   const phaseLabels: Record<string, string> = {
     acute: 'Acute — Rest',
     rehab: 'Rehabilitation',
@@ -1363,7 +1363,7 @@ function buildInjuryBanner(): string {
   };
   const phaseLabelText = phaseLabels[inj.injuryPhase] || 'Rehabilitation';
 
-  // Can-run label (text only — opacity-coded by severity)
+  // Can-run label (text only. Opacity-coded by severity)
   const canRunLabels = {
     yes: 'Can run',
     limited: 'Limited running',
@@ -1458,7 +1458,7 @@ function buildMorningPainCheck(): string {
 }
 
 /**
- * Handle a morning pain response — persists the entry, updates pain level,
+ * Handle a morning pain response. Persists the entry, updates pain level,
  * and replaces the card with a quiet confirmation message.
  */
 function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void {
@@ -1486,7 +1486,7 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
   (s as any).injuryState = recordMorningPain(injuryState, newPain);
   saveState();
 
-  // Inline feedback — no full re-render
+  // Inline feedback. No full re-render
   const container = document.getElementById('morning-pain-check');
   if (!container) return;
 
@@ -1536,7 +1536,7 @@ function formatBenchmarkResult(result: any): string {
 }
 
 /**
- * Optional fitness check-in panel — shown on post-deload weeks for continuous mode users.
+ * Optional fitness check-in panel. Shown on post-deload weeks for continuous mode users.
  * Compact status card: not yet started → open overlay | workout added | completed | skipped.
  */
 function buildBenchmarkPanel(s: SimulatorState): string {
@@ -1581,7 +1581,7 @@ function buildBenchmarkPanel(s: SimulatorState): string {
     `;
   }
 
-  // Not started — show prompt to open overlay
+  // Not started. Show prompt to open overlay
   return `
     <div style="margin:12px 16px 0;padding:16px;${PLAN_CARD_STYLE}">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -1604,7 +1604,7 @@ function buildBenchmarkPanel(s: SimulatorState): string {
 // ─── Recovery ─────────────────────────────────────────────────────────────────
 
 /**
- * Compact recovery status row — shown at the top of the plan card list.
+ * Compact recovery status row. Shown at the top of the plan card list.
  * States: no data (prompt) | green (all good) | amber/orange/red + unresolved (tap to adjust) | prompted (quiet dot).
  */
 function buildRecoveryPill(s: SimulatorState): string {
@@ -1628,7 +1628,7 @@ function buildRecoveryPill(s: SimulatorState): string {
   `;
 
   if (!todayEntry) {
-    // No data — invite to log
+    // No data. Invite to log
     return `
       <div ${base}var(--c-border);background:var(--c-surface)">
         <div style="display:flex;align-items:center;gap:8px">
@@ -1646,7 +1646,7 @@ function buildRecoveryPill(s: SimulatorState): string {
   const c = cfg[level] || cfg.green;
 
   if (level === 'green' || alreadyPrompted || !shouldPrompt) {
-    // Logged + OK (or already acted on today) — quiet confirmation
+    // Logged + OK (or already acted on today). Quiet confirmation
     return `
       <div ${base}${c.border};background:${c.bg}">
         <div style="display:flex;align-items:center;gap:8px">
@@ -1681,7 +1681,7 @@ function buildRecoveryPill(s: SimulatorState): string {
 
 /**
  * 7-day recovery history panel with dot indicators.
- * Compact card below the status pill — always visible when there is any history.
+ * Compact card below the status pill. Always visible when there is any history.
  */
 function buildRecoveryLogPanel(s: SimulatorState): string {
   const history: RecoveryEntry[] = (s as any).recoveryHistory || [];
@@ -1827,7 +1827,7 @@ function handleRecoveryScoreInput(score: number): void {
 }
 
 /**
- * Bottom-sheet modal shown when recovery is low — offers to adjust today's run.
+ * Bottom-sheet modal shown when recovery is low. Offers to adjust today's run.
  * Exported so main.ts orchestration can call it after Garmin physiology sync.
  */
 export function showRecoveryAdjustModal(entry: RecoveryEntry): void {
@@ -1997,7 +1997,7 @@ function markRecoveryPrompted(): void {
 
 function buildCarryOverCard(wk: Week | undefined): string {
   if (!wk?.hasCarriedLoad || wk.carryOverCardDismissed) return '';
-  // Only count items whose date falls BEFORE this week's start — items added via
+  // Only count items whose date falls BEFORE this week's start. Items added via
   // populateUnspentLoadItems for current-week excess are not carry-overs.
   const s = getState();
   let weekStartIso = '';
@@ -2206,7 +2206,7 @@ function buildAdjustWeekRow(wk: Week | undefined, s: SimulatorState): string {
   const _hasPendingExcess = _excess > 15;
   const carryPortion = Math.round(_carriedForStrip);
 
-  // Only show when total effective load exceeds planned — carry alone (under target) is informational only.
+  // Only show when total effective load exceeds planned. Carry alone (under target) is informational only.
   if (!_hasPendingExcess) return '';
 
   const _hasRemaining = hasRemainingWeekWorkouts();
@@ -2239,7 +2239,7 @@ function _renderPills(pills: SignalPill[]): string {
   }).join('');
 }
 
-// buildWeekOverview removed — pills now rendered inline in header
+// buildWeekOverview removed. Pills now rendered inline in header
 
 // Computes the resolved workout list for a given week with all mods/moves/illness/holiday/bridge applied.
 // Shared between getPlanHTML (full render) and rerenderWeekListLocal (localized drag-and-drop rerender).
@@ -2325,7 +2325,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
   const dateRange = fmtWeekRange(s.planStartDate, viewWeek);
   const phase = wk?.ph ? phaseLabel(wk.ph) : '';
 
-  // Running km — planned vs actual
+  // Running km. Planned vs actual
   const _isRunType = (t: string) => t !== 'cross' && t !== 'gym' && t !== 'strength' && t !== 'rest';
   const _parseKmFromDesc = (desc: string): number => {
     const lines = (desc || '').split('\n').filter(l => l.trim());
@@ -2372,7 +2372,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
       </div>
     </div>` : '';
 
-  // Week load — Signal B (full physiological, all sports) for all weeks
+  // Week load. Signal B (full physiological, all sports) for all weeks
   // Using Signal B everywhere so the bar always matches what the breakdown sheet shows.
   const _weekRawTSS = wk ? Math.round(computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate)) : 0;
   const _plannedTSS = computePlannedSignalB(
@@ -2474,7 +2474,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     ? (viewWeek > 1 || _hasOlderArchive)
     : (viewWeek > 1 || _liveArchives.length > 0);
   const canGoForward = _inArchive
-    ? true   // always can go forward — last archive week exits to live plan
+    ? true   // always can go forward. Last archive week exits to live plan
     : viewWeek < s.tw;
   const injured = isInjuryActive();
   const initials = (s.onboarding?.name || 'You')
@@ -2510,7 +2510,7 @@ function getPlanHTML(s: SimulatorState, viewWeek: number): string {
     ? _archiveBg
     : (_phaseBg[wk?.ph ?? 'base'] ?? _phaseBg.base);
 
-  // Design tokens — same as physiology page
+  // Design tokens. Same as physiology page
   const _TM = '#0F172A';
   const _TS = '#64748B';
   const _TL = '#94A3B8';
@@ -2643,18 +2643,18 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     showRunBreakdownSheet(s, viewWeek);
   });
 
-  // This Week card (from buildProgressBars on current week) — whole card → Load & Taper
+  // This Week card (from buildProgressBars on current week). Whole card → Load & Taper
   document.getElementById('this-week-card')?.addEventListener('click', () => {
     import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
   });
 
-  // 3-column weekly summary card (new shell) — whole card → Load & Taper.
+  // 3-column weekly summary card (new shell). Whole card → Load & Taper.
   document.getElementById('plan-week-summary-card')?.addEventListener('click', () => {
     import('./load-taper-view').then(({ renderLoadTaperView }) => renderLoadTaperView(viewWeek, 'plan', _viewArchiveIdx));
   });
 
   // Week navigation pills (1, 2 … N). Clicking a pill previews that week
-  // without changing s.w — same semantics as the prev/next nav arrows but
+  // without changing s.w. Same semantics as the prev/next nav arrows but
   // direct-jump. Tapping the live week resets the preview override.
   document.querySelectorAll<HTMLElement>('[data-plan-week-nav]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -2666,10 +2666,10 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // (Week overview toggle removed — pills now inline)
+  // (Week overview toggle removed. Pills now inline)
 
   // Goal-feasibility: add a quality session. Mirror the onboarding
-  // milestone-accept lever (plan-preview.ts) — bump both rw (drives plan
+  // milestone-accept lever (plan-preview.ts). Bump both rw (drives plan
   // regeneration) and epw (drives forecast). Then re-blend so the banner
   // disappears and expectedFinal/forecastTime reflect the added stimulus.
   document.getElementById('goal-add-session')?.addEventListener('click', () => {
@@ -2684,7 +2684,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // Budget banner — accept shorter sessions (record dismissal at current hours).
+  // Budget banner. Accept shorter sessions (record dismissal at current hours).
   document.getElementById('budget-accept-btn')?.addEventListener('click', () => {
     const ms = getMutableState();
     if (ms.onboarding && ms.onboarding.weeklyTrainingHours != null) {
@@ -2694,7 +2694,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     }
   });
 
-  // Budget banner — bump the user's weekly hours to fit the plan, re-blend,
+  // Budget banner. Bump the user's weekly hours to fit the plan, re-blend,
   // then re-render. Plan workouts re-derive on render via generateWeekWorkouts.
   document.getElementById('budget-increase-btn')?.addEventListener('click', (e) => {
     const btn = e.currentTarget as HTMLElement;
@@ -2703,7 +2703,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     const ms = getMutableState();
     if (!ms.onboarding) return;
     ms.onboarding.weeklyTrainingHours = recommended;
-    // Clear dismissal — the user's situation has changed.
+    // Clear dismissal. The user's situation has changed.
     ms.onboarding.budgetAcceptedAtHours = undefined;
     saveState();
     import('@/calculations/blended-fitness').then(({ refreshBlendedFitness }) => {
@@ -2804,7 +2804,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   });
 
   // Edit week button (shown only on current week)
-  // Review past week button — fires week-end debrief for the PREVIOUS week
+  // Review past week button. Fires week-end debrief for the PREVIOUS week
   document.getElementById('plan-review-week-btn')?.addEventListener('click', () => {
     const curWeek = (getState() as any).w ?? 1;
     if (curWeek > 1) {
@@ -2829,7 +2829,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     });
   });
 
-  // Benchmark panel — open overlay or trigger auto-show
+  // Benchmark panel. Open overlay or trigger auto-show
   document.getElementById('btn-benchmark-open')?.addEventListener('click', () => openBenchmarkOverlay());
   maybeTriggerBenchmarkOverlay();
 
@@ -2856,7 +2856,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   };
   document.addEventListener('keydown', keyHandler);
 
-  // Start button (header + expanded detail) — look up workout from module-level lookup
+  // Start button (header + expanded detail). Look up workout from module-level lookup
   const startHandler = (e: Event) => {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLElement;
@@ -3050,7 +3050,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       wk2.workoutMods = wk2.workoutMods.filter(m => !(m.name === candidate.workoutName && m.modReason?.startsWith('KmNudge:')));
 
       if (candidate.wasReduced) {
-        // Run was reduced by cross-training — update the existing reduce mod's distance
+        // Run was reduced by cross-training. Update the existing reduce mod's distance
         const existingMod = wk2.workoutMods.find(m =>
           m.name === candidate.workoutName && m.status === 'reduced'
         );
@@ -3131,23 +3131,23 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
     triggerExcessLoadAdjustment();
   });
 
-  // ─── Tier 1 auto-reduce — undo button ─────────────────────────────────────
+  // ─── Tier 1 auto-reduce. Undo button ─────────────────────────────────────
   document.querySelectorAll<HTMLElement>('.plan-auto-undo-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const s2 = getMutableState();
       const wk2 = s2.wks?.[s2.w - 1];
       if (!wk2) return;
-      // Remove all Auto: mods — restores the easy run; unspentLoadItems already in state → card reappears
+      // Remove all Auto: mods. Restores the easy run; unspentLoadItems already in state → card reappears
       wk2.workoutMods = (wk2.workoutMods ?? []).filter(m => !m.modReason?.startsWith('Auto:'));
       saveState();
-      // Must use render() (full re-render) not renderPlanView() — the excess load card
+      // Must use render() (full re-render) not renderPlanView(). The excess load card
       // lives in the Training tab (main-view.ts) and won't reappear on Plan-only re-render
       import('@/ui/renderer').then(({ render }) => render());
     });
   });
 
-  // ─── Timing suggestion — accept downgrade ──────────────────────────────────
+  // ─── Timing suggestion. Accept downgrade ──────────────────────────────────
   document.querySelectorAll<HTMLElement>('.plan-timing-accept').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -3491,7 +3491,7 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
   if (page) {
     page.addEventListener('touchstart', (e) => { touchStartX = e.touches[0].clientX; }, { passive: true });
     page.addEventListener('touchend', (e) => {
-      if (_touchDraggingCard) return; // card drag was in progress — don't swipe
+      if (_touchDraggingCard) return; // card drag was in progress. Don't swipe
       const dx = e.changedTouches[0].clientX - touchStartX;
       if (Math.abs(dx) > 60) {
         // Delegate to the same prev/next click handlers so swipes can also
@@ -3508,7 +3508,7 @@ export function renderPlanView(): void {
   if (!container) return;
   let s = getState();
 
-  // Triathlon fork — route to the tri plan view before any running-specific
+  // Triathlon fork. Route to the tri plan view before any running-specific
   // setup runs. Running and track-only flows below are unaffected.
   if (s.eventType === 'triathlon') {
     import('./triathlon/plan-view').then(({ renderTriathlonPlanView }) => renderTriathlonPlanView());
@@ -3536,7 +3536,7 @@ export function renderPlanView(): void {
   if (archiveActive) {
     const arc = archives[_viewArchiveIdx!];
     if (!arc?.weeks?.length) {
-      // Defensive: archive is empty/corrupt — drop back to live plan.
+      // Defensive: archive is empty/corrupt. Drop back to live plan.
       _viewArchiveIdx = null;
       _viewWeek = null;
     } else {
@@ -3604,7 +3604,7 @@ export function renderPlanView(): void {
 
 // Localized re-render of just the week-list card after drag-and-drop.
 // Same-week day reorders don't change weekly totals (TSS, km, counts), so the
-// header/banners above the list stay correct — rebuilding them causes a flicker.
+// header/banners above the list stay correct. Rebuilding them causes a flicker.
 // We replace only the list's innerHTML and re-wire handlers scoped to the new nodes.
 // Non-card handlers (coach btn, banners, nav) are untouched and keep their original listeners.
 function rerenderWeekListLocal(viewWeek: number): void {
@@ -3913,12 +3913,12 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
 // ─── Just-Track empty state ─────────────────────────────────────────────────
 
 /**
- * Just-Track Plan tab. No forward planning — instead, a retrospective log:
+ * Just-Track Plan tab. No forward planning. Instead, a retrospective log:
  * current week broken down by day (showing synced + recorded activities),
  * followed by a rolling history list of prior weeks with totals. Create-a-plan
  * CTA lives at the bottom.
  *
- * Values come from each week's `garminActuals` / `adhocWorkouts` — the same
+ * Values come from each week's `garminActuals` / `adhocWorkouts`. The same
  * buckets planned users write to. No special trackOnly data store.
  */
 function getTrackOnlyPlanHTML(s: SimulatorState): string {

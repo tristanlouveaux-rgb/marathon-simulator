@@ -2,7 +2,7 @@
  * HYROX weakest-link / "Where to gain" calculation.
  *
  * **Side**: tracking + planning. Surfaces which stations have the highest
- * forecast impact if the athlete trains them — combining current time, planned
+ * forecast impact if the athlete trains them. Combining current time, planned
  * training dose, and weeks remaining. Reuses the per-class horizon model
  * (`applyHyroxStationHorizon` in `training-horizon.hyrox.ts`) that powers the
  * trajectory panel; no new constants.
@@ -50,7 +50,7 @@ export function rankWeakestLinks(prediction: HyroxPrediction | null): WeakestLin
   }));
 
   rows.sort((a, b) => b.gainableSec - a.gainableSec);
-  // Drop trailing entries with zero gain — they add noise without info.
+  // Drop trailing entries with zero gain. They add noise without info.
   return rows.filter(r => r.gainableSec >= 1);
 }
 

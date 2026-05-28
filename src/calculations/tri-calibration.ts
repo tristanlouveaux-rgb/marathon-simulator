@@ -1,21 +1,21 @@
 /**
- * Triathlon prediction calibration — derives per-user correction factors
+ * Triathlon prediction calibration. Derives per-user correction factors
  * from the race log (predicted vs actual history).
  *
  * Tier ladder (data-gated so calibration grows with evidence):
- *   Tier 0 (< 2 races):  no calibration — current behaviour.
+ *   Tier 0 (< 2 races):  no calibration. Current behaviour.
  *   Tier 1 (≥ 2 races):  per-leg additive bias. bias = median(actual − predicted),
  *                         capped at ±8% of median predicted leg time.
  *   Tier 2 (≥ 4 races with predictedRawPerLeg): learned maxPenalty scale per
  *                         leg, Bayesian-shrunk toward 1.0. Dormant until entries
  *                         carry the `predictedRawPerLeg` field added in WS-1.
  *   Tier 3 (≥ 6 races spanning ≥ 3 distances): full multiplier fit. Dormant
- *                         today — TriathlonDistance only has 70.3 / ironman,
+ *                         today. TriathlonDistance only has 70.3 / ironman,
  *                         so 3+ distinct distances cannot be reached yet.
  *
  * All tiers are additive: tier 2 includes tier 1's bias, tier 3 includes both.
  *
- * Pure — no state mutation, no I/O.
+ * Pure. No state mutation, no I/O.
  */
 
 import type { TriRaceLogEntry, TriCalibration } from '@/types/triathlon';
@@ -139,7 +139,7 @@ function computeTier2RawScale(
 
 /**
  * Compute the calibration struct for a given race log. Safe to call at any
- * time — returns tier=0 when not enough data, never throws.
+ * time. Returns tier=0 when not enough data, never throws.
  */
 export function computeTriCalibration(raceLog: TriRaceLogEntry[] | undefined): TriCalibration {
   const entries = (raceLog ?? []).filter(
@@ -196,7 +196,7 @@ export function computeTriCalibration(raceLog: TriRaceLogEntry[] | undefined): T
   // distances unreachable today). Leave the machinery in place.
   const distinctDistances = new Set(entries.map(e => e.distance)).size;
   if (n >= 6 && distinctDistances >= 3) {
-    // Placeholder — actual tier-3 fit goes here when sprint/olympic logging lands.
+    // Placeholder. Actual tier-3 fit goes here when sprint/olympic logging lands.
     return { ...tier2Cal, tier: 3 };
   }
 

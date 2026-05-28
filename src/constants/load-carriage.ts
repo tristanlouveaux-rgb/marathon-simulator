@@ -14,7 +14,7 @@
  *   • Ground reaction force scales linearly with total mass (runner + pack).
  *     A 70 kg runner with a 7 kg pack lands with ~10% more peak vertical force
  *     each step than the same runner without a pack. This is the structural-
- *     stress (impact-load) signal that HR cannot see — Signal C, in Mosaic's
+ *     stress (impact-load) signal that HR cannot see. Signal C, in Mosaic's
  *     three-signal load model.
  *
  *   • The relationship saturates well above the loads typical commuters carry
@@ -24,19 +24,19 @@
  * -----------------------
  * For any run tagged as a commute with a backpack mass, the impact-load
  * contribution is multiplied by `loadCarriageImpactCoef(backpackKg, bodyKg)`.
- * Aerobic load (iTRIMP, TSS) is unchanged — HR has already done that job.
+ * Aerobic load (iTRIMP, TSS) is unchanged. HR has already done that job.
  *
  * Limitations (call out honestly)
  * -------------------------------
  *   • Linear scaling oversimplifies pack position (high vs low load), centre
- *     of mass, and pack hardness. We don't model these — they would require
+ *     of mass, and pack hardness. We don't model these. They would require
  *     pack-style data the user doesn't have to enter.
  *   • Load carriage gait differences (slower cadence, longer ground contact)
  *     shift force distribution toward the calf/Achilles. We capture the
  *     magnitude bump, not the redistribution.
  *   • Above ~30% bodyweight the linear model breaks down (real military
  *     studies show metabolic and structural cost grow faster). We clamp the
- *     coefficient to 1.5 (50% bodyweight) — anything heavier is outside the
+ *     coefficient to 1.5 (50% bodyweight). Anything heavier is outside the
  *     run-to-work use case.
  *
  * References
@@ -80,7 +80,7 @@ export function resolveBodyweightKg(
  *
  * Equivalent to `1 + (backpackKg / bodyweightKg)`. A 7 kg pack on a 70 kg
  * runner returns 1.10 (10% extra structural stress per kilometre). Clamped
- * to `[1.0, 1.5]` — see file header for rationale.
+ * to `[1.0, 1.5]`. See file header for rationale.
  *
  * @param backpackKg     Pack mass in kg. 0 or negative returns 1.0 (no-op).
  * @param bodyweightKg   Runner mass in kg. Must be > 0.

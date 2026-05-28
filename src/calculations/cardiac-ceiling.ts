@@ -1,5 +1,5 @@
 /**
- * Cardiac Ceiling — aerobic upper bound from peak HR ÷ resting HR.
+ * Cardiac Ceiling. Aerobic upper bound from peak HR ÷ resting HR.
  *
  * Uth-Sørensen formula (Uth, Sørensen, Overgaard, Pedersen 2004,
  * *Eur J Appl Physiol* 91:111–115):
@@ -10,12 +10,12 @@
  * VO2max against HRmax/HRrest in trained runners and validated against
  * gas-exchange measurements with ±10–15% accuracy. The formula leverages the
  * fact that maximal cardiac output (HRmax × stroke volume) and resting HR
- * together encode central cardiovascular capacity — the component of VO2max
+ * together encode central cardiovascular capacity. The component of VO2max
  * that is *modality-independent* (Bassett & Howley 2000, *MSSE* 32:70–84).
  *
  * What this is and is not:
  *   - IT IS: an aerobic upper bound. The maximum VO2max consistent with the
- *     athlete's HRmax/HRrest ratio. A theoretical ceiling — "if you trained
+ *     athlete's HRmax/HRrest ratio. A theoretical ceiling. "if you trained
  *     perfectly across all sports, this is the value your cardiac function
  *     would support". Useful as a headroom indicator when set against the
  *     measured per-modality numbers (running, cycling, cross-training).
@@ -30,7 +30,7 @@
  * ceiling no longer has to do double duty as both "your aerobic ceiling" and
  * "your cross-training credit". Cross-training is the sustained-fitness
  * sibling that this ceiling caps. Don't reintroduce framing that implies
- * cardiac ceiling itself credits cross-training fitness — it doesn't.
+ * cardiac ceiling itself credits cross-training fitness. It doesn't.
  *
  * HRmax determination is the dominant source of error: we use *observed*
  * peak HR across recent activity, not a maximal effort test. The 8-week
@@ -38,7 +38,7 @@
  * (e.g. monitor connection artefacts at the start of a session). Users who
  * never go truly maximal will under-estimate; we never over-credit.
  *
- * Pure — no state dependency, fully testable.
+ * Pure. No state dependency, fully testable.
  */
 
 export interface ActivityHRSample {
@@ -81,14 +81,14 @@ const UTH_SORENSEN_K = 15.3;
 const PLAUSIBLE_HRMAX_CAP = 220;
 /** Cardiac VO2max ceiling cap. Highest measured human VO2max is ~88–95
  *  (Bjørn Dæhlie). For a recreational app, anything above 85 is almost
- *  certainly Uth-Sørensen breaking down at extreme HR ratios — clamp rather
+ *  certainly Uth-Sørensen breaking down at extreme HR ratios. Clamp rather
  *  than emit a number that will erode user trust. */
 const PLAUSIBLE_VO2_CAP = 85;
 
 /**
  * Compute the cardiac VO2max ceiling.
  *
- * @param activities  Recent aerobic sessions with HR data (any window — function filters to 8w).
+ * @param activities  Recent aerobic sessions with HR data (any window. Function filters to 8w).
  * @param restingHR   Resting heart rate, bpm.
  * @param now         Anchor time for window. Defaults to now.
  * @param athleteMaxHR Optional stored max HR for the athlete. When provided,
@@ -153,11 +153,11 @@ export function computeCardiacCeiling(
   const vo2 = Math.min(UTH_SORENSEN_K * (hrMaxObserved / restingHR), PLAUSIBLE_VO2_CAP);
 
   // Confidence model:
-  //   high   = ≥ 8 sessions AND ≥ 2 distinct sports — diverse, well-sampled HR exposure
+  //   high   = ≥ 8 sessions AND ≥ 2 distinct sports. Diverse, well-sampled HR exposure
   //   medium = ≥ 4 sessions
   //   low    = ≥ 1 session
   // Sport diversity matters because HRmax is more reliable when multiple
-  // sports have probed the cardiac ceiling — single-sport HRmax may understate
+  // sports have probed the cardiac ceiling. Single-sport HRmax may understate
   // true peak (e.g. a habitually slow runner who never spikes HR).
   let confidence: CardiacConfidence = 'low';
   if (n >= 8 && sports.size >= 2) confidence = 'high';

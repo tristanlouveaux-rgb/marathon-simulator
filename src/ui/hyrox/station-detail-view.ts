@@ -97,7 +97,7 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
   // on the same chart. A user racing both should see two separate progressions.
   const history = getStationHistory(s, station).filter(e => e.format === fmt);
 
-  // Race-day adjusted time from the predictor — this is the in-race-fatigued
+  // Race-day adjusted time from the predictor. This is the in-race-fatigued
   // version after run-leg fatigue accumulation but before within-station fade
   // (which we don't model yet, see ISSUE-197).
   const prediction = predictHyroxRace(s);
@@ -112,14 +112,14 @@ export function renderHyroxStationDetailView(station: HyroxStation): void {
     ? getStationPercentile(station, baseSec)
     : null;
 
-  // Improvement since FIRST test (chronologically) — anchored at oldest, not best.
+  // Improvement since FIRST test (chronologically). Anchored at oldest, not best.
   const first = history[0] ?? null;
   const improvementSec = (latest && first && history.length > 1)
     ? latest.sec - first.sec
     : null;
 
   // Race-day fade: how much slower the predicted race-day time is vs the latest
-  // fresh test. ISSUE-195 Phase 1 — purely informational, no new math.
+  // fresh test. ISSUE-195 Phase 1. Purely informational, no new math.
   const fadePct = (latest && raceDaySec != null && latest.sec > 0)
     ? ((raceDaySec - latest.sec) / latest.sec) * 100
     : null;

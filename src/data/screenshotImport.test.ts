@@ -1,5 +1,5 @@
 /**
- * Screenshot import — OCR/AI text parsing + row conversion.
+ * Screenshot import. OCR/AI text parsing + row conversion.
  *
  * Fixture mirrors the real Strava run screenshots Tristan shared (Splits table
  * with per-km pace/elev/HR, plus avg pace, moving time, avg/max HR, distance).
@@ -131,9 +131,9 @@ describe('parsedHrSeriesFromAIJson', () => {
     const out = parsedHrSeriesFromAIJson({
       hrSeries: [
         { tSec: 120, hr: 145 },
-        { tSec: -5, hr: 130 },     // negative time — dropped
-        { tSec: 60, hr: 350 },     // HR out of range — dropped
-        { tSec: 0, hr: 50 },       // HR out of range — dropped
+        { tSec: -5, hr: 130 },     // negative time. Dropped
+        { tSec: 60, hr: 350 },     // HR out of range. Dropped
+        { tSec: 0, hr: 50 },       // HR out of range. Dropped
         { tSec: 30, hr: 128 },
       ],
     });
@@ -191,7 +191,7 @@ describe('screenshotActivityToRow — hrSeries enrichment', () => {
     // Steady 150 bpm → avg/max both 150
     expect(row.avg_hr).toBe(150);
     expect(row.max_hr).toBe(150);
-    // Real iTRIMP (not null) — value depends on Banister formula but must be > 0
+    // Real iTRIMP (not null). Value depends on Banister formula but must be > 0
     expect(row.iTrimp).not.toBeNull();
     expect(row.iTrimp ?? 0).toBeGreaterThan(0);
     // Zone breakdown populated (150 bpm sits in z3 per the ctx zones)

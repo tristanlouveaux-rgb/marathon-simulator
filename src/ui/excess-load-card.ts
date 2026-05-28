@@ -1,9 +1,9 @@
 /**
- * Excess Load Card — amber card on the Training tab when total week Signal B
+ * Excess Load Card. Amber card on the Training tab when total week Signal B
  * exceeds the composite planned target (running plan + cross-training budget).
  *
- * Excess is detected from the FULL Signal B picture — matched activities that
- * were harder than expected, extra sessions, heavy cross-training — everything.
+ * Excess is detected from the FULL Signal B picture. Matched activities that
+ * were harder than expected, extra sessions, heavy cross-training. Everything.
  * Whether activities matched plan slots or not is irrelevant to detection.
  *
  * Three-tier response:
@@ -78,7 +78,7 @@ function filterRemainingWorkouts<T extends { id?: string; n: string; dayOfWeek?:
   _planStartDate: string,
 ): T[] {
   // "Remaining" = unrated only. Past-day unrated runs stay eligible so the user
-  // can replan the rest of the week — e.g. if Wednesday's tempo was missed and
+  // can replan the rest of the week. E.g. if Wednesday's tempo was missed and
   // today is Friday, the suggester can still downgrade it to absorb extra load
   // from cross-training done after it was scheduled.
   return workouts.filter(w => _wk.rated[w.id || w.n] === undefined);
@@ -120,17 +120,17 @@ function computeTotalWeekExcess(wk: Week, s: ReturnType<typeof getMutableState>)
  * Returns the excess load card HTML, or empty string if no excess in Tier 2 range.
  * Wire up events by calling wireExcessLoadCard() after inserting into DOM.
  *
- * Detection is now total-week Signal B vs plannedSignalB — not limited to unspent items.
+ * Detection is now total-week Signal B vs plannedSignalB. Not limited to unspent items.
  */
 export function renderExcessLoadCard(wk: Week | undefined): string {
   if (!wk) return '';
 
-  // Tier 1 auto-reduce: excess was silently absorbed — don't show the card
+  // Tier 1 auto-reduce: excess was silently absorbed. Don't show the card
   if (wk.workoutMods?.some(m => m.modReason?.startsWith('Auto:'))) return '';
 
   const _s = getMutableState();
 
-  // No plan data yet — skip (can't compute meaningful target)
+  // No plan data yet. Skip (can't compute meaningful target)
   if (!_s.historicWeeklyTSS?.length && !_s.ctlBaseline) return '';
 
   const excess = computeTotalWeekExcess(wk, _s);
@@ -182,7 +182,7 @@ export function wireExcessLoadCard(): void {
     triggerExcessLoadAdjustment();
   });
 
-  // Dismiss (two-tap confirmation) — just dismisses the card for this render cycle
+  // Dismiss (two-tap confirmation). Just dismisses the card for this render cycle
   // by marking the week as excess-dismissed. Does not clear activity data.
   let dismissWarningShown = false;
   document.getElementById('excess-dismiss-btn')?.addEventListener('click', (e) => {
@@ -193,7 +193,7 @@ export function wireExcessLoadCard(): void {
       if (warning) warning.style.display = '';
       return;
     }
-    // Second tap — add an auto-mod note so Tier 1 suppression hides the card
+    // Second tap. Add an auto-mod note so Tier 1 suppression hides the card
     const s2 = getMutableState();
     const wk2 = s2.wks?.[s2.w - 1];
     if (wk2) {
@@ -275,7 +275,7 @@ export function triggerExcessLoadAdjustment(): void {
   // the items were unresolved from last week and are already in state.
   if (excess <= 0 && !hasCarriedItems) return;
 
-  // Recovery trend multiplier — modulates how aggressively we reduce.
+  // Recovery trend multiplier. Modulates how aggressively we reduce.
   // Passed to buildCrossTrainingPopup which inflates runReplacementCredit accordingly.
   const recoveryMultiplier = s.physiologyHistory?.length
     ? computeRecoveryTrend(s.physiologyHistory)
@@ -333,7 +333,7 @@ export function triggerExcessLoadAdjustment(): void {
 
     sportLabel = items.length === 1 ? items[0].displayName : `${items.length} activities`;
   } else {
-    // No unspent items — excess came from matched activities being harder than expected.
+    // No unspent items. Excess came from matched activities being harder than expected.
     // Create a synthetic activity representing the excess TSS so the suggester can
     // size reductions correctly. iTrimp = excessTSS * 150 (inverse of TSS = iTrimp*100/15000).
     sport = 'cross_training';
@@ -349,12 +349,12 @@ export function triggerExcessLoadAdjustment(): void {
   const remainingWorkouts = filterRemainingWorkouts(allWeekWorkouts, wk, weekIdx, s.planStartDate ?? '');
 
   if (remainingWorkouts.length === 0) {
-    // No remaining workouts this week — don't adjust next week's plan mid-week.
+    // No remaining workouts this week. Don't adjust next week's plan mid-week.
     // The load will carry forward automatically via migration at week advance.
     return;
   }
 
-  // Has remaining workouts — offer to reduce/replace them.
+  // Has remaining workouts. Offer to reduce/replace them.
   const weekRuns = workoutsToPlannedRuns(remainingWorkouts, s.pac);
   const _tier = s.athleteTierOverride ?? s.athleteTier;
   const _atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
@@ -426,13 +426,13 @@ export function triggerExcessLoadAdjustment(): void {
     saveState();
     render();
   }, undefined, undefined, () => {
-    // "Push to next week" — close the modal; load carries via migration. No state change needed.
+    // "Push to next week". Close the modal; load carries via migration. No state change needed.
     render();
   });
 }
 
 /**
- * No workouts remain this week — the extra load carries to next week automatically.
+ * No workouts remain this week. The extra load carries to next week automatically.
  * Show the suggestion modal targeting next week's runs so the user can absorb it there.
  */
 function _triggerCarryoverToNextWeek(
@@ -447,7 +447,7 @@ function _triggerCarryoverToNextWeek(
   const nextWeekWorkouts = getWeekWorkouts(1);
 
   if (!nextWk || nextWeekWorkouts.length === 0) {
-    // No next week in plan — nothing to adjust, just clear.
+    // No next week in plan. Nothing to adjust, just clear.
     const s2 = getMutableState();
     const wk2 = s2.wks?.[s2.w - 1];
     if (wk2) { wk2.unspentLoadItems = []; wk2.unspentLoad = 0; }

@@ -18,14 +18,14 @@ export function isCyclingOnlyMode(state: Pick<SimulatorState, 'triConfig' | 'onb
 
 /**
  * Display label for the cycling event distance (e.g. "160 km"). Returns
- * undefined when not in cycling mode or distance is missing — callers fall
+ * undefined when not in cycling mode or distance is missing. Callers fall
  * back to the existing tri distance label.
  */
 export function getCyclingEventLabel(state: Pick<SimulatorState, 'onboarding' | 'triConfig'>): string | undefined {
   if (!isCyclingOnlyMode(state)) return undefined;
   const d = state.onboarding?.cyclingDistance;
   if (!d) return 'Cycling';
-  // Distance values are stored as '100km' / '160km' / '200km' — render with a
+  // Distance values are stored as '100km' / '160km' / '200km'. Render with a
   // space for typographic consistency with the rest of the app.
   if (d === '50km')  return '50 km';
   if (d === '100km') return '100 km';

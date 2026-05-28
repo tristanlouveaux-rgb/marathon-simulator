@@ -1,5 +1,5 @@
 /**
- * Double-day compounding — same-calendar-day session stacking carries more
+ * Double-day compounding. Same-calendar-day session stacking carries more
  * physiological cost than pure additive TSS suggests.
  *
  * Science (see docs/SCIENCE_LOG.md → "Double-day stacking"):
@@ -14,7 +14,7 @@
  *   ≥12h → ×1.05 (minimal compounding)
  *
  * The bonus is applied to the day-level Signal B aggregate (CTL/ATL/ACWR/
- * Readiness inputs). Per-activity TSS in Activity Review stays raw — the
+ * Readiness inputs). Per-activity TSS in Activity Review stays raw. The
  * *session* didn't get harder; the *day's recovery debt* did.
  *
  * Side of the line: tracking. Describes day-level stress after the fact.
@@ -205,7 +205,7 @@ export function computeWeekDoubleDayDays(
 
   if (sessions.length < 2) return [];
 
-  // Planned-brick day set — collapse to ISO dates from workout dayOfWeek + week index.
+  // Planned-brick day set. Collapse to ISO dates from workout dayOfWeek + week index.
   const plannedBrickDates = new Set<string>();
   if (planStartDate && wk.w != null) {
     const weekStartMs = new Date(planStartDate + 'T00:00:00').getTime() + (wk.w - 1) * 7 * 86400000;

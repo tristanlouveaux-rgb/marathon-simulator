@@ -1,5 +1,5 @@
 /**
- * Stats tab — redesigned 2026-03-19.
+ * Stats tab. Redesigned 2026-03-19.
  * Three-pillar architecture: Progress · Fitness · Readiness
  * Opening screen: one card per pillar + flat Summary section.
  * Each card taps into a single-scroll detail page (no tabs inside).
@@ -44,7 +44,7 @@ function navigateTab(tab: TabId): void {
 // ---------------------------------------------------------------------------
 // Chart design tokens (UX_PATTERNS § Charts)
 
-const CHART_STROKE = '#64748B';         // muted slate — line charts
+const CHART_STROKE = '#64748B';         // muted slate. Line charts
 const CHART_FILL   = 'rgba(100,116,139,0.12)'; // area fill under line
 const CHART_FILL_LIGHT = 'rgba(100,116,139,0.06)'; // forecast/projected area fill
 const CHART_STROKE_DIM = 'rgba(100,116,139,0.5)'; // forecast/dashed lines
@@ -102,7 +102,7 @@ function computeCurrentVDOT(s: SimulatorState): number {
 /**
  * Find the most recent running garminActual and return it as a RecentRun.
  * Keeps s.rec fresh from actual Strava/Garmin data rather than stale onboarding
- * input. No HR scaling — the blend engine already handles sub-race efforts via
+ * input. No HR scaling. The blend engine already handles sub-race efforts via
  * its PB/LT/VO2 weighting and recency decay.
  */
 /**
@@ -407,7 +407,7 @@ function buildOnePositionBar(opts: {
     ? `<div id="stats-info-${infoId}" style="display:none;margin-top:6px;font-size:11px;color:var(--c-muted);line-height:1.5;background:rgba(0,0,0,0.04);border-radius:8px;padding:10px 12px">${INFO_TEXTS[infoId]}</div>`
     : '';
 
-  // Zone fill colour — sky→blue→indigo→violet→purple→deep-violet (fitness scale, non-judgmental)
+  // Zone fill colour. Sky→blue→indigo→violet→purple→deep-violet (fitness scale, non-judgmental)
   const ZONE_FILL: Record<string, string> = {
     'Building':     '#38BDF8',
     'Foundation':   '#3B82F6',
@@ -418,7 +418,7 @@ function buildOnePositionBar(opts: {
   };
   const fillColor = ZONE_FILL[zoneName] ?? '#3B82F6';
 
-  // Full zone names — no abbreviations
+  // Full zone names. No abbreviations
   const ZONE_SHORT: Record<string, string> = {
     'Building':     'Building',
     'Foundation':   'Foundation',
@@ -438,7 +438,7 @@ function buildOnePositionBar(opts: {
     `<div style="flex:${z.fraction};height:100%;background:${z.color}"></div>`
   ).join('');
 
-  // Divider ticks at boundaries — sit under the fill (z-index 1)
+  // Divider ticks at boundaries. Sit under the fill (z-index 1)
   const dividerTicks = boundaries.map(pct =>
     `<div style="position:absolute;top:0;left:${pct.toFixed(2)}%;width:1.5px;height:100%;background:rgba(255,255,255,0.55);z-index:1"></div>`
   ).join('');
@@ -516,7 +516,7 @@ const INFO_TEXTS: Record<string, string> = {
 
 function buildCalibrationStatus(s: SimulatorState): string {
   // Either history source (Strava DB-backed or Apple local-backfilled) qualifies
-  // a user for the calibration card — the math below operates on `s.wks` rows
+  // a user for the calibration card. The math below operates on `s.wks` rows
   // that match either path.
   if (!s.stravaHistoryFetched && !s.appleHistoryFetched) return '';
   const completedRuns = (s.wks ?? []).reduce((acc, wk) => {
@@ -822,7 +822,7 @@ function buildSummarySection(s: SimulatorState): string {
       } else {
         timeSec = vt(d.km, vdot);
       }
-      // Signed delta vs target — only on the row matching s.rd, and only when a goal is set.
+      // Signed delta vs target. Only on the row matching s.rd, and only when a goal is set.
       let deltaHtml = '';
       if (d.code === s.rd && !s.continuousMode && s.initialBaseline && s.initialBaseline > 0) {
         const dSec = Math.round(timeSec - s.initialBaseline);
@@ -896,7 +896,7 @@ function buildTrackOnlyAreaChart(
 
 /**
  * Just-Track weekly volume retrospective. Line/area chart (same style as VO2).
- * Series sourced from `s.wks` only — each week's km summed from garminActuals
+ * Series sourced from `s.wks` only. Each week's km summed from garminActuals
  * + adhocWorkouts. Excludes `historicWeeklyKm` (Strava backfill from prior
  * plan usage) so a fresh tracking programme starts with a clean chart and
  * fills in as activities sync into the new weeks.
@@ -977,7 +977,7 @@ function buildTrackOnlyVolumeCard(s: SimulatorState): string {
  * when no data yet.
  */
 function buildTrackOnlyLoadCard(s: SimulatorState): string {
-  // Series sourced from s.wks only — each week's Signal-B TSS. Excludes
+  // Series sourced from s.wks only. Each week's Signal-B TSS. Excludes
   // historicWeeklyTSS (Strava backfill from prior plan usage).
   const wks = s.wks ?? [];
   const series = wks.map(w => Math.round(computeWeekRawTSS(w, w.rated ?? {}, s.planStartDate)));
@@ -1056,7 +1056,7 @@ function _buildMiniPlanChart(weeklyKm: number[]): string {
 }
 
 function buildCompletedPlansCard(s: SimulatorState): string {
-  // Deduplicate by completionDate — earlier entries with same date are stale duplicates.
+  // Deduplicate by completionDate. Earlier entries with same date are stale duplicates.
   const rawPlans = ((s as any).completedPlans ?? []) as CompletedPlanSummary[];
   const seenDates = new Set<string>();
   const plans = rawPlans.slice().reverse().filter(p => {
@@ -1073,7 +1073,7 @@ function buildCompletedPlansCard(s: SimulatorState): string {
     const vdotDelta = p.vdotEnd - p.vdotStart;
     const vdotLabel = Math.abs(vdotDelta) >= 0.1 ? `${vdotDelta >= 0 ? '+' : ''}${vdotDelta.toFixed(1)} VDOT` : '';
     const isFirst = i === 0;
-    // Tappable card — opens a past-plan detail page that hydrates from the
+    // Tappable card. Opens a past-plan detail page that hydrates from the
     // matching `previousPlanWks` archive entry (when present) so the user can
     // browse old activities, week-by-week load, and totals.
     return `<button data-past-plan="${p.completionDate}" style="display:block;width:100%;text-align:left;background:transparent;border:none;cursor:pointer;font-family:var(--f);padding:${isFirst ? '0' : '14px 0 0'};${!isFirst ? 'border-top:1px solid var(--c-border);' : ''}">
@@ -1101,7 +1101,7 @@ function buildStatsSummary(s: SimulatorState): string {
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
 
-  // Just-Track mode: same card layout as planned — Progress (continuous-fitness
+  // Just-Track mode: same card layout as planned. Progress (continuous-fitness
   // branch of `buildProgressCard_Opening`), Fitness, Volume, Load over time.
   // Progress card taps through to the Progress detail page which hides Plan
   // Adherence + Phase Timeline for trackOnly. The Current/Total toggle lives
@@ -1353,7 +1353,7 @@ function buildForecastLoadChart(s: SimulatorState): string {
   }
 
   // Phase labels: show at each phase change (first week of a new phase)
-  // Never use SVG <text> in preserveAspectRatio:none — use absolutely-positioned HTML
+  // Never use SVG <text> in preserveAspectRatio:none. Use absolutely-positioned HTML
   const phaseLabelsHtml = futurePhases.map((ph, fi) => {
     const prevPh = fi === 0 ? null : futurePhases[fi - 1];
     if (ph === prevPh) return ''; // not a phase change
@@ -1593,13 +1593,13 @@ function buildCTLLineChart(s: SimulatorState, range: ChartRange): string {
 }
 
 /**
- * Aerobic Durability chart — HR drift on easy + long runs over recent training.
+ * Aerobic Durability chart. HR drift on easy + long runs over recent training.
  *
  * Chart shows individual drift samples (dots) plus a 4-session rolling mean (line)
  * so the user can see both the noise and the trend. Reference bands at 5% and 8%
  * mark the efficient / moderate / stressed zones.
  *
- * Filters to easy + long runs only — quality sessions deliberately push above
+ * Filters to easy + long runs only. Quality sessions deliberately push above
  * aerobic threshold so drift on them carries no durability signal.
  */
 function buildDurabilityChart(s: SimulatorState): string {
@@ -1662,7 +1662,7 @@ function buildDurabilityChart(s: SimulatorState): string {
   const y8 = yOf(8);
   const y0 = yOf(Math.max(0, minY));
 
-  // Points — coloured by zone
+  // Points. Coloured by zone
   const pointColour = (v: number) => v <= 5 ? 'rgba(52,199,89,0.85)' : v <= 8 ? 'rgba(245,158,11,0.85)' : 'rgba(239,68,68,0.85)';
   const dots = drifts.map((v, i) => {
     const cx = xOf(i).toFixed(1);
@@ -1752,7 +1752,7 @@ function aggregateAllTimeStats(s: SimulatorState): {
 } {
   const RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
   // WALKING (and the deprecated GENERIC bucket) auto-syncs from phone step
-  // counters and Apple Health daily walk segments — that's not "training time"
+  // counters and Apple Health daily walk segments. That's not "training time"
   // in any useful sense and was inflating Time Active / Calories massively
   // (e.g. 8 runs but 116h Time Active). Excluded from time + calories totals
   // but kept in TSS (computeWeekRawTSS already weighs by iTrimp, so an
@@ -1800,7 +1800,7 @@ function aggregateAllTimeStats(s: SimulatorState): {
             caloriesTracked = true;
           }
         }
-        // Track the activity-window range (irrespective of passive filter — it's
+        // Track the activity-window range (irrespective of passive filter. It's
         // a "what dates are these stats from" hint, so any logged activity counts).
         const dateOnly = (actual.startTime ?? '').split('T')[0];
         if (dateOnly) {
@@ -1808,7 +1808,7 @@ function aggregateAllTimeStats(s: SimulatorState): {
           if (newestActivityDate == null || dateOnly > newestActivityDate) newestActivityDate = dateOnly;
         }
       }
-      // Per-week TSS is the right unit for "Total Load" — already de-duped vs
+      // Per-week TSS is the right unit for "Total Load". Already de-duped vs
       // adhoc inside `computeWeekRawTSS` and counts cross-training without runSpec.
       totalLoad += computeWeekRawTSS(wk, wk.rated ?? {}, planStartDate);
     }
@@ -1948,7 +1948,7 @@ function buildProgressDetailPage(s: SimulatorState): string {
     </div>` : '';
 
   // ── Total view date-range subtitle ────────────────────────────────────────
-  // Local activity history isn't unbounded — the recovery feature fetches the
+  // Local activity history isn't unbounded. The recovery feature fetches the
   // last 90 days, and prior plans contribute their own windows. Surface the
   // actual range so the user can see "since 28 Jan" instead of guessing
   // whether these are all-time or recent-only numbers.
@@ -2145,7 +2145,7 @@ function _aggregateArchiveStats(archive: PastPlanArchive, excludeGarminIds?: Set
       if (actual.garminId) {
         if (seenIds.has(actual.garminId)) continue;
         seenIds.add(actual.garminId);
-        // Skip activities that the live plan also tracks — without this filter
+        // Skip activities that the live plan also tracks. Without this filter
         // the past-plan view would double-show any activity that overlaps the
         // current plan's date range (e.g. a continuousMode tail-week activity
         // that's already in s.wks for the new plan's week 1).
@@ -2254,7 +2254,7 @@ function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummar
     ? `${fmtMonthDay(startD)} – ${fmtMonthDay(endD)}, ${endD.getFullYear()}`
     : (summary.completionDate ?? '');
 
-  // Pull stats — prefer archive (raw rows, full fidelity); fall back to summary.
+  // Pull stats. Prefer archive (raw rows, full fidelity); fall back to summary.
   // Build a set of garminIds that the live plan currently owns, so the past-
   // plan view can skip duplicates introduced by an old continuousMode tail
   // overlapping the new plan's week 1 (or by a buggy redistribution from an
@@ -2304,7 +2304,7 @@ function buildPastPlanDetailPage(s: SimulatorState, summary: CompletedPlanSummar
 
   // Activity list (newest-first). Cap at 50 to keep the page lightweight.
   // Use the same iTrimp→TSS normaliser as `computeWeekRawTSS` so per-activity
-  // TSS sums to the weekly chart number — without this they diverge whenever
+  // TSS sums to the weekly chart number. Without this they diverge whenever
   // the user has an LT-derived norm ≠ 15000.
   const _norm = getNormalizerFromState(s);
   const RUN_TYPES = new Set(['RUNNING', 'TREADMILL_RUNNING', 'TRAIL_RUNNING', 'VIRTUAL_RUN', 'TRACK_RUNNING']);
@@ -2460,7 +2460,7 @@ function renderPastPlanDetail(s: SimulatorState, completionDate: string): void {
   if (!container) return;
   const rawPlans = ((s as any).completedPlans ?? []) as CompletedPlanSummary[];
   // Search newest-first to handle accidental duplicates from before the dedup
-  // guard landed — the latest entry for a given completionDate is the one that
+  // guard landed. The latest entry for a given completionDate is the one that
   // saveSummary intended to keep.
   const summary = [...rawPlans].reverse().find(p => p.completionDate === completionDate);
   if (!summary) {
@@ -2483,7 +2483,7 @@ function renderPastPlanDetail(s: SimulatorState, completionDate: string): void {
 }
 
 /**
- * External entry point — used by `plan-view.ts`'s prev-week button at week 1
+ * External entry point. Used by `plan-view.ts`'s prev-week button at week 1
  * to step into the most recent archived plan. Reads state itself so callers
  * outside this module don't need to thread it through.
  */
@@ -2666,7 +2666,7 @@ function buildProgressScaleBars(s: SimulatorState, ctl: number, fitnessMetrics?:
     ],
   });
 
-  // Bar 2: VO2 Max — single source of truth via getPhysiologicalVdot.
+  // Bar 2: VO2 Max. Single source of truth via getPhysiologicalVdot.
   // Watch (s.vo2) wins when fresh; otherwise priority chain falls through to
   // HR-calibrated → LT-back-derived → PB-median → Tanda-blended `s.v`.
   const vo2physio = getPhysiologicalVdot(s);
@@ -2775,7 +2775,7 @@ function getVO2History(s: SimulatorState): Array<{ date: string; value: number }
 
 // Why: every fitness surface used `s.vo2 ?? computeCurrentVDOT(s)` for the headline
 // but `vo2hist.length >= 2` for the chart/trend, so a watch-derived headline was
-// paired with a VDOT-derived trend caption — silently mixing two sources under one
+// paired with a VDOT-derived trend caption. Silently mixing two sources under one
 // "VO2 Max" label. This resolves the mode once so all surfaces stay coherent.
 //
 // Now anchored on `getPhysiologicalVdot` so the same priority chain runs here
@@ -2900,7 +2900,7 @@ function buildVO2ChangeNote(data: Array<{ date: string; value: number }>): strin
  *
  * Why HTML dots instead of `<circle>`: the SVG uses
  * `preserveAspectRatio="none"` so it can stretch to card width while
- * keeping a constant height — that distortion would turn `<circle>` into
+ * keeping a constant height. That distortion would turn `<circle>` into
  * ellipses (and our SVG-sizing memory bans circles inside stretched SVGs).
  * Only the regression line lives in the SVG, with `vector-effect=
  * non-scaling-stroke` so its width stays 1.5px after the stretch.
@@ -3170,7 +3170,7 @@ export function buildLTMetricPage(s: SimulatorState): string {
   const currentHR = s.ltHR ?? null;
   const ltLabel = currentLT > 0 ? fp(currentLT, unitPref) : '—';
 
-  // Diagnostic dump — explains which recent runs qualified for the empirical
+  // Diagnostic dump. Explains which recent runs qualified for the empirical
   // LT path and why others didn't. Read-only, fires once per page render.
   // Sub-20-min runs are excluded upstream by `collectSustainedEfforts` (any
   // LT effort below that floor is physiologically impossible) so they don't
@@ -3212,7 +3212,7 @@ export function buildLTMetricPage(s: SimulatorState): string {
       ? 'Watch reading'
       : derived.provenance);
 
-  // Sparkline (Garmin history) — only shown when there's enough history.
+  // Sparkline (Garmin history). Only shown when there's enough history.
   const hist = (s.physiologyHistory ?? []).filter(e => (e.ltPace ?? 0) > 0);
   const sparkline = hist.length >= 2 ? buildLTSparkline(hist) : '';
 
@@ -3498,7 +3498,7 @@ function buildRaceProgressDetail(s: SimulatorState): string {
  *
  * Filters to long runs (≥90 min) in the last 4 weeks whose average pace falls
  * within ±15 sec/km of the goal MP. Returns null if fewer than 2 such sessions
- * exist — not enough signal to make a claim.
+ * exist. Not enough signal to make a claim.
  */
 function computeMarathonFadeRisk(
   s: SimulatorState,
@@ -3573,7 +3573,7 @@ function buildForecastTimesCard(s: SimulatorState): string {
     }
     const isLast = i === distances.length - 1;
 
-    // Fade-risk badge — marathon only, based on long-run drift at goal MP
+    // Fade-risk badge. Marathon only, based on long-run drift at goal MP
     let fadeBadge = '';
     if (d.label === 'Marathon' && timeSec > 0) {
       const goalMpSecKm = timeSec / d.km;
@@ -3919,7 +3919,7 @@ function buildRecoveryAccordionBody(
     const physSrc = getPhysiologySource(s);
     const manualEntries = (s.recoveryHistory ?? []).filter((e: any) => e.source === 'manual');
     if (!physSrc && manualEntries.length > 0) {
-      // No watch but user has been logging manually — show their trend
+      // No watch but user has been logging manually. Show their trend
       const recent = manualEntries.slice(-7);
       const avg = Math.round(recent.reduce((sum: number, e: any) => sum + (e.sleepScore ?? 0), 0) / recent.length);
       return `<div style="padding:8px 0 14px">
@@ -4001,7 +4001,7 @@ function buildReadinessDetailPage(s: SimulatorState): string {
 
 // ---------------------------------------------------------------------------
 // ══════════════════════════════════════════════════════════════════════════════
-// STATS SCROLL — flat metric dashboard (redesigned 2026-03-22)
+// STATS SCROLL. Flat metric dashboard (redesigned 2026-03-22)
 // One card per metric: spectrum bar above chart, fully labelled, consultant tone.
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -4595,7 +4595,7 @@ function wireReadinessAccordion(s: SimulatorState): void {
     hdr.addEventListener('touchend', (e) => { e.preventDefault(); toggle(e); }, { passive: false });
   });
 
-  // Sleep card — header taps open latest night; per-day bar taps open that specific night
+  // Sleep card. Header taps open latest night; per-day bar taps open that specific night
   const sleepCard = document.getElementById('stats-card-sleep');
   if (sleepCard) {
     const physioHistory = s.physiologyHistory ?? [];
@@ -4821,7 +4821,7 @@ export function wireLTOverrideHandlers(s: SimulatorState): void {
           setAt: new Date().toISOString(),
         };
       } else if (choice === 'derived') {
-        // Trust our blended derivation for now — also lock as override.
+        // Trust our blended derivation for now. Also lock as override.
         m.ltOverride = {
           ltPaceSecKm: Math.round(sug.derived.ltPaceSecKm),
           ltHR: sug.derived.ltHR ?? undefined,
@@ -4854,12 +4854,12 @@ export function renderStatsView(): void {
   const container = document.getElementById('app-root');
   if (!container) return;
   const s = getState();
-  // Triathlon fork — full per-discipline stats view handles its own render.
+  // Triathlon fork. Full per-discipline stats view handles its own render.
   if (s.eventType === 'triathlon') {
     import('./triathlon/stats-view').then(({ renderTriathlonStatsView }) => renderTriathlonStatsView());
     return;
   }
-  // HYROX fork — MTL load + station benchmarks stats view.
+  // HYROX fork. MTL load + station benchmarks stats view.
   if (s.eventType === 'hyrox') {
     import('./hyrox/stats-view').then(({ renderHyroxStatsView }) => renderHyroxStatsView());
     return;

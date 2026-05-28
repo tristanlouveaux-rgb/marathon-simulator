@@ -1,10 +1,10 @@
 /**
- * Marathon + half population percentile lookups — public API for UI surfaces.
+ * Marathon + half population percentile lookups. Public API for UI surfaces.
  *
  * Mirrors `src/calculations/hyrox-population.ts`. Resolution order:
  *   1. Per-venue ingested table (richest signal, smallest cohort).
  *   2. Per-distance aggregate fallback (pooled across all ingested venues).
- *   3. null — caller hides the population card.
+ *   3. null. Caller hides the population card.
  *
  * Science log: docs/SCIENCE_LOG.md §Marathon Population Distributions.
  */
@@ -38,7 +38,7 @@ export interface PercentileResult {
  * Compute a finish-time percentile against the best available distribution.
  *
  * Returns null when neither the per-venue table nor the distance aggregate has
- * any data ingested — caller should hide the population surface entirely
+ * any data ingested. Caller should hide the population surface entirely
  * rather than show a placeholder.
  */
 export function getMarathonFinishPercentile(
@@ -105,7 +105,7 @@ export interface ResolvedDistribution {
 
 /**
  * Resolve which distribution table the UI should draw for a given venue +
- * distance. Same fallback chain as `getMarathonFinishPercentile` — per-venue
+ * distance. Same fallback chain as `getMarathonFinishPercentile`. Per-venue
  * first, then per-distance aggregate. Returns null when no data is available.
  *
  * UI callers (e.g. the population card) need the raw breakpoints to build a
@@ -134,7 +134,7 @@ export function resolveMarathonDistribution(
 }
 
 /** Caption naming the dataset behind a per-venue answer. Used directly under
- *  the population card. Returns null when source is aggregate or none — the
+ *  the population card. Returns null when source is aggregate or none. The
  *  caller writes its own caption for those cases. */
 export function venueCalibrationCaption(result: PercentileResult): string | null {
   if (result.source !== 'venue' || !result.provenance) return null;

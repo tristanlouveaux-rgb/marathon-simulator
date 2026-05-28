@@ -80,7 +80,7 @@ describe('computeGoalBackCalc', () => {
 
   it('unrealistic target → flagged with shortfall and caveat', () => {
     const p = buildPrediction();
-    // Target 30 min from a ~80 min current — far beyond population floor across all stations.
+    // Target 30 min from a ~80 min current. Far beyond population floor across all stations.
     const r = computeGoalBackCalc(p, 1800);
     expect(r.feasibility).toBe('unrealistic');
     expect(r.shortfallSec).toBeGreaterThan(0);

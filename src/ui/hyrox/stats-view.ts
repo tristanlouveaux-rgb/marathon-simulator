@@ -3,10 +3,10 @@
  *
  * Sections:
  *   1. Band + format header
- *   2. Plan timeline — week / phase / race countdown
- *   3. Population comparison card — predicted finish time vs global field
- *   4. MTL load card — weeklyMTL vs cap, MTL ACWR indicator
- *   5. Station benchmarks — calibrated vs pending
+ *   2. Plan timeline. Week / phase / race countdown
+ *   3. Population comparison card. Predicted finish time vs global field
+ *   4. MTL load card. WeeklyMTL vs cap, MTL ACWR indicator
+ *   5. Station benchmarks. Calibrated vs pending
  */
 
 import { getState } from '@/state/store';
@@ -40,7 +40,7 @@ export function renderHyroxStatsView(): void {
   const format = hx.format ?? 'open_singles';
   const bandLabel = band.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const mtlCap = hx.mtlCap ?? HYROX_MTL_CAP[band];
-  // Derived at render time — `hyroxConfig.weeklyActualMTL` is a dead field
+  // Derived at render time. `hyroxConfig.weeklyActualMTL` is a dead field
   // (typed but never written). Same scope as the chronic/acute computation
   // so all four numbers share one source. See ISSUE-184.
   const currentWk = (s.wks ?? [])[(s.w ?? 1) - 1];
@@ -282,7 +282,7 @@ export function renderHyroxStatsView(): void {
     openCriticalPaceExplainer();
   });
 
-  // Pro weights toggle — flips hyroxConfig.benchmarksAtProWeights and re-renders.
+  // Pro weights toggle. Flips hyroxConfig.benchmarksAtProWeights and re-renders.
   document.getElementById('hx-pro-weights-toggle')?.addEventListener('click', async () => {
     const { getMutableState } = await import('@/state/store');
     const { saveState } = await import('@/state/persistence');
@@ -372,7 +372,7 @@ function renderBenchmarkRow(
   // Standalone benchmark times are max-effort with rest. Comparing them to the
   // 89k-finisher Kaggle dataset (which captures mid-race fatigued station
   // splits) is apples-to-oranges, so the BENCHMARKS card stays a personal
-  // ledger — no population comparison. Race-day prediction percentile lives on
+  // ledger. No population comparison. Race-day prediction percentile lives on
   // the headline finish-time card above, where the comparison is valid.
   let calibratedRightCol = '';
   if (hasUser) {

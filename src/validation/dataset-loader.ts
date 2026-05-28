@@ -17,10 +17,10 @@
  * directly without an intermediate string[][] for the big files.
  *
  * **Not for runtime.** Production runtime consumes the precomputed JSON of
- * empirical course factors emitted by the calibration script — never these
+ * empirical course factors emitted by the calibration script. Never these
  * CSVs directly.
  *
- * Data location: `validation/data/` (gitignored — regenerate from Kaggle).
+ * Data location: `validation/data/` (gitignored. Regenerate from Kaggle).
  *   - 70.3:    https://www.kaggle.com/datasets/aiaiaidavid/ironman-703-race-data-between-2004-and-2020
  *   - IM 140.6: https://www.kaggle.com/datasets/miguswong/ironman-140-6-results-dataset-2002-2024
  */
@@ -235,7 +235,7 @@ export async function load703(filter: LoaderFilter = {}): Promise<FinishRecord[]
 export async function loadIM(filter: LoaderFilter = {}): Promise<FinishRecord[]> {
   const f = { ...DEFAULTS, ...filter };
 
-  // races.csv + series.csv are tiny — load synchronously with readFileSync.
+  // races.csv + series.csv are tiny. Load synchronously with readFileSync.
   const racesText = readFileSync(resolve(DATA_DIR, 'races.csv'), 'utf8');
   const racesLines = racesText.split(/\r?\n/).filter((l) => l.length > 0);
   const racesHeader = parseCsvLine(racesLines[0]);
@@ -259,7 +259,7 @@ export async function loadIM(filter: LoaderFilter = {}): Promise<FinishRecord[]>
     seriesLoc.set(row[sidIdx], row[slocIdx]);
   }
 
-  // results.csv is the big one — stream it.
+  // results.csv is the big one. Stream it.
   const out: FinishRecord[] = [];
   let iCountry = -1, iGender = -1, iDiv = -1, iSwim = -1, iBike = -1, iRun = -1;
   let iOverall = -1, iStatus = -1, iRaceId = -1, iAthleteId = -1;
@@ -302,7 +302,7 @@ export async function loadIM(filter: LoaderFilter = {}): Promise<FinishRecord[]>
       const location = seriesLoc.get(meta.seriesId);
       if (!location) return;
 
-      // IM Division is e.g. "M40-44" / "F35-39" — strip leading gender letter.
+      // IM Division is e.g. "M40-44" / "F35-39". Strip leading gender letter.
       const ageGroup = /^[MF]\d/.test(division) ? division.slice(1) : division;
 
       // Combined transition derived as overall − legs. Drop rows where this

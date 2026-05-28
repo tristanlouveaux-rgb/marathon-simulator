@@ -4,7 +4,7 @@
  * 2026 events: verified against hyrox.com/find-my-race on 2026-05-07 and
  * marked `verified: true`. Multi-day events use the start date.
  *
- * 2024–2025 events: historical, marked unverified — kept for the previous-time
+ * 2024–2025 events: historical, marked unverified. Kept for the previous-time
  * provenance picker (athletes recalling which past race their time came from).
  * Specific dates may be approximate; weekend they fell on is the more useful
  * signal for venue resolution.
@@ -24,7 +24,7 @@ export interface HyroxEvent {
 }
 
 export const HYROX_WORLD_SERIES: HyroxEvent[] = [
-  // ── 2022 (S1–S2 historical — approximate weekend dates, unverified) ────────
+  // ── 2022 (S1–S2 historical. Approximate weekend dates, unverified) ────────
   { id: 'cologne-2022',         name: 'HYROX Cologne',         city: 'Cologne',     country: 'Germany',        date: '2022-10-29' },
   { id: 'london-2022',          name: 'HYROX London',          city: 'London',      country: 'United Kingdom', date: '2022-11-19' },
   { id: 'amsterdam-2022',       name: 'HYROX Amsterdam',       city: 'Amsterdam',   country: 'Netherlands',    date: '2022-12-03' },
@@ -42,7 +42,7 @@ export const HYROX_WORLD_SERIES: HyroxEvent[] = [
   { id: 'cologne-2023',         name: 'HYROX Cologne',         city: 'Cologne',     country: 'Germany',        date: '2023-10-28' },
   { id: 'amsterdam-2023',       name: 'HYROX Amsterdam',       city: 'Amsterdam',   country: 'Netherlands',    date: '2023-11-11' },
   { id: 'dubai-2023',           name: 'HYROX Dubai',           city: 'Dubai',       country: 'UAE',            date: '2023-12-09' },
-  // ── 2024 (S4–S5 historical — full year, approximate weekends) ──────────────
+  // ── 2024 (S4–S5 historical. Full year, approximate weekends) ──────────────
   { id: 'sydney-2024',          name: 'HYROX Sydney',          city: 'Sydney',      country: 'Australia',      date: '2024-01-27' },
   { id: 'melbourne-2024',       name: 'HYROX Melbourne',       city: 'Melbourne',   country: 'Australia',      date: '2024-02-17' },
   { id: 'singapore-2024',       name: 'HYROX Singapore',       city: 'Singapore',   country: 'Singapore',      date: '2024-03-02' },

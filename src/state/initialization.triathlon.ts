@@ -66,11 +66,11 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     });
 
     // Derive benchmarks from a past race result entered during onboarding.
-    // Only fills gaps — wizard-entered CSS/FTP still takes priority below.
+    // Only fills gaps. Wizard-entered CSS/FTP still takes priority below.
     const pastRaceBench = derivePastRaceBenchmarks(state);
 
     // Merge user-entered benchmarks with history-derived ones. User input
-    // always wins — derivation only fills in fields the user left blank.
+    // always wins. Derivation only fills in fields the user left blank.
     // Tag derived values with `*Source: 'derived'` so the launch-time refresh
     // can overwrite them when fresh data is available; user-entered values
     // (or pre-provenance ones) are preserved unconditionally.
@@ -109,7 +109,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       swim.cssConfidence = derived.css.confidence;
     }
 
-    // Seed history with whatever value we ended up with — gives the trend
+    // Seed history with whatever value we ended up with. Gives the trend
     // charts on the Progress detail page a starting point for new users.
     if (bike.ftp) {
       appendFtpSample(bike, bike.ftp, bike.ftpSource ?? 'user', bike.ftpConfidence);
@@ -147,7 +147,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
       );
     }
 
-    // Plan-level state — keep shape compatible with running state so shared UI
+    // Plan-level state. Keep shape compatible with running state so shared UI
     // consumers don't crash. Race distance is set to 'marathon' as a harmless
     // placeholder; triathlon views ignore it and read triConfig.distance
     // instead. (Using 'marathon' avoids widening the RaceDistance type.)
@@ -173,12 +173,12 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     const _dow = _planMonday.getDay();
     _planMonday.setDate(_planMonday.getDate() - (_dow === 0 ? 6 : _dow - 1));
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
-    // Triathlon doesn't use the running debrief gate — seed lastCompleteDebriefWeek
+    // Triathlon doesn't use the running debrief gate. Seed lastCompleteDebriefWeek
     // so advanceWeekToToday can advance freely without waiting for a plan-preview.
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
-    s.rd = 'marathon';  // Placeholder — triathlon views read triConfig.distance
-    s.rw = 3;            // Runs per week — refined by plan engine in Phase 3
+    s.rd = 'marathon';  // Placeholder. Triathlon views read triConfig.distance
+    s.rw = 3;            // Runs per week. Refined by plan engine in Phase 3
     s.epw = 9;           // Placeholder total sessions (3 swim + 3 bike + 3 run)
     s.gs = state.gymSessionsPerWeek || 0;
     s.wkm = 0;           // Triathlon uses hours, not km. Shared stats views must be guarded.
@@ -199,7 +199,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
     // Archive existing wks (running plan, track-only buckets, or a previous
     // triathlon plan) so daily history survives mode switches.
     archiveCurrentWksIfPopulated();
-    // Plan generation — replaces any previously-stored running weeks.
+    // Plan generation. Replaces any previously-stored running weeks.
     s.wks = generateTriathlonPlan(s);
 
     // Seed run VDOT from past race when no other signal is available.
@@ -225,7 +225,7 @@ export function initializeTriathlonSimulator(state: OnboardingState): Calculatio
 /**
  * Flatten every synced activity off state into a single list. Walks both
  * `garminActuals` (matched) and `garminPending` (unmatched) across every
- * week — running-mode users who later switch to triathlon have their
+ * week. Running-mode users who later switch to triathlon have their
  * historical bike/swim activities in `garminPending` because they never
  * matched a running workout. Both shapes get normalised to GarminActual.
  */
@@ -242,7 +242,7 @@ function collectActivityLog(s: {
       if (a) list.push(a);
     }
     for (const p of wk.garminPending ?? []) {
-      // Normalise to GarminActual shape — only the fields derivation reads.
+      // Normalise to GarminActual shape. Only the fields derivation reads.
       list.push({
         garminId: p.garminId,
         activityType: p.activityType,
@@ -267,18 +267,18 @@ function collectActivityLog(s: {
  * Confidence is 'high' for those distances because the race duration
  * (25–40 min for 70.3, 55–80 min for IM) sits in the same severe-intensity
  * domain that CSS is defined for (Dekerle 2002). Sprint and Olympic swims
- * are shorter and faster than CSS — race pace alone is an overestimate of
+ * are shorter and faster than CSS. Race pace alone is an overestimate of
  * CSS so we mark confidence 'medium'.
  *
  * Run → VDOT: back-calculate a "fresh equivalent" run time using the
  * published bike-to-run fatigue discounts (5% for 70.3, 11% for IM) that
  * are already used in race-time prediction. Sprint/Olympic use the 70.3
  * discount as a conservative approximation (shorter events have less
- * cumulative fatigue — the 5% is slightly pessimistic, not optimistic).
+ * cumulative fatigue. The 5% is slightly pessimistic, not optimistic).
  * Confidence: 'medium' because the discount is population-average, not
  * individual-specific.
  *
- * Bike time alone cannot derive FTP without watts — left for the FTP field
+ * Bike time alone cannot derive FTP without watts. Left for the FTP field
  * on the triathlon-setup screen.
  */
 function derivePastRaceBenchmarks(state: OnboardingState): {

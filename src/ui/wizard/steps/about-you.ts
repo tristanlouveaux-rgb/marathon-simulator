@@ -5,7 +5,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { getState } from '@/state/store';
 
 /**
- * Page 4 — About You
+ * Page 4. About You
  *
  * Age + sex are required (max-HR estimation, HR-zone modelling). Weight is
  * shown for triathlon/cycling only because watts-per-kg drives the cycling

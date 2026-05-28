@@ -1,17 +1,17 @@
 /**
- * Triathlon Fitness detail page — mirrors `buildFitnessDetailPage` from the
+ * Triathlon Fitness detail page. Mirrors `buildFitnessDetailPage` from the
  * running stats but with per-discipline thresholds (CSS · FTP · LT) instead
  * of one Running Load + VO2 Max + LT triple.
  *
  * Layout:
- *   1. Your Numbers card — three zone bars (Swim CSS, Bike FTP, Run LT) with
+ *   1. Your Numbers card. Three zone bars (Swim CSS, Bike FTP, Run LT) with
  *      a per-discipline adaptation caption above each bar (from the
  *      `triConfig.prediction.adaptation` ratios) and a shared signals
  *      footer (HRV / RPE / Pa:Hr / etc.) when any are populated.
- *   2. Trend cards — sparkline per benchmark using existing helpers exported
+ *   2. Trend cards. Sparkline per benchmark using existing helpers exported
  *      from `progress-detail-view.ts`. LT trend is derived from `vdotHistory`
  *      via `gp(vdot).t`.
- *   3. Current race estimates — Sprint, Olympic, plus the user's race-day
+ *   3. Current race estimates. Sprint, Olympic, plus the user's race-day
  *      target distance. Pulls from `triConfig.prediction`.
  */
 
@@ -48,7 +48,7 @@ function navigateTab(tab: TabId): void {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Position bar (local — tri-specific zone definitions and adaptation caption)
+// Position bar (local. Tri-specific zone definitions and adaptation caption)
 // ────────────────────────────────────────────────────────────────────────────
 
 type ZoneName = 'Building' | 'Foundation' | 'Trained' | 'Well-Trained' | 'Performance' | 'Elite';
@@ -81,7 +81,7 @@ interface BarOpts {
   score: number | null;
   zoneName: ZoneName | null;
   /** Equal-fraction zones; bar always shows all 6 segments. */
-  // (Kept simple — running stats has variable widths but the tri benchmarks
+  // (Kept simple. Running stats has variable widths but the tri benchmarks
   //  use even sixths since the score is already normalised 0–100.)
   subtitle?: string;
   /** When set, the bar renders inside a clickable container with
@@ -143,7 +143,7 @@ function buildBar(opts: BarOpts): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Score helpers — convert raw benchmark to 0-100 score + zone name
+// Score helpers. Convert raw benchmark to 0-100 score + zone name
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -207,7 +207,7 @@ function scoreToZone(score: number): ZoneName {
 function adaptationCaption(ratio: number | undefined): BarOpts['caption'] | undefined {
   if (ratio == null) return undefined;
   const deltaPct = (ratio - 1) * 100;
-  // No caption for the neutral band — clean visual default; only surface when
+  // No caption for the neutral band. Clean visual default; only surface when
   // adaptation diverges meaningfully from plan expectation.
   if (Math.abs(deltaPct) < 5) return undefined;
   if (deltaPct > 0) {
@@ -241,7 +241,7 @@ function fmtDuration(sec: number): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// VO2max helpers — honour watch/device source preference
+// VO2max helpers. Honour watch/device source preference
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Mirror the toggle logic in vo2max-card.ts: device wins when the user
@@ -358,7 +358,7 @@ export function buildYourNumbersCard(s: SimulatorState): string {
     tapId: 'vo2',
   }) : '';
 
-  // Source toggle + info button — only shown when there is something to toggle between.
+  // Source toggle + info button. Only shown when there is something to toggle between.
   const hasWatchVo2 = deviceVal != null;
   const hasMosaicVo2 = s.vo2Estimates?.headline?.value != null;
   const showToggle = hasWatchVo2 || hasMosaicVo2;

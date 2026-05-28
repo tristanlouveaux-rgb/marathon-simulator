@@ -101,8 +101,8 @@ describe('estimateCSSFromSwimActivities', () => {
   });
 
   it('rejects implausible paces as sanity check', () => {
-    // 1000m in 5 min = 30s/100m — too fast to be real, should be rejected.
-    // 1000m in 90 min = 540s/100m — way too slow, rejected.
+    // 1000m in 5 min = 30s/100m. Too fast to be real, should be rejected.
+    // 1000m in 90 min = 540s/100m. Way too slow, rejected.
     const est = estimateCSSFromSwimActivities([
       mkSwim({ distKm: 1.0, durSec: 5 * 60 }),
       mkSwim({ distKm: 1.0, durSec: 90 * 60 }),
@@ -114,7 +114,7 @@ describe('estimateCSSFromSwimActivities', () => {
   it('counts valid + invalid swims in swimActivityCount', () => {
     const est = estimateCSSFromSwimActivities([
       mkSwim({ distKm: 0.3, durSec: 200, iso: daysAgo(1) }),      // too short
-      mkSwim({ distKm: 1.0, durSec: 20 * 60, iso: daysAgo(2) }),  // 120s/100m — valid
+      mkSwim({ distKm: 1.0, durSec: 20 * 60, iso: daysAgo(2) }),  // 120s/100m. Valid
     ] as GarminActual[], REF);
     expect(est.swimActivityCount).toBe(2);
     expect(est.cssSecPer100m).toBe(125);  // 120 + 5
@@ -171,7 +171,7 @@ describe('estimateCSSFromSwimActivities', () => {
   });
 
   it('confidence=none: only swims older than 12 weeks', () => {
-    // Single ancient swim — number is still returned (best-effort), but
+    // Single ancient swim. Number is still returned (best-effort), but
     // confidence is 'none' so the UI surfaces the test card.
     const est = estimateCSSFromSwimActivities([
       mkSwim({ distKm: 1.5, durSec: Math.round((110 * 1500) / 100), iso: daysAgo(100) }),
@@ -277,7 +277,7 @@ describe('estimateFTPFromBikeActivities', () => {
   // ── Power curve primary path ─────────────────────────────────────────────
 
   it('reads p1200 directly: 20-min interval at 310 W → FTP 295 W (Coggan ×0.95)', () => {
-    // The exact case that motivated the rewrite — 110-min ride containing
+    // The exact case that motivated the rewrite. 110-min ride containing
     // two 20-min all-out efforts. Whole-ride NP=251 would give 263 (floor),
     // but p1200=310 reveals the real test.
     const est = estimateFTPFromBikeActivities([
@@ -374,7 +374,7 @@ describe('estimateFTPFromBikeActivities', () => {
   it('curve from a deviceWatts=false ride is still accepted (Strava flag is unreliable)', () => {
     // Strava's `device_watts` flag arrives `false` on real power-meter rides
     // routinely (Garmin → Strava transfer bug). The existence of a power
-    // curve is a stronger signal than the flag — the curve is computed
+    // curve is a stronger signal than the flag. The curve is computed
     // from actual watts samples by the edge function. Confidence is
     // downgraded one tier (high → medium) since the flag isn't trustworthy.
     const est = estimateFTPFromBikeActivities([
@@ -423,7 +423,7 @@ describe('estimateFTPFromBikeActivities', () => {
 
   it('fallback: strongest qualifying ride within 12 weeks → NP × 1.00, low confidence', () => {
     // No power curve on any ride. Use whole-ride NP of the *strongest* recent
-    // ride (not the freshest) — whole-ride NP × 1.0 is conservative anyway,
+    // ride (not the freshest). Whole-ride NP × 1.0 is conservative anyway,
     // and a recent recovery spin would peg FTP absurdly low.
     const est = estimateFTPFromBikeActivities([
       { activityType: 'Ride', durationSec: 110 * 60, normalizedPowerW: 251, deviceWatts: true, startTime: daysAgo(1) } as PoweredActivity,
@@ -447,7 +447,7 @@ describe('estimateFTPFromBikeActivities', () => {
   });
 
   it('fallback accepts a deviceWatts=false ride when NP is high enough to be plausibly real', () => {
-    // The Strava flag is structurally unreliable — refusing every false-flag
+    // The Strava flag is structurally unreliable. Refusing every false-flag
     // ride leaves real power-meter owners with FTP=null forever. NP=280W
     // for an hour is far above what speed-based estimation produces (Strava's
     // estimator caps casual rides at ~150W). Trust the data, tag 'low' so
@@ -539,7 +539,7 @@ describe('deriveTriBenchmarksFromHistory — paired-TT CSS preferred', () => {
       swim400Sec: 400, swim200Sec: 180,
     });
     expect(result.css.cssSecPer100m).toBe(110);
-    // Paired TT is gold-standard — always 'high' confidence.
+    // Paired TT is gold-standard. Always 'high' confidence.
     expect(result.css.confidence).toBe('high');
   });
 
@@ -551,7 +551,7 @@ describe('deriveTriBenchmarksFromHistory — paired-TT CSS preferred', () => {
       swim400Sec: 400,
     });
     expect(result.css.cssSecPer100m).toBe(117);
-    // Single recent test-grade swim — but no spread to confirm hard effort.
+    // Single recent test-grade swim. But no spread to confirm hard effort.
     // Best=median so the hard-effort delta fails → medium not high.
     expect(result.css.confidence).toBe('medium');
   });
@@ -652,7 +652,7 @@ describe('estimatePerDisciplineCTLFromActivities', () => {
   it('iTRIMP is divided by 150 to produce TSS (matches activity-matcher convention)', () => {
     // An iTrimp of 150 is one unit of "1 hour at threshold" = 100 TSS in the
     // running convention. An all-tomorrow one-off of 150 iTRIMP should give a
-    // bounded CTL — not the 2296+ we saw when iTRIMP was used raw.
+    // bounded CTL. Not the 2296+ we saw when iTRIMP was used raw.
     const est = estimatePerDisciplineCTLFromActivities([
       mkActivity({ type: 'Run', durSec: 60 * 60, dayAgo: 0, iTrimp: 150 }),
     ] as GarminActual[], REF);

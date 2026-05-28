@@ -1,5 +1,5 @@
 /**
- * Home tab — the app landing screen.
+ * Home tab. The app landing screen.
  * Shows this-week progress, injury risk, today's workout, race countdown, recent activity.
  */
 
@@ -180,7 +180,7 @@ export function computeLoadBreakdown(
     return RUN_LABELS.has(label.toLowerCase()) ? 'Running' : label;
   }
 
-  // Matched activities (garminActuals) — primarily runs
+  // Matched activities (garminActuals). Primarily runs
   for (const [workoutId, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (actual.garminId) {
       if (seenGarminIds.has(actual.garminId)) continue;
@@ -205,13 +205,13 @@ export function computeLoadBreakdown(
     add(label, tss, durationMin, color);
   }
 
-  // Adhoc workouts — all types, no runSpec discount for Signal B
-  // Skip user-generated sessions (not real activity — just suggestions)
+  // Adhoc workouts. All types, no runSpec discount for Signal B
+  // Skip user-generated sessions (not real activity. Just suggestions)
   for (const w of wk.adhocWorkouts ?? []) {
     if (w.id?.startsWith('holiday-') || w.id?.startsWith('adhoc-')) continue;
-    // Skip if garminActuals already covers this entry (garminActuals wins — may have been Strava-upgraded)
+    // Skip if garminActuals already covers this entry (garminActuals wins. May have been Strava-upgraded)
     if (w.id && (wk.garminActuals as any)?.[w.id]) continue;
-    // Dedup by garminId — check both id prefix and direct garminId property
+    // Dedup by garminId. Check both id prefix and direct garminId property
     const rawId = w.id?.startsWith('garmin-') ? w.id.slice('garmin-'.length) : null;
     const garminId = rawId ?? (w as any).garminId ?? null;
     if (garminId) {
@@ -238,7 +238,7 @@ export function computeLoadBreakdown(
     add(label, tss, durationMin, sportColor(sport));
   }
 
-  // Unspent load items — no runSpec discount
+  // Unspent load items. No runSpec discount
   let weekStartMs: number | null = null;
   let weekEndMs: number | null = null;
   if (planStartDate && wk.w != null) {
@@ -516,7 +516,7 @@ export function showRunBreakdownSheet(s: SimulatorState, weekNum?: number): void
 /**
  * Guest-account banner. Fires once for users still on the auto-created
  * anonymous Supabase session who have already accumulated training data.
- * Anonymous sessions live in localStorage only — uninstalling, switching
+ * Anonymous sessions live in localStorage only. Uninstalling, switching
  * phone, or clearing app data wipes everything. The banner is the
  * one-time wake-up; the Account view keeps a persistent affordance.
  *
@@ -529,7 +529,7 @@ function buildGuestAccountBanner(s: SimulatorState): string {
   if (!s.isGuestAccount) return '';
   if (s.guestBannerDismissed) return '';
 
-  // Only fire if the user has real data worth losing — a single completed workout
+  // Only fire if the user has real data worth losing. A single completed workout
   // is enough signal that they've engaged with the app.
   const hasData = (s.wks ?? []).some(w =>
     Object.values(w.garminActuals ?? {}).some(a => a && (a.distanceKm ?? 0) > 0)
@@ -554,13 +554,13 @@ function buildGuestAccountBanner(s: SimulatorState): string {
 /**
  * Post-race banner. Fires when a planned race has passed (1+ days ago) and
  * the user hasn't dismissed the prompt. Offers the "Switch to tracking"
- * downgrade as a soft suggestion — the plan keeps running regardless.
+ * downgrade as a soft suggestion. The plan keeps running regardless.
  *
  * State guards:
  *   - selectedMarathon.date OR onboarding.customRaceDate is in the past
  *   - NOT already in trackOnly mode (nothing to offer)
  *   - user hasn't dismissed (s.racePastPromptDismissed = true stored after X tap)
- *   - NOT in continuousMode — no meaningful race date
+ *   - NOT in continuousMode. No meaningful race date
  */
 function buildRaceCompleteBanner(s: SimulatorState): string {
   if (s.trackOnly || s.continuousMode) return '';
@@ -641,7 +641,7 @@ function buildIllnessBanner(s: SimulatorState): string {
 export function buildProgressBars(s: SimulatorState): string {
   const wk = s.wks?.[s.w - 1];
 
-  // Sessions done this week — dedupe by unique garmin/strava activity id.
+  // Sessions done this week. Dedupe by unique garmin/strava activity id.
   // addAdhocWorkoutFromPending writes the SAME id into both garminActuals AND adhocWorkouts,
   // so adding their counts double-counts synced adhoc activities.
   // garminActuals keys (e.g. "garmin-strava-XXX") match adhocWorkouts ids, so we track
@@ -695,7 +695,7 @@ export function buildProgressBars(s: SimulatorState): string {
     .reduce((sum: number, w: any) => sum + _parseKmFromDesc((w as any).d || ''), 0)
     || (s.rw || 5) * ((s.wks?.[s.w - 1] as any)?.targetKmPerRun || 10);
 
-  // TSS this week vs plan — Signal B (full physiological load, all sports), matching the plan header.
+  // TSS this week vs plan. Signal B (full physiological load, all sports), matching the plan header.
   const _tssRaw = wk ? computeWeekRawTSS(wk, wk.rated ?? {}, s.planStartDate) : 0;
   const tssPlan = computePlannedSignalB(
     s.historicWeeklyTSS, s.ctlBaseline, wk?.ph ?? 'base',
@@ -711,7 +711,7 @@ export function buildProgressBars(s: SimulatorState): string {
     const ratio = actual / plan;
     const width = Math.min(ratio, 1) * 100;
     // Two bands only: grey if under 70%, green otherwise.
-    // Doing more than planned is not a warning — ACWR/injury risk surface that separately.
+    // Doing more than planned is not a warning. ACWR/injury risk surface that separately.
     const color = ratio < 0.7 ? 'var(--c-muted)' : 'var(--c-ok)';
     return `<div class="m-prog-fill" style="width:${width}%;background:${color}"></div>`;
   }
@@ -804,7 +804,7 @@ function buildRaceForecastCard(s: SimulatorState): string {
   if (s.continuousMode || !s.rd || !s.initialBaseline) return '';
 
   // Prefer course-adjusted forecast (climate/altitude/elevation) when available
-  // — that is the realistic finish time. Falls back to raw VDOT prediction.
+  //. That is the realistic finish time. Falls back to raw VDOT prediction.
   const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? s.blendedRaceTimeSec ?? s.currentFitness ?? 0;
   if (!forecastSec || forecastSec <= 0) return '';
 
@@ -818,7 +818,7 @@ function buildRaceForecastCard(s: SimulatorState): string {
 
   const distLabel = RACE_DIST_LABEL[s.rd] ?? 'Race';
 
-  // Course-adjustment caption — phrased as a percentage because that's the
+  // Course-adjustment caption. Phrased as a percentage because that's the
   // constant (a 4% heat penalty is 4% whether you run 2:00 or 4:00). Suppress
   // tiny adjustments under 0.5% so micro-bumps from a 30m hill don't crowd
   // the card. Pulled from the compounded factor multipliers, not derived from
@@ -936,7 +936,7 @@ function buildReadinessRing(s: SimulatorState): string {
     }
   }
   const baseMinPerKmH = s.pac?.e ? s.pac.e / 60 : 5.5;
-  // Exclude cross-training from planned strain targets — cross-training is flexible/adhoc,
+  // Exclude cross-training from planned strain targets. Cross-training is flexible/adhoc,
   // handled by matched-activity zones when it actually happens.
   const runWorkouts = plannedWorkouts.filter((w: any) => w.t !== 'cross');
   const plannedDayTSS = computePlannedDaySignalBTSS(runWorkouts, todayDayOfWeek, baseMinPerKmH);
@@ -962,9 +962,9 @@ function buildReadinessRing(s: SimulatorState): string {
   const restDayOverreachThreshold = perSessionAvg * REST_DAY_OVERREACH_RATIO;
   const isRestDayOverreaching = isRestDay && todaySignalBTSS > 0 && perSessionAvg > 0 && todaySignalBTSS > restDayOverreachThreshold;
   // Strain: two scales for different purposes.
-  // Linear (actual/target × 100) — used for the readiness floor thresholds.
+  // Linear (actual/target × 100). Used for the readiness floor thresholds.
   //   The floor cares about real physiological load completion, not visual display.
-  // Logarithmic (log(1+actual)/log(1+target) × 100) — used for ring fill only.
+  // Logarithmic (log(1+actual)/log(1+target) × 100). Used for ring fill only.
   //   Early effort registers visually (20/100 TSS → ~38% not 20%);
   //   exceeding target grows slowly (130% linear → ~107% log).
   //   Matches WHOOP/Bevel logarithmic strain display.
@@ -995,7 +995,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
   // Big ring = global recovery readiness (sleep + HRV + physiology + combined load).
   // Per-discipline load status surfaces in the discipline ring row in tri mode.
-  // MTL ACWR for HYROX — station eccentric ramp rate
+  // MTL ACWR for HYROX. Station eccentric ramp rate
   const hxMtlCTL = s.hyroxConfig?.mtlCTL ?? 0;
   const hxMtlATL = s.hyroxConfig?.mtlATL ?? 0;
   const mtlAcwr = s.eventType === 'hyrox' && hxMtlCTL >= 15 ? hxMtlATL / hxMtlCTL : null;
@@ -1027,12 +1027,26 @@ function buildReadinessRing(s: SimulatorState): string {
     .find((w: any) => w.dayOfWeek === todayDayOfWeek);
   const todayIsHard = todayPlannedWorkout ? isHardWorkout(todayPlannedWorkout.t) : false;
 
+  let upcomingHard: StrainContext['upcomingHard'] = null;
+  for (let offset = 1; offset <= 2; offset++) {
+    const targetDow = (todayDayOfWeek + offset) % 7;
+    if (targetDow < todayDayOfWeek) break;
+    const hit = plannedWorkouts.find((w: any) =>
+      w.dayOfWeek === targetDow && w.status !== 'skip' && w.status !== 'replaced' && isHardWorkout(w.t),
+    );
+    if (hit) {
+      upcomingHard = { whenLabel: offset === 1 ? 'tomorrow' : 'the day after', type: (hit as any).t };
+      break;
+    }
+  }
+
   const strainCtx: StrainContext = {
     strainPct: strainPctLinear,
     isRestDay,
     isRestDayOverreaching,
     trainedToday,
     todayIsHard,
+    upcomingHard,
     recentCrossTraining: null, // populated below if found
     actualTSS: todaySignalBTSS,
   };
@@ -1050,7 +1064,7 @@ function buildReadinessRing(s: SimulatorState): string {
 
   const color = readinessColor(readiness.label);
   const rdnStops = readinessColorStops(readiness.label);
-  // In tri mode skip the post-session label override — tri readiness label is already definitive.
+  // In tri mode skip the post-session label override. Tri readiness label is already definitive.
   const ringLabel = isTri ? readiness.label : coach.ringLabel;
 
   // SVG rings: 270° arc, starts bottom-left (135°), fills clockwise. 120×120 for side-by-side layout.
@@ -1105,7 +1119,7 @@ function buildReadinessRing(s: SimulatorState): string {
     ? arcPath(CX, CY, R, START, Math.min(strainFillEnd, START + SWEEP - 0.01))
     : '';
 
-  // Target dashes removed — too noisy at 66px ring size
+  // Target dashes removed. Too noisy at 66px ring size
 
   // Sleep ring
   const sleepDurationSec = garminTodaySleep?.sleepDurationSec ?? null;
@@ -1146,7 +1160,7 @@ function buildReadinessRing(s: SimulatorState): string {
     ? arcPath(CX, CY, R, START, Math.min(recFillEnd, START + SWEEP - 0.01))
     : '';
 
-  // ISSUE 1: Driving signal highlight — coloured left border + "⬇ Main factor" label
+  // ISSUE 1: Driving signal highlight. Coloured left border + "⬇ Main factor" label
   const isDriving = (sig: string) => readiness.drivingSignal === sig;
   const drivingBorderStyle = (sig: string) => isDriving(sig)
     ? 'border-left:3px solid var(--c-warn);padding-left:9px;margin-left:-3px;'
@@ -1175,7 +1189,7 @@ function buildReadinessRing(s: SimulatorState): string {
           : readiness.drivingSignal === 'legLoad' ? 'Protect the legs'
             : "Keep consistency, don't skip";
 
-  // Hide the adjust button when its handler has nothing to do — otherwise the
+  // Hide the adjust button when its handler has nothing to do. Otherwise the
   // user taps and lands silently on the plan view. Mirror the click-handler's
   // branches: ACWR elevated → reduction modal, unspent cross-training →
   // reduction modal, unrated run remaining this week → recovery advice sheet
@@ -1689,7 +1703,7 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
     close();
     import('./stats-view').then(({ renderStatsView }) => renderStatsView());
   });
-  // "Sync" button — pull fresh physiology from Garmin, then re-render home.
+  // "Sync" button. Pull fresh physiology from Garmin, then re-render home.
   overlay.querySelector('#sleep-sync-btn')?.addEventListener('click', async (e) => {
     e.stopPropagation();
     const btn = e.currentTarget as HTMLButtonElement;
@@ -1703,7 +1717,7 @@ function showReadinessPillSheet(signal: PillSignal, d: PillSheetData): void {
       renderHomeView();
     }
   });
-  // "Log manually" button lives inside the sleep row — wire it first so it can
+  // "Log manually" button lives inside the sleep row. Wire it first so it can
   // stop propagation before the row-level handler opens the sleep history sheet.
   overlay.querySelector('#sleep-log-manual-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1734,7 +1748,7 @@ type CompletedActivity = { name: string; distanceKm: number | null; durationMin:
 /** Find a completed activity for today across garminActuals and adhocWorkouts.
  *  Uses YYYY-MM-DD prefix match on startTime/garminTimestamp (same as readiness ring). */
 function findTodayCompletedActivity(wk: Week, todayISO: string, s: SimulatorState): CompletedActivity | null {
-  // 1. garminActuals — matched to a plan slot (e.g. skiing → General Sport)
+  // 1. garminActuals. Matched to a plan slot (e.g. skiing → General Sport)
   for (const [key, actual] of Object.entries(wk.garminActuals ?? {})) {
     if (!actual.startTime?.startsWith(todayISO)) continue;
     const name = (actual.activityType ? formatActivityType(actual.activityType) : null)
@@ -1748,7 +1762,7 @@ function findTodayCompletedActivity(wk: Week, todayISO: string, s: SimulatorStat
     };
   }
 
-  // 2. adhocWorkouts — unmatched activities logged as ad-hoc
+  // 2. adhocWorkouts. Unmatched activities logged as ad-hoc
   const adhocs = wk.adhocWorkouts || [];
   for (let i = 0; i < adhocs.length; i++) {
     const w = adhocs[i] as any;
@@ -1842,8 +1856,8 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   const jsDay = new Date().getDay();
   const ourDay = jsDay === 0 ? 6 : jsDay - 1;
 
-  // Find today's workout — run or cross-training
-  // Exclude slots already completed (have a garminActuals entry) — they're done
+  // Find today's workout. Run or cross-training
+  // Exclude slots already completed (have a garminActuals entry). They're done
   // and shouldn't reappear as today's workout if the slot was moved to a different day.
   const gActuals = wk.garminActuals ?? {};
   const active = workouts.filter((w: any) => {
@@ -1855,7 +1869,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
   let todayW = active.find((w: any) => w.dayOfWeek === ourDay) ?? null;
 
   if (!todayW || (todayW as any).t === 'rest' || (todayW as any).n?.toLowerCase().includes('rest')) {
-    // No planned workout today — check for completed ad-hoc/matched activities done today
+    // No planned workout today. Check for completed ad-hoc/matched activities done today
     const todayISO = new Date().toISOString().split('T')[0];
     const todayActivity = findTodayCompletedActivity(wk, todayISO, s);
     if (todayActivity) {
@@ -1886,7 +1900,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
 
   // For gym sessions: render exercises as an expandable list
   const exercises = isGym && rawDesc ? rawDesc.split('\n').filter(Boolean) : [];
-  // Suppress planned description when real activity data is available — it would be wrong (e.g. "90min general sport" for Alpine Skiing)
+  // Suppress planned description when real activity data is available. It would be wrong (e.g. "90min general sport" for Alpine Skiing)
   const desc = matchedActual ? '' : (isGym ? '' : fmtDesc(rawDesc, s.unitPref ?? 'km'));
 
   const metaItems = [
@@ -1911,7 +1925,7 @@ function buildTodayWorkout(s: SimulatorState, coach?: CoachState): string {
       ? `<button id="home-today-view-activity-btn" data-workout-key="${workoutId}" data-week-num="${s.w}" class="m-btn-glass m-btn-glass--inset" style="padding:6px 14px;font-size:12px">Done · View</button>`
       : `<span style="padding:6px 14px;border-radius:100px;border:1px solid var(--c-border);background:rgba(255,255,255,0.7);font-size:12px;font-weight:600;color:#64748B;font-family:var(--f)">Done</span>`;
 
-  // Coach workout modifier — render only the lead clause on home; the body
+  // Coach workout modifier. Render only the lead clause on home; the body
   // (coach.primaryMessage) is already shown by the readiness-ring card directly
   // below, so repeating it here is double messaging. Plan view keeps the full
   // sentence because it doesn't show the readiness sentence on the same page.
@@ -2055,7 +2069,7 @@ function buildRecentActivity(s: SimulatorState): string {
         || key.replace(/^[Ww]\d+[-_]?/, '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
       rows.push({ name: actName, sub: dateStr, value: val, icon: isRun ? 'run' : 'gym', id: `garmin-${key}-${act.date || ''}`, workoutKey: key, weekNum, sortKey: act.startTime || act.date || '' });
     });
-    // Adhoc workouts — skip if garminActuals already covers this id (garminActuals has richer/Strava data)
+    // Adhoc workouts. Skip if garminActuals already covers this id (garminActuals has richer/Strava data)
     (week.adhocWorkouts || []).forEach((w: any, idx: number) => {
       if (w.id && actualKeys.has(w.id)) return;
       const dateStr = w.garminTimestamp ? fmtDate(w.garminTimestamp) : (isCurrentWeek ? 'This week' : 'Last week');
@@ -2152,7 +2166,7 @@ function buildRecentActivity(s: SimulatorState): string {
   }).join('');
 
   // Recent shows current + previous week activities, so the Review button must
-  // surface whenever EITHER week has synced items — otherwise on a Monday with
+  // surface whenever EITHER week has synced items. Otherwise on a Monday with
   // no fresh activity yet, the button hides even though last week's runs are
   // visible and re-matchable.
   const wkForReview = s.wks?.[s.w - 1];
@@ -2222,7 +2236,7 @@ function getHomePlanName(s: SimulatorState): string {
  * Just-Track mode home layout. Activity tracking only, no plan.
  * Hides: today-workout, readiness/strain rings, race-forecast, week progress ring.
  * Shows: header + account button, weekly volume from `historicWeeklyKm`,
- * recent synced activities (from historicWeeklyKm derived rows only — s.wks is empty).
+ * recent synced activities (from historicWeeklyKm derived rows only. S.wks is empty).
  *
  * Data sources used (all independent of s.wks):
  *  - `s.historicWeeklyKm` : last 8 weeks running km (populated by stravaSync.ts)
@@ -2232,11 +2246,11 @@ function getHomePlanName(s: SimulatorState): string {
 /**
  * Daily "sustainable load" target for Just-Track users.
  *
- * Anchor: CTL ÷ 7 — the daily-equivalent of a fitness-flat week, per the
+ * Anchor: CTL ÷ 7. The daily-equivalent of a fitness-flat week, per the
  * Banister impulse-response model. Modulated by readiness so the target
  * bends to how recovered the athlete actually is that day. Gabbett bands
  * colour the actual-vs-target ratio (0.8–1.3 sweet spot, 1.3–1.5 caution,
- * >1.5 injury-risk spike — Gabbett 2016).
+ * >1.5 injury-risk spike. Gabbett 2016).
  *
  * Returns null when CTL is too low to produce a meaningful target
  * (athlete has no sync history / is brand new). UI falls back to
@@ -2257,7 +2271,7 @@ function buildTrackOnlyDailyTarget(s: SimulatorState): string {
 
   const ctlDaily = ctlWeekly / 7;
 
-  // Readiness multiplier — four zones anchored on the composite 0–100.
+  // Readiness multiplier. Four zones anchored on the composite 0–100.
   // 80+ → push (×1.3), 60–79 → neutral (×1.0), 40–59 → easy (×0.7), <40 → rest (×0.3).
   const hrvAll = (s.physiologyHistory ?? []).map(p => p.hrvRmssd).filter((v): v is number => v != null);
   const hrvAvg = hrvAll.length >= 3 ? Math.round(hrvAll.reduce((a, b) => a + b, 0) / hrvAll.length) : null;
@@ -2279,7 +2293,7 @@ function buildTrackOnlyDailyTarget(s: SimulatorState): string {
              : 0.3;
   const target = Math.round(ctlDaily * mult);
 
-  // Today's actual load — sum of TSS for today's activities.
+  // Today's actual load. Sum of TSS for today's activities.
   const todayIso = new Date().toISOString().slice(0, 10);
   const wk = s.wks?.[s.w - 1];
   let todayTSS = 0;
@@ -2298,7 +2312,7 @@ function buildTrackOnlyDailyTarget(s: SimulatorState): string {
 
   // Gabbett-band colour for actual-vs-CTL ratio.
   // Note: bands apply to ratio of daily actual vs CTL/7, not vs the readiness-
-  // adjusted target — they're a safety signal, not a prescription signal.
+  // adjusted target. They're a safety signal, not a prescription signal.
   const ratio = ctlDaily > 0 ? todayTSS / ctlDaily : 0;
   const bandColor = ratio > 1.5 ? '#dc2626'     // red. Injury-risk spike
                   : ratio > 1.3 ? '#f59e0b'     // amber. Overreaching
@@ -2461,7 +2475,7 @@ function weekRangeFmtLocal(planStartIso: string | undefined, weekNum: number): s
 }
 
 /**
- * "This Week" summary card for Just-Track home. Actuals only — no targets,
+ * "This Week" summary card for Just-Track home. Actuals only. No targets,
  * no progress bars. Sessions / Distance / Training Load. Tap → Stats tab
  * where the Progress detail page can be opened for deeper drill-down.
  */
@@ -2526,7 +2540,7 @@ function buildTrackOnlyThisWeek(s: SimulatorState): string {
  * NOT `historicWeeklyTSS` (which carries Strava backfill from prior plan
  * usage and looks like "fake" data on a fresh tracking programme). As the
  * calendar advances and activities sync into new weeks, the chart fills in
- * organically. Returns '' when fewer than 2 weeks with non-zero TSS — one
+ * organically. Returns '' when fewer than 2 weeks with non-zero TSS. One
  * data point can't draw a line.
  */
 function buildTrackOnlyLoadSpark(s: SimulatorState): string {
@@ -2535,7 +2549,7 @@ function buildTrackOnlyLoadSpark(s: SimulatorState): string {
   const currentTSS = series[series.length - 1] ?? 0;
   if (series.length < 2 || series.every(t => !t || t === 0)) return '';
 
-  // Build smoothed area path — same recipe as stats-view.buildVO2LineChart.
+  // Build smoothed area path. Same recipe as stats-view.buildVO2LineChart.
   const W = 320, H = 60;
   const maxVal = Math.max(...series, 1) * 1.1;
   const xOf = (i: number) => (i / (series.length - 1)) * W;
@@ -2661,7 +2675,7 @@ function getTrackOnlyHomeHTML(s: SimulatorState): string {
 function getHomeHTML(s: SimulatorState): string {
   // Just-Track mode: activity tracking only, no plan. Short-circuit to a minimal
   // layout that hides today-workout, readiness/strain rings, race-forecast, and
-  // week progress — all of which assume a generated plan.
+  // week progress. All of which assume a generated plan.
   if (s.trackOnly) return getTrackOnlyHomeHTML(s);
 
   const initials = (s.onboarding?.name || 'You')
@@ -2754,7 +2768,7 @@ function getHomeHTML(s: SimulatorState): string {
 
 /**
  * Carry-over banner: shows when the user clicked "Push to next week" on a
- * exponentially (7-day τ) — banner displays the current decayed value so
+ * exponentially (7-day τ). Banner displays the current decayed value so
  * exponentially (7-day τ): banner displays the current decayed value so
  * it shrinks visibly over the days following the push and disappears after
  * ~3 weeks.
@@ -3008,10 +3022,10 @@ function wireHomeHandlers(): void {
 
   // Just-Track "Log sleep" link → manual sleep picker overlay
   document.getElementById('home-log-sleep-link')?.addEventListener('click', () => showManualSleepPicker());
-  // Illness banner — mark recovered
+  // Illness banner. Mark recovered
   // Illness banner. Mark recovered
   document.getElementById('home-illness-recover')?.addEventListener('click', () => clearIllness());
-  // Holiday banner — end or cancel holiday
+  // Holiday banner. End or cancel holiday
   // Holiday banner. End or cancel holiday
   document.getElementById('home-holiday-end')?.addEventListener('click', () => {
     const hs = getState().holidayState;
@@ -3019,7 +3033,7 @@ function wireHomeHandlers(): void {
     if (hs && today < hs.startDate) cancelScheduledHoliday(() => renderHomeView());
     else clearHoliday(() => renderHomeView());
   });
-  // Start workout button — launches structured GPS tracking for the selected workout
+  // Start workout button. Launches structured GPS tracking for the selected workout
   // Start workout button. Launches structured GPS tracking for the selected workout
   document.getElementById('home-start-btn')?.addEventListener('click', (e) => {
     const btn = e.currentTarget as HTMLElement;
@@ -3036,7 +3050,7 @@ function wireHomeHandlers(): void {
   document.getElementById('home-view-plan-btn')?.addEventListener('click', () => {
     import('./main-view').then(({ renderMainView }) => renderMainView());
   });
-  // "Done · View" pill on today's hero — open activity detail
+  // "Done · View" pill on today's hero. Open activity detail
   // "Done · View" pill on today's hero. Open activity detail
   document.getElementById('home-today-view-activity-btn')?.addEventListener('click', () => {
     const btn = document.getElementById('home-today-view-activity-btn');
@@ -3058,19 +3072,19 @@ function wireHomeHandlers(): void {
   document.getElementById('home-sync-btn')?.addEventListener('click', () => {
     import('./main-view').then(({ renderMainView }) => renderMainView());
   });
-  // Race forecast card — opens full-page chart
+  // Race forecast card. Opens full-page chart
   // Race forecast card. Opens full-page chart
   document.getElementById('home-race-forecast-card')?.addEventListener('click', () => {
     import('./race-forecast-view').then(({ renderRaceForecastView }) => renderRaceForecastView());
   });
-  // Strain ring — tap opens strain detail page
+  // Strain ring. Tap opens strain detail page
   // Strain ring. Tap opens strain detail page
   document.getElementById('home-strain-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     const label = document.getElementById('home-strain-ring')?.dataset.readinessLabel ?? null;
     import('./strain-view').then(({ renderStrainView }) => renderStrainView(undefined, label as any, () => renderHomeView()));
   });
-  // Sleep ring — tap opens sleep detail page.
+  // Sleep ring. Tap opens sleep detail page.
   // Sleep ring. Tap opens sleep detail page.
   document.getElementById('home-sleep-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3079,19 +3093,19 @@ function wireHomeHandlers(): void {
       renderSleepView(undefined, s3.physiologyHistory ?? [], s3.wks ?? [], () => renderHomeView());
     });
   });
-  // Readiness ring — tap opens readiness detail page
+  // Readiness ring. Tap opens readiness detail page
   // Readiness ring. Tap opens readiness detail page
   document.getElementById('home-readiness-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     import('./readiness-view').then(({ renderReadinessView }) => renderReadinessView());
   });
-  // Recovery ring — tap opens recovery detail page
+  // Recovery ring. Tap opens recovery detail page
   // Recovery ring. Tap opens recovery detail page
   document.getElementById('home-recovery-ring')?.addEventListener('click', (e) => {
     e.stopPropagation();
     import('./recovery-view').then(({ renderRecoveryView }) => renderRecoveryView(undefined, () => renderHomeView()));
   });
-  // Manual sleep buttons — no-watch users log sleep quality
+  // Manual sleep buttons. No-watch users log sleep quality
   // Manual sleep buttons. No-watch users log sleep quality
   document.querySelectorAll('.manual-sleep-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -3111,7 +3125,7 @@ function wireHomeHandlers(): void {
       renderHomeView();
     });
   });
-  // Adjust session button — shown when readiness ≤ 59
+  // Adjust session button. Shown when readiness ≤ 59
   // Adjust session button. Shown when readiness ≤ 59
   document.getElementById('readiness-adjust-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -3139,7 +3153,7 @@ function wireHomeHandlers(): void {
     if (acwrElevated || hasUnspent) {
       // ACWR is elevated or there's unspent cross-training load → plan adjustment modal
       import('./main-view').then(({ triggerACWRReduction }) => triggerACWRReduction());
-      // Low readiness driven by sleep/recovery — show rest advice if there's a run to act on,
+      // Low readiness driven by sleep/recovery. Show rest advice if there's a run to act on,
       // Low readiness driven by sleep/recovery: show rest advice if there's a run to act on,
       // otherwise navigate to plan so the user can see their week
       const opened = showRecoveryAdviceSheet();
@@ -3252,7 +3266,7 @@ export function renderHomeView(): void {
   });
 
 }
-// ─── Manual sleep picker — centred overlay, 0–100 slider ─────────────────────
+// ─── Manual sleep picker. Centred overlay, 0–100 slider ─────────────────────
 // ─── Manual sleep picker: centred overlay, 0–100 slider ─────────────────────
 function showManualSleepPicker(): void {
   const today = new Date().toISOString().split('T')[0];
@@ -3383,7 +3397,7 @@ function showRecoveryAdviceSheet(): boolean {
       }
     }
   }
-  // Nothing actionable today (rest day, cross-training only) — skip the modal
+  // Nothing actionable today (rest day, cross-training only). Skip the modal
   // Nothing actionable today (rest day, cross-training only): skip the modal
   if (!todayAnyWorkout) return false;
 
@@ -3462,13 +3476,13 @@ function showRecoveryAdviceSheet(): boolean {
   const close = () => overlay.remove();
   overlay.querySelector('#rec-advice-close')?.addEventListener('click', close);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-  // Convert button — downgrade today's session to easy
+  // Convert button. Downgrade today's session to easy
   // Convert button. Downgrade today's session to easy
   overlay.querySelector('#rec-advice-convert')?.addEventListener('click', () => {
     close();
     applyRecoveryAdjustment('downgrade', internalDow, todayWorkout?.n);
   });
-  // Move button — shift today's session to the best available day
+  // Move button. Shift today's session to the best available day
   // Move button. Shift today's session to the best available day
   overlay.querySelector('#rec-advice-move')?.addEventListener('click', () => {
     if (!todayWorkout || !bestMoveDay) return;
@@ -3482,18 +3496,18 @@ function showRecoveryAdviceSheet(): boolean {
     close();
     renderHomeView();
   });
-  // Rest today — close modal; user decides not to train
+  // Rest today. Close modal; user decides not to train
   // Rest today. Close modal; user decides not to train
   overlay.querySelector('#rec-advice-rest')?.addEventListener('click', () => {
     close();
   });
-  // Reorder the week — navigate to plan view so user can rearrange
+  // Reorder the week. Navigate to plan view so user can rearrange
   // Reorder the week. Navigate to plan view so user can rearrange
   overlay.querySelector('#rec-advice-reorder')?.addEventListener('click', () => {
     close();
     import('./main-view').then(({ renderMainView }) => renderMainView());
   });
-  // Reduce intensity — downgrade today's workout to easy effort
+  // Reduce intensity. Downgrade today's workout to easy effort
   // Reduce intensity. Downgrade today's workout to easy effort
   overlay.querySelector('#rec-advice-reduce')?.addEventListener('click', () => {
     close();

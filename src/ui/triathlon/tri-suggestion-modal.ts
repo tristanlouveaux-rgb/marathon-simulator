@@ -2,17 +2,17 @@
  * Triathlon plan-modification suggestion modal (v2).
  *
  * Two layouts in one modal:
- *  - **Cross-training overload layout** — when a mod with `overloadOptions`
+ *  - **Cross-training overload layout**. When a mod with `overloadOptions`
  *    is in the bundle. Renders: severity-tinted header, discipline chip
  *    switcher (swim/bike/run, default = recommended), proposed mod list
  *    (which re-renders when chips flip), and Reduce / Replace & Reduce /
  *    Keep / Push-to-next-week buttons (mirroring running's modal).
- *  - **Generic checkbox layout** — for volume_ramp, rpe_blown, readiness mods.
+ *  - **Generic checkbox layout**. For volume_ramp, rpe_blown, readiness mods.
  *    Each mod is a checkable row; user accepts a subset.
  *
  * If both kinds of mods are present in one bundle, the overload section
  * renders on top and the checkbox section renders below. Each commits
- * independently — accepting overload mods does NOT auto-apply checked
+ * independently. Accepting overload mods does NOT auto-apply checked
  * checkbox rows.
  *
  * Tone: direct, factual. No motivational padding (CLAUDE.md UI Copy rules).
@@ -42,7 +42,7 @@ export function showTriSuggestionModal(bundle: TriSuggestionBundle): Promise<num
       return;
     }
     if (document.getElementById(OVERLAY_ID)) {
-      // Already open from a previous trigger — don't stack.
+      // Already open from a previous trigger. Don't stack.
       resolve(0);
       return;
     }

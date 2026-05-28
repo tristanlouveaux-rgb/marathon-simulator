@@ -275,7 +275,7 @@ function findBestWorkoutMatch(
       continue;
     }
 
-    // Long runs must NEVER be fully replaced — only reduced (adjust-only)
+    // Long runs must NEVER be fully replaced. Only reduced (adjust-only)
     if (wt === 'long' && !skipReplacements) {
       continue;
     }

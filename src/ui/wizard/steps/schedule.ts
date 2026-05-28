@@ -7,7 +7,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { easyRunMinutes, longRunMinutes } from '@/workouts/plan_engine';
 
 /**
- * Page 6 — Schedule.
+ * Page 6. Schedule.
  *
  * Consolidates the legacy `frequency.ts` + `activities.ts` into one screen:
  *  - Runs per week (3 to 7)
@@ -16,7 +16,7 @@ import { easyRunMinutes, longRunMinutes } from '@/workouts/plan_engine';
  *
  * Writes: `runsPerWeek`, `gymSessionsPerWeek`, `recurringActivities`,
  *         `activeLifestyle` (set true iff any recurring activity is added),
- *         `sportsPerWeek` (kept in sync for legacy consumers — sum of freqs).
+ *         `sportsPerWeek` (kept in sync for legacy consumers. Sum of freqs).
  *
  * Aesthetic clone of `goals.ts` / `review.ts`:
  * - Apple 3-layer shadow (`.shadow-ap`)
@@ -28,7 +28,7 @@ import { easyRunMinutes, longRunMinutes } from '@/workouts/plan_engine';
 /**
  * Runs-per-week range. Event-training users start at 2 (1 run/week isn't a
  * running plan, it's cross-training). Non-event users (continuous fitness /
- * just-track / no specific race) may select 1 — they're maintaining, not
+ * just-track / no specific race) may select 1. They're maintaining, not
  * building toward a distance. A conditional caption below 3 explains that
  * cross-training fills the adaptation gap for users running less frequently.
  */
@@ -46,7 +46,7 @@ const DEFAULT_ACTIVITY_DURATION_MIN = 60;
  * stores `gymSessionsPerWeek` as a count, not a duration, so we anchor the
  * cross-training tally against a typical 60-min lifting session (warm-up +
  * 3-4 main lifts + accessories). Used only by the "your runs cover ~Xh"
- * hint under the runs grid — does not affect plan generation. */
+ * hint under the runs grid. Does not affect plan generation. */
 const ASSUMED_GYM_SESSION_MIN = 60;
 /** Per-activity duration slider bounds (min). */
 const DUR_MIN = 15;
@@ -58,7 +58,7 @@ const SPORT_ENTRIES = Object.entries(SPORT_LABELS) as [string, string][];
 
 /** Hours slider range and default by race distance.
  * Defaults calibrated to "first event, time-constrained" not "competitive
- * intermediate" — most onboarding users are building toward their first race,
+ * intermediate". Most onboarding users are building toward their first race,
  * not their fifth. Each default lands at roughly running portion + ~2h cross
  * buffer for a 4-runs/week starting point. Range stays wide so users can slide
  * up to Pfitzinger / Daniels competitive volumes (5K: 4–8h, marathon: 8–14h). */
@@ -527,7 +527,7 @@ function wireHandlers(state: OnboardingState): void {
     updateOnboarding({ weekdayTrainingHours: wd });
   });
 
-  // Runs per week — update selection + caption in-place to avoid full rerender.
+  // Runs per week. Update selection + caption in-place to avoid full rerender.
   document.querySelectorAll<HTMLElement>('[data-runs]').forEach(btn => {
     btn.addEventListener('click', () => {
       const n = parseInt(btn.getAttribute('data-runs') || '0', 10);
@@ -542,7 +542,7 @@ function wireHandlers(state: OnboardingState): void {
     });
   });
 
-  // Gym sessions — update selection in-place; refresh preview since gym
+  // Gym sessions. Update selection in-place; refresh preview since gym
   // sessions feed total time math.
   document.querySelectorAll<HTMLElement>('[data-gym]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -630,7 +630,7 @@ function wireActivitiesHandlers(state: OnboardingState): void {
       if (!Number.isFinite(mins)) return;
       const next = state.recurringActivities.map((a, i) => i === idx ? { ...a, durationMin: mins } : a);
       updateOnboarding({ recurringActivities: next });
-      // No rerender — live readout handles display; skipping rerender keeps slider focus.
+      // No rerender. Live readout handles display; skipping rerender keeps slider focus.
       refreshRunsCaption();
       refreshWeekPreview();
     });

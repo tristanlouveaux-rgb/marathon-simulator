@@ -1,5 +1,5 @@
 /**
- * Readiness detail page — composite training readiness breakdown.
+ * Readiness detail page. Composite training readiness breakdown.
  * Shows Freshness (TSB), Load Ratio (ACWR), and Recovery sub-signals.
  * Opens from the Readiness ring on the Home view.
  * Copies the sky-gradient design language from recovery-view.
@@ -38,7 +38,7 @@ import { buildInjuryCaption } from './injury/modal';
 import { getDisciplineCapacity, type DisciplineKey } from '@/injury/engine';
 import { buildSkyBackground, skyAnimationCSS } from './sky-background';
 import { buildFloweyHaloBackground, floweyHaloAnimationCSS, buildSunGlint, atmosphereGradient } from './page-flair';
-// Suppress unused warnings — keeping legacy sky imports for safety
+// Suppress unused warnings. Keeping legacy sky imports for safety
 void buildSkyBackground; void skyAnimationCSS;
 const TEXT_M = '#0F172A';
 const TEXT_S = '#64748B';
@@ -124,7 +124,7 @@ function getReadinessHTML(s: SimulatorState): string {
     ? debtOutlook.debtSec - debtOutlook.typicalDebtSec
     : null;
 
-  // ── Recovery sub-signal (computed first — feeds into readiness composite) ──
+  // ── Recovery sub-signal (computed first. Feeds into readiness composite) ──
   const noGarminSleep = !(s.physiologyHistory ?? []).find(p => p.date === today && p.sleepScore != null);
   const physioForRecovery = (() => {
     const h = s.physiologyHistory ?? [];
@@ -145,7 +145,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const todayPhysioR = (s.physiologyHistory ?? []).find(e => e.date === today);
   const todaySignalBTSS = strainWk ? computeTodayStrainTSS(strainWk, today, todayPhysioR, s.tssPerActiveMinute) : 0;
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
-  // Just-Track users have no plan — skip the planned-workout comparison entirely.
+  // Just-Track users have no plan. Skip the planned-workout comparison entirely.
   // Plan-derived fields (s.rd, s.v, s.pac) are stale defaults in trackOnly and
   // would produce a bogus "planned" list that poisons plannedDayTSS maths.
   const plannedWorkouts = (strainWk && !s.trackOnly) ? generateWeekWorkouts(
@@ -217,7 +217,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const isHyrox = isHyroxMode;
   const triReadiness = isTri ? computeTriReadiness(s) : null;
 
-  // Cross-training readiness for non-tri modes — compute ATL/CTL from non-run garminActuals.
+  // Cross-training readiness for non-tri modes. Compute ATL/CTL from non-run garminActuals.
   // Tri mode reads crossTrainingAtl/Ctl from triConfig.fitness (already computed at launch).
   const crossTrainingLoad = (() => {
     if (isTri) return null;  // tri mode uses triReadiness.crossTraining instead
@@ -257,7 +257,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const coachMessage = (() => {
     if (!isTri || !triReadiness) return _coach.primaryMessage;
 
-    // Determine the most important systemic signal (sleep, HRV, load) — may override
+    // Determine the most important systemic signal (sleep, HRV, load). May override
     // or augment the discipline sentence depending on severity.
     const hrvDrop = (hrvRmssd != null && hrvPersonalAvg != null && hrvPersonalAvg > 0)
       ? (hrvPersonalAvg - hrvRmssd) / hrvPersonalAvg
@@ -283,7 +283,7 @@ function getReadinessHTML(s: SimulatorState): string {
     const discIssue = triReadiness.overall !== 'On Track' && triReadiness.overall !== 'Primed';
     if (!discIssue && systemicNote) return systemicNote;
 
-    // Disciplines have an issue — lead with that, append systemic context if notable.
+    // Disciplines have an issue. Lead with that, append systemic context if notable.
     const discSentence = triReadiness.sentence;
     if (systemicNote) return `${discSentence} ${systemicNote}`;
     return discSentence;
@@ -309,7 +309,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const tsbZone = tsbDisp > 0 ? 'Fresh' : tsbDisp >= -3 ? 'Recovering' : tsbDisp >= -8 ? 'Fatigued' : tsbDisp >= -15 ? 'Heavy' : tsbDisp >= -25 ? 'Overloaded' : 'Overreaching';
   const tsbColor = tsbDisp > 0 ? 'var(--c-ok)' : tsbDisp >= -3 ? 'var(--c-accent)' : tsbDisp >= -15 ? 'var(--c-caution)' : 'var(--c-warn)';
 
-  // ── To Baseline — stacked session recovery ──────────────────────────────────
+  // ── To Baseline. Stacked session recovery ──────────────────────────────────
   // Same model as freshness page: all recent sessions stacked, sport-adjusted,
   // sleep/HRV-adjusted. See computeToBaseline() in fitness-model.ts.
   const ctlForBaseline = liveTSB.ctl / 7;
@@ -347,7 +347,7 @@ function getReadinessHTML(s: SimulatorState): string {
     strainLabel = isRestDayOverreaching ? 'Overreaching' : (todaySignalBTSS > 0 ? 'Active rest' : 'Rest day');
     strainColor = isRestDayOverreaching ? 'var(--c-warn)' : (todaySignalBTSS > 0 ? 'var(--c-ok)' : TEXT_S);
   } else if (matchedActivityToday && !hasPlannedWorkout) {
-    // Adhoc activity on a non-planned day — match home-view logic
+    // Adhoc activity on a non-planned day. Match home-view logic
     strainLabel = displayAdhocPct >= 150 ? 'High' : displayAdhocPct >= 80 ? 'Optimal' : displayAdhocPct >= 50 ? 'Moderate' : 'Light';
     strainColor = displayAdhocPct >= 150 ? 'var(--c-warn)' : displayAdhocPct >= 80 ? 'var(--c-ok)' : TEXT_S;
   } else {
@@ -412,7 +412,7 @@ function getReadinessHTML(s: SimulatorState): string {
   const isLoadRatioDriving = readiness.hardFloor === 'acwr';
   const loadRatioCardBorder = isLoadRatioDriving ? 'border-left:3px solid var(--c-warn);padding-left:13px;' : '';
 
-  // Leg Fatigue sub-signal — permanent card. Mechanical/tissue load from
+  // Leg Fatigue sub-signal. Permanent card. Mechanical/tissue load from
   // cross-training, caps readiness at ≥20 (Manage Load) and ≥60 (Ease Back).
   // Surface here rather than in Rolling Load so the signal is visible alongside
   // the other readiness components it competes with.
@@ -472,7 +472,7 @@ function getReadinessHTML(s: SimulatorState): string {
     </div>` : ''}
   `, 'rdn-card-recovery');
 
-  // Sleep History card — 14d rolling average, debt-adjusted
+  // Sleep History card. 14d rolling average, debt-adjusted
   const sleepHistAvg = recoveryResult.sleepHistoryAvg;
   const sleepHistScore = recoveryResult.sleepHistoryScore;
   const sleepHistColor = sleepHistScore != null
@@ -530,10 +530,10 @@ function getReadinessHTML(s: SimulatorState): string {
     // Per-discipline bars show their honest label. The overall sentence and ring
     // convey aggregate state; the bars exist to break down that aggregate. Capping
     // them to the overall label made a fresh discipline read as "Manage" alongside
-    // a sentence saying it was fine — contradicting itself. A caption beneath the
+    // a sentence saying it was fine. Contradicting itself. A caption beneath the
     // bars handles the "fresh in isolation, tired overall" framing.
     // Injury-aware bar: a blocked discipline (capacity=0) overrides the readiness
-    // number with a "Blocked" treatment — showing "52 Manage" for a discipline the
+    // number with a "Blocked" treatment. Showing "52 Manage" for a discipline the
     // user can't train is misleading. A reduced discipline (0<cap<100) keeps its
     // readiness score but appends the cap so the constraint is visible at a glance.
     const makeBar = (discName: string, result: { score: number; label: string }, capacity = 100, last = false) => {
@@ -564,7 +564,7 @@ function getReadinessHTML(s: SimulatorState): string {
       { name: 'Run',  key: 'run',  result: triReadiness.run  },
     ];
     // Require both meaningful training volume (CTL ≥ 1) and at least one direct
-    // activity — a single ghost swim from months ago decays to ~0.1 CTL and
+    // activity. A single ghost swim from months ago decays to ~0.1 CTL and
     // shouldn't surface the discipline in readiness bars.
     const discs = allDiscs.filter(d => (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.directCount ?? 0) > 0 && (fit?.[(d.key as 'run' | 'bike' | 'swim')]?.ctl ?? 0) >= 1);
 
@@ -575,7 +575,7 @@ function getReadinessHTML(s: SimulatorState): string {
     const injState = (s as any).injuryState as import('@/types/injury').InjuryState | undefined;
     const bars = discs.map(d => makeBar(d.name, d.result, getDisciplineCapacity(injState, d.key))).join('');
 
-    // Divergence caption — only render when a discipline's own label is better than
+    // Divergence caption. Only render when a discipline's own label is better than
     // the overall verdict (i.e. the bar would have been capped before). Tells the
     // user "fresh for this discipline" doesn't mean "ready to smash a hard session".
     const overallRank = LABEL_RANK[triReadiness.overall];
@@ -592,7 +592,7 @@ function getReadinessHTML(s: SimulatorState): string {
     `, 'rdn-card-disciplines');
   })();
 
-  // Cross-training card for non-tri modes — shown when there is any non-run load.
+  // Cross-training card for non-tri modes. Shown when there is any non-run load.
   const crossTrainingCard = (() => {
     if (isTri || !crossTrainingLoad) return '';
     const shortStatus = (label: string) =>
@@ -839,7 +839,7 @@ function wireReadinessHandlers(): void {
     import('./sleep-view').then(({ renderSleepView }) => renderSleepView(undefined, undefined, undefined, () => renderReadinessView()));
   });
 
-  // Sleep sync nudge — pull fresh physiology then re-render
+  // Sleep sync nudge. Pull fresh physiology then re-render
   document.getElementById('rdn-sleep-sync-btn')?.addEventListener('click', async () => {
     const btn = document.getElementById('rdn-sleep-sync-btn') as HTMLButtonElement | null;
     if (btn) { btn.textContent = 'Syncing…'; btn.disabled = true; }

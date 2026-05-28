@@ -1,5 +1,5 @@
 /**
- * HYROX session classifier — single source of truth for "what kind of session
+ * HYROX session classifier. Single source of truth for "what kind of session
  * was this completed activity?" Lives here because the classification drives
  * both UI (Recent activities list, Training drill-down chart + mix card,
  * Unplanned-day card badges) and calculations could call it in future
@@ -18,7 +18,7 @@
  *
  * Both calls follow the same precedence:
  *   1. Matched planned slot's `discipline` wins (a strength session matched
- *      to a brick is still a brick — the plan defines the bucket).
+ *      to a brick is still a brick. The plan defines the bucket).
  *   2. Strength detection (`isStrengthActual`) → station, so untagged gym
  *      uploads land in the right bucket.
  *   3. `classifyActivity` on the raw activityType → run if applicable.

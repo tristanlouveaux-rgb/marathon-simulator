@@ -1,18 +1,18 @@
 /**
- * HYROX run-pace derivation, v2 — Critical Pace (CP) anchored.
+ * HYROX run-pace derivation, v2. Critical Pace (CP) anchored.
  *
  * **Scientific anchor**: Critical Pace, not Lactate Threshold.
  * - Hill (1923) original power-duration construct; Monod & Scherrer (1965)
  *   human application; Jones et al. (2010) modern review.
  * - For trained runners CP ≈ 95–97% of LT pace (Galbraith et al. 2014,
  *   MLSS vs CP comparison).
- * - HYROX runs are 8 × 1km efforts at ~3–7 min intervals — CP-zone
+ * - HYROX runs are 8 × 1km efforts at ~3–7 min intervals. CP-zone
  *   physiology, NOT continuous threshold. Stations act as metabolic recovery
  *   for the running musculature even when they elevate HR.
  *
  * **Implication**: trained HYROXers can pace 1km legs AT or FASTER than
  * their threshold pace. The previous model assumed every HYROXer runs
- * slower than threshold (ratio ≥ 1.05) — wrong for the top ~20% of
+ * slower than threshold (ratio ≥ 1.05). Wrong for the top ~20% of
  * athletes. The new ratios descend below 1.0 for trained tiers.
  *
  * **Formula**:
@@ -22,7 +22,7 @@
  *
  * - `cpRatio(vdot)`: continuous linear interp between band anchor points
  *   (no more discrete buckets).
- * - `formatFactor`: doubles run pace ≈ singles × 1/factor — partner-rest in
+ * - `formatFactor`: doubles run pace ≈ singles × 1/factor. Partner-rest in
  *   doubles allows running closer to CP. v1 gut-anchored; flagged for
  *   empirical calibration from Kaggle same-athlete cross-format pairs.
  * - `personalOffsetSec`: Bayesian update from logged-race observations.
@@ -105,7 +105,7 @@ export function cpRatioForVdot(vdot: number): number {
  * eccentric + metabolic load that slows subsequent runs.
  *
  * Differential grows for less-trained athletes whose station-to-run
- * recovery is poor — they "feel" the partner-rest gap more than elites
+ * recovery is poor. They "feel" the partner-rest gap more than elites
  * who can run hard regardless.
  *
  * **v1: gut-anchored from elite split comparisons and interval-recovery
@@ -243,7 +243,7 @@ export function deriveHyroxRunPace(state: SimulatorState): HyroxRunPaceResult {
 }
 
 /**
- * Legacy export — kept for tests and callers that read the discrete ratio
+ * Legacy export. Kept for tests and callers that read the discrete ratio
  * directly. The continuous interpolation via `cpRatioForVdot()` is the
  * canonical lookup; this table just exposes the anchor values for
  * back-compat. Numbers updated from the v1 (threshold-anchored) values to

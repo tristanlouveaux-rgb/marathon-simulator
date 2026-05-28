@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { computeSameSignalTSB, CTL_DECAY, ATL_DECAY, computePlannedWeekTSS, computeStrengthRpeTSS } from './fitness-model';
 import type { Week } from '@/types';
 
-// Minimal Week factory — only fields needed for computeWeekRawTSS
+// Minimal Week factory. Only fields needed for computeWeekRawTSS
 function makeWeek(w: number, tss: number): Week {
   return {
     w,

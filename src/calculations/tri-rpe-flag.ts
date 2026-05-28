@@ -9,7 +9,7 @@
  * via the suggestion modal.
  *
  * Source: Foster C et al. (2001) "A new approach to monitoring exercise
- * training" J Strength Cond Res 15:109–115. Session RPE methodology — a
+ * training" J Strength Cond Res 15:109–115. Session RPE methodology. A
  * 2-point overshoot is a meaningful effort signal worth surfacing.
  */
 
@@ -45,7 +45,7 @@ export function detectRpeBlownSession(state: SimulatorState): RpeFlag | null {
   const todayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === todayDow && w.status !== 'skipped');
   if (!todayWorkout || !isQuality(todayWorkout)) return null;
 
-  // Yesterday's workout — could be in this week or last week (Sunday → Saturday wrap).
+  // Yesterday's workout. Could be in this week or last week (Sunday → Saturday wrap).
   let yesterdayWk = wk;
   let yesterdayWorkout = wk.triWorkouts.find(w => w.dayOfWeek === yesterdayDow);
   if (!yesterdayWorkout && state.w! > 0) {

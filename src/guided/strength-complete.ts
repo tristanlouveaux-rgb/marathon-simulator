@@ -1,6 +1,6 @@
 /**
  * Mode-agnostic strength-session completion. Writes `wk.rated[workoutId] = rpe`
- * via the existing `rate()` function (events.ts) — the field every mode's plan
+ * via the existing `rate()` function (events.ts). The field every mode's plan
  * view reads to render "done". Passing `expected === rpe` makes `rate()` skip
  * its running-specific VDOT adjustment, so a gym RPE never moves a runner's
  * VDOT. Mirrors what the running gym "Mark Done" button already does.

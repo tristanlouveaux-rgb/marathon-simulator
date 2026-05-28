@@ -1,11 +1,11 @@
 /**
- * ScreenshotOCR — typed bridge to the MosaicScreenshotOCR Capacitor plugin.
+ * ScreenshotOCR. Typed bridge to the MosaicScreenshotOCR Capacitor plugin.
  *
  * On-device Apple Vision text recognition for run-summary screenshots. This is
  * the first engine of the hybrid screenshot-import path; the AI-vision edge
  * function (`screenshot-vision`) is the fallback when OCR confidence is low.
  *
- * iOS-only — returns an empty array on web/Android so the orchestration in
+ * iOS-only. Returns an empty array on web/Android so the orchestration in
  * `src/data/screenshotCapture.ts` falls straight through to the AI fallback.
  */
 
@@ -18,7 +18,7 @@ interface ScreenshotOCRPlugin {
 }
 
 /** Underlying plugin handle. On non-iOS the web shim throws when methods are
- *  called — the wrappers below catch and return empty results. */
+ *  called. The wrappers below catch and return empty results. */
 const ScreenshotOCR = registerPlugin<ScreenshotOCRPlugin>('ScreenshotOCR');
 
 /** True on native iOS, where on-device OCR is available. */

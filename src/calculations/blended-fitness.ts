@@ -1,5 +1,5 @@
 /**
- * Blended fitness refresh — single source of truth for the race-time prediction
+ * Blended fitness refresh. Single source of truth for the race-time prediction
  * that drives the stats view, onboarding summary, and (Step 6) plan-engine
  * pace derivation.
  *
@@ -8,7 +8,7 @@
  *   2. Weekly rollover (`next()` in `events.ts`) after auto-LT update.
  *
  * Writes `s.blendedRaceTimeSec`, `s.blendedEffectiveVdot`,
- * `s.blendedLastRefreshedISO`. Reads are O(1) everywhere else — no component
+ * `s.blendedLastRefreshedISO`. Reads are O(1) everywhere else. No component
  * re-runs the blend on render.
  */
 
@@ -32,8 +32,8 @@ const DIST_M: Record<RaceDistance, number> = {
 /**
  * Assemble `RunActivityInput[]` from whichever sources are available in the
  * current state. Preference order:
- *   - `s.wks[].garminActuals` (live sync — authoritative for returning users)
- *   - `s.onboardingRunHistory` (seeded by backfill response — first-session data)
+ *   - `s.wks[].garminActuals` (live sync. Authoritative for returning users)
+ *   - `s.onboardingRunHistory` (seeded by backfill response. First-session data)
  * Both may coexist for a user mid-onboarding; we merge and let the dedup in
  * `computePredictionInputs` collapse overlaps.
  */
@@ -70,14 +70,14 @@ export function collectRunsFromState(s: SimulatorState): RunActivityInput[] {
 
 /**
  * Recompute the blended race-time prediction for `s.rd` and cache it on state.
- * Idempotent — safe to call any time. Does nothing and returns false if
+ * Idempotent. Safe to call any time. Does nothing and returns false if
  * required inputs are missing.
  */
 export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Compute + cache HR-calibrated VDOT first, independent of the full blend.
   // The onboarding review screen needs this even before race distance is set,
   // so we pre-cache before the early-return guards below. This write is
-  // load-bearing for onboarding's fitness display — main.ts always invokes
+  // load-bearing for onboarding's fitness display. Main.ts always invokes
   // refreshBlendedFitness on launch, so the cache is never stale at runtime.
   const runsAll = collectRunsFromState(s);
   const hrVdot = computeHRCalibratedVdot(runsAll, s.restingHR ?? null, s.maxHR ?? null);
@@ -95,7 +95,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Pre-blend reconciliation: when no race distance has been picked yet
   // (onboarding) and HR-calibrated confidence is medium+, write the value to
   // s.v so the rest of the app shows the same number as the review row.
-  // Skip at low confidence — too noisy to overwrite a PB-derived seed.
+  // Skip at low confidence. Too noisy to overwrite a PB-derived seed.
   // Once race distance is set, the post-guard blend below takes over and this
   // is overwritten with the full blended VDOT. Mid-plan we never hit this
   // branch because s.rd is set.
@@ -129,7 +129,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // distinguish "explicit zero recent training" from "no volume signal at all".
   // The marathon-specificity penalty (Tanda-gated path) only fires when an
   // explicit signal is present, so passing the actual computed value (even 0)
-  // is the right behaviour — a user with 145 historical runs but zero in the
+  // is the right behaviour. A user with 145 historical runs but zero in the
   // 8-week window genuinely has zero recent training, which is signal, not noise.
   // Marathon PB age scales the penalty: recent PB → demonstrated capability →
   // lighter penalty.
@@ -166,7 +166,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Long-run durability cap. Applies a multiplicative penalty when the
   // longest recent run is below the distance-specific threshold (orthogonal
   // to the volume-based marathon-specificity penalty inside blendPredictions
-  // — both can fire). Stored on state for the Durability chip drill-down.
+  //. Both can fire). Stored on state for the Durability chip drill-down.
   const longestRunSec = getLongestRunSec(s, 12);
   const durability: RunDurabilityResult = applyLongRunCap(longestRunSec, s.rd);
   s.runDurability = durability;
@@ -179,7 +179,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   // Push the blended VDOT into s.v so plan generation and pace derivation
   // reflect reality, not the Week-1 linear projection. Exception: during taper
   // and deload weeks (both share `ph === 'taper'`), volume is deliberately cut
-  // — recomputing would read the reduction as detraining and pull predictions
+  //. Recomputing would read the reduction as detraining and pull predictions
   // slower, when the science says fitness is maintained (Mujika & Padilla 2000).
   // Hold s.v at its pre-taper value until we exit the low-volume phase.
   const currentWeek = (s.wks ?? [])[(s.w ?? 1) - 1];
@@ -241,7 +241,7 @@ export function refreshBlendedFitness(s: SimulatorState): boolean {
   }
 
   // Record a history entry so the VDOT sparkline shows the weekly refresh.
-  // Dedup by (week, date) — refreshBlendedFitness can fire multiple times
+  // Dedup by (week, date). RefreshBlendedFitness can fire multiple times
   // per boot (app launch + onboarding + weekly rollover).
   const effectiveVdot = s.v + (s.rpeAdj ?? 0) + (s.physioAdj ?? 0);
   const today = new Date().toISOString().slice(0, 10);

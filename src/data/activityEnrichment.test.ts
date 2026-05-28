@@ -1,7 +1,7 @@
 /**
  * Tests for shared activity-enrichment helpers.
  *
- * Focus: computeSplitsFromSpeed — the speed-stream split fallback for sources
+ * Focus: computeSplitsFromSpeed. The speed-stream split fallback for sources
  * that write a speed series to HealthKit but no GPS route (Garmin Connect via
  * the Apple Health bridge).
  */
@@ -67,6 +67,6 @@ describe('computeSplitsFromSpeed', () => {
     expect(splits).toHaveLength(2);
     expect(Math.abs(splits[0] - 200)).toBeLessThanOrEqual(1); // clean first km
     // The second km spans the pause, so it legitimately reads long (elapsed
-    // time, matching the GPS extractKmSplits behaviour) — not asserted here.
+    // time, matching the GPS extractKmSplits behaviour). Not asserted here.
   });
 });

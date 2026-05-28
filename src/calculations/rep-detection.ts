@@ -10,15 +10,15 @@
  * adherence scorer (`rep-adherence.ts`) which is the planning side.
  *
  * Two entry points:
- *   - `detectRepsFromLaps(laps, sport)` — primary path, runs on the
+ *   - `detectRepsFromLaps(laps, sport)`. Primary path, runs on the
  *     server-side laps array Strava returns from /activities/{id}/laps.
- *   - `detectRunRepsFromStream(distData, timeData)` — fallback for runs
+ *   - `detectRunRepsFromStream(distData, timeData)`. Fallback for runs
  *     when the user didn't press lap on their watch.
- *   - `detectBikeRepsFromPower(wattsData, timeData, distData?)` — fallback
+ *   - `detectBikeRepsFromPower(wattsData, timeData, distData?)`. Fallback
  *     for bikes when the bike computer auto-lapped every km (uniform laps,
  *     useless for rep detection).
  *
- * **Heuristic rationale** — see SCIENCE_LOG.md "Per-rep interval analysis"
+ * **Heuristic rationale**. See SCIENCE_LOG.md "Per-rep interval analysis"
  * for the full derivation.
  *
  * The detection logic intentionally errs on the side of "no reps" rather
@@ -67,7 +67,7 @@ export interface DetectionResult {
 const MIN_REPS = 3;
 
 /** Maximum rep count we'll surface. Sets >40 reps are extremely rare in
- *  endurance training (e.g. 30/30s × 40 = 40min — possible but unusual);
+ *  endurance training (e.g. 30/30s × 40 = 40min. Possible but unusual);
  *  beyond that, we're probably looking at noise from a bike computer
  *  auto-lapping every 10s during a track session. */
 const MAX_REPS = 40;
@@ -89,7 +89,7 @@ const MIN_LAP_DURATION = 15;
  *  from "easy/recovery laps". The detector sorts laps by pace, then
  *  finds the largest gap; reps are everything before the gap if the gap
  *  exceeds this many σ of the lap-pace distribution. 1.0σ means roughly
- *  a 16-percentile separation — generous enough to catch genuine rep
+ *  a 16-percentile separation. Generous enough to catch genuine rep
  *  structure, strict enough to reject noise. */
 const REP_PACE_GAP_SIGMA = 1.0;
 
@@ -164,7 +164,7 @@ export function detectRepsFromLaps(
   const byPace = [...withPace].sort((a, b) => a.pace - b.pace);
   const paces = byPace.map(x => x.pace);
   const sd = stddev(paces);
-  if (sd === 0) return null; // All laps identical — no rep cluster.
+  if (sd === 0) return null; // All laps identical. No rep cluster.
 
   // Find the largest gap between consecutive sorted paces. That gap, if
   // it's bigger than REP_PACE_GAP_SIGMA × σ, separates reps (left side)
@@ -208,7 +208,7 @@ export function detectRepsFromLaps(
  * samples; reps = contiguous segments where smoothed pace is faster than
  * `baseline - REP_FAST_OFFSET_SEC_KM` for at least `MIN_REP_DURATION_SEC`.
  *
- * Pure heuristic — works for "fast intervals separated by jog recoveries"
+ * Pure heuristic. Works for "fast intervals separated by jog recoveries"
  * which is the dominant track session shape. Misses fartlek and
  * progression sessions; that's acceptable.
  */
@@ -398,7 +398,7 @@ export function detectBikeRepsFromPower(
 // ─── HR-only stream detection (treadmill / no-power fallback) ───────────────
 
 /**
- * Detect interval reps from a heart-rate stream alone — used when neither
+ * Detect interval reps from a heart-rate stream alone. Used when neither
  * a pace stream (treadmill run, indoor cycling without GPS) nor a power
  * stream (no paired meter) is available.
  *
@@ -406,10 +406,10 @@ export function detectBikeRepsFromPower(
  *   - HR lags pace/power by 30–60s on transitions (cardiac response time).
  *   - Drift over long runs can creep HR upward without any interval cue.
  *   - Recovery between short reps (< 60s) doesn't drop HR enough to detect a
- *     boundary — short-rep sessions register as one continuous plateau.
+ *     boundary. Short-rep sessions register as one continuous plateau.
  *
  * Algorithm:
- *   1. Smooth HR with a 60s rolling mean (longer than pace's 30s — HR is
+ *   1. Smooth HR with a 60s rolling mean (longer than pace's 30s. HR is
  *      slower-moving so over-smoothing isn't a concern, and we want to
  *      reject 5–10s sensor noise).
  *   2. Baseline = median of the FIRST 10 minutes (post warm-up onset).
@@ -467,7 +467,7 @@ export function detectRepsFromHRStream(
     if (count >= 5) smooth[i] = sum / count;
   }
 
-  // Baseline = median of smoothed values in the first 10 min only — keeps
+  // Baseline = median of smoothed values in the first 10 min only. Keeps
   // long mid-session intervals from inflating the baseline above their own
   // working HR.
   const t0 = timeData[0];
@@ -561,7 +561,7 @@ export function detectReps(
   inputs: DetectionInputs,
 ): DetectionResult | null {
   if (sport === 'bike') {
-    // Power stream is the most reliable bike rep signal — promote it
+    // Power stream is the most reliable bike rep signal. Promote it
     // above laps[].
     if (inputs.wattsData && inputs.timeData) {
       const r = detectBikeRepsFromPower(
@@ -575,7 +575,7 @@ export function detectReps(
       if (r && r.reps.length >= MIN_REPS) return r;
     }
     // HR-only fallback for trainer rides without power. Only catches long
-    // reps (≥ 90s) — short on/off intervals can't be detected from HR alone.
+    // reps (≥ 90s). Short on/off intervals can't be detected from HR alone.
     if (inputs.hrData && inputs.timeData) {
       const r = detectRepsFromHRStream(inputs.hrData, inputs.timeData);
       if (r && r.reps.length >= MIN_REPS) return r;
@@ -595,7 +595,7 @@ export function detectReps(
       if (r && r.reps.length >= MIN_REPS) return r;
     }
     // HR-only fallback for treadmill / no-GPS runs. Same long-rep limitation
-    // as the bike branch — works for 5×5min and 4×4min, not for short reps.
+    // as the bike branch. Works for 5×5min and 4×4min, not for short reps.
     if (inputs.hrData && inputs.timeData) {
       const r = detectRepsFromHRStream(inputs.hrData, inputs.timeData);
       if (r && r.reps.length >= MIN_REPS) return r;

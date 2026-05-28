@@ -1,5 +1,5 @@
 /**
- * Illness modal — opened from the check-in overlay.
+ * Illness modal. Opened from the check-in overlay.
  *
  * Asks the user how they are managing their illness, then sets illnessState
  * on the simulator state. The plan is not mutated; an illness banner appears
@@ -91,7 +91,7 @@ function parseKmFromDesc(d: string): number {
 }
 
 /**
- * Apply illness modifications to a workouts array IN MEMORY (render-time only — not saved to state).
+ * Apply illness modifications to a workouts array IN MEMORY (render-time only. Not saved to state).
  *
  * resting: mark all running workouts as rest.
  * light: downgrade quality sessions to easy at 50% km; reduce easy/long at 60% km.

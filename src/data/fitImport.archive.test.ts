@@ -1,5 +1,5 @@
 /**
- * Bulk archive (.zip) import — the "bring all my history" path.
+ * Bulk archive (.zip) import. The "bring all my history" path.
  *
  * Covers the novel, error-prone logic: zip walking with nested-zip recursion
  * (Garmin's UploadedFiles_*.zip), per-file gzip handling (Strava's .gpx.gz),

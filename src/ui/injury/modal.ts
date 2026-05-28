@@ -18,6 +18,13 @@ const LOCATION_LABELS: Record<InjuryLocation, string> = {
   hamstring: 'Hamstring / Thigh',
   hip: 'Hip / Glute',
   back: 'Lower Back',
+  shoulder: 'Shoulder',
+  upper_arm: 'Upper Arm',
+  elbow: 'Elbow',
+  forearm: 'Forearm',
+  wrist: 'Wrist / Hand',
+  neck: 'Neck',
+  chest_ribs: 'Chest / Ribs',
   other: 'Other',
 };
 import { INJURY_PROTOCOLS } from '@/constants/injury-protocols';

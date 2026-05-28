@@ -1,5 +1,5 @@
 /**
- * Marathon forecast fingerprint — the page hero.
+ * Marathon forecast fingerprint. The page hero.
  *
  * One glassy hero card with the predicted finish time + delta vs goal, then
  * five glass chips beneath showing the factor clusters that feed the

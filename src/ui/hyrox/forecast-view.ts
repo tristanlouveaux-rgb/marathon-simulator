@@ -1,5 +1,5 @@
 /**
- * HYROX forecast view — sums calibrated station benchmarks + run pace and
+ * HYROX forecast view. Sums calibrated station benchmarks + run pace and
  * applies venue-specific course factors. Mirrors the pattern of the triathlon
  * race-forecast card.
  */
@@ -71,7 +71,7 @@ function daysUntil(isoDate: string): number {
  * "Last race" retro card. Renders above the body when the most recent
  * HyroxRaceLogEntry has a `targetTotalSec` and the actual beat it by ≥60s.
  * Mirrors the tri pattern in `triathlon/forecast-view.ts:42`. HYROX has no
- * cached prediction — the "target" slot is what we compare against.
+ * cached prediction. The "target" slot is what we compare against.
  */
 function renderHyroxRaceOutcomeRetroCard(s: SimulatorState): string {
   const log = s.hyroxConfig?.raceLog;
@@ -134,7 +134,7 @@ function renderRunLegsTable(legs: HyroxRunLeg[], currentRunSec: number, projecte
  * stations and the run-discipline ratio for legs.
  *
  * Percentile chips are intentionally absent. Benchmark times are max-effort
- * fresh; the population dataset captures mid-race fatigued splits — the
+ * fresh; the population dataset captures mid-race fatigued splits. The
  * comparison would be apples-to-oranges. Race-day percentile lives on the
  * headline finish-time card where the comparison is valid.
  *
@@ -235,7 +235,7 @@ function renderStationOrderRow(
     ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.16);border-radius:6px;padding:2px 7px;flex-shrink:0">PR</span>`
     : '';
 
-  // Test-age caption only when stale (≥ 4 mo) — matches the BENCHMARKS card
+  // Test-age caption only when stale (≥ 4 mo). Matches the BENCHMARKS card
   // convention.
   const ageMo = line.source === 'calibrated' ? latestTestAgeMonths(state, line.station) : null;
   const ageCaption = (ageMo != null && ageMo >= 4)
@@ -279,7 +279,7 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:500;color:var(--c-black);border:1px solid rgba(0,0,0,0.12);border-radius:6px;padding:2px 7px;flex-shrink:0">Target</span>`
       : '';
 
-    // Inline percentile (e.g. "p73") — only when calibrated, since seed-based
+    // Inline percentile (e.g. "p73"). Only when calibrated, since seed-based
     // entries have no athlete-personal percentile.
     const pctChip = pct != null
       ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">p${pct}</span>`
@@ -291,7 +291,7 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.16);border-radius:6px;padding:2px 7px;flex-shrink:0">New PR</span>`
       : '';
 
-    // Test staleness caption — surfaces when the latest test is more than ~4 mo
+    // Test staleness caption. Surfaces when the latest test is more than ~4 mo
     // old. Below that, no caption (recent enough to trust).
     const ageMo = line.source === 'calibrated' ? latestTestAgeMonths(state, line.station) : null;
     const ageCaption = (ageMo != null && ageMo >= 4)
@@ -336,7 +336,7 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
 }
 
 /**
- * "Where to gain" card — top stations ranked by absolute gainable seconds at
+ * "Where to gain" card. Top stations ranked by absolute gainable seconds at
  * the user's current training dose (per ISSUE-194). Reads the weakest-link
  * helper which reuses the existing per-station horizon model.
  *
@@ -393,7 +393,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
     ? potential.topTargets[0].targetBand.replace(/_/g, ' ')
     : 'next band';
 
-  // Green saving pill — universal "improvement = green" signal, matching the
+  // Green saving pill. Universal "improvement = green" signal, matching the
   // trend-card delta colour. Distinct from the radar (indigo) and the four
   // percentile-row hues, and reads instantly as "good thing".
   const limiterRows = potential.topTargets.map(p => {
@@ -535,7 +535,7 @@ export function renderHyroxForecastView(): void {
           return '';
         })();
 
-        // Run-pace source caption — surfaces when the run pace is VDOT-derived
+        // Run-pace source caption. Surfaces when the run pace is VDOT-derived
         // or seed-fallback (vs user-set), so users see why the headline number
         // moved.
         const runPaceSourceNote = prediction.runPaceSource === 'derived'
@@ -544,12 +544,12 @@ export function renderHyroxForecastView(): void {
           ? `Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.`
           : '';
 
-        // Station-test CTA banner — promotes the existing half-test calibration
+        // Station-test CTA banner. Promotes the existing half-test calibration
         // flow on the plan view. Surfaces whenever any station is still on a
         // population seed. Two copy variants:
         //   - Recent race (≤ 6 mo, staleness 'fresh'): softer 'optional
-        //     sharpening' nudge — the race time is doing the calibration work.
-        //   - Otherwise: direct CTA — testing is the primary calibration path.
+        //     sharpening' nudge. The race time is doing the calibration work.
+        //   - Otherwise: direct CTA. Testing is the primary calibration path.
         const pendingStations = prediction.stations.length - prediction.calibratedCount;
         const showCalibrationBanner = pendingStations > 0;
         const hasFreshRace = prediction.staleness?.category === 'fresh';
@@ -619,7 +619,7 @@ export function renderHyroxForecastView(): void {
           ${(() => {
             if (proj.weeksRemaining === 0 && proj.factors.length === 0) return '';
             const fmtDelta = (sec: number) => sec === 0 ? '—' : (sec > 0 ? `+${sec}s` : `−${Math.abs(sec)}s`);
-            // UX_PATTERNS: neutrals only — direction comes from the +/− sign,
+            // UX_PATTERNS: neutrals only. Direction comes from the +/− sign,
             // not from green/amber tone. Avoid mixing semantic colours per row.
             const factorRows = proj.factors.map(f => `
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:8px 0;font-size:12px;border-top:1px solid rgba(0,0,0,0.05)">
@@ -801,7 +801,7 @@ export function renderHyroxForecastView(): void {
     });
   });
 
-  // "Test stations" CTA — un-dismiss the benchmark card so it surfaces on the
+  // "Test stations" CTA. Un-dismiss the benchmark card so it surfaces on the
   // plan view we're navigating to, then navigate. Without the un-dismiss, a
   // user who previously dismissed the card would land on the plan with nowhere
   // to enter station times.

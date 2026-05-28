@@ -1,5 +1,5 @@
 /**
- * Adaptive recovery — learns the user's personal recovery rate (`k_user`)
+ * Adaptive recovery. Learns the user's personal recovery rate (`k_user`)
  * over time from observed post-session physiology.
  *
  * The recovery countdown is `k × TSS / ctlDaily × recoveryMult × recoveryAdj`.
@@ -8,7 +8,7 @@
  * personal baseline after each session.
  *
  * The fit composes two terms:
- *   - `recoveryAdj` (transient): today's HRV/RHR/sleep — see readiness.ts.
+ *   - `recoveryAdj` (transient): today's HRV/RHR/sleep. See readiness.ts.
  *   - `k_user`     (persistent trait): how this athlete clears load in general.
  *
  * Confidence gates:
@@ -45,7 +45,7 @@ export const K_USER_MAX = 13;
 export const RECOVERY_OBSERVATION_CAP_HOURS = 96;
 
 /** Composite z-score (HRV positive, RHR sign-flipped) at or above this counts
- * as "recovered". A small negative tolerance acknowledges noise — strict
+ * as "recovered". A small negative tolerance acknowledges noise. Strict
  * z ≥ 0 would inflate observed hours. */
 export const RECOVERY_Z_THRESHOLD = -0.25;
 
@@ -146,7 +146,7 @@ interface BaselineStats {
 }
 
 /** Compute personal HRV / RHR baselines from the 28 days strictly BEFORE a
- * session date. No peeking forward — the baseline must reflect the user's
+ * session date. No peeking forward. The baseline must reflect the user's
  * normal pre-session state. Returns null fields when fewer than 5 readings. */
 export function computeBaselineStats(
   history: PhysiologyDayEntry[],
@@ -264,7 +264,7 @@ export function logSessionImpact(
   };
 
   const log = s.sessionImpactLog ?? [];
-  // De-dupe by garminId — re-running historical backfill or replaying a webhook
+  // De-dupe by garminId. Re-running historical backfill or replaying a webhook
   // shouldn't multiply evidence.
   const idx = log.findIndex(e => e.garminId === entry.garminId);
   if (idx >= 0) log.splice(idx, 1);
@@ -331,7 +331,7 @@ interface FitOptions {
  *   - For each closed entry: ratio = observedHours / predictedHours.
  *   - Apply weighting: source weight (live=1.0 / historical=0.7) × recency
  *     decay (0.5^(ageWeeks / halfLife)).
- *   - Bayesian prior: ghost samples with ratio=1.0 and total weight 4 — keeps
+ *   - Bayesian prior: ghost samples with ratio=1.0 and total weight 4. Keeps
  *     low-N estimates anchored near population while data accumulates.
  *   - Weighted mean ratio × 8, clamped to [5, 13], gives k_user.
  *   - Confidence band derives from N closed entries.
@@ -409,7 +409,7 @@ interface BackfillResult {
 /** One-shot historical pass: ingest a list of pre-computed historical sessions
  * and try to close them out against the current physiology history. Sessions
  * that can't be closed (no baseline, no post-session readings) are dropped
- * rather than stored open — historical entries don't get a second chance. */
+ * rather than stored open. Historical entries don't get a second chance. */
 export function backfillHistoricalImpacts(
   s: Pick<SimulatorState, 'sessionImpactLog' | 'physiologyHistory' | 'adaptiveRecovery'>,
   sessions: HistoricalSession[],
@@ -501,7 +501,7 @@ interface WeekLike {
 /** Walk recent weeks of `wk.garminActuals` (current plan + archived plans) and
  * log a SessionImpactEntry for any completed session not yet in the impact log
  * and within the 90-day rolling window. Sessions that pre-date the rolling
- * window are tagged `historical-backfill` (lower fit weight) — this is the
+ * window are tagged `historical-backfill` (lower fit weight). This is the
  * day-one personalisation path for users with rich Strava/Garmin history.
  *
  * Idempotent (de-duped by garminId in `logSessionImpact`); safe to run on
@@ -539,7 +539,7 @@ export function ingestNewActualsAsImpacts(
       const ageDays = daysBetween(date, todayIso());
       if (ageDays < 0 || ageDays > IMPACT_LOG_MAX_DAYS) continue;
 
-      // Run-equiv TSS — mirrors the fallback used in computeToBaseline. Uses
+      // Run-equiv TSS. Mirrors the fallback used in computeToBaseline. Uses
       // iTRIMP / 150 when available, otherwise rough duration-based fallback.
       const tss = actual.iTrimp != null
         ? actual.iTrimp / 150
@@ -550,7 +550,7 @@ export function ingestNewActualsAsImpacts(
       const recoveryAdjAtTime = recoveryAdjOnDate(physio, date);
       const predictedHours = K_USER_DEFAULT * tss / Math.max(1, ctlDaily) * recoveryMultAtTime * recoveryAdjAtTime;
 
-      // Sessions older than 7 days are tagged historical — they post-date the
+      // Sessions older than 7 days are tagged historical. They post-date the
       // current launch but pre-date the active engagement window where we
       // typically have RPE / check-in corrections. Down-weighted in the fit.
       const isHistorical = ageDays > 7;
@@ -571,7 +571,7 @@ export function ingestNewActualsAsImpacts(
       });
       added++;
       if (isHistorical) addedHistorical++;
-      // De-dupe protection within this pass — same activity may appear in both
+      // De-dupe protection within this pass. Same activity may appear in both
       // current plan and an archived plan during overlap. logSessionImpact
       // already de-dupes, but we want our local known set to reflect this so
       // we don't double-count `added` either.

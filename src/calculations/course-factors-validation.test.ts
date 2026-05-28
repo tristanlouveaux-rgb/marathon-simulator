@@ -1,17 +1,17 @@
 /**
  * Empirical validation of course-factor predictions against published race
  * outcomes. These tests compare relative differences between known races
- * for a fixed athlete fitness — not absolute times, since the model is a
+ * for a fixed athlete fitness. Not absolute times, since the model is a
  * relative adjustment layer on top of the user's VDOT prediction.
  *
  * Reference data (winning men's times in each city for the Eliud-era ~2018-2024):
- *   Berlin       — 2:00:35 (Kipchoge 2018, world record course)
- *   Chicago      — 2:00:35 (Kelvin Kiptum 2023)
- *   London       — 2:01:25 (Kiptum 2023)
- *   Tokyo        — 2:02:40 (Kipsang 2017)
- *   Boston       — 2:03:02 (Mutai 2011, wind-aided) / 2:04:35 (typical winner)
- *   NYC          — 2:04:58 (Geoffrey Mutai 2011)
- *   Dubai        — 2:03:34 (Sambu 2018) / 2:04:11 (Cheruiyot 2018)
+ *   Berlin. 2:00:35 (Kipchoge 2018, world record course)
+ *   Chicago. 2:00:35 (Kelvin Kiptum 2023)
+ *   London. 2:01:25 (Kiptum 2023)
+ *   Tokyo. 2:02:40 (Kipsang 2017)
+ *   Boston. 2:03:02 (Mutai 2011, wind-aided) / 2:04:35 (typical winner)
+ *   NYC. 2:04:58 (Geoffrey Mutai 2011)
+ *   Dubai. 2:03:34 (Sambu 2018) / 2:04:11 (Cheruiyot 2018)
  *
  * The model should produce: Berlin ≈ Chicago ≈ Tokyo (all flat-cool); Boston
  * notably slower (elevation); NYC slower (rolling); Dubai slower (heat).
@@ -26,7 +26,7 @@ import { MARATHON_COURSE_PROFILES } from '@/data/marathon-course-profiles';
 import { predictHyroxRace } from './race-prediction.hyrox';
 import type { SimulatorState } from '@/types/state';
 
-// Baseline: a 3:00 marathon (~VDOT 53) — a typical strong amateur.
+// Baseline: a 3:00 marathon (~VDOT 53). A typical strong amateur.
 const RAW_3HR = 3 * 3600;
 const MARATHON_KM = 42.195;
 
@@ -44,7 +44,7 @@ describe('Empirical validation: marathon majors', () => {
     // All three are flat (≤100m gain) cool-month European/Asian races.
     // Sub-cluster of the major-marathon set with truly comparable conditions.
     // Note: Chicago is flat but classed as 'temperate' (October averages 13-18°C
-    // wet-bulb), so it sits ~150s slower than this peer group — the model
+    // wet-bulb), so it sits ~150s slower than this peer group. The model
     // captures real October-vs-September weather variance.
     expect(range).toBeLessThan(90);
   });
@@ -53,7 +53,7 @@ describe('Empirical validation: marathon majors', () => {
     const delta = adjusted('chicago') - adjusted('berlin');
     // Both genuinely flat, but Chicago's October weather averages temperate
     // (+1.5%) where Berlin's September averages cool (reference). That's the
-    // entire signal — literature-driven, not noise.
+    // entire signal. Literature-driven, not noise.
     expect(delta).toBeGreaterThan(60);
     expect(delta).toBeLessThan(240);
   });
@@ -145,7 +145,7 @@ describe('Empirical validation: Hyrox venues', () => {
     // Bonetti meta-analysis: ~6.3% VO2max loss per 1000m above 600m.
     // 2240m → roughly +3.3% on metabolically-taxed components (run + endurance
     // stations, ~80% of total). Expected range 90s-300s for an intermediate
-    // athlete — visiting athletes report consistently 2-4 minutes slower at altitude.
+    // athlete. Visiting athletes report consistently 2-4 minutes slower at altitude.
     expect(delta).toBeGreaterThan(60);
     expect(delta).toBeLessThan(300);
   });
@@ -165,7 +165,7 @@ describe('Empirical validation: Hyrox venues', () => {
     const easy = predictHyroxRace(buildHyroxState('birmingham-nec'))!;
     const hard = predictHyroxRace(buildHyroxState('paris-portes'))!;
     const delta = hard.totalSec - easy.totalSec;
-    // Lap-difficulty multiplier: easy 0.985, hard 1.030 — 4.5% delta on the
+    // Lap-difficulty multiplier: easy 0.985, hard 1.030. 4.5% delta on the
     // 8km run total. For intermediate athlete (~40 min total run time) this
     // is ~110s. Easy ↔ hard delta should be well within 30-120s.
     expect(delta).toBeGreaterThan(30);

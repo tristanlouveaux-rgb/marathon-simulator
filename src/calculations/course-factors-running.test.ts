@@ -21,7 +21,7 @@ describe('applyRunningCourseFactors', () => {
       altitudeM: 34,        // below 500m floor → no altitude factor
     };
     const out = applyRunningCourseFactors(FAST_MARATHON_SEC, berlin, MARATHON_KM);
-    // Climate cool + altitude < 500m both skipped — only the tiny elevation
+    // Climate cool + altitude < 500m both skipped. Only the tiny elevation
     // factor remains. Minetti's polynomial credits any positive grade with
     // a small cost; 60m gain over 42km is ~+1.5min on a 3hr marathon.
     expect(out.adjustedSec).toBeGreaterThanOrEqual(FAST_MARATHON_SEC);
@@ -56,7 +56,7 @@ describe('applyRunningCourseFactors', () => {
     const elev = out.factors.find(f => f.kind === 'run-elevation');
     expect(elev).toBeDefined();
     // Average grade 250/42195 = 0.59%. Minetti cost at +0.6% is ~+12% energy.
-    // For a 3hr marathon that lands somewhere in the +20-25min range — large
+    // For a 3hr marathon that lands somewhere in the +20-25min range. Large
     // because the polynomial models pure-uphill cost; rolling courses with
     // descent recovery in reality see less. Sanity-check: penalty exists,
     // is positive, but bounded.
@@ -85,7 +85,7 @@ describe('applyRunningCourseFactors', () => {
   });
 
   it('compounds multiple factors multiplicatively', () => {
-    // Hot-humid + altitude — combined penalty should be larger than either alone.
+    // Hot-humid + altitude. Combined penalty should be larger than either alone.
     const harsh: CourseProfile = {
       climate: 'hot-humid',  // +12%
       altitudeM: 1500,       // +2%

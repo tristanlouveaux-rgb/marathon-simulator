@@ -49,7 +49,7 @@ function openPopover(id: string): void {
   const entry = REGISTRY.get(id);
   if (!entry) return;
   // Don't stack. Close any existing popover first.
-  Document.getElementById(OVERLAY_ID)?.remove();
+  document.getElementById(OVERLAY_ID)?.remove();
 
   const overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;

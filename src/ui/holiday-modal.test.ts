@@ -154,8 +154,8 @@ describe('applyHolidayMods', () => {
 
   it('only modifies workouts on holiday days when holidayDays provided', () => {
     const workouts = [
-      makeWorkout({ dayOfWeek: 0 }), // Mon — not holiday
-      makeWorkout({ dayOfWeek: 3 }), // Thu — holiday
+      makeWorkout({ dayOfWeek: 0 }), // Mon. Not holiday
+      makeWorkout({ dayOfWeek: 3 }), // Thu. Holiday
     ];
     const holidayDays = new Set([3, 4, 5, 6]);
     applyHolidayMods(workouts, 'no', holidayDays);

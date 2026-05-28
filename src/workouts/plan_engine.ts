@@ -12,8 +12,8 @@ export interface PlanContext {
   totalWeeks: number;
   vdot: number;
   effortScore?: number;  // Trailing effort score from recent weeks (used for adaptive scaling)
-  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR injury risk — reduces quality sessions when elevated
-  forceDeload?: boolean; // Holiday week — treated as deload regardless of cycle position
+  acwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR injury risk. Reduces quality sessions when elevated
+  forceDeload?: boolean; // Holiday week. Treated as deload regardless of cycle position
   /** Peak weekly hours target from onboarding. Easy and long sessions are scaled to fit;
    *  quality sessions (threshold / VO2 / marathon-pace) are never shortened below their
    *  minimum effective duration. */
@@ -31,7 +31,7 @@ export interface PlanContext {
    *  alongside `baselineKm` for the ramp to fire. */
   archetype?: Archetype;
   /** Easy pace in seconds per km, used to convert the km budget into a minute
-   *  budget. Falls back to 360 s/km (6:00/km) when omitted — matches
+   *  budget. Falls back to 360 s/km (6:00/km) when omitted. Matches
    *  intent_to_workout.minutesToKm. */
   easyPaceSecPerKm?: number;
 }
@@ -60,10 +60,10 @@ export const LONG_VARIANTS = [
   { id: 'long_with_blocks' },
 ];
 
-// Float fartlek variants — hard reps at 10K/HM effort, "float" recovery at ~MP
+// Float fartlek variants. Hard reps at 10K/HM effort, "float" recovery at ~MP
 // Science: moderate-effort recovery trains MCT1/MCT4 lactate transporters (Brooks 2009).
 // Sustained blood lactate at 2–3 mmol/L during float segments forces aerobic adaptation
-// under mild acidosis — mimicking the metabolic profile of marathon racing (Coyle 2007).
+// under mild acidosis. Mimicking the metabolic profile of marathon racing (Coyle 2007).
 export const FLOAT_VARIANTS = [
   { id: 'float_6x3_2', reps: 6, repMin: 3, floatMin: 2 },   // 30min main set, classic Hudson format
   { id: 'float_5x4_2', reps: 5, repMin: 4, floatMin: 2 },   // longer reps, sustained clearance
@@ -253,11 +253,11 @@ export function mpWorkMinutes(
 export function floatWorkMinutes(
   race: RaceDistance, ability: AbilityBand, phase: TrainingPhase
 ): number {
-  // Float only for half/marathon — shorter races don't benefit (race effort is above LT)
+  // Float only for half/marathon. Shorter races don't benefit (race effort is above LT)
   if (race !== 'marathon' && race !== 'half') return 0;
-  // Build and peak only — base is aerobic development, taper clears fatigue
+  // Build and peak only. Base is aerobic development, taper clears fatigue
   if (phase !== 'build' && phase !== 'peak') return 0;
-  // Intermediate+ only — requires pacing discipline to hold float (not jog, not tempo)
+  // Intermediate+ only. Requires pacing discipline to hold float (not jog, not tempo)
   const eligible: AbilityBand[] = ['intermediate', 'advanced', 'elite'];
   if (!eligible.includes(ability)) return 0;
 
@@ -383,7 +383,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
     slotsRemaining--;
   }
 
-  // Fill quality sessions — filter any slots the user has opted out of
+  // Fill quality sessions. Filter any slots the user has opted out of
   let qualityFilled = 0;
   const rawPriority = applyRunnerTypeBias(workoutPriority(raceDistance, phase), runnerType);
   const priority = rawPriority.filter(s => !excludedSlots.has(s));
@@ -482,7 +482,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   // long are scaled via the same applyHoursBudget mechanism used for the
   // weekly-hours target.
   //
-  // Skipped when baselineKm or archetype is missing — preserves legacy
+  // Skipped when baselineKm or archetype is missing. Preserves legacy
   // behaviour for users without Strava/Apple history.
   if (ctx.baselineKm != null && ctx.archetype != null && ctx.baselineKm > 0) {
     const peakKm = computePeakWeeklyKm(ctx);
@@ -493,7 +493,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
   }
 
   // Apply weekly hours budget: scale easy sessions first, then long if still over.
-  // Quality session durations are never shortened — their training stimulus depends
+  // Quality session durations are never shortened. Their training stimulus depends
   // on work interval duration (Seiler 2010, Billat 2001).
   if (ctx.weeklyHoursTarget != null && ctx.weeklyHoursTarget > 0) {
     applyHoursBudget(intents, ctx.weeklyHoursTarget * 60);
@@ -503,7 +503,7 @@ export function planWeekSessions(ctx: PlanContext): SessionIntent[] {
 }
 
 /**
- * Peak weekly km the plan is ramping toward — derived from the ability-driven
+ * Peak weekly km the plan is ramping toward. Derived from the ability-driven
  * minute budgets and easy pace. Matches the volume an established consistent
  * runner would see today (which is why their plan generation looks the same:
  * baseline ≥ peak → ramp clamps at peak from week 1).
@@ -528,7 +528,7 @@ function computePeakWeeklyKm(ctx: PlanContext): number {
   const easyCount = Math.max(0, ctx.runsPerWeek - 2 - (ctx.raceDistance === 'marathon' || ctx.raceDistance === 'half' ? 1 : 0));
   const totalMin = longMin + qualityMin + easyMin * easyCount;
   // km at easy pace (quality reps cover less ground per minute, but the integral
-  // assumption is close enough for a budget heuristic — the goal here is a
+  // assumption is close enough for a budget heuristic. The goal here is a
   // realistic peak that an intermediate marathoner trains at, ~70-80 km).
   return (totalMin * 60) / easyPaceSecPerKm;
 }
@@ -546,7 +546,7 @@ function computePeakWeeklyKm(ctx: PlanContext): number {
  * elite polarised training (Seiler & Tønnessen 2009), and a 30-min long run
  * still delivers the aerobic stimulus that distinguishes a long session from
  * an easy one. Below the soft floor, we accept the overflow rather than
- * compress sessions into ineffective doses — the plan-view banner surfaces
+ * compress sessions into ineffective doses. The plan-view banner surfaces
  * the overflow so the user can choose to accept shorter sessions or raise
  * their weekly hours target.
  */

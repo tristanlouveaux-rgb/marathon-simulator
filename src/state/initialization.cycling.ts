@@ -6,7 +6,7 @@
  * the full pro-grade bike workout library, per-discipline CTL/ATL, and
  * Strava activity routing for free.
  *
- * Distance/time prediction is deferred — V1 ships training-only.
+ * Distance/time prediction is deferred. V1 ships training-only.
  */
 
 import type { OnboardingState } from '@/types/onboarding';
@@ -51,7 +51,7 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     const weekdayHours = state.triWeekdayHoursPerWeek ?? Math.round(timeAvailable * 0.4 * 2) / 2;
 
     // Derive FTP from activity history if not user-entered. Cycling-only mode
-    // skips swim/run derivation entirely — only bike paths matter.
+    // skips swim/run derivation entirely. Only bike paths matter.
     const activityLog = collectActivityLog(s);
     const derived = deriveTriBenchmarksFromHistory(activityLog, undefined, {});
 
@@ -105,7 +105,7 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     }
 
     // Plan-level state. We reuse `eventType: 'triathlon'` so existing tri
-    // views render correctly — they're already discipline-aware and will
+    // views render correctly. They're already discipline-aware and will
     // surface bike-only data when no swim/run actuals exist. The cycling
     // mode is identified upstream via state.onboarding.trainingMode.
     s.eventType = 'triathlon';
@@ -126,8 +126,8 @@ export function initializeCyclingSimulator(state: OnboardingState): CalculationR
     s.planStartDate = _planMonday.toISOString().slice(0, 10);
     (s as any).lastCompleteDebriefWeek = 0;
     (s as any)._debriefGateV3 = true;
-    s.rd = 'marathon';  // Placeholder — tri/cycling views ignore this.
-    s.rw = 0;            // Bike-only — no run sessions.
+    s.rd = 'marathon';  // Placeholder. Tri/cycling views ignore this.
+    s.rw = 0;            // Bike-only. No run sessions.
     s.epw = 4;           // Approx weekly bike sessions (3-4 typical).
     s.gs = state.gymSessionsPerWeek || 0;
     s.wkm = 0;

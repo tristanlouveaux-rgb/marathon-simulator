@@ -48,7 +48,7 @@ function makeInjury(overrides: Partial<InjuryState> = {}): InjuryState {
 }
 
 // ---------------------------------------------------------------------------
-// clearStaleGatesForMode — preventing stale answers re-engaging on mode switch
+// clearStaleGatesForMode. Preventing stale answers re-engaging on mode switch
 // ---------------------------------------------------------------------------
 
 describe('clearStaleGatesForMode', () => {
@@ -162,7 +162,7 @@ describe('getActivityGateLevel', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Plan-engine integration — verifies gates actually shape the generated plan.
+// Plan-engine integration. Verifies gates actually shape the generated plan.
 // These call the public regenerateTriathlonWeek / regenerateHyroxWeek so the
 // private apply*InjuryGates functions stay private without losing coverage.
 // ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ describe('applyTriInjuryGates via regenerateTriathlonWeek', () => {
 
   it('drops brick when either leg is gated', () => {
     const s = makeTriStateWithInjury({ canBike: 'limited', canRun: 'yes', canSwim: 'yes' });
-    const week = regenerateTriathlonWeek(s, 4);  // build phase — brick eligible
+    const week = regenerateTriathlonWeek(s, 4);  // build phase. Brick eligible
     expect(week).not.toBeNull();
     const bricks = (week!.triWorkouts ?? []).filter(w => w.t === 'brick');
     expect(bricks).toHaveLength(0);
@@ -410,7 +410,7 @@ describe('applyHyroxInjuryGates via regenerateHyroxWeek', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Capacity-slider scaling — replaces the prior return-ramp tests (the ramp
+// Capacity-slider scaling. Replaces the prior return-ramp tests (the ramp
 // was removed; the slider IS the gradient now).
 // ---------------------------------------------------------------------------
 
@@ -448,7 +448,7 @@ describe('Capacity-slider scaling in tri plan engine', () => {
     const scaledBikes = (scaledWeek!.triWorkouts ?? []).filter(w => (w as any).discipline === 'bike');
 
     // Aggregate duration: scaled should be well below baseline. Don't require
-    // identical session count — the downstream scheduler may drop a session
+    // identical session count. The downstream scheduler may drop a session
     // whose scaled duration no longer fits its per-day minute cap.
     const baselineTotalMin = baselineBikes.reduce((acc, b: any) => acc + (b.estimatedDurationMin ?? 0), 0);
     const scaledTotalMin = scaledBikes.reduce((acc, b: any) => acc + (b.estimatedDurationMin ?? 0), 0);
@@ -475,7 +475,7 @@ describe('Capacity-slider scaling in tri plan engine', () => {
 
     const baseTotal = baselineBikes.reduce((acc, b: any) => acc + (b.aerobic ?? 0), 0);
     const scaledTotal = scaledBikes.reduce((acc, b: any) => acc + (b.aerobic ?? 0), 0);
-    // Scaled aggregate aerobic must be lower — ACWR / weekly TSS / ATL all
+    // Scaled aggregate aerobic must be lower. ACWR / weekly TSS / ATL all
     // depend on this; a hard-session staying hard-TSS would mask the cap.
     expect(scaledTotal).toBeLessThan(baseTotal);
   });
@@ -483,7 +483,7 @@ describe('Capacity-slider scaling in tri plan engine', () => {
   it('drops the brick when either bike or run capacity is below 100', () => {
     const s = makeTriStateWithInjury({ runCapacity: 100, bikeCapacity: 80, swimCapacity: 100 });
     s.w = 6;
-    const week = regenerateTriathlonWeek(s, 6);  // build phase — brick eligible at 100%
+    const week = regenerateTriathlonWeek(s, 6);  // build phase. Brick eligible at 100%
     expect(week).not.toBeNull();
     const bricks = (week!.triWorkouts ?? []).filter(w => w.t === 'brick');
     expect(bricks).toHaveLength(0);
@@ -494,7 +494,7 @@ describe('Capacity-slider scaling in tri plan engine', () => {
     s.w = 6;
     const week = regenerateTriathlonWeek(s, 6);
     expect(week).not.toBeNull();
-    // Brick may or may not be generated depending on phase mechanics — but if
+    // Brick may or may not be generated depending on phase mechanics. But if
     // an injury is active and all caps are 100, the injury filter must NOT
     // strip a brick that was otherwise generated. Look for an unmodified one.
     const bricks = (week!.triWorkouts ?? []).filter(w => w.t === 'brick');
@@ -571,7 +571,7 @@ describe('Capacity-slider scaling in HYROX plan engine', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Past-week protection — a current injury must NEVER rewrite past weeks.
+// Past-week protection. A current injury must NEVER rewrite past weeks.
 // Regression coverage for the 2026-05-26 bug where main.ts's version-bump
 // regen rewrote every past triWorkouts entry to "Complete Rest" because the
 // phase-replacement guard checked injury.active without checking weekIndex.
@@ -614,7 +614,7 @@ describe('Past-week protection from current-injury rewrites (tri)', () => {
     const weeks = generateTriathlonPlan(s);
     const ws = weeks[5].triWorkouts ?? [];
 
-    // Bike sessions present, swim sessions absent — gates drive the plan.
+    // Bike sessions present, swim sessions absent. Gates drive the plan.
     const bikes = ws.filter(w => (w as any).discipline === 'bike').length;
     const swims = ws.filter(w => (w as any).discipline === 'swim').length;
     expect(bikes).toBeGreaterThan(0);
@@ -627,7 +627,7 @@ describe('Past-week protection from current-injury rewrites (tri)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Location-aware capacity tests — Session 3 work
+// Location-aware capacity tests. Session 3 work
 // ---------------------------------------------------------------------------
 
 describe('getRequiredCapacityTests', () => {
@@ -763,7 +763,7 @@ describe('Phase progression fast-track is lower-body-only', () => {
       capacityTestsPassed: [],
     });
     const next = evaluatePhaseTransition(state);
-    // Must still be in test_capacity — tests haven't been done.
+    // Must still be in test_capacity. Tests haven't been done.
     expect(next.injuryPhase).toBe('test_capacity');
   });
 

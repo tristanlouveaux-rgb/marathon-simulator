@@ -1,11 +1,11 @@
 /**
  * Tests for single-file FIT / GPX / TCX import.
  *
- * FIT is binary and hard to fixture inline — we test the pure mapping layer
+ * FIT is binary and hard to fixture inline. We test the pure mapping layer
  * (streamsToActivityRow, mapFitSport) against mock records arrays rather
  * than exercising the binary decoder.
  *
- * GPX and TCX are XML — inline fixtures confirm end-to-end parsing through
+ * GPX and TCX are XML. Inline fixtures confirm end-to-end parsing through
  * the DOMParser path.
  */
 
@@ -295,7 +295,7 @@ describe('parseTcx — cycling with power', () => {
 });
 
 // ---------------------------------------------------------------------------
-// streamsToActivityRow — pure mapping (mock records, no state, no HealthKit)
+// streamsToActivityRow. Pure mapping (mock records, no state, no HealthKit)
 // ---------------------------------------------------------------------------
 
 function makeRunSummary(): ActivitySummary {
@@ -347,7 +347,7 @@ describe('streamsToActivityRow', () => {
 
   it('computes avg_hr from HR stream when restingHR/maxHR absent', () => {
     const row = streamsToActivityRow(makeRunSummary(), makeRunRecords(), null, null, 30, undefined);
-    // Stream HR values are 140/141/142 — avg should be in that range
+    // Stream HR values are 140/141/142. Avg should be in that range
     expect(row.avg_hr).toBeGreaterThanOrEqual(140);
     expect(row.avg_hr).toBeLessThanOrEqual(142);
   });

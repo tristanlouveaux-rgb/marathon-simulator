@@ -1,10 +1,10 @@
 /**
- * Transitions override overlay — opened from the race-forecast card's
+ * Transitions override overlay. Opened from the race-forecast card's
  * transitions row. Shows the empirical default for the user's race × level
  * bin (the same number the predictor uses), with an inline override.
  *
  * Override priority chain at runtime:
- *   1. user override (triConfig.transitionOverride) — what this overlay sets
+ *   1. user override (triConfig.transitionOverride). What this overlay sets
  *   2. race-specific empirical bin
  *   3. global level-bin fallback
  *   4. skill-slider default
@@ -116,7 +116,7 @@ function resolve(state: SimulatorState, p: TriRacePrediction | null): ResolvedTr
 
 /** Apply the sockless modifier to a resolved pair. Mirrors the predictor's
  *  logic: 20s saved per skipped leg, floored at 60s per side. Applied even
- *  when both legs are hardcoded — the override is treated as the raw time
+ *  when both legs are hardcoded. The override is treated as the raw time
  *  with full socks, and the selector adjusts from there. */
 function applySockless(r: ResolvedTransitions, choice: TransitionSocks): { t1: number; t2: number } {
   if (choice === 't1') return { t1: r.t1, t2: r.t2 };
@@ -274,7 +274,7 @@ export function openTransitionsOverlay(prediction: TriRacePrediction | null, onS
       if (!m.triConfig) return;
       // Only write a hardcoded override when the inputs actually differ from
       // the resolved seed. If the user only toggled sockless and didn't edit
-      // T1 / T2, we leave any existing override alone — otherwise toggling
+      // T1 / T2, we leave any existing override alone. Otherwise toggling
       // sockless would silently freeze whatever empirical value happened to
       // be displayed at open time.
       if (t1 !== resolved.t1 || t2 !== resolved.t2) {

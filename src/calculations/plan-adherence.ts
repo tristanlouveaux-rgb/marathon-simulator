@@ -76,7 +76,7 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
     //    or plannedDistanceKm (ad-hoc entries have none of these)
     // If plannedDistanceKm is available, apply the 95% distance check.
     // If not (older entries, or description had no km token), count the
-    // match itself as completion — it was matched to the plan.
+    // match itself as completion. It was matched to the plan.
     let weekCompleted = 0;
     for (const [key, actual] of Object.entries(wk.garminActuals || {}) as [string, GarminActual][]) {
       if (!isRunningActual(key, actual.activityType)) continue;
@@ -87,12 +87,12 @@ export function computePlanAdherence(s: SimulatorState): PlanAdherenceResult {
       if (!isPlannedMatch) continue;
 
       if (actual.plannedDistanceKm != null && actual.plannedDistanceKm > 0) {
-        // Distance check available — apply 95% threshold
+        // Distance check available. Apply 95% threshold
         if (actual.distanceKm >= ADHERENCE_THRESHOLD * actual.plannedDistanceKm) {
           weekCompleted++;
         }
       } else {
-        // Matched to a planned slot but no target distance — count as completed
+        // Matched to a planned slot but no target distance. Count as completed
         weekCompleted++;
       }
     }

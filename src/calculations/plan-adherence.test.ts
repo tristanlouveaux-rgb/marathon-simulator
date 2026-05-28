@@ -96,7 +96,7 @@ describe('computePlanAdherence', () => {
   });
 
   it('caps completed at planned per week', () => {
-    // More garminActuals than rw — should not exceed rw
+    // More garminActuals than rw. Should not exceed rw
     const wk1 = makeWeek(1, {
       garminActuals: {
         'a': makeRunActual(10, 10),

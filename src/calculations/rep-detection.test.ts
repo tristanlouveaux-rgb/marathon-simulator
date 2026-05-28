@@ -27,7 +27,7 @@ describe('detectRepsFromLaps — running', () => {
     expect(r!.source).toBe('strava-laps');
     expect(r!.reps).toHaveLength(8);
     expect(r!.reps[0].distanceM).toBe(400);
-    // Reps sorted chronologically — first detected rep should have lapIndex 2.
+    // Reps sorted chronologically. First detected rep should have lapIndex 2.
     expect(r!.reps.map(rp => rp.index)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
   });
 
@@ -174,7 +174,7 @@ describe('detectRepsFromHRStream', () => {
   });
 
   it('returns null on a uniform easy run (no rep structure)', () => {
-    // 60 minutes at 140 bpm with ±2 bpm noise — should not register reps.
+    // 60 minutes at 140 bpm with ±2 bpm noise. Should not register reps.
     const hr: number[] = [];
     const t: number[] = [];
     for (let s = 0; s < 3600; s++) {
@@ -185,7 +185,7 @@ describe('detectRepsFromHRStream', () => {
   });
 
   it('returns null when peak − baseline spread < MIN_HR_SPREAD_BPM', () => {
-    // 30-min session, baseline 145, "interval" peaks only 153 bpm — too narrow.
+    // 30-min session, baseline 145, "interval" peaks only 153 bpm. Too narrow.
     const hr: number[] = [];
     const t: number[] = [];
     let now = 0;
@@ -198,7 +198,7 @@ describe('detectRepsFromHRStream', () => {
   });
 
   it('rejects too-short reps (< MIN_HR_REP_DURATION_SEC)', () => {
-    // 30s on / 30s off ×8 — HR can't catch the cadence, won't sustain above
+    // 30s on / 30s off ×8. HR can't catch the cadence, won't sustain above
     // threshold for the 90s minimum. Expect null.
     const hr: number[] = [];
     const t: number[] = [];

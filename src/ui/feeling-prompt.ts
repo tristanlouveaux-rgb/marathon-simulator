@@ -10,7 +10,7 @@
  *   - Border-only buttons with muted/black text
  *   - 4 single-word labels: Struggling / Ok / Good / Great
  *
- * The stored value expires at end of day — see getTodayFeeling() in
+ * The stored value expires at end of day. See getTodayFeeling() in
  * calculations/daily-coach.ts.
  */
 
@@ -36,7 +36,7 @@ function todayISO(): string {
  *
  * @param variant 'home' uses home-view's inline styling (CSS vars),
  *                'brain' uses the Brain sub-page palette (hard-coded colours,
- *                already matching TEXT_M etc. — kept as neutral greys here).
+ *                already matching TEXT_M etc.. Kept as neutral greys here).
  */
 export function renderFeelingPromptHTML(variant: 'home' | 'brain' = 'home'): string {
   const s = getState();
@@ -72,7 +72,7 @@ export function renderFeelingPromptHTML(variant: 'home' | 'brain' = 'home'): str
     return `<div style="display:flex;gap:8px;margin-top:8px">${buttons}</div>`;
   }
 
-  // home variant — uses CSS vars so it matches the existing home-view check-in row.
+  // home variant. Uses CSS vars so it matches the existing home-view check-in row.
   if (hasToday && tf) {
     const chosen = OPTIONS.find(o => o.key === tf.value)?.label ?? tf.value;
     return `

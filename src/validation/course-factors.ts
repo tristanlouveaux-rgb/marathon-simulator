@@ -8,7 +8,7 @@
  * Factor < 1.0 → faster than typical (flat, fast water, cool weather).
  *
  * **The athlete-quality problem.** Different races attract different athlete
- * pools — Worlds is faster than a regional race not because the course is
+ * pools. Worlds is faster than a regional race not because the course is
  * easier but because the field is talented. We need to net out talent:
  *
  *   - IM data has `athleteID` → athlete fixed effects: each athlete's relative
@@ -61,7 +61,7 @@ export const RECENCY_WINDOW_YEARS = 5;
  * Years excluded from per-location aggregation (both all-time and recent
  * windows). 2020 and 2021 are excluded because COVID-era cancellations,
  * postponements, and capacity limits produced atypical fields that bias
- * course factors — e.g., Kona 2021 (cancelled), Frankfurt 2020 (cancelled),
+ * course factors. E.g., Kona 2021 (cancelled), Frankfurt 2020 (cancelled),
  * races with 30–50% typical field size inflating per-athlete ratios.
  *
  * Per-athlete and global-bucket baselines (fixed effects) are NOT filtered —
@@ -96,7 +96,7 @@ function classifyConfidence(n: number): Confidence {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Sanity caps — we'd rather flag than ship factors that are obviously wrong
+// Sanity caps. We'd rather flag than ship factors that are obviously wrong
 // (data error, course-shortened, weather cancellation).
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ function clampOrFlag(f: number, label: string): { value: number; flagged: boolea
  */
 function buildIMCourseFactors(records: FinishRecord[]): CourseFactorTable {
   // Pass 1: per-athlete sums (only athletes that appear in IM records).
-  // ALL records contribute to the athlete's personal baseline — recency
+  // ALL records contribute to the athlete's personal baseline. Recency
   // filtering applies only to the location aggregation, so athletes' multi-
   // race average stays stable.
   interface AthleteAcc {
@@ -147,7 +147,7 @@ function buildIMCourseFactors(records: FinishRecord[]): CourseFactorTable {
     a.n++;
   }
 
-  // Pass 2: per-location accumulation. Build TWO maps simultaneously — one
+  // Pass 2: per-location accumulation. Build TWO maps simultaneously. One
   // for all-time records, one for the last RECENCY_WINDOW_YEARS only.
   interface LocAcc {
     swimRatioSum: number; bikeRatioSum: number; runRatioSum: number; n: number;
@@ -243,7 +243,7 @@ function buildIMCourseFactors(records: FinishRecord[]): CourseFactorTable {
 /**
  * Build per-location course factors from 70.3 data using age-group × gender
  * stratification. The 70.3 dataset has no athlete ID, so we can't do true
- * fixed effects — instead we compute a per-bucket reference and average.
+ * fixed effects. Instead we compute a per-bucket reference and average.
  *
  *   For bucket b (e.g., 40-44M):
  *     globalMean_b   = mean leg time across all 70.3 finishers in b
@@ -262,14 +262,14 @@ function buildHalfCourseFactors(records: FinishRecord[]): CourseFactorTable {
   interface BucketAcc { swim: number; bike: number; run: number; n: number; }
   const bucketKey = (r: FinishRecord): string => `${r.gender}:${r.ageGroup}`;
 
-  // Cutoff year for recent variant — moves with the dataset.
+  // Cutoff year for recent variant. Moves with the dataset.
   let latestYear = 0;
   for (const r of records) {
     if (r.distance === '70.3' && r.eventYear > latestYear) latestYear = r.eventYear;
   }
   const recentCutoff = latestYear - RECENCY_WINDOW_YEARS;
 
-  // Step 1: global per-bucket means. Computed across ALL years — the bucket
+  // Step 1: global per-bucket means. Computed across ALL years. The bucket
   // reference (e.g., "global mean bike time for M40-44") is a stable
   // baseline. Recency filtering applies only to per-location aggregation.
   const globalBuckets = new Map<string, BucketAcc>();

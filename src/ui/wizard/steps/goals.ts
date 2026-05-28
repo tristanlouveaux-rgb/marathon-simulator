@@ -10,7 +10,7 @@ import trackImgUrl from '@/assets/onboarding/track.jpg';
 
 type TrainingMode = 'running' | 'hyrox' | 'triathlon' | 'cycling' | 'track';
 
-// Monochrome line marks — watermark inside each tile until the real photo lands.
+// Monochrome line marks. Watermark inside each tile until the real photo lands.
 const ICON_RUN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4.5" r="1.6"/><path d="M7 11l3.5-3 3 1.5 2.5 3 2.5 0.5"/><path d="M10.5 8.5l-3 4 3 2 0.5 4.5"/><path d="M5 16l3.5 1 2-1.5"/><path d="M13.5 14l-1 4.5"/></svg>`;
 const ICON_HYROX = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 10.5v3"/><path d="M21.5 10.5v3"/><path d="M5.5 8v8"/><path d="M18.5 8v8"/><path d="M5.5 12h13"/></svg>`;
 const ICON_TRI = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 17c1.5-1 3-1 4.5 0s3 1 4.5 0 3-1 4.5 0 3 1 4.5 0"/><circle cx="17" cy="7" r="1.4"/><path d="M6 14l3-3 3 1 3-1"/></svg>`;
@@ -81,10 +81,10 @@ const MODE_TILES: ModeTile[] = [
 ];
 
 /**
- * Page 2 — Training Mode picker.
+ * Page 2. Training Mode picker.
  *
  * Tap-to-advance. Four tiles (Running / Just track / Hyrox / Triathlon).
- * No Continue button — the selection IS the commit. No Change pill either — the
+ * No Continue button. The selection IS the commit. No Change pill either. The
  * user goes back via the wizard back button.
  *
  * Event Y/N, distance, focus, and race selection live on the Race/Target page.
@@ -143,7 +143,7 @@ export function renderGoals(container: HTMLElement, state: OnboardingState): voi
 
   wireEventHandlers();
 
-  // Keep linter happy — state is intentionally unused now that there's no selection UI.
+  // Keep linter happy. State is intentionally unused now that there's no selection UI.
   void state;
 }
 

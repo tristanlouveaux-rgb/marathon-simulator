@@ -59,7 +59,7 @@ describe('unmatched Strava run (no plannedType)', () => {
   });
 
   it('flags high HR via effort mismatch or HR insight', () => {
-    // High HR triggers effortMismatch — may return null if no splits/elevation,
+    // High HR triggers effortMismatch. May return null if no splits/elevation,
     // or HR elevated insight if not mismatch. Either way, should not lecture about "easy".
     const result = generateWorkoutInsight(unmatchedStravaRun({
       hrEffortScore: 1.20,
@@ -71,7 +71,7 @@ describe('unmatched Strava run (no plannedType)', () => {
     const result = generateWorkoutInsight(unmatchedStravaRun({
       paceAdherence: 0.85,
     }));
-    // No "meant to be easy" lecture — unmatched runs are analysed neutrally
+    // No "meant to be easy" lecture. Unmatched runs are analysed neutrally
     expect(result ?? '').not.toContain('meant to be easy');
   });
 });
@@ -118,7 +118,7 @@ describe('easy run — ran too hard (pace)', () => {
 describe('easy run — HR too high', () => {
   it('flags high HR on an easy run', () => {
     const result = generateWorkoutInsight(easyRun({ hrEffortScore: 1.20 }));
-    // High HR triggers effort mismatch — no "easy run" lecture, but may get
+    // High HR triggers effort mismatch. No "easy run" lecture, but may get
     // neutral analysis or HR-elevated note
     expect(result ?? '').not.toContain('easy run');
   });

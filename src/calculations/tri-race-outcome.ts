@@ -1,5 +1,5 @@
 /**
- * Race-outcome logging — pull predicted vs actual after a target race day.
+ * Race-outcome logging. Pull predicted vs actual after a target race day.
  *
  * v1 contract:
  *   - LOG every race outcome (positive AND negative gap) so the data is there
@@ -62,7 +62,7 @@ export function getRaceOutcomeRetro(state: SimulatorState): RetroDisplay {
 }
 
 /**
- * Append a race outcome to the log. Pure mutation — caller must `saveState()`.
+ * Append a race outcome to the log. Pure mutation. Caller must `saveState()`.
  *
  * Idempotent guard: if a log entry already exists for the same `dateISO` we
  * don't append a duplicate.
@@ -80,7 +80,7 @@ export function appendRaceOutcome(state: SimulatorState, entry: TriRaceLogEntry)
  *   1. Skip if no `triConfig.raceDate` set, or race date in the future.
  *   2. Skip if `raceLog` already has an entry for this race date.
  *   3. Sum swim + bike + run actual durations from the race-day activities
- *      (within ±6 hours of midnight on the race date — IM range).
+ *      (within ±6 hours of midnight on the race date. IM range).
  *   4. Pull predicted from the cached `triConfig.prediction`.
  *   5. Append to `raceLog`.
  *
@@ -121,7 +121,7 @@ export function detectAndLogRaceOutcome(state: SimulatorState): TriRaceLogEntry 
   const actualTotalSec = actualPerLeg.swim + actualPerLeg.bike + actualPerLeg.run;
   if (actualTotalSec === 0) return null;  // no race-day activities found
 
-  // Pull predicted from cache. If absent, no log entry — we don't fabricate.
+  // Pull predicted from cache. If absent, no log entry. We don't fabricate.
   const pred = tri.prediction;
   if (!pred) return null;
 

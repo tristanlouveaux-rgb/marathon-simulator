@@ -119,7 +119,7 @@ export function openGpsCompletionModal(
   let selectedRpe = 0;
   let currentSaveBtn: HTMLButtonElement | null = null;
 
-  // Safety slider — only for outdoor routes >= 1km
+  // Safety slider. Only for outdoor routes >= 1km
   let safetySlider: ReturnType<typeof createSafetySlider> | null = null;
   const hasRoute = recording.route.length >= 2 && actualDistKm >= 1;
   if (hasRoute) {

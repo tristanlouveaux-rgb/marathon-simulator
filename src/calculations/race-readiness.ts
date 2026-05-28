@@ -1,5 +1,5 @@
 /**
- * Race-readiness aggregator — wraps `specificEndurancePenalty` per-discipline
+ * Race-readiness aggregator. Wraps `specificEndurancePenalty` per-discipline
  * results into a single shape the UI consumes.
  *
  * Used by:
@@ -19,7 +19,7 @@ import { CROSS_DISCIPLINE_TRANSFER, type ReadinessDiscipline } from '@/constants
 /**
  * Default closure window when distance-specific value isn't supplied (legacy
  * call sites + safety fallback). Per-distance `closureWeeks` lives in
- * `RACE_READINESS_TARGETS` — that's the canonical value for production use.
+ * `RACE_READINESS_TARGETS`. That's the canonical value for production use.
  */
 const READINESS_CLOSURE_REFERENCE_WEEKS = 12;
 
@@ -29,7 +29,7 @@ const READINESS_CLOSURE_REFERENCE_WEEKS = 12;
  * "race in 6 months" distinction.
  *
  * **Multiplicative time × dose model.** Time and dose are *independent
- * dimensions* — they don't substitute for each other. Each saturates
+ * dimensions*. They don't substitute for each other. Each saturates
  * separately, then they multiply:
  *
  *   timeFactor = 1 - exp(-weeksRemaining / (closureWeeks/3))
@@ -93,7 +93,7 @@ export interface ProjectionPenaltyInputs {
   taperWeeks?: number;
   /**
    * User's planned hours/wk for THIS discipline (`plannedHoursPerWeekByDiscipline`).
-   * Optional — when supplied, the dose factor uses the geometric mean of
+   * Optional. When supplied, the dose factor uses the geometric mean of
    * session-ratio AND hours-ratio. This captures that 5 short bike sessions
    * ≠ 5 long bike sessions: same session count, very different volume. When
    * omitted, falls back to session-count-only.
@@ -103,7 +103,7 @@ export interface ProjectionPenaltyInputs {
   refHours?: number;
   /**
    * Athlete's current readiness score for this discipline (0-100). When
-   * supplied, scales the closure window by the gap size — a near-ready
+   * supplied, scales the closure window by the gap size. A near-ready
    * athlete (score=80) needs fewer weeks to close than a far-from-ready one
    * (score=20). `effectiveClosureWeeks = closureWeeks × sqrt(1 - score/100)`.
    * Omitted → uses full closureWeeks (legacy behaviour, equivalent to
@@ -141,7 +141,7 @@ export function computeProjectionPenaltyShare(
     currentScore,
   } = inputs;
 
-  if (rSess <= 0) return 0; // safety — no target = no closure to compute
+  if (rSess <= 0) return 0; // safety. No target = no closure to compute
   if (weeksRemaining <= 0) return 1.0; // race today/tomorrow → full penalty stays
   if (pSess <= 0) return 1.0; // zero training is categorical, not gradient
 
@@ -155,7 +155,7 @@ export function computeProjectionPenaltyShare(
 
   // Gap-aware closure window: a near-ready athlete needs fewer weeks to close
   // than one starting far from ready. Scales the effective closure window by
-  // sqrt(gap fraction) — sqrt because closure is non-linear (last few percent
+  // sqrt(gap fraction). Sqrt because closure is non-linear (last few percent
   // are easier than the first 50%). Without currentScore, falls back to
   // worst-case full window (legacy behaviour). For score=80 → effective
   // window = closureWeeks × 0.45; score=20 → × 0.89; score=0 → × 1.0.
@@ -171,7 +171,7 @@ export function computeProjectionPenaltyShare(
   const timeFactor = 1 - Math.exp(-usefulWeeks / tau);
 
   // Dose factor combines session count AND weekly hours when both are
-  // available — geometric mean so both dimensions must be present. Captures
+  // available. Geometric mean so both dimensions must be present. Captures
   // that 5 short bike sessions ≠ 5 long bike sessions (same session count,
   // half the volume → half the dose factor). When hours data isn't supplied,
   // fall back to session-count-only (legacy behaviour).
@@ -194,7 +194,7 @@ export interface RaceReadinessResult {
   run: DisciplineReadiness;
   /**
    * Overall readiness score (0-100). Weighted by discipline duration share
-   * — run weighted highest in IM (run leg dominates fatigue), bike highest
+   *. Run weighted highest in IM (run leg dominates fatigue), bike highest
    * in 70.3 (bike is longest leg). Weighting per Friel 2018 race-time
    * decomposition tables.
    */
@@ -210,7 +210,7 @@ export interface RaceReadinessResult {
  * **Two-pass with cross-discipline transfer.**
  *   1. First pass: compute each discipline's raw readiness from its own
  *      volume + longest signals.
- *   2. Second pass: apply `CROSS_DISCIPLINE_TRANSFER` matrix — credit each
+ *   2. Second pass: apply `CROSS_DISCIPLINE_TRANSFER` matrix. Credit each
  *      discipline's volumeRatio with fractional contributions from the OTHER
  *      disciplines' raw volumeRatios. Captures shared cardiac/aerobic-base
  *      adaptations across modalities (Bassett & Howley 2000) while respecting
@@ -218,7 +218,7 @@ export interface RaceReadinessResult {
  *      gets the largest transfer (~30%); swim contributes least to others.
  *
  * Standalone running mode should call `computeDisciplineReadiness` directly
- * with `discipline='run'` and the appropriate distance — no need for the
+ * with `discipline='run'` and the appropriate distance. No need for the
  * tri-shaped wrapper.
  */
 export function computeTriRaceReadiness(
@@ -257,7 +257,7 @@ export function computeTriRaceReadiness(
   });
 
   // Discipline weights for the overall score. Approximates each leg's share
-  // of total race time at intermediate level — bike dominates time, run
+  // of total race time at intermediate level. Bike dominates time, run
   // dominates fatigue/perception, swim is shortest. Friel 2018 averaged.
   // Sprint/Olympic share weights with 70.3 (run share rises with distance).
   const weights = distance === 'ironman'

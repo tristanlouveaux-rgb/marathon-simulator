@@ -1,9 +1,9 @@
 /**
- * LT Pace Estimator — Core estimation engine for automatic LT pace updates.
+ * LT Pace Estimator. Core estimation engine for automatic LT pace updates.
  *
  * Two estimation methods:
- *   1. Threshold Direct — extract LT from steady-state threshold runs with HR in Z4
- *   2. Cardiac Efficiency Trend — track pace:HR ratio on easy runs over weeks
+ *   1. Threshold Direct. Extract LT from steady-state threshold runs with HR in Z4
+ *   2. Cardiac Efficiency Trend. Track pace:HR ratio on easy runs over weeks
  *
  * Pure functions, no state mutation.
  */
@@ -150,7 +150,7 @@ export function estimateFromEfficiencyTrend(
   const slope = (n * sumXY - sumX * sumY) / denom;
 
   // Negative slope = improving (lower CEI = faster at same HR)
-  if (slope >= 0) return null; // Not improving — no estimate
+  if (slope >= 0) return null; // Not improving. No estimate
 
   // Compute improvement percentage from slope relative to mean CEI
   const meanCEI = sumY / n;
@@ -164,7 +164,7 @@ export function estimateFromEfficiencyTrend(
   const span = Math.max(...weeks) - Math.min(...weeks);
   const totalImprovementPct = weeklyImprovementPct * span;
 
-  // Require >10% improvement for statistical significance — avoids firing on
+  // Require >10% improvement for statistical significance. Avoids firing on
   // normal week-to-week CEI variation from terrain, temperature, or hydration.
   if (totalImprovementPct < 0.10) return null;
 

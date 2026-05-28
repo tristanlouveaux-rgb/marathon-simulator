@@ -1,5 +1,5 @@
 /**
- * Rolling Load detail page — warm, card-based design.
+ * Rolling Load detail page. Warm, card-based design.
  * Opens from the Rolling Load card on the Readiness view.
  * Shows 7-day rolling load, 28-day chart, zone breakdown, activity timeline.
  */
@@ -293,7 +293,7 @@ function getRollingLoadHTML(s: SimulatorState): string {
   const hasZoneData = entries.some(e => e.zoneLoad.lowAerobic + e.zoneLoad.highAerobic + e.zoneLoad.anaerobic > 0);
   const dailyZoneBars = hasZoneData ? buildDailyZoneBars(entries) : '';
   const zoneBalance = hasZoneData ? buildZoneBalance(entries) : '';
-  // Leg fatigue — permanent card. Mechanical/localised load from cross-training,
+  // Leg fatigue. Permanent card. Mechanical/localised load from cross-training,
   // Leg fatigue. Permanent card. Mechanical/localised load from cross-training,
   // independent of cardiovascular TSS. Always visible so the signal is discoverable.
   const legBreakdown = computeLegLoadBreakdown(s.recentLegLoads ?? [], Date.now());

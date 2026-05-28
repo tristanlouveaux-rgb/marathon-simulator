@@ -1,13 +1,13 @@
 /**
- * Training Readiness — composite 0–100 score.
+ * Training Readiness. Composite 0–100 score.
  *
  * Answers: "Should I do today's specific planned workout as-is?"
  *
  * Four sub-signals:
- *   Fitness Readiness (Freshness)  — TSB                   28% (40% without recovery)
- *   Load Safety                    — ACWR ratio             27% (35% without recovery)
- *   Training Momentum              — CTL trend 4-week       10% (25% without recovery)
- *   Recovery (optional)            — sleep + HRV            35% (excluded when no watch)
+ *   Fitness Readiness (Freshness). TSB                   28% (40% without recovery)
+ *   Load Safety. ACWR ratio             27% (35% without recovery)
+ *   Training Momentum. CTL trend 4-week       10% (25% without recovery)
+ *   Recovery (optional). Sleep + HRV            35% (excluded when no watch)
  *
  * Sleep uses Garmin's 0–100 score directly (already population-normalised).
  * HRV and RHR are scored relative to the athlete's 28-day personal baseline.
@@ -17,8 +17,8 @@
  *   ACWR 1.3–1.5         → score ≤ 59 (Manage Load)
  *   Sleep < 45           → score ≤ 59 (Manage Load)
  *   Sleep < 60           → score ≤ 74 (prevents Primed on a bad night)
- *   Leg load >= 20       → score ≤ 54 (Manage Load — moderate eccentric/impact damage)
- *   Leg load >= 60       → score ≤ 34 (Ease Back — heavy EIMD, 72-96h recovery window)
+ *   Leg load >= 20       → score ≤ 54 (Manage Load. Moderate eccentric/impact damage)
+ *   Leg load >= 60       → score ≤ 34 (Ease Back. Heavy EIMD, 72-96h recovery window)
  *
  * CONTINUOUS PENALTIES (not hard caps):
  *   Sleep debt above personal baseline → −5 pts/hr excess, max −25 pts (Van Dongen 2003)
@@ -47,7 +47,7 @@ function stddev(values: number[]): number {
 /**
  * Base half-life for leg fatigue decay: 48 hours.
  *
- * Basis: Clarkson & Hubal 2002 — functional force-absorption recovery from
+ * Basis: Clarkson & Hubal 2002. Functional force-absorption recovery from
  * eccentric loading takes 72-168h. 48h half-life → ~95% clearance in 4 half-lives
  * (~8 days), which envelopes that range. Sport-specific: scaled by recoveryMult
  * from SPORTS_DB (hiking 0.95x ≈ 46h, rugby 1.30x ≈ 62h).
@@ -66,7 +66,7 @@ export const LEG_LOAD_MODERATE = 20;
 export const LEG_LOAD_HEAVY = 60;
 
 /**
- * Repeated Bout Effect (RBE) — McHugh 2003; Nosaka & Clarkson 1995; Nosaka & Aoki 2011.
+ * Repeated Bout Effect (RBE). McHugh 2003; Nosaka & Clarkson 1995; Nosaka & Aoki 2011.
  *
  * A prior bout of the same (or biomechanically similar) eccentric stimulus within
  * ~2 weeks confers protection: the second bout produces 40-60% less damage (CK
@@ -76,7 +76,7 @@ export const LEG_LOAD_HEAVY = 60;
  * clearance penalty. Same sport within RBE_WINDOW_H gets RBE_DISCOUNT applied
  * (conservative end of the 0.4-0.6 attenuation range). First-in-window bout is
  * unprotected (full load). Protection is stimulus-specific, so we key on sport
- * identity — hiking does not protect against skiing.
+ * identity. Hiking does not protect against skiing.
  *
  * Replaces the previous 1.3× reload-clearance penalty (2026-04-17), which was
  * scientifically backwards: that treated repeated same-sport bouts as slowing
@@ -206,7 +206,7 @@ export interface ReadinessInput {
   /** Sleep score 0–100 from last night (watch/manual). Null = no data. */
   sleepScore?: number | null;
   /**
-   * Historical sleep entries — used to find the most recent Garmin sleep score.
+   * Historical sleep entries. Used to find the most recent Garmin sleep score.
    * Each entry needs at least { sleepScore, date }. Compatible with PhysiologyDayEntry[].
    */
   sleepHistory?: Array<{ sleepScore?: number | null; date?: string }>;
@@ -269,7 +269,7 @@ export interface ReadinessInput {
    * True when at least one hard/quality session is scheduled in the next 1-2 days
    * (excluding today). Used by the decision-matrix fallback sentences so prescriptive
    * verbs ("shorten or swap", "reduce today") don't fire on rest days with nothing
-   * hard upcoming. Optional — when omitted, falls back to the legacy unconditional copy.
+   * hard upcoming. Optional. When omitted, falls back to the legacy unconditional copy.
    */
   hasUpcomingHardSession?: boolean;
 }
@@ -412,13 +412,13 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Freshness: daily-equivalent TSB −25 → 0%, +30 → 100%
   // Exponent 1.2: mild non-linearity. Fresh end stays comfortable, fatigued end
   // drops slightly faster than linear. TSB is not as exponentially risky as ACWR —
-  // negative TSB is normal during training blocks — so the curve is gentler.
+  // negative TSB is normal during training blocks. So the curve is gentler.
   // TSB daily 0 → 39% (was 45 linear). TSB daily -10 → 21% (was 27 linear).
   const tsbDailyEq = tsb / 7;
   const fitnessFrac = clamp((tsbDailyEq + 25) / 55, 0, 1);
   const fitnessScore = Math.pow(fitnessFrac, 1.2) * 100;
 
-  // Load Safety — tier-aware, non-linear.
+  // Load Safety. Tier-aware, non-linear.
   // Anchored to athlete's personal safeUpper: score hits 0 at safeUpper + 0.6,
   // hits 100 at safeUpper - 0.6. This means the same ACWR produces different
   // scores for different tiers: ACWR 1.35 is comfortable for elite (safeUpper 1.5)
@@ -466,13 +466,13 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
 
   let score: number;
   if (hasRecovery && recoveryScore != null) {
-    // Fitness 35%, Safety 30%, Recovery 35% — momentum removed (CTL trend ≠ session readiness).
+    // Fitness 35%, Safety 30%, Recovery 35%. Momentum removed (CTL trend ≠ session readiness).
     score = fitnessScore * 0.35 + safetyScore * 0.30 + recoveryScore * 0.35;
   } else {
     score = fitnessScore * 0.55 + safetyScore * 0.45;
   }
 
-  // ── Sleep cap — decays with bad nights, recovers symmetrically ────────────
+  // ── Sleep cap. Decays with bad nights, recovers symmetrically ────────────
   // Walk up to 14 nights of history (oldest → newest), then apply today.
   // Bad night (score < threshold): cap -= STEP, floored at MIN.
   // Good night (score >= threshold): cap += STEP, ceilinged at MAX.
@@ -480,7 +480,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // History is excluded for today's date to avoid double-counting.
   const SLEEP_CAP_THRESHOLD = 65;   // below this = bad night
   const SLEEP_CAP_MAX = 54;         // starting cap (no recent bad sleep)
-  const SLEEP_CAP_MIN = 34;         // floor — Ease Back boundary after ~11 bad nights
+  const SLEEP_CAP_MIN = 34;         // floor. Ease Back boundary after ~11 bad nights
   const SLEEP_CAP_STEP = 2;         // pts per night, same rate both directions (symmetric)
 
   const todayIso = new Date().toISOString().slice(0, 10);
@@ -501,7 +501,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
       : Math.min(SLEEP_CAP_MAX, effectiveSleepCap + SLEEP_CAP_STEP);
   }
 
-  // Streak for annotation — consecutive bad nights ending today (desc walk).
+  // Streak for annotation. Consecutive bad nights ending today (desc walk).
   let sleepStreak = (sleepScore != null && sleepScore < SLEEP_CAP_THRESHOLD) ? 1 : 0;
   if (sleepStreak > 0) {
     const sortedDesc = [...historyExclToday].reverse();
@@ -517,7 +517,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Thresholds are tier-aware: safeUpper from TIER_ACWR_CONFIG, caution = safeUpper + 0.2.
   let hardFloor: 'acwr' | 'sleep' | 'hrv' | 'sleepBank' | 'strain' | 'legLoad' | 'mtlLoad' | null = null;
 
-  // ── Hard floors — recalibrated for non-linear sub-scores ─────────────────
+  // ── Hard floors. Recalibrated for non-linear sub-scores ─────────────────
   // Label boundaries: Primed >= 75, On Track >= 55, Manage Load >= 35, Ease Back < 35.
   // Old caps (59/74/39) mapped to old boundaries (60/80/40).
   // New caps: 54 = top of Manage Load, 74 = just below Primed, 34 = top of Ease Back.
@@ -530,22 +530,22 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     hardFloor = 'acwr';
   }
 
-  // Sleep floor — severe bad night (< 45) caps at effectiveSleepCap (decays/recovers over time).
-  // Moderate bad night (45–60) keeps fixed 74 cap — decay only applies to the severe tier.
+  // Sleep floor. Severe bad night (< 45) caps at effectiveSleepCap (decays/recovers over time).
+  // Moderate bad night (45–60) keeps fixed 74 cap. Decay only applies to the severe tier.
   if (sleepScore != null) {
     if (sleepScore < 45 && score > effectiveSleepCap) { score = Math.min(score, effectiveSleepCap); hardFloor = 'sleep'; }
     else if (sleepScore < 60 && score > 74)           { score = Math.min(score, 74); hardFloor = 'sleep'; }
   }
 
-  // HRV penalty — continuous, proportional to how far HRV sits below personal average.
+  // HRV penalty. Continuous, proportional to how far HRV sits below personal average.
   //
   // Replaces former binary caps (>20% → cap 74, >30% → cap 54).
   // Plews et al. (2013) and Buchheit (2014): acute HRV suppression correlates
   // linearly with autonomic stress load. A 30% drop is meaningful; a 50% drop
-  // is severe — the penalty should scale rather than snap to a floor.
+  // is severe. The penalty should scale rather than snap to a floor.
   //
   // Formula: penalty = clamp((dropFraction − 0.15) × 100, 0, 25)
-  //   15% drop → 0 pts  (noise floor — within normal day-to-day variation)
+  //   15% drop → 0 pts  (noise floor. Within normal day-to-day variation)
   //   20% drop → 5 pts
   //   30% drop → 15 pts  (was hard-capped at 54)
   //   40% drop → 25 pts  (max)
@@ -560,7 +560,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     }
   }
 
-  // Sleep debt penalty — continuous, baseline-aware (replaces former hard cap).
+  // Sleep debt penalty. Continuous, baseline-aware (replaces former hard cap).
   //
   // When a personal 30-day baseline is available (sleepDebtExcessSec != null):
   //   Penalty = clamp(excessHours × 5, 0, 25)
@@ -600,8 +600,8 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
   // Recovery is already in the composite at 35% weight. Individual HRV and sleep
   // penalties add graduated signal-specific pressure. No additional hard floor.
 
-  // Strain floor — today's accumulated load reduces "readiness for more" as target is approached.
-  // Strain penalty — continuous gradient, no step-jumps.
+  // Strain floor. Today's accumulated load reduces "readiness for more" as target is approached.
+  // Strain penalty. Continuous gradient, no step-jumps.
   // 50-100%: floor descends 100→54 (approaching daily target).
   // 100%+:   floor continues descending 54→10 over the next 80pp (sp 100→180%).
   //          Slope ≈ 0.55 pts/% so at 130% floor ≈ 38, at 150% floor ≈ 27, at 180%+ floor = 10.
@@ -619,7 +619,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     }
   }
 
-  // MTL load floor — eccentric ramp rate for HYROX and station-heavy modes.
+  // MTL load floor. Eccentric ramp rate for HYROX and station-heavy modes.
   // MTL ACWR mirrors aerobic ACWR thresholds: > 1.3 → Manage Load, > 1.5 → Ease Back.
   // Applies only when mtlAcwr is provided and MTL history is meaningful (ratio > 0).
   // Does not overwrite a stricter floor already applied by ACWR, sleep, or leg load.
@@ -634,13 +634,13 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     }
   }
 
-  // Leg load floor — localised muscle/impact damage from cross-training caps readiness.
+  // Leg load floor. Localised muscle/impact damage from cross-training caps readiness.
   // Heavy (>=60): 72-96h functional deficit window (Clarkson & Hubal 2002; Paulsen 2012).
   // Force absorption is impaired, gait alters, impact tissues take more load. Cap at Ease Back.
   // Moderate (>=20): mild deficit, training through is fine but not at full intensity. Cap at Manage Load.
   // Soft taper (10-20): linear onset so crossing 20 isn't a cliff. No hardFloor (no callout).
   // Precedence: each branch checks `score > cap` so a stricter prior floor (ACWR, sleep) is
-  // never overwritten — legLoad only wins when it is the strictest constraint.
+  // never overwritten. LegLoad only wins when it is the strictest constraint.
   if (legLoadTotal >= LEG_LOAD_HEAVY && score > 34) {
     score = 34;
     hardFloor = 'legLoad';
@@ -675,7 +675,7 @@ export function computeReadiness(input: ReadinessInput): ReadinessResult {
     signals.push({ key: 'recovery', score: recoveryScore });
   }
   signals.sort((a, b) => a.score - b.score);
-  // When leg fatigue is the active hard floor, it is the driving signal — the cap
+  // When leg fatigue is the active hard floor, it is the driving signal. The cap
   // the user needs to address, even if another sub-score happens to be lower.
   const drivingSignal: DrivingSignal = hardFloor === 'legLoad' ? 'legLoad' : signals[0].key;
 
@@ -748,7 +748,7 @@ export function computeRecoveryTrend(
   history: Array<{ sleepScore?: number | null; hrvRmssd?: number | null; restingHR?: number | null; date?: string }>,
 ): number {
   // Pass the full history so computeRecoveryScore has its 28-day baseline window.
-  // Slicing to 5 days first breaks HRV and RHR scores — both baseline and recent
+  // Slicing to 5 days first breaks HRV and RHR scores. Both baseline and recent
   // would be the same 5 entries, producing a delta of ~0 and always scoring ~65.
   const result = computeRecoveryScore(history);
   if (!result.hasData || result.score == null) return 1.0;
@@ -807,7 +807,7 @@ export interface RecoveryScoreResult {
  *
  * Composite: HRV 50% + Last Night Sleep 25% + Sleep History 25%
  * (renormalised when one or more signals are missing).
- * RHR is NOT a weighted input — it acts as a graduated hard floor when
+ * RHR is NOT a weighted input. It acts as a graduated hard floor when
  * elevated >= 2 SD above personal baseline (caps at 55/40/25 by severity).
  * Rationale: RHR has high specificity but low sensitivity (Buchheit 2014);
  * weighting it continuously adds noise from caffeine/heat/hydration.
@@ -822,7 +822,7 @@ export function computeRecoveryScore(
   options?: {
     /**
      * When set, bypass the chronic/acute formula and use this value directly
-     * as the sleep sub-score. Manual entries are explicit 0–100 ratings — the
+     * as the sleep sub-score. Manual entries are explicit 0–100 ratings. The
      * user is saying "my sleep was X/100", not providing a Garmin reading to
      * normalise against their personal baseline. Using the formula would dampen
      * a 23 to ~49 by anchoring on the 7-day chronic average, which is wrong.
@@ -847,7 +847,7 @@ export function computeRecoveryScore(
 
   // ── Staleness gate ────────────────────────────────────────────────────────
   // If the most recent entry with any recovery metric is >3 days old, treat as
-  // unavailable — showing a score based on week-old data is actively misleading.
+  // unavailable. Showing a score based on week-old data is actively misleading.
   const todayMs = Date.now();
   const latestWithData = [...history]
     .reverse()
@@ -865,7 +865,7 @@ export function computeRecoveryScore(
   // Use last 28 days (or all available) as personal baseline
   const baseline = history.slice(-28);
 
-  // ── Sleep score — use Garmin's score directly ────────────────────────────
+  // ── Sleep score. Use Garmin's score directly ────────────────────────────
   // Garmin's 0–100 sleep score is already absolute and calibrated (sleep stages,
   // duration, HRV, respiration, stress). Unlike HRV/RHR where personal baseline
   // matters (a 40ms RMSSD means different things for different athletes), Garmin's
@@ -894,14 +894,14 @@ export function computeRecoveryScore(
   }
 
   // Manual sleep score bypasses the chronic/acute formula entirely.
-  // The user rated their sleep directly — use it as-is.
+  // The user rated their sleep directly. Use it as-is.
   if (options?.manualSleepScore != null) {
     sleepScore = clamp(Math.round(options.manualSleepScore), 0, 100);
     lastNightSleep = options.manualSleepScore;
     lastNightSleepDate = new Date().toISOString().split('T')[0];
   }
 
-  // ── HRV score — z-score method (Plews/Flatt/Buchheit) when ≥ 10 baseline readings ──
+  // ── HRV score. Z-score method (Plews/Flatt/Buchheit) when ≥ 10 baseline readings ──
   // Measures how many personal SDs the 7-day average is from the 28-day baseline.
   // SD-based because a 10ms swing means different things for different athletes.
   // z = (7d avg − 28d avg) / 28d SD → mapped: z=0 → 80 (baseline = ready), z=+1 → 100, z=−2 → 40
@@ -929,7 +929,7 @@ export function computeRecoveryScore(
       chronicScore = clamp(80 + chronicDelta * 175, 0, 100);
     }
 
-    // Capture last-night HRV for the detail sheet flag — not used in the score.
+    // Capture last-night HRV for the detail sheet flag. Not used in the score.
     // Single-night readings are too noisy (one drink, warm room, sleep position) to
     // modify the composite. The score reflects only the chronic trend (7d vs 28d).
     const lastHrvEntry = [...recent].reverse().find(d => d.hrvRmssd != null && d.hrvRmssd > 0);
@@ -939,7 +939,7 @@ export function computeRecoveryScore(
     hrvScore = clamp(Math.round(chronicScore), 0, 100);
   }
 
-  // ── RHR — SD-based override (not a weighted input) ──────────────────────
+  // ── RHR. SD-based override (not a weighted input) ──────────────────────
   // RHR is a high-specificity, low-sensitivity signal (Buchheit 2014). Rather than
   // weighting it continuously (where noise from caffeine/heat drags the score around),
   // it acts as a graduated hard floor when elevated ≥2 SD above personal baseline.
@@ -969,7 +969,7 @@ export function computeRecoveryScore(
     }
   }
 
-  // ── Sleep History — 14d rolling avg, debt-adjusted ─────────────────────────
+  // ── Sleep History. 14d rolling avg, debt-adjusted ─────────────────────────
   // Chronic sleep restriction has cumulative effects (Van Dongen 2003, Halson 2014).
   // 14-day window matches the effective range of sleep debt (half-life 7d, so 14d
   // captures ~93% of the signal). Unlike HRV, Garmin/Apple sleep scores are already
@@ -988,17 +988,17 @@ export function computeRecoveryScore(
     // 5.5h debt → -16pts. Keeps the ring and composite aligned with readiness messaging.
     // Linear 3pt/hour, capped at -25pts (~8.3h debt). Cognitive deficits accumulate
     // roughly linearly with sleep restriction (Van Dongen 2003), but beyond ~8h of debt
-    // the athlete is already in the danger zone — further debt adds little signal.
+    // the athlete is already in the danger zone. Further debt adds little signal.
     const debtPenalty = options?.sleepDebtSec != null && options.sleepDebtSec > 0
       ? Math.min(Math.round((options.sleepDebtSec / 3600) * 3), 25)
       : 0;
     sleepHistoryScore = clamp(sleepHistoryAvg - debtPenalty, 0, 100);
   }
 
-  // ── Composite — HRV 50%, Last Night Sleep + Sleep History 50% ─────────────
+  // ── Composite. HRV 50%, Last Night Sleep + Sleep History 50% ─────────────
   // RHR removed from weighted input per Buchheit 2014: low sensitivity means it
   // adds noise to the composite. It acts as an override (above) instead.
-  // HRV uses z-scoring (personal baseline matters — 40ms is good for some, bad for others).
+  // HRV uses z-scoring (personal baseline matters. 40ms is good for some, bad for others).
   // Sleep uses raw Garmin/Apple scores (already population-normalised).
   //
   // Asymmetric sleep weighting (Fullagar 2015, Reilly & Edwards 2007):
@@ -1015,7 +1015,7 @@ export function computeRecoveryScore(
 
   // Asymmetric weighting: when last night is worse than the 14d history, shift weight
   // toward last night. Ramps linearly with the gap (last night vs history), saturating
-  // at ±0.10 when the gap reaches 20 points — roughly a full sleep-quality tier.
+  // at ±0.10 when the gap reaches 20 points. Roughly a full sleep-quality tier.
   // Rationale: acute sleep loss has disproportionate next-day impact (Fullagar 2015;
   // Reilly & Edwards 2007), but a 1–2 pt dip shouldn't flip the weighting meaningfully.
   let wLastNight = 0.25;

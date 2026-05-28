@@ -152,7 +152,7 @@ describe('GpsTracker', () => {
     it('rejects points implying unrealistic speed', async () => {
       await tracker.start();
       provider.pushPoint(makePoint(0, 0, 0));
-      // ~1.1km in 1 second = 1100 m/s — far too fast
+      // ~1.1km in 1 second = 1100 m/s. Far too fast
       provider.pushPoint(makePoint(0.01, 0, 1000));
 
       expect(tracker.getLiveData().points).toBe(1);
@@ -364,6 +364,104 @@ describe('GpsTracker', () => {
       }
       expect(tracker.getStatus()).toBe('tracking');
       expect(events).toHaveLength(0);
+    });
+  });
+
+  describe('captureLap (manual lap button)', () => {
+    it('returns null when no GPS lock has been acquired', async () => {
+      await tracker.start();
+      // No points pushed yet — still acquiring.
+      expect(tracker.captureLap()).toBeNull();
+    });
+
+    it('returns null when a structured scheme is active (scheme owns splits)', async () => {
+      const scheme: SplitScheme = {
+        segments: [{ label: 'km 1', distance: 1000, targetPace: 300 }],
+        totalDistance: 1000,
+        description: '1km',
+      };
+      tracker = new GpsTracker(provider, scheme, { autoPause: false });
+      await tracker.start();
+      // Cover ~400m so a lap would have measurable distance.
+      for (let i = 0; i <= 4; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      expect(tracker.captureLap()).toBeNull();
+      // Scheme-managed splits remain untouched.
+      expect(tracker.getLiveData().completedSplits).toHaveLength(0);
+    });
+
+    it('captures a Lap split with measured distance and elapsed', async () => {
+      tracker = new GpsTracker(provider, undefined, { autoPause: false });
+      await tracker.start();
+      // ~330m over 90s.
+      for (let i = 0; i <= 3; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      const split = tracker.captureLap();
+      expect(split).not.toBeNull();
+      expect(split!.label).toBe('Lap 1');
+      expect(split!.distance).toBeGreaterThan(200);
+      expect(split!.distance).toBeLessThan(400);
+      expect(split!.elapsed).toBeGreaterThan(60);
+      expect(split!.elapsed).toBeLessThan(120);
+      expect(split!.pace).toBeGreaterThan(0);
+      expect(split!.targetPace).toBeNull();
+    });
+
+    it('numbers successive laps sequentially', async () => {
+      tracker = new GpsTracker(provider, undefined, { autoPause: false });
+      await tracker.start();
+      for (let i = 0; i <= 3; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      const first = tracker.captureLap();
+      // Cover more ground.
+      for (let i = 4; i <= 7; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      const second = tracker.captureLap();
+      expect(first!.label).toBe('Lap 1');
+      expect(second!.label).toBe('Lap 2');
+      // Both splits live in the completedSplits array.
+      expect(tracker.getLiveData().completedSplits).toHaveLength(2);
+    });
+
+    it('resets segment counters so the next lap measures only its own distance', async () => {
+      tracker = new GpsTracker(provider, undefined, { autoPause: false });
+      await tracker.start();
+      for (let i = 0; i <= 3; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      const first = tracker.captureLap();
+      for (let i = 4; i <= 7; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      const second = tracker.captureLap();
+      // Each lap is ~3 segments × ~111m ≈ similar distance, not cumulative.
+      expect(second!.distance).toBeLessThan(first!.distance * 2);
+    });
+
+    it('notifies split listeners so the UI can patch a "Last lap" readout', async () => {
+      tracker = new GpsTracker(provider, undefined, { autoPause: false });
+      const seen: string[] = [];
+      tracker.onSplitComplete((s) => seen.push(s.label));
+      await tracker.start();
+      for (let i = 0; i <= 3; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      tracker.captureLap();
+      expect(seen).toEqual(['Lap 1']);
+    });
+
+    it('returns null when stopped', async () => {
+      tracker = new GpsTracker(provider, undefined, { autoPause: false });
+      await tracker.start();
+      for (let i = 0; i <= 3; i++) {
+        provider.pushPoint(makePoint(i * 0.001, 0, i * 30000));
+      }
+      tracker.stop();
+      expect(tracker.captureLap()).toBeNull();
     });
   });
 });

@@ -1,5 +1,5 @@
 /**
- * Sleep detail page — same design language as strain-view and recovery-view.
+ * Sleep detail page. Same design language as strain-view and recovery-view.
  * Dark indigo gradient hero, cream body, white cards, purple ring.
  * Opens from the Sleep Score card in recovery-view, or from readiness pill sheets.
  */
@@ -239,7 +239,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const lastNightTarget       = computeLoadAdjustedTarget(effectiveSleepTarget, yesterdayTSS, athleteTier);
   const lastNightLoadBonus    = lastNightTarget - effectiveSleepTarget;
 
-  // Today's load bonus — heavy exercise today raises tonight's sleep target.
+  // Today's load bonus. Heavy exercise today raises tonight's sleep target.
   const todayTSS              = dailyTSSByDate[today] ?? 0;
   const tonightLoadBonusSec   = computeLoadAdjustedTarget(effectiveSleepTarget, todayTSS, athleteTier) - effectiveSleepTarget;
 
@@ -248,7 +248,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const nightlyStr      = bank.nightsWithData >= 3 ? fmtNightlyShortfall(bank.avgNightlyShortfallSec) : null;
   const bankTargetL     = fmtSleepDuration(effectiveSleepTarget);
 
-  // Headline: debt > 1h dominates over nightly average — they can tell contradictory stories.
+  // Headline: debt > 1h dominates over nightly average. They can tell contradictory stories.
   // "On target" nightly avg + 2h debt is confusing; show the debt as the primary signal.
   const debtDominates   = debtSec != null && debtSec > 3600;
   const fmtDebt = (s: number): string => {
@@ -260,7 +260,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     : (nightlyStr ?? null);
   const bankSubLabel    = debtDominates ? 'sleep debt' : null;
   // Only show nightly-avg context when it adds information. "On target" contradicts a large debt
-  // (debt uses load-adjusted targets per night; avg uses the flat base — they diverge legitimately).
+  // (debt uses load-adjusted targets per night; avg uses the flat base. They diverge legitimately).
   const bankNightlyCtx  = debtDominates && nightlyStr && nightlyStr !== 'On target' ? `7-night avg: ${nightlyStr}` : null;
   // Recovery target: base + debt-scaled extension + quality bump if recent quality is poor.
   // Debt bands from Walker/Van Dongen sleep extension research.
@@ -282,7 +282,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
   const bankColor       = debtDominates
     ? (debtSec! > 7200 ? '#FF9500' : '#F59E0B')
     : (bank.avgNightlyShortfallSec < -1800 ? '#FF9500' : bank.avgNightlyShortfallSec > 1800 ? '#34C759' : '#64748B');
-  // Nightly vs base target chart — always orange
+  // Nightly vs base target chart. Always orange
   const bankNights      = physiologyHistory
     .slice(-7)
     .filter(d => d.sleepDurationSec != null)
@@ -293,7 +293,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     ? buildSleepBankLineChart(bankNights, '#F97316', '#CBD5E1', !!scoreTrendHTML)
     : '';
 
-  // Cumulative debt chart — same recurrence as the headline (computeSleepDebt):
+  // Cumulative debt chart. Same recurrence as the headline (computeSleepDebt):
   // debt_n = debt_{n-1} * DEBT_DECAY + max(0, target_n − actual_n).
   // Plot −debt so the line sits below the target line when in deficit (matches
   // the "below = bad" metaphor used by the duration chart above).
@@ -307,7 +307,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     ? buildSleepBankLineChart(cumulativeNights, debtColor, '#CBD5E1', !!scoreTrendHTML, true, true, true)
     : '';
 
-  // Outlook — two-line story. Status line carries the personal-norm comparison
+  // Outlook. Two-line story. Status line carries the personal-norm comparison
   // (relative-coloured). Context line combines driver (spike vs chronic), trend,
   // and ETA with · separators. This avoids three stacked sentences that read as
   // a checklist; the status answers "should I worry?" and the context answers
@@ -316,7 +316,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     ? computeSleepDebtOutlook(physiologyHistory, dailyTSSByDate, athleteTier, effectiveSleepTarget)
     : null;
 
-  // Status line — vs personal norm. Drops out when there's no meaningful debt
+  // Status line. Vs personal norm. Drops out when there's no meaningful debt
   // (< 45 min "on track") or when there's no baseline yet.
   const debtStatusCopy = (() => {
     if (!debtOutlook || debtSec == null || debtSec < 2700) return null;
@@ -326,7 +326,7 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
     if (debtOutlook.vsTypical === 'below') return `Below your typical ${typicalStr}. Better than usual.`;
     return `In line with your typical ${typicalStr}.`;
   })();
-  // Status colour — independent of the absolute tier colour. Above = warn,
+  // Status colour. Independent of the absolute tier colour. Above = warn,
   // below = ok, on par = muted slate. Lets the user see at a glance whether
   // they're trending into worse territory regardless of where the absolute
   // number sits in the population-anchored tiers.
@@ -334,12 +334,12 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
                         : debtOutlook?.vsTypical === 'below' ? '#10B981'   // emerald-500
                         : '#64748B';                                       // slate-500
 
-  // Context line — driver · trend · ETA. Each segment drops out when not material.
+  // Context line. Driver · trend · ETA. Each segment drops out when not material.
   const debtContextCopy = (() => {
     if (!debtOutlook || debtSec == null || debtSec < 2700) return null;
     const parts: string[] = [];
 
-    // Driver — only mention spikes when they actually drove the stack.
+    // Driver. Only mention spikes when they actually drove the stack.
     // ratio > 0.7 → spike-dominated (e.g. one bad weekend night)
     // ratio 0.3–0.7 → mixed; quantify the spike contribution
     // ratio < 0.3 → chronic gap is the story; don't muddy it with a small spike line
@@ -358,13 +358,13 @@ function getSleepHTML(physiologyHistory: PhysiologyDayEntry[], wks: any[], displ
       }
     }
 
-    // Trend — direction over the last 7 series entries.
+    // Trend. Direction over the last 7 series entries.
     if (debtOutlook.trendDeltaSec != null && Math.abs(debtOutlook.trendDeltaSec) >= 600) {
       const dir = debtOutlook.trendDeltaSec < 0 ? 'down' : 'up';
       parts.push(`${dir} ${fmtSleepDebt(Math.abs(debtOutlook.trendDeltaSec))} this week`);
     }
 
-    // ETA — only when simulation says it actually clears.
+    // ETA. Only when simulation says it actually clears.
     if (debtOutlook.daysToOnTrack != null) {
       const d = debtOutlook.daysToOnTrack;
       parts.push(`clears in ${d} day${d === 1 ? '' : 's'} at this pace`);

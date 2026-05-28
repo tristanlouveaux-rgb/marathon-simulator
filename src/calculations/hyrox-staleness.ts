@@ -4,7 +4,7 @@
  * **Side**: tracking. Race time from a year ago should not anchor today's
  * forecast with the same authority as last week's. This module computes a
  * time-based staleness category, and crucially, gates the penalty on
- * cross-mode physiology evidence — an athlete with stable/improving VDOT
+ * cross-mode physiology evidence. An athlete with stable/improving VDOT
  * through the race-age window has clearly maintained fitness, so we should
  * lean less heavily on the time decay.
  *
@@ -91,7 +91,7 @@ function computePhysiologyMitigation(state: SimulatorState): number {
     factors.push(f);
   }
 
-  // Signal 3: Strava ctlBaseline (Signal A — running-equivalent). When
+  // Signal 3: Strava ctlBaseline (Signal A. Running-equivalent). When
   // present, strong baseline = athlete has maintained running volume.
   const ctlBaseline = state.ctlBaseline;
   if (typeof ctlBaseline === 'number' && ctlBaseline > 0) {
@@ -102,7 +102,7 @@ function computePhysiologyMitigation(state: SimulatorState): number {
 
   if (factors.length === 0) return 0.5;
   const mean = factors.reduce((s, v) => s + v, 0) / factors.length;
-  // Clamp to [0.5, 1.0] — we never punish athletes for bad mitigation; we
+  // Clamp to [0.5, 1.0]. We never punish athletes for bad mitigation; we
   // only release them from the staleness penalty when the evidence is good.
   return Math.max(0.5, Math.min(1.0, mean));
 }

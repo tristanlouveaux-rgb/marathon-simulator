@@ -84,7 +84,7 @@ describe('workoutsToPlannedRuns', () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyAdjustments — replace (full coverage, newDistanceKm = 0)
+// applyAdjustments. Replace (full coverage, newDistanceKm = 0)
 // ---------------------------------------------------------------------------
 
 describe('applyAdjustments — replace', () => {
@@ -131,7 +131,7 @@ describe('applyAdjustments — replace', () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyAdjustments — downgrade
+// applyAdjustments. Downgrade
 // ---------------------------------------------------------------------------
 
 describe('applyAdjustments — downgrade', () => {
@@ -183,7 +183,7 @@ describe('applyAdjustments — downgrade', () => {
 });
 
 // ---------------------------------------------------------------------------
-// applyAdjustments — threshold → steady pace
+// applyAdjustments. Threshold → steady pace
 // ---------------------------------------------------------------------------
 
 describe('applyAdjustments — threshold downgrade uses steady pace label', () => {

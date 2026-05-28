@@ -37,7 +37,7 @@ describe('backComputeRunPaceFromRace', () => {
   });
 
   it('returns null when pace lands out of physiological range', () => {
-    // 100 s/km would imply 12 min total run — too fast.
+    // 100 s/km would imply 12 min total run. Too fast.
     expect(backComputeRunPaceFromRace({
       finishSec: 1100, stationsTotalSec: 200, roxzoneSec: 100,
       format: 'open_singles', dateISO: '2026-01-01', stationsFromSplits: false,

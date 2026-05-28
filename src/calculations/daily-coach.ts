@@ -5,7 +5,7 @@
  * structured CoachState with stance, blockers, and all signals needed
  * to render the Coach modal and call the LLM narrative edge function.
  *
- * Pure function — no side effects, no network calls.
+ * Pure function. No side effects, no network calls.
  */
 
 import type { SimulatorState } from '@/types';
@@ -141,7 +141,7 @@ export interface CoachState {
   /** Pre-session context note (e.g. long-run drift warning). Null when not applicable. */
   sessionNote: string | null;
   /**
-   * UI ring label — always the underlying `readiness.label`. The post-session
+   * UI ring label. Always the underlying `readiness.label`. The post-session
    * "Trained hard today" wording lives in the sentence below the ring (see
    * `isPostSessionState`), since the ring is too narrow for long copy.
    */
@@ -160,7 +160,7 @@ export interface CoachState {
 
 /**
  * Returns the stored todayFeeling value ONLY when its date matches today.
- * Expires at end of day — stale feelings from yesterday don't leak into today's
+ * Expires at end of day. Stale feelings from yesterday don't leak into today's
  * stance computation.
  */
 export function getTodayFeeling(s: SimulatorState): 'struggling' | 'ok' | 'good' | 'great' | null {
@@ -182,7 +182,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   const todayDayOfWeek = (new Date(today + 'T12:00:00').getDay() + 6) % 7;
   const todayTSS = computeTodaySignalBTSS(wk, today);
 
-  // Just-Track users have no plan — skip workout generation entirely. Plan-
+  // Just-Track users have no plan. Skip workout generation entirely. Plan-
   // derived fields (s.rd, s.v, s.pac) are stale defaults in trackOnly and
   // would produce a bogus planned list that poisons the coach ring + copy.
   // Downstream: plannedDayTSS stays 0, hasPlannedWorkout=false, which lets
@@ -253,7 +253,7 @@ function deriveStrainContext(s: SimulatorState): StrainContext {
   let upcomingHard: StrainContext['upcomingHard'] = null;
   for (let offset = 1; offset <= 2; offset++) {
     const targetDow = (todayDayOfWeek + offset) % 7;
-    if (targetDow < todayDayOfWeek) break; // wraps to next week — current plannedWorkouts only covers this week
+    if (targetDow < todayDayOfWeek) break; // wraps to next week. Current plannedWorkouts only covers this week
     const hit = plannedWorkouts.find((w: any) =>
       w.dayOfWeek === targetDow && w.status !== 'skip' && w.status !== 'replaced' && isHardWorkout(w.t),
     );
@@ -298,7 +298,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   // ── Fitness metrics ───────────────────────────────────────────────────────
   const atlSeed = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
   const acwr = computeReadinessACWR(s);
-  // Live TSB with intra-week decay through today (shared helper — matches all readiness surfaces).
+  // Live TSB with intra-week decay through today (shared helper. Matches all readiness surfaces).
   const archivedPlans = (s as any).previousPlanWks ?? undefined;
   const liveTSB = computeLiveSameSignalTSB(wks, s.w, s.signalBBaseline ?? undefined, s.ctlBaseline ?? undefined, s.planStartDate, archivedPlans);
   const tsb = liveTSB.tsb;
@@ -432,7 +432,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
   // ── Today's workout ───────────────────────────────────────────────────────
   // Sourced from the strain-context lookup (which already calls generateWeekWorkouts).
   // Previous `_cachedWorkouts` path never populated, so today's workout was missing
-  // from signals sent to the LLM — restored here via StrainContext.todayPlannedWorkout.
+  // from signals sent to the LLM. Restored here via StrainContext.todayPlannedWorkout.
   const todayPlannedW = strain?.todayPlannedWorkout ?? null;
   const todayWorkouts: Array<{ n: string; t: string }> = todayPlannedW
     ? [{ n: todayPlannedW.name, t: todayPlannedW.type }]
@@ -613,7 +613,7 @@ export function computeDailyCoach(s: SimulatorState, strain?: StrainContext): Co
  * (or actualTSS ≥ daily CTL on adhoc / rest-day sessions). Used to override
  * the tri-mode chronic-load sentence with descriptive copy that reflects
  * what just happened. Mirrors the running-mode `derivePrimaryMessage`
- * "Solid session today…" branch — fires on strain alone, regardless of the
+ * "Solid session today…" branch. Fires on strain alone, regardless of the
  * underlying readiness tier.
  *
  * Handles two cases:
@@ -638,7 +638,7 @@ export function isPostSessionState(
 
 /**
  * Legacy wrapper kept for the existing `coach.ringLabel` plumbing. Returns
- * null in all cases now — the underlying readiness label stays in the ring
+ * null in all cases now. The underlying readiness label stays in the ring
  * (it has to fit a narrow circle), and post-session copy is surfaced in
  * the sentence below the ring instead.
  */
@@ -691,15 +691,15 @@ function computeLongRunDriftNote(s: SimulatorState, todayType: string | null): s
 /**
  * Detects sustained HR drift on easy runs over the last 3 weeks. Returns a note
  * when ≥3 easy runs have drift data and the mean exceeds 5%. Signal: easy pace
- * is sitting too close to aerobic threshold — the athlete's "easy" isn't easy enough.
+ * is sitting too close to aerobic threshold. The athlete's "easy" isn't easy enough.
  *
- * Pure function — pass in SimulatorState, returns string | null for the UI.
+ * Pure function. Pass in SimulatorState, returns string | null for the UI.
  */
 // ─── Durability flag (drift-based injury risk signal) ───────────────────────
 //
 // Strict matching: only `plannedType === 'easy'` or `'long'`. These are the
 // only session types where cardiovascular drift is meaningfully "higher than
-// expected" — drift on intervals or tempo is an artefact of the effort
+// expected". Drift on intervals or tempo is an artefact of the effort
 // profile, not under-recovery.
 //
 // Heat-adjusted: every sample has ~0.15% per °C above 15°C subtracted before
@@ -715,12 +715,12 @@ function computeLongRunDriftNote(s: SimulatorState, todayType: string | null): s
 // Returns null unless ≥ 3 matching samples (easy) or ≥ 2 (long) exist in the
 // recent window AND the average exceeds the personal or fallback threshold.
 
-// Heat correction — literature-approximate 0.15%/°C rise in HR drift above
+// Heat correction. Literature-approximate 0.15%/°C rise in HR drift above
 // 15°C neutral. Used across durability detection and coach commentary.
 //
 // `heatStrainRatio` scales the correction by body size (larger athletes store
 // heat faster, so more of their hot-day drift is heat-driven). Defaults to 1.0
-// = the reference build, which reproduces the original formula EXACTLY — so any
+// = the reference build, which reproduces the original formula EXACTLY. So any
 // caller that omits the argument is unchanged (regression-locked in
 // daily-coach.heatAdjust.test.ts). Ratio comes from heatStrainRatioForState().
 export function heatAdjust(drift: number, tempC: number | null | undefined, heatStrainRatio: number = 1.0): number {
@@ -845,7 +845,7 @@ export function detectDurabilityFlag(s: SimulatorState): DurabilityFlag | null {
 
 // Week-debrief wrapper. Delegates to `detectDurabilityFlag` so the threshold
 // logic lives in one place. Returns copy only when the easy-run signal is the
-// sole trigger — mixed (easy + long) flags surface on the injury-risk page
+// sole trigger. Mixed (easy + long) flags surface on the injury-risk page
 // instead, to avoid duplicating the same narrative in two places.
 export function detectEasyDriftPattern(s: SimulatorState): string | null {
   const flag = detectDurabilityFlag(s);
@@ -909,7 +909,7 @@ function derivePrimaryMessage(
     return `Solid session today (${Math.round(actualTSS)} TSS). Rest up and recover.`;
 
   // ── Tier 2: Red flags ───────────────────────────────────────────────────
-  // Hard-floor signals first — the message must explain whatever is capping
+  // Hard-floor signals first. The message must explain whatever is capping
   // the readiness score, otherwise the badge ("Manage Load"), CTA, and copy
   // disagree across surfaces.
   if (readiness.hardFloor === 'legLoad' && readiness.legLoadNote) {
@@ -977,7 +977,7 @@ function derivePrimaryMessage(
   }
 
   // Freshness-driven message when fitness is the biggest drag on readiness.
-  // Gate on TSB being meaningfully negative — the fitness sub-score reads ~39
+  // Gate on TSB being meaningfully negative. The fitness sub-score reads ~39
   // at neutral TSB due to the non-linear mapping, so `drivingSignal === 'fitness'`
   // can fire at TSB ≈ 0 where freshness is fine. Requiring tsb <= -5 keeps copy
   // truthful against the Freshness drill-down.
@@ -1121,7 +1121,7 @@ function derivePrimaryMessage(
   const hrvElevated = hrvPct != null && hrvPct > 12;
   const phase = sig.phase;
 
-  // Taper phase — only when readiness is reasonable (score ≥ 50).
+  // Taper phase. Only when readiness is reasonable (score ≥ 50).
   if ((phase === 'taper' || phase === 'race') && sig.readinessScore >= 50) {
     if (trained)
       return 'Taper week. Session done. Fatigue is clearing while fitness remains.';
@@ -1263,7 +1263,7 @@ export interface CoachNarrativePayload {
   weekTssPct: number | null;
   /**
    * Active injury signal. Includes the discipline gates so the LLM can
-   * suggest concrete swaps ("you can still bike — let's move today's run to
+   * suggest concrete swaps ("you can still bike. Let's move today's run to
    * a bike at zone 2"). `phase` lets the coach acknowledge clinical stage.
    */
   injury: {
@@ -1280,7 +1280,7 @@ export interface CoachNarrativePayload {
      * Return-ramp counters per discipline. When a gate transitions from
      * 'no'/'limited' back to 'yes', that discipline gets 2 weeks of downmix
      * before resuming full volume. The LLM should reference this so it can
-     * say "you are 1 week into a swim return — keep it easy" instead of
+     * say "you are 1 week into a swim return. Keep it easy" instead of
      * recommending full intensity.
      */
     returnRampWeeksLeft?: Partial<Record<'run' | 'bike' | 'swim' | 'stations', number>>;
@@ -1289,7 +1289,7 @@ export interface CoachNarrativePayload {
    * Active illness signal. `severity` is the legacy two-tier field, retained
    * for prompts that already key off it. The v2 fields (set when the user has
    * gone through the new illness form) give the LLM enough context to give
-   * specific advice — "Day 3 of below-neck recovery, two rest days remaining"
+   * specific advice. "Day 3 of below-neck recovery, two rest days remaining"
    * rather than just "you're ill".
    */
   illness: {
@@ -1422,7 +1422,7 @@ export function buildCoachSignalsPayload(coach: CoachState, state?: SimulatorSta
 
   // Surface gates + phase so the LLM can recommend discipline swaps instead
   // of a generic "rest" response (e.g. tri user with shoulder injury can
-  // still bike + run — the coach should propose those, not blanket rest).
+  // still bike + run. The coach should propose those, not blanket rest).
   const injuryState = state?.injuryState;
   const injury = sig.injuryActive
     ? {

@@ -787,7 +787,7 @@ describe('Universal Load: extendedModel backward compatibility', () => {
     expect(r.runSpec).toBe(0.5);
     expect(r.recoveryMult).toBe(1.1);
 
-    // FCL = baseLoad * recoveryMult — must hold exactly
+    // FCL = baseLoad * recoveryMult. Must hold exactly
     const expectedFCL = Math.round(r.baseLoad * 1.1 * 10) / 10;
     expect(r.fatigueCostLoad).toBe(expectedFCL);
 
@@ -891,7 +891,7 @@ describe('Universal Load: iTRIMP scale invariant', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase B v3 — Workout Type Classifier
+// Phase B v3. Workout Type Classifier
 // ---------------------------------------------------------------------------
 
 function zones(z1: number, z2: number, z3: number, z4: number, z5: number): HRZoneData {
@@ -1015,7 +1015,7 @@ describe('classifyWorkoutType', () => {
     const r = classifyWorkoutType({
       sport: 'cycling',
       durationMin: 60,
-      hrZones: zones(30, 20, 8, 1, 1), // Z4+Z5 = 2/60 = 3% — steady-state
+      hrZones: zones(30, 20, 8, 1, 1), // Z4+Z5 = 2/60 = 3%. Steady-state
     });
     expect(r.method).toBe('zones');
     expect(r.type).toBe('easy');

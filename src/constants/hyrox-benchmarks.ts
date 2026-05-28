@@ -5,9 +5,9 @@
  * Open division, gender-averaged midpoints.
  *
  * Sources (all accessed 2026-05):
- *   HyroxDataLab — 700k+ race database, target split tables by finish goal
- *   RoxLyfe — elite vs average Pro division analysis (roxlyfe.com)
- *   Hyroxy.com — Open/Pro aggregate station averages
+ *   HyroxDataLab. 700k+ race database, target split tables by finish goal
+ *   RoxLyfe. Elite vs average Pro division analysis (roxlyfe.com)
+ *   Hyroxy.com. Open/Pro aggregate station averages
  *
  * Key structural findings:
  *   - Biggest skill gaps: Sled Pull (3:17 elite-vs-avg), Wall Balls (3:13),
@@ -75,7 +75,7 @@ export const STATION_SEED_TIMES_SEC: Record<AbilityBand, Record<HyroxStation, nu
   beginner: {
     ski_erg:            345,  // 5:45
     sled_push:          290,  // 4:50
-    sled_pull:          410,  // 6:50  (roxlyfe avg men 6:31, women 6:36 — average)
+    sled_pull:          410,  // 6:50  (roxlyfe avg men 6:31, women 6:36. Average)
     burpee_broad_jumps: 420,  // 7:00
     row_erg:            345,  // 5:45
     farmer_carry:       180,  // 3:00
@@ -96,7 +96,7 @@ export const STATION_SEED_TIMES_SEC: Record<AbilityBand, Record<HyroxStation, nu
 };
 
 /**
- * Average fatigued 1km run pace (seconds/km) — mean across all 8 legs.
+ * Average fatigued 1km run pace (seconds/km). Mean across all 8 legs.
  * Leg 1 is faster; leg 8 is slower. These represent the average.
  * Source: HyroxDataLab target-split run totals divided by 8km.
  */
@@ -110,7 +110,7 @@ export const SEED_RUN_PACE_SEC_KM: Record<AbilityBand, number> = {
 };
 
 /**
- * RoxZone transition time total (seconds) — time moving between start/finish zones.
+ * RoxZone transition time total (seconds). Time moving between start/finish zones.
  * Elite athletes use 2:54; beginners lose 10-12 minutes in transitions.
  * Source: roxlyfe.com (elite 2:54, average 6:58); HyroxDataLab target table.
  */
@@ -124,20 +124,20 @@ export const SEED_ROXZONE_SEC: Record<AbilityBand, number> = {
 };
 
 /**
- * Minimum plausible station times (seconds) — physical lower bound for any human.
+ * Minimum plausible station times (seconds). Physical lower bound for any human.
  * Used to reject clearly-corrupted input (e.g. h:mm:ss parsed as mm:ss → 2s instead of 2:56).
  * Set at roughly 65% of the competitive-band seed times to allow for WR-class athletes
  * while still catching obvious parsing errors.
  */
 export const STATION_MIN_SEC: Record<HyroxStation, number> = {
-  ski_erg:            90,   // 1:30 — 1000m SkiErg
-  sled_push:          40,   // 0:40 — 50m push
-  sled_pull:          50,   // 0:50 — 50m pull
-  burpee_broad_jumps: 55,   // 0:55 — 80m of burpee broad jumps
-  row_erg:           120,   // 2:00 — 1000m row
-  farmer_carry:       35,   // 0:35 — 200m carry
-  sandbag_lunges:     70,   // 1:10 — 100m lunges
-  wall_balls:         90,   // 1:30 — 100 reps
+  ski_erg:            90,   // 1:30. 1000m SkiErg
+  sled_push:          40,   // 0:40. 50m push
+  sled_pull:          50,   // 0:50. 50m pull
+  burpee_broad_jumps: 55,   // 0:55. 80m of burpee broad jumps
+  row_erg:           120,   // 2:00. 1000m row
+  farmer_carry:       35,   // 0:35. 200m carry
+  sandbag_lunges:     70,   // 1:10. 100m lunges
+  wall_balls:         90,   // 1:30. 100 reps
 };
 
 /** Minimum plausible run km pace (seconds/km). Below 3:10/km is physiologically impossible under HYROX conditions. */

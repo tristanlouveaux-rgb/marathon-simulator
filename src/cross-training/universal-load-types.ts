@@ -34,7 +34,7 @@ export interface ActivityInput {
   durationMin: number;
   rpe?: number;                    // 1-10 scale
 
-  // Tier A+: iTRIMP (Individual TRIMP from HR stream — highest accuracy)
+  // Tier A+: iTRIMP (Individual TRIMP from HR stream. Highest accuracy)
   iTrimp?: number | null;
 
   // Tier A: Garmin/Firstbeat data

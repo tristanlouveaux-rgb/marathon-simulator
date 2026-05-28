@@ -62,7 +62,7 @@ function recordVdotHistory(s: SimulatorState): void {
   s.vdotHistory = [...(s.vdotHistory ?? []), entry].slice(-20);
 }
 
-// ─── Stream cache (module-level, not persisted — cleared on page load) ───
+// ─── Stream cache (module-level, not persisted. Cleared on page load) ───
 const workoutStreamCache = new Map<string, ActivityStream>();
 
 /** Store stream data for a workout (called from sync listener). */
@@ -358,7 +358,7 @@ export function init(): void {
   // Calculate expected final via centralized forecast model. Anchor to the
   // blended view of today's fitness so the forecast and "Current Race Estimate"
   // surfaces stay on the same scale (single canonical prediction model). Feed
-  // the plan-prescribed mean volume — the horizon model is predicting gain
+  // the plan-prescribed mean volume. The horizon model is predicting gain
   // FROM the plan, so the dose input should reflect what the plan will deliver
   // (sessions × ref-km-per-session × build-phase factor), not the user's
   // pre-plan maintenance volume.
@@ -479,7 +479,7 @@ export function rate(
   }
 
   let ch = 0;
-  // RPE bands — no dead zone, every difference produces signal
+  // RPE bands. No dead zone, every difference produces signal
   if (rpeDif <= -3) ch = 0.15;
   else if (rpeDif <= -2) ch = 0.08;
   else if (rpeDif === -1) ch = 0.03;
@@ -491,7 +491,7 @@ export function rate(
   // Apply efficiency shift from HR
   if (efficiencyShift !== 0) {
     if (ch === 0) {
-      // HR-only signal when RPE matched expected — small standalone contribution
+      // HR-only signal when RPE matched expected. Small standalone contribution
       ch = efficiencyShift * 0.05;
     } else {
       // HR modulates the existing RPE signal
@@ -563,7 +563,7 @@ export function rate(
   // Only record data points where HR is in Z2 (aerobic zone).
   // Easy runs at recovery pace (<Z2) or aerobic-threshold pace (>Z2) would
   // produce outlier CEI values and pollute the trend. We require known HR zones
-  // to validate the data point — without them CEI comparisons are meaningless.
+  // to validate the data point. Without them CEI comparisons are meaningless.
   if ((workoutType === 'easy' || workoutType === 'long') && avgHR && avgHR > 0) {
     const effZones = calculateZones({
       lthr: s.lt || undefined,
@@ -697,7 +697,7 @@ export function skip(
   }
 
   // General fitness / continuous mode: second skip requires user confirmation to drop.
-  // There is no race penalty here — the user explicitly chooses to remove the session.
+  // There is no race penalty here. The user explicitly chooses to remove the session.
   if (isAlreadySkipped && s.continuousMode) {
     showDropWorkoutConfirmation(name).then(drop => {
       if (drop) skipInner(workoutId, name, workoutType, isAlreadySkipped, currentSkipCount, desc, rpe, dayOfWeek, dayName);
@@ -895,14 +895,14 @@ export async function next(): Promise<void> {
   const perWeekGain = s.tw > 0 ? totalExpectedVdotGain / s.tw : 0;
   // Apply adherence modifier: scale by what fraction of RUNNING workouts were completed.
   // Only running contributes to VDOT gain (Signal A). Cross-training/gym build systemic
-  // fitness (Signal B) but not running-specific adaptation — per PRINCIPLES.md.
+  // fitness (Signal B) but not running-specific adaptation. Per PRINCIPLES.md.
   const NON_RUN_KW = ['cross', 'gym', 'strength', 'rest', 'yoga', 'swim', 'bike', 'cycl', 'tennis', 'hiit', 'pilates', 'row', 'hik', 'elliptic', 'walk', 'box', 'climb', 'ski', 'padel', 'football', 'soccer', 'basketball', 'rugby'];
   const isRunName = (n: string) => !NON_RUN_KW.some(kw => n.toLowerCase().includes(kw));
   const ratedNames = Object.keys(wk.rated);
   const completedCount = ratedNames.filter(n => wk.rated[n] !== 'skip' && isRunName(n)).length;
   const expectedCount = s.rw || 3;
   const isIll = !!(s as any).illnessState?.active;
-  // Illness: treat adherence as 1.0 — skips are excused, no adherence penalty.
+  // Illness: treat adherence as 1.0. Skips are excused, no adherence penalty.
   // Fitness still reflects actual training (perWeekGain is computed from real activity).
   const adherence = isIll ? 1 : (expectedCount > 0 ? Math.min(completedCount / expectedCount, 1) : 1);
   if (!isInjured) {
@@ -971,7 +971,7 @@ export async function next(): Promise<void> {
     let hrTotal = 0, hrCount = 0;
     // Plan-effort score is "did the user execute the planned workout harder/easier
     // than expected". Adhoc activities (excess runs, cross-training) have no plan
-    // reference — they're tracked via load (Signal A/B) and recovery, not via this
+    // reference. They're tracked via load (Signal A/B) and recovery, not via this
     // adherence signal. Only iterate planned workouts here. Mirror of the triathlon
     // pattern in effort-multiplier.triathlon.ts:54-58.
     for (const wo of weekWos) {
@@ -1007,7 +1007,7 @@ export async function next(): Promise<void> {
       }
 
       if (perRepDev != null) {
-        // 60/40 RPE/per-rep — same shape as HR blend, sharper objective half.
+        // 60/40 RPE/per-rep. Same shape as HR blend, sharper objective half.
         totalDev += rpeDev * 0.6 + perRepDev * 0.4;
         // Track for hrEffort summary so coach view still has signal.
         if (hrScore != null) { hrTotal += hrScore; hrCount++; }
@@ -1125,7 +1125,7 @@ export async function next(): Promise<void> {
 
   // ─── Settle unspentLoadItems at week end ─────────────────────────────
   // If the week finished at or under its planned Signal B, any items that were
-  // tagged mid-week as "excess" were already absorbed by the overall load — clear them.
+  // tagged mid-week as "excess" were already absorbed by the overall load. Clear them.
   // This prevents false carry-over into next week for weeks that ended under target.
   {
     const plannedB = computePlannedSignalB(
@@ -1480,7 +1480,7 @@ function showDropWorkoutConfirmation(name: string): Promise<boolean> {
 
 /**
  * Navigate back to the assessment step to edit settings.
- * Preserves all state — only changes the wizard step pointer.
+ * Preserves all state. Only changes the wizard step pointer.
  * Sets hasCompletedOnboarding = false so initWizard() routes
  * to the assessment step (not renderMainView()) on reload.
  */
@@ -2100,7 +2100,7 @@ export function toggleJustRunPanel(): void {
 }
 
 /**
- * Start an unstructured "Just Run" — adds an ad-hoc workout to the week
+ * Start an unstructured "Just Run". Adds an ad-hoc workout to the week
  * and begins GPS tracking, just like any planned workout.
  */
 export function justRun(): void {
@@ -2124,7 +2124,7 @@ export function justRun(): void {
   if (window.trackWorkout) {
     window.trackWorkout(name, 'Easy pace');
   } else {
-    // No GPS available — just re-render so the workout card appears for manual rating
+    // No GPS available. Just re-render so the workout card appears for manual rating
     render();
   }
 }
@@ -2244,7 +2244,7 @@ export function getBenchmarkOptions(
     recommended = focus === 'speed' ? 'speed_check' : 'threshold_check';
   }
 
-  // Build options list — recommended first, race_simulation only for intermediate+
+  // Build options list. Recommended first, race_simulation only for intermediate+
   const types: import('@/types/state').BenchmarkType[] = ['easy_checkin', 'threshold_check', 'speed_check'];
   if (!isBeginner) types.push('race_simulation');
 
@@ -2313,7 +2313,7 @@ export function recordBenchmark(
     // 20-min comfortably hard ≈ threshold pace
     estimatedLT = avgPaceSecKm;
   } else if (type === 'easy_checkin' && avgPaceSecKm) {
-    // Easy check-in: lighter signal — still record as LT proxy (weaker confidence)
+    // Easy check-in: lighter signal. Still record as LT proxy (weaker confidence)
     estimatedLT = avgPaceSecKm;
   } else if (type === 'race_simulation' && distanceKm && durationSec) {
     // Full TT: compute VDOT directly from time + distance
@@ -2368,7 +2368,7 @@ export function recordBenchmark(
 }
 
 /**
- * Skip a benchmark check-in. No penalty — plan continues normally.
+ * Skip a benchmark check-in. No penalty. Plan continues normally.
  */
 export function skipBenchmark(): void {
   const s = getMutableState();
@@ -2425,7 +2425,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
     }
   }
 
-  // Find target run workout — match by name first, then by dayOfWeek, then first available
+  // Find target run workout. Match by name first, then by dayOfWeek, then first available
   const runWorkouts = workouts.filter(w =>
     w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' &&
     w.status !== 'replaced'
@@ -2467,7 +2467,7 @@ export function applyRecoveryAdjustment(type: 'downgrade' | 'reduce' | 'easyflag
     });
     log(`Recovery: ${todayRun.n} downgraded to easy`);
   } else if (type === 'easyflag') {
-    // Already an easy/long run — just flag to ignore pace targets
+    // Already an easy/long run. Just flag to ignore pace targets
     wk.workoutMods.push({
       name: todayRun.n,
       dayOfWeek: todayRun.dayOfWeek,
@@ -2545,7 +2545,7 @@ export function removeGarminActivity(garminId: string, opts?: { permanent?: bool
     if (!s.ignoredGarminIds.includes(garminId)) s.ignoredGarminIds.push(garminId);
   }
 
-  // Search across ALL weeks — the × button may be on any week's card
+  // Search across ALL weeks. The × button may be on any week's card
   let found = false;
   for (const wk of s.wks || []) {
     if (!wk.garminMatched) continue;

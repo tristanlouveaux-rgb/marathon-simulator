@@ -8,7 +8,7 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { checkExperienceLevelVsPBs } from '@/calculations/experience-level-validation';
 
 /**
- * Page 3b — Manual fallback.
+ * Page 3b. Manual fallback.
  *
  * Shown only when the user taps "Enter manually" on the Connect Strava step
  * (i.e. `state.skippedStrava === true`). Collapses three legacy steps
@@ -77,7 +77,7 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
   const volumeUnitLabel = unitPref === 'mi' ? 'mi / week' : 'km / week';
 
   // Read any previously-saved volume (state.detectedWeeklyKm is the canonical
-  // "recent weekly km" slot — also populated by Strava sync).
+  // "recent weekly km" slot. Also populated by Strava sync).
   const existingVolume = getState().detectedWeeklyKm;
   const volumeDisplay = existingVolume != null
     ? (unitPref === 'mi' ? (existingVolume / 1.609).toFixed(1) : String(Math.round(existingVolume)))
@@ -202,13 +202,13 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
 
 /**
  * Render an inline notice when the entered PBs are inconsistent with the
- * selected experience level. Surface-only — the consistency check itself
+ * selected experience level. Surface-only. The consistency check itself
  * lives in `@/calculations/experience-level-validation`. Returns empty
  * string when consistent (so the section collapses to nothing).
  *
  * The notice offers a one-tap apply for the suggested level. The user can
  * also dismiss by re-selecting their original level or by entering different
- * PBs. We deliberately do NOT block "next" — over-claiming experience is
+ * PBs. We deliberately do NOT block "next". Over-claiming experience is
  * always allowed; we just flag under-claiming (which silently distorts the
  * forecast). See SCIENCE_LOG audit #11 follow-up.
  */
@@ -258,7 +258,7 @@ function renderPBRow(label: string, id: string, value: number | undefined, place
 }
 
 function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
-  // Experience pills — single-select, commit live.
+  // Experience pills. Single-select, commit live.
   document.querySelectorAll<HTMLElement>('.exp-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const exp = btn.getAttribute('data-exp') as RunnerExperience | null;
@@ -277,7 +277,7 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
 
   const commitPbs = () => {
     const current = { ...state.pbs };
-    // Manually-entered PBs have no source date — drop any stored pbDates so the
+    // Manually-entered PBs have no source date. Drop any stored pbDates so the
     // marathon-specificity penalty's recency scaling falls back to full strength
     // rather than using a now-mismatched date.
     const currentDates = { ...(state.pbDates ?? {}) };
@@ -332,7 +332,7 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
     rerender();
   });
 
-  // Weekly volume — write to global state.detectedWeeklyKm (always stored as km).
+  // Weekly volume. Write to global state.detectedWeeklyKm (always stored as km).
   const volumeInput = document.getElementById('weekly-volume') as HTMLInputElement | null;
   const commitVolume = () => {
     if (!volumeInput) return;
@@ -350,7 +350,7 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
   };
   volumeInput?.addEventListener('blur', commitVolume);
 
-  // Continue — commit everything, then advance.
+  // Continue. Commit everything, then advance.
   document.getElementById('manual-continue')?.addEventListener('click', () => {
     commitPbs();
     commitVolume();

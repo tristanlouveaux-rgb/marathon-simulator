@@ -53,7 +53,7 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   strength:      { mult: 1.10, noReplace: [], runSpec: 0.35, recoveryMult: 1.00, impactPerMin: 0.08, volumeTransfer: 0 },
   extra_run:     { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 }, // km-based for runs
   // Running: leg load is km-based via IMPACT_PER_KM × effort multiplier (see recordRunLegLoad).
-  // legLoadPerMin omitted — runs do not use the duration-based pipeline.
+  // legLoadPerMin omitted. Runs do not use the duration-based pipeline.
   running:       { mult: 1.00, noReplace: [], runSpec: 1.00, recoveryMult: 1.00, impactPerMin: 0.00, volumeTransfer: 1.0 },
   hiking:        { mult: 0.80, noReplace: [], runSpec: 0.45, recoveryMult: 0.95, impactPerMin: 0.06, legLoadPerMin: 0.50, volumeTransfer: 0.4 },
   rowing:        { mult: 0.85, noReplace: [], runSpec: 0.35, recoveryMult: 0.95, impactPerMin: 0.00, legLoadPerMin: 0.35, volumeTransfer: 0 },
@@ -71,7 +71,7 @@ export const SPORTS_DB: Record<SportKey, SportConfig> = {
   jump_rope:     { mult: 1.10, noReplace: [], runSpec: 0.50, recoveryMult: 1.05, impactPerMin: 0.08, legLoadPerMin: 0.10, volumeTransfer: 0.2 },
   walking:       { mult: 0.35, noReplace: [], runSpec: 0.30, recoveryMult: 0.80, impactPerMin: 0.03, legLoadPerMin: 0.05, volumeTransfer: 0.3 },
   padel:         { mult: 1.15, noReplace: [], runSpec: 0.45, recoveryMult: 1.05, impactPerMin: 0.05, legLoadPerMin: 0.10, volumeTransfer: 0 },
-  // Snowboarding: Compendium ~5-6 METs. Close to skiing but slightly lower — more static board
+  // Snowboarding: Compendium ~5-6 METs. Close to skiing but slightly lower. More static board
   // pressure and lift-riding time. Similar eccentric quad loading pattern.
   snowboarding:  { mult: 0.85, noReplace: [], runSpec: 0.45, recoveryMult: 1.00, impactPerMin: 0.06, legLoadPerMin: 0.45, volumeTransfer: 0 },
   // Kitesurfing: Compendium ~3-6 METs (wind-dependent). Sustained isometric leg work edging

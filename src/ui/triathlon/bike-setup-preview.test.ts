@@ -1,5 +1,5 @@
 /**
- * Regression test for ISSUE-189 — verify the bike-setup modal's local
+ * Regression test for ISSUE-189. Verify the bike-setup modal's local
  * prediction matches the headline forecast for the same inputs.
  *
  * The modal exists for users to tune fit, position, tires, and weights and
@@ -100,7 +100,7 @@ describe('ISSUE-189: bike-setup modal preview matches headline forecast', () => 
     };
     const modal = predictBikeSplit(form, '70.3');
 
-    // Within 10 seconds — accounts for rounding (modal rounds final, headline
+    // Within 10 seconds. Accounts for rounding (modal rounds final, headline
     // rounds intermediate).
     expect(Math.abs(modal.splitSec - headlineCurrentBikeSec!)).toBeLessThanOrEqual(10);
   });

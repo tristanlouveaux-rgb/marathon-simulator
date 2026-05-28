@@ -331,7 +331,7 @@ function parseMainSet(desc: string, paces: Paces): MainSet {
     };
   }
 
-  // "8km", "8km easy", "5km warmup jog" — an unstructured easy run. The
+  // "8km", "8km easy", "5km warmup jog". An unstructured easy run. The
   // trailing descriptor words (if any) are purely prose and don't change
   // semantics; we always pace at easy.
   const simple = line.match(/^(\d+\.?\d*)km(?:\s+[\w\s]+)?$/i);

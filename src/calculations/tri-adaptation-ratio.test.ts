@@ -1,5 +1,5 @@
 /**
- * Tests for `computeTriAdaptationRatios` — the per-discipline live adaptation
+ * Tests for `computeTriAdaptationRatios`. The per-discipline live adaptation
  * ratio that scales the horizon adjuster's projected gain.
  */
 
@@ -222,7 +222,7 @@ describe('Pa:Hr decoupling signal', () => {
     for (let w = 0; w < 6; w++) {
       const wk: any = { garminActuals: {} };
       // Build 10-km run (50 min, above 45-min filter) with pace constant at
-      // 300 s/km but HR rising in the 2nd half by `(8 - w)`% — gives an EF
+      // 300 s/km but HR rising in the 2nd half by `(8 - w)`%. Gives an EF
       // decoupling close to `(8 - w)`%.
       const kmSplits = Array(10).fill(300);
       const baseHr = 150;
@@ -241,7 +241,7 @@ describe('Pa:Hr decoupling signal', () => {
         maxHR: null,
         calories: null,
         activityType: 'RUNNING',
-        hrDrift: 20,  // flat — would give ~0 slope if used
+        hrDrift: 20,  // flat. Would give ~0 slope if used
         kmSplits,
         kmHRSplits,
       };
@@ -257,7 +257,7 @@ describe('Pa:Hr decoupling signal', () => {
     const s = emptyState();
     s.w = 6;
     const wks: any[] = [];
-    // Same shape as the canonical test but without kmHRSplits — must still
+    // Same shape as the canonical test but without kmHRSplits. Must still
     // produce a positive signal via the hrDrift fallback.
     for (let w = 0; w < 6; w++) {
       const wk: any = { garminActuals: {} };
@@ -300,7 +300,7 @@ describe('efDecouplingPct helper', () => {
   });
 
   it('HR rises in second half → positive decoupling', () => {
-    // EF_1st ≈ (1/300)/150, EF_2nd ≈ (1/300)/165 — drops ~9.1%.
+    // EF_1st ≈ (1/300)/150, EF_2nd ≈ (1/300)/165. Drops ~9.1%.
     const result = efDecouplingPct(
       [300, 300, 300, 300, 300, 300, 300, 300],
       [150, 150, 150, 150, 165, 165, 165, 165],

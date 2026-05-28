@@ -1,8 +1,8 @@
 /**
- * Activity Sync — pulls Garmin activities from Supabase Edge Function
+ * Activity Sync. Pulls Garmin activities from Supabase Edge Function
  * and triggers auto-completion of planned workouts.
  *
- * Fire-and-forget on boot. Offline-safe — silently no-ops on error.
+ * Fire-and-forget on boot. Offline-safe. Silently no-ops on error.
  * Follows the same pattern as physiologySync.ts.
  */
 
@@ -20,7 +20,7 @@ import { mergeTimingMods } from '@/cross-training/timing-check';
 
 /**
  * Fetch recent Garmin activities and match them to the current week's plan.
- * Safe to call at any time — silently no-ops on error so the app still loads.
+ * Safe to call at any time. Silently no-ops on error so the app still loads.
  */
 export async function syncActivities(): Promise<void> {
   try {
@@ -60,7 +60,7 @@ export async function syncActivities(): Promise<void> {
     }
 
     if (result.changed) {
-      // New runs may unlock empirical LT detection — refresh derivation.
+      // New runs may unlock empirical LT detection. Refresh derivation.
       try {
         const { recomputeLT } = await import('./ltSync');
         recomputeLT(s2);
@@ -79,13 +79,13 @@ export async function syncActivities(): Promise<void> {
       _pendingModalActive = false;
     }
 
-    // Show reduce/replace/keep modal — handles both newly queued AND pre-existing pending items
+    // Show reduce/replace/keep modal. Handles both newly queued AND pre-existing pending items
     processPendingCrossTraining();
 
     // After matching, fetch lap details for matched activities
     syncLapDetails().catch(() => {});
   } catch (err) {
-    // Non-fatal — app continues without activity sync
+    // Non-fatal. App continues without activity sync
     console.warn('[ActivitySync] Failed to sync:', err);
   }
 }
@@ -140,7 +140,7 @@ export function processPendingCrossTraining(): void {
   }
 
   // Drop malformed pending items (missing garminId, activityType, or startTime).
-  // These can't be rendered or processed — carrying them forward just crashes the review UI.
+  // These can't be rendered or processed. Carrying them forward just crashes the review UI.
   const beforeMalformed = wk.garminPending.length;
   wk.garminPending = wk.garminPending.filter(item =>
     !!item && !!item.garminId && !!item.activityType && !!item.startTime,
@@ -187,7 +187,7 @@ export function processPendingCrossTraining(): void {
 
 /**
  * Open the excess load adjustment modal on-demand (called from "Adjust week" button).
- * Bypasses the ACWR check — used when the user explicitly requests adjustment
+ * Bypasses the ACWR check. Used when the user explicitly requests adjustment
  * even when ACWR is not elevated.
  */
 export function openAdjustWeekModal(): void {
@@ -221,7 +221,7 @@ export function openAdjustWeekModal(): void {
   autoProcessActivities(unprocessed, () => {
     _pendingModalActive = false;
     render();
-  }, true); // forceModal = true — bypass ACWR check
+  }, true); // forceModal = true. Bypass ACWR check
 }
 
 // ---------------------------------------------------------------------------

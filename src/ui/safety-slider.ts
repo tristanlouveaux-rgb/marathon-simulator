@@ -1,5 +1,5 @@
 /**
- * Route safety slider — reusable component for both the GPS completion modal
+ * Route safety slider. Reusable component for both the GPS completion modal
  * and the activity-detail "Rate route safety" CTA.
  *
  * Slider range: 0 (N/A, default) to 10.

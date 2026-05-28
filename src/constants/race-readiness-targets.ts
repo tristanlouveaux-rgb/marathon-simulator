@@ -4,30 +4,30 @@
  * Calibrated to Friel *Triathlete's Training Bible* 4th ed. (2018) volume
  * tables, scaled across 5 ability bands. Two signals per discipline:
  *
- *   1. Recent weekly volume (endurance reservoir)  — sustained training base
- *   2. Longest single session (specific peak prep) — race-distance-specific work
+ *   1. Recent weekly volume (endurance reservoir). Sustained training base
+ *   2. Longest single session (specific peak prep). Race-distance-specific work
  *
  * Both feed into a *weighted* geometric-mean readiness score (see
  * `src/calculations/specific-endurance-penalty.ts`). Per-distance weights
  * recognise that:
  *   - Sprint is volume-heavy (no point doing 90+ min sessions for a 1-hour race)
  *   - IM is longest-heavy (weekly volume can't substitute for actually having
- *     done a 4-hour ride and 2:30 run — those peak sessions are non-negotiable)
+ *     done a 4-hour ride and 2:30 run. Those peak sessions are non-negotiable)
  *
  * Per-band scaling reflects athlete adaptation capacity:
- *   - Beginner (~0.55× intermediate) — low ceiling; 60 km/wk would be over-training
+ *   - Beginner (~0.55× intermediate). Low ceiling; 60 km/wk would be over-training
  *   - Novice (~0.75×)
  *   - Intermediate (Friel baseline = 1.00×)
- *   - Advanced (~1.25×) — higher ceiling, needs more volume to be race-ready
- *   - Elite (~1.45×) — highest sustainable load
+ *   - Advanced (~1.25×). Higher ceiling, needs more volume to be race-ready
+ *   - Elite (~1.45×). Highest sustainable load
  *
  * Sources:
  *   - Friel J (2018) *The Triathlete's Training Bible* 4th ed., VeloPress
- *     (Tables 7.1, 8.x — intermediate-band targets)
- *   - Daniels (2014) *Daniels' Running Formula* 3rd ed. — VDOT-band running
+ *     (Tables 7.1, 8.x. Intermediate-band targets)
+ *   - Daniels (2014) *Daniels' Running Formula* 3rd ed.. VDOT-band running
  *     volume scaling (intermediate vs advanced plans)
  *   - Skinner & Strudwick coaching observations on IM volume × outcome
- *   - Coyle (1984) + Mujika & Padilla (2000) — fractional utilization decay
+ *   - Coyle (1984) + Mujika & Padilla (2000). Fractional utilization decay
  *     scales with race distance
  */
 
@@ -77,7 +77,7 @@ interface DistanceTargets {
 // Generates a 5-band lookup from a single intermediate baseline. Multipliers
 // chosen to match Daniels/Pfitzinger inter-band volume ratios for marathon
 // running, then applied symmetrically to swim/bike (where Friel doesn't
-// publish explicit per-band tables — closest analogue is Coggan W/kg tiers
+// publish explicit per-band tables. Closest analogue is Coggan W/kg tiers
 // which scale similarly).
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -309,10 +309,10 @@ export const TRI_DISTANCE_CROSS_CREDIT: Partial<Record<
  * Asymmetric matrix:
  *   - Bike → Run: largest transfer (~30%) because cycling delivers ~50% of
  *     run-specific cardiovascular adaptations (Mutton 1993) but minimal
- *     run-economy gains (Bassett & Howley 2000) — net ~30% for endurance prep.
- *   - Run → Bike: ~25% — cardiac transfer plus some shared leg-pattern
+ *     run-economy gains (Bassett & Howley 2000). Net ~30% for endurance prep.
+ *   - Run → Bike: ~25%. Cardiac transfer plus some shared leg-pattern
  *     endurance, but cycling-specific power demands aren't trained.
- *   - Swim ↔ Bike/Run: ~10% one way, ~5% the other — swim is technique-bound
+ *   - Swim ↔ Bike/Run: ~10% one way, ~5% the other. Swim is technique-bound
  *     and the leg-vs-arm mechanical separation makes peripheral transfer minimal.
  *
  * Sources: Tanaka 1995 (cross-training meta-review), Bassett & Howley 2000
@@ -332,7 +332,7 @@ export const CROSS_DISCIPLINE_TRANSFER: Record<ReadinessDiscipline, Record<Readi
  * Sigmoid steepness for the score → penalty curve. `k=0.08` gives a clean
  * S-shape: 90% ready → 4% of max penalty (low impact), 50% ready → 50% of max
  * penalty (midpoint), 30% ready → 83% of max (steep), 0% ready → 98% of max.
- * Captures "almost-ready is much different from not-ready" — linear would
+ * Captures "almost-ready is much different from not-ready". Linear would
  * over-penalise nearly-ready athletes and under-penalise unprepared ones.
  */
 export const SCORE_TO_PENALTY_SIGMOID_K = 0.08;

@@ -1,7 +1,7 @@
 /**
  * Triathlon blessed constants. Every value here is sourced from literature or
  * coaching consensus and was explicitly confirmed during the 2026-04-23 spec
- * review. Do not invent additions here — add via the spec-review workflow
+ * review. Do not invent additions here. Add via the spec-review workflow
  * (docs/TRIATHLON.md §18) and cite.
  *
  * **Tracking vs planning**: this file holds constants from both sides. The
@@ -39,7 +39,7 @@ export const ACWR_SAFE_HIGH = 1.3;
 export const WEEKLY_VOLUME_RAMP_CAP = 0.10;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Race prediction (TRACKING side only — never apply to training load)
+// Race prediction (TRACKING side only. Never apply to training load)
 // ───────────────────────────────────────────────────────────────────────────
 
 /** 70.3 run-leg pace discount after 90 km bike. Bentley 2007; Landers 2008 (midpoint 4–6%). */
@@ -50,11 +50,11 @@ export const RUN_FATIGUE_DISCOUNT_IRONMAN = 0.11;
 
 /** Default transition estimates (seconds) by skill level. Beginners → experienced. Rough coaching ranges. */
 export const T1_SEC_BY_SLIDER: Record<1 | 2 | 3 | 4 | 5, number> = {
-  1: 540,   // 9 min — first-timer fumbling through
+  1: 540,   // 9 min. First-timer fumbling through
   2: 360,   // 6 min
   3: 240,   // 4 min
   4: 180,   // 3 min
-  5: 120,   // 2 min — experienced age-grouper
+  5: 120,   // 2 min. Experienced age-grouper
 };
 
 export const T2_SEC_BY_SLIDER: Record<1 | 2 | 3 | 4 | 5, number> = {
@@ -67,7 +67,7 @@ export const T2_SEC_BY_SLIDER: Record<1 | 2 | 3 | 4 | 5, number> = {
 
 /**
  * Time cost of putting socks on once during a triathlon. Modelled as a
- * single one-time event — the athlete either does it at T1 (default), at
+ * single one-time event. The athlete either does it at T1 (default), at
  * T2, or never. The 20s figure is the practised-athlete steady state from
  * coaching consensus (Joe Friel, Tower 26, TrainingPeaks: 15–30s once
  * rehearsed). See SCIENCE_LOG §W for references and rationale.
@@ -84,7 +84,7 @@ export const SOCK_ON_COST_SEC = 20;
  * T1 share of combined transition time, used when only a combined T1+T2 mean
  * is available (Ironman dataset has no per-side split). Derived from the
  * 70.3 dataset where typical-finisher bins (4–6 h moving time) show
- * T1 / (T1+T2) ≈ 0.58 — T1 is longer because of the wetsuit strip and
+ * T1 / (T1+T2) ≈ 0.58. T1 is longer because of the wetsuit strip and
  * longer transition-zone walks at most venues.
  */
 export const IM_T1_SHARE_OF_TOTAL = 0.58;
@@ -116,7 +116,7 @@ export const PHASE_WEEKS: Record<TriathlonDistance, { base: number; build: numbe
  * length. Returns canonical PHASE_WEEKS when the plan is long enough; for
  * shorter plans, weeks are compressed proportionally with priority order
  * taper > peak > build > base. Base is sacrificed first because an athlete
- * signing up for a race typically already has aerobic foundation — what
+ * signing up for a race typically already has aerobic foundation. What
  * they're short of is race-specific work and a taper.
  *
  * Taper: clamped to [1, 2] weeks. Floor at 1 because race week itself is
@@ -126,7 +126,7 @@ export const PHASE_WEEKS: Record<TriathlonDistance, { base: number; build: numbe
  * Peak: floored at 1 whenever there's at least 1 non-taper week to spend —
  * the race-specific phase is the last to drop.
  *
- * @deprecated Use `computeTriPlanPhases(distance, totalWeeks)` instead — it
+ * @deprecated Use `computeTriPlanPhases(distance, totalWeeks)` instead. It
  * returns per-week phases (including the checkpoint flag for double-periodization
  * plans ≥28 weeks) and shares its strategy with running mode. Kept temporarily
  * for the test suite. Will be removed once all callers migrate.
@@ -174,11 +174,11 @@ export function phasesForLen(
  * default plan length (70.3 / 20 weeks → 8/6/4/2; ironman / 24 weeks → 10/7/5/2),
  * so any user already running a default-length plan sees the same numbers.
  *
- * Taper capped at 2 (Mujika & Padilla 2003) — tri detraining bites sooner than
+ * Taper capped at 2 (Mujika & Padilla 2003). Tri detraining bites sooner than
  * running because of the cross-training fatigue load.
  *
- * Double-periodization threshold is **28 weeks** for tri — sooner than running's
- * 33 — because tri's monotony pain shows earlier when training across three
+ * Double-periodization threshold is **28 weeks** for tri. Sooner than running's
+ * 33. Because tri's monotony pain shows earlier when training across three
  * disciplines (multi-discipline volume + brick fatigue compresses the productive
  * single-arc window).
  */
@@ -261,7 +261,7 @@ export const HOURS_RANGE: Record<TriathlonDistance, { min: number; max: number }
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Detraining (planning side — VDOT unchanged, CSS and FTP added for tri)
+// Detraining (planning side. VDOT unchanged, CSS and FTP added for tri)
 // ───────────────────────────────────────────────────────────────────────────
 
 /** FTP loss per 4 weeks off. Coyle 1984 — cycling detraining studies. */
@@ -278,10 +278,10 @@ export const CSS_DETRAINING_PER_4WK = 0.04;  // Midpoint of 3–5%
 export const BIKE_LTHR_OFFSET_VS_RUN = -7;  // Midpoint of −5 to −10
 
 /** Brick detection window in seconds. Two sequential activities within this gap are treated as a brick. */
-export const BRICK_DETECTION_WINDOW_SEC = 30 * 60;  // 30 min — §18.1
+export const BRICK_DETECTION_WINDOW_SEC = 30 * 60;  // 30 min. §18.1
 
 /**
- * Brick adaptation — how many (recency-weighted) brick sessions equal "fully adapted".
+ * Brick adaptation. How many (recency-weighted) brick sessions equal "fully adapted".
  * Millet & Vleck 2000: 10–15 bricks saturate the running-economy adaptation.
  * Using 12 as midpoint.
  */
@@ -289,7 +289,7 @@ export const BRICK_FULL_ADAPT_COUNT = 12;
 
 /**
  * Maximum fraction by which brick history can reduce the run-leg fatigue discount.
- * Capped at 40% — even a brick-veteran still fades on the IM run; the discount
+ * Capped at 40%. Even a brick-veteran still fades on the IM run; the discount
  * never reaches zero (Bentley 2007, Landers 2008 document residual fade even in
  * elite triathletes with high brick volume).
  */
@@ -304,7 +304,7 @@ export const BASE_OW_PENALTY_NON_WETSUIT = 0.05;
 
 /**
  * Base open-water swim penalty for a novice OW swimmer racing in a wetsuit.
- * Wetsuit provides buoyancy that partially offsets OW inefficiencies — deficit
+ * Wetsuit provides buoyancy that partially offsets OW inefficiencies. Deficit
  * narrows to ~2% (Veiga 2013; Toussaint et al. 2002 on wetsuit buoyancy benefit).
  */
 export const BASE_OW_PENALTY_WETSUIT = 0.02;
@@ -317,7 +317,7 @@ export const BASE_OW_PENALTY_WETSUIT = 0.02;
 export const OW_ADAPT_HALF_SESSIONS = 5;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Adaptation engine — auto-progression
+// Adaptation engine. Auto-progression
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -338,7 +338,7 @@ export const TRI_EFFORT_MULT_BOUNDS: readonly [number, number] = [0.85, 1.15] as
 /**
  * Race-outcome retrospective threshold. Show the "you beat your prediction"
  * card on stats only when the athlete came in at least this many seconds
- * faster than predicted. Below this we still log but don't surface — the user
+ * faster than predicted. Below this we still log but don't surface. The user
  * shouldn't see a noisy "you came in 30s under!" celebration.
  */
 export const TRI_RACE_OUTCOME_POSITIVE_THRESHOLD_SEC = 60;
@@ -365,7 +365,7 @@ export const BIKE_ADHERENCE_BAND: Record<string, number> = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Adaptation transparency — marker auto-bump notification thresholds
+// Adaptation transparency. Marker auto-bump notification thresholds
 // ───────────────────────────────────────────────────────────────────────────
 // These drive the small "your FTP just improved" toast (CLAUDE.md →
 // Adaptation transparency rule). Confirmed values 2026-04-30.
@@ -395,7 +395,7 @@ export const RACE_LEG_DISTANCES: Record<TriathlonDistance, { swimM: number; bike
 /**
  * Intensity factor (IF = watts / FTP) for single-discipline cycling events by
  * target distance. Derived from Allen & Coggan (2010) "Training and Racing with
- * a Power Meter" power-duration zones — the same source as `RACE_INTENSITY_BY_DISTANCE`
+ * a Power Meter" power-duration zones. The same source as `RACE_INTENSITY_BY_DISTANCE`
  * for triathlon. Cycling events are single-discipline so IF is higher than an
  * equivalent-duration tri bike leg (no pre-swim fatigue). Confirmed 2026-05-04.
  *
@@ -417,7 +417,7 @@ export const CYCLING_EVENT_INTENSITY_FACTOR: Record<string, number> = {
  * Confidence range half-width for cycling event predictions (fraction of total
  * time). Gran Fondo pacing is less predictable than tri bike legs because
  * group dynamics, parcours sections, and nutrition strategy vary more.
- * Tighter as event day approaches — modelled as a flat ±10% until <4 weeks,
+ * Tighter as event day approaches. Modelled as a flat ±10% until <4 weeks,
  * then narrows to ±6%. Values are conservative given the single-discipline,
  * single-day nature of the event.
  */

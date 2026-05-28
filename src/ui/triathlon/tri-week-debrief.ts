@@ -2,9 +2,9 @@
  * Triathlon end-of-week debrief modal.
  *
  * 3-step flow mirroring running's week-debrief.ts:
- *   Step 1: Summary — week metrics + per-discipline breakdown
- *   Step 2: Analysis animation — ring + checklist (same timing as running)
- *   Step 3: Next week tri plan — stored triWorkouts with effort-multiplier
+ *   Step 1: Summary. Week metrics + per-discipline breakdown
+ *   Step 2: Analysis animation. Ring + checklist (same timing as running)
+ *   Step 3: Next week tri plan. Stored triWorkouts with effort-multiplier
  *           notes; "Accept" records the debrief and navigates to plan view.
  *
  * Overlay is vertically centred (UX_PATTERNS → Overlays and Modals).

@@ -1,5 +1,5 @@
 /**
- * Cycling power balance — solve speed from power (and the inverse: solve CdA
+ * Cycling power balance. Solve speed from power (and the inverse: solve CdA
  * from a known ride). Pure functions, no state, fully testable.
  *
  * **Side of the line**: tracking. Feeds `predictTriathlonRace` only.
@@ -10,13 +10,13 @@
  *   P_net = ½·ρ·CdA·v³  +  Crr·m·g·v  +  m·g·sinθ·v
  *   P_pedalled = P_net / η         // η = drivetrain efficiency, 0.95–0.98
  *
- *   v   — ground speed (m/s)
- *   ρ   — air density (kg/m³); 1.225 at sea level, 15°C
- *   CdA — drag area (m²)
- *   Crr — rolling resistance coefficient
- *   m   — total moving mass (rider + bike + kit), kg
- *   g   — 9.80665 m/s²
- *   θ   — road gradient (rad). For "flat" course, sinθ ≈ 0; we still pass an
+ *   v. Ground speed (m/s)
+ *   ρ. Air density (kg/m³); 1.225 at sea level, 15°C
+ *   CdA. Drag area (m²)
+ *   Crr. Rolling resistance coefficient
+ *   m. Total moving mass (rider + bike + kit), kg
+ *   g. 9.80665 m/s²
+ *   θ. Road gradient (rad). For "flat" course, sinθ ≈ 0; we still pass an
  *         effective average gradient + a wind-loss factor for rolling/hilly.
  *
  * The wind term (cubic in v) dominates above ~25 kph. At low speeds Crr leads.
@@ -29,7 +29,7 @@
  * `solveCdA` reverse-calibration is the path to a personal value.
  *
  * Crr presets are from `bicyclerollingresistance.com` lab data at 100 PSI on
- * a steel drum (overestimates road CRR by ~10% — values below already adjusted
+ * a steel drum (overestimates road CRR by ~10%. Values below already adjusted
  * down).
  */
 
@@ -45,15 +45,15 @@ const RHO_SEA_LEVEL = 1.225; // kg/m³ at 15°C, 1 atm
 
 /** CdA presets by riding position (m²). */
 export const CDA_PRESET: Record<BikePosition, number> = {
-  hoods:    0.36,  // upright on road bike, hands on hoods — typical recreational
-  drops:    0.32,  // road bike in drops — race-fit roadie
-  'clip-ons': 0.28, // road bike with clip-on aerobars — common 70.3 setup
+  hoods:    0.36,  // upright on road bike, hands on hoods. Typical recreational
+  drops:    0.32,  // road bike in drops. Race-fit roadie
+  'clip-ons': 0.28, // road bike with clip-on aerobars. Common 70.3 setup
   'tt-bike': 0.24,  // dedicated TT/tri bike with aero helmet, race wheels
 };
 
 /** Crr presets by tire/surface choice. */
 export const CRR_PRESET: Record<BikeTire, number> = {
-  'race-tubeless': 0.0035, // GP5000 S TR, Vittoria Corsa Pro etc. — fast race
+  'race-tubeless': 0.0035, // GP5000 S TR, Vittoria Corsa Pro etc.. Fast race
   'race-clincher': 0.0040, // GP5000 with latex tubes
   training:        0.0050, // training tires, mid-pressure
   gravel:          0.0070, // gravel/all-road tires
@@ -73,9 +73,9 @@ export type BikeCourseProfileExtended = BikeCourseProfile | 'mountainous';
 /** Gradient assumption for course profile (mean tan θ). */
 export const COURSE_GRADIENT: Record<BikeCourseProfileExtended, number> = {
   flat:        0.000, // Kona, Roth, Texas
-  rolling:     0.005, // 0.5% net "always climbing" feel — Wales 70.3, Mont-Tremblant
-  hilly:       0.012, // 1.2% effective from sustained climbs — Frankfurt, Lake Placid
-  mountainous: 0.020, // 2.0% effective — Lanzarote, IM Nice, IM Wales (sustained alpine climbs)
+  rolling:     0.005, // 0.5% net "always climbing" feel. Wales 70.3, Mont-Tremblant
+  hilly:       0.012, // 1.2% effective from sustained climbs. Frankfurt, Lake Placid
+  mountainous: 0.020, // 2.0% effective. Lanzarote, IM Nice, IM Wales (sustained alpine climbs)
 };
 
 /** Headwind/conditions loss multiplier — bumps CdA on rougher courses where
@@ -118,7 +118,7 @@ export interface PowerBalanceParams {
 
 /**
  * Solve ground speed (m/s) from sustained pedalled power, given physics params.
- * Uses Newton-Raphson on the cubic — converges in ~5 iterations.
+ * Uses Newton-Raphson on the cubic. Converges in ~5 iterations.
  *
  * @param powerW Sustained pedalled power at the cranks (watts).
  * @returns Ground speed in m/s. Always >= 0.
@@ -179,7 +179,7 @@ export interface CdAResult {
   cda: number;
   /** Confidence: 'high' for solid power+flat course; 'medium' otherwise.
    *  We can't validate course flatness without GPS streams, so most user
-   *  calibrations are 'medium' — better than a preset, not lab-grade. */
+   *  calibrations are 'medium'. Better than a preset, not lab-grade. */
   confidence: 'high' | 'medium' | 'low';
   /** Average speed used in the inversion (kph) — surface to UI for sanity-check. */
   avgKph: number;
@@ -216,27 +216,27 @@ export function solveCdA(
   const aeroPower = Pnet - rollingPower - climbPower;
 
   if (aeroPower <= 0) {
-    // All measured power went to climbing/rolling — implies negative CdA, which
+    // All measured power went to climbing/rolling. Implies negative CdA, which
     // means the rolling/climb assumptions are too aggressive for this ride.
     return { cda: 0, confidence: 'low', avgKph: msToKph(v), reason: 'unphysical-cda' };
   }
 
   const cda = (2 * aeroPower) / (p.airDensityKgM3 * v * v * v);
 
-  // Sanity bounds — anything outside this is almost certainly bad input
+  // Sanity bounds. Anything outside this is almost certainly bad input
   // (rolled drum, drafting, hilly course misclassified as flat, etc.).
   if (cda < 0.15 || cda > 0.50) {
     return { cda, confidence: 'low', avgKph: msToKph(v), reason: 'unphysical-cda' };
   }
 
-  // Conservative confidence — without GPS-stream validation we treat all user
+  // Conservative confidence. Without GPS-stream validation we treat all user
   // calibrations as 'medium'. A future iteration could parse Strava streams
   // and award 'high' for verified flat/no-stop rides.
   return { cda, confidence: 'medium', avgKph: msToKph(v) };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// W/kg tier — Coggan-style
+// W/kg tier. Coggan-style
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface WattsPerKgTier {
@@ -258,7 +258,7 @@ export interface WattsPerKgTier {
  * by sex; we use a sex-neutral mapping pinned to typical male age-grouper
  * cycling values, with the female table giving the same labels at lower
  * thresholds. For a triathlon UI, gendered tiers add complexity without
- * helping pacing decisions — the underlying watts is what predicts speed.
+ * helping pacing decisions. The underlying watts is what predicts speed.
  */
 export function wattsPerKgTier(ftpW: number, riderKg: number): WattsPerKgTier {
   if (!isFinite(ftpW) || ftpW <= 0 || !isFinite(riderKg) || riderKg <= 0) {
@@ -268,7 +268,7 @@ export function wattsPerKgTier(ftpW: number, riderKg: number): WattsPerKgTier {
   // Thresholds from Coggan FTP/kg tables (male, 60-min power). Female tables
   // are ~10% lower at every tier; we use the male thresholds as the canonical
   // reference and accept that female athletes will appear one tier lower than
-  // their relative-to-peers ranking. Tier label is informational only — the
+  // their relative-to-peers ranking. Tier label is informational only. The
   // physics solver uses watts directly.
   if (wkg < 2.62) return { wkg, tier: 'untrained',     label: 'Untrained' };
   if (wkg < 3.01) return { wkg, tier: 'fair',          label: 'Fair' };

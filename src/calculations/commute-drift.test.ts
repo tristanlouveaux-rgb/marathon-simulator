@@ -81,13 +81,13 @@ describe('detectCommuteDrift', () => {
     const weeks = [
       makeWeek(1, 0), makeWeek(2, 0), // ignored, outside window
       makeWeek(3, 3), makeWeek(4, 3), makeWeek(5, 3), makeWeek(6, 3),
-      makeWeek(7, 0), // current week — excluded from check
+      makeWeek(7, 0), // current week. Excluded from check
     ];
     expect(detectCommuteDrift(weeks, 7, declared(3))).toBeNull();
   });
 
   it('excludes the in-progress current week from the observation', () => {
-    // Current week (7) shows 0 commutes — should NOT trigger reduction by itself
+    // Current week (7) shows 0 commutes. Should NOT trigger reduction by itself
     const weeks = [
       makeWeek(1, 4), makeWeek(2, 4), makeWeek(3, 4), makeWeek(4, 4),
       makeWeek(5, 4), makeWeek(6, 4), makeWeek(7, 0),
@@ -107,7 +107,7 @@ describe('detectCommuteDrift', () => {
 
   it('does not reduce by more than 1 step beyond the declared (single step ceiling)', () => {
     // Declared = 5, observations show median 3 → new = min(median, declared-1) = min(3, 4) = 3
-    // (not necessarily a single-step reduction — median wins when below declared-1)
+    // (not necessarily a single-step reduction. Median wins when below declared-1)
     const weeks = [
       makeWeek(1, 3), makeWeek(2, 3), makeWeek(3, 4), makeWeek(4, 3), makeWeek(5, 0),
     ];

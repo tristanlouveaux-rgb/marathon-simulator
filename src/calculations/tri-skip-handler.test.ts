@@ -96,7 +96,7 @@ describe('skipTriWorkout (legacy wrapper)', () => {
     const s = state(0, [[workout('w1', 2)], []]);
     expect(skipTriWorkout(s, 'w1').outcome).toBe('pushed');
     const clonedId = s.wks![1].triWorkouts![0].id!;
-    // Advance to next week and skip the clone — should drop, not push again.
+    // Advance to next week and skip the clone. Should drop, not push again.
     s.w = 1;
     s.wks!.push({ triWorkouts: [] } as any);
     expect(skipTriWorkout(s, clonedId).outcome).toBe('dropped');

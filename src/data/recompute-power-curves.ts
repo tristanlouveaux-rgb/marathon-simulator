@@ -1,5 +1,5 @@
 /**
- * Manual "Recompute power curves" — user-triggered escape hatch when
+ * Manual "Recompute power curves". User-triggered escape hatch when
  * `power_curve` is missing on the user's recent rides and the auto-backfill
  * isn't filling it (rate-limited, budget exhausted, conditions don't fire on
  * launch, etc).
@@ -8,7 +8,7 @@
  * function reads cycling rides from the DB without a curve, fetches their
  * watts streams (up to 30), computes mean-max curves, and updates the rows.
  *
- * Pairs with the FTP debug overlay's "Recompute power" button — see
+ * Pairs with the FTP debug overlay's "Recompute power" button. See
  * `src/ui/ftp-debug-overlay.ts` and `docs/CHANGELOG.md` 2026-05-02 entry.
  */
 

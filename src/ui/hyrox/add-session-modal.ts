@@ -106,7 +106,7 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
 
   // Cap-headroom: how much MTL is already on the books for this week vs the cap.
   // The "Over cap" warning only fires when adding the session would push the
-  // weekly total >15% over the cap — not on every 1-MTL overshoot. The cap is a
+  // weekly total >15% over the cap. Not on every 1-MTL overshoot. The cap is a
   // soft governor in the plan engine, not a hard injury threshold.
   const plannedMtl = weekWorkouts.reduce((s, w) => s + (w.musculoTendonLoad ?? 0), 0);
   const cap = hx.mtlCap ?? 1000;
@@ -187,7 +187,7 @@ export function openHyroxAddSessionModal(onUpdate: () => void): void {
       });
     });
 
-    // Duration slider — update chosen duration, re-render to refresh MTL chip + caption.
+    // Duration slider. Update chosen duration, re-render to refresh MTL chip + caption.
     const slider = overlay.querySelector('#hx-dur-slider') as HTMLInputElement | null;
     const display = overlay.querySelector('#hx-dur-display') as HTMLElement | null;
     slider?.addEventListener('input', () => {

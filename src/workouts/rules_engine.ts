@@ -73,7 +73,7 @@ function runnerTypeBias(target: RaceDistance, runnerType: RunnerType): Record<Sl
     bias['marathon_pace'] = (bias['marathon_pace'] || 1) * 1.10;
     bias['vo2'] = (bias['vo2'] || 1) * 0.90;
     bias['intervals'] = (bias['intervals'] || 1) * 0.90;
-    // Float teaches patience at moderate effort — useful but lower priority for speed types
+    // Float teaches patience at moderate effort. Useful but lower priority for speed types
     bias['float'] = (bias['float'] || 1) * 0.90;
   } else if (runnerType === 'Endurance') {
     // Endurance runners need more speed stimulus
@@ -81,7 +81,7 @@ function runnerTypeBias(target: RaceDistance, runnerType: RunnerType): Record<Sl
     bias['intervals'] = (bias['intervals'] || 1) * 1.10;
     bias['hill_repeats'] = (bias['hill_repeats'] || 1) * 1.05;
     bias['threshold'] = (bias['threshold'] || 1) * 0.95;
-    // Float is especially valuable for endurance types — forces moderate-effort running
+    // Float is especially valuable for endurance types. Forces moderate-effort running
     // instead of defaulting to slow-and-steady recovery
     bias['float'] = (bias['float'] || 1) * 1.15;
     if (target === 'half' || target === 'marathon') {

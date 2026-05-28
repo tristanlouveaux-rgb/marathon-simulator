@@ -1,5 +1,5 @@
 /**
- * Race-readiness detail view — per-discipline breakdown opened from the
+ * Race-readiness detail view. Per-discipline breakdown opened from the
  * summary card on the forecast page.
  *
  * Per discipline, shows:
@@ -9,7 +9,7 @@
  *   - Actionable coaching line ("Add one long ride 3+ hours by week 8")
  *   - PB-recency note (run only, when applicable)
  *
- * Sourced from `state.triConfig.prediction.raceReadiness` — populated by
+ * Sourced from `state.triConfig.prediction.raceReadiness`. Populated by
  * `predictTriathlonRace`.
  */
 
@@ -48,7 +48,7 @@ function fmtLongestHours(actualH: number, requiredH: number): string {
 
 /**
  * Coaching line for the discipline. Plain consultant tone per CLAUDE.md UI
- * Copy rules — no motivational padding, no emoji, direct.
+ * Copy rules. No motivational padding, no emoji, direct.
  */
 function coachingLine(d: DisciplineReadiness): string {
   const volGap = d.weeklyVolumeRequired - d.weeklyVolumeActual;
@@ -143,7 +143,7 @@ export function renderRaceReadinessDetailView(): void {
   const s = getState();
   const readiness = s.triConfig?.prediction?.raceReadiness;
   if (!readiness) {
-    // No data — bounce back to forecast.
+    // No data. Bounce back to forecast.
     renderTriathlonForecastView();
     return;
   }
@@ -200,7 +200,7 @@ export function renderRaceReadinessDetailView(): void {
   wireTabBarHandlers(navigateTab);
 }
 
-// Lightweight tab nav delegation — same shape as forecast-view's navigateTab.
+// Lightweight tab nav delegation. Same shape as forecast-view's navigateTab.
 function navigateTab(tab: TabId): void {
   if (tab === 'home') {
     import('../home-view').then(({ renderHomeView }) => renderHomeView());

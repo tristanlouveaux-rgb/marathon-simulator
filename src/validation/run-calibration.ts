@@ -1,5 +1,5 @@
 /**
- * Calibration runner — load both datasets, build distribution tables and
+ * Calibration runner. Load both datasets, build distribution tables and
  * empirical course factors, write JSON outputs that the runtime predictor
  * consumes.
  *

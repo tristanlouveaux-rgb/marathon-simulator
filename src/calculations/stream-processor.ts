@@ -1,5 +1,5 @@
 /**
- * Stream Processor — Pure data processing for per-second workout timeseries.
+ * Stream Processor. Pure data processing for per-second workout timeseries.
  *
  * Extracts derived metrics (work segment, cardiac efficiency, steady-state flag)
  * from raw HR + pace stream data pulled from Garmin syncs.
@@ -27,7 +27,7 @@ export interface StreamAnalysis {
     durationSec: number;
     avgPaceSecPerKm: number;
     avgHeartRateBpm: number;
-    paceCV: number;          // coefficient of variation — measures steadiness
+    paceCV: number;          // coefficient of variation. Measures steadiness
   };
   cardiacEfficiency: number; // pace / HR (lower = more efficient)
   isSteadyState: boolean;    // paceCV < 0.08
@@ -45,7 +45,7 @@ export function computeCardiacEfficiency(paceSecPerKm: number, heartRateBpm: num
 }
 
 /**
- * Extract the "work segment" from a stream — the longest contiguous block
+ * Extract the "work segment" from a stream. The longest contiguous block
  * where pace is within 15% of the median pace of the middle 50%.
  *
  * Fallback: strip first 15% and last 10% of points (warmup/cooldown heuristic).
@@ -56,7 +56,7 @@ export function extractWorkSegment(stream: ActivityStream): {
 } {
   const moving = stream.points.filter(p => p.paceSecPerKm > 0);
   if (moving.length < 10) {
-    // Too few moving points — use fallback
+    // Too few moving points. Use fallback
     return fallbackSegment(stream.points.length);
   }
 
@@ -169,7 +169,7 @@ export function analyzeStream(stream: ActivityStream): StreamAnalysis {
  * - Returns null if insufficient data
  *
  * Positive drift = HR rising at same pace (fatigue/dehydration/heat)
- * Negative drift = HR dropping at same pace (rare — cooldown effect or data noise)
+ * Negative drift = HR dropping at same pace (rare. Cooldown effect or data noise)
  */
 export function computeHRDrift(
   hrData: number[],

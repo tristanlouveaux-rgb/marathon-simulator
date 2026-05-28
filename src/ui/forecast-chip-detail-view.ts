@@ -4,7 +4,7 @@
  * Tapping a cluster chip (You / Capacity / Response / Training / Venue) on
  * the marathon-forecast hero navigates to a full-page detail view. Each
  * page leads with a chart or visual breakdown, then a short caption,
- * then the key numbers — visual first, not prose. Back button returns to
+ * then the key numbers. Visual first, not prose. Back button returns to
  * the forecast view.
  *
  * Mirrors the canonical detail-page chrome from `race-readiness-detail.ts`

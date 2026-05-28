@@ -138,7 +138,7 @@ export interface HyroxConfig {
   hyroxPreviousTimeRaceId?: string;
   /** ISO date (YYYY-MM-DD) of the previous HYROX time. Either picked directly
    *  during onboarding or derived from `hyroxPreviousTimeRaceId`'s event date.
-   *  Used by the race-age staleness model — without it, the model can't decay
+   *  Used by the race-age staleness model. Without it, the model can't decay
    *  trust on year-old benchmarks vs current physiology. */
   hyroxPreviousRaceDate?: string;
   /** User-updated run pace for forecast (sec/km). Overrides population default for band. */
@@ -163,7 +163,7 @@ export interface HyroxConfig {
    *  set directly only on the manual-date path. */
   venueId?: string;
   /** Selected race event id (from `HYROX_WORLD_SERIES`). When set, the venue is
-   *  derived from the event — no separate venue picker is shown. */
+   *  derived from the event. No separate venue picker is shown. */
   raceEventId?: string;
   /**
    * Version of the HYROX plan generator that produced `triWorkouts` on each
@@ -174,7 +174,7 @@ export interface HyroxConfig {
    */
   generatorVersion?: number;
   /**
-   * Race outcome log — actual race-day finish times against the target.
+   * Race outcome log. Actual race-day finish times against the target.
    * Idempotent on `dateISO`. Mirrors `triConfig.raceLog` for parity across
    * modes. Optional so existing state objects stay valid.
    */
@@ -182,7 +182,7 @@ export interface HyroxConfig {
 }
 
 /**
- * Single HYROX race outcome — actual finish time logged after a target race.
+ * Single HYROX race outcome. Actual finish time logged after a target race.
  * HYROX has no continuously cached prediction the way triathlon does, so the
  * "predicted" slot stores the user's target if set, otherwise undefined.
  */
@@ -236,8 +236,8 @@ export interface TriVolumeSplit {
  * activity history. */
 export interface SwimPBs {
   m100?: number;     // 100m time
-  m200?: number;     // 200m time — pairs with m400 for Smith-Norris CSS
-  m400?: number;     // 400m time — primary CSS input
+  m200?: number;     // 200m time. Pairs with m400 for Smith-Norris CSS
+  m400?: number;     // 400m time. Primary CSS input
   m1500?: number;    // 1500m time
 }
 
@@ -257,9 +257,9 @@ export type BikeCourseProfile = 'flat' | 'rolling' | 'hilly';
  *  TT bike with clip-ons, etc.) and switch between them on the bike-setup screen. */
 export interface BikeAeroProfile {
   id: string;                 // stable id (e.g. 'tt-bike-default', or generated uuid)
-  label: string;              // user-facing — "TT bike", "Road bike (hoods)"
+  label: string;              // user-facing. "TT bike", "Road bike (hoods)"
   position: BikePosition;
-  cda: number;                // m² — effective drag area
+  cda: number;                // m². Effective drag area
   cdaSource: 'preset' | 'calibrated' | 'user';
   crr: number;                // dimensionless rolling resistance
   tire: BikeTire;
@@ -290,7 +290,7 @@ export interface BikeBenchmarks {
    * 'user' to avoid accidentally clobbering manual entries). */
   ftpSource?: 'user' | 'derived';
   /** Confidence in the FTP value at the time it was written. Drives the
-   * "estimate — run a test for confidence" caption and the test-card prompt.
+   * "estimate. Run a test for confidence" caption and the test-card prompt.
    * Mirrors `FtpEstimate.confidence`. Always 'high' when source is 'user' and
    * twentyMinW is present (they ran an actual test). Undefined = pre-confidence
    * value; UI treats as 'medium' so we don't aggressively prompt for tests on
@@ -298,7 +298,7 @@ export interface BikeBenchmarks {
   ftpConfidence?: 'high' | 'medium' | 'low' | 'none';
   lthr?: number;       // Lactate threshold HR (bike) in bpm
   twentyMinW?: number; // Raw 20-min test watts (if user ran the test)
-  hasPowerMeter?: boolean; // Collected at onboarding — gates power-based bTSS vs HR fallback (§18.1)
+  hasPowerMeter?: boolean; // Collected at onboarding. Gates power-based bTSS vs HR fallback (§18.1)
   bikeWeightKg?: number;   // Mass of the bike (frame + wheels + bottle cages, etc.). Used in
                            // climb-time prediction alongside rider bodyweight; not part of the
                            // FTP→W/kg tier classification (Coggan uses rider weight only).
@@ -326,11 +326,11 @@ export interface BikeBenchmarks {
 
 /** Swim benchmarks. CSS (Critical Swim Speed) is the canonical swim threshold — seconds per 100m. */
 export interface SwimBenchmarks {
-  cssSecPer100m?: number;    // Critical Swim Speed — lactate-threshold pace per 100m
+  cssSecPer100m?: number;    // Critical Swim Speed. Lactate-threshold pace per 100m
   /** Provenance for cssSecPer100m — same semantics as BikeBenchmarks.ftpSource. */
   cssSource?: 'user' | 'derived';
   /** Confidence in the CSS value at the time it was written. Drives the
-   * "estimate — run a test for confidence" caption and the test-card prompt.
+   * "estimate. Run a test for confidence" caption and the test-card prompt.
    * Mirrors `CssEstimate.confidence`. Always 'high' when source is 'user' and
    * paired m400+m200 PBs are present. Undefined = pre-confidence value; UI
    * treats as 'medium' so existing users aren't aggressively prompted until
@@ -376,7 +376,7 @@ export interface PerDisciplineFitness {
 }
 
 /**
- * Single race outcome — predicted vs actual logged after a target race.
+ * Single race outcome. Predicted vs actual logged after a target race.
  * Used retrospectively (display only when athlete beat their prediction; v1
  * does not auto-calibrate). v2 uses this log for per-user prediction calibration.
  */
@@ -390,7 +390,7 @@ export interface TriRaceLogEntry {
   predictedTotalSec: number;
   predictedPerLeg: { swim: number; bike: number; run: number };
   /**
-   * Pre-readiness-penalty projected leg times — raw output of `computeRaceTime`
+   * Pre-readiness-penalty projected leg times. Raw output of `computeRaceTime`
    * before penaltyMultiplier is applied. Absent in entries logged before WS-1
    * calibration was added. Required for tier-2 maxPenalty scale calibration.
    */
@@ -402,7 +402,7 @@ export interface TriRaceLogEntry {
    */
   predictionVdotSnapshot?: number;
   /** What actually happened. Combined duration of swim+bike+run within the
-   *  race window — pulled from synced activities. */
+   *  race window. Pulled from synced activities. */
   actualTotalSec: number;
   actualPerLeg: { swim: number; bike: number; run: number };
   /** ISO timestamp when the prediction was last recomputed before the race. */
@@ -481,7 +481,7 @@ export interface TriProjectionMarkers {
 /** Predicted race time with confidence band. */
 export interface TriRacePrediction {
   /**
-   * Headline predicted finish — assumes the user sticks with the plan and the
+   * Headline predicted finish. Assumes the user sticks with the plan and the
    * horizon model's projected race-day fitness materialises. THIS IS THE
    * PRIMARY NUMBER; the UI shows it as the headline.
    */
@@ -495,7 +495,7 @@ export interface TriRacePrediction {
   totalRangeSec: [number, number]; // ±band on total (§18.8). Narrows as race day approaches.
 
   /**
-   * Secondary number — what the athlete would do if they raced today, with no
+   * Secondary number. What the athlete would do if they raced today, with no
    * further training. Renders as a sub-line under the headline; the gap
    * `currentTotalSec - totalSec` is "what the plan delivers".
    */
@@ -516,7 +516,7 @@ export interface TriRacePrediction {
   limitingFactor?: LimitingFactor;
 
   /**
-   * Live projection inputs — projected vs current fitness markers per
+   * Live projection inputs. Projected vs current fitness markers per
    * discipline. Useful for debug + future "how am I tracking" panel.
    */
   projection?: TriProjectionMarkers;
@@ -548,7 +548,7 @@ export interface TriRacePrediction {
   computedAtISO: string;
 
   /**
-   * Pre-readiness-penalty projected leg times — raw `computeRaceTime` output
+   * Pre-readiness-penalty projected leg times. Raw `computeRaceTime` output
    * before `penaltyMultiplier` is applied. Stored here so `detectAndLogRaceOutcome`
    * can write them into the raceLog entry for tier-2 calibration.
    */
@@ -614,13 +614,13 @@ export interface TriConfig {
 
   /**
    * Where the user puts their socks on (a single one-time event):
-   *   't1'   — sock-on at T1, keep them for the run. Matches the population
+   *   't1'. Sock-on at T1, keep them for the run. Matches the population
    *            baseline that empirical T1/T2 already reflects. No adjustment.
-   *   't2'   — sockless on the bike, sock-on at T2 only. Shifts the ~20s
+   *   't2'. Sockless on the bike, sock-on at T2 only. Shifts the ~20s
    *            sock-on cost from T1 to T2. Net total unchanged.
-   *   'none' — never wears socks. Skip the sock-on cost entirely. −20s on T1.
+   *   'none'. Never wears socks. Skip the sock-on cost entirely. −20s on T1.
    *
-   * Applied on top of whichever path resolves the base T1/T2 — override,
+   * Applied on top of whichever path resolves the base T1/T2. Override,
    * empirical, or slider. An override is treated as the raw transition with
    * full socks; this selector adjusts from there.
    */
@@ -687,7 +687,7 @@ export interface TriConfig {
   generatorVersion?: number;
 
   /**
-   * History of completed target races — predicted vs actual time per leg.
+   * History of completed target races. Predicted vs actual time per leg.
    * Append-only; used for retrospective display and prediction calibration.
    */
   raceLog?: TriRaceLogEntry[];
@@ -738,9 +738,9 @@ export type TriWorkoutType =
   | 'bike_threshold'
   | 'bike_vo2'
   | 'bike_hills'
-  | 'bike_over_under'   // Alternating 105/95% FTP — lactate clearance at threshold
-  | 'bike_vo2_micros'   // Billat 30/30s — accumulates time at VO2max
-  | 'bike_vlamax'       // Neuromuscular short sprints — PCr/glycolytic ceiling
+  | 'bike_over_under'   // Alternating 105/95% FTP. Lactate clearance at threshold
+  | 'bike_vo2_micros'   // Billat 30/30s. Accumulates time at VO2max
+  | 'bike_vlamax'       // Neuromuscular short sprints. PCr/glycolytic ceiling
   // Combined
   | 'brick';
 

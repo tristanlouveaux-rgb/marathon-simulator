@@ -28,9 +28,9 @@ describe('computePredictionInputs', () => {
 
   it('filters walks (pace > 7:30/km) and sprints (pace < 3:00/km)', () => {
     const runs = [
-      run(1, 5, 500),     // 8:20/km walk — filtered
-      run(2, 5, 150),     // 2:30/km sprint — filtered
-      run(3, 5, 300),     // 5:00/km — kept
+      run(1, 5, 500),     // 8:20/km walk. Filtered
+      run(2, 5, 150),     // 2:30/km sprint. Filtered
+      run(3, 5, 300),     // 5:00/km. Kept
       run(4, 5, 300),
       run(5, 5, 300),
     ];
@@ -72,7 +72,7 @@ describe('computePredictionInputs', () => {
     // 8 training runs at 5:00/km + one race at 4:00/km
     const runs = [
       ...Array.from({ length: 8 }, (_, i) => run(i * 2 + 2, 10, 300)),
-      run(1, 21, 240),  // race: 21km at 4:00/km — 20% faster than median
+      run(1, 21, 240),  // race: 21km at 4:00/km. 20% faster than median
     ];
     const r = computePredictionInputs(runs, NOW);
     // P should exclude the race
@@ -114,7 +114,7 @@ describe('computePredictionInputs', () => {
       run(8, 10, 300), run(12, 10, 300),
     ];
     const r = computePredictionInputs(runs, NOW);
-    // 50 km across 2 weeks = ~25 km/wk. With 8-week div would be ~6 — bug.
+    // 50 km across 2 weeks = ~25 km/wk. With 8-week div would be ~6. Bug.
     expect(r.weeklyKm).toBeGreaterThan(15);
     expect(r.weeksCovered).toBeLessThanOrEqual(3);
   });
@@ -135,7 +135,7 @@ describe('computePredictionInputs', () => {
     // 10 runs: 9 at 4:30/km, 1 at 7:30/km (in-band but slowest). 10% drop = 1.
     const runs: RunActivityInput[] = [
       ...Array.from({ length: 9 }, (_, i) => run(i + 1, 8, 270)),
-      run(11, 8, 450), // slowest tail — in band but should be dropped
+      run(11, 8, 450), // slowest tail. In band but should be dropped
     ];
     const r = computePredictionInputs(runs, NOW);
     expect(r.runsCounted).toBe(9);
@@ -144,7 +144,7 @@ describe('computePredictionInputs', () => {
   });
 
   it('skips slow-tail drop when fewer than 5 runs remain', () => {
-    // 4 runs — sample too small to safely trim.
+    // 4 runs. Sample too small to safely trim.
     const runs: RunActivityInput[] = [
       run(1, 8, 270), run(3, 8, 270), run(5, 8, 270), run(7, 8, 450),
     ];
@@ -155,7 +155,7 @@ describe('computePredictionInputs', () => {
   it('rejects runs shorter than 3 km', () => {
     const runs = [
       run(1, 2.5, 300),     // too short under new threshold
-      run(2, 3.0, 300),     // exact threshold — kept
+      run(2, 3.0, 300),     // exact threshold. Kept
       run(3, 5, 300),
       run(4, 5, 300),
     ];

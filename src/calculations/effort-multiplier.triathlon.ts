@@ -1,5 +1,5 @@
 /**
- * Per-discipline effort multiplier — mirrors running's `effortMultiplier`
+ * Per-discipline effort multiplier. Mirrors running's `effortMultiplier`
  * (`src/workouts/plan_engine.ts:113`) for tri.
  *
  * **Mirror rule (CLAUDE.md)**: when running's `effortMultiplier` formula
@@ -62,7 +62,7 @@ export function triTrailingEffortScore(state: SimulatorState, discipline: Discip
       const actual = wk.garminActuals?.[workout.matchedActivityId ?? ''];
 
       // Under-duration guard: if actual was < 80% of planned, don't let low RPE
-      // inflate next week — the session was cut short, not genuinely easy.
+      // inflate next week. The session was cut short, not genuinely easy.
       const plannedMin = workout.estimatedDurationMin;
       const actualMin = actual ? actual.durationSec / 60 : null;
       const underDuration = plannedMin != null && actualMin != null && actualMin < plannedMin * 0.8;
@@ -70,13 +70,13 @@ export function triTrailingEffortScore(state: SimulatorState, discipline: Discip
       let dev: number;
       if (discipline === 'bike') {
         // Signal priority for bike effort:
-        //   1. Per-rep power adherence (rep-level scoring) — sharpest signal
+        //   1. Per-rep power adherence (rep-level scoring). Sharpest signal
         //      because it scores each interval against its own target rather
         //      than averaging the whole ride.
-        //   2. Whole-session powerAdherence — fallback when no clean rep
+        //   2. Whole-session powerAdherence. Fallback when no clean rep
         //      structure was detected.
-        //   3. HR effort score — fallback when no power meter.
-        //   4. Pure RPE — final fallback.
+        //   3. HR effort score. Fallback when no power meter.
+        //   4. Pure RPE. Final fallback.
         // Per-rep wins because a 5×5min @ FTP ride averaged with warmup +
         // cooldown reads as IF ~0.7 even when every rep was on target;
         // scoring at the rep level avoids that dilution.

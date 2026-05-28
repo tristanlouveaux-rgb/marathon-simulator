@@ -1,5 +1,5 @@
 /**
- * Coach eval scenarios — covers the failure modes that have actually bitten us.
+ * Coach eval scenarios. Covers the failure modes that have actually bitten us.
  * Add a scenario whenever a real prompt drift slips through. Keep the list small
  * enough that a full run stays under ~$0.50.
  */
@@ -42,7 +42,7 @@ export const SCENARIOS: Scenario[] = [
     forceToolUse: true,
     expect: {
       toolCalled: 'reduce_workout',
-      // Model has to pick a workout — accept any day. The fact a tool fires at all is the win.
+      // Model has to pick a workout. Accept any day. The fact a tool fires at all is the win.
     },
   },
 
@@ -147,7 +147,7 @@ export const SCENARIOS: Scenario[] = [
     coachContext: baseTriContext,
     userMessage: 'how am I tracking?',
     expect: {
-      // The context has lots of numbers — the response must reference one of them.
+      // The context has lots of numbers. The response must reference one of them.
       mustIncludeAnyOf: ['10.3', '5.2', '2.9', '18.4', '450', '220', '95', '250', '48', 'CTL', 'ACWR', 'TSB'],
       mustIncludeConfidence: true,
       maxTextLength: 800,
@@ -185,7 +185,7 @@ export const SCENARIOS: Scenario[] = [
     },
     userMessage: 'should I add a second long ride this week?',
     expect: {
-      // "Don't" / "I'd hold" / "protect" — soft refuses, plus a recommendation
+      // "Don't" / "I'd hold" / "protect". Soft refuses, plus a recommendation
       // bias toward keeping the planned load rather than adding to it.
       mustNotInclude: ['add a second', 'go for it', 'absolutely', 'push hard'],
       mustIncludeAnyOf: ['hold', 'protect', 'no', 'not', 'keep'],
@@ -257,7 +257,7 @@ export const SCENARIOS: Scenario[] = [
     },
     userMessage: 'should I do Wednesday\'s bike threshold?',
     expect: {
-      // The coach should advise easy/skip — not threshold.
+      // The coach should advise easy/skip. Not threshold.
       mustNotInclude: ['threshold', 'push through', 'as planned'],
       mustIncludeAnyOf: ['easy', 'skip', 'rest', 'recover'],
       maxTextLength: 600,

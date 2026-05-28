@@ -1,5 +1,5 @@
 /**
- * Course-factor adjustments — applied to leg times after fitness projection.
+ * Course-factor adjustments. Applied to leg times after fitness projection.
  *
  * Inputs come from the canonical `CourseProfile` data file
  * (`src/data/triathlon-course-profiles.ts`) attached to the `Triathlon` object
@@ -82,7 +82,7 @@ export function applyCourseFactors(
     // Run climate penalty scales by body-size heat strain (heatStrainRatio).
     // At the default 1.0 (reference build / no anthropometrics), runFactor ===
     // the literature multiplier, so this is identical to the original. Bike is
-    // left unscaled — convective cooling at 30+ km/h dominates body-size
+    // left unscaled. Convective cooling at 30+ km/h dominates body-size
     // effects on the bike leg.
     const baseRunFactor = CLIMATE_RUN_MULTIPLIER[profile.climate];
     const runFactor = 1 + (baseRunFactor - 1) * heatStrainRatio;
@@ -116,7 +116,7 @@ export function applyCourseFactors(
   // boost from sea-level acclimatisation models) surface as negative deltas
   // rather than being silently dropped. Today altitudeRunMultiplier /
   // altitudeBikeMultiplier only return >= 1.0, so behaviour is unchanged for
-  // current data — but the gate no longer hides legitimate sub-1.0 cases.
+  // current data. But the gate no longer hides legitimate sub-1.0 cases.
   if (profile.altitudeM && profile.altitudeM >= 500) {
     const runFactor = altitudeRunMultiplier(profile.altitudeM);
     const bikeFactor = altitudeBikeMultiplier(profile.altitudeM);
@@ -161,7 +161,7 @@ export function applyCourseFactors(
   }
 
   // ── Wind exposure (bike) ────────────────────────────────────────────────
-  // Drop the `!== 'sheltered'` short-circuit — sheltered courses have a sub-1.0
+  // Drop the `!== 'sheltered'` short-circuit. Sheltered courses have a sub-1.0
   // multiplier (faster bike split) and should display as a negative delta. The
   // previous gate hid every sub-1.0 case (sheltered tailwinds, low-wind venues),
   // making the panel look like every condition is a penalty.

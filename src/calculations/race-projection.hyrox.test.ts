@@ -61,14 +61,14 @@ describe('buildHyroxProjection', () => {
     tomorrow7d.setDate(tomorrow7d.getDate() + 7);
     const raceDate = tomorrow7d.toISOString().slice(0, 10);
     // Planned sessions need to be in `wks` for `plannedHyroxSessionsPerWeek`
-    // to return >0 — without them, the horizon's undertraining penalty
+    // to return >0. Without them, the horizon's undertraining penalty
     // cancels the taper bonus.
     const triWorkouts = Array(6).fill(null).map((_, i) => ({ d: i, t: 'run', m: 'Easy 5km', km: 5 }));
     const wks = [{ triWorkouts }, { triWorkouts }, { triWorkouts }, { triWorkouts }];
     const s = buildState({ raceDate }, { wks } as unknown as Partial<SimulatorState>);
     const p = predictHyroxRace(s)!;
     const proj = buildHyroxProjection(s, p);
-    // Taper is owned by the per-discipline horizon models — no separate
+    // Taper is owned by the per-discipline horizon models. No separate
     // "Taper bonus" factor. The stations + roxzone horizons apply their
     // per-class taper bonus when inside the window, so the headline
     // projection is faster than today.
@@ -145,7 +145,7 @@ describe('buildHyroxProjection', () => {
   });
 
   it('reconciles: sum of factors[].deltaSec equals improvementSec', () => {
-    // Transparency contract — the factor breakdown the UI shows must sum to
+    // Transparency contract. The factor breakdown the UI shows must sum to
     // the headline delta. With MTL above anchor, run horizon, and station
     // horizon all firing, the breakdown should still close.
     const eightWeeks = new Date();

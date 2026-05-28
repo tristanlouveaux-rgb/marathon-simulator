@@ -1,10 +1,10 @@
 /**
- * Monte Carlo forecast simulator — triathlon mode.
+ * Monte Carlo forecast simulator. Triathlon mode.
  *
  * Mirrors the marathon sim (`race-forecast-simulation.ts`) but operates on the
  * already-computed triathlon prediction (`predictTriathlonRace`) as its
  * deterministic mean. Per Tristan's design call (2026-05-19), tri uses a
- * single total-time cone (not per-discipline cones) — the race-forecast card
+ * single total-time cone (not per-discipline cones). The race-forecast card
  * above the cone surfaces per-leg detail; the cone is for "total race
  * outcome range".
  *
@@ -19,7 +19,7 @@
  *
  * The implicit assumption with a single total-time sim is that per-discipline
  * improvements are correlated within a trial (one athlete, one body, one
- * training response) — which is the right modelling choice for a single-trial
+ * training response). Which is the right modelling choice for a single-trial
  * multi-discipline race. A per-discipline cone is a future extension.
  *
  * Returns the same `ForecastSimResult` shape as the marathon sim so the
@@ -98,7 +98,7 @@ export function runTriForecastSim(
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
   const weeksRemaining = Math.max(0, totalWeeks - currentWeek);
 
-  // Mean improvement % — how much the plan is expected to deliver between
+  // Mean improvement %. How much the plan is expected to deliver between
   // today's fitness and race-day fitness. Negative when projection is
   // somehow slower than today (rare); simulate around it without clamping.
   const meanImprovementPct = ((currentSec - projectedSec) / currentSec) * 100;
@@ -121,7 +121,7 @@ export function runTriForecastSim(
     const formFactor = clamp(normalSample(rng, meanForm, sigmaForm), 0.93, 1.07);
 
     // The deterministic projection already assumes a realistic plan, so the sim
-    // adds spread around it — not a mean shift. Normalising adherence by its
+    // adds spread around it. Not a mean shift. Normalising adherence by its
     // own mean keeps the variance (good and bad weeks widen the cone) while
     // pinning E[multiplier] ≈ 1.0, so the simulated median equals the
     // deterministic projection by construction.
@@ -144,7 +144,7 @@ export function runTriForecastSim(
   // **Headline alignment.** The deterministic median trial is `projectedSec`
   // by construction (median improvementPct = mean, median adherenceMul = 1.0,
   // median formFactor = 1.0). But the *empirical* race-day median across 2000
-  // samples drifts a little — typically 10–40s — because formFactor at race
+  // samples drifts a little. Typically 10–40s. Because formFactor at race
   // day perturbs each trial independently. Shift-align the cone so the
   // empirical race-day p50 lands exactly on the headline. Today's p50 stays
   // at `currentSec` (no shift at w=0). The shift ramps in via the same

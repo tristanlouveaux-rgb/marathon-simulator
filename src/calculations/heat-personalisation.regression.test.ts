@@ -2,7 +2,7 @@
  * Regression locks for the body-size heat personalisation.
  *
  * These prove the two modified functions are BYTE-IDENTICAL to their original
- * behaviour at the default ratio (1.0) — i.e. for every user who hasn't entered
+ * behaviour at the default ratio (1.0). I.e. for every user who hasn't entered
  * weight + height, nothing changes. If a future edit breaks that, these go red.
  */
 import { describe, it, expect } from 'vitest';

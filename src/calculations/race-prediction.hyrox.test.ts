@@ -49,7 +49,7 @@ describe('predictHyroxRace', () => {
   it('Mexico City venue applies a meaningful altitude penalty', () => {
     const sea = predictHyroxRace(buildState({ venueId: 'london-excel' }))!;
     const mexico = predictHyroxRace(buildState({ venueId: 'mexico-city-exh' }))!;
-    // Mexico City is at 2240m — substantial penalty on run + endurance stations.
+    // Mexico City is at 2240m. Substantial penalty on run + endurance stations.
     expect(mexico.totalSec).toBeGreaterThan(sea.totalSec);
     const altFactor = mexico.courseFactors.find(f => f.kind === 'altitude');
     expect(altFactor).toBeDefined();
@@ -196,7 +196,7 @@ describe('predictHyroxRace', () => {
         benchmarksAtProWeights: true,
       }))!;
       const sled = open.stations.find(l => l.station === 'sled_push')!;
-      // Pre-fix: sled.baseSec === SLED_PUSH_PRO (149.5) — wrong (Open should be faster).
+      // Pre-fix: sled.baseSec === SLED_PUSH_PRO (149.5). Wrong (Open should be faster).
       // Post-fix: sled.baseSec ≈ 130 (Pro time / 1.15).
       expect(sled.baseSec).toBeCloseTo(SLED_PUSH_OPEN, 0);
       expect(sled.baseSec).toBeLessThan(SLED_PUSH_PRO);
@@ -265,7 +265,7 @@ describe('predictHyroxRace', () => {
 
     it('band blend shifts seeds when VDOT crosses a threshold and mitigation is partial', () => {
       // Stored band 'total_beginner' (implied VDOT 28). VDOT 30 crosses into
-      // 'beginner' but the ratio (30-28)/5=0.4 keeps signal f≈0.82 — partial
+      // 'beginner' but the ratio (30-28)/5=0.4 keeps signal f≈0.82. Partial
       // mitigation, not full. So bandWeight stays below 1.0 and the seed
       // blends between total_beginner and beginner. The prediction with the
       // stale race + slight VDOT lift should be FASTER than a fresh prediction

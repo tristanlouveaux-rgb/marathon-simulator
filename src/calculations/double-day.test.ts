@@ -79,7 +79,7 @@ describe('computeWeekDoubleDayDays — basic gating', () => {
     const wk = emptyWeek();
     wk.garminActuals = {
       W1: makeActual({ garminId: 'g1', startTime: '2026-01-05T08:00:00Z', durationSec: 3600 }),
-      // 15 min — below threshold, should not count as a second session
+      // 15 min. Below threshold, should not count as a second session
       W2: makeActual({ garminId: 'g2', startTime: '2026-01-05T12:00:00Z', durationSec: 15 * 60 }),
     };
     expect(computeWeekDoubleDayDays(wk, PLAN_START)).toEqual([]);
@@ -207,7 +207,7 @@ describe('doubleDayIntensityScalar — first-session intensity bands', () => {
 
 describe('intensity-aware compounding', () => {
   it('hard first session → larger bonus on same 2nd session', () => {
-    // First session: 60 min, iTrimp 3000 (high — TSS ≈ 20 raw, but at normalizer 15000 = 20 TSS,
+    // First session: 60 min, iTrimp 3000 (high. TSS ≈ 20 raw, but at normalizer 15000 = 20 TSS,
     // TSS/min ≈ 0.33 actually. Let me use a higher iTrimp).
     // Actually with normalizer 15000: TSS = iTrimp × 100/15000 = iTrimp/150
     // For 60 min hard at 1.5 TSS/min target → 90 TSS → iTrimp ≈ 13500

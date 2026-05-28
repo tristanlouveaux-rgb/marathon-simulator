@@ -2,7 +2,7 @@
  * stravaSync.ts
  * =============
  * Fetches Strava activities and feeds them into the standard matchAndAutoComplete()
- * pipeline. Strava is always the activity source when connected — regardless of
+ * pipeline. Strava is always the activity source when connected. Regardless of
  * whether the user also has a Garmin or Apple Watch wearable.
  *
  * The wearable (Garmin/Apple) is used separately for biometrics only
@@ -28,7 +28,7 @@ import { detectArchetype } from '@/calculations/athlete-archetype';
  *
  * Thresholds (CTL): TrainingPeaks daily tiers (20/40/65/90) ×7 for our weekly EMA.
  *
- * Performance floors (rough, not weight-normalised — we don't store body
+ * Performance floors (rough, not weight-normalised. We don't store body
  * weight; FTP/kg would be cleaner but we use absolute watts as a proxy):
  *  - VDOT ≥ 60 OR FTP ≥ 320 W → at least 'performance'
  *  - VDOT ≥ 50 OR FTP ≥ 250 W → at least 'trained'
@@ -85,7 +85,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
       // Still check for any stuck __pending__ items from a previous sync
       if (!document.getElementById('activity-review-overlay') &&
           !document.getElementById('suggestion-modal')) {
-        // _pendingModalActive is in activitySync.ts — processPendingCrossTraining handles the guard
+        // _pendingModalActive is in activitySync.ts. ProcessPendingCrossTraining handles the guard
       }
       processPendingCrossTraining();
       return { processed: 0 };
@@ -108,7 +108,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         // Patch adhoc workouts (unmatched activities accepted by user). Adhoc
         // workouts also have a garminActuals entry keyed by adhocId, so fall
         // through to the actual-patching block below after updating the adhoc
-        // record itself — otherwise power fields fetched on a later sync never
+        // record itself. Otherwise power fields fetched on a later sync never
         // reach the detail view, which reads from garminActuals.
         if (workoutId.startsWith('garmin-')) {
           const adhoc = (wk.adhocWorkouts ?? []).find(w => w.id === workoutId) as any;
@@ -122,7 +122,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         if (!wk.garminActuals) continue;
         const actual = wk.garminActuals[workoutId];
         if (!actual) continue;
-        // Update hrZones when the row has them and the actual doesn't yet — happens when an
+        // Update hrZones when the row has them and the actual doesn't yet. Happens when an
         // activity was first matched during a sync where the stream fetch failed (rate limit)
         // but a later sync succeeded (because zones are now cached in DB, the second sync
         // returns real zones from DB instead of hitting the Strava API again).
@@ -132,7 +132,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           const splitsChanged = !actual.kmSplits || JSON.stringify(actual.kmSplits) !== JSON.stringify(row.kmSplits);
           if (splitsChanged) { actual.kmSplits = row.kmSplits; extraPatched = true; }
         }
-        // Parallel per-km HR. Same DB-wins policy as kmSplits — the edge fn
+        // Parallel per-km HR. Same DB-wins policy as kmSplits. The edge fn
         // recomputes both from Strava and is canonical.
         if (row.kmHRSplits?.length) {
           const hrSplitsChanged = !actual.kmHRSplits || JSON.stringify(actual.kmHRSplits) !== JSON.stringify(row.kmHRSplits);
@@ -143,7 +143,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         if (row.elevationGainM != null && actual.elevationGainM == null) { actual.elevationGainM = row.elevationGainM; extraPatched = true; }
         if (row.calories != null && actual.calories == null) { actual.calories = row.calories; extraPatched = true; }
         if (row.polyline && !actual.polyline) { actual.polyline = row.polyline; extraPatched = true; }
-        // Power fields — DB is canonical (refreshed by every Strava sync), so overwrite
+        // Power fields. DB is canonical (refreshed by every Strava sync), so overwrite
         // whenever it has a non-null value that differs. Filling-nulls-only would leave
         // stale numbers stuck (e.g. averageWatts captured before the power-detail backfill).
         if (row.averageWatts != null && actual.averageWatts !== row.averageWatts) { actual.averageWatts = row.averageWatts; extraPatched = true; }
@@ -157,7 +157,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
             && cur.p1800 === row.powerCurve.p1800 && cur.p3600 === row.powerCurve.p3600;
           if (!same) { actual.powerCurve = row.powerCurve; extraPatched = true; }
         }
-        // repData — overwrite when DB has a non-null value that differs.
+        // repData. Overwrite when DB has a non-null value that differs.
         // Detection runs server-side and is deterministic, so DB is canonical.
         if (row.repData !== undefined) {
           const a = actual.repData ?? null;
@@ -182,11 +182,11 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
         }
       }
     }
-    // Third pass: "Strava always wins" — upgrade any Garmin-sourced actuals that have a
+    // Third pass: "Strava always wins". Upgrade any Garmin-sourced actuals that have a
     // matching Strava row in this batch, identified by start_time ±10 min. This is the
     // defensive fallback for cases where the upgrade loop in matchAndAutoComplete was
     // blocked by a stale garminMatched mapping (e.g. "strava-X" → "__pending__" from a
-    // previous sync with the garminPending-overwrite bug). Idempotent — already-upgraded
+    // previous sync with the garminPending-overwrite bug). Idempotent. Already-upgraded
     // actuals (garminId starts with 'strava-') are skipped.
     const stravaRowByTime = new Map<number, GarminActivityRow>();
     for (const row of activityRows as GarminActivityRow[]) {
@@ -219,14 +219,14 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
           // Strip stale Garmin-webhook lap shells. The Garmin path
           // (activitySync.ts) writes `laps[]` from Garmin webhook details,
           // often without HR per lap. When a Strava row arrives for the same
-          // activity, Strava is canonical — but the kmHRSplits we now carry
+          // activity, Strava is canonical. But the kmHRSplits we now carry
           // give richer per-km HR signal than Garmin's lap-level data, and
           // leaving stale Garmin laps around creates a misleading lap-level
           // HRR=0 contribution in any consumer that reads `actual.laps`.
           actual.laps = undefined;
           if (matchRow.elevationGainM != null) actual.elevationGainM = matchRow.elevationGainM;
           if (matchRow.hrDrift != null) actual.hrDrift = matchRow.hrDrift;
-          // Strava is canonical for power — overwrite even if Garmin row had numbers
+          // Strava is canonical for power. Overwrite even if Garmin row had numbers
           if (matchRow.averageWatts != null) actual.averageWatts = matchRow.averageWatts;
           if (matchRow.normalizedPowerW != null) actual.normalizedPowerW = matchRow.normalizedPowerW;
           if (matchRow.maxWatts != null) actual.maxWatts = matchRow.maxWatts;
@@ -275,7 +275,7 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
     if (extraPatched) saveState();
 
     // Derive maxHR from Strava activities. Uses 95th percentile of max_hr values,
-    // filtering wrist-sensor noise. Max HR is a physiological ceiling — only raise,
+    // filtering wrist-sensor noise. Max HR is a physiological ceiling. Only raise,
     // never lower an existing value.
     {
       const maxHrs = activityRows
@@ -327,14 +327,14 @@ export async function syncStravaActivities(): Promise<{ processed: number }> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase C1 — History fetch
+// Phase C1. History fetch
 // ---------------------------------------------------------------------------
 
 /** One week's worth of aggregated training data from the history edge function. */
 export interface HistorySummaryRow {
   weekStart: string;       // ISO date of Monday e.g. "2026-02-17"
-  totalTSS: number;        // Signal A — running-equivalent TSS (with runSpec discount)
-  rawTSS: number;          // Signal B — raw physiological TSS (no runSpec discount)
+  totalTSS: number;        // Signal A. Running-equivalent TSS (with runSpec discount)
+  rawTSS: number;          // Signal B. Raw physiological TSS (no runSpec discount)
   runningKm: number;       // km from running activities only
   zoneBase: number;        // Estimated base (Z1+Z2) TSS
   zoneThreshold: number;   // Estimated threshold (Z3) TSS
@@ -374,7 +374,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
 
     if (rows.length === 0) return [];
 
-    // Persist to state — exclude current (partial) week from chart arrays.
+    // Persist to state. Exclude current (partial) week from chart arrays.
     // The edge function includes today's in-progress week in its response.
     // Storing it would shift all historic entries by one position in the chart,
     // making Fix 4 in getChartData backfill the wrong plan week.
@@ -393,7 +393,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
     // Zero-fill missing calendar weeks. The edge fn only emits weeks that have
     // at least one stored activity, so a stretch of pure rest/non-tracked weeks
     // collapses out of the array. Downstream consumers (`slice(-N)`,
-    // per-week chart, CTL EMA, `detectedWeeklyKm`) are positional — they treat
+    // per-week chart, CTL EMA, `detectedWeeklyKm`) are positional. They treat
     // array index as calendar offset. Without zero-fill, `slice(-4)` for the
     // 4-week running average reaches into older non-empty weeks and reports a
     // stale run from 5+ weeks ago as "last 4 weeks", which drifts every time
@@ -449,7 +449,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       s.signalBBaseline = undefined;
     }
 
-    // Per-sport session baselines (Phase 2 calibration data — not yet used by reduction logic)
+    // Per-sport session baselines (Phase 2 calibration data. Not yet used by reduction logic)
     // Aggregate all sport breakdown data across weeks, compute avg session rawTSS + freq/week
     const sportAgg: Record<string, { totalRawTSS: number; totalSessions: number; weekCount: number }> = {};
     for (const row of rows) {
@@ -481,7 +481,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       ftpWatts: s.onboarding?.triBike?.ftp,
     });
 
-    // Athlete archetype — re-classify whenever history is freshly aggregated.
+    // Athlete archetype. Re-classify whenever history is freshly aggregated.
     // Drives plan-engine ramp slope and predictor confidence band. Cached on
     // state with computedAt timestamp.
     s.athleteArchetype = detectArchetype(s);
@@ -494,7 +494,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
       console.log(`[StravaHistory]  ${r.weekStart}: totalTSS=${r.totalTSS} runKm=${r.runningKm} | ${sports || '(no activities)'}`);
     }
 
-    // Kick off iTRIMP calibration in parallel — results stored on state independently
+    // Kick off iTRIMP calibration in parallel. Results stored on state independently
     calibrateIntensityThresholds().catch(() => {/* silent */});
 
     return rows;
@@ -505,7 +505,7 @@ export async function fetchStravaHistory(weeks = 8): Promise<HistorySummaryRow[]
 }
 
 // ---------------------------------------------------------------------------
-// Phase B v3 — iTRIMP calibration from labelled Strava runs
+// Phase B v3. ITRIMP calibration from labelled Strava runs
 // ---------------------------------------------------------------------------
 
 /**
@@ -530,7 +530,7 @@ interface CalibrateRow { name: string; durationMin: number; iTrimp: number; }
 
 /**
  * Map plan workout types and classifyByName zone labels → calibration zone.
- * 'progressive' is intentionally excluded — it spans easy→fast finish, ambiguous.
+ * 'progressive' is intentionally excluded. It spans easy→fast finish, ambiguous.
  * 'test_run', 'rest', 'cross', 'gym', 'strength' → undefined (not running zones).
  */
 const TYPE_TO_ZONE: Record<string, 'easy' | 'tempo' | 'interval'> = {
@@ -547,7 +547,7 @@ const TYPE_TO_ZONE: Record<string, 'easy' | 'tempo' | 'interval'> = {
 /**
  * TSS/hr guard-rail ceilings per zone.
  * If actual TSS/hr exceeds these, the label is probably wrong (e.g. half marathon
- * matched to an easy run slot). The session is skipped — not used for calibration.
+ * matched to an easy run slot). The session is skipped. Not used for calibration.
  *
  * Easy ceiling (95) = default tempo threshold. Anything above that is clearly not easy.
  * Tempo ceiling (160) = hard race effort. Anything above that is an all-out sprint.
@@ -645,7 +645,7 @@ function applyCalibration(
  */
 export async function calibrateIntensityThresholds(weeks = 12): Promise<void> {
   try {
-    // Primary: use matched actuals already in state — no network call needed
+    // Primary: use matched actuals already in state. No network call needed
     const stateResult = calibrateFromState();
     const MIN_POINTS = 3;
     const hasEnoughStateData =
@@ -669,7 +669,7 @@ export async function calibrateIntensityThresholds(weeks = 12): Promise<void> {
       return;
     }
 
-    // Merge edge fn rows into byZone (additive — state data already in there)
+    // Merge edge fn rows into byZone (additive. State data already in there)
     const merged = { ...stateResult.byZone };
     for (const row of rows) {
       const zone = classifyByName(row.name);
@@ -728,7 +728,7 @@ export interface BackfillResult {
  * uncached activities; avg_heartrate estimate for the rest.
  *
  * After backfill completes, runs fetchStravaHistory() to refresh state.
- * Safe to call multiple times — already-cached activities are skipped.
+ * Safe to call multiple times. Already-cached activities are skipped.
  */
 export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult> {
   console.log(`[StravaBackfill] Starting ${weeks}-week backfill…`);
@@ -765,7 +765,7 @@ export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult>
 
     // Populate extendedHistory + reset historicWeekly* to last 8 calendar weeks.
     // `fetchStravaHistory` above already wrote `historicWeekly*` zero-filled to
-    // the full `weeks` calendar span — read those back rather than re-mapping
+    // the full `weeks` calendar span. Read those back rather than re-mapping
     // raw `historyRows` (which still has gaps for empty weeks). All four
     // arrays must be kept in lockstep so consumers can index them by the same
     // calendar position.
@@ -784,7 +784,7 @@ export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult>
 
     // Stash per-run summary so refreshBlendedFitness can seed Tanda immediately.
     // garminActuals won't be populated until the first standalone sync fills in
-    // matched rows — this gives us a full 16-week pool for K and P on day one.
+    // matched rows. This gives us a full 16-week pool for K and P on day one.
     if (result?.runs && result.runs.length > 0) {
       const s = getMutableState();
       s.onboardingRunHistory = result.runs;
@@ -813,7 +813,7 @@ export async function backfillStravaHistory(weeks = 52): Promise<BackfillResult>
 /**
  * Fetch the user's earliest Strava activity timestamp. Stored on
  * `state.firstStravaActivityISO` to derive years-of-training for the
- * triathlon prediction's experience-level bucket. Idempotent — caller
+ * triathlon prediction's experience-level bucket. Idempotent. Caller
  * should skip if `state.firstStravaActivityISO` is already set.
  *
  * Returns ISO timestamp or null if no activity / no auth / DB error.
@@ -858,7 +858,7 @@ export async function fetchEarliestActivityDate(): Promise<string | null> {
 export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activitiesRecovered: number; weeksReconstructed: number }> {
   try {
     const s = getMutableState();
-    // Query `garmin_activities` directly — the standalone `sync-strava-activities`
+    // Query `garmin_activities` directly. The standalone `sync-strava-activities`
     // endpoint only returns activities not yet processed (sync-state filter), so
     // historical rows that the user already synced before a plan reset are
     // invisible to it. We need raw DB rows.
@@ -932,7 +932,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
         };
         weekMap.set(weekIdx, wk);
       }
-      // Archive entries omit only `polyline` (multi-KB GPS string) — 90% of
+      // Archive entries omit only `polyline` (multi-KB GPS string). 90% of
       // the per-row payload, dropping it lets the cap go from 2 to 12 plans
       // without busting localStorage. kmSplits and hrZones stay so the
       // activity-detail popup still renders pace/zone breakdowns from the
@@ -962,7 +962,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
     // Densify: emit a Week for every index from 0 to maxIdx, even if empty.
     // _resolveWeekForDate uses array-index lookup keyed on date offset, so a
     // sparse array (missing rest weeks) misaligns every week after the first
-    // gap — every chart bar then misses or falls through to seedDaily.
+    // gap. Every chart bar then misses or falls through to seedDaily.
     const maxIdx = Math.max(...Array.from(weekMap.keys()), -1);
     const reconstructedWeeks: any[] = [];
     for (let i = 0; i <= maxIdx; i++) {
@@ -985,7 +985,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
 
     // Replace any prior archive with the same planStartDate (e.g. an earlier
     // run of this same recovery that emitted a sparse, mis-indexed weeks array
-    // — _resolveWeekForDate iterates archives in order and the broken entry
+    //. _resolveWeekForDate iterates archives in order and the broken entry
     // would otherwise keep winning). Cap matches the initialization helper
     // (MAX_ARCHIVED_PLANS = 12) so the two paths stay in sync.
     const { MAX_ARCHIVED_PLANS } = await import('@/state/initialization');
@@ -1010,7 +1010,7 @@ export async function restoreHistoryFromServer(daysBack = 90): Promise<{ activit
 }
 
 // ---------------------------------------------------------------------------
-// Phase D — Extended history fetch (16w / all-time)
+// Phase D. Extended history fetch (16w / all-time)
 // ---------------------------------------------------------------------------
 
 /**
@@ -1051,7 +1051,7 @@ export async function fetchExtendedHistory(weeks: 16 | 52): Promise<void> {
  * All other rows in the group are deleted.
  *
  * Idempotent: gated by `s.dbDedupCompletedAt` (re-runs after 30 days). Safe to
- * call from startup — a 90-day window is sufficient since duplicates only enter
+ * call from startup. A 90-day window is sufficient since duplicates only enter
  * via active sync and old ones would have been cleaned by prior runs.
  *
  * Returns counts so the caller can log a summary; does NOT touch local state

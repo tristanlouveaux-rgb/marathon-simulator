@@ -1,9 +1,9 @@
 /**
- * Smoke test — dataset-loader sanity check.
+ * Smoke test. Dataset-loader sanity check.
  * Run with: `npx tsx src/validation/smoke-test.ts`
  *
  * Confirms both loaders return well-formed records with realistic time
- * distributions. Not a proper test suite — just a quick eyeballing harness
+ * distributions. Not a proper test suite. Just a quick eyeballing harness
  * before the full calibration runs against millions of rows.
  */
 

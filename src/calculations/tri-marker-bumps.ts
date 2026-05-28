@@ -1,11 +1,11 @@
 /**
- * Marker-bump detector — pure logic. Compares current CSS / FTP / VDOT against
+ * Marker-bump detector. Pure logic. Compares current CSS / FTP / VDOT against
  * the last-notified snapshot stored on `triConfig.notifiedMarkers` and
  * returns a list of "improvement" deltas worth surfacing as toasts.
  *
  * **Side of the line**: tracking. Pure function; the caller (main.ts) owns
  * the toast call AND the state mutation that updates `notifiedMarkers` after
- * surfacing — two-step design so we never accidentally swallow a delta if a
+ * surfacing. Two-step design so we never accidentally swallow a delta if a
  * render error eats the toast.
  *
  * Thresholds in `triathlon-constants.ts`:
@@ -14,7 +14,7 @@
  *   - VDOT: +1 point
  *
  * Direction: only positive improvements are surfaced. A regression in any
- * marker is silent — it'll show up in the prediction and stats anyway, and
+ * marker is silent. It'll show up in the prediction and stats anyway, and
  * we don't want to punish detraining with a popup.
  */
 
@@ -48,7 +48,7 @@ export function detectMarkerBumps(state: SimulatorState): MarkerBump[] {
   const notified = tri.notifiedMarkers ?? {};
   const bumps: MarkerBump[] = [];
 
-  // FTP — higher is better.
+  // FTP. Higher is better.
   const ftpNow = tri.bike?.ftp;
   if (ftpNow != null && ftpNow > 0) {
     const ftpPrev = notified.ftp ?? null;
@@ -63,7 +63,7 @@ export function detectMarkerBumps(state: SimulatorState): MarkerBump[] {
     }
   }
 
-  // CSS — lower sec/100m is better. We surface "improvement" as seconds saved.
+  // CSS. Lower sec/100m is better. We surface "improvement" as seconds saved.
   const cssNow = tri.swim?.cssSecPer100m;
   if (cssNow != null && cssNow > 0) {
     const cssPrev = notified.cssSecPer100m ?? null;
@@ -78,7 +78,7 @@ export function detectMarkerBumps(state: SimulatorState): MarkerBump[] {
     }
   }
 
-  // VDOT — higher is better.
+  // VDOT. Higher is better.
   const vdotNow = state.v;
   if (vdotNow != null && vdotNow > 0) {
     const vdotPrev = notified.vdot ?? null;
@@ -101,7 +101,7 @@ export function detectMarkerBumps(state: SimulatorState): MarkerBump[] {
  * marker values onto `triConfig.notifiedMarkers` so we don't re-pop on the
  * next launch. Mutates state. Caller must `saveState()`.
  *
- * Always called even if no bumps fired — keeps the snapshot fresh against
+ * Always called even if no bumps fired. Keeps the snapshot fresh against
  * the current values. First-launch behaviour: writes baseline values without
  * surfacing anything (next launch's deltas are then real).
  */

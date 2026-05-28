@@ -1,5 +1,5 @@
 /**
- * Marathon population distribution card — "Where you sit in the field".
+ * Marathon population distribution card. "Where you sit in the field".
  *
  * Renders a single PDF curve (derived from real cumulative-percentile
  * breakpoints) for the user's selected race × distance, with a vertical
@@ -11,7 +11,7 @@
  * `docs/UX_PATTERNS.md → Population Distribution Charts`.
  *
  * Returns '' when no population data is available for the venue or its
- * distance aggregate — caller hides the card entirely.
+ * distance aggregate. Caller hides the card entirely.
  */
 
 import type { SimulatorState } from '@/types/state';
@@ -25,13 +25,13 @@ import {
 import { ft } from '@/utils/format';
 
 // ── Design tokens ────────────────────────────────────────────────────────────
-// Teal "race-prediction" palette — mirrors buildLtTrendChart in
+// Teal "race-prediction" palette. Mirrors buildLtTrendChart in
 // triathlon/benchmark-charts.ts. Vertical gradient fill + layered stroke
 // give the curve depth instead of reading as a flat wireframe.
-const STROKE_LIGHT = '#5EEAD4';              // teal-300 — stroke highlight
-const STROKE_MID   = '#14B8A6';              // teal-500 — stroke body
-const STROKE_DARK  = '#0D9488';              // teal-600 — stroke shadow
-const USER_LINE    = '#0F172A';              // slate-900 — user vertical marker
+const STROKE_LIGHT = '#5EEAD4';              // teal-300. Stroke highlight
+const STROKE_MID   = '#14B8A6';              // teal-500. Stroke body
+const STROKE_DARK  = '#0D9488';              // teal-600. Stroke shadow
+const USER_LINE    = '#0F172A';              // slate-900. User vertical marker
 const GUIDE_LINE   = 'rgba(15,23,42,0.08)';  // p25/p50/p75 dashed reference
 
 const W = 320;
@@ -101,7 +101,7 @@ function timeAtPercentile(table: Array<[number, number]>, targetPct: number): nu
 
 /**
  * Render the population distribution card. Reads venue + distance + predicted
- * finish from state. Returns '' if no data is available — caller hides the
+ * finish from state. Returns '' if no data is available. Caller hides the
  * card entirely.
  */
 export function renderMarathonPopulationCard(s: SimulatorState): string {

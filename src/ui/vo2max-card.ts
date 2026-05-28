@@ -1,17 +1,17 @@
 /**
- * VO2max headline card — shared between running and triathlon stats views.
+ * VO2max headline card. Shared between running and triathlon stats views.
  *
  * Top-line: cross-modal headline VO2max with the source sport that drove
  * it (running / cycling / cardiac ceiling). Up to four rows beneath:
  * running and cycling (measured), cardiac ceiling (aerobic upper bound from
  * HRmax/HRrest), and cross-training (sustained-HR aerobic capacity from
- * non-run/non-bike sport — hidden until 3 qualifying sessions). Tap →
+ * non-run/non-bike sport. Hidden until 3 qualifying sessions). Tap →
  * drill-down with explainer + literature note.
  *
  * Visual style mirrors the existing Fitness summary card (compact rows,
  * coloured dot per source, tabular-nums values, "Detail →" link).
  *
- * The card is hidden when no estimate is available — fresh installs without
+ * The card is hidden when no estimate is available. Fresh installs without
  * any activity history shouldn't see an empty placeholder.
  */
 
@@ -22,7 +22,7 @@ import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 /**
  * Compact area-chart for VO2max trend. UX_PATTERNS-compliant:
  * no dots, area fill at 0.12, stroke 1.5px, render nothing when < 2 points.
- * Trend colour from rising (green) vs declining (red) — same convention as
+ * Trend colour from rising (green) vs declining (red). Same convention as
  * the existing fitness chart on the running stats view.
  */
 function buildVO2TrendChart(data: Array<{ date: string; value: number }>): string {
@@ -190,7 +190,7 @@ function resolveDisplayHeadline(s: SimulatorState): {
  * has not produced any usable estimate (fresh install, no activity).
  *
  * @param s         SimulatorState
- * @param elementId DOM id for the outer card — drives drill-down click handler.
+ * @param elementId DOM id for the outer card. Drives drill-down click handler.
  */
 export function buildVO2MaxCard(s: SimulatorState, elementId: string): string {
   const est = s.vo2Estimates;

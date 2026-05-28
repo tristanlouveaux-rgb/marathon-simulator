@@ -3,7 +3,7 @@
  * ================
  * Subscribe-or-leave surface shown inside the Coach view on iOS for users
  * without an active AI Coach entitlement. Replaces the rules-based classic
- * coach for iOS-only — the web/Android build still renders classic coach as
+ * coach for iOS-only. The web/Android build still renders classic coach as
  * the non-subscriber fallback.
  *
  * App Store Review Guideline 3.1.3 compliance (auto-renewing subscriptions):
@@ -14,7 +14,7 @@
  *   - How to manage / cancel (Settings → Apple ID → Subscriptions)
  *   - Restore Purchases link visible
  *   - Terms of Use + Privacy Policy links visible
- *   - NO mention of external payment methods (Stripe, web checkout) — Guideline
+ *   - NO mention of external payment methods (Stripe, web checkout). Guideline
  *     3.1.3(a) anti-steering
  */
 
@@ -264,13 +264,13 @@ async function onSubscribe(): Promise<void> {
     await purchaseCoachPackage(pkg);
     resetEntitlementCache();
     showSimpleToast('Welcome to AI Coach. Your trial has started.');
-    // Re-enter the Coach view — entitlement is now active.
+    // Re-enter the Coach view. Entitlement is now active.
     void import('./coach-view').then(m => m.renderCoachView({ onBack: _onBack ?? undefined }));
   } catch (err) {
     const msg = (err as Error)?.message ?? '';
     // RevenueCat surfaces user-cancelled with a specific shape; silence it.
     if (msg.includes('UserCancelled') || msg.includes('PurchaseCancelledError')) {
-      // No toast on cancel — the user knows they cancelled.
+      // No toast on cancel. The user knows they cancelled.
     } else {
       console.error('[paywall] purchase failed:', msg);
       showSimpleToast('Purchase could not be completed. Please try again.', 'error');

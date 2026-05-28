@@ -8,7 +8,7 @@
  * Flow:
  *   1. Entitlement check. If no active AI Coach subscription, render a
  *      teaser pane with a Subscribe CTA that routes into `coach-paywall`.
- *   2. Intent input — free-text, duration, optional injury note.
+ *   2. Intent input. Free-text, duration, optional injury note.
  *   3. POST to edge function. Show loading.
  *   4. Render the proposal: workout summary + narrative + Accept / Regenerate.
  *   5. Accept pushes the workout into `wk.adhocWorkouts` (same path as the

@@ -1,5 +1,5 @@
 /**
- * Triathlon plan engine — top-level entry for generating a triathlon plan.
+ * Triathlon plan engine. Top-level entry for generating a triathlon plan.
  *
  * Generation flow:
  *   1. Phase each week (base → build → peak → taper, plus checkpoint flag for
@@ -11,7 +11,7 @@
  *   6. Wrap into a Week[] compatible with the rest of the app
  *
  * Reuses the running workout library for run sessions to keep the running
- * code path canonical (no fork for the run leg — it's the same muscle as
+ * code path canonical (no fork for the run leg. It's the same muscle as
  * marathon training).
  */
 
@@ -72,7 +72,7 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
 
   // Apply per-discipline effort multiplier to upcoming weeks (week ≥ current).
   // Mirrors running's plan_engine `effortMultiplier` step. Past weeks are
-  // intentionally left alone — we don't rewrite history.
+  // intentionally left alone. We don't rewrite history.
   applyTriEffortMultipliersToFutureWeeks(state, weeks);
 
   return weeks;
@@ -80,7 +80,7 @@ export function generateTriathlonPlan(state: SimulatorState): Week[] {
 
 /**
  * Apply per-discipline effort multipliers to ALL future weeks of the plan.
- * Pure mutation — caller passes the freshly-generated `weeks` array.
+ * Pure mutation. Caller passes the freshly-generated `weeks` array.
  *
  * Skips weeks before `state.w` (those are completed/in-progress and
  * shouldn't have their planned durations re-scaled retroactively).
@@ -109,7 +109,7 @@ export function regenerateTriathlonWeek(state: SimulatorState, weekIndex: number
   const weekWorkouts = generateWeekForTriathlon(state, weekIndex, totalWeeks, phase);
 
   // Apply per-discipline effort multiplier when regenerating a future week.
-  // For a same-week or past-week regen, skip — preserves historical duration.
+  // For a same-week or past-week regen, skip. Preserves historical duration.
   if (weekIndex >= (state.w ?? 1)) {
     applyTriEffortMultipliers(state, weekWorkouts);
   }
@@ -139,7 +139,7 @@ function generateWeekForTriathlon(
   // shoulder injury at acute pain doesn't blanket-stop all training, it
   // drops swim while keeping bike + run. The Session 1 "B1" wiring that
   // routed phase workouts through tri was a misread of the running
-  // engine — phase replacement is run-only because running is single-
+  // engine. Phase replacement is run-only because running is single-
   // discipline. If the user has every gate set to 'no', the gate
   // downmix below correctly produces an empty week and the empty-state
   // card surfaces "Plan paused this week". The clinical "acute = 72h
@@ -152,7 +152,7 @@ function generateWeekForTriathlon(
   const rating = tri.skillRating ?? { swim: 3, bike: 3, run: 3 };
   const gymSessions = state.gs ?? 0;
 
-  // Active disciplines — defaults to full triathlon when undefined so existing
+  // Active disciplines. Defaults to full triathlon when undefined so existing
   // tri behaviour is preserved. Single-discipline modes (V1 cycling) set
   // disciplines=['bike']; swim/run loops below skip when the discipline is
   // absent.
@@ -182,7 +182,7 @@ function generateWeekForTriathlon(
   let   runSessions  = hasRun  ? countSessions(runHours,  0.9,  3) : 0;
 
   // Commute runs are appended on top of the prescribed tri run sessions,
-  // not substituted for them (revised 2026-05-20 — see SCIENCE_LOG §AK).
+  // not substituted for them (revised 2026-05-20. See SCIENCE_LOG §AK).
   // We still read commuteDays so the slot generator further down can emit
   // the commute slots themselves.
   const commuteDays = state.commuteConfig?.enabled && state.commuteConfig.commuteDaysPerWeek > 0
@@ -206,7 +206,7 @@ function generateWeekForTriathlon(
     }));
   }
 
-  // Generate bike sessions. Last one is the "long" — we might swap for a brick.
+  // Generate bike sessions. Last one is the "long". We might swap for a brick.
   const bike: Workout[] = [];
   for (let i = 0; i < bikeSessions; i++) {
     const excluded = new Set<string>(state.onboarding?.cyclingExcludedWorkouts ?? []);
@@ -228,7 +228,7 @@ function generateWeekForTriathlon(
   }
 
   // Run sessions (simple: 1 quality, 1 easy, 1 long)
-  // Resolve easy pace — mirrors running mode: gp(vdot, ltPace) so LT anchors
+  // Resolve easy pace. Mirrors running mode: gp(vdot, ltPace) so LT anchors
   // all zones when available. Without ltPace, gp() falls back to VDOT-only
   // which diverges from the LT-anchored paces shown elsewhere in the UI.
   const easyPaceSecPerKm = state.v ? gp(state.v, state.lt ?? null).e : undefined;
@@ -247,7 +247,7 @@ function generateWeekForTriathlon(
   }
 
   // Brick (phase: build or peak, weekly in those phases). Requires both bike
-  // and run disciplines active — single-discipline cycling mode skips bricks.
+  // and run disciplines active. Single-discipline cycling mode skips bricks.
   let brick: Workout | null = null;
   if ((phase === 'build' || phase === 'peak') && bike.length > 0 && hasRun && run.length > 0) {
     const bikeMinutes = Math.round(bikeHours * 60 * 0.40);  // Slightly shorter than solo long ride
@@ -322,7 +322,7 @@ function generateWeekForTriathlon(
 
   // Build per-day minute caps from the user's weekday/weekend split. The
   // scheduler will spill overflow toward the weekend when weekday capacity
-  // runs out — matches how a 9-to-5 athlete actually trains.
+  // runs out. Matches how a 9-to-5 athlete actually trains.
   const totalHours = weekHours;
   const weekdayHours = Math.min(
     totalHours,
@@ -346,7 +346,7 @@ function generateWeekForTriathlon(
   // intensity session that compounds risk on whichever side is compromised.
   //
   // weeksFromCurrent is passed so per-week ramp logic can decide if the ramp
-  // window covers THIS specific future week — without it, a 2-week ramp set
+  // window covers THIS specific future week. Without it, a 2-week ramp set
   // at week 5 would incorrectly downmix every week 5–16 in a 16-week plan.
   //
   // Past weeks are skipped entirely: a current injury cannot retroactively
@@ -374,7 +374,7 @@ function generateWeekForTriathlon(
  * Apply per-discipline capacity scaling to the generated workouts. The slider
  * model (0–100 per discipline) replaces the prior 3-tier enum: 0 drops the
  * discipline, 100 leaves it untouched, in-between scales each session's
- * duration linearly. Intensity is intentionally NOT capped — the user chose
+ * duration linearly. Intensity is intentionally NOT capped. The user chose
  * volume-only scaling and self-regulates RPE in the moment. Reads via
  * `getDisciplineCapacity` so legacy enum state still works during migration.
  *
@@ -385,7 +385,7 @@ function generateWeekForTriathlon(
  * `weeksFromCurrent` resolves each discipline's per-week recovery horizon.
  * The slider sets the *magnitude* of the restriction; `resumeWeeksByDiscipline`
  * sets *when it ends*. Once the week being generated is at or beyond a
- * discipline's resume week, that discipline is restored to full capacity — so
+ * discipline's resume week, that discipline is restored to full capacity. So
  * a 2-week swim restriction does not zero swim for the entire macrocycle.
  * Without a captured resume week (legacy state), the discipline keeps the
  * conservative freeze-current-capacity behaviour for all future weeks.
@@ -488,7 +488,7 @@ function countSessions(hours: number, avgSessionHours: number, maxSessions: numb
 }
 
 function phaseMultiplier(phase: TrainingPhase, weekIndex: number, totalWeeks: number): number {
-  // Volume ramp within each phase — linear-ish so early base weeks don't
+  // Volume ramp within each phase. Linear-ish so early base weeks don't
   // blast a beginner with full peak volume on day one (§4 feedback).
   //   Base: 0.55 at week 1 → 0.85 near end of base
   //   Build: 0.85 → 1.00
@@ -580,7 +580,7 @@ function generateRunSessionForTri(
   const isLong = slotIndex === totalSlots - 1;
   const isQuality = slotIndex === 0 && (phase === 'build' || phase === 'peak');
 
-  // Derive pace labels — mirrors intent_to_workout.ts logic exactly.
+  // Derive pace labels. Mirrors intent_to_workout.ts logic exactly.
   const fmtPace = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
   const pace = easyPaceSec ?? easyPaceSecPerKmFromSkill(skill);
   const thresholdSec = pace / 1.15;

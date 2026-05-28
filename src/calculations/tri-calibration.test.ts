@@ -140,7 +140,7 @@ describe('computeTriCalibration — tier-2 shrinkage', () => {
     // We verify through the clamp/shrinkage math directly.
     // Use entries where the penalty is 1.1× and actual always matches raw (no residual).
     // penaltyExcess = 0.1 for all; if actual = raw, residualFraction = (actual - post) / post = (raw - raw*1.1) / (raw*1.1) ≈ -0.091
-    // That produces a specific slope — let's just verify the shrinkage formula
+    // That produces a specific slope. Let's just verify the shrinkage formula
     // by checking that at n=4 with a non-trivial raw scale, the output is between 1.0 and raw.
     const entries = Array.from({ length: 4 }, (_, i) => {
       const rawSwim = 2200;
@@ -155,7 +155,7 @@ describe('computeTriCalibration — tier-2 shrinkage', () => {
     });
     const cal = computeTriCalibration(entries);
     expect(cal.tier).toBe(2);
-    // Shrunk scale is between 1.0 and raw scale — the Bayesian pull toward 1 works.
+    // Shrunk scale is between 1.0 and raw scale. The Bayesian pull toward 1 works.
     expect(cal.perLegMaxPenaltyScale!.swim).toBeGreaterThanOrEqual(0.6);
     expect(cal.perLegMaxPenaltyScale!.swim).toBeLessThanOrEqual(1.4);
   });

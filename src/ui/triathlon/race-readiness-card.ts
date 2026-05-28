@@ -5,7 +5,7 @@
  * and label. Tap-through opens the detail view (`race-readiness-detail.ts`)
  * for the actionable breakdown ("you need 2 more weeks of long rides").
  *
- * Data source: `state.triConfig.prediction.raceReadiness` — populated by
+ * Data source: `state.triConfig.prediction.raceReadiness`. Populated by
  * `predictTriathlonRace` whenever the prediction is computed. If absent
  * (no prediction yet, race distance not set), this card returns ''.
  *
@@ -65,7 +65,7 @@ export function renderRaceReadinessCard(state: SimulatorState): string {
   const bike = makeBar('Bike', readiness.bike, false);
   const run  = makeBar('Run',  readiness.run,  true);
 
-  // Only show the panel if any discipline is below "race ready" — when the
+  // Only show the panel if any discipline is below "race ready". When the
   // athlete is fully prepared across all three, the panel adds no value
   // and clutters the forecast page.
   const showSummary = readiness.overallScore < 90;

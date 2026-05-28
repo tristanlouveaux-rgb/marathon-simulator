@@ -19,7 +19,7 @@ const TYPE_DESCRIPTIONS: Record<RunnerType, string> = {
  */
 export function renderRunnerType(container: HTMLElement, state: OnboardingState): void {
   // Classification needs at least 2 different-distance PBs to detect a
-  // speed/endurance lean from the ratio. With 0 or 1 PB it's noise — skip the
+  // speed/endurance lean from the ratio. With 0 or 1 PB it's noise. Skip the
   // screen entirely. The engine falls back to 'Balanced' until enough data
   // accrues via real race entries.
   const pbs = state.pbs ?? {};

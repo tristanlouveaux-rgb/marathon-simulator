@@ -1,5 +1,5 @@
 /**
- * Triathlon course-factor multipliers — applied to leg times AFTER fitness
+ * Triathlon course-factor multipliers. Applied to leg times AFTER fitness
  * projection. Drives climate, altitude, run elevation, wind, and swim-type
  * adjustments. Every value is literature-anchored; full rationale lives in
  * `docs/SCIENCE_LOG.md` §G.
@@ -17,14 +17,14 @@ import type { CourseProfile } from '@/types/onboarding';
 // Climate (run primary, bike secondary)
 // Sources:
 //   - Ely MR et al. (2007) "Impact of weather on marathon-running performance"
-//     MSSE 39:487–493 — fastest times at 10–12°C; per-degree slowdown above.
+//     MSSE 39:487–493. Fastest times at 10–12°C; per-degree slowdown above.
 //   - El Helou N et al. (2012) "Impact of environmental parameters on marathon
-//     running performance" PLoS ONE 7:e37407 — 1.7M finishers across 6 marathons.
+//     running performance" PLoS ONE 7:e37407. 1.7M finishers across 6 marathons.
 //   - Maughan & Shirreffs (2010) "Dehydration and rehydration in competitive
 //     sport" Scand J Med Sci Sports 20 Suppl 3:40–47.
-//   - Galloway & Maughan (1997) — heat + humidity interaction.
+//   - Galloway & Maughan (1997). Heat + humidity interaction.
 //   - ACSM Position Stand on Heat (2007).
-//   - Tatterson et al. (2000) J Sci Med Sport 3:186–193 — ~6.5% bike power
+//   - Tatterson et al. (2000) J Sci Med Sport 3:186–193. ~6.5% bike power
 //     drop in 32°C vs 23°C TT; bike heat penalty ≈40% of run penalty due to
 //     convective cooling at 30+ km/h.
 // Confidence: high for run, medium for bike.
@@ -47,7 +47,7 @@ export const CLIMATE_RUN_MULTIPLIER: Record<ClimateCategory, number> = {
   temperate:   1.015,  // +1.5% (Ely 2007, Vihma 2010)
   warm:        1.040,  // +4%   (Ely 2007, Maughan 2010)
   hot:         1.080,  // +8%   (El Helou 2012)
-  'hot-humid': 1.120,  // +12%  (Galloway 1997, ACSM 2007 — humidity premium)
+  'hot-humid': 1.120,  // +12%  (Galloway 1997, ACSM 2007. Humidity premium)
 };
 
 /** Bike multiplier — convective cooling reduces effect to ~40% of run. */
@@ -63,10 +63,10 @@ export const CLIMATE_BIKE_MULTIPLIER: Record<ClimateCategory, number> = {
 // Altitude (run + bike, non-linear above 1500m)
 // Sources:
 //   - Bonetti & Hopkins (2009) "Sea-level exercise performance following
-//     adaptation to hypoxia" Sports Med 39:107–127 — meta-analysis.
-//   - Wehrlin & Hallen (2006) Eur J Appl Physiol — ~6.3% VO2max drop per
+//     adaptation to hypoxia" Sports Med 39:107–127. Meta-analysis.
+//   - Wehrlin & Hallen (2006) Eur J Appl Physiol. ~6.3% VO2max drop per
 //     1000m above 600m.
-//   - Peronnet F et al. (1991) — altitude performance modelling.
+//   - Peronnet F et al. (1991). Altitude performance modelling.
 // Bike < run because IM-intensity power is sub-maximal aerobic; running has
 // higher relative VO2 cost per unit speed.
 // Confidence: high for the model, medium for the bike-vs-run scaling.
@@ -151,7 +151,7 @@ export const WIND_EXPOSURE_BIKE_MULTIPLIER: Record<WindExposureCategory, number>
   exposed:   1.05,
 };
 
-// Running wind multiplier — lower magnitude than bike because aerodynamic
+// Running wind multiplier. Lower magnitude than bike because aerodynamic
 // resistance is a much smaller share of running's energy cost (~2-3% vs
 // ~80% at race speed for cycling). Net effect of a windy course is asymmetric
 // (headwind slows ~3%, tailwind helps ~1%) so a mixed/exposed average
@@ -172,7 +172,7 @@ export const WIND_EXPOSURE_RUN_MULTIPLIER: Record<WindExposureCategory, number> 
 // ───────────────────────────────────────────────────────────────────────────
 // Heat acclimatisation discount (run)
 // Source: Lorenzo S & Cheuvront SN (2010) "Heat acclimation improves
-// exercise performance" J Appl Physiol 109:1140–1147 — 10–14 days of heat
+// exercise performance" J Appl Physiol 109:1140–1147. 10–14 days of heat
 // acclimatisation preserves ~3–5% performance vs unacclimatised matched
 // athletes. Karlsen A et al. (2015) "Heat acclimatization does not improve
 // VO2max" Scand J Med Sci Sports 25 Suppl 1:269–276 confirms the effect
@@ -187,28 +187,28 @@ export const WIND_EXPOSURE_RUN_MULTIPLIER: Record<WindExposureCategory, number> 
 // ───────────────────────────────────────────────────────────────────────────
 
 export const RUN_HEAT_ACCLIM_MAX_DISCOUNT = 0.50; // 50% of the climate penalty
-export const RUN_HEAT_ACCLIM_RAMP_GAP_C = 15;    // °C — gap that fully cancels the discount
+export const RUN_HEAT_ACCLIM_RAMP_GAP_C = 15;    // °C. Gap that fully cancels the discount
 
 // ───────────────────────────────────────────────────────────────────────────
 // Swim type
 // Sources:
 //   - Toussaint HM et al. (1989) "Effect of a triathlon wet suit on drag during
-//     swimming" MSSE 21:325–328 — ~14% drag reduction at 1.25 m/s.
+//     swimming" MSSE 21:325–328. ~14% drag reduction at 1.25 m/s.
 //   - Cordain L & Kopriva R (1991) "Wetsuits, body density and swimming
-//     performance" Sports Med 11:336–348 — ~5% time benefit for non-elite.
+//     performance" Sports Med 11:336–348. ~5% time benefit for non-elite.
 //   - de la Fuente Pacheco JG et al. (2020) "Is swimmers' performance
 //     influenced by wetsuit use?" Int J Sports Physiol Perform 15:46–51 —
 //     400m pool study, ~6% time reduction (~0.07 m/s).
 //   - Baldassarre R et al. (2017) "Pacing and hazards in long-distance open-
-//     water swimming" Front Physiol 8:294 — open-water vs pool review.
+//     water swimming" Front Physiol 8:294. Open-water vs pool review.
 //   - López-Belmonte Ó et al. (2024) "Swimming performance in elite
 //     triathletes: comparison between open water and pool conditions" Scand J
-//     Med Sci Sports 34:e14702 — 1500m, n=14, no physiological differences
+//     Med Sci Sports 34:e14702. 1500m, n=14, no physiological differences
 //     between conditions; kinematic shifts (lower stroke length / index, higher
 //     stroke rate in OW) but strong correlation between pool and OW finish time.
 //
 // Two unions (sharing the same multiplier table):
-//   - `SwimTypeCategory`: wider — includes both race-side and athlete-side
+//   - `SwimTypeCategory`: wider. Includes both race-side and athlete-side
 //     environments. Used as the multiplier-table key.
 //   - `CourseProfile['swimType']`: narrower (5 values). Race profiles cannot
 //     be `pool` (you don't race in a pool).
@@ -238,11 +238,11 @@ export const RUN_HEAT_ACCLIM_RAMP_GAP_C = 15;    // °C — gap that fully cance
 /** Wider union covering both race-side and athlete-side environments. Used
  *  as the multiplier-table key. */
 export type SwimTypeCategory =
-  | 'pool'                      // ATHLETE-only — training in a pool
+  | 'pool'                      // ATHLETE-only. Training in a pool
   | 'wetsuit-lake'              // shared
   | 'non-wetsuit-lake'          // shared
   | 'ocean'                     // shared
-  | 'ocean-current-assisted'    // RACE-only — favourable current
+  | 'ocean-current-assisted'    // RACE-only. Favourable current
   | 'river';                    // shared
 
 /** Subset of SwimTypeCategory valid as an athlete-side per-activity tag.
@@ -259,7 +259,7 @@ export const SWIM_TYPE_MULTIPLIER: Record<SwimTypeCategory, number> = {
 };
 
 // ───────────────────────────────────────────────────────────────────────────
-// Source attribution — surfaced on the Venue forecast card
+// Source attribution. Surfaced on the Venue forecast card
 // One primary citation per running factor kind. Keep titles short enough to
 // fit on one line; long-form discussion lives in docs/SCIENCE_LOG.md §G.
 // ───────────────────────────────────────────────────────────────────────────

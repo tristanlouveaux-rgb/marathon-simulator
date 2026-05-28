@@ -12,7 +12,7 @@
  * **Floor at 0% gain**: lessons-learnt from the triathlon model. A negative
  * floor produced "training will make you slower" projections in degenerate
  * cases (race tomorrow + zero planned sessions hits the undertrain penalty
- * hard). We clamp at 0 — worst case = current fitness, never regression.
+ * hard). We clamp at 0. Worst case = current fitness, never regression.
  *
  * Phase 1 ships with `adaptation_ratio = 1.0` defaults. The architecture
  * supports future per-class adaptation signals (HR-at-power drift on erg
@@ -34,7 +34,7 @@ import {
   getStationClassHorizonParams,
 } from '@/constants/hyrox-horizon-params';
 
-// Mirrors EXP_FACTORS in training-horizon.triathlon.ts — same physiology
+// Mirrors EXP_FACTORS in training-horizon.triathlon.ts. Same physiology
 // (re-adaptation advantage / cold-start penalty) is modality-agnostic. Kept
 // in lockstep deliberately.
 const EXP_FACTORS: Record<string, number> = {
@@ -76,7 +76,7 @@ export interface HyroxHorizonResult {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Generic core — shared across all four curve types.
+// Generic core. Shared across all four curve types.
 // ───────────────────────────────────────────────────────────────────────────
 
 function computeImprovementPct(
@@ -106,14 +106,14 @@ function computeImprovementPct(
   const taperBon  = params.taper_bonus_pct[input.ability_band];
 
   // Default taper used unless caller overrides. Single Hyrox-wide value
-  // (HYROX_TAPER_WEEKS) — see hyrox-horizon-params header for rationale.
+  // (HYROX_TAPER_WEEKS). See hyrox-horizon-params header for rationale.
   const taper_eff = input.taper_weeks ?? HYROX_TAPER_WEEKS;
   const weeks_eff = Math.max(0, input.weeks_remaining - taper_eff);
 
   // Saturating exponential: longer horizon → asymptotic max_gain.
   const weekFactor = weeks_eff > 0 ? (1 - Math.exp(-weeks_eff / tau)) : 0;
 
-  // Logistic dose-response — k=0.7 mirrors triathlon (recalibrated).
+  // Logistic dose-response. K=0.7 mirrors triathlon (recalibrated).
   const sessionFactor = 1 / (1 + Math.exp(-HYROX_K_SESSIONS * (input.sessions_per_week - refSess)));
 
   const expFactor = EXP_FACTORS[input.experience_level ?? 'intermediate'] ?? 1.0;
@@ -159,7 +159,7 @@ function computeImprovementPct(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Per-station horizon — looks up the station's class, then applies the curve.
+// Per-station horizon. Looks up the station's class, then applies the curve.
 // ───────────────────────────────────────────────────────────────────────────
 
 export function applyHyroxStationHorizon(
@@ -185,7 +185,7 @@ export function applyHyroxClassHorizon(
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// RoxZone horizon — separate curve, same math.
+// RoxZone horizon. Separate curve, same math.
 // ───────────────────────────────────────────────────────────────────────────
 
 export function applyHyroxRoxzoneHorizon(input: HyroxHorizonInput): HyroxHorizonResult {

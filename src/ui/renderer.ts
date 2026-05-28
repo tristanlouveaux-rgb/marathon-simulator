@@ -178,7 +178,7 @@ export function render(): void {
   // For predictions/forecast, always use the real training week, not the viewed week
   const realW = (s as any)._viewOnly ? (s as any)._realW : s.w;
 
-  // VDOT tracking — s.v is the blended current-fitness VDOT (refreshed weekly).
+  // VDOT tracking. S.v is the blended current-fitness VDOT (refreshed weekly).
   const currentVDOT = getEffectiveVdot(s);
 
   // Current fitness
@@ -337,7 +337,7 @@ export function render(): void {
     }
   }
 
-  // 3. Append ad-hoc workouts — exclude Garmin-synced ones (separate section) and GPS
+  // 3. Append ad-hoc workouts. Exclude Garmin-synced ones (separate section) and GPS
   //    impromptu runs (they're shown in the GPS recordings panel, not the plan list).
   //    Two cases to exclude:
   //    a) GPS-linked entries (id present in gpsRecordings)
@@ -761,10 +761,10 @@ function renderCalendar(wos: Workout[], wk: Week, paces: any): string {
             h += `<div class="text-xs line-through" style="color:var(--c-faint)">${origLine}</div>`;
             h += `<div class="text-xs" style="color:var(--c-accent)">${w.modReason ? w.modReason.replace(/^Garmin:\s*/i, '').trim() : 'Replaced'}</div>`;
           } else if (isModified) {
-            // Modified (graduated return): short format — just key info
+            // Modified (graduated return): short format. Just key info
             const descLines = fmtDesc(injectPaces(w.d, paces), unitPref).split(/\n/);
             const mainLine = descLines.length >= 3 ? descLines[1] : descLines[0];
-            // Strip paces, distance hints, recovery — just show structure
+            // Strip paces, distance hints, recovery. Just show structure
             const shortDesc = mainLine
               .replace(/@\s*[^,\n]+/g, '')       // strip everything after @
               .replace(/\s*\(~[^)]+\)/g, '')     // strip distance hints
@@ -834,7 +834,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
 
       h += `<div class="border-2 p-2 rounded" style="border-color:${gymBorderColor};background:${gymBgStyle}">`;
 
-      // Header — show matched activity name if garmin-matched
+      // Header. Show matched activity name if garmin-matched
       const dayLabel = w.dayOfWeek != null ? DAY_NAMES_SHORT[w.dayOfWeek] : '';
       h += `<div class="flex justify-between mb-1 text-xs">`;
       h += `<div>${dayLabel ? `<span class="mr-1.5" style="color:var(--c-faint)">${dayLabel}</span>` : ''}`;
@@ -885,7 +885,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
         h += `<div class="text-xs" style="color:var(--c-ok)">Done</div>`;
       }
 
-      // Skip button — only for unrated (planned) gym sessions
+      // Skip button. Only for unrated (planned) gym sessions
       if (!viewOnly && !rtd) {
         const skipId = w.id || w.n;
         h += `<button onclick="window.skip('${skipId.replace(/'/g, "\\'")}','${w.n.replace(/'/g, "\\'")}','${w.t}',false,0,'${w.d.replace(/'/g, "\\'").replace(/\n/g, ' ')}',${w.rpe || w.r},${w.dayOfWeek},'${w.dayName || ''}')" class="w-full mt-1 text-xs py-0.5 rounded" style="background:rgba(0,0,0,0.06);color:var(--c-muted)">Skip</button>`;
@@ -1008,7 +1008,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       }
     }
 
-    // Description — for replaced workouts, show original distance instead of "0km (replaced)"
+    // Description. For replaced workouts, show original distance instead of "0km (replaced)"
     if (isReplaced && w.originalDistance) {
       const origDesc = fmtDesc(injectPaces(w.originalDistance, paces), unitPref).replace(/\n/g, '<br>');
       h += `<div class="text-xs mb-1" style="color:var(--c-muted)"><s>${origDesc}</s> <span style="color:var(--c-accent)">(replaced)</span></div>`;
@@ -1031,7 +1031,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
           : garminActual ? '<span style="color:var(--c-faint)">RPE est.</span>'
           : '';
         if (actualTSSVal != null) {
-          // Zone breakdown — use real hrZones if available, else fall back to workout type profile
+          // Zone breakdown. Use real hrZones if available, else fall back to workout type profile
           let zBase = 0, zThreshold = 0, zIntensity = 0;
           const hz = garminActual?.hrZones;
           const hzTotal = hz ? (hz.z1 + hz.z2 + hz.z3 + hz.z4 + hz.z5) : 0;
@@ -1104,7 +1104,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     if (garminActual) {
       h += renderGarminActuals(garminActual, workoutInfo);
 
-      // Strava detail panel (HR zones, km splits, route map) — shown on expand
+      // Strava detail panel (HR zones, km splits, route map). Shown on expand
       if (garminActual.hrZones || garminActual.kmSplits?.length || garminActual.polyline) {
         const detailId = 'gd-' + escapeAttr(w.id || w.n);
         h += `<button onclick="window.toggleStravaDetail('${detailId}')" class="flex items-center gap-1 text-[11px] mt-1.5 transition-colors" style="color:var(--c-faint)">`;
@@ -1169,7 +1169,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       }
     }
 
-    // HR target pill (conditional — only rendered if data exists and workout not yet done)
+    // HR target pill (conditional. Only rendered if data exists and workout not yet done)
     if (w.hrTarget && !rtd) {
       h += `<div class="text-xs mb-1 px-2 py-1 rounded-full inline-flex items-center gap-1 border" style="background:rgba(239,68,68,0.06);border-color:rgba(239,68,68,0.3);color:var(--c-warn)">`;
       h += `<svg class="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clip-rule="evenodd"/></svg>`;
@@ -1240,7 +1240,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
     if (!isReplaced && w.t !== 'cross' && w.t !== 'strength' && w.t !== 'rest' && w.t !== 'gym') {
       const gpsRecId = wk.gpsRecordings?.[w.id || w.n];
       if (gpsRecId && rtd) {
-        // Completed with GPS — show "View Run" button
+        // Completed with GPS. Show "View Run" button
         h += `<button class="gps-view-btn w-full mt-1 text-xs py-1 rounded font-medium" style="background:var(--c-ok);color:white" data-recid="${escapeAttr(gpsRecId)}">View Run</button>`;
       } else if (!viewOnly && !rtd) {
         const tracking = isTrackingActive();
@@ -1257,7 +1257,7 @@ function renderWorkoutList(wos: Workout[], wk: Week, rd: string, paces: any, tw:
       }
     }
 
-    // Skip button — only for unrated (planned) workouts
+    // Skip button. Only for unrated (planned) workouts
     if (!viewOnly && !rtd) {
       const skipId = w.id || w.n;
       const skipBtnStyle = isSkipped
@@ -1647,7 +1647,7 @@ export function setupSyncListener(): void {
           window.rate(matchedWorkout.id || matchedWorkout.n, matchedWorkout.n, 5, matchedWorkout.rpe || matchedWorkout.r || 5, matchedWorkout.t, false, activity.avgHR);
         }
       } else if (decision === 'keep-both') {
-        // Log as separate cross-training — dispatch back as unmatched
+        // Log as separate cross-training. Dispatch back as unmatched
         window.dispatchEvent(new CustomEvent('sync-activity-unmatched', { detail: activity }));
       }
       // 'ignore' → do nothing

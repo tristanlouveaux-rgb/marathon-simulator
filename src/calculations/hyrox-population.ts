@@ -3,7 +3,7 @@
  *
  * Based on HyroxDataLab 700k+ race database percentile distributions
  * and band thresholds from hyrox-benchmarks.ts. Open division, gender-mixed.
- * Values are approximate midpoints — real distributions vary by age/gender/location.
+ * Values are approximate midpoints. Real distributions vary by age/gender/location.
  *
  * Science log: docs/SCIENCE_LOG.md §HYROX Population Percentiles.
  */
@@ -36,7 +36,7 @@ const OPEN_PERCENTILE_TABLE: Array<[number, number]> = [
 ];
 
 /**
- * Pro division is faster — the field is self-selected to faster athletes.
+ * Pro division is faster. The field is self-selected to faster athletes.
  * Scale roughly: Pro men ~15% faster than Open; women ~12% faster.
  */
 const PRO_PERCENTILE_TABLE: Array<[number, number]> = [
@@ -97,7 +97,7 @@ export function percentileLabel(fasterThanPct: number): string {
 }
 
 /** Headline phrasing for the "your time vs population" hero line.
- *  At extremes, "faster than X%" reads weirdly — switch to descriptive text. */
+ *  At extremes, "faster than X%" reads weirdly. Switch to descriptive text. */
 export function percentileHeadline(fasterThanPct: number): string {
   if (fasterThanPct >= 5) return `Faster than ${fasterThanPct}% of finishers`;
   return 'Below typical finishing range';

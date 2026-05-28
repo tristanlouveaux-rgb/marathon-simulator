@@ -5,7 +5,7 @@ import type { Week, CommuteConfig } from '@/types';
  *
  * The user declares their commute pattern at onboarding (or via Settings):
  * one-way distance, bidirectional flag, days/week. That declaration is a
- * stated intent. Real behaviour drifts — life happens, weather happens, the
+ * stated intent. Real behaviour drifts. Life happens, weather happens, the
  * user changes office or starts driving on Wednesdays. If we don't trail the
  * actuals, the commute-aware plan engine keeps prescribing as if the user is
  * still doing 5 days/week when they're really doing 2, and the runner ends
@@ -23,7 +23,7 @@ import type { Week, CommuteConfig } from '@/types';
  * the declared `commuteDaysPerWeek` by ≥ 1, reduce the declared baseline
  * to the median observed count (rounded to the nearest day, floored at 1).
  *
- * We don't *raise* the declared count automatically — if a user is doing
+ * We don't *raise* the declared count automatically. If a user is doing
  * more than they declared, that's their own elective effort and the plan
  * engine's substitution math still works (it floors at zero spare easy
  * mileage). Raising would shrink the plan, which is the wrong direction.
@@ -62,16 +62,16 @@ export function detectCommuteDrift(
 ): CommuteDriftResult | null {
   if (!commuteConfig?.enabled) return null;
   if (!commuteConfig.commuteDaysPerWeek || commuteConfig.commuteDaysPerWeek <= 1) {
-    // Already at the floor — nothing to reduce to.
+    // Already at the floor. Nothing to reduce to.
     return null;
   }
 
   // Take the last WINDOW *completed* weeks. The current week (currentWeekNumber)
-  // is in-progress and would unfairly skew the observation downward — exclude.
+  // is in-progress and would unfairly skew the observation downward. Exclude.
   const startIdx = Math.max(0, currentWeekNumber - 1 - WINDOW);
   const endIdx = currentWeekNumber - 1; // exclusive
   if (endIdx - startIdx < WINDOW) {
-    // Not enough history yet — wait for a fuller window before adjusting.
+    // Not enough history yet. Wait for a fuller window before adjusting.
     return null;
   }
 

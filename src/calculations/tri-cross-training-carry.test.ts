@@ -1,7 +1,7 @@
 /**
  * Tests for `computeDecayedTriCarry`.
  *
- * Mirrors running's `computeDecayedCarry` — 7-day exponential decay (ATL τ),
+ * Mirrors running's `computeDecayedCarry`. 7-day exponential decay (ATL τ),
  * 3-week lookback. Used by the cross-training overload detector to factor
  * "still-being-paid" load from prior weeks where the user clicked Push to
  * Next Week.
@@ -64,7 +64,7 @@ describe('computeDecayedTriCarry', () => {
       w: 3, // currentWeekIdx = 3
       wks: [{}, {}, {}, { carriedCrossTrainingTSS: 100 }] as any, // week 3 (idx 3) is current
     });
-    // Wait — current week is idx 3, but we want the carry on idx 2 (week 3
+    // Wait. Current week is idx 3, but we want the carry on idx 2 (week 3
     // becomes the prior week of idx 3 ... let me re-index. The detector reads
     // wk.carriedCrossTrainingTSS from PRIOR weeks. If currentWeekIdx=3, prior
     // weeks are 2, 1, 0.
@@ -99,7 +99,7 @@ describe('computeDecayedTriCarry', () => {
       wks: [{}, { carriedCrossTrainingTSS: 100 }, { carriedCrossTrainingTSS: 50 }, {}] as any,
     });
     const decayed = computeDecayedTriCarry(s);
-    // Tolerant range — depends on local-vs-UTC handling of "noon today".
+    // Tolerant range. Depends on local-vs-UTC handling of "noon today".
     // The point is: both weeks contribute proportional to age (recent > old).
     expect(decayed).toBeGreaterThan(45);
     expect(decayed).toBeLessThan(65);

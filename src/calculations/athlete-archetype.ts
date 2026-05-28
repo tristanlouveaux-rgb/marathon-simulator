@@ -1,5 +1,5 @@
 /**
- * Athlete archetype classification — what KIND of athlete is starting this plan.
+ * Athlete archetype classification. What KIND of athlete is starting this plan.
  *
  * The plan engine's ramp rate and the predictor's confidence band both depend
  * on it. A user running 18 km/wk today could be (a) returning after a layoff
@@ -10,7 +10,7 @@
  * Science:
  *  - Bone/tendon adaptation lags VO₂max by 6-12 weeks (Bennell 1996, Warden 2014).
  *  - Detraining: VO₂max -7-10%/mo, but retrained runners regain 2-3× faster
- *    than de-novo (Mujika & Padilla 2000; Egan & Zierath 2013 — satellite-cell
+ *    than de-novo (Mujika & Padilla 2000; Egan & Zierath 2013. Satellite-cell
  *    retention).
  *  - ACWR sweet spot 0.8-1.3, danger >1.5 (Gabbett 2016).
  *
@@ -110,7 +110,7 @@ function yearsBetween(isoFrom: string | null | undefined, isoTo: Date): number |
 }
 
 /**
- * Build the evidence object from state. Pure — no side effects.
+ * Build the evidence object from state. Pure. No side effects.
  */
 export function gatherEvidence(s: State, now: Date = new Date()): ArchetypeEvidence {
   const currentWeeklyKm = s.detectedWeeklyKm ?? 0;
@@ -130,7 +130,7 @@ export function gatherEvidence(s: State, now: Date = new Date()): ArchetypeEvide
     .reduce((max: number, r: { distKm: number }) => Math.max(max, r.distKm), 0);
   const longestRunPast12moKm = longestFromOnboarding;
 
-  // Weeks since last consistent week — scan the most recent extended history.
+  // Weeks since last consistent week. Scan the most recent extended history.
   const REVERSED = [...weeklyKmHistory].reverse();
   let weeksSinceConsistent = Infinity;
   for (let i = 0; i < REVERSED.length; i++) {
@@ -185,18 +185,18 @@ export function gatherEvidence(s: State, now: Date = new Date()): ArchetypeEvide
 /**
  * Classify the athlete from evidence.
  *
- * Decision order (top-down — the first matching archetype wins):
- *   1. high-mileage         — current ≥ 50 km/wk AND CV < 0.35
- *   2. consistent-runner    — current ≥ 20 km/wk AND recent (weeksSinceConsistent ≤ 2)
+ * Decision order (top-down. The first matching archetype wins):
+ *   1. high-mileage. Current ≥ 50 km/wk AND CV < 0.35
+ *   2. consistent-runner. Current ≥ 20 km/wk AND recent (weeksSinceConsistent ≤ 2)
  *      OR currentWk < 20 with recent consistency (a stable low-volume runner who
  *      just dipped below 20 km last week is "consistent at their level", not
- *      detrained — detrained requires an actual gap of 3+ weeks).
- *   3. detrained-with-history — current < 20 km/wk, hasn't been ≥ 20 for 3+ weeks,
+ *      detrained. Detrained requires an actual gap of 3+ weeks).
+ *   3. detrained-with-history. Current < 20 km/wk, hasn't been ≥ 20 for 3+ weeks,
  *      AND has running history (peak past year ≥ 25 km / longest run ≥ 15 km /
  *      completed marathon).
- *   4. cross-trained-impact — current < 15 km/wk AND impactSportPresent
- *   5. cross-trained-no-impact — current < 15 km/wk AND crossTrainingHours ≥ 2
- *   6. sedentary-novice     — everything else with current < 10 km/wk
+ *   4. cross-trained-impact. Current < 15 km/wk AND impactSportPresent
+ *   5. cross-trained-no-impact. Current < 15 km/wk AND crossTrainingHours ≥ 2
+ *   6. sedentary-novice. Everything else with current < 10 km/wk
  *   else `consistent-runner` (fallback for ambiguous mid-range without history)
  */
 export function classify(e: ArchetypeEvidence): Archetype {
@@ -211,7 +211,7 @@ export function classify(e: ArchetypeEvidence): Archetype {
       e.peakWeeklyKmPast52 >= 25 ||
       e.longestRunPast12moKm >= 15 ||
       e.hasCompletedMarathon;
-    // Stable low-volume runner with history — they hit ≥ 20 km recently and
+    // Stable low-volume runner with history. They hit ≥ 20 km recently and
     // have demonstrable running base. Not detrained, just a low-volume athlete.
     // Detrained requires an actual layoff of 3+ weeks below 20 km.
     if (hasHistory && e.weeksSinceConsistent <= 2) return 'consistent-runner';
@@ -220,7 +220,7 @@ export function classify(e: ArchetypeEvidence): Archetype {
     if (e.crossTrainingHoursPerWeek >= 2) return 'cross-trained-no-impact';
     if (e.currentWeeklyKm < 10) return 'sedentary-novice';
   }
-  // Ambiguous mid-range with no signal — treat as consistent. The ramp slope
+  // Ambiguous mid-range with no signal. Treat as consistent. The ramp slope
   // for consistent-runner is conservative enough to be safe if wrong.
   return 'consistent-runner';
 }
@@ -228,10 +228,10 @@ export function classify(e: ArchetypeEvidence): Archetype {
 /**
  * Confidence in the classification.
  *
- *  - high   — 26+ weeks of extended history AND Strava tenure > 1 yr
- *  - medium — 8-26 weeks of history
- *  - low    — only onboardingRunHistory or < 8 weeks
- *  - none   — Strava not connected and no run history at all
+ *  - high. 26+ weeks of extended history AND Strava tenure > 1 yr
+ *  - medium. 8-26 weeks of history
+ *  - low. Only onboardingRunHistory or < 8 weeks
+ *  - none. Strava not connected and no run history at all
  */
 export function confidenceFromState(s: State, e: ArchetypeEvidence): ArchetypeConfidence {
   const extWeeks = s.extendedHistoryKm?.length ?? 0;
@@ -267,14 +267,14 @@ export function detectArchetype(s: State, now: Date = new Date()): ArchetypeResu
 /**
  * Plan-engine ramp parameters.
  *
- *  - `startingWeeklyKmCap` — week-1 ceiling expressed as `current_km × multiplier
+ *  - `startingWeeklyKmCap`. Week-1 ceiling expressed as `current_km × multiplier
  *    + headroom`. Floor for `cross-trained-impact` is 15 km because the bone is
  *    adapted; for `cross-trained-no-impact` we deliberately stay near current
  *    running km regardless of aerobic capacity.
- *  - `weeklyRampPct` — additive % progression per week toward `peakWeeklyKm`,
+ *  - `weeklyRampPct`. Additive % progression per week toward `peakWeeklyKm`,
  *    derived from Reilly's 10% guideline and Gabbett ACWR safe zone. Lower for
  *    bone-limited cohorts.
- *  - `predictionBandPctWidth` — ± uncertainty added to predicted finish time;
+ *  - `predictionBandPctWidth`. ± uncertainty added to predicted finish time;
  *    narrows as wkAdherenceRecent rises (handled by the predictor).
  */
 export const ARCHETYPE_PARAMS: Record<Archetype, {
@@ -297,9 +297,9 @@ export const ARCHETYPE_PARAMS: Record<Archetype, {
  * Maximum acute:chronic workload ratio applied to the week-1 starting volume.
  * Gabbett (2016) identifies the "sweet spot" at 0.8-1.3 and the "danger zone"
  * above 1.5. We cap at 1.30 so the very first week is at the upper edge of
- * the sweet spot — never higher.
+ * the sweet spot. Never higher.
  *
- * Only applied when baseline > 10 km — below that, the absolute load is small
+ * Only applied when baseline > 10 km. Below that, the absolute load is small
  * enough that even a +50% jump remains low-risk, and the archetype floors
  * (15 km for cross-trained-impact, 10 km for sedentary) govern.
  */
@@ -315,7 +315,7 @@ const ACWR_CAP_BASELINE_MIN = 10;
  *
  * The ACWR cap protects users with moderate-to-high baseline from
  * archetype-floor-induced spikes (e.g. detrained-with-history at 18 km/wk
- * would otherwise start at 24.8 km — a +36% jump in week 1, above safe
+ * would otherwise start at 24.8 km. A +36% jump in week 1, above safe
  * ACWR). Below 10 km baseline, the floor governs because the absolute load
  * is tiny and the relative ratio isn't a meaningful injury signal.
  *

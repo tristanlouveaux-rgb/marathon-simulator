@@ -113,7 +113,7 @@ function buildBreakdownCard(
     ? `<div style="height:100%;width:${remainingPct.toFixed(1)}%;background:rgba(0,0,0,0.06);flex-shrink:0;border-radius:0 3px 3px 0"></div>`
     : '';
 
-  // Legend: compact inline dots — include carry if present
+  // Legend: compact inline dots. Include carry if present
   const carryLegend = tssCarry > 0
     ? `<div style="display:flex;align-items:center;gap:4px;font-size:11px;color:${TEXT_S}"><div style="width:7px;height:7px;border-radius:50%;background:var(--c-caution);flex-shrink:0"></div>Carried</div>`
     : '';
@@ -323,7 +323,7 @@ export function renderLoadTaperView(
 
   // Triathlon mode: redirect to the Load Ratio & Injury Risk page, which has
   // a tri fork rendering per-discipline data using the same UX patterns. One
-  // Load page across both modes — this view's running TSS/taper machinery
+  // Load page across both modes. This view's running TSS/taper machinery
   // doesn't apply to tri.
   if (s.eventType === 'triathlon' && s.triConfig && archiveIdx == null) {
     import('./injury-risk-view').then(({ renderInjuryRiskView }) => renderInjuryRiskView());

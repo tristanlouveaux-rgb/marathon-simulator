@@ -64,7 +64,7 @@ describe('bike-physics — solveSpeed', () => {
     // 315 W × 0.70 IM intensity = 220.5 W race watts. The idealized solver
     // gives ~4:40–4:50 on perfect flat. Real-world IM bike splits at this
     // fitness are 4:50–5:15 once you add nutrition stops, real wind, and
-    // slower turns — those losses live in the ±10% prediction range, not
+    // slower turns. Those losses live in the ±10% prediction range, not
     // in the idealized physics.
     const v = solveSpeed(220.5, ttFlatParams);
     const splitSec = (180.2 * 1000) / v;

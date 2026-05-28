@@ -1,5 +1,5 @@
 /**
- * VO2max diagnostic — runs every available estimator on the current state and
+ * VO2max diagnostic. Runs every available estimator on the current state and
  * prints a side-by-side comparison so we can see which signals agree, which
  * disagree, and where the displayed headline number is coming from.
  *
@@ -7,7 +7,7 @@
  * `diagnoseVO2()` (wired in main.ts).
  *
  * Each row in the output answers "what would VO2max be if we used only this
- * signal?" — so you can spot the outliers visually rather than trusting a
+ * signal?". So you can spot the outliers visually rather than trusting a
  * single black-box estimator.
  */
 
@@ -85,7 +85,7 @@ function collectRuns(s: SimulatorState, now: Date): { runs: RunRow[]; lapPoints:
 
       // Per-lap extraction. Each lap with valid HR + pace + ≥ 30 s duration
       // becomes a (paceSecKm, %HRR) point so that within-run variation —
-      // e.g. an easy warmup followed by a tempo finish — feeds the regression
+      // e.g. an easy warmup followed by a tempo finish. Feeds the regression
       // as separate signals instead of being averaged into one.
       const laps = a.laps ?? [];
       let lapsWithHR = 0;
@@ -191,7 +191,7 @@ function bestNSecondEffort(
     }
   }
   if (best) return { distKm: best.distKm, timeSec: best.timeSec };
-  // Run never reached targetSec — return total if at least 80 % of target.
+  // Run never reached targetSec. Return total if at least 80 % of target.
   const total = splits.reduce((a, b) => a + b, 0);
   if (total >= targetSec * 0.8) {
     return { distKm: splits.length, timeSec: total };
@@ -458,7 +458,7 @@ export function runVO2Diagnostic(s: SimulatorState = getState(), now: Date = new
   // ─── Lap-level regression: pace-vs-HRR on within-run sub-segments ───────
   // Apply the same filter as the run-level regression (HRR 0.40–0.95) so the
   // result is directly comparable. Outlier removal is intentionally skipped
-  // here — the goal is to see what the lap data says raw, before any cleanup.
+  // here. The goal is to see what the lap data says raw, before any cleanup.
   const lapPointsFiltered = lapPoints.filter(
     p => p.hrrFraction >= 0.40 && p.hrrFraction <= 0.95,
   );

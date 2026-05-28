@@ -55,13 +55,13 @@ function hasPlanStarted(s: SimulatorState): boolean {
 export function renderMainView(): void {
   const s = getState();
 
-  // Triathlon fork — route straight to the triathlon plan view.
+  // Triathlon fork. Route straight to the triathlon plan view.
   if (s.eventType === 'triathlon') {
     import('./triathlon/plan-view').then(({ renderTriathlonPlanView }) => renderTriathlonPlanView());
     return;
   }
 
-  // HYROX fork — route to the HYROX plan view.
+  // HYROX fork. Route to the HYROX plan view.
   if (s.eventType === 'hyrox' || s.onboarding?.trainingMode === 'hyrox') {
     import('./hyrox/plan-view').then(({ renderHyroxPlanView }) => renderHyroxPlanView());
     return;
@@ -575,7 +575,7 @@ function renderStravaButton(connected: boolean): string {
 
 /**
  * Render recovery progress panel (replaces prediction panel when injured).
- * Shows phase, return-to-run level, and weeks in recovery — no forecast numbers.
+ * Shows phase, return-to-run level, and weeks in recovery. No forecast numbers.
  */
 function renderRecoveryProgressPanel(s: any): string {
   const injuryState = getInjuryStateForDisplay();
@@ -722,7 +722,7 @@ function renderContinuousProgressPanel(s: any): string {
 
 /**
  * Render the optional benchmark check-in panel (shown on post-deload weeks for continuous mode users).
- * Compact status card — delegates to the benchmark overlay for option selection.
+ * Compact status card. Delegates to the benchmark overlay for option selection.
  */
 function renderBenchmarkPanel(s: any): string {
   if (!s.continuousMode) return '';
@@ -764,7 +764,7 @@ function renderBenchmarkPanel(s: any): string {
     `;
   }
 
-  // Not started — prompt to open overlay
+  // Not started. Prompt to open overlay
   return `
     <div class="rounded-lg p-4 mb-4" style="border:1px solid var(--c-border)">
       <div style="display:flex;align-items:center;justify-content:space-between">
@@ -821,7 +821,7 @@ function renderRecoveryPill(s: any): string {
   const { level, shouldPrompt } = computeRecoveryStatus(todayEntry, history);
 
   if (!todayEntry) {
-    // No data — prompt to log. Until the personal recovery rate has been fit
+    // No data. Prompt to log. Until the personal recovery rate has been fit
     // to high confidence, surface a one-line note that this logging is what
     // teaches the plan how the user recovers (motivates the soft check-in).
     const arConf = s.adaptiveRecovery?.confidence ?? 'none';
@@ -867,7 +867,7 @@ function renderRecoveryPill(s: any): string {
     `;
   }
 
-  // Already prompted today — small status dot only
+  // Already prompted today. Small status dot only
   const dotStyle: Record<RecoveryLevel, string> = {
     green: 'background:var(--c-ok)',
     yellow: 'background:var(--c-caution)',
@@ -886,7 +886,7 @@ function renderPhysiologyCard(s: any): string {
   const history: import('@/types').PhysiologyDayEntry[] = s.physiologyHistory || [];
   const latest = history.length > 0 ? history[history.length - 1] : null;
 
-  // Rolling helpers — day-to-day HR is noisy; averages are more meaningful
+  // Rolling helpers. Day-to-day HR is noisy; averages are more meaningful
   const numVals = (vals: (number | undefined)[]) => vals.filter((v): v is number => v !== undefined);
   const rollAvg = (vals: (number | undefined)[]) => { const n = numVals(vals); return n.length ? n.reduce((a, b) => a + b, 0) / n.length : null; };
   const rollPeak = (vals: (number | undefined)[]) => { const n = numVals(vals); return n.length ? Math.max(...n) : null; };
@@ -914,7 +914,7 @@ function renderPhysiologyCard(s: any): string {
     return `<span style="font-size:10px;margin-right:4px;color:${good ? 'var(--c-ok)' : 'var(--c-warn)'}">${diff > 0 ? '↑' : '↓'}${Math.abs(diff).toFixed(0)}</span>`;
   };
 
-  // Dot sparkline — size encodes relative position in range
+  // Dot sparkline. Size encodes relative position in range
   const dots = (vals: (number | undefined)[], colorFn: (v: number) => string): string => {
     const nums = vals.filter((v): v is number => v !== undefined);
     if (nums.length === 0) return '';
@@ -1166,7 +1166,7 @@ function showRecoveryAdjustModal(entry: RecoveryEntry): void {
   // Try matching by dayOfWeek first, then fall back to first available run
   let todayWorkout = runWorkouts.find((w: any) => w.dayOfWeek === ourDay);
   if (!todayWorkout && runWorkouts.length > 0) {
-    // No exact day match — offer the first unrated run workout
+    // No exact day match. Offer the first unrated run workout
     const unrated = runWorkouts.filter((w: any) => !wk.rated[w.id || w.n]);
     todayWorkout = unrated[0] || runWorkouts[0];
   }
@@ -1385,7 +1385,7 @@ function renderMedicalDisclaimer(s: any): string {
 /**
  * Handle morning pain check response.
  * Records to morningPainResponses[] for weekly gate evaluation.
- * No immediate phase regression — data feeds into weekly check-in.
+ * No immediate phase regression. Data feeds into weekly check-in.
  */
 function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void {
   const s = getMutableState();
@@ -1415,7 +1415,7 @@ function handleMorningPainResponse(response: 'worse' | 'same' | 'better'): void 
     const updatedState = recordMorningPain(injuryState, improvedPain);
     (s as any).injuryState = updatedState;
   } else {
-    // Worse — record pain but no immediate regression
+    // Worse. Record pain but no immediate regression
     const worsePain = Math.min(10, (injuryState.currentPain || 1) + 1);
     const updatedState = recordMorningPain(injuryState, worsePain);
     (s as any).injuryState = updatedState;
@@ -1587,7 +1587,7 @@ function updateLoadChart(s: SimulatorState): void {
     const rpe = w.rpe || w.r || 5;
     const fcl = calculateWorkoutLoad(w.t, w.d, rpe * 10, easyPace);
     const scale = (TL_PER_MIN[Math.round(rpe)] ?? 1.15) / (LOAD_PER_MIN_BY_INTENSITY[Math.round(rpe)] ?? 2.0);
-    // Apply sport runSpec for cross-training — prevents tennis/cycling/etc from inflating the planned target
+    // Apply sport runSpec for cross-training. Prevents tennis/cycling/etc from inflating the planned target
     let sportRunSpec = 1.0;
     if (w.t === 'cross' && w.n) {
       const raw = w.n.toLowerCase().trim().replace(/ /g, '_');
@@ -1601,7 +1601,7 @@ function updateLoadChart(s: SimulatorState): void {
     plannedIntensity += (fcl.intensity ?? 0) * scale * sportRunSpec;
   }
 
-  // Sum actual loads from matched Garmin runs (TSS units — same scale as individual card display)
+  // Sum actual loads from matched Garmin runs (TSS units. Same scale as individual card display)
   let actualAero = 0, actualAnaero = 0;
   let actualBase = 0, actualThreshold = 0, actualIntensity = 0;
   if (wk?.garminActuals) {
@@ -1723,7 +1723,7 @@ function updateLoadChart(s: SimulatorState): void {
   if (runBarEl) runBarEl.style.width = `${runPct}%`;
   if (crossBarEl) crossBarEl.style.width = `${Math.min(100 - runPct, crossPct)}%`;
 
-  // Zone band widths — background behind the actual fill
+  // Zone band widths. Background behind the actual fill
   // Gray = 0→CTL (your chronic baseline); Green = CTL→plan (the target zone);
   // Amber = plan→plan×1.2 (acceptable overrun); Red = beyond that (fills rest).
   const acwrAtlSeed1 = (s.ctlBaseline ?? 0) * (1 + Math.min(0.1 * (s.gs ?? 0), 0.3));
@@ -1876,9 +1876,9 @@ function updateLoadChart(s: SimulatorState): void {
     volNoteEl.textContent = '';
   }
 
-  // §5.6 — Minimum running km floor nudge (moved to plan-view)
+  // §5.6. Minimum running km floor nudge (moved to plan-view)
 
-  // 3-zone TSS breakdown — progress vs planned per zone
+  // 3-zone TSS breakdown. Progress vs planned per zone
   const setZoneProgress = (
     barId: string, labelId: string,
     actual: number, planned: number,
@@ -1939,7 +1939,7 @@ function updateLoadChart(s: SimulatorState): void {
 }
 
 // ---------------------------------------------------------------------------
-// ACWR bar — populated after DOM is ready
+// ACWR bar. Populated after DOM is ready
 // ---------------------------------------------------------------------------
 
 function updateACWRBar(s: SimulatorState): void {
@@ -2010,7 +2010,7 @@ function updateACWRBar(s: SimulatorState): void {
 
   // Check over-plan % threshold when ACWR is safe/unknown
   if (!showReduceBtn && actualTSSNow > 0) {
-    // We need plannedTSS — compute a quick estimate from the week's planned km
+    // We need plannedTSS. Compute a quick estimate from the week's planned km
     // Use the same weekWos call as getWeekWorkoutsForACWR
     // (cheaper: just check wk.actualTSS vs s.wkm * rough load factor)
     const roughPlannedTSS = (s.wkm ?? 30) * 5; // ≈ 5 TSS/km as rough baseline
@@ -2347,7 +2347,7 @@ export function triggerACWRReduction(): void {
     : 0;
 
   // Compute rule-driving fields for the 5-rule plain language advice
-  // Rule 2 — km spike
+  // Rule 2. Km spike
   let actualRunKmForRule = 0;
   const plannedRunKmForRule = (getWeekWorkoutsForACWR(s) as any[])
     .filter((w: any) => ['easy', 'long', 'marathon_pace', 'threshold', 'vo2', 'intervals', 'progressive', 'mixed', 'float'].includes(w.t))
@@ -2361,7 +2361,7 @@ export function triggerACWRReduction(): void {
     }
   }
   const kmSpiked = plannedRunKmForRule > 0 && actualRunKmForRule > plannedRunKmForRule * 1.3;
-  // Rule 3 — cross-training cause (heaviest non-running item). Surplus-run items are
+  // Rule 3. Cross-training cause (heaviest non-running item). Surplus-run items are
   // a mechanical concern handled by Rule 2 (kmSpiked), not Rule 3.
   const crossTrainingCause = (wk.unspentLoadItems?.length && sport !== 'running')
     ? (wk.unspentLoadItems
@@ -2369,7 +2369,7 @@ export function triggerACWRReduction(): void {
         .slice()
         .sort((a, b) => (b.aerobic + b.anaerobic) - (a.aerobic + a.anaerobic))[0]?.sport ?? undefined)
     : undefined;
-  // Rule 4 — consecutive intensity-heavy weeks from historicWeeklyZones
+  // Rule 4. Consecutive intensity-heavy weeks from historicWeeklyZones
   const histZones = s.historicWeeklyZones ?? [];
   let consecutiveIntensityWeeks = 0;
   for (let i = histZones.length - 1; i >= 0; i--) {
@@ -2392,7 +2392,7 @@ export function triggerACWRReduction(): void {
     if (!wk3) return;
 
     if (decision.choice === 'keep') {
-      // User saw the recommendation but chose to keep full load — record override
+      // User saw the recommendation but chose to keep full load. Record override
       wk3.acwrOverridden = true;
     } else if (decision.adjustments.length > 0) {
       const freshW = getWeekWorkoutsForACWR(s3);
@@ -2572,7 +2572,7 @@ function wireEventHandlers(): void {
   // Reset button
   document.getElementById('btn-reset')?.addEventListener('click', reset);
 
-  // Week navigation with viewWeek — restore persisted position across re-renders
+  // Week navigation with viewWeek. Restore persisted position across re-renders
   let viewWeek = (_persistedViewWeek !== null && _persistedViewWeek >= 1 && _persistedViewWeek <= maxViewableWeek)
     ? _persistedViewWeek
     : s.w;
@@ -2616,7 +2616,7 @@ function wireEventHandlers(): void {
         // Simply sets the current week pointer back to the viewed week and reloads.
         // All existing activity pairings, ratings, and plan state are preserved.
         // The activity review will only fire if there are genuinely unprocessed (__pending__)
-        // items — it won't fire for activities that are already paired.
+        // items. It won't fire for activities that are already paired.
         (window as any).__editThisWeek = () => {
           const ms = getMutableState();
           ms.w = viewWeek;
@@ -2753,7 +2753,7 @@ function wireEventHandlers(): void {
     showRunnerTypeModal(s.typ || 'Hybrid', planStarted);
   });
 
-  // Benchmark — open overlay
+  // Benchmark. Open overlay
   document.getElementById('btn-home-benchmark-open')?.addEventListener('click', () => openBenchmarkOverlay());
 
   // Morning Pain Check buttons

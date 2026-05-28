@@ -11,7 +11,7 @@ import { Capacitor } from '@capacitor/core';
  *   non-dismissable notification. iOS ignores these fields; they are harmless to set.
  *
  * Call `BackgroundGeolocation.ready(GUIDED_RUN_LOCATION_CONFIG)` before `.start()` on
- * native. On web, do nothing — GPS is read from `navigator.geolocation` via the existing
+ * native. On web, do nothing. GPS is read from `navigator.geolocation` via the existing
  * tracker.
  */
 export const GUIDED_RUN_LOCATION_CONFIG = {

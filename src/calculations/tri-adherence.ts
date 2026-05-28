@@ -1,5 +1,5 @@
 /**
- * Per-discipline plan adherence — drives the horizon adjuster's
+ * Per-discipline plan adherence. Drives the horizon adjuster's
  * adherence-penalty input. Mirrors the marathon `calculateAdherencePenalty`
  * (`src/calculations/predictions.ts:22`) but split per discipline so a missed
  * long swim does not penalise the bike projection.
@@ -75,7 +75,7 @@ function emptySummary(): DisciplineAdherenceSummary {
 
 /**
  * Compute per-discipline adherence over the last `weeks` completed weeks.
- * The current week (`state.w`) is excluded — it's still in progress.
+ * The current week (`state.w`) is excluded. It's still in progress.
  */
 export function computeTriAdherence(
   state: SimulatorState,

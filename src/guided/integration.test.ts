@@ -50,7 +50,7 @@ describe('guided pipeline — timeline vs split-scheme convergence', () => {
 
     // Work reps appear in both: three "rep" steps in the timeline, three paced
     // segments in the scheme. Recovery counts differ by convention (timeline
-    // includes recoveries, scheme may or may not — test only the paced work).
+    // includes recoveries, scheme may or may not. Test only the paced work).
     const workSteps = tl.steps.filter((s) => s.type === 'work');
     const pacedSegs = scheme.segments.filter((s) => s.targetPace != null);
     expect(workSteps.length).toBe(pacedSegs.length);
@@ -63,7 +63,7 @@ describe('guided pipeline — timeline vs split-scheme convergence', () => {
     ctrl.start();
 
     // Drive the engine forward by advancing elapsed past each step boundary.
-    // Use `skipStep` rather than simulating distance — we're testing sequencing,
+    // Use `skipStep` rather than simulating distance. We're testing sequencing,
     // not pace maths.
     const totalSteps = ctrl.getTimeline().steps.length;
     ctrl.update(live(0, 0));

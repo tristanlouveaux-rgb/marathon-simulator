@@ -1,5 +1,5 @@
 /**
- * Body-mass adaptations — pure functions of athlete anthropometrics.
+ * Body-mass adaptations. Pure functions of athlete anthropometrics.
  *
  * Two outputs:
  *   - `crossTrainingSwapFraction`: 0..CAP. Share of EASY running volume to
@@ -8,7 +8,7 @@
  *   - `heatStrainRatio`: 0.85..1.25. Body-size scalar on heat effects; 1.0 =
  *     the reference build, >1 = stores heat faster. (TRACKING side.)
  *
- * **Safety contract** (load-bearing — tested in body-mass-adaptations.test.ts):
+ * **Safety contract** (load-bearing. Tested in body-mass-adaptations.test.ts):
  *   - Swap is exactly 0 with no/invalid weight, or weight ≤ reference mass.
  *   - Heat ratio is exactly 1.0 with no/invalid weight OR no/invalid height.
  *   - Both are clamped, so no input can produce an unbounded effect.

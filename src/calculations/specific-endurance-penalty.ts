@@ -1,5 +1,5 @@
 /**
- * Specific endurance penalty — generalises the existing marathon-specificity
+ * Specific endurance penalty. Generalises the existing marathon-specificity
  * pattern across triathlon's three disciplines and the four IM/70.3/Olympic/
  * Sprint distances (plus standalone running 5K/10K/Half/Marathon).
  *
@@ -18,7 +18,7 @@
  *
  * For RUN discipline only, an additional PB-recency factor reduces the
  * penalty when the athlete has a recent race PB demonstrating full-distance
- * capability — preserves existing `marathonSpecificityPenalty` behaviour.
+ * capability. Preserves existing `marathonSpecificityPenalty` behaviour.
  *
  * **Side of the line**: tracking. This describes "what fitness reality is
  * given the athlete's training so far", not "what the plan should prescribe".
@@ -49,7 +49,7 @@ import { computePredictionInputs } from './prediction-inputs';
 import { collectRunsFromState } from './blended-fitness';
 import { getAbilityBand as getRunAbilityBandFromVdot } from './fatigue';
 
-// Local band classifiers — duplicated rather than imported to avoid a
+// Local band classifiers. Duplicated rather than imported to avoid a
 // circular dependency (race-prediction → race-readiness → this file). The
 // canonical versions live in `race-prediction.triathlon.ts`; if those bands
 // change, mirror here. Tests below pin the boundaries.
@@ -103,12 +103,12 @@ export interface DisciplineReadiness {
 
 /**
  * Determine an athlete's ability band for a specific discipline.
- *   - Run: from VDOT (`getAbilityBand` in fatigue.ts) — uses Daniels VDOT bands
- *   - Bike: from FTP (W) — Coggan-tier approximation at ~70kg
+ *   - Run: from VDOT (`getAbilityBand` in fatigue.ts). Uses Daniels VDOT bands
+ *   - Bike: from FTP (W). Coggan-tier approximation at ~70kg
  *   - Swim: from CSS (sec/100m)
- * Falls back to 'intermediate' when the marker is missing — matches the
+ * Falls back to 'intermediate' when the marker is missing. Matches the
  * existing horizon-model band default. Per-discipline bands let an athlete
- * be 'advanced' on bike but 'novice' on swim — the readiness model treats
+ * be 'advanced' on bike but 'novice' on swim. The readiness model treats
  * each leg separately rather than projecting one ability across all three.
  */
 export function getReadinessAbilityBand(
@@ -134,7 +134,7 @@ export function getReadinessAbilityBand(
 /**
  * Optional per-discipline readiness inputs that override the normal
  * state-derived volume signal. Used by the cross-discipline transfer
- * pass — a discipline's `volumeRatio` can be inflated by fractional
+ * pass. A discipline's `volumeRatio` can be inflated by fractional
  * credit from other disciplines' raw volumeRatios. See
  * `computeTriRaceReadiness` in `race-readiness.ts`.
  */
@@ -146,7 +146,7 @@ export interface DisciplineReadinessOverrides {
 /**
  * Compute one discipline's race-readiness for a target race distance.
  *
- * @param state    Simulator state (read-only — this is a pure tracking calc)
+ * @param state    Simulator state (read-only. This is a pure tracking calc)
  * @param discipline  'swim' | 'bike' | 'run'
  * @param distance Race distance key (triathlon: sprint/olympic/70.3/ironman;
  *                 running: marathon/half/10k/5k)
@@ -175,7 +175,7 @@ export function computeDisciplineReadiness(
   const longestSec = longestSessionByDiscipline(state, READINESS_LONGEST_WINDOW_WEEKS)[discipline];
   const longestSessionActualHours = longestSec / 3600;
 
-  // ─── Ratios (cap each at 1.2 — over-preparing doesn't keep boosting) ──
+  // ─── Ratios (cap each at 1.2. Over-preparing doesn't keep boosting) ──
   const baseVolumeRatio = bandTarget.weeklyVolume > 0
     ? Math.min(1.2, weeklyVolumeActual / bandTarget.weeklyVolume)
     : 1.2; // no target → treat as fully ready (e.g. running mode for swim/bike)
@@ -183,7 +183,7 @@ export function computeDisciplineReadiness(
     ? Math.min(1.2, longestSessionActualHours / bandTarget.longestSessionHours)
     : 1.2;
 
-  // Apply override if supplied (cross-discipline transfer pass) — capped at 1.2
+  // Apply override if supplied (cross-discipline transfer pass). Capped at 1.2
   const volumeRatio = overrides.volumeRatioOverride != null
     ? Math.min(1.2, overrides.volumeRatioOverride)
     : baseVolumeRatio;
@@ -201,7 +201,7 @@ export function computeDisciplineReadiness(
 
   // ─── Sigmoid penalty curve ────────────────────────────────────────────
   // `penaltyShare = 1 - 1/(1 + exp(k × (50 - score)))`. Captures "almost-
-  // ready is much different from not-ready" — linear would over-penalise
+  // ready is much different from not-ready". Linear would over-penalise
   // 90% ready (4% of max instead of 10%) and under-penalise 30% (83% of
   // max instead of 70%). Midpoint preserved at score=50 → 50% of max.
   const penaltyShare = 1 - 1 / (1 + Math.exp(SCORE_TO_PENALTY_SIGMOID_K * (50 - score)));
@@ -274,7 +274,7 @@ export function computeDisciplineReadiness(
  * `recentHoursByDiscipline` (hours over the same window).
  *
  * Run uses km because the existing horizon model and marathon-specificity
- * penalty already operate in km — keeps the unified framework's run output
+ * penalty already operate in km. Keeps the unified framework's run output
  * consistent with prior behaviour. Swim/bike use hours because triathlon
  * activities don't always have a cleanly extractable distance signal (open-
  * water swims with manual entry, indoor rides on smart trainers).
@@ -289,7 +289,7 @@ function readWeeklyVolume(
     return { actual: inputs.weeklyKm ?? 0, unit: 'km' };
   }
   // Swim/bike: hours/week from the 8-week window. recentHoursByDiscipline
-  // defaults to 12w — pass the readiness-specific 8w window explicitly so
+  // defaults to 12w. Pass the readiness-specific 8w window explicitly so
   // the volume signal aligns with the run side.
   const hours = recentHoursByDiscipline(state, READINESS_VOLUME_WINDOW_WEEKS)[discipline];
   return { actual: hours, unit: 'hours' };
@@ -302,7 +302,7 @@ function readWeeklyVolume(
  *
  * Reads from `state.onboarding.pbDates` which is populated by
  * `review.ts` during Strava best_efforts auto-fill. The existing
- * `marathonSpecificityPenalty` already uses this field — we reuse it here
+ * `marathonSpecificityPenalty` already uses this field. We reuse it here
  * so the PB-recency behaviour is identical between old and new code paths.
  */
 function readRunPbAgeDays(
@@ -328,7 +328,7 @@ function pbKeyForDistance(distance: ReadinessDistance): 'k5' | 'k10' | 'h' | 'm'
   // (the run leg of an IM is a marathon; the run leg of a 70.3 is a half).
   if (distance === 'ironman') return 'm';
   if (distance === '70.3') return 'h';
-  // Sprint/Olympic run legs are 5K/10K respectively — use those PBs.
+  // Sprint/Olympic run legs are 5K/10K respectively. Use those PBs.
   if (distance === 'olympic') return 'k10';
   if (distance === 'sprint') return 'k5';
   return null;
@@ -343,7 +343,7 @@ function pbKeyForDistance(distance: ReadinessDistance): 'k5' | 'k10' | 'h' | 'm'
  * Cross-credit: a richer (longer) race fully credits shorter target distances;
  * a shorter race partially credits longer ones (reduced factor per
  * TRI_DISTANCE_CROSS_CREDIT). An entry qualifies when `actualPerLeg[discipline]
- * > 0` — the leg was actually completed.
+ * > 0`. The leg was actually completed.
  */
 function readTriRaceRecencyDays(
   state: SimulatorState,

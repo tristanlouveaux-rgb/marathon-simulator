@@ -1,12 +1,12 @@
 /**
- * Tri past-race step — asks whether the user completed a triathlon in the
+ * Tri past-race step. Asks whether the user completed a triathlon in the
  * past year and, if so, collects the distance, date, total time, and
  * optional per-leg splits.
  *
  * Scan logic covers both recording patterns:
- *   A. SEPARATE activities — three swim/bike/run rows in garmin_activities
+ *   A. SEPARATE activities. Three swim/bike/run rows in garmin_activities
  *      on the same calendar day. Per-leg splits pre-filled from DB.
- *   B. MULTISPORT recording — one TRIATHLON row from Garmin's tri mode,
+ *   B. MULTISPORT recording. One TRIATHLON row from Garmin's tri mode,
  *      Suunto, Coros, or Apple Watch multi-sport. Total time only; a
  *      "Load splits from Strava" button calls the getTriLaps edge function
  *      to fetch per-lap data and fill in swim/bike/run times.
@@ -281,7 +281,7 @@ function guessDistance(swimM: number): PastTriathlonDistance {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Strava scan — queries garmin_activities for race candidates.
+// Strava scan. Queries garmin_activities for race candidates.
 //
 // Two result buckets:
 //   separate:   3 rows (SWIMMING + CYCLING + RUNNING) on the same day

@@ -5,11 +5,11 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { getState } from '@/state/store';
 
 /**
- * Workout preview — the "research showcase" step.
+ * Workout preview. The "research showcase" step.
  *
  * Shows the session types a user's plan will draw from, with one-line
  * literature anchors. Each toggleable card lets the user opt out of
- * session types they don't want — exclusions feed the plan engine.
+ * session types they don't want. Exclusions feed the plan engine.
  *
  * Supports running and cycling modes. Triathlon and HYROX don't use this step.
  *

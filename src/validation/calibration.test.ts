@@ -6,7 +6,7 @@
  *   - buildDistribution (binning, mean/SD, MIN_BIN_N gate)
  *   - validateAgainstDistribution (in-band, out-of-band, missing bin)
  *   - buildCourseFactors (IM fixed effects, 70.3 stratification, clamping, era)
- *   - lookupEmpiricalCourseFactors (runtime — hit, miss, clamped drop, normalisation)
+ *   - lookupEmpiricalCourseFactors (runtime. Hit, miss, clamped drop, normalisation)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -78,7 +78,7 @@ function rec(
 
 describe('buildDistribution + validateAgainstDistribution', () => {
   it('drops bins with too few records (MIN_BIN_N gate)', () => {
-    // Only 5 records — should produce zero bins.
+    // Only 5 records. Should produce zero bins.
     const records = Array.from({ length: 5 }, () =>
       rec({ swimSec: 2000, bikeSec: 10000, runSec: 8000, finishSec: 20000 }),
     );
@@ -126,7 +126,7 @@ describe('buildDistribution + validateAgainstDistribution', () => {
     );
     const table = buildDistribution('70.3', records);
 
-    // Total time of 30s — way outside any bin
+    // Total time of 30s. Way outside any bin
     const result = validateAgainstDistribution(
       { swimSec: 5, bikeSec: 15, runSec: 10, finishSec: 30 },
       table,
@@ -137,7 +137,7 @@ describe('buildDistribution + validateAgainstDistribution', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// buildCourseFactors — IM fixed effects
+// buildCourseFactors. IM fixed effects
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('buildCourseFactors — IM fixed effects', () => {
@@ -201,7 +201,7 @@ describe('buildCourseFactors — IM fixed effects', () => {
   it('clamps and flags absurd factors', () => {
     const athletes = ['A1', 'A2', 'A3'];
     const records: FinishRecord[] = [];
-    // Make "Cancelled" race have a 60% faster bike — should clamp to 0.75.
+    // Make "Cancelled" race have a 60% faster bike. Should clamp to 0.75.
     for (let i = 0; i < 60; i++) {
       for (const a of athletes) {
         const aid = `${a}-${i}`;
@@ -212,7 +212,7 @@ describe('buildCourseFactors — IM fixed effects', () => {
         records.push(rec({
           distance: 'ironman', athleteId: aid,
           eventLocation: 'Cancelled',
-          swimSec: 4000, bikeSec: 9000, runSec: 14000, finishSec: 27500, // 50% bike — extreme
+          swimSec: 4000, bikeSec: 9000, runSec: 14000, finishSec: 27500, // 50% bike. Extreme
         }));
       }
     }
@@ -247,7 +247,7 @@ describe('buildCourseFactors — IM fixed effects', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// buildCourseFactors — 70.3 stratified
+// buildCourseFactors. 70.3 stratified
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('buildCourseFactors — 70.3 stratified', () => {
@@ -303,7 +303,7 @@ describe('buildCourseFactors — 70.3 stratified', () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// lookupEmpiricalCourseFactors — runtime
+// lookupEmpiricalCourseFactors. Runtime
 // ───────────────────────────────────────────────────────────────────────────
 
 describe('lookupEmpiricalCourseFactors (runtime)', () => {
@@ -323,7 +323,7 @@ describe('lookupEmpiricalCourseFactors (runtime)', () => {
   });
 
   it('returns null for clamped (data-error) races', () => {
-    // IM North Carolina was a 2016 weather-shortened race — clamped at calibration.
+    // IM North Carolina was a 2016 weather-shortened race. Clamped at calibration.
     const res = lookupEmpiricalCourseFactors('Ironman North Carolina', 'ironman', baseSec);
     expect(res).toBeNull();
   });

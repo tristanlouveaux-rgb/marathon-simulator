@@ -163,7 +163,7 @@ export function showSuggestionModal(
     : popup.impactLoad < 10  ? { text: 'Moderate leg impact', color: 'var(--c-caution)' }
     :                          { text: 'High leg impact',      color: 'var(--c-warn)' };
 
-  // Warning text based on severity — only shown when ACWR is actually elevated.
+  // Warning text based on severity. Only shown when ACWR is actually elevated.
   // A heavy session alone doesn't mean fatigue risk is high (e.g. high-volume athlete with
   // high CTL baseline can absorb a big session without ACWR spiking).
   const keepWarning = acwrContext
@@ -184,28 +184,28 @@ export function showSuggestionModal(
       ? 'background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.25)'
       : 'background:rgba(245,158,11,0.06);border:1px solid rgba(245,158,11,0.25)';
     const statusTextColor = status === 'high' ? 'color:var(--c-warn)' : 'color:var(--c-caution)';
-    // §8 — 5-rule plain language reduction advice
+    // §8. 5-rule plain language reduction advice
     const { kmSpiked, crossTrainingCause, consecutiveIntensityWeeks } = acwrContext;
     const iHeavy = (intensityPct ?? 0) > 50;
     let zoneAdvice: string;
     if (consecutiveIntensityWeeks != null && consecutiveIntensityWeeks >= 3) {
-      // Rule 4 — consecutive intensity-heavy weeks
+      // Rule 4. Consecutive intensity-heavy weeks
       zoneAdvice = `Your last ${consecutiveIntensityWeeks} weeks have been intensity-heavy. Pulling back on intervals protects your aerobic base.`;
     } else if (crossTrainingCause) {
-      // Rule 3 — cross-training drove the spike
+      // Rule 3. Cross-training drove the spike
       const sportLabel = crossTrainingCause === 'generic_sport'
         ? 'cross-training'
         : (SPORT_LABELS[crossTrainingCause as keyof typeof SPORT_LABELS]
             ?? crossTrainingCause.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())).toLowerCase();
       zoneAdvice = `A ${sportLabel} session added load on top of your planned running. The adjustments below bring the week back in line. Quality sessions are preserved where possible.`;
     } else if (kmSpiked) {
-      // Rule 2 — running km spiked (mechanical risk)
+      // Rule 2. Running km spiked (mechanical risk)
       zoneAdvice = 'Your running km spiked this week. Heart rate load is fine. The risk here is mechanical (tendons, bones), so volume should come down before intensity.';
     } else if (iHeavy) {
-      // Rule 1 — ACWR elevated + intensity-heavy
+      // Rule 1. ACWR elevated + intensity-heavy
       zoneAdvice = `Your load is ${pctAboveBaseline}% above your usual weekly volume and most of it was high-intensity work. Intensity is the biggest fatigue driver, so it should come down before volume.`;
     } else {
-      // Rule 5 — trailing zone mix / general
+      // Rule 5. Trailing zone mix / general
       zoneAdvice = `Your load has built quickly. The safest cuts are to your highest-volume runs. Quality sessions stay intact where possible.`;
     }
     // Human-consequence headline: reference actual load vs baseline (not vs safety ceiling)
@@ -498,7 +498,7 @@ export function showSuggestionModal(
   });
 
   // Prevent the <summary> toggle click from bubbling to the parent choice button.
-  // Only block the summary toggle itself — clicks on expanded content should
+  // Only block the summary toggle itself. Clicks on expanded content should
   // still reach the button so the user can select the option by clicking anywhere on the card.
   overlay.querySelectorAll('details summary').forEach(summary => {
     summary.addEventListener('click', (e) => {
@@ -506,7 +506,7 @@ export function showSuggestionModal(
     });
   });
 
-  // §6.5 edge case buttons — fire 'keep' with empty adjustments (load already counted in ACWR)
+  // §6.5 edge case buttons. Fire 'keep' with empty adjustments (load already counted in ACWR)
   overlay.querySelector('#choice-apply-next-week')?.addEventListener('click', () => {
     close('keep', []);
   });

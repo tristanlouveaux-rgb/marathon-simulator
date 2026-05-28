@@ -6,12 +6,12 @@
  * the app (plan view, load bars, activity matching) can render it unchanged.
  *
  * Session types (§18.9 / §9.1):
- *   - technique — drills + short reps, low intensity. Core of base phase.
- *   - endurance — longer continuous or long-interval aerobic volume.
- *   - threshold — CSS intervals (100/200m reps at threshold pace).
- *   - speed — short sharp work above CSS (typically late build / peak).
+ *   - technique. Drills + short reps, low intensity. Core of base phase.
+ *   - endurance. Longer continuous or long-interval aerobic volume.
+ *   - threshold. CSS intervals (100/200m reps at threshold pace).
+ *   - speed. Short sharp work above CSS (typically late build / peak).
  *
- * Load (aerobic / anaerobic) is a rough first approximation — Phase 4 will
+ * Load (aerobic / anaerobic) is a rough first approximation. Phase 4 will
  * recompute from the real swim-TSS formula (cubed IF) once CSS is available
  * on state.
  */
@@ -104,7 +104,7 @@ export function generateSwimSession(input: SwimSessionInput): Workout {
 
 export function estimateDistanceMetres(minutes: number, skill: TriSkillSlider, css?: number): number {
   // Estimate average pace from skill (sec/100m) if CSS not supplied.
-  // Rough: skill 1 ≈ 2:45/100m, skill 5 ≈ 1:25/100m — linear interpolation.
+  // Rough: skill 1 ≈ 2:45/100m, skill 5 ≈ 1:25/100m. Linear interpolation.
   const paceSecPer100 = css ?? (165 - (skill - 1) * 20);  // 1→165, 5→85
   const totalSec = minutes * 60;
   const metres = Math.round((totalSec / paceSecPer100) * 100);
@@ -122,7 +122,7 @@ function nameForSwim(kind: SwimSessionKind): string {
 }
 
 /**
- * Variant rotation per kind — avoids generating the same workout every week.
+ * Variant rotation per kind. Avoids generating the same workout every week.
  * Pick by `weekIndex % variants.length`.
  */
 const SWIM_VARIANTS: Record<SwimSessionKind, Array<(totalM: number, paceHint: string) => string>> = {
@@ -189,7 +189,7 @@ export function describeSwimSession(
   explicitVariantIndex?: number,
 ): string {
   const paceHint = css ? ` @ ${formatPace(css)}/100m (CSS)` : '';
-  // Technique sessions swim ~10s/100m slower than CSS — show absolute pace when CSS is known.
+  // Technique sessions swim ~10s/100m slower than CSS. Show absolute pace when CSS is known.
   const techHint = css ? ` @ ${formatPace(css + 10)}/100m` : '';
   const drillHint = skill <= 2 ? ' Focus on body position and breathing.' : '';
   const variants = SWIM_VARIANTS[kind];

@@ -9,7 +9,7 @@
  * Default posture is ON for heavy users (`bodyMassSwapEnabled === undefined` is
  * treated as on by the generator), so the plan they're looking at already
  * reflects the gentle swap; this popup confirms it or turns it off. Turning it
- * off takes effect on the next plan generation (week rollover / replan) — we
+ * off takes effect on the next plan generation (week rollover / replan). We
  * don't force a rebuild.
  *
  * Physics-framed, qualitative copy (no percentage) chosen by Tristan: states

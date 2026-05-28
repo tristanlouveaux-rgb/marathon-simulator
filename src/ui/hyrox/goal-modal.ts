@@ -150,7 +150,7 @@ export function openHyroxGoalModal(prediction: HyroxPrediction): void {
 
   document.getElementById('hx-goal-input')?.addEventListener('input', computeAndRender);
 
-  // Close handlers — close back to forecast (i.e. don't navigate).
+  // Close handlers. Close back to forecast (i.e. don't navigate).
   const close = () => overlay.remove();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.getElementById('hx-goal-close')?.addEventListener('click', close);

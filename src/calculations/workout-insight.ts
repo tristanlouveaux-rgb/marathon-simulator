@@ -2,7 +2,7 @@
  * workout-insight.ts
  * Narrative coaching commentary for completed activities.
  * Gathers raw signals (pacing, HR, elevation, load, session-to-session delta)
- * then composes a connected 2-3 sentence paragraph — like a coach reviewing
+ * then composes a connected 2-3 sentence paragraph. Like a coach reviewing
  * your session, not a dashboard restating numbers already visible on screen.
  */
 
@@ -91,7 +91,7 @@ interface Signals {
   isTreadmill: boolean;
   isShort: boolean;
 
-  // Pacing — regression-based
+  // Pacing. Regression-based
   slope: number | null;        // s/km per km; positive = fading
   slopeR2: number | null;      // goodness of fit (0–1)
   slopePaceStart: number | null; // regression-predicted pace at km 1
@@ -332,7 +332,7 @@ function composeNarrative(s: Signals): string | null {
     sentences.push(lead);
 
   } else if (s.hasSplits) {
-    // Slope is flat or noisy — note consistent pacing; add HR qualifier when drift data exists
+    // Slope is flat or noisy. Note consistent pacing; add HR qualifier when drift data exists
     const hrNote = (s.hrDrift != null && s.hrDrift <= 3) ? ' HR stayed flat too.' : '';
     sentences.push(`Consistent pacing throughout.${hrNote} Well-controlled effort.`);
 
@@ -513,7 +513,7 @@ function composeCrossTraining(s: Signals): string | null {
 }
 
 // ─── cycling insight ────────────────────────────────────────────────────────
-// References: Coggan & Allen, "Training and Racing with a Power Meter" — IF and VI
+// References: Coggan & Allen, "Training and Racing with a Power Meter". IF and VI
 // thresholds. IF = NP/FTP describes ride intensity; VI = NP/avgWatts describes how
 // punchy or steady the effort was.
 
@@ -602,7 +602,7 @@ function composeCyclingInsight(a: GarminActual, opts?: InsightOptions): string |
 
 // ─── swim insight ───────────────────────────────────────────────────────────
 // Pace per 100m is the canonical swim metric. CSS (Critical Swim Speed) is the
-// swim equivalent of running threshold pace — sub-CSS is hard, +5 to +10s/100m
+// swim equivalent of running threshold pace. Sub-CSS is hard, +5 to +10s/100m
 // over CSS is endurance, +15s+ is recovery.
 
 function fmtSwimPace(secPer100m: number): string {

@@ -68,11 +68,11 @@ describe('triTrailingEffortScore', () => {
 
   it('only looks at last 2 completed weeks (lookback window)', () => {
     const s = state([
-      // Oldest week (3 weeks ago) — should be EXCLUDED
+      // Oldest week (3 weeks ago). Should be EXCLUDED
       { workouts: [workout('r0', 'run', 7)], rated: { r0: 9 } },  // very hard
-      // Last week — INCLUDED
+      // Last week. INCLUDED
       { workouts: [workout('r1', 'run', 7)], rated: { r1: 5 } },  // easy
-      // Two weeks ago — INCLUDED
+      // Two weeks ago. INCLUDED
       { workouts: [workout('r2', 'run', 7)], rated: { r2: 5 } },  // easy
     ], 3);
     // Lookback = 2 weeks back from currentWeek=3 → samples weeks 1 and 2 (indexes 1 and 2).

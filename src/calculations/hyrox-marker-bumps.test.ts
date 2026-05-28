@@ -6,7 +6,7 @@
  * 2. The detect-BEFORE-apply wiring order required by main.ts. The detector
  *    re-derives from current state and gates on `result.source === 'derived'`.
  *    If apply runs first, it writes derived → hyroxRunPaceSecKm, so the next
- *    derive call sees userVal === derived and returns source='user' — bump
+ *    derive call sees userVal === derived and returns source='user'. Bump
  *    never fires. The final test in this file pins that regression.
  */
 
@@ -129,7 +129,7 @@ describe('detectHyroxMarkerBumps', () => {
     applyHyroxRunPaceDerivation(s);
     snapshotHyroxNotifiedMarkers(s);
 
-    // Tiny VDOT bump — derived shifts well under 5 s/km.
+    // Tiny VDOT bump. Derived shifts well under 5 s/km.
     s.v = 46.3;
     const bumps = detectHyroxMarkerBumps(s);
     expect(bumps).toHaveLength(0);

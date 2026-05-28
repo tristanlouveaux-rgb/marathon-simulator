@@ -1,12 +1,12 @@
 /**
- * Screenshot capture — hybrid OCR→AI orchestration.
+ * Screenshot capture. Hybrid OCR→AI orchestration.
  *
  * Sits between the two engines and the verified parser core
  * (`src/data/screenshotImport.ts`). The strategy:
  *
  *   1. Run on-device Apple Vision OCR (free, private, iOS-only) and parse the
  *      recognised text with `parseScreenshotText`.
- *   2. If the OCR result is confident and complete, use it — no network, no cost.
+ *   2. If the OCR result is confident and complete, use it. No network, no cost.
  *   3. Otherwise (low confidence, missing distance/duration, or no OCR at all —
  *      e.g. on web), fall back to the AI-vision edge function and parse its JSON
  *      with `parsedFromAIJson`.
@@ -75,7 +75,7 @@ export function pickBetterParse(
     if (aiScore[i] > ocrScore[i]) return { parsed: ai, source: 'ai' };
     if (aiScore[i] < ocrScore[i]) return { parsed: ocr, source: 'ocr' };
   }
-  // Exact tie — prefer AI.
+  // Exact tie. Prefer AI.
   return { parsed: ai, source: 'ai' };
 }
 

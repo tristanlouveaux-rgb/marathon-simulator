@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-// Pure logic extracted from events.ts — tested without DOM/window dependencies
+// Pure logic extracted from events.ts. Tested without DOM/window dependencies
 
 /** Check if the given week is a benchmark week (every 4th week within continuous mode). */
 function isBenchmarkWeek(weekNumber: number, continuousMode: boolean): boolean {
@@ -153,7 +153,7 @@ describe('Continuous Mode', () => {
 
       if (w > tw) {
         if (continuousMode) {
-          // Would append — should not happen
+          // Would append. Should not happen
         } else {
           completeCalled = true;
         }

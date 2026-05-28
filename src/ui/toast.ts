@@ -1,7 +1,7 @@
 /**
- * Assignment Toast — shows a brief summary after Garmin activities are processed.
+ * Assignment Toast. Shows a brief summary after Garmin activities are processed.
  * Auto-dismisses after 5s; tap anywhere on toast to dismiss early.
- * No queue — replaces any existing toast.
+ * No queue. Replaces any existing toast.
  */
 
 const TOAST_ID = 'mosaic-assignment-toast';
@@ -10,9 +10,9 @@ const TOAST_ID = 'mosaic-assignment-toast';
  * Show a floating assignment toast with one line per assignment.
  *
  * Line formats:
- *   "{ActivityName} → {WorkoutName} {DayAbbr}"   — slot match
- *   "{ActivityName} → Excess load"                — overflow
- *   "{ActivityName} → Logged (no plan impact)"    — log only
+ *   "{ActivityName} → {WorkoutName} {DayAbbr}". Slot match
+ *   "{ActivityName} → Excess load". Overflow
+ *   "{ActivityName} → Logged (no plan impact)". Log only
  */
 export function showAssignmentToast(lines: string[]): void {
   if (lines.length === 0) return;

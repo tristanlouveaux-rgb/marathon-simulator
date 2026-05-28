@@ -187,7 +187,7 @@ export class GuideEngine {
       });
     }
 
-    // Don't advance cues while paused — step time/distance is frozen anyway.
+    // Don't advance cues while paused. Step time/distance is frozen anyway.
     if (data.status === 'paused') return;
 
     const stepElapsed = data.elapsed - this.stepStartElapsed;

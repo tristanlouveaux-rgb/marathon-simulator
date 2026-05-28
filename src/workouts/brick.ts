@@ -1,12 +1,12 @@
 /**
- * Brick workouts — bike → run combined sessions.
+ * Brick workouts. Bike → run combined sessions.
  *
  * Almost always bike-to-run (§18.1). The physiological value is in training
  * the run-off-the-bike transition: altered blood flow, muscle recruitment
  * after cycling, and race-day pacing discipline.
  *
  * Load accounting: both segments contribute their full TSS to the brick
- * workout (§18.4 — no training-load discount). The 5–11% pace discount is
+ * workout (§18.4. No training-load discount). The 5–11% pace discount is
  * race-time prediction only (tracking side), never applied here.
  */
 

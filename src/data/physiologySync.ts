@@ -1,5 +1,5 @@
 /**
- * Physiology Sync — pulls daily metrics from Supabase Edge Function
+ * Physiology Sync. Pulls daily metrics from Supabase Edge Function
  * and hydrates existing SimulatorState fields.
  *
  * Currently syncs: vo2max → s.vo2, resting_hr → s.restingHR
@@ -79,7 +79,7 @@ export interface PhysiologySnapshot {
  * Returns only the values that were actually present in the Supabase response —
  * null means Garmin hasn't pushed that metric yet (not a stale cached value).
  *
- * Safe to call at any time — returns all-null on error so the app still loads.
+ * Safe to call at any time. Returns all-null on error so the app still loads.
  *
  * @param days  How many days of history to request (default 1 = latest only)
  */
@@ -120,7 +120,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     if (vo2Value != null) {
       result.vo2 = vo2Value;
-      // Accept any increase. Accept a decline only if it's ≤ 5 points — a larger
+      // Accept any increase. Accept a decline only if it's ≤ 5 points. A larger
       // overnight drop is almost always a Garmin data glitch, not real detraining.
       const currentVo2 = s.vo2 ?? 0;
       if (currentVo2 === 0 || vo2Value >= currentVo2 || (currentVo2 - vo2Value) <= 5) {
@@ -135,7 +135,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       // userMetrics has not delivered a running-VO2 value. Clear any stale
       // s.vo2 so the UI shows our own VDOT estimate rather than pinning a
       // possibly-wrong device number. Only clear when the sync actually
-      // returned data — we don't want to wipe state on a transient empty
+      // returned data. We don't want to wipe state on a transient empty
       // response (rate limit, network blip).
       console.log(`[PhysiologySync] Clearing stale s.vo2=${s.vo2} — physiology_snapshots has no vo2_max_running for this account`);
       s.vo2 = undefined as unknown as number;
@@ -145,7 +145,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     // Walk backwards through daily rows to find the most recent non-null RHR.
     // Garmin populates resting_hr overnight after a sleep cycle, so today's row
-    // is null until tomorrow's sync — without the walk-back, fresh Garmin
+    // is null until tomorrow's sync. Without the walk-back, fresh Garmin
     // connections leave s.restingHR undefined and gate off HR-calibrated VDOT.
     let latestRHR: number | null = null;
     for (let i = rows.length - 1; i >= 0; i--) {
@@ -158,7 +158,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       changed = true;
     }
 
-    // Max HR is a physiological ceiling — only raise, never lower.
+    // Max HR is a physiological ceiling. Only raise, never lower.
     // A value from a low-intensity or wrist-sensor session is not the athlete's max.
     if (data.maxHR != null && data.maxHR > 0) {
       result.maxHR = data.maxHR;
@@ -188,7 +188,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
       asOf: (data.latestPhysio?.calendar_date ?? latest.calendar_date ?? new Date().toISOString().slice(0, 10)),
     } : null;
 
-    // Hand off to ltSync — it builds derive inputs from PBs + activities,
+    // Hand off to ltSync. It builds derive inputs from PBs + activities,
     // applies the override > Garmin > derived priority, and surfaces a
     // suggestion if Garmin and derived disagree by >10s/km.
     const action = recomputeLT(s, { garmin: garminLT });
@@ -240,7 +240,7 @@ export async function syncPhysiologySnapshot(days = 1): Promise<PhysiologySnapsh
 
     return result;
   } catch (err) {
-    // Non-fatal — app continues without fresh physiology data
+    // Non-fatal. App continues without fresh physiology data
     console.warn('[PhysiologySync] Failed to sync:', err);
     return empty;
   }

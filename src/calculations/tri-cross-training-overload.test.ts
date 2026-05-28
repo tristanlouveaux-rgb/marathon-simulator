@@ -35,7 +35,7 @@ function state(overrides: Partial<SimulatorState> = {}): SimulatorState {
  *   Sat: 4 h bike endurance (220 TSS)
  *   Sun: 90 min run long (110 TSS)
  *  Total = 510 TSS.
- *  Bike has the most planned TSS (220) — recommended target by default.
+ *  Bike has the most planned TSS (220). Recommended target by default.
  */
 function canonicalTriWeek() {
   return {
@@ -71,7 +71,7 @@ describe('detectCrossTrainingOverload — gating', () => {
   });
 
   it('does NOT fire below the 15% threshold', () => {
-    // 510 TSS planned + 60 TSS tennis = 11.7% — below threshold.
+    // 510 TSS planned + 60 TSS tennis = 11.7%. Below threshold.
     const s = state({
       wks: [{
         ...canonicalTriWeek(),
@@ -239,7 +239,7 @@ describe('detectCrossTrainingOverload — per-discipline options', () => {
     });
     const r = detectCrossTrainingOverload(s, 0);
     const runReplace = r!.options.run.replaceMods;
-    // Run has a quality session (mon-r threshold) — first replace mod should swap it.
+    // Run has a quality session (mon-r threshold). First replace mod should swap it.
     const swap = runReplace.find(m => m.action === 'swap_easy');
     expect(swap).toBeDefined();
     expect(swap!.workoutId).toBe('mon-r');
@@ -361,7 +361,7 @@ describe('detectCrossTrainingOverload — modifiable filter', () => {
         adhocWorkouts: [{ id: 'tennis', t: 'cross', n: 'tennis', d: '90min', r: 6, iTrimp: 15000 }],
       }] as any,
     });
-    // Today is Friday (dow=4) — Mon (0), Wed (2) are in the past.
+    // Today is Friday (dow=4). Mon (0), Wed (2) are in the past.
     const r = detectCrossTrainingOverload(s, 4);
     const runMods = r!.options.run.reduceMods;
     expect(runMods.find(m => m.workoutId === 'mon-r')).toBeUndefined();

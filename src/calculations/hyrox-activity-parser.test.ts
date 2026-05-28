@@ -81,7 +81,7 @@ describe('applyParsedBenchmarks', () => {
   it('improves a benchmark when new time is faster (PB only)', () => {
     const current = { ski_erg: 270, sled_push: 200 };
     const parsed = parseHyroxActivity('HYROX', buildSyntheticHyroxLaps());
-    // Synthetic stations are all 240s — so ski_erg (current 270) improves, sled_push (200) doesn't.
+    // Synthetic stations are all 240s. So ski_erg (current 270) improves, sled_push (200) doesn't.
     const { updated, improvements } = applyParsedBenchmarks(current, parsed);
     expect(updated.ski_erg).toBe(240);
     expect(updated.sled_push).toBe(200);  // not overwritten with 240 (slower than 200)

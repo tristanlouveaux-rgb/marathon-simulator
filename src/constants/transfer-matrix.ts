@@ -12,7 +12,7 @@
  * **Tracking vs planning**: these values are used on both sides of the line.
  * On the tracking side, they determine how a padel session (for example)
  * contributes to each per-discipline CTL when we analyse history. On the
- * planning side, they drive the replace-and-reduce flow — if a user misses a
+ * planning side, they drive the replace-and-reduce flow. If a user misses a
  * run but did a long bike, the matrix says the bike counts as 0.75 of a run
  * for aerobic-stimulus substitution purposes.
  */
@@ -39,10 +39,10 @@ export type TransferSourceSport =
  * contributes 70% of its TSS to bike CTL/ATL (in addition to 100% going to
  * run CTL/ATL).
  *
- * Citations (triathlon values — §18.3):
- *   - run ↔ bike: Millet et al. (2002) — shared VO2 and cardiac adaptations
- *   - swim ↔ run: Millet & Vleck (2000) — minimal specificity transfer
- *   - strength → aerobic: Beattie et al. (2023) — small but present
+ * Citations (triathlon values. §18.3):
+ *   - run ↔ bike: Millet et al. (2002). Shared VO2 and cardiac adaptations
+ *   - swim ↔ run: Millet & Vleck (2000). Minimal specificity transfer
+ *   - strength → aerobic: Beattie et al. (2023). Small but present
  *   - padel / ski values: first-approximation proposals based on physiology;
  *     flagged for validation in §18.11.
  */
@@ -61,7 +61,7 @@ export const TRANSFER_MATRIX: Record<TransferSourceSport, Record<Discipline, num
 
 /**
  * Get the transfer contribution from a source sport to a destination discipline.
- * Returns 0 if either key is unknown — we do not crash on unexpected sport strings.
+ * Returns 0 if either key is unknown. We do not crash on unexpected sport strings.
  */
 export function transferWeight(source: TransferSourceSport, dest: Discipline): number {
   return TRANSFER_MATRIX[source]?.[dest] ?? 0;
@@ -69,7 +69,7 @@ export function transferWeight(source: TransferSourceSport, dest: Discipline): n
 
 /**
  * Map a free-form sport label (as stored on activities) into a transfer source key.
- * Kept deliberately small — unmatched sports default to 'other'. Expand as needed.
+ * Kept deliberately small. Unmatched sports default to 'other'. Expand as needed.
  */
 export function sportToTransferSource(sportLabel: string | undefined): TransferSourceSport {
   if (!sportLabel) return 'other';

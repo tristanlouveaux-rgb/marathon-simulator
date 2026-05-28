@@ -30,7 +30,7 @@ const GOOD_OCR_LINES = [
   'Distance 7.5',
 ];
 
-// A blurry / partial OCR pass — distance + duration unreadable, low confidence.
+// A blurry / partial OCR pass. Distance + duration unreadable, low confidence.
 const POOR_OCR_LINES = ['Run', 'some blurry text', 'Avg Heart Rate 140 bpm'];
 
 const CLEAN_AI_JSON = {

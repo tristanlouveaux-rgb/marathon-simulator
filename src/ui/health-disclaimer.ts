@@ -1,6 +1,6 @@
 /**
  * One-time health disclaimer modal. Required for App Store §1.4 (Safety/Physical Harm)
- * compliance — any fitness/training app that prescribes load must surface a clear
+ * compliance. Any fitness/training app that prescribes load must surface a clear
  * medical-device disclaimer and obtain user acknowledgement.
  *
  * Triggered once per device per user. Persisted via `state.healthDisclaimerAcknowledged`.

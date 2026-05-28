@@ -1,9 +1,9 @@
 /**
- * Triathlon plan view — mirrors the running plan visual language.
+ * Triathlon plan view. Mirrors the running plan visual language.
  *
  * Same page shell as `plan-view.ts` (sky gradient, centred hero, Coach +
  * Check-in buttons, real tab bar), with the workout list replaced by a
- * tri-aware day-grouped layout. Running users never hit this — they see
+ * tri-aware day-grouped layout. Running users never hit this. They see
  * the full `renderPlanView()`.
  */
 
@@ -28,8 +28,36 @@ import type { InjuryState, InjuryLocation } from '@/types/injury';
 
 // ─── Module-level navigation state ───────────────────────────────────────────
 // null = show the live current week (s.w). Non-null = preview another week
-// without changing s.w — same pattern as running plan-view.
+// without changing s.w. Same pattern as running plan-view.
 let _viewWeek: number | null = null;
+
+/** Open the plan view focused on a specific week without mutating s.w. Used by
+ * surfaces that list past weeks (e.g. recent-weeks-detail) so a tap opens that
+ * week. Passing `wkNum === liveW` resets to the live view. */
+export function renderTriathlonPlanViewAtWeek(wkNum: number, liveW: number): void {
+  _viewWeek = wkNum === liveW ? null : wkNum;
+  renderTriathlonPlanView();
+}
+
+/** Summarize a week's actuals into minutes, session count, and TSS-equivalent.
+ * Mirrors `forEachActual` from progress-detail-view but flattens across
+ * disciplines for stats-row displays. */
+export function summarizeWeekActuals(
+  actuals: Record<string, { garminId?: string; durationSec?: number | null; iTrimp?: number | null }>,
+): { min: number; count: number; tss: number } {
+  let min = 0;
+  let count = 0;
+  let tss = 0;
+  const seen = new Set<string>();
+  for (const a of Object.values(actuals ?? {})) {
+    if (a.garminId && seen.has(a.garminId)) continue;
+    if (a.garminId) seen.add(a.garminId);
+    min += (a.durationSec ?? 0) / 60;
+    count += 1;
+    if (a.iTrimp != null && a.iTrimp > 0) tss += (a.iTrimp * 100) / 15000;
+  }
+  return { min, count, tss };
+}
 
 function navigateTab(tab: TabId): void {
   _viewWeek = null; // leaving the plan tab resets to live week on return
@@ -71,7 +99,7 @@ export function renderTriathlonPlanView(): void {
   const raceCountdownDisplay = raceDays > 14 ? `${Math.floor(raceDays / 7)}` : `${raceDays}`;
   const raceCountdownUnit = raceDays > 14 ? 'weeks' : 'days';
 
-  // Dismissed benchmark tests — chips only show after the test card is dismissed
+  // Dismissed benchmark tests. Chips only show after the test card is dismissed
   const dismissedTests = new Set<string>((tri as any).dismissedTests as string[] ?? []);
 
   // Weekly totals
@@ -85,7 +113,7 @@ export function renderTriathlonPlanView(): void {
     if (d === 'swim' || d === 'bike' || d === 'run') minByDisc[d] += estimateMinutes(w);
   }
 
-  // Completed totals (current + past weeks only — future weeks have no actuals yet)
+  // Completed totals (current + past weeks only. Future weeks have no actuals yet)
   const actualsForWk: Record<string, any> = (wk as any)?.garminActuals ?? {};
   const completedWorkouts = workouts.filter((w: any) => w.status === 'completed');
   const completedMinFor = (w: any): number => {
@@ -255,7 +283,7 @@ export function renderTriathlonPlanView(): void {
   // Tab bar wiring
   wireTabBarHandlers(navigateTab);
 
-  // Benchmark test cards — re-render on save/dismiss to update visibility.
+  // Benchmark test cards. Re-render on save/dismiss to update visibility.
   wireBenchmarkTestsCard(() => renderTriathlonPlanView());
 
   // Header buttons
@@ -374,7 +402,7 @@ let _dragId = '';
 let _dragDay = -1;
 let _dragSuppressClick = false;
 
-// Touch DnD state (iOS — HTML5 drag events don't fire in WKWebView)
+// Touch DnD state (iOS. HTML5 drag events don't fire in WKWebView)
 let _touchDragId = '';
 let _touchDragDay = -1;
 let _touchStartX = 0;
@@ -504,7 +532,7 @@ function wireTriWorkoutDnd(): void {
 }
 
 /**
- * Touch-based DnD for iOS WKWebView — HTML5 drag events don't fire there.
+ * Touch-based DnD for iOS WKWebView. HTML5 drag events don't fire there.
  * Uses touchstart/touchmove/touchend + document.elementFromPoint to replicate
  * the mouse drag behaviour. Only calls e.preventDefault() after the finger
  * moves ≥8px so vertical scroll still works for short taps.
@@ -674,7 +702,7 @@ function moveWorkoutToDay(srcId: string, targetDay: number): void {
 /**
  * After a drop that lands a workout on today, surface the tri suggestion
  * modal if the drop has produced a mod targeting today specifically. We
- * deliberately filter out mods that aren't about today's load — the user
+ * deliberately filter out mods that aren't about today's load. The user
  * just made a change to today, the response should be about today, not
  * about next week's volume ramp or a cross-training overload elsewhere
  * in the week. Call after the plan re-render so the user sees the new
@@ -684,12 +712,12 @@ function moveWorkoutToDay(srcId: string, targetDay: number): void {
  * - source `readiness` and `rpe_blown` are today-centric by construction
  *   (the aggregator picks today's quality workout when emitting them).
  * - any mod whose `targetWorkoutId` resolves to a workout currently on
- *   today is also today-relevant — covers `cross_training_overload` when
+ *   today is also today-relevant. Covers `cross_training_overload` when
  *   the recommended discipline's first mod happens to land on today.
  * - everything else (`volume_ramp` for next week, cross-training overload
  *   targeting another day) is dropped here. Those mods still surface via
  *   the home readiness CTA, which is the "everything actionable" entry
- *   point — they just don't pop a modal mid-drag.
+ *   point. They just don't pop a modal mid-drag.
  */
 function maybeOpenSuggestionsAfterDrop(targetDay: number): void {
   const todayDow = (new Date().getDay() + 6) % 7;
@@ -719,7 +747,7 @@ function maybeOpenSuggestionsAfterDrop(targetDay: number): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Injury system — triathlon discipline-aware adaptation
+// Injury system. Triathlon discipline-aware adaptation
 // ─────────────────────────────────────────────────────────────────────────────
 
 type DisciplineStatus = 'ok' | 'easy' | 'stop';
@@ -865,7 +893,7 @@ function renderInjuryRestCard(w: Workout, disc: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Completed efforts — past-week section + detail pop-up
+// Completed efforts. Past-week section + detail pop-up
 // ─────────────────────────────────────────────────────────────────────────────
 
 function fmtDurSec(sec: number): string {

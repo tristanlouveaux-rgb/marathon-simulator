@@ -1,9 +1,9 @@
 /**
- * Plan Settings Sync — backs up the user's plan state to Supabase so it
+ * Plan Settings Sync. Backs up the user's plan state to Supabase so it
  * survives a localStorage wipe (e.g. after a device change or accidental reset).
  *
- * savePlanSettings()      — called fire-and-forget inside saveState()
- * restorePlanFromSupabase() — called in main.ts only when localStorage is empty
+ * savePlanSettings(). Called fire-and-forget inside saveState()
+ * restorePlanFromSupabase(). Called in main.ts only when localStorage is empty
  */
 
 import { supabase } from './supabaseClient';
@@ -25,7 +25,7 @@ export function setLocalStateOwner(userId: string | null): void {
 }
 
 /**
- * Keys excluded from the snapshot — these are large arrays that are
+ * Keys excluded from the snapshot. These are large arrays that are
  * re-fetched from Strava/Garmin on first sync after a restore.
  */
 const EXCLUDE_KEYS: (keyof SimulatorState)[] = [
@@ -43,7 +43,7 @@ const EXCLUDE_KEYS: (keyof SimulatorState)[] = [
 
 /**
  * Back up the current plan state to Supabase.
- * Fire-and-forget — never throws, never blocks the caller.
+ * Fire-and-forget. Never throws, never blocks the caller.
  */
 export async function savePlanSettings(): Promise<void> {
   try {

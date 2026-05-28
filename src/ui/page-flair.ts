@@ -1,14 +1,14 @@
 /**
- * Page Flair — concentric ring backgrounds + sun-glint corner overlay.
+ * Page Flair. Concentric ring backgrounds + sun-glint corner overlay.
  *
  * Two complementary visual systems shared across the app:
  *
- *   1. Ring backgrounds — concentric SVG circles with linear-gradient strokes
+ *   1. Ring backgrounds. Concentric SVG circles with linear-gradient strokes
  *      (white highlight upper-left → mid blue/teal → dark lower-right).
  *      Five named variants (centered / sweep / focused / asymmetric / whisper)
  *      give per-page composition variety while keeping the same DNA.
  *
- *   2. Sun glint — warm cream radial-gradient at upper-left of every page.
+ *   2. Sun glint. Warm cream radial-gradient at upper-left of every page.
  *      The universal corner mark. Three intensities (low / mid / high).
  *
  * Reference: docs/UX_PATTERNS.md → "Ring Backgrounds" + "Sun Glint".
@@ -18,7 +18,7 @@
  *   - Mountains (`buildSkyBackground` from sky-background.ts) are detail-page-only
  *   - Sun glint is universal (every page)
  *
- * **Animation system** (all motion is one-shot — page settles after arrival):
+ * **Animation system** (all motion is one-shot. Page settles after arrival):
  *   - First-ever ring experience (per device): large entrance (~1.4s, scale 0.28→1)
  *     plus a single light haptic tap on iOS. Tracked via localStorage flag.
  *   - All subsequent appearances: small "settle" entrance (~0.55s, scale 0.85→1).
@@ -53,7 +53,7 @@ export type RingVariant = 'centered' | 'sweep' | 'focused' | 'asymmetric' | 'whi
 export type GlintIntensity = 'low' | 'mid' | 'high';
 export type RingPalette =
   | 'blue'      // wizard default; Readiness (clinical, focused)
-  | 'sky'       // Home (softer, more atmospheric — morning sky vs data)
+  | 'sky'       // Home (softer, more atmospheric. Morning sky vs data)
   | 'teal'      // race-prediction moments, Strava-results
   | 'indigo'    // Sleep
   | 'mint'      // Freshness
@@ -85,7 +85,7 @@ export interface RingOptions {
 
 /**
  * Three gradient tiers create depth between rings.
- * All share the same colour DNA — light upper-left, depth lower-right —
+ * All share the same colour DNA. Light upper-left, depth lower-right —
  * but inner/outer rings use different intensity envelopes so the inner
  * rings "pop" and the outer rings "recede".
  */
@@ -251,7 +251,7 @@ function getVariant(opts: RingOptions): VariantDef {
  * Returns the SVG ring background as an HTML string. Caller wraps in a
  * `position:absolute;inset:0;pointer-events:none` container.
  *
- * Does NOT include the page's atmosphere/gradient base — call `buildAtmosphereBase()`
+ * Does NOT include the page's atmosphere/gradient base. Call `buildAtmosphereBase()`
  * separately and layer this on top.
  *
  * If `pulse: true`, you must include `<style>${ringAnimationCSS(prefix, pulseCycles)}</style>`
@@ -295,7 +295,7 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
 
   // Stagger by ascending radius (smallest r → delay 0, largest r → max delay).
   // Entrance stagger is bigger on 'large' so the bloom feels deliberate.
-  // Wave stagger is fixed (innermost first → outermost last) — same map, used as
+  // Wave stagger is fixed (innermost first → outermost last). Same map, used as
   // both `animation-delay` for entrance AND a CSS variable for the wave so the
   // ripple actually travels outward through the rings.
   const sortedByR = [...v.rings].sort((a, b) => a.r - b.r);
@@ -364,14 +364,14 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
   }).join('');
 
   // Entrance + wave keyframes embedded inside the SVG <style>.
-  // 'large' = water-droplet (~2.0s, scale 0.22→1, 280ms stagger) — first-impression hero.
+  // 'large' = water-droplet (~2.0s, scale 0.22→1, 280ms stagger). First-impression hero.
   //   Slower than the small entrance so the bloom feels deliberate, like a slow inhale.
-  // 'small' = settle (~0.55s, scale 0.85→1, 80ms stagger) — fast and unobtrusive.
-  // Wave    = triggered manually via triggerRingWave() — TRAVELLING ripple that
+  // 'small' = settle (~0.55s, scale 0.85→1, 80ms stagger). Fast and unobtrusive.
+  // Wave    = triggered manually via triggerRingWave(). TRAVELLING ripple that
   //           propagates inner→outer (per-ring delay via --wave-delay var).
   //           Scale peak hits at 30% of the animation (fast expand), then settles
   //           back over the remaining 70% so slowly the eye doesn't catch a snap.
-  //           Far rings expand to 1.10, near rings to 1.16 — foreground gets the
+  //           Far rings expand to 1.10, near rings to 1.16. Foreground gets the
   //           strongest pulse + parallax depth.
   const entranceKeyframes = entrance === 'large' ? `
     @keyframes ${prefix}Entrance {
@@ -400,16 +400,16 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
   ` : '';
 
   // Wave keyframes. Rings expand FAR outward (scale 1.8 / 2.4) and fade to invisible
-  // at 45%. The snap back to scale 1 happens during 45%-58% while opacity is 0 — a
+  // at 45%. The snap back to scale 1 happens during 45%-58% while opacity is 0. A
   // wide silent window so no eye can catch the contraction. Then opacity fades back
   // in over 58%-100% with ease-in-out for a graceful settle (no snap-to-static).
   //
   // Per-keyframe `animation-timing-function`:
-  //   • 0%→45%   — strong ease-out for the dramatic outward push
-  //   • 45%→58%  — linear, doesn't matter (invisible)
-  //   • 58%→100% — ease-in-out for smooth, gradual fade-in (the bit that was "snappy")
+  //   • 0%→45%. Strong ease-out for the dramatic outward push
+  //   • 45%→58%. Linear, doesn't matter (invisible)
+  //   • 58%→100%. Ease-in-out for smooth, gradual fade-in (the bit that was "snappy")
   //
-  // Total 3.6s — slow enough to be deliberate. Per-ring delay via --wave-delay var.
+  // Total 3.6s. Slow enough to be deliberate. Per-ring delay via --wave-delay var.
   const waveKeyframes = `
     @keyframes ${prefix}WaveFar {
       0%   { transform: scale(1);   opacity: 1; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
@@ -442,10 +442,10 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
     }
   `;
 
-  // Drift ring — single ambient ripple on arrival, only added when pulse is enabled
+  // Drift ring. Single ambient ripple on arrival, only added when pulse is enabled
   // (hero pages: intro slides, plan-preview, stats/plan/forecast tabs). A phantom
   // circle expands outward from centre and fades over 6.5s, then disappears.
-  // One-shot — used to be `infinite` but constant motion is bad for iOS battery
+  // One-shot. Used to be `infinite` but constant motion is bad for iOS battery
   // and accessibility. Page should feel alive on arrival, not perpetually moving.
   const driftKeyframes = opts.pulse ? `
     @keyframes ${prefix}Drift {
@@ -469,7 +469,7 @@ export function buildRingBackground(prefix: string, opts: RingOptions): string {
             stroke="url(#${prefix}Ring_mid)" stroke-width="1.4"/>
   ` : '';
 
-  // Click-triggered phantom — a small "fresh" ring that emerges from centre
+  // Click-triggered phantom. A small "fresh" ring that emerges from centre
   // when the wave fires. Sits behind the rings as they push outward, so it
   // looks like a new ripple is being born to replace the ones flying off.
   // Only rendered alongside drift (i.e. on hero pages with pulse:true).
@@ -530,7 +530,7 @@ export function ringAnimationCSS(prefix: string): string {
 }
 
 /**
- * Atmospheric base — soft cool radial gradient that gives the rings something
+ * Atmospheric base. Soft cool radial gradient that gives the rings something
  * to "live in", instead of sitting on flat warm cream. Apply as the bottom layer
  * of the background stack on any page using rings.
  *
@@ -547,13 +547,13 @@ export function atmosphereGradient(palette: RingPalette = 'blue'): string {
 }
 
 /**
- * Sun glint — warm cream radial-gradient at upper-left of the page.
+ * Sun glint. Warm cream radial-gradient at upper-left of the page.
  * The universal brand mark across every page in the app.
  *
  * Always upper-left for a consistent light source. Three intensities:
- *   • low  — Home, Plan, Stats, detail pages (alongside mountain background)
- *   • mid  — wizard steps (alongside ring background)
- *   • high — hero / celebration moments only
+ *   • low. Home, Plan, Stats, detail pages (alongside mountain background)
+ *   • mid. Wizard steps (alongside ring background)
+ *   • high. Hero / celebration moments only
  */
 export function buildSunGlint(intensity: GlintIntensity = 'mid'): string {
   const op = GLINT_OPACITY[intensity];
@@ -575,7 +575,7 @@ const FIRST_LAUNCH_KEY = 'mosaic_has_seen_ring_intro';
 
 /**
  * Returns true if the user has never seen the rings before on this device.
- * Used to gate the large entrance animation + the welcome haptic — both
+ * Used to gate the large entrance animation + the welcome haptic. Both
  * happen exactly once per device install, then it's always small/quiet.
  */
 export function isFirstRingExperience(): boolean {
@@ -593,7 +593,7 @@ export function markRingExperienceSeen(): void {
   try {
     localStorage.setItem(FIRST_LAUNCH_KEY, '1');
   } catch {
-    // localStorage unavailable — silent fail
+    // localStorage unavailable. Silent fail
   }
 }
 
@@ -614,7 +614,7 @@ export async function triggerRingEntranceHaptic(): Promise<void> {
     const { Haptics, ImpactStyle } = await import('@capacitor/haptics');
     await Haptics.impact({ style: ImpactStyle.Light });
   } catch {
-    // Plugin unavailable or platform not supported — silent fail
+    // Plugin unavailable or platform not supported. Silent fail
   }
 }
 
@@ -653,16 +653,16 @@ export function triggerRingWave(prefix: string): void {
 // motion (each layer drifts horizontally on a different cycle for parallax).
 //
 // Replaces the angular mountain peaks of sky-background.ts with smooth
-// horizontal wave layers — softer, more contemporary, sibling to the rings.
+// horizontal wave layers. Softer, more contemporary, sibling to the rings.
 
 /**
- * Returns the full HTML for the flowey detail-page background — sky gradient
+ * Returns the full HTML for the flowey detail-page background. Sky gradient
  * base + 4 stacked WAVE LAYERS in the page's signature colour, plus a clean
  * top fade so nothing touches the screen edge.
  *
  * Each wave is a colour-prominent fill (page palette mid colour at decreasing
  * opacity from near to far) with a gradient stroke on its top edge (same
- * gradient recipe as the wizard rings — light highlight upper-left → mid →
+ * gradient recipe as the wizard rings. Light highlight upper-left → mid →
  * shadow). The stroke is what makes the waves recognisable as siblings of
  * the rings; the fill is what makes the page colour-focused.
  *
@@ -675,7 +675,7 @@ export function buildFloweyBackground(prefix: string, palette: RingPalette = 'bl
   const skyMidHex = pickSkyHex(palette, 'mid');
   const skyBotHex = pickSkyHex(palette, 'bottom');
 
-  // Wave layers — far/blurred at top with low colour opacity, near/sharp at
+  // Wave layers. Far/blurred at top with low colour opacity, near/sharp at
   // bottom with high colour opacity. The page colour visually anchors the page.
   // Top of each wave is curved horizontally; bottom is closed at the SVG floor.
   const WAVES = [
@@ -771,7 +771,7 @@ function pickSkyHex(palette: RingPalette, position: 'top' | 'mid' | 'bottom'): s
   return matches[2] ?? '#F5F7FA';
 }
 
-// ── Flowey HALO variant — alternative to the wave version ──────────────────
+// ── Flowey HALO variant. Alternative to the wave version ──────────────────
 // Used on pages where rings RADIATING from behind the hero data ring is more
 // thematic than horizontal waves. Currently used only on Readiness, where the
 // halo concept lands as "background rings echoing the score ring".
@@ -781,7 +781,7 @@ interface FloweyHaloOptions {
    *  page's hero data ring. Default (200, 240). */
   haloCenter?: { cx: number; cy: number };
   /** Where the inner halo ring starts (just outside the hero data ring's outer edge).
-   *  Default 175 — sized to clear a typical hero ring. */
+   *  Default 175. Sized to clear a typical hero ring. */
   haloInnerR?: number;
   /** Whether to also include the off-axis "drift" accent ellipses at the corners.
    *  Adds organic asymmetry. Default true. */
@@ -789,7 +789,7 @@ interface FloweyHaloOptions {
 }
 
 /**
- * Halo variant of the flowey background — sky base + concentric rings radiating
+ * Halo variant of the flowey background. Sky base + concentric rings radiating
  * from behind the page's hero data ring + off-axis accent ellipses for organic
  * composition. Use this on pages where the data ring IS the focal point and the
  * background should echo it (e.g. Readiness).
@@ -910,7 +910,7 @@ export function floweyHaloAnimationCSS(prefix: string): string {
   `;
 }
 
-// ── Scroll-page atmospheric background — for full-page scrollable pages ────
+// ── Scroll-page atmospheric background. For full-page scrollable pages ────
 // Designed for Home / Plan / Stats / Account where the page is taller than the
 // 480px detail-page hero. Continuous atmosphere gradient with no hard cutoff,
 // plus soft halo rings spread across more vertical space. Reads as a calm
@@ -918,7 +918,7 @@ export function floweyHaloAnimationCSS(prefix: string): string {
 
 interface ScrollAtmosphereOptions {
   /** Where the soft halo sits in the 400×800 viewBox. Default centred at (200, 320).
-   *  Pages can shift this for differentiation — e.g. home uses (320, 200) to put
+   *  Pages can shift this for differentiation. E.g. home uses (320, 200) to put
    *  the halo upper-right, balancing the upper-left sun glint. */
   haloCenter?: { cx: number; cy: number };
 }
@@ -937,7 +937,7 @@ export function buildScrollAtmosphereBackground(
   palette: RingPalette = 'blue',
   opts: ScrollAtmosphereOptions = {},
 ): string {
-  // Soft halo — rings positioned in upper-mid, larger and spread further apart
+  // Soft halo. Rings positioned in upper-mid, larger and spread further apart
   // for a "wallpaper" feel instead of a focused halo. Lower opacities = chill.
   const RINGS = [
     { r: 200, tier: 'inner' as const, sw: 1.4, opacity: 0.55, depth: 'near' as const, cls: 'h1' },
@@ -1020,7 +1020,7 @@ export function buildScrollAtmosphereBackground(
 
 /**
  * CSS keyframes for the flowey wave drift. Each layer drifts horizontally
- * once on arrival and returns to its starting position — far layers take
+ * once on arrival and returns to its starting position. Far layers take
  * longer than near layers, so the parallax cascade reads as a single tide
  * rolling in then settling. Disabled under `prefers-reduced-motion`.
  */

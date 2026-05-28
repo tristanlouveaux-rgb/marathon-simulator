@@ -106,7 +106,7 @@ export function unmountGuidedOverlay(): void {
   removeOverlay();
   const prev = (window as any).__guidedOverlayCue;
   if (prev) {
-    // We don't have the controller ref here — caller is responsible for offCue via controller.destroy().
+    // We don't have the controller ref here. Caller is responsible for offCue via controller.destroy().
     (window as any).__guidedOverlayCue = null;
   }
 }
@@ -143,7 +143,7 @@ function wireControls(controller: GuideController): void {
     });
   });
   document.getElementById(`${OVERLAY_ID}-backdrop`)?.addEventListener('click', (e) => {
-    // Backdrop click dismisses — countdown continues underneath.
+    // Backdrop click dismisses. Countdown continues underneath.
     if ((e.target as HTMLElement).id === `${OVERLAY_ID}-backdrop`) removeOverlay();
   });
 }

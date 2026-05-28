@@ -1,5 +1,5 @@
 /**
- * HYROX venue dataset — per-event characteristics that produce small but
+ * HYROX venue dataset. Per-event characteristics that produce small but
  * measurable course-time differences.
  *
  * **Confidence: low-medium.** Hyrox is identical-format (15 stations, 8×1km
@@ -20,7 +20,7 @@
  *      mixed:     +5s/sled station (12s total across 2 sled stations).
  *      concrete:  +10s/sled, but −5s on each 1km run (cleaner surface).
  *
- * 2. **Lap difficulty** captures the run-loop geometry — long straights vs
+ * 2. **Lap difficulty** captures the run-loop geometry. Long straights vs
  *    tight S-curves through narrow corridors. Each 1km run is ~3-5min; a
  *    tight venue adds ~10-15s per lap.
  *      easy:      long straights, wide corners. ~1.5% faster on each run.

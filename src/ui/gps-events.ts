@@ -166,7 +166,7 @@ export async function startTracking(
 
   const started = await activeTracker.start();
   if (!started) {
-    // GPS denied — fall back to timer-only mode (no distance/pace, but
+    // GPS denied. Fall back to timer-only mode (no distance/pace, but
     // elapsed time and time-based splits still work)
     const { MockGpsProvider } = await import('@/gps/providers/mock-provider');
     const timerProvider = new MockGpsProvider();
@@ -260,7 +260,7 @@ export function stopTracking(): void {
     return;
   }
 
-  // Distance too short — discard silently
+  // Distance too short. Discard silently
   void releaseWakeLock();
   activeTracker = null;
   activeWorkoutName = null;
@@ -283,12 +283,45 @@ function gpsStop(): void {
   stopTracking();
 }
 
+/**
+ * Manual lap capture. No-op when a structured split scheme is active (the
+ * scheme owns the splits) — see `GpsTracker.captureLap`. When a lap lands,
+ * we patch a small "Last lap" readout in the record-view header so the
+ * runner gets immediate visual feedback, plus a haptic pulse to confirm
+ * the press registered without needing to look at the screen.
+ */
+function gpsLap(): void {
+  if (!activeTracker) return;
+  const split = activeTracker.captureLap();
+  if (!split) return;
+  // Light haptic so the runner knows the press registered even mid-stride.
+  try {
+    if (typeof navigator !== 'undefined' && typeof (navigator as { vibrate?: (p: number | number[]) => boolean }).vibrate === 'function') {
+      (navigator as { vibrate: (p: number | number[]) => boolean }).vibrate(60);
+    }
+  } catch { /* no-op */ }
+  // Cheap inline readout patch — record-view's `rec-last-lap` element gets
+  // updated if it exists. If the element isn't rendered (e.g. structured
+  // workout), the patch is silently skipped.
+  const el = typeof document !== 'undefined' ? document.getElementById('rec-last-lap') : null;
+  if (el) {
+    const min = Math.floor(split.elapsed / 60);
+    const sec = Math.round(split.elapsed % 60);
+    const mm = String(min);
+    const ss = String(sec).padStart(2, '0');
+    const meters = Math.round(split.distance);
+    el.textContent = `${split.label}: ${mm}:${ss} · ${meters}m`;
+    el.style.opacity = '1';
+  }
+}
+
 // Expose to window for onclick handlers
 declare global {
   interface Window {
     gpsPause: typeof gpsPause;
     gpsResume: typeof gpsResume;
     gpsStop: typeof gpsStop;
+    gpsLap: typeof gpsLap;
     trackWorkout: (name: string, desc: string) => void;
   }
 }
@@ -297,6 +330,7 @@ if (typeof window !== 'undefined') {
   window.gpsPause = gpsPause;
   window.gpsResume = gpsResume;
   window.gpsStop = gpsStop;
+  window.gpsLap = gpsLap;
 }
 
 /**

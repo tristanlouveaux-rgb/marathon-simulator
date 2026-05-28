@@ -177,7 +177,7 @@ describe('scaleWorkoutDescription', () => {
 
   // ── Interval rep-distance guard (P0 regression) ───────────────────────────
   // Reps inside "8x100m" / "4x400m" / "6×200m" are PRESCRIPTIONS, not volumes.
-  // A 30% reduce must not scale them — that destroys the interval.
+  // A 30% reduce must not scale them. That destroys the interval.
   it('does NOT scale interval rep distances — 8x100m', () => {
     const result = scaleWorkoutDescription('Warm up + 8x100m strides + cool down', 0.7);
     expect(result).toContain('8x100m');

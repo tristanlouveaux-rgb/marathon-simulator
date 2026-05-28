@@ -1,5 +1,5 @@
 /**
- * Triathlon benchmark detail pages — drill-down surfaces for the four bars
+ * Triathlon benchmark detail pages. Drill-down surfaces for the four bars
  * on the Stats "Your Numbers" card. Mirrors the running LT detail page
  * (`buildLTMetricPage` in `ui/stats-view.ts`) for consistency:
  *
@@ -11,15 +11,15 @@
  *
  * Override semantics by benchmark:
  *
- *   CSS / FTP — saved value flips `cssSource` / `ftpSource` to `'user'` and
+ *   CSS / FTP. Saved value flips `cssSource` / `ftpSource` to `'user'` and
  *   confidence to `'high'`, then appends to the per-discipline history. The
  *   existing main.ts launch refresh recognises `'user'` and preserves it,
  *   refreshing only when a derived estimate clearly improves on it.
  *   Reset flips the source back to `'derived'`; the value refreshes from
  *   training data on the next launch (see CHANGELOG 2026-05-07 for the
- *   reasoning — avoids a synchronous activity DB call at click time).
+ *   reasoning. Avoids a synchronous activity DB call at click time).
  *
- *   VO2max — sets a top-priority `s.vo2Override`. The display hierarchy in
+ *   VO2max. Sets a top-priority `s.vo2Override`. The display hierarchy in
  *   `vo2max-card.ts:resolveDisplayHeadline` is:
  *      override > toggle (mosaic | device) > computed
  *   The Mosaic / Watch toggle disables and shows a third "Manual" pill while
@@ -36,7 +36,6 @@ import { buildMetricSubHeader, buildConfidenceChip } from '../stats-view';
 import { appendCssSample, appendFtpSample } from '@/calculations/tri-benchmark-history';
 import { buildBenchmarkTrendChart, buildCssTrendChart, animateChartDrawOn } from './benchmark-charts';
 import { computeVO2Estimates } from '@/calculations/vo2-orchestrator';
-import { getVo2Conflict, buildVo2ConflictBanner } from '@/calculations/vo2-sources';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -57,7 +56,7 @@ function navigateTab(tab: TabId): void {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Shared shell — keeps the four pages structurally identical.
+// Shared shell. Keeps the four pages structurally identical.
 // ────────────────────────────────────────────────────────────────────────────
 
 function buildShell(opts: {
@@ -293,7 +292,7 @@ export function wireFTPDetailHandlers(rerender: () => void): void {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// VO2max detail page — adds the override hierarchy on top of the existing
+// VO2max detail page. Adds the override hierarchy on top of the existing
 // Mosaic / Watch toggle. Computed value is shown as the source-of-record when
 // no override is set; override pins a value above both.
 // ────────────────────────────────────────────────────────────────────────────
@@ -338,8 +337,6 @@ export function buildVO2DetailPage(s: SimulatorState): string {
   const overrideCard = buildVO2OverrideCard(displayVal, !!override);
 
   const methods = buildVO2MethodsCard(est);
-  const conflict = getVo2Conflict(s);
-  const conflictBanner = buildVo2ConflictBanner(conflict);
 
   const footer = 'VO2max is your peak rate of oxygen use during exercise (ml/kg/min). Cross-sport, lab-grade. We estimate it from your training data; your watch estimates it from HR variability during activities; neither is ground truth. Set a manual value if you have a lab test.';
 
@@ -348,7 +345,7 @@ export function buildVO2DetailPage(s: SimulatorState): string {
     headline,
     confidence: conf,
     provenance,
-    sparkline: methods + conflictBanner + toggle,
+    sparkline: methods + toggle,
     overrideCard,
     footer,
   });
@@ -409,11 +406,11 @@ function buildVO2MethodsCard(est: NonNullable<SimulatorState['vo2Estimates']>): 
   if (ct.value != null) bars.push({ key: 'crossTraining', label: 'Cross-training', value: ct.value });
 
   // Best-of bar gets the accent fill; others read in neutral grey. Length still
-  // encodes value — colour only differentiates which source is currently the
+  // encodes value. Colour only differentiates which source is currently the
   // headline. Keeps the chart within the 2-non-neutral colour budget.
   const bestValue = bars.length > 0 ? Math.max(...bars.map(b => b.value)) : null;
 
-  // No measured bars and no ceiling — render the original row layout as a
+  // No measured bars and no ceiling. Render the original row layout as a
   // graceful fallback. Doesn't happen in practice (ceiling needs HRmax/RHR
   // which any user with synced activity has) but defends against edge cases.
   if (bars.length === 0 && ceiling == null) {

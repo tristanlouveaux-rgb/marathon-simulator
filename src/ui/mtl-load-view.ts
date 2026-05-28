@@ -1,5 +1,5 @@
 /**
- * MusculoTendon Load (MTL) detail page — eccentric / mechanical strain across
+ * MusculoTendon Load (MTL) detail page. Eccentric / mechanical strain across
  * all HYROX sessions: runs, station work, and bricks.
  *
  * Opens from the MTL factor card on Readiness and the MTL card on Hyrox Stats.
@@ -10,7 +10,7 @@
  * MTL is `durationMin × sRPE × modality × impact × (1 + externalLoad)` per
  * component, summed to a weekly value, then exponentially smoothed into chronic
  * (42d τ) and acute (7d τ) EMAs in `src/calculations/mtl.ts`. The discipline
- * split uses run/station/brick coefficients — running has lower per-minute MTL
+ * split uses run/station/brick coefficients. Running has lower per-minute MTL
  * than station work but accumulates over more weekly minutes, so it is often
  * the largest single chronic contributor.
  */
@@ -38,7 +38,7 @@ function acwrZone(acwr: number | null, ctl: number, atl: number): { label: strin
   if (acwr == null) {
     // Chronic hasn't crossed the 15 daily-equivalent threshold for the ramp signal
     // to be reliable. Acknowledge the visible acute/chronic relationship rather
-    // than saying "no signal" — Tristan's feedback 2026-05-08.
+    // than saying "no signal". Tristan's feedback 2026-05-08.
     if (ctl > 0 && atl > ctl * 1.5) {
       return {
         label: 'Building',
@@ -116,7 +116,7 @@ function getMtlLoadHTML(): string {
   const weeks = s.wks ?? [];
   const wIdx = Math.max(0, Math.min(s.w ?? 0, weeks.length - 1));
 
-  // Derived at render time — `hyroxConfig.weeklyActualMTL` is a dead field
+  // Derived at render time. `hyroxConfig.weeklyActualMTL` is a dead field
   // (typed but never written); deriving here keeps actual / planned /
   // chronic / acute on a single source. See ISSUE-184 history.
   const currentWk = weeks[wIdx];

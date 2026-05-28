@@ -1,7 +1,7 @@
 /**
  * Sleep data poller.
  *
- * Garmin pushes sleep data to our webhook on their own schedule — typically
+ * Garmin pushes sleep data to our webhook on their own schedule. Typically
  * 1–3 hours after the watch syncs in the morning. This poller re-checks the
  * DB every 3 minutes so the app picks up the data as soon as it arrives,
  * without requiring the user to relaunch.

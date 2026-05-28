@@ -5,7 +5,7 @@
  * more than `WEEKLY_VOLUME_RAMP_CAP` (10%). Each discipline checks
  * independently so a swim ramp does not trigger a bike warning.
  *
- * **Side of the line**: planning. Pure function — caller surfaces the result
+ * **Side of the line**: planning. Pure function. Caller surfaces the result
  * as a suggestion (modal) and applies the proposed trim if the user accepts.
  *
  * Source: Gabbett TJ (2016) "The training-injury prevention paradox" Br J
@@ -40,7 +40,7 @@ export function checkVolumeRamp(state: SimulatorState): VolumeRampViolation[] {
     const thisActualHours = sumActualHours(thisWk.garminActuals, d);
     const nextPlannedHours = sumPlannedHours(nextWk.triWorkouts ?? [], d);
 
-    // Skip if either is zero — ramp logic doesn't apply when there's no anchor.
+    // Skip if either is zero. Ramp logic doesn't apply when there's no anchor.
     if (thisActualHours <= 0 || nextPlannedHours <= 0) continue;
 
     const rampPct = (nextPlannedHours - thisActualHours) / thisActualHours;

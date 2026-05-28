@@ -4,7 +4,7 @@
  * Maintains independent CTL/ATL/TSB tracks for swim, bike, and run, plus a
  * combined CTL derived from the transfer matrix and COMBINED_CTL_WEIGHTS
  * (§18.3). All three disciplines share the same time constants (42-day CTL,
- * 7-day ATL) — Banister 1975, same as running mode.
+ * 7-day ATL). Banister 1975, same as running mode.
  *
  * **Side of the line**: tracking. The model describes where fitness is given
  * the activities that have happened.
@@ -21,7 +21,7 @@ import { sportToTransferSource, transferWeight, type TransferSourceSport } from 
  */
 export interface FitnessContribution {
   sport: TransferSourceSport;       // Source activity sport
-  rawTSS: number;                    // Signal B — real physiological TSS
+  rawTSS: number;                    // Signal B. Real physiological TSS
   dayIndex: number;                  // 0 = today, 1 = yesterday, ... (for decay)
 }
 
@@ -53,7 +53,7 @@ export function computePerDisciplineFitness(contributions: FitnessContribution[]
   };
 
   // Combined CTL (and ATL) is the raw EMA across ALL activities without
-  // transfer weighting. This is the honest total-fatigue number — every
+  // transfer weighting. This is the honest total-fatigue number. Every
   // activity contributes at full weight regardless of sport, so padel, gym,
   // hiking etc. all count toward combined even though they only contribute
   // partially to swim/bike/run CTLs. (§8 feedback, 2026-04-24.)

@@ -1,5 +1,5 @@
 /**
- * deriveHyroxRunPace tests — v2 (CP-anchored continuous model).
+ * deriveHyroxRunPace tests. V2 (CP-anchored continuous model).
  *
  * Confirms the VDOT → CP → format → personalised HYROX-pace derivation,
  * the manual-yields-to-improvements rule, the personal offset blend with
@@ -152,7 +152,7 @@ describe('derivePopulationRunPace — base model without personal offset', () =>
 describe('deriveHyroxRunPace — full pipeline', () => {
   it('VDOT 46 + intermediate band → derived (v2: faster than the old seed)', () => {
     // v2: cpRatio at VDOT 46 ≈ 1.045 (interp 45..38). With threshold ≈ 264
-    // → pace ≈ 276. v1 produced ~300 (threshold × 1.15) — v2 is faster.
+    // → pace ≈ 276. v1 produced ~300 (threshold × 1.15). V2 is faster.
     const result = deriveHyroxRunPace(buildState({ band: 'intermediate', vdot: 46 }));
     expect(result.source).toBe('derived');
     expect(result.paceSecKm).toBeGreaterThan(255);
@@ -169,7 +169,7 @@ describe('deriveHyroxRunPace — full pipeline', () => {
   });
 
   it('user pace within 5 s/km of derived → user wins', () => {
-    // Derived at VDOT 46 ≈ 276; pick user 278 (2 s/km slower) — should keep user.
+    // Derived at VDOT 46 ≈ 276; pick user 278 (2 s/km slower). Should keep user.
     const result = deriveHyroxRunPace(buildState({
       band: 'intermediate', vdot: 46, userPace: 278,
     }));

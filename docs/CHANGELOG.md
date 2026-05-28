@@ -4,6 +4,14 @@ Session-by-session record of significant changes. Most recent first.
 
 ---
 
+## 2026-05-28 — Recovery: running forecast cone + goal overlay (mirror of tri)
+
+Mirror of the triathlon cone rebuild, per CLAUDE.md mirror rule. The running forecast view was using a simple actual-line + projection chart (private `buildForecastChart` in `race-forecast-view.ts`) instead of the Monte Carlo cone. Outcome tiles, chance bar, and goal edit were all absent. Side-effect of restoring this: `s.raceGoalTimeSec` (declared in state but unreferenced anywhere) now has a real read/write path.
+
+- **`src/ui/race-forecast-cone-card.ts`** (new) — `renderRunConeCard(s)` and `wireRunConeCard()`. Calls `runMarathonForecastSim(s, 2000, goalSec)`, passes the result to `buildForecastCone` with a real `history` array built from `vdotHistory` (one point per completed week, `time = tv(vdot, distKm)`). Reads goal from `s.raceGoalTimeSec`, falls back to `s.initialBaseline` so the line still shows something meaningful before the user sets a goal. Same outcome-tile / chance-bar / threshold-ladder shape as the triathlon card. Uses `fmtProbPct` for capped display.
+- **`src/ui/goal-time-overlay.ts`** (new) — running mirror of the tri goal overlay. Slider bounds derived from the deterministic prediction (`forecastTimeAdjusted ?? forecastTime ?? blendedRaceTimeSec`), live chance recompute re-runs the seeded sim per drag (RAF-throttled). Writes through to `s.raceGoalTimeSec` on save, clears it on clear, re-renders the forecast view either way.
+- **`src/ui/race-forecast-view.ts`** — chart card block replaced with `${renderRunConeCard(s)}`. `wireRunConeCard()` called from `wireRaceForecastHandlers`. The old private `buildForecastChart` and `ChartPoint` / `projection` / `history` data-prep code is now unused but left in source pending a follow-up cleanup pass (separate commit).
+
 ## 2026-05-28 — Goal overlay rebuilt as slider + probability display caps
 
 Recovery follow-up. The previous version of `goal-time-overlay.ts` (committed earlier in the day) used a text input. The pre-regression build had a glass slider with a live chance-of-beating readout that updated on every drag — restored to match.

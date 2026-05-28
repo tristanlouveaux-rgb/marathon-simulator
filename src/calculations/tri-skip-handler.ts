@@ -1,9 +1,9 @@
 /**
- * Triathlon push / drop handler — explicit user actions on a missed workout.
+ * Triathlon push / drop handler. Explicit user actions on a missed workout.
  *
  * Mirrors the established race-mode running rule: a missed workout may be
  * moved forward by one week, or dropped permanently. A workout cannot be
- * pushed twice — once a clone exists in next week, the only remaining
+ * pushed twice. Once a clone exists in next week, the only remaining
  * action is to drop. Adherence-penalised by `tri-adherence.ts` when the
  * status is `'skipped'`.
  *
@@ -50,14 +50,14 @@ export function pushTriWorkout(state: SimulatorState, workoutId: string): SkipRe
 
   const nextWk = wks[currentWeek + 1];
   if (!nextWk) {
-    // No next week available (e.g. race week) — fall back to drop semantics.
+    // No next week available (e.g. race week). Fall back to drop semantics.
     workout.status = 'skipped';
     workout.skipCount = (workout.skipCount ?? 0) + 1;
     return { outcome: 'dropped', workoutId };
   }
   if (!nextWk.triWorkouts) nextWk.triWorkouts = [];
 
-  // Mark original as skipped — but pushCount stays on original AND propagates
+  // Mark original as skipped. But pushCount stays on original AND propagates
   // to the clone so the lineage can't be pushed again.
   const newPushCount = priorPushCount + 1;
   workout.status = 'skipped';
@@ -79,7 +79,7 @@ export function pushTriWorkout(state: SimulatorState, workoutId: string): SkipRe
     id: `${workout.id}__push${newPushCount}`,
     status: 'planned',
     skipCount: 0,                  // Reset per-week skip tracking
-    pushCount: newPushCount,       // Carry lineage forward — clone can't be pushed again
+    pushCount: newPushCount,       // Carry lineage forward. Clone can't be pushed again
     originalName: workout.originalName ?? workout.n,
     dayOfWeek: pickFreeDayOfWeek(workout.dayOfWeek, nextWk.triWorkouts),
   };
@@ -109,7 +109,7 @@ export function dropTriWorkout(state: SimulatorState, workoutId: string): SkipRe
 }
 
 /**
- * @deprecated Kept for backwards compatibility with any older callers — prefer
+ * @deprecated Kept for backwards compatibility with any older callers. Prefer
  * the explicit `pushTriWorkout` / `dropTriWorkout` pair. First call pushes,
  * subsequent calls on the same lineage drop.
  */

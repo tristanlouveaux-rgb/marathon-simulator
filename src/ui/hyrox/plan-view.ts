@@ -193,7 +193,7 @@ export function renderHyroxPlanView(): void {
   // Account button
   document.getElementById('hx-account-btn')?.addEventListener('click', () => navigateTab('account'));
 
-  // Add session button — opens the HYROX-specific session picker.
+  // Add session button. Opens the HYROX-specific session picker.
   // Lets the user add a session in keeping with the current week's phase.
   document.getElementById('hx-add-session-btn')?.addEventListener('click', () => {
     import('./add-session-modal').then(({ openHyroxAddSessionModal }) =>
@@ -231,7 +231,7 @@ export function renderHyroxPlanView(): void {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Touch DnD — reorder within week (same pattern as triathlon plan-view)
+// Touch DnD. Reorder within week (same pattern as triathlon plan-view)
 // ─────────────────────────────────────────────────────────────────────────────
 
 let _touchDragId = '';

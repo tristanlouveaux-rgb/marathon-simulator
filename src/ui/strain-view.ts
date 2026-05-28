@@ -1,5 +1,5 @@
 /**
- * Strain detail page — new iPhone-native design language.
+ * Strain detail page. New iPhone-native design language.
  * Opens when tapping the Strain ring on the Home view.
  * Shows strain %, 7-day rolling stats, coaching insight, and activity timeline.
  */
@@ -188,7 +188,7 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
   const wkForPlan = wks[wkIdx];
 
   // ── Actual Signal B TSS (logged activities + passive excess) ──────────
-  // Uses computeTodayStrainTSS — single source of truth shared with Home + Readiness.
+  // Uses computeTodayStrainTSS. Single source of truth shared with Home + Readiness.
   const physioEntry = (s.physiologyHistory ?? []).find(e => e.date === date);
   let actualTSS = 0;
   if (s.planStartDate) {
@@ -272,7 +272,7 @@ function getStrainForDate(date: string, s: SimulatorState, todayReadinessLabel?:
   const isRestDay = !hasPlannedWorkout && !matchedActivityDay;
 
   // ── Readiness label (for target modulation + marker colour) ────────────
-  // Only applies for today — past days display unmodulated targets.
+  // Only applies for today. Past days display unmodulated targets.
   // Passed through from the caller (home-view precomputes readiness).
   const readinessLabel: ReadinessLabel | null = (date === today && todayReadinessLabel) ? todayReadinessLabel : null;
 
@@ -357,7 +357,7 @@ function coachingText(
     return `${actual} TSS logged.${kmNote}`;
   }
 
-  // Rest day — two states only: good or overreaching
+  // Rest day. Two states only: good or overreaching
   if (isRestDay) {
     if (isOverreaching) return `${actual} TSS on a rest day. This level of activity impairs recovery. Keep it light or take it fully off.`;
     if (actual > 0) return `${actual} TSS logged. Light activity on rest days is fine for recovery.${kmNote}`;
@@ -396,7 +396,7 @@ function activityIcon(type: string): string {
   if (t.includes('WALK') || t.includes('HIKE')) {
     return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="4" r="2"/><path d="M9 8l-2 8m7-8l2 4-4 2-1 6"/></svg>`;
   }
-  // Default — dumbbell / strength
+  // Default. Dumbbell / strength
   return `<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 6.5h11M6.5 17.5h11M2 9.5h20M2 14.5h20"/></svg>`;
 }
 
@@ -434,7 +434,7 @@ function getWeekBarDays(displayDate: string, s: SimulatorState, today: string): 
       })();
 
   const viewWeek = wkIdx + 1;
-  // Skip planned-workout generation for Just-Track users — no plan exists.
+  // Skip planned-workout generation for Just-Track users. No plan exists.
   const plannedWorkouts = s.trackOnly ? [] : generateWeekWorkouts(
     wk.ph, s.rw, s.rd, s.typ, [], s.commuteConfig || undefined,
     null, s.recurringActivities, s.onboarding?.experienceLevel, undefined, s.pac?.e,
@@ -834,7 +834,7 @@ function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadi
   // Tab bar
   wireTabBarHandlers(navigateTab);
 
-  // Ring sweep animation — same pattern as readiness-view.ts
+  // Ring sweep animation. Same pattern as readiness-view.ts
   setTimeout(() => {
     const circle = document.getElementById('strain-ring-circle');
     const target = (circle as HTMLElement | null)?.dataset.targetOffset;
@@ -865,7 +865,7 @@ function wireStrainHandlers(s: SimulatorState, _displayDate: string, _todayReadi
   // Info overlay
   document.getElementById('strain-info-btn')?.addEventListener('click', () => showStrainInfoOverlay());
 
-  // Timeline activity detail — navigate to full activity detail page
+  // Timeline activity detail. Navigate to full activity detail page
   document.querySelectorAll<HTMLElement>('.strain-act-row').forEach(row => {
     row.addEventListener('click', () => {
       const gid = row.dataset.garminId;

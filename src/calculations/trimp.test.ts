@@ -125,7 +125,7 @@ describe('calculateITrimp (HR stream)', () => {
   });
 
   it('handles variable HR with non-linear accumulation', () => {
-    // Alternating easy / hard — hard portion should dominate due to exponential weight
+    // Alternating easy / hard. Hard portion should dominate due to exponential weight
     const easy = 110;
     const hard = 170;
     const hrEasy = Array(60).fill(easy);

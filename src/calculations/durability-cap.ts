@@ -1,5 +1,5 @@
 /**
- * Run-leg durability cap — the triathlon-specific machinery the marathon side
+ * Run-leg durability cap. The triathlon-specific machinery the marathon side
  * does not need.
  *
  * **Why this exists**: capacity markers (CSS / FTP / VDOT) describe single-bout
@@ -13,9 +13,9 @@
  *   - Coyle 1988 *Exerc Sport Sci Rev* "Endurance specificity"
  *   - Joyner & Coyle 2008 *J Physiol* "Endurance exercise performance: the
  *     physiology of champions"
- *   - Rüst et al. 2012 *J Strength Cond Res* — IM marathon time correlates
+ *   - Rüst et al. 2012 *J Strength Cond Res*. IM marathon time correlates
  *     strongly with longest training run + weekly volume in build (r ≈ 0.55–0.70)
- *   - Friel "Triathlete's Training Bible" — build-phase specificity guidelines.
+ *   - Friel "Triathlete's Training Bible". Build-phase specificity guidelines.
  *
  * Because the literature does not justify a larger penalty, the cap is bounded
  * at +5%. Do not increase without new evidence.

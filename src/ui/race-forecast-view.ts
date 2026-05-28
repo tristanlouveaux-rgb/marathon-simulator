@@ -1,5 +1,5 @@
 /**
- * Race Forecast detail page — race mode only.
+ * Race Forecast detail page. Race mode only.
  * Opens from the race forecast card on Home.
  *
  * Shows:
@@ -19,6 +19,7 @@ import { renderTabBar, wireTabBarHandlers, type TabId } from './tab-bar';
 import { buildRingBackground, atmosphereGradient, buildSunGlint } from './page-flair';
 import { renderMarathonPopulationCard } from './marathon-population-card';
 import { renderForecastFingerprint } from './race-forecast-fingerprint';
+import { renderRunConeCard, wireRunConeCard } from './race-forecast-cone-card';
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 
@@ -27,7 +28,7 @@ const TEXT_S  = '#64748B';
 const TEXT_L  = '#94A3B8';
 
 const CHART_STROKE = '#64748B';
-const GOAL_STROKE  = '#C48A3A'; // warm amber — distinct from the grey projection line
+const GOAL_STROKE  = '#C48A3A'; // warm amber. Distinct from the grey projection line
 const CARD = `background:#fff;border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06)`;
 
 const RACE_DIST_LABEL: Record<string, string> = {
@@ -142,7 +143,7 @@ function buildForecastChart(
   projection: ChartPoint[],
   totalWeeks: number,
 ): string {
-  // Combine for axis range — started anchor + every actual + projection endpoint
+  // Combine for axis range. Started anchor + every actual + projection endpoint
   const allSecs = [
     startedSec,
     goalSec,
@@ -170,7 +171,7 @@ function buildForecastChart(
   };
 
   // Solid actual polyline from real history only. Do not synthesise a week-1
-  // anchor from the current value — that produces a misleading flat line when
+  // anchor from the current value. That produces a misleading flat line when
   // we only have one data point. When history has <2 points, skip the actual
   // line and render a single marker circle at the current point instead, so
   // the user sees "we don't have progression data yet" truthfully.
@@ -204,7 +205,7 @@ function buildForecastChart(
     ? `<circle cx="${projectionAnchor[0].toFixed(1)}" cy="${projectionAnchor[1].toFixed(1)}" r="3" fill="${CHART_STROKE}"/>`
     : '';
 
-  // Horizontal reference line at goal — warm amber so it is visually distinct
+  // Horizontal reference line at goal. Warm amber so it is visually distinct
   // from the grey dashed projection. Solid stroke (not dashed) reinforces the
   // distinction with the projection line which uses dash-pattern.
   const goalY = yOf(goalSec);
@@ -231,7 +232,7 @@ function buildForecastChart(
     return `<span style="position:absolute;left:${leftPct}%;transform:translateX(-50%);font-size:9px;color:${l.bold ? TEXT_M : TEXT_L};font-weight:${l.bold ? '600' : '400'};white-space:nowrap">${l.label}</span>`;
   }).join('');
 
-  // Goal label (right of chart, in gutter) — amber tint matches the goal line
+  // Goal label (right of chart, in gutter). Amber tint matches the goal line
   const goalLabelHtml = `<span style="position:absolute;top:${((goalY / H) * 100).toFixed(1)}%;right:0;transform:translateY(-50%);font-size:9px;color:${GOAL_STROKE};line-height:1;font-variant-numeric:tabular-nums;font-weight:600">Goal ${ft(goalSec)}</span>`;
 
   return `
@@ -265,7 +266,7 @@ function getRaceForecastHTML(s: SimulatorState): string {
   const totalWeeks = s.tw ?? (s.wks?.length ?? 16);
   const currentWeek = Math.max(1, Math.min(totalWeeks, s.w ?? 1));
 
-  // Header chrome — initials avatar + race-name subtitle. Mirrors tri/hyrox tabs.
+  // Header chrome. Initials avatar + race-name subtitle. Mirrors tri/hyrox tabs.
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
   const raceName = s.selectedMarathon?.name;
@@ -291,7 +292,7 @@ function getRaceForecastHTML(s: SimulatorState): string {
     ? history[history.length - 1].timeSec
     : (s.blendedRaceTimeSec ?? s.currentFitness ?? forecastSec);
 
-  // Projection chart shows the FITNESS trajectory (raw VDOT-derived) — course
+  // Projection chart shows the FITNESS trajectory (raw VDOT-derived). Course
   // factors are a separate constant adjustment shown in the panel below. Mixing
   // them into the trajectory line would imply weather/elevation are training-
   // sensitive, which they are not.
@@ -370,22 +371,7 @@ function getRaceForecastHTML(s: SimulatorState): string {
 
         ${courseFactorsPanel}
 
-        ${chart ? `
-        <!-- Chart card -->
-        <div class="rfc-fade" style="animation-delay:0.16s;padding:0 16px;margin-bottom:14px">
-          <div style="${CARD};padding:20px">
-            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
-              <div style="font-size:12px;color:${TEXT_S};font-weight:500">Race-time progression</div>
-              <div style="font-size:11px;color:${TEXT_L}">Lower is faster</div>
-            </div>
-            ${chart}
-            <div style="display:flex;align-items:center;gap:14px;margin-top:14px;font-size:11px;color:${TEXT_S};flex-wrap:wrap">
-              <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:18px;height:2px;background:${CHART_STROKE}"></span>Actual</span>
-              <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:18px;height:2px;background:repeating-linear-gradient(to right,${CHART_STROKE} 0 4px,transparent 4px 7px);opacity:0.55"></span>Projection</span>
-              <span style="display:inline-flex;align-items:center;gap:6px"><span style="display:inline-block;width:18px;height:2px;background:${GOAL_STROKE};opacity:0.7"></span>Goal</span>
-            </div>
-          </div>
-        </div>` : ''}
+        ${renderRunConeCard(s)}
 
         ${ctaCard}
 
@@ -436,6 +422,7 @@ function wireRaceForecastHandlers(): void {
   wireTabBarHandlers(navigateTab);
 
   animateChartDrawOn();
+  wireRunConeCard();
 
   document.getElementById('rfc-account-btn')?.addEventListener('click', () => {
     import('./account-view').then(({ renderAccountView }) => renderAccountView());

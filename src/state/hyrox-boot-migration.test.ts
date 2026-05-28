@@ -6,7 +6,7 @@
  * the Singles slot. The migration moves them to the Doubles slot on launch.
  *
  * The migration logic is duplicated here as a pure function for unit testing
- * — `main.ts` itself is hard to test in isolation due to its launch wiring.
+ *. `main.ts` itself is hard to test in isolation due to its launch wiring.
  * The function below is the same shape as the inline block in main.ts and
  * must be kept in sync if either changes.
  */

@@ -9,7 +9,7 @@ import {
 import * as DistMod from '@/data/marathon-population-distributions';
 
 // We mutate the module's internal tables directly to keep the test self-
-// contained — no Kaggle dataset required. The exported tables are mutable
+// contained. No Kaggle dataset required. The exported tables are mutable
 // objects (Records / arrays), which mirrors how the ingestion script will
 // eventually populate the file.
 

@@ -57,7 +57,7 @@ export function deriveSportFromActivityType(activityType: string | null | undefi
  *      `gym`, `weights`).
  *   3. Substring match on `workoutName` / `displayName` for strength keywords.
  *
- * Shared single source of truth — both the fitness-model TSS override and the
+ * Shared single source of truth. Both the fitness-model TSS override and the
  * activity-detail UI chips import this so a session detected as strength on
  * one surface is detected on the other.
  */
@@ -73,7 +73,7 @@ export function isStrengthActual(actual: {
   if (derived === 'strength') return true;
   // Name fallback only fires when activityType was ambiguous (generic_sport).
   // Otherwise a run named "Easy run to lose weight" would mis-classify as
-  // strength via the `weight` keyword — mirrors getEffectiveSport's rule that
+  // strength via the `weight` keyword. Mirrors getEffectiveSport's rule that
   // name mappings only apply when the type derives to generic_sport.
   if (derived !== 'generic_sport') return false;
   const name = `${actual.workoutName ?? ''} ${actual.displayName ?? ''}`;

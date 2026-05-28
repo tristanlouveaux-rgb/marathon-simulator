@@ -1,15 +1,15 @@
 /**
- * Triathlon Load page — replaces `load-taper-view` for tri users.
+ * Triathlon Load page. Replaces `load-taper-view` for tri users.
  *
  * Hosts:
  *   - Total combined load (CTL / ATL / Form, weekly-EMA daily-equivalent)
- *   - Per-discipline DIRECT load (own-discipline activity only — NO transfer
+ *   - Per-discipline DIRECT load (own-discipline activity only. NO transfer
  *     matrix spillover, so a user with 0 swims sees 0/0/0 for swim).
  *   - Fitness history chart (per-discipline direct CTL over 12 weeks).
  *   - Workload-ratio chip per discipline (only when ≥3 active weeks).
  *
  * Cross-training transfer is real physiology and IS used by the race
- * predictor internally — but the user-facing display is "what did I actually
+ * predictor internally. But the user-facing display is "what did I actually
  * do in each sport?" because that matches the user's mental model.
  */
 
@@ -41,7 +41,7 @@ export function renderTriLoadView(_returnTo: 'plan' | 'home' = 'home'): void {
   const cycling = isCyclingOnlyMode(s);
   const disciplines = (cycling ? ['bike'] : ['swim', 'bike', 'run']) as ('swim' | 'bike' | 'run')[];
 
-  // Total combined load — sum of direct per-discipline (everything you did),
+  // Total combined load. Sum of direct per-discipline (everything you did),
   // displayed as TrainingPeaks-style daily-equivalent (÷7).
   const totalCtl = (fitness.swim.ctl + fitness.bike.ctl + fitness.run.ctl) / 7;
   const totalAtl = (fitness.swim.atl + fitness.bike.atl + fitness.run.atl) / 7;

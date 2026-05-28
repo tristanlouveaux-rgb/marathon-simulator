@@ -6,11 +6,11 @@ import { buildRingBackground, buildSunGlint, buildAtmosphereBase } from '@/ui/pa
 import { calculateWeeksUntil } from '@/data/marathons';
 
 /**
- * Cycling setup — V1 single-step config for cycling-only mode.
+ * Cycling setup. V1 single-step config for cycling-only mode.
  *
  * Modelled on triathlon-setup but stripped to a single discipline:
  *   - event distance (100km / 160km / 200km Gran Fondo)
- *   - target date (custom date input — no race database for cycling V1)
+ *   - target date (custom date input. No race database for cycling V1)
  *   - weekly time available (peak hours + weekday split)
  *   - optional strength sessions
  *
@@ -277,7 +277,7 @@ function wireEventHandlers(): void {
     }
     // Plan length follows the picked race date when set, falling back to the
     // distance default otherwise. Mirrors triathlon-setup.ts:408 and the
-    // 2026-05-07 HYROX fix — without this a user with a 6-week race window
+    // 2026-05-07 HYROX fix. Without this a user with a 6-week race window
     // sees "Week 1 of 16" because the distance default ignores the date.
     finalPatch.planDurationWeeks = current.customRaceDate
       ? Math.max(1, calculateWeeksUntil(current.customRaceDate))

@@ -1,5 +1,5 @@
 /**
- * Screenshot import — the iOS-easy capture path.
+ * Screenshot import. The iOS-easy capture path.
  *
  * A user screenshots their run summary (Strava / Garmin / Nike etc.) and we read
  * the numbers off it. Two engines feed the SAME structured contract
@@ -9,7 +9,7 @@
  *      `parsedFromAIJson()`.
  * Both converge on `screenshotActivityToRow()` → the shared import pipeline
  * (match + PBs + fitness refresh), so a screenshot-sourced run drives the plan
- * exactly like a file import — minus the GPS route (a screenshot has no track)
+ * exactly like a file import. Minus the GPS route (a screenshot has no track)
  * and at per-km, not per-second, granularity.
  *
  * This module is the verified core. The OCR engine (native Apple Vision plugin)
@@ -56,7 +56,7 @@ export interface ParsedScreenshotActivity {
    * screenshot, parsed by the AI-vision `hr_chart` mode. When present,
    * `screenshotActivityToRow` runs the canonical `computeHREnrichment` over
    * these points to produce iTRIMP + HR zones + maxHR exactly like a FIT-file
-   * import — so a screenshot run can drive load math at full fidelity.
+   * import. So a screenshot run can drive load math at full fidelity.
    */
   hrSeries?: ParsedScreenshotHrPoint[];
   /** Overall read confidence — drives whether we fall back to AI vision and how
@@ -95,7 +95,7 @@ function parseDistanceToM(value: string, unitHint: 'km' | 'mi'): number | null {
 /**
  * Parse recognised OCR text (newline-separated visual lines, top-to-bottom)
  * into a structured activity. Keyword-anchored and tolerant of OCR noise. Never
- * throws — returns a result with `confidence` + `missing` so callers can decide
+ * throws. Returns a result with `confidence` + `missing` so callers can decide
  * whether to fall back to AI vision or surface a confirm screen.
  */
 export function parseScreenshotText(raw: string): ParsedScreenshotActivity {

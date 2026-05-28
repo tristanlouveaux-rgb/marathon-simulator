@@ -1,5 +1,5 @@
 /**
- * LT Derivation — blended lactate threshold estimator.
+ * LT Derivation. Blended lactate threshold estimator.
  *
  * Computes a single best-estimate LT pace + LTHR from three independent methods:
  *   1. Daniels T-pace from VDOT                (algorithmic, always available if VDOT exists)
@@ -12,7 +12,7 @@
  *
  * Science references + constants: docs/SCIENCE_LOG.md § Lactate Threshold Derivation.
  *
- * Pure functions — no state mutation.
+ * Pure functions. No state mutation.
  */
 
 export type LTMethod = 'daniels' | 'critical-speed' | 'empirical' | 'override' | 'garmin';
@@ -91,7 +91,7 @@ export interface DeriveLTInput {
   now?: string;
 }
 
-// ─── Constants (all sourced — see SCIENCE_LOG.md) ─────────────────────────
+// ─── Constants (all sourced. See SCIENCE_LOG.md) ─────────────────────────
 
 /** Daniels: T-intensity = 88% of vVO2max (Running Formula 3rd ed., Table 4.1). */
 const DANIELS_T_FRACTION = 0.88;
@@ -129,7 +129,7 @@ const MAX_EMPIRICAL_DURATION_SEC = 60 * 60;
 const MAX_EMPIRICAL_DURATION_WITH_DRIFT_SEC = 120 * 60;
 
 /** Decoupling threshold for HR-based drift. Same 5% bound as the pace-based
- *  proxy (Friel) — applied to `hrDrift` when present. */
+ *  proxy (Friel). Applied to `hrDrift` when present. */
 const MAX_HR_DRIFT_PCT = 5;
 
 /** Maximum ambient temp for empirical HR trust (heat inflates HR 5–20 bpm). */
@@ -187,7 +187,7 @@ export function deriveLTFromVdot(vdot: number | null): number | null {
 }
 
 /**
- * Inverse of deriveLTFromVdot — back out VDOT from a measured LT pace.
+ * Inverse of deriveLTFromVdot. Back out VDOT from a measured LT pace.
  *
  * vVO2max sec/km = LT sec/km × DANIELS_T_FRACTION
  * v (m/min)      = 60000 / vVO2max sec/km
@@ -227,7 +227,7 @@ export function deriveLTFromCriticalSpeed(
   if (!bestEfforts || bestEfforts.length < CS_MIN_EFFORTS) return null;
 
   // Filter by age, valid distance/time, and drop obvious cross-training.
-  // Prefer unique distances — if same distance appears twice, keep the faster.
+  // Prefer unique distances. If same distance appears twice, keep the faster.
   const fresh = bestEfforts
     .filter((e) => e.distanceM > 0 && e.elapsedSec > 0)
     .filter((e) => {
@@ -235,8 +235,8 @@ export function deriveLTFromCriticalSpeed(
       const ageDays = (now.getTime() - new Date(e.date).getTime()) / (1000 * 86400);
       return ageDays <= CS_MAX_AGE_DAYS;
     })
-    // Drop ultra-short efforts (<2 min) — dominated by anaerobic capacity.
-    // Drop ultra-long (>60 min) — glycogen/fuelling effects pull fit away from CS.
+    // Drop ultra-short efforts (<2 min). Dominated by anaerobic capacity.
+    // Drop ultra-long (>60 min). Glycogen/fuelling effects pull fit away from CS.
     // 60 min covers slow-runner 10K and most 15K race efforts; excludes half-marathon
     // and above where the fit starts to curve.
     .filter((e) => e.elapsedSec >= 120 && e.elapsedSec <= 3600);
@@ -331,10 +331,10 @@ export function deriveLTFromSustainedEfforts(
       if (e.elevationGainM / km > MAX_ELEV_GAIN_PER_KM) continue;
     }
 
-    // Steady-state — joint gate on pace and HR. Two signals say the same
+    // Steady-state. Joint gate on pace and HR. Two signals say the same
     // thing in different ways: pace CV (variability across kmSplits) and
     // hrDrift (HR rise from first half to second half). For LT detection we
-    // accept a run when AT LEAST ONE proves the effort was steady — a tempo
+    // accept a run when AT LEAST ONE proves the effort was steady. A tempo
     // with rising HR but constant pace is still a tempo, and a long run with
     // stable HR but variable pace (hills, traffic) is also a usable LT signal.
     // For runs >60 min, both are required because the cardiac-drift confound
@@ -366,7 +366,7 @@ export function deriveLTFromSustainedEfforts(
     } else {
       // Short tempo: at least one steady-state signal must fire. If neither
       // is measurable (no kmSplits, no hrDrift), trust the HR-band gate
-      // alone — without any quality signal we can't reject, but we also
+      // alone. Without any quality signal we can't reject, but we also
       // can't lift past the standard duration cap.
       const haveAnySignal = paceCV != null || decoupling != null;
       if (haveAnySignal && !paceSteady && !hrSteady) continue;
@@ -404,7 +404,7 @@ export function deriveLTFromSustainedEfforts(
   };
 }
 
-// ─── Diagnostic — explain inclusion / rejection of every candidate ─────────
+// ─── Diagnostic. Explain inclusion / rejection of every candidate ─────────
 
 /**
  * One-shot diagnostic: walks the same filter pipeline as
@@ -412,7 +412,7 @@ export function deriveLTFromSustainedEfforts(
  * returns a record per candidate run with a human-readable reason for
  * exclusion (or "qualified" if it cleared every gate).
  *
- * Pure — used by the LT detail page's diagnostic console output. The reasons
+ * Pure. Used by the LT detail page's diagnostic console output. The reasons
  * are intentionally short so they fit cleanly in `console.table`.
  *
  * Order matters: gates fire top-to-bottom, first failure wins. Mirrors
@@ -533,7 +533,7 @@ export function diagnoseSustainedEfforts(
     });
   }
 
-  // Newest first — the most relevant runs sit at the top.
+  // Newest first. The most relevant runs sit at the top.
   out.sort((a, b) => (a.startTime > b.startTime ? -1 : 1));
   return out;
 }
@@ -559,12 +559,12 @@ export function deriveLTHRFromMaxHR(maxHR: number | null): number | null {
  *   2. Blended: empirical (if ≥1 qualifying effort) + CS + Daniels
  *   3. Falls back through available methods if any are missing
  *
- * Blend weights depend on what's available — see SCIENCE_LOG.md.
+ * Blend weights depend on what's available. See SCIENCE_LOG.md.
  */
 export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   const now = input.now ? new Date(input.now) : new Date();
 
-  // Priority 1 — override wins outright.
+  // Priority 1. Override wins outright.
   if (input.override) {
     const ovr = input.override;
     return {
@@ -585,7 +585,7 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
     };
   }
 
-  // Priority 2 — derive from inputs.
+  // Priority 2. Derive from inputs.
   const daniels = deriveLTFromVdot(input.vdot);
   const cs = deriveLTFromCriticalSpeed(input.bestEfforts, now);
   const emp = deriveLTFromSustainedEfforts(input.sustainedEfforts, input.maxHR, now);
@@ -686,7 +686,7 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
   const ltHR = emp ? Math.round(emp.ltHR) : deriveLTHRFromMaxHR(input.maxHR);
 
   // Confidence logic:
-  //   high  = empirical present AND (CS or Daniels) — triangulated
+  //   high  = empirical present AND (CS or Daniels). Triangulated
   //   medium = one method only, or empirical absent
   //   low = Daniels only
   let confidence: LTConfidence;
@@ -725,7 +725,7 @@ export function deriveLT(input: DeriveLTInput): LTDerivationResult {
  *
  * Garmin is preferred over derived when the reading is <60 days old, because
  * when it *is* present it comes from the FirstBeat algorithm running
- * continuously on the watch — higher fidelity than any field-data estimator.
+ * continuously on the watch. Higher fidelity than any field-data estimator.
  * When stale or absent, our derived value takes over.
  */
 export function resolveLT(input: DeriveLTInput): LTDerivationResult {

@@ -1,5 +1,5 @@
 /**
- * Running race-outcome logging — capture predicted vs actual after a target
+ * Running race-outcome logging. Capture predicted vs actual after a target
  * marathon/half/10k/5k. Mirrors `tri-race-outcome.ts` for parity with the
  * CLAUDE.md mirror rule ("Race-outcome logging must be in both running and
  * triathlon").
@@ -39,7 +39,7 @@ export interface RunRaceRetroDisplay {
 /**
  * Decide whether to surface a retrospective race-outcome card. Returns
  * `display: true` only when the latest logged race beat the prediction by
- * a meaningful margin (≥ 60 s — same intuition as the tri threshold scaled
+ * a meaningful margin (≥ 60 s. Same intuition as the tri threshold scaled
  * to single-discipline). Negative outcomes are stored but never surfaced.
  */
 export function getRunRaceOutcomeRetro(state: SimulatorState): RunRaceRetroDisplay {
@@ -108,7 +108,7 @@ export function detectAndLogRunRaceOutcome(state: SimulatorState): RunRaceLogEnt
   const existing = (state.runRaceLog ?? []).find(e => e.dateISO === raceDate);
   if (existing) return null;
 
-  // Window: 6h before midnight to 30h after — covers any single-day race
+  // Window: 6h before midnight to 30h after. Covers any single-day race
   // including ultra-marathon edge cases.
   const winStart = raceTs - 6 * 3600 * 1000;
   const winEnd = raceTs + 30 * 3600 * 1000;

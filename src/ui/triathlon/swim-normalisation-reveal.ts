@@ -1,8 +1,8 @@
 /**
  * Swim-environment chip selector. Used in two places:
- *   1. The triathlon onboarding wizard's review step — writes back to
+ *   1. The triathlon onboarding wizard's review step. Writes back to
  *      `onboarding.triSwim` via an injected `onSave` callback.
- *   2. The account-view "Swim environment" row — writes directly to
+ *   2. The account-view "Swim environment" row. Writes directly to
  *      `triConfig.swim` (default behaviour when no callback is provided).
  *
  * Originally also fired as a one-time auto-reveal on the forecast page;
@@ -135,7 +135,7 @@ function open(initial: SwimEnvironmentChoice | undefined, onSave?: (choice: Swim
       if (m.triConfig) {
         if (!m.triConfig.swim) m.triConfig.swim = {};
         m.triConfig.swim.primarySwimEnvironment = choice;
-        // pool = "primarily a pool swimmer" — clear OW default so rare OW
+        // pool = "primarily a pool swimmer". Clear OW default so rare OW
         // swims fall through to the wetsuit-lake baseline.
         m.triConfig.swim.defaultOwSwimEnvironment = choice === 'pool' ? undefined : choice;
         if (m.triConfig.prediction) m.triConfig.prediction = undefined;

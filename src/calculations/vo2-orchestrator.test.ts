@@ -102,7 +102,7 @@ describe('vo2 orchestrator', () => {
   it('headline = max(running, cycling) — cardiac never claims headline when measured modalities have data', () => {
     // Cardiac ceiling ≈ 59.7. Add cycling FTP so cycling-direct fires.
     // No running. Headline should = cycling-direct, NOT cardiac, even though
-    // cardiac is higher — cardiac is informational only.
+    // cardiac is higher. Cardiac is informational only.
     const padelActuals = Object.fromEntries(Array.from({ length: 8 }).map((_, i) =>
       mkActual({ id: `p${i}`, daysAgo: i * 4, activityType: 'padel', maxHR: 195, avgHR: 165, durationSec: 3600 })
     ));

@@ -2,7 +2,7 @@
  * recovery/engine.ts
  * ==================
  * Recovery scoring engine. Computes recovery status from sleep, readiness, and HRV data.
- * Drives the UI pill + adjustment modal — NOT a new load engine.
+ * Drives the UI pill + adjustment modal. NOT a new load engine.
  */
 
 export interface RecoveryEntry {

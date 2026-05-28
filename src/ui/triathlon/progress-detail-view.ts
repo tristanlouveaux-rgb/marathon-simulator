@@ -1,18 +1,18 @@
 /**
- * Triathlon Progress detail page — mirrors the running stats Progress
+ * Triathlon Progress detail page. Mirrors the running stats Progress
  * detail (`stats-view.ts → buildProgressDetailPage`) using tri data.
  *
  * Charts:
  *  1. Per-discipline fitness (CTL, swim/bike/run lines, daily-equivalent ÷7)
- *  2. Weekly km — Swim (own chart, shown as metres-aware)
- *  3. Weekly km — Bike (own chart)
- *  4. Weekly km — Run  (own chart)
+ *  2. Weekly km. Swim (own chart, shown as metres-aware)
+ *  3. Weekly km. Bike (own chart)
+ *  4. Weekly km. Run  (own chart)
  *  5. Weekly TSS per discipline (3 lines on one chart)
  *  6. Total weekly TSS (single line, sum across disciplines)
  *  7. FTP trend (line chart, fills from `tri.bike.ftpHistory`)
  *  8. CSS trend (line chart, fills from `tri.swim.cssHistory`)
  *
- * Range toggle: 4w / 12w / All / Forecast — Forecast extends km + TSS with
+ * Range toggle: 4w / 12w / All / Forecast. Forecast extends km + TSS with
  * the planned `triWorkouts` from the current and future weeks (dashed
  * continuation, mirroring `buildForecastLoadChart`).
  *
@@ -27,7 +27,7 @@ import type { SimulatorState, Week, Workout, GarminActual } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
 import { DISCIPLINE_LABEL } from './colours';
 
-// Blue/indigo spectrum — from the UX_PATTERNS zone colour scale.
+// Blue/indigo spectrum. From the UX_PATTERNS zone colour scale.
 // Swim = sky, Bike = blue, Run = indigo. All from the same tonal family.
 const DISC_CHART = {
   swim: { stroke: '#38BDF8', fill: 'rgba(56,189,248,0.08)' },
@@ -76,7 +76,7 @@ function navigateTab(tab: TabId): void {
  * one of the three tri disciplines returns null and is excluded from the
  * progress chart per the user's "swim/bike/run only" requirement.
  */
-function disciplineOf(actual: GarminActual): Discipline | null {
+export function disciplineOf(actual: GarminActual): Discipline | null {
   // Manual override wins. SportKey uses 'swimming' / 'cycling' / 'running' so
   // map back to the tri-discipline shorthand used in this file.
   const manual = actual.manualSport;
@@ -90,7 +90,7 @@ function disciplineOf(actual: GarminActual): Discipline | null {
 }
 
 /** Walk every (deduped) actual on a week and call `fn` once per. */
-function forEachActual(wk: Week, fn: (a: GarminActual) => void): void {
+export function forEachActual(wk: Week, fn: (a: GarminActual) => void): void {
   const seen = new Set<string>();
   for (const a of Object.values(wk.garminActuals ?? {})) {
     if (a.garminId && seen.has(a.garminId)) continue;
@@ -114,7 +114,7 @@ function emptySlice(): WeekDisciplineSlice {
 
 /** iTRIMP → TSS-equivalent. Same conversion used everywhere else in the
  * codebase (1 hour at threshold ≈ 15000 iTRIMP ≈ 100 TSS). */
-function iTrimpToTSS(iTrimp: number | null | undefined): number {
+export function iTrimpToTSS(iTrimp: number | null | undefined): number {
   if (iTrimp == null || iTrimp <= 0) return 0;
   return (iTrimp * 100) / 15000;
 }
@@ -135,7 +135,7 @@ function buildHistorySlices(s: SimulatorState): WeekDisciplineSlice[] {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Forecast — planned km + TSS from `triWorkouts`
+// Forecast. Planned km + TSS from `triWorkouts`
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Parse a distance token (e.g. "5km", "1500m", "2x500m") to km. Returns 0
@@ -161,7 +161,7 @@ function parseDistanceTokenKm(desc: string): number {
 function plannedSliceForWorkout(w: Workout): WeekDisciplineSlice {
   const slice = emptySlice();
 
-  // Brick — sum each segment as its own discipline
+  // Brick. Sum each segment as its own discipline
   if (w.brickSegments && Array.isArray(w.brickSegments)) {
     for (const seg of w.brickSegments) {
       const d = (seg.discipline as Discipline | undefined);
@@ -170,7 +170,7 @@ function plannedSliceForWorkout(w: Workout): WeekDisciplineSlice {
         ? seg.distanceM / 1000
         : 0;
       slice.km[d] += distKm;
-      // TSS estimate: very rough — 1 TSS per minute at moderate intensity.
+      // TSS estimate: very rough. 1 TSS per minute at moderate intensity.
       // Forecast charts only need a comparable shape, not absolute calibration.
       const mins = seg.durationMin ?? 0;
       slice.tss[d] += mins; // 1 TSS/min ≈ Z2 endurance
@@ -217,7 +217,7 @@ function rangeSlice(s: SimulatorState, range: ProgressRange): RangedSeries {
   const wks = s.wks ?? [];
   const currentIdx = (s.w ?? 1) - 1;
 
-  // Exclude the current in-progress week — showing a partially-complete week
+  // Exclude the current in-progress week. Showing a partially-complete week
   // (e.g. Monday morning with near-zero volume) makes the trend look like
   // training collapsed. Volume charts show completed weeks only.
   const completedCount = Math.max(0, Math.min(all.length, currentIdx));
@@ -258,7 +258,7 @@ function rangeSlice(s: SimulatorState, range: ProgressRange): RangedSeries {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// SVG primitives — copied from running stats so the look is identical
+// SVG primitives. Copied from running stats so the look is identical
 // ────────────────────────────────────────────────────────────────────────────
 
 function chartGridLines(maxVal: number, yOf: (v: number) => number, W: number, padL = 0, padR = 0): string {
@@ -313,7 +313,7 @@ function buildRangeToggle(active: ProgressRange): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Per-discipline km chart — one chart for one discipline
+// Per-discipline km chart. One chart for one discipline
 // ────────────────────────────────────────────────────────────────────────────
 
 function buildDisciplineKmChart(
@@ -374,7 +374,7 @@ function buildDisciplineKmChart(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Per-discipline TSS chart — three lines on one chart
+// Per-discipline TSS chart. Three lines on one chart
 // ────────────────────────────────────────────────────────────────────────────
 
 function buildPerDisciplineTSSChart(series: RangedSeries, cycling = false): string {
@@ -440,7 +440,7 @@ function buildPerDisciplineTSSChart(series: RangedSeries, cycling = false): stri
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Total weekly TSS chart — single line, sum across disciplines
+// Total weekly TSS chart. Single line, sum across disciplines
 // ────────────────────────────────────────────────────────────────────────────
 
 function buildTotalTSSChart(series: RangedSeries): string {
@@ -494,7 +494,7 @@ function buildTotalTSSChart(series: RangedSeries): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Per-discipline CTL chart — pulled from `tri.fitnessHistory`
+// Per-discipline CTL chart. Pulled from `tri.fitnessHistory`
 // ────────────────────────────────────────────────────────────────────────────
 
 function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): string {
@@ -508,7 +508,7 @@ function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): st
   const n = sliced.length;
   if (n < 2) return chartEmptyState(75, 'Fills in once you have 2+ weeks of activity');
 
-  // Display as TrainingPeaks daily-equivalent (÷7) — same convention as the
+  // Display as TrainingPeaks daily-equivalent (÷7). Same convention as the
   // running stats CTL chart and the tri Load page.
   const cycling = isCyclingOnlyMode(s);
   const swim = sliced.map(h => h.swimCtl / 7);
@@ -567,7 +567,7 @@ function buildPerDisciplineCTLChart(s: SimulatorState, range: ProgressRange): st
 
 
 // ────────────────────────────────────────────────────────────────────────────
-// Stat list — per-discipline aggregates + adherence + time + total TSS
+// Stat list. Per-discipline aggregates + adherence + time + total TSS
 // ────────────────────────────────────────────────────────────────────────────
 
 interface DisciplineAggregates {
@@ -757,7 +757,7 @@ function legendRow(cycling = false): string {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Exported content block — used by the unified stats page
+// Exported content block. Used by the unified stats page
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Returns the full progress section HTML (range toggle + all cards) without

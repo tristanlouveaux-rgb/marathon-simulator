@@ -1,5 +1,5 @@
 /**
- * Effort-Calibrated VDOT — current-fitness estimate from the last 8 weeks of
+ * Effort-Calibrated VDOT. Current-fitness estimate from the last 8 weeks of
  * running, anchored on HR response to pace. Complements Tanda (volume+pace)
  * and the PB ceiling in `blendPredictions`.
  *
@@ -14,7 +14,7 @@
  *
  * Qualifying filter: duration ≥ 20 min, HR drift < 8% (aerobic decoupling),
  * valid avgHR + RHR + maxHR, pace in [3:00–7:30/km]. If RHR is absent we do
- * NOT fabricate a default — we return null and the blend falls back to
+ * NOT fabricate a default. We return null and the blend falls back to
  * Tanda/hard-effort/PB.
  *
  * Outlier removal: after the initial fit, any point whose residual exceeds
@@ -37,7 +37,7 @@ import { cv } from './vdot';
  *  - **Run-level** (`isSegment` falsy): duration ≥ 20 min, hrDrift gate
  *    (steady-state proxy), pace/HRR gates. This is the legacy mode.
  *  - **Segment-level** (`isSegment = true`): duration ≥ 60 s (one km ≈ 3-6
- *    min), pace/HRR gates only — drift is a whole-run property and is
+ *    min), pace/HRR gates only. Drift is a whole-run property and is
  *    measured by the caller before emitting segments. Segments from the
  *    same run are independent (pace, HR) points spanning the run's HRR
  *    range, dramatically expanding coverage compared to one averaged-out
@@ -55,13 +55,13 @@ export interface HRRunInput {
   /** Average heart rate (bpm). Required for inclusion. */
   avgHR?: number | null;
   /** HR drift %: (avgHR_2nd_half − avgHR_1st_half) / avgHR_1st_half × 100.
-   *  Run-level only. Optional — runs without drift data are still included
+   *  Run-level only. Optional. Runs without drift data are still included
    *  (we can't apply the aerobic-decoupling filter, but pace+HR+duration
    *  is still usable). Ignored when `isSegment` is true. */
   hrDrift?: number | null;
   /** Marks this entry as a within-run segment (e.g. one km of a long run)
    *  rather than a full run averaged into one point. Drives different
-   *  qualifying filters — see the interface doc above. */
+   *  qualifying filters. See the interface doc above. */
   isSegment?: boolean;
 }
 
@@ -113,15 +113,15 @@ const WINDOW_WEEKS = 8;
 const MIN_DURATION_SEC = 20 * 60;          // <20 min: HR–pace linearity breaks (Swain domain is steady submax)
 const MIN_SEGMENT_DURATION_SEC = 60;       // Per-segment floor (1km ≈ 3-6 min; warmup/transition < 60s gets noisy)
 const MAX_HR_DRIFT_PCT = 8;                // Friel 5% aerobic, 8% = upper bound before supra-threshold
-const MIN_PACE_SEC_PER_KM = 180;           // 3:00/km — faster = interval artefact
-const MAX_PACE_SEC_PER_KM = 450;           // 7:30/km — slower = walk
+const MIN_PACE_SEC_PER_KM = 180;           // 3:00/km. Faster = interval artefact
+const MAX_PACE_SEC_PER_KM = 450;           // 7:30/km. Slower = walk
 const MIN_HRR_FRACTION = 0.40;             // Swain validated ≥40% HRR
 const MAX_HRR_FRACTION = 0.95;             // Beyond this, HR plateaus (cardiac output ceiling)
 
 /**
  * Compute effort-calibrated VDOT from recent runs + physiology.
  *
- * Pure function — no state dependency, fully testable.
+ * Pure function. No state dependency, fully testable.
  *
  * @param runs    Recent run activities (any window; function filters to 8w).
  * @param rhr     Resting heart rate (bpm). If null/undefined, returns null.
@@ -211,7 +211,7 @@ export function computeHRCalibratedVdot(
   // Physiological sanity: β must be negative (higher effort → faster pace → lower sec/km).
   if (beta >= 0) return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2: null, paceAtVO2max: null, reason: 'bad-fit', points: exposedPoints };
 
-  // Reject weak fits — R² < 0.25 means the pace–HR relationship is too noisy
+  // Reject weak fits. R² < 0.25 means the pace–HR relationship is too noisy
   // to trust the extrapolation to 100% HRR even after outlier removal.
   if (r2 < 0.25) {
     return { alpha, beta, vdot: null, confidence: 'none', n: points.length, r2, paceAtVO2max: null, reason: 'bad-fit', points: exposedPoints };

@@ -35,8 +35,8 @@ export interface VO2Estimate {
 /** Benchmark check-in types (4-tier system) */
 export type BenchmarkType =
   | 'easy_checkin'       // 30 min easy–steady, track pace at same effort
-  | 'threshold_check'    // 20 min "comfortably hard" — proxy for LT
-  | 'speed_check'        // 12-min Cooper test or 3km TT — VO2/speed signal
+  | 'threshold_check'    // 20 min "comfortably hard". Proxy for LT
+  | 'speed_check'        // 12-min Cooper test or 3km TT. VO2/speed signal
   | 'race_simulation';   // 5k/10k TT (advanced only, opt-in)
 
 /** Benchmark result from an optional check-in */
@@ -115,7 +115,7 @@ export interface Workout extends WorkoutDefinition {
   originalDistance?: string;    // Original distance before modification
   autoCompleted?: boolean;      // Auto-completed by cross-training
   completedBySport?: string;    // Sport that completed this workout
-  hrTarget?: {                   // Heart rate target (conditional — only if HR data available)
+  hrTarget?: {                   // Heart rate target (conditional. Only if HR data available)
     zone: string;
     min: number;
     max: number;
@@ -156,7 +156,7 @@ export interface Workout extends WorkoutDefinition {
   aiModifiedAt?: string;
   /** Heart-rate zone cap set by the AI coach's `adjust_intensity` tool. The
    *  workout card displays "Z2 cap" / "Z3 cap" chip when this is set. The plan
-   *  engine doesn't enforce the cap directly — RPE is downgraded server-side
+   *  engine doesn't enforce the cap directly. RPE is downgraded server-side
    *  by setting `rpe`. This field is the visible signal and the coach's
    *  memory of its own past cap calls. */
   zoneCap?: 2 | 3;
@@ -206,7 +206,7 @@ export interface SimpleCross {
  *
  * Created when a workout is completed (live) or reconstructed from history
  * (one-shot backfill on first launch). `observedHours` is filled in once the
- * user's HRV/RHR composite z-score returns to baseline — or capped at 96h
+ * user's HRV/RHR composite z-score returns to baseline. Or capped at 96h
  * (right-censored). The fitter aggregates `observed/predicted` ratios across
  * recent entries to update `s.adaptiveRecovery.kUserHours`.
  *
@@ -230,7 +230,7 @@ export interface SessionImpactEntry {
 }
 
 /**
- * Learned recovery personalisation — tracks the user's `k_user` (the multiplier
+ * Learned recovery personalisation. Tracks the user's `k_user` (the multiplier
  * that replaces the population constant of 8 in the recovery countdown) and the
  * confidence with which it has been fit.
  *
@@ -246,7 +246,7 @@ export interface AdaptiveRecovery {
   confidence: 'none' | 'low' | 'medium' | 'high';
   sessionsObserved: number;         // count of entries with observedHours filled
   lastFitAt?: string;               // ISO date of last weekly fit
-  emaHalfLifeWeeks: number;         // 4 — recency decay for the fit
+  emaHalfLifeWeeks: number;         // 4. Recency decay for the fit
   history?: Array<{ date: string; k: number; n: number }>; // sparkline (cap 12)
   notifiedMilestones?: string[];    // e.g. 'first-medium', 'first-high'
 }
@@ -269,8 +269,8 @@ export interface PhysiologyDayEntry {
   activeCalories?: number;     // active kcal from Garmin epochs (non-BMR energy expenditure)
   activeMinutes?: number;      // minutes in ACTIVE or HIGHLY_ACTIVE intensity (15-min epoch granularity)
   highlyActiveMinutes?: number; // minutes in HIGHLY_ACTIVE intensity only
-  ltPace?: number;        // sec/km — from physiology_snapshots
-  ltHR?: number;          // bpm at lactate threshold — from physiology_snapshots
+  ltPace?: number;        // sec/km. From physiology_snapshots
+  ltHR?: number;          // bpm at lactate threshold. From physiology_snapshots
 }
 
 /**
@@ -285,7 +285,7 @@ export interface GarminPendingItem {
   startTime: string;       // ISO timestamp of when the activity occurred
   durationSec: number;
   distanceM: number | null;
-  avgPaceSecKm?: number | null;  // Strava moving pace (sec/km) — null if not from Strava or not available
+  avgPaceSecKm?: number | null;  // Strava moving pace (sec/km). Null if not from Strava or not available
   avgHR: number | null;
   maxHR: number | null;
   aerobicEffect: number | null;   // Garmin Training Effect aerobic (0-5)
@@ -334,7 +334,7 @@ export interface GarminActual {
   /** Average HR (bpm) for each completed km, parallel-indexed to kmSplits.
    *  Runs only, populated when Strava's splits_metric or the HR stream had
    *  per-km HR data. Drives the per-km point input to the VO2 HR-calibrated
-   *  regression — within-run variation (e.g. a tempo finish on a long run)
+   *  regression. Within-run variation (e.g. a tempo finish on a long run)
    *  becomes multiple regression points instead of one diluted (avgPace,
    *  avgHR) point. Same indexing as kmSplits; readers should pair index-by-
    *  index and skip entries where either value is missing/zero. */
@@ -520,14 +520,14 @@ export interface Week {
   rpeEffort?: number;                            // Pure RPE deviation: avg(rating - expected) across rated runs
   hrEffort?: number;                             // Average hrEffortScore from Strava HR data (1.0 = on target)
   weekAdjustmentReason?: string;                // Why this week was lightened (ACWR-driven; shown in banner)
-  scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time — passed to generator
+  scheduledAcwrStatus?: 'safe' | 'caution' | 'high' | 'unknown'; // ACWR status at week-advance time. Passed to generator
   carriedTSS?: { base: number; threshold: number; intensity: number }; // Excess TSS by zone (actual > plan), decays via CTL
   /** Triathlon-mode equivalent of `carriedTSS`: cross-training TSS pushed forward
    *  from this week to next via the tri suggestion modal's "Push to next week"
    *  button. Single number (cross-training stimulus isn't decomposed by zone).
    *  Decayed via 7-day ATL τ when read by `computeDecayedTriCarry` (Tier 2). */
   carriedCrossTrainingTSS?: number;
-  acwrOverridden?: boolean;                     // User dismissed "Reduce this week" — adds synthetic ATL debt
+  acwrOverridden?: boolean;                     // User dismissed "Reduce this week". Adds synthetic ATL debt
   recoveryDebt?: 'orange' | 'red';             // Set when recovery check-in fires a warning this week
   hasCarriedLoad?: boolean;                     // Set when unresolved excess load was carried in from the previous week
   carryOverCardDismissed?: boolean;             // User dismissed the carry-over card for this week
@@ -544,7 +544,7 @@ export interface Week {
   /**
    * Triathlon-only: per-week generated workouts (swim/bike/run/brick/gym).
    * Running mode regenerates workouts on the fly from VDOT + phase, so running
-   * weeks leave this undefined. Triathlon generation is stateful — the plan
+   * weeks leave this undefined. Triathlon generation is stateful. The plan
    * engine runs once at initialisation and we store the results here so views
    * can read them without re-deriving from triConfig on every render.
    * Set by `plan_engine.triathlon.ts:generateTriathlonPlan`.
@@ -572,7 +572,7 @@ export const TRIATHLON_FIELDS_VERSION = 3;
 export const VO2_DEVICE_ONLY_VERSION = 4;
 
 /**
- * Single running race outcome — predicted vs actual logged after a target race.
+ * Single running race outcome. Predicted vs actual logged after a target race.
  * Mirrors `TriRaceLogEntry` for running mode. Idempotent on `dateISO`.
  */
 export interface RunRaceLogEntry {
@@ -634,9 +634,9 @@ export interface SimulatorState {
   rec: RecentRun | null;  // Recent race/time trial
 
   // Physiology
-  lt: number | null;      // Current LT pace (sec/km). Resolved via resolveLT() — override > Garmin (fresh) > derived.
+  lt: number | null;      // Current LT pace (sec/km). Resolved via resolveLT(). Override > Garmin (fresh) > derived.
   ltPace?: number | null; // LT pace alias
-  ltHR?: number;          // LT heart rate (bpm) — resolved same as lt
+  ltHR?: number;          // LT heart rate (bpm). Resolved same as lt
   /** User-entered LT override. When present, wins over Garmin and derived values. */
   ltOverride?: {
     ltPaceSecKm: number;
@@ -669,7 +669,7 @@ export interface SimulatorState {
   restingHR?: number;         // Resting Heart Rate
 
   // Race time tracking
-  initialBaseline: number | null;   // Initial race time PREDICTION at plan generation (NOT a user-set goal — see raceGoalTimeSec)
+  initialBaseline: number | null;   // Initial race time PREDICTION at plan generation (NOT a user-set goal. See raceGoalTimeSec)
   currentFitness: number | null;    // Current race time estimate
   forecastTime: number | null;      // Forecast race time after training (raw VDOT)
   /** User-set race-day goal (seconds). Null/undefined = no goal set. Only when this
@@ -732,7 +732,7 @@ export interface SimulatorState {
 
   // Auth
   // True when the Supabase session is anonymous (auto-created on first launch).
-  // Refreshed on every launch from session.user.is_anonymous — never persisted
+  // Refreshed on every launch from session.user.is_anonymous. Never persisted
   // beyond the current run. Drives the guest-account banner and the Account
   // view's "Save your account" affordance.
   isGuestAccount?: boolean;
@@ -745,7 +745,7 @@ export interface SimulatorState {
 
   // Integrations
   stravaConnected?: boolean;
-  wearable?: 'garmin' | 'apple' | 'strava';  // Legacy — use accessors in src/data/sources.ts
+  wearable?: 'garmin' | 'apple' | 'strava';  // Legacy. Use accessors in src/data/sources.ts
   connectedSources?: {
     activity?: 'strava' | 'garmin' | 'apple' | 'polar' | 'phone';
     physiology?: 'garmin' | 'apple' | 'whoop' | 'oura';
@@ -757,14 +757,14 @@ export interface SimulatorState {
   heightCm?: number;      // Height in cm. With bodyWeightKg → body surface area for heat personalisation. Optional; absent → no heat-size adjustment.
   bodyMassSwapEnabled?: boolean;  // Cross-training swap opt-in. undefined = undecided (default-on for heavy users, onboarding popup pending); true = kept; false = user turned it off.
 
-  // Plan start date (ISO YYYY-MM-DD) — anchor for all week date ranges
+  // Plan start date (ISO YYYY-MM-DD). Anchor for all week date ranges
   planStartDate?: string;
 
   // Selected event (locked from onboarding)
   selectedMarathon?: Marathon;
 
   /**
-   * Running race-outcome log — predicted vs actual after a target race.
+   * Running race-outcome log. Predicted vs actual after a target race.
    * Idempotent per `dateISO`. Mirrors `triConfig.raceLog` in triathlon mode.
    * Append-only; consumed by post-race retrospective surfaces. Optional so
    * existing state objects keep working without migration.
@@ -783,7 +783,7 @@ export interface SimulatorState {
   /**
    * Long-run durability result. Multiplier applied to `blendedRaceTimeSec`
    * (today's prediction) when the user's longest recent run falls below the
-   * distance-specific threshold. NOT applied to `forecastTime` — the
+   * distance-specific threshold. NOT applied to `forecastTime`. The
    * projection assumes the plan delivers long runs before race day. See
    * `src/calculations/run-durability.ts`.
    */
@@ -793,7 +793,7 @@ export interface SimulatorState {
   athleteTier?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
   athleteTierOverride?: 'beginner' | 'recreational' | 'trained' | 'performance' | 'high_volume';
 
-  // iTRIMP intensity thresholds — personalised from Strava labelled runs (Phase C2)
+  // iTRIMP intensity thresholds. Personalised from Strava labelled runs (Phase C2)
   // Defaults: easy < 70 TSS/hr, tempo 70–95 TSS/hr, vo2 > 95 TSS/hr
   intensityThresholds?: {
     easy: number;              // TSS/hr upper bound for easy zone (default 70)
@@ -801,14 +801,14 @@ export interface SimulatorState {
     calibratedFrom?: number;   // Number of labelled sessions used for calibration
   };
 
-  // Phase C — Strava history (populated by fetchStravaHistory() / history mode edge fn)
-  // Blended race-time prediction cache — refreshed at onboarding + weekly rollover.
+  // Phase C. Strava history (populated by fetchStravaHistory() / history mode edge fn)
+  // Blended race-time prediction cache. Refreshed at onboarding + weekly rollover.
   // Computed by refreshBlendedFitness() from wizard data + per-run history (Tanda).
   // Consumers (stats view, plan engine) read this instead of re-blending on every render.
   blendedRaceTimeSec?: number;              // Predicted time for s.rd at current fitness
   blendedEffectiveVdot?: number;            // VDOT back-solved from blended prediction, for pace derivation
   blendedLastRefreshedISO?: string;         // When the cache was last recomputed
-  // HR-calibrated VDOT — Swain regression of pace on %VO2R across recent runs.
+  // HR-calibrated VDOT. Swain regression of pace on %VO2R across recent runs.
   // Cached so the onboarding review screen can describe the method + confidence
   // without re-running the regression. See effort-calibrated-vdot.ts.
   hrCalibratedVdot?: {
@@ -822,7 +822,7 @@ export interface SimulatorState {
     points?: Array<{ vo2r: number; paceSecKm: number; durationSec: number }>;
   };
 
-  // Cross-modal VO2max — per-discipline estimates plus a cardiac ceiling that
+  // Cross-modal VO2max. Per-discipline estimates plus a cardiac ceiling that
   // captures contributions from any aerobic sport via HR data. Computed every
   // launch from the last 8 weeks of activities. See SCIENCE_LOG → "Cross-Modal
   // VO2max" for the formulas, transfer coefficients, and citations.
@@ -855,7 +855,7 @@ export interface SimulatorState {
   // Per-run summary cached at onboarding so the first blend has Tanda inputs
   // without waiting a week for standalone sync to fill garminActuals.
   // The rich quality fields (avgPaceSecKm, kmSplits, hrDrift, elevation, temp)
-  // are optional — populated when we can seed from the DB (post-backfill, via
+  // are optional. Populated when we can seed from the DB (post-backfill, via
   // `loadActivitiesFromDB`), absent when seeded only from the edge function's
   // lightweight `result.runs` summary. The empirical LT path treats absent
   // fields as "filter does not apply", so coarsely-seeded entries still feed
@@ -876,7 +876,7 @@ export interface SimulatorState {
 
   /** ISO timestamp of the user's earliest Strava activity, fetched once on first
    * triathlon prediction. Drives years-of-training → experience-level mapping in
-   * the horizon adjuster (Joyner & Coyle 2008 — durability scales with years
+   * the horizon adjuster (Joyner & Coyle 2008. Durability scales with years
    * beyond what CTL captures). Null if Strava is not connected or fetch failed. */
   firstStravaActivityISO?: string | null;
   stravaHistoryFetched?: boolean;           // True once history has been loaded at least once
@@ -897,7 +897,7 @@ export interface SimulatorState {
   appleHistoryLastRefreshedAt?: string;
   /** True once the deep (multi-year) Apple Health history pull has run at
    * least once. Separate from `appleHistoryFetched` (which covers the
-   * 52-week HR-enriched window) — this flag tracks the older, lighter
+   * 52-week HR-enriched window). This flag tracks the older, lighter
    * pull whose only purpose is surfacing historic races and PBs. */
   appleDeepHistoryFetched?: boolean;
   /** Device-local flag: the user has authorized Apple HealthKit on THIS device
@@ -920,9 +920,9 @@ export interface SimulatorState {
   historicWeeklyRawTSS?: number[];          // Signal B: raw physiological TSS per week, oldest first (no runSpec discount)
   historicWeeklyKm?: number[];              // Running km per week, oldest first (8 weeks)
   historicWeeklyZones?: { base: number; threshold: number; intensity: number }[];  // Zone breakdown per week
-  ctlBaseline?: number;                     // Signal A CTL — 42-day EMA of run-equiv load; seeds fitness model
+  ctlBaseline?: number;                     // Signal A CTL. 42-day EMA of run-equiv load; seeds fitness model
   tssPerActiveMinute?: number;              // Personal TSS per active minute, calibrated from logged activities
-  signalBBaseline?: number;                 // Signal B baseline — 8-week EMA of raw physiological TSS; used for excess load thresholds
+  signalBBaseline?: number;                 // Signal B baseline. 8-week EMA of raw physiological TSS; used for excess load thresholds
   sportBaselineByType?: Record<string, {    // Per-sport session averages from history (Phase 2 calibration)
     avgSessionRawTSS: number;               //   avg raw TSS per session
     sessionsPerWeek: number;                //   avg sessions per week in the history window
@@ -933,7 +933,7 @@ export interface SimulatorState {
   extendedHistoryKm?: number[];
   extendedHistoryZones?: { base: number; threshold: number; intensity: number }[];
 
-  // Athlete archetype — re-detected at onboarding and on the 7-day refresh.
+  // Athlete archetype. Re-detected at onboarding and on the 7-day refresh.
   // Drives plan-engine ramp slope and predictor confidence band. See
   // src/calculations/athlete-archetype.ts for the classifier.
   athleteArchetype?: import('@/calculations/athlete-archetype').ArchetypeResult;
@@ -947,7 +947,7 @@ export interface SimulatorState {
   illnessState?: {
     startDate: string;              // ISO date when the CURRENT schedule was built (rolls forward on re-report)
     onsetDate?: string;              // ISO date of original first report; preserved across re-reports for "Day N" display
-    severity: 'light' | 'resting'; // legacy tier — derived from schedule[0] when v2 fields present
+    severity: 'light' | 'resting'; // legacy tier. Derived from schedule[0] when v2 fields present
     active: boolean;                // false once user marks recovered
 
     // ─── v2 fields (optional, additive) ──────────────────────────────────────
@@ -997,14 +997,14 @@ export interface SimulatorState {
     actualTSSRatio?: number;
   }>;
 
-  // Just-Track mode — activity tracking only, no plan generated.
+  // Just-Track mode. Activity tracking only, no plan generated.
   // Mirrors s.onboarding.trackOnly so views can branch without reading onboarding.
   // When true: s.wks is []; s.w is 0; today-workout / plan widgets are hidden.
   // Strava/Garmin/Apple sync, physiology sync, activity matching still run normally.
   trackOnly?: boolean;
 
   // Continuous (non-event) training
-  continuousMode?: boolean;       // True for non-event users — plan loops instead of completing
+  continuousMode?: boolean;       // True for non-event users. Plan loops instead of completing
   blockNumber?: number;           // Current 4-week block number (1-based)
   benchmarkResults?: BenchmarkResult[]; // History of optional benchmark check-ins
 
@@ -1017,12 +1017,12 @@ export interface SimulatorState {
 
   // Recovery tracking
   recoveryHistory?: import('../recovery/engine').RecoveryEntry[];
-  lastRecoveryPromptDate?: string;   // ISO date — one-prompt-per-day guard
+  lastRecoveryPromptDate?: string;   // ISO date. One-prompt-per-day guard
 
   // Garmin physiology history (last 7 days from daily_metrics)
   physiologyHistory?: PhysiologyDayEntry[];
 
-  // Personalised recovery learning — fitted from the session impact log.
+  // Personalised recovery learning. Fitted from the session impact log.
   // Replaces the population recovery constant (8) when confidence is medium
   // or higher. See `src/calculations/adaptive-recovery.ts`.
   adaptiveRecovery?: AdaptiveRecovery;
@@ -1032,7 +1032,7 @@ export interface SimulatorState {
   // historical backfill on first launch.
   sessionImpactLog?: SessionImpactEntry[];
 
-  // Leg load history — recent cross-training entries used to compute decayed leg fatigue signal.
+  // Leg load history. Recent cross-training entries used to compute decayed leg fatigue signal.
   // `recoveryMultOverride` lets a per-entry tag (e.g. strength session with heavy leg-feel)
   // override the sport's default recoveryMult for the half-life calc, so a heavy squat day
   // decays slower than the strength baseline.
@@ -1051,26 +1051,26 @@ export interface SimulatorState {
   // LT auto-estimation state
   ltEstimation?: import('../calculations/lt-estimator').LTEstimationState;
 
-  // VDOT history — appended whenever VDOT changes, capped at last 20 entries
+  // VDOT history. Appended whenever VDOT changes, capped at last 20 entries
   vdotHistory?: Array<{ week: number; vdot: number; date?: string }>;
 
   // Display preferences
   unitPref?: 'km' | 'mi';   // Distance unit preference (default 'km')
 
-  // Guided runs — phone-driven coaching during a tracked run
+  // Guided runs. Phone-driven coaching during a tracked run
   guidedRunsEnabled?: boolean;        // Master on/off (default off until user opts in)
   guidedSplitAnnouncements?: boolean; // Per-km voice splits (default true; off if Strava/Garmin already doing it)
   guidedVoiceRate?: number;           // Speech rate multiplier, 0.8–1.4, default 1.0
   guidedKeepScreenOn?: boolean;       // Keep screen on during guided runs (Screen Wake Lock). Default true; web-only interim until Capacitor KeepAwake.
 
-  // Sleep target — user-set override in seconds; if absent, derived from 75th percentile of last 30 nights
+  // Sleep target. User-set override in seconds; if absent, derived from 75th percentile of last 30 nights
   sleepTargetSec?: number;
 
-  // Today's subjective feeling — one-tap daily check-in from the Coach sub-page.
+  // Today's subjective feeling. One-tap daily check-in from the Coach sub-page.
   // Expires at end of day (check `date === todayISO()` before reading).
   todayFeeling?: { value: 'struggling' | 'ok' | 'good' | 'great'; date: string } | null;
 
-  // Completed plan history — appended when the user finishes the plan-complete debrief.
+  // Completed plan history. Appended when the user finishes the plan-complete debrief.
   completedPlans?: CompletedPlanSummary[];
 
   // Archived weeks from prior plans. Captured by `initializeSimulator` whenever
@@ -1080,7 +1080,7 @@ export interface SimulatorState {
   // current plan's date range. Capped to keep state size bounded.
   previousPlanWks?: Array<{
     planStartDate: string;       // ISO date for week 1 of that plan
-    weeks: any[];                // Week[] — typed loosely to avoid forward-ref churn
+    weeks: any[];                // Week[]. Typed loosely to avoid forward-ref churn
     archivedAt: string;          // ISO date when archived
   }>;
 
@@ -1088,7 +1088,7 @@ export interface SimulatorState {
    * Timestamp of the last successful auto-restore from `garmin_activities`.
    * `main.ts` boot sequence checks this and re-runs the restore if older than
    * 24h, so a long-term user who clears localStorage (or whose state ever gets
-   * partially wiped) self-heals on the next launch — Strava's table is the
+   * partially wiped) self-heals on the next launch. Strava's table is the
    * source of truth, local `previousPlanWks` is a hot cache.
    */
   lastHistoryAutoRestoreISO?: string;
@@ -1104,7 +1104,7 @@ export interface SimulatorState {
   coachIntroSeen?: boolean;         // one-time "what the coach can do" overlay dismissed
   /** Persistent memory the coach maintains about the athlete across sessions.
    *  Each fact is a short statement (preference, constraint, motivation). Capped
-   *  at 15 — when full, oldest is dropped on the next remember. Written via the
+   *  at 15. When full, oldest is dropped on the next remember. Written via the
    *  `remember` tool's Apply card so the user confirms each memory write. */
   coachMemory?: {
     lastUpdatedISO: string;
@@ -1112,7 +1112,7 @@ export interface SimulatorState {
   };
   /** What the athlete cares most about in this training block, captured by a
    *  one-time 2-click flow the first time they open Coach. Used by the coach to
-   *  weight recommendations — "healthy" + "injury" leans toward reductions;
+   *  weight recommendations. "healthy" + "injury" leans toward reductions;
    *  "time" + "none" leans toward pushing. Re-prompt every 12 weeks via setISO. */
   coachPriorities?: {
     priority: 'time' | 'finish' | 'healthy' | 'fun';
@@ -1154,7 +1154,7 @@ export interface CompletedPlanSummary {
   predictedTimeSec?: number;
   weeklyKm: number[];
   weeklyPhases: string[];
-  // Granular stats — preserved so "Total" tab can show all-time aggregates
+  // Granular stats. Preserved so "Total" tab can show all-time aggregates
   totalRuns?: number;
   longestRunKm?: number;
   totalTimeSec?: number;

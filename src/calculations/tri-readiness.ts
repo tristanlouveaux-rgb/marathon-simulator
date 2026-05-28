@@ -1,5 +1,5 @@
 /**
- * Per-discipline readiness for triathlon — wraps the running-side
+ * Per-discipline readiness for triathlon. Wraps the running-side
  * `computeReadiness` engine, calling it once per discipline using that
  * discipline's own TSB / ACWR / CTL. Sleep + HRV are global, so the recovery
  * sub-score is the same across all three; the difference is in fitness +
@@ -81,7 +81,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     return window.reduce((s, d) => s + (d.hrvRmssd ?? 0), 0) / window.length;
   })();
 
-  // Sleep debt excess above personal baseline — same signal for all three disciplines
+  // Sleep debt excess above personal baseline. Same signal for all three disciplines
   // (sleep is systemic, not sport-specific).
   const sleepTarget = state.sleepTargetSec ?? deriveSleepTarget(physio);
   const dailyTSS = buildDailySignalBTSS(state.wks ?? [], (state as any).previousPlanWks);
@@ -98,7 +98,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   const buildInput = (f: { ctl: number; atl: number; tsb: number }) => ({
     tsb: f.tsb / 7,
     // Mirror perDisciplineACWR's guard: below CTL 10 the ratio is too noisy to
-    // flag overreaching — pass a safe neutral (1.0) instead.
+    // flag overreaching. Pass a safe neutral (1.0) instead.
     acwr: f.ctl >= 10 ? f.atl / f.ctl : 1.0,
     ctlNow: f.ctl / 7,
     sleepScore: lastSleep?.sleepScore ?? null,
@@ -115,7 +115,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
   const run  = computeReadiness(buildInput(fit.run));
 
   // Only disciplines with actual direct activities drive the overall score and
-  // sentence. Require directCount > 0 AND CTL ≥ 1 — a single ghost swim from
+  // sentence. Require directCount > 0 AND CTL ≥ 1. A single ghost swim from
   // months ago decays to ~0.1 CTL and shouldn't appear in the overall verdict
   // or the coaching sentence.
   //
@@ -183,13 +183,13 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
       return worstCandidate?.result.sentence ?? 'All disciplines are clear.';
     }
     const cap = (d: string) => d.charAt(0).toUpperCase() + d.slice(1);
-    // Exclude injury-restricted others from "not the primary concern" — that
+    // Exclude injury-restricted others from "not the primary concern". That
     // phrasing implies they are otherwise available, which contradicts the
     // injury context the chip is already showing.
     const others = candidates
       .filter(d => d.disc !== worstCandidate.disc && !injuryRestricted.has(d.disc))
       .map(d => cap(d.disc)).join(' and ');
-    // "clear" would contradict the UI cap — say "not the primary concern" instead.
+    // "clear" would contradict the UI cap. Say "not the primary concern" instead.
     const othersClause = others
       ? ` ${others} ${others.includes(' and ') ? 'are' : 'is'} not the primary concern.`
       : '';
@@ -204,7 +204,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
     // Only treat cross-training as a load "cause" when it is both the largest
     // source AND its own readiness is stressed (Manage Load or worse). If
     // cross-training ACWR is fine (Clear/On Track), high volume is normal
-    // baseline for this athlete — don't blame it for discipline overreaching.
+    // baseline for this athlete. Don't blame it for discipline overreaching.
     const crossIsStressed = crossTraining != null
       && LABEL_RANK[crossTraining.label] >= LABEL_RANK['Manage Load'];
     const crossIsDominant = crossTrainingAtl > 0 && crossTrainingAtl > maxDisciplineAtl && crossIsStressed;
@@ -224,7 +224,7 @@ export function computeTriReadiness(state: SimulatorState): TriReadinessResult |
         return `${cap(worstDisc)} load is elevated relative to your baseline, with cross-training adding to the total. Reduce ${worstDisc} volume and limit extra activities this week.`;
       }
       // Injured worst: the user is already at a reduced capacity cap (shown by
-      // the injury chip), so "Reduce" reads oddly — "Hold" is more accurate.
+      // the injury chip), so "Reduce" reads oddly. "Hold" is more accurate.
       // The chip carries the rehab framing, so the sentence stays terse.
       return worstIsInjured
         ? `${cap(worstDisc)} load is climbing fast for an injury phase. Hold ${worstDisc} volume this week.${othersClause}`

@@ -16,7 +16,7 @@ import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/worko
 /** Same-athlete cross-format TOTAL time multiplier — DOUBLES → SINGLES.
  *  In singles, the athlete completes all 8 stations continuously without the
  *  partner-rest pattern doubles offers. Population-data lower bound: 1.125
- *  (P50 cohort comparison, S4–S6, 89,868 finishers — see
+ *  (P50 cohort comparison, S4–S6, 89,868 finishers. See
  *  src/data/hyrox-population-distributions.ts where open_singles P50 total =
  *  5338 s vs open_doubles P50 total = 4747 s; ratio is cohort-comparison so
  *  it understates the same-athlete gap). Coaching consensus (Hyrox Hub,
@@ -25,7 +25,7 @@ import { computePlanPhases, type PhaseConfig, type PlanPhaseWeek } from '@/worko
  *
  *  Used ONLY for band derivation (initialization.hyrox.ts). Per-station
  *  cross-format inference is not defensible from current data and is not
- *  attempted — predictions of a different-format target fall back to seed
+ *  attempted. Predictions of a different-format target fall back to seed
  *  station times and surface a confidence drop in the UI.
  *
  *  Recalibrate when matched-athlete cross-format records become available
@@ -64,7 +64,7 @@ export const HYROX_PHASE_WEEKS = {
  * given length. Returns canonical proportions when the plan is long enough;
  * for shorter plans, weeks are compressed proportionally with priority order
  * taper > peak > build > base. Base is sacrificed first because an athlete
- * registering for HYROX typically already has aerobic foundation — what they
+ * registering for HYROX typically already has aerobic foundation. What they
  * need is race-specific station/brick work and a taper.
  *
  * Mirrors `phasesForLen` in `triathlon-constants.ts`.
@@ -76,7 +76,7 @@ export const HYROX_PHASE_WEEKS = {
  * Peak: floored at 1 whenever there's at least 1 non-taper week to spend —
  * the race-specific phase is the last to drop.
  *
- * @deprecated Use `computeHyroxPlanPhases(totalWeeks)` instead — it returns
+ * @deprecated Use `computeHyroxPlanPhases(totalWeeks)` instead. It returns
  * per-week phases (including the checkpoint flag for double-periodization plans
  * ≥28 weeks) and shares its strategy with running and triathlon mode. Kept
  * temporarily for any callers that depend on the count-based shape.
@@ -119,7 +119,7 @@ export function hyroxPhasesForLen(
 /**
  * Tuned to reproduce the canonical HYROX_PHASE_WEEKS split (6/6/3) at the
  * default plan length (18 weeks → 7/6/3/2). Peak capped at 3 because HYROX peak
- * = race-specific compromised-running and station-density work — beyond 3w the
+ * = race-specific compromised-running and station-density work. Beyond 3w the
  * stimulus plateaus and accumulated fatigue compromises race day.
  *
  * Double-periodization threshold is 28 weeks (matching triathlon). HYROX lead
@@ -168,7 +168,7 @@ export const HYROX_TAPER_DAYS: Record<AbilityBand, number> = {
 /**
  * Weekly MTL cap per ability band.
  *
- * Initial estimates — pending real-training validation. Derived from the
+ * Initial estimates. Pending real-training validation. Derived from the
  * training-load literature on eccentric/mechanical stress tolerance across
  * experience levels (Damas et al. 2016; Schoenfeld 2010). Units are arbitrary
  * MTL units (durationMin × sRPE × modalityFactor × impactFactor).
@@ -189,7 +189,7 @@ export const HYROX_MTL_CAP: Record<AbilityBand, number> = {
  * but share the 4 of 8 stations with their partner. So the cap should reflect:
  * full run-load + half station-load.
  *
- * Run vs station MTL share is approximately 30 / 70 in our model — stations
+ * Run vs station MTL share is approximately 30 / 70 in our model. Stations
  * carry heavier per-minute eccentric weight than runs (see STATION_MTL_FACTORS
  * vs RUN_MTL_FACTORS modality coefficients).
  *
@@ -318,7 +318,7 @@ export const HYROX_HOURS_RANGE: Record<AbilityBand, { default: number; min: numb
  * age-group beginners show 8–12% slip by run 7–8.
  *
  * Doubles format halves the effective rate (athletes alternate stations, sharing
- * the eccentric load — but still accumulate metabolic cost from waiting partner).
+ * the eccentric load. But still accumulate metabolic cost from waiting partner).
  */
 export const PER_STATION_FATIGUE_RATE_BY_BAND: Record<AbilityBand, number> = {
   competitive:    0.004,
@@ -332,7 +332,7 @@ export const PER_STATION_FATIGUE_RATE_BY_BAND: Record<AbilityBand, number> = {
 // ─── ACWR thresholds for MTL ─────────────────────────────────────────────────
 
 /** MTL ACWR thresholds for station-volume reduction and warning.
- *  Same structure as aerobic ACWR — safe / caution / high-risk. */
+ *  Same structure as aerobic ACWR. Safe / caution / high-risk. */
 export const MTL_ACWR_CAUTION = 1.2;
 export const MTL_ACWR_HIGH    = 1.35;
 
@@ -352,12 +352,12 @@ export const ECCENTRIC_HEAVY_STATIONS: HyroxStation[] = [
  * Phase volume multipliers applied to weekly-available hours.
  * Mirrors the triathlon engine's ramp (Bompa & Haff 2009; Issurin 2010):
  *   Base:  0.55 at week 1 → 0.85 at end of base (linear ramp over 8 weeks)
- *   Build: 0.92 — near-peak effort as specificity increases
- *   Peak:  1.00 — highest training stimulus
+ *   Build: 0.92. Near-peak effort as specificity increases
+ *   Peak:  1.00. Highest training stimulus
  *   Taper: stepped reduction (0.75 → 0.55 → 0.30 at race week)
  *
  * Deload modifier: ×0.70 applied on every 4th week within base/build.
- * (Same as tri engine — empirically validated 3:1 load:recovery ratio.)
+ * (Same as tri engine. Empirically validated 3:1 load:recovery ratio.)
  */
 export const HYROX_DELOAD_FACTOR = 0.70;
 export const HYROX_BUILD_MULT = 0.92;

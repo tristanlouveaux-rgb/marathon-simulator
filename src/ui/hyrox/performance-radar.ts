@@ -1,5 +1,5 @@
 /**
- * HYROX Performance Radar — 8-axis station percentile chart.
+ * HYROX Performance Radar. 8-axis station percentile chart.
  *
  * Renders an octagon (one axis per HYROX station). Each axis represents the
  * percentile (0..100) the user beats vs the population: centre = bottom of
@@ -7,10 +7,10 @@
  *
  * **Layout**: SVG holds the geometry (rings, axis spokes, user polygon, dots).
  * Station labels are HTML <span> elements absolutely-positioned via left%/top%
- * around the SVG. This is non-negotiable — long labels like "Burpee Broad Jumps"
+ * around the SVG. This is non-negotiable. Long labels like "Burpee Broad Jumps"
  * and "Sandbag Lunges" will NOT clip in any container width and can wrap to
  * two lines on narrow screens. SVG <text> in a stretched chart distorts the
- * size and clips at the viewBox edge — see UX_PATTERNS § "SVG text is banned".
+ * size and clips at the viewBox edge. See UX_PATTERNS § "SVG text is banned".
  *
  * Mounts on forecast-view between Skills Analysis and Stations table.
  */
@@ -35,7 +35,7 @@ interface RadarOpts {
  * The radar lives inside a square wrapper. The SVG is inset to leave gutters
  * for HTML labels on every side. Labels snap to one of nine zones (top, top-
  * right, right, bottom-right, bottom, bottom-left, left, top-left, centre)
- * based on the axis angle — this guarantees they sit inside dedicated gutter
+ * based on the axis angle. This guarantees they sit inside dedicated gutter
  * space and never collide with the chart.
  */
 const SVG_VIEW = 200;                         // SVG viewBox is square 200×200
@@ -43,14 +43,14 @@ const SVG_CENTRE = SVG_VIEW / 2;
 const SVG_RADIUS = SVG_VIEW * 0.42;            // outer ring inside the SVG
 const SVG_INSET_PCT = 19;                      // % of wrapper reserved per side for labels
 
-// Vibrant indigo — the radar gets its own distinct hue, separate from the
+// Vibrant indigo. The radar gets its own distinct hue, separate from the
 // four percentile-row colours below it (pink / teal / orange / amber). Cool
 // tone reads as analytical, fitting "where you sit on each station".
-const STROKE_OUTER = '#6366F1';                // indigo-500 — outermost grid + polygon stroke
-const STROKE_DARK = '#4338CA';                 // indigo-700 — gradient end stop, dot fill
+const STROKE_OUTER = '#6366F1';                // indigo-500. Outermost grid + polygon stroke
+const STROKE_DARK = '#4338CA';                 // indigo-700. Gradient end stop, dot fill
 const FILL_INNER = 'rgba(99,102,241,0.18)';
 const FILL_OUTER = 'rgba(99,102,241,0.04)';
-const DOT_FILLED = '#4338CA';                  // deep indigo — calibrated benchmark
+const DOT_FILLED = '#4338CA';                  // deep indigo. Calibrated benchmark
 const HALO = 'rgba(255,255,255,0.95)';
 
 function pointAt(angleRad: number, radius: number): [number, number] {
@@ -99,7 +99,7 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
     const [ox, oy] = pointAt(ang, SVG_RADIUS);
     const radius = (p.pct / 100) * SVG_RADIUS;
     const [dx, dy] = pointAt(ang, radius);
-    const delay = (1100 + i * 40); // ms — dots arrive once the polygon has settled
+    const delay = (1100 + i * 40); // ms. Dots arrive once the polygon has settled
     const dotMain = p.calibrated
       ? `<circle class="hx-radar-dot" style="animation-delay:${delay}ms" cx="${dx.toFixed(2)}" cy="${dy.toFixed(2)}" r="3.4" fill="${DOT_FILLED}"/>`
       : `<circle class="hx-radar-dot" style="animation-delay:${delay}ms" cx="${dx.toFixed(2)}" cy="${dy.toFixed(2)}" r="3.0" fill="#fff" stroke="${DOT_FILLED}" stroke-width="1.2"/>`;
@@ -159,7 +159,7 @@ export function renderPerformanceRadar(opts: RadarOpts): string {
   const allCalibrated = calibratedCount === N;
 
   // Empty state when zero stations are calibrated. The polygon would otherwise
-  // plot every axis at the band's seed percentile — a regular N-gon that reads
+  // plot every axis at the band's seed percentile. A regular N-gon that reads
   // as a circle and carries no signal about strengths vs limiters. Replace
   // with a calibration prompt so the user knows what's missing.
   if (calibratedCount === 0) {

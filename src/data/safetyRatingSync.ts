@@ -1,5 +1,5 @@
 /**
- * Route Safety Ratings — syncs user safety scores to Supabase.
+ * Route Safety Ratings. Syncs user safety scores to Supabase.
  * Fire-and-forget: never throws to caller, warns on failure.
  */
 

@@ -1,11 +1,11 @@
 /**
- * FTP debug overlay — surfaced from the Bike FTP card when the estimator
+ * FTP debug overlay. Surfaced from the Bike FTP card when the estimator
  * couldn't land a number despite having bike rides synced, OR on demand.
  * Renders the funnel breakdown and top candidates from `FtpEstimate.diagnostics`
  * so the user can self-diagnose ("ah, my rides are too short / Strava hasn't
  * processed the watts streams yet / etc") instead of needing a debug round-trip.
  *
- * Built specifically for the recurring FTP regression class — see
+ * Built specifically for the recurring FTP regression class. See
  * `docs/CHANGELOG.md` 2026-05-01 entry. The visibility this overlay provides
  * is the "make sure it doesn't keep happening" defence.
  */
@@ -56,7 +56,7 @@ export function openFtpDebugOverlay(estimate: FtpEstimate): void {
     ? 'Here\'s why no number landed and what would unblock it.'
     : 'Source ride and how the funnel ranked your candidates.';
 
-  // Inventory block — coverage of power data on bike rides.
+  // Inventory block. Coverage of power data on bike rides.
   const inventoryHtml = d ? `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:13px;color:#0F172A">
       <div><span style="color:#64748B">Total rides</span> ${d.totalRides}</div>
@@ -68,7 +68,7 @@ export function openFtpDebugOverlay(estimate: FtpEstimate): void {
     </div>
   ` : '';
 
-  // Funnel block — only meaningful when fallback path ran (curve path leaves
+  // Funnel block. Only meaningful when fallback path ran (curve path leaves
   // funnel zeroed). Show only when fallback was used or no FTP was derived.
   const funnelMatters = d && (d.funnel.noUsablePower > 0 || d.funnel.tooShort > 0 || d.funnel.tooOld > 0);
   const funnelHtml = funnelMatters ? `
@@ -80,7 +80,7 @@ export function openFtpDebugOverlay(estimate: FtpEstimate): void {
     </div>
   ` : '';
 
-  // Top candidates — empty when curve path was used.
+  // Top candidates. Empty when curve path was used.
   const candidatesHtml = d && d.topCandidates.length > 0 ? `
     <div style="font-size:12px;font-weight:600;color:#64748B;text-transform:uppercase;letter-spacing:0.06em;margin-top:18px;margin-bottom:8px">Top candidates (NP-ranked)</div>
     <div style="display:flex;flex-direction:column;gap:6px">
@@ -93,7 +93,7 @@ export function openFtpDebugOverlay(estimate: FtpEstimate): void {
     </div>
   ` : '';
 
-  // What to do next — short, scannable. Different copy for the regression
+  // What to do next. Short, scannable. Different copy for the regression
   // case vs the success case.
   const guidanceHtml = estimate.ftpWatts == null && d && d.totalRides > 0 ? `
     <div style="font-size:12px;font-weight:600;color:#64748B;text-transform:uppercase;letter-spacing:0.06em;margin-top:18px;margin-bottom:8px">Most likely cause</div>

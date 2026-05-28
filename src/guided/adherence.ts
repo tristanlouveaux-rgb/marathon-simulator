@@ -7,7 +7,7 @@ import type { GpsSplit } from '@/types';
  */
 export const ADHERENCE_TOLERANCE_BY_KIND: Record<SplitCategory['kind'], number> = {
   work: 4,
-  recovery: 0,      // never classified — paced recovery is handled as untimed
+  recovery: 0,      // never classified. Paced recovery is handled as untimed
   warmup: 10,
   cooldown: 10,
   other: 5,

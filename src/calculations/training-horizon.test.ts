@@ -133,18 +133,18 @@ describe('Training Horizon', () => {
         const lowVolume = applyTrainingHorizonAdjustment({
           ...baseParams,
           sessions_per_week: 4,
-          weekly_volume_km: 20,  // 5 km/session — short
+          weekly_volume_km: 20,  // 5 km/session. Short
         });
         const highVolume = applyTrainingHorizonAdjustment({
           ...baseParams,
           sessions_per_week: 4,
-          weekly_volume_km: 60,  // 15 km/session — proper marathon dose
+          weekly_volume_km: 60,  // 15 km/session. Proper marathon dose
         });
         expect(highVolume.improvement_pct).toBeGreaterThan(lowVolume.improvement_pct);
       });
 
       it('should treat 10h/week and 3h/week as meaningfully different (hours fallback)', () => {
-        // No km history — onboarding-only user with stated weekly hours.
+        // No km history. Onboarding-only user with stated weekly hours.
         const lowHours = applyTrainingHorizonAdjustment({
           ...baseParams,
           sessions_per_week: 4,
@@ -180,7 +180,7 @@ describe('Training Horizon', () => {
       });
 
       it('should prefer km history over hours when both provided', () => {
-        // km says ample volume, hours says minimal — km should win.
+        // km says ample volume, hours says minimal. Km should win.
         const kmDominant = applyTrainingHorizonAdjustment({
           ...baseParams,
           sessions_per_week: 4,
@@ -446,7 +446,7 @@ describe('Training Horizon', () => {
 
     describe('dual-tau adaptation curve (audit #12)', () => {
       // Long-plan saturation gap: with single-tau (tau=9 for intermediate
-      // marathon), week_factor was at 0.811 at 18w and 0.989 at 43w — only
+      // marathon), week_factor was at 0.811 at 18w and 0.989 at 43w. Only
       // ~22% additional headroom for 25 extra weeks of training. Science
       // says LT and economy continue adapting (Seiler 2010, Coyle 1984),
       // so dual-tau extends the long-plan curve while preserving short-plan
@@ -469,7 +469,7 @@ describe('Training Horizon', () => {
         // Post-dual-tau: ≈ 0.7-0.8% (matches Pfitzinger two-block outcomes).
         const delta = r43.improvement_pct - r18.improvement_pct;
         expect(delta).toBeGreaterThan(0.5);
-        expect(delta).toBeLessThan(2.0); // sanity ceiling — not over-claiming
+        expect(delta).toBeLessThan(2.0); // sanity ceiling. Not over-claiming
       });
 
       it('diminishing returns preserved across plan lengths', () => {
@@ -703,7 +703,7 @@ describe('getPlanPrescribedMeanWeeklyKm — ramp integration', () => {
       archetype: 'sedentary-novice',
       totalWeeks: 35,
     });
-    // Novice starts at 10 km floor with 5%/wk ramp — wouldn't reach 79 over 32 weeks
+    // Novice starts at 10 km floor with 5%/wk ramp. Wouldn't reach 79 over 32 weeks
     // (10 × 1.05^31 ≈ 44 km), so mean is much lower than legacy.
     expect(km).toBeLessThan(40);
   });

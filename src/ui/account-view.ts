@@ -1,5 +1,5 @@
 /**
- * Account page — user email, wearable connection status, sync controls, sign out.
+ * Account page. User email, wearable connection status, sync controls, sign out.
  */
 
 import { supabase, getAccessToken, SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_FUNCTIONS_BASE, isGarminConnected, resetGarminCache, isStravaConnected, resetStravaCache, refreshGarminToken, resetGarminBackfillGuard, triggerGarminReconcile } from '@/data/supabaseClient';
@@ -53,7 +53,7 @@ export async function renderAccountView(): Promise<void> {
 
   const s = getState();
 
-  // Check Garmin status unless Apple is the explicit physiology source — the
+  // Check Garmin status unless Apple is the explicit physiology source. The
   // Strava-standalone card also surfaces a Connect Garmin row, which needs the
   // real connection state to decide between Connect vs Sync/Remove.
   if (!isSimulatorMode() && !hasPhysiologySource(s, 'apple') && s.wearable !== 'apple') {
@@ -439,7 +439,7 @@ function renderStravaEnrichRow(): string {
 // ─── Profile Group ─────────────────────────────────────────────────────────────
 
 /**
- * Triathlon benchmarks section — moved here from the Stats page so the four
+ * Triathlon benchmarks section. Moved here from the Stats page so the four
  * cells (CSS, FTP, Hours/week, Split) live with the rest of the user's
  * settings rather than alongside live training stats. Includes the "Bike &
  * aero setup →" entry that previously hung off the Stats targets card.
@@ -460,7 +460,7 @@ function renderTriBenchmarksGroup(s: ReturnType<typeof getState>): string {
   const hoursVal = tri.timeAvailableHoursPerWeek ? `${tri.timeAvailableHoursPerWeek}h` : '—';
   const splitVal = `S ${pct(tri.volumeSplit?.swim)} · B ${pct(tri.volumeSplit?.bike)} · R ${pct(tri.volumeSplit?.run)}`;
   // Refresh action only matters when FTP is auto-derived. User-set values
-  // shouldn't be silently overwritten — the user typed them deliberately.
+  // shouldn't be silently overwritten. The user typed them deliberately.
   const showFtpRefreshTri = tri.bike?.ftp != null && tri.bike?.ftpSource === 'derived';
 
   const row = (label: string, value: string) => `
@@ -471,7 +471,7 @@ function renderTriBenchmarksGroup(s: ReturnType<typeof getState>): string {
   `;
 
   // FTP row variant with an inline "Refresh" button on the right when the
-  // value is derived. Same action as the Profile-card button — see
+  // value is derived. Same action as the Profile-card button. See
   // `btn-refresh-ftp-tri` handler in `wireAccountHandlers`.
   const ftpRow = showFtpRefreshTri ? `
     <div style="padding:14px 16px;display:flex;justify-content:space-between;align-items:center;gap:10px">
@@ -575,7 +575,7 @@ function renderProfileGroup(): string {
         ${sub ? `<div style="font-size:10px;color:var(--c-faint);margin-top:3px">${sub}</div>` : ''}
       </div>`;
 
-    // Confidence captions — show "estimate" when the persisted value is
+    // Confidence captions. Show "estimate" when the persisted value is
     // derived from history at low/none confidence, so the user knows the
     // number is a rough guess until they run the proper test.
     const ftpHint = (() => {
@@ -593,7 +593,7 @@ function renderProfileGroup(): string {
       return undefined;
     })();
 
-    // FTP refresh action — only meaningful when there's a bike workflow
+    // FTP refresh action. Only meaningful when there's a bike workflow
     // (cycling or triathlon mode) and the value is auto-derived. Triggers
     // a server-side power-curve refresh that fetches missing watts streams,
     // then re-derives FTP locally. Surfaces inline so users don't have to
@@ -611,7 +611,7 @@ function renderProfileGroup(): string {
       </div>` : '';
 
     if (isCycling) {
-      // Cycling-only mode: drop Swim CSS and Run VO2max — neither applies.
+      // Cycling-only mode: drop Swim CSS and Run VO2max. Neither applies.
       // Single-card layout keeps the FTP benchmark front and centre.
       benchmarkSection = `
         ${rowDivider()}
@@ -971,7 +971,7 @@ function renderCoachGroup(): string {
   const constraintLabel: Record<string, string> = { time: 'Time available', energy: 'Energy / recovery', injury: 'Injury history', none: 'Nothing right now' };
 
   // Restore Purchases is required by App Store guidelines for any IAP. Shown
-  // only on native iOS — the row is a no-op on web/Android where RevenueCat
+  // only on native iOS. The row is a no-op on web/Android where RevenueCat
   // doesn't run.
   const isIOS = typeof window !== 'undefined'
     && (window as { Capacitor?: { isNativePlatform?: () => boolean; getPlatform?: () => string } }).Capacitor?.isNativePlatform?.()
@@ -1115,7 +1115,7 @@ function showRecurringActivitiesModal(): void {
 
   render();
   overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); const container = document.getElementById('app-root'); if (container) { container.innerHTML = getAccountHTML(); wireAccountHandlers(); } } });
-  // Initial activity count — used only to prompt a soft message if the user leaves with an empty list.
+  // Initial activity count. Used only to prompt a soft message if the user leaves with an empty list.
   void activities;
   document.body.appendChild(overlay);
 }
@@ -1149,7 +1149,7 @@ function renderCommuteRow(s: ReturnType<typeof getState>): string {
 
 /**
  * Modal for editing commute config from the Account page. Mirrors the
- * onboarding step's data model — writes the same `s.commuteConfig` shape.
+ * onboarding step's data model. Writes the same `s.commuteConfig` shape.
  */
 function showCommuteModal(): void {
   const overlay = document.createElement('div');
@@ -1429,7 +1429,7 @@ function wireAccountHandlers(): void {
     renderAuthView();
   });
 
-  // Legal & data — App Store compliance flows.
+  // Legal & data. App Store compliance flows.
   document.getElementById('btn-delete-account')?.addEventListener('click', async () => {
     const { openDeleteAccountModal } = await import('./account-legal');
     openDeleteAccountModal();
@@ -1440,7 +1440,7 @@ function wireAccountHandlers(): void {
     await triggerDataExport('btn-export-data');
   });
 
-  // Coach priorities edit — opens the same one-time modal the Coach uses on first launch.
+  // Coach priorities edit. Opens the same one-time modal the Coach uses on first launch.
   document.getElementById('btn-edit-coach-priorities')?.addEventListener('click', async () => {
     const { openCoachPrioritiesModal } = await import('./coach-view');
     openCoachPrioritiesModal(() => rerender());
@@ -1460,7 +1460,7 @@ function wireAccountHandlers(): void {
     }
   });
 
-  // Guest-account upgrade — opens auth view in upgrade mode (signUp uses
+  // Guest-account upgrade. Opens auth view in upgrade mode (signUp uses
   // updateUser to preserve the user_id and all data attached to the guest).
   document.getElementById('btn-save-account')?.addEventListener('click', () => {
     renderAuthView({ upgradeGuest: true });
@@ -1471,7 +1471,7 @@ function wireAccountHandlers(): void {
     (document.getElementById('sleep-target-edit') as HTMLElement).style.display = '';
   });
 
-  // FTP refresh — calls the edge function's `powerCurveRefresh` mode to fetch
+  // FTP refresh. Calls the edge function's `powerCurveRefresh` mode to fetch
   // missing watts streams, then re-derives FTP locally and updates state. The
   // ratchet-up rule (main.ts) ensures we only accept the result when it
   // improves on the saved value or carries higher confidence. Two surfaces:
@@ -1720,7 +1720,7 @@ function wireAccountHandlers(): void {
 
   document.getElementById('account-swim-env-btn')?.addEventListener('click', () => {
     import('./triathlon/swim-normalisation-reveal').then(({ openSwimEnvironmentEditor }) => {
-      // No callback — editor writes directly to triConfig.swim and persists.
+      // No callback. Editor writes directly to triConfig.swim and persists.
       openSwimEnvironmentEditor();
       // Re-render account view when the overlay is removed so the row label
       // updates immediately rather than waiting for a navigation.
@@ -1925,7 +1925,7 @@ function wireAccountHandlers(): void {
     }
   });
 
-  // Sync Now — Garmin biometrics only (sleep, HRV, VO2max).
+  // Sync Now. Garmin biometrics only (sleep, HRV, VO2max).
   // When Strava is connected it handles activities separately via btn-sync-strava.
   //
   // Flow:
@@ -1948,7 +1948,7 @@ function wireAccountHandlers(): void {
       await triggerGarminReconcile(3);
 
       if (sNow.stravaConnected) {
-        // Strava is the activity source — this button only syncs Garmin biometrics
+        // Strava is the activity source. This button only syncs Garmin biometrics
         await syncPhysiologySnapshot(7);
       } else {
         await Promise.all([syncActivities(), syncPhysiologySnapshot(7)]);
@@ -2093,7 +2093,7 @@ function wireAccountHandlers(): void {
   // Strava: Connect (shared by both standalone and enrich cards)
   //
   // Defensive UX (ISSUE-227 follow-up): the previous handler silently swallowed
-  // every error path — if Supabase was unreachable on a reviewer device the
+  // every error path. If Supabase was unreachable on a reviewer device the
   // button gave no feedback, which reads as a broken integration. Now it
   // disables the button during the round-trip, surfaces a toast on any failure,
   // and re-enables the button so the user can retry.
@@ -2199,7 +2199,7 @@ function wireAccountHandlers(): void {
     }
   });
 
-  // Edit Profile — jump into wizard at the Review step (PBs + volume editor)
+  // Edit Profile. Jump into wizard at the Review step (PBs + volume editor)
   document.getElementById('btn-edit-profile')?.addEventListener('click', () => {
     import('@/ui/wizard/controller').then(({ initWizard, goToStep }) => {
       initWizard();

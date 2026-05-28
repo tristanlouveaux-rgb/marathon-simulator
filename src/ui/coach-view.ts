@@ -1,5 +1,5 @@
 /**
- * Coach view — AI-powered coaching surface (Mosaic-paid) + rules-based fallback.
+ * Coach view. AI-powered coaching surface (Mosaic-paid) + rules-based fallback.
  *
  * AI mode (allowlisted user): streams a coaching brief, shows Apply cards for
  * plan changes, supports chat follow-ups. Session persists across navigation
@@ -7,7 +7,7 @@
  *
  * Classic mode (not allowlisted): rules-based brief, recovery readout, today's
  * workout, feeling prompt, and an export-snapshot affordance. No placeholder
- * copy — fully functional standalone surface.
+ * copy. Fully functional standalone surface.
  *
  * Security: all user-controlled strings sanitized before prompt inclusion.
  * Tool calls validated against actual plan state before Apply card is shown.
@@ -98,7 +98,7 @@ function escHtml(s: string): string {
 }
 
 /** Strip the most common markdown markers Haiku occasionally emits despite the
- *  prompt forbidding them. Defensive belt-and-braces — the prompt is the primary
+ *  prompt forbidding them. Defensive belt-and-braces. The prompt is the primary
  *  defence, this is the safety net so the UI never renders raw `**` or `*`. */
 export function stripMarkdown(s: string): string {
   return s
@@ -783,7 +783,7 @@ async function sendChatMessage(text: string): Promise<void> {
   if (errorMessage) {
     if (replyEl) { replyEl.textContent = errorMessage; (replyEl as HTMLElement).style.color = WARN; }
   } else if (accumulated) {
-    // Stream completed with text — strip internal tags, format, persist.
+    // Stream completed with text. Strip internal tags, format, persist.
     const c1 = extractChoices(accumulated);
     const c2 = extractConfidence(c1.clean);
     if (replyEl) replyEl.innerHTML = formatAsHTML(c2.clean);
@@ -796,7 +796,7 @@ async function sendChatMessage(text: string): Promise<void> {
       renderChips(c1.choices, assistantId);
     }
   } else if (validToolFired) {
-    // Coach used a tool with no preamble — the Apply card IS the response.
+    // Coach used a tool with no preamble. The Apply card IS the response.
     // Remove the empty bubble; persist a marker so re-renders don't recreate it.
     if (bubbleEl) bubbleEl.remove();
     chatMessages.push({ role: 'assistant', content: '[proposed a change above]' });
@@ -808,7 +808,7 @@ async function sendChatMessage(text: string): Promise<void> {
       (replyEl as HTMLElement).style.color = TEXT_M;
     }
   } else {
-    // No text, no tool, no error — likely a model hiccup. Recoverable.
+    // No text, no tool, no error. Likely a model hiccup. Recoverable.
     if (replyEl) {
       replyEl.textContent = 'I didn\'t catch that. Try rephrasing what you\'d like to change.';
       (replyEl as HTMLElement).style.color = TEXT_S;
@@ -1066,7 +1066,7 @@ function wireCoachHandlers(aiMode: boolean): void {
   wireTabBarHandlers(navigateTab);
 
   document.getElementById('coach-back-btn')?.addEventListener('click', () => {
-    // Intentionally do NOT reset — the session persists within the same plan
+    // Intentionally do NOT reset. The session persists within the same plan
     // week so re-opening Coach picks up the existing thread.
     if (coachOnBack) { coachOnBack(); return; }
     import('./home-view').then(({ renderHomeView }) => renderHomeView());
@@ -1074,12 +1074,12 @@ function wireCoachHandlers(aiMode: boolean): void {
 
   document.getElementById('coach-export-btn')?.addEventListener('click', () => downloadSnapshot());
 
-  // ? icon — re-open the "what the coach can do" overlay anytime
+  // ? icon. Re-open the "what the coach can do" overlay anytime
   document.getElementById('coach-help-btn')?.addEventListener('click', () => {
     showCoachIntro({ markSeen: false });
   });
 
-  // ↻ icon — discard the current thread and stream a fresh brief
+  // ↻ icon. Discard the current thread and stream a fresh brief
   document.getElementById('coach-newsession-btn')?.addEventListener('click', () => {
     resetSession();
     renderCoachView(coachOnBack ?? undefined);
@@ -1148,7 +1148,7 @@ export async function renderCoachView(opts?: RenderCoachOpts | (() => void)): Pr
     container.innerHTML = getAICoachHTML();
     wireCoachHandlers(true);
 
-    // When opened with a primer, ALWAYS start fresh — the primer is meant to
+    // When opened with a primer, ALWAYS start fresh. The primer is meant to
     // initiate a focused, single-topic conversation, not piggy-back on a
     // previous thread the user wasn't expecting.
     if (opt.primer) {
@@ -1158,7 +1158,7 @@ export async function renderCoachView(opts?: RenderCoachOpts | (() => void)): Pr
       restoreSessionUI();
       return;
     } else {
-      // Normal entry, no restorable session — fresh start.
+      // Normal entry, no restorable session. Fresh start.
       resetSession();
     }
 
@@ -1177,7 +1177,7 @@ export async function renderCoachView(opts?: RenderCoachOpts | (() => void)): Pr
     }
 
     // First Coach open OR priorities stale (>12 weeks) OR inconsistent state
-    // (seen flag set but no priorities object — happens if state got partially
+    // (seen flag set but no priorities object. Happens if state got partially
     // wiped or migrated): goal-setting flow.
     const STALE_MS = 12 * 7 * 24 * 60 * 60 * 1000;
     const priorityStale = state.coachPriorities

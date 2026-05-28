@@ -2,7 +2,7 @@
  * Triathlon forecast chip detail pages.
  *
  * Tapping a chip on the tri forecast page opens a full-page detail view
- * with the chip's math factor explained — current state, how it feeds the
+ * with the chip's math factor explained. Current state, how it feeds the
  * prediction, and where the user can take action.
  *
  * One page per factor; see `race-forecast-fingerprint.ts` for the chip set.
@@ -43,7 +43,7 @@ const TEXT_S = '#64748B';
 const TEXT_L = '#94A3B8';
 const CARD = 'background:rgba(255,255,255,0.92);border:1px solid rgba(0,0,0,0.05);border-radius:14px;padding:18px 20px';
 
-// Discipline accents — mirror DISCIPLINE_COLOURS (swim blue / bike red / run green).
+// Discipline accents. Mirror DISCIPLINE_COLOURS (swim blue / bike red / run green).
 const COL_SWIM = '#3B82F6';
 const COL_BIKE = '#DC2626';
 const COL_RUN  = '#16A34A';

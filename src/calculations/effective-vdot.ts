@@ -1,5 +1,5 @@
 /**
- * Effective VDOT — single source of truth for the VDOT used to derive paces,
+ * Effective VDOT. Single source of truth for the VDOT used to derive paces,
  * forecasts, and pace-matched activity detection.
  *
  * Prior to 2026-04-16, effective VDOT was computed as
@@ -8,7 +8,7 @@
  * climb toward s.expectedFinal. This was a pre-drawn trajectory, not reality.
  *
  * Now s.v itself is refreshed weekly to the blended race-prediction-derived VDOT
- * (see refreshBlendedFitness). The wkGain accumulator is dropped — s.v already
+ * (see refreshBlendedFitness). The wkGain accumulator is dropped. S.v already
  * reflects actual current fitness as supported by the last 8 weeks of running.
  * wkGain remains on week state for cosmetic display only.
  *

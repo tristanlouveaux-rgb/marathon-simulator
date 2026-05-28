@@ -1,5 +1,5 @@
 /**
- * Leg Fatigue detail page — localised mechanical fatigue from cross-training.
+ * Leg Fatigue detail page. Localised mechanical fatigue from cross-training.
  *
  * Opens from the Leg Fatigue card on the Rolling Load view (permanent home) or
  * from the Readiness callout banner when the floor is active. Models the same
@@ -27,7 +27,7 @@ const TEXT_L = '#94A3B8';
 const RING_R = 46;
 const RING_C = +(2 * Math.PI * RING_R).toFixed(2);
 
-// Bronze palette — distinct from strain (red) and load ratio (amber)
+// Bronze palette. Distinct from strain (red) and load ratio (amber)
 const ZONE_FRESH    = '#22C55E'; // green when legs are fresh
 const ZONE_MODERATE = '#F59E0B'; // amber at MODERATE threshold
 const ZONE_HEAVY    = '#DC2626'; // deep red at HEAVY threshold
@@ -157,7 +157,7 @@ function buildDecayCurve(entries: LegLoadEntryDecayed[], nowMs: number): string 
       ` L ${x(last.hOffset).toFixed(1)} ${yBase.toFixed(1)} Z`;
   };
 
-  // Split marker (today) — thin dashed vertical, very muted (per UX_PATTERNS forecast pattern)
+  // Split marker (today). Thin dashed vertical, very muted (per UX_PATTERNS forecast pattern)
   const xNow = x(0).toFixed(1);
 
   return `

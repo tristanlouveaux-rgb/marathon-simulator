@@ -1,5 +1,5 @@
 /**
- * Coach eval suite — gated by RUN_COACH_EVAL=1 so accidental `npm test` doesn't
+ * Coach eval suite. Gated by RUN_COACH_EVAL=1 so accidental `npm test` doesn't
  * spend Anthropic credits. Run with:
  *
  *   npm run coach:eval

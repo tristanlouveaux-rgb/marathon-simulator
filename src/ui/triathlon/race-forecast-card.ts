@@ -35,7 +35,7 @@ const SPLIT_DIST_TABLES = splitDistJson as unknown as Record<string, Distributio
  * empirical (calibrated) model vs the physical fallback. Empirical entries
  * carry a `value` like "high, n=6480"; physical entries carry descriptive
  * values like "Cool (~12°C)" or "+200 m gain". The panel renderer and the
- * calibration caption both need this signal — if the empirical-output value
+ * calibration caption both need this signal. If the empirical-output value
  * format ever changes, only this helper needs updating.
  */
 function isEmpiricalFactors(factors: CourseFactorEntry[]): boolean {
@@ -408,7 +408,7 @@ function renderCourseFactorsPanel(
     if (isEmpirical) {
       commentary = legCommentary(leg, totalDelta, profile);
     } else if (legFactors.length === 1) {
-      // Single-dimension hit — show the descriptive value directly
+      // Single-dimension hit. Show the descriptive value directly
       // (e.g. "Hot-humid (~30°C)") so the user sees the actual reading.
       commentary = `${legFactors[0].label} · ${legFactors[0].value}`;
     } else {
@@ -426,7 +426,7 @@ function renderCourseFactorsPanel(
     `;
   }).join('');
 
-  // Venue sample size sits quietly at the bottom of the panel — confidence
+  // Venue sample size sits quietly at the bottom of the panel. Confidence
   // and n are the same across all three legs (single empirical fit per
   // venue), so surface them once instead of repeating on every row.
   // Physical-mode entries have no n, so this footer is skipped naturally.
@@ -436,7 +436,7 @@ function renderCourseFactorsPanel(
     ? `<div style="margin-top:8px;font-size:11px;color:var(--c-faint)">${venueN.toLocaleString()} finishes from this venue.</div>`
     : '';
 
-  // Altitude acclimatisation flag — empirical course factors are talent-
+  // Altitude acclimatisation flag. Empirical course factors are talent-
   // controlled but include altitude-acclimatised locals, so a sea-level
   // athlete racing at altitude may face a larger effective penalty than the
   // factor suggests. We don't know where the user trains, so we flag it
@@ -467,7 +467,7 @@ function renderCourseFactorsPanel(
  * Per-leg commentary derived from the venue's published physical attributes.
  *
  * Empirical course factors fuse physics, race-day weather, and field
- * composition into a single multiplier — we can't decompose them. So this
+ * composition into a single multiplier. We can't decompose them. So this
  * function describes the physical attributes that plausibly explain the
  * direction of the delta and is honest where physics alone doesn't (a flat
  * course that still runs slow points to weather and field, not terrain).
@@ -475,7 +475,7 @@ function renderCourseFactorsPanel(
  * Rule: only generate commentary when the physical attributes credibly
  * explain the direction we see. If a "tough" course (hilly, mountainous,
  * exposed) reads faster than reference, that's most likely a field-strength
- * signal we have no independent data on — we return empty rather than
+ * signal we have no independent data on. We return empty rather than
  * speculate.
  */
 function legCommentary(
@@ -514,7 +514,7 @@ function legCommentary(
       case 'mountainous':
       case 'hilly':
         // Faster than reference on a hilly course is most likely a field
-        // signal we can't verify — stay quiet rather than speculate.
+        // signal we can't verify. Stay quiet rather than speculate.
         return slow && hasElev ? `${elev.toLocaleString()}m of climbing on the bike.` : '';
       case 'rolling':
         if (slow) return exposed ? `Rolling${elevPhrase} bike with exposed crosswinds.` : `Rolling${elevPhrase} bike profile.`;
@@ -575,7 +575,7 @@ function renderProjectedMarkers(p: TriRacePrediction, state: SimulatorState): st
 
   // Render all four markers when we have data for them, even when projected ≈
   // current (race week, low-headroom athlete, etc.). When the projection
-  // doesn't move, drop the arrow and just show today's value — surfacing all
+  // doesn't move, drop the arrow and just show today's value. Surfacing all
   // four reassures the athlete that every benchmark is being tracked.
   const row = (label: string, body: string) => `
     <div style="display:flex;justify-content:space-between;padding:5px 0">
@@ -634,7 +634,7 @@ function renderProjectedMarkers(p: TriRacePrediction, state: SimulatorState): st
 /**
  * Surface a small chip on the swim leg showing the source/quality of CSS.
  * Only "high"-confidence reads (paired-TT test or recent strong-data derived
- * estimate) get NO chip — everything else carries a hint so the user knows
+ * estimate) get NO chip. Everything else carries a hint so the user knows
  * the swim split rests on incomplete information.
  */
 function swimLowConfidenceFlag(state: SimulatorState): string | undefined {

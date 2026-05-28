@@ -4,7 +4,7 @@
  * Side: tracking. For each calibrated station, computes how much time the
  * athlete could save by closing the gap to the next ability band's seed time.
  *
- * Outputs are forward-looking only — they do NOT auto-revise the current
+ * Outputs are forward-looking only. They do NOT auto-revise the current
  * predicted finish (that stays anchored on actual benchmarks). Surfaced as a
  * "biggest targets" panel in the forecast view.
  *
@@ -13,7 +13,7 @@
  *     Capped at 'competitive' for athletes already in that band.
  *   - Saving = max(0, currentSec - targetSec). Negative means already past target.
  *   - Confidence: low. Real improvement curves are S-shaped (steep early, plateau
- *     later) and depend on training response variance — see SCIENCE_LOG §Q.
+ *     later) and depend on training response variance. See SCIENCE_LOG §Q.
  */
 
 import type { HyroxStation, AbilityBand } from '@/types/triathlon';
@@ -54,7 +54,7 @@ function nextBandUp(band: AbilityBand): AbilityBand {
 
 /**
  * Compute improvement potential per station for the calibrated subset.
- * Seed-only stations are skipped — we only project on benchmarks the user owns.
+ * Seed-only stations are skipped. We only project on benchmarks the user owns.
  */
 export function computeStationPotential(
   athleteBand: AbilityBand,

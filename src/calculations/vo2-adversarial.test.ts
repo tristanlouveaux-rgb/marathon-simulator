@@ -71,7 +71,7 @@ describe('cardiac ceiling — adversarial', () => {
     const gap = (trueCeiling.vo2! - staleCeiling.vo2!) / trueCeiling.vo2!;
     // RHR drift of 30% produces a ~23% under-estimate of cardiac ceiling.
     expect(gap).toBeGreaterThan(0.20);
-    // No mitigation — we trust whatever RHR is in state.
+    // No mitigation. We trust whatever RHR is in state.
   });
 
   it('GUARD: cardiac ceiling clamped at physiologically plausible upper limit', () => {
@@ -90,7 +90,7 @@ describe('cardiac ceiling — adversarial', () => {
     }], 50, NOW);
     expect(r.vo2).not.toBeNull();
     expect(r.confidence).toBe('low');
-    // Value is shown in the card with "Low confidence" label — that's our
+    // Value is shown in the card with "Low confidence" label. That's our
     // safety net. Document this so we don't tighten gating without thinking.
   });
 });
@@ -118,7 +118,7 @@ describe('cycling VO2 — adversarial', () => {
 describe('orchestrator lift logic — adversarial', () => {
   it('GUARD: cycling stays null when user has no FTP (no cardiac-lift inflation)', () => {
     // Pure runner with strong cardiac fitness. They never bike. We must NOT
-    // display a cycling number — earlier versions used cardiac × transfer to
+    // display a cycling number. Earlier versions used cardiac × transfer to
     // populate cycling for someone who doesn't ride; that was a double-count
     // and misleading. Cycling stays null until they have an FTP.
     const acts = Array.from({ length: 8 }).map((_, i) =>
@@ -169,7 +169,7 @@ describe('orchestrator lift logic — adversarial', () => {
     const r = computeVO2Estimates(mkState({ restingHR: undefined, wks: [mkWeek(acts)] }), NOW);
     expect(r.cardiac.value).toBeNull();
     // Without cardiac, no lift. Running depends on hr-calibrated which also needs RHR.
-    // So everything is null — but no crash.
+    // So everything is null. But no crash.
     expect(() => r.headline.value).not.toThrow();
   });
 

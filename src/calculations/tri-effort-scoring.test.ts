@@ -62,13 +62,13 @@ describe('scoreBikeEffort — power adherence', () => {
     const rEdge    = scoreBikeEffort(actual(npEdge),    workout('bike_threshold'), FTP);
     const rInside  = scoreBikeEffort(actual(npInside),  workout('bike_threshold'), FTP);
     const rOutside = scoreBikeEffort(actual(npOutside), workout('bike_threshold'), FTP);
-    // All three should be very close — no 2–3× jump.
+    // All three should be very close. No 2–3× jump.
     expect(Math.abs(rInside.powerAdherence!  - rEdge.powerAdherence!)).toBeLessThan(0.005);
     expect(Math.abs(rOutside.powerAdherence! - rEdge.powerAdherence!)).toBeLessThan(0.005);
   });
 
   it('larger band (endurance ±10%) attenuates more than tighter band (threshold ±5%) for same miss', () => {
-    // Both 4% below their respective targets — endurance is inside its band (attenuated more),
+    // Both 4% below their respective targets. Endurance is inside its band (attenuated more),
     // threshold is also inside its band but the band is tighter so less attenuation.
     const npEndurance  = FTP * 0.65 * 0.96;  // 4% below endurance target IF 0.65
     const npThreshold  = FTP * 0.95 * 0.96;  // 4% below threshold target IF 0.95
@@ -79,7 +79,7 @@ describe('scoreBikeEffort — power adherence', () => {
   });
 
   it('above target — positive deviation is also attenuated within band', () => {
-    // threshold, 3% above target (IF = 0.978) — within ±5% band
+    // threshold, 3% above target (IF = 0.978). Within ±5% band
     const np = FTP * 0.95 * 1.03;
     const r = scoreBikeEffort(actual(np), workout('bike_threshold'), FTP);
     const rawAdherence = np / (FTP * 0.95);

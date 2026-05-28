@@ -1,5 +1,5 @@
 /**
- * Benchmark test cards — pinned to the top of the triathlon plan view.
+ * Benchmark test cards. Pinned to the top of the triathlon plan view.
  *
  * Surfaces "Run the swim CSS test" and "Run the FTP 20-min test" as
  * actionable workouts when the user hasn't entered (or auto-derived) a
@@ -38,7 +38,7 @@ interface PendingTest {
  *   - AND the test isn't in the dismissed set
  *
  * The gold-standard test always wins: a paired m400+m200 (CSS) or a logged
- * twentyMinW (FTP) shorts the prompt regardless of derived confidence — the
+ * twentyMinW (FTP) shorts the prompt regardless of derived confidence. The
  * user already did the test.
  */
 export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
@@ -47,16 +47,16 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
   const dismissed = new Set((tri as any).dismissedTests as string[] ?? []);
   const out: PendingTest[] = [];
 
-  // Swim CSS test — pending when CSS is missing OR confidence is < 'medium'
+  // Swim CSS test. Pending when CSS is missing OR confidence is < 'medium'
   // (i.e. the persisted value is unreliable). Confidence is the canonical
-  // signal: a paired m400+m200 entry — wizard or test card — already promotes
+  // signal: a paired m400+m200 entry. Wizard or test card. Already promotes
   // confidence to 'high', so we don't need a separate PB short-circuit.
   // Conversely, m400/m200 PBs can be stale or wizard-typed without a real
   // test, so they aren't a reliable gold-standard exemption on their own.
   // Undefined confidence = pre-confidence persisted value; the launch-refresh
   // in main.ts writes a real tier on every boot. Treat undefined as 'medium'
   // (don't nag) to avoid surprising existing users.
-  // Cycling-only mode skips swim entirely — no CSS test, no swim leg in
+  // Cycling-only mode skips swim entirely. No CSS test, no swim leg in
   // predictions. Gate the test list on the active disciplines.
   const hasSwim = !isCyclingOnlyMode(s);
 
@@ -93,7 +93,7 @@ export function pendingBenchmarkTests(s: SimulatorState): PendingTest[] {
     });
   }
 
-  // FTP 20-min test — pending unless either:
+  // FTP 20-min test. Pending unless either:
   //   (a) the user has logged a real 20-min test (twentyMinW), or
   //   (b) the activity-history estimator has medium-or-better confidence in the
   //       current FTP value (i.e. a recent power-curve top-1 candidate).

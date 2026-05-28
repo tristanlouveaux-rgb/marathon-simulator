@@ -98,7 +98,7 @@ export function buildPlanSkeleton(state: SimulatorState): Array<Record<string, u
     const isCurrent = weekNum === currentW;
     const marker = isCurrent ? 'current' : isPast ? 'past' : 'future';
 
-    // Triathlon AND HYROX both store sessions in wk.triWorkouts — both should
+    // Triathlon AND HYROX both store sessions in wk.triWorkouts. Both should
     // get the structured per-week skeleton. Running falls through to the
     // simpler (phase + actual TSS) shape below.
     if ((state.eventType === 'triathlon' || state.eventType === 'hyrox') && wk.triWorkouts) {
@@ -121,7 +121,7 @@ export function buildPlanSkeleton(state: SimulatorState): Array<Record<string, u
     }
 
     // Running: only phase + week is reliably available without regenerating.
-    // Actual TSS for past weeks is on wk.actualTSS — useful for the coach.
+    // Actual TSS for past weeks is on wk.actualTSS. Useful for the coach.
     return {
       week: weekNum,
       phase: wk.ph ?? null,
@@ -198,7 +198,7 @@ export function buildRunningCoachContext(state: SimulatorState): object {
 
   // AI modifications applied this week (so the coach sees its own past calls
   // rather than re-proposing the same change). Workout-engine auto-reductions
-  // are filtered out — those aren't ours.
+  // are filtered out. Those aren't ours.
   const aiModifications = (wk?.workoutMods ?? [])
     .filter(m => !!m.aiModifiedAt)
     .map(m => ({
@@ -324,7 +324,7 @@ export function buildTriathlonCoachContext(state: SimulatorState): object {
   const payload = buildCoachSignalsPayload(coach, s);
   const triReadiness = computeTriReadiness(s);
 
-  // This week's tri workouts — include a per-day index so the LLM can pass it
+  // This week's tri workouts. Include a per-day index so the LLM can pass it
   // to tool calls (validateAndBuildPendingChange filters by day then indexes).
   const triDayCounter: Record<string, number> = {};
   const thisWeekWorkouts = (wk?.triWorkouts ?? []).map(w => {

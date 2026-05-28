@@ -4,17 +4,17 @@
  * Uses @capgo/capacitor-health when running as a native iOS app, and falls
  * back to a no-op when running in browser/web mode.
  *
- * npx cap sync ios  — run after `npm install @capgo/capacitor-health`
+ * npx cap sync ios. Run after `npm install @capgo/capacitor-health`
  *
  * Required Info.plist keys:
- *   NSHealthShareUsageDescription  — "Mosaic reads workouts, sleep, heart rate
+ *   NSHealthShareUsageDescription. "Mosaic reads workouts, sleep, heart rate
  *     variability, and resting heart rate from Apple Health to track your
  *     training load and recovery."
- *   NSHealthUpdateUsageDescription — "Not required (read-only)"
+ *   NSHealthUpdateUsageDescription. "Not required (read-only)"
  *
  * Two sync functions:
- *   syncAppleHealth()              — workouts (activities) → GarminActivityRow[]
- *   syncAppleHealthPhysiology()    — sleep, HRV, resting HR, steps → PhysiologyDayEntry[]
+ *   syncAppleHealth(). Workouts (activities) → GarminActivityRow[]
+ *   syncAppleHealthPhysiology(). Sleep, HRV, resting HR, steps → PhysiologyDayEntry[]
  *
  * Both are on-device only (HealthKit is a local store, no server/OAuth needed).
  * This is the key difference from Garmin, which pushes data via webhooks to
@@ -90,20 +90,20 @@ export function isNativeiOS(): boolean {
  *
  * Returns `{ ok: true }` when permissions were granted and at least one
  * physiology sample landed; `{ ok: false, reason }` otherwise. Reasons:
- *   - 'not-ios'           — running on web / Android (caller should hide the button)
- *   - 'permission-denied' — user dismissed the permission dialog or denied all reads
- *   - 'sync-error'        — HealthKit threw or returned no usable data
+ *   - 'not-ios'. Running on web / Android (caller should hide the button)
+ *   - 'permission-denied'. User dismissed the permission dialog or denied all reads
+ *   - 'sync-error'. HealthKit threw or returned no usable data
  */
 export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not-ios' | 'permission-denied' | 'sync-error' }> {
   if (!isNativeiOS()) return { ok: false, reason: 'not-ios' };
   try {
-    // 1) Capgo physiology — populates restingHR, sleep, HRV, steps. Always run
+    // 1) Capgo physiology. Populates restingHR, sleep, HRV, steps. Always run
     //    first (acts as our smoke-test that HealthKit is actually available
     //    and the user granted *some* read access).
     const ok = await syncAppleHealthPhysiology(28);
     if (!ok) return { ok: false, reason: 'permission-denied' };
 
-    // 2) HealthExtras permissions — VO2max, running power, GPS routes, etc.
+    // 2) HealthExtras permissions. VO2max, running power, GPS routes, etc.
     //    iOS prompts a single combined dialog. iOS-version-gated types
     //    (running power = iOS 16+, cycling power = iOS 17+) are silently
     //    dropped on older OS by the Swift plugin's quantityType(for:) switch.
@@ -117,7 +117,7 @@ export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not
 
     const s = getMutableState();
     // Mark Apple Health as authorized on THIS device. It runs as a supplementary
-    // source — launch additively merges Apple physiology with the primary, and
+    // source. Launch additively merges Apple physiology with the primary, and
     // the merge prefers existing (Garmin) values. Only claim the labelled primary
     // physiology source if nothing else already holds it (legacy `wearable` or
     // `connectedSources.physiology`), so connecting Apple never demotes Garmin.
@@ -139,7 +139,7 @@ export async function connectAppleHealth(): Promise<{ ok: boolean; reason?: 'not
 }
 
 /** Permissions to request from the HealthExtras plugin on Apple Health connect.
- *  Includes iOS-17+ types — Swift filters unavailable ones automatically so
+ *  Includes iOS-17+ types. Swift filters unavailable ones automatically so
  *  the prompt only ever lists what the user's OS actually supports. */
 const EXTRAS_READ_TYPES: HealthExtrasPermission[] = [
   'vo2Max',
@@ -163,7 +163,7 @@ const EXTRAS_READ_TYPES: HealthExtrasPermission[] = [
  * week from outdoor GPS runs (HealthKit's `HKQuantityTypeIdentifierVO2Max`).
  *
  * This is the headline benefit of the plugin: an Apple-only user no longer
- * sees "(est.)" next to their fitness number — it matches what they see in
+ * sees "(est.)" next to their fitness number. It matches what they see in
  * the iOS Health app, with the same provenance label as a Garmin reading.
  */
 export async function syncAppleVO2(): Promise<boolean> {
@@ -274,12 +274,12 @@ async function ensureAuthorization(): Promise<typeof import('@capgo/capacitor-he
  * Apple Watch lands in the same `'other'` bucket as a Garmin tennis activity,
  * not as a misclassified walk. Default fallback was previously WALKING; that
  * misclassified every team sport, racket sport, water sport, and yoga
- * session — now `CARDIO`, which the matcher routes to cross-training rather
+ * session. Now `CARDIO`, which the matcher routes to cross-training rather
  * than counting as locomotion.
  */
 function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
   switch (type) {
-    // Endurance — own categories
+    // Endurance. Own categories
     case 'running':                    return 'RUNNING';
     case 'cycling':                    return 'CYCLING';
     case 'swimming':                   return 'SWIMMING';
@@ -295,7 +295,7 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
     case 'crossTraining':              return 'STRENGTH_TRAINING';
     case 'yoga':                       return 'YOGA';
 
-    // Racket + ball sports — match `mapGarminType`'s 'other' bucket
+    // Racket + ball sports. Match `mapGarminType`'s 'other' bucket
     case 'tennis':                     return 'TENNIS';
     case 'basketball':                 return 'BASKETBALL';
     case 'soccer':                     return 'SOCCER';
@@ -303,12 +303,12 @@ function mapWorkoutType(type: WorkoutType): GarminActivityRow['activity_type'] {
     case 'baseball':                   return 'SOFTBALL';
     case 'wrestling':                  return 'MARTIAL_ARTS';
 
-    // Water sports — closest internal mapping
+    // Water sports. Closest internal mapping
     case 'waterFitness':               return 'AEROBIC_TRAINING';
     case 'waterPolo':                  return 'CARDIO';
     case 'waterSports':                return 'PADDLEBOARDING';
 
-    // Catch-all — `CARDIO` routes to cross-training in the matcher rather
+    // Catch-all. `CARDIO` routes to cross-training in the matcher rather
     // than the locomotion-style WALKING (which would skew weekly km).
     case 'other':
     default:                           return 'CARDIO';
@@ -336,13 +336,13 @@ const INCREMENTAL_DAYS = 14;
 const HR_FETCH_CONCURRENCY = 4;
 /** Max samples per heart-rate query. Apple Watch typically samples HR every
  *  2–5s during workouts, so a 3h ride with continuous HR maxes around ~5400
- *  samples. The plugin default is 100 — we explicitly raise it. */
+ *  samples. The plugin default is 100. We explicitly raise it. */
 const HR_SAMPLE_LIMIT = 6000;
 
 /**
  * Sync recent Apple Watch workouts to the plan.
  * Called from main.ts after app launch on iOS.
- * Safe to call on every launch — already-processed workouts are skipped
+ * Safe to call on every launch. Already-processed workouts are skipped
  * by the garminMatched dedup key (keyed as "apple-<stableId>").
  *
  * On first invocation (no `appleHistoryFetched` flag), runs a 16-week backfill
@@ -417,7 +417,7 @@ export async function syncAppleHealth(): Promise<void> {
       });
     }
   } catch (err) {
-    // Non-fatal — app continues without Apple Health sync
+    // Non-fatal. App continues without Apple Health sync
     console.warn('[AppleHealthSync] Sync failed:', err);
   }
 }
@@ -434,7 +434,7 @@ async function fetchRecentWorkouts(daysBack: number): Promise<Workout[]> {
   const { workouts } = await Health.queryWorkouts({
     startDate: since.toISOString(),
     endDate: new Date().toISOString(),
-    // Hard upper bound — 16 weeks of typical hobbyist activity stays well
+    // Hard upper bound. 16 weeks of typical hobbyist activity stays well
     // under 500. Power users training daily across multiple sports may push
     // ~250. We set 1000 as a safety ceiling rather than a realistic target.
     limit: 1000,
@@ -458,13 +458,13 @@ const DEEP_HISTORY_CHUNK_DAYS = 365;
  * in 1-year chunks until either `DEEP_HISTORY_MAX_YEARS` is reached or an
  * empty chunk indicates no older data. Workouts go through
  * `matchAndAutoComplete()` so historic races become matchable to the user's
- * PB list, but HR enrichment is skipped — the athlete-archetype classifier
+ * PB list, but HR enrichment is skipped. The athlete-archetype classifier
  * and CTL baseline already use the 52-week window from `syncAppleHealth()`,
  * and HR enrichment for thousands of old workouts would be expensive without
  * adding signal.
  *
  * Runs once per install. The `appleDeepHistoryFetched` flag prevents re-runs.
- * Fire-and-forget — does not block any other sync path.
+ * Fire-and-forget. Does not block any other sync path.
  *
  * No-op on web/Android.
  */
@@ -491,7 +491,7 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
       });
 
       if (workouts.length === 0) {
-        // No older data — stop walking. User's HealthKit store ends here.
+        // No older data. Stop walking. User's HealthKit store ends here.
         break;
       }
 
@@ -516,12 +516,12 @@ export async function syncAppleHealthDeepHistory(): Promise<void> {
     }
   } catch (err) {
     console.warn('[AppleHealthSync] Deep history pull failed', err);
-    // Do not set the flag — let the next launch retry.
+    // Do not set the flag. Let the next launch retry.
   }
 }
 
 // ---------------------------------------------------------------------------
-// Physiology sync — sleep, HRV, resting HR from HealthKit
+// Physiology sync. Sleep, HRV, resting HR from HealthKit
 // ---------------------------------------------------------------------------
 
 /** Default sleep target when we have no history yet (7 hours). */
@@ -530,7 +530,7 @@ const DEFAULT_SLEEP_TARGET_SEC = 7 * 3600;
 /**
  * SDNN → RMSSD conversion factor for Apple Watch HRV.
  * Apple Watch reports SDNN; our readiness model and rmssdToHrvStatus() expect RMSSD.
- * Source: Shaffer & Ginsberg 2017 — nocturnal short-term recordings.
+ * Source: Shaffer & Ginsberg 2017. Nocturnal short-term recordings.
  * Range in literature: 1.2–1.4. We use 1.28 (study median).
  */
 const SDNN_TO_RMSSD = 1.28;
@@ -540,7 +540,7 @@ const SDNN_TO_RMSSD = 1.28;
  * Populates `s.physiologyHistory` with up to 28 days of PhysiologyDayEntry[],
  * matching the same shape that syncPhysiologySnapshot() produces from Garmin.
  *
- * Safe to call on every launch — reads the local HealthKit store, no network.
+ * Safe to call on every launch. Reads the local HealthKit store, no network.
  * Returns true if state was updated.
  */
 export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
@@ -550,11 +550,11 @@ export async function syncAppleHealthPhysiology(days = 28): Promise<boolean> {
     const Health = await ensureAuthorization();
 
     // Check if sleep permission was actually granted (HealthKit silently
-    // returns empty results when denied — this is the only way to detect it).
+    // returns empty results when denied. This is the only way to detect it).
     const authStatus = await Health.checkAuthorization({ read: ['sleep', 'restingHeartRate', 'heartRateVariability'] });
     if (authStatus.readDenied.length > 0) {
       console.warn('[AppleHealthSync] HealthKit permissions denied for:', authStatus.readDenied);
-      // Continue anyway — we'll get data for whatever types ARE authorized.
+      // Continue anyway. We'll get data for whatever types ARE authorized.
     }
 
     const since = new Date();
@@ -797,7 +797,7 @@ interface HRWorkoutEnrichment {
   averageWatts?: number | null;
   maxWatts?: number | null;
   /** Coggan-formula normalised power (W). Computed from the 1Hz-resampled
-   *  cycling power stream — feeds the FTP estimator's primary path so Apple
+   *  cycling power stream. Feeds the FTP estimator's primary path so Apple
    *  cycling FTP matches Strava's precision. Null on runs / when the ride
    *  has fewer than 60s of usable power data. */
   normalizedPowerW?: number | null;
@@ -862,7 +862,7 @@ function convertToActivityRow(w: Workout, hr?: HRWorkoutEnrichment): GarminActiv
     deviceWatts: (hr?.averageWatts != null && hr.averageWatts > 0) ? true : null,
     repData: hr?.repData ?? null,
   };
-  // best_efforts isn't part of GarminActivityRow's typed surface — it lives on
+  // best_efforts isn't part of GarminActivityRow's typed surface. It lives on
   // the wider `cachedActivities` shape that pbs-from-history reads. We attach
   // it via index assignment so the same row carries the data through to the
   // review-step PB extractor without forcing a type widening on every call site.
@@ -892,7 +892,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
   if (workouts.length === 0) return result;
 
   // Bulk-fetch GPS routes covering the whole window once. HKWorkoutRoute is a
-  // separate series type — querying per-workout would mean N HealthKit reads;
+  // separate series type. Querying per-workout would mean N HealthKit reads;
   // a single date-range read returns all routes in milliseconds. We then
   // match by workout startDate inside the per-workout loop. Returns [] on
   // older OS, missing permission, or web/Android.
@@ -912,14 +912,14 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
   const restingHR = (s.restingHR && s.restingHR > 0) ? s.restingHR : null;
   const userMaxHR = (s.maxHR && s.maxHR > 0) ? s.maxHR : null;
   // Resolve a maxHR for the iTRIMP integration: explicit s.maxHR wins, else
-  // Tanaka 208 - 0.7 × age (Tanaka et al. 2001 — better than 220−age, valid
+  // Tanaka 208 - 0.7 × age (Tanaka et al. 2001. Better than 220−age, valid
   // 18–80y). Apple Watch doesn't expose true maxHR directly, so for an
   // Apple-only user this is the best fallback we have without lab testing.
   // null when neither is available → iTRIMP stays null, healMissingITrimp
   // recovers later.
   const age = s.onboarding?.age;
   const resolvedMaxHR = resolveMaxHR(userMaxHR, age);
-  // `s.lt` is a pace in sec/km, NOT lactate-threshold HR — calculateZones
+  // `s.lt` is a pace in sec/km, NOT lactate-threshold HR. CalculateZones
   // wants LTHR (bpm), so we don't pass it here. Maxhr/restinghr-Karvonen is
   // the realistic best path; age fallback inside calculateZones covers the
   // remaining cold-start case.
@@ -937,7 +937,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
         // HR stream + power samples in parallel. Power is only meaningful for
         // run/ride; we still always query so the chunk's await time is bounded
         // by HR (the slow query). HealthKit returns empty arrays for
-        // unavailable types — same as a permission denial — and we treat both
+        // unavailable types. Same as a permission denial. And we treat both
         // identically.
         const sport = mapWorkoutType(w.workoutType);
         const isRun = sport === 'RUNNING';
@@ -968,7 +968,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
                 ascending: true,
               })
             : Promise.resolve([]),
-          // Speed stream — the fallback source for per-km splits when no GPS
+          // Speed stream. The fallback source for per-km splits when no GPS
           // route bridged. Garmin Connect → Apple Health drops the route but may
           // still write runningSpeed / cyclingSpeed samples; integrating those
           // gives splits without GPS. Empty array on non-run/ride or when the
@@ -994,7 +994,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
 
         const samples = hrRes.samples ?? [];
         if (samples.length < 2) {
-          // No HR — still attach route + power if we have either, so the
+          // No HR. Still attach route + power if we have either, so the
           // activity surfaces an enriched view despite missing iTRIMP.
           const enrichment = buildEnrichmentWithoutHR(w, routes, powerSamples, speedSamples, isRun, isRide);
           if (enrichment) result.set(key, enrichment);
@@ -1007,7 +1007,7 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
         const enriched = decorateWithRouteAndPower(base, w, routes, samples, powerSamples, speedSamples, isRun, isRide);
         result.set(key, enriched);
       } catch (err) {
-        // Per-workout failure is non-fatal — leave row un-enriched and continue.
+        // Per-workout failure is non-fatal. Leave row un-enriched and continue.
         console.warn(`[AppleHealthSync] HR enrichment failed for workout ${key}:`, err);
       }
     }));
@@ -1015,15 +1015,15 @@ async function enrichWorkoutsWithHR(workouts: Workout[]): Promise<Map<string, HR
 
   // Observed-maxHR refinement. Apple Watch doesn't expose a true maxHR field,
   // but a user's HR during their hardest interval session lands within 1–2 bpm
-  // of their lab-measured max — far closer than Tanaka's population formula
+  // of their lab-measured max. Far closer than Tanaka's population formula
   // (208 − 0.7×age can be off by 10–15 bpm individually). After 16 weeks of
   // workouts we have enough hard sessions for an observed peak to be a better
   // estimate than the Tanaka fallback.
   //
   // Gating:
-  //   1. ≥ 3 workouts with peak ≥ 150 bpm — single-workout glitch (cold-start
+  //   1. ≥ 3 workouts with peak ≥ 150 bpm. Single-workout glitch (cold-start
   //      sensor jumps) won't move the value; need a pattern of hard efforts.
-  //   2. Observed > current s.maxHR (or s.maxHR null) — never write a lower
+  //   2. Observed > current s.maxHR (or s.maxHR null). Never write a lower
   //      value, since maxHR can only be observed-or-greater than what's stored.
   // Mirrors the CLAUDE.md "Manually-set Benchmarks Yield to Improvements" rule.
   const workoutPeaks = [...result.values()].map(e => e.maxHR).filter(p => p >= 150);
@@ -1059,7 +1059,7 @@ function computeHREnrichment(
 ): HRWorkoutEnrichment | null {
   // Map HealthKit samples to the (hrValues, timeOffsets) arrays the shared
   // helper expects, then delegate. Same [30,240] bpm artefact gate, same
-  // >300s pause-gap exclusion, same avg/max/iTRIMP/zone math — keeping the
+  // >300s pause-gap exclusion, same avg/max/iTRIMP/zone math. Keeping the
   // Apple, FIT-import, and future Garmin parser paths on one canonical
   // computation (CLAUDE.md: two numbers that mean the same thing share a source).
   const startMs = new Date(workoutStartISO).getTime();
@@ -1070,7 +1070,7 @@ function computeHREnrichment(
 
 /**
  * Splice route (polyline + km splits + best-efforts) and power samples onto
- * an HR-derived enrichment. Pure data-shape function — no HealthKit calls.
+ * an HR-derived enrichment. Pure data-shape function. No HealthKit calls.
  */
 function decorateWithRouteAndPower(
   base: HRWorkoutEnrichment,
@@ -1104,14 +1104,14 @@ function decorateWithRouteAndPower(
 
   const powerStats = computePowerStats(powerSamples);
   // Compute NP + powerCurve only for rides (running power doesn't follow
-  // the same energy-systems model — Coggan's NP formula is calibrated for
+  // the same energy-systems model. Coggan's NP formula is calibrated for
   // cycling). The FTP estimator only consumes powerCurve from cycling rides.
   const powerCurveData = isRide
     ? computeNPAndPowerCurve(powerSamples)
     : { normalizedPowerW: null, powerCurve: null };
 
   // Stream-based rep detection. Closes the rep-detection gap that previously
-  // applied only to Strava users — Apple's GPS trace (for runs) or per-second
+  // applied only to Strava users. Apple's GPS trace (for runs) or per-second
   // power stream (for rides) feeds the same detector that the Strava /laps
   // path falls through to. Returns null when the activity doesn't look like
   // an interval session, when the stream is too short, or when nothing
@@ -1124,7 +1124,7 @@ function decorateWithRouteAndPower(
     const det = detectBikeRepsFromPowerSamples(powerSamples, hrSamples);
     if (det) repData = detectionToRepData(det);
   }
-  // HR-only fallback — fires when GPS (run) / power (ride) detection didn't
+  // HR-only fallback. Fires when GPS (run) / power (ride) detection didn't
   // produce a usable rep cluster. Catches treadmill long-interval sessions
   // and trainer rides without a power meter. Short-rep sessions (< 90s reps)
   // still fall through to no-rep-data; that's a hardware limitation of the
@@ -1183,7 +1183,7 @@ function buildEnrichmentWithoutHR(
   }
   if ((!kmSplits || kmSplits.length === 0) && speedSplits.length > 0) kmSplits = speedSplits;
 
-  // Rep detection is still possible without HR — pace-stream for runs and
+  // Rep detection is still possible without HR. Pace-stream for runs and
   // power-stream for rides are the primary signals. HR overlay just decorates
   // the per-rep avgHR field.
   let repData: ActivityRepData | null = null;
@@ -1199,7 +1199,7 @@ function buildEnrichmentWithoutHR(
     ? computeNPAndPowerCurve(powerSamples)
     : { normalizedPowerW: null, powerCurve: null };
 
-  // We need to satisfy HRWorkoutEnrichment's required avg/max — emit zeros
+  // We need to satisfy HRWorkoutEnrichment's required avg/max. Emit zeros
   // so the matcher still reads the row, and downstream HR-required logic
   // (zone scoring, iTRIMP) skips it because hr is 0.
   return {
@@ -1363,7 +1363,7 @@ function detectionToRepData(det: DetectionResult): ActivityRepData {
 }
 
 /** Haversine distance between two points (m). Mirrors the helper in
- *  `appleHealthRoute.ts` — duplicated here to keep `decorateWithRouteAndPower`
+ *  `appleHealthRoute.ts`. Duplicated here to keep `decorateWithRouteAndPower`
  *  self-contained without forcing an export. */
 function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -1386,7 +1386,7 @@ function haversineMetres(lat1: number, lng1: number, lat2: number, lng2: number)
 
 /**
  * Aggregate the 16-week backfill into per-week totals and write the same
- * state fields that `fetchStravaHistory` (in stravaSync.ts) sets — so the
+ * state fields that `fetchStravaHistory` (in stravaSync.ts) sets. So the
  * plan engine, athlete tier, ACWR baseline, and weekly km detection all
  * work for an Apple-only user without any Strava data.
  *
@@ -1408,7 +1408,7 @@ function aggregateAppleHistory(rows: GarminActivityRow[]): void {
 /**
  * Aggregate a set of activity rows into weekly baselines (extended 52w +
  * canonical last-8), CTL / Signal-B baselines, detectedWeeklyKm, athlete tier,
- * archetype, and PB auto-fill. Source-agnostic — used by BOTH the Apple Health
+ * archetype, and PB auto-fill. Source-agnostic. Used by BOTH the Apple Health
  * sync and the file-import pipeline (fitImport.ts) so the two stay in parity
  * instead of duplicating the math. Pure data processing, no native calls, so it
  * is safe to run on web. The `source` only gates which post-aggregation flags
@@ -1483,7 +1483,7 @@ export function aggregateHistoryFromRows(
       : nonzero[mid];
   }
 
-  // Average weekly running km (last 4 weeks) — used to seed plan starting volume.
+  // Average weekly running km (last 4 weeks). Used to seed plan starting volume.
   const recentKm = s.historicWeeklyKm.slice(-4);
   s.detectedWeeklyKm = recentKm.length > 0
     ? Math.round(recentKm.reduce((a, b) => a + b, 0) / recentKm.length * 10) / 10
@@ -1494,7 +1494,7 @@ export function aggregateHistoryFromRows(
     ftpWatts: s.onboarding?.triBike?.ftp,
   });
 
-  // Athlete archetype — re-classify whenever history is freshly aggregated.
+  // Athlete archetype. Re-classify whenever history is freshly aggregated.
   s.athleteArchetype = detectArchetype(s);
   console.log(`[AppleHealthHistory] archetype=${s.athleteArchetype.archetype} (${s.athleteArchetype.confidence}) — currentWk=${s.athleteArchetype.evidence.currentWeeklyKm}km peak52=${s.athleteArchetype.evidence.peakWeeklyKmPast52}km longest=${s.athleteArchetype.evidence.longestRunPast12moKm}km`);
 
@@ -1502,7 +1502,7 @@ export function aggregateHistoryFromRows(
     s.appleHistoryFetched = true;
     s.appleHistoryLastRefreshedAt = new Date().toISOString();
   } else if (opts.source === 'import' && s.detectedWeeklyKm != null) {
-    // Explicitly importing your own history is acceptance — let the derived
+    // Explicitly importing your own history is acceptance. Let the derived
     // weekly volume seed the plan's starting volume (D3 gate in initialization.ts).
     s.weeklyVolumeConfirmed = true;
   }
@@ -1512,14 +1512,14 @@ export function aggregateHistoryFromRows(
   // fastest 5K / 10K / Half / Marathon segments inside that workout's GPS
   // trace. We aggregate across all rows and pick the fastest per distance,
   // then merge into `s.pbs` and `s.onboarding.pbs` with the fastest-wins rule
-  // — same shape Strava's `best_efforts` flow produces. This is the
+  //. Same shape Strava's `best_efforts` flow produces. This is the
   // mechanism that lets an Apple-only user reach the review step with their
   // PBs auto-populated, mirroring the Strava onboarding experience.
   applyPBsFromRows(rows);
 
   console.log(`[AppleHealthHistory] 16w aggregated — CTL=${s.ctlBaseline}, signalB=${s.signalBBaseline}, weeklyKm=${s.detectedWeeklyKm}, tier=${s.athleteTier}`);
 
-  // Heal pass — if any rows synced before restingHR/maxHR were known, this
+  // Heal pass. If any rows synced before restingHR/maxHR were known, this
   // populates iTrimp from avgHR + duration after aggregation completes (so
   // the next weekly refresh picks up the full signal).
   healMissingITrimp();
@@ -1562,7 +1562,7 @@ export function applyPBsFromRows(rows: GarminActivityRow[]): void {
   if (fastest.k5 == null && fastest.k10 == null && fastest.h == null && fastest.m == null) return;
 
   const s = getMutableState();
-  // Top-level PBs — fastest-wins merge.
+  // Top-level PBs. Fastest-wins merge.
   const next = { ...(s.pbs ?? {}) } as Record<string, number>;
   if (fastest.k5 != null && (next.k5 == null || fastest.k5 < next.k5)) next.k5 = fastest.k5;
   if (fastest.k10 != null && (next.k10 == null || fastest.k10 < next.k10)) next.k10 = fastest.k10;
@@ -1593,7 +1593,7 @@ function buildAppleWeekTotals(rows: GarminActivityRow[]): {
   for (const row of rows) {
     const sportKey = mapActivityTypeToSportKey(row.activity_type);
     const cfg = (SPORTS_DB as Record<string, { runSpec?: number }>)[sportKey];
-    const runSpec = cfg?.runSpec ?? 0.40; // fallback for unknown sports — same default the rest of the app uses
+    const runSpec = cfg?.runSpec ?? 0.40; // fallback for unknown sports. Same default the rest of the app uses
     const isRun = sportKey === 'running';
 
     const durationMin = row.duration_sec / 60;
@@ -1658,7 +1658,7 @@ function mondayOfISO(d: Date): string {
 }
 
 // ---------------------------------------------------------------------------
-// Background workout delivery — HealthKit observer
+// Background workout delivery. HealthKit observer
 // ---------------------------------------------------------------------------
 
 /** Debounce window. Apple Watch sometimes fires the observer 2 to 3 times in
@@ -1677,7 +1677,7 @@ let observerDebounceTimer: ReturnType<typeof setTimeout> | null = null;
  * debounces 5s and runs the incremental sync, which matches the workout
  * against the plan via `matchAndAutoComplete()`.
  *
- * Idempotent — subsequent calls return the existing handle without
+ * Idempotent. Subsequent calls return the existing handle without
  * re-subscribing. No-op on web/Android.
  *
  * Must be called *after* `syncAppleHealth()` has run at least once (so the

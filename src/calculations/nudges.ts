@@ -1,8 +1,8 @@
 /**
- * Smart Nudging & Honesty Engine — Durability Matrix
+ * Smart Nudging & Honesty Engine. Durability Matrix
  *
  * 4-Case system based on HM-equivalent gap + structural durability.
- * Philosophy: "Honesty over Hype" — never predict a time the user's legs can't support.
+ * Philosophy: "Honesty over Hype". Never predict a time the user's legs can't support.
  */
 
 import type { RaceDistance } from '@/types';
@@ -74,7 +74,7 @@ function isDurable(snapshot: NudgeSnapshot): boolean {
  *
  * Case A (Green):  Gap ≤3% AND durable     → Realistic this cycle
  * Case B (Amber):  Gap ≤3% AND !durable    → Fitness is there, durability will decide
- * Case C (Yellow): Gap 3-5%                 → Exploratory — this block will clarify
+ * Case C (Yellow): Gap 3-5%                 → Exploratory. This block will clarify
  * Case D (Red):    Gap >5%                  → Focus on next milestone (hidden)
  */
 export function decideMilestone(snapshot: NudgeSnapshot): NudgeDecision {
@@ -114,7 +114,7 @@ export function decideMilestone(snapshot: NudgeSnapshot): NudgeDecision {
     };
   }
 
-  // Case D: Far (>5%) — widget will be hidden by the UI
+  // Case D: Far (>5%). Widget will be hidden by the UI
   return {
     scenario: 'none',
     headline: `Building towards ${snapshot.milestoneLabel}`,

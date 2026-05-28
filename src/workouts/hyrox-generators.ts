@@ -2,11 +2,11 @@
  * HYROX session generators.
  *
  * Produces Workout objects for each HYROX session kind:
- *   - run_easy / run_tempo / run_intervals  — standalone run sessions
- *   - station_technique                     — 3 × circuit, technique focus, RPE 5
- *   - station_density                       — 2-station AMRAP, RPE 7
- *   - brick                                 — N rounds: 1km run + station
- *   - mini_brick                            — N rounds: 500m run + erg (beginners)
+ *   - run_easy / run_tempo / run_intervals. Standalone run sessions
+ *   - station_technique. 3 × circuit, technique focus, RPE 5
+ *   - station_density. 2-station AMRAP, RPE 7
+ *   - brick. N rounds: 1km run + station
+ *   - mini_brick. N rounds: 500m run + erg (beginners)
  *
  * All generators return a Workout with:
  *   - `estimatedDurationMin` set from targetMinutes
@@ -125,7 +125,7 @@ function fmtPace(secPerKm: number): string {
 
 /**
  * Easy run pace from race pace (seed × 1.2).
- * Race pace is already fatigued race pace from HyroxDataLab — 20% slower is a
+ * Race pace is already fatigued race pace from HyroxDataLab. 20% slower is a
  * physiologically reasonable easy training pace (Maffetone; Seiler 2010).
  */
 function easyTrainingPaceSecKm(band: AbilityBand): number {
@@ -220,7 +220,7 @@ function generateStationTechnique(p: {
 }): Workout {
   // 3 stations × 3 rounds at 65% of seed time (technique pace), 1:1 work:rest.
   let stations = pickStations(p.stationAccess, p.phase, p.slotIndex, 3);
-  // Beginners: remove eccentric-heavy stations entirely — quad DOMS from burpees/lunges
+  // Beginners: remove eccentric-heavy stations entirely. Quad DOMS from burpees/lunges
   // on Week 1 kills adherence. Introduce progressively from build phase.
   if ((p.band === 'total_beginner' || p.band === 'beginner') && p.phase === 'base') {
     const safe = stations.filter(s => !ECCENTRIC_HEAVY_STATIONS.includes(s));
@@ -255,7 +255,7 @@ function generateStationTechnique(p: {
   // it has space; cramming three station names into the headline reads as noise.
   const sessionName = 'Station Circuit';
 
-  // Add a 20-min easy run at the end — race-specific transition practice
+  // Add a 20-min easy run at the end. Race-specific transition practice
   const runFinishMin = Math.min(20, Math.round(p.dur * 0.4));
   const easyPace = SEED_RUN_PACE_SEC_KM[p.band] * 1.2;
   const runKm = Math.round((runFinishMin * 60) / easyPace * 10) / 10;
@@ -474,7 +474,7 @@ export interface AssessmentParams {
 }
 
 /**
- * Week 1 HYROX Assessment — one easy pass through all accessible stations.
+ * Week 1 HYROX Assessment. One easy pass through all accessible stations.
  * RPE 4 throughout. Purpose is to record split times, not to train hard.
  * Low MTL by design.
  */

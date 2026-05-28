@@ -1,5 +1,5 @@
 /**
- * eval-helpers.ts — utility surface for the coach eval harness.
+ * eval-helpers.ts. Utility surface for the coach eval harness.
  *
  * Each scenario is a TypeScript object that describes a coachContext, the user
  * message to send, and a bundle of expectations. `runScenario` calls Anthropic
@@ -19,7 +19,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { COACH_TOOLS } from '../coach-tools';
-// NOTE: tests the CLIENT copy of buildSystemPrompt — the canonical (server)
+// NOTE: tests the CLIENT copy of buildSystemPrompt. The canonical (server)
 // copy lives in `supabase/functions/coach-chat/index.ts:buildSystemPromptServer`.
 // The two must be kept in sync manually. If the eval suite passes but
 // production fails, check that the server file's prompt template matches.
@@ -236,7 +236,7 @@ export function assertResponse(resp: AnthropicResponse, expect: ScenarioExpect):
     }
   }
 
-  // Must include ANY of (OR logic — useful for "cited at least one number from context")
+  // Must include ANY of (OR logic. Useful for "cited at least one number from context")
   if (expect.mustIncludeAnyOf) {
     const lower = resp.text.toLowerCase();
     const matched = expect.mustIncludeAnyOf.find(s => lower.includes(s.toLowerCase()));

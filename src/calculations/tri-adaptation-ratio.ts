@@ -1,5 +1,5 @@
 /**
- * Per-discipline adaptation ratio — how fast the athlete is actually responding
+ * Per-discipline adaptation ratio. How fast the athlete is actually responding
  * to training, vs the population-average gain the horizon adjuster predicts.
  *
  * Five signals:
@@ -47,7 +47,7 @@ export interface TriAdaptationRatios {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Signal 1 — HRV trend
+// Signal 1. HRV trend
 // ───────────────────────────────────────────────────────────────────────────
 
 function hrvAdjustment(state: SimulatorState): number | null {
@@ -65,7 +65,7 @@ function hrvAdjustment(state: SimulatorState): number | null {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Signal 2 — RPE vs expected (per discipline)
+// Signal 2. RPE vs expected (per discipline)
 // ───────────────────────────────────────────────────────────────────────────
 
 function rpeAdjustment(state: SimulatorState, discipline: Discipline): number | null {
@@ -100,7 +100,7 @@ function rpeAdjustment(state: SimulatorState, discipline: Discipline): number | 
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Signal 3 — HR-at-power (bike only)
+// Signal 3. HR-at-power (bike only)
 // ───────────────────────────────────────────────────────────────────────────
 
 function hrAtPowerAdjustment(state: SimulatorState): number | null {
@@ -141,7 +141,7 @@ function hrAtPowerAdjustment(state: SimulatorState): number | null {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Signal 4 — Pa:Hr decoupling (bike + run)
+// Signal 4. Pa:Hr decoupling (bike + run)
 // ───────────────────────────────────────────────────────────────────────────
 
 /** Friel EF (efficiency-factor) decoupling for a single run, from parallel
@@ -190,10 +190,10 @@ function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): numb
       if (classifyActivity(actual.activityType) !== discipline) continue;
       if (actual.durationSec < 45 * 60) continue;
 
-      // Prefer true Pa:Hr from per-km pace + HR splits (runs only — Strava
+      // Prefer true Pa:Hr from per-km pace + HR splits (runs only. Strava
       // splits_metric / HR stream populate kmHRSplits in the ingest path).
       // Fall back to hrDrift (HR-only first/second half) when per-km HR is
-      // not available — bike actuals and pre-ingest-upgrade runs.
+      // not available. Bike actuals and pre-ingest-upgrade runs.
       const efDecoup = discipline === 'run'
         ? efDecouplingPct(actual.kmSplits, actual.kmHRSplits)
         : null;
@@ -214,7 +214,7 @@ function pahrAdjustment(state: SimulatorState, discipline: 'bike' | 'run'): numb
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Signal 5 — CSS pace SD (swim only)
+// Signal 5. CSS pace SD (swim only)
 // ───────────────────────────────────────────────────────────────────────────
 
 function cssSdAdjustment(state: SimulatorState): number | null {

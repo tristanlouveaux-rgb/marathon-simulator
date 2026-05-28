@@ -1,11 +1,11 @@
 /**
- * Record tab view — standalone GPS recording interface.
+ * Record tab view. Standalone GPS recording interface.
  *
  * Three live UIs:
- *   Simple   — single-pace run (easy/long/freerun): time + progress bar + pace stats
- *   Phased   — WU + main set + CD, no recovery gaps (tempo, progressive):
+ *   Simple. Single-pace run (easy/long/freerun): time + progress bar + pace stats
+ *   Phased. WU + main set + CD, no recovery gaps (tempo, progressive):
  *              segmented phase bar + current phase block + stats
- *   Interval — has recovery (null-pace) segments: full scrollable segment list + current block + stats
+ *   Interval. Has recovery (null-pace) segments: full scrollable segment list + current block + stats
  */
 
 import type { GpsLiveData, SplitScheme } from '@/types';
@@ -75,7 +75,7 @@ function fmtMeters(m: number, pref: UnitPref = 'km'): string {
 // ---------------------------------------------------------------------------
 
 /**
- * True if any segment has null targetPace (recovery) — interval-style workout.
+ * True if any segment has null targetPace (recovery). Interval-style workout.
  * These use the full scrollable segment list UI.
  */
 function hasRecoverySegments(scheme: SplitScheme): boolean {
@@ -83,7 +83,7 @@ function hasRecoverySegments(scheme: SplitScheme): boolean {
 }
 
 /**
- * True if the scheme has more than one distinct non-null pace — phased workout
+ * True if the scheme has more than one distinct non-null pace. Phased workout
  * (WU + tempo + CD, progressive, etc.). No recovery gaps.
  * These use the segmented phase bar UI.
  */
@@ -150,7 +150,7 @@ function recHeader(workoutName: string | null, right?: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Simple UI — single-pace run
+// Simple UI. Single-pace run
 // ---------------------------------------------------------------------------
 
 function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
@@ -195,7 +195,17 @@ function buildSimpleUI(data: GpsLiveData, workoutName: string | null): string {
           <p class="text-xs mt-1" style="color:var(--c-muted)">avg ${paceUnit(unitPref)}</p>
         </div>
       </div>
+      <div id="rec-last-lap" style="font-size:12px;color:var(--c-muted);font-variant-numeric:tabular-nums;margin-bottom:10px;min-height:16px;opacity:${data.completedSplits.length > 0 ? '1' : '0'}">
+        ${(() => {
+          const last = data.completedSplits[data.completedSplits.length - 1];
+          if (!last) return '';
+          const min = Math.floor(last.elapsed / 60);
+          const sec = Math.round(last.elapsed % 60);
+          return `${last.label}: ${min}:${String(sec).padStart(2, '0')} · ${Math.round(last.distance)}m`;
+        })()}
+      </div>
       <div class="flex gap-3">
+        ${!scheme ? `<button onclick="gpsLap()" class="m-btn-glass">Lap</button>` : ''}
         <button onclick="gpsPause()" class="m-btn-glass">${isTrackingPaused() ? 'Resume' : 'Pause'}</button>
         <button onclick="gpsStop()" class="px-6 py-3 rounded-xl font-medium" style="background:#EF4444;color:white">Stop</button>
       </div>
@@ -226,7 +236,7 @@ function patchSimpleStats(data: GpsLiveData): void {
 }
 
 // ---------------------------------------------------------------------------
-// Phased UI — WU + main set + CD (no recovery gaps)
+// Phased UI. WU + main set + CD (no recovery gaps)
 // ---------------------------------------------------------------------------
 
 /** Short label for phase bar: strip common words to keep it compact */
@@ -343,7 +353,7 @@ function patchPhasedStats(data: GpsLiveData): void {
     phaseFillEl.style.width = `${Math.min(100, (distInSeg / currentSeg.distance) * 100)}%`;
   }
 
-  // Phase completed — full re-render to update bar colours and current block
+  // Phase completed. Full re-render to update bar colours and current block
   if (currentIdx !== lastCompletedIdx) {
     lastCompletedIdx = currentIdx;
     renderRecordView();
@@ -351,7 +361,7 @@ function patchPhasedStats(data: GpsLiveData): void {
 }
 
 // ---------------------------------------------------------------------------
-// Interval UI — rep + recovery workout
+// Interval UI. Rep + recovery workout
 // ---------------------------------------------------------------------------
 
 /** Format seconds as a compact time string for countdowns: "1:23" or "45s" */
@@ -424,7 +434,7 @@ function buildIntervalUI(data: GpsLiveData, workoutName: string | null): string 
   const segElapsed = data.currentSplit?.elapsed ?? 0;
   const distInSeg = data.currentSplit?.distance ?? 0;
 
-  // Remaining value — time (s) for recovery, distance (m) for work reps
+  // Remaining value. Time (s) for recovery, distance (m) for work reps
   const remainingRaw = isRecovery
     ? Math.max(0, currentSeg!.durationSeconds! - segElapsed)
     : currentSeg ? Math.max(0, currentSeg.distance - distInSeg) : 0;

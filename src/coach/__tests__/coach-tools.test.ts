@@ -1,5 +1,5 @@
 /**
- * Unit tests for coach-tools — validation, apply, undo, and the HYROX fix.
+ * Unit tests for coach-tools. Validation, apply, undo, and the HYROX fix.
  * Network-free; runs as part of the default `npm test`.
  *
  * Tests use the live state store (singleton) seeded via setState/getDefaultState
@@ -154,7 +154,7 @@ describe('validateAndBuildPendingChange — memory tools', () => {
   });
 });
 
-// ─── applyPendingChange — triathlon path ─────────────────────────────────────
+// ─── applyPendingChange. Triathlon path ─────────────────────────────────────
 
 describe('applyPendingChange — triathlon reduce_workout', () => {
   it('scales description + sets aiModifiedAt + reduces aerobic/anaerobic', () => {
@@ -231,7 +231,7 @@ describe('applyPendingChange — triathlon skip_workout', () => {
   });
 });
 
-// ─── applyPendingChange — HYROX path (regression for the P0 bug) ─────────────
+// ─── applyPendingChange. HYROX path (regression for the P0 bug) ─────────────
 
 describe('applyPendingChange — HYROX mutates triWorkouts (P0 regression)', () => {
   it('writes to wk.triWorkouts when eventType is hyrox', () => {
@@ -251,7 +251,7 @@ describe('applyPendingChange — HYROX mutates triWorkouts (P0 regression)', () 
   });
 });
 
-// ─── applyPendingChange — running path ───────────────────────────────────────
+// ─── applyPendingChange. Running path ───────────────────────────────────────
 
 describe('applyPendingChange — running pushes a workoutMod', () => {
   it('appends a WorkoutMod via name resolution when the engine produces a tempo run', () => {
@@ -289,7 +289,7 @@ describe('applyPendingChange — running pushes a workoutMod', () => {
   });
 });
 
-// ─── applyPendingChange — memory operations ──────────────────────────────────
+// ─── applyPendingChange. Memory operations ──────────────────────────────────
 
 describe('applyPendingChange — remember / forget', () => {
   it('appends a fact to coachMemory', () => {
