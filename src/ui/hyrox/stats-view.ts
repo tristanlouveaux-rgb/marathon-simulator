@@ -237,7 +237,7 @@ export function renderHyroxStatsView(): void {
                 <div style="font-size:12px;color:var(--c-muted);line-height:1.5">
                   Threshold ${fmtPaceLocal(thresholdSec)}/km × <span style="font-weight:600;color:#0F172A">${cpRatio.toFixed(2)}</span> (CP-ratio at your VDOT) = ${fmtPaceLocal(cpSec)}/km critical pace.${isDoubles ? ` Doubles factor ${formatFactor.toFixed(2)} → ${fmtPaceLocal(Math.round(cpSec * formatFactor))}.` : ''} ${personalOffset !== 0 ? `Personal offset ${personalOffset > 0 ? '+' : ''}${personalOffset}s/km → final.` : ''}
                 </div>
-                <div style="font-size:10px;color:var(--c-faint);padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);margin-top:10px">${offsetLabel} · tap for the science</div>
+                <div style="font-size:10px;color:var(--c-faint);padding-top:10px;border-top:1px solid rgba(0,0,0,0.05);margin-top:10px">${offsetLabel} · tap for the trend and science</div>
               </div>
             </div>
           `;
@@ -277,9 +277,9 @@ export function renderHyroxStatsView(): void {
     import('../mtl-load-view').then(({ renderMtlLoadView }) => renderMtlLoadView(() => renderHyroxStatsView()));
   });
 
-  // CP card tap → modal explainer covering the derivation chain + science.
+  // CP card tap → full drill-down page (critical pace over time + the science).
   document.getElementById('hx-stats-cp-card')?.addEventListener('click', () => {
-    openCriticalPaceExplainer();
+    import('./critical-pace-detail-view').then(({ renderHyroxCriticalPaceDetail }) => renderHyroxCriticalPaceDetail());
   });
 
   // Pro weights toggle. Flips hyroxConfig.benchmarksAtProWeights and re-renders.
@@ -409,41 +409,3 @@ function daysUntil(isoDate: string): number {
   return Math.max(0, Math.round((target - now) / 86400000));
 }
 
-/** Modal explainer for the Critical Pace card. Spells out the derivation
- *  chain (VDOT → threshold → CP → format → personalisation → HYROX pace)
- *  and the scientific anchor. Per UX_PATTERNS overlays must be vertically
- *  centered (`items-center justify-center`).
- */
-function openCriticalPaceExplainer(): void {
-  const overlay = document.createElement('div');
-  overlay.style.cssText =
-    'position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,0.45);' +
-    'display:flex;align-items:center;justify-content:center;padding:20px;' +
-    'backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
-  overlay.innerHTML = `
-    <div style="background:#fff;border-radius:18px;max-width:480px;width:100%;max-height:80vh;overflow-y:auto;padding:24px;box-shadow:0 24px 60px rgba(0,0,0,0.3);position:relative">
-      <button id="hx-cp-modal-close" style="position:absolute;top:14px;right:14px;width:28px;height:28px;border-radius:14px;border:none;background:rgba(0,0,0,0.05);font-size:14px;cursor:pointer;line-height:1;color:var(--c-muted)">×</button>
-      <div style="font-size:18px;font-weight:600;color:#0F172A;margin-bottom:14px;letter-spacing:-0.01em">How your HYROX pace is computed</div>
-      <div style="font-size:13px;color:var(--c-black);line-height:1.6;margin-bottom:14px">
-        Step by step, from physiology to prediction:
-      </div>
-      <ol style="font-size:13px;color:var(--c-black);line-height:1.6;padding-left:20px;margin:0 0 16px">
-        <li style="margin-bottom:8px"><strong>Threshold pace</strong> from your VDOT and lactate threshold (LT pace). The pace you can hold for 60 min straight.</li>
-        <li style="margin-bottom:8px"><strong>CP ratio</strong> at your VDOT. Continuously interpolated. No more discrete band buckets. Trained athletes can pace HYROX at or faster than threshold because stations are recovery between 1km legs.</li>
-        <li style="margin-bottom:8px"><strong>Critical Pace</strong> = threshold × CP ratio. This is your sustainable HYROX run pace for the singles format.</li>
-        <li style="margin-bottom:8px"><strong>Format factor</strong> adjusts for doubles (partner-rest reduces leg fatigue) or stays at 1.0 for singles.</li>
-        <li style="margin-bottom:8px"><strong>Personal offset</strong> applies a residual from your logged HYROX races. Decays linearly to zero over 12 months without fresh evidence.</li>
-      </ol>
-      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;padding-top:14px;border-top:1px solid rgba(0,0,0,0.06)">
-        <strong>The science.</strong> Critical Pace is the asymptote of the velocity-time relationship (Hill 1923; Monod &amp; Scherrer 1965; Jones et al. 2010). For trained runners CP sits between 5k pace and threshold pace, and aligns with maximum lactate steady state within ~3–5% (Galbraith et al. 2014). HYROX's interval structure (8 × 1km separated by ~3–7 min of station work) matches CP-zone physiology better than continuous threshold.
-      </div>
-      <div style="font-size:12px;color:var(--c-muted);line-height:1.5;padding-top:10px">
-        <strong>Why the prediction gets more accurate over time.</strong> When you log a HYROX race the model compares observed run pace to its prediction at that race's format, blends the residual into a personal offset, and uses that to bias all future predictions. The more races logged, the tighter the fit.
-      </div>
-    </div>
-  `;
-  document.body.appendChild(overlay);
-  const close = () => overlay.remove();
-  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
-  overlay.querySelector('#hx-cp-modal-close')?.addEventListener('click', close);
-}

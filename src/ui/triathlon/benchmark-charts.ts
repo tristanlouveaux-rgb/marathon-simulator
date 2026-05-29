@@ -130,6 +130,27 @@ export function buildLtTrendChart(samples: BenchmarkSample[]): string {
   return inner;
 }
 
+/** Critical-pace wrapper. Pace-formats the headline and delta (sec/km, lower
+ *  is better), violet accent to distinguish it from LT (teal) and VDOT (green). */
+export function buildCpTrendChart(samples: BenchmarkSample[]): string {
+  if (samples.length < 2) {
+    return chartEmptyState(55, 'Fills as your VDOT updates', samples.length === 0 ? 'No samples yet' : '1 sample so far, needs 2+');
+  }
+  const sorted = [...samples].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  const latest = sorted[sorted.length - 1].value;
+  const first = sorted[0].value;
+  const delta = latest - first;
+  const better = delta < 0;
+  const deltaCol = Math.abs(delta) < 0.5 ? 'var(--c-muted)' : (better ? '#5a8050' : '#c06a50');
+  const sign = delta >= 0 ? '+' : '';
+  const inner = buildBenchmarkTrendChart(samples, '#8B5CF6', 'rgba(139,92,246,0.10)', '/km', /*inverted*/ true)
+    .replace(/<span style="font-size:14px;font-weight:600[^>]*>[^<]*(?:<span[^>]*>[^<]*<\/span>)?<\/span>/,
+      `<span style="font-size:14px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">${fmtLtPace(latest)}<span style="font-size:11px;color:var(--c-muted);font-weight:400;margin-left:2px">/km</span></span>`)
+    .replace(/<span style="font-size:11px;color:[^"]+;font-variant-numeric:tabular-nums">[^<]*<\/span>/,
+      `<span style="font-size:11px;color:${deltaCol};font-variant-numeric:tabular-nums">${sign}${delta.toFixed(1)}s since first sample</span>`);
+  return inner;
+}
+
 export function smoothAreaPath(pts: [number, number][]): string {
   if (pts.length === 0) return '';
   if (pts.length === 1) return `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
