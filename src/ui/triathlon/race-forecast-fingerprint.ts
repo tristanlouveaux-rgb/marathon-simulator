@@ -44,7 +44,19 @@ interface TriChip {
   detail: string;
   present: boolean;
   addCta?: string;
+  /** Subtle dashboard-style headline tint. 'good' = muted moss, 'warn' = muted
+   * clay. Only set when the headline carries a genuinely good/bad signal —
+   * absence of data is NOT warn (it's already faded via !present). Two muted
+   * non-neutrals only, text-only, no surface changes. */
+  tone?: 'good' | 'warn';
 }
+
+// Muted dashboard tints. Soft enough not to fight the glass; saturated enough
+// to read as a status at a glance. Black stays the default for everything else.
+const TONE_COLOR: Record<NonNullable<TriChip['tone']>, string> = {
+  good: '#4F7A4F',  // muted moss
+  warn: '#A66F3E',  // muted clay
+};
 
 // ── Chip builders. One per math factor ──────────────────────────────────────
 
@@ -134,12 +146,16 @@ function buildAdaptation(_s: SimulatorState, p: TriRacePrediction | null): TriCh
   const headline = overallAvg >= 1.05 ? 'Ahead'
     : overallAvg <= 0.95 ? 'Behind'
     : 'On track';
+  const tone: TriChip['tone'] = headline === 'Ahead' ? 'good'
+    : headline === 'Behind' ? 'warn'
+    : undefined;
 
   return {
     key: 'adaptation', label: 'Adaptation',
     headline,
     detail: `${populatedCount} of 5 signals`,
     present: true,
+    tone,
   };
 }
 
@@ -164,11 +180,17 @@ function buildEndurance(_s: SimulatorState, p: TriRacePrediction | null): TriChi
   }
   const overall = Math.round(r.overallScore);
   const detail = `S ${Math.round(r.swim.score)} · B ${Math.round(r.bike.score)} · R ${Math.round(r.run.score)}`;
+  // Score thresholds match the existing readiness-label bands so the tint
+  // tracks the qualitative label without re-deriving it.
+  const tone: TriChip['tone'] = overall >= 75 ? 'good'
+    : overall < 55 ? 'warn'
+    : undefined;
   return {
     key: 'endurance', label: 'Endurance',
     headline: `${overall} · ${r.overallLabel}`,
     detail,
     present: true,
+    tone,
   };
 }
 
@@ -188,6 +210,9 @@ function buildDurability(s: SimulatorState, p: TriRacePrediction | null): TriChi
     : bikePct >= 100 && runPct >= 100 ? 'Met'
     : 'Building';
   const detail = `Bike ${Math.round(bikePct)}% · Run ${Math.round(runPct)}%`;
+  const tone: TriChip['tone'] = headline === 'Met' ? 'good'
+    : headline === 'Capped' ? 'warn'
+    : undefined;
 
   return {
     key: 'durability', label: 'Durability',
@@ -195,6 +220,7 @@ function buildDurability(s: SimulatorState, p: TriRacePrediction | null): TriChi
     detail,
     present: bikePct > 0 || runPct > 0,
     addCta: bikePct === 0 && runPct === 0 ? 'Log a long session' : undefined,
+    tone,
   };
 }
 
@@ -227,6 +253,10 @@ function buildBricks(s: SimulatorState): TriChip {
     : count <= 10 ? 'Adapting'
     : 'Adapted';
   const detail = count > 0 ? `${count} bricks logged` : 'Reduces run fade';
+  // Only 'Adapted' earns the good tint. 'Building' / 'Adapting' / 'No bricks'
+  // are honest in-progress states; leaving them neutral keeps the chip from
+  // celebrating partial work.
+  const tone: TriChip['tone'] = headline === 'Adapted' ? 'good' : undefined;
 
   return {
     key: 'bricks', label: 'Bricks',
@@ -234,6 +264,7 @@ function buildBricks(s: SimulatorState): TriChip {
     detail,
     present: count > 0,
     addCta: count === 0 ? 'Log a brick' : undefined,
+    tone,
   };
 }
 
@@ -266,12 +297,14 @@ function buildOpenWater(s: SimulatorState): TriChip {
     : count <= 6 ? 'Adapting'
     : 'Race-ready';
   const detail = count > 0 ? `${count} swims · ${swimTypeLabel}` : swimTypeLabel;
+  const tone: TriChip['tone'] = headline === 'Race-ready' ? 'good' : undefined;
 
   return {
     key: 'openwater', label: 'Open water',
     headline,
     detail,
     present: count > 0,
+    tone,
     addCta: count === 0 ? 'Log an OW swim' : undefined,
   };
 }
@@ -458,7 +491,7 @@ export function renderTriForecastFingerprint(
     ">
       <div style="position:absolute;top:8px;right:8px;pointer-events:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       <div style="font-size:9px;color:var(--c-muted);font-weight:500;line-height:1;margin-bottom:6px">${escapeText(c.label)}</div>
-      <div style="font-size:12px;color:${c.present ? 'var(--c-black)' : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${escapeText(c.headline)}</div>
+      <div style="font-size:12px;color:${c.present ? (c.tone ? TONE_COLOR[c.tone] : 'var(--c-black)') : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${escapeText(c.headline)}</div>
       ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px">${escapeText(c.detail)}</div>` : ''}
       ${!c.present && c.addCta ? `<div style="font-size:8px;color:var(--c-faint);margin-top:5px;line-height:1.15;font-style:italic">${escapeText(c.addCta)}</div>` : ''}
     </div>
