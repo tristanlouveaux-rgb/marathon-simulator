@@ -303,7 +303,7 @@ function buildVO2SubRows(s: SimulatorState): string {
 // Build "Your Numbers" card
 // ────────────────────────────────────────────────────────────────────────────
 
-export function buildYourNumbersCard(s: SimulatorState): string {
+export function buildYourNumbersCard(s: SimulatorState, opts?: { vo2Only?: boolean }): string {
   const tri = s.triConfig!;
   const isFemale = s.biologicalSex === 'female';
   const adaptation = tri.prediction?.adaptation;
@@ -375,12 +375,16 @@ export function buildYourNumbersCard(s: SimulatorState): string {
     </div>` : '';
 
   const cycling = isCyclingOnlyMode(s);
+  // vo2Only mode: Stats main uses this so the CSS/FTP/LT bars don't duplicate
+  // the per-benchmark drill-down tiles. VO2max stays because it's cross-sport
+  // and carries the Mosaic/Watch/Manual source toggle that's useful at a glance.
+  const headerLabel = opts?.vo2Only ? 'VO2max' : 'Your Numbers';
   return `
     <div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:14px">Your Numbers</div>
-      ${cycling ? '' : cssBar}
-      ${ftpBar}
-      ${cycling ? '' : ltBar}
+      <div style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.1em;color:var(--c-faint);margin-bottom:14px">${headerLabel}</div>
+      ${opts?.vo2Only || cycling ? '' : cssBar}
+      ${opts?.vo2Only ? '' : ftpBar}
+      ${opts?.vo2Only || cycling ? '' : ltBar}
       ${vo2Bar ? `${vo2Bar}${vo2SrcToggle}${buildVO2SubRows(s)}` : ''}
     </div>`;
 }

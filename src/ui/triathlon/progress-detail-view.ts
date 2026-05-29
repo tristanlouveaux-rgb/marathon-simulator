@@ -837,6 +837,22 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
     ${buildStatListCard(s, unitPref, range)}
     ${buildPhaseTimeline(s)}
 
+    <!-- Charts order (top to bottom): Total TSS first, then per-discipline
+         TSS, then Fitness/CTL, then weekly volume per discipline. -->
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Total weekly load (TSS)</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Sum across${cycling ? ' bike' : ' swim, bike, and run'} · iTRIMP-derived</div>
+      ${buildTotalTSSChart(series)}
+    </div>
+
+    <div class="m-card" style="padding:16px;margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Weekly load (TSS) by discipline</div>
+      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
+      ${legendRow(cycling)}
+      ${buildPerDisciplineTSSChart(series, cycling)}
+    </div>
+
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Fitness by discipline (CTL)</div>
       <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">42-day rolling load · daily-equivalent units</div>
@@ -867,19 +883,6 @@ export function buildProgressContent(s: SimulatorState, range: ProgressRange): s
       </div>
       ${buildDisciplineKmChart(series, 'run', unitPref)}
     </div>`}
-
-    <div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Weekly load (TSS) by discipline</div>
-      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Real physiological load per session · iTRIMP-derived</div>
-      ${legendRow(cycling)}
-      ${buildPerDisciplineTSSChart(series, cycling)}
-    </div>
-
-    <div class="m-card" style="padding:16px;margin-bottom:10px">
-      <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Total weekly load (TSS)</div>
-      <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Sum across${cycling ? ' bike' : ' swim, bike, and run'} · iTRIMP-derived</div>
-      ${buildTotalTSSChart(series)}
-    </div>
   `;
 }
 
