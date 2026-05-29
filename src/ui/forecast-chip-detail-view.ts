@@ -1132,6 +1132,17 @@ function pageShoes(s: SimulatorState): { title: string; subhead: string; body: s
     ? 'Race-day prediction credits carbon-plated racing flats. Adjust the assumed time if you switch back.'
     : 'Switch to supershoes if you plan to race in carbon-plated flats (Vaporfly, Alphafly, Adios Pro, Endorphin Elite, etc.).';
 
+  // Live forecast readout so the user sees the time change as they toggle.
+  const forecastSec = s.forecastTimeAdjusted ?? s.forecastTime ?? 0;
+  const forecastRow = forecastSec > 0 ? `
+    <div style="padding:10px 0;border-top:1px solid rgba(0,0,0,0.06);margin-top:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:12px;color:${TEXT_S}">Your forecast</span>
+        <span style="font-size:14px;color:${TEXT_M};font-weight:600;font-variant-numeric:tabular-nums">${ft(forecastSec)}</span>
+      </div>
+    </div>
+  ` : '';
+
   const toggleCard = `
     <div style="${CARD};margin-bottom:14px">
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
@@ -1143,6 +1154,7 @@ function pageShoes(s: SimulatorState): { title: string; subhead: string; body: s
         <button id="fcd-shoes-standard" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${!isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${!isCarbon ? TEXT_M : 'transparent'};color:${!isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Standard</button>
         <button id="fcd-shoes-supershoes" type="button" style="flex:1;padding:11px;border-radius:100px;border:1px solid ${isCarbon ? TEXT_M : 'rgba(0,0,0,0.10)'};background:${isCarbon ? TEXT_M : 'transparent'};color:${isCarbon ? '#fff' : TEXT_M};font:inherit;font-size:13px;font-weight:600;cursor:pointer;font-family:var(--f)">Supershoes</button>
       </div>
+      ${forecastRow}
     </div>
   `;
 
@@ -1393,13 +1405,18 @@ export function renderForecastChipDetail(key: ChipKey): void {
   });
 
   // Shoes toggle. Writes shoeKind to state, refreshes blended fitness so the
-  // forecast time picks up the new 3% adjustment, then re-renders this page.
+  // raw forecast time picks up the 3% adjustment, then re-runs the course-
+  // factors pass so forecastTimeAdjusted (the field the hero card actually
+  // reads) reflects the new value. Re-renders this page on completion.
   const setShoeKind = async (kind: 'standard' | 'supershoes') => {
     const { getMutableState, saveState } = await import('@/state');
-    getMutableState().shoeKind = kind;
+    const ms = getMutableState();
+    ms.shoeKind = kind;
     saveState();
     const { refreshBlendedFitness } = await import('@/calculations/blended-fitness');
-    refreshBlendedFitness(getMutableState());
+    refreshBlendedFitness(ms);
+    const { refreshForecastCourseFactors } = await import('@/calculations/course-factors-running');
+    refreshForecastCourseFactors(ms);
     saveState();
     renderForecastChipDetail('shoes');
   };
