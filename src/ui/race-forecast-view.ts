@@ -302,12 +302,9 @@ function getRaceForecastHTML(s: SimulatorState): string {
   }
 
   const chart = buildForecastChart(nowSec, goalSec, history, projection, totalWeeks);
-  const courseFactorsPanel = buildCourseFactorsPanel(
-    courseFactors,
-    s.selectedMarathon?.name,
-    rawForecastSec,
-    forecastSec,
-  );
+  // Course factors panel removed from the main forecast view — the Venue chip
+  // in the fingerprint already drills into a dedicated page with the same
+  // factor breakdown. Keeping it here was a duplicate surface.
 
   // CTA conditions: race mode, forecast ≥ +20 min slower than goal, not in taper, epw < 7
   const inTaper = (s.wks ?? [])[currentWeek - 1]?.ph === 'taper';
@@ -368,8 +365,6 @@ function getRaceForecastHTML(s: SimulatorState): string {
         ${renderForecastFingerprint(s)}
 
         ${renderMarathonPopulationCard(s)}
-
-        ${courseFactorsPanel}
 
         ${renderRunConeCard(s)}
 
