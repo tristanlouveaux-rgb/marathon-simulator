@@ -46,6 +46,7 @@ import { altitudeRunMultiplier } from '@/constants/triathlon-course-factors';
 import { yearsOfTrainingToExperienceLevel } from '@/constants/triathlon-horizon-params';
 import { applyHyroxStationHorizon, applyHyroxRoxzoneHorizon } from './training-horizon.hyrox';
 import { plannedHyroxSessionsPerWeek } from './hyrox-volume';
+import { stationInjuryBuildWeeks } from './hyrox-injury';
 
 /** Stations whose performance is metabolically taxed by heat / altitude. */
 const ENDURANCE_STATIONS: HyroxStation[] = [
@@ -511,8 +512,13 @@ function buildStationProjection(
   };
 
   const stationProjections: HyroxStationProjection[] = stationLines.map(line => {
+    // Injury debit: a station only banks build time for the weeks its loaded
+    // region(s) can train. Blocked region → 0 build weeks → no projected gain.
+    // Unchanged when there is no active injury (returns full weeksRemaining).
+    const stationWeeks = stationInjuryBuildWeeks(state.injuryState, line.station, weeksRemaining);
     const result = applyHyroxStationHorizon(line.station, {
       ...horizonInput,
+      weeks_remaining: stationWeeks,
       baseline: line.baseSec,
     });
     return {

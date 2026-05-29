@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   summariseHyroxSession,
+  summariseHyroxRuns,
   applyHyroxSessionBenchmarks,
   isRacePaceHyroxSession,
 } from './hyrox-session-benchmarks';
@@ -78,6 +79,35 @@ describe('summariseHyroxSession', () => {
     const wb = r.find(x => x.station === 'wall_balls')!;
     expect(wb.eligible).toBe(false);
     expect(wb.isImprovement).toBe(false);
+  });
+});
+
+describe('summariseHyroxRuns', () => {
+  const RUN: HyroxComponent = { type: 'run', distanceM: 1000, mtl: 0 };
+
+  it('returns one leg per run record, in round order, with pace per km', () => {
+    // Brick: 2 rounds of [run, wall_balls]. Run is exerciseIndex 0.
+    const w = workout('hyrox_brick', [RUN, WB]);
+    const records = [
+      rec(0, 250, 0), rec(1, 400, 0),   // round 1: run 250s, station 400s
+      rec(0, 270, 1), rec(1, 410, 1),   // round 2: run 270s (fade), station 410s
+    ];
+    const legs = summariseHyroxRuns(w, records);
+    expect(legs).toHaveLength(2);
+    expect(legs[0]).toMatchObject({ round: 1, durationSec: 250, distanceM: 1000, paceSecKm: 250 });
+    expect(legs[1]).toMatchObject({ round: 2, durationSec: 270, paceSecKm: 270 });
+  });
+
+  it('computes pace from distance for sub-km legs (mini brick 500m)', () => {
+    const run500: HyroxComponent = { type: 'run', distanceM: 500, mtl: 0 };
+    const w = workout('hyrox_mini_brick', [run500, WB]);
+    const legs = summariseHyroxRuns(w, [rec(0, 130, 0), rec(1, 300, 0)]);
+    expect(legs[0]).toMatchObject({ distanceM: 500, durationSec: 130, paceSecKm: 260 }); // 130s / 0.5km
+  });
+
+  it('is empty for station-only sessions', () => {
+    const w = workout('hyrox_station_density', [WB, ROW]);
+    expect(summariseHyroxRuns(w, densityRecords([300, 280], [250, 240]))).toEqual([]);
   });
 });
 

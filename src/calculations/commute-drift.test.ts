@@ -2,11 +2,15 @@ import { describe, it, expect } from 'vitest';
 import { detectCommuteDrift } from './commute-drift';
 import type { Week, GarminActual, CommuteConfig } from '@/types';
 
-function makeWeek(w: number, commuteCount: number): Week {
+// `commuteDays` distinct commute days, one dated actual each (day i+1 of the
+// week). The detector counts distinct calendar dates, so one actual per day.
+function makeWeek(w: number, commuteDays: number): Week {
   const actuals: Record<string, GarminActual> = {};
-  for (let i = 0; i < commuteCount; i++) {
+  for (let i = 0; i < commuteDays; i++) {
+    const date = `2026-01-${String(i + 1).padStart(2, '0')}`;
     actuals[`commute-${w}-${i}`] = {
       garminId: `commute-${w}-${i}`,
+      startTime: `${date}T08:00:00.000Z`,
       distanceKm: 5,
       durationSec: 1800,
       avgPaceSecKm: 360,
@@ -102,6 +106,40 @@ describe('detectCommuteDrift', () => {
     ];
     const result = detectCommuteDrift(weeks, 5, declared(3));
     expect(result).not.toBeNull();
+    expect(result!.newDays).toBe(1);
+  });
+
+  it('counts two same-day commute trips as one day (bidirectional)', () => {
+    // A bidirectional commuter runs morning + evening on the same date. Both
+    // are tagged commute and share a calendar date. The detector must count
+    // that as ONE day, not two, or a two-way commuter never trips the drift.
+    function makeBidirWeek(w: number, days: number): Week {
+      const actuals: Record<string, GarminActual> = {};
+      for (let d = 0; d < days; d++) {
+        const date = `2026-02-${String(d + 1).padStart(2, '0')}`;
+        for (const leg of ['morning', 'evening']) {
+          actuals[`c-${w}-${d}-${leg}`] = {
+            garminId: `c-${w}-${d}-${leg}`,
+            startTime: `${date}T${leg === 'morning' ? '08' : '17'}:00:00.000Z`,
+            distanceKm: 5, durationSec: 1800, avgPaceSecKm: 360,
+            avgHR: null, maxHR: null, calories: null, commute: true,
+          };
+        }
+      }
+      return {
+        w, ph: 'build', rated: {}, skip: [], cross: [], wkGain: 0,
+        workoutMods: [], adjustments: [], unspentLoad: 0, extraRunLoad: 0,
+        garminActuals: actuals,
+      } as Week;
+    }
+    // Declared 3 days. Each week the user runs both ways on 1 day = 2 trips, 1 day.
+    // Observed days = [1,1,1,1] → 4 shortfalls, median 1 → reduce to 1.
+    const weeks = [
+      makeBidirWeek(1, 1), makeBidirWeek(2, 1), makeBidirWeek(3, 1), makeBidirWeek(4, 1), makeBidirWeek(5, 0),
+    ];
+    const result = detectCommuteDrift(weeks, 5, declared(3));
+    expect(result).not.toBeNull();
+    expect(result!.observed).toEqual([1, 1, 1, 1]);
     expect(result!.newDays).toBe(1);
   });
 

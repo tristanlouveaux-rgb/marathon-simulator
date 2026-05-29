@@ -71,7 +71,8 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
          .pre  = bordered, no fill: pre-upload state, signals "you can go, but with less data"
          .post = dark fill: after an upload or HealthKit connect, signals "ready to go" */
       .cd-continue { width:100%; max-width:300px; height:48px; border-radius:24px; font-size:14px; font-weight:500; cursor:pointer; transition: transform 0.12s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease; display:flex; align-items:center; justify-content:center; gap:6px; }
-      .cd-continue.pre { background:transparent; color:var(--c-black); border:1px solid var(--c-border-strong); }
+      .cd-continue.pre { background:transparent; color:var(--c-muted); border:none; box-shadow:none; text-decoration:underline; font-weight:500; }
+      .cd-continue.pre:hover { color:var(--c-black); }
       .cd-continue.post { background:var(--c-black); color:#FFFFFF; border:none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 1px 2px rgba(0,0,0,0.20), 0 9px 22px -8px rgba(0,0,0,0.30); }
       .cd-continue:active { transform: translateY(1px); }
 
@@ -146,7 +147,7 @@ export function renderConnectData(container: HTMLElement, state: OnboardingState
               </svg>
             </div>
             <div class="cd-watch-text">
-              <p class="cd-watch-label">Garmin, Coros, Polar, or other</p>
+              <p class="cd-watch-label">Garmin or other</p>
               <p class="cd-watch-sub">Garmin doesn't yet let us pull this automatically. Upload an export and we'll pull in your runs and heart rate.</p>
             </div>
             <div class="cd-watch-chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></div>

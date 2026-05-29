@@ -38,6 +38,7 @@ import {
 } from '@/constants/hyrox-constants';
 import { applyTrainingHorizonAdjustment } from './training-horizon';
 import { bandFromVdot } from './hyrox-staleness';
+import { injuryAdjustedBuildWeeks } from './injury-recovery';
 
 export interface HyroxProjectionFactor {
   /** Display name. */
@@ -215,10 +216,14 @@ export function buildHyroxProjection(state: SimulatorState, prediction: HyroxPre
   if (weeksRemaining > 0 && state.v > 0) {
     const runVdotBand = toRunAbilityBand(bandFromVdot(state.v) ?? band);
     runSessions = (hx.runsPerWeek ?? 0) + 0.5 * (hx.bricksPerWeek ?? 0);
+    // Injury debit: the run portion only banks build time for the weeks the
+    // athlete can run. A blocked run → 0 build weeks → no projected run gain.
+    // Unchanged when there is no active injury (returns full weeksRemaining).
+    const runBuildWeeks = injuryAdjustedBuildWeeks(state.injuryState, 'run', weeksRemaining);
     const runHorizon = applyTrainingHorizonAdjustment({
       baseline_vdot: state.v,
       target_distance: '10k',
-      weeks_remaining: weeksRemaining,
+      weeks_remaining: runBuildWeeks,
       sessions_per_week: runSessions,
       runner_type: state.typ ?? 'Balanced',
       ability_band: runVdotBand,

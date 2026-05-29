@@ -1,5 +1,5 @@
 /**
- * HYROX forecast view. Sums calibrated station benchmarks + run pace and
+ * HYROX forecast view — sums calibrated station benchmarks + run pace and
  * applies venue-specific course factors. Mirrors the pattern of the triathlon
  * race-forecast card.
  */
@@ -22,6 +22,8 @@ import { computeStationPotential } from '@/calculations/hyrox-station-potential'
 import { renderPerformanceRadar } from './performance-radar';
 import { renderPercentileDistributions } from './percentile-distributions';
 import { applyHyroxPrevFormatChange } from '@/state/hyrox-prev-format-fix';
+import { isInjuryActive } from '@/ui/injury/modal';
+import { getDisciplineCapacity } from '@/injury/engine';
 
 function fmtMmSs(sec: number): string {
   if (!Number.isFinite(sec) || sec <= 0) return '—';
@@ -71,7 +73,7 @@ function daysUntil(isoDate: string): number {
  * "Last race" retro card. Renders above the body when the most recent
  * HyroxRaceLogEntry has a `targetTotalSec` and the actual beat it by ≥60s.
  * Mirrors the tri pattern in `triathlon/forecast-view.ts:42`. HYROX has no
- * cached prediction. The "target" slot is what we compare against.
+ * cached prediction — the "target" slot is what we compare against.
  */
 function renderHyroxRaceOutcomeRetroCard(s: SimulatorState): string {
   const log = s.hyroxConfig?.raceLog;
@@ -134,24 +136,31 @@ function renderRunLegsTable(legs: HyroxRunLeg[], currentRunSec: number, projecte
  * stations and the run-discipline ratio for legs.
  *
  * Percentile chips are intentionally absent. Benchmark times are max-effort
- * fresh; the population dataset captures mid-race fatigued splits. The
+ * fresh; the population dataset captures mid-race fatigued splits — the
  * comparison would be apples-to-oranges. Race-day percentile lives on the
  * headline finish-time card where the comparison is valid.
  *
  * Doubles still uses the legacy split layout because the athlete only does 4
  * of 8 stations, breaking the simple alternation.
+ *
+ * `mode` controls row ordering:
+ *  - 'race' → R1 → Station 1 → R2 → Station 2 → … (the real-race sequence)
+ *  - 'station' → Station 1 … Station 8 → R1 … R8 (all stations first, runs
+ *    after). Cumulative race-time values stay anchored to real race order,
+ *    so a station row's "total time" still reflects when it happens in the
+ *    race, not where it appears in this list.
  */
 function renderRaceOrderTable(
   prediction: HyroxPrediction,
   projectedRunSec: number | undefined,
   state: SimulatorState,
+  mode: 'race' | 'station' = 'race',
 ): string {
   const fmt = (state.hyroxConfig?.format ?? 'open_singles') as HyroxFormat;
   const legs = prediction.runLegs;
   const stations = prediction.stations;
-  const stationProjections = prediction.projection?.stations ?? [];
   const stationProjByName = new Map<string, HyroxStationProjection>(
-    stationProjections.map(p => [p.station, p]),
+    (prediction.projection?.stations ?? []).map(p => [p.station, p]),
   );
 
   const runRatio = projectedRunSec && prediction.runSec > 0 ? projectedRunSec / prediction.runSec : 1;
@@ -160,15 +169,53 @@ function renderRaceOrderTable(
   const fastestLegPace = Math.min(...legs.map(l => l.paceSecKm));
   const maxLegSlip = Math.max(...legs.map(l => l.paceSecKm - fastestLegPace));
 
+  // Cumulative race-time at the end of each event (run or station), built once
+  // in real-race order. We absorb the gap between summed-displayed-times and
+  // `prediction.totalSec` (course-venue adjustment + RoxZone transitions) as a
+  // uniform per-event overhead, so the last cumulative value lines up with the
+  // headline projected finish. Caption explains it under the card.
+  const sumDisplayed =
+    legs.reduce((s, l) => s + l.paceSecKm, 0) +
+    stations.reduce((s, st) => s + st.baseSec, 0);
+  const overhead = prediction.totalSec - sumDisplayed;
+  const perEventOverhead = overhead / (legs.length + stations.length);
+  const cumByKey = new Map<string, number>();
+  let cumSec = 0;
+  for (let i = 0; i < legs.length; i++) {
+    cumSec += legs[i].paceSecKm + perEventOverhead;
+    cumByKey.set(`run-${i}`, Math.round(cumSec));
+    if (i < stations.length) {
+      cumSec += stations[i].baseSec + perEventOverhead;
+      cumByKey.set(`station-${i}`, Math.round(cumSec));
+    }
+  }
+
   const rows: string[] = [];
   let rowIndex = 0;
 
-  for (let i = 0; i < legs.length; i++) {
-    rows.push(renderRunLegRow(legs[i], runRatio, showRunProjection, fastestLegPace, maxLegSlip, rowIndex++));
-    if (i < stations.length) {
+  if (mode === 'race') {
+    // Race order = pacing clock. Compact rows, no projection arrows, cumulative
+    // "Total time" on the right so the user reads the card top-to-bottom as a
+    // timeline of where they should be on the clock.
+    for (let i = 0; i < legs.length; i++) {
+      rows.push(renderRunLegRow(legs[i], runRatio, false, fastestLegPace, maxLegSlip, rowIndex++, cumByKey.get(`run-${i}`) ?? 0, 'race-order'));
+      if (i < stations.length) {
+        const line = stations[i];
+        const proj = stationProjByName.get(line.station);
+        rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'race-order'));
+      }
+    }
+  } else {
+    // Station order = where you'll gain. Per-row "now → race day" projection
+    // with the gain delta on the right. No cumulative — order is no longer the
+    // race sequence, so a running clock would mislead.
+    for (let i = 0; i < stations.length; i++) {
       const line = stations[i];
       const proj = stationProjByName.get(line.station);
-      rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++));
+      rows.push(renderStationOrderRow(line, proj, state, fmt, rowIndex++, cumByKey.get(`station-${i}`) ?? 0, 'station-order'));
+    }
+    for (let i = 0; i < legs.length; i++) {
+      rows.push(renderRunLegRow(legs[i], runRatio, showRunProjection, fastestLegPace, maxLegSlip, rowIndex++, cumByKey.get(`run-${i}`) ?? 0, 'station-order'));
     }
   }
 
@@ -182,6 +229,8 @@ function renderRunLegRow(
   fastestLegPace: number,
   maxLegSlip: number,
   rowIndex: number,
+  cumulativeSec: number,
+  variant: 'race-order' | 'station-order',
 ): string {
   const projectedPace = Math.round(leg.paceSecKm * ratio);
   const slipSec = leg.paceSecKm - fastestLegPace;
@@ -191,20 +240,42 @@ function renderRunLegRow(
   const projDelta = leg.paceSecKm - projectedPace;
   const showRowProjection = showProjection && projDelta >= 1;
 
-  const paceCell = showRowProjection
+  // Race-order variant: shared grid layout so split and total numbers line up
+  // in fixed columns regardless of row type (run R# label vs. station name).
+  // Bar is rendered inline with the R# label so col2 (the time-column area)
+  // stays a flex spacer that never pushes the number columns.
+  if (variant === 'race-order') {
+    return `
+      <div style="display:grid;grid-template-columns:auto 1fr 72px 60px;align-items:center;gap:12px;padding:9px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:12px">
+        <span style="display:flex;align-items:center;gap:10px;min-width:0">
+          <span style="width:24px;color:var(--c-faint);font-weight:600;font-size:11px">R${leg.legNumber}</span>
+          <div style="width:120px;max-width:30vw;height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden">
+            <div style="height:100%;width:${Math.max(2, barPct)}%;background:${barColour};border-radius:2px"></div>
+          </div>
+        </span>
+        <span></span>
+        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtPace(leg.paceSecKm)}</span>
+        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+      </div>
+    `;
+  }
+
+  // Station-order variant: now → race day with race-day gain delta only. No
+  // cumulative (ordering isn't race sequence), no in-race fatigue bar (that
+  // signal belongs in Race order). Delta meaning is unified across this whole
+  // view: every row's delta = race-day projected gain.
+  const paceCell = showProjection
     ? `${fmtPace(leg.paceSecKm).replace('/km', '')} → ${fmtPace(projectedPace)}`
     : fmtPace(leg.paceSecKm);
-  const deltaCell = showRowProjection
+  const deltaCell = showProjection && projDelta >= 1
     ? `−${Math.round(projDelta)}s`
-    : (slipSec > 0 ? `+${Math.round(slipSec)}s` : '—');
+    : '—';
 
   return `
-    <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:12px">
-      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:0.05em">R${leg.legNumber}</span>
-      <div style="flex:1;height:3px;background:#F1F5F9;border-radius:2px;overflow:hidden">
-        <div style="height:100%;width:${Math.max(2, barPct)}%;background:${barColour};border-radius:2px"></div>
-      </div>
-      <span style="min-width:${showRowProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:12px">${paceCell}</span>
+    <div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'};font-size:13px">
+      <span style="width:36px;text-align:left;color:var(--c-faint);font-weight:600;flex-shrink:0;font-size:11px">R${leg.legNumber}</span>
+      <span style="flex:1"></span>
+      <span style="min-width:${showProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:12px">${paceCell}</span>
       <span style="min-width:40px;text-align:right;color:var(--c-faint);font-variant-numeric:tabular-nums;font-size:11px">${deltaCell}</span>
       <span style="width:14px;flex-shrink:0"></span>
     </div>
@@ -217,13 +288,14 @@ function renderStationOrderRow(
   state: SimulatorState,
   fmt: HyroxFormat,
   rowIndex: number,
+  cumulativeSec: number,
+  variant: 'race-order' | 'station-order',
 ): string {
   const display = STATION_DISPLAY[line.station];
   const sourceTag = line.source === 'calibrated' ? 'Your time' : 'Estimated';
 
-  // Show "current → projected" when the horizon model produces a meaningful
-  // gain (≥ 1s). Anchor `currentSec` to baseSec (test-pace), not adjustedSec
-  // (post-venue), so today's number matches the BENCHMARKS card.
+  // currentSec anchored to baseSec (test-pace), not adjustedSec (post-venue),
+  // so today's number matches the BENCHMARKS card.
   const currentSec = Math.round(line.baseSec);
   const projectedSec = proj ? proj.projectedSec : currentSec;
   const projDelta = currentSec - projectedSec;
@@ -235,13 +307,35 @@ function renderStationOrderRow(
     ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.16);border-radius:6px;padding:2px 7px;flex-shrink:0">PR</span>`
     : '';
 
-  // Test-age caption only when stale (≥ 4 mo). Matches the BENCHMARKS card
+  // Test-age caption only when stale (≥ 4 mo) — matches the BENCHMARKS card
   // convention.
   const ageMo = line.source === 'calibrated' ? latestTestAgeMonths(state, line.station) : null;
   const ageCaption = (ageMo != null && ageMo >= 4)
     ? `<span style="font-size:10px;color:var(--c-faint)">Tested ${Math.round(ageMo)} mo ago</span>`
     : '';
 
+  // Race-order variant: shared grid layout so split and total columns line up
+  // with the run rows above and below. No projection arrow, no click-through —
+  // drill-down lives on Station order.
+  if (variant === 'race-order') {
+    return `
+      <div style="display:grid;grid-template-columns:auto 1fr 72px 60px;align-items:center;gap:12px;padding:11px 0;font-size:13px;border-top:${rowIndex === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)'}">
+        <span style="display:flex;flex-direction:column;gap:3px;min-width:0">
+          <span style="color:var(--c-black)">${display.name}</span>
+          <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:10px;color:var(--c-faint)">${sourceTag}</span>
+            ${prBadge}
+            ${ageCaption}
+          </span>
+        </span>
+        <span></span>
+        <span style="text-align:right;color:var(--c-muted);font-variant-numeric:tabular-nums;font-size:12px">${fmtMmSs(currentSec)}</span>
+        <span style="text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:13px;font-weight:600">${fmtMmSs(cumulativeSec)}</span>
+      </div>
+    `;
+  }
+
+  // Station-order variant: now → race day with gain delta. No cumulative.
   const timeCell = showProjection
     ? `${fmtMmSs(currentSec)} → ${fmtMmSs(projectedSec)}`
     : fmtMmSs(currentSec);
@@ -257,7 +351,7 @@ function renderStationOrderRow(
           ${ageCaption}
         </span>
       </span>
-      <span style="min-width:${showProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums">${timeCell}</span>
+      <span style="min-width:${showProjection ? 120 : 80}px;text-align:right;color:var(--c-black);font-variant-numeric:tabular-nums;font-size:12px">${timeCell}</span>
       <span style="min-width:40px;text-align:right;color:var(--c-faint);font-variant-numeric:tabular-nums;font-size:11px">${deltaCell}</span>
       <span style="color:var(--c-faint);font-size:14px;line-height:1;flex-shrink:0">›</span>
     </div>
@@ -279,7 +373,7 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:500;color:var(--c-black);border:1px solid rgba(0,0,0,0.12);border-radius:6px;padding:2px 7px;flex-shrink:0">Target</span>`
       : '';
 
-    // Inline percentile (e.g. "p73"). Only when calibrated, since seed-based
+    // Inline percentile (e.g. "p73") — only when calibrated, since seed-based
     // entries have no athlete-personal percentile.
     const pctChip = pct != null
       ? `<span style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">p${pct}</span>`
@@ -291,7 +385,7 @@ function renderStationsTable(stations: HyroxStationLine[], state: SimulatorState
       ? `<span style="font-size:10px;font-weight:600;color:#4f5a3b;background:rgba(122,132,92,0.16);border-radius:6px;padding:2px 7px;flex-shrink:0">New PR</span>`
       : '';
 
-    // Test staleness caption. Surfaces when the latest test is more than ~4 mo
+    // Test staleness caption — surfaces when the latest test is more than ~4 mo
     // old. Below that, no caption (recent enough to trust).
     const ageMo = line.source === 'calibrated' ? latestTestAgeMonths(state, line.station) : null;
     const ageCaption = (ageMo != null && ageMo >= 4)
@@ -336,7 +430,7 @@ function renderTrajectoryFooter(proj: HyroxProjectionMarkers): string {
 }
 
 /**
- * "Where to gain" card. Top stations ranked by absolute gainable seconds at
+ * "Where to gain" card — top stations ranked by absolute gainable seconds at
  * the user's current training dose (per ISSUE-194). Reads the weakest-link
  * helper which reuses the existing per-station horizon model.
  *
@@ -393,7 +487,7 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
     ? potential.topTargets[0].targetBand.replace(/_/g, ' ')
     : 'next band';
 
-  // Green saving pill. Universal "improvement = green" signal, matching the
+  // Green saving pill — universal "improvement = green" signal, matching the
   // trend-card delta colour. Distinct from the radar (indigo) and the four
   // percentile-row hues, and reads instantly as "good thing".
   const limiterRows = potential.topTargets.map(p => {
@@ -426,6 +520,243 @@ function renderSkillsAnalysis(stations: HyroxStationLine[], athleteBand: string)
   `;
 }
 
+/**
+ * Injury recovery note for the hero card.
+ *
+ * Mirrors the triathlon marquee's `renderInjuryRecoveryNote`
+ * (race-forecast-marquee.ts:82). Reads the same `InjuryState` the HYROX injury
+ * modal writes (run / upper-body / lower-body capacity + resume windows) and
+ * explains, in one line, why the projected race-day gain is reduced. The
+ * projection math itself is debited in `buildHyroxProjection` (run) and
+ * `buildStationProjection` (stations via `stationInjuryBuildWeeks`).
+ */
+function naturalJoin(parts: string[]): string {
+  if (parts.length === 0) return '';
+  if (parts.length === 1) return parts[0];
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+function renderHyroxInjuryNote(s: SimulatorState): string {
+  if (!isInjuryActive()) return '';
+  const inj = s.injuryState;
+  if (!inj) return '';
+
+  const DISCS: Array<{ key: 'run' | 'upperLoad' | 'lowerLoad'; label: string }> = [
+    { key: 'run',       label: 'running'        },
+    { key: 'upperLoad', label: 'upper-body work' },
+    { key: 'lowerLoad', label: 'lower-body work' },
+  ];
+
+  const blocked: Array<{ label: string; weeks: number | undefined }> = [];
+  const reduced: string[] = [];
+  for (const d of DISCS) {
+    const cap = getDisciplineCapacity(inj, d.key);
+    if (cap === 0) blocked.push({ label: d.label, weeks: inj.resumeWeeksByDiscipline?.[d.key] });
+    else if (cap < 100) reduced.push(d.label);
+  }
+  if (blocked.length === 0 && reduced.length === 0) return '';
+
+  let body = '';
+  if (blocked.length > 0) {
+    const labels = naturalJoin(blocked.map(b => b.label));
+    const verb = blocked.length === 1 ? 'resumes' : 'resume';
+    const weeks = blocked.map(b => b.weeks).filter((w): w is number => typeof w === 'number');
+    let weeksTxt = '';
+    if (weeks.length > 0) {
+      const lo = Math.min(...weeks);
+      const hi = Math.max(...weeks);
+      weeksTxt = lo === hi ? ` in ${lo} weeks` : ` in ${lo} to ${hi} weeks`;
+    }
+    body += `${labels} ${verb}${weeksTxt}`;
+  }
+  if (reduced.length > 0) {
+    const labels = naturalJoin(reduced);
+    const verb = reduced.length === 1 ? 'is reduced' : 'are reduced';
+    body += blocked.length > 0 ? `, ${labels} ${verb} until then` : `${labels} ${verb}`;
+  }
+  const bodyCap = body.charAt(0).toUpperCase() + body.slice(1);
+
+  return `
+    <div style="font-size:12px;color:var(--c-muted);line-height:1.5;text-align:center;margin:12px 4px 2px;padding:0">
+      Assumes recovery on schedule: ${bodyCap}. Counts each discipline only for the weeks it can train.
+    </div>
+  `;
+}
+
+/**
+ * HYROX glass hero card — mirrors `renderForecastFingerprint` for marathon mode.
+ * Big predicted finish, optional race-day delta + target-vs-goal line, and a
+ * five-chip factor row (Band / Calibration / Run pace / Stations / Venue).
+ * Confidence badge top-right toggles the detail panel with calibration,
+ * staleness, cross-format conversion, and previous-race notes.
+ */
+function buildHyroxHero(
+  s: SimulatorState,
+  prediction: HyroxPrediction,
+  hx: NonNullable<SimulatorState['hyroxConfig']>,
+  venue: ReturnType<typeof getHyroxVenueById>,
+): string {
+  const proj = buildHyroxProjection(s, prediction);
+  const rawForPct = Math.max(prediction.rawSec, 1);
+  const courseFactorPct = ((prediction.totalSec - prediction.rawSec) / rawForPct) * 100;
+
+  // Target delta line: "On pace vs target" / "+X min vs target" / "−X min vs target".
+  // Falls back to race-day projection delta when no target is set, so the slot
+  // always carries useful information.
+  const target = hx.targetFinishTimeSec ?? 0;
+  const delta = target > 0 ? prediction.totalSec - target : 0;
+  let deltaTxt = '';
+  let deltaColor = 'var(--c-muted)';
+  if (target > 0) {
+    if (Math.abs(delta) < 60) { deltaTxt = 'On pace vs target'; deltaColor = '#1F7A3D'; }
+    else if (delta > 0)        { deltaTxt = `+${Math.round(delta / 60)} min vs target`; deltaColor = '#9A6A20'; }
+    else                       { deltaTxt = `−${Math.round(-delta / 60)} min vs target`; deltaColor = '#1F7A3D'; }
+  } else if (proj.weeksRemaining > 0 && Math.abs(proj.improvementSec) >= 60) {
+    const min = Math.round(Math.abs(proj.improvementSec) / 60);
+    deltaTxt = proj.improvementSec < 0 ? `Projected −${min} min by race day` : `Projected +${min} min by race day`;
+    deltaColor = proj.improvementSec < 0 ? '#1F7A3D' : '#9A6A20';
+  }
+
+  // Five HYROX-native factor chips. Every chip navigates to its dedicated
+  // factor sub-page via `renderHyroxChipDetail` (mirrors marathon mode).
+  const totalStations = prediction.stations.length;
+  const calibrated = prediction.calibratedCount;
+  const runPaceSecKm = Math.round(prediction.runSec / 8);
+  const bandLabel = hx.athleteBand ? (hx.athleteBand[0].toUpperCase() + hx.athleteBand.slice(1)) : null;
+  const runPaceSourceDetail = prediction.runPaceSource === 'derived' ? 'From VDOT'
+    : prediction.runPaceSource === 'seed' ? 'Population avg'
+    : 'Set manually';
+  const courseFactorDetail = Math.abs(courseFactorPct) < 0.1
+    ? 'Course-neutral'
+    : `${courseFactorPct > 0 ? '+' : '−'}${Math.abs(courseFactorPct).toFixed(1)}% vs neutral`;
+
+  // Training chip — sessions in the current planned week + plan phase.
+  const currentWk = s.wks?.[s.w ?? 0];
+  const sessionsThisWeek = currentWk?.triWorkouts
+    ? currentWk.triWorkouts.filter(w => w != null).length
+    : 0;
+  const phasePct = (s.tw && s.tw > 0) ? ((s.w ?? 0) / s.tw) : 0;
+  const phaseLabel = phasePct < 0.40 ? 'Base' : phasePct < 0.75 ? 'Build' : phasePct < 0.90 ? 'Peak' : 'Taper';
+  const trainingPresent = sessionsThisWeek > 0;
+
+  type Chip = { key: string; label: string; headline: string; detail: string; present: boolean; addCta?: string };
+  const chips: Chip[] = [
+    { key: 'you',      label: 'You',      headline: bandLabel ?? 'Set band',         detail: hx.previousHyroxTimeSec ? fmtMmSs(hx.previousHyroxTimeSec) : '', present: !!bandLabel,    addCta: 'Set in onboarding' },
+    { key: 'runpace',  label: 'Run pace', headline: fmtPace(runPaceSecKm),           detail: runPaceSourceDetail,                                           present: runPaceSecKm > 0 },
+    { key: 'stations', label: 'Stations', headline: `${calibrated}/${totalStations}`, detail: `${fmtMmSs(prediction.stationsSec)} summed`,                  present: totalStations > 0, addCta: 'Test stations' },
+    { key: 'training', label: 'Training', headline: `${sessionsThisWeek}/wk`,         detail: phaseLabel,                                                    present: trainingPresent,   addCta: 'Build a plan' },
+    { key: 'venue',    label: 'Venue',    headline: venue?.city ?? 'Pick race',       detail: venue ? courseFactorDetail : '',                               present: !!venue,           addCta: 'Pick in onboarding' },
+  ];
+
+  const chipHtml = chips.map(c => `
+    <div data-hx-chip="${c.key}" role="button" tabindex="0" style="flex:1;min-width:0;
+      background:linear-gradient(135deg,rgba(255,255,255,0.62) 0%,rgba(255,255,255,0.22) 100%);
+      backdrop-filter:blur(20px) saturate(170%);-webkit-backdrop-filter:blur(20px) saturate(170%);
+      border:1px solid rgba(255,255,255,${c.present ? 0.55 : 0.30});
+      box-shadow:0 4px 12px rgba(0,0,0,0.08),inset 0 1px 0 rgba(255,255,255,0.6);
+      border-radius:14px;padding:12px 8px;text-align:center;min-height:86px;
+      display:flex;flex-direction:column;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent">
+      <div style="font-size:9px;color:var(--c-muted);font-weight:500;line-height:1;margin-bottom:6px">${c.label}</div>
+      <div style="font-size:12px;color:${c.present ? 'var(--c-black)' : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${c.headline}</div>
+      ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px">${c.detail}</div>` : ''}
+      ${!c.present && c.addCta ? `<div style="font-size:8px;color:var(--c-faint);margin-top:5px;line-height:1.15;font-style:italic">${c.addCta}</div>` : ''}
+    </div>
+  `).join('');
+
+  const missing = chips.filter(c => !c.present).map(c => c.label);
+  const missingLine = missing.length > 0
+    ? `<div style="font-size:11px;color:var(--c-faint);margin-top:10px;line-height:1.4;text-align:center">Missing: ${missing.join(', ')}. Fewer factors mean lower confidence.</div>`
+    : '';
+
+  const confidenceLabel =
+    prediction.confidence === 'high'   ? 'High confidence'   :
+    prediction.confidence === 'medium' ? 'Medium confidence' :
+                                          'Low confidence';
+  const confidenceCaption =
+    prediction.confidence === 'high'
+      ? `Based on ${calibrated}/${totalStations} calibrated benchmarks${venue ? ` and venue factors` : ''}.`
+    : prediction.confidence === 'medium'
+      ? `${calibrated}/${totalStations} stations calibrated. Calibrate more to sharpen the prediction.`
+      : `Mostly seed data. Only ${calibrated}/${totalStations} stations calibrated. Best treated as a rough benchmark.`;
+  const conversionNote = prediction.crossFormatConversion === 'doubles_to_singles'
+    ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
+    : prediction.crossFormatConversion === 'singles_to_doubles'
+    ? `Forecast based on seed times. Your benchmarks are from a singles race. Add doubles splits to calibrate.`
+    : '';
+  const stale = prediction.staleness;
+  const stalenessNote = (() => {
+    if (!stale || stale.category === 'fresh' || stale.category === 'unknown') return '';
+    const months = Math.round(stale.ageMonths);
+    const monthLabel = months === 1 ? 'month' : 'months';
+    const mitigated = stale.physiologyMitigation > 0.85;
+    const mitigationCopy = mitigated ? ' Strong current physiology mitigates the gap.' : '';
+    if (stale.category === 'aging')      return `Race ${months} ${monthLabel} ago. Confidence reduced. Add a recent benchmark for sharper forecasts.${mitigationCopy}`;
+    if (stale.category === 'stale')      return `Race ${months} ${monthLabel} ago. Forecast leans on current physiology evidence.${mitigationCopy}`;
+    if (stale.category === 'very_stale') return `Race ${months} ${monthLabel} ago. Forecast is mostly modelled from current physiology.${mitigationCopy}`;
+    return '';
+  })();
+  const prevRaceId = hx.hyroxPreviousTimeRaceId;
+  const prevTimeSec = hx.previousHyroxTimeSec;
+  const prevEvent = prevRaceId ? getHyroxEventById(prevRaceId) : undefined;
+  const prevVenueId = prevRaceId ? getVenueIdForEvent(prevRaceId) : undefined;
+  const equivalentNote = (prevEvent && prevTimeSec && hx.venueId && prevVenueId && prevVenueId !== hx.venueId)
+    ? `Your ${fmtMmSs(prevTimeSec)} from ${prevEvent.city} ≈ ${fmtMmSs(rescaleTimeAcrossVenues(prevTimeSec, prevVenueId, hx.venueId))} at ${venue?.city ?? 'this venue'}.`
+    : '';
+  const runPaceSourceNote = prediction.runPaceSource === 'derived'
+    ? `Run pace updated from your VDOT.`
+    : prediction.runPaceSource === 'seed'
+    ? `Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.`
+    : '';
+
+  const targetLine = hx.targetFinishTimeSec
+    ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Edit ›`
+    : `Set a target finish ›`;
+
+  const prevRaceLink = prevTimeSec != null ? (() => {
+    const label = (() => {
+      switch (hx.hyroxPreviousTimeFormat) {
+        case 'open_singles': return 'Open Singles';
+        case 'open_doubles': return 'Open Doubles';
+        case 'pro_singles':  return 'Pro Singles';
+        case 'pro_doubles':  return 'Pro Doubles';
+        default:             return 'Format unset';
+      }
+    })();
+    return `<button id="hx-verify-prev-format" style="margin-top:6px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer;text-align:center;display:block;width:100%">Previous race: ${label} · ${fmtMmSs(prevTimeSec)} · Change ›</button>`;
+  })() : '';
+
+  return `
+    <div style="padding:0 16px;margin-bottom:14px">
+      <div style="position:relative;background:rgba(255,255,255,0.50);backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%);border-radius:24px;padding:22px 22px 20px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 18px 48px rgba(0,0,0,0.10);border:1px solid rgba(255,255,255,0.55);overflow:hidden">
+        <div style="position:absolute;top:14px;right:14px;z-index:2">
+          <button id="hx-conf-badge" style="font-size:10px;color:var(--c-muted);background:rgba(255,255,255,0.7);border:1px solid rgba(0,0,0,0.10);border-radius:6px;padding:3px 8px;cursor:pointer">${confidenceLabel}</button>
+        </div>
+        <div style="position:relative;z-index:1">
+          <div style="text-align:center;padding:10px 6px 14px">
+            <div style="font-size:11px;font-weight:500;color:var(--c-muted)">Forecast</div>
+            <div style="font-size:54px;font-weight:300;color:var(--c-black);letter-spacing:-0.03em;line-height:1;margin-top:10px;font-variant-numeric:tabular-nums">${fmtMmSs(prediction.totalSec)}</div>
+            ${deltaTxt ? `<div style="font-size:13px;color:${deltaColor};margin-top:8px;font-weight:500">${deltaTxt}</div>` : ''}
+            <button id="hx-set-target-cta" style="margin-top:10px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer">${targetLine}</button>
+          </div>
+          ${renderHyroxInjuryNote(s)}
+          <div style="display:flex;gap:8px;margin-top:4px">${chipHtml}</div>
+          ${missingLine}
+          ${prevRaceLink}
+          <div id="hx-conf-detail" style="display:none;margin-top:14px;padding:10px 12px;border-radius:10px;background:rgba(248,250,252,0.7);border:1px solid var(--c-border)">
+            <div style="font-size:12px;color:var(--c-black);line-height:1.5">${confidenceCaption}</div>
+            ${conversionNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${conversionNote}</div>` : ''}
+            ${stalenessNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${stalenessNote}</div>` : ''}
+            ${runPaceSourceNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${runPaceSourceNote}</div>` : ''}
+            ${equivalentNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${equivalentNote}</div>` : ''}
+            <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">Calibrated against 89,868 real HYROX finishers from Seasons 4–6.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 export function renderHyroxForecastView(): void {
   const root = document.getElementById('app-root');
   if (!root) return;
@@ -438,10 +769,22 @@ export function renderHyroxForecastView(): void {
 
   const initials = (s.onboarding?.name || 'You')
     .split(' ').slice(0, 2).map((n: string) => n[0]?.toUpperCase() || '').join('');
+  const firstName = (s.onboarding?.name || '').trim().split(' ')[0];
   const raceDate = hx.raceDate ?? s.onboarding?.customRaceDate;
   const raceDays = raceDate ? daysUntil(raceDate) : 0;
   const raceCountdownDisplay = raceDays > 14 ? `${Math.floor(raceDays / 7)}` : `${raceDays}`;
   const raceCountdownUnit = raceDays > 14 ? 'weeks' : 'days';
+
+  // Title sub-line: mirrors marathon "Test's Dubai Marathon — Week 1 of 35".
+  // Skips gracefully when name/event are missing.
+  const eventCity = hx.raceEventId ? getHyroxEventById(hx.raceEventId)?.city : undefined;
+  const currentWeek = s.w ?? 0;
+  const totalWeeks = s.tw ?? 0;
+  const possessive = firstName ? `${firstName}${firstName.endsWith('s') ? "'" : "'s"}` : '';
+  const raceLabel = eventCity ? `${eventCity} HYROX` : 'HYROX';
+  const weekLine = totalWeeks > 0 ? `Week ${currentWeek + 1} of ${totalWeeks}` : '';
+  const subLineParts = [possessive ? `${possessive} ${raceLabel}` : raceLabel, weekLine].filter(Boolean);
+  const subLine = subLineParts.join('. ');
 
   const body = !prediction
     ? `
@@ -450,225 +793,13 @@ export function renderHyroxForecastView(): void {
       </div>
     `
     : (() => {
-        // Hoisted: shared between the headline race-day projection card and
-        // the per-leg run breakdown so both cards read from the same source.
+        // Hoisted: shared between the hero (race-day projection delta) and the
+        // per-leg run breakdown so both surfaces read from the same source.
         const proj = buildHyroxProjection(s, prediction);
         const projectedRunSec = proj.weeksRemaining > 0 ? proj.byDiscipline.run.projectedSec : undefined;
-        const rawForPct = Math.max(prediction.rawSec, 1);
-        const factorRows = (prediction.courseFactors ?? []).map(f => {
-          const pct = (f.deltaSec / rawForPct) * 100;
-          const isZero = Math.abs(pct) < 0.05;
-          const sign = isZero ? '' : (pct > 0 ? '+' : '−');
-          const pctText = isZero ? '0.0%' : `${sign}${Math.abs(pct).toFixed(1)}%`;
-          const pctColor = isZero ? 'var(--c-faint)' : 'var(--c-muted)';
-          return `
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;font-size:12px;border-top:1px solid rgba(0,0,0,0.05)">
-              <span style="color:var(--c-muted)">${f.label}</span>
-              <span style="display:flex;gap:14px;align-items:center">
-                <span style="color:var(--c-black)">${f.value}</span>
-                <span style="color:${pctColor};font-variant-numeric:tabular-nums;min-width:56px;text-align:right">${pctText}</span>
-              </span>
-            </div>
-          `;
-        }).join('');
-
-        const totalDelta = prediction.totalSec - prediction.rawSec;
-        const totalPct = (totalDelta / rawForPct) * 100;
-        const totalSign = totalPct >= 0 ? '+' : '−';
-        const slowerOrFaster = totalPct >= 0 ? 'slower' : 'faster';
-        const venueNote = venue?.notes
-          ? `<div style="font-size:12px;color:var(--c-faint);padding:0 0 10px;line-height:1.5;font-style:italic">${venue.notes}</div>`
-          : '';
-        const factorsPanel = prediction.courseFactors.length === 0
-          ? `<div style="font-size:12px;color:var(--c-faint);padding:10px 0">No race picked yet. Set your race in onboarding to apply floor, lap, and temperature adjustments for the venue.</div>`
-          : `
-            <div style="font-size:12px;color:var(--c-muted);padding:6px 0 10px;line-height:1.5">Athletes tend to finish ${totalSign}${Math.abs(totalPct).toFixed(1)}% ${slowerOrFaster} at this venue. Raw fitness: ${fmtMmSs(prediction.rawSec)}.</div>
-            ${venueNote}
-            ${factorRows}
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0 4px;font-size:13px;border-top:1px solid rgba(0,0,0,0.10);margin-top:4px">
-              <span style="color:var(--c-black);font-weight:600">Adjusted finish</span>
-              <span style="display:flex;gap:14px;align-items:center">
-                <span style="color:var(--c-black);font-weight:600;font-variant-numeric:tabular-nums">${fmtMmSs(prediction.totalSec)}</span>
-                <span style="color:var(--c-muted);font-variant-numeric:tabular-nums;min-width:56px;text-align:right">${totalSign}${Math.abs(totalPct).toFixed(1)}%</span>
-              </span>
-            </div>
-          `;
-
-        const confidenceLabel =
-          prediction.confidence === 'high'   ? 'High confidence'   :
-          prediction.confidence === 'medium' ? 'Medium confidence' :
-                                                'Low confidence';
-        const confidenceCaption =
-          prediction.confidence === 'high'
-            ? `Based on ${prediction.calibratedCount}/${prediction.stations.length} calibrated benchmarks${venue ? ` and venue factors` : ''}.`
-          : prediction.confidence === 'medium'
-            ? `${prediction.calibratedCount}/${prediction.stations.length} stations calibrated. Calibrate more to sharpen the prediction.`
-            : `Mostly seed data. Only ${prediction.calibratedCount}/${prediction.stations.length} stations calibrated. Best treated as a rough benchmark.`;
-        const conversionNote = prediction.crossFormatConversion === 'doubles_to_singles'
-          ? `Forecast based on seed times. Your benchmarks are from a doubles race. Add singles splits to calibrate.`
-          : prediction.crossFormatConversion === 'singles_to_doubles'
-          ? `Forecast based on seed times. Your benchmarks are from a singles race. Add doubles splits to calibrate.`
-          : '';
-
-        // Previous-time race-equivalent line: if user logged a previous race at a different
-        // venue, surface what that time would translate to at the target venue.
-        const prevRaceId = hx.hyroxPreviousTimeRaceId;
-        const prevTimeSec = hx.previousHyroxTimeSec;
-        const prevEvent = prevRaceId ? getHyroxEventById(prevRaceId) : undefined;
-        const prevVenueId = prevRaceId ? getVenueIdForEvent(prevRaceId) : undefined;
-        const equivalentNote = (prevEvent && prevTimeSec && hx.venueId && prevVenueId && prevVenueId !== hx.venueId)
-          ? `Your ${fmtMmSs(prevTimeSec)} from ${prevEvent.city} ≈ ${fmtMmSs(rescaleTimeAcrossVenues(prevTimeSec, prevVenueId, hx.venueId))} at ${venue?.city ?? 'this venue'}.`
-          : '';
-
-        // Race-age staleness chip. Surfaces when the previous race is at least
-        // 'aging' (>6 months); strong physiology mitigation softens the copy.
-        const stale = prediction.staleness;
-        const stalenessNote = (() => {
-          if (!stale || stale.category === 'fresh' || stale.category === 'unknown') return '';
-          const months = Math.round(stale.ageMonths);
-          const monthLabel = months === 1 ? 'month' : 'months';
-          const mitigated = stale.physiologyMitigation > 0.85;
-          const mitigationCopy = mitigated ? ' Strong current physiology mitigates the gap.' : '';
-          if (stale.category === 'aging')      return `Race ${months} ${monthLabel} ago. Confidence reduced. Add a recent benchmark for sharper forecasts.${mitigationCopy}`;
-          if (stale.category === 'stale')      return `Race ${months} ${monthLabel} ago. Forecast leans on current physiology evidence.${mitigationCopy}`;
-          if (stale.category === 'very_stale') return `Race ${months} ${monthLabel} ago. Forecast is mostly modelled from current physiology.${mitigationCopy}`;
-          return '';
-        })();
-
-        // Run-pace source caption. Surfaces when the run pace is VDOT-derived
-        // or seed-fallback (vs user-set), so users see why the headline number
-        // moved.
-        const runPaceSourceNote = prediction.runPaceSource === 'derived'
-          ? `Run pace updated from your VDOT.`
-          : prediction.runPaceSource === 'seed'
-          ? `Run pace estimated from population data. Add a recent run for VDOT-anchored prediction.`
-          : '';
-
-        // Station-test CTA banner. Promotes the existing half-test calibration
-        // flow on the plan view. Surfaces whenever any station is still on a
-        // population seed. Two copy variants:
-        //   - Recent race (≤ 6 mo, staleness 'fresh'): softer 'optional
-        //     sharpening' nudge. The race time is doing the calibration work.
-        //   - Otherwise: direct CTA. Testing is the primary calibration path.
-        const pendingStations = prediction.stations.length - prediction.calibratedCount;
-        const showCalibrationBanner = pendingStations > 0;
-        const hasFreshRace = prediction.staleness?.category === 'fresh';
-        const calibrationBannerHtml = showCalibrationBanner ? (() => {
-          const stationsLabel = pendingStations === 1
-            ? '1 station is using a population average'
-            : `${pendingStations} stations are using population averages`;
-          const headline = hasFreshRace
-            ? 'Your race time is anchoring this forecast.'
-            : 'Test your stations to sharpen this forecast.';
-          const caption = hasFreshRace
-            ? `${stationsLabel}. Station tests are optional with a recent race, but they sharpen the per-leg detail.`
-            : `${stationsLabel}. A short half-distance test of each gives a personal anchor instead of population data.`;
-          return `
-            <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Sharpen this forecast</div>
-              <div style="font-size:13px;font-weight:600;color:var(--c-black);line-height:1.5;margin-bottom:4px">${headline}</div>
-              <div style="font-size:12px;color:var(--c-muted);line-height:1.5;margin-bottom:12px">${caption}</div>
-              <button id="hx-test-stations-cta" style="font-size:12px;font-weight:600;color:var(--c-black);background:transparent;border:1px solid var(--c-border);border-radius:8px;padding:8px 14px;cursor:pointer">Test stations →</button>
-            </div>
-          `;
-        })() : '';
 
         return `
-          <!-- Hero finish time -->
-          <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:24px 22px 20px;margin-bottom:14px">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px">
-              <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em">${venue ? `${venue.city} · ${venue.name}` : 'Predicted finish'}</div>
-              <button id="hx-conf-badge" style="font-size:10px;color:var(--c-muted);background:transparent;border:1px solid rgba(0,0,0,0.10);border-radius:6px;padding:2px 8px;cursor:pointer">${confidenceLabel}</button>
-            </div>
-            <div style="font-size:54px;font-weight:200;color:var(--c-black);font-variant-numeric:tabular-nums;letter-spacing:-0.025em;line-height:1">${fmtMmSs(prediction.totalSec)}</div>
-            <div style="display:flex;gap:18px;margin-top:12px;font-size:12px;color:var(--c-muted)">
-              <span>Run ${fmtMmSs(prediction.runSec)}</span>
-              <span>Stations ${fmtMmSs(prediction.stationsSec)}</span>
-              <span>RoxZone ${fmtMmSs(prediction.roxzoneSec)}</span>
-            </div>
-            <button id="hx-set-target-cta" style="margin-top:14px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer;text-align:left">${
-              hx.targetFinishTimeSec
-                ? `Target ${fmtMmSs(hx.targetFinishTimeSec)} · Edit ›`
-                : `Set a target finish ›`
-            }</button>
-            ${prevTimeSec != null ? (() => {
-              const label = (() => {
-                switch (hx.hyroxPreviousTimeFormat) {
-                  case 'open_singles': return 'Open Singles';
-                  case 'open_doubles': return 'Open Doubles';
-                  case 'pro_singles':  return 'Pro Singles';
-                  case 'pro_doubles':  return 'Pro Doubles';
-                  default:             return 'Format unset';
-                }
-              })();
-              return `<button id="hx-verify-prev-format" style="margin-top:6px;padding:0;background:transparent;border:none;color:var(--c-muted);font-size:12px;cursor:pointer;text-align:left;display:block">Previous race: ${label} · ${fmtMmSs(prevTimeSec)} · Change ›</button>`;
-            })() : ''}
-            <div id="hx-conf-detail" style="display:none;margin-top:14px;padding:10px 12px;border-radius:10px;background:#F8FAFC;border:1px solid var(--c-border)">
-              <div style="font-size:12px;color:var(--c-black);line-height:1.5">${confidenceCaption}</div>
-              ${conversionNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${conversionNote}</div>` : ''}
-              ${stalenessNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${stalenessNote}</div>` : ''}
-              ${runPaceSourceNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${runPaceSourceNote}</div>` : ''}
-              ${equivalentNote ? `<div style="font-size:11px;color:var(--c-muted);margin-top:4px">${equivalentNote}</div>` : ''}
-              <div style="font-size:11px;color:var(--c-faint);margin-top:8px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.06)">Calibrated against 89,868 real HYROX finishers from Seasons 4–6.</div>
-            </div>
-          </div>
-
-          ${calibrationBannerHtml}
-
-          <!-- Race-day projection -->
-          ${(() => {
-            if (proj.weeksRemaining === 0 && proj.factors.length === 0) return '';
-            const fmtDelta = (sec: number) => sec === 0 ? '—' : (sec > 0 ? `+${sec}s` : `−${Math.abs(sec)}s`);
-            // UX_PATTERNS: neutrals only. Direction comes from the +/− sign,
-            // not from green/amber tone. Avoid mixing semantic colours per row.
-            const factorRows = proj.factors.map(f => `
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;padding:8px 0;font-size:12px;border-top:1px solid rgba(0,0,0,0.05)">
-                  <div style="flex:1">
-                    <div style="color:var(--c-black);font-weight:500">${f.name}</div>
-                    <div style="font-size:11px;color:var(--c-muted);margin-top:1px;line-height:1.4">${f.explanation}</div>
-                  </div>
-                  <div style="color:var(--c-muted);font-variant-numeric:tabular-nums;min-width:48px;text-align:right">${fmtDelta(f.deltaSec)}</div>
-                </div>
-              `).join('');
-            const improveLabel = proj.improvementSec < 0 ? 'faster' : proj.improvementSec > 0 ? 'slower' : 'no change';
-            return `
-              <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-                <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Race-day projection</div>
-                ${proj.weeksRemaining > 0 ? `<div style="font-size:12px;color:var(--c-muted);margin-bottom:8px;line-height:1.5">If you stick with the plan, by race day (~${proj.weeksRemaining.toFixed(1)} weeks):</div>` : ''}
-                <div style="display:flex;justify-content:space-between;align-items:baseline;gap:14px;padding:6px 0 8px">
-                  <span style="color:var(--c-black);font-weight:600;font-size:13px">Projected finish</span>
-                  <span style="display:flex;gap:14px;align-items:baseline">
-                    <span style="font-size:22px;font-weight:300;color:var(--c-black);font-variant-numeric:tabular-nums">${fmtMmSs(proj.projectedTotalSec)}</span>
-                    <span style="font-size:11px;color:var(--c-muted);font-variant-numeric:tabular-nums;min-width:62px;text-align:right">${proj.improvementSec === 0 ? '—' : `${fmtDelta(proj.improvementSec)} ${improveLabel}`}</span>
-                  </span>
-                </div>
-                <div style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums;padding:0 0 6px">Likely range: ${fmtMmSs(proj.confidenceRangeSec[0])} – ${fmtMmSs(proj.confidenceRangeSec[1])}</div>
-                ${proj.improvementSec !== 0 ? `
-                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:8px 0;border-top:1px solid rgba(0,0,0,0.05);margin:4px 0">
-                    ${[
-                      { label: 'Run',      d: proj.byDiscipline.run },
-                      { label: 'Stations', d: proj.byDiscipline.stations },
-                      { label: 'RoxZone',  d: proj.byDiscipline.roxzone },
-                    ].map(({label, d}) => `
-                      <div>
-                        <div style="font-size:10px;color:var(--c-faint)">${label}</div>
-                        <div style="font-size:13px;color:var(--c-black);font-variant-numeric:tabular-nums;margin-top:2px">${fmtMmSs(d.projectedSec)}</div>
-                        <div style="font-size:10px;color:var(--c-muted);font-variant-numeric:tabular-nums">${d.deltaSec === 0 ? '—' : (d.deltaSec > 0 ? `+${d.deltaSec}s` : `−${Math.abs(d.deltaSec)}s`)}</div>
-                      </div>
-                    `).join('')}
-                  </div>
-                ` : ''}
-                ${factorRows}
-                <div style="font-size:10px;color:var(--c-faint);padding:10px 0 0;border-top:1px solid rgba(0,0,0,0.05);margin-top:6px;line-height:1.4">Factor weights are heuristic: anchored on running and triathlon prediction models, not yet validated against HYROX outcome data. Treat the projection as directional, not precise.</div>
-              </div>
-            `;
-          })()}
-
-          <!-- Course factors -->
-          <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
-            <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Course factors</div>
-            ${factorsPanel}
-          </div>
+          ${buildHyroxHero(s, prediction, hx, venue)}
 
           <!-- Race-order forecast: runs and stations interleaved (singles only).
                Each row shows current → projected with delta. Doubles falls back
@@ -685,10 +816,16 @@ export function renderHyroxForecastView(): void {
             const avgPaceCell = showAvgProj
               ? `${fmtPace(avgPaceSecKm).replace('/km', '')} → ${fmtPace(avgProjPaceSecKm!)}`
               : fmtPace(avgPaceSecKm);
+            const raceOrderRows = renderRaceOrderTable(prediction, projectedRunSec, s, 'race');
+            const stationOrderRows = renderRaceOrderTable(prediction, projectedRunSec, s, 'station');
             return `
             <div style="background:rgba(255,255,255,0.78);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-radius:16px;box-shadow:0 2px 4px rgba(0,0,0,0.06),0 8px 24px rgba(0,0,0,0.06);padding:18px 20px;margin-bottom:14px">
               <div style="font-size:11px;color:var(--c-faint);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Race order</div>
-              <div style="font-size:12px;color:var(--c-muted);margin-bottom:10px;line-height:1.4">Run, station, run, station. Your race in sequence. Times show today → race day projection where the horizon model expects gain.</div>
+              <div style="font-size:12px;color:var(--c-muted);margin-bottom:12px;line-height:1.4">Race order shows your race-day clock at each split. Station order groups the disciplines and shows where the horizon model expects gain by race day.</div>
+              <div role="tablist" style="display:flex;gap:8px;margin-bottom:12px">
+                <button type="button" data-hx-order="race" role="tab" aria-selected="true" style="flex:1;padding:8px 10px;border-radius:10px;border:1px solid var(--c-black);background:var(--c-black);color:#FDFCF7;font-size:12px;font-weight:500;cursor:pointer">Race order</button>
+                <button type="button" data-hx-order="station" role="tab" aria-selected="false" style="flex:1;padding:8px 10px;border-radius:10px;border:1px solid rgba(0,0,0,0.12);background:transparent;color:var(--c-muted);font-size:12px;font-weight:500;cursor:pointer">Station order</button>
+              </div>
               <div style="display:flex;justify-content:space-between;align-items:baseline;padding:8px 0;border-top:1px solid rgba(0,0,0,0.05);border-bottom:1px solid rgba(0,0,0,0.05);margin-bottom:2px">
                 <div style="display:flex;flex-direction:column;gap:2px">
                   <span style="font-size:12px;color:var(--c-black);font-weight:500">Average run pace</span>
@@ -696,7 +833,16 @@ export function renderHyroxForecastView(): void {
                 </div>
                 <span style="font-size:13px;color:var(--c-black);font-variant-numeric:tabular-nums">${avgPaceCell}</span>
               </div>
-              ${renderRaceOrderTable(prediction, projectedRunSec, s)}
+              <div id="hx-rows-race">
+                <div style="display:grid;grid-template-columns:auto 1fr 72px 60px;align-items:center;gap:12px;padding:8px 0 6px;font-size:10px;color:var(--c-faint)">
+                  <span></span>
+                  <span></span>
+                  <span style="text-align:right">Split</span>
+                  <span style="text-align:right">Total</span>
+                </div>
+                ${raceOrderRows}
+              </div>
+              <div id="hx-rows-station" style="display:none">${stationOrderRows}</div>
               ${prediction.projection ? renderTrajectoryFooter(prediction.projection) : ''}
             </div>
           `;
@@ -745,7 +891,10 @@ export function renderHyroxForecastView(): void {
           ` : ''}
           <button id="hx-forecast-account-btn" class="m-btn-glass m-btn-glass--icon" style="width:36px;height:36px">${initials || 'Me'}</button>
         </div>
-        <div style="font-size:24px;font-weight:300;color:var(--c-black);letter-spacing:-0.01em;margin:0 0 16px">Forecast</div>
+        <div style="text-align:center;padding:4px 4px 18px">
+          <div style="font-size:32px;font-weight:700;color:var(--c-black);letter-spacing:-0.02em;line-height:1">HYROX forecast</div>
+          ${subLine ? `<div style="font-size:13px;color:var(--c-muted);margin-top:6px;font-weight:500">${subLine}</div>` : ''}
+        </div>
         ${renderHyroxRaceOutcomeRetroCard(s)}
         ${body}
         <div style="padding:10px 0 4px;text-align:center">
@@ -790,6 +939,27 @@ export function renderHyroxForecastView(): void {
     openHyroxPrevFormatModal();
   });
 
+  // Race-order ↔ station-order segment control: swap visible row container.
+  // Both row sets are pre-rendered (cheap), so the toggle is instant.
+  document.querySelectorAll<HTMLButtonElement>('[data-hx-order]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-hx-order') as 'race' | 'station' | null;
+      if (!mode) return;
+      const raceEl = document.getElementById('hx-rows-race');
+      const stationEl = document.getElementById('hx-rows-station');
+      if (!raceEl || !stationEl) return;
+      raceEl.style.display = mode === 'race' ? '' : 'none';
+      stationEl.style.display = mode === 'station' ? '' : 'none';
+      document.querySelectorAll<HTMLButtonElement>('[data-hx-order]').forEach(b => {
+        const isActive = b === btn;
+        b.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        b.style.background = isActive ? 'var(--c-black)' : 'transparent';
+        b.style.color = isActive ? '#FDFCF7' : 'var(--c-muted)';
+        b.style.borderColor = isActive ? 'var(--c-black)' : 'rgba(0,0,0,0.12)';
+      });
+    });
+  });
+
   // Per-station row tap → station detail sub-page (ISSUE-193).
   document.querySelectorAll<HTMLElement>('[data-hx-station-row]').forEach(row => {
     row.addEventListener('click', () => {
@@ -801,22 +971,39 @@ export function renderHyroxForecastView(): void {
     });
   });
 
-  // "Test stations" CTA. Un-dismiss the benchmark card so it surfaces on the
-  // plan view we're navigating to, then navigate. Without the un-dismiss, a
-  // user who previously dismissed the card would land on the plan with nowhere
-  // to enter station times.
-  const wireCalibrateCta = (id: string) => {
-    document.getElementById(id)?.addEventListener('click', () => {
-      const ms = getMutableState();
-      if (ms.hyroxConfig && (ms.hyroxConfig as { dismissedBenchmarkCard?: boolean }).dismissedBenchmarkCard) {
-        (ms.hyroxConfig as { dismissedBenchmarkCard?: boolean }).dismissedBenchmarkCard = false;
-        saveState();
+  // Calibrate CTA — wires the performance radar's "Calibrate" prompt to the
+  // plan view, un-dismissing the benchmark card so the user lands on a working
+  // entry point. (The legacy "Sharpen this forecast" card was removed when the
+  // hero adopted the marathon factor-chip pattern; the Calibration chip in the
+  // hero now signals the same status passively.)
+  document.getElementById('hx-radar-calibrate-cta')?.addEventListener('click', () => {
+    const ms = getMutableState();
+    if (ms.hyroxConfig && (ms.hyroxConfig as { dismissedBenchmarkCard?: boolean }).dismissedBenchmarkCard) {
+      (ms.hyroxConfig as { dismissedBenchmarkCard?: boolean }).dismissedBenchmarkCard = false;
+      saveState();
+    }
+    import('@/ui/hyrox/plan-view').then(({ renderHyroxPlanView }) => renderHyroxPlanView());
+  });
+
+  // Hero chip drill-downs — every chip navigates to its dedicated full-page
+  // factor view (mirrors marathon mode). Stations + Venue pages carry their
+  // own action CTAs (Test stations / Pick race).
+  document.querySelectorAll<HTMLElement>('[data-hx-chip]').forEach(el => {
+    const open = () => {
+      const key = el.getAttribute('data-hx-chip') as
+        | 'you' | 'runpace' | 'stations' | 'training' | 'venue' | null;
+      if (!key) return;
+      import('./forecast-chip-detail-view').then(({ renderHyroxChipDetail }) =>
+        renderHyroxChipDetail(key));
+    };
+    el.addEventListener('click', open);
+    el.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        open();
       }
-      import('@/ui/hyrox/plan-view').then(({ renderHyroxPlanView }) => renderHyroxPlanView());
     });
-  };
-  wireCalibrateCta('hx-test-stations-cta');
-  wireCalibrateCta('hx-radar-calibrate-cta');
+  });
 
   wireTabBarHandlers((tab: TabId) => {
     if (tab === 'home') {

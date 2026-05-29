@@ -7,6 +7,7 @@
 
 import type { Workout } from '@/types/state';
 import { DISCIPLINE_COLOURS, DISCIPLINE_LABEL, DISCIPLINE_ICON, type BadgeKind } from './colours';
+import { parseStrengthSession } from '@/guided/strength-model';
 
 export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssSecPer100m?: number | null; ftp?: number | null; dismissedTests?: Set<string>; injuryEasy?: boolean } = {}): string {
   const discipline: BadgeKind = badgeKindFor(w);
@@ -16,7 +17,14 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
   const tss = (w.aerobic ?? 0) + (w.anaerobic ?? 0);
   const isBrick = w.t === 'brick' && w.brickSegments;
 
+  // Strength sessions collapse to a "tap to view" summary; the per-exercise
+  // breakdown opens in the shared strength detail modal. The raw list reads as
+  // a run-on paragraph inline.
+  const strengthCount = discipline === 'strength' ? (parseStrengthSession(w)?.exerciseCount ?? 0) : 0;
   const expandedDesc = humaniseDesc(w.d);
+  const descLine = strengthCount > 0
+    ? `${strengthCount} exercise${strengthCount === 1 ? '' : 's'} · tap to view`
+    : escapeHtml(expandedDesc);
 
   const dayLine = opts.showDay && w.dayName
     ? `<div style="font-size:10px;font-weight:600;color:var(--c-faint);letter-spacing:0.08em;text-transform:uppercase;margin-bottom:6px">${w.dayName}</div>`
@@ -52,7 +60,7 @@ export function renderTriWorkoutCard(w: Workout, opts: { showDay?: boolean; cssS
         ${tss > 0 ? `<span style="font-size:11px;color:var(--c-faint);font-variant-numeric:tabular-nums">TSS ${Math.round(tss)}</span>` : ''}
       </div>
       <div style="font-size:15px;font-weight:600;color:#0F172A;margin-bottom:4px;letter-spacing:-0.01em">${escapeHtml(w.n)}</div>
-      <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${escapeHtml(expandedDesc)}</div>
+      <div style="font-size:13px;color:var(--c-muted);line-height:1.5">${descLine}</div>
       ${brickFootnote}
       ${opts.injuryEasy ? `<div style="margin-top:8px;padding:5px 10px;background:rgba(245,158,11,0.08);border-radius:8px;font-size:11px;color:#92400E;font-weight:500">Easy intensity only. Injury management</div>` : ''}
     </div>

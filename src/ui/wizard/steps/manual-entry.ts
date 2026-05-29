@@ -1,6 +1,6 @@
 import type { OnboardingState, RunnerExperience } from '@/types/onboarding';
 import type { PBs } from '@/types/training';
-import { updateOnboarding, nextStep } from '../controller';
+import { updateOnboarding, nextStep, getOnboardingState } from '../controller';
 import { renderProgressIndicator, renderBackButton } from '../renderer';
 import { getState, getMutableState } from '@/state/store';
 import { saveState } from '@/state/persistence';
@@ -146,7 +146,7 @@ export function renderManualEntry(container: HTMLElement, state: OnboardingState
               `;
             }).join('')}
           </div>
-          ${renderExperienceConsistencyNotice(state)}
+          <div id="exp-notice-slot">${renderExperienceConsistencyNotice(state)}</div>
         </div>
 
         <div class="m-rise" style="width:100%;max-width:480px;margin-top:22px;animation-delay:0.18s">
@@ -258,13 +258,14 @@ function renderPBRow(label: string, id: string, value: number | undefined, place
 }
 
 function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
-  // Experience pills. Single-select, commit live.
+  // Experience pills. Single-select, commit live. Selection styling and the
+  // consistency notice update IN PLACE — never a full re-render (which would
+  // replay the entrance animations and read as the page reloading).
   document.querySelectorAll<HTMLElement>('.exp-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const exp = btn.getAttribute('data-exp') as RunnerExperience | null;
       if (!exp) return;
-      updateOnboarding({ experienceLevel: exp });
-      rerender();
+      applyExperience(exp);
     });
   });
 
@@ -276,11 +277,14 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
   ];
 
   const commitPbs = () => {
-    const current = { ...state.pbs };
+    // Read live state. We no longer full-re-render between edits, so the
+    // captured `state` would go stale across successive PB commits.
+    const live = getOnboardingState() ?? state;
+    const current = { ...live.pbs };
     // Manually-entered PBs have no source date. Drop any stored pbDates so the
     // marathon-specificity penalty's recency scaling falls back to full strength
     // rather than using a now-mismatched date.
-    const currentDates = { ...(state.pbDates ?? {}) };
+    const currentDates = { ...(live.pbDates ?? {}) };
     pbFields.forEach(({ id, key, long }) => {
       const input = document.getElementById(id) as HTMLInputElement | null;
       if (!input) return;
@@ -312,11 +316,16 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
       if (err) err.style.display = ok ? 'none' : 'block';
       return ok;
     };
-    // After PB blur, re-render so the experience-consistency notice can fire
-    // if the new PBs contradict the selected level. Re-render is the same
-    // mechanism the experience pills use (see `wireHandlers` top), so the
-    // notice surfaces immediately rather than waiting for the next step.
-    input.addEventListener('blur', () => { validate(); commitPbs(); rerender(); });
+    // On blur: validate first. An invalid value keeps its inline error visible
+    // and is NOT committed or refreshed, so the user's typed text and the error
+    // both survive (a full re-render used to wipe both, which read as the page
+    // reloading). On a valid value, commit and refresh ONLY the consistency
+    // notice in place so it can fire when the PBs contradict the chosen level.
+    input.addEventListener('blur', () => {
+      if (!validate()) return;
+      commitPbs();
+      refreshNotice();
+    });
     input.addEventListener('input', () => {
       if (input.classList.contains('invalid')) validate();
     });
@@ -324,13 +333,7 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
 
   // Wire the "Use suggested level" CTA inside the consistency notice. The
   // notice itself is conditionally rendered; this no-ops when absent.
-  document.getElementById('exp-apply-suggested')?.addEventListener('click', (e) => {
-    const btn = e.currentTarget as HTMLElement;
-    const suggested = btn.getAttribute('data-suggested') as RunnerExperience | null;
-    if (!suggested) return;
-    updateOnboarding({ experienceLevel: suggested });
-    rerender();
-  });
+  wireApplyButton();
 
   // Weekly volume. Write to global state.detectedWeeklyKm (always stored as km).
   const volumeInput = document.getElementById('weekly-volume') as HTMLInputElement | null;
@@ -358,11 +361,42 @@ function wireHandlers(state: OnboardingState, unitPref: 'km' | 'mi'): void {
   });
 }
 
-function rerender(): void {
-  import('../controller').then(({ getOnboardingState }) => {
-    const currentState = getOnboardingState();
-    if (!currentState) return;
-    const container = document.getElementById('app-root');
-    if (container) renderManualEntry(container, currentState);
+/**
+ * Apply an experience level: persist it, update the pill selection styling, and
+ * refresh the consistency notice — all in place. No full re-render, so the
+ * entrance animations don't replay (which read as a page reload).
+ */
+function applyExperience(exp: RunnerExperience): void {
+  updateOnboarding({ experienceLevel: exp });
+  document.querySelectorAll<HTMLElement>('.exp-btn').forEach(b => {
+    const sel = b.getAttribute('data-exp') === exp;
+    b.classList.toggle('selected', sel);
+    b.classList.toggle('shadow-ap-selected', sel);
+    b.classList.toggle('shadow-ap', !sel);
+  });
+  refreshNotice();
+}
+
+/**
+ * Re-render only the experience-consistency notice slot from live state, then
+ * re-wire its apply button. Replaces the old full-step `rerender()` so a blur
+ * or pill tap no longer rebuilds the page.
+ */
+function refreshNotice(): void {
+  const slot = document.getElementById('exp-notice-slot');
+  if (!slot) return;
+  const live = getOnboardingState();
+  if (!live) return;
+  slot.innerHTML = renderExperienceConsistencyNotice(live);
+  wireApplyButton();
+}
+
+/** (Re)wire the "Use suggested level" button. No-ops when the notice is absent. */
+function wireApplyButton(): void {
+  document.getElementById('exp-apply-suggested')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLElement;
+    const suggested = btn.getAttribute('data-suggested') as RunnerExperience | null;
+    if (!suggested) return;
+    applyExperience(suggested);
   });
 }

@@ -24,7 +24,7 @@ import { GpsTracker } from '@/gps/tracker';
 import { createGpsProvider } from '@/gps/providers';
 import { formatKm, formatPace } from '@/utils/format';
 import { getState } from '@/state/store';
-import { summariseHyroxSession } from '@/calculations/hyrox-session-benchmarks';
+import { summariseHyroxSession, summariseHyroxRuns } from '@/calculations/hyrox-session-benchmarks';
 import type { SetRecord } from '@/guided/strength-controller';
 
 const OVERLAY_ID = 'guided-strength-overlay';
@@ -595,16 +595,30 @@ function fmtDelta(sec: number): string {
 }
 
 /**
- * HYROX end-of-session summary: one row per station showing the best round,
- * how it ranks against the field, and whether it beat (and updated) the stored
- * benchmark. Race-pace sessions compare; technique rows show "Technique pace"
- * since the times are submaximal by design. Mirrors `summariseHyroxSession`.
+ * HYROX end-of-session summary. Run legs (bricks) list time + pace per round so
+ * the athlete can see fade across the brick — no benchmark, run fitness lives in
+ * pace/VDOT. Station rows show the best round, field rank, and whether it beat
+ * (and updated) the stored benchmark. Technique rows show "Technique pace" since
+ * the times are submaximal by design. Mirrors `summariseHyroxSession` /
+ * `summariseHyroxRuns`.
  */
 function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string {
   const results = summariseHyroxSession(workout, records, getState());
-  if (!results.length) return '';
+  const runLegs = summariseHyroxRuns(workout, records);
+  if (!results.length && !runLegs.length) return '';
+  const unit = getState().unitPref ?? 'km';
+
+  // Run legs first, in round order (bricks). Time + pace, no benchmark.
+  const runRows = runLegs.map(leg => {
+    const distLabel = formatKm(leg.distanceM / 1000, unit, leg.distanceM % 1000 === 0 ? 0 : 1);
+    return `<li style="padding:8px 0;border-bottom:1px solid var(--c-border)">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:13px"><span>Run<span style="color:var(--c-muted);font-size:11px;margin-left:6px">round ${leg.round} · ${distLabel}</span></span><span style="font-variant-numeric:tabular-nums;color:#0F172A;font-weight:600">${fmtElapsed(leg.durationSec)}</span></div>
+      <div style="font-size:11px;color:var(--c-muted);margin-top:2px">${formatPace(leg.paceSecKm, unit)}</div>
+    </li>`;
+  }).join('');
+
   const multiRound = ((workout as any).hyroxRounds ?? 1) > 1;
-  const rows = results.map(r => {
+  const stationRows = results.map(r => {
     const nameLabel = `${escapeHtml(r.displayName)}${multiRound ? '<span style="color:var(--c-muted);font-size:11px;margin-left:6px">best round</span>' : ''}`;
     let sub = '';
     if (r.isImprovement) {
@@ -624,7 +638,7 @@ function buildHyroxFinishSummary(workout: Workout, records: SetRecord[]): string
       ${sub}
     </li>`;
   }).join('');
-  return `<ul style="margin:0 0 22px;padding:0;list-style:none">${rows}</ul>`;
+  return `<ul style="margin:0 0 22px;padding:0;list-style:none">${runRows}${stationRows}</ul>`;
 }
 
 function renderFinish(): void {

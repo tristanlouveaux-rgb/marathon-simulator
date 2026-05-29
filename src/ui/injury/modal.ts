@@ -155,10 +155,6 @@ function getModalHTML(injuryState: InjuryState): string {
             <span id="injury-cap-${disc}-val" style="font-size:12px;font-weight:600;color:var(--c-black)">${capValueLabel(cap)}</span>
           </div>
           <input type="range" id="injury-cap-${disc}" class="m-slider-glass" min="0" max="100" step="5" value="${cap}" />
-          <div class="flex justify-between mt-1.5" style="font-size:11px;color:var(--c-faint)">
-            <span>None</span>
-            <span>Full</span>
-          </div>
           <p id="injury-cap-${disc}-caption" style="font-size:12px;color:var(--c-muted);margin-top:6px;margin-bottom:0">${capCaptionText(cap, verb0)}</p>
           <div id="injury-resume-${disc}-row" class="flex items-center gap-2 mt-2" style="${cap >= 100 ? 'display:none' : ''}">
             <span style="font-size:13px;color:var(--c-muted)">Back to ${resumeLabel} in</span>

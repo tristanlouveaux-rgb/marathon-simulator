@@ -13,6 +13,13 @@ import { openGuidedStrength } from '@/ui/guided-strength-overlay';
 import { completeStrengthSession } from '@/guided/strength-complete';
 
 export function openTriWorkoutDetail(workout: Workout): void {
+  // Strength/gym sessions use the shared clean per-exercise breakdown modal,
+  // not the swim/bike/run block layout below.
+  if (workout.t === 'gym' || workout.t === 'strength' || /strength|gym/i.test(workout.n || '')) {
+    import('@/ui/strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(workout));
+    return;
+  }
+
   const existing = document.getElementById('tri-workout-detail-overlay');
   if (existing) existing.remove();
 

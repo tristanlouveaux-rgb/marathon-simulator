@@ -14,7 +14,8 @@ import { looksLikeCssTest, looksLikeFtpTest } from '@/calculations/tri-benchmark
 import { renderTabBar, wireTabBarHandlers, navigateToForecastTab, type TabId } from './tab-bar';
 import { generateWeekWorkouts } from '@/workouts';
 import { getTrailingEffortScore } from '@/calculations/fitness-model';
-import { SPORT_LABELS } from '@/constants';
+import { SPORT_LABELS, IMPACT_PER_KM } from '@/constants';
+import { loadCarriageImpactCoef, resolveBodyweightKg } from '@/constants/load-carriage';
 import { showSportPicker, reclassifyActivity, getEffectiveSport } from './sport-picker-modal';
 import { buildScrollAtmosphereBackground, floweyHaloAnimationCSS, buildSunGlint } from './page-flair';
 import {
@@ -533,6 +534,36 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
     </div>
   ` : '';
 
+  // ─── Run-to-work tag (run activities only) ──────────────────────────────────
+  // Manual override for the matcher's auto-tag. Lets the user mark any run as a
+  // commute, set a per-run backpack weight, or untag a mis-tag. Tagging counts
+  // the run toward commute volume (drift learning) and applies the load-carriage
+  // impact adjustment (Signal C). See SCIENCE_LOG §AD.
+  const commuteOn = actual.commute === true;
+  const commuteBackpackVal = actual.backpackKg != null && actual.backpackKg > 0 ? actual.backpackKg : '';
+  const commuteTagHtml = isRunActual ? `
+    <div class="ad-fade" style="animation-delay:0.48s;margin-bottom:16px">
+      <div style="${CARD};padding:14px 16px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:${TEXT_M}">Run to work</div>
+            <div style="font-size:12px;color:${TEXT_S};line-height:1.5;margin-top:3px">Tag this run as a commute. It counts toward your commute volume and tracks backpack load.</div>
+          </div>
+          <div id="ad-commute-toggle" role="switch" aria-checked="${commuteOn}" data-active="${commuteOn}" style="position:relative;width:42px;height:24px;background:${commuteOn ? 'var(--c-black)' : 'rgba(0,0,0,0.12)'};border-radius:12px;cursor:pointer;flex-shrink:0;transition:background 0.16s ease">
+            <div style="position:absolute;top:2px;left:${commuteOn ? '20px' : '2px'};width:20px;height:20px;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,0.18);transition:left 0.16s ease"></div>
+          </div>
+        </div>
+        <div id="ad-commute-fields" style="display:${commuteOn ? 'flex' : 'none'};align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,0.05)">
+          <div style="font-size:12px;color:${TEXT_S}">Backpack on this run <span style="color:${TEXT_L}">(optional)</span></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input id="ad-commute-backpack" type="number" inputmode="decimal" min="0" max="25" step="0.5" placeholder="0" value="${commuteBackpackVal}" style="width:78px;background:rgba(255,255,255,0.95);border:1px solid var(--c-border);color:${TEXT_M};border-radius:9px;padding:8px 10px;font-size:14px;text-align:right;outline:none;font-variant-numeric:tabular-nums">
+            <span style="font-size:13px;color:${TEXT_S}">kg</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  ` : '';
+
   return `
     <style>
       #ad-view { box-sizing:border-box; }
@@ -586,6 +617,7 @@ function buildDetailHTML(actual: GarminActual, planWorkoutName: string, plannedT
           ${insightHtml}
           ${cssPromptHtml}
           ${ftpPromptHtml}
+          ${commuteTagHtml}
           ${actual.polyline ? `
             <div class="ad-fade" style="animation-delay:0.50s;margin-bottom:16px">
               <button id="ad-safety-cta" style="
@@ -733,6 +765,59 @@ export function renderActivityDetail(
       btn.textContent = 'Use as FTP test';
       if (confirmEl) confirmEl.style.display = 'none';
     }
+  });
+
+  // Run-to-work tag. Toggle writes actual.commute; the backpack field writes
+  // actual.backpackKg. Both adjust the week's impact load (Signal C) by the
+  // same carriage coefficient the matcher applies at match time, so the number
+  // stays consistent whether the run was auto-tagged or hand-tagged here.
+  const carriageCoefFor = (commute: boolean, backpackKg: number | undefined): number => {
+    const st = getState();
+    return commute && backpackKg && backpackKg > 0
+      ? loadCarriageImpactCoef(backpackKg, resolveBodyweightKg(st.bodyWeightKg, st.biologicalSex))
+      : 1.0;
+  };
+  const applyCommuteImpactDelta = (oldCoef: number, newCoef: number): void => {
+    if (oldCoef === newCoef) return;
+    const ms = getMutableState();
+    for (const wk of ms.wks ?? []) {
+      const entry = Object.entries(wk.garminActuals ?? {}).find(([, a]) => a.garminId === actual.garminId);
+      if (!entry) continue;
+      const baseImpactPerKm = IMPACT_PER_KM[actual.plannedType ?? ''] ?? 1.0;
+      const delta = actual.distanceKm * baseImpactPerKm * (newCoef - oldCoef);
+      wk.actualImpactLoad = Math.max(0, (wk.actualImpactLoad ?? 0) + delta);
+      return;
+    }
+  };
+
+  document.getElementById('ad-commute-toggle')?.addEventListener('click', () => {
+    const wasOn = actual.commute === true;
+    const oldCoef = carriageCoefFor(wasOn, actual.backpackKg);
+    if (wasOn) {
+      actual.commute = false;
+    } else {
+      actual.commute = true;
+      // Pre-fill the per-run backpack from the user's commute default so the
+      // load adjustment has a value without opening the field. User can edit.
+      if (actual.backpackKg == null) {
+        const def = getState().commuteConfig?.backpackKg;
+        if (def && def > 0) actual.backpackKg = def;
+      }
+    }
+    const newCoef = carriageCoefFor(actual.commute === true, actual.backpackKg);
+    applyCommuteImpactDelta(oldCoef, newCoef);
+    saveState();
+    renderActivityDetail(actual, planWorkoutName, returnView, plannedTSS, workoutId);
+  });
+
+  document.getElementById('ad-commute-backpack')?.addEventListener('input', (e) => {
+    const raw = Number((e.target as HTMLInputElement).value);
+    const newPack = Number.isFinite(raw) && raw > 0 ? raw : undefined;
+    const oldCoef = carriageCoefFor(actual.commute === true, actual.backpackKg);
+    actual.backpackKg = newPack;
+    const newCoef = carriageCoefFor(actual.commute === true, actual.backpackKg);
+    applyCommuteImpactDelta(oldCoef, newCoef);
+    saveState();
   });
 
   // Safety CTA. Opens rating modal, submits trimmed polyline on confirm

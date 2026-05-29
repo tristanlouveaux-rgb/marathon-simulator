@@ -876,6 +876,30 @@ async function launchApp(): Promise<void> {
     advanceWeekToToday(); // silently advances week + applies detraining if behind calendar
     assertPlanAnchorConsistent(); // tripwire: warn loudly if s.w and planStartDate disagree
 
+    // Boot-time: commute drift. If recent completed weeks logged consistently
+    // fewer commute days than declared, trim the baseline so the plan stops
+    // over-prescribing commute slots. Runs BEFORE the forecast refresh below so
+    // the same-launch forecast uses the trimmed commute count. Only ever
+    // reduces; converges (next launch sees the lower declared and won't
+    // re-fire). CLAUDE.md → Adaptation transparency: small change → small toast.
+    try {
+      const { detectCommuteDrift } = await import('@/calculations/commute-drift');
+      const ms = getMutableState();
+      if (ms.commuteConfig?.enabled) {
+        const drift = detectCommuteDrift(ms.wks ?? [], ms.w ?? 1, ms.commuteConfig);
+        if (drift) {
+          ms.commuteConfig.commuteDaysPerWeek = drift.newDays;
+          console.log(`[commute-drift] baseline ${drift.oldDays} → ${drift.newDays} day(s)/week (observed ${drift.observed.join(',')})`);
+          saveState();
+          const { showMarkerBumpToast } = await import('@/ui/toast');
+          const dayLabel = drift.newDays === 1 ? 'day' : 'days';
+          showMarkerBumpToast([`Commute baseline trimmed to ${drift.newDays} ${dayLabel}/week. Recent weeks logged fewer commute runs than declared.`]);
+        }
+      }
+    } catch (err) {
+      console.warn('[commute-drift] pass failed', err);
+    }
+
     // Boot-time migration: refresh blended VDOT so existing users (who have
     // wkGain deprecated) see current fitness, not Week-1 baseline.
     try {

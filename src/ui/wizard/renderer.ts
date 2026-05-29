@@ -19,6 +19,7 @@ import { renderHyroxSetup } from './steps/hyrox-setup';
 import { renderWorkoutPreview } from './steps/workout-preview';
 import { renderTriWorkoutPreview } from './steps/tri-workout-preview';
 import { renderHyroxWorkoutPreview } from './steps/hyrox-workout-preview';
+import { renderCommute } from './steps/commute';
 
 /**
  * Get the app root container
@@ -76,6 +77,10 @@ export function renderStep(step: OnboardingStep, state: OnboardingState): void {
 
     case 'schedule':
       renderSchedule(container, state);
+      break;
+
+    case 'commute':
+      renderCommute(container, state);
       break;
 
     case 'plan-preview-v2':

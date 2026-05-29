@@ -22,6 +22,7 @@ const STEP_ORDER: OnboardingStep[] = [
   'about-you',
   'race-target',
   'schedule',
+  'commute',
   'review',
   'initializing',
   'plan-preview-v2',
@@ -153,6 +154,10 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'tri-workout-preview') {
+      goToStep('commute');
+      return;
+    }
+    if (s.onboarding.currentStep === 'commute') {
       goToStep('review');
       return;
     }
@@ -186,8 +191,15 @@ export function nextStep(): void {
       return;
     }
     if (s.onboarding.currentStep === 'hyrox-workout-preview') {
-      // Skip the recap review step for HYROX. The workout-preview is the
-      // final reveal before initializing the plan.
+      // HYROX adds a commute capture step between the workout preview and
+      // initialising. Commute runs are appended on top of the prescribed
+      // HYROX sessions (see plan_engine.hyrox.ts).
+      goToStep('commute');
+      return;
+    }
+    if (s.onboarding.currentStep === 'commute') {
+      // Skip the recap review step for HYROX. The workout-preview was the
+      // final reveal; commute is the only thing between it and plan generation.
       goToStep('initializing');
       return;
     }
@@ -263,13 +275,20 @@ export function nextStep(): void {
   }
 
   // Branch: running users (no specific trainingMode or mode === 'running') go
-  // schedule → workout-preview → review. Other modes skip workout-preview.
+  // schedule → workout-preview → commute → review. Commute slots in here so the
+  // user has just seen their planned sessions and is in the headspace to
+  // consider what they already run outside the plan. Cycling handles its own
+  // workout-preview → review inside its block above (no run leg, no commute).
   const isRunningMode = !s.onboarding.trainingMode || s.onboarding.trainingMode === 'running';
   if (s.onboarding.currentStep === 'schedule' && isRunningMode && !s.onboarding.trackOnly) {
     goToStep('workout-preview');
     return;
   }
   if (s.onboarding.currentStep === 'workout-preview') {
+    goToStep('commute');
+    return;
+  }
+  if (s.onboarding.currentStep === 'commute') {
     goToStep('review');
     return;
   }
@@ -375,6 +394,19 @@ export function previousStep(): void {
     return;
   }
 
+  // Branch: commute back → the preceding workout-preview step. Mode-specific
+  // because each mode routes through a different preview screen.
+  if (s.onboarding.currentStep === 'commute') {
+    if (s.onboarding.trainingMode === 'triathlon') {
+      goToStep('tri-workout-preview');
+    } else if (s.onboarding.trainingMode === 'hyrox') {
+      goToStep('hyrox-workout-preview');
+    } else {
+      goToStep('workout-preview');
+    }
+    return;
+  }
+
   // Branch: manual-entry back → connect-data. The user landed here by tapping
   // "Enter manually" on the connect step; clear skippedStrava so they can try
   // OAuth again if they changed their mind.
@@ -387,12 +419,13 @@ export function previousStep(): void {
     return;
   }
 
-  // Branch: review back depends on mode. Triathlon: → tri-past-race. Cycling:
-  // → workout-preview. Running (no mode / 'running'): → workout-preview.
-  // Track-only: → race-target (no schedule step). HYROX: → hyrox-setup.
+  // Branch: review back depends on mode. Triathlon and running both pass
+  // through commute before review now, so review-back lands on commute.
+  // Cycling has no run leg (skips commute) → workout-preview. Track-only has
+  // no schedule/commute step → race-target. HYROX has no review step.
   if (s.onboarding.currentStep === 'review') {
     if (s.onboarding.trainingMode === 'triathlon') {
-      goToStep('tri-workout-preview');
+      goToStep('commute');
     } else if (s.onboarding.trainingMode === 'hyrox') {
       goToStep('hyrox-setup');
     } else if (s.onboarding.trainingMode === 'cycling') {
@@ -400,9 +433,8 @@ export function previousStep(): void {
     } else if (s.onboarding.trackOnly) {
       goToStep('race-target');
     } else {
-      // Running mode (default): schedule → workout-preview → review.
-      // Track-only already handled above; non-track running goes back to workout-preview.
-      goToStep('workout-preview');
+      // Running mode (default): workout-preview → commute → review.
+      goToStep('commute');
     }
     return;
   }

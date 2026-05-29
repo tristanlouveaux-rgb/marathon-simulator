@@ -18,10 +18,12 @@ import type { Week, CommuteConfig } from '@/types';
  *
  * Rule
  * ----
- * Look at the last `WINDOW` fully-rolled-over weeks. Count tagged commute
- * actuals per week. If at least `THRESHOLD` of those weeks fell short of
- * the declared `commuteDaysPerWeek` by ≥ 1, reduce the declared baseline
- * to the median observed count (rounded to the nearest day, floored at 1).
+ * Look at the last `WINDOW` fully-rolled-over weeks. Count distinct commute
+ * DAYS per week (not trips — a bidirectional commuter logs two runs on one
+ * calendar day and that is still one day against `commuteDaysPerWeek`). If at
+ * least `THRESHOLD` of those weeks fell short of the declared
+ * `commuteDaysPerWeek` by ≥ 1, reduce the declared baseline to the median
+ * observed count (rounded to the nearest day, floored at 1).
  *
  * We don't *raise* the declared count automatically. If a user is doing
  * more than they declared, that's their own elective effort and the plan
@@ -83,8 +85,17 @@ export function detectCommuteDrift(
       continue;
     }
     const actuals = wk.garminActuals ? Object.values(wk.garminActuals) : [];
-    const commuteCount = actuals.filter(a => a.commute === true).length;
-    observed.push(commuteCount);
+    // Count distinct commute DAYS, not trips. A bidirectional commuter logs two
+    // runs (morning + evening) sharing one calendar date; both count as a single
+    // day against the declared days/week. Counting raw trips would double the
+    // observation for two-way commuters, so the shortfall comparison against
+    // `commuteDaysPerWeek` (a day count) would never fire.
+    const commuteDays = new Set(
+      actuals
+        .filter(a => a.commute === true && a.startTime)
+        .map(a => a.startTime!.slice(0, 10)),
+    ).size;
+    observed.push(commuteDays);
   }
 
   const declared = commuteConfig.commuteDaysPerWeek;

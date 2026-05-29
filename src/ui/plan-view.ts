@@ -30,6 +30,7 @@ import { triggerExcessLoadAdjustment, hasRemainingWeekWorkouts } from './excess-
 import { showRunBreakdownSheet } from './home-view';
 import { computeWeekSignals, getSignalPills, getFutureWeekPills, PILL_COLORS, type SignalPill } from '@/calculations/coach-insight';
 import { isTimingMod, mergeTimingMods } from '@/cross-training/timing-check';
+import { parseStrengthSession } from '@/guided/strength-model';
 import type { MorningPainResponse } from '@/types/injury';
 import { computeRecoveryStatus, sleepQualityToScore } from '@/recovery/engine';
 import { calculateZones, getWorkoutHRTarget } from '@/calculations/heart-rate';
@@ -44,7 +45,7 @@ let _viewWeek: number | null = null; // null = current week
 // in the same UI as the live plan, instead of `s.wks`. Lets the user step back
 // past week 1 and browse a finished plan week-by-week. null = live plan.
 let _viewArchiveIdx: number | null = null;
-let _workoutLookup: Map<string, { n: string; d: string }> = new Map();
+let _workoutLookup: Map<string, Workout> = new Map();
 
 // ─── Recovery undo. Module-level delegated handler (set once, survives re-renders) ──
 // Must be outside wirePlanHandlers so it works regardless of render path.
@@ -1110,11 +1111,21 @@ function buildWorkoutCards(
       // Type badge + description (always visible)
       const typeBadgeLabel = runWorkoutTypeBadgeLabel(w.t, w.n || '');
       const descText = (w as any).d?.trim() ? fmtDesc((w as any).d, s.unitPref ?? 'km') : '';
-      const descRow = isSportSwap
-        ? `<div style="font-size:11px;color:var(--c-muted);margin-top:3px">Planned: ${escapeHtml((w.n || 'Cross-training').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))}</div>`
-        : (descText && !isReplaced
-          ? `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:4px">${escapeHtml(descText).replace(/\n/g, '<br>')}</div>`
-          : '');
+      // Strength/gym sessions collapse their exercise list to a "tap to view"
+      // summary; the full breakdown opens in the strength detail modal. The raw
+      // multi-exercise description reads as a run-on paragraph inline.
+      const isGymCard = (w.t === 'gym' || w.t === 'strength') && !isSportSwap && !isReplaced;
+      const gymExerciseCount = isGymCard && (w as any).d?.trim() ? (parseStrengthSession(w as any)?.exerciseCount ?? 0) : 0;
+      let descRow: string;
+      if (isSportSwap) {
+        descRow = `<div style="font-size:11px;color:var(--c-muted);margin-top:3px">Planned: ${escapeHtml((w.n || 'Cross-training').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()))}</div>`;
+      } else if (gymExerciseCount > 0) {
+        descRow = `<div style="font-size:13px;color:var(--c-muted);margin-top:4px">${gymExerciseCount} exercise${gymExerciseCount === 1 ? '' : 's'} · tap to view</div>`;
+      } else if (descText && !isReplaced) {
+        descRow = `<div style="font-size:13px;color:var(--c-muted);line-height:1.5;margin-top:4px">${escapeHtml(descText).replace(/\n/g, '<br>')}</div>`;
+      } else {
+        descRow = '';
+      }
 
       // Status chip (right side of badge row. Only show non-trivial states)
       const showStatusChip = statusLabel !== 'Upcoming';
@@ -1130,7 +1141,7 @@ function buildWorkoutCards(
       const expandDetail = buildWorkoutExpandedDetail(w, wk, viewWeek, s.w);
 
       cards.push(`
-        <div class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" draggable="true" style="
+        <div class="plan-workout-card" data-workout-id="${id}" data-day-of-week="${dayIdx}" ${gymExerciseCount > 0 ? 'data-gym-detail="1"' : ''} draggable="true" style="
           background:#fff;
           border-radius:14px;
           margin-bottom:8px;
@@ -2307,7 +2318,7 @@ function computeRenderedWorkouts(s: SimulatorState, viewWeek: number): any[] {
 
   _workoutLookup = new Map();
   for (const w of workouts) {
-    _workoutLookup.set(w.id || w.n, { n: w.n || '', d: w.d || '' });
+    _workoutLookup.set(w.id || w.n, w);
   }
 
   return workouts;
@@ -2895,6 +2906,13 @@ function wirePlanHandlers(s: SimulatorState, viewWeek: number): void {
       const card = header.closest('.plan-workout-card') as HTMLElement;
       const id = card?.getAttribute('data-workout-id');
       if (!id) return;
+
+      // Strength/gym cards open the clean detail modal instead of expanding.
+      if (card?.hasAttribute('data-gym-detail')) {
+        const wo = _workoutLookup.get(id);
+        if (wo) import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
+        return;
+      }
 
       const detail = document.getElementById(safeDetailId(id));
       if (!detail) return;
@@ -3657,6 +3675,12 @@ function wireCardScopedHandlers(root: ParentNode, viewWeek: number): void {
       const card = header.closest('.plan-workout-card') as HTMLElement;
       const id = card?.getAttribute('data-workout-id');
       if (!id) return;
+      // Strength/gym cards open the clean detail modal instead of expanding.
+      if (card?.hasAttribute('data-gym-detail')) {
+        const wo = _workoutLookup.get(id);
+        if (wo) import('./strength-workout-detail-modal').then(({ openStrengthWorkoutDetail }) => openStrengthWorkoutDetail(wo));
+        return;
+      }
       const detail = document.getElementById(safeDetailId(id));
       if (!detail) return;
       const isExpanded = detail.style.display !== 'none';

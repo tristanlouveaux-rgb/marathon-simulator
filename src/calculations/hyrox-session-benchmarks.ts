@@ -107,6 +107,35 @@ function bestRoundPerStation(components: HyroxComponent[], records: SetRecord[])
   return out;
 }
 
+/** One run leg of a brick session, for the end-of-session summary. Runs carry no
+ *  benchmark (run fitness lives in VDOT/pace, tracked elsewhere) — we surface
+ *  time + pace per round so the athlete can see fade across the brick. */
+export interface RunLegResult {
+  round: number;        // 1-based round this leg belonged to
+  durationSec: number;
+  distanceM: number;
+  paceSecKm: number;
+}
+
+/**
+ * Per-leg summary of the run components in a session, in round order. Empty for
+ * station-only sessions (density / technique). Pure.
+ */
+export function summariseHyroxRuns(workout: Workout, records: SetRecord[]): RunLegResult[] {
+  const components = ((workout as any).hyroxComponents ?? []) as HyroxComponent[];
+  if (!components.length || !records.length) return [];
+  const legs: RunLegResult[] = [];
+  for (const r of records) {
+    const c = components[r.exerciseIndex];
+    if (!c || c.type !== 'run') continue;
+    const distanceM = c.distanceM ?? 1000;
+    const sec = Math.round(r.durationSec);
+    if (sec <= 0 || distanceM <= 0) continue;
+    legs.push({ round: r.setIndex + 1, durationSec: sec, distanceM, paceSecKm: Math.round(sec / (distanceM / 1000)) });
+  }
+  return legs.sort((a, b) => a.round - b.round);
+}
+
 /**
  * Per-station summary for a completed guided HYROX session: best round, current
  * benchmark, delta, percentile, and whether it is an eligible improvement. Pure

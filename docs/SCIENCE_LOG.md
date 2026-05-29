@@ -6253,3 +6253,35 @@ This mirrors the brick generator's fill-the-budget intent (`generateFullBrick`),
 3. **Raw fatigued time** (see "Conservative on fatigue").
 
 **Code.** `src/calculations/hyrox-session-benchmarks.ts` (`isRacePaceHyroxSession`, `summariseHyroxSession`, `applyHyroxSessionBenchmarks`). Wired from `src/guided/strength-complete.ts`; summary in `src/ui/guided-strength-overlay.ts` (`buildHyroxFinishSummary`). Source enum `'session'` added in `hyrox-station-history.ts` + `triathlon.ts`; label in `station-detail-view.ts`. Tests: `hyrox-session-benchmarks.test.ts` (9).
+
+## §AQ — HYROX injury-aware projection (2026-05-29)
+
+**Problem.** The HYROX race-day projection (`buildHyroxProjection`) credited full training-horizon build to every discipline regardless of an active injury. A HYROX athlete with a blocked or reduced body region still saw the healthy-case projected gain. Triathlon has solved this since §AM: it debits each discipline's effective build weeks by an injury-recovery window (`injuryAdjustedBuildWeeks`), so a forecast builds from the return date rather than crediting weeks the athlete cannot train. HYROX never consumed that shared math.
+
+**Model — discipline build-week debit, stolen from triathlon.** Same formula, same shared helper (`src/calculations/injury-recovery.ts`). An injury costs a discipline `resumeWeeks × (1 − capacity/100)` weeks of effective build; the horizon for that discipline then runs over `weeksRemaining − debit` weeks. A blocked discipline (capacity 0, full window) → 0 build weeks → no projected gain (the horizon functions clamp to `improvement_pct: 0` at `weeks_remaining ≤ 0`, no detraining penalty). This is a *projection-horizon* adjustment only: today's "race now" prediction is unchanged, in parity with triathlon.
+
+**Discipline mapping.** HYROX has no swim/bike. Its disciplines are the 8 km run (`run`) and the 8 functional stations. The injury engine already exposes `upperLoad` / `lowerLoad` capacity and resume windows, captured directly by the HYROX injury modal (`src/ui/injury/modal.ts:106`, the `eventType === 'hyrox'` branch shows run / upper-body / lower-body sliders). Stations map to regions anatomically (`HYROX_STATION_REGION` in `src/calculations/hyrox-injury.ts`):
+
+| Station | Region | Movement basis |
+|---|---|---|
+| SkiErg | upper | double-pole: lats, triceps, core |
+| Sled Push | lower | horizontal leg drive |
+| Sled Pull | full | upper-back/arm pull braced on leg drive |
+| Burpee Broad Jumps | full | push-up + explosive jump |
+| RowErg | full | legs drive, back/arms finish |
+| Farmer Carry | full | grip/upper hold under loaded locomotion |
+| Sandbag Lunges | lower | loaded lunge, leg-dominant |
+| Wall Balls | full | squat + overhead throw |
+
+A `full` station is debited by the *worse* of its upper/lower build weeks (`min`), because the station is only as trainable as its most-restricted contributor. The run portion is debited by the `run` discipline; roxzone (transition economy) is left unaffected (it has no triathlon analog — tri transitions are fixed clock time, not horizon-projected).
+
+**Why defensible.** No new model constants. The recovery math, the per-region capacity table (`LOCATION_CAPACITY_DEFAULTS`), and the `injuryAdjustedBuildWeeks` formula are all the existing §AM / §AN machinery. The only new artefact is the station→region classification, which is anatomical (HYROX movement patterns), not a tunable. The no-injury path is bit-for-bit unchanged: `stationInjuryBuildWeeks(undefined, …)` and `injuryAdjustedBuildWeeks(undefined, …)` both return the full `weeksRemaining`.
+
+**Surface.** The forecast hero shows a one-line recovery note (`renderHyroxInjuryNote` in `src/ui/hyrox/forecast-view.ts`), mirroring the triathlon marquee's `renderInjuryRecoveryNote`: "Assumes recovery on schedule: Running resumes in 3 weeks, upper-body work is reduced until then. Counts each discipline only for the weeks it can train."
+
+**Limitations.**
+1. **Linear region collapse.** A `full` station takes the worse single region rather than a weighted blend of both. Conservative: it never under-states the restriction. A blended model would need per-station upper/lower load fractions we have not measured.
+2. **Roxzone unaffected.** Transition economy is small and not cleanly tied to one region; left out rather than guessed.
+3. **Capacity is a snapshot.** The debit uses the current capacity for the whole pre-return window rather than a graded ramp back to 100; matches the triathlon model's same simplification.
+
+**Code.** `src/calculations/hyrox-injury.ts` (`HYROX_STATION_REGION`, `stationInjuryBuildWeeks`), wired into `src/calculations/race-prediction.hyrox.ts` (`buildStationProjection`, per-station weeks) and `src/calculations/race-projection.hyrox.ts` (`buildHyroxProjection`, run horizon). UI note in `src/ui/hyrox/forecast-view.ts`. Tests: `hyrox-injury.test.ts` (10 — mapping, per-region debit, full-station worst-of, blocked/reduced, projection integration, no-injury invariance).

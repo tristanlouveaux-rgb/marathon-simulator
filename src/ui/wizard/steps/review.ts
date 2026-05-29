@@ -81,7 +81,7 @@ const ATHLETE_TIER_LABELS: Record<NonNullable<ReturnType<typeof getState>['athle
 const LOADING_TIMEOUT_MS = 30_000;
 
 /** Inline row state — which row (if any) is currently in edit mode. */
-type EditingRow = null | 'volume' | 'pb-k5' | 'pb-k10' | 'pb-h' | 'pb-m' | 'ftp' | 'css';
+type EditingRow = null | 'volume' | 'pb-k5' | 'pb-k10' | 'pb-h' | 'pb-m' | 'ftp' | 'css' | 'vdot' | 'lt';
 let editing: EditingRow = null;
 
 /** Cached activity rows between renders so inline edits don't refetch. */
@@ -1365,18 +1365,17 @@ function renderTriPbsSection(
     return `${renderSectionLabel('Personal bests (for closest distances)')}\n${rows.join('\n')}`;
   }
 
-  const anyPb =
-    pbs.k5 || pbSources.k5 ||
-    pbs.k10 || pbSources.k10 ||
-    pbs.h || pbSources.h ||
-    pbs.m || pbSources.m;
-  if (!anyPb) return '';
+  // Always render all four distance rows in running mode. Empty rows read
+  // "-- · Tap to add" and are tappable, so a user who synced nothing can still
+  // satisfy the continue gate ("at least one personal best"). Previously this
+  // section returned '' when no PB existed, leaving the gate unsatisfiable
+  // from this screen.
   return `
     ${renderSectionLabel('Personal bests')}
-    ${pbs.k5 || pbSources.k5 ? renderPbRow('k5', '5K', pbs.k5, pbSources.k5, false) : ''}
-    ${pbs.k10 || pbSources.k10 ? renderPbRow('k10', '10K', pbs.k10, pbSources.k10, false) : ''}
-    ${pbs.h || pbSources.h ? renderPbRow('h', 'Half marathon', pbs.h, pbSources.h, true) : ''}
-    ${pbs.m || pbSources.m ? renderPbRow('m', 'Marathon', pbs.m, pbSources.m, true) : ''}
+    ${renderPbRow('k5', '5K', pbs.k5, pbSources.k5, false)}
+    ${renderPbRow('k10', '10K', pbs.k10, pbSources.k10, false)}
+    ${renderPbRow('h', 'Half marathon', pbs.h, pbSources.h, true)}
+    ${renderPbRow('m', 'Marathon', pbs.m, pbSources.m, true)}
   `;
 }
 
@@ -1524,7 +1523,7 @@ function renderPbRow(
     `;
   }
 
-  let subline = 'Not found in recent activities';
+  let subline = 'Tap to add';
   if (sourceWins && source) {
     subline = source.activityName ?? 'From your Strava history';
   } else if (source && currentSec != null && stravaSec != null && currentSec === stravaSec) {
@@ -1574,6 +1573,30 @@ function renderVdotRow(_vdot: number | undefined): string {
   const s = getState();
   const physio = getPhysiologicalVdot(s);
   const value = physio.vdot != null ? physio.vdot.toFixed(1) : '--';
+
+  // Inline editor. Manual entry sets `s.vo2Override` (top of the priority
+  // chain) and recomputes LT + paces. The launch-time refresh auto-clears it
+  // when a derived estimate clearly beats it, per the benchmark-improvement
+  // rule in CLAUDE.md.
+  if (editing === 'vdot') {
+    const cur = physio.vdot != null ? physio.vdot.toFixed(1) : '';
+    return `
+      <div class="r-row shadow-ap editing" data-row="vdot">
+        <div class="r-row-icon">${ICON_FITNESS}</div>
+        <div class="r-row-body">
+          <p class="r-row-label">Current VO2max</p>
+          <div class="r-edit-row">
+            <input id="r-vdot-input" class="r-edit-input" type="number" inputmode="decimal" min="20" max="85" step="0.1" value="${cur}" placeholder="e.g. 45">
+            <span class="r-edit-unit">ml/kg/min</span>
+          </div>
+          <div class="r-edit-actions">
+            <button class="r-edit-btn" data-action="cancel">Cancel</button>
+            <button class="r-edit-btn save" data-action="save">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   const hr = s.hrCalibratedVdot;
   const physioLinked = hasPhysiologySource(s, 'garmin') || hasPhysiologySource(s, 'apple');
@@ -1629,14 +1652,19 @@ function renderVdotRow(_vdot: number | undefined): string {
       break;
   }
 
+  // Manual override wins the priority chain; caption it as such rather than
+  // leaving the derived-source copy that doesn't apply.
+  if (physio.source === 'override') sub = 'Set manually. Tap to change.';
+
   return `
-    <div class="r-row shadow-ap readonly">
+    <div class="r-row shadow-ap" data-row="vdot" style="cursor:pointer">
       <div class="r-row-icon">${ICON_FITNESS}</div>
       <div class="r-row-body">
         <p class="r-row-label">Current VO2max${renderInfoButton('vdot')}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${sub}</p>
       </div>
+      <div class="r-row-chev">${CHEV}</div>
     </div>
   `;
 }
@@ -1648,11 +1676,37 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
   const conf = s.ltConfidence;
   const src = s.ltSource;
   const value = fp(lt, unitPref);
+
+  // Inline editor. Manual entry sets `s.ltOverride` and recomputes paces. Like
+  // VO2max, the launch-time refresh auto-clears it when a derived estimate
+  // clearly beats it (CLAUDE.md benchmark-improvement rule).
+  if (editing === 'lt') {
+    const secForUnit = unitPref === 'mi' ? lt * 1.60934 : lt;
+    const cur = `${Math.floor(secForUnit / 60)}:${String(Math.round(secForUnit % 60)).padStart(2, '0')}`;
+    const unitLabel = unitPref === 'mi' ? '/ mi' : '/ km';
+    return `
+      <div class="r-row shadow-ap editing" data-row="lt">
+        <div class="r-row-icon">${ICON_LT}</div>
+        <div class="r-row-body">
+          <p class="r-row-label">Lactate threshold pace</p>
+          <div class="r-edit-row">
+            <input id="r-lt-input" class="r-edit-input" type="text" inputmode="numeric" placeholder="mm:ss" value="${cur}">
+            <span class="r-edit-unit">${unitLabel}</span>
+          </div>
+          <div class="r-edit-actions">
+            <button class="r-edit-btn" data-action="cancel">Cancel</button>
+            <button class="r-edit-btn save" data-action="save">Save</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   let sub = '';
   if (src === 'garmin') {
     sub = `From your Garmin LT reading${conf ? ` (${conf} confidence)` : ''}.`;
   } else if (src === 'override') {
-    sub = 'Set manually.';
+    sub = 'Set manually. Tap to change.';
   } else if (src) {
     // Caption reflects which derivation method actually fired. Anchored to
     // the same `ltSource` value `deriveLT` returned in `recomputeLT`.
@@ -1684,13 +1738,14 @@ function renderLtRow(unitPref: 'km' | 'mi'): string {
     sub = 'Threshold pace estimate.';
   }
   return `
-    <div class="r-row shadow-ap readonly">
+    <div class="r-row shadow-ap" data-row="lt" style="cursor:pointer">
       <div class="r-row-icon">${ICON_LT}</div>
       <div class="r-row-body">
         <p class="r-row-label">Lactate threshold pace${renderInfoButton('lt')}</p>
         <p class="r-row-value">${value}</p>
         <p class="r-row-sub">${sub}</p>
       </div>
+      <div class="r-row-chev">${CHEV}</div>
     </div>
   `;
 }
@@ -2010,12 +2065,13 @@ function wireHandlers(container: HTMLElement, state: OnboardingState): void {
     const row = el.getAttribute('data-row');
     if (!row) return;
 
-    if (row === 'volume' || row === 'pb-k5' || row === 'pb-k10' || row === 'pb-h' || row === 'pb-m' || row === 'ftp' || row === 'css') {
+    if (row === 'volume' || row === 'pb-k5' || row === 'pb-k10' || row === 'pb-h' || row === 'pb-m' || row === 'ftp' || row === 'css' || row === 'vdot' || row === 'lt') {
       if (el.classList.contains('editing')) return;
       el.addEventListener('click', (e) => {
-        // Ignore clicks that land on cancel/save buttons inside an already-open editor
+        // Ignore clicks that land on cancel/save buttons inside an already-open
+        // editor, or the inline info "i" button (VO2max / LT rows carry one).
         const target = e.target as HTMLElement;
-        if (target.closest('[data-action]')) return;
+        if (target.closest('[data-action]') || target.closest('[data-info]')) return;
         editing = row as EditingRow;
         rerender(state);
       });
@@ -2178,6 +2234,66 @@ function commitEditing(state: OnboardingState): void {
       updateOnboarding({ triSwim: { ...(onb.triSwim ?? {}), cssSecPer100m: parsed } });
     } else if (input.value.trim() === '') {
       updateOnboarding({ triSwim: { ...(onb.triSwim ?? {}), cssSecPer100m: undefined } });
+    } else {
+      input.style.borderColor = 'rgba(185,28,28,0.6)';
+      return;
+    }
+    editing = null;
+    rerender(state);
+    return;
+  }
+
+  if (editing === 'vdot') {
+    const input = document.getElementById('r-vdot-input') as HTMLInputElement | null;
+    if (!input) return;
+    const m = getMutableState();
+    if (input.value.trim() === '') {
+      // Clear the manual override and fall back to the derived chain.
+      delete m.vo2Override;
+      recomputeLT(m);
+      saveState();
+      editing = null;
+      rerender(state);
+      return;
+    }
+    const raw = parseFloat(input.value);
+    if (Number.isFinite(raw) && raw >= 20 && raw <= 85) {
+      m.vo2Override = { value: Math.round(raw * 10) / 10, setAt: new Date().toISOString() };
+      // Flow-through: a new VO2max re-derives LT (Daniels) and, downstream,
+      // training paces. recomputeLT reads the override via getPhysiologicalVdot.
+      recomputeLT(m);
+      saveState();
+    } else {
+      input.style.borderColor = 'rgba(185,28,28,0.6)';
+      return;
+    }
+    editing = null;
+    rerender(state);
+    return;
+  }
+
+  if (editing === 'lt') {
+    const input = document.getElementById('r-lt-input') as HTMLInputElement | null;
+    if (!input) return;
+    const m = getMutableState();
+    const unitPref = getState().unitPref ?? 'km';
+    if (input.value.trim() === '') {
+      delete m.ltOverride;
+      recomputeLT(m);
+      saveState();
+      editing = null;
+      rerender(state);
+      return;
+    }
+    const parsed = parseCss(input.value); // mm:ss → seconds, unit-agnostic parse
+    // Convert the entered pace (in the user's unit) back to sec/km for storage.
+    const secKm = parsed != null && unitPref === 'mi' ? parsed / 1.60934 : parsed;
+    if (secKm != null && secKm > 120 && secKm < 600) {
+      m.ltOverride = { ltPaceSecKm: Math.round(secKm), setAt: new Date().toISOString() };
+      // Flow-through: recomputeLT applies the override to s.lt / s.ltSource and
+      // paces derive from it at plan generation.
+      recomputeLT(m);
+      saveState();
     } else {
       input.style.borderColor = 'rgba(185,28,28,0.6)';
       return;
