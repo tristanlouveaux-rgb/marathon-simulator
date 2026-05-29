@@ -55,21 +55,27 @@ function navigateTab(tab: TabId): void {
 type ZoneName = 'Building' | 'Foundation' | 'Trained' | 'Well-Trained' | 'Performance' | 'Elite';
 const ZONE_LABELS: ZoneName[] = ['Building', 'Foundation', 'Trained', 'Well-Trained', 'Performance', 'Elite'];
 
+// All zones share a single teal-green fill colour (matches the Xcode build).
+// The earlier blue-to-purple gradient drove the bars into a purple tint at
+// the high end of the tier ladder ("Well-Trained" / "Performance" / "Elite")
+// which read as wrong for a fitness benchmark.
 const ZONE_FILL: Record<ZoneName, string> = {
-  'Building':     '#38BDF8',
-  'Foundation':   '#3B82F6',
-  'Trained':      '#4F46E5',
-  'Well-Trained': '#7C3AED',
-  'Performance':  '#9333EA',
-  'Elite':        '#6D28D9',
+  'Building':     '#14B8A6',
+  'Foundation':   '#14B8A6',
+  'Trained':      '#14B8A6',
+  'Well-Trained': '#14B8A6',
+  'Performance':  '#14B8A6',
+  'Elite':        '#14B8A6',
 };
+// Background segment tints: gentle teal-tinged grey, slightly stronger at the
+// active end so the spectrum still reads left-to-right.
 const ZONE_TINT: Record<ZoneName, string> = {
-  'Building':     'rgba(56,189,248,0.18)',
-  'Foundation':   'rgba(59,130,246,0.20)',
-  'Trained':      'rgba(79,70,229,0.22)',
-  'Well-Trained': 'rgba(124,58,237,0.25)',
-  'Performance':  'rgba(147,51,234,0.28)',
-  'Elite':        'rgba(109,40,217,0.35)',
+  'Building':     'rgba(20,184,166,0.12)',
+  'Foundation':   'rgba(20,184,166,0.16)',
+  'Trained':      'rgba(20,184,166,0.20)',
+  'Well-Trained': 'rgba(20,184,166,0.24)',
+  'Performance':  'rgba(148,163,184,0.20)',
+  'Elite':        'rgba(148,163,184,0.28)',
 };
 
 interface BarOpts {
@@ -455,7 +461,7 @@ export function buildTrendCards(s: SimulatorState): string {
     <div class="m-card" style="padding:16px;margin-bottom:10px">
       <div style="font-size:12px;font-weight:600;color:var(--c-black);margin-bottom:2px">Bike FTP trend</div>
       <div style="font-size:10px;color:var(--c-faint);margin-bottom:10px">Functional threshold power · auto-derived from rides + your tests</div>
-      ${buildBenchmarkTrendChart(ftpHistory, '#8B5CF6', 'rgba(139,92,246,0.08)', 'W', /*inverted*/ false)}
+      ${buildBenchmarkTrendChart(ftpHistory, '#DC2626', 'rgba(220,38,38,0.08)', 'W', /*inverted*/ false)}
     </div>
 
     ${cycling ? '' : `<div class="m-card" style="padding:16px;margin-bottom:10px">
