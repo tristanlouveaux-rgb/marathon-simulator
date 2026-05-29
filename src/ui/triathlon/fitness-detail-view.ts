@@ -20,6 +20,7 @@ import { getMutableState, saveState } from '@/state';
 import type { SimulatorState, VO2Estimate, VO2Confidence } from '@/types';
 import { isCyclingOnlyMode } from '@/calculations/cycling-mode';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import { gp } from '@/calculations/paces';
 import { predictTriathlonRace } from '@/calculations/race-prediction.triathlon';
 import {
@@ -525,13 +526,33 @@ export function renderTriFitnessDetailView(): void {
   if (!s.triConfig) return;
 
   container.innerHTML = `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildDetailHeader('Fitness')}
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('tfd', { variant: 'centered', palette: 'mint', pulse: false })}
+      </div>
+      ${buildSunGlint('low')}
 
-      <div style="max-width:600px;margin:0 auto;padding:12px 18px 80px;overflow-y:auto">
-        ${buildYourNumbersCard(s)}
-        ${buildTrendCards(s)}
-        ${buildRaceEstimatesCard(s)}
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+
+        <!-- Back row -->
+        <div style="padding:max(20px, env(safe-area-inset-top)) 18px 0">
+          <button id="tri-fitness-back" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:15px;color:var(--c-black);font-family:var(--f);padding:6px 0;margin-left:-2px">
+            <span style="font-size:18px;line-height:1">←</span>
+            <span style="font-weight:500">Back</span>
+          </button>
+        </div>
+
+        <!-- Centered hero -->
+        <div style="text-align:center;padding:40px 20px 22px">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Fitness</div>
+          <div style="font-size:13px;color:var(--c-muted);margin-top:8px">Your benchmarks across all three disciplines.</div>
+        </div>
+
+        <div style="padding:0 16px">
+          ${buildYourNumbersCard(s)}
+          ${buildTrendCards(s)}
+          ${buildRaceEstimatesCard(s)}
+        </div>
       </div>
     </div>
     ${renderTabBar('stats')}`;

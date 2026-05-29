@@ -25,6 +25,7 @@
 import { getState } from '@/state/store';
 import type { SimulatorState, Week, Workout, GarminActual } from '@/types';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
+import { buildRingBackground, atmosphereGradient, buildSunGlint } from '../page-flair';
 import { DISCIPLINE_LABEL } from './colours';
 
 // Blue/indigo spectrum. From the UX_PATTERNS zone colour scale.
@@ -845,10 +846,29 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
     : 'All available history.';
 
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildDetailHeader('Progress')}
+    <div class="mosaic-page" style="background:${atmosphereGradient('mint')};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground('tpd', { variant: 'centered', palette: 'mint', pulse: false })}
+      </div>
+      ${buildSunGlint('low')}
 
-      <div id="tri-progress-content" style="max-width:600px;margin:0 auto;padding:12px 18px 80px;overflow-y:auto">
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+
+        <!-- Back row -->
+        <div style="padding:max(20px, env(safe-area-inset-top)) 18px 0">
+          <button id="tri-progress-back" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:15px;color:var(--c-black);font-family:var(--f);padding:6px 0;margin-left:-2px">
+            <span style="font-size:18px;line-height:1">←</span>
+            <span style="font-weight:500">Back</span>
+          </button>
+        </div>
+
+        <!-- Centered hero -->
+        <div style="text-align:center;padding:40px 20px 22px">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">Progress</div>
+          <div style="font-size:13px;color:var(--c-muted);margin-top:8px">Recent weeks, fitness trend, and weekly load.</div>
+        </div>
+
+      <div id="tri-progress-content" style="padding:0 16px">
 
         <!-- Range toggle + caption -->
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -912,6 +932,7 @@ function buildPage(s: SimulatorState, range: ProgressRange): string {
           ${buildTotalTSSChart(series)}
         </div>
 
+      </div>
       </div>
     </div>
     ${renderTabBar('stats')}
