@@ -28,7 +28,15 @@ interface Cluster {
   detail: string;
   present: boolean;
   addCta?: string;
+  /** Subtle dashboard-style headline tint. Mirrors the tri fingerprint. Two
+   * muted non-neutrals only, text-only, no surface changes. Set sparingly. */
+  tone?: 'good' | 'warn';
 }
+
+const TONE_COLOR: Record<NonNullable<Cluster['tone']>, string> = {
+  good: '#4F7A4F',
+  warn: '#A66F3E',
+};
 
 // ── Cluster derivation ───────────────────────────────────────────────────────
 
@@ -80,7 +88,8 @@ function buildResponse(s: SimulatorState): Cluster {
     }
     // We have an adaptation ratio but not enough VDOT history. Still informative.
     const headline = adaptation >= 1.05 ? 'Ahead' : adaptation <= 0.95 ? 'Behind' : 'On track';
-    return { key: 'response', label: 'Response', headline, detail: 'Vs expected', present: true };
+    const tone: Cluster['tone'] = headline === 'Ahead' ? 'good' : headline === 'Behind' ? 'warn' : undefined;
+    return { key: 'response', label: 'Response', headline, detail: 'Vs expected', present: true, tone };
   }
 
   // Real window: span between first and last VDOT-history entries we kept.
@@ -105,10 +114,12 @@ function buildResponse(s: SimulatorState): Cluster {
     trajectory === 'up' ? 'Trending up' : trajectory === 'down' ? 'Trending down' : 'Steady';
 
   if (adaptation == null) {
-    return { key: 'response', label: 'Response', headline: trajectoryLabel, detail: windowLabel, present: true };
+    const trajTone: Cluster['tone'] = trajectory === 'up' ? 'good' : trajectory === 'down' ? 'warn' : undefined;
+    return { key: 'response', label: 'Response', headline: trajectoryLabel, detail: windowLabel, present: true, tone: trajTone };
   }
   const headline = adaptation >= 1.05 ? 'Ahead' : adaptation <= 0.95 ? 'Behind' : 'On track';
-  return { key: 'response', label: 'Response', headline, detail: trajectoryLabel, present: true };
+  const tone: Cluster['tone'] = headline === 'Ahead' ? 'good' : headline === 'Behind' ? 'warn' : undefined;
+  return { key: 'response', label: 'Response', headline, detail: trajectoryLabel, present: true, tone };
 }
 
 function buildTraining(s: SimulatorState): Cluster {
@@ -185,12 +196,14 @@ function buildDurability(s: SimulatorState): Cluster {
   const headline = capped ? 'Capped' : metPct >= 100 ? 'Met' : 'Building';
   const longestMin = Math.round(d.longestRunSec / 60);
   const thresholdMin = Math.round(d.thresholdSec / 60);
+  const tone: Cluster['tone'] = headline === 'Met' ? 'good' : headline === 'Capped' ? 'warn' : undefined;
   return {
     key: 'durability', label: 'Durability',
     headline,
     detail: `${longestMin} / ${thresholdMin} min longest run`,
     present: d.longestRunSec > 0,
     addCta: d.longestRunSec === 0 ? 'Log a long run' : undefined,
+    tone,
   };
 }
 
@@ -218,11 +231,13 @@ function buildHeat(s: SimulatorState): Cluster | null {
   // Negative deltaSec = saved time. Show as "saves X min" or "Acclimated".
   const savedMin = Math.round(-heat.deltaSec / 60);
   const headline = savedMin >= 1 ? 'Acclimated' : 'Partial';
+  const tone: Cluster['tone'] = headline === 'Acclimated' ? 'good' : undefined;
   return {
     key: 'heat', label: 'Heat',
     headline,
     detail: savedMin >= 1 ? `Saves ~${savedMin} min` : 'Light discount',
     present: true,
+    tone,
   };
 }
 
@@ -358,7 +373,7 @@ export function renderForecastFingerprint(s: SimulatorState): string {
       display:flex;flex-direction:column;justify-content:center;cursor:pointer;-webkit-tap-highlight-color:transparent">
       <div style="position:absolute;top:8px;right:8px;pointer-events:none"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="var(--c-muted)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg></div>
       <div style="font-size:9px;color:var(--c-muted);font-weight:500;line-height:1;margin-bottom:6px">${c.label}</div>
-      <div style="font-size:12px;color:${c.present ? 'var(--c-black)' : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${escapeText(c.headline)}</div>
+      <div style="font-size:12px;color:${c.present ? (c.tone ? TONE_COLOR[c.tone] : 'var(--c-black)') : 'var(--c-muted)'};font-weight:600;line-height:1.15;letter-spacing:-0.005em">${escapeText(c.headline)}</div>
       ${c.detail ? `<div style="font-size:9px;color:var(--c-faint);line-height:1.2;margin-top:4px">${escapeText(c.detail)}</div>` : ''}
       ${!c.present && c.addCta ? `<div style="font-size:8px;color:var(--c-faint);margin-top:5px;line-height:1.15;font-style:italic">${c.addCta}</div>` : ''}
     </div>
