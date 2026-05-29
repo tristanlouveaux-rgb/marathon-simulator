@@ -1,7 +1,11 @@
 /**
  * Bottom tab bar.
- * Running/cycling: Home | Plan | Stats (3 tabs)
- * Triathlon:       Home | Plan | Forecast | Stats (4 tabs)
+ * All modes: Home | Plan | Forecast | Stats (4 tabs)
+ *
+ * Forecast was originally tri/hyrox only because running mode used to surface
+ * the race forecast inline on Home. The forecast is now a full standalone
+ * view (`renderRaceForecastView` for running) and belongs in the tab bar
+ * alongside the tri and hyrox forecast pages.
  *
  * Mode is auto-detected from state. No call-site changes needed.
  */
@@ -25,22 +29,12 @@ const STATS_ICON = `<path d="M18 20V10M12 20V4M6 20v-6"/>`;
  * @param _isSimulator - Unused, kept for call-site compat
  */
 export function renderTabBar(activeTab: TabId, _isSimulator?: boolean): string {
-  const _et = getState().eventType;
-  const isTriathlon = _et === 'triathlon';
-  const isHyrox = _et === 'hyrox';
-
-  const tabs: { id: TabId; label: string; icon: string }[] = (isTriathlon || isHyrox)
-    ? [
-        { id: 'home',     label: 'Home',     icon: HOME_ICON },
-        { id: 'plan',     label: 'Plan',     icon: PLAN_ICON },
-        { id: 'forecast', label: 'Forecast', icon: FORECAST_ICON },
-        { id: 'stats',    label: 'Stats',    icon: STATS_ICON },
-      ]
-    : [
-        { id: 'home',  label: 'Home',  icon: HOME_ICON },
-        { id: 'plan',  label: 'Plan',  icon: PLAN_ICON },
-        { id: 'stats', label: 'Stats', icon: STATS_ICON },
-      ];
+  const tabs: { id: TabId; label: string; icon: string }[] = [
+    { id: 'home',     label: 'Home',     icon: HOME_ICON },
+    { id: 'plan',     label: 'Plan',     icon: PLAN_ICON },
+    { id: 'forecast', label: 'Forecast', icon: FORECAST_ICON },
+    { id: 'stats',    label: 'Stats',    icon: STATS_ICON },
+  ];
 
   const tabsHtml = tabs.map(tab => {
     const isActive = tab.id === activeTab;
