@@ -32,10 +32,11 @@
 import type { SimulatorState } from '@/types';
 import { getMutableState, getState, saveState } from '@/state';
 import { renderTabBar, wireTabBarHandlers, type TabId } from '../tab-bar';
-import { buildMetricSubHeader, buildConfidenceChip } from '../stats-view';
+import { buildConfidenceChip } from '../stats-view';
 import { appendCssSample, appendFtpSample } from '@/calculations/tri-benchmark-history';
 import { buildBenchmarkTrendChart, buildCssTrendChart, animateChartDrawOn } from './benchmark-charts';
 import { computeVO2Estimates } from '@/calculations/vo2-orchestrator';
+import { buildRingBackground, atmosphereGradient, buildSunGlint, type RingPalette } from '../page-flair';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Formatters
@@ -68,20 +69,49 @@ function buildShell(opts: {
   sparkline: string;
   overrideCard: string;
   footer: string;
+  /** Per-benchmark ring palette so each detail page has its own atmosphere
+   *  (Xcode reference: swim = sky blue, bike = indigo, run/VO2 = mint). */
+  palette: RingPalette;
+  /** Optional extra content rendered between the sparkline card and override
+   *  card. Used by VO2max for the per-sport bars + methods card. */
+  belowSparkline?: string;
 }): string {
+  const prefix = `bd-${opts.title.replace(/[^a-z0-9]/gi, '').toLowerCase()}`;
   return `
-    <div class="mosaic-page" style="background:var(--c-bg)">
-      ${buildMetricSubHeader(opts.title)}
-      <div style="max-width:600px;margin:0 auto;padding:18px;overflow-y:auto">
-        <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:4px;flex-wrap:wrap">
-          <span style="font-size:28px;font-weight:300;color:var(--c-black)">${opts.headline}</span>
-          ${opts.subline ? `<span style="font-size:14px;color:var(--c-muted)">· ${opts.subline}</span>` : ''}
-          ${opts.confidence ? buildConfidenceChip(opts.confidence) : ''}
+    <div class="mosaic-page" style="background:${atmosphereGradient(opts.palette)};position:relative;min-height:100vh">
+      <div style="position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0">
+        ${buildRingBackground(prefix, { variant: 'centered', palette: opts.palette, pulse: false })}
+      </div>
+      ${buildSunGlint('low')}
+
+      <div style="position:relative;z-index:10;max-width:600px;margin:0 auto;padding-bottom:100px">
+
+        <!-- Back button row -->
+        <div style="padding:max(20px, env(safe-area-inset-top)) 18px 0">
+          <button id="stats-metric-back" style="display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:15px;color:var(--c-black);font-family:var(--f);padding:6px 0;margin-left:-2px">
+            <span style="font-size:18px;line-height:1">←</span>
+            <span style="font-weight:500">Back</span>
+          </button>
         </div>
-        <div style="font-size:12px;color:var(--c-faint);margin-bottom:20px">${opts.provenance}</div>
-        ${opts.sparkline}
-        ${opts.overrideCard}
-        <div style="font-size:11px;color:var(--c-faint);line-height:1.5;margin-top:14px">${opts.footer}</div>
+
+        <!-- Centered hero block -->
+        <div style="text-align:center;padding:40px 20px 22px">
+          <div style="font-size:32px;font-weight:700;color:#0F172A;letter-spacing:-0.02em;line-height:1">${opts.title}</div>
+          <div style="display:flex;align-items:baseline;justify-content:center;gap:8px;margin-top:14px;flex-wrap:wrap">
+            <span style="font-size:30px;font-weight:300;color:var(--c-black);letter-spacing:-0.02em;font-variant-numeric:tabular-nums">${opts.headline}</span>
+            ${opts.subline ? `<span style="font-size:14px;color:var(--c-muted)">· ${opts.subline}</span>` : ''}
+            ${opts.confidence ? buildConfidenceChip(opts.confidence) : ''}
+          </div>
+          <div style="font-size:13px;color:var(--c-muted);margin-top:8px">${opts.provenance}</div>
+        </div>
+
+        <!-- Cards (left-aligned content) -->
+        <div style="padding:0 16px">
+          ${opts.sparkline}
+          ${opts.belowSparkline ?? ''}
+          ${opts.overrideCard}
+          <div style="font-size:13px;color:var(--c-muted);line-height:1.55;margin-top:18px;padding:0 4px">${opts.footer}</div>
+        </div>
       </div>
     </div>
     ${renderTabBar('stats')}`;
@@ -123,6 +153,7 @@ export function buildCSSDetailPage(s: SimulatorState): string {
     sparkline,
     overrideCard,
     footer,
+    palette: 'sky',
   });
 }
 
@@ -227,6 +258,7 @@ export function buildFTPDetailPage(s: SimulatorState): string {
     sparkline,
     overrideCard,
     footer,
+    palette: 'indigo',
   });
 }
 
@@ -348,6 +380,7 @@ export function buildVO2DetailPage(s: SimulatorState): string {
     sparkline: methods + toggle,
     overrideCard,
     footer,
+    palette: 'mint',
   });
 }
 
