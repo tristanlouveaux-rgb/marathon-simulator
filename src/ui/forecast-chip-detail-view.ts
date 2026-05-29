@@ -594,27 +594,16 @@ function pageResponse(s: SimulatorState): { title: string; subhead: string; body
     ? buildBenchmarkTrendChart(vdotSamples, '#10B981', 'rgba(16,185,129,0.08)', '', false)
     : `<div style="text-align:center;padding:16px 8px;font-size:12px;color:${TEXT_S}">${sampleCount === 0 ? 'No VDOT samples yet. Connect a watch or sync Strava.' : `${sampleCount} sample${sampleCount === 1 ? '' : 's'} so far: at least 4 are needed to call a trend.`}</div>`;
 
-  const adaptationBar = adaptation != null ? (() => {
-    // Bar visualises adaptation ratio: 0.7 → 0%, 1.0 → 50%, 1.3 → 100%.
+  // Adaptation card — mirrors the tri per-discipline card layout. Running is
+  // single-discipline so this is one card: header (sport, ratio), centered
+  // bar showing position along the 0.70–1.30 scale, then the signal rows
+  // (RPE + HR/physiology) consolidated underneath.
+  const adaptationCard = adaptation != null ? (() => {
     const clamped = Math.max(0.7, Math.min(1.3, adaptation));
     const pct = ((clamped - 0.7) / 0.6) * 100;
-    const tone = adaptation >= 1.05 ? '#16A34A' : adaptation <= 0.95 ? '#D97706' : '#64748B';
-    return `
-      <div style="${CARD};margin-bottom:14px">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
-          <div style="font-size:14px;color:${TEXT_S};font-weight:500">Adaptation vs plan</div>
-          <div style="font-size:18px;font-weight:600;color:${tone};font-variant-numeric:tabular-nums">${adaptation.toFixed(2)}</div>
-        </div>
-        <div style="position:relative;height:8px;border-radius:4px;background:rgba(15,23,42,0.07);overflow:hidden;margin-bottom:8px">
-          <div style="position:absolute;left:50%;top:0;height:100%;width:1px;background:rgba(15,23,42,0.20)"></div>
-          <div style="position:absolute;left:0;top:0;height:100%;width:${pct.toFixed(1)}%;background:${tone};border-radius:4px"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:${TEXT_L}">
-          <span>Behind plan</span><span>As planned</span><span>Ahead</span>
-        </div>
-      </div>
-    `;
-  })() : '';
+    const tone = adaptation >= 1.05 ? '#16A34A' : adaptation <= 0.95 ? '#D97706' : TEXT_S;
+    return { tone, pct, ratio: adaptation };
+  })() : null;
 
   const samplesValue = sampleCount === 0
     ? '0 (need 4+)'
@@ -642,19 +631,19 @@ function pageResponse(s: SimulatorState): { title: string; subhead: string; body
   const rpeCheckinCount = ratedCount + debriefCount;
   const rpeHasSignal = rpeCheckinCount > 0;
 
-  const signalCard = (label: string, value: number, populated: boolean, populatedSource: string, missingExplanation: string, infoIconHtml: string = ''): string => {
+  const signalRow = (label: string, value: number, populated: boolean, populatedSource: string, missingExplanation: string, infoIconHtml: string = ''): string => {
     const sign = value >= 0 ? '+' : '';
     const valueColor = value > 0.1 ? '#1F7A3D' : value < -0.1 ? '#9A6A20' : TEXT_M;
     const valueDisplay = populated
       ? `<span style="font-variant-numeric:tabular-nums;color:${valueColor};font-weight:600">${sign}${value.toFixed(1)}</span>`
       : `<span style="color:${TEXT_L};font-size:12px;font-style:italic">No signal</span>`;
     return `
-      <div style="padding:12px 0;border-top:1px solid rgba(0,0,0,0.04)">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
-          <span style="font-size:13px;color:${TEXT_M};font-weight:500">${escapeText(label)}${infoIconHtml}</span>
+      <div style="padding:10px 0;border-top:1px solid rgba(0,0,0,0.04);font-size:12px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px">
+          <span style="color:${populated ? TEXT_M : TEXT_L}">${escapeText(label)}${infoIconHtml}</span>
           ${valueDisplay}
         </div>
-        <div style="font-size:11px;color:${TEXT_S};line-height:1.4">${escapeText(populated ? populatedSource : missingExplanation)}</div>
+        <div style="font-size:11px;color:${TEXT_L};line-height:1.4">${escapeText(populated ? populatedSource : missingExplanation)}</div>
       </div>
     `;
   };
@@ -671,17 +660,29 @@ function pageResponse(s: SimulatorState): { title: string; subhead: string; body
     '<p style="margin:0 0 8px 0">A composite signal from synced runs. We watch four things: <strong>HR efficiency</strong> (pace held per beat), <strong>cardiac drift</strong> (HR creep at steady pace), <strong>HRV</strong> (overnight recovery quality), and <strong>resting HR</strong> (baseline trend).</p><p style="margin:0">When these point in the same direction, the model nudges your VDOT up or down. Requires a watch syncing HR + HRV data.</p>',
   );
 
-  const signalsCard = `
+  // Single-discipline adaptation card (mirrors the tri per-discipline card
+  // shape: header → ratio → bar → signal rows in one tight block).
+  const runningAdaptationCard = adaptationCard ? `
     <div style="${CARD};margin-bottom:14px">
-      <div style="font-size:14px;color:${TEXT_S};font-weight:500;margin-bottom:6px">Signals feeding the model</div>
-      ${signalCard(
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px">
+        <span style="display:flex;align-items:center;gap:8px;font-size:14px;color:${TEXT_M};font-weight:600">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#16A34A"></span>
+          Running
+        </span>
+        <span style="font-size:18px;font-weight:600;color:${adaptationCard.tone};font-variant-numeric:tabular-nums">${adaptationCard.ratio.toFixed(2)}</span>
+      </div>
+      <div style="position:relative;height:6px;border-radius:3px;background:rgba(15,23,42,0.07);overflow:hidden;margin-bottom:10px">
+        <div style="position:absolute;left:50%;top:0;height:100%;width:1px;background:rgba(15,23,42,0.20)"></div>
+        <div style="position:absolute;left:0;top:0;height:100%;width:${adaptationCard.pct.toFixed(1)}%;background:${adaptationCard.tone};border-radius:3px"></div>
+      </div>
+      ${signalRow(
         'RPE feedback',
         rpeAdj,
         rpeHasSignal,
         rpeSource,
         'No check-ins logged yet. Weekly check-ins on the Plan view feed this signal.',
       )}
-      ${signalCard(
+      ${signalRow(
         'HR / physiology',
         physioAdj,
         Math.abs(physioAdj) > 0.05,
@@ -690,33 +691,33 @@ function pageResponse(s: SimulatorState): { title: string; subhead: string; body
         hrPhysioInfoIcon,
       )}
     </div>
+  ` : `
+    <div style="${CARD};margin-bottom:14px;text-align:center">
+      <div style="font-size:13px;color:${TEXT_S};line-height:1.5">Log a few weeks of sessions for the adaptation signal to build.</div>
+    </div>
   `;
 
-  const body = `
+  // VDOT trajectory + history sparkline in one combined card below the
+  // adaptation block. The trajectory headline is descriptive context for the
+  // sparkline; pulling them into one card avoids the previous 5-card stack.
+  const trajectoryCard = `
     <div style="${CARD};margin-bottom:14px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
         <div>
-          <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">Trajectory</div>
-          <div style="font-size:24px;font-weight:600;color:${headlineColor};letter-spacing:-0.01em">${headline}</div>
+          <div style="font-size:12px;color:${TEXT_S};font-weight:500;margin-bottom:2px">VDOT trajectory</div>
+          <div style="font-size:18px;font-weight:600;color:${headlineColor};letter-spacing:-0.01em">${headline}</div>
         </div>
-        ${sampleCount >= 4 ? `<div style="font-size:11px;color:${TEXT_L}">${windowDays}d, ${sampleCount} samples</div>` : ''}
+        ${sampleCount >= 4 ? `<div style="font-size:11px;color:${TEXT_L}">${windowDays}d, ${sampleCount} samples${sampleCount >= 2 ? ` · ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}` : ''}</div>` : `<div style="font-size:11px;color:${TEXT_L}">${samplesValue}</div>`}
       </div>
       ${chart}
     </div>
+  `;
 
-    ${adaptationBar}
-
-    ${signalsCard}
-
+  const body = `
+    ${runningAdaptationCard}
+    ${trajectoryCard}
     ${renderPenaltiesCard(s)}
-
-    <div style="${CARD};margin-bottom:14px">
-      ${statRow('VDOT samples', samplesValue)}
-      ${sampleCount >= 2 ? statRow('VDOT delta', `${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`) : ''}
-      ${windowDays > 0 ? statRow('Window', `${windowDays} days`) : ''}
-    </div>
-
-    ${captionCard('Response tracks how the model treats you right now. The adaptation bar fine-tunes the horizon gain rate; RPE and physiology adjustments fine-tune your VDOT directly. The Active penalties card surfaces any blend-time discounts the engine applies for low volume, missing race history, or other gating signals. So when your forecast feels conservative, the cause is visible rather than hidden in the math.')}
+    ${captionCard('Adaptation tracks how fast you respond vs population average. 1.00 = on track. Above 1.05 the model credits faster horizon gains; below 0.95 it tempers them. Signals you have not yet generated count as 0 — they neither help nor hurt, but the discipline only moves once at least one signal is present. The Active penalties card surfaces any blend-time discounts the engine applies for low volume, missing race history, or other gating signals.')}
   `;
 
   return {
